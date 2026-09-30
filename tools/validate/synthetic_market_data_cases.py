@@ -6608,6 +6608,7 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
         resolve_trading_v2_current_execution_pool,
     )
     from services.trading.market_data_consumer_promotion import (
+        promote_trading_v2_consumer_state_if_ready,
         reconcile_trading_v2_consumer_state_from_local_evidence,
     )
 
@@ -6872,6 +6873,62 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
         check("local_refresh_reconcile_promotes_ready_consumer", True, reconciled["promoted"])
         check("local_refresh_reconcile_has_zero_provider_calls", 0, reconciled.get("provider_calls", 0))
         check("local_refresh_reconcile_delegates_once", 1, promote_local.call_count)
+
+    class _SameTargetRevisionView:
+        def __init__(self, relevant_batches):
+            self.archive = SimpleNamespace(snapshot_fingerprint="provider-snapshot-fp")
+            self._relevant_batches = tuple(relevant_batches)
+
+        def overlay_batch_fingerprints_for_datasets(self, datasets):
+            assert "TaiwanStockPriceAdj" in set(datasets)
+            return self._relevant_batches
+
+    prior_same_target = {
+        "market_date": "2026-09-30",
+        "provider_snapshot_fingerprint": "provider-snapshot-fp",
+        "required_v2_datasets": ["TaiwanStockPriceAdj", "TaiwanStockPrice"],
+        "source_overlay_batch_fingerprints": ["batch-old"],
+        "source_view_fingerprint": "old-view",
+    }
+    ready_evidence = {"ready": True, "blocking_dependencies": []}
+    with TemporaryDirectory(prefix="same_target_consumer_revision_") as revision_temp_dir:
+        revision_root = Path(revision_temp_dir)
+        unchanged_view = _SameTargetRevisionView(("batch-old",))
+        with (
+            patch("services.trading.market_data_consumer_promotion.find_latest_ready_provider_snapshot", return_value=object()),
+            patch("services.trading.market_data_consumer_promotion.load_trading_v2_consumer_state", return_value=prior_same_target),
+            patch("services.trading.market_data_consumer_promotion.TradingMarketDataV2View.open_as_of_target", return_value=unchanged_view),
+            patch("services.trading.market_data_consumer_promotion.build_trading_data_readiness_from_evidence", return_value=ready_evidence),
+            patch("services.trading.market_data_consumer_promotion.publish_trading_v2_consumer_state") as publish_unchanged,
+        ):
+            unchanged_result = promote_trading_v2_consumer_state_if_ready(
+                revision_root, target_date="2026-09-30"
+            )
+        check("same_target_consumer_without_new_required_batch_remains_finalized", "ALREADY_FINALIZED", unchanged_result["reason"])
+        check("same_target_consumer_without_new_required_batch_does_not_republish", 0, publish_unchanged.call_count)
+
+        revised_view = _SameTargetRevisionView(("batch-old", "batch-required-revision"))
+        published_revision = {
+            "market_date": "2026-09-30",
+            "state_fingerprint": "new-consumer-state",
+            "source_view_fingerprint": "new-view",
+        }
+        with (
+            patch("services.trading.market_data_consumer_promotion.find_latest_ready_provider_snapshot", return_value=object()),
+            patch("services.trading.market_data_consumer_promotion.load_trading_v2_consumer_state", return_value=prior_same_target),
+            patch("services.trading.market_data_consumer_promotion.TradingMarketDataV2View.open_as_of_target", return_value=revised_view),
+            patch("services.trading.market_data_consumer_promotion.build_trading_data_readiness_from_evidence", return_value=ready_evidence),
+            patch("services.trading.market_data_consumer_promotion.load_trading_account_state", return_value={"positions": {}}),
+            patch("services.trading.market_data_consumer_promotion.resolve_trading_live_reentry_required_tickers", return_value=[]),
+            patch("services.trading.market_data_consumer_promotion.publish_trading_v2_consumer_state", return_value=published_revision) as publish_revision,
+        ):
+            revised_result = promote_trading_v2_consumer_state_if_ready(
+                revision_root, target_date="2026-09-30"
+            )
+        check("same_target_required_dataset_revision_republishes_consumer", True, revised_result["promoted"])
+        check("same_target_required_dataset_revision_has_explicit_reason", "REFRESHED_SAME_TARGET", revised_result["reason"])
+        check("same_target_required_dataset_revision_reuses_current_asof_view", revised_view, publish_revision.call_args.kwargs["view"])
+        check("same_target_required_dataset_revision_publishes_once", 1, publish_revision.call_count)
 
     repo = Path(__file__).resolve().parents[2]
     sources = {

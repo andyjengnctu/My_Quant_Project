@@ -604,6 +604,25 @@ class TradingMarketDataV2View:
             requested_members=requested_members,
         )
 
+    def overlay_batch_fingerprints_for_datasets(self, datasets) -> tuple[str, ...]:
+        """Return verified overlay batches that can affect the named datasets.
+
+        Consumer promotion uses this narrow identity to distinguish an irrelevant
+        late batch from a same-target revision of an execution dependency.  The
+        full consumer view still pins the complete verified overlay set when it is
+        republished.
+        """
+
+        names = {str(dataset or "").strip() for dataset in datasets}
+        names.discard("")
+        if not names:
+            return ()
+        return tuple(
+            batch.batch_fingerprint
+            for batch in self._load_overlay_batches()
+            if any(str(artifact.dataset) in names for artifact in batch.artifacts)
+        )
+
     def view_identity(
         self,
         *,

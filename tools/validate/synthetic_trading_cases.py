@@ -828,12 +828,34 @@ def validate_trading_account_state_contract_case(base_params):
             ),
             patch(
                 "services.trading.account_dashboard._current_close_by_ticker",
-                return_value=({"2330": 121.0}, {}),
+                return_value=({"2330": 121.0}, {"2330": "2026-09-15"}, {}),
             ),
         ):
             mtm_dashboard = build_trading_account_dashboard_read_model(root)
         check("account_dashboard_mtm_date_can_advance_ahead_of_valid_scan_date", "2026-09-15", mtm_dashboard["market_date"])
         check("account_dashboard_preserves_separate_valid_scan_date", "2026-09-14", mtm_dashboard["scan_market_date"])
+        check("account_dashboard_exposes_actual_price_date_per_position", "2026-09-15", mtm_dashboard["positions"][0]["current_price_date"])
+        check("account_dashboard_exact_target_price_date_is_truthful", True, mtm_dashboard["valuation_prices_exact_target"])
+
+        with (
+            patch(
+                "services.trading.account_dashboard.load_trading_v2_consumer_state",
+                return_value={"market_date": "2026-09-14"},
+            ),
+            patch(
+                "services.trading.account_dashboard.load_market_data_dataset_state",
+                return_value=mtm_dataset_state,
+            ),
+            patch(
+                "services.trading.account_dashboard._current_close_by_ticker",
+                return_value=({"2330": 120.0}, {"2330": "2026-09-14"}, {}),
+            ),
+        ):
+            stale_mtm_dashboard = build_trading_account_dashboard_read_model(root)
+        check("account_dashboard_keeps_valuation_boundary_separate_from_actual_price_date", "2026-09-15", stale_mtm_dashboard["market_date"])
+        check("account_dashboard_reports_stale_actual_price_date", "2026-09-14", stale_mtm_dashboard["valuation_price_date_min"])
+        check("account_dashboard_marks_non_exact_target_valuation", False, stale_mtm_dashboard["valuation_prices_exact_target"])
+        check("account_dashboard_warns_when_price_row_is_older_than_valuation_boundary", True, any("市價資料日 2026-09-14" in str(item) for item in stale_mtm_dashboard["warnings"]))
 
     # Historical edit/delete must rebuild account truth rather than reverse-mutating
     # only the latest position.  The Workbench may omit expected_revision so the
@@ -5347,6 +5369,8 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_primary_ui_does_not_mount_broker_oms_notebook", False, "advanced_notebook.grid(" in panel_source or "advanced_notebook.pack(" in panel_source)
     check("workbench_performance_colour_is_cell_scoped", True, "performance=True" in accounting_source and "column.performance" in paged_source and 'tag_configure("gain"' not in accounting_source)
     check("workbench_account_dashboard_uses_requested_five_cards_and_fixed_bottom_refresh", True, 'text="帳戶儀表板"' in accounting_source and all(label in accounting_source for label in ('("revision", "revision")', '("市價日", "market_date")', '("股票淨值", "liquidation")', '("現金餘額", "cash")', '("帳戶淨值", "equity")')) and '("持股市值", "market")' not in accounting_source and '("可清算淨值", "liquidation")' not in accounting_source and 'footer_line = ttk.Frame' in accounting_source and 'text="全狀態刷新"' in accounting_source and 'pack(side="right"' in accounting_source)
+    check("workbench_account_inventory_shows_actual_price_date_and_warns_on_carry_forward", True, 'TableColumn("current_price_date", "市價日"' in accounting_source and 'valuation_prices_exact_target' in accounting_source and '市價含前期資料' in accounting_source)
+    check("workbench_data_center_market_generation_changes_publish_market_data_domain", True, 'STATE_MARKET_DATA' in data_ops_source and '_canonical_market_state_identity' in data_ops_source and '_notify_market_data_generation_changed' in data_ops_source and 'source_panel_id="market_data_ops"' in data_ops_source)
     check("workbench_account_dashboard_amount_cards_use_tw_gain_loss_flat_colors", True, 'elif float(value) > 0.0:' in accounting_source and 'color = WORKBENCH_ERROR' in accounting_source and 'color = WORKBENCH_SUCCESS' in accounting_source and 'color = WORKBENCH_TEXT' in accounting_source)
     check("workbench_account_performance_labels_empirical_r_semantics", True, '"實績 EV(R)"' in accounting_source and '"實績賺賠比"' in accounting_source)
     account_dashboard_source = (Path(__file__).resolve().parents[2] / "services" / "trading" / "account_dashboard.py").read_text(encoding="utf-8")

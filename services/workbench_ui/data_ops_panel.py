@@ -24,6 +24,7 @@ from services.trading.market_data_scheduler import (
 )
 from services.trading.market_data_update import run_trading_market_data_update
 from services.workbench_ui.selection_behavior import bind_treeview_toggle_selection, toggled_row_selection
+from services.workbench_ui.state_sync import STATE_MARKET_DATA
 from services.workbench_ui.workbench import (
     WORKBENCH_ACCENT,
     WORKBENCH_BG,
@@ -223,6 +224,8 @@ class MarketDataOpsPanel(ttk.Frame):
         self._deferred_status_refresh = None
         self._workbench_active = False
         self._snapshot: dict[str, object] = {}
+        self._market_state_identity = None
+        self._market_state_identity_observed = False
         self._dataset_by_iid: dict[str, dict[str, object]] = {}
         self._cell_overlays: dict[ttk.Treeview, _TreeCellColorOverlay] = {}
         self._tree_heading_titles: dict[ttk.Treeview, dict[str, str]] = {}
@@ -261,6 +264,17 @@ class MarketDataOpsPanel(ttk.Frame):
                 )
             )
         if self._startup_reconcile_started:
+            # Auto Sync can mutate persisted Market Data while this tab is hidden.
+            # Re-read the provider-free status whenever Data Center becomes visible;
+            # the identity comparison in the completion path fans a real generation
+            # change out to already-mounted dependent centers.  Never overlap this
+            # read with the initial reconcile/action worker.
+            action_busy = bool(
+                self._startup_reconcile_inflight
+                or (self._action_thread is not None and self._action_thread.is_alive())
+            )
+            if not action_busy and not any(thread.is_alive() for thread in self._status_refresh_threads.values()):
+                self.refresh_local_status(update_status=False)
             return
         if self._startup_reconcile_after_id is None:
             self._startup_reconcile_after_id = self.after(
@@ -800,6 +814,23 @@ class MarketDataOpsPanel(ttk.Frame):
         if any(thread.is_alive() for thread in self._status_refresh_threads.values()):
             self._schedule_status_refresh_poll()
 
+    @staticmethod
+    def _canonical_market_state_identity(snapshot) -> tuple[object, ...] | None:
+        if not isinstance(snapshot, dict):
+            return None
+        return (
+            snapshot.get("trading_consumer_state_fingerprint"),
+            snapshot.get("trading_source_view_fingerprint"),
+            snapshot.get("dataset_state_fingerprint"),
+            snapshot.get("update_target_date"),
+            snapshot.get("v2_latest_sync_target_date"),
+        )
+
+    def _notify_market_data_generation_changed(self) -> None:
+        callback = getattr(self.winfo_toplevel(), "_notify_workbench_state_changed", None)
+        if callable(callback):
+            callback({STATE_MARKET_DATA}, source_panel_id="market_data_ops")
+
     def _finish_local_status_refresh(self, token: int, snapshot, error, *, update_status: bool) -> None:
         # A later refresh request supersedes an older snapshot.  This matters on
         # first open because the automatic reconcile may finish before a slow
@@ -822,8 +853,25 @@ class MarketDataOpsPanel(ttk.Frame):
             self._status_var.set("狀態讀取失敗：Market Data read model 格式不合法")
             self._status_label.configure(style=WORKBENCH_ERROR_LABEL_STYLE)
             return
+        new_identity = self._canonical_market_state_identity(snapshot)
+        identity_changed = bool(
+            new_identity is not None
+            and (
+                not self._market_state_identity_observed
+                or new_identity != self._market_state_identity
+            )
+        )
+        self._market_state_identity = new_identity
+        self._market_state_identity_observed = new_identity is not None
         self._snapshot = snapshot
         self._render(snapshot)
+        if identity_changed:
+            # The first observed canonical identity is also a synchronization
+            # checkpoint: another tab may have been mounted before Data Center and
+            # Auto Sync may already have advanced persisted truth.  Render this
+            # source panel first, then invalidate every mounted consumer on the next
+            # Tk turn.
+            self.after_idle(self._notify_market_data_generation_changed)
         if not update_status:
             return
         blockers = [str(item) for item in list(snapshot.get("trading_blocking_dependencies") or []) if str(item)]

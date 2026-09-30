@@ -46,6 +46,7 @@ from services.workbench_ui.workbench import (
     WORKBENCH_PANEL_ACTIVATION_DELAY_MS,
     WORKBENCH_SUCCESS,
     WORKBENCH_TEXT,
+    WORKBENCH_WARNING,
     WORKBENCH_VSCROLL_STYLE,
     _warn_gui_fallback,
     run_workbench_startup_io_serialized,
@@ -257,6 +258,7 @@ class AccountingCenterPanel(ttk.Frame):
                 TableColumn("qty", "股數", 9, sort_kind="numeric", formatter=lambda v, _r: _integer(v)),
                 TableColumn("holding_cost", "持有成本", 12, sort_kind="numeric", formatter=lambda v, _r: _money(v)),
                 TableColumn("current_price", "市價", 10, sort_kind="numeric", formatter=lambda v, _r: _price(v)),
+                TableColumn("current_price_date", "市價日", 11),
                 TableColumn("market_value", "市值", 12, sort_kind="numeric", formatter=lambda v, _r: _money(v)),
                 TableColumn("unrealized_pnl", "損益", 11, sort_kind="numeric", performance=True, formatter=lambda v, _r: _money(v)),
                 TableColumn("holding_return_pct", "報酬率", 9, sort_kind="numeric", performance=True, formatter=lambda v, _r: _pct(v)),
@@ -604,7 +606,10 @@ class AccountingCenterPanel(ttk.Frame):
         self._snapshot = dict(account or {})
         self._dashboard = dict(dashboard or {})
         self._render()
-        self._refresh_status_var.set("刷新完成")
+        if self._dashboard.get("valuation_prices_exact_target") is False:
+            self._refresh_status_var.set("刷新完成 | 市價含前期資料，請查看庫存股的市價日")
+        else:
+            self._refresh_status_var.set("刷新完成")
         if self._refresh_pending:
             self.after_idle(self.refresh)
 
@@ -628,7 +633,16 @@ class AccountingCenterPanel(ttk.Frame):
         self._init_button.configure(state="disabled")
         self._cash_button.configure(state="normal")
         self._status_var.set(str(int(self._snapshot.get("revision") or 0)))
-        self._market_date_var.set(str(self._dashboard.get("market_date") or "-"))
+        price_date_min = str(self._dashboard.get("valuation_price_date_min") or "").strip()
+        price_date_max = str(self._dashboard.get("valuation_price_date_max") or "").strip()
+        if price_date_min and price_date_max:
+            price_date_display = price_date_min if price_date_min == price_date_max else f"{price_date_min}~{price_date_max}"
+        else:
+            price_date_display = str(self._dashboard.get("market_date") or "-")
+        self._market_date_var.set(price_date_display)
+        self._metric_labels["market_date"].configure(
+            foreground=(WORKBENCH_WARNING if self._dashboard.get("valuation_prices_exact_target") is False else WORKBENCH_INFO)
+        )
 
         account_positions = {str(row.get("ticker") or ""): dict(row) for row in self._snapshot.get("positions") or []}
         inventory_rows = []

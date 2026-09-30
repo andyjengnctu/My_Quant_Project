@@ -16,6 +16,7 @@ from services.trading.market_data_consumer import (
 )
 from services.trading.market_data_dataset_state import load_market_data_dataset_state
 from services.trading.market_data_v2_state import resolve_trading_market_data_update_target_date
+from services.trading.market_data_v2_view import TradingMarketDataV2View
 
 
 def reconcile_trading_v2_consumer_state_from_local_evidence(
@@ -63,8 +64,32 @@ def promote_trading_v2_consumer_state_if_ready(
 
     prior = load_trading_v2_consumer_state(root, required=False, verify_current_view=False)
     prior_date = None if prior is None else str(prior.get("market_date") or "").strip() or None
-    if prior_date is not None and prior_date >= candidate:
+    if prior_date is not None and prior_date > candidate:
         return {"promoted": False, "reason": "ALREADY_FINALIZED", "market_date": prior_date}
+
+    # A finalized target normally remains immutable.  The exception is a later
+    # verified batch for the *same target* that touches one of the execution
+    # consumer's required datasets (or a provider-snapshot lineage change).
+    # That is a same-date source revision, not merely an irrelevant late batch:
+    # republish a new consumer identity so every dependent read model can detect
+    # the revision and stop serving the older pinned generation.
+    publication_view = None
+    same_target_revision = False
+    if prior is not None and prior_date == candidate:
+        publication_view = TradingMarketDataV2View.open_as_of_target(
+            root, target_date=candidate
+        )
+        required_datasets = tuple(prior.get("required_v2_datasets") or ())
+        prior_batches = set(str(value) for value in (prior.get("source_overlay_batch_fingerprints") or ()))
+        relevant_batches = publication_view.overlay_batch_fingerprints_for_datasets(required_datasets)
+        has_new_required_batch = any(batch_fp not in prior_batches for batch_fp in relevant_batches)
+        provider_revision = (
+            str(prior.get("provider_snapshot_fingerprint") or "").strip()
+            != str(publication_view.archive.snapshot_fingerprint or "").strip()
+        )
+        if not has_new_required_batch and not provider_revision:
+            return {"promoted": False, "reason": "ALREADY_FINALIZED", "market_date": prior_date}
+        same_target_revision = True
 
     profile = get_trading_strategy_profile()
     dataset_state = load_market_data_dataset_state(root, required=False)
@@ -95,10 +120,11 @@ def promote_trading_v2_consumer_state_if_ready(
         market_date=candidate,
         required_position_tickers=required_position_tickers,
         required_reentry_tickers=required_reentry_tickers,
+        view=publication_view,
     )
     return {
         "promoted": True,
-        "reason": "PROMOTED",
+        "reason": "REFRESHED_SAME_TARGET" if same_target_revision else "PROMOTED",
         "market_date": str(state["market_date"]),
         "consumer_state_fingerprint": str(state["state_fingerprint"]),
         "source_view_fingerprint": str(state["source_view_fingerprint"]),

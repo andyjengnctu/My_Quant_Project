@@ -80,11 +80,16 @@ def _resolve_account_valuation_market_date(
     return max(scan_market_date, latest_price_date), None
 
 
-def _current_close_by_ticker(project_root: Path, tickers: list[str], market_date: str | None) -> tuple[dict[str, float], dict[str, str]]:
+def _current_close_by_ticker(
+    project_root: Path,
+    tickers: list[str],
+    market_date: str | None,
+) -> tuple[dict[str, float], dict[str, str], dict[str, str]]:
     if not tickers or not market_date:
-        return {}, {}
+        return {}, {}, {}
     view = TradingMarketDataV2View.open(project_root)
     prices: dict[str, float] = {}
+    price_dates: dict[str, str] = {}
     errors: dict[str, str] = {}
     requested = tuple(dict.fromkeys(str(ticker).strip() for ticker in tickers if str(ticker).strip()))
 
@@ -104,7 +109,7 @@ def _current_close_by_ticker(project_root: Path, tickers: list[str], market_date
 
     if frame is not None:
         if frame.empty:
-            return {}, {ticker: "Trading V2 無可用收盤價" for ticker in requested}
+            return {}, {}, {ticker: "Trading V2 無可用收盤價" for ticker in requested}
         work = frame.copy()
         work["stock_id"] = work["stock_id"].astype(str).str.strip()
         work["date"] = work["date"].astype(str)
@@ -127,7 +132,8 @@ def _current_close_by_ticker(project_root: Path, tickers: list[str], market_date
                 errors[ticker] = "Trading V2 收盤價不合法"
                 continue
             prices[ticker] = close
-        return prices, errors
+            price_dates[ticker] = str(dated.iloc[-1]["date"])
+        return prices, price_dates, errors
 
     for ticker in requested:
         try:
@@ -151,9 +157,10 @@ def _current_close_by_ticker(project_root: Path, tickers: list[str], market_date
                 errors[ticker] = "Trading V2 收盤價不合法"
                 continue
             prices[ticker] = close
+            price_dates[ticker] = str(dated.iloc[-1]["date"])
         except (FileNotFoundError, ValueError, RuntimeError, OSError, KeyError, TypeError) as exc:
             errors[ticker] = f"{type(exc).__name__}: {exc}"
-    return prices, errors
+    return prices, price_dates, errors
 
 
 def _load_primary_params(project_root: Path):
@@ -495,6 +502,10 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
             "source_account_revision": None,
             "market_date": None,
             "scan_market_date": None,
+            "valuation_price_dates": [],
+            "valuation_price_date_min": None,
+            "valuation_price_date_max": None,
+            "valuation_prices_exact_target": None,
             "positions": [],
             "buy_details": [],
             "sell_details": [],
@@ -541,9 +552,12 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
 
     open_records = dict(state.get("positions") or {})
     tickers = sorted(open_records)
-    prices, price_errors = _current_close_by_ticker(root, tickers, market_date)
+    prices, price_dates, price_errors = _current_close_by_ticker(root, tickers, market_date)
     for ticker, error in sorted(price_errors.items()):
         warnings.append(f"{ticker} 市價: {error}")
+    for ticker, price_date in sorted(price_dates.items()):
+        if market_date and str(price_date) != str(market_date):
+            warnings.append(f"{ticker} 市價資料日 {price_date}；估值截止 {market_date}")
 
     enriched_positions: list[dict[str, Any]] = []
     holdings_market_value = 0.0
@@ -624,6 +638,7 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
                 "initial_cost_basis": milli_to_money(initial_cost_milli),
                 "realized_pnl": milli_to_money(realized_milli),
                 "current_price": current_price,
+                "current_price_date": price_dates.get(ticker),
                 "market_value": market_value,
                 "net_liquidation_value": net_liquidation,
                 "unrealized_pnl": unrealized,
@@ -705,6 +720,23 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
     ]
 
 
+    valuation_price_dates = sorted({
+        str(row.get("current_price_date") or "").strip()
+        for row in enriched_positions
+        if str(row.get("current_price_date") or "").strip()
+    })
+    valuation_price_date_min = valuation_price_dates[0] if valuation_price_dates else None
+    valuation_price_date_max = valuation_price_dates[-1] if valuation_price_dates else None
+    valuation_prices_exact_target = (
+        None
+        if not enriched_positions or market_date is None
+        else bool(
+            len(valuation_price_dates) == 1
+            and valuation_price_date_min == str(market_date)
+            and len(price_dates) == len(enriched_positions)
+        )
+    )
+
     return {
         "schema_version": ACCOUNT_DASHBOARD_SCHEMA_VERSION,
         "role": ACCOUNT_DASHBOARD_ROLE,
@@ -715,6 +747,10 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
         "source_params_path": params_path,
         "market_date": market_date,
         "scan_market_date": scan_market_date,
+        "valuation_price_dates": valuation_price_dates,
+        "valuation_price_date_min": valuation_price_date_min,
+        "valuation_price_date_max": valuation_price_date_max,
+        "valuation_prices_exact_target": valuation_prices_exact_target,
         "fixed_risk": fixed_risk,
         "positions": enriched_positions,
         "buy_details": buy_details,
