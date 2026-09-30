@@ -2555,10 +2555,16 @@ def inspect_fixed_multiseed_strategy_parameter_artifact(
 
     ready = status == "READY"
     existed = bool(target.exists() or manifest_path.exists())
+    # A legacy P6 artifact that predates scientific-identity binding must not be
+    # REUSED, but it also must not dead-end the canonical Research workflow.
+    # When the registered source contract still matches current semantics, the
+    # Optimizer sole producer can deterministically REBUILD (and resume any
+    # compatible workspace) to publish a newly bound manifest.  True source or
+    # bound-manifest scientific drift remains BLOCKED and can never be bypassed
+    # by rebuild/force-rebuild under the same PARAM identity.
     blocked_statuses = {
         "SCIENTIFIC_IDENTITY_UNREGISTERED",
         "REGISTERED_SCIENTIFIC_CONTRACT_DRIFT",
-        "LEGACY_SCIENTIFIC_IDENTITY_UNBOUND",
         "SCIENTIFIC_IDENTITY_SCHEMA_MISMATCH",
         "SCIENTIFIC_REGISTRATION_MISMATCH",
         "SCIENTIFIC_CONTRACT_DRIFT",
@@ -2618,12 +2624,11 @@ def ensure_fixed_multiseed_strategy_parameter_artifact(
     scientific_identity = dict(state["scientific_identity"])
     if str(state.get("action") or "") == "BLOCKED":
         status = str(state.get("status") or "")
-        if not (bool(force_rebuild) and status == "LEGACY_SCIENTIFIC_IDENTITY_UNBOUND"):
-            raise RuntimeError(
-                "PARAM-P6 scientific identity blocked: "
-                f"status={status}. Existing registered identity must not be rebuilt "
-                "under changed scientific semantics."
-            )
+        raise RuntimeError(
+            "PARAM-P6 scientific identity blocked: "
+            f"status={status}. Existing registered identity must not be rebuilt "
+            "under changed scientific semantics."
+        )
     existed_before = str(state["action"]) == "REBUILD"
     if bool(state["ready"]) and not force_rebuild:
         return {

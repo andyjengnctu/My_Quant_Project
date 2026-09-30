@@ -4546,8 +4546,8 @@
       "section": "B2",
       "priority": "P0",
       "category": "Strategy Parameter scientific identity / immutable contract binding",
-      "item": "已命名Strategy Parameter identity不得在common scientific config變更後靜默漂移。Profile可登記canonical resolved scientific fingerprint；已綁定artifact manifest必須保存相同schema、registered fingerprint、actual fingerprint與完整resolved scientific contract。PARAM-P6/C85為第一個bound identity：source registration與目前resolved contract不一致、bound manifest contract/fingerprint漂移一律`BLOCKED`，不得在同一PARAM identity下自動REBUILD；既有artifact缺少scientific identity視為legacy-unbound且不得自動認領，僅可在registered contract仍一致時以明確force rebuild完成一次性綁定。Progress/report欄位可依resolved contract決定可見性，但presentation contract不得進scientific fingerprint；`base-finalists-agree`且local-min disabled時不得顯示不適用的`seed_min_agree`或`best_local_min`。",
-      "gap": "`validate_optimizer_walk_forward_policy_contract_case`以config/registry-driven方式驗registered profile fingerprint等價、hard-gate mutation造成registration drift、legacy-unbound與bound-manifest語意，並驗progress display contract只依active scientific policy顯示適用欄位；不得硬編PARAM-P6、4 seeds、300 trials、120M/12M為唯一合法current值。",
+      "item": "已命名Strategy Parameter identity不得在common scientific config變更後靜默漂移。Profile可登記canonical resolved scientific fingerprint；已綁定artifact manifest必須保存相同schema、registered fingerprint、actual fingerprint與完整resolved scientific contract。PARAM-P6/C85為第一個bound identity：source registration與目前resolved contract不一致、bound manifest contract/fingerprint漂移一律`BLOCKED`，不得在同一PARAM identity下自動REBUILD；既有artifact缺少scientific identity視為legacy-unbound，禁止REUSE或直接補manifest自動認領，但若registered source contract仍exact-match，canonical Optimizer producer可由正式Research／Strategy Compare自動`REBUILD`（允許resume相容workspace）重新發布並完成一次性綁定。Progress/report欄位可依resolved contract決定可見性，但presentation contract不得進scientific fingerprint；`base-finalists-agree`且local-min disabled時不得顯示不適用的`seed_min_agree`或`best_local_min`。",
+      "gap": "`validate_optimizer_walk_forward_policy_contract_case`以config/registry-driven方式驗registered profile fingerprint等價、hard-gate mutation造成registration drift、legacy-unbound在registered source exact-match時必須`REBUILD`而不得REUSE/direct-adopt、true drift仍BLOCKED、bound manifest需exact contract/fingerprint，並驗progress display contract只依active scientific policy顯示適用欄位；不得硬編PARAM-P6、4 seeds、300 trials、120M/12M為唯一合法current值。",
       "entry": "`config/strategy_params.py`, `core/strategy_param_policy.py`, `core/strategy_param_scientific_contract.py`, `services/optimizer/strategy_param_service.py`, `services/optimizer/scientific_runtime.py`, `services/optimizer/outer_rolling_progress.py`, `services/optimizer/outer_rolling_oos.py`, `services/optimizer/outer_rolling_live_boards.py`, `services/research/strategy_compare_preparation_status.py`, `tools/validate/synthetic_strategy_cases.py`",
       "initial_status": "NEW",
       "order": 410
@@ -8486,7 +8486,7 @@
     {
       "id": "T560",
       "b_id": "B422",
-      "description": "`validate_optimizer_walk_forward_policy_contract_case` Strategy Parameter scientific identity extension：驗registered profile與resolved canonical fingerprint一致、scientific config mutation觸發drift、legacy-unbound不得自動認領、bound manifest需exact contract/fingerprint，並以resolved display contract驗`seed_min_agree`／`best_local_min`只在適用policy出現。",
+      "description": "`validate_optimizer_walk_forward_policy_contract_case` Strategy Parameter scientific identity extension：驗registered profile與resolved canonical fingerprint一致、scientific config mutation觸發drift、legacy-unbound在source registration仍exact-match時路由canonical `REBUILD`且不得REUSE/direct-adopt、bound manifest需exact contract/fingerprint，並以resolved display contract驗`seed_min_agree`／`best_local_min`只在適用policy出現。",
       "initial_status": "NEW",
       "order": 550
     },

@@ -12257,3 +12257,13 @@ Decision：`ENGINEERING_ONLY / NON_VALIDATION_IDENTITY_CONVERGED / C58_C61_C62_C
 - **Scientific impact**：無。未變更C58/C61/C62/C85的search、seed/trials結果、selector、PIT、OOS/Rolling或Robustness benchmark semantics；`PARAM-P5 / C84` validation完全不改。
 
 Decision：`ENGINEERING_ONLY / NON_VALIDATION_ROBUSTNESS_IDENTITY_BOUND / FITTING_PROTOCOL_OWNS_SEED_TRIALS / UNSAFE_REUSE_CLOSED / C84_P5_UNCHANGED / READY_FOR_FORMAL_DOUBLE_CHECK_BEFORE_VALIDATION_REDESIGN`。
+
+
+## 2026-09-30 — PARAM-P6 legacy-unbound formal-flow dead-end correction
+
+- **Observed blocker**：Round-3首次綁定P6 scientific identity後，既有P6若缺`scientific_identity` manifest會被標成`LEGACY_SCIENTIFIC_IDENTITY_UNBOUND/BLOCKED`；但Strategy Compare正式入口沒有P6 force-rebuild分支，因此使用者從正式選單無法完成一次性綁定，所有C85/C62/C61/C58後續項目被前置dependency連鎖`NOT_RUN`。
+- **State-transition correction**：`LEGACY_SCIENTIFIC_IDENTITY_UNBOUND`不再屬BLOCKED集合；在registered P6 source fingerprint仍與current resolved scientific contract exact-match時，inspect回`REBUILD`，正式orchestrator可委派canonical Optimizer producer重新發布P6與bound manifest。此REBUILD沿用正常resume semantics，可重用相容Optimizer workspace；不直接替舊artifact補manifest，也不把舊artifact宣稱成已證明scientific identity。
+- **Drift protection unchanged**：`SCIENTIFIC_IDENTITY_UNREGISTERED`、`REGISTERED_SCIENTIFIC_CONTRACT_DRIFT`、bound-manifest schema/registration/fingerprint/contract drift仍一律`BLOCKED`，force rebuild也不得繞過。
+- **Scientific impact**：無。未改P6/C85的4 fixed fitting seeds、300 trials/seed、120M/12M、selector、score、gate、search、execution economics、PIT或validation-disabled semantics；只修正式dependency orchestration的legacy migration state transition。
+
+Decision：`ENGINEERING_ONLY / LEGACY_P6_UNBOUND_REBUILDABLE / NO_DIRECT_ADOPTION / TRUE_DRIFT_STILL_BLOCKED / FORMAL_MENU_DEAD_END_REMOVED / NO_SCIENTIFIC_CHANGE`。

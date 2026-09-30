@@ -30,6 +30,7 @@ from core.strategy_param_artifacts import (
     STRATEGY_PARAM_FAMILIES,
     STRATEGY_PARAM_SCHEDULE_MODES,
     STRATEGY_PARAM_STATE_FILENAME_BY_NAME,
+    normalize_strategy_param_policy,
 )
 from core.portfolio_fast_data import build_score_single_stock_profile_fields
 from core.portfolio_stats import calc_plain_romd, calc_portfolio_score, calc_score_median_r_multiplier, calc_score_min_full_year_return_multiplier, calc_score_min_month_return_multiplier, calc_score_min_quarter_return_multiplier, calc_score_portfolio_return_multiplier, calc_score_positive_return_multiplier, calc_score_win_rate_multiplier
@@ -2220,7 +2221,10 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     from services.optimizer.strategy_param_service import (
         _benchmark_schedule_build_contract,
         _canonical_schedule_build_contract,
+        _fixed_multiseed_build_contract,
         ensure_fixed_multiseed_robustness_strategy_parameter_artifact,
+        fixed_multiseed_strategy_param_artifact_path,
+        inspect_fixed_multiseed_strategy_parameter_artifact,
         inspect_fixed_multiseed_robustness_strategy_parameter_artifact,
         inspect_robustness_benchmark_strategy_parameter_artifact,
     )
@@ -2245,6 +2249,114 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and int(canonical_full_contract["trials_per_fold"])
             == int(full_best_fit_protocol.trials_per_seed),
     )
+    with TemporaryDirectory() as temp_dir:
+        legacy_root = Path(temp_dir)
+        legacy_contract = _fixed_multiseed_build_contract(
+            training_profile_id=production_multiseed_param_profile.profile_id,
+            dataset=production_multiseed_param_profile.dataset,
+            max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+            rotation=str(DEFAULT_PORTFOLIO_ROTATION),
+            fixed_risk=float(DEFAULT_FIXED_RISK),
+            max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+        )
+        legacy_path = fixed_multiseed_strategy_param_artifact_path(
+            legacy_root, policy=production_multiseed_param_profile.parameter_policy
+        )
+        legacy_path.parent.mkdir(parents=True, exist_ok=True)
+        legacy_seed = int(legacy_contract["seed_ensemble_policy"]["resolved_seeds"][0])
+        legacy_path.write_text(
+            json.dumps({
+                "type": "active_param_ensemble",
+                "mode": "rolling",
+                "selector": normalize_strategy_param_policy(
+                    production_multiseed_param_profile.parameter_policy
+                ),
+                "params_ensemble_by_effective_date": {
+                    "2021-01-01": [{
+                        "seed": legacy_seed,
+                        "params": {"high_len": 260, "atr_len": 23},
+                    }]
+                },
+                "breakout_quality_param_adaptation": {
+                    "parameter_set": legacy_contract["parameter_set"],
+                    "training_dl_enabled": False,
+                    "optimizer_search_protocol": legacy_contract["optimizer_search_protocol"],
+                    "seed_ensemble_policy": legacy_contract["seed_ensemble_policy"],
+                },
+            }),
+            encoding="utf-8",
+        )
+        legacy_p6_state = inspect_fixed_multiseed_strategy_parameter_artifact(
+            legacy_root,
+            training_profile_id=production_multiseed_param_profile.profile_id,
+            policy=production_multiseed_param_profile.parameter_policy,
+            comparison_end_date="2021-12-31",
+            dataset=production_multiseed_param_profile.dataset,
+            max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+            rotation=str(DEFAULT_PORTFOLIO_ROTATION),
+            fixed_risk=float(DEFAULT_FIXED_RISK),
+            max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+        )
+        from services.research.strategy_compare_preparation_status import (
+            _collect_parameter_artifact_status,
+        )
+        legacy_source_id = next(
+            source_id
+            for source_id, source in current_oos_settings.parameter_sources.items()
+            if source.builder is not None
+            and source.builder.builder_type == "optimizer_fixed_multiseed_strategy_params"
+        )
+        legacy_actions = []
+        legacy_rows, _legacy_paths, _legacy_arm_paths = _collect_parameter_artifact_status(
+            root=legacy_root,
+            settings=current_oos_settings,
+            required_param_sources={legacy_source_id},
+            comparison_start="2021-01-01",
+            comparison_end="2021-12-31",
+            dl_model_ready={},
+            comparison_period_dependencies=(),
+            artifact_identities={},
+            actions=legacy_actions,
+        )
+        legacy_plan_action = next(
+            row for row in legacy_actions if row.artifact_key == f"param:{legacy_source_id}"
+        )
+        with patch.object(
+            training_policy_settings,
+            "MIN_ANNUAL_TRADES",
+            float(training_policy_settings.MIN_ANNUAL_TRADES) + 1.0,
+        ):
+            drifted_p6_state = inspect_fixed_multiseed_strategy_parameter_artifact(
+                legacy_root,
+                training_profile_id=production_multiseed_param_profile.profile_id,
+                policy=production_multiseed_param_profile.parameter_policy,
+                comparison_end_date="2021-12-31",
+                dataset=production_multiseed_param_profile.dataset,
+                max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+                rotation=str(DEFAULT_PORTFOLIO_ROTATION),
+                fixed_risk=float(DEFAULT_FIXED_RISK),
+                max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+            )
+    check(
+        "strategy_param_legacy_unbound_p6_routes_to_canonical_rebuild_when_source_registration_matches",
+        ("LEGACY_SCIENTIFIC_IDENTITY_UNBOUND", "REBUILD", True),
+        (
+            legacy_p6_state["status"],
+            legacy_p6_state["action"],
+            bool(legacy_p6_state["scientific_identity"]["registration_matches"]),
+        ),
+    )
+    check(
+        "strategy_compare_legacy_unbound_p6_dependency_plan_is_rebuild_not_blocked",
+        ("REBUILD", "optimizer_fixed_multiseed_strategy_params"),
+        (legacy_rows[legacy_source_id]["action"], legacy_plan_action.builder_type),
+    )
+    check(
+        "strategy_param_true_registered_p6_scientific_drift_remains_blocked",
+        ("REGISTERED_SCIENTIFIC_CONTRACT_DRIFT", "BLOCKED"),
+        (drifted_p6_state["status"], drifted_p6_state["action"]),
+    )
+
     benchmark_full_contract = _benchmark_schedule_build_contract(
         benchmark_id=str(benchmark_snapshot["benchmark_id"]),
         seed=replication_seed,

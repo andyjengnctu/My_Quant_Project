@@ -1088,7 +1088,7 @@ def _collect_parameter_artifact_status(
             builder_type = builder.builder_type
         elif action == "BLOCKED":
             builder_type = None
-            description = "scientific identity drift／legacy unbound；禁止以相同PARAM identity自動重建"
+            description = "scientific identity drift／registration mismatch；禁止以相同PARAM identity自動重建"
         else:
             builder_type = None
             description = (
