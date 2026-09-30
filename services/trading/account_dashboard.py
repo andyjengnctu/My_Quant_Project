@@ -9,6 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 from core.console_report import project_relative_display_path
 from core.exact_accounting import (
     build_sell_ledger_from_price,
@@ -112,14 +114,20 @@ def _current_close_by_ticker(
             return {}, {}, {ticker: "Trading V2 無可用收盤價" for ticker in requested}
         work = frame.copy()
         work["stock_id"] = work["stock_id"].astype(str).str.strip()
-        work["date"] = work["date"].astype(str)
-        work = work.sort_values(["stock_id", "date"])
+        # Provider Snapshot rows may carry ISO strings while newer overlay rows
+        # arrive as pandas Timestamp objects.  Comparing their string renderings
+        # is not date-safe: ``2026-09-30 00:00:00`` sorts after the cutoff text
+        # ``2026-09-30`` and silently falls back to the prior day.  Normalize
+        # once to day-level timestamps before sorting/filtering.
+        work["date"] = pd.to_datetime(work["date"], errors="coerce").dt.normalize()
+        cutoff = pd.Timestamp(market_date).normalize()
+        work = work.loc[work["date"].notna()].sort_values(["stock_id", "date"])
         for ticker in requested:
             ticker_rows = work.loc[work["stock_id"] == ticker]
             if ticker_rows.empty:
                 errors[ticker] = "Trading V2 無可用收盤價"
                 continue
-            dated = ticker_rows.loc[ticker_rows["date"] <= str(market_date)]
+            dated = ticker_rows.loc[ticker_rows["date"] <= cutoff]
             if dated.empty:
                 errors[ticker] = "Trading V2 無 cutoff 內收盤價"
                 continue
@@ -132,7 +140,7 @@ def _current_close_by_ticker(
                 errors[ticker] = "Trading V2 收盤價不合法"
                 continue
             prices[ticker] = close
-            price_dates[ticker] = str(dated.iloc[-1]["date"])
+            price_dates[ticker] = pd.Timestamp(dated.iloc[-1]["date"]).date().isoformat()
         return prices, price_dates, errors
 
     for ticker in requested:
@@ -147,8 +155,9 @@ def _current_close_by_ticker(
                 errors[ticker] = "Trading V2 無可用收盤價"
                 continue
             dated = frame.copy()
-            dated["date"] = dated["date"].astype(str)
-            dated = dated.loc[dated["date"] <= str(market_date)].sort_values("date")
+            dated["date"] = pd.to_datetime(dated["date"], errors="coerce").dt.normalize()
+            cutoff = pd.Timestamp(market_date).normalize()
+            dated = dated.loc[dated["date"].notna() & (dated["date"] <= cutoff)].sort_values("date")
             if dated.empty:
                 errors[ticker] = "Trading V2 無 cutoff 內收盤價"
                 continue
@@ -157,7 +166,7 @@ def _current_close_by_ticker(
                 errors[ticker] = "Trading V2 收盤價不合法"
                 continue
             prices[ticker] = close
-            price_dates[ticker] = str(dated.iloc[-1]["date"])
+            price_dates[ticker] = pd.Timestamp(dated.iloc[-1]["date"]).date().isoformat()
         except (FileNotFoundError, ValueError, RuntimeError, OSError, KeyError, TypeError) as exc:
             errors[ticker] = f"{type(exc).__name__}: {exc}"
     return prices, price_dates, errors

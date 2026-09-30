@@ -40,7 +40,7 @@ Core 不得反向引用 services、apps、tools 或 UI。`core/position_step.py`
 
 升級時可以使用有效的舊 Scanner snapshot 建立 binding，但這只代表已保存的觀察證據，不能證明更早、從未記錄的原始參數。歷史來源不足不能用 current Params 補造；binding 損壞時明確失敗，不默默重設。
 
-Pending 與 Position 共用同一個固定的 finalized 日期及資料來源。來源身分包括資料版本、frozen binding、重播契約版本及已確認事件進度，不能只用日期判斷重用。相同輸入重跑不異動；同日資料更正或真實成交更正則重新重播。對 Market Data 而言，同一 target 後續新 verified batch 若觸及 active strategy required V2 dependency，即屬 source revision，必須產生新的 execution-consumer identity；不得因日期相同而繼續沿用舊 pinned generation。管理同步不可修改帳務或券商欄位。
+Pending 與 Position 共用同一個固定的 finalized 日期及資料來源。來源身分包括資料版本、frozen binding、重播契約版本及已確認事件進度，不能只用日期判斷重用。相同輸入重跑不異動；同日資料更正或真實成交更正則重新重播。對 Market Data 而言，同一 target 後續新 verified batch 若觸及 active strategy required V2 dependency，即屬 source revision，必須產生新的 execution-consumer identity；不得因日期相同而繼續沿用舊 pinned generation。Current Trading batch 即使整體尚未 DONE，只要某 required dataset 的 manifest requests 已全數 DONE，該 dataset-complete subset 即可成為新的 verified source evidence；但同 dataset 只完成部分 request 時不得洩漏。finalized consumer 對此類 partial batch 只 pin 其 required dataset scope，之後無關 sibling dataset 完成不得改變既有 lifecycle source。管理同步不可修改帳務或券商欄位。
 
 補登歷史成交時，Shadow 只能使用成交前的資訊；較新的 Pending snapshot 不得洩漏到較早的建倉日。更正成交後使用 effective account events 的真實日期重建，不覆寫原掛單意圖或歷史事件鏈。
 

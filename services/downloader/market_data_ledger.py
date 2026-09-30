@@ -656,18 +656,8 @@ class MarketDataJobLedger:
             http_attempts=total_http_attempts,
         )
 
-    def list_committed_artifacts(self, workload_id: str) -> tuple[LedgerCommittedArtifact, ...]:
-        with self._connection() as conn:
-            rows = conn.execute(
-                """
-                SELECT workload_id, request_id, ordinal, dataset, bootstrap_mode,
-                       data_id, start_date, end_date, row_count, content_sha256, completed_at
-                FROM jobs
-                WHERE workload_id = ? AND status = ?
-                ORDER BY ordinal
-                """,
-                (workload_id, JOB_DONE),
-            ).fetchall()
+    @staticmethod
+    def _committed_artifacts_from_rows(rows) -> tuple[LedgerCommittedArtifact, ...]:
         artifacts: list[LedgerCommittedArtifact] = []
         for row in rows:
             if row["row_count"] is None:
@@ -691,6 +681,61 @@ class MarketDataJobLedger:
                 )
             )
         return tuple(artifacts)
+
+    def list_committed_artifacts(self, workload_id: str) -> tuple[LedgerCommittedArtifact, ...]:
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT workload_id, request_id, ordinal, dataset, bootstrap_mode,
+                       data_id, start_date, end_date, row_count, content_sha256, completed_at
+                FROM jobs
+                WHERE workload_id = ? AND status = ?
+                ORDER BY ordinal
+                """,
+                (workload_id, JOB_DONE),
+            ).fetchall()
+        return self._committed_artifacts_from_rows(rows)
+
+    def list_dataset_complete_artifacts(self, workload_id: str) -> tuple[LedgerCommittedArtifact, ...]:
+        """Return committed artifacts only for datasets whose whole request set is DONE.
+
+        A Trading due batch may contain many datasets and stop on quota/retry after
+        some datasets have already completed. Dataset-level readiness is published
+        only for those complete request sets, so the read view must expose the same
+        verified subset instead of requiring the unrelated remainder of the batch.
+        The completeness test and artifact rows are read from one SQLite snapshot.
+        """
+
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                WITH complete_datasets AS (
+                    SELECT dataset
+                    FROM jobs
+                    WHERE workload_id = ?
+                    GROUP BY dataset
+                    HAVING COUNT(*) > 0
+                       AND SUM(CASE WHEN status = ? THEN 0 ELSE 1 END) = 0
+                )
+                SELECT j.workload_id, j.request_id, j.ordinal, j.dataset, j.bootstrap_mode,
+                       j.data_id, j.start_date, j.end_date, j.row_count,
+                       j.content_sha256, j.completed_at
+                FROM jobs AS j
+                INNER JOIN complete_datasets AS d ON d.dataset = j.dataset
+                WHERE j.workload_id = ? AND j.status = ?
+                ORDER BY j.ordinal
+                """,
+                (workload_id, JOB_DONE, workload_id, JOB_DONE),
+            ).fetchall()
+        return self._committed_artifacts_from_rows(rows)
+
+    def list_jobs(self, workload_id: str) -> tuple[LedgerJob, ...]:
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM jobs WHERE workload_id = ? ORDER BY ordinal",
+                (workload_id,),
+            ).fetchall()
+        return tuple(_row_to_job(row) for row in rows)
 
     def get_job(self, workload_id: str, request_id: str) -> LedgerJob:
         with self._connection() as conn:

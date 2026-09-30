@@ -701,8 +701,17 @@ def _run_market_data_v2_full_integrity_audit() -> int:
     integrity_status = result.get("status")
     print(f"Local canonical integrity : {_paint(integrity_status, _status_color(integrity_status))}")
     print(f"Provider Snapshot          : {result.get('provider_snapshot_status')} | requests={result.get('provider_requests_verified')} rows={result.get('provider_rows_verified')}")
-    print(f"Trading DONE overlays      : {result.get('overlay_status')} | batches={result.get('overlay_done_batches_verified')} requests={result.get('overlay_requests_verified')} rows={result.get('overlay_rows_verified')}")
-    print(f"Incomplete overlay batches : {result.get('overlay_incomplete_batches_ignored')} (resumable, not part of canonical read view)")
+    print(
+        "Trading readable overlays  : "
+        f"{result.get('overlay_status')} | done_batches={result.get('overlay_done_batches_verified')} "
+        f"partial_batches={result.get('overlay_partial_batches_verified', 0)} "
+        f"requests={result.get('overlay_requests_verified')} rows={result.get('overlay_rows_verified')}"
+    )
+    print(
+        "Incomplete overlay batches : "
+        f"{result.get('overlay_incomplete_batches_ignored')} "
+        "(dataset-complete subsets verified; unfinished datasets remain resumable/invisible)"
+    )
     print(f"Current target             : {result.get('target_date')}")
     print(f"Dataset registry/state     : {validation.get('state_dataset_count', 0)} / {validation.get('dataset_count', 0)}")
     print(f"State contract             : {_paint(validation.get('state_contract_status') or '-', _status_color(validation.get('state_contract_status')))}")

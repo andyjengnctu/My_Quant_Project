@@ -6457,15 +6457,24 @@ def validate_market_data_v2_trading_historical_latest_view_contract_case(_base_p
             "2026-03-01",
             "2026-03-02",
         )
+        provider_raw_request = BootstrapHttpRequest(
+            "TaiwanStockPrice",
+            "per_instrument_full_range",
+            "2330",
+            "2026-03-01",
+            "2026-03-02",
+        )
         registry_fp = canonical_json_sha256({"registry": "round4-synthetic"})
-        provider_manifest_fp = canonical_json_sha256({"provider_request": provider_request.request_id})
+        provider_manifest_fp = canonical_json_sha256({
+            "provider_requests": [provider_request.request_id, provider_raw_request.request_id]
+        })
         provider_manifest = BootstrapRequestManifest(
             as_of_date="2026-03-02",
             full_range_start="2026-03-01",
             registry_fingerprint=registry_fp,
             manifest_fingerprint=provider_manifest_fp,
             historical_instrument_count=1,
-            requests=(provider_request,),
+            requests=(provider_request, provider_raw_request),
         )
         provider_frames = {
             provider_request.request_id: pd.DataFrame({
@@ -6475,7 +6484,12 @@ def validate_market_data_v2_trading_historical_latest_view_contract_case(_base_p
                 "max": [102.0, 103.0],
                 "min": [99.0, 100.0],
                 "close": [101.0, 102.0],
-            })
+            }),
+            provider_raw_request.request_id: pd.DataFrame({
+                "date": ["2026-03-01", "2026-03-02"],
+                "stock_id": ["2330", "2330"],
+                "Trading_Volume": [1000000, 1100000],
+            }),
         }
         provider_payload, _unused_reader = _publish_ready_provider_snapshot_fixture(
             root=root,
@@ -6578,6 +6592,239 @@ def validate_market_data_v2_trading_historical_latest_view_contract_case(_base_p
                 bool(identity["current_execution_pool_used_for_historical_membership"]),
                 list(identity["overlay_batch_fingerprints"]),
             ),
+        )
+
+        # Regression: Due/Auto Sync records READY per dataset, not per whole
+        # multi-dataset batch. If PriceAdj completes but an unrelated dataset is
+        # still waiting for quota, Trading/Accounting must see the committed
+        # PriceAdj rows immediately. A dataset with even one unfinished request
+        # must remain invisible.
+        partial_price = BootstrapHttpRequest(
+            "TaiwanStockPriceAdj",
+            "trading_recent_repair",
+            None,
+            "2026-03-03",
+            "2026-03-03",
+        )
+        partial_raw_price = BootstrapHttpRequest(
+            "TaiwanStockPrice",
+            "trading_recent_repair",
+            None,
+            "2026-03-03",
+            "2026-03-03",
+        )
+        partial_unrelated = BootstrapHttpRequest(
+            "TaiwanStockPER",
+            "trading_recent_repair",
+            None,
+            "2026-03-03",
+            "2026-03-03",
+        )
+        partial_batch_fp = canonical_json_sha256(
+            {
+                "partial_batch": [
+                    partial_price.request_id,
+                    partial_raw_price.request_id,
+                    partial_unrelated.request_id,
+                ]
+            }
+        )
+        partial_manifest = TradingSyncRequestManifest(
+            as_of_date="2026-03-03",
+            full_range_start="2026-03-03",
+            registry_fingerprint=registry_fp,
+            manifest_fingerprint=partial_batch_fp,
+            historical_instrument_count=1,
+            requests=(partial_price, partial_raw_price, partial_unrelated),
+            base_provider_snapshot_fingerprint=str(provider_payload["snapshot_fingerprint"]),
+            base_provider_manifest_fingerprint=provider_manifest_fp,
+            base_as_of_date="2026-03-02",
+            previous_sync_date="2026-03-02",
+            validation_contract_version=TRADING_SYNC_VALIDATION_CONTRACT_VERSION,
+        )
+        atomic_write_json(
+            resolve_trading_market_data_v2_batch_manifest_path(root, partial_batch_fp),
+            build_trading_sync_batch_manifest_payload(partial_manifest),
+        )
+        partial_ledger = MarketDataJobLedger(
+            resolve_trading_market_data_v2_ledger_path(root, partial_batch_fp),
+            workload_namespace="market_data_v2_trading_auto_due",
+        )
+        partial_workload = partial_ledger.seed_manifest(partial_manifest, now=now)
+        partial_job = partial_ledger.claim_next_job(
+            partial_workload,
+            owner_id="round4-partial-overlay",
+            now=now,
+            lease_until=now + timedelta(minutes=5),
+        )
+        if partial_job is None or partial_job.request_id != partial_price.request_id:
+            raise AssertionError("synthetic partial Trading overlay first job identity drift")
+        partial_path = resolve_trading_market_data_v2_request_path(
+            root, partial_batch_fp, partial_price
+        )
+        partial_path.parent.mkdir(parents=True, exist_ok=True)
+        partial_path.write_bytes(b"round4-partial-price-overlay\n")
+        partial_ledger.mark_done(
+            partial_workload,
+            partial_price.request_id,
+            row_count=1,
+            content_sha256=compute_file_sha256(partial_path),
+            now=now + timedelta(seconds=3),
+        )
+        partial_raw_job = partial_ledger.claim_next_job(
+            partial_workload,
+            owner_id="round4-partial-overlay",
+            now=now + timedelta(seconds=4),
+            lease_until=now + timedelta(minutes=5),
+        )
+        if partial_raw_job is None or partial_raw_job.request_id != partial_raw_price.request_id:
+            raise AssertionError("synthetic partial Trading raw-price job identity drift")
+        partial_raw_path = resolve_trading_market_data_v2_request_path(
+            root, partial_batch_fp, partial_raw_price
+        )
+        partial_raw_path.parent.mkdir(parents=True, exist_ok=True)
+        partial_raw_path.write_bytes(b"round4-partial-raw-price-overlay\n")
+        partial_ledger.mark_done(
+            partial_workload,
+            partial_raw_price.request_id,
+            row_count=1,
+            content_sha256=compute_file_sha256(partial_raw_path),
+            now=now + timedelta(seconds=5),
+        )
+        partial_ledger.set_workload_status(
+            partial_workload, status="WAIT_QUOTA", now=now + timedelta(seconds=6)
+        )
+        frames[partial_price.request_id] = pd.DataFrame({
+            "date": ["2026-03-03"],
+            "stock_id": ["2330"],
+            "open": [120.0],
+            "max": [122.0],
+            "min": [119.0],
+            "close": [121.0],
+        })
+        frames[partial_raw_price.request_id] = pd.DataFrame({
+            "date": ["2026-03-03"],
+            "stock_id": ["2330"],
+            "Trading_Volume": [1234567],
+        })
+        partial_view = TradingMarketDataV2View.open(root, frame_reader=frame_reader)
+        partial_latest = partial_view.read_dataset_frame(
+            "TaiwanStockPriceAdj", columns=("date", "stock_id", "close")
+        )
+        check(
+            "dataset_complete_overlay_is_visible_before_unrelated_batch_datasets_finish",
+            {"date": "2026-03-03", "stock_id": "2330", "close": 121.0},
+            partial_latest.sort_values("date", kind="stable").iloc[-1].to_dict(),
+        )
+        check_true(
+            "dataset_complete_partial_batch_enters_required_dataset_identity",
+            partial_batch_fp
+            in partial_view.overlay_batch_fingerprints_for_datasets(("TaiwanStockPriceAdj",)),
+        )
+        check_true(
+            "unfinished_sibling_dataset_stays_out_of_partial_batch_identity",
+            partial_batch_fp
+            not in partial_view.overlay_batch_fingerprints_for_datasets(("TaiwanStockPER",)),
+        )
+        check_true(
+            "second_complete_dataset_in_partial_batch_is_visible",
+            partial_batch_fp
+            in partial_view.overlay_batch_fingerprints_for_datasets(("TaiwanStockPrice",)),
+        )
+        from services.trading.market_data_consumer import build_trading_v2_ohlcv_frame
+
+        partial_ohlcv = build_trading_v2_ohlcv_frame(
+            partial_view, ticker="2330", through_date="2026-03-03"
+        )
+        check_true(
+            "single_stock_ohlcv_uses_complete_price_and_priceadj_from_partial_batch",
+            not partial_ohlcv.empty
+            and str(partial_ohlcv["Date"].iloc[-1]) == "2026-03-03",
+        )
+
+        split_price_a = BootstrapHttpRequest(
+            "TaiwanStockPriceAdj",
+            "trading_recent_repair",
+            "2330",
+            "2026-03-04",
+            "2026-03-04",
+        )
+        split_price_b = BootstrapHttpRequest(
+            "TaiwanStockPriceAdj",
+            "trading_recent_repair",
+            "2317",
+            "2026-03-04",
+            "2026-03-04",
+        )
+        split_batch_fp = canonical_json_sha256(
+            {"split_dataset_batch": [split_price_a.request_id, split_price_b.request_id]}
+        )
+        split_manifest = TradingSyncRequestManifest(
+            as_of_date="2026-03-04",
+            full_range_start="2026-03-04",
+            registry_fingerprint=registry_fp,
+            manifest_fingerprint=split_batch_fp,
+            historical_instrument_count=2,
+            requests=(split_price_a, split_price_b),
+            base_provider_snapshot_fingerprint=str(provider_payload["snapshot_fingerprint"]),
+            base_provider_manifest_fingerprint=provider_manifest_fp,
+            base_as_of_date="2026-03-02",
+            previous_sync_date="2026-03-03",
+            validation_contract_version=TRADING_SYNC_VALIDATION_CONTRACT_VERSION,
+        )
+        atomic_write_json(
+            resolve_trading_market_data_v2_batch_manifest_path(root, split_batch_fp),
+            build_trading_sync_batch_manifest_payload(split_manifest),
+        )
+        split_ledger = MarketDataJobLedger(
+            resolve_trading_market_data_v2_ledger_path(root, split_batch_fp),
+            workload_namespace="market_data_v2_trading_auto_due",
+        )
+        split_workload = split_ledger.seed_manifest(split_manifest, now=now)
+        split_job = split_ledger.claim_next_job(
+            split_workload,
+            owner_id="round4-split-overlay",
+            now=now,
+            lease_until=now + timedelta(minutes=5),
+        )
+        if split_job is None or split_job.request_id != split_price_a.request_id:
+            raise AssertionError("synthetic split Trading overlay first job identity drift")
+        split_path = resolve_trading_market_data_v2_request_path(
+            root, split_batch_fp, split_price_a
+        )
+        split_path.parent.mkdir(parents=True, exist_ok=True)
+        split_path.write_bytes(b"round4-split-price-overlay\n")
+        split_ledger.mark_done(
+            split_workload,
+            split_price_a.request_id,
+            row_count=1,
+            content_sha256=compute_file_sha256(split_path),
+            now=now + timedelta(seconds=5),
+        )
+        split_ledger.set_workload_status(
+            split_workload, status="WAIT_QUOTA", now=now + timedelta(seconds=6)
+        )
+        frames[split_price_a.request_id] = pd.DataFrame({
+            "date": ["2026-03-04"],
+            "stock_id": ["2330"],
+            "open": [130.0],
+            "max": [132.0],
+            "min": [129.0],
+            "close": [131.0],
+        })
+        split_view = TradingMarketDataV2View.open(root, frame_reader=frame_reader)
+        split_latest = split_view.read_dataset_frame(
+            "TaiwanStockPriceAdj", columns=("date", "stock_id", "close"), data_id="2330"
+        )
+        check(
+            "partially_completed_dataset_never_leaks_single_done_request",
+            "2026-03-03",
+            str(split_latest.sort_values("date", kind="stable").iloc[-1]["date"]),
+        )
+        check_true(
+            "partial_dataset_batch_stays_out_of_dataset_identity",
+            split_batch_fp
+            not in split_view.overlay_batch_fingerprints_for_datasets(("TaiwanStockPriceAdj",)),
         )
 
     summary.update(
@@ -6852,6 +7099,11 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
         check("consumer_state_verify_reopens_finalized_target_view", "2026-09-09", open_finalized.call_args.kwargs["target_date"])
         check("consumer_state_verify_reopens_exact_pinned_overlay_set", ("batch-a", "batch-b"), tuple(open_finalized.call_args.kwargs["overlay_batch_fingerprints"]))
         check("consumer_state_verify_reopens_pinned_provider_snapshot", "provider-snapshot-fp", open_finalized.call_args.kwargs["provider_snapshot_fingerprint"])
+        check(
+            "consumer_state_verify_freezes_pinned_view_to_required_dataset_scope",
+            tuple(second["required_v2_datasets"]),
+            tuple(open_finalized.call_args.kwargs["overlay_dataset_scope"]),
+        )
         check("consumer_state_finalized_target_identity_verifies", second["state_fingerprint"], verified["state_fingerprint"])
 
         with (
@@ -6938,6 +7190,7 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
         "position": (repo / "services/trading/position_market_context.py").read_text(encoding="utf-8"),
         "allocator": (repo / "services/trading/order_planning.py").read_text(encoding="utf-8"),
         "data_ops": (repo / "services/trading/market_data_ops.py").read_text(encoding="utf-8"),
+        "v2_view": (repo / "services/trading/market_data_v2_view.py").read_text(encoding="utf-8"),
     }
     check_true("params_inject_v2_optimizer_loader", "raw_data_loader=load_trading_v2_optimizer_raw_data" in sources["params"])
     check_true("scanner_runtime_uses_v2_consumer_state", "load_trading_v2_consumer_state" in sources["scanner_state"])
@@ -6947,6 +7200,8 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
     check("position_context_has_no_legacy_csv_read", False, "pd.read_csv" in sources["position"] or "discover_unique_csv_map" in sources["position"])
     check("allocator_has_no_legacy_csv_read", False, "pd.read_csv" in sources["allocator"] or "discover_unique_csv_map" in sources["allocator"])
     check_true("workbench_data_ops_uses_v2_consumer_state", "load_trading_v2_consumer_state" in sources["data_ops"])
+    check_true("partial_overlay_read_preserves_full_manifest_job_identity_validation", "ledger.list_jobs(workload_id)" in sources["v2_view"] and "Trading V2 batch ledger request identity drift" in sources["v2_view"])
+    check_true("partial_overlay_read_caches_no_visible_dataset_result_by_ledger_signature", "_TRADING_OVERLAY_BATCH_CACHE[cache_key] = (signature, batch)" in sources["v2_view"] and "signature = _overlay_batch_stat_signature(manifest_path, ledger_path)" in sources["v2_view"] and "if batch is None" not in sources["v2_view"].split("cached = _TRADING_OVERLAY_BATCH_CACHE.get(cache_key)", 1)[1].split("return batch", 1)[0])
     check("legacy_trading_market_data_state_module_is_retired", False, (repo / "services/trading/market_data_state.py").exists())
     check("legacy_trading_compatibility_module_is_retired", False, (repo / "services/trading/market_data_compatibility.py").exists())
     check("legacy_direct_provider_application_module_is_retired", False, (repo / "services/downloader/application.py").exists())

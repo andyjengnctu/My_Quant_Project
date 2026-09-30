@@ -121,6 +121,23 @@ def _dataset_display_semantics(row: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def load_market_data_ops_generation_identity(project_root: str | Path) -> tuple[str | None, str | None]:
+    """Return the cheap persisted identity that downstream Workbench views consume.
+
+    This deliberately excludes scheduler/probe display state.  Only execution
+    consumer truth or dataset evidence changes should fan out ``STATE_MARKET_DATA``
+    to expensive dependent panels.
+    """
+
+    root = Path(project_root).resolve()
+    consumer_state = load_trading_v2_consumer_state(root, required=False, verify_current_view=False)
+    dataset_state = load_market_data_dataset_state(root, required=False)
+    return (
+        None if consumer_state is None else str(consumer_state.get("state_fingerprint") or "") or None,
+        None if dataset_state is None else str(dataset_state.get("state_fingerprint") or "") or None,
+    )
+
+
 def build_market_data_ops_read_model(
     project_root: str | Path,
     *,
@@ -366,4 +383,4 @@ def build_market_data_ops_read_model(
     }
 
 
-__all__ = ["build_market_data_ops_read_model"]
+__all__ = ["build_market_data_ops_read_model", "load_market_data_ops_generation_identity"]

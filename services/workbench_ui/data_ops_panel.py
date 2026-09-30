@@ -15,7 +15,10 @@ from core.market_data_scan_freshness import (
 from services.downloader.daily_console_progress import MarketDataDailyConsoleProgress
 from services.trading.market_data_auto_update import run_trading_market_data_auto_update
 from services.trading.market_data_consumer_promotion import reconcile_trading_v2_consumer_state_from_local_evidence
-from services.trading.market_data_ops import build_market_data_ops_read_model
+from services.trading.market_data_ops import (
+    build_market_data_ops_read_model,
+    load_market_data_ops_generation_identity,
+)
 from services.trading.market_data_dataset_state import set_market_data_scan_freshness_mode
 from services.trading.market_data_scheduler import (
     install_or_update_market_data_scheduler,
@@ -818,12 +821,12 @@ class MarketDataOpsPanel(ttk.Frame):
     def _canonical_market_state_identity(snapshot) -> tuple[object, ...] | None:
         if not isinstance(snapshot, dict):
             return None
+        # Fan-out identity is intentionally limited to canonical persisted
+        # evidence consumed by the other Workbench centers.  Scheduler/probe
+        # timestamps are display state and must not trigger an expensive reload.
         return (
             snapshot.get("trading_consumer_state_fingerprint"),
-            snapshot.get("trading_source_view_fingerprint"),
             snapshot.get("dataset_state_fingerprint"),
-            snapshot.get("update_target_date"),
-            snapshot.get("v2_latest_sync_target_date"),
         )
 
     def _notify_market_data_generation_changed(self) -> None:
@@ -856,21 +859,19 @@ class MarketDataOpsPanel(ttk.Frame):
         new_identity = self._canonical_market_state_identity(snapshot)
         identity_changed = bool(
             new_identity is not None
-            and (
-                not self._market_state_identity_observed
-                or new_identity != self._market_state_identity
-            )
+            and self._market_state_identity_observed
+            and new_identity != self._market_state_identity
         )
         self._market_state_identity = new_identity
         self._market_state_identity_observed = new_identity is not None
         self._snapshot = snapshot
         self._render(snapshot)
         if identity_changed:
-            # The first observed canonical identity is also a synchronization
-            # checkpoint: another tab may have been mounted before Data Center and
-            # Auto Sync may already have advanced persisted truth.  Render this
-            # source panel first, then invalidate every mounted consumer on the next
-            # Tk turn.
+            # Only a real canonical generation transition invalidates mounted
+            # consumers.  First observation establishes a baseline; startup
+            # reconcile captures its pre-operation identity in the worker so a
+            # real change during first open is still detected without forcing an
+            # unconditional three-center reload.
             self.after_idle(self._notify_market_data_generation_changed)
         if not update_status:
             return
@@ -1241,7 +1242,12 @@ class MarketDataOpsPanel(ttk.Frame):
 
     def _run_action(self, action: str):
         console_progress = MarketDataDailyConsoleProgress() if action in {"due", "full"} else None
+        pre_market_state_identity = None
         try:
+            if action in {"reconcile", "due", "full"}:
+                pre_market_state_identity = load_market_data_ops_generation_identity(
+                    WORKBENCH_PROJECT_ROOT
+                )
             if action == "reconcile":
                 result = run_workbench_startup_io_serialized(
                     lambda: run_workbench_local_reconcile_serialized(
@@ -1284,6 +1290,9 @@ class MarketDataOpsPanel(ttk.Frame):
                 console_progress.close()
             self._action_results.put((None, exc))
             return
+        if pre_market_state_identity is not None and isinstance(result, dict):
+            result = dict(result)
+            result["_workbench_pre_market_state_identity"] = tuple(pre_market_state_identity)
         # AI: Worker threads must never call Tk methods directly.  Queue the
         # result and let the Tk-thread poller update widgets/messageboxes.
         self._action_results.put((result, None))
@@ -1313,6 +1322,11 @@ class MarketDataOpsPanel(ttk.Frame):
         self._startup_reconcile_inflight = False
         self._action_thread = None
         self._set_action_state("normal")
+        if isinstance(result, dict) and not self._market_state_identity_observed:
+            baseline = result.get("_workbench_pre_market_state_identity")
+            if isinstance(baseline, (tuple, list)) and len(baseline) == 2:
+                self._market_state_identity = tuple(baseline)
+                self._market_state_identity_observed = True
         self.refresh_local_status(update_status=False)
         status = result.get("status") if isinstance(result, dict) else None
         canonical_result = (

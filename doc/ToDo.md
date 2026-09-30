@@ -4,10 +4,8 @@
     - 重新編號目前的research arm編號系統
 
 - non-DL 
+    - ajd/raw整合交易策略 
     - 加入validate period early stop，驗證最適回數，再用此回數retrain traning+valid完整資料，最後再用research的即有的選單來測試效果
-    - 目前DL是用SR來編號，策略是否也要有自已的編號
-    
-    - 將要要改的寫進一個臨時doc，改完後刪掉，避免跨對話移忘
 
 
 
@@ -35,12 +33,12 @@
 
 
 ## To do
+
 - 如何讓你依據投組結果，包含分析K線交易過程，提供我策略升級建議
     - 加入大盤過濾 +  加入低點買入 
     - 加入盤整期策略
 - DRL-based learning
 - LLM-based learning
-- ajd/raw整合交易策略 
 - 快速檢視不同獎勵函式結果 (排行）
 - 改為線上自動交易模擬 (依當天資產決定持有股數、沒買到下一檔(現在就是))
 - online虛擬交易 (小時交易)

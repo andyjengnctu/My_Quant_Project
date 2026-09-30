@@ -857,6 +857,39 @@ def validate_trading_account_state_contract_case(base_params):
         check("account_dashboard_marks_non_exact_target_valuation", False, stale_mtm_dashboard["valuation_prices_exact_target"])
         check("account_dashboard_warns_when_price_row_is_older_than_valuation_boundary", True, any("市價資料日 2026-09-14" in str(item) for item in stale_mtm_dashboard["warnings"]))
 
+        # Regression: provider snapshot rows may be strings while same-day overlay
+        # rows are pandas Timestamps. A lexical string cutoff would incorrectly
+        # reject ``2026-09-30 00:00:00`` against ``2026-09-30`` and mark to 9/29.
+        from services.trading.account_dashboard import _current_close_by_ticker
+
+        class _MixedDatePriceView:
+            def read_dataset_frame_many_data_ids(self, _dataset, *, data_ids, columns=None, end_date=None):
+                assert str(end_date) == "2026-09-30"
+                rows = []
+                for ticker, old_close, new_close in (("5443", 109.5, 111.0), ("7795", 488.0, 490.0)):
+                    if ticker not in set(str(item) for item in data_ids):
+                        continue
+                    rows.extend((
+                        {"date": "2026-09-29", "stock_id": ticker, "close": old_close},
+                        {"date": pd.Timestamp("2026-09-30"), "stock_id": ticker, "close": new_close},
+                    ))
+                frame = pd.DataFrame(rows)
+                if columns:
+                    frame = frame.loc[:, list(columns)]
+                return frame
+
+        with patch(
+            "services.trading.account_dashboard.TradingMarketDataV2View.open",
+            return_value=_MixedDatePriceView(),
+        ):
+            mixed_prices, mixed_price_dates, mixed_errors = _current_close_by_ticker(
+                root, ["5443", "7795"], "2026-09-30"
+            )
+        check("account_mtm_mixed_date_dtype_uses_same_day_overlay_close_5443", 111.0, mixed_prices.get("5443"))
+        check("account_mtm_mixed_date_dtype_uses_same_day_overlay_close_7795", 490.0, mixed_prices.get("7795"))
+        check("account_mtm_mixed_date_dtype_reports_true_same_day_price_dates", {"5443": "2026-09-30", "7795": "2026-09-30"}, mixed_price_dates)
+        check("account_mtm_mixed_date_dtype_has_no_false_cutoff_errors", {}, mixed_errors)
+
     # Historical edit/delete must rebuild account truth rather than reverse-mutating
     # only the latest position.  The Workbench may omit expected_revision so the
     # service resolves current truth after acquiring the shared mutation lock.
@@ -5371,6 +5404,9 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_account_dashboard_uses_requested_five_cards_and_fixed_bottom_refresh", True, 'text="帳戶儀表板"' in accounting_source and all(label in accounting_source for label in ('("revision", "revision")', '("市價日", "market_date")', '("股票淨值", "liquidation")', '("現金餘額", "cash")', '("帳戶淨值", "equity")')) and '("持股市值", "market")' not in accounting_source and '("可清算淨值", "liquidation")' not in accounting_source and 'footer_line = ttk.Frame' in accounting_source and 'text="全狀態刷新"' in accounting_source and 'pack(side="right"' in accounting_source)
     check("workbench_account_inventory_shows_actual_price_date_and_warns_on_carry_forward", True, 'TableColumn("current_price_date", "市價日"' in accounting_source and 'valuation_prices_exact_target' in accounting_source and '市價含前期資料' in accounting_source)
     check("workbench_data_center_market_generation_changes_publish_market_data_domain", True, 'STATE_MARKET_DATA' in data_ops_source and '_canonical_market_state_identity' in data_ops_source and '_notify_market_data_generation_changed' in data_ops_source and 'source_panel_id="market_data_ops"' in data_ops_source)
+    check("workbench_data_center_first_snapshot_is_baseline_not_unconditional_reload", True, 'self._market_state_identity_observed\n            and new_identity != self._market_state_identity' in data_ops_source)
+    check("workbench_data_center_mutating_actions_capture_pre_generation_identity", True, 'if action in {"reconcile", "due", "full"}:' in data_ops_source and 'load_market_data_ops_generation_identity' in data_ops_source and '_workbench_pre_market_state_identity' in data_ops_source)
+    check("workbench_data_center_generation_identity_excludes_probe_display_state", True, 'snapshot.get("trading_consumer_state_fingerprint")' in data_ops_source and 'snapshot.get("dataset_state_fingerprint")' in data_ops_source and 'snapshot.get("update_target_date")' not in data_ops_source.split('def _canonical_market_state_identity', 1)[1].split('def _notify_market_data_generation_changed', 1)[0])
     check("workbench_account_dashboard_amount_cards_use_tw_gain_loss_flat_colors", True, 'elif float(value) > 0.0:' in accounting_source and 'color = WORKBENCH_ERROR' in accounting_source and 'color = WORKBENCH_SUCCESS' in accounting_source and 'color = WORKBENCH_TEXT' in accounting_source)
     check("workbench_account_performance_labels_empirical_r_semantics", True, '"實績 EV(R)"' in accounting_source and '"實績賺賠比"' in accounting_source)
     account_dashboard_source = (Path(__file__).resolve().parents[2] / "services" / "trading" / "account_dashboard.py").read_text(encoding="utf-8")
@@ -7063,6 +7099,80 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_single_stock_prefetch_warms_each_candidate_analysis", 2, prefetched_analysis_run.call_count)
     check("workbench_single_stock_prefetch_warms_two_ohlcv_cache_entries", 2, len(prefetch_panel._trading_ohlcv_cache))
     check("workbench_single_stock_prefetch_warms_two_analysis_cache_entries", 2, len(prefetch_panel._trading_analysis_cache))
+
+    # Market Data same-day revisions must invalidate both replay caches.  A
+    # worker that started before invalidation may finish later, so generation
+    # fencing must also prevent stale prefetch data from repopulating the cache.
+    invalidation_panel = object.__new__(SingleStockBacktestInspectorPanel)
+    invalidation_panel._trading_cache_lock = _threading.RLock()
+    invalidation_panel._trading_market_cache_generation = 7
+    invalidation_panel._trading_consumer_cache_file_identity = (1, 2, 3)
+    invalidation_panel._trading_consumer_cache_state = {"market_date": "2026-09-29"}
+    invalidation_panel._trading_consumer_cache_view = object()
+    invalidation_panel._trading_consumer_cache_key = ("old-consumer", "old-view", "2026-09-29")
+    invalidation_panel._trading_ohlcv_cache = _OrderedDict({(("old-consumer", "old-view", "2026-09-29"), "5443"): cache_df})
+    invalidation_panel._trading_analysis_cache = _OrderedDict({("old", "5443", "params"): {"cached": True}})
+    invalidation_panel._trading_prefetch_tickers = {"5443"}
+    invalidation_panel._trading_prefetch_data_ready = _threading.Event()
+    next_generation = SingleStockBacktestInspectorPanel._invalidate_trading_market_data_caches(invalidation_panel)
+    check("workbench_single_stock_market_data_change_advances_cache_generation", 8, next_generation)
+    check("workbench_single_stock_market_data_change_clears_ohlcv_cache", 0, len(invalidation_panel._trading_ohlcv_cache))
+    check("workbench_single_stock_market_data_change_clears_analysis_cache", 0, len(invalidation_panel._trading_analysis_cache))
+    check("workbench_single_stock_market_data_change_clears_consumer_context", None, invalidation_panel._trading_consumer_cache_key)
+    check("workbench_single_stock_market_data_change_releases_old_prefetch_waiters", True, invalidation_panel._trading_prefetch_data_ready.is_set())
+
+    stale_prefetch_panel = object.__new__(SingleStockBacktestInspectorPanel)
+    stale_prefetch_panel._trading_cache_lock = _threading.RLock()
+    stale_prefetch_panel._trading_market_cache_generation = 2
+    stale_prefetch_panel._trading_ohlcv_cache = _OrderedDict()
+    stale_prefetch_panel._trading_analysis_cache = _OrderedDict()
+    stale_prefetch_panel._trading_prefetch_data_ready = _threading.Event()
+    stale_prefetch_panel._trading_prefetch_thread = None
+    stale_prefetch_panel._trading_prefetch_pending_rows = None
+    stale_prefetch_panel.after = lambda _delay, callback, *args: None
+    stale_prefetch_panel._resolve_cached_trading_consumer_context = lambda: (
+        {"market_date": "2026-09-30"}, object(), ("consumer-new", "view-new", "2026-09-30")
+    )
+    with patch.object(single_stock_inspector_module, "build_trading_v2_ohlcv_frames") as stale_bulk_read:
+        SingleStockBacktestInspectorPanel._trading_analysis_prefetch_worker(
+            stale_prefetch_panel, [{"ticker": "5443"}], generation=1
+        )
+    check("workbench_single_stock_stale_prefetch_generation_cannot_read_new_market_context", 0, stale_bulk_read.call_count)
+    check("workbench_single_stock_stale_prefetch_generation_cannot_repopulate_ohlcv_cache", 0, len(stale_prefetch_panel._trading_ohlcv_cache))
+
+    foreground_panel = object.__new__(SingleStockBacktestInspectorPanel)
+    foreground_panel._trading_cache_lock = _threading.RLock()
+    foreground_panel._trading_market_cache_generation = 1
+    foreground_panel._trading_ohlcv_cache = _OrderedDict()
+    foreground_panel._trading_analysis_cache = _OrderedDict()
+    foreground_panel._trading_prefetch_thread = None
+    foreground_panel._trading_prefetch_data_ready = None
+    foreground_panel._trading_prefetch_tickers = set()
+    foreground_context = ("consumer-same-day", "view-same-day", "2026-09-30")
+    foreground_panel._resolve_cached_trading_consumer_context = lambda: (
+        {"market_date": "2026-09-30"}, object(), foreground_context
+    )
+
+    def _foreground_load_then_invalidate(*_args, **_kwargs):
+        foreground_panel._trading_market_cache_generation = 2
+        return cache_df
+
+    with patch.object(
+        single_stock_inspector_module,
+        "load_trading_v2_sanitized_ohlcv_frame",
+        side_effect=_foreground_load_then_invalidate,
+    ):
+        try:
+            SingleStockBacktestInspectorPanel._get_cached_trading_clean_df(
+                foreground_panel, foreground_context, "5443", 1, generation=1
+            )
+        except RuntimeError as exc:
+            foreground_generation_rejected = "Market Data" in str(exc)
+        else:
+            foreground_generation_rejected = False
+    check("workbench_single_stock_foreground_load_rejects_generation_change_mid_read", True, foreground_generation_rejected)
+    check("workbench_single_stock_foreground_load_cannot_repopulate_stale_ohlcv_cache", 0, len(foreground_panel._trading_ohlcv_cache))
+
     class _Var:
         def __init__(self, value=""):
             self.value = value

@@ -1,7 +1,9 @@
 """Trading Market Data V2 historical/latest read seam.
 
-This module composes the immutable neutral Provider Snapshot with only fully
-verified Trading overlay batches.  It is a read service: it performs no provider
+This module composes the immutable neutral Provider Snapshot with verified
+Trading overlay evidence. A due batch may be only partially finished globally;
+only datasets whose entire request set is committed are readable. It is a read
+service: it performs no provider
 calls, writes no market-data artifact, does not choose model scientific scope,
 and does not define today's execution pool.
 """
@@ -32,6 +34,7 @@ from core.market_data_trading_storage_contract import (
     resolve_trading_market_data_v2_root,
     validate_trading_sync_batch_manifest_payload_for_read,
 )
+from core.market_data_trading_sync import TRADING_SYNC_VALIDATION_CONTRACT_VERSION
 from core.market_data_trading_view import (
     TradingV2TrainingHorizon,
     merge_market_data_v2_fragments,
@@ -56,7 +59,7 @@ class VerifiedTradingOverlayBatch:
 _TRADING_OVERLAY_BATCH_CACHE_LOCK = threading.RLock()
 _TRADING_OVERLAY_BATCH_CACHE: OrderedDict[
     tuple[str, str],
-    tuple[tuple[int, ...], VerifiedTradingOverlayBatch],
+    tuple[tuple[int, ...], VerifiedTradingOverlayBatch | None],
 ] = OrderedDict()
 
 
@@ -101,20 +104,49 @@ def _load_verified_overlay_batch(
         if workload_id is None:
             raise ValueError(f"Trading V2 batch ledger 找不到 manifest workload: {batch_fp}")
         summary = ledger.get_summary(workload_id)
-        # Batch manifests are created before execution; unfinished batches are
-        # legitimate resumable state and must never leak into the read view.
-        if summary.workload_status != WORKLOAD_DONE:
-            return None
         expected = int(payload.get("request_count") or 0)
-        if summary.total != expected or summary.done != expected or summary.blocked:
-            raise ValueError(
-                "Trading V2 DONE batch ledger completeness drift: "
-                f"batch={batch_fp}, done={summary.done}, total={summary.total}, expected={expected}"
-            )
-        artifacts = ledger.list_committed_artifacts(workload_id)
         request_ids = tuple(str(value) for value in payload.get("request_ids") or ())
-        if tuple(item.request_id for item in artifacts) != request_ids:
-            raise ValueError(f"Trading V2 batch committed request identity drift: {batch_fp}")
+        if summary.total != expected or len(request_ids) != expected:
+            raise ValueError(
+                "Trading V2 batch ledger request-count drift: "
+                f"batch={batch_fp}, total={summary.total}, manifest={expected}, ids={len(request_ids)}"
+            )
+        if summary.workload_status == WORKLOAD_DONE:
+            if summary.done != expected or summary.blocked:
+                raise ValueError(
+                    "Trading V2 DONE batch ledger completeness drift: "
+                    f"batch={batch_fp}, done={summary.done}, total={summary.total}, expected={expected}"
+                )
+            artifacts = ledger.list_committed_artifacts(workload_id)
+            if tuple(item.request_id for item in artifacts) != request_ids:
+                raise ValueError(f"Trading V2 batch committed request identity drift: {batch_fp}")
+        else:
+            # Dataset-level partial publication is a current-contract behavior.
+            # Retained legacy batches keep their historical complete-workload
+            # read rule so compatibility never silently broadens old evidence.
+            if int(payload.get("validation_contract_version") or 0) != int(TRADING_SYNC_VALIDATION_CONTRACT_VERSION):
+                return None
+            jobs = ledger.list_jobs(workload_id)
+            if tuple(item.request_id for item in jobs) != request_ids:
+                raise ValueError(f"Trading V2 batch ledger request identity drift: {batch_fp}")
+            if any(item.to_request().request_id != item.request_id for item in jobs):
+                raise ValueError(f"Trading V2 batch ledger request payload drift: {batch_fp}")
+            # Auto/Due sync publishes READY evidence per dataset as soon as every
+            # logical request for that dataset is committed. Requiring unrelated
+            # datasets in the same batch to finish made dataset state say READY
+            # while Trading consumers still saw the previous batch. Mirror the
+            # canonical dataset-level completion boundary here: a partially
+            # completed dataset remains invisible, but a fully committed dataset
+            # is valid overlay evidence even while other datasets wait/retry.
+            artifacts = ledger.list_dataset_complete_artifacts(workload_id)
+            if not artifacts:
+                return None
+            manifest_request_ids = set(request_ids)
+            artifact_request_ids = {item.request_id for item in artifacts}
+            if not artifact_request_ids <= manifest_request_ids:
+                raise ValueError(f"Trading V2 dataset-complete artifact identity drift: {batch_fp}")
+            if any(item.to_request().request_id != item.request_id for item in artifacts):
+                raise ValueError(f"Trading V2 dataset-complete artifact payload drift: {batch_fp}")
         completed_at = max((str(item.completed_at or "") for item in artifacts), default="")
         return VerifiedTradingOverlayBatch(
             batch_fingerprint=batch_fp,
@@ -127,8 +159,8 @@ def _load_verified_overlay_batch(
         return _materialize()
 
     # Several initial Trading Center read models open independent views in
-    # parallel.  Serialize only completed-batch ledger verification; once one
-    # view verifies a batch, peers reuse the same immutable evidence object.
+    # parallel. Serialize ledger verification; the cache signature includes the
+    # live SQLite/WAL evidence so newly completed dataset subsets invalidate reuse.
     with _TRADING_OVERLAY_BATCH_CACHE_LOCK:
         signature = _overlay_batch_stat_signature(manifest_path, ledger_path)
         cached = _TRADING_OVERLAY_BATCH_CACHE.get(cache_key)
@@ -136,9 +168,11 @@ def _load_verified_overlay_batch(
             _TRADING_OVERLAY_BATCH_CACHE.move_to_end(cache_key)
             return cached[1]
         batch = _materialize()
-        if batch is None:
-            # Do not cache unfinished work.  Its ledger is expected to mutate.
-            return None
+        # Cache both visible partial batches and the current "no complete dataset"
+        # result.  The signature includes SQLite/WAL evidence, so the cache is
+        # invalidated immediately when any job completion mutates the ledger.
+        # This avoids repeatedly opening/querying every retained partial ledger
+        # while several Workbench read models initialize in parallel.
         signature = _overlay_batch_stat_signature(manifest_path, ledger_path)
         _TRADING_OVERLAY_BATCH_CACHE[cache_key] = (signature, batch)
         _TRADING_OVERLAY_BATCH_CACHE.move_to_end(cache_key)
@@ -157,6 +191,7 @@ class TradingMarketDataV2View:
         hash_fn=None,
         overlay_target_date_cutoff: str | None = None,
         overlay_batch_fingerprints: tuple[str, ...] | None = None,
+        overlay_dataset_scope: tuple[str, ...] | None = None,
     ):
         self.project_root = Path(project_root).resolve()
         self.archive = archive
@@ -167,6 +202,11 @@ class TradingMarketDataV2View:
             None
             if overlay_batch_fingerprints is None
             else tuple(dict.fromkeys(str(value).strip() for value in overlay_batch_fingerprints if str(value).strip()))
+        )
+        self._overlay_dataset_scope = (
+            None
+            if overlay_dataset_scope is None
+            else frozenset(str(value).strip() for value in overlay_dataset_scope if str(value).strip())
         )
         self._frame_reader = frame_reader or read_parquet_frame
         self._hash_fn = hash_fn or compute_file_sha256
@@ -234,14 +274,17 @@ class TradingMarketDataV2View:
         target_date: str,
         overlay_batch_fingerprints,
         provider_snapshot_fingerprint: str | None = None,
+        overlay_dataset_scope=None,
         frame_reader=None,
         hash_fn=None,
     ):
         """Open an immutable consumer view pinned to an exact verified overlay set.
 
-        This is stronger than ``open_as_of_target``: later DONE batches carrying
-        the same target date are excluded as well, so a finalized Scanner/Params
-        lineage cannot drift after its consumer state has been published.
+        This is stronger than ``open_as_of_target``: later batches carrying the
+        same target date are excluded as well. ``overlay_dataset_scope`` freezes
+        the consumer to its declared dependency datasets, so unrelated datasets
+        that finish later inside an already pinned partial batch cannot drift the
+        finalized Scanner/Params source view.
         """
 
         root = Path(project_root).resolve()
@@ -259,6 +302,7 @@ class TradingMarketDataV2View:
             hash_fn=hash_fn,
             overlay_target_date_cutoff=str(target_date),
             overlay_batch_fingerprints=tuple(overlay_batch_fingerprints or ()),
+            overlay_dataset_scope=None if overlay_dataset_scope is None else tuple(overlay_dataset_scope),
         )
 
     def training_horizon(
@@ -322,9 +366,41 @@ class TradingMarketDataV2View:
             )
             if batch is not None:
                 batches.append(batch)
-        batches.sort(key=lambda item: (item.target_date, item.completed_at, item.batch_fingerprint))
+        # Global batch identity order must not move merely because an unrelated
+        # dataset in a partially completed batch finishes later. Dataset merge
+        # precedence is resolved separately from that dataset's own completion.
+        batches.sort(key=lambda item: (item.target_date, item.batch_fingerprint))
         self._overlay_batches = tuple(batches)
         return self._overlay_batches
+
+    def _overlay_batches_for_dataset(self, dataset: str) -> tuple[VerifiedTradingOverlayBatch, ...]:
+        name = str(dataset or "").strip()
+        if self._overlay_dataset_scope is not None and name not in self._overlay_dataset_scope:
+            return ()
+        relevant = [
+            batch
+            for batch in self._load_overlay_batches()
+            if any(str(artifact.dataset) == name for artifact in batch.artifacts)
+        ]
+
+        def _dataset_completion(batch: VerifiedTradingOverlayBatch) -> str:
+            return max(
+                (
+                    str(artifact.completed_at or "")
+                    for artifact in batch.artifacts
+                    if str(artifact.dataset) == name
+                ),
+                default="",
+            )
+
+        relevant.sort(
+            key=lambda batch: (
+                batch.target_date,
+                _dataset_completion(batch),
+                batch.batch_fingerprint,
+            )
+        )
+        return tuple(relevant)
 
     @staticmethod
     def _filter_frame(
@@ -356,7 +432,7 @@ class TradingMarketDataV2View:
         start_date: str | None,
         end_date: str | None,
     ) -> Iterator[pd.DataFrame]:
-        for batch in self._load_overlay_batches():
+        for batch in self._overlay_batches_for_dataset(dataset):
             for artifact in batch.artifacts:
                 if str(artifact.dataset) != dataset:
                     continue
@@ -396,7 +472,7 @@ class TradingMarketDataV2View:
         wanted = {str(value).strip() for value in data_ids if str(value).strip()}
         if not wanted:
             return
-        for batch in self._load_overlay_batches():
+        for batch in self._overlay_batches_for_dataset(dataset):
             for artifact in batch.artifacts:
                 if str(artifact.dataset) != dataset:
                     continue
@@ -493,9 +569,10 @@ class TradingMarketDataV2View:
     ) -> pd.DataFrame:
         """Read one verified latest operational dataset view.
 
-        Provider fragments are oldest.  Complete Trading overlay fragments are
-        ordered deterministically after them, so the latest verified row for the
-        registry primary key wins.  Incomplete/resumable batches are invisible.
+        Provider fragments are oldest. Dataset-complete Trading overlay fragments
+        are ordered deterministically after them, so the latest verified row for
+        the registry primary key wins. Incomplete datasets remain invisible even
+        when sibling datasets in the same resumable batch have completed.
         """
 
         name = str(dataset or "").strip()
@@ -615,6 +692,8 @@ class TradingMarketDataV2View:
 
         names = {str(dataset or "").strip() for dataset in datasets}
         names.discard("")
+        if self._overlay_dataset_scope is not None:
+            names.intersection_update(self._overlay_dataset_scope)
         if not names:
             return ()
         return tuple(

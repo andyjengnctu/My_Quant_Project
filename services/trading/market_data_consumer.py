@@ -410,6 +410,7 @@ def open_trading_v2_consumer_view(
             target_date=market_date,
             overlay_batch_fingerprints=tuple(pinned_batches),
             provider_snapshot_fingerprint=str(state.get("provider_snapshot_fingerprint") or "") or None,
+            overlay_dataset_scope=tuple(state.get("required_v2_datasets") or _required_v2_datasets()),
         )
     # Compatibility for pre-pinning consumer states. They remain target-capped
     # and will be replaced on the next legal consumer promotion/publication.

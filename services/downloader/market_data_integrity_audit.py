@@ -41,6 +41,7 @@ from core.market_data_integrity_contract import (
     validate_market_data_integrity_contract,
 )
 from core.market_data_storage_contract import resolve_market_data_request_parquet_path
+from core.market_data_trading_sync import TRADING_SYNC_VALIDATION_CONTRACT_VERSION
 from core.market_data_trading_storage_contract import (
     TRADING_MARKET_DATA_V2_BATCH_MANIFEST_FILENAME,
     resolve_trading_market_data_v2_ledger_path,
@@ -400,6 +401,7 @@ def run_market_data_v2_full_integrity_audit(
     batch_root = resolve_trading_market_data_v2_root(root) / "batches"
     done_batches = 0
     incomplete_batches = 0
+    partial_readable_batches = 0
     overlay_requests = 0
     overlay_rows = 0
     overlay_artifacts_verified = 0
@@ -418,26 +420,48 @@ def run_market_data_v2_full_integrity_audit(
                 raise ValueError(f"Trading V2 batch ledger 找不到 manifest workload: {batch_fp}")
             summary = ledger.get_summary(workload_id)
             expected = int(payload.get("request_count") or 0)
-            if summary.workload_status != WORKLOAD_DONE:
-                incomplete_batches += 1
-                continue
-            if (
-                summary.total != expected
-                or summary.done != expected
-                or summary.pending
-                or summary.running
-                or summary.retryable
-                or summary.blocked
-            ):
-                raise ValueError(
-                    "Trading V2 DONE batch ledger completeness drift: "
-                    f"batch={batch_fp}, done={summary.done}, total={summary.total}, expected={expected}"
-                )
-            artifacts = ledger.list_committed_artifacts(workload_id)
             request_ids = tuple(str(value) for value in payload.get("request_ids") or ())
-            if tuple(item.request_id for item in artifacts) != request_ids:
-                raise ValueError(f"Trading V2 batch committed request identity drift: {batch_fp}")
-            done_batches += 1
+            if summary.total != expected or len(request_ids) != expected:
+                raise ValueError(
+                    "Trading V2 batch ledger request-count drift: "
+                    f"batch={batch_fp}, total={summary.total}, manifest={expected}, ids={len(request_ids)}"
+                )
+
+            if summary.workload_status == WORKLOAD_DONE:
+                if (
+                    summary.done != expected
+                    or summary.pending
+                    or summary.running
+                    or summary.retryable
+                    or summary.blocked
+                ):
+                    raise ValueError(
+                        "Trading V2 DONE batch ledger completeness drift: "
+                        f"batch={batch_fp}, done={summary.done}, total={summary.total}, expected={expected}"
+                    )
+                artifacts = ledger.list_committed_artifacts(workload_id)
+                if tuple(item.request_id for item in artifacts) != request_ids:
+                    raise ValueError(f"Trading V2 batch committed request identity drift: {batch_fp}")
+                done_batches += 1
+            else:
+                incomplete_batches += 1
+                if int(payload.get("validation_contract_version") or 0) != int(TRADING_SYNC_VALIDATION_CONTRACT_VERSION):
+                    continue
+                jobs = ledger.list_jobs(workload_id)
+                if tuple(item.request_id for item in jobs) != request_ids:
+                    raise ValueError(f"Trading V2 batch ledger request identity drift: {batch_fp}")
+                if any(item.to_request().request_id != item.request_id for item in jobs):
+                    raise ValueError(f"Trading V2 batch ledger request payload drift: {batch_fp}")
+                artifacts = ledger.list_dataset_complete_artifacts(workload_id)
+                if not artifacts:
+                    continue
+                artifact_ids = {item.request_id for item in artifacts}
+                if not artifact_ids <= set(request_ids):
+                    raise ValueError(f"Trading V2 dataset-complete artifact identity drift: {batch_fp}")
+                if any(item.to_request().request_id != item.request_id for item in artifacts):
+                    raise ValueError(f"Trading V2 dataset-complete artifact payload drift: {batch_fp}")
+                partial_readable_batches += 1
+
             overlay_requests += len(artifacts)
             for item in artifacts:
                 request = item.to_request()
@@ -479,6 +503,7 @@ def run_market_data_v2_full_integrity_audit(
         "provider_rows_verified": provider_rows,
         "overlay_status": "PASS",
         "overlay_done_batches_verified": done_batches,
+        "overlay_partial_batches_verified": partial_readable_batches,
         "overlay_incomplete_batches_ignored": incomplete_batches,
         "overlay_requests_verified": overlay_requests,
         "overlay_rows_verified": overlay_rows,

@@ -343,6 +343,10 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         self._trading_consumer_cache_key = None
         self._trading_ohlcv_cache = OrderedDict()
         self._trading_analysis_cache = OrderedDict()
+        # Bump whenever canonical Market Data changes.  A same-day overlay
+        # revision can keep the same consumer market_date, so file/date keys
+        # alone are insufficient to invalidate prefetched OHLCV.
+        self._trading_market_cache_generation = 0
         self._trading_prefetch_thread = None
         self._trading_prefetch_pending_rows = None
         self._trading_prefetch_tickers = set()
@@ -781,6 +785,37 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         if ticker:
             self.after_idle(self._run_analysis)
 
+    def _trading_market_cache_generation_snapshot(self) -> int:
+        with self._trading_cache_lock:
+            return int(getattr(self, "_trading_market_cache_generation", 0))
+
+    def _require_trading_market_cache_generation(self, generation: int) -> None:
+        if int(generation) != self._trading_market_cache_generation_snapshot():
+            raise RuntimeError("Trading Market Data 在單股資料載入期間已更新，請重試目前股票")
+
+    def _invalidate_trading_market_data_caches(self) -> int:
+        """Drop Trading replay caches after canonical Market Data advances.
+
+        A background prefetch may still be finishing against the previous view.
+        The generation token prevents that worker from repopulating a cleared
+        cache after the invalidation.
+        """
+
+        with self._trading_cache_lock:
+            generation = int(getattr(self, "_trading_market_cache_generation", 0)) + 1
+            self._trading_market_cache_generation = generation
+            self._trading_consumer_cache_file_identity = None
+            self._trading_consumer_cache_state = None
+            self._trading_consumer_cache_view = None
+            self._trading_consumer_cache_key = None
+            self._trading_ohlcv_cache.clear()
+            self._trading_analysis_cache.clear()
+            self._trading_prefetch_tickers = set()
+            event = self._trading_prefetch_data_ready
+        if event is not None:
+            event.set()
+        return generation
+
     def refresh_for_state_domains(self, domains) -> bool:
         """Refresh Trading projections after any committed Workbench state transition."""
         normalized = normalize_state_domains(domains)
@@ -791,6 +826,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         if normalized & {STATE_PENDING_ENTRIES}:
             self._refresh_pending_options()
         if STATE_MARKET_DATA in normalized:
+            self._invalidate_trading_market_data_caches()
             self._refresh_stock_names(force=True)
         if normalized & {STATE_PENDING_ENTRIES, STATE_SCANNER_ELIGIBILITY, STATE_SCANNER, STATE_MARKET_DATA, STATE_PARAMS}:
             self._candidate_pool_checked_identity = ("__state_changed__",)
@@ -1041,7 +1077,12 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             signature = str((members[0] if members else {}).get("params_signature") or "").strip()
         return params, signature, "trading_primary_params"
 
-    def _get_cached_trading_clean_df(self, context_key, ticker, min_rows, *, allow_prefetch_wait=False):
+    def _get_cached_trading_clean_df(
+        self, context_key, ticker, min_rows, *, allow_prefetch_wait=False, generation=None
+    ):
+        if generation is None:
+            generation = self._trading_market_cache_generation_snapshot()
+        self._require_trading_market_cache_generation(generation)
         cache_key = (context_key, str(ticker).strip().upper())
         with self._trading_cache_lock:
             cached = self._lru_get(self._trading_ohlcv_cache, cache_key)
@@ -1062,6 +1103,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             and prefetch_event is not None
         ):
             prefetch_event.wait(timeout=SINGLE_STOCK_TRADING_PREFETCH_WAIT_SECONDS)
+            self._require_trading_market_cache_generation(generation)
             with self._trading_cache_lock:
                 cached = self._lru_get(self._trading_ohlcv_cache, cache_key)
             if cached is not None:
@@ -1069,6 +1111,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
                     raise ValueError(f"有效資料不足: 清洗後僅剩 {len(cached)} 列")
                 return cached, True
 
+        self._require_trading_market_cache_generation(generation)
         _state, view, _resolved_key = self._resolve_cached_trading_consumer_context()
         if _resolved_key != context_key:
             raise RuntimeError("Trading consumer state 在單股資料載入期間已更新，請重試目前股票")
@@ -1079,7 +1122,9 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             through_date=market_date,
             min_rows=int(min_rows),
         )
+        self._require_trading_market_cache_generation(generation)
         with self._trading_cache_lock:
+            self._require_trading_market_cache_generation(generation)
             self._lru_put(
                 self._trading_ohlcv_cache,
                 cache_key,
@@ -1098,7 +1143,9 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         include_live_inspection=True,
     ):
         started = time.perf_counter()
+        generation = self._trading_market_cache_generation_snapshot()
         consumer_state, _view, context_key = self._resolve_cached_trading_consumer_context()
+        self._require_trading_market_cache_generation(generation)
         context_elapsed = time.perf_counter() - started
         params, params_signature, params_source = self._resolve_trading_analysis_params(
             ticker, params_path, candidate_row
@@ -1107,6 +1154,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         with self._trading_cache_lock:
             cached_result = self._lru_get(self._trading_analysis_cache, cache_key)
         if cached_result is not None:
+            self._require_trading_market_cache_generation(generation)
             result = dict(cached_result)
             # Backtest/chart replay is cacheable; broker/account truth is not.
             # Foreground inspection always re-reads canonical Trading state, while
@@ -1128,7 +1176,9 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         min_rows = get_required_min_rows(params)
         data_started = time.perf_counter()
         clean_df, data_cache_hit = self._get_cached_trading_clean_df(
-            context_key, ticker, min_rows, allow_prefetch_wait=allow_prefetch_wait
+            context_key, ticker, min_rows,
+            allow_prefetch_wait=allow_prefetch_wait,
+            generation=generation,
         )
         data_elapsed = time.perf_counter() - data_started
         analysis_params = build_trade_analysis_view_params(params)
@@ -1148,6 +1198,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             output_dir=output_dir,
         )
         analysis_elapsed = time.perf_counter() - analysis_started
+        self._require_trading_market_cache_generation(generation)
         market_date = str(consumer_state.get("market_date") or "")
         result = {
             "ticker": ticker,
@@ -1162,6 +1213,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         }
         cache_payload = dict(result)
         with self._trading_cache_lock:
+            self._require_trading_market_cache_generation(generation)
             self._lru_put(
                 self._trading_analysis_cache,
                 cache_key,
@@ -1169,6 +1221,7 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
                 SINGLE_STOCK_TRADING_ANALYSIS_CACHE_SIZE,
             )
         if include_live_inspection:
+            self._require_trading_market_cache_generation(generation)
             result["trading_inspection"] = build_trading_single_stock_inspection(
                 WORKBENCH_PROJECT_ROOT, ticker, candidate_row=dict(candidate_row or {}),
                 market_frame=result["clean_df"], consumer_state=consumer_state,
@@ -1195,9 +1248,11 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         data_rows = normalized_rows[:TRADING_WORKBENCH_SINGLE_STOCK_OHLCV_PREFETCH_TICKERS]
         self._trading_prefetch_tickers = {str(row.get("ticker") or "").strip().upper() for row in data_rows}
         self._trading_prefetch_data_ready = threading.Event()
+        with self._trading_cache_lock:
+            generation = int(getattr(self, "_trading_market_cache_generation", 0))
         prefetch_thread = threading.Thread(
             target=self._trading_analysis_prefetch_worker,
-            args=(data_rows,),
+            args=(data_rows, generation),
             name="workbench-single-stock-analysis-prefetch",
             daemon=True,
         )
@@ -1205,10 +1260,20 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
         prefetch_thread.start()
         return True
 
-    def _trading_analysis_prefetch_worker(self, rows):
+    def _trading_analysis_prefetch_worker(self, rows, generation=None):
         error = None
+        if generation is None:
+            with self._trading_cache_lock:
+                generation = int(getattr(self, "_trading_market_cache_generation", 0))
+
+        def _generation_is_current():
+            with self._trading_cache_lock:
+                return int(generation) == int(getattr(self, "_trading_market_cache_generation", 0))
+
         try:
             consumer_state, view, context_key = self._resolve_cached_trading_consumer_context()
+            if not _generation_is_current():
+                return
             market_date = str(consumer_state.get("market_date") or "")
             tickers = tuple(
                 dict.fromkeys(
@@ -1228,7 +1293,11 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
                     tickers=missing,
                     through_date=market_date,
                 )
+                if not _generation_is_current():
+                    return
                 for ticker in missing:
+                    if not _generation_is_current():
+                        return
                     raw = raw_frames.get(ticker)
                     if raw is None or raw.empty:
                         continue
@@ -1246,8 +1315,12 @@ class SingleStockBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame
             if self._trading_prefetch_data_ready is not None:
                 self._trading_prefetch_data_ready.set()
 
+            if not _generation_is_current():
+                return
             params_path = str(resolve_trading_selected_strategy_param_path(WORKBENCH_PROJECT_ROOT))
             for row in rows[:TRADING_WORKBENCH_SINGLE_STOCK_ANALYSIS_PREFETCH_TICKERS]:
+                if not _generation_is_current():
+                    return
                 ticker = str(row.get("ticker") or "").strip().upper()
                 if not ticker:
                     continue
