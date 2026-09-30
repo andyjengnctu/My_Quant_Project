@@ -3894,6 +3894,19 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         with _auto_update_lock(live_root, now=lock_now + timedelta(minutes=2), lease_minutes=1) as next_owner:
             check("auto_update_finished_worker_releases_process_lock", True, next_owner)
 
+    with TemporaryDirectory() as orphan_lease_dir:
+        orphan_root = Path(orphan_lease_dir)
+        orphan_now = datetime(2026, 9, 8, 18, 0, tzinfo=ZoneInfo("Asia/Taipei"))
+        from core.market_data_trading_storage_contract import resolve_trading_market_data_v2_auto_update_lock_path
+        orphan_path = resolve_trading_market_data_v2_auto_update_lock_path(orphan_root)
+        orphan_path.parent.mkdir(parents=True, exist_ok=True)
+        orphan_path.write_text(
+            '{"owner":"dead-worker","acquired_at":"2026-09-08T17:59:00+08:00","lease_until":"2026-09-08T18:30:00+08:00"}',
+            encoding="utf-8",
+        )
+        with _auto_update_lock(orphan_root, now=orphan_now, lease_minutes=1) as recovered_owner:
+            check("auto_update_orphan_lease_does_not_false_busy_when_process_mutex_is_free", True, recovered_owner)
+
     project_root = Path(__file__).resolve().parents[2]
     workflow_source = (project_root / "services" / "trading" / "daily_workflow.py").read_text(encoding="utf-8")
     update_source = (project_root / "services" / "trading" / "market_data_update.py").read_text(encoding="utf-8")
@@ -3919,6 +3932,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     price_refresh_source = (project_root / "services" / "downloader" / "trading_price_refresh.py").read_text(encoding="utf-8")
     check("canonical_update_passes_provider_client_only_to_v2_updater", True, "client=provider_client" in update_source and "legacy_stage_data_requests" not in update_source)
     check("canonical_full_update_requests_fresh_quota_observation", True, "refresh_provider_quota=True" in update_source)
+    check("canonical_full_update_busy_fails_closed_before_consumer_publication", True, 'v2_status == "BUSY"' in update_source and "本次沒有送出 provider request" in update_source)
     check(
         "canonical_full_update_force_probes_all_included_v2_datasets",
         True,
@@ -3985,6 +3999,7 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("workbench_data_ops_read_model_never_runs_on_tk_refresh_body", False, "build_market_data_ops_read_model" in data_ops_refresh_body)
     check("workbench_data_ops_read_model_uses_background_status_worker", True, 'target=self._refresh_local_status_worker' in data_ops_panel_source and 'self._status_refresh_results.put' in data_ops_panel_source)
     check("workbench_data_ops_local_reconcile_uses_background_action_thread", True, 'def _start_initial_reconcile' in data_ops_panel_source and 'self._start_action("reconcile")' in data_ops_panel_source and 'if action == "reconcile"' in data_ops_panel_source and 'command=lambda: self._start_action("reconcile")' in data_ops_panel_source)
+    check("workbench_data_ops_busy_result_is_warning_not_success", True, 'canonical_status == "BUSY"' in data_ops_panel_source and "本次未執行更新" in data_ops_panel_source)
     check(
         "workbench_dataset_table_labels_provider_attempt_as_last_check",
         True,

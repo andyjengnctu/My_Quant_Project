@@ -321,6 +321,14 @@ def _auto_update_lock(project_root: Path, *, now: datetime, lease_minutes: int):
         if not acquired:
             yield False
             return
+        # AI: The SQLite process-owned mutex is the live-owner authority.  Once
+        # it is acquired, any remaining JSON lease belongs to a dead/finished
+        # worker (for example after an unclean process exit) and must not block
+        # a manual Full Update for the rest of the lease window.
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
         with _auto_update_lease(project_root, now=now, lease_minutes=lease_minutes) as leased:
             yield leased
 

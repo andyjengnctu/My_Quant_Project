@@ -527,6 +527,8 @@ Operational lineage 同步改名並 bump schema：Params binding / Scanner candi
 
 `services/trading/market_data_ops.py` 是 Workbench Data Ops 的 local-first read-model owner：只組合 V2 execution consumer state、`market_data_v2` aggregate state、51-dataset operational state、canonical due planner、market-date discovery state、auto-update policy 與本機 Windows scheduler status，不呼叫 FinMind、不寫 Market Data state。`services/workbench_ui/data_ops_panel.py` 只 render Overview / Dataset Status / Schedule / Activity，並透過既有 `run_trading_market_data_auto_update()` / `run_trading_market_data_update()` 執行資料 action；OS scheduler 安裝／啟停／移除則只委派 `services/trading/market_data_scheduler.py`，不得直接執行 PowerShell、建立 request manifest、publication/freshness 判斷或 raw JSON state mutation。Live quota 不因 UI refresh 額外查詢；Trading sync executor 在真正 provider interaction 後將最後 observed `quota_user_count / quota_limit` 持久化至 aggregate V2 state，Data Ops 只顯示該 evidence 與 observation timestamp。Workbench 的 Market Data read model 必須先以 canonical planner timezone 正規化 `now/generated_at`；timestamp 顯示再沿用 `MARKET_DATA_V2_PUBLICATION_POLICY.timezone`，並透過 `core.console_report.format_datetime_in_timezone()` 格式化，不能依執行主機 local timezone 重新解讀 publication / next-check / quota-observed 時間。
 
+Market Data update concurrency 以 `state/trading/market_data_v2/auto_update.lock.sqlite3` 的 process-owned SQLite mutex 作為 live-owner authority；JSON lease 只保存 crash-recovery/diagnostic metadata，當 process mutex 已成功取得時，不得讓前一個已退出 worker 遺留的未到期 lease 造成 false `BUSY`。Workbench Full Update 若真的因另一個 live worker 回傳 `BUSY`，必須 fail-closed 停止在資料更新階段，不得繼續 publish 或沿用既有 Trading consumer state 冒充本次更新成功；Data Center 亦以 warning 明示「本次未執行更新」。
+
 
 ### Trading Market Data Windows Scheduler Deployment Ownership（Round 7）
 

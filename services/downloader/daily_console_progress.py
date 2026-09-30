@@ -19,7 +19,7 @@ def _status_color(status: object) -> str:
     normalized = str(status or "").strip().upper()
     if normalized in {"PASS", "READY", "UPDATED", "DONE", "AVAILABLE", "YES", "SYNCED", "COMPLETE", "REUSE"}:
         return C_GREEN
-    if normalized in {"DEFERRED", "WAIT_PUBLISH", "WAIT_QUOTA", "UNVERIFIED", "ATTENTION", "PARTIAL", "INCOMPLETE", "RUN"}:
+    if normalized in {"BUSY", "DEFERRED", "WAIT_PUBLISH", "WAIT_QUOTA", "UNVERIFIED", "ATTENTION", "PARTIAL", "INCOMPLETE", "RUN"}:
         return C_YELLOW
     if normalized in {"NO", "NO_DUE", "NOT_IN_BATCH"}:
         return C_GRAY

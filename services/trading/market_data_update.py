@@ -81,7 +81,13 @@ def run_trading_market_data_update(
                 quota_wait_fn=quota_wait_fn,
             )
         )
-        if str(v2_update.get("status") or "") in {"NO_TARGET", "BLOCKED", "DISABLED"}:
+        v2_status = str(v2_update.get("status") or "").strip().upper()
+        if v2_status == "BUSY":
+            raise RuntimeError(
+                "Trading V2 Full Update 未執行：另一個 Market Data worker 正在執行；"
+                "本次沒有送出 provider request，也不會沿用舊 consumer state 冒充更新完成。"
+            )
+        if v2_status in {"NO_TARGET", "BLOCKED", "DISABLED"}:
             raise RuntimeError(
                 "Trading V2 update 尚未提供可發布 consumer state 的 canonical market-data truth；"
                 f"status={v2_update.get('status')} error={v2_update.get('error') or '-'}"

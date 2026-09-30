@@ -1347,8 +1347,12 @@ class MarketDataOpsPanel(ttk.Frame):
             if isinstance(result, dict) and isinstance(result.get("market_data_v2_archive"), dict)
             else result
         )
+        canonical_status = str(canonical_result.get("status") or "").strip().upper() if isinstance(canonical_result, dict) else ""
         quota_error = canonical_result.get("quota_refresh_error") if isinstance(canonical_result, dict) else None
-        if quota_error:
+        if canonical_status == "BUSY":
+            self._status_var.set("BUSY：已有另一個 Market Data worker 執行中；本次未執行更新。")
+            self._status_label.configure(style=WORKBENCH_WARNING_LABEL_STYLE)
+        elif quota_error:
             self._status_var.set(f"完成：{status or 'OK'} | Quota refresh WARN：{quota_error}")
             self._status_label.configure(style=WORKBENCH_WARNING_LABEL_STYLE)
         else:
