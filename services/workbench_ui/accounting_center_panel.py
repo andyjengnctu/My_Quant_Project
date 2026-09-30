@@ -29,6 +29,7 @@ from services.workbench_ui.stock_names import (
     enrich_workbench_stock_rows,
     load_workbench_stock_name_map,
     workbench_stock_name,
+    workbench_stock_name_cache_ready,
 )
 from services.workbench_ui.state_sync import ACCOUNT_MUTATION_DOMAINS
 from services.workbench_ui.trading_source_labels import trading_source_display_label
@@ -137,12 +138,17 @@ class AccountingCenterPanel(ttk.Frame):
         self._sell_constraint_inflight = 0
         self._sell_constraint_results: queue.Queue = queue.Queue()
         self._sell_constraint_poll_after_id = None
+        self._stock_name_warm_thread = None
+        self._stock_name_warm_after_id = None
+        self._stock_name_warm_error: str | None = None
         self._build_ui()
         self.bind("<Map>", lambda _event: self.on_workbench_visibility_changed(True), add="+")
         self.bind("<Unmap>", lambda _event: self.on_workbench_visibility_changed(False), add="+")
 
     def on_workbench_visibility_changed(self, active: bool) -> None:
         self._workbench_active = bool(active)
+        if self._workbench_active:
+            self._ensure_stock_name_warm()
         if not self._workbench_active:
             if self._startup_refresh_after_id is not None:
                 try:
@@ -170,6 +176,43 @@ class AccountingCenterPanel(ttk.Frame):
             return
         self._startup_refresh_started = True
         self.refresh()
+
+    def _ensure_stock_name_warm(self) -> None:
+        """Warm display names independently of the accounting data refresh."""
+
+        if workbench_stock_name_cache_ready(WORKBENCH_PROJECT_ROOT):
+            if self._workbench_active and (self._snapshot or self._dashboard):
+                self._render()
+            return
+        if self._stock_name_warm_thread is None or not self._stock_name_warm_thread.is_alive():
+            self._stock_name_warm_error = None
+
+            def _worker():
+                try:
+                    load_workbench_stock_name_map(WORKBENCH_PROJECT_ROOT)
+                except Exception as exc:
+                    self._stock_name_warm_error = f"{type(exc).__name__}: {exc}"
+
+            self._stock_name_warm_thread = threading.Thread(
+                target=_worker,
+                name="workbench-accounting-stock-names",
+                daemon=True,
+            )
+            self._stock_name_warm_thread.start()
+        if self._stock_name_warm_after_id is None:
+            self._stock_name_warm_after_id = self.after(100, self._poll_stock_name_warm)
+
+    def _poll_stock_name_warm(self) -> None:
+        self._stock_name_warm_after_id = None
+        thread = self._stock_name_warm_thread
+        if thread is not None and thread.is_alive():
+            self._stock_name_warm_after_id = self.after(100, self._poll_stock_name_warm)
+            return
+        self._stock_name_warm_thread = None
+        if self._stock_name_warm_error is not None:
+            return
+        if self._workbench_active and (self._snapshot or self._dashboard):
+            self._render()
 
     def _build_ui(self):
         self.columnconfigure(0, weight=1)
@@ -528,6 +571,7 @@ class AccountingCenterPanel(ttk.Frame):
                 continue
 
     def refresh(self):
+        self._ensure_stock_name_warm()
         if (
             not bool(getattr(self, "_workbench_active", True))
             and getattr(self, "_deferred_refresh_result", None) is not None
@@ -550,18 +594,14 @@ class AccountingCenterPanel(ttk.Frame):
 
     def _load_worker(self):
         def _load():
-            # Warm names before returning the read models so render never opens the
-            # Market Data V2 security master on the Tk thread.
-            load_workbench_stock_name_map(WORKBENCH_PROJECT_ROOT)
             account = get_trading_account_read_model(WORKBENCH_PROJECT_ROOT)
             dashboard = build_trading_account_dashboard_read_model(WORKBENCH_PROJECT_ROOT)
             publish_trading_account_dashboard_snapshot(WORKBENCH_PROJECT_ROOT, dashboard)
             return account, dashboard
 
         try:
-            # This worker is already outside Tk.  Let the active Accounting page
-            # read in parallel with unrelated hidden-center startup work instead
-            # of waiting behind one global first-open queue.
+            # Display-only TaiwanStockInfo names warm on a separate single-flight
+            # background path and never gate account valuation/performance first paint.
             account, dashboard = _load()
             self._refresh_results.put((account, dashboard, None))
         except Exception as exc:
@@ -1227,6 +1267,12 @@ class AccountingCenterPanel(ttk.Frame):
             callback(str(ticker), runtime_domain="trading", auto_run=True)
 
     def destroy(self):
+        if self._stock_name_warm_after_id is not None:
+            try:
+                self.after_cancel(self._stock_name_warm_after_id)
+            except tk.TclError as exc:
+                _warn_gui_fallback("Accounting stock-name warm destroy after_cancel", exc)
+            self._stock_name_warm_after_id = None
         if self._startup_refresh_after_id is not None:
             try:
                 self.after_cancel(self._startup_refresh_after_id)

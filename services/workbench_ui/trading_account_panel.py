@@ -133,7 +133,11 @@ from services.workbench_ui.state_sync import (
     normalize_state_domains,
 )
 from services.workbench_ui.paged_table import PagedTable, TableColumn
-from services.workbench_ui.stock_names import load_workbench_stock_name_map, workbench_stock_name
+from services.workbench_ui.stock_names import (
+    load_workbench_stock_name_map,
+    workbench_stock_name,
+    workbench_stock_name_cache_ready,
+)
 from services.workbench_ui.trading_source_labels import (
     TRADING_SOURCE_CUSTOM_LABEL,
     TRADING_SOURCE_STRATEGY_LABEL,
@@ -498,11 +502,9 @@ def build_trading_account_panel_initial_bundle(project_root=WORKBENCH_PROJECT_RO
         return snapshot
 
     loaders = {
-        # Warm the canonical security-name cache off the Tk thread.  Candidate and
-        # position rendering may resolve hundreds of names on first open; letting
-        # the first UI lookup open TaiwanStockInfo caused an intermittent mainloop
-        # stall when users switched centers during startup.
-        "stock_names": lambda: load_workbench_stock_name_map(root),
+        # Display-only stock names are warmed independently by the panel and must
+        # never gate the canonical Trading first paint.  A cold TaiwanStockInfo
+        # verification can be much slower than the account/scanner read models.
         "dashboard": _load_dashboard,
         "candidate_read": lambda: get_trading_candidate_snapshot_read_model(root),
         "protection": lambda: get_trading_protection_plan_read_model(root, recover_pending_fill=False),
@@ -685,6 +687,9 @@ class TradingAccountPanel(ttk.Frame):
         self._initial_preloaded: dict[str, object] = {}
         self._suspend_operations_refresh = False
         self._external_state_refresh_pending_domains: set[str] = set()
+        self._stock_name_warm_thread = None
+        self._stock_name_warm_after_id = None
+        self._stock_name_warm_error: str | None = None
         self._build_ui()
         self._set_initial_loading_state()
         # AI: The Workbench shell notifies visibility after construction.  Keep a
@@ -697,6 +702,8 @@ class TradingAccountPanel(ttk.Frame):
         """Start/apply Trading startup work only while this notebook page is visible."""
 
         self._workbench_active = bool(active)
+        if self._workbench_active:
+            self._ensure_stock_name_warm()
         if not self._workbench_active:
             if self._initial_state_start_after_id is not None:
                 try:
@@ -727,6 +734,84 @@ class TradingAccountPanel(ttk.Frame):
                 WORKBENCH_PANEL_ACTIVATION_DELAY_MS,
                 self._start_initial_state_load,
             )
+
+    def _ensure_stock_name_warm(self) -> None:
+        """Warm display-only names without delaying canonical Trading data."""
+
+        if workbench_stock_name_cache_ready(WORKBENCH_PROJECT_ROOT):
+            if self._initial_state_applied and self._workbench_active:
+                self._refresh_rendered_stock_names()
+            return
+        if self._stock_name_warm_thread is None or not self._stock_name_warm_thread.is_alive():
+            self._stock_name_warm_error = None
+
+            def _worker():
+                try:
+                    load_workbench_stock_name_map(WORKBENCH_PROJECT_ROOT)
+                except Exception as exc:
+                    self._stock_name_warm_error = f"{type(exc).__name__}: {exc}"
+
+            self._stock_name_warm_thread = threading.Thread(
+                target=_worker,
+                name="workbench-trading-stock-names",
+                daemon=True,
+            )
+            self._stock_name_warm_thread.start()
+        if self._stock_name_warm_after_id is None:
+            self._stock_name_warm_after_id = self.after(100, self._poll_stock_name_warm)
+
+    def _poll_stock_name_warm(self) -> None:
+        self._stock_name_warm_after_id = None
+        thread = self._stock_name_warm_thread
+        if thread is not None and thread.is_alive():
+            self._stock_name_warm_after_id = self.after(100, self._poll_stock_name_warm)
+            return
+        self._stock_name_warm_thread = None
+        if self._stock_name_warm_error is not None:
+            return
+        if self._workbench_active:
+            self._refresh_rendered_stock_names()
+
+    def _refresh_rendered_stock_names(self) -> None:
+        """Patch visible name cells from cache only; perform no domain I/O."""
+
+        candidate = getattr(self, "_candidate_tree", None)
+        if isinstance(candidate, PagedTable):
+            rows = [dict(row) for row in list(getattr(candidate, "_rows", []))]
+            for row in rows:
+                row["stock_name"] = workbench_stock_name(WORKBENCH_PROJECT_ROOT, row.get("ticker"))
+            candidate.set_rows(rows, preserve_selection=True)
+
+        for attr_name in (
+            "_tree", "_pending_tree", "_proposed_tree", "_order_tree",
+            "_protection_tree", "_indicator_tree",
+        ):
+            tree = getattr(self, attr_name, None)
+            if not isinstance(tree, ttk.Treeview):
+                continue
+            columns = tuple(str(value) for value in tree.cget("columns"))
+            if "ticker" not in columns or "stock_name" not in columns:
+                continue
+            ticker_index = columns.index("ticker")
+            name_index = columns.index("stock_name")
+            for item_id in tree.get_children():
+                values = list(tree.item(item_id, "values"))
+                if ticker_index >= len(values) or name_index >= len(values):
+                    continue
+                values[name_index] = workbench_stock_name(
+                    WORKBENCH_PROJECT_ROOT, values[ticker_index]
+                )
+                tree.item(item_id, values=values)
+
+        for ticker_var_name, name_var_name in (
+            ("_ticker_var", "_ticker_name_var"),
+            ("_pending_order_ticker_var", "_pending_order_stock_name_var"),
+            ("_trade_ticker_var", "_trade_stock_name_var"),
+        ):
+            ticker_var = getattr(self, ticker_var_name, None)
+            name_var = getattr(self, name_var_name, None)
+            if ticker_var is not None and name_var is not None:
+                name_var.set(workbench_stock_name(WORKBENCH_PROJECT_ROOT, ticker_var.get()))
 
     def _set_initial_loading_state(self):
         self._operations_next_var.set("LOADING | Trading 狀態載入中… | 下一步：等待載入完成")
@@ -1040,6 +1125,8 @@ class TradingAccountPanel(ttk.Frame):
         normalized = normalize_state_domains(domains)
         if not normalized:
             return False
+        if STATE_MARKET_DATA in normalized:
+            self._ensure_stock_name_warm()
         initial_busy = bool(
             (self._initial_state_thread is not None and self._initial_state_thread.is_alive())
             or bool(getattr(self, "_initial_apply_bundle_active", False))
@@ -1090,6 +1177,7 @@ class TradingAccountPanel(ttk.Frame):
             ("_command_poll_after_id", "command"),
             ("_pending_preview_poll_after_id", "pending-preview"),
             ("_trade_constraint_poll_after_id", "direct-fill-constraint"),
+            ("_stock_name_warm_after_id", "stock-name-warm"),
         ):
             after_id = getattr(self, attr_name, None)
             if after_id is not None:

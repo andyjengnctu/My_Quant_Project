@@ -4372,7 +4372,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_trading_background_worker_never_calls_tk_after", True, "self.after(0, self._finish_initial_state_load" not in panel_source and "def _drain_initial_state_results" in panel_source)
     check("workbench_trading_constructor_defers_state_reads_until_visible_after_paint", True, "on_workbench_visibility_changed" in panel_source and "WORKBENCH_PANEL_ACTIVATION_DELAY_MS" in panel_source and "self.refresh_account()\n        self.refresh_candidate_snapshot_rows()" not in panel_source.split("def __init__", 1)[1].split("def on_workbench_visibility_changed", 1)[0])
     check("workbench_trading_initial_read_does_not_wait_on_cross_center_startup_lock", False, "run_workbench_startup_io_serialized" in panel_source.split("def _initial_state_load_worker", 1)[1].split("def _schedule_initial_state_poll", 1)[0])
-    check("workbench_trading_initial_bundle_prewarms_stock_names_off_tk_thread", True, '"stock_names": lambda: load_workbench_stock_name_map(root)' in panel_source)
+    check("workbench_trading_stock_names_warm_async_without_gating_initial_bundle", True, '"stock_names": lambda: load_workbench_stock_name_map(root)' not in panel_source and 'name="workbench-trading-stock-names"' in panel_source and 'def _refresh_rendered_stock_names' in panel_source)
     check("workbench_trading_hidden_initial_bundle_defers_render", True, "self._deferred_initial_bundle = dict(bundle)" in panel_source and "if not self._workbench_active:" in panel_source.split("def _finish_initial_state_load", 1)[1].split("def _iter_action_buttons", 1)[0])
     check("workbench_trading_first_render_is_split_across_tk_turns", True, "def _run_initial_apply_step" in panel_source and "self.after(1, self._run_initial_apply_step)" in panel_source)
     check("workbench_trading_initial_worker_surfaces_background_exception", True, "error = exc" in panel_source.split("def _initial_state_load_worker", 1)[1].split("def _schedule_initial_state_poll", 1)[0] and "Trading 初始狀態載入失敗" in panel_source)
@@ -5458,6 +5458,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         _refresh_thread=_AliveRefreshThread(),
         _refresh_pending=False,
         _refresh_status_var=SimpleNamespace(set=lambda _value: None),
+        _ensure_stock_name_warm=lambda: None,
     )
     AccountingCenterPanel.refresh(accounting_refresh_panel)
     check("workbench_accounting_refresh_marks_followup_pending_when_worker_is_alive", True, accounting_refresh_panel._refresh_pending)
