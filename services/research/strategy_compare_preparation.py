@@ -126,15 +126,20 @@ def _execute_preparation_action(
         source = settings.parameter_sources[source_id]
         if not source.canonical_family or not source.canonical_evaluation_mode:
             raise RuntimeError(f"canonical optimizer參數來源缺少family/mode: {source_id}")
-        if comparison_end_date in (None, ""):
-            raise RuntimeError(f"canonical optimizer參數來源缺少comparison_end_date: {source_id}")
+        required_schedule_end = resolve_strategy_parameter_required_schedule_end(
+            source,
+            comparison_start=comparison_start_date,
+            comparison_end=comparison_end_date,
+        )
+        if required_schedule_end in (None, ""):
+            raise RuntimeError(f"canonical optimizer參數來源缺少required schedule end: {source_id}")
         for param_policy in resolve_required_param_policies_for_source(settings, source_id):
             ensure_strategy_parameter_artifact(
                 root,
                 family=source.canonical_family,
                 evaluation_mode=source.canonical_evaluation_mode,
                 policy=param_policy,
-                comparison_end_date=str(comparison_end_date),
+                comparison_end_date=str(required_schedule_end),
                 dataset=settings.dataset,
                 max_positions=int(settings.max_positions),
                 rotation=str(settings.rotation),

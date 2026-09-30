@@ -460,10 +460,10 @@ def append_strategy_compare_preparation_contract_checks(
         )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "parameter_producer_consumes_fresh_post_upstream_comparison_period",
+        "forward_parameter_producer_consumes_only_freeze_start_schedule_prefix",
         True,
         refreshed_param_result["comparison_ready"]
-        and forwarded_ensure.get("comparison_end_date") == "2026-03-02",
+        and forwarded_ensure.get("comparison_end_date") == "2021-01-01",
     )
 
     from core.strategy_compare_policy import get_strategy_comparison_settings

@@ -126,6 +126,8 @@ Round-5 evidence: C58/C61/C62 single-seed benchmark artifacts and C85/P6 replica
 
 Round-5 formal-flow follow-up: parent/child plan semantics now distinguish verified completed-result evidence from final execution authorization. If a C-arm's Params producer is still a canonical build action, the arm remains `WAIT` until post-producer re-plan recomputes its evaluation-view parameter identity; only then may it become `REUSE` or `RUN`. This changes no scientific identity and leaves Round 6 validation redesign scope unchanged.
 
+Round-5 mode-routing follow-up: Forward Strategy Compare parameter preparation now uses the same canonical required-schedule-end resolver as P5/P6 and standalone Strategy Parameter training. Forward only prepares the freeze-start schedule prefix; Rolling alone requires coverage through the comparison end. The shared annual-refit Optimizer engine and physical schedule identity are unchanged.
+
 ### Round 6 — Validation redesign **[NEXT]**
 
 - [ ] Preserve no-validation baseline as an immutable validation contract.

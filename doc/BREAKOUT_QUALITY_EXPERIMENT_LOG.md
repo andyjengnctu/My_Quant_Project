@@ -12276,3 +12276,12 @@ Decision：`ENGINEERING_ONLY / LEGACY_P6_UNBOUND_REBUILDABLE / NO_DIRECT_ADOPTIO
 - **Scientific impact**：none. No parameter search, seed/trial, score/gate, selector, execution economics, OOS/Rolling consumption, completed-result fingerprint, or validation behavior changed. This only corrects dependency-plan state ordering and human-visible action truth.
 
 Decision：`ENGINEERING_ONLY / PARENT_PARAMS_FINALIZE_BEFORE_CHILD_REUSE / PROVISIONAL_WAIT / REPLAN_DECIDES_REUSE_OR_RUN / SCIENTIFIC_IDENTITY_UNCHANGED`。
+## 2026-10-01 — Forward Strategy Compare parameter-coverage routing correction
+
+- **Observed issue**：使用者在`Strategy Compare → [1] Forward OOS Test`實跑時，P6 prerequisite正確只建立2021第一個schedule member，但canonical Full/Min parameter prerequisite卻把整個comparison end `2026-03-02`直接傳給Optimizer，造成Forward workflow額外建立2022～2026 annual refit folds並顯示`1/6 ... 6/6`。
+- **Root cause**：`core.strategy_comparison.resolve_strategy_parameter_required_schedule_end*()`早已定義Forward只需comparison start、Rolling才需comparison end；P5/P6 preparation已使用此resolver，但`canonical_optimizer_strategy_params`的preflight與executor各自繞過resolver，形成同一workflow兩套coverage語意。
+- **Correction**：Strategy Compare parameter preflight對所有source統一使用canonical required-schedule-end resolver；canonical Optimizer executor亦先解析required coverage再呼叫`ensure_strategy_parameter_artifact()`。Forward Full/Min/P6現在都只要求`2021-01-01`；Rolling三者仍要求`2026-03-02`。既有physical truth、annual-refit producer、OOS freeze consumption、registered scientific fingerprints與validation contract均不變。
+- **Regression**：config-driven Strategy Compare synthetic case驗證Forward canonical producer只收到freeze-start prefix；direct planner inspection驗證current production-multiseed OOS三個parameter source均解析至2021-01-01，而Rolling三個source均維持2026-03-02。
+
+Decision：`ENGINEERING_ONLY / FORWARD_PARAM_COVERAGE_PREFIX_ONLY / ROLLING_FULL_COVERAGE_UNCHANGED / ONE_REQUIRED_COVERAGE_RESOLVER / SCIENTIFIC_IDENTITY_UNCHANGED`。
+

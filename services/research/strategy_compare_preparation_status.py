@@ -915,17 +915,10 @@ def _collect_parameter_artifact_status(
         builder_type = (
             "" if source.builder is None else str(source.builder.builder_type or "").strip()
         )
-        required_schedule_end = (
-            resolve_strategy_parameter_required_schedule_end(
-                source,
-                comparison_start=comparison_start,
-                comparison_end=comparison_end,
-            )
-            if builder_type in {
-                "optimizer_validation_budget_refit_strategy_params",
-                "optimizer_fixed_multiseed_strategy_params",
-            }
-            else comparison_end
+        required_schedule_end = resolve_strategy_parameter_required_schedule_end(
+            source,
+            comparison_start=comparison_start,
+            comparison_end=comparison_end,
         )
         for param_policy in policies:
             path = resolve_param_source_path(
