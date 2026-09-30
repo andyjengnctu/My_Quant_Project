@@ -54,7 +54,6 @@ from services.workbench_ui.workbench import (
     WORKBENCH_TEXT,
     _warn_gui_fallback,
     run_workbench_local_reconcile_serialized,
-    run_workbench_startup_io_serialized,
 )
 
 WORKBENCH_PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -224,6 +223,7 @@ class MarketDataOpsPanel(ttk.Frame):
         self._startup_reconcile_started = False
         self._startup_reconcile_inflight = False
         self._startup_reconcile_after_id = None
+        self._startup_initial_status_started = False
         self._deferred_status_refresh = None
         self._workbench_active = False
         self._snapshot: dict[str, object] = {}
@@ -270,8 +270,7 @@ class MarketDataOpsPanel(ttk.Frame):
             # Auto Sync can mutate persisted Market Data while this tab is hidden.
             # Re-read the provider-free status whenever Data Center becomes visible;
             # the identity comparison in the completion path fans a real generation
-            # change out to already-mounted dependent centers.  Never overlap this
-            # read with the initial reconcile/action worker.
+            # change out to already-mounted dependent centers.
             action_busy = bool(
                 self._startup_reconcile_inflight
                 or (self._action_thread is not None and self._action_thread.is_alive())
@@ -279,11 +278,18 @@ class MarketDataOpsPanel(ttk.Frame):
             if not action_busy and not any(thread.is_alive() for thread in self._status_refresh_threads.values()):
                 self.refresh_local_status(update_status=False)
             return
-        if self._startup_reconcile_after_id is None:
-            self._startup_reconcile_after_id = self.after(
-                WORKBENCH_PANEL_ACTIVATION_DELAY_MS,
-                self._start_initial_reconcile,
-            )
+
+        # First paint the persisted provider-free snapshot.  Recent startup
+        # serialization made Data Center wait for Trading/Accounting heavy reads
+        # and for local reconcile before showing any rows.  The status read is
+        # read-only and already off the Tk thread; render it first, then start the
+        # mutating reconcile from the completion path.
+        if (
+            not self._startup_initial_status_started
+            and not any(thread.is_alive() for thread in self._status_refresh_threads.values())
+        ):
+            self._startup_initial_status_started = True
+            self.refresh_local_status(update_status=True)
 
     def _start_initial_reconcile(self) -> None:
         self._startup_reconcile_after_id = None
@@ -291,10 +297,22 @@ class MarketDataOpsPanel(ttk.Frame):
             return
         self._startup_reconcile_started = True
         self._startup_reconcile_inflight = True
-        # Reconcile first; its completion path performs the status refresh.  The old
-        # startup launched both operations concurrently and doubled first-open local
-        # I/O while another center could already be loading.
+        # The persisted status has already been rendered.  Reconcile now runs as a
+        # background mutation and its completion path refreshes canonical status; it
+        # no longer gates the first Data Center paint.
         self._start_action("reconcile")
+
+    def _schedule_initial_reconcile_after_status(self) -> None:
+        if (
+            not self._workbench_active
+            or self._startup_reconcile_started
+            or self._startup_reconcile_after_id is not None
+        ):
+            return
+        self._startup_reconcile_after_id = self.after(
+            WORKBENCH_PANEL_ACTIVATION_DELAY_MS,
+            self._start_initial_reconcile,
+        )
 
     def _build_ui(self):
         controls = ttk.Frame(self, style=WORKBENCH_FRAME_STYLE)
@@ -764,7 +782,7 @@ class MarketDataOpsPanel(ttk.Frame):
             self._status_label.configure(style=WORKBENCH_INFO_LABEL_STYLE)
         thread = threading.Thread(
             target=self._refresh_local_status_worker,
-            args=(token, bool(update_status), not bool(self._snapshot)),
+            args=(token, bool(update_status)),
             name=f"workbench-data-ops-status-{token}",
             daemon=True,
         )
@@ -776,17 +794,11 @@ class MarketDataOpsPanel(ttk.Frame):
         self,
         token: int,
         update_status: bool,
-        serialize_startup: bool = False,
     ) -> None:
         snapshot = None
         error = None
         try:
-            if serialize_startup:
-                snapshot = run_workbench_startup_io_serialized(
-                    lambda: build_market_data_ops_read_model(WORKBENCH_PROJECT_ROOT)
-                )
-            else:
-                snapshot = build_market_data_ops_read_model(WORKBENCH_PROJECT_ROOT)
+            snapshot = build_market_data_ops_read_model(WORKBENCH_PROJECT_ROOT)
         except Exception as exc:
             error = exc
         self._status_refresh_results.put((int(token), snapshot, error, bool(update_status)))
@@ -851,10 +863,12 @@ class MarketDataOpsPanel(ttk.Frame):
         if error is not None:
             self._status_var.set(f"狀態讀取失敗：{type(error).__name__}: {error}")
             self._status_label.configure(style=WORKBENCH_ERROR_LABEL_STYLE)
+            self._schedule_initial_reconcile_after_status()
             return
         if not isinstance(snapshot, dict):
             self._status_var.set("狀態讀取失敗：Market Data read model 格式不合法")
             self._status_label.configure(style=WORKBENCH_ERROR_LABEL_STYLE)
+            self._schedule_initial_reconcile_after_status()
             return
         new_identity = self._canonical_market_state_identity(snapshot)
         identity_changed = bool(
@@ -866,6 +880,7 @@ class MarketDataOpsPanel(ttk.Frame):
         self._market_state_identity_observed = new_identity is not None
         self._snapshot = snapshot
         self._render(snapshot)
+        self._schedule_initial_reconcile_after_status()
         if identity_changed:
             # Only a real canonical generation transition invalidates mounted
             # consumers.  First observation establishes a baseline; startup
@@ -1249,11 +1264,9 @@ class MarketDataOpsPanel(ttk.Frame):
                     WORKBENCH_PROJECT_ROOT
                 )
             if action == "reconcile":
-                result = run_workbench_startup_io_serialized(
-                    lambda: run_workbench_local_reconcile_serialized(
-                        lambda: reconcile_trading_v2_consumer_state_from_local_evidence(
-                            WORKBENCH_PROJECT_ROOT
-                        )
+                result = run_workbench_local_reconcile_serialized(
+                    lambda: reconcile_trading_v2_consumer_state_from_local_evidence(
+                        WORKBENCH_PROJECT_ROOT
                     )
                 )
             elif action == "due":

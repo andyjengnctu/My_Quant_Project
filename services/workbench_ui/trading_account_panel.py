@@ -171,7 +171,6 @@ from services.workbench_ui.workbench import (
     WORKBENCH_WARNING,
     _warn_gui_fallback,
     run_workbench_local_reconcile_serialized,
-    run_workbench_startup_io_serialized,
 )
 
 WORKBENCH_PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -762,9 +761,10 @@ class TradingAccountPanel(ttk.Frame):
         bundle = None
         error = None
         try:
-            bundle = run_workbench_startup_io_serialized(
-                lambda: build_trading_account_panel_initial_bundle(WORKBENCH_PROJECT_ROOT)
-            )
+            # Read-only first-open work stays on this background thread.  Do not
+            # queue it behind unrelated center startup I/O; shared V2 verification
+            # already serializes/cache-shares at its canonical owner.
+            bundle = build_trading_account_panel_initial_bundle(WORKBENCH_PROJECT_ROOT)
         except Exception as exc:
             error = exc
         self._initial_state_results.put((int(token), bundle, error))

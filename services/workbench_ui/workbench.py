@@ -83,25 +83,19 @@ WORKBENCH_STARTUP_PANEL_DELAY_MS = 60
 # one center.  Serialize that mutation inside this GUI process so rapid tab
 # switching cannot rebuild/publish the same consumer generation concurrently.
 _WORKBENCH_LOCAL_RECONCILE_LOCK = threading.Lock()
-_WORKBENCH_STARTUP_IO_LOCK = threading.Lock()
 
 
 def run_workbench_local_reconcile_serialized(callback):
-    with _WORKBENCH_LOCAL_RECONCILE_LOCK:
-        return callback()
+    """Serialize only the canonical local Market Data mutation seam.
 
-
-def run_workbench_startup_io_serialized(callback):
-    """Serialize heavyweight first-open reads across Workbench centers.
-
-    Rapid tab switching used to launch Trading, Accounting and Market Data first-open
-    workers at the same time.  Those workers are provider-free, but they still perform
-    substantial local filesystem/pandas work and can starve Tk long enough for Windows
-    to present the shell as unresponsive.  Startup serialization changes execution
-    strategy only; each center still consumes the same canonical producers.
+    First-open panel reads already run off the Tk thread, hidden panels defer render,
+    and shared immutable Market Data verification has lower-level cache/locks.  A
+    coarse cross-center read lock made the active tab wait behind unrelated hidden
+    startup work.  Keep serialization only where two centers could publish the same
+    consumer generation concurrently.
     """
 
-    with _WORKBENCH_STARTUP_IO_LOCK:
+    with _WORKBENCH_LOCAL_RECONCILE_LOCK:
         return callback()
 
 

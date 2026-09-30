@@ -49,7 +49,6 @@ from services.workbench_ui.workbench import (
     WORKBENCH_WARNING,
     WORKBENCH_VSCROLL_STYLE,
     _warn_gui_fallback,
-    run_workbench_startup_io_serialized,
 )
 
 WORKBENCH_PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -541,19 +540,15 @@ class AccountingCenterPanel(ttk.Frame):
             return
         self._refresh_pending = False
         self._refresh_status_var.set("刷新中…")
-        serialize_startup = not bool(
-            getattr(self, "_snapshot", {}) or getattr(self, "_dashboard", {})
-        )
         self._refresh_thread = threading.Thread(
             target=self._load_worker,
-            args=(serialize_startup,),
             daemon=True,
             name="workbench-accounting-center-refresh",
         )
         self._refresh_thread.start()
         self.after(30, self._poll_refresh)
 
-    def _load_worker(self, serialize_startup: bool = False):
+    def _load_worker(self):
         def _load():
             # Warm names before returning the read models so render never opens the
             # Market Data V2 security master on the Tk thread.
@@ -564,10 +559,10 @@ class AccountingCenterPanel(ttk.Frame):
             return account, dashboard
 
         try:
-            if serialize_startup:
-                account, dashboard = run_workbench_startup_io_serialized(_load)
-            else:
-                account, dashboard = _load()
+            # This worker is already outside Tk.  Let the active Accounting page
+            # read in parallel with unrelated hidden-center startup work instead
+            # of waiting behind one global first-open queue.
+            account, dashboard = _load()
             self._refresh_results.put((account, dashboard, None))
         except Exception as exc:
             self._refresh_results.put((None, None, exc))
