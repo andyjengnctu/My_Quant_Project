@@ -1423,6 +1423,8 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         _benchmark_fast_republish_source,
         _benchmark_manifest_matches_current_policy,
         _benchmark_schedule_build_contract,
+        _benchmark_scientific_identity,
+        _derived_scientific_identity_record,
         ensure_robustness_benchmark_strategy_parameter_artifact,
         ensure_validation_budget_robustness_strategy_parameter_artifact,
         validation_budget_robustness_strategy_param_artifact_path,
@@ -1650,6 +1652,13 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and materialized_states[("C84", materialize_seed)]["action"] != "REUSE",
     )
 
+    from config.execution_policy import (
+        DEFAULT_FIXED_RISK,
+        DEFAULT_MAX_POSITION_CAP_PCT,
+        DEFAULT_PORTFOLIO_MAX_POSITIONS,
+        DEFAULT_PORTFOLIO_ROTATION,
+    )
+
     benchmark = get_robustness_benchmark_policy_snapshot()
     benchmark_seed = int(benchmark["resolved_seeds"][0])
     benchmark_family = "min"
@@ -1663,10 +1672,10 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         family=benchmark_family,
         policy=benchmark_policy,
         dataset="full",
-        max_positions=10,
-        rotation="off",
-        fixed_risk=0.01,
-        max_position_cap_pct=20.0,
+        max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+        rotation=str(DEFAULT_PORTFOLIO_ROTATION),
+        fixed_risk=float(DEFAULT_FIXED_RISK),
+        max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
     )
     benchmark_agree_contract = _benchmark_schedule_build_contract(
         benchmark_id=str(benchmark["benchmark_id"]),
@@ -1674,10 +1683,21 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         family=benchmark_family,
         policy="base_finalists_agree",
         dataset="full",
-        max_positions=10,
-        rotation="off",
-        fixed_risk=0.01,
-        max_position_cap_pct=20.0,
+        max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+        rotation=str(DEFAULT_PORTFOLIO_ROTATION),
+        fixed_risk=float(DEFAULT_FIXED_RISK),
+        max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+    )
+    benchmark_scientific_identity = _benchmark_scientific_identity(
+        project_root,
+        seed=benchmark_seed,
+        family=benchmark_family,
+        policy=benchmark_policy,
+        dataset="full",
+        max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+        rotation=str(DEFAULT_PORTFOLIO_ROTATION),
+        fixed_risk=float(DEFAULT_FIXED_RISK),
+        max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
     )
     check_true(
         "robustness_best_and_finalists_agree_share_one_optimizer_search_contract",
@@ -1727,10 +1747,10 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
             "model_architecture": BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
             "experiment_profile": UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
-            "max_positions": 10,
-            "rotation": "off",
-            "fixed_risk": 0.01,
-            "max_position_cap_pct": 20.0,
+            "max_positions": int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+            "rotation": str(DEFAULT_PORTFOLIO_ROTATION),
+            "fixed_risk": float(DEFAULT_FIXED_RISK),
+            "max_position_cap_pct": float(DEFAULT_MAX_POSITION_CAP_PCT),
             "quiet": True,
         }
         with patch(
@@ -1872,6 +1892,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                     "scientific_sha256": target_scientific_sha,
                     "source": {
                         "build_contract": benchmark_build_contract,
+                        "scientific_identity": _derived_scientific_identity_record(
+                            benchmark_scientific_identity
+                        ),
                         "schedule_kind": "annual_refit",
                     },
                 }
@@ -1889,6 +1912,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             target_path=target,
             comparison_end_date="2026-03-02",
             build_contract=benchmark_build_contract,
+            scientific_identity=benchmark_scientific_identity,
         )
         stale_contract = dict(benchmark_build_contract)
         stale_contract["trials_per_fold"] = int(stale_contract["trials_per_fold"]) + 1
@@ -1903,6 +1927,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             target_path=target,
             comparison_end_date="2026-03-02",
             build_contract=stale_contract,
+            scientific_identity=benchmark_scientific_identity,
         )
         tampered_payload = json.loads(json.dumps(target_payload))
         tampered_payload["params_by_effective_date"]["2022-01-01"]["high_len"] = 210
@@ -1918,6 +1943,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             target_path=target,
             comparison_end_date="2026-03-02",
             build_contract=benchmark_build_contract,
+            scientific_identity=benchmark_scientific_identity,
         )
     check_true(
         "robustness_per_seed_param_reuse_ignores_membership_but_rejects_stale_contract_or_sha",
@@ -1942,6 +1968,23 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             ],
         }
         fast_target.write_text(json.dumps(fast_payload), encoding="utf-8")
+        fast_manifest_path = temp_root / "fast_manifest.json"
+        fast_manifest_path.write_text(
+            json.dumps(
+                {
+                    "artifacts": {
+                        benchmark_policy: {
+                            "source": {
+                                "scientific_identity": _derived_scientific_identity_record(
+                                    benchmark_scientific_identity
+                                )
+                            }
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
         fast_work_root = resolve_strategy_param_optimizer_work_dir(
             temp_root,
             scope=STRATEGY_PARAM_WORK_SCOPE_BENCHMARK,
@@ -1973,7 +2016,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             family=benchmark_family,
             policy=benchmark_policy,
             target_path=fast_target,
+            manifest_path=fast_manifest_path,
             build_contract=benchmark_build_contract,
+            scientific_identity=benchmark_scientific_identity,
             comparison_end_date="2026-03-02",
         )
         changed_fit_contract = dict(benchmark_build_contract)
@@ -1985,7 +2030,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             family=benchmark_family,
             policy=benchmark_policy,
             target_path=fast_target,
+            manifest_path=fast_manifest_path,
             build_contract=changed_fit_contract,
+            scientific_identity=benchmark_scientific_identity,
             comparison_end_date="2026-03-02",
         )
         publication_raw_differs_but_scientific_matches = (
