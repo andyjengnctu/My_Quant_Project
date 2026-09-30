@@ -12285,3 +12285,13 @@ Decision：`ENGINEERING_ONLY / PARENT_PARAMS_FINALIZE_BEFORE_CHILD_REUSE / PROVI
 
 Decision：`ENGINEERING_ONLY / FORWARD_PARAM_COVERAGE_PREFIX_ONLY / ROLLING_FULL_COVERAGE_UNCHANGED / ONE_REQUIRED_COVERAGE_RESOLVER / SCIENTIFIC_IDENTITY_UNCHANGED`。
 
+
+## 2026-10-01 — P6 Forward-prefix → Rolling-extension study resume identity correction
+
+- **Observed runtime failure**：Strategy Compare `[2] Rolling OOS Test` 對 `PARAM-P6` 建立6-fold schedule時，2021 fold嘗試接續 Forward OOS 先前建立的同一 study，卻被 `ensure_study_effective_policy_compatible()`以effective-policy mismatch拒絕；parallel fold與sequential fallback都在同一 gate失敗。
+- **Root cause**：P6的DB cache identity早已刻意排除requested schedule `last_oos_date`，以支援「Forward先建立schedule prefix、Rolling後續延伸同一physical truth」；但 outer fold policy仍繼承 `build_rolling_base_policy()` 的 parent `latest_data_date`。Forward prefix的2021 fold因此帶`2021-01-31`，Rolling extension同一fold帶`2026-03-31`，造成同一fold fingerprint不一致，雖其selection/OOS/search/score等scientific contract未變。
+- **Correction**：parallel與sequential outer-fold runtime policy均把`latest_data_date`收斂成該fold selection cutoff (`search_train_end_date`)。既有legacy study若且唯若兩個 explicit-date `oos_single_fold` snapshots移除`latest_data_date`後exact-match，允許一次性更新effective-policy fingerprint/snapshot並resume；任何其他差異仍禁止接續。
+- **Regression evidence**：舊Forward/舊Rolling 2021 fold在修正前只有parent-horizon欄位不同；修正後fold-local fingerprint完全一致。Synthetic contract新增「horizon-only legacy migration PASS」與「實際search cutoff drift仍REJECT」兩個能力檢查；Optimizer walk-forward 116/116、objective/export 45/45、session cache 3/3、Strategy Compare plan 5/5、config-driven 120/120、readable report 53/53均PASS。
+- **Scientific impact**：無。C58/C61/C62/C85/P6 registered scientific fingerprints、seed/trials、selector、search space、score/gates、PIT、OOS/Rolling consumption與validation均不變。
+
+Decision：`ENGINEERING_ONLY / OUTER_FOLD_IDENTITY_FOLD_LOCAL / FORWARD_PREFIX_ROLLING_EXTENSION_RESUME / LEGACY_HORIZON_ONLY_MIGRATION / TRUE_DRIFT_STILL_BLOCKED / SCIENTIFIC_IDENTITY_UNCHANGED`。

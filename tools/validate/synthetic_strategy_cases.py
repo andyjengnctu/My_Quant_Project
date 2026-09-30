@@ -1845,6 +1845,75 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     check("study_oos_runtime_respects_configured_end_year", expected_oos_end_date, study_oos_policy.get("oos_end_date"))
     check("trade_runtime_drops_oos_end_year", None, trade_policy.get("oos_end_year"))
 
+    # Regression: a fixed outer-rolling fold may be built first as a Forward
+    # schedule prefix and later resumed while Rolling extends the same physical
+    # schedule.  Parent schedule horizon must not make that same fold incompatible.
+    from services.optimizer.session_factory import ensure_study_effective_policy_compatible
+    from core.walk_forward_policy import build_optimizer_effective_policy_fingerprint
+
+    class _SyntheticStudy:
+        def __init__(self, attrs, trials):
+            self.user_attrs = dict(attrs)
+            self.trials = list(trials)
+
+        def set_user_attr(self, key, value):
+            self.user_attrs[key] = value
+
+    legacy_fold_policy = {
+        **oos_policy,
+        "selection_start_year": 2011,
+        "train_start_year": 2011,
+        "search_train_end_year": 2020,
+        "oos_start_year": 2021,
+        "selection_start_date": "2011-01-01",
+        "train_start_date": "2011-01-01",
+        "search_train_end_date": "2020-12-31",
+        "oos_start_date": "2021-01-01",
+        "oos_end_date": "2021-12-31",
+        "latest_data_date": "2021-01-31",
+        "evaluation_scope": "oos_single_fold",
+        "model_mode": "oos",
+    }
+    current_fold_policy = {**legacy_fold_policy, "latest_data_date": "2020-12-31"}
+    legacy_contract = build_optimizer_effective_policy_fingerprint(legacy_fold_policy)
+    current_contract = build_optimizer_effective_policy_fingerprint(current_fold_policy)
+    fold_resume_study = _SyntheticStudy(
+        {
+            "optimizer_effective_policy_fingerprint_sha256": legacy_contract["fingerprint_sha256"],
+            "optimizer_effective_policy_snapshot": legacy_contract["snapshot"],
+        },
+        trials=[object()],
+    )
+    ensure_study_effective_policy_compatible(
+        study=fold_resume_study,
+        walk_forward_policy=current_fold_policy,
+    )
+    check(
+        "outer_fold_resume_migrates_parent_horizon_only_legacy_identity",
+        current_contract["fingerprint_sha256"],
+        fold_resume_study.user_attrs.get("optimizer_effective_policy_fingerprint_sha256"),
+    )
+    drifted_fold_policy = {**current_fold_policy, "search_train_end_date": "2020-11-30"}
+    rejected_real_drift = False
+    try:
+        ensure_study_effective_policy_compatible(
+            study=_SyntheticStudy(
+                {
+                    "optimizer_effective_policy_fingerprint_sha256": legacy_contract["fingerprint_sha256"],
+                    "optimizer_effective_policy_snapshot": legacy_contract["snapshot"],
+                },
+                trials=[object()],
+            ),
+            walk_forward_policy=drifted_fold_policy,
+        )
+    except RuntimeError:
+        rejected_real_drift = True
+    check(
+        "outer_fold_resume_still_rejects_real_scientific_drift",
+        True,
+        rejected_real_drift,
+    )
+
     from tools.optimizer.outer_rolling_oos import _resolve_config as resolve_outer_rolling_config
 
     rolling_config = resolve_outer_rolling_config(

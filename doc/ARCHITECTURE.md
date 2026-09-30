@@ -674,3 +674,10 @@ Capability contracts live in `tools/validate/synthetic_trading_history_cases.py`
 
 
 Direct-account BUY provenance is owned by `services/trading/account_trade_entry.py`, not the transient Scanner widget selection. Optional candidate discovery uses the canonical account-aware snapshot and delegates matching rows to the existing currentness/reference validator. Workbench commits the resolved preview reference and source route. `services/trading/account_dashboard.py` preserves acquisition source independently of SELL execution reason. These source changes do not rewrite prior events, reclassify historical custom entries from current membership, or redefine Research statistics.
+
+## 2026-10-01 — Outer-Rolling fold-local Optimizer study identity
+
+- Outer-Rolling／Strategy-Parameter Optimizer study DB 是 **fold-local search memory**；其可接續 identity 必須只由該 fold 的固定 selection/OOS scientific contract 與 Optimizer scientific runtime semantics決定，不得被整條 requested schedule 的尾端污染。
+- `latest_data_date` 在 outer fold runtime policy 固定為該 fold `search_train_end_date`（selection cutoff）。因此 Forward 先建立 2021 prefix、Rolling 之後延伸到 2026 時，2021 fold 仍解析成同一 effective-policy identity與同一 physical study。
+- 2026-10-01 前的 study 可能已把 parent schedule end 寫進 `optimizer_effective_policy_snapshot.walk_forward_policy.latest_data_date`。`ensure_study_effective_policy_compatible()`只允許一種 legacy migration：兩個 snapshot 均為 explicit-date `oos_single_fold`，且移除 `latest_data_date` 後其餘完整 snapshot exact-match。符合時可更新該 study 的 fingerprint/snapshot並 resume；任何其他 window、score、gate、search、execution或scientific runtime差異仍 fail-fast。
+- 此 migration 不修改 PARAM-P6/C85 或其他 registered Strategy Parameter scientific fingerprint；只是修復 execution-memory identity 的過度綁定。

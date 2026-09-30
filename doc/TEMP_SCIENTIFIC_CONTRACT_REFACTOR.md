@@ -174,3 +174,5 @@ Delete this file only when all are true:
 - [ ] No formal/synthetic validator treats this file as a truth source.
 - [ ] Historical experiment/artifact identities remain reproducible.
 - [ ] Current production/Research flows pass local formal double-check from `apps/run_bundle.py` after the final patch.
+
+Round-5 runtime follow-up (2026-10-01): Outer-Rolling Optimizer study identity is now fold-local across schedule-prefix extension. Forward prefix and later Rolling extension no longer produce different effective-policy fingerprints for the same fold merely because the parent schedule end changed. Legacy studies are resumable only when the stored/current explicit-date OOS single-fold snapshots differ solely in the old `latest_data_date` parent-horizon field; all true scientific drift remains fail-fast. Registered Strategy Parameter fingerprints remain unchanged; Round 6 validation scope is unaffected.

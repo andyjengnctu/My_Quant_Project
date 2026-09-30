@@ -44,23 +44,72 @@ def configure_optuna_logging():
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 
+def _fold_resume_snapshot_without_parent_horizon(snapshot: dict | None) -> dict | None:
+    """Normalize the one legacy outer-fold field that depended on parent schedule length.
+
+    Outer rolling studies are fold-local search memories.  Before the 2026-10-01
+    fix, ``latest_data_date`` was inherited from the requested *whole schedule*
+    end, so Forward prefix build and later Rolling extension gave the same 2021
+    fold different effective-policy fingerprints.  The explicit selection/OOS
+    dates already pin the fold.  Only this field may be ignored for the legacy
+    migration, and only for fixed OOS single-fold snapshots.
+    """
+
+    if not isinstance(snapshot, dict):
+        return None
+    normalized = dict(snapshot)
+    walk_forward = dict(normalized.get("walk_forward_policy") or {})
+    if str(walk_forward.get("evaluation_scope") or "") != "oos_single_fold":
+        return None
+    if str(walk_forward.get("model_mode") or "") != "oos":
+        return None
+    required_dates = (
+        "selection_start_date",
+        "search_train_end_date",
+        "oos_start_date",
+        "oos_end_date",
+    )
+    if any(not str(walk_forward.get(key) or "").strip() for key in required_dates):
+        return None
+    walk_forward.pop("latest_data_date", None)
+    normalized["walk_forward_policy"] = walk_forward
+    return normalized
+
+
+def _is_legacy_parent_horizon_only_fold_resume(*, existing_snapshot, current_snapshot) -> bool:
+    existing = _fold_resume_snapshot_without_parent_horizon(existing_snapshot)
+    current = _fold_resume_snapshot_without_parent_horizon(current_snapshot)
+    return existing is not None and current is not None and existing == current
+
+
 def ensure_study_effective_policy_compatible(*, study, walk_forward_policy: dict):
     if not hasattr(study, "user_attrs") or not hasattr(study, "set_user_attr"):
         return
     contract = build_optimizer_effective_policy_fingerprint(walk_forward_policy)
     fingerprint_key = "optimizer_effective_policy_fingerprint_sha256"
     snapshot_key = "optimizer_effective_policy_snapshot"
-    existing_fingerprint = getattr(study, "user_attrs", {}).get(fingerprint_key)
+    user_attrs = dict(getattr(study, "user_attrs", {}) or {})
+    existing_fingerprint = user_attrs.get(fingerprint_key)
+    existing_snapshot = user_attrs.get(snapshot_key)
     existing_trials = list(getattr(study, "trials", []) or [])
     if not existing_fingerprint:
         study.set_user_attr(fingerprint_key, contract["fingerprint_sha256"])
         study.set_user_attr(snapshot_key, contract["snapshot"])
         return
     if str(existing_fingerprint) == str(contract["fingerprint_sha256"]):
-        if getattr(study, "user_attrs", {}).get(snapshot_key) is None:
+        if existing_snapshot is None:
             study.set_user_attr(snapshot_key, contract["snapshot"])
         return
     if len(existing_trials) == 0:
+        study.set_user_attr(fingerprint_key, contract["fingerprint_sha256"])
+        study.set_user_attr(snapshot_key, contract["snapshot"])
+        return
+    if _is_legacy_parent_horizon_only_fold_resume(
+        existing_snapshot=existing_snapshot,
+        current_snapshot=contract["snapshot"],
+    ):
+        # Safe one-time migration: the study's fold-local scientific contract is
+        # identical; only the old parent-schedule horizon leaked into the snapshot.
         study.set_user_attr(fingerprint_key, contract["fingerprint_sha256"])
         study.set_user_attr(snapshot_key, contract["snapshot"])
         return

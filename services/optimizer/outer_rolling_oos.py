@@ -1269,6 +1269,11 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
         fold_policy["search_train_end_date"] = selection_end
         fold_policy["oos_start_date"] = oos_start_date
         fold_policy["oos_end_date"] = oos_end_date
+        # Fold search identity must be local to the information available at the
+        # selection cutoff.  Do not inherit the requested parent schedule end:
+        # Forward prefix build and later Rolling extension must address the same
+        # physical study for an identical fold.
+        fold_policy["latest_data_date"] = selection_end
         fold_policy = build_optimizer_runtime_policy(fold_policy, "split")
         fold_policy[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = int(optimizer_required_min_rows)
         objective_mode = str(fold_policy.get("objective_mode", "split_train_romd"))
@@ -2249,6 +2254,8 @@ def run_outer_rolling_oos(
         fold_policy["search_train_end_date"] = str(fold["selection_end_date"])
         fold_policy["oos_start_date"] = str(fold["oos_start_date"])
         fold_policy["oos_end_date"] = str(fold["oos_end_date"])
+        # Keep the sequential path identical to the parallel worker contract.
+        fold_policy["latest_data_date"] = str(fold["selection_end_date"])
         fold_policy = build_optimizer_runtime_policy(fold_policy, "split")
         fold_policy[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = int(optimizer_required_min_rows)
         objective_mode = str(fold_policy.get("objective_mode", "split_train_romd"))
