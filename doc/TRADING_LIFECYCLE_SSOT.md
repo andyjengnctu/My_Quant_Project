@@ -58,7 +58,7 @@ Pending 與 Position 共用同一個固定的 finalized 日期及資料來源。
 
 依賴檢查與寫入契約補足結果對照，但不代表所有未來修改都不可能出错，也不能防止刻意繞過。獨立模擬使用暫存帳戶／OMS 檔案與合成市場儲存 fixture，實際執行策略計算與持久化；不是實際市場 Parquet、GUI、券商或本機正式整合測試。`apps/run_bundle.py` 仍是使用者本機正式驗證入口。
 
-重播契約變更後首次同步可能需要重建持股歷史，後續相同來源則依 fingerprint 重用。完整歷史查詢優先確保 frozen 指標正確，不採不安全的裁切視窗捷徑；本輪未宣稱實際大型帳戶的延遲或 UI 效能已完成量測。
+重播契約變更後首次同步可能需要重建持股歷史，後續相同來源則依 fingerprint 重用。多檔 POSITION 同步時，可對所有實際 due tickers 共用一次 canonical market-frame batch load，以避免每檔持股重複讀取完整 PriceAdj/Price；但每檔仍必須以自己的 frozen Params、binding、effective account events 與 high-water 獨立 replay。batch I/O 失敗可退回逐 ticker fail-soft 讀取，這只改 execution strategy，不改 lifecycle source、PIT 或 fingerprint。完整歷史查詢優先確保 frozen 指標正確，不採不安全的裁切視窗捷徑；本輪未宣稱實際大型帳戶的延遲或 UI 效能已完成量測。
 
 ## Confirmed-history chart ownership and recovery
 

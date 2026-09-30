@@ -79,6 +79,12 @@ def _market_io(frames, state, reads=None):
         return frames[ticker].loc[:date].copy()
     def source(_root, *args, **kwargs):
         return deepcopy(state)
+    def load_many(*, view: object, params_by_ticker, allowed_date, **kwargs):
+        result = {}
+        for ticker in params_by_ticker:
+            reads.append((ticker, allowed_date))
+            result[ticker] = frames[ticker].loc[:allowed_date].copy()
+        return result
     with ExitStack() as stack:
         for module in ("services.trading.lifecycle_sync", "services.trading.lifecycle_context", "services.trading.market_data_consumer"):
             stack.enter_context(patch(module + ".load_trading_v2_consumer_state", side_effect=source))
@@ -86,6 +92,7 @@ def _market_io(frames, state, reads=None):
         for module in ("services.trading.lifecycle_sync", "services.trading.pending_entry_service", "services.trading.entry_lifecycle_context"):
             stack.enter_context(patch(module + ".load_trading_v2_sanitized_ohlcv_frame", side_effect=load))
         stack.enter_context(patch("services.trading.position_rollforward.load_trading_position_market_frame", side_effect=load))
+        stack.enter_context(patch("services.trading.position_rollforward.load_trading_position_market_frames", side_effect=load_many))
         yield reads
 
 

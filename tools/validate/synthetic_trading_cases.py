@@ -3044,6 +3044,18 @@ def validate_trading_position_rollforward_contract_case(base_params):
         and "project_full_exit_obligation(" in service_source
         and '"derived_exit_obligation": obligation' in service_source,
     )
+    run_body = service_source.split("def run_trading_position_rollforward", 1)[1]
+    check(
+        "rollforward_batches_due_position_market_io_before_per_ticker_replay",
+        True,
+        "load_trading_position_market_frames(" in run_body
+        and "params_by_ticker={ticker: item[\"params\"] for ticker, item in prepared.items()}" in run_body,
+    )
+    check(
+        "rollforward_preserves_per_ticker_market_io_fallback",
+        True,
+        "batch_load_error" in run_body and "load_trading_position_market_frame(" in run_body,
+    )
     check(
         "workbench_removes_explicit_position_rollforward_action",
         True,

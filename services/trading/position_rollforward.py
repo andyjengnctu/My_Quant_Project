@@ -29,7 +29,7 @@ from services.trading.account_trade_entry import build_manual_adopted_management
 from services.trading.fill_reconciliation import recover_trading_fill_transaction
 from services.trading.lifecycle_context import TradingLifecycleContext, resolve_trading_lifecycle_context
 from services.trading.position_market_context import (
-    load_trading_position_market_frame, normalize_trading_date,
+    load_trading_position_market_frame, load_trading_position_market_frames, normalize_trading_date,
     resolve_trading_strategy_position_sources,
 )
 from services.trading.protection_planning import build_trading_protection_plan
@@ -200,6 +200,12 @@ def run_trading_position_rollforward(project_root: str | Path, *, lifecycle_cont
         load_trading_pending_entry_state(root, required=False)).values())
     updates, rows, errors = {}, [], {}
     signal_tickers = []
+
+    # Prepare every due position before touching Market Data.  The replay identity,
+    # frozen params and confirmed-event set remain ticker-local; only the immutable
+    # OHLCV I/O is shared.  With N holdings the former path reread the same
+    # PriceAdj/Price fragments N times during Workbench first-open.
+    prepared: dict[str, dict[str, Any]] = {}
     for ticker, record in sorted(account.get("positions", {}).items()):
         if record.get("source") not in MANAGED_POSITION_SOURCES:
             continue
@@ -213,8 +219,47 @@ def run_trading_position_rollforward(project_root: str | Path, *, lifecycle_cont
             fingerprint = _evaluation_identity(record, binding, context, events, prefill_entry)
             if management.get("evaluation_context_fingerprint") == fingerprint:
                 continue
-            params = build_params_from_mapping(binding["frozen_params"])
-            frame = load_trading_position_market_frame(view=market_view, ticker=ticker, params=params, allowed_date=context.finalized_date)
+            prepared[ticker] = {
+                "record": record,
+                "management": management,
+                "binding": binding,
+                "events": events,
+                "prefill_entry": prefill_entry,
+                "fingerprint": fingerprint,
+                "params": build_params_from_mapping(binding["frozen_params"]),
+            }
+        except (OSError, ValueError, TypeError, KeyError, IndexError, RuntimeError) as exc:
+            errors[ticker] = f"{type(exc).__name__}: {exc}"
+
+    frames_by_ticker: dict[str, pd.DataFrame] = {}
+    batch_load_error = None
+    if prepared:
+        try:
+            frames_by_ticker = load_trading_position_market_frames(
+                view=market_view,
+                params_by_ticker={ticker: item["params"] for ticker, item in prepared.items()},
+                allowed_date=context.finalized_date,
+            )
+        except (OSError, ValueError, TypeError, KeyError, IndexError, RuntimeError) as exc:
+            # Preserve the historical per-ticker fail-soft contract.  A single bad
+            # holding must not prevent unrelated positions from rolling forward.
+            batch_load_error = exc
+
+    for ticker, item in prepared.items():
+        record = item["record"]
+        management = item["management"]
+        binding = item["binding"]
+        events = item["events"]
+        prefill_entry = item["prefill_entry"]
+        fingerprint = item["fingerprint"]
+        params = item["params"]
+        try:
+            if batch_load_error is None:
+                frame = frames_by_ticker[ticker]
+            else:
+                frame = load_trading_position_market_frame(
+                    view=market_view, ticker=ticker, params=params, allowed_date=context.finalized_date
+                )
             if frame.index.max() > pd.Timestamp(context.finalized_date):
                 raise RuntimeError("Market frame exceeds the pinned finalized boundary")
             acquisition = build_confirmed_position_origin(
