@@ -3649,7 +3649,6 @@ def ensure_validation_budget_strategy_parameter_artifact(
         "sha256": target_sha,
         "coverage_end": coverage_end,
         "build_contract": contract,
-        "scientific_identity": scientific_identity,
     }
 
 
