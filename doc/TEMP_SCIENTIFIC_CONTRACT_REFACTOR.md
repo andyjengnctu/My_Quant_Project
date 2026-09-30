@@ -124,6 +124,8 @@ Exit: all non-validation strategy-parameter/compare paths are stable enough for 
 
 Round-5 evidence: C58/C61/C62 single-seed benchmark artifacts and C85/P6 replicated multi-seed benchmark artifacts now persist derived scientific identity and follow `BUILD → REUSE`, while removing that binding returns `REBUILD` rather than unsafe reuse; registered source scientific drift is `BLOCKED`. Baseline-vs-Round-5 canonical Min/Full/P6 build contracts, registered fingerprints and current Strategy Compare/Robustness runtime payloads are byte/value-equivalent. C84/P5 validation profile/runtime payload hashes are identical. A conservative pre-existing fingerprint over-binding of some inactive/non-applicable selector review knobs was observed; changing it would alter already-registered fingerprints, so it is explicitly deferred to an identity-version migration rather than silently mixed into this behavior-preserving round.
 
+Round-5 formal-flow follow-up: parent/child plan semantics now distinguish verified completed-result evidence from final execution authorization. If a C-arm's Params producer is still a canonical build action, the arm remains `WAIT` until post-producer re-plan recomputes its evaluation-view parameter identity; only then may it become `REUSE` or `RUN`. This changes no scientific identity and leaves Round 6 validation redesign scope unchanged.
+
 ### Round 6 — Validation redesign **[NEXT]**
 
 - [ ] Preserve no-validation baseline as an immutable validation contract.

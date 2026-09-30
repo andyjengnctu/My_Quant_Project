@@ -26,6 +26,7 @@ def append_completed_pair_score_reuse_contract_checks(
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
     )
     from services.research import strategy_comparison as score_reuse_module
+    from services.research import strategy_compare_reuse as reuse_owner_module
 
     reuse_source = (
         project_root / "services" / "research" / "strategy_compare_reuse.py"
@@ -37,6 +38,78 @@ def append_completed_pair_score_reuse_contract_checks(
         "forward_oos"
     )
     c44_contract = forward_score_reuse_base.arms["C44"]
+
+    # A completed result is only a reusable candidate while its scientific Params
+    # producer is still BUILD/REBUILD/RESUME.  The final REUSE/RUN decision must be
+    # made after canonical parameter production completes and the plan is re-resolved.
+    parent_child_settings = strategy_config.get_strategy_comparison_settings(
+        "non_dl_production_multiseed_oos"
+    )
+    parent_param_sources = tuple(
+        dict.fromkeys(arm.param_source for arm in parent_child_settings.enabled_arms)
+    )
+    pending_plan = reuse_owner_module.StrategyPreparationPlan.from_actions(
+        reuse_owner_module.StrategyPreparationAction(
+            action_id=f"param:{source_id}",
+            artifact_key=f"param:{source_id}",
+            action="REBUILD",
+            builder_type="synthetic_param_builder",
+            description="synthetic pending parameter producer",
+            path=f"models/strategy_params/{source_id}.json",
+            dependencies=(),
+            producer_work_type="optimizer_strategy_parameter_service",
+        )
+        for source_id in parent_param_sources
+    )
+    ready_plan = reuse_owner_module.StrategyPreparationPlan.from_actions(
+        reuse_owner_module.StrategyPreparationAction(
+            action_id=f"param:{source_id}",
+            artifact_key=f"param:{source_id}",
+            action="REUSE",
+            builder_type=None,
+            description="synthetic ready parameter producer",
+            path=f"models/strategy_params/{source_id}.json",
+            dependencies=(),
+            producer_work_type="existing_artifact",
+        )
+        for source_id in parent_param_sources
+    )
+    replay_status_base = {
+        "comparison_period": {"start": "2021-01-01", "end": "2026-03-02"},
+    }
+    synthetic_completed_pair = Path("synthetic_completed_pair").resolve()
+    with patch.object(
+        reuse_owner_module,
+        "_find_reusable_baseline_source",
+        return_value=synthetic_completed_pair,
+    ):
+        pending_cache = reuse_owner_module._collect_replay_cache_status(
+            root=project_root,
+            settings=parent_child_settings,
+            status={**replay_status_base, "preparation_plan": pending_plan},
+        )
+        ready_cache = reuse_owner_module._collect_replay_cache_status(
+            root=project_root,
+            settings=parent_child_settings,
+            status={**replay_status_base, "preparation_plan": ready_plan},
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "completed_arm_reuse_waits_for_pending_parameter_parent_before_final_reuse",
+        True,
+        all(
+            dict(pending_cache["arm_states"][arm.arm_id]).get("action") == "WAIT"
+            and bool(
+                dict(pending_cache["arm_states"][arm.arm_id]).get(
+                    "scientific_result_ready"
+                )
+            )
+            and dict(ready_cache["arm_states"][arm.arm_id]).get("action") == "REUSE"
+            for arm in parent_child_settings.enabled_arms
+        ),
+    )
 
     add_check(
         results,

@@ -12267,3 +12267,12 @@ Decision：`ENGINEERING_ONLY / NON_VALIDATION_ROBUSTNESS_IDENTITY_BOUND / FITTIN
 - **Scientific impact**：無。未改P6/C85的4 fixed fitting seeds、300 trials/seed、120M/12M、selector、score、gate、search、execution economics、PIT或validation-disabled semantics；只修正式dependency orchestration的legacy migration state transition。
 
 Decision：`ENGINEERING_ONLY / LEGACY_P6_UNBOUND_REBUILDABLE / NO_DIRECT_ADOPTION / TRUE_DRIFT_STILL_BLOCKED / FORMAL_MENU_DEAD_END_REMOVED / NO_SCIENTIFIC_CHANGE`。
+
+## 2026-09-30 — Strategy Compare parent/child reuse-state ordering correction
+
+- **Observed inconsistency**：Strategy Compare execution plan could show `REBUILD Params | ...` while simultaneously showing dependent C-arms as final `REUSE`. The completed result evidence was valid against the currently visible evaluation-view Params schedule, but the parent Params producer had not yet completed its own scientific identity migration/rebuild, so the child decision was being presented too early.
+- **Canonical state correction**：`StrategyResultState` now supports provisional `WAIT`. When an arm's `param:<source>` action is any canonical build action (`BUILD/REBUILD/RESUME/MIGRATE/DERIVE`), the completed evidence is retained but the arm is `WAIT`; after the producer completes, the existing orchestration re-plans and recomputes the evaluation-bound Params identity. Same SHA may then become `REUSE`; changed SHA becomes `RUN`. READY plans cannot retain `WAIT`.
+- **Dependency waiver correction**：completed-pair DL waiver no longer marks a DL source unnecessary when a pending Strategy Params producer directly depends on that DL artifact. This keeps parent scientific production dependencies authoritative even when a downstream completed pair exists.
+- **Scientific impact**：none. No parameter search, seed/trial, score/gate, selector, execution economics, OOS/Rolling consumption, completed-result fingerprint, or validation behavior changed. This only corrects dependency-plan state ordering and human-visible action truth.
+
+Decision：`ENGINEERING_ONLY / PARENT_PARAMS_FINALIZE_BEFORE_CHILD_REUSE / PROVISIONAL_WAIT / REPLAN_DECIDES_REUSE_OR_RUN / SCIENTIFIC_IDENTITY_UNCHANGED`。

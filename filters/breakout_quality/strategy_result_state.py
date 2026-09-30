@@ -15,6 +15,7 @@ from typing import Any, Mapping
 RESULT_ACTION_REUSE = "REUSE"
 RESULT_ACTION_RUN = "RUN"
 RESULT_ACTION_REBUILD_CONTEXT = "REBUILD_CONTEXT"
+RESULT_ACTION_WAIT = "WAIT"
 
 
 @dataclass(frozen=True)
@@ -55,11 +56,29 @@ def resolve_strategy_result_state(
     context_required: bool = False,
     context_ready: bool = False,
     missing_reason: str = "no identity-compatible completed scientific result",
+    upstream_dependency_pending: bool = False,
+    upstream_dependency_reason: str = "upstream scientific dependency pending re-resolution",
 ) -> StrategyResultState:
-    """Map verified scientific evidence to the one canonical execution action."""
+    """Map verified scientific evidence to the one canonical execution action.
+
+    A completed result may already have identity-compatible evidence while an upstream
+    scientific producer is still BUILD/REBUILD/RESUME.  In that case the evidence is
+    retained but the execution decision is provisional until the producer completes and
+    the comparison plan is resolved again.
+    """
 
     scientific_ready = isinstance(verified_evidence, Mapping)
     resolved_source = None if source_dir in (None, "") else Path(source_dir).resolve()
+    if upstream_dependency_pending:
+        return StrategyResultState(
+            action=RESULT_ACTION_WAIT,
+            scientific_result_ready=scientific_ready,
+            context_required=bool(context_required),
+            context_ready=bool(context_ready),
+            source_dir=resolved_source,
+            reason=str(upstream_dependency_reason),
+            evidence=verified_evidence if scientific_ready else None,
+        )
     if not scientific_ready:
         return StrategyResultState(
             action=RESULT_ACTION_RUN,
@@ -99,6 +118,7 @@ def result_state_from_mapping(raw: Mapping[str, Any]) -> StrategyResultState:
         RESULT_ACTION_REUSE,
         RESULT_ACTION_RUN,
         RESULT_ACTION_REBUILD_CONTEXT,
+        RESULT_ACTION_WAIT,
     }:
         raise ValueError(f"不支援的Strategy result action: {action!r}")
     evidence = raw.get("evidence")
@@ -120,6 +140,7 @@ __all__ = [
     "RESULT_ACTION_REBUILD_CONTEXT",
     "RESULT_ACTION_REUSE",
     "RESULT_ACTION_RUN",
+    "RESULT_ACTION_WAIT",
     "StrategyResultState",
     "resolve_strategy_result_state",
     "result_state_from_mapping",

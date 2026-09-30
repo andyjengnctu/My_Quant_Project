@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from core.console_report import project_relative_display_path
+from core.research_orchestration import RESEARCH_ARTIFACT_BUILD_ACTIONS
 from core.strategy_compare_policy import resolve_strategy_comparison_result_search_roots
 from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT,
@@ -1022,8 +1023,19 @@ def _collect_replay_cache_status(
                         "source_pair_dir": source_pair_dir,
                     },
                 )
+    plan = status.get("preparation_plan")
+    action_by_key = (
+        plan.action_by_key
+        if isinstance(plan, StrategyPreparationPlan)
+        else {}
+    )
     arm_states: dict[str, Any] = {}
     for arm in settings.enabled_arms:
+        parameter_dependency = action_by_key.get(f"param:{arm.param_source}")
+        parameter_dependency_pending = (
+            isinstance(parameter_dependency, StrategyPreparationAction)
+            and parameter_dependency.action in RESEARCH_ARTIFACT_BUILD_ACTIONS
+        )
         if arm.dl_enabled:
             evidence = pairs.get(arm.arm_id)
             source_dir = (
@@ -1047,6 +1059,17 @@ def _collect_replay_cache_status(
             verified_evidence=evidence if isinstance(evidence, dict) else None,
             source_dir=source_dir,
             missing_reason=f"{arm.arm_id}尚無identity一致的completed result",
+            upstream_dependency_pending=parameter_dependency_pending,
+            upstream_dependency_reason=(
+                (
+                    "既有completed result僅為候選；"
+                    if isinstance(evidence, dict)
+                    else ""
+                )
+                + f"等待上游Params完成{parameter_dependency.action}後重新解析，屆時才決定REUSE/RUN"
+                if parameter_dependency_pending
+                else "upstream scientific dependency pending re-resolution"
+            ),
         ).as_dict()
     return {
         "pairs": pairs,
@@ -1063,6 +1086,15 @@ def _apply_completed_pair_dependency_waivers(
     """Do not require DL source artifacts when every dependent arm reuses a completed pair."""
 
     pairs = dict(replay_cache.get("pairs") or {})
+    plan: StrategyPreparationPlan = status["preparation_plan"]
+    pending_param_dependencies = {
+        dependency
+        for action in plan.actions
+        if action.artifact_key.startswith("param:")
+        and action.action in RESEARCH_ARTIFACT_BUILD_ACTIONS
+        for dependency in action.dependencies
+        if dependency.startswith("dl:")
+    }
     waived_dl_ids: set[str] = set()
     for dl_id, source_row in dict(status.get("dl_sources") or {}).items():
         if bool(source_row.get("ready")):
@@ -1074,13 +1106,17 @@ def _apply_completed_pair_dependency_waivers(
         )
         if not dependent_arms:
             continue
+        if any(
+            dependency.startswith(f"dl:{dl_id}:")
+            for dependency in pending_param_dependencies
+        ):
+            continue
         if all(isinstance(pairs.get(arm.arm_id), dict) for arm in dependent_arms):
             waived_dl_ids.add(str(dl_id))
     if not waived_dl_ids:
         status["replay_cache"] = replay_cache
         return status
 
-    plan: StrategyPreparationPlan = status["preparation_plan"]
     rewritten_actions: list[StrategyPreparationAction] = []
     for item in plan.actions:
         parts = item.artifact_key.split(":")

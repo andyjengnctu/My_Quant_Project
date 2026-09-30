@@ -98,6 +98,7 @@ from services.research.strategy_compare_execution import (
 from filters.breakout_quality.strategy_compare_plan import ResolvedComparisonPlan
 from filters.breakout_quality.strategy_result_state import (
     RESULT_ACTION_REUSE,
+    RESULT_ACTION_WAIT,
     result_state_from_mapping,
 )
 from filters.breakout_quality.strategy_compare_runtime import (
@@ -534,6 +535,8 @@ def render_execution_plan(
             description = (
                 f"{arm.name}｜重用identity一致的completed scientific result"
             )
+        elif action == RESULT_ACTION_WAIT:
+            description = f"{arm.name}｜{state.reason}"
         else:
             description = arm.name
         rows.append((action, arm.arm_id, description))
