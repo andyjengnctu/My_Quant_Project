@@ -12246,3 +12246,14 @@ Decision：`PARAM-P6_C85_SCIENTIFIC_CONTRACT_BOUND / REGISTERED_FINGERPRINT_IMMU
 
 Decision：`ENGINEERING_ONLY / NON_VALIDATION_IDENTITY_CONVERGED / C58_C61_C62_C85_COMMON_CONTRACT_MECHANISM / ONE_PHYSICAL_SCHEDULE_PER_FAMILY / C84_P5_UNCHANGED / VALIDATION_DEFERRED`。
 
+
+
+## 2026-09-30 — Strategy Parameter scientific-contract refactor / Round 5 non-validation stabilization
+
+- **Robustness identity closure**：C58/C61/C62每個benchmark seed的parameter artifact不再只驗legacy build contract，而由其registered `(family, parameter_policy)` profile加benchmark fitting-seed override導出concrete scientific contract/fingerprint並寫入manifest。C85/P6 replicated robustness同樣由registered P6 source contract加outer-replicate resolved 4-seed fitting bundle導出identity。Source registration drift一律`BLOCKED`；artifact缺少binding或identity mismatch只能`REBUILD`，不得誤REUSE。
+- **Fitting protocol ownership**：canonical Strategy Parameter physical schedule的optimizer seed/trials改由`config/strategy_params.py` versioned fitting protocol提供；generic Optimizer mutable seed/trial defaults不再反向決定C58/C61/C62 registered fitting identity。Canonical manifest reuse只比較physical schedule owner欄位，selector/score/gate等語意由policy-output scientific identity驗證。
+- **Regression evidence**：baseline vs Round-5的Min/Full/P6 build contracts、registered scientific fingerprints與current Strategy Compare/Robustness runtime payload完全一致；C84/P5 validation profile/runtime payload亦hash一致。Single-seed與P6 robustness fake-producer state transition皆驗證`BUILD → REUSE`，移除scientific binding後回`REBUILD`；代表性score mutation使registered source drift `BLOCKED`。
+- **Deferred conservative over-binding**：既有registered fingerprint仍保守包含少數inactive/non-applicable review knobs；修正會改已使用fingerprint，因此本Round不做silent migration，留給後續明確identity-version migration。此為可能造成額外stale的保守性問題，不是unsafe reuse。
+- **Scientific impact**：無。未變更C58/C61/C62/C85的search、seed/trials結果、selector、PIT、OOS/Rolling或Robustness benchmark semantics；`PARAM-P5 / C84` validation完全不改。
+
+Decision：`ENGINEERING_ONLY / NON_VALIDATION_ROBUSTNESS_IDENTITY_BOUND / FITTING_PROTOCOL_OWNS_SEED_TRIALS / UNSAFE_REUSE_CLOSED / C84_P5_UNCHANGED / READY_FOR_FORMAL_DOUBLE_CHECK_BEFORE_VALIDATION_REDESIGN`。

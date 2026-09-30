@@ -184,6 +184,7 @@ def build_strategy_parameter_benchmark_manifest_payload(
     family: str,
     evaluation_mode: str,
     source_records: dict[str, dict[str, Any]] | None = None,
+    training_policy_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
     family = normalize_strategy_param_family(family)
@@ -214,15 +215,17 @@ def build_strategy_parameter_benchmark_manifest_payload(
     benchmark_policy = get_robustness_benchmark_policy_snapshot()
     if int(seed) not in {int(value) for value in benchmark_policy["resolved_seeds"]}:
         raise ValueError(f"seed不屬於目前robustness benchmark題庫: {seed}")
-    training_policy = {
-        **get_strategy_parameter_training_policy_snapshot(evaluation_mode="rolling"),
-        "evaluation_mode": "schedule",
-        "consumption_modes": ["oos", "rolling"],
-        # The benchmark overrides only the stochastic seed. Optimizer budget/window/cadence
-        # remain owned by the canonical optimizer training policy.
-        "optimizer_seed": int(seed),
-        "benchmark_seed_override": True,
-    }
+    training_policy = (
+        dict(training_policy_override)
+        if isinstance(training_policy_override, dict)
+        else {
+            **get_strategy_parameter_training_policy_snapshot(evaluation_mode="rolling"),
+            "evaluation_mode": "schedule",
+            "consumption_modes": ["oos", "rolling"],
+            "optimizer_seed": int(seed),
+            "benchmark_seed_override": True,
+        }
+    )
     return {
         "schema_type": "strategy_parameter_robustness_benchmark_artifact_set",
         "schema_version": STRATEGY_PARAM_ARTIFACT_SCHEMA_VERSION,
@@ -249,6 +252,7 @@ def refresh_strategy_parameter_benchmark_manifest(
     family: str,
     evaluation_mode: str,
     source_records: dict[str, dict[str, Any]] | None = None,
+    training_policy_override: dict[str, Any] | None = None,
 ) -> Path:
     root = Path(project_root).resolve()
     manifest_path = resolve_strategy_param_benchmark_manifest_path(
@@ -267,6 +271,7 @@ def refresh_strategy_parameter_benchmark_manifest(
             family=family,
             evaluation_mode=evaluation_mode,
             source_records=source_records,
+            training_policy_override=training_policy_override,
         ),
     )
     return manifest_path

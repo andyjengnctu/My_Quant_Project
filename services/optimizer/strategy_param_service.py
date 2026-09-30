@@ -30,8 +30,12 @@ from core.seed_ensemble_policy import normalize_seed_ensemble_members
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
 from core.strategy_param_scientific_contract import (
     build_registered_strategy_param_scientific_identity,
+    derive_strategy_param_scientific_identity_from_registered_profile,
 )
-from core.strategy_param_policy import resolve_canonical_strategy_param_training_profile
+from core.strategy_param_policy import (
+    get_strategy_param_fitting_seed_protocol,
+    resolve_canonical_strategy_param_training_profile,
+)
 from core.strategy_param_artifacts import (
     POLICY_FILENAME_BY_NAME,
     COMPARE_PARAM_POLICY_TO_OPTIMIZER_POLICY,
@@ -733,6 +737,73 @@ def finalize_legacy_strategy_parameter_migration(project_root: str | Path) -> di
     }
 
 
+def _canonical_family_fitting_seed_protocol(family: str):
+    """Return the one fitting protocol shared by a canonical physical schedule.
+
+    A Min/Full physical Optimizer search may emit multiple policy outputs, but all
+    outputs from that search must share the same seed/trial fitting semantics.
+    Those semantics are owned by the registered Strategy Parameter profiles, not
+    by mutable generic Optimizer defaults.
+    """
+
+    normalized_family = normalize_strategy_param_family(family)
+    profiles = []
+    for compare_policy in COMPARE_PARAM_POLICY_TO_OPTIMIZER_POLICY:
+        profile = resolve_canonical_strategy_param_training_profile(
+            normalized_family, compare_policy
+        )
+        if profile is not None:
+            profiles.append(profile)
+    if not profiles:
+        raise ValueError(
+            "canonical strategy parameter family缺少registered fitting profile: "
+            f"family={normalized_family}"
+        )
+    protocol_ids = {str(profile.fitting_seed_protocol) for profile in profiles}
+    if len(protocol_ids) != 1:
+        raise ValueError(
+            "同一canonical physical schedule的policy outputs不得使用不同fitting protocol: "
+            f"family={normalized_family}, protocols={sorted(protocol_ids)}"
+        )
+    protocol = get_strategy_param_fitting_seed_protocol(next(iter(protocol_ids)))
+    if protocol.enabled or protocol.seed_count != 1:
+        raise ValueError(
+            "canonical single-seed physical schedule必須使用single-seed fitting protocol: "
+            f"family={normalized_family}, protocol={protocol.protocol_id}"
+        )
+    return protocol
+
+
+def _canonical_schedule_training_policy(family: str) -> dict[str, Any]:
+    policy = dict(get_strategy_parameter_training_policy_snapshot(evaluation_mode="rolling"))
+    fitting_protocol = _canonical_family_fitting_seed_protocol(family)
+    policy["optimizer_seed"] = int(fitting_protocol.generator_seed)
+    policy["trials_per_fold"] = int(fitting_protocol.trials_per_seed)
+    policy["evaluation_mode"] = "schedule"
+    policy["consumption_modes"] = ["oos", "rolling"]
+    return policy
+
+
+def _schedule_training_policy_reuse_projection(policy: dict[str, Any]) -> dict[str, Any]:
+    """Return only physical-schedule fields owned by the Strategy Parameter fit.
+
+    Selector/anti-overfit semantics are bound by each policy output's scientific
+    identity. Generic random-ensemble defaults are not used by these registered
+    single-seed schedules and must not invalidate their reuse.
+    """
+
+    keys = (
+        "owner",
+        "evaluation_mode",
+        "optimizer_seed",
+        "trials_per_fold",
+        "train_window_months",
+        "oos_horizon_months",
+        "consumption_modes",
+    )
+    return {key: policy.get(key) for key in keys}
+
+
 def _canonical_schedule_build_contract(
     *,
     family: str,
@@ -757,12 +828,13 @@ def _canonical_schedule_build_contract(
 
     family = normalize_strategy_param_family(family)
     policy = dict(get_strategy_parameter_training_policy_snapshot(evaluation_mode="rolling"))
+    fitting_protocol = _canonical_family_fitting_seed_protocol(family)
     return {
         "family": family,
         "dataset": str(DEFAULT_DATASET_PROFILE if dataset in (None, "") else dataset),
         "search_space_sha256": canonical_json_sha256(BREAKOUT_OPTIMIZER_SEARCH_SPACE),
-        "optimizer_seed": int(policy["optimizer_seed"]),
-        "trials_per_fold": int(policy["trials_per_fold"]),
+        "optimizer_seed": int(fitting_protocol.generator_seed),
+        "trials_per_fold": int(fitting_protocol.trials_per_seed),
         "train_window_months": int(policy["train_window_months"]),
         "oos_horizon_months": int(policy["oos_horizon_months"]),
         "max_positions": int(DEFAULT_PORTFOLIO_MAX_POSITIONS if max_positions is None else max_positions),
@@ -853,6 +925,23 @@ def _scientific_identity_record(identity: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _derived_scientific_identity_record(identity: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": int(identity["schema_version"]),
+        "source_profile_id": str(identity["source_profile_id"]),
+        "source_registered_scientific_fingerprint_sha256": str(
+            identity.get("source_registered_scientific_fingerprint_sha256") or ""
+        ),
+        "source_scientific_fingerprint_sha256": str(
+            identity.get("source_scientific_fingerprint_sha256") or ""
+        ),
+        "scientific_fingerprint_sha256": str(
+            identity["scientific_fingerprint_sha256"]
+        ),
+        "scientific_contract": dict(identity["scientific_contract"]),
+    }
+
+
 def _canonical_family_scientific_identities(
     root: Path,
     *,
@@ -929,10 +1018,11 @@ def _canonical_manifest_matches_current_schedule(
         return False, "FAMILY_MISMATCH"
     if str(manifest.get("evaluation_mode") or "") != "schedule":
         return False, "STORAGE_MODE_MISMATCH"
-    expected_policy = dict(get_strategy_parameter_training_policy_snapshot(evaluation_mode="rolling"))
-    expected_policy["evaluation_mode"] = "schedule"
-    expected_policy["consumption_modes"] = ["oos", "rolling"]
-    if dict(manifest.get("training_policy") or {}) != expected_policy:
+    expected_policy = _canonical_schedule_training_policy(family)
+    actual_policy = dict(manifest.get("training_policy") or {})
+    if _schedule_training_policy_reuse_projection(actual_policy) != (
+        _schedule_training_policy_reuse_projection(expected_policy)
+    ):
         return False, "TRAINING_POLICY_MISMATCH"
     record = dict(dict(manifest.get("artifacts") or {}).get(policy) or {})
     if not record:
@@ -1160,6 +1250,7 @@ def _build_canonical_schedule(
         family=family,
         evaluation_mode="rolling",
         source_records=source_records,
+        training_policy_override=_canonical_schedule_training_policy(family),
     )
     target = published[policy]
     _print_published_strategy_param_paths(
@@ -1292,9 +1383,9 @@ def build_isolated_strategy_parameter_schedule(
             "data_identity_sha256": canonical_json_sha256(data_identity),
         }
 
-    training_policy = dict(get_strategy_parameter_training_policy_snapshot(evaluation_mode="rolling"))
-    training_policy["evaluation_mode"] = "schedule"
-    training_policy["consumption_modes"] = ["oos", "rolling"]
+    training_policy = _canonical_schedule_training_policy(normalized_family)
+    training_policy["optimizer_seed"] = int(contract["optimizer_seed"])
+    training_policy["trials_per_fold"] = int(contract["trials_per_fold"])
     training_policy["runtime_domain"] = domain
     training_policy["data_source"] = "trading_market_data_v2_historical_latest_view" if domain == "trading" else domain
     manifest = refresh_strategy_parameter_manifest(
@@ -1582,6 +1673,13 @@ def _benchmark_parameter_coverage_end(path: Path) -> str | None:
     return None if value in (None, "") else str(value)
 
 
+def _benchmark_training_policy_snapshot(*, family: str, seed: int) -> dict[str, Any]:
+    policy = _canonical_schedule_training_policy(family)
+    policy["optimizer_seed"] = int(seed)
+    policy["benchmark_seed_override"] = True
+    return policy
+
+
 def _benchmark_schedule_build_contract(
     *, benchmark_id: str, seed: int, family: str, policy: str,
     dataset: str, max_positions: int, rotation: str, fixed_risk: float,
@@ -1589,14 +1687,15 @@ def _benchmark_schedule_build_contract(
 ) -> dict[str, Any]:
     from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
 
-    optimizer_policy = get_strategy_parameter_training_policy_snapshot(evaluation_mode="rolling")
+    optimizer_policy = _benchmark_training_policy_snapshot(family=family, seed=int(seed))
+    fitting_protocol = _canonical_family_fitting_seed_protocol(family)
     return {
         "schema": "robustness_strategy_schedule_work_v3",
         "benchmark_id": str(benchmark_id),
         "seed": int(seed),
         "family": normalize_strategy_param_family(family),
         "policy": normalize_strategy_param_policy(policy),
-        "trials_per_fold": int(optimizer_policy["trials_per_fold"]),
+        "trials_per_fold": int(fitting_protocol.trials_per_seed),
         "dataset": str(dataset),
         "max_positions": int(max_positions),
         "rotation": str(rotation),
@@ -1623,6 +1722,56 @@ def _benchmark_build_contract_scientific_payload(contract: dict[str, Any]) -> di
     }
 
 
+def _benchmark_scientific_identity(
+    root: Path,
+    *,
+    seed: int,
+    family: str,
+    policy: str,
+    dataset: str,
+    max_positions: int,
+    rotation: str,
+    fixed_risk: float,
+    max_position_cap_pct: float,
+) -> dict[str, Any]:
+    profile = resolve_canonical_strategy_param_training_profile(family, policy)
+    if profile is None:
+        raise ValueError(
+            "robustness benchmark缺少registered canonical strategy-param profile: "
+            f"family={family}, policy={policy}"
+        )
+    if str(dataset) != str(profile.dataset):
+        raise ValueError(
+            "registered robustness strategy parameter identity不得覆寫dataset: "
+            f"profile={profile.profile_id}, registered={profile.dataset!r}, requested={dataset!r}"
+        )
+    protocol = get_strategy_param_fitting_seed_protocol(profile.fitting_seed_protocol)
+    if protocol.enabled or protocol.seed_count != 1:
+        raise ValueError(
+            "single-seed robustness baseline必須源自single-seed fitting profile: "
+            f"profile={profile.profile_id}, protocol={protocol.protocol_id}"
+        )
+    fitting = dict(protocol.as_seed_ensemble_policy())
+    fitting["generator_seed"] = int(seed)
+    fitting["resolved_seeds"] = [int(seed)]
+    fitting["trials_per_seed"] = int(protocol.trials_per_seed)
+    return derive_strategy_param_scientific_identity_from_registered_profile(
+        root,
+        profile.profile_id,
+        fitting_override=fitting,
+        execution_overrides=_strategy_param_execution_overrides(
+            max_positions=int(max_positions),
+            rotation=str(rotation),
+            fixed_risk=float(fixed_risk),
+            max_position_cap_pct=float(max_position_cap_pct),
+        ),
+        reference_overrides={
+            "robustness_fitting_seed": int(seed),
+            "robustness_seed_semantics": "benchmark_seed_overrides_single_fitting_seed",
+        },
+    )
+
+
 def _benchmark_workspace_source_path(
     work_root: Path, *, family: str, policy: str
 ) -> Path:
@@ -1635,7 +1784,8 @@ def _benchmark_workspace_source_path(
 
 def _benchmark_fast_republish_source(
     *, root: Path, benchmark_id: str, seed: int, family: str, policy: str,
-    target_path: Path, build_contract: dict[str, Any], comparison_end_date: str,
+    target_path: Path, manifest_path: Path, build_contract: dict[str, Any],
+    scientific_identity: dict[str, Any], comparison_end_date: str,
 ) -> Path | None:
     """Return an existing workspace payload that can repair publication metadata only.
 
@@ -1654,6 +1804,13 @@ def _benchmark_fast_republish_source(
         return None
     coverage_end = _benchmark_parameter_coverage_end(target_path)
     if coverage_end is None or str(coverage_end) < str(comparison_end_date):
+        return None
+    manifest = _load_json_object(manifest_path)
+    artifact = dict(dict((manifest or {}).get("artifacts") or {}).get(policy) or {})
+    source = dict(artifact.get("source") or {})
+    if dict(source.get("scientific_identity") or {}) != _derived_scientific_identity_record(
+        scientific_identity
+    ):
         return None
     work_root = resolve_strategy_param_optimizer_work_dir(
         root,
@@ -1693,6 +1850,7 @@ def _benchmark_manifest_matches_current_policy(
     manifest_path: Path, *, benchmark: dict[str, Any], benchmark_id: str, seed: int,
     family: str, evaluation_mode: str, policy: str, target_path: Path,
     comparison_end_date: str, build_contract: dict[str, Any],
+    scientific_identity: dict[str, Any],
 ) -> bool:
     try:
         payload = load_json_strict(manifest_path)
@@ -1719,7 +1877,7 @@ def _benchmark_manifest_matches_current_policy(
     if (
         int(training.get("optimizer_seed") or -1) != int(seed)
         or int(training.get("trials_per_fold") or -1)
-            != int(get_strategy_parameter_training_policy_snapshot(evaluation_mode="rolling")["trials_per_fold"])
+            != int(build_contract["trials_per_fold"])
         or training.get("benchmark_seed_override") is not True
         or str(training.get("evaluation_mode") or "") != "schedule"
     ):
@@ -1744,6 +1902,10 @@ def _benchmark_manifest_matches_current_policy(
         return False
     source = dict(artifact.get("source") or {})
     if dict(source.get("build_contract") or {}) != dict(build_contract):
+        return False
+    if dict(source.get("scientific_identity") or {}) != _derived_scientific_identity_record(
+        scientific_identity
+    ):
         return False
     schedule_kind = str(source.get("schedule_kind") or "")
     return schedule_kind == "annual_refit"
@@ -1784,11 +1946,24 @@ def _resolve_robustness_benchmark_strategy_parameter_state(
     if int(seed) not in {int(value) for value in benchmark["resolved_seeds"]}:
         raise ValueError(f"seed不屬於current robustness benchmark題庫: {seed}")
 
-    optimizer_policy = get_strategy_parameter_training_policy_snapshot(evaluation_mode="rolling")
+    optimizer_policy = _benchmark_training_policy_snapshot(
+        family=normalized_family, seed=int(seed)
+    )
     build_contract = _benchmark_schedule_build_contract(
         benchmark_id=str(benchmark_id), seed=int(seed), family=normalized_family,
         policy=normalized_policy, dataset=str(dataset), max_positions=int(max_positions),
         rotation=str(rotation), fixed_risk=float(fixed_risk),
+        max_position_cap_pct=float(max_position_cap_pct),
+    )
+    scientific_identity = _benchmark_scientific_identity(
+        root,
+        seed=int(seed),
+        family=normalized_family,
+        policy=normalized_policy,
+        dataset=str(dataset),
+        max_positions=int(max_positions),
+        rotation=str(rotation),
+        fixed_risk=float(fixed_risk),
         max_position_cap_pct=float(max_position_cap_pct),
     )
     target = resolve_strategy_param_benchmark_artifact_path(
@@ -1808,6 +1983,7 @@ def _resolve_robustness_benchmark_strategy_parameter_state(
             seed=int(seed), family=normalized_family, evaluation_mode=mode,
             policy=normalized_policy, target_path=target,
             comparison_end_date=str(comparison_end_date), build_contract=build_contract,
+            scientific_identity=scientific_identity,
         )
     )
     repair_source = None
@@ -1815,14 +1991,28 @@ def _resolve_robustness_benchmark_strategy_parameter_state(
         repair_source = _benchmark_fast_republish_source(
             root=root, benchmark_id=str(benchmark_id), seed=int(seed),
             family=normalized_family, policy=normalized_policy, target_path=target,
-            build_contract=build_contract, comparison_end_date=str(comparison_end_date),
+            manifest_path=manifest_path, build_contract=build_contract,
+            scientific_identity=scientific_identity,
+            comparison_end_date=str(comparison_end_date),
         )
-    action = (
-        "REUSE" if reusable else
-        "REPAIR" if repair_source is not None else
-        "REBUILD" if target.exists() or manifest_path.exists() else
-        "BUILD"
-    )
+    if not bool(scientific_identity.get("source_registered", False)):
+        status = "SCIENTIFIC_IDENTITY_UNREGISTERED"
+        action = "BLOCKED"
+    elif not bool(scientific_identity.get("source_registration_matches", False)):
+        status = "REGISTERED_SCIENTIFIC_CONTRACT_DRIFT"
+        action = "BLOCKED"
+    elif reusable:
+        status = "READY"
+        action = "REUSE"
+    elif repair_source is not None:
+        status = "PUBLICATION_METADATA_STALE"
+        action = "REPAIR"
+    elif target.exists() or manifest_path.exists():
+        status = "ARTIFACT_STALE_OR_IDENTITY_UNBOUND"
+        action = "REBUILD"
+    else:
+        status = "ARTIFACT_MISSING"
+        action = "BUILD"
     return {
         "root": root,
         "family": normalized_family,
@@ -1831,6 +2021,8 @@ def _resolve_robustness_benchmark_strategy_parameter_state(
         "benchmark": benchmark,
         "optimizer_policy": optimizer_policy,
         "build_contract": build_contract,
+        "scientific_identity": scientific_identity,
+        "status": status,
         "target": target,
         "manifest_path": manifest_path,
         "repair_source_path": repair_source,
@@ -1871,8 +2063,10 @@ def inspect_robustness_benchmark_strategy_parameter_artifact(
     )
     return {
         "action": str(state["action"]),
+        "status": str(state["status"]),
         "path": Path(state["target"]),
         "manifest_path": Path(state["manifest_path"]),
+        "scientific_identity": dict(state["scientific_identity"]),
     }
 
 
@@ -1927,8 +2121,14 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
     train_window_months = int(optimizer_policy["train_window_months"])
     oos_months = int(optimizer_policy["oos_horizon_months"])
     build_contract = dict(state["build_contract"])
+    scientific_identity = dict(state["scientific_identity"])
     target = Path(state["target"])
     manifest_path = Path(state["manifest_path"])
+    if str(state["action"]) == "BLOCKED":
+        raise RuntimeError(
+            "robustness strategy parameter scientific identity blocked: "
+            f"status={state['status']}, family={family}, policy={policy}, seed={int(seed)}"
+        )
     reusable = str(state["action"]) == "REUSE" and not force_rebuild
     if reusable:
         initial_sha = _benchmark_effective_member_sha256(target)
@@ -1958,9 +2158,13 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
                     "schedule_kind": "annual_refit",
                     "same_json_oos_rolling": True,
                     "build_contract": build_contract,
+                    "scientific_identity": _derived_scientific_identity_record(
+                        scientific_identity
+                    ),
                     "path": _project_relative(root, source_path),
                 }
             },
+            training_policy_override=dict(state["optimizer_policy"]),
         )
         if not bool(quiet):
             _print_published_strategy_param_paths(
@@ -2064,12 +2268,26 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
             fixed_risk=float(fixed_risk),
             max_position_cap_pct=float(max_position_cap_pct),
         )
+        policy_scientific_identity = _benchmark_scientific_identity(
+            root,
+            seed=int(seed),
+            family=family,
+            policy=optimizer_policy,
+            dataset=str(dataset),
+            max_positions=int(max_positions),
+            rotation=str(rotation),
+            fixed_risk=float(fixed_risk),
+            max_position_cap_pct=float(max_position_cap_pct),
+        )
         source_records[optimizer_policy] = {
             "benchmark_initial_2021_member_sha256": str(initial_member_sha),
             "same_seed_oos_rolling_initial_required": True,
             "schedule_kind": "annual_refit",
             "same_json_oos_rolling": True,
             "build_contract": policy_contract,
+            "scientific_identity": _derived_scientific_identity_record(
+                policy_scientific_identity
+            ),
             "path": _project_relative(root, source_path),
         }
         published_paths[compare_policy] = policy_target
@@ -2086,6 +2304,7 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
         family=family,
         evaluation_mode="rolling",
         source_records=source_records,
+        training_policy_override=dict(state["optimizer_policy"]),
     )
     if not bool(quiet):
         _print_published_strategy_param_paths(
@@ -2584,6 +2803,49 @@ def _fixed_multiseed_robustness_build_contract(
     }
 
 
+def _fixed_multiseed_robustness_scientific_identity(
+    project_root: str | Path,
+    *,
+    training_profile_id: str,
+    build_contract: dict[str, Any],
+    dataset: str | None,
+    max_positions: int | None,
+    rotation: str | None,
+    fixed_risk: float | None,
+    max_position_cap_pct: float | None,
+) -> dict[str, Any]:
+    from core.strategy_param_policy import get_strategy_param_training_profile
+
+    profile = get_strategy_param_training_profile(training_profile_id)
+    requested_dataset = str(profile.dataset if dataset in (None, "") else dataset)
+    if requested_dataset != str(profile.dataset):
+        raise ValueError(
+            "registered fixed multi-seed robustness identity不得覆寫dataset: "
+            f"profile={profile.profile_id}, registered={profile.dataset!r}, requested={requested_dataset!r}"
+        )
+    fitting = dict(build_contract["seed_ensemble_policy"])
+    fitting["trials_per_seed"] = int(build_contract["trials_per_fold"])
+    return derive_strategy_param_scientific_identity_from_registered_profile(
+        project_root,
+        training_profile_id,
+        fitting_override=fitting,
+        execution_overrides=_fixed_multiseed_execution_overrides(
+            max_positions=max_positions,
+            rotation=rotation,
+            fixed_risk=fixed_risk,
+            max_position_cap_pct=max_position_cap_pct,
+        ),
+        reference_overrides={
+            "robustness_replication_seed": int(
+                build_contract["robustness_replication_seed"]
+            ),
+            "robustness_seed_semantics": str(
+                build_contract["robustness_seed_semantics"]
+            ),
+        },
+    )
+
+
 def inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
     project_root: str | Path,
     *,
@@ -2622,14 +2884,29 @@ def inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
         fixed_risk=fixed_risk,
         max_position_cap_pct=max_position_cap_pct,
     )
+    scientific_identity = _fixed_multiseed_robustness_scientific_identity(
+        root,
+        training_profile_id=training_profile_id,
+        build_contract=contract,
+        dataset=dataset,
+        max_positions=max_positions,
+        rotation=rotation,
+        fixed_risk=fixed_risk,
+        max_position_cap_pct=max_position_cap_pct,
+    )
     payload = _load_json_object(target)
     manifest = _load_json_object(manifest_path)
     coverage_end = _canonical_schedule_coverage_end(target)
     adaptation = dict((payload or {}).get("breakout_quality_param_adaptation") or {})
     expected_seed_policy = dict(contract["seed_ensemble_policy"])
     actual_seed_policy = dict(adaptation.get("seed_ensemble_policy") or {})
+    manifest_scientific_identity = dict((manifest or {}).get("scientific_identity") or {})
     status = "READY"
-    if payload is None:
+    if not bool(scientific_identity.get("source_registered", False)):
+        status = "SCIENTIFIC_IDENTITY_UNREGISTERED"
+    elif not bool(scientific_identity.get("source_registration_matches", False)):
+        status = "REGISTERED_SCIENTIFIC_CONTRACT_DRIFT"
+    elif payload is None:
         status = "ARTIFACT_MISSING_OR_INVALID"
     elif str(payload.get("selector") or "") != normalize_strategy_param_policy(compare_policy):
         status = "POLICY_SELECTOR_MISMATCH"
@@ -2657,18 +2934,37 @@ def inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
         status = "MANIFEST_FITTING_SEED_POLICY_MISMATCH"
     elif dict(manifest.get("build_contract") or {}) != contract:
         status = "BUILD_CONTRACT_MISMATCH"
+    elif not manifest_scientific_identity:
+        status = "LEGACY_SCIENTIFIC_IDENTITY_UNBOUND"
+    elif manifest_scientific_identity != _derived_scientific_identity_record(
+        scientific_identity
+    ):
+        status = "SCIENTIFIC_IDENTITY_MISMATCH"
     elif str(manifest.get("artifact_sha256") or "") != compute_strategy_param_file_sha256(target):
         status = "ARTIFACT_SHA_MISMATCH"
     ready = status == "READY"
     existed = bool(target.exists() or manifest_path.exists())
+    blocked_statuses = {
+        "SCIENTIFIC_IDENTITY_UNREGISTERED",
+        "REGISTERED_SCIENTIFIC_CONTRACT_DRIFT",
+    }
     return {
         "ready": ready,
         "status": status,
-        "action": "REUSE" if ready else ("REBUILD" if existed else "BUILD"),
+        "action": (
+            "REUSE"
+            if ready
+            else (
+                "BLOCKED"
+                if status in blocked_statuses
+                else ("REBUILD" if existed else "BUILD")
+            )
+        ),
         "path": target,
         "manifest_path": manifest_path,
         "coverage_end": coverage_end,
         "build_contract": contract,
+        "scientific_identity": scientific_identity,
     }
 
 
@@ -2716,6 +3012,12 @@ def ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
     target = Path(state["path"])
     manifest_path = Path(state["manifest_path"])
     contract = dict(state["build_contract"])
+    scientific_identity = dict(state["scientific_identity"])
+    if str(state.get("action") or "") == "BLOCKED":
+        raise RuntimeError(
+            "PARAM-P6 robustness scientific identity blocked: "
+            f"status={state.get('status')}"
+        )
     if bool(state["ready"]) and not force_rebuild:
         return {
             "action": "REUSE",
@@ -2725,6 +3027,7 @@ def ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
             "scientific_sha256": compute_strategy_param_scientific_sha256(target),
             "coverage_end": state.get("coverage_end"),
             "build_contract": contract,
+            "scientific_identity": scientific_identity,
         }
     replicate = int(contract["robustness_replication_seed"])
     benchmark = str(contract["benchmark_id"])
@@ -2800,6 +3103,9 @@ def ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
             "robustness_replication_seed": replicate,
             "seed_ensemble_policy": dict(contract["seed_ensemble_policy"]),
             "build_contract": contract,
+            "scientific_identity": _derived_scientific_identity_record(
+                scientific_identity
+            ),
             "artifact_path": _project_relative(root, target),
             "artifact_sha256": target_sha,
             "coverage_end": coverage_end,
@@ -3343,6 +3649,7 @@ def ensure_validation_budget_strategy_parameter_artifact(
         "sha256": target_sha,
         "coverage_end": coverage_end,
         "build_contract": contract,
+        "scientific_identity": scientific_identity,
     }
 
 

@@ -2218,12 +2218,155 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and current_rolling_robustness.suite_id == current_rolling_settings.suite_id,
     )
     from services.optimizer.strategy_param_service import (
+        _benchmark_schedule_build_contract,
+        _canonical_schedule_build_contract,
         ensure_fixed_multiseed_robustness_strategy_parameter_artifact,
         inspect_fixed_multiseed_robustness_strategy_parameter_artifact,
+        inspect_robustness_benchmark_strategy_parameter_artifact,
     )
     from config.execution_policy import (
         DEFAULT_FIXED_RISK, DEFAULT_MAX_POSITION_CAP_PCT,
         DEFAULT_PORTFOLIO_MAX_POSITIONS, DEFAULT_PORTFOLIO_ROTATION,
+    )
+    import config.training_policy as training_policy_settings
+    from core.strategy_param_policy import resolve_canonical_strategy_param_training_profile
+    full_best_profile_for_fit = resolve_canonical_strategy_param_training_profile(
+        "full", "base-finalist-best"
+    )
+    full_best_fit_protocol = get_strategy_param_fitting_seed_protocol(
+        full_best_profile_for_fit.fitting_seed_protocol
+    )
+    canonical_full_contract = _canonical_schedule_build_contract(family="full")
+    check(
+        "strategy_param_registered_fitting_protocol_owns_canonical_seed_and_trials",
+        True,
+        int(canonical_full_contract["optimizer_seed"])
+            == int(full_best_fit_protocol.generator_seed)
+        and int(canonical_full_contract["trials_per_fold"])
+            == int(full_best_fit_protocol.trials_per_seed),
+    )
+    benchmark_full_contract = _benchmark_schedule_build_contract(
+        benchmark_id=str(benchmark_snapshot["benchmark_id"]),
+        seed=replication_seed,
+        family="full",
+        policy="base_finalist_best",
+        dataset="full",
+        max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+        rotation=str(DEFAULT_PORTFOLIO_ROTATION),
+        fixed_risk=float(DEFAULT_FIXED_RISK),
+        max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+    )
+    check(
+        "strategy_param_robustness_trials_are_owned_by_registered_fitting_protocol",
+        int(full_best_fit_protocol.trials_per_seed),
+        int(benchmark_full_contract["trials_per_fold"]),
+    )
+    with patch.object(
+        training_policy_settings,
+        "OPTIMIZER_RANDOM_SEED_DEFAULT",
+        int(training_policy_settings.OPTIMIZER_RANDOM_SEED_DEFAULT) + 1000,
+    ), patch.object(
+        training_policy_settings,
+        "OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT",
+        int(training_policy_settings.OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT) + 111,
+    ):
+        mutated_canonical_contract = _canonical_schedule_build_contract(family="full")
+        mutated_benchmark_contract = _benchmark_schedule_build_contract(
+            benchmark_id=str(benchmark_snapshot["benchmark_id"]),
+            seed=replication_seed,
+            family="full",
+            policy="base_finalist_best",
+            dataset="full",
+            max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+            rotation=str(DEFAULT_PORTFOLIO_ROTATION),
+            fixed_risk=float(DEFAULT_FIXED_RISK),
+            max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+        )
+    check(
+        "strategy_param_generic_optimizer_seed_trial_defaults_do_not_override_registered_fit_protocol",
+        True,
+        int(mutated_canonical_contract["optimizer_seed"])
+            == int(canonical_full_contract["optimizer_seed"])
+        and int(mutated_canonical_contract["trials_per_fold"])
+            == int(canonical_full_contract["trials_per_fold"])
+        and int(mutated_benchmark_contract["trials_per_fold"])
+            == int(benchmark_full_contract["trials_per_fold"]),
+    )
+    from core.strategy_param_scientific_contract import build_strategy_param_scientific_contract
+    full_best_fp = build_strategy_param_scientific_contract(
+        project_root, full_best_profile_for_fit.profile_id
+    )["scientific_fingerprint_sha256"]
+    with patch.object(
+        training_policy_settings,
+        "OPTIMIZER_RANDOM_SEED_DEFAULT",
+        int(training_policy_settings.OPTIMIZER_RANDOM_SEED_DEFAULT) + 2000,
+    ), patch.object(
+        training_policy_settings,
+        "OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT",
+        int(training_policy_settings.OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT) + 222,
+    ):
+        mutated_full_best_fp = build_strategy_param_scientific_contract(
+            project_root, full_best_profile_for_fit.profile_id
+        )["scientific_fingerprint_sha256"]
+    check(
+        "strategy_param_registered_fit_fingerprint_ignores_generic_optimizer_seed_trial_defaults",
+        full_best_fp,
+        mutated_full_best_fp,
+    )
+    with TemporaryDirectory() as temp_dir:
+        single_seed_robustness_state = inspect_robustness_benchmark_strategy_parameter_artifact(
+            temp_dir,
+            benchmark_id=str(benchmark_snapshot["benchmark_id"]),
+            seed=replication_seed,
+            family="full",
+            evaluation_mode="rolling",
+            policy="base-finalist-best",
+            comparison_end_date="2021-01-01",
+            dataset="full",
+            max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+            rotation=str(DEFAULT_PORTFOLIO_ROTATION),
+            fixed_risk=float(DEFAULT_FIXED_RISK),
+            max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+        )
+    single_seed_identity = dict(single_seed_robustness_state["scientific_identity"])
+    single_seed_fitting = dict(single_seed_identity["scientific_contract"]["fitting"])
+    check(
+        "strategy_param_single_seed_robustness_derives_identity_from_registered_source",
+        True,
+        single_seed_robustness_state["action"] == "BUILD"
+        and bool(single_seed_identity["source_registration_matches"])
+        and int(single_seed_fitting["generator_seed"]) == replication_seed
+        and list(single_seed_fitting["resolved_seeds"]) == [replication_seed]
+        and int(single_seed_fitting["trials_per_seed"])
+            == int(full_best_fit_protocol.trials_per_seed),
+    )
+    with patch.object(
+        training_policy_settings,
+        "MIN_ANNUAL_TRADES",
+        float(training_policy_settings.MIN_ANNUAL_TRADES) + 1.0,
+    ):
+        with TemporaryDirectory() as temp_dir:
+            drifted_single_seed_robustness_state = inspect_robustness_benchmark_strategy_parameter_artifact(
+                temp_dir,
+                benchmark_id=str(benchmark_snapshot["benchmark_id"]),
+                seed=replication_seed,
+                family="full",
+                evaluation_mode="rolling",
+                policy="base-finalist-best",
+                comparison_end_date="2021-01-01",
+                dataset="full",
+                max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+                rotation=str(DEFAULT_PORTFOLIO_ROTATION),
+                fixed_risk=float(DEFAULT_FIXED_RISK),
+                max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+            )
+    check(
+        "strategy_param_single_seed_robustness_blocks_registered_scientific_drift",
+        ("BLOCKED", "REGISTERED_SCIENTIFIC_CONTRACT_DRIFT"),
+        (
+            drifted_single_seed_robustness_state["action"],
+            drifted_single_seed_robustness_state["status"],
+        ),
     )
     with TemporaryDirectory() as temp_dir:
         p6_robustness_state = inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
@@ -2323,10 +2466,16 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         True,
         built_p6_robustness["action"] == "BUILD"
         and rebuilt_p6_robustness_state["ready"]
+        and bool(
+            rebuilt_p6_robustness_state["scientific_identity"][
+                "source_registration_matches"
+            ]
+        )
         and int(captured_p6_robustness_build["optimizer_seed"]) == replication_seed
         and tuple(captured_p6_robustness_build["seed_ensemble_policy_override"]["resolved_seeds"])
             == tuple(p6_robustness_seed_policy["resolved_seeds"])
-        and len(captured_p6_robustness_build["seed_ensemble_policy_override"]["resolved_seeds"]) == 4
+        and len(captured_p6_robustness_build["seed_ensemble_policy_override"]["resolved_seeds"])
+            == production_multiseed_fitting_seed_protocol.seed_count
         and replication_seed
             not in set(captured_p6_robustness_build["seed_ensemble_policy_override"]["resolved_seeds"]),
     )

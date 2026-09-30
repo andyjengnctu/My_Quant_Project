@@ -245,6 +245,55 @@ def build_strategy_param_scientific_fingerprint(
     )
 
 
+def derive_strategy_param_scientific_identity_from_registered_profile(
+    project_root: str | Path,
+    profile_id: str,
+    *,
+    fitting_override: Mapping[str, Any],
+    execution_overrides: Mapping[str, Any] | None = None,
+    reference_overrides: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Derive one immutable runtime identity from a registered base profile.
+
+    Robustness fitting reuses the registered strategy/search/score/gate/execution
+    semantics but intentionally substitutes the benchmark-controlled fitting seed
+    or fitting-seed bundle.  The registered profile remains the authorization and
+    drift anchor; the derived fingerprint binds the concrete robustness fit.
+    """
+
+    base = build_registered_strategy_param_scientific_identity(
+        project_root,
+        profile_id,
+        execution_overrides=execution_overrides,
+    )
+    scientific = _jsonable(dict(base["scientific_contract"]))
+    scientific["fitting"] = _jsonable(dict(fitting_override))
+    references = {
+        **dict(base.get("references") or {}),
+        **_jsonable(dict(reference_overrides or {})),
+    }
+    derived = _wrap_scientific_contract(scientific, references=references)
+    return {
+        "schema_version": STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA_VERSION,
+        "source_profile_id": str(base["profile_id"]),
+        "source_registered": bool(base.get("registered", False)),
+        "source_registered_scientific_fingerprint_sha256": base.get(
+            "registered_scientific_fingerprint_sha256"
+        ),
+        "source_scientific_fingerprint_sha256": str(
+            base["scientific_fingerprint_sha256"]
+        ),
+        "source_registration_matches": bool(
+            base.get("registration_matches", False)
+        ),
+        "scientific_fingerprint_sha256": str(
+            derived["scientific_fingerprint_sha256"]
+        ),
+        "scientific_contract": dict(derived["scientific_contract"]),
+        "references": dict(derived.get("references") or {}),
+    }
+
+
 def build_registered_strategy_param_scientific_identity(
     project_root: str | Path,
     profile_id: str,
@@ -285,6 +334,7 @@ __all__ = [
     "STRATEGY_PARAM_SCIENTIFIC_CONTRACT_SCHEMA_VERSION",
     "STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA_VERSION",
     "build_registered_strategy_param_scientific_identity",
+    "derive_strategy_param_scientific_identity_from_registered_profile",
     "build_strategy_param_runtime_scientific_contract",
     "build_strategy_param_scientific_contract",
     "build_strategy_param_scientific_fingerprint",

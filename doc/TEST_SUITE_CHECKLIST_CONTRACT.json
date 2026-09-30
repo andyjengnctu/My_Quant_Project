@@ -4562,6 +4562,17 @@
       "entry": "`config/strategy_params.py`, `core/strategy_param_policy.py`, `core/strategy_comparison.py`, `services/optimizer/strategy_param_service.py`, `tools/validate/synthetic_strategy_cases.py`",
       "initial_status": "NEW",
       "order": 411
+    },
+    {
+      "id": "B424",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Non-validation Strategy Parameter fitting-protocol ownership / robustness scientific identity",
+      "item": "已註冊non-validation Strategy Parameter的physical fitting seed/trial semantics必須由versioned fitting protocol持有，generic Optimizer mutable defaults不得反向改寫registered strategy identity。C58/C61/C62 single-seed robustness benchmark artifact與C85/P6 replicated multi-seed robustness artifact必須由其registered source scientific contract加該benchmark/replicate fitting override導出concrete scientific identity並持久化；source registration drift一律`BLOCKED`，legacy-unbound或artifact identity mismatch不得REUSE但可在source仍exact-match時由canonical producer REBUILD。Physical schedule manifest reuse只比較schedule-owned欄位；selector/score/gate等scientific semantics由policy-output registered identity驗證。P5/C84 validation不得被本contract改寫。",
+      "gap": "`validate_optimizer_walk_forward_policy_contract_case`驗versioned fitting protocol對canonical seed/trials的ownership、generic Optimizer seed/trial default mutation invariance、single-seed/P6 robustness derived identity與source-drift BLOCKED；另以artifact state transition probe確認bound artifact可REUSE、移除binding後必須REBUILD。Validation profile/runtime payload需與本Round輸入基準完全一致。",
+      "entry": "`config/strategy_params.py`, `core/strategy_param_scientific_contract.py`, `services/optimizer/strategy_param_service.py`, `services/optimizer/strategy_param_repository.py`, `tools/validate/synthetic_strategy_cases.py`",
+      "initial_status": "NEW",
+      "order": 412
     }
   ],
   "tests": [
@@ -8485,6 +8496,13 @@
       "description": "`validate_optimizer_walk_forward_policy_contract_case` Round-4 extension：以config-driven mapping驗canonical non-validation family/policy registered profiles、distinct fingerprints、Strategy Compare relational binding、C84/P5 exclusion與scientific-drift BLOCKED；不得硬編current C-arm/PARAM/seed/trial values。",
       "initial_status": "NEW",
       "order": 551
+    },
+    {
+      "id": "T562",
+      "b_id": "B424",
+      "description": "`validate_optimizer_walk_forward_policy_contract_case` Round-5 extension：驗registered FIT protocol owns seed/trials、generic Optimizer defaults不得改registered fitting identity、single-seed/P6 robustness derived scientific identity與source-drift fail-fast；不得修改C84/P5 validation semantics。",
+      "initial_status": "NEW",
+      "order": 552
     }
   ],
   "transitions": [
@@ -27044,6 +27062,22 @@
       "date": "2026-09-30",
       "id": "T561",
       "description": "Register config-driven non-validation policy-output identity convergence regression under the existing optimizer walk-forward policy synthetic.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_optimizer_walk_forward_policy_contract_case`"
+    },
+    {
+      "date": "2026-09-30",
+      "id": "B424",
+      "description": "Register non-validation Strategy Parameter fitting-protocol ownership and robustness scientific-identity binding.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "C58/C61/C62/C85 robustness inputs now use registered-source-derived identity; C84/P5 validation remains unchanged."
+    },
+    {
+      "date": "2026-09-30",
+      "id": "T562",
+      "description": "Register Round-5 non-validation fitting-protocol and robustness identity regression under optimizer walk-forward synthetic.",
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_optimizer_walk_forward_policy_contract_case`"

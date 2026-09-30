@@ -110,17 +110,21 @@ Exit: C58/C61/C62/C85 non-validation paths share one scientific-identity mechani
 
 Round-4 evidence: current Min/Full canonical build contracts, P6 build contract/scientific fingerprint, and Strategy Compare runtime payload remain byte/value-equivalent to the input ZIP.  Registered fingerprints are `783eb920…428d` (Min/base-best), `77fa547f…0ad9` (Full/base-best), and `7f8d7c77…7d440` (Full/base-agree).  Full base-best/base-agree continue to share the same physical canonical schedule; identity is attached at policy-output source-record level.
 
-### Round 5 — Non-validation stabilization / regression **[NEXT]**
+### Round 5 — Non-validation stabilization / regression **[DONE]**
 
-- [ ] Run focused non-validation regression across C58/C61/C62/C85, canonical OOS/Rolling preparation, REUSE/BUILD/REBUILD/BLOCKED states, and relevant Robustness seed semantics.
-- [ ] Close any remaining scientific-identity leakage or over-binding found by regression without changing validation behavior.
-- [ ] Verify execution/display-only mutations do not invalidate scientific identity and scientific mutations do.
-- [ ] Verify historical evidence and physical truth reuse remain unchanged where fingerprints match.
-- [ ] Keep C84/P5 fixed-checkpoint validation untouched.
+- [x] Run focused non-validation regression across C58/C61/C62/C85, canonical OOS/Rolling preparation, REUSE/BUILD/REBUILD/BLOCKED states, and relevant Robustness seed semantics.
+- [x] Close the unsafe identity under-binding found by regression: both single-seed benchmark params and P6 replicated multi-seed robustness artifacts now bind a concrete scientific identity derived from the registered source profile plus the benchmark fitting override.
+- [x] Make the versioned fitting protocol the owner of Strategy Parameter seed/trial semantics; generic Optimizer seed/trial defaults no longer mutate a registered strategy fitting identity.
+- [x] Limit physical-schedule manifest comparison to schedule-owned fields; selector/score/gate scientific semantics remain owned by each registered policy-output scientific identity.
+- [x] Verify execution/display-only mutations do not invalidate the registered scientific identity and scientific mutations fail fast on the registered source contract.
+- [x] Verify historical evidence and physical truth reuse remain unchanged where fingerprints match.
+- [x] Keep C84/P5 fixed-checkpoint validation untouched.
 
 Exit: all non-validation strategy-parameter/compare paths are stable enough for user-side formal double-check before validation behavior changes.
 
-### Round 6 — Validation redesign **[PENDING]**
+Round-5 evidence: C58/C61/C62 single-seed benchmark artifacts and C85/P6 replicated multi-seed benchmark artifacts now persist derived scientific identity and follow `BUILD → REUSE`, while removing that binding returns `REBUILD` rather than unsafe reuse; registered source scientific drift is `BLOCKED`. Baseline-vs-Round-5 canonical Min/Full/P6 build contracts, registered fingerprints and current Strategy Compare/Robustness runtime payloads are byte/value-equivalent. C84/P5 validation profile/runtime payload hashes are identical. A conservative pre-existing fingerprint over-binding of some inactive/non-applicable selector review knobs was observed; changing it would alter already-registered fingerprints, so it is explicitly deferred to an identity-version migration rather than silently mixed into this behavior-preserving round.
+
+### Round 6 — Validation redesign **[NEXT]**
 
 - [ ] Preserve no-validation baseline as an immutable validation contract.
 - [ ] Preserve fixed-checkpoint P5/C84 validation as historical/control semantics.
@@ -152,8 +156,8 @@ Exit: component identity, scientific contracts, runtime and historical experimen
 | 2 | DONE | No |
 | 3 | DONE | No; identity binding/migration only |
 | 4 | DONE | No; non-validation identity convergence only |
-| 5 | NEXT | No; stabilization/regression only |
-| 6 | PENDING | **Yes — explicit validation research change** |
+| 5 | DONE | No; stabilization/regression only |
+| 6 | NEXT | **Yes — explicit validation research change** |
 | 7 | PENDING | No for identity refactor; new compositions later require explicit research identity |
 
 ## 5. Deletion gate for this temporary file
