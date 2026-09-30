@@ -956,6 +956,51 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
         if arm.rule_policy not in {"formal", "all_off"}:
             raise ValueError(f"arm {key} rule_policy不支援: {arm.rule_policy}")
         parameter_source = settings.parameter_sources[arm.param_source]
+        if arm.enabled and parameter_source.builder is not None:
+            builder_type = str(parameter_source.builder.builder_type or "").strip()
+            if builder_type == "canonical_optimizer_strategy_params":
+                from core.strategy_param_policy import (
+                    resolve_canonical_strategy_param_training_profile,
+                )
+
+                canonical_policy = resolve_strategy_comparison_arm_param_policy(
+                    settings, arm
+                )
+                canonical_profile = resolve_canonical_strategy_param_training_profile(
+                    str(parameter_source.canonical_family or ""),
+                    canonical_policy,
+                )
+                if canonical_profile is None:
+                    raise ValueError(
+                        "current canonical Strategy Compare arm缺少registered strategy-param profile: "
+                        f"arm={key}, family={parameter_source.canonical_family}, "
+                        f"policy={canonical_policy}"
+                    )
+                if canonical_profile.registered_scientific_fingerprint_sha256 is None:
+                    raise ValueError(
+                        "current canonical Strategy Compare arm的strategy-param profile尚未註冊: "
+                        f"arm={key}, profile={canonical_profile.profile_id}"
+                    )
+            elif builder_type == "optimizer_fixed_multiseed_strategy_params":
+                from core.strategy_param_policy import get_strategy_param_training_profile
+
+                options = dict(parameter_source.builder.options)
+                training_profile_id = str(options.get("training_profile_id") or "").strip()
+                if not training_profile_id:
+                    raise ValueError(
+                        f"current fixed multi-seed Strategy Compare arm缺少training_profile_id: arm={key}"
+                    )
+                training_profile = get_strategy_param_training_profile(training_profile_id)
+                arm_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
+                if (
+                    training_profile.parameter_policy != arm_policy
+                    or training_profile.validation_enabled
+                    or training_profile.registered_scientific_fingerprint_sha256 is None
+                ):
+                    raise ValueError(
+                        "current fixed multi-seed Strategy Compare arm與registered profile不一致: "
+                        f"arm={key}, profile={training_profile.profile_id}, policy={arm_policy}"
+                    )
         if arm.dl_enabled:
             if not arm.dl_id or arm.dl_id not in settings.dl_sources:
                 raise ValueError(f"arm {key}啟用DL但dl_id無效: {arm.dl_id}")

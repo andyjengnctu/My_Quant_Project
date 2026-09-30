@@ -4,14 +4,14 @@
 >
 > This file is not a scientific/config/runtime truth owner.  Every completed rule
 > must be moved into its canonical code/config/Registry/Architecture/test owner.
-> Delete this file after Round 6 closes and all items below have permanent owners.
+> Delete this file after Round 7 closes and all items below have permanent owners.
 
 ## 0. Fixed refactor principles
 
 1. **Shared implementation, frozen scientific semantics.**  Algorithms/formulas stay single-source; a named historical experiment/artifact must not change because a mutable common config later changes.
 2. **Scientific vs execution/display separation.**  Any value that can change generated trials, accepted/rejected candidates, selected params, portfolio economics, PIT/data scope, score, or final result belongs to the scientific contract.  Worker count, cache sizing, profiling, console refresh and display scaling do not.
 3. **Resolve once, consume everywhere.**  A strategy-parameter job resolves one immutable canonical scientific contract at the boundary.  Inner Optimizer/runtime consumers must eventually stop re-reading mutable scientific globals.
-4. **IDs describe different layers.**  Existing Registry namespaces remain authoritative (`DL-*` = DL runtime source, `SR-C*` = strategy runtime/comparison arm, `PARAM-P*` = strategy-parameter stage).  Future rule-component and deployable-composition namespaces must be explicitly allocated in the Experiment Registry during Round 6; `RULE-*` / `STR-*` below are provisional architecture labels only, not pre-allocated scientific IDs.  DL and rules may be chained; they are not mutually exclusive alternatives.
+4. **IDs describe different layers.**  Existing Registry namespaces remain authoritative (`DL-*` = DL runtime source, `SR-C*` = strategy runtime/comparison arm, `PARAM-P*` = strategy-parameter stage).  Future rule-component and deployable-composition namespaces must be explicitly allocated in the Experiment Registry during Round 7; `RULE-*` / `STR-*` below are provisional architecture labels only, not pre-allocated scientific IDs.  DL and rules may be chained; they are not mutually exclusive alternatives.
 5. **Versioned shared contracts, not copied per experiment.**  Common scientific dimensions (search, score, gate, execution economics, schedule, fitting, validation, selector, data lineage) are referenced by experiments/compositions.  Used contract versions are immutable; new semantics create a new version/identity rather than mutating historical meaning.
 6. **Validation is a first-class scientific contract.**  Current no-validation and fixed-checkpoint validation remain historical/control semantics.  A later plateau early-stop protocol will use max budget + warmup + patience + min-delta + metric/direction, sharing the state-machine abstraction with DL where appropriate while keeping DL/non-DL evaluators separate.
 7. **Behavior-preserving architecture work must not alter existing scientific/artifact identity.**  Identity-changing migrations happen only in an explicit later round with equivalence/migration evidence.
@@ -56,7 +56,7 @@ Adaptive/parallel search knobs are execution-only **only after** proving they do
 - Some validators hard-code the current C85 / P6 / 4-seed / 300-trial values instead of validating registered-profile relationships.
 - Human progress output has exposed stale generic fields (`best_local_min`, `seed_min_agree`) in contexts where the active selector does not use those semantics; later display cleanup must consume the resolved contract rather than add formatter exceptions.
 
-## 3. Six-round implementation plan
+## 3. Seven-round implementation plan
 
 ### Round 1 — Canonical scientific-contract boundary **[DONE]**
 
@@ -96,29 +96,44 @@ Exit: C85/P6 has one reproducible scientific meaning.
 
 Round-3 evidence: `production_multiseed_current` is source-registered against the canonical resolved scientific fingerprint; P6 inspect returns `BLOCKED` on common scientific drift, existing manifests without scientific identity are `LEGACY_SCIENTIFIC_IDENTITY_UNBOUND`, and bound manifests must carry the exact resolved contract/fingerprint. Progress visibility is derived from the same contract so finalist-agree/local-min-disabled runs no longer leak `seed_min_agree` / `best_local_min`; no optimizer result semantics changed. Permanent formal ownership is registered as B422/T560 in `doc/TEST_SUITE_CHECKLIST.md`; B253 now explicitly distinguishes ordinary artifact/workspace staleness from scientific-identity drift.
 
-### Round 4 — Migrate existing strategy-param / Strategy Compare identities **[NEXT]**
+### Round 4 — Non-validation identity convergence **[DONE]**
 
-- [ ] Migrate C58/C61/C62/C84/C85 and relevant `PARAM-P*` lineage to the same contract system.
-- [ ] Keep completed historical evidence immutable.
-- [ ] Replace validators that hard-code current C/P/seed/trial values with registry/profile relational checks.
-- [ ] Confirm equivalent existing artifacts remain reusable only when their resolved scientific fingerprint matches.
+- [x] Register canonical non-validation policy-output profiles for Min `base-finalist-best`, Full `base-finalist-best`, and Full `base-finalists-agree`.
+- [x] Preserve one physical canonical schedule per family; policy outputs emitted from the same search may share that physical truth while carrying distinct scientific identities.
+- [x] Bind each canonical policy source record to its exact registered scientific contract/fingerprint.
+- [x] Make source-registration drift fail fast as `BLOCKED`; legacy-unbound/mismatched concrete artifacts may rebuild only under an unchanged registered source identity and may never be silently REUSED.
+- [x] Make current Strategy Compare canonical/fixed-multiseed arms validate their strategy-param profile relationally from config/registry ownership rather than hard-coded C/P/seed/trial literals.
+- [x] Keep `PARAM-P5 / C84` fixed-checkpoint validation completely unchanged and outside this round.
+- [x] Preserve `PARAM-P6 / C85` Round-3 binding unchanged.
 
-Exit: old and current Research arms share one identity mechanism.
+Exit: C58/C61/C62/C85 non-validation paths share one scientific-identity mechanism and can be regression-tested without mixing in validation redesign.
 
-### Round 5 — Validation redesign **[PENDING]**
+Round-4 evidence: current Min/Full canonical build contracts, P6 build contract/scientific fingerprint, and Strategy Compare runtime payload remain byte/value-equivalent to the input ZIP.  Registered fingerprints are `783eb920…428d` (Min/base-best), `77fa547f…0ad9` (Full/base-best), and `7f8d7c77…7d440` (Full/base-agree).  Full base-best/base-agree continue to share the same physical canonical schedule; identity is attached at policy-output source-record level.
+
+### Round 5 — Non-validation stabilization / regression **[NEXT]**
+
+- [ ] Run focused non-validation regression across C58/C61/C62/C85, canonical OOS/Rolling preparation, REUSE/BUILD/REBUILD/BLOCKED states, and relevant Robustness seed semantics.
+- [ ] Close any remaining scientific-identity leakage or over-binding found by regression without changing validation behavior.
+- [ ] Verify execution/display-only mutations do not invalidate scientific identity and scientific mutations do.
+- [ ] Verify historical evidence and physical truth reuse remain unchanged where fingerprints match.
+- [ ] Keep C84/P5 fixed-checkpoint validation untouched.
+
+Exit: all non-validation strategy-parameter/compare paths are stable enough for user-side formal double-check before validation behavior changes.
+
+### Round 6 — Validation redesign **[PENDING]**
 
 - [ ] Preserve no-validation baseline as an immutable validation contract.
 - [ ] Preserve fixed-checkpoint P5/C84 validation as historical/control semantics.
 - [ ] Add plateau early-stop validation contract: max budget, warmup/min observations, patience, min delta, metric, direction, PIT-safe validation window.
 - [ ] Share a generic early-stop state-machine abstraction with DL where valid; keep DL/non-DL evaluation computation separate.
-- [ ] First validate single-seed behavior/cost, then extend to multi-seed.
+- [ ] First validate single-seed behavior/cost, then extend to multi-seed only after the single-seed protocol is accepted.
 - [ ] Produce a new `PARAM-P*`; never overwrite P6/P5 meaning.
 
 Exit: validation budget is adaptive and versioned, with no OOS feedback leakage.
 
-### Round 6 — Strategy component/composition identity + closure **[PENDING]**
+### Round 7 — Strategy component/composition identity + closure **[PENDING]**
 
-- [ ] Define the permanent component/composition identity model through the canonical Experiment Registry before allocating any new prefix.  Preserve existing meanings (`DL-*` source, `SR-C*` runtime/comparison arm, `PARAM-P*` parameter stage); provisional `RULE-*` / `STR-*` labels may be adopted only after explicit Registry allocation.
+- [ ] Define the permanent component/composition identity model through the canonical Experiment Registry before allocating any new prefix. Preserve existing meanings (`DL-*` source, `SR-C*` runtime/comparison arm, `PARAM-P*` parameter stage); provisional `RULE-*` / `STR-*` labels may be adopted only after explicit Registry allocation.
 - [ ] Represent fitted rule-parameter artifacts with the existing `PARAM-P*` namespace unless the Registry explicitly defines a different layer.
 - [ ] Keep Research evaluation/comparison arms in the existing `SR-C*` namespace unless the Registry explicitly changes that contract.
 - [ ] Support rule-only, DL-only, and chained/hybrid topologies (`RULE -> DL`, `DL -> RULE confirmation`, multi-component compositions) without separate engines.
@@ -136,15 +151,16 @@ Exit: component identity, scientific contracts, runtime and historical experimen
 | 1 | DONE | No |
 | 2 | DONE | No |
 | 3 | DONE | No; identity binding/migration only |
-| 4 | NEXT | No; historical migration only |
-| 5 | PENDING | **Yes — explicit validation research change** |
-| 6 | PENDING | No for identity refactor; new compositions later require explicit research identity |
+| 4 | DONE | No; non-validation identity convergence only |
+| 5 | NEXT | No; stabilization/regression only |
+| 6 | PENDING | **Yes — explicit validation research change** |
+| 7 | PENDING | No for identity refactor; new compositions later require explicit research identity |
 
 ## 5. Deletion gate for this temporary file
 
 Delete this file only when all are true:
 
-- [ ] All six rounds are complete or explicitly closed by user decision.
+- [ ] All seven rounds are complete or explicitly closed by user decision.
 - [ ] Every surviving rule has a permanent code/config/Registry/Architecture/test owner.
 - [ ] No production/runtime module imports or parses this file.
 - [ ] No formal/synthetic validator treats this file as a truth source.

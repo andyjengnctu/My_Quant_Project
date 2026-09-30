@@ -4551,6 +4551,17 @@
       "entry": "`config/strategy_params.py`, `core/strategy_param_policy.py`, `core/strategy_param_scientific_contract.py`, `services/optimizer/strategy_param_service.py`, `services/optimizer/scientific_runtime.py`, `services/optimizer/outer_rolling_progress.py`, `services/optimizer/outer_rolling_oos.py`, `services/optimizer/outer_rolling_live_boards.py`, `services/research/strategy_compare_preparation_status.py`, `tools/validate/synthetic_strategy_cases.py`",
       "initial_status": "NEW",
       "order": 410
+    },
+    {
+      "id": "B423",
+      "section": "B2",
+      "priority": "P0",
+      "category": "Canonical non-validation Strategy Parameter policy-output scientific identity",
+      "item": "Canonical Min/Full Strategy Parameter不得只以physical schedule family作scientific identity。每個已授權non-validation `(family, parameter_policy)` 必須由config-driven registered profile解析；同一physical Optimizer schedule可一次產生多個policy outputs，但每個policy-output source record必須各自綁定exact resolved scientific contract/fingerprint。Source registration不存在或registered fingerprint與current resolved semantics漂移時一律`BLOCKED`；legacy-unbound或artifact scientific identity mismatch不得REUSE，但若registered source仍exact-match可由canonical producer REBUILD完成綁定。Strategy Compare只能依builder/family/policy/profile關係驗證，不得硬編current C/P/seed/trial值。Round 4只涵蓋non-validation C58/C61/C62與既有C85/P6 mechanism；P5/C84 validation contract保持不變。",
+      "gap": "`validate_optimizer_walk_forward_policy_contract_case`以registered mapping/profile關係驗Min base-best、Full base-best、Full base-agree各有不同fingerprint且共用physical family schedule不分叉；hard-gate mutation必須使canonical inspect變成`REGISTERED_SCIENTIFIC_CONTRACT_DRIFT/BLOCKED`。Strategy Compare所有current registered profiles必須以關聯契約通過；P5/C84 fixed-checkpoint validation不得被Round-4 non-validation mapping吸收。",
+      "entry": "`config/strategy_params.py`, `core/strategy_param_policy.py`, `core/strategy_comparison.py`, `services/optimizer/strategy_param_service.py`, `tools/validate/synthetic_strategy_cases.py`",
+      "initial_status": "NEW",
+      "order": 411
     }
   ],
   "tests": [
@@ -8467,6 +8478,13 @@
       "description": "`validate_optimizer_walk_forward_policy_contract_case` Strategy Parameter scientific identity extension：驗registered profile與resolved canonical fingerprint一致、scientific config mutation觸發drift、legacy-unbound不得自動認領、bound manifest需exact contract/fingerprint，並以resolved display contract驗`seed_min_agree`／`best_local_min`只在適用policy出現。",
       "initial_status": "NEW",
       "order": 550
+    },
+    {
+      "id": "T561",
+      "b_id": "B423",
+      "description": "`validate_optimizer_walk_forward_policy_contract_case` Round-4 extension：以config-driven mapping驗canonical non-validation family/policy registered profiles、distinct fingerprints、Strategy Compare relational binding、C84/P5 exclusion與scientific-drift BLOCKED；不得硬編current C-arm/PARAM/seed/trial values。",
+      "initial_status": "NEW",
+      "order": 551
     }
   ],
   "transitions": [
@@ -27010,6 +27028,22 @@
       "date": "2026-09-30",
       "id": "T560",
       "description": "Register config-driven scientific-identity drift and display-visibility regression under the existing optimizer walk-forward policy synthetic.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_optimizer_walk_forward_policy_contract_case`"
+    },
+    {
+      "date": "2026-09-30",
+      "id": "B423",
+      "description": "Register canonical non-validation policy-output scientific identities and drift/reuse semantics without duplicating physical Min/Full schedules.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "C58/C61/C62 join the same mechanism as existing C85/P6; C84/P5 validation is unchanged."
+    },
+    {
+      "date": "2026-09-30",
+      "id": "T561",
+      "description": "Register config-driven non-validation policy-output identity convergence regression under the existing optimizer walk-forward policy synthetic.",
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_optimizer_walk_forward_policy_contract_case`"

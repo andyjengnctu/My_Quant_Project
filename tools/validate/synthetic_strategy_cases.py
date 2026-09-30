@@ -2145,22 +2145,26 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     check("strategy_param_menu_contains_only_stable_work_types", True, all(label in strategy_param_app_source for label in ("Forward OOS 參數訓練", "Rolling OOS 參數訓練", "Forward OOS Robustness 參數訓練", "Rolling OOS Robustness 參數訓練", "進階／單次 Optimizer")) and "PARAM-P5" not in research_entry_source)
     check("strategy_param_validation_is_profile_config_not_optimizer_menu_switch", True, validation_param_profile.validation_enabled and validation_param_profile.validation_protocol == "validation_budget_refit_v1" and "STRATEGY_PARAM_VALIDATION_PROTOCOLS" in strategy_param_config_source)
     check("strategy_param_validation_config_preserves_phase2_contract", True, validation_spec.as_dict() == {"protocol": "validation_budget_refit_v1", "holdout_months": 12, "checkpoints": [50, 100, 150, 200, 250, 300], "policy_name": "base_finalists_agree", "selection_metric": "canonical_optimizer_portfolio_score", "tie_break": "smaller_budget", "oos_feedback_used": False, "full_refit_required": True})
+    from config.strategy_params import ACTIVE_STRATEGY_PARAM_PROFILE
+    active_fitting_seed_protocol = get_strategy_param_fitting_seed_protocol(
+        active_param_profile.fitting_seed_protocol
+    )
     check(
-        "strategy_param_round3_activates_four_seed_p6_with_single_seed_p5_preserved",
+        "strategy_param_active_profile_and_seed_protocol_are_config_driven",
         True,
-        active_param_profile.parameter_set_identity == "PARAM-P6"
-        and active_param_profile.profile_id == "production_multiseed_current"
-        and production_multiseed_param_profile.parameter_set_identity == "PARAM-P6"
-        and production_multiseed_param_profile.profile_id == "production_multiseed_current"
-        and not production_multiseed_param_profile.validation_enabled
-        and production_multiseed_fitting_seed_protocol.enabled
-        and production_multiseed_fitting_seed_protocol.seed_count == 4
-        and production_multiseed_fitting_seed_protocol.trials_per_seed == 300
-        and production_multiseed_fitting_seed_protocol.seed_mode == "fixed_generated_bundle"
-        and len(production_multiseed_fitting_seed_protocol.resolved_seeds) == 4
-        and len(set(production_multiseed_fitting_seed_protocol.resolved_seeds)) == 4
+        active_param_profile.profile_id == str(ACTIVE_STRATEGY_PARAM_PROFILE)
+        and active_param_profile.parameter_set_identity.strip() != ""
+        and active_fitting_seed_protocol.trials_per_seed > 0
+        and active_fitting_seed_protocol.seed_count
+            == len(active_fitting_seed_protocol.resolved_seeds)
+        and len(set(active_fitting_seed_protocol.resolved_seeds))
+            == len(active_fitting_seed_protocol.resolved_seeds)
+        and (
+            not active_fitting_seed_protocol.enabled
+            or active_fitting_seed_protocol.seed_count >= 2
+        )
         and validation_fitting_seed_protocol.seed_mode == "fixed_single_seed"
-        and validation_fitting_seed_protocol.resolved_seeds == (42,),
+        and len(validation_fitting_seed_protocol.resolved_seeds) == 1,
     )
     from core.strategy_param_policy import build_replicated_fitting_seed_ensemble_policy
     from core.training_policy import get_robustness_benchmark_policy_snapshot
@@ -2171,12 +2175,15 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         replication_seed=replication_seed,
     )
     check(
-        "strategy_param_round3_robustness_replication_seed_generates_orthogonal_four_seed_bundle",
+        "strategy_param_replicated_fitting_bundle_preserves_registered_seed_count_and_orthogonality",
         True,
-        replicated_p6_policy["seed_count"] == 4
+        replicated_p6_policy["seed_count"]
+            == production_multiseed_fitting_seed_protocol.seed_count
         and replicated_p6_policy["generator_seed"] == replication_seed
-        and len(replicated_p6_policy["resolved_seeds"]) == 4
-        and len(set(replicated_p6_policy["resolved_seeds"])) == 4
+        and len(replicated_p6_policy["resolved_seeds"])
+            == production_multiseed_fitting_seed_protocol.seed_count
+        and len(set(replicated_p6_policy["resolved_seeds"]))
+            == production_multiseed_fitting_seed_protocol.seed_count
         and tuple(replicated_p6_policy["resolved_seeds"])
             != tuple(production_multiseed_fitting_seed_protocol.resolved_seeds),
     )
@@ -2186,13 +2193,29 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS,
         STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS,
     )
+    from core.strategy_compare_policy import (
+        get_strategy_comparison_settings,
+        get_strategy_multi_seed_robustness_settings,
+    )
+    current_oos_settings = get_strategy_comparison_settings(
+        STRATEGY_COMPARE_CURRENT_OOS_PROFILE
+    )
+    current_rolling_settings = get_strategy_comparison_settings(
+        STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE
+    )
+    current_oos_robustness = get_strategy_multi_seed_robustness_settings(
+        STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS
+    )
+    current_rolling_robustness = get_strategy_multi_seed_robustness_settings(
+        STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS
+    )
     check(
-        "strategy_param_round3_switches_compare_and_robustness_atomically_to_c85_suite",
+        "strategy_param_current_compare_and_robustness_bindings_are_relationally_atomic",
         True,
-        STRATEGY_COMPARE_CURRENT_OOS_PROFILE == "non_dl_production_multiseed_oos"
-        and STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE == "non_dl_production_multiseed_rolling"
-        and STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS == "non_dl_production_multiseed_oos"
-        and STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS == "non_dl_production_multiseed_rolling",
+        current_oos_robustness.profile_id == current_oos_settings.profile_id
+        and current_rolling_robustness.profile_id == current_rolling_settings.profile_id
+        and current_oos_robustness.suite_id == current_oos_settings.suite_id
+        and current_rolling_robustness.suite_id == current_rolling_settings.suite_id,
     )
     from services.optimizer.strategy_param_service import (
         ensure_fixed_multiseed_robustness_strategy_parameter_artifact,
@@ -2225,7 +2248,8 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and p6_robustness_contract["robustness_replication_seed"] == replication_seed
         and p6_robustness_contract["robustness_seed_semantics"]
             == "replication_seed_generates_fitting_seed_bundle"
-        and p6_robustness_seed_policy["seed_count"] == 4
+        and p6_robustness_seed_policy["seed_count"]
+            == production_multiseed_fitting_seed_protocol.seed_count
         and p6_robustness_seed_policy["generator_seed"] == replication_seed
         and replication_seed not in set(p6_robustness_seed_policy["resolved_seeds"]),
     )
@@ -2727,6 +2751,102 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         True,
         bool(registered_drift_rows)
         and all(not bool(row.get("registration_matches", True)) for row in registered_drift_rows),
+    )
+
+    # Round 4 convergence: current non-validation Strategy Compare arms resolve
+    # their parameter semantics through registered profiles, while C84/P5 stays
+    # on the historical validation path and is intentionally not migrated here.
+    from core.strategy_compare_policy import get_strategy_comparison_settings
+    from core.strategy_param_policy import resolve_canonical_strategy_param_training_profile
+    from services.optimizer.strategy_param_service import inspect_strategy_parameter_artifact
+
+    current_compare_settings = get_strategy_comparison_settings()
+    canonical_profile_rows = []
+    fixed_multiseed_profile_rows = []
+    for arm in current_compare_settings.enabled_arms:
+        source = current_compare_settings.parameter_sources[arm.param_source]
+        builder_type = "" if source.builder is None else str(source.builder.builder_type)
+        if builder_type == "canonical_optimizer_strategy_params":
+            profile = resolve_canonical_strategy_param_training_profile(
+                str(source.canonical_family or ""), str(arm.param_policy or "")
+            )
+            canonical_profile_rows.append((arm, source, profile))
+        elif builder_type == "optimizer_fixed_multiseed_strategy_params":
+            profile_id = str(dict(source.builder.options).get("training_profile_id") or "")
+            fixed_multiseed_profile_rows.append(
+                (arm, get_strategy_param_training_profile(profile_id))
+            )
+    check(
+        "strategy_compare_non_validation_canonical_arms_resolve_registered_profiles",
+        True,
+        bool(canonical_profile_rows)
+        and all(
+            profile is not None
+            and not profile.validation_enabled
+            and profile.registered_scientific_fingerprint_sha256 is not None
+            and profile.filter_profile == str(source.canonical_family)
+            and profile.parameter_policy == str(arm.param_policy)
+            for arm, source, profile in canonical_profile_rows
+        ),
+    )
+    check(
+        "strategy_compare_fixed_multiseed_arm_reuses_registered_profile",
+        True,
+        bool(fixed_multiseed_profile_rows)
+        and all(
+            not profile.validation_enabled
+            and profile.registered_scientific_fingerprint_sha256 is not None
+            and profile.parameter_policy == str(arm.param_policy)
+            for arm, profile in fixed_multiseed_profile_rows
+        ),
+    )
+    current_builder_types = {
+        str(current_compare_settings.parameter_sources[arm.param_source].builder.builder_type)
+        for arm in current_compare_settings.enabled_arms
+        if current_compare_settings.parameter_sources[arm.param_source].builder is not None
+    }
+    check(
+        "strategy_compare_round4_leaves_validation_control_outside_current_non_validation_suite",
+        True,
+        "optimizer_validation_budget_strategy_params" not in current_builder_types
+        and validation_param_profile.validation_enabled,
+    )
+    min_profile = resolve_canonical_strategy_param_training_profile(
+        "min", "base-finalist-best"
+    )
+    full_best_profile = resolve_canonical_strategy_param_training_profile(
+        "full", "base-finalist-best"
+    )
+    full_agree_profile = resolve_canonical_strategy_param_training_profile(
+        "full", "base-finalists-agree"
+    )
+    check(
+        "canonical_single_seed_policy_outputs_have_distinct_registered_scientific_identities",
+        True,
+        all(profile is not None for profile in (min_profile, full_best_profile, full_agree_profile))
+        and len({
+            min_profile.registered_scientific_fingerprint_sha256,
+            full_best_profile.registered_scientific_fingerprint_sha256,
+            full_agree_profile.registered_scientific_fingerprint_sha256,
+        }) == 3,
+    )
+    with patch.object(
+        training_policy_settings,
+        "MIN_ANNUAL_TRADES",
+        float(training_policy_settings.MIN_ANNUAL_TRADES) + 1.0,
+    ):
+        drift_state = inspect_strategy_parameter_artifact(
+            project_root,
+            family="min",
+            evaluation_mode="rolling",
+            policy="base-finalist-best",
+            comparison_end_date="2021-01-01",
+            dataset=min_profile.dataset,
+        )
+    check(
+        "canonical_strategy_param_registered_drift_blocks_before_artifact_reuse",
+        ("BLOCKED", "REGISTERED_SCIENTIFIC_CONTRACT_DRIFT"),
+        (drift_state.get("action"), drift_state.get("status")),
     )
 
     # Round 2 runtime injection: once a producer starts a fitting invocation,

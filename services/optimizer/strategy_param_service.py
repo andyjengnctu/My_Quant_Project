@@ -31,6 +31,7 @@ from core.file_integrity import atomic_write_json, canonical_json_sha256, load_j
 from core.strategy_param_scientific_contract import (
     build_registered_strategy_param_scientific_identity,
 )
+from core.strategy_param_policy import resolve_canonical_strategy_param_training_profile
 from core.strategy_param_artifacts import (
     POLICY_FILENAME_BY_NAME,
     COMPARE_PARAM_POLICY_TO_OPTIMIZER_POLICY,
@@ -775,6 +776,124 @@ def _canonical_schedule_build_contract(
     }
 
 
+def _strategy_param_execution_overrides(
+    *,
+    max_positions: int | None,
+    rotation: str | None,
+    fixed_risk: float | None,
+    max_position_cap_pct: float | None,
+) -> dict[str, Any]:
+    from config.execution_policy import (
+        DEFAULT_FIXED_RISK,
+        DEFAULT_MAX_POSITION_CAP_PCT,
+        DEFAULT_PORTFOLIO_MAX_POSITIONS,
+        DEFAULT_PORTFOLIO_ROTATION,
+    )
+
+    return {
+        "max_positions": int(
+            DEFAULT_PORTFOLIO_MAX_POSITIONS if max_positions is None else max_positions
+        ),
+        "rotation": str(
+            DEFAULT_PORTFOLIO_ROTATION if rotation in (None, "") else rotation
+        ),
+        "fixed_risk": float(DEFAULT_FIXED_RISK if fixed_risk is None else fixed_risk),
+        "max_position_cap_pct": float(
+            DEFAULT_MAX_POSITION_CAP_PCT
+            if max_position_cap_pct is None
+            else max_position_cap_pct
+        ),
+    }
+
+
+def _canonical_schedule_scientific_identity(
+    root: Path,
+    *,
+    family: str,
+    policy: str,
+    dataset: str | None,
+    max_positions: int | None,
+    rotation: str | None,
+    fixed_risk: float | None,
+    max_position_cap_pct: float | None,
+) -> dict[str, Any] | None:
+    profile = resolve_canonical_strategy_param_training_profile(family, policy)
+    if profile is None:
+        return None
+    requested_dataset = str(profile.dataset if dataset in (None, "") else dataset)
+    if requested_dataset != str(profile.dataset):
+        raise ValueError(
+            "registered canonical strategy parameter identity不得覆寫dataset: "
+            f"profile={profile.profile_id}, registered={profile.dataset!r}, "
+            f"requested={requested_dataset!r}"
+        )
+    return build_registered_strategy_param_scientific_identity(
+        root,
+        profile.profile_id,
+        execution_overrides=_strategy_param_execution_overrides(
+            max_positions=max_positions,
+            rotation=rotation,
+            fixed_risk=fixed_risk,
+            max_position_cap_pct=max_position_cap_pct,
+        ),
+    )
+
+
+def _scientific_identity_record(identity: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": int(identity["schema_version"]),
+        "profile_id": str(identity["profile_id"]),
+        "registered_scientific_fingerprint_sha256": str(
+            identity["registered_scientific_fingerprint_sha256"]
+        ),
+        "scientific_fingerprint_sha256": str(
+            identity["scientific_fingerprint_sha256"]
+        ),
+        "scientific_contract": dict(identity["scientific_contract"]),
+    }
+
+
+def _canonical_family_scientific_identities(
+    root: Path,
+    *,
+    family: str,
+    dataset: str | None,
+    max_positions: int | None,
+    rotation: str | None,
+    fixed_risk: float | None,
+    max_position_cap_pct: float | None,
+) -> dict[str, dict[str, Any]]:
+    identities: dict[str, dict[str, Any]] = {}
+    for compare_policy in COMPARE_PARAM_POLICY_TO_OPTIMIZER_POLICY:
+        normalized_policy = normalize_strategy_param_policy(compare_policy)
+        identity = _canonical_schedule_scientific_identity(
+            root,
+            family=family,
+            policy=normalized_policy,
+            dataset=dataset,
+            max_positions=max_positions,
+            rotation=rotation,
+            fixed_risk=fixed_risk,
+            max_position_cap_pct=max_position_cap_pct,
+        )
+        if identity is None:
+            continue
+        if not bool(identity.get("registered", False)):
+            raise RuntimeError(
+                "canonical strategy parameter profile尚未註冊scientific fingerprint: "
+                f"profile={identity.get('profile_id')}"
+            )
+        if not bool(identity.get("registration_matches", False)):
+            raise RuntimeError(
+                "canonical strategy parameter registered scientific contract drift: "
+                f"profile={identity.get('profile_id')}, "
+                f"registered={identity.get('registered_scientific_fingerprint_sha256')}, "
+                f"current={identity.get('scientific_fingerprint_sha256')}"
+            )
+        identities[normalized_policy] = identity
+    return identities
+
+
 def _canonical_manifest_matches_current_schedule(
     root: Path, *, family: str, policy: str, target: Path,
     evaluation_mode: str = "rolling", comparison_end_date: str | None = None,
@@ -782,6 +901,22 @@ def _canonical_manifest_matches_current_schedule(
     rotation: str | None = None, fixed_risk: float | None = None,
     max_position_cap_pct: float | None = None,
 ) -> tuple[bool, str]:
+    scientific_identity = _canonical_schedule_scientific_identity(
+        root,
+        family=family,
+        policy=policy,
+        dataset=dataset,
+        max_positions=max_positions,
+        rotation=rotation,
+        fixed_risk=fixed_risk,
+        max_position_cap_pct=max_position_cap_pct,
+    )
+    if scientific_identity is not None:
+        if not bool(scientific_identity.get("registered", False)):
+            return False, "SCIENTIFIC_IDENTITY_UNREGISTERED"
+        if not bool(scientific_identity.get("registration_matches", False)):
+            return False, "REGISTERED_SCIENTIFIC_CONTRACT_DRIFT"
+
     manifest_path = resolve_strategy_param_manifest_path(
         root, family=family, evaluation_mode="rolling"
     )
@@ -827,6 +962,15 @@ def _canonical_manifest_matches_current_schedule(
     schedule_kind = str(source.get("schedule_kind") or "")
     if schedule_kind != "annual_refit":
         return False, "SCHEDULE_KIND_MISSING_OR_INVALID"
+
+    if scientific_identity is not None:
+        persisted_identity = dict(source.get("scientific_identity") or {})
+        if not persisted_identity:
+            return False, "LEGACY_SCIENTIFIC_IDENTITY_UNBOUND"
+        expected_record = _scientific_identity_record(scientific_identity)
+        if persisted_identity != expected_record:
+            return False, "SCIENTIFIC_IDENTITY_MISMATCH"
+
     if comparison_end_date not in (None, ""):
         coverage_end = _canonical_schedule_coverage_end(target)
         if coverage_end is None or str(coverage_end) < str(comparison_end_date):
@@ -910,6 +1054,15 @@ def _build_canonical_schedule(
         max_position_cap_pct=max_position_cap_pct,
     )
     compare_policy = _compare_policy_name(policy)
+    scientific_identities = _canonical_family_scientific_identities(
+        root,
+        family=family,
+        dataset=dataset,
+        max_positions=max_positions,
+        rotation=rotation,
+        fixed_risk=fixed_risk,
+        max_position_cap_pct=max_position_cap_pct,
+    )
     # One optimizer-owned 2021->latest rolling schedule is the only physical truth.
     # OOS is an in-memory consumption view applied by Strategy Compare, never a
     # second 2021-only training job or frozen parameter JSON.
@@ -997,6 +1150,11 @@ def _build_canonical_schedule(
             "schedule_kind": "annual_refit",
             "same_json_oos_rolling": True,
         }
+        scientific_identity = scientific_identities.get(emitted_policy)
+        if scientific_identity is not None:
+            source_records[emitted_policy]["scientific_identity"] = (
+                _scientific_identity_record(scientific_identity)
+            )
     manifest = refresh_strategy_parameter_manifest(
         root,
         family=family,
@@ -1166,6 +1324,12 @@ def build_isolated_strategy_parameter_schedule(
     }
 
 
+_CANONICAL_SCIENTIFIC_IDENTITY_BLOCKED_STATUSES = {
+    "SCIENTIFIC_IDENTITY_UNREGISTERED",
+    "REGISTERED_SCIENTIFIC_CONTRACT_DRIFT",
+}
+
+
 def inspect_strategy_parameter_artifact(
     project_root: str | Path,
     *,
@@ -1212,6 +1376,11 @@ def inspect_strategy_parameter_artifact(
     ready = bool(target.is_file() and identity_ready and coverage_ready)
     if ready:
         status = "READY"
+    elif (
+        not identity_ready
+        and str(identity_status) in _CANONICAL_SCIENTIFIC_IDENTITY_BLOCKED_STATUSES
+    ):
+        status = str(identity_status)
     elif not target.is_file():
         status = "ARTIFACT_MISSING"
     elif not identity_ready:
@@ -1220,7 +1389,15 @@ def inspect_strategy_parameter_artifact(
         status = "SCHEDULE_COVERAGE_INCOMPLETE"
     return {
         "ready": ready,
-        "action": "REUSE" if ready else ("REBUILD" if target.is_file() else "BUILD"),
+        "action": (
+            "REUSE"
+            if ready
+            else (
+                "BLOCKED"
+                if status in _CANONICAL_SCIENTIFIC_IDENTITY_BLOCKED_STATUSES
+                else ("REBUILD" if target.is_file() else "BUILD")
+            )
+        ),
         "status": status,
         "path": target,
         "coverage_end": coverage_end,
@@ -1280,6 +1457,14 @@ def ensure_strategy_parameter_artifact(
         fixed_risk=fixed_risk, max_position_cap_pct=max_position_cap_pct,
     )
     coverage_end = _canonical_schedule_coverage_end(target)
+    if (
+        not identity_ready
+        and str(identity_status) in _CANONICAL_SCIENTIFIC_IDENTITY_BLOCKED_STATUSES
+    ):
+        raise RuntimeError(
+            "canonical strategy parameter scientific identity blocked: "
+            f"status={identity_status}, family={family}, policy={policy}"
+        )
     coverage_ready = bool(
         comparison_end_date in (None, "")
         or (coverage_end is not None and str(coverage_end) >= str(comparison_end_date))
@@ -1947,27 +2132,12 @@ def _fixed_multiseed_execution_overrides(
     fixed_risk: float | None,
     max_position_cap_pct: float | None,
 ) -> dict[str, Any]:
-    from config.execution_policy import (
-        DEFAULT_FIXED_RISK,
-        DEFAULT_MAX_POSITION_CAP_PCT,
-        DEFAULT_PORTFOLIO_MAX_POSITIONS,
-        DEFAULT_PORTFOLIO_ROTATION,
+    return _strategy_param_execution_overrides(
+        max_positions=max_positions,
+        rotation=rotation,
+        fixed_risk=fixed_risk,
+        max_position_cap_pct=max_position_cap_pct,
     )
-
-    return {
-        "max_positions": int(
-            DEFAULT_PORTFOLIO_MAX_POSITIONS if max_positions is None else max_positions
-        ),
-        "rotation": str(
-            DEFAULT_PORTFOLIO_ROTATION if rotation in (None, "") else rotation
-        ),
-        "fixed_risk": float(DEFAULT_FIXED_RISK if fixed_risk is None else fixed_risk),
-        "max_position_cap_pct": float(
-            DEFAULT_MAX_POSITION_CAP_PCT
-            if max_position_cap_pct is None
-            else max_position_cap_pct
-        ),
-    }
 
 
 def _fixed_multiseed_scientific_identity(

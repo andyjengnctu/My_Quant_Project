@@ -12235,3 +12235,14 @@ Decision：`ENGINEERING_ONLY / STREAM_ADAPTER_PRESERVES_TTY / FIXED_PROGRESS_BLO
 - **Scientific impact**：無新的研究treatment。P6/C85既有4 fixed fitting seeds × 300 trials/seed、120M/12M、selector、PIT、Trading隔離與RESULT_PENDING狀態不變；本Round只把其既有語意永久註冊並建立fail-fast reuse boundary。
 
 Decision：`PARAM-P6_C85_SCIENTIFIC_CONTRACT_BOUND / REGISTERED_FINGERPRINT_IMMUTABLE / LEGACY_UNBOUND_NOT_AUTO_ADOPTED / SCIENTIFIC_DRIFT_BLOCKED / CONTRACT_DRIVEN_PROGRESS_FIELDS / NO_RESULT_CHANGE`。
+
+## 2026-09-30 — Strategy Parameter scientific-contract refactor / Round 4 non-validation identity convergence
+
+- **Scope**：依使用者調整後順序，本Round只收斂validation以外的Strategy Parameter identity；`PARAM-P5 / SR-C84` fixed-checkpoint validation完全不改，validation redesign延後。
+- **Canonical policy-output identity**：Min `base-finalist-best`、Full `base-finalist-best`、Full `base-finalists-agree`分別以config-driven profile註冊canonical scientific fingerprint=`783eb920…428d / 77fa547f…0ad9 / 7f8d7c77…7d440`。C58/C61/C62因此與Round-3已綁定的C85/P6共用同一scientific-contract mechanism。
+- **Physical truth不分叉**：Min/Full仍各只有一份canonical Optimizer schedule；Full同一次search產生的base-best與base-agree繼續共用同一physical schedule，只在policy-output source record綁定不同resolved scientific contract/fingerprint，沒有第二套search、schedule或params producer。
+- **Drift/reuse contract**：source registration不存在或registered contract與current resolved scientific semantics漂移時直接`BLOCKED`；legacy-unbound或artifact scientific identity mismatch不得REUSE，但若registered source本身仍exact-match，可由canonical producer REBUILD並完成綁定。Strategy Compare只以builder/family/policy/profile關係驗證，不硬編目前C/P/seed/trial值。
+- **Behavior preservation**：input ZIP與Round-4 tree的canonical Min build contract、canonical Full build contract、P6 build contract/P6 scientific fingerprint與current Strategy Compare runtime payload逐項hash一致；C85/P6 Round-3 binding不變，C84/P5 scientific behavior不變。
+
+Decision：`ENGINEERING_ONLY / NON_VALIDATION_IDENTITY_CONVERGED / C58_C61_C62_C85_COMMON_CONTRACT_MECHANISM / ONE_PHYSICAL_SCHEDULE_PER_FAMILY / C84_P5_UNCHANGED / VALIDATION_DEFERRED`。
+

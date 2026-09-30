@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 from config.strategy_params import (
     ACTIVE_STRATEGY_PARAM_PROFILE,
+    STRATEGY_PARAM_CANONICAL_PROFILE_BY_FAMILY_POLICY,
     STRATEGY_PARAM_FITTING_SEED_PROTOCOLS,
     STRATEGY_PARAM_PROFILES,
     STRATEGY_PARAM_VALIDATION_PROTOCOLS,
@@ -266,6 +267,42 @@ def get_strategy_param_training_profile(profile_id: str) -> StrategyParamTrainin
     )
 
 
+def resolve_canonical_strategy_param_training_profile(
+    family: str, parameter_policy: str
+) -> StrategyParamTrainingProfile | None:
+    """Resolve the registered canonical single-seed profile for one policy output.
+
+    Canonical Min/Full schedules may emit multiple policy outputs from the same
+    physical Optimizer study.  The profile is therefore keyed by
+    ``(family, parameter_policy)`` rather than by artifact path.  The mapping is
+    declarative config; callers must not infer C-arm identity or duplicate it.
+    """
+
+    normalized_family = str(family or "").strip().lower()
+    raw_policy = str(parameter_policy or "").strip()
+    compare_policy = {
+        "base_finalist_best": "base-finalist-best",
+        "base_finalists_agree": "base-finalists-agree",
+    }.get(raw_policy, raw_policy)
+    profile_id = STRATEGY_PARAM_CANONICAL_PROFILE_BY_FAMILY_POLICY.get(
+        (normalized_family, compare_policy)
+    )
+    if profile_id is None:
+        return None
+    profile = get_strategy_param_training_profile(str(profile_id))
+    if profile.filter_profile != normalized_family or profile.parameter_policy != compare_policy:
+        raise ValueError(
+            "canonical strategy parameter profile mapping與profile內容不一致: "
+            f"family={normalized_family}, policy={compare_policy}, profile={profile.profile_id}"
+        )
+    if profile.validation_enabled:
+        raise ValueError(
+            "canonical non-validation strategy parameter profile不得啟用validation: "
+            f"{profile.profile_id}"
+        )
+    return profile
+
+
 def get_active_strategy_param_training_profile() -> StrategyParamTrainingProfile:
     return get_strategy_param_training_profile(ACTIVE_STRATEGY_PARAM_PROFILE)
 
@@ -278,4 +315,5 @@ __all__ = [
     "get_active_strategy_param_training_profile",
     "get_strategy_param_training_profile",
     "get_strategy_param_validation_protocol",
+    "resolve_canonical_strategy_param_training_profile",
 ]
