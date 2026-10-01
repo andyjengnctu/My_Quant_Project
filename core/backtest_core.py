@@ -134,7 +134,8 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
     C = df['Close'].to_numpy(dtype=np.float64, copy=False)
     O = df['Open'].to_numpy(dtype=np.float64, copy=False)
     V = df['Volume'].to_numpy(dtype=np.float64, copy=False)
-    Dates = df.index
+    # (AI註: backtest hot loop materializes Timestamp objects once; repeated DatetimeIndex[j] boxing was a measured CPU hotspot.)
+    Dates = df.index.tolist()
 
     if precomputed_signals is None:
         ATR_main, buyCondition, sellCondition, buy_limits = generate_signals(df, params, ticker=resolved_ticker)
