@@ -91,6 +91,10 @@ def rate_to_ppm(rate) -> int:
     return _round_decimal_to_int(_to_decimal(rate) * _DECIMAL_PPM)
 
 
+_BROKER_FEE_PPM = rate_to_ppm(BROKER_FEE_RATE)
+_BROKER_MIN_FEE_MILLI = money_to_milli(BROKER_MIN_FEE_TWD)
+
+
 STOCK_MILLI_TICK_LADDER = (
     (1_000, 1),
     (10_000, 10),
@@ -450,10 +454,14 @@ def calc_broker_fee_milli(gross_milli: int) -> int:
     """
     return calc_fee_milli(
         int(gross_milli),
-        rate_to_ppm(BROKER_FEE_RATE),
-        money_to_milli(BROKER_MIN_FEE_TWD),
+        _BROKER_FEE_PPM,
+        _BROKER_MIN_FEE_MILLI,
         rounding_mode=CHARGE_ROUNDING_FLOOR_TWD,
     )
+
+
+def _calc_fee_rebate_receivable_from_broker_fee_milli(broker_fee_milli: int, economic_fee_milli: int) -> int:
+    return max(0, int(broker_fee_milli) - int(economic_fee_milli))
 
 
 def calc_fee_rebate_receivable_milli(gross_milli: int, economic_fee_milli: int) -> int:
@@ -463,7 +471,10 @@ def calc_fee_rebate_receivable_milli(gross_milli: int, economic_fee_milli: int) 
     preserves custom/conservative Research fee policies while keeping Trading
     (whose economic fee already equals the broker fee) at zero receivable.
     """
-    return max(0, calc_broker_fee_milli(int(gross_milli)) - int(economic_fee_milli))
+    return _calc_fee_rebate_receivable_from_broker_fee_milli(
+        calc_broker_fee_milli(int(gross_milli)),
+        int(economic_fee_milli),
+    )
 
 
 def calc_tax_milli(
@@ -562,7 +573,9 @@ def build_buy_ledger(fill_price_milli: int, qty: int, params) -> Dict[str, int]:
         rounding_mode=_resolve_charge_rounding_mode(params),
     )
     broker_buy_fee_milli = calc_broker_fee_milli(gross_buy_milli)
-    buy_fee_rebate_receivable_milli = calc_fee_rebate_receivable_milli(gross_buy_milli, buy_fee_milli)
+    buy_fee_rebate_receivable_milli = _calc_fee_rebate_receivable_from_broker_fee_milli(
+        broker_buy_fee_milli, buy_fee_milli
+    )
     net_buy_total_milli = gross_buy_milli + buy_fee_milli
     cash_buy_total_milli = gross_buy_milli + broker_buy_fee_milli
     return {
@@ -599,7 +612,9 @@ def build_sell_ledger(exec_price_milli: int, qty: int, params, *, ticker=None, s
     # broker integer-TWD tax settlement semantics.
     tax_milli = calc_tax_milli(gross_sell_milli, tax_ppm, rounding_mode=CHARGE_ROUNDING_FLOOR_TWD)
     broker_sell_fee_milli = calc_broker_fee_milli(gross_sell_milli)
-    sell_fee_rebate_receivable_milli = calc_fee_rebate_receivable_milli(gross_sell_milli, sell_fee_milli)
+    sell_fee_rebate_receivable_milli = _calc_fee_rebate_receivable_from_broker_fee_milli(
+        broker_sell_fee_milli, sell_fee_milli
+    )
     net_sell_total_milli = gross_sell_milli - sell_fee_milli - tax_milli
     cash_sell_total_milli = gross_sell_milli - broker_sell_fee_milli - tax_milli
     return {
