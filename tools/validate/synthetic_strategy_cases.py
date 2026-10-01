@@ -2292,6 +2292,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         _canonical_schedule_build_contract,
         _fixed_multiseed_build_contract,
         ensure_fixed_multiseed_robustness_strategy_parameter_artifact,
+        fixed_multiseed_robustness_strategy_param_artifact_path,
         fixed_multiseed_strategy_param_artifact_path,
         inspect_fixed_multiseed_strategy_parameter_artifact,
         inspect_fixed_multiseed_robustness_strategy_parameter_artifact,
@@ -3128,6 +3129,38 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             and profile.registered_scientific_fingerprint_sha256 is not None
             and profile.parameter_policy == str(arm.param_policy)
             for arm, profile in fixed_multiseed_profile_rows
+        ),
+    )
+    fixed_profile_ids = tuple(
+        dict.fromkeys(profile.profile_id for _arm, profile in fixed_multiseed_profile_rows)
+    )
+    fixed_profile_artifact_paths = tuple(
+        fixed_multiseed_strategy_param_artifact_path(
+            project_root,
+            training_profile_id=profile_id,
+            policy="base-finalists-agree",
+        )
+        for profile_id in fixed_profile_ids
+    )
+    fixed_profile_robustness_paths = tuple(
+        fixed_multiseed_robustness_strategy_param_artifact_path(
+            project_root,
+            training_profile_id=profile_id,
+            benchmark_id=str(benchmark_snapshot["benchmark_id"]),
+            replication_seed=replication_seed,
+            policy="base-finalists-agree",
+        )
+        for profile_id in fixed_profile_ids
+    )
+    check(
+        "strategy_compare_fixed_multiseed_profiles_have_isolated_artifact_namespaces",
+        True,
+        len(fixed_profile_ids) >= 1
+        and len(set(fixed_profile_artifact_paths)) == len(fixed_profile_ids)
+        and len(set(fixed_profile_robustness_paths)) == len(fixed_profile_ids)
+        and all(
+            get_strategy_param_training_profile(profile_id).artifact_slug
+            for profile_id in fixed_profile_ids
         ),
     )
     current_builder_types = {

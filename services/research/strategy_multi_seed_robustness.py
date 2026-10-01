@@ -608,6 +608,7 @@ def _benchmark_param_binding(
         producer_variant = "validation_budget_refit_v1"
         training_profile_id = None
         fitting_seed_count = 1
+        fitting_trials_per_seed = 0
     elif builder_type == "optimizer_fixed_multiseed_strategy_params":
         family = "full"
         mode = str(source.consumption_evaluation_mode or "rolling").strip()
@@ -618,11 +619,16 @@ def _benchmark_param_binding(
                 f"fixed multi-seed benchmark source缺少training_profile_id: {arm.arm_id}/{arm.param_source}"
             )
         path = fixed_multiseed_robustness_strategy_param_artifact_path(
-            PROJECT_ROOT, benchmark_id=str(robustness.benchmark_id),
-            replication_seed=int(seed), policy=policy,
+            PROJECT_ROOT,
+            training_profile_id=training_profile_id,
+            benchmark_id=str(robustness.benchmark_id),
+            replication_seed=int(seed),
+            policy=policy,
         )
         manifest_path = fixed_multiseed_robustness_strategy_param_manifest_path(
-            PROJECT_ROOT, benchmark_id=str(robustness.benchmark_id),
+            PROJECT_ROOT,
+            training_profile_id=training_profile_id,
+            benchmark_id=str(robustness.benchmark_id),
             replication_seed=int(seed),
         )
         producer_variant = "fixed_multiseed_v1"
@@ -631,6 +637,7 @@ def _benchmark_param_binding(
             training_profile.fitting_seed_protocol
         )
         fitting_seed_count = int(fitting_seed_protocol.seed_count)
+        fitting_trials_per_seed = int(fitting_seed_protocol.trials_per_seed)
     else:
         family = str(source.canonical_family or "").strip()
         mode = str(source.canonical_evaluation_mode or "").strip()
@@ -657,6 +664,7 @@ def _benchmark_param_binding(
         producer_variant = "canonical_schedule_v1"
         training_profile_id = None
         fitting_seed_count = 1
+        fitting_trials_per_seed = 0
     return {
         "arm_id": arm.arm_id,
         "seed": int(seed),
@@ -666,6 +674,7 @@ def _benchmark_param_binding(
         "producer_variant": producer_variant,
         "training_profile_id": training_profile_id,
         "fitting_seed_count": int(fitting_seed_count),
+        "fitting_trials_per_seed": int(fitting_trials_per_seed),
         "path": path,
         "manifest_path": manifest_path,
     }
@@ -682,7 +691,7 @@ def _benchmark_parameter_plan_rows(
     blockers: list[str] = []
     bindings: dict[tuple[str, int], dict[str, Any]] = {}
     reusable_units = set(dict(reusable_observations or {}).keys())
-    seen_units: set[tuple[int, str, str, str, str]] = set()
+    seen_units: set[tuple[int, str, str, str, str, str]] = set()
     for seed in robustness.resolved_seeds:
         for arm in benchmark_arms:
             binding = _benchmark_param_binding(
@@ -701,6 +710,7 @@ def _benchmark_parameter_plan_rows(
             unit = (
                 int(seed),
                 str(binding["producer_variant"]),
+                str(binding["training_profile_id"] or ""),
                 str(binding["family"]),
                 str(binding["evaluation_mode"]),
                 str(binding["param_policy"]),
@@ -714,6 +724,20 @@ def _benchmark_parameter_plan_rows(
                 "" if str(binding["producer_variant"]) == "canonical_schedule_v1"
                 else f":{binding['producer_variant']}"
             )
+            budget_suffix = (
+                f":budget={int(binding['fitting_seed_count'])}x{int(binding['fitting_trials_per_seed'])}"
+                if (
+                    str(binding["producer_variant"]) == "fixed_multiseed_v1"
+                    and int(binding.get("fitting_seed_count") or 0) > 0
+                    and int(binding.get("fitting_trials_per_seed") or 0) > 0
+                )
+                else ""
+            )
+            profile_suffix = (
+                f":profile={binding['training_profile_id']}"
+                if str(binding["training_profile_id"] or "")
+                else ""
+            )
             seed_role = (
                 "replicate" if str(binding["producer_variant"]) == "fixed_multiseed_v1"
                 else "seed"
@@ -721,7 +745,7 @@ def _benchmark_parameter_plan_rows(
             label = (
                 f"param-benchmark:{robustness.benchmark_id}:{seed_role}={seed}:"
                 f"{binding['family']}:{binding['evaluation_mode']}:{binding['param_policy']}"
-                f"{variant_suffix}"
+                f"{variant_suffix}{budget_suffix}{profile_suffix}"
             )
             required_schedule_end = resolve_strategy_parameter_required_schedule_end_for_mode(
                 str(binding["evaluation_mode"]),
@@ -826,7 +850,7 @@ def _prepare_benchmark_strategy_parameter_artifacts(
     if robustness.benchmark_id is None:
         return {}
     workflow = get_breakout_quality_workflow_settings()
-    built_by_unit: dict[tuple[int, str, str, str, str], dict[str, Any]] = {}
+    built_by_unit: dict[tuple[int, str, str, str, str, str], dict[str, Any]] = {}
     bindings: dict[tuple[str, int], dict[str, Any]] = {}
     reusable = dict(reusable_observations or {})
     for seed in robustness.resolved_seeds:
@@ -880,8 +904,12 @@ def _prepare_benchmark_strategy_parameter_artifacts(
                 }
                 continue
             unit = (
-                int(seed), str(binding["producer_variant"]), str(binding["family"]),
-                str(binding["evaluation_mode"]), str(binding["param_policy"]),
+                int(seed),
+                str(binding["producer_variant"]),
+                str(binding["training_profile_id"] or ""),
+                str(binding["family"]),
+                str(binding["evaluation_mode"]),
+                str(binding["param_policy"]),
             )
             result = built_by_unit.get(unit)
             if result is None:
@@ -1479,9 +1507,19 @@ def _render_robustness_execution_plan(
                     if int(item.get("fitting_seed_count") or 0) > 0
                 }
                 fitting_count = next(iter(fitting_counts)) if len(fitting_counts) == 1 else 0
+                fitting_trials = {
+                    int(item.get("fitting_trials_per_seed") or 0)
+                    for item in arm_bindings
+                    if int(item.get("fitting_trials_per_seed") or 0) > 0
+                }
+                trials_count = next(iter(fitting_trials)) if len(fitting_trials) == 1 else 0
                 fitting_label = (
-                    f"{fitting_count}-seed fitting bundle"
-                    if fitting_count > 0 else "multi-seed fitting bundle"
+                    f"{fitting_count}-seed x {trials_count}-trial fitting bundle"
+                    if fitting_count > 0 and trials_count > 0
+                    else (
+                        f"{fitting_count}-seed fitting bundle"
+                        if fitting_count > 0 else "multi-seed fitting bundle"
+                    )
                 )
                 description = (
                     f"{cfg.seed_count}個robustness replicates；每個replicate使用{fitting_label} + DL-off replay"
@@ -1493,7 +1531,7 @@ def _render_robustness_execution_plan(
             action = "PARAM+REPLAY"
         rows.append((action, arm.name, description))
     training_sources = _training_source_groups(tuple(model_arms), settings=settings)
-    pending_optimizer_search_groups: set[tuple[int, str, str]] = set()
+    pending_optimizer_search_groups: set[tuple[int, str, str, str, str, str]] = set()
     if cfg.benchmark_id is not None:
         reusable_units = set(registered_scientific_reuse)
         for seed in cfg.resolved_seeds:
@@ -1506,7 +1544,10 @@ def _render_robustness_execution_plan(
                 pending_optimizer_search_groups.add((
                     int(seed),
                     str(binding["producer_variant"]),
+                    str(binding.get("training_profile_id") or ""),
                     str(binding["family"]),
+                    str(binding["evaluation_mode"]),
+                    str(binding["param_policy"]),
                 ))
     pit_workload_rows: list[tuple[str, str]] = []
     pit_training_sources = tuple(
@@ -1544,23 +1585,25 @@ def _render_robustness_execution_plan(
                     f"{cfg.seed_count * sum(fold_counts)} slots（實際新訓練會扣除REUSE／rescore／跨mode checkpoint重用）",
                 ),
             ]
-    fixed_multiseed_fitting_counts = {
-        int(item.get("fitting_seed_count") or 0)
+    fixed_multiseed_fitting_budgets = {
+        (
+            str(item.get("training_profile_id") or ""),
+            int(item.get("fitting_seed_count") or 0),
+            int(item.get("fitting_trials_per_seed") or 0),
+        )
         for item in benchmark_bindings.values()
         if str(item.get("producer_variant") or "") == "fixed_multiseed_v1"
         and int(item.get("fitting_seed_count") or 0) > 0
+        and int(item.get("fitting_trials_per_seed") or 0) > 0
     }
     fitting_bundle_rows = ()
-    if fixed_multiseed_fitting_counts:
-        if len(fixed_multiseed_fitting_counts) == 1:
-            fitting_count = next(iter(fixed_multiseed_fitting_counts))
-            fitting_bundle_rows = (("Strategy fitting seeds", f"{fitting_count} / robustness replicate"),)
-        else:
-            fitting_bundle_rows = ((
-                "Strategy fitting seeds",
-                "/".join(str(value) for value in sorted(fixed_multiseed_fitting_counts))
-                + " / robustness replicate",
-            ),)
+    if fixed_multiseed_fitting_budgets:
+        budget_text = " / ".join(
+            f"{seed_count} seeds x {trials_per_seed} trials"
+            for _profile_id, seed_count, trials_per_seed
+            in sorted(fixed_multiseed_fitting_budgets, key=lambda item: (item[1], item[2], item[0]))
+        )
+        fitting_bundle_rows = (("Strategy fitting budgets", budget_text),)
 
     metadata_rows = (
         ("整體狀態", overall),

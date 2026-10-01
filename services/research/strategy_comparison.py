@@ -402,7 +402,12 @@ def _compact_execution_plan_item(value: object) -> str:
             "base-finalist-best": "Best",
             "base-finalists-agree": "Agree",
         }.get(policy, policy)
-        text = f"Bench {family.title()} {policy_label} | {seed_label}".replace("  ", " ")
+        budget = next(
+            (part.split("=", 1)[1] for part in parts if part.startswith("budget=")),
+            "",
+        )
+        budget_label = f" {budget}" if budget else ""
+        text = f"Bench {family.title()} {policy_label}{budget_label} | {seed_label}".replace("  ", " ")
     elif text.startswith("param:"):
         source = text.split(":", 1)[1]
         source = source.replace("_oos", "").replace("_rolling", "")

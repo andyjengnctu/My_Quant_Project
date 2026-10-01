@@ -56,6 +56,22 @@ STRATEGY_PARAM_FITTING_SEED_PROTOCOLS: dict[str, dict] = {
         "min_agree": "auto",
         "trials_per_seed": 300,
     },
+    "research_fixed_multiseed_8x300_v1": {
+        "enabled": True,
+        "seed_count": 8,
+        "seed_mode": "fixed_generated_bundle",
+        "generator_seed": 42,
+        "min_agree": "auto",
+        "trials_per_seed": 300,
+    },
+    "research_fixed_multiseed_4x1000_v1": {
+        "enabled": True,
+        "seed_count": 4,
+        "seed_mode": "fixed_generated_bundle",
+        "generator_seed": 42,
+        "min_agree": "auto",
+        "trials_per_seed": 1000,
+    },
 }
 
 
@@ -143,6 +159,7 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
             "enabled": False,
         },
         "fitting_seed_protocol": "research_fixed_multiseed_v1",
+        "artifact_slug": "param_p6_production_multiseed",
         # PARAM-P6 / SR-C85 is the first Strategy Parameter profile whose
         # scientific semantics are permanently registered.  This digest is
         # the canonical resolved scientific contract (including Research data
@@ -151,6 +168,38 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
         # rather than mutate PARAM-P6/SR-C85 in place.
         "registered_scientific_fingerprint_sha256": (
             "b6162e8debd663a54fc3a56d2f738e7a217e11128a1fa2148dac01006bae976b"
+        ),
+    },
+    "production_multiseed_8x300_compare": {
+        "label": "Fixed Multi-Seed 8x300",
+        "strategy_id": "breakout",
+        "filter_profile": "full",
+        "parameter_policy": "base-finalists-agree",
+        "parameter_set_identity": "PARAM-P7",
+        "dataset": "full",
+        "schedule_start_date": "2021-01-01",
+        "coverage_end_date": RESEARCH_MARKET_DATA_CUTOFF,
+        "validation": {"enabled": False},
+        "fitting_seed_protocol": "research_fixed_multiseed_8x300_v1",
+        "artifact_slug": "param_p7_multiseed_8x300",
+        "registered_scientific_fingerprint_sha256": (
+            "2fbe14e7d72d5e71936cfa152934cdb027f414910a2b737309c0488ec9b1da3c"
+        ),
+    },
+    "production_multiseed_4x1000_compare": {
+        "label": "Fixed Multi-Seed 4x1000",
+        "strategy_id": "breakout",
+        "filter_profile": "full",
+        "parameter_policy": "base-finalists-agree",
+        "parameter_set_identity": "PARAM-P8",
+        "dataset": "full",
+        "schedule_start_date": "2021-01-01",
+        "coverage_end_date": RESEARCH_MARKET_DATA_CUTOFF,
+        "validation": {"enabled": False},
+        "fitting_seed_protocol": "research_fixed_multiseed_4x1000_v1",
+        "artifact_slug": "param_p8_multiseed_4x1000",
+        "registered_scientific_fingerprint_sha256": (
+            "dbcbaf0653895bbfdf93462cb57845a565497d6fa4cef2baf5e7782ce0c26697"
         ),
     },
 }

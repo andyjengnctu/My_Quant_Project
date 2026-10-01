@@ -12295,3 +12295,12 @@ Decision：`ENGINEERING_ONLY / FORWARD_PARAM_COVERAGE_PREFIX_ONLY / ROLLING_FULL
 - **Scientific impact**：無。C58/C61/C62/C85/P6 registered scientific fingerprints、seed/trials、selector、search space、score/gates、PIT、OOS/Rolling consumption與validation均不變。
 
 Decision：`ENGINEERING_ONLY / OUTER_FOLD_IDENTITY_FOLD_LOCAL / FORWARD_PREFIX_ROLLING_EXTENSION_RESUME / LEGACY_HORIZON_ONLY_MIGRATION / TRUE_DRIFT_STILL_BLOCKED / SCIENTIFIC_IDENTITY_UNCHANGED`。
+
+## 2026-10-01 — C86/C87 fitting-budget controlled comparison registered
+
+- 使用者明確要求在current non-DL production-style Strategy Compare加入兩個比較項目：`8 seeds × 300 trials/seed`與`4 seeds × 1000 trials/seed`。既有C85/P6 `4 fixed seeds × 300`保持immutable baseline，不覆寫其identity/result。
+- Registry分配`SR-C86 / PARAM-P7`與`SR-C87 / PARAM-P8`。C86相對C85只改fitting seed count `4→8`；C87相對C85只改trials/seed `300→1000`。兩者均固定Full/formal/`base-finalists-agree`、120M/12M、generator seed 42、canonical fixed bundle與execution。Primary contrasts=`C86-C85`、`C87-C85`。
+- P7/P8各自使用獨立physical artifact namespace；fixed-multiseed Optimizer producer由training profile解析artifact namespace，P6原路徑保持不變。Robustness benchmark dedupe identity同步加入`training_profile_id`，禁止C85/C86/C87因同為Full/base-finalists-agree而錯誤共用benchmark parameter artifact。
+- Registered scientific fingerprints：P7=`2fbe14e7d72d5e71936cfa152934cdb027f414910a2b737309c0488ec9b1da3c`；P8=`dbcbaf0653895bbfdf93462cb57845a565497d6fa4cef2baf5e7782ce0c26697`。P6仍=`b6162e8debd663a54fc3a56d2f738e7a217e11128a1fa2148dac01006bae976b`。
+- 狀態：implementation registered，**result pending**；本紀錄不預先宣稱任何performance結論。
+

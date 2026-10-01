@@ -34,7 +34,7 @@ from config.training_policy import (
     ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 68
+STRATEGY_COMPARE_SCHEMA_VERSION = 69
 
 _ROLLING_OOS = get_breakout_quality_rolling_test_mode("oos")
 _ROLLING_ROLLING = get_breakout_quality_rolling_test_mode("rolling")
@@ -75,6 +75,8 @@ STRATEGY_COMPARE_DISPLAY_MIN_ROOS = "Min ROOS"
 STRATEGY_COMPARE_DISPLAY_FULL_FINALISTS_AGREE = "Full Base-Finalists-Agree"
 STRATEGY_COMPARE_DISPLAY_FULL_VALIDATION_BUDGET_REFIT = "Full Validation-Budget Refit"
 STRATEGY_COMPARE_DISPLAY_FULL_PRODUCTION_MULTI_SEED = "Full Production-Style Fixed Multi-Seed"
+STRATEGY_COMPARE_DISPLAY_FULL_MULTI_SEED_8X300 = "Full Fixed Multi-Seed 8x300"
+STRATEGY_COMPARE_DISPLAY_FULL_MULTI_SEED_4X1000 = "Full Fixed Multi-Seed 4x1000"
 STRATEGY_COMPARE_DISPLAY_MIN_FINALISTS_AGREE = "Min Base-Finalists-Agree"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED = "Min MR-13E Constrained"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13E_K_FLEX_R0 = "Min MR-13E K-Flex R0 Exact (Compute-Blocked)"
@@ -103,10 +105,18 @@ STRATEGY_COMPARE_DISPLAY_MIN_MR13AK_NO_K_NO_R0 = "Min MR-13AK No-K No-R0"
 # OOS／Rolling／single-seed／multi-seed都只能引用suite，不得各自再列current arm matrix。
 STRATEGY_COMPARE_SUITES = {
     "non_dl_production_multiseed_current": {
-        "arm_ids": ("C85", "C62", "C61", "C58"),
-        "contrast_ids": ("C85-C62", "C85-C61", "C85-C58"),
+        "arm_ids": ("C85", "C86", "C87", "C62", "C61", "C58"),
+        "contrast_ids": (
+            "C86-C85",
+            "C87-C85",
+            "C85-C62",
+            "C85-C61",
+            "C85-C58",
+        ),
         "display_name_bases": {
-            "C85": "Full Production-Style Fixed Multi-Seed",
+            "C85": "Full Fixed Multi-Seed 4x300",
+            "C86": "Full Fixed Multi-Seed 8x300",
+            "C87": "Full Fixed Multi-Seed 4x1000",
             "C62": "Full Single-Seed Base-Finalists-Agree",
             "C61": "Full Base-Finalist-Best",
             "C58": "Min Base-Finalist-Best",
@@ -284,9 +294,9 @@ STRATEGY_COMPARE_PROFILES = {
     "non_dl_production_multiseed_oos": {
         "label": "Non-DL Production Multi-Seed | OOS Test",
         "description": (
-            "Round-3 controlled comparison：Full/formal/base-finalists-agree固定；C85使用"
-            "4個固定Research fitting seeds、300 trials/seed，對照C62的單一Seed42版本。"
-            "本arm重現Trading的multi-seed fitting/selection語意，但不是Trading 8 random × 1000的exact replay。"
+            "Full/formal/base-finalists-agree固定的fitting-budget controlled comparison："
+            "C85=4 seeds×300、C86=8 seeds×300、C87=4 seeds×1000，另保留C62單一Seed42×300與Full/Min references。"
+            "三個multi-seed arms均使用固定Research bundles以利重現，不等同Trading每次重訓的random 8×1000 exact replay。"
         ),
         "display_alignment_group": "non_dl_production_multiseed",
         "suite_id": "non_dl_production_multiseed_current",
@@ -303,6 +313,8 @@ STRATEGY_COMPARE_PROFILES = {
         "reuse_output_roots": (),
         "arm_param_source_overrides": {
             "C85": "full_production_multiseed_oos_experiment",
+            "C86": "full_multiseed_8x300_oos_experiment",
+            "C87": "full_multiseed_4x1000_oos_experiment",
             "C62": "full_oos",
             "C61": "full_oos",
             "C58": "min_oos",
@@ -311,8 +323,9 @@ STRATEGY_COMPARE_PROFILES = {
     "non_dl_production_multiseed_rolling": {
         "label": "Non-DL Production Multi-Seed | Rolling Test",
         "description": (
-            "Round-3 primary PIT evaluation：C85逐年度以固定4-seed Research fitting bundle × 300 trials/seed"
-            "產生Full/base-finalists-agree參數；C62保持單一Seed42 × 300 control，其餘rules/execution相同。"
+            "Full/formal/base-finalists-agree逐年度PIT controlled comparison："
+            "C85=固定4-seed×300、C86=固定8-seed×300、C87=固定4-seed×1000；"
+            "C62保持單一Seed42×300 control，其餘rules/execution相同。"
         ),
         "display_alignment_group": "non_dl_production_multiseed",
         "suite_id": "non_dl_production_multiseed_current",
@@ -329,6 +342,8 @@ STRATEGY_COMPARE_PROFILES = {
         "reuse_output_roots": (),
         "arm_param_source_overrides": {
             "C85": "full_production_multiseed_rolling_experiment",
+            "C86": "full_multiseed_8x300_rolling_experiment",
+            "C87": "full_multiseed_4x1000_rolling_experiment",
             "C62": "full_rolling",
             "C61": "full_rolling",
             "C58": "min_rolling",
@@ -691,6 +706,82 @@ STRATEGY_EXPERIMENTAL_PARAM_SOURCES = {
             "options": {"training_profile_id": "production_multiseed_current"},
         },
     },
+    "full_multiseed_8x300_oos_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p7_multiseed_8x300/{param_filename}",
+        "description": "PARAM-P7 optimizer-owned fixed 8-seed x 300-trial schedule；OOS只freeze消費同一physical truth。",
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p7_multiseed_8x300/identity_manifest.json",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "oos",
+        "artifact_contract": {
+            "breakout_quality_param_adaptation": {
+                "parameter_set": "PARAM-P7",
+                "training_dl_enabled": False,
+                "optimizer_search_protocol": "fixed_multiseed_v1",
+            }
+        },
+        "builder": {
+            "enabled": True,
+            "builder_type": "optimizer_fixed_multiseed_strategy_params",
+            "options": {"training_profile_id": "production_multiseed_8x300_compare"},
+        },
+    },
+    "full_multiseed_8x300_rolling_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p7_multiseed_8x300/{param_filename}",
+        "description": "PARAM-P7 optimizer-owned fixed 8-seed x 300-trial schedule；Rolling以date-effective語意消費同一physical truth。",
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p7_multiseed_8x300/identity_manifest.json",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "rolling",
+        "artifact_contract": {
+            "breakout_quality_param_adaptation": {
+                "parameter_set": "PARAM-P7",
+                "training_dl_enabled": False,
+                "optimizer_search_protocol": "fixed_multiseed_v1",
+            }
+        },
+        "builder": {
+            "enabled": True,
+            "builder_type": "optimizer_fixed_multiseed_strategy_params",
+            "options": {"training_profile_id": "production_multiseed_8x300_compare"},
+        },
+    },
+    "full_multiseed_4x1000_oos_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p8_multiseed_4x1000/{param_filename}",
+        "description": "PARAM-P8 optimizer-owned fixed 4-seed x 1000-trial schedule；OOS只freeze消費同一physical truth。",
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p8_multiseed_4x1000/identity_manifest.json",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "oos",
+        "artifact_contract": {
+            "breakout_quality_param_adaptation": {
+                "parameter_set": "PARAM-P8",
+                "training_dl_enabled": False,
+                "optimizer_search_protocol": "fixed_multiseed_v1",
+            }
+        },
+        "builder": {
+            "enabled": True,
+            "builder_type": "optimizer_fixed_multiseed_strategy_params",
+            "options": {"training_profile_id": "production_multiseed_4x1000_compare"},
+        },
+    },
+    "full_multiseed_4x1000_rolling_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p8_multiseed_4x1000/{param_filename}",
+        "description": "PARAM-P8 optimizer-owned fixed 4-seed x 1000-trial schedule；Rolling以date-effective語意消費同一physical truth。",
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p8_multiseed_4x1000/identity_manifest.json",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "rolling",
+        "artifact_contract": {
+            "breakout_quality_param_adaptation": {
+                "parameter_set": "PARAM-P8",
+                "training_dl_enabled": False,
+                "optimizer_search_protocol": "fixed_multiseed_v1",
+            }
+        },
+        "builder": {
+            "enabled": True,
+            "builder_type": "optimizer_fixed_multiseed_strategy_params",
+            "options": {"training_profile_id": "production_multiseed_4x1000_compare"},
+        },
+    },
     "full_validation_budget_oos_experiment": {
         "path_template": "models/research/breakout_quality/strategy_params/param_p5_validation_budget_refit/{param_filename}",
         "description": "PARAM-P5 optimizer-owned Full validation-budget schedule；OOS只freeze消費同一physical truth。",
@@ -832,6 +923,34 @@ STRATEGY_COMPARE_ARMS = {
             "它重現Trading multi-seed fitting/selection語意，但不宣稱是8 random ×1000 production exact replay。"
         ),
         "param_source": "full_production_multiseed_rolling_experiment",
+        "param_policy": "base-finalists-agree",
+        "rule_policy": "formal",
+        "dl_enabled": False,
+        "dl_id": None,
+        "dl_runtime_mode": None,
+        "robustness_role": "off",
+    },
+    "C86": {
+        "name": STRATEGY_COMPARE_DISPLAY_FULL_MULTI_SEED_8X300,
+        "description": (
+            "PARAM-P7 controlled fitting-budget treatment；Full/formal/base-finalists-agree、120M/12M固定；"
+            "使用8個固定Research fitting seeds × 300 trials/seed。相對C85唯一主要變量為seed_count 4→8。"
+        ),
+        "param_source": "full_multiseed_8x300_rolling_experiment",
+        "param_policy": "base-finalists-agree",
+        "rule_policy": "formal",
+        "dl_enabled": False,
+        "dl_id": None,
+        "dl_runtime_mode": None,
+        "robustness_role": "off",
+    },
+    "C87": {
+        "name": STRATEGY_COMPARE_DISPLAY_FULL_MULTI_SEED_4X1000,
+        "description": (
+            "PARAM-P8 controlled fitting-budget treatment；Full/formal/base-finalists-agree、120M/12M固定；"
+            "使用4個固定Research fitting seeds × 1000 trials/seed。相對C85唯一主要變量為trials_per_seed 300→1000。"
+        ),
+        "param_source": "full_multiseed_4x1000_rolling_experiment",
         "param_policy": "base-finalists-agree",
         "rule_policy": "formal",
         "dl_enabled": False,
@@ -1065,6 +1184,22 @@ STRATEGY_COMPARE_ARMS = {
 # Contrast 是否啟用只由 STRATEGY_COMPARE_PROFILES[*]["contrast_ids"] 決定。
 
 STRATEGY_COMPARE_CONTRASTS = {
+    "C86-C85": {
+        "left": "C86",
+        "right": "C85",
+        "description": (
+            "Fitting seed-count primary：Full/formal/base-finalists-agree與300 trials/seed固定；"
+            "只比較8個固定Research fitting seeds相對4個固定seeds。"
+        ),
+    },
+    "C87-C85": {
+        "left": "C87",
+        "right": "C85",
+        "description": (
+            "Fitting trial-budget primary：Full/formal/base-finalists-agree與4個固定Research fitting seeds固定；"
+            "只比較1000 trials/seed相對300 trials/seed。"
+        ),
+    },
     "C85-C62": {
         "left": "C85",
         "right": "C62",

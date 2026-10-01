@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 import re
 from typing import Any, Mapping
 
@@ -58,6 +59,7 @@ class StrategyParamTrainingProfile:
     validation_enabled: bool
     validation_protocol: str | None
     fitting_seed_protocol: str
+    artifact_slug: str | None
     registered_scientific_fingerprint_sha256: str | None
 
 
@@ -239,6 +241,10 @@ def get_strategy_param_training_profile(profile_id: str) -> StrategyParamTrainin
     if not fitting_seed_protocol:
         raise ValueError(f"strategy parameter profile缺少fitting_seed_protocol: {key}")
     get_strategy_param_fitting_seed_protocol(fitting_seed_protocol)
+    artifact_slug = str(raw.get("artifact_slug") or "").strip() or None
+    if artifact_slug is not None:
+        if Path(artifact_slug).name != artifact_slug or artifact_slug in {".", ".."}:
+            raise ValueError(f"strategy parameter artifact_slug必須是安全單一資料夾名稱: {key}")
     registered_scientific_fingerprint_sha256 = str(
         raw.get("registered_scientific_fingerprint_sha256") or ""
     ).strip().lower() or None
@@ -263,6 +269,7 @@ def get_strategy_param_training_profile(profile_id: str) -> StrategyParamTrainin
         validation_enabled=enabled,
         validation_protocol=protocol,
         fitting_seed_protocol=fitting_seed_protocol,
+        artifact_slug=artifact_slug,
         registered_scientific_fingerprint_sha256=registered_scientific_fingerprint_sha256,
     )
 

@@ -836,9 +836,29 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         )
 
         robust_settings = strategy_config.get_strategy_comparison_settings(robustness.profile_id)
+        canonical_reuse_arm_ids = tuple(
+            arm_id
+            for arm_id in robustness.stochastic_arm_ids
+            if (
+                robust_settings.parameter_sources[str(robust_settings.arms[arm_id].param_source)].builder is not None
+                and str(
+                    robust_settings.parameter_sources[str(robust_settings.arms[arm_id].param_source)].builder.builder_type
+                ) == "canonical_optimizer_strategy_params"
+            )
+        )
+        fixed_multiseed_arm_ids = tuple(
+            arm_id
+            for arm_id in robustness.stochastic_arm_ids
+            if (
+                robust_settings.parameter_sources[str(robust_settings.arms[arm_id].param_source)].builder is not None
+                and str(
+                    robust_settings.parameter_sources[str(robust_settings.arms[arm_id].param_source)].builder.builder_type
+                ) == "optimizer_fixed_multiseed_strategy_params"
+            )
+        )
         reusable = {
             (arm_id, int(seed)): {"source_run_root": Path("synthetic_registered_run")}
-            for arm_id in ("C62", "C61", "C58")
+            for arm_id in canonical_reuse_arm_ids
             for seed in robustness.resolved_seeds
         }
         rows, blockers, _bindings = _benchmark_parameter_plan_rows(
@@ -859,15 +879,18 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         check_true(
             f"robustness_reused_scientific_units_prune_param_dependencies:{robustness.robustness_id}",
             not blockers
-            and len(reused_result_rows) == 24
+            and len(reused_result_rows) == len(canonical_reuse_arm_ids) * len(robustness.resolved_seeds)
             and all(
                 any(f"result:{arm_id}:seed={int(seed)}" == row[1] for row in reused_result_rows)
-                for arm_id in ("C62", "C61", "C58")
+                for arm_id in canonical_reuse_arm_ids
                 for seed in robustness.resolved_seeds
             )
-            and len(pending_rows) == 8
+            and len(pending_rows) == len(fixed_multiseed_arm_ids) * len(robustness.resolved_seeds)
+            and len({str(row[1]) for row in pending_rows}) == len(pending_rows)
             and all(
-                "replicate=" in str(row[1]) and "fixed_multiseed_v1" in str(row[1])
+                "replicate=" in str(row[1])
+                and "fixed_multiseed_v1" in str(row[1])
+                and ":profile=" in str(row[1])
                 for row in pending_rows
             ),
         )
@@ -886,6 +909,26 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     rolling_fixed, rolling_stochastic = _robustness_arms(
         rolling_robust_settings, rolling_robustness
     )
+    rolling_canonical_reuse_arm_ids = tuple(
+        arm_id
+        for arm_id in rolling_robustness.stochastic_arm_ids
+        if (
+            rolling_robust_settings.parameter_sources[str(rolling_robust_settings.arms[arm_id].param_source)].builder is not None
+            and str(
+                rolling_robust_settings.parameter_sources[str(rolling_robust_settings.arms[arm_id].param_source)].builder.builder_type
+            ) == "canonical_optimizer_strategy_params"
+        )
+    )
+    rolling_fixed_multiseed_arm_ids = tuple(
+        arm_id
+        for arm_id in rolling_robustness.stochastic_arm_ids
+        if (
+            rolling_robust_settings.parameter_sources[str(rolling_robust_settings.arms[arm_id].param_source)].builder is not None
+            and str(
+                rolling_robust_settings.parameter_sources[str(rolling_robust_settings.arms[arm_id].param_source)].builder.builder_type
+            ) == "optimizer_fixed_multiseed_strategy_params"
+        )
+    )
     rolling_reusable = {
         (arm_id, int(seed)): {
             "source_run_root": Path("synthetic_registered_extending_run"),
@@ -895,7 +938,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             },
             "yearly": pd.DataFrame(),
         }
-        for arm_id in ("C62", "C61", "C58")
+        for arm_id in rolling_canonical_reuse_arm_ids
         for seed in rolling_robustness.resolved_seeds
     }
     with patch(
@@ -911,15 +954,20 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 stochastic_arms=rolling_stochastic,
             )
         )
+    expected_reuse_units = len(rolling_canonical_reuse_arm_ids) * len(rolling_robustness.resolved_seeds)
+    expected_pending_search_units = len(rolling_fixed_multiseed_arm_ids) * len(rolling_robustness.resolved_seeds)
+    expected_total_units = len(rolling_robustness.stochastic_arm_ids) * len(rolling_robustness.resolved_seeds)
     check_true(
-        "robustness_plan_surfaces_cross_profile_seed_reuse_before_pending_c85_bundle_work",
-        len(rendered_robustness_payload.get("registered_scientific_reuse_units") or ()) == 24
-        and "8 pending search units" in rendered_robustness_plan
-        and "scientific result REUSE=24/32 arm×replicate" in rendered_robustness_plan
-        and "REUSE         Full Single-Seed Base-Finalists-Agr" in rendered_robustness_plan
-        and "REUSE         Full Base-Finalist-Best" in rendered_robustness_plan
-        and "REUSE         Min Base-Finalist-Best" in rendered_robustness_plan
-        and "PARAM+REPLAY  Full Production-Style Fixed Multi-S" in rendered_robustness_plan,
+        "robustness_plan_surfaces_cross_profile_seed_reuse_before_pending_fixed_multiseed_work",
+        len(rendered_robustness_payload.get("registered_scientific_reuse_units") or ()) == expected_reuse_units
+        and f"{expected_pending_search_units} pending search units" in rendered_robustness_plan
+        and f"scientific result REUSE={expected_reuse_units}/{expected_total_units} arm×replicate" in rendered_robustness_plan
+        and rendered_robustness_plan.count("PARAM+REPLAY") == len(rolling_fixed_multiseed_arm_ids)
+        and rendered_robustness_plan.count(" seed scientific results identity一致") == len(rolling_canonical_reuse_arm_ids)
+        and "Strategy fitting budgets" in rendered_robustness_plan
+        and "4 seeds x 300 trials" in rendered_robustness_plan
+        and "8 seeds x 300 trials" in rendered_robustness_plan
+        and "4 seeds x 1000 trials" in rendered_robustness_plan,
     )
 
     # The long-lived extending_current benchmark remains contract-tested even when
