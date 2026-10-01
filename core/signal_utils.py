@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pandas as pd
 
@@ -10,6 +12,77 @@ from core.feature_bank import coerce_feature_bank
 from core.breakout_false_filter import build_breakout_false_filter_pass_condition
 from filters.breakout_quality.runtime import build_breakout_quality_filter_pass_condition
 OPTIMIZER_TRUE_RANGE_ATTR = '_optimizer_true_range'
+
+_NUMBA_SUPERTREND_LOOP = None
+_NUMBA_SUPERTREND_UNAVAILABLE = False
+_NUMBA_SUPERTREND_WARNING_EMITTED = False
+
+
+def _tv_supertrend_loop_reference(basic_ub, basic_lb, close, first):
+    final_ub = np.full(close.shape, np.nan, dtype=np.float64)
+    final_lb = np.full(close.shape, np.nan, dtype=np.float64)
+    direction = np.full(close.shape, 1, dtype=np.int8)
+    final_ub[first], final_lb[first] = basic_ub[first], basic_lb[first]
+    for i in range(first + 1, len(close)):
+        if close[i - 1] > final_lb[i - 1]:
+            final_lb[i] = max(basic_lb[i], final_lb[i - 1])
+        else:
+            final_lb[i] = basic_lb[i]
+        if close[i - 1] < final_ub[i - 1]:
+            final_ub[i] = min(basic_ub[i], final_ub[i - 1])
+        else:
+            final_ub[i] = basic_ub[i]
+        if direction[i - 1] == -1 and close[i] < final_lb[i - 1]:
+            direction[i] = 1
+        elif direction[i - 1] == 1 and close[i] > final_ub[i - 1]:
+            direction[i] = -1
+        else:
+            direction[i] = direction[i - 1]
+    return direction
+
+
+def _warn_compiled_supertrend_fallback(exc):
+    global _NUMBA_SUPERTREND_WARNING_EMITTED
+    if _NUMBA_SUPERTREND_WARNING_EMITTED:
+        return
+    _NUMBA_SUPERTREND_WARNING_EMITTED = True
+    warnings.warn(
+        f"Optimizer compiled SuperTrend kernel unavailable; using reference path: {type(exc).__name__}: {exc}",
+        RuntimeWarning,
+        stacklevel=2,
+    )
+
+
+def _get_numba_supertrend_loop():
+    global _NUMBA_SUPERTREND_LOOP, _NUMBA_SUPERTREND_UNAVAILABLE
+    if _NUMBA_SUPERTREND_LOOP is not None:
+        return _NUMBA_SUPERTREND_LOOP
+    if _NUMBA_SUPERTREND_UNAVAILABLE:
+        return None
+    try:
+        from numba import njit
+        _NUMBA_SUPERTREND_LOOP = njit(cache=True, fastmath=False)(_tv_supertrend_loop_reference)
+    except (ImportError, ModuleNotFoundError, RuntimeError, TypeError, ValueError) as exc:
+        _NUMBA_SUPERTREND_UNAVAILABLE = True
+        _warn_compiled_supertrend_fallback(exc)
+        return None
+    return _NUMBA_SUPERTREND_LOOP
+
+
+def _run_tv_supertrend_loop(basic_ub, basic_lb, close, first, *, use_compiled_kernel):
+    global _NUMBA_SUPERTREND_LOOP, _NUMBA_SUPERTREND_UNAVAILABLE
+    if not use_compiled_kernel:
+        return _tv_supertrend_loop_reference(basic_ub, basic_lb, close, first)
+    kernel = _get_numba_supertrend_loop()
+    if kernel is None:
+        return _tv_supertrend_loop_reference(basic_ub, basic_lb, close, first)
+    try:
+        return kernel(basic_ub, basic_lb, close, first)
+    except Exception as exc:  # Numba compile/runtime errors are optional-accelerator failures.
+        _NUMBA_SUPERTREND_LOOP = None
+        _NUMBA_SUPERTREND_UNAVAILABLE = True
+        _warn_compiled_supertrend_fallback(exc)
+        return _tv_supertrend_loop_reference(basic_ub, basic_lb, close, first)
 
 
 def extract_precomputed_signals(df):
@@ -98,7 +171,7 @@ def tv_ema(source, length):
     return ema
 
 
-def tv_supertrend(high, low, close, atr, multiplier):
+def tv_supertrend(high, low, close, atr, multiplier, *, use_compiled_kernel=False):
     high = np.asarray(high, dtype=np.float64)
     low = np.asarray(low, dtype=np.float64)
     close = np.asarray(close, dtype=np.float64)
@@ -106,34 +179,20 @@ def tv_supertrend(high, low, close, atr, multiplier):
     hl2 = (high + low) / 2.0
     basic_ub = hl2 + multiplier * atr
     basic_lb = hl2 - multiplier * atr
-    final_ub = np.full(close.shape, np.nan, dtype=np.float64)
-    final_lb = np.full(close.shape, np.nan, dtype=np.float64)
-    direction = np.full(close.shape, 1, dtype=np.int8)
     first_valid = np.where(~np.isnan(atr))[0]
     if len(first_valid) == 0:
-        return direction
-    first = first_valid[0]
-    final_ub[first], final_lb[first] = basic_ub[first], basic_lb[first]
-    for i in range(first + 1, len(close)):
-        if close[i - 1] > final_lb[i - 1]:
-            final_lb[i] = max(basic_lb[i], final_lb[i - 1])
-        else:
-            final_lb[i] = basic_lb[i]
-        if close[i - 1] < final_ub[i - 1]:
-            final_ub[i] = min(basic_ub[i], final_ub[i - 1])
-        else:
-            final_ub[i] = basic_ub[i]
-        if direction[i - 1] == -1 and close[i] < final_lb[i - 1]:
-            direction[i] = 1
-        elif direction[i - 1] == 1 and close[i] > final_ub[i - 1]:
-            direction[i] = -1
-        else:
-            direction[i] = direction[i - 1]
-    return direction
+        return np.full(close.shape, 1, dtype=np.int8)
+    return _run_tv_supertrend_loop(
+        basic_ub,
+        basic_lb,
+        close,
+        int(first_valid[0]),
+        use_compiled_kernel=bool(use_compiled_kernel),
+    )
 
 
 
-def generate_signals(df, params, ticker=None, feature_bank=None):
+def generate_signals(df, params, ticker=None, feature_bank=None, use_compiled_kernels=False):
     resolved_ticker = ticker or df.attrs.get('ticker')
     if len(df) == 0:
         empty_float = np.array([], dtype=np.float64)
@@ -201,7 +260,7 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
     SuperTrend_Dir = _feature(
         'supertrend_dir',
         (atr_len, atr_times_trail),
-        lambda: tv_supertrend(H, L, C, ATR_main, atr_times_trail),
+        lambda: tv_supertrend(H, L, C, ATR_main, atr_times_trail, use_compiled_kernel=use_compiled_kernels),
     )
 
     prev_supertrend = np.empty_like(SuperTrend_Dir)

@@ -14,6 +14,7 @@ from services.optimizer.trial_inputs import _build_process_pool_executor
 from core.raw_universe_contract import coerce_raw_universe_required_min_rows
 from core.portfolio_fast_data import get_fast_dates, pack_static_market_data
 from core.signal_utils import OPTIMIZER_TRUE_RANGE_ATTR, tv_true_range
+from core.exact_accounting import infer_security_profile
 
 
 def close_study_storage(study):
@@ -507,6 +508,14 @@ class OptimizerSession:
                 df['Close'].to_numpy(dtype='float64', copy=False),
             )
 
+    def _precompute_optimizer_security_profiles(self):
+        for ticker, df in self.raw_data_cache.items():
+            if df is None or len(df) == 0:
+                continue
+            if isinstance(getattr(df, 'attrs', {}).get('security_profile'), dict):
+                continue
+            df.attrs['security_profile'] = infer_security_profile(ticker)
+
     def install_raw_data_cache(
         self,
         data_dir,
@@ -520,6 +529,7 @@ class OptimizerSession:
         self.close_trial_prep_executor()
         self.raw_data_cache = dict(raw_data_cache or {})
         self._precompute_optimizer_true_range()
+        self._precompute_optimizer_security_profiles()
         self.raw_data_cache_data_dir = data_dir
         self.raw_data_cache_required_min_rows = coerce_raw_universe_required_min_rows(required_min_rows, allow_none=True)
         if not bool(self._prepared_trial_input_cache_is_shared):

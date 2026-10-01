@@ -8,6 +8,7 @@ from core.history_filters import evaluate_history_candidate_metrics
 from core.exact_accounting import build_sell_ledger_from_price, coerce_money_like_to_milli, restore_money_like_from_milli
 from core.price_utils import adjust_long_sell_fill_price
 from core.signal_utils import generate_signals, unpack_precomputed_signals
+from core.training_performance import is_optimizer_compiled_signal_kernels_enabled
 from core.portfolio_fast_access import (
     FAST_STATIC_FLOAT_FIELDS,
     FAST_DYNAMIC_FLOAT_FIELDS,
@@ -130,7 +131,13 @@ def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None
         profile_stats['assign_columns_sec'] = 0.0
 
     t0 = time.perf_counter() if profile_stats is not None else None
-    precomputed_signals = generate_signals(df, params, ticker=resolved_ticker, feature_bank=feature_bank)
+    precomputed_signals = generate_signals(
+        df,
+        params,
+        ticker=resolved_ticker,
+        feature_bank=feature_bank,
+        use_compiled_kernels=is_optimizer_compiled_signal_kernels_enabled(),
+    )
     if profile_stats is not None:
         profile_stats['generate_signals_sec'] = time.perf_counter() - t0
 
