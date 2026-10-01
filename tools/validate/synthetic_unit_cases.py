@@ -12,6 +12,8 @@ from core.exact_accounting import (
     build_buy_ledger_from_price,
     build_sell_ledger_from_price,
     calc_entry_total_cost,
+    calc_buy_net_total_milli_from_milli,
+    calc_sell_net_total_milli_from_milli,
     calc_exit_net_total,
     calc_risk_budget_milli,
     milli_to_money,
@@ -539,6 +541,16 @@ def validate_exact_accounting_ledger_conservation_case(_base_params):
     check("exit_total_helper_matches_sell_ledger", milli_to_money(sell_ledger["net_sell_total_milli"]), calc_exit_net_total(10.95, 3000, params), tol=1e-12)
     check("buy_broker_cash_minus_rebate_equals_economic_cost", buy_ledger["net_buy_total_milli"], buy_ledger["cash_buy_total_milli"] - buy_ledger["buy_fee_rebate_receivable_milli"])
     check("sell_broker_cash_plus_rebate_equals_economic_proceeds", sell_ledger["net_sell_total_milli"], sell_ledger["cash_sell_total_milli"] + sell_ledger["sell_fee_rebate_receivable_milli"])
+    check(
+        "direct_buy_net_total_matches_full_ledger",
+        buy_ledger["net_buy_total_milli"],
+        calc_buy_net_total_milli_from_milli(price_to_milli(10.05), 3000, params),
+    )
+    check(
+        "direct_sell_net_total_matches_full_ledger",
+        sell_ledger["net_sell_total_milli"],
+        calc_sell_net_total_milli_from_milli(price_to_milli(10.95), 3000, params),
+    )
 
     summary["buy_net_total_milli"] = buy_ledger["net_buy_total_milli"]
     return results, summary
@@ -656,6 +668,32 @@ def validate_exact_accounting_tick_limit_integer_case(_base_params):
     check("bond_etf_sell_ledger_zero_tax_before_deadline", 0, build_sell_ledger_from_price(28.0, 1000, V16StrategyParams(), ticker="00679B", trade_date="2026-03-02")["tax_milli"])
     check("bond_etf_sell_ledger_tax_after_deadline_uses_fund_rate", 28000, build_sell_ledger_from_price(28.0, 1000, V16StrategyParams(), ticker="00679B", trade_date="2027-01-02")["tax_milli"])
     check("reit_sell_ledger_tax_is_exempt", 0, build_sell_ledger_from_price(10.0, 1000, V16StrategyParams(), ticker="01001T", trade_date="2026-03-02")["tax_milli"])
+
+    # AI註: mark-to-market now consumes the direct exact-accounting sell-total
+    # primitive. Keep it locked to the full ledger across security/date tax rules.
+    direct_sell_cases = [
+        ("stock", 100.0, 1000, "1101", "2026-03-02"),
+        ("etf", 80.35, 1000, "0050", "2026-03-02"),
+        ("bond_before_deadline", 28.0, 1000, "00679B", "2026-03-02"),
+        ("bond_after_deadline", 28.0, 1000, "00679B", "2027-01-02"),
+        ("reit", 10.0, 1000, "01001T", "2026-03-02"),
+    ]
+    for direct_case, direct_price, direct_qty, direct_ticker, direct_date in direct_sell_cases:
+        direct_params = V16StrategyParams()
+        direct_ledger = build_sell_ledger_from_price(
+            direct_price, direct_qty, direct_params, ticker=direct_ticker, trade_date=direct_date
+        )
+        check(
+            f"direct_sell_total_matches_full_ledger_{direct_case}",
+            direct_ledger["net_sell_total_milli"],
+            calc_sell_net_total_milli_from_milli(
+                price_to_milli(direct_price),
+                direct_qty,
+                direct_params,
+                ticker=direct_ticker,
+                trade_date=direct_date,
+            ),
+        )
 
     summary["limit_up"] = up_limit
     summary["etf_tick_size"] = get_tick_size(10.17, ticker="0050")

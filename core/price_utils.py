@@ -1,4 +1,5 @@
 import math
+from functools import lru_cache
 
 import numpy as np
 import pandas as pd
@@ -20,6 +21,7 @@ from core.exact_accounting import (
     calc_sell_net_total_milli_from_milli,
     get_tick_milli_from_price,
     infer_security_profile,
+    normalize_security_symbol,
     milli_to_money,
     milli_to_price,
     money_to_milli,
@@ -34,8 +36,21 @@ def tv_round(number):
     return math.floor(number + 0.5)
 
 
+@lru_cache(maxsize=2048)
+def _cached_price_security_profile(normalized_ticker):
+    # AI註: price helpers only read the inferred profile; cache that read-only
+    # internal view so repeated tick/limit calls do not allocate a dict copy.
+    return infer_security_profile(normalized_ticker)
+
+
+def _resolve_price_security_profile(ticker, security_profile):
+    if security_profile is not None:
+        return security_profile
+    return _cached_price_security_profile(normalize_security_symbol(ticker))
+
+
 def get_tick_size(price, ticker=None, security_profile=None):
-    resolved_profile = infer_security_profile(ticker) if security_profile is None else security_profile
+    resolved_profile = _resolve_price_security_profile(ticker, security_profile)
     return milli_to_price(get_tick_milli_from_price(price, security_profile=resolved_profile))
 
 
@@ -43,7 +58,7 @@ def get_tick_size(price, ticker=None, security_profile=None):
 def round_to_tick(price, direction="nearest", ticker=None, security_profile=None):
     if pd.isna(price):
         return np.nan
-    resolved_profile = infer_security_profile(ticker) if security_profile is None else security_profile
+    resolved_profile = _resolve_price_security_profile(ticker, security_profile)
     return milli_to_price(round_price_to_tick_milli(price, direction=direction, security_profile=resolved_profile))
 
 
@@ -107,7 +122,7 @@ def get_tick_size_array(prices, ticker=None, security_profile=None):
     valid = ~np.isnan(prices)
     if not np.any(valid):
         return ticks
-    resolved_profile = infer_security_profile(ticker) if security_profile is None else security_profile
+    resolved_profile = _resolve_price_security_profile(ticker, security_profile)
     ticks[valid] = np.fromiter(
         (milli_to_price(get_tick_milli_from_price(price, security_profile=resolved_profile)) for price in prices[valid]),
         dtype=np.float64,
@@ -122,7 +137,7 @@ def round_to_tick_array(prices, direction="nearest", ticker=None, security_profi
     valid = ~np.isnan(prices)
     if not np.any(valid):
         return out
-    resolved_profile = infer_security_profile(ticker) if security_profile is None else security_profile
+    resolved_profile = _resolve_price_security_profile(ticker, security_profile)
     out[valid] = np.fromiter(
         (
             milli_to_price(round_price_to_tick_milli(price, direction=direction, security_profile=resolved_profile))
@@ -284,14 +299,14 @@ def calc_initial_risk_total(entry_price, net_stop_price, qty, params):
 def calc_limit_up_price(reference_price, ticker=None, security_profile=None):
     if pd.isna(reference_price) or reference_price <= 0:
         return np.nan
-    resolved_profile = infer_security_profile(ticker) if security_profile is None else security_profile
+    resolved_profile = _resolve_price_security_profile(ticker, security_profile)
     return milli_to_price(calc_limit_up_price_milli(price_to_milli(reference_price), security_profile=resolved_profile))
 
 
 def calc_limit_down_price(reference_price, ticker=None, security_profile=None):
     if pd.isna(reference_price) or reference_price <= 0:
         return np.nan
-    resolved_profile = infer_security_profile(ticker) if security_profile is None else security_profile
+    resolved_profile = _resolve_price_security_profile(ticker, security_profile)
     return milli_to_price(calc_limit_down_price_milli(price_to_milli(reference_price), security_profile=resolved_profile))
 
 
@@ -308,7 +323,7 @@ def is_limit_buy_price_reachable_for_day(limit_price, y_close, ticker=None, secu
 def is_limit_up_bar(t_open, t_high, t_low, t_close, y_close, ticker=None, security_profile=None):
     if any(pd.isna(v) for v in (t_open, t_high, t_low, t_close, y_close)):
         return False
-    resolved_profile = infer_security_profile(ticker) if security_profile is None else security_profile
+    resolved_profile = _resolve_price_security_profile(ticker, security_profile)
     limit_up_price_milli = calc_limit_up_price_milli(price_to_milli(y_close), security_profile=resolved_profile)
     return all(price_to_milli(v) == limit_up_price_milli for v in (t_open, t_high, t_low, t_close))
 
@@ -316,7 +331,7 @@ def is_limit_up_bar(t_open, t_high, t_low, t_close, y_close, ticker=None, securi
 def is_limit_down_bar(t_open, t_high, t_low, t_close, y_close, ticker=None, security_profile=None):
     if any(pd.isna(v) for v in (t_open, t_high, t_low, t_close, y_close)):
         return False
-    resolved_profile = infer_security_profile(ticker) if security_profile is None else security_profile
+    resolved_profile = _resolve_price_security_profile(ticker, security_profile)
     limit_down_price_milli = calc_limit_down_price_milli(price_to_milli(y_close), security_profile=resolved_profile)
     return all(price_to_milli(v) == limit_down_price_milli for v in (t_open, t_high, t_low, t_close))
 

@@ -245,6 +245,11 @@ def _infer_security_profile_cached(code: str, cfi: str, name: str):
     return _build_security_profile(code=code, family="stock", broad_type=_SECURITY_BROAD_STOCK, tick_profile=_TICK_PROFILE_STOCK)
 
 
+@lru_cache(maxsize=256)
+def _resolve_buy_fee_cached(buy_fee, min_fee):
+    return rate_to_ppm(buy_fee), money_to_milli(min_fee)
+
+
 @lru_cache(maxsize=2048)
 def _resolve_fee_schedule_cached(buy_fee, sell_fee, tax_rate, min_fee, family: str, broad_type: str, trade_day_ord):
     buy_fee_ppm = rate_to_ppm(buy_fee)
@@ -473,22 +478,40 @@ def calc_tax_milli(
     return (int(gross_milli) * int(tax_ppm) + (PPM_SCALE // 2)) // PPM_SCALE
 
 
-def _resolve_fee_schedule_tuple(params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None):
+def _resolve_trade_fee_schedule_tuple(params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None):
     resolved_profile = resolve_security_profile(
         security_profile,
         ticker=ticker,
         cfi_code=cfi_code,
         security_name=security_name,
     )
-    trade_day = _normalize_trade_date(trade_date)
-    buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli = _resolve_fee_schedule_cached(
+    family = resolved_profile.get("family", "stock")
+    broad_type = resolved_profile.get("broad_type", _SECURITY_BROAD_STOCK)
+    # AI註: only bond ETF tax semantics are date-dependent. Avoid repeated date
+    # normalization/cache-key fragmentation for stock and other fund families.
+    trade_day_ord = None
+    if family == "etf" and broad_type == _SECURITY_BROAD_BOND:
+        trade_day = _normalize_trade_date(trade_date)
+        trade_day_ord = None if trade_day is None else trade_day.toordinal()
+    return _resolve_fee_schedule_cached(
         float(params.buy_fee),
         float(params.sell_fee),
         float(params.tax_rate),
         float(params.min_fee),
-        resolved_profile.get("family", "stock"),
-        resolved_profile.get("broad_type", _SECURITY_BROAD_STOCK),
-        None if trade_day is None else trade_day.toordinal(),
+        family,
+        broad_type,
+        trade_day_ord,
+    )
+
+
+def _resolve_fee_schedule_tuple(params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None):
+    buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli = _resolve_trade_fee_schedule_tuple(
+        params,
+        ticker=ticker,
+        security_profile=security_profile,
+        trade_date=trade_date,
+        cfi_code=cfi_code,
+        security_name=security_name,
     )
     return buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, rate_to_ppm(params.fixed_risk)
 
@@ -505,13 +528,13 @@ def resolve_fee_schedule_tuple(params, *, ticker=None, security_profile=None, tr
 
 
 def calc_buy_net_total_milli_from_milli(fill_price_milli: int, qty: int, params) -> int:
-    buy_fee_ppm, _sell_fee_ppm, _tax_ppm, min_fee_milli, _fixed_risk_ppm = _resolve_fee_schedule_tuple(params)
+    buy_fee_ppm, min_fee_milli = _resolve_buy_fee_cached(float(params.buy_fee), float(params.min_fee))
     gross_buy_milli = int(fill_price_milli) * int(qty)
     return gross_buy_milli + calc_fee_milli(gross_buy_milli, buy_fee_ppm, min_fee_milli, rounding_mode=_resolve_charge_rounding_mode(params))
 
 
 def calc_sell_net_total_milli_from_milli(exec_price_milli: int, qty: int, params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None) -> int:
-    _buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, _fixed_risk_ppm = _resolve_fee_schedule_tuple(
+    _buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli = _resolve_trade_fee_schedule_tuple(
         params,
         ticker=ticker,
         security_profile=security_profile,
@@ -529,7 +552,7 @@ def calc_sell_net_total_milli_from_milli(exec_price_milli: int, qty: int, params
 
 
 def build_buy_ledger(fill_price_milli: int, qty: int, params) -> Dict[str, int]:
-    buy_fee_ppm, _sell_fee_ppm, _tax_ppm, min_fee_milli, _fixed_risk_ppm = _resolve_fee_schedule_tuple(params)
+    buy_fee_ppm, min_fee_milli = _resolve_buy_fee_cached(float(params.buy_fee), float(params.min_fee))
     qty = int(qty)
     gross_buy_milli = int(fill_price_milli) * qty
     buy_fee_milli = calc_fee_milli(
@@ -555,7 +578,7 @@ def build_buy_ledger(fill_price_milli: int, qty: int, params) -> Dict[str, int]:
 
 
 def build_sell_ledger(exec_price_milli: int, qty: int, params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None) -> Dict[str, int]:
-    _buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, _fixed_risk_ppm = _resolve_fee_schedule_tuple(
+    _buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli = _resolve_trade_fee_schedule_tuple(
         params,
         ticker=ticker,
         security_profile=security_profile,

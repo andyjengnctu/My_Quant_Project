@@ -5,8 +5,12 @@ import numpy as np
 
 from core.backtest_core import run_v16_backtest
 from core.history_filters import evaluate_history_candidate_metrics
-from core.exact_accounting import build_sell_ledger_from_price, coerce_money_like_to_milli, restore_money_like_from_milli
-from core.price_utils import adjust_long_sell_fill_price
+from core.exact_accounting import (
+    calc_sell_net_total_milli_from_milli,
+    coerce_money_like_to_milli,
+    restore_money_like_from_milli,
+    round_price_to_tick_milli,
+)
 from core.signal_utils import generate_signals, unpack_precomputed_signals
 from core.training_performance import is_optimizer_compiled_signal_kernels_enabled
 from core.portfolio_fast_access import (
@@ -48,16 +52,17 @@ def calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params, fee
 
         pos['last_px'] = px
 
-        floating_exec_price = adjust_long_sell_fill_price(px, ticker=ticker)
-        sell_ledger = build_sell_ledger_from_price(
-            floating_exec_price,
+        floating_exec_price_milli = round_price_to_tick_milli(
+            px, direction="down", ticker=ticker
+        )
+        equity_milli += calc_sell_net_total_milli_from_milli(
+            floating_exec_price_milli,
             pos['qty'],
             position_params,
             ticker=ticker,
             security_profile=pos.get('security_profile'),
             trade_date=today,
         )
-        equity_milli += sell_ledger['net_sell_total_milli']
 
     return restore_money_like_from_milli(equity_milli, cash_template)
 
