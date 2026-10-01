@@ -1,4 +1,5 @@
 import copy
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -29,11 +30,18 @@ from core.fee_rebate import (
     settle_fee_rebate,
 )
 from core.history_filters import evaluate_history_candidate_metrics
+from core.portfolio_engine import run_portfolio_timeline
+from core.portfolio_fast_data import (
+    merge_static_market_with_dynamic,
+    pack_static_market_data,
+    prep_optimizer_stock_data_bundle,
+)
 from core.portfolio_stats import (
     build_full_month_return_stats,
     build_full_quarter_return_stats,
     build_full_year_return_stats,
     calc_annual_return_pct,
+    calc_portfolio_score,
     calc_curve_stats,
     calc_sim_years,
     find_sim_start_idx,
@@ -55,6 +63,7 @@ from core.price_utils import (
     is_limit_down_bar,
     is_limit_up_bar,
 )
+from core import signal_utils as signal_utils_module
 from core.signal_utils import generate_signals
 
 from .checks import bind_synthetic_case, bind_checks, add_check
@@ -149,6 +158,145 @@ def validate_history_filters_unit_case(_base_params):
     return results, summary
 
 
+def _build_compiled_signal_equivalence_df():
+    close_values = []
+    base = 100.0
+    for idx in range(80):
+        cycle_pos = idx % 12
+        if cycle_pos < 6:
+            close_value = base + 0.1 * cycle_pos
+        elif cycle_pos == 6:
+            close_value = base + 5.0
+        elif cycle_pos == 7:
+            close_value = base + 7.0
+        elif cycle_pos == 8:
+            close_value = base + 9.0
+        elif cycle_pos == 9:
+            close_value = base + 8.0
+        elif cycle_pos == 10:
+            close_value = base + 6.0
+        else:
+            close_value = base + 3.0
+            base += 2.0
+        close_values.append(close_value)
+
+    close = np.asarray(close_values, dtype=np.float64)
+    open_px = close.copy()
+    open_px[0] = close[0] - 0.2
+    open_px[1:] = close[:-1]
+    high = np.maximum(open_px, close) + 0.3
+    low = np.minimum(open_px, close) - 0.3
+    df = pd.DataFrame(
+        {
+            "Open": open_px,
+            "High": high,
+            "Low": low,
+            "Close": close,
+            "Volume": np.full(close.shape, 1000.0, dtype=np.float64),
+        },
+        index=pd.bdate_range("2024-01-01", periods=len(close)),
+    )
+    df.attrs["ticker"] = "2330"
+    return df
+
+
+def _optimizer_bundle_arrays_exact(left, right):
+    if set(left) != set(right):
+        return False
+    for key in sorted(left):
+        if not np.array_equal(
+            np.asarray(left[key]),
+            np.asarray(right[key]),
+            equal_nan=True,
+        ):
+            return False
+    return True
+
+
+def _pit_stats_index_exact(left, right):
+    if set(left) != set(right):
+        return False
+    for key in sorted(left):
+        left_value = left[key]
+        right_value = right[key]
+        if isinstance(left_value, np.ndarray) or isinstance(right_value, np.ndarray):
+            if not np.array_equal(
+                np.asarray(left_value),
+                np.asarray(right_value),
+                equal_nan=True,
+            ):
+                return False
+        elif left_value != right_value:
+            return False
+    return True
+
+
+def _exact_scalar_equal(left, right):
+    if isinstance(left, (float, np.floating)) and isinstance(right, (float, np.floating)):
+        if np.isnan(left) and np.isnan(right):
+            return True
+    return bool(left == right)
+
+
+def _portfolio_training_result_exact(left, right):
+    if len(left) != len(right):
+        return False
+    return all(_exact_scalar_equal(left_value, right_value) for left_value, right_value in zip(left, right))
+
+
+def _run_compiled_signal_equivalence_path(df, params, *, compiled_enabled):
+    with patch(
+        "core.portfolio_fast_data.is_optimizer_compiled_signal_kernels_enabled",
+        return_value=bool(compiled_enabled),
+    ):
+        dynamic_data, standalone_logs, pit_stats_index = prep_optimizer_stock_data_bundle(
+            df,
+            params,
+            ticker="2330",
+            include_trade_logs=True,
+            include_pit_stats_index=True,
+        )
+
+    fast_data = merge_static_market_with_dynamic(pack_static_market_data(df), dynamic_data)
+    profile_stats = {"_timing_enabled": False}
+    portfolio_result = run_portfolio_timeline(
+        all_dfs_fast={"2330": fast_data},
+        all_standalone_logs={"2330": standalone_logs},
+        sorted_dates=list(df.index),
+        start_year=2024,
+        params=params,
+        max_positions=1,
+        enable_rotation=False,
+        benchmark_ticker="2330",
+        benchmark_data=fast_data,
+        is_training=True,
+        profile_stats=profile_stats,
+        verbose=False,
+        pit_stats_index={"2330": pit_stats_index},
+    )
+    objective_score = calc_portfolio_score(
+        portfolio_result[0],
+        portfolio_result[1],
+        portfolio_result[14],
+        portfolio_result[13],
+        annual_return_pct=portfolio_result[21],
+        trade_win_rate_pct=portfolio_result[8],
+        min_full_year_return_pct=profile_stats.get("min_full_year_return_pct"),
+        min_month_return_pct=profile_stats.get("min_month_return_pct"),
+        min_quarter_return_pct=profile_stats.get("min_quarter_return_pct"),
+        total_r=profile_stats.get("portfolio_total_r"),
+        median_r=profile_stats.get("portfolio_median_r"),
+    )
+    return {
+        "dynamic_data": dynamic_data,
+        "standalone_logs": standalone_logs,
+        "pit_stats_index": pit_stats_index,
+        "portfolio_result": portfolio_result,
+        "profile_stats": profile_stats,
+        "objective_score": objective_score,
+    }
+
+
 def validate_signal_utils_unit_case(_base_params):
     case_id = "UNIT_SIGNAL_UTILS"
     results = []
@@ -186,7 +334,104 @@ def validate_signal_utils_unit_case(_base_params):
     _, buy_allowed, _, _ = generate_signals(df, params)
     add_check(results, "unit_signal_utils", case_id, "return_filter_accepts_strong_enough_breakout", True, bool(buy_allowed[5]))
 
+    equivalence_df = _build_compiled_signal_equivalence_df()
+    equivalence_params = V16StrategyParams(
+        use_breakout_buy=True,
+        high_len=5,
+        use_breakout_ema_filter=False,
+        use_bb=False,
+        use_vol=False,
+        use_kc=False,
+        atr_len=3,
+        atr_times_trail=1.5,
+        atr_buy_tol=0.2,
+        tp_percent=0.03,
+        min_history_trades=0,
+        min_history_win_rate=0.0,
+        min_history_ev=-99.0,
+        initial_capital=2_000_000,
+    )
+    reference_path = _run_compiled_signal_equivalence_path(
+        equivalence_df,
+        equivalence_params,
+        compiled_enabled=False,
+    )
+    compiled_path = _run_compiled_signal_equivalence_path(
+        equivalence_df,
+        equivalence_params,
+        compiled_enabled=True,
+    )
+    compiled_dispatcher = signal_utils_module._NUMBA_SUPERTREND_LOOP
+    compiled_signatures = list(getattr(compiled_dispatcher, "signatures", ()) or ())
+
+    add_check(
+        results,
+        "unit_signal_utils",
+        case_id,
+        "compiled_supertrend_native_signature_materialized",
+        True,
+        bool(compiled_dispatcher is not None and compiled_signatures),
+    )
+    add_check(
+        results,
+        "unit_signal_utils",
+        case_id,
+        "compiled_optimizer_signal_arrays_exact",
+        True,
+        _optimizer_bundle_arrays_exact(
+            reference_path["dynamic_data"],
+            compiled_path["dynamic_data"],
+        ),
+    )
+    add_check(
+        results,
+        "unit_signal_utils",
+        case_id,
+        "compiled_optimizer_standalone_trade_logs_exact",
+        reference_path["standalone_logs"],
+        compiled_path["standalone_logs"],
+    )
+    add_check(
+        results,
+        "unit_signal_utils",
+        case_id,
+        "compiled_optimizer_pit_stats_index_exact",
+        True,
+        _pit_stats_index_exact(
+            reference_path["pit_stats_index"],
+            compiled_path["pit_stats_index"],
+        ),
+    )
+    add_check(
+        results,
+        "unit_signal_utils",
+        case_id,
+        "compiled_optimizer_portfolio_result_exact",
+        True,
+        _portfolio_training_result_exact(
+            reference_path["portfolio_result"],
+            compiled_path["portfolio_result"],
+        ),
+    )
+    add_check(
+        results,
+        "unit_signal_utils",
+        case_id,
+        "compiled_optimizer_objective_score_exact",
+        reference_path["objective_score"],
+        compiled_path["objective_score"],
+        tol=0.0,
+    )
+
     summary["breakout_return_pct"] = round((14.1 / 13.7 - 1.0) * 100.0, 4)
+    summary["compiled_equivalence"] = {
+        "native_signature_count": len(compiled_signatures),
+        "setup_count": int(np.count_nonzero(compiled_path["dynamic_data"]["is_setup"])),
+        "sell_signal_count": int(np.count_nonzero(compiled_path["dynamic_data"]["ind_sell_signal"])),
+        "standalone_trade_count": len(compiled_path["standalone_logs"]),
+        "portfolio_trade_count": int(compiled_path["portfolio_result"][2]),
+        "objective_score": float(compiled_path["objective_score"]),
+    }
     return results, summary
 
 

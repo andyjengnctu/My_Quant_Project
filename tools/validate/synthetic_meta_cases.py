@@ -2523,6 +2523,7 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         "OPTIMIZER_PROFILE_WRITE_FILES": "",
         "OPTIMIZER_RESOURCE_SAMPLE_INTERVAL_SEC": "",
         "OPTIMIZER_RESOURCE_DISK_MBPS_CAP": "",
+        "OPTIMIZER_COMPILED_SIGNAL_KERNELS": "",
     }
     defaults_resolve_from_config = all((
         performance_runtime.resolve_optimizer_rolling_shared_prep_cache_max_items(clean_env)
@@ -2539,6 +2540,8 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         == max(0.5, min(60.0, float(performance_config.OPTIMIZER_RESOURCE_SAMPLE_INTERVAL_SEC))),
         performance_runtime.resolve_optimizer_resource_disk_mbps_cap(clean_env)
         == max(1.0, min(10000.0, float(performance_config.OPTIMIZER_RESOURCE_DISK_MBPS_CAP))),
+        performance_runtime.is_optimizer_compiled_signal_kernels_enabled(clean_env)
+        is bool(performance_config.OPTIMIZER_COMPILED_SIGNAL_KERNELS),
     ))
     add_check(
         results,
@@ -2555,6 +2558,12 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         performance_runtime.resolve_optimizer_single_fold_local_min_parallel_workers(
             {"OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS": "2"}
         ) == min(2, int(performance_config.OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_MAX_WORKERS)),
+        performance_runtime.is_optimizer_compiled_signal_kernels_enabled(
+            {"OPTIMIZER_COMPILED_SIGNAL_KERNELS": "0"}
+        ) is False,
+        performance_runtime.is_optimizer_compiled_signal_kernels_enabled(
+            {"OPTIMIZER_COMPILED_SIGNAL_KERNELS": "1"}
+        ) is True,
     ))
     add_check(
         results,
@@ -2581,6 +2590,7 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS",
         "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS",
         "OPTIMIZER_FEATURE_BANK_MAX_ITEMS",
+        "OPTIMIZER_COMPILED_SIGNAL_KERNELS",
     }
     add_check(
         results,
