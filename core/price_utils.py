@@ -36,7 +36,7 @@ from core.exact_accounting import (
     money_to_milli,
     price_to_milli,
     rate_to_ppm,
-    resolve_sell_tax_ppm,
+    resolve_fee_schedule_tuple,
     round_price_to_tick_milli,
 )
 
@@ -201,9 +201,12 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params, ticker=None, sec
     max_position_cap_pct = float(getattr(params, "max_position_cap_pct", 1.0))
     max_position_cap_milli = min(cap_milli, calc_risk_budget_milli(cap_milli, max_position_cap_pct))
 
-    buy_fee_ppm = rate_to_ppm(params.buy_fee)
-    sell_fee_ppm = rate_to_ppm(params.sell_fee)
-    tax_ppm = resolve_sell_tax_ppm(params, ticker=ticker, security_profile=security_profile, trade_date=trade_date)
+    buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, _fixed_risk_ppm = resolve_fee_schedule_tuple(
+        params,
+        ticker=ticker,
+        security_profile=security_profile,
+        trade_date=trade_date,
+    )
 
     if _NATIVE_HOTPATH_ENABLED:
         charge_rounding_mode = str(getattr(params, "charge_rounding_mode", "nearest_milli") or "nearest_milli")
@@ -217,7 +220,7 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params, ticker=None, sec
                 int(buy_fee_ppm),
                 int(sell_fee_ppm),
                 int(tax_ppm),
-                int(money_to_milli(params.min_fee)),
+                int(min_fee_milli),
                 charge_rounding_mode == "floor_twd",
                 int(_NATIVE_BROKER_FEE_PPM),
                 int(_NATIVE_BROKER_MIN_FEE_MILLI),

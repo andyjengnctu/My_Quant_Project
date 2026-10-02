@@ -149,20 +149,21 @@ def resolve_sell_tax_ppm(params, *, ticker=None, security_profile=None, trade_da
     resolved_profile = resolve_security_profile(security_profile, ticker=ticker, cfi_code=cfi_code, security_name=security_name)
     family = resolved_profile.get("family", "stock")
     broad_type = resolved_profile.get("broad_type", _SECURITY_BROAD_STOCK)
-    trade_day = _normalize_trade_date(trade_date)
-    stock_tax_ppm = rate_to_ppm(params.tax_rate)
 
     if family == "stock":
-        return stock_tax_ppm
+        return rate_to_ppm(params.tax_rate)
     if family == "reit":
         return _REIT_SELL_TAX_PPM
     if family == "etf" and broad_type == _SECURITY_BROAD_BOND:
+        # AI註: only bond-ETF tax semantics are date-dependent. Avoid normalizing
+        # every replay date for stock / REIT / other fund families in sizing hot paths.
+        trade_day = _normalize_trade_date(trade_date)
         if trade_day is None or trade_day <= _BOND_ETF_TAX_EXEMPTION_END:
             return 0
         return _FUND_SELL_TAX_PPM
     if family in {"etf", "etn"}:
         return _FUND_SELL_TAX_PPM
-    return stock_tax_ppm
+    return rate_to_ppm(params.tax_rate)
 
 
 def normalize_security_symbol(symbol) -> str:
@@ -542,6 +543,16 @@ def calc_buy_net_total_milli_from_milli(fill_price_milli: int, qty: int, params)
     buy_fee_ppm, min_fee_milli = _resolve_buy_fee_cached(float(params.buy_fee), float(params.min_fee))
     gross_buy_milli = int(fill_price_milli) * int(qty)
     return gross_buy_milli + calc_fee_milli(gross_buy_milli, buy_fee_ppm, min_fee_milli, rounding_mode=_resolve_charge_rounding_mode(params))
+
+
+def calc_cash_buy_total_milli_from_milli(fill_price_milli: int, qty: int) -> int:
+    """Return broker-facing cash debit for a buy without constructing a full ledger."""
+    gross_buy_milli = int(fill_price_milli) * int(qty)
+    return gross_buy_milli + calc_broker_fee_milli(gross_buy_milli)
+
+
+def calc_cash_buy_total_milli_from_price(fill_price, qty: int) -> int:
+    return calc_cash_buy_total_milli_from_milli(price_to_milli(fill_price), qty)
 
 
 def calc_sell_net_total_milli_from_milli(exec_price_milli: int, qty: int, params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None) -> int:

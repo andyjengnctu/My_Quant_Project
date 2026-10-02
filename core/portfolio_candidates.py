@@ -1,12 +1,15 @@
 import time
 
 from core.buy_sort import (
+    BUY_LIMIT_OVERAGE_SORT_METHOD,
+    ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD,
+    calc_buy_limit_overage_pct,
     calc_buy_sort_value,
     calc_projected_capital_metrics,
     sort_candidate_rows,
 )
 from core.config import get_buy_sort_method
-from core.exact_accounting import build_buy_ledger_from_price, milli_to_money
+from core.exact_accounting import calc_cash_buy_total_milli_from_price, milli_to_money
 from filters.breakout_quality.runtime import (
     breakout_quality_ranking_uses_daily_information_date,
     get_breakout_quality_ranking_source_context,
@@ -121,37 +124,31 @@ def _make_candidate_row(
     signal_date=None,
     sizing_capital=None,
     shadow_position_state=None,
+    shadow_position_state_is_snapshot=False,
     max_qty=None,
     prev_close=None,
     quality_rank=None,
 ):
     if est_qty > 0:
-        est_ledger = build_buy_ledger_from_price(est_limit_px, est_qty, params)
-        est_cost_milli = int(est_ledger["cash_buy_total_milli"])
+        est_cost_milli = int(calc_cash_buy_total_milli_from_price(est_limit_px, est_qty))
         est_cost = milli_to_money(est_cost_milli)
     else:
         est_cost_milli = 0
         est_cost = 0.0
-    buy_limit_overage_pct = calc_buy_sort_value(
-        'BUY_LIMIT_OVERAGE_THEN_PROJ_COST',
-        ev,
-        est_cost,
-        win_rate,
-        trade_count,
-        asset_growth_pct,
-        prev_close=prev_close,
-        limit_price=est_limit_px,
-    )
-    sort_value = calc_buy_sort_value(
-        buy_sort_method,
-        ev,
-        est_cost,
-        win_rate,
-        trade_count,
-        asset_growth_pct,
-        prev_close=prev_close,
-        limit_price=est_limit_px,
-    )
+    buy_limit_overage_pct = calc_buy_limit_overage_pct(prev_close, est_limit_px)
+    if buy_sort_method in {BUY_LIMIT_OVERAGE_SORT_METHOD, ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD}:
+        sort_value = buy_limit_overage_pct
+    else:
+        sort_value = calc_buy_sort_value(
+            buy_sort_method,
+            ev,
+            est_cost,
+            win_rate,
+            trade_count,
+            asset_growth_pct,
+            prev_close=prev_close,
+            limit_price=est_limit_px,
+        )
     normalized_quality_rank = (
         None
         if quality_rank is None
@@ -246,10 +243,20 @@ def _make_candidate_row(
     if signal_state is not None:
         row['signal_state'] = signal_state
     resolved_shadow_position = shadow_position_state
+    resolved_shadow_is_snapshot = bool(
+        shadow_position_state is not None and shadow_position_state_is_snapshot
+    )
     if resolved_shadow_position is None and signal_state is not None:
         resolved_shadow_position = (signal_state or {}).get('shadow_position')
     if resolved_shadow_position is not None:
-        row['shadow_position_state'] = clone_shadow_position(resolved_shadow_position)
+        # AI註: extended candidate_plan already owns an isolated shadow snapshot.
+        # Transfer that snapshot into the ephemeral row instead of cloning it twice.
+        # A fallback read from signal_state is still cloned because it is live state.
+        row['shadow_position_state'] = (
+            resolved_shadow_position
+            if resolved_shadow_is_snapshot
+            else clone_shadow_position(resolved_shadow_position)
+        )
     return row
 
 
@@ -569,6 +576,7 @@ def _collect_extended_candidates(
             continuation_completion_barrier=candidate_plan.get('continuation_completion_barrier'),
             entry_ref_price=candidate_plan.get('entry_ref_price'),
             shadow_position_state=candidate_plan.get('shadow_position_state'),
+            shadow_position_state_is_snapshot=True,
             max_qty=candidate_plan.get('max_qty'),
             prev_close=y_close,
             quality_rank=quality_rank,
