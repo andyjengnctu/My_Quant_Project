@@ -214,6 +214,104 @@ fail:
 
 
 
+/*
+ * Optimizer-only breakout re-entry watch scanner.
+ *
+ * The Python SSOT checks one completed bar at a time while a stopped position
+ * waits for a reclaim confirmation.  In optimizer no-log mode the intermediate
+ * failed checks have no side effects beyond bars_checked/last_checked_date.
+ * This scanner skips those failed checks and stops before the first bar that
+ * must be handled by Python (normal setup or valid reclaim trigger).  If the
+ * watch window expires without either event, it reports the consumed checks so
+ * Python can retire the watch state directly.
+ */
+static PyObject *native_scan_reentry_watch_span(PyObject *self, PyObject *args) {
+    PyObject *close_obj, *atr_obj, *buy_obj;
+    Py_ssize_t start_j, end_j;
+    int bars_checked, window_bars;
+    double confirm_price;
+    Py_buffer close_view = {0}, atr_view = {0}, buy_view = {0};
+    (void)self;
+
+    if (!PyArg_ParseTuple(
+            args, "OOOnniid",
+            &close_obj, &atr_obj, &buy_obj,
+            &start_j, &end_j,
+            &bars_checked, &window_bars,
+            &confirm_price)) {
+        return NULL;
+    }
+    if (start_j < 1 || end_j < start_j || bars_checked < 0 || window_bars <= 0 ||
+        !isfinite(confirm_price) || confirm_price <= 0.0) {
+        PyErr_SetString(PyExc_ValueError, "invalid native reentry scan arguments");
+        return NULL;
+    }
+    if (!get_double_buffer(close_obj, &close_view)) goto fail;
+    if (!get_double_buffer(atr_obj, &atr_view)) goto fail;
+    if (!get_byte_buffer(buy_obj, &buy_view)) goto fail;
+
+    Py_ssize_t n_close = close_view.len / close_view.itemsize;
+    Py_ssize_t n_atr = atr_view.len / atr_view.itemsize;
+    Py_ssize_t n_buy = buy_view.len / buy_view.itemsize;
+    Py_ssize_t n = n_close;
+    if (n_atr < n) n = n_atr;
+    if (n_buy < n) n = n_buy;
+    if (end_j > n) end_j = n;
+
+    const double *CLOSE = (const double *)close_view.buf;
+    const double *ATR = (const double *)atr_view.buf;
+    const unsigned char *BUY = (const unsigned char *)buy_view.buf;
+
+    int remaining = window_bars - bars_checked;
+    if (remaining <= 0) {
+        PyBuffer_Release(&buy_view);
+        PyBuffer_Release(&atr_view);
+        PyBuffer_Release(&close_view);
+        return Py_BuildValue("(nii)", start_j, 0, 1);
+    }
+
+    Py_ssize_t j = start_j;
+    int consumed = 0;
+    int expired = 0;
+    for (; j < end_j && remaining > 0; ++j) {
+        const Py_ssize_t y = j - 1;
+
+        /* Re-entry check occurs before normal setup handling on the same bar;
+           stop so Python preserves that exact ordering when a setup exists. */
+        if (BUY[y] != 0) {
+            break;
+        }
+
+        const double close_price = CLOSE[y];
+        const double atr = ATR[y];
+        const int trigger = isfinite(close_price) && close_price > 0.0 &&
+                            close_price >= confirm_price && !isnan(atr);
+        if (trigger) {
+            break;
+        }
+
+        consumed += 1;
+        remaining -= 1;
+        if (remaining <= 0) {
+            expired = 1;
+            j += 1; /* return the first unconsumed outer-loop index */
+            break;
+        }
+    }
+
+    PyBuffer_Release(&buy_view);
+    PyBuffer_Release(&atr_view);
+    PyBuffer_Release(&close_view);
+    return Py_BuildValue("(nii)", j, consumed, expired);
+
+fail:
+    if (buy_view.obj) PyBuffer_Release(&buy_view);
+    if (atr_view.obj) PyBuffer_Release(&atr_view);
+    if (close_view.obj) PyBuffer_Release(&close_view);
+    return NULL;
+}
+
+
 static inline int64_t fee_nearest_milli(int64_t gross_milli, int64_t fee_ppm, int64_t min_fee_milli) {
     int64_t fee = (gross_milli * fee_ppm + 500000LL) / 1000000LL;
     return fee > min_fee_milli ? fee : min_fee_milli;
@@ -373,6 +471,12 @@ static PyMethodDef NativeOptimizerMethods[] = {
         native_scan_position_span,
         METH_VARARGS,
         "Scan a no-event optimizer position span and return the first bar that requires canonical Python handling."
+    },
+    {
+        "scan_reentry_watch_span",
+        native_scan_reentry_watch_span,
+        METH_VARARGS,
+        "Skip optimizer re-entry watch bars until setup, reclaim trigger, or window expiry."
     },
     {
         "calc_position_size_exact",

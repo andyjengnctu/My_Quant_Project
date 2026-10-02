@@ -90,4 +90,5 @@ def get_native_optimizer_hotpath_load_error() -> Exception | None:
 
 _native = _load_native_module()
 scan_position_span = None if _native is None else getattr(_native, "scan_position_span", None)
+scan_reentry_watch_span = None if _native is None else getattr(_native, "scan_reentry_watch_span", None)
 calc_position_size_exact = None if _native is None else getattr(_native, "calc_position_size_exact", None)

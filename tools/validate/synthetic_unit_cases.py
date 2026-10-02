@@ -52,7 +52,7 @@ from core.portfolio_stats import (
 from core.portfolio_exits import closeout_open_positions
 from core.position_step import SETTLEMENT_BASIS_BROKER_CASH, SETTLEMENT_BASIS_LEDGER_NET, execute_bar_step
 from core import price_utils as price_utils_module
-from core.native_optimizer_hotpath import is_native_optimizer_hotpath_available
+from core.native_optimizer_hotpath import is_native_optimizer_hotpath_available, scan_reentry_watch_span
 from core.price_utils import (
     adjust_long_buy_limit,
     adjust_long_sell_fill_price,
@@ -323,6 +323,7 @@ def _run_compiled_signal_equivalence_path(df, params, *, compiled_enabled):
 def _run_native_backtest_equivalence_path(df, params, *, native_enabled):
     with (
         patch.object(backtest_core_module, "_NATIVE_POSITION_SCAN_ENABLED", bool(native_enabled)),
+        patch.object(backtest_core_module, "_NATIVE_REENTRY_SCAN_ENABLED", bool(native_enabled)),
         patch.object(price_utils_module, "_NATIVE_HOTPATH_ENABLED", bool(native_enabled)),
     ):
         dynamic_data, _logs, pit_stats_index = prep_optimizer_stock_data_bundle(
@@ -465,6 +466,37 @@ def validate_signal_utils_unit_case(_base_params):
     )
 
     native_hotpath_available = is_native_optimizer_hotpath_available()
+    if native_hotpath_available and scan_reentry_watch_span is not None:
+        reentry_close = np.ascontiguousarray([10.0, 10.5, 11.0, 11.5, 12.0, 12.5], dtype=np.float64)
+        reentry_atr = np.ascontiguousarray([1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float64)
+        reentry_buy = np.ascontiguousarray([False, False, False, False, False, False], dtype=np.bool_)
+        add_check(
+            results,
+            "unit_signal_utils",
+            case_id,
+            "native_reentry_scan_stops_before_reclaim_trigger",
+            (4, 3, 0),
+            tuple(scan_reentry_watch_span(reentry_close, reentry_atr, reentry_buy, 1, len(reentry_close), 0, 5, 11.2)),
+        )
+        reentry_buy_with_setup = reentry_buy.copy()
+        reentry_buy_with_setup[2] = True
+        add_check(
+            results,
+            "unit_signal_utils",
+            case_id,
+            "native_reentry_scan_stops_before_normal_setup",
+            (3, 2, 0),
+            tuple(scan_reentry_watch_span(reentry_close, reentry_atr, reentry_buy_with_setup, 1, len(reentry_close), 0, 5, 99.0)),
+        )
+        add_check(
+            results,
+            "unit_signal_utils",
+            case_id,
+            "native_reentry_scan_expires_exact_window",
+            (4, 3, 1),
+            tuple(scan_reentry_watch_span(reentry_close, reentry_atr, reentry_buy, 1, len(reentry_close), 0, 3, 99.0)),
+        )
+
     if native_hotpath_available:
         native_reference = _run_native_backtest_equivalence_path(
             equivalence_df,

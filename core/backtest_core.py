@@ -4,10 +4,16 @@ import numpy as np
 
 from core.training_performance import is_optimizer_native_hotpath_kernels_enabled
 
-from core.native_optimizer_hotpath import scan_position_span as _native_scan_position_span
+from core.native_optimizer_hotpath import (
+    scan_position_span as _native_scan_position_span,
+    scan_reentry_watch_span as _native_scan_reentry_watch_span,
+)
 
 _NATIVE_POSITION_SCAN_ENABLED = bool(
     _native_scan_position_span is not None and is_optimizer_native_hotpath_kernels_enabled()
+)
+_NATIVE_REENTRY_SCAN_ENABLED = bool(
+    _native_scan_reentry_watch_span is not None and is_optimizer_native_hotpath_kernels_enabled()
 )
 
 # AI註: Optimizer runtime index caches must remain process-local.  Storing long
@@ -191,22 +197,32 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         ATR_main, buyCondition, sellCondition, buy_limits = unpack_precomputed_signals(precomputed_signals)
 
     native_sell_flags = None
+    native_buy_flags = None
     native_month_end_exclusive = None
-    if _NATIVE_POSITION_SCAN_ENABLED and not collect_stats and not return_logs:
-        candidate_sell_flags = np.asarray(sellCondition, dtype=np.bool_)
+    if (
+        not collect_stats
+        and not return_logs
+        and (_NATIVE_POSITION_SCAN_ENABLED or _NATIVE_REENTRY_SCAN_ENABLED)
+    ):
         candidate_atr = np.asarray(ATR_main, dtype=np.float64)
-        if (
-            H.flags.c_contiguous
-            and L.flags.c_contiguous
-            and candidate_atr.flags.c_contiguous
-            and candidate_sell_flags.flags.c_contiguous
-        ):
-            native_sell_flags = candidate_sell_flags
+        if candidate_atr.flags.c_contiguous:
             ATR_main = candidate_atr
-            _runtime_dates, native_month_end_exclusive = _get_backtest_index_runtime_state(
-                df,
-                need_month_end=True,
-            )
+            if _NATIVE_POSITION_SCAN_ENABLED:
+                candidate_sell_flags = np.asarray(sellCondition, dtype=np.bool_)
+                if (
+                    H.flags.c_contiguous
+                    and L.flags.c_contiguous
+                    and candidate_sell_flags.flags.c_contiguous
+                ):
+                    native_sell_flags = candidate_sell_flags
+                    _runtime_dates, native_month_end_exclusive = _get_backtest_index_runtime_state(
+                        df,
+                        need_month_end=True,
+                    )
+            if _NATIVE_REENTRY_SCAN_ENABLED and C.flags.c_contiguous:
+                candidate_buy_flags = np.asarray(buyCondition, dtype=np.bool_)
+                if candidate_buy_flags.flags.c_contiguous:
+                    native_buy_flags = candidate_buy_flags
 
     position = {'qty': 0}
     active_extended_signal = None
@@ -425,25 +441,71 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             if isinstance(state, dict):
                 last_checked_date = Dates[j - 1]
                 last_checked_key = last_checked_date.strftime('%Y-%m-%d') if hasattr(last_checked_date, 'strftime') else str(last_checked_date)
-                if state.get('last_checked_date') != last_checked_key:
-                    state['last_checked_date'] = last_checked_key
-                    state['bars_checked'] = int(state.get('bars_checked', 0) or 0) + 1
-                    active_reentry_signal = create_breakout_reentry_signal_state(
-                        state,
-                        close_price=C[j - 1],
-                        atr=ATR_main[j - 1],
-                        params=params,
-                        ticker=resolved_ticker,
-                        security_profile=resolved_security_profile,
-                        signal_date=Dates[j - 1],
-                    )
-                    if active_reentry_signal is not None:
-                        active_extended_signal = active_reentry_signal
-                        active_reentry_watchlist.pop(resolved_ticker, None)
+
+                # AI註: Optimizer no-log mode can skip failed re-entry-watch checks
+                # in native C.  The scanner stops before any normal setup or
+                # valid reclaim trigger, so Python still owns signal creation,
+                # setup precedence, price rounding and every executable action.
+                if native_buy_flags is not None and state.get('last_checked_date') != last_checked_key:
+                    bars_checked_before = int(state.get('bars_checked', 0) or 0)
+                    window_bars = int(state.get('window_bars', 0) or 0)
+                    confirm_price = state.get('confirm_price')
+                    try:
+                        confirm_price_value = float(confirm_price)
+                    except (TypeError, ValueError):
+                        confirm_price_value = float('nan')
+                    if window_bars > bars_checked_before and np.isfinite(confirm_price_value) and confirm_price_value > 0.0:
+                        next_j, consumed_checks, expired = _native_scan_reentry_watch_span(
+                            C,
+                            ATR_main,
+                            native_buy_flags,
+                            int(j),
+                            int(len(C)),
+                            int(bars_checked_before),
+                            int(window_bars),
+                            float(confirm_price_value),
+                        )
+                        consumed_checks = int(consumed_checks)
+                        next_j = int(next_j)
+                        if consumed_checks > 0:
+                            state['bars_checked'] = bars_checked_before + consumed_checks
+                            consumed_last_date = Dates[j + consumed_checks - 2]
+                            state['last_checked_date'] = (
+                                consumed_last_date.strftime('%Y-%m-%d')
+                                if hasattr(consumed_last_date, 'strftime')
+                                else str(consumed_last_date)
+                            )
+                        if bool(expired):
+                            active_reentry_watchlist.pop(resolved_ticker, None)
+                            if next_j > j:
+                                j = next_j
+                                continue
+                        elif next_j > j:
+                            j = next_j
+                            continue
+
+                if resolved_ticker in active_reentry_watchlist:
+                    last_checked_date = Dates[j - 1]
+                    last_checked_key = last_checked_date.strftime('%Y-%m-%d') if hasattr(last_checked_date, 'strftime') else str(last_checked_date)
+                    if state.get('last_checked_date') != last_checked_key:
+                        state['last_checked_date'] = last_checked_key
+                        state['bars_checked'] = int(state.get('bars_checked', 0) or 0) + 1
+                        active_reentry_signal = create_breakout_reentry_signal_state(
+                            state,
+                            close_price=C[j - 1],
+                            atr=ATR_main[j - 1],
+                            params=params,
+                            ticker=resolved_ticker,
+                            security_profile=resolved_security_profile,
+                            signal_date=Dates[j - 1],
+                        )
+                        if active_reentry_signal is not None:
+                            active_extended_signal = active_reentry_signal
+                            active_reentry_watchlist.pop(resolved_ticker, None)
+                        elif int(state.get('bars_checked', 0) or 0) >= int(state.get('window_bars', 0) or 0):
+                            active_reentry_watchlist.pop(resolved_ticker, None)
                     elif int(state.get('bars_checked', 0) or 0) >= int(state.get('window_bars', 0) or 0):
                         active_reentry_watchlist.pop(resolved_ticker, None)
-                elif int(state.get('bars_checked', 0) or 0) >= int(state.get('window_bars', 0) or 0):
-                    active_reentry_watchlist.pop(resolved_ticker, None)
             else:
                 active_reentry_watchlist.pop(resolved_ticker, None)
 
