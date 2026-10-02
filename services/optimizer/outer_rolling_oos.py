@@ -167,6 +167,7 @@ from services.optimizer.outer_rolling_parallel_progress import (
     _ParallelFoldProgressLogFilter,
     _build_parallel_fold_failure_message,
     _collect_parallel_fold_replay_phase_metrics,
+    _display_parallel_fold_log_path,
     _latest_parallel_fold_log_status,
     _merge_live_result_rows,
     _parallel_fold_log_path_for_fallback,
@@ -648,6 +649,12 @@ from services.optimizer.walk_forward import evaluate_walk_forward
 
 def _run_missing_parallel_fold_tasks_sequentially(*, tasks: list[dict], rows: list[dict], fold_timing_rows: list[dict], chain_state: dict, cause: BaseException | None = None) -> dict:
     completed_oos = {int((row or {}).get("oos_year", 0) or 0) for row in list(rows or []) if row}
+    completed_oos.update(
+        int((timing_row or {}).get("oos_year", 0) or 0)
+        for timing_row in list(fold_timing_rows or [])
+        if timing_row
+    )
+    completed_oos.discard(0)
     missing_tasks = [dict(task) for task in list(tasks or []) if int(task.get("oos_year", 0) or 0) not in completed_oos]
     if not missing_tasks:
         return chain_state
@@ -658,7 +665,11 @@ def _run_missing_parallel_fold_tasks_sequentially(*, tasks: list[dict], rows: li
             f" cause={_format_exception_summary(cause)}"
         ) from cause
     cause_text = f" | cause={_format_exception_summary(cause)}" if cause is not None else ""
-    print(f"{C_YELLOW}⚠️ parallel fold 中斷，改用單 fold fallback 跑完剩餘 {len(missing_tasks)} 個 fold{cause_text}{C_RESET}", flush=True)
+    print(
+        f"{C_YELLOW}⚠️ parallel fold 部分失敗；保留已完成 fold，改用單 fold fallback 跑完剩餘 "
+        f"{len(missing_tasks)} 個 fold{cause_text}{C_RESET}",
+        flush=True,
+    )
     for task in missing_tasks:
         fallback_task = dict(task)
         fallback_task["log_path"] = _parallel_fold_log_path_for_fallback(str(task.get("log_path") or ""))
@@ -667,7 +678,8 @@ def _run_missing_parallel_fold_tasks_sequentially(*, tasks: list[dict], rows: li
         fallback_task["fold_workers"] = 1
         print(
             f"{C_CYAN}↪ fallback fold | fold={int(task.get('fold_idx', 0) or 0)}/{int(task.get('fold_count', 0) or 0)} "
-            f"| OOS={_display_month_period(task.get('oos_period') or task.get('oos_year'))} | log={fallback_task.get('log_path')}{C_RESET}",
+            f"| OOS={_display_month_period(task.get('oos_period') or task.get('oos_year'))} "
+            f"| log={_display_parallel_fold_log_path(fallback_task, str(fallback_task.get('log_path') or ''))}{C_RESET}",
             flush=True,
         )
         try:
@@ -685,6 +697,7 @@ def _run_parallel_fold_futures(*, executor, tasks: list[dict], rows: list[dict],
     future_map = {executor.submit(_run_outer_rolling_oos_fold_task, task): task for task in tasks}
     pending = set(future_map)
     chain_state = {"chain_max_positions": None, "chain_enable_rotation": None}
+    retryable_failures: list[dict] = []
     live_board = _ParallelFoldLiveBoard(tasks, overall_start=overall_start, raw_data_load_sec=raw_data_load_sec)
     live_board.render(pending=pending, future_map=future_map, completed_rows=rows, fold_timing_rows=fold_timing_rows, force=True)
     try:
@@ -700,8 +713,14 @@ def _run_parallel_fold_futures(*, executor, tasks: list[dict], rows: list[dict],
                         chain_state=chain_state,
                     )
                 except Exception as exc:
-                    _cancel_parallel_fold_executor_after_failure(executor, pending)
-                    raise RuntimeError(_build_parallel_fold_failure_message(task=future_map[future], exc=exc)) from exc
+                    task = future_map[future]
+                    if _is_non_retryable_fold_failure(exc):
+                        _cancel_parallel_fold_executor_after_failure(executor, pending)
+                        raise RuntimeError(_build_parallel_fold_failure_message(task=task, exc=exc)) from exc
+                    retryable_failures.append({
+                        "task": dict(task),
+                        "exception": exc,
+                    })
             live_board.render(pending=pending, future_map=future_map, completed_rows=rows, fold_timing_rows=fold_timing_rows, force=bool(done))
     finally:
         live_board.close()
@@ -716,6 +735,7 @@ def _run_parallel_fold_futures(*, executor, tasks: list[dict], rows: list[dict],
             **dict(phase_metrics or {}),
             **dict(replay_metrics or {}),
         }
+    chain_state["retryable_fold_failures"] = retryable_failures
     return chain_state
 
 
@@ -2128,6 +2148,17 @@ def run_outer_rolling_oos(
                 chain_state=chain_state,
                 cause=exc,
             )
+        else:
+            retryable_failures = list(chain_state.pop("retryable_fold_failures", []) or [])
+            if retryable_failures:
+                first_failure = dict(retryable_failures[0] or {})
+                chain_state = _run_missing_parallel_fold_tasks_sequentially(
+                    tasks=tasks,
+                    rows=rows,
+                    fold_timing_rows=fold_timing_rows,
+                    chain_state=chain_state,
+                    cause=first_failure.get("exception"),
+                )
         if chain_state.get("chain_max_positions") is not None:
             chain_max_positions = int(chain_state.get("chain_max_positions"))
         if chain_state.get("chain_enable_rotation") is not None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 
+from core.path_utils import project_relative_display_path
 from services.optimizer.outer_rolling_fold_context import normalize_optimizer_seed_ensemble_fold_row
 from services.optimizer.outer_rolling_progress import (
     PARALLEL_FOLD_PROGRESS_PREFIX,
@@ -107,14 +108,25 @@ def _parallel_fold_log_path_for_fallback(path: str) -> str:
     return f"{root}_fallback{ext or '.log'}"
 
 
+def _display_parallel_fold_log_path(task: dict | None, path: str) -> str:
+    raw = str(path or "").strip()
+    if not raw:
+        return ""
+    project_root = str((task or {}).get("project_root") or "").strip()
+    if not project_root:
+        return raw.replace("\\", "/")
+    return project_relative_display_path(raw, project_root=project_root)
+
+
 def _build_parallel_fold_failure_message(*, task: dict, exc: BaseException, label: str = "parallel fold failed") -> str:
     fold_idx = int((task or {}).get("fold_idx", 0) or 0)
     fold_count = int((task or {}).get("fold_count", 0) or 0)
     oos_year = int((task or {}).get("oos_year", 0) or 0)
     log_path = str((task or {}).get("log_path") or "")
+    display_log_path = _display_parallel_fold_log_path(task, log_path)
     tail = _tail_text_file(log_path, max_lines=24)
     detail = f"\n最後 fold log：\n{tail}" if tail else ""
-    return f"{label}: fold={fold_idx}/{fold_count} OOS={oos_year} error={_format_exception_summary(exc)} log={log_path}{detail}"
+    return f"{label}: fold={fold_idx}/{fold_count} OOS={oos_year} error={_format_exception_summary(exc)} log={display_log_path}{detail}"
 
 
 def _latest_parallel_fold_log_status(path: str, *, max_chars: int = PARALLEL_FOLD_LOG_STATUS_MAX_CHARS) -> str:
