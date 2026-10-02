@@ -2341,6 +2341,7 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         "config.training_performance_policy": {
             "OPTIMIZER_ROLLING_FOLD_WORKERS",
             "OPTIMIZER_FEATURE_BANK_MAX_ITEMS",
+            "OPTIMIZER_NATIVE_HOTPATH_KERNELS",
             "OPTIMIZER_TIMING_MODE_DEFAULT_TRIALS",
             "OPTIMIZER_ROLLING_SHARED_PREP_CACHE_MAX_ITEMS",
             "OPTIMIZER_FULL_EVAL_CACHE_MAX_ITEMS",
@@ -2524,6 +2525,7 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         "OPTIMIZER_RESOURCE_SAMPLE_INTERVAL_SEC": "",
         "OPTIMIZER_RESOURCE_DISK_MBPS_CAP": "",
         "OPTIMIZER_COMPILED_SIGNAL_KERNELS": "",
+        "OPTIMIZER_NATIVE_HOTPATH_KERNELS": "",
     }
     defaults_resolve_from_config = all((
         performance_runtime.resolve_optimizer_rolling_shared_prep_cache_max_items(clean_env)
@@ -2542,6 +2544,8 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         == max(1.0, min(10000.0, float(performance_config.OPTIMIZER_RESOURCE_DISK_MBPS_CAP))),
         performance_runtime.is_optimizer_compiled_signal_kernels_enabled(clean_env)
         is bool(performance_config.OPTIMIZER_COMPILED_SIGNAL_KERNELS),
+        performance_runtime.is_optimizer_native_hotpath_kernels_enabled(clean_env)
+        is bool(performance_config.OPTIMIZER_NATIVE_HOTPATH_KERNELS),
     ))
     add_check(
         results,
@@ -2563,6 +2567,12 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         ) is False,
         performance_runtime.is_optimizer_compiled_signal_kernels_enabled(
             {"OPTIMIZER_COMPILED_SIGNAL_KERNELS": "1"}
+        ) is True,
+        performance_runtime.is_optimizer_native_hotpath_kernels_enabled(
+            {"OPTIMIZER_NATIVE_HOTPATH_KERNELS": "0"}
+        ) is False,
+        performance_runtime.is_optimizer_native_hotpath_kernels_enabled(
+            {"OPTIMIZER_NATIVE_HOTPATH_KERNELS": "1"}
         ) is True,
     ))
     add_check(
@@ -2591,6 +2601,7 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS",
         "OPTIMIZER_FEATURE_BANK_MAX_ITEMS",
         "OPTIMIZER_COMPILED_SIGNAL_KERNELS",
+        "OPTIMIZER_NATIVE_HOTPATH_KERNELS",
     }
     add_check(
         results,

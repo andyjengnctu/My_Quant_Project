@@ -1,0 +1,396 @@
+#define PY_SSIZE_T_CLEAN
+#include <Python.h>
+#include <math.h>
+#include <stdint.h>
+
+/*
+ * Optimizer-only native no-event position-management probe.
+ *
+ * This kernel intentionally handles only the common bar where there is no
+ * pending exit and no indicator sell.  It computes the exact management state
+ * that the Python SSOT would reach and tells the caller whether STOP/TP is hit.
+ * If an exit is hit, Python falls back to the canonical transition without
+ * mutating state; only the no-event case is committed from this result.
+ *
+ * No fast-math is allowed.  Monetary/price state stays integer milli-units.
+ */
+
+static inline int64_t price_to_milli_double(double value) {
+    double scaled = value * 1000.0;
+    if (scaled >= 0.0) {
+        return (int64_t)floor(scaled + 0.5);
+    }
+    return (int64_t)ceil(scaled - 0.5);
+}
+
+static int resolve_tick_milli(double value, int is_fund, int64_t *tick_out) {
+    if (!isfinite(value)) {
+        return 0;
+    }
+
+    if (is_fund) {
+        const double threshold = 50.0;
+        if (fabs(value - threshold) <= 1e-12) {
+            return 0; /* Python Decimal fallback boundary. */
+        }
+        *tick_out = (value < threshold) ? 10 : 50;
+        return 1;
+    }
+
+    static const double thresholds[] = {1.0, 10.0, 50.0, 100.0, 500.0, 1000.0};
+    static const int64_t ticks[] = {1, 10, 50, 100, 500, 1000};
+    for (int i = 0; i < 6; ++i) {
+        if (fabs(value - thresholds[i]) <= 1e-12) {
+            return 0; /* Preserve Python Decimal boundary behavior via fallback. */
+        }
+        if (value < thresholds[i]) {
+            *tick_out = ticks[i];
+            return 1;
+        }
+    }
+    *tick_out = 5000;
+    return 1;
+}
+
+static int round_up_price_to_tick_milli(double value, int is_fund, int64_t *result_out) {
+    int64_t tick_milli = 0;
+    if (!resolve_tick_milli(value, is_fund, &tick_milli)) {
+        return 0;
+    }
+    const double scaled = value * 1000.0;
+    const double ratio = scaled / (double)tick_milli;
+    const double rounded_ratio = ceil(ratio - 1e-12);
+    if (!isfinite(rounded_ratio)) {
+        return 0;
+    }
+    *result_out = (int64_t)rounded_ratio * tick_milli;
+    return 1;
+}
+
+static int get_double_buffer(PyObject *obj, Py_buffer *view) {
+    if (PyObject_GetBuffer(obj, view, PyBUF_CONTIG_RO | PyBUF_FORMAT) != 0) {
+        return 0;
+    }
+    if (view->itemsize != (Py_ssize_t)sizeof(double) || view->format == NULL || view->format[0] != 'd') {
+        PyBuffer_Release(view);
+        PyErr_SetString(PyExc_TypeError, "expected contiguous float64 buffer");
+        return 0;
+    }
+    return 1;
+}
+
+static int get_byte_buffer(PyObject *obj, Py_buffer *view) {
+    if (PyObject_GetBuffer(obj, view, PyBUF_CONTIG_RO | PyBUF_FORMAT) != 0) {
+        return 0;
+    }
+    if (view->itemsize != 1) {
+        PyBuffer_Release(view);
+        PyErr_SetString(PyExc_TypeError, "expected contiguous 1-byte bool/uint8 buffer");
+        return 0;
+    }
+    return 1;
+}
+
+static PyObject *native_scan_position_span(PyObject *self, PyObject *args) {
+    PyObject *high_obj, *low_obj, *atr_obj, *sell_obj;
+    Py_ssize_t start_j, end_j;
+    long long previous_high_ll, initial_stop_ll, trailing_stop_ll, tp_half_ll;
+    int qty, sold_half;
+    double atr_times_trail, tp_percent;
+    int is_fund;
+    Py_buffer high_view = {0}, low_view = {0}, atr_view = {0}, sell_view = {0};
+    (void)self;
+
+    if (!PyArg_ParseTuple(
+            args, "OOOOnnLLLLipddp",
+            &high_obj, &low_obj, &atr_obj, &sell_obj,
+            &start_j, &end_j,
+            &previous_high_ll, &initial_stop_ll, &trailing_stop_ll, &tp_half_ll,
+            &qty, &sold_half, &atr_times_trail, &tp_percent, &is_fund)) {
+        return NULL;
+    }
+    if (qty <= 0 || start_j < 1 || end_j < start_j || !isfinite(atr_times_trail) || !isfinite(tp_percent)) {
+        PyErr_SetString(PyExc_ValueError, "invalid native span arguments");
+        return NULL;
+    }
+    if (!get_double_buffer(high_obj, &high_view)) goto fail;
+    if (!get_double_buffer(low_obj, &low_view)) goto fail;
+    if (!get_double_buffer(atr_obj, &atr_view)) goto fail;
+    if (!get_byte_buffer(sell_obj, &sell_view)) goto fail;
+
+    Py_ssize_t n_high = high_view.len / high_view.itemsize;
+    Py_ssize_t n_low = low_view.len / low_view.itemsize;
+    Py_ssize_t n_atr = atr_view.len / atr_view.itemsize;
+    Py_ssize_t n_sell = sell_view.len / sell_view.itemsize;
+    Py_ssize_t n = n_high;
+    if (n_low < n) n = n_low;
+    if (n_atr < n) n = n_atr;
+    if (n_sell < n) n = n_sell;
+    if (end_j > n) end_j = n;
+
+    const double *H = (const double *)high_view.buf;
+    const double *L = (const double *)low_view.buf;
+    const double *ATR = (const double *)atr_view.buf;
+    const unsigned char *SELL = (const unsigned char *)sell_view.buf;
+
+    int64_t highest_high = (int64_t)previous_high_ll;
+    int64_t trailing_stop = (int64_t)trailing_stop_ll;
+    int64_t initial_stop = (int64_t)initial_stop_ll;
+    int64_t sl_milli = initial_stop > trailing_stop ? initial_stop : trailing_stop;
+    int half_qty = 0;
+    if (tp_percent > 0.0) {
+        double raw_half = floor(((double)qty) * tp_percent);
+        if (isfinite(raw_half) && raw_half > 0.0 && raw_half < (double)qty) half_qty = (int)raw_half;
+    }
+
+    Py_ssize_t j = start_j;
+    for (; j < end_j; ++j) {
+        const double y_atr = ATR[j - 1];
+        if (!isfinite(y_atr)) {
+            continue; /* canonical backtest skips this bar before management */
+        }
+        if (SELL[j - 1] != 0) {
+            break; /* indicator sell: Python owns the executable transition */
+        }
+        const double t_high = H[j];
+        const double t_low = L[j];
+        if (!isfinite(t_high) || !isfinite(t_low)) {
+            break;
+        }
+
+        int64_t candidate_highest = highest_high;
+        int64_t candidate_trailing = trailing_stop;
+        const double y_high = H[j - 1];
+        if (isfinite(y_high)) {
+            int64_t y_high_milli = price_to_milli_double(y_high);
+            if (y_high_milli > highest_high) {
+                candidate_highest = y_high_milli;
+                const double trail_reference = ((double)candidate_highest) / 1000.0;
+                const double trail_offset = y_atr * atr_times_trail;
+                const double raw_trail = trail_reference - trail_offset;
+                int64_t candidate_trail_milli = 0;
+                if (!round_up_price_to_tick_milli(raw_trail, is_fund, &candidate_trail_milli)) {
+                    break; /* exact Python Decimal boundary path */
+                }
+                if (candidate_trail_milli > candidate_trailing) {
+                    candidate_trailing = candidate_trail_milli;
+                }
+            }
+        }
+        int64_t candidate_sl = initial_stop > candidate_trailing ? initial_stop : candidate_trailing;
+        const int stop_hit = price_to_milli_double(t_low) <= candidate_sl;
+        int tp_hit = 0;
+        if (!stop_hit && !sold_half && half_qty > 0) {
+            tp_hit = price_to_milli_double(t_high) >= (int64_t)tp_half_ll;
+        }
+        if (stop_hit || tp_hit) {
+            break; /* leave this event bar to canonical Python, pre-bar state intact */
+        }
+
+        highest_high = candidate_highest;
+        trailing_stop = candidate_trailing;
+        sl_milli = candidate_sl;
+    }
+
+    PyBuffer_Release(&sell_view);
+    PyBuffer_Release(&atr_view);
+    PyBuffer_Release(&low_view);
+    PyBuffer_Release(&high_view);
+    return Py_BuildValue(
+        "(nLLL)",
+        j,
+        (long long)highest_high,
+        (long long)trailing_stop,
+        (long long)sl_milli
+    );
+
+fail:
+    if (sell_view.obj) PyBuffer_Release(&sell_view);
+    if (atr_view.obj) PyBuffer_Release(&atr_view);
+    if (low_view.obj) PyBuffer_Release(&low_view);
+    if (high_view.obj) PyBuffer_Release(&high_view);
+    return NULL;
+}
+
+
+
+static inline int64_t fee_nearest_milli(int64_t gross_milli, int64_t fee_ppm, int64_t min_fee_milli) {
+    int64_t fee = (gross_milli * fee_ppm + 500000LL) / 1000000LL;
+    return fee > min_fee_milli ? fee : min_fee_milli;
+}
+
+static inline int64_t fee_floor_twd_milli(int64_t gross_milli, int64_t fee_ppm, int64_t min_fee_milli) {
+    int64_t fee_twd = (gross_milli * fee_ppm) / 1000000000LL;
+    int64_t fee_milli = fee_twd * 1000LL;
+    return fee_milli > min_fee_milli ? fee_milli : min_fee_milli;
+}
+
+static inline int64_t tax_floor_twd_milli(int64_t gross_milli, int64_t tax_ppm) {
+    int64_t tax_twd = (gross_milli * tax_ppm) / 1000000000LL;
+    return tax_twd * 1000LL;
+}
+
+static inline int64_t economic_fee_milli(int64_t gross_milli, int64_t fee_ppm, int64_t min_fee_milli, int floor_twd_mode) {
+    return floor_twd_mode
+        ? fee_floor_twd_milli(gross_milli, fee_ppm, min_fee_milli)
+        : fee_nearest_milli(gross_milli, fee_ppm, min_fee_milli);
+}
+
+static int qty_is_valid_exact(
+    int64_t qty,
+    int64_t buy_price_milli,
+    int64_t stop_price_milli,
+    int64_t cap_milli,
+    int64_t max_risk_milli,
+    int64_t max_position_cap_milli,
+    int64_t buy_fee_ppm,
+    int64_t sell_fee_ppm,
+    int64_t tax_ppm,
+    int64_t min_fee_milli,
+    int floor_twd_mode,
+    int64_t broker_fee_ppm,
+    int64_t broker_min_fee_milli
+) {
+    if (qty <= 0) return 0;
+    const int64_t gross_buy = buy_price_milli * qty;
+    const int64_t buy_fee = economic_fee_milli(gross_buy, buy_fee_ppm, min_fee_milli, floor_twd_mode);
+    const int64_t broker_buy_fee = fee_floor_twd_milli(gross_buy, broker_fee_ppm, broker_min_fee_milli);
+    const int64_t net_buy_total = gross_buy + buy_fee;
+    const int64_t cash_buy_total = gross_buy + broker_buy_fee;
+
+    const int64_t gross_sell = stop_price_milli * qty;
+    const int64_t sell_fee = economic_fee_milli(gross_sell, sell_fee_ppm, min_fee_milli, floor_twd_mode);
+    const int64_t tax = tax_floor_twd_milli(gross_sell, tax_ppm);
+    const int64_t net_sell_total = gross_sell - sell_fee - tax;
+    const int64_t actual_risk = net_buy_total - net_sell_total;
+
+    return cash_buy_total <= cap_milli
+        && cash_buy_total <= max_position_cap_milli
+        && actual_risk <= max_risk_milli;
+}
+
+static PyObject *native_calc_position_size_exact(PyObject *self, PyObject *args) {
+    long long buy_price_milli_ll, stop_price_milli_ll, cap_milli_ll;
+    long long max_risk_milli_ll, max_position_cap_milli_ll;
+    long long buy_fee_ppm_ll, sell_fee_ppm_ll, tax_ppm_ll, min_fee_milli_ll;
+    int floor_twd_mode;
+    long long broker_fee_ppm_ll, broker_min_fee_milli_ll;
+    (void)self;
+
+    if (!PyArg_ParseTuple(
+            args,
+            "LLLLLLLLLpLL",
+            &buy_price_milli_ll,
+            &stop_price_milli_ll,
+            &cap_milli_ll,
+            &max_risk_milli_ll,
+            &max_position_cap_milli_ll,
+            &buy_fee_ppm_ll,
+            &sell_fee_ppm_ll,
+            &tax_ppm_ll,
+            &min_fee_milli_ll,
+            &floor_twd_mode,
+            &broker_fee_ppm_ll,
+            &broker_min_fee_milli_ll)) {
+        return NULL;
+    }
+
+    const int64_t buy_price_milli = (int64_t)buy_price_milli_ll;
+    const int64_t stop_price_milli = (int64_t)stop_price_milli_ll;
+    const int64_t cap_milli = (int64_t)cap_milli_ll;
+    const int64_t max_risk_milli = (int64_t)max_risk_milli_ll;
+    const int64_t max_position_cap_milli = (int64_t)max_position_cap_milli_ll;
+    const int64_t buy_fee_ppm = (int64_t)buy_fee_ppm_ll;
+    const int64_t sell_fee_ppm = (int64_t)sell_fee_ppm_ll;
+    const int64_t tax_ppm = (int64_t)tax_ppm_ll;
+    const int64_t min_fee_milli = (int64_t)min_fee_milli_ll;
+    const int64_t broker_fee_ppm = (int64_t)broker_fee_ppm_ll;
+    const int64_t broker_min_fee_milli = (int64_t)broker_min_fee_milli_ll;
+
+    if (buy_price_milli <= 0 || stop_price_milli <= 0 || cap_milli <= 0 || max_risk_milli < 0 || max_position_cap_milli <= 0) {
+        return PyLong_FromLong(0);
+    }
+
+    const int64_t est_buy_fee_per_share = buy_fee_ppm <= 0
+        ? 0
+        : (buy_price_milli * buy_fee_ppm + 999999LL) / 1000000LL;
+    const int64_t combined_sell_ppm = sell_fee_ppm + tax_ppm;
+    const int64_t est_sell_cost_per_share = combined_sell_ppm <= 0
+        ? 0
+        : (stop_price_milli * combined_sell_ppm + 999999LL) / 1000000LL;
+    const int64_t est_entry_unit = buy_price_milli + est_buy_fee_per_share;
+    const int64_t est_exit_unit = stop_price_milli - est_sell_cost_per_share;
+    const int64_t risk_per_share = est_entry_unit - est_exit_unit;
+    if (risk_per_share <= 0 || est_entry_unit <= 0) {
+        return PyLong_FromLong(0);
+    }
+
+    int64_t q_cap = cap_milli / est_entry_unit;
+    int64_t q_risk = max_risk_milli / risk_per_share;
+    int64_t q_pos = max_position_cap_milli / est_entry_unit;
+    int64_t qty = q_cap < q_risk ? q_cap : q_risk;
+    if (q_pos < qty) qty = q_pos;
+    if (qty <= 0) return PyLong_FromLong(0);
+
+    if (qty_is_valid_exact(
+            qty, buy_price_milli, stop_price_milli, cap_milli, max_risk_milli,
+            max_position_cap_milli, buy_fee_ppm, sell_fee_ppm, tax_ppm,
+            min_fee_milli, floor_twd_mode, broker_fee_ppm, broker_min_fee_milli)) {
+        return PyLong_FromLongLong((long long)qty);
+    }
+
+    int64_t probe_qty = qty;
+    for (int i = 0; i < 8; ++i) {
+        probe_qty -= 1;
+        if (probe_qty <= 0) return PyLong_FromLong(0);
+        if (qty_is_valid_exact(
+                probe_qty, buy_price_milli, stop_price_milli, cap_milli, max_risk_milli,
+                max_position_cap_milli, buy_fee_ppm, sell_fee_ppm, tax_ppm,
+                min_fee_milli, floor_twd_mode, broker_fee_ppm, broker_min_fee_milli)) {
+            return PyLong_FromLongLong((long long)probe_qty);
+        }
+    }
+
+    int64_t lo = 0;
+    int64_t hi = probe_qty - 1;
+    while (lo < hi) {
+        int64_t mid = (lo + hi + 1) / 2;
+        if (qty_is_valid_exact(
+                mid, buy_price_milli, stop_price_milli, cap_milli, max_risk_milli,
+                max_position_cap_milli, buy_fee_ppm, sell_fee_ppm, tax_ppm,
+                min_fee_milli, floor_twd_mode, broker_fee_ppm, broker_min_fee_milli)) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    return PyLong_FromLongLong((long long)lo);
+}
+
+static PyMethodDef NativeOptimizerMethods[] = {
+    {
+        "scan_position_span",
+        native_scan_position_span,
+        METH_VARARGS,
+        "Scan a no-event optimizer position span and return the first bar that requires canonical Python handling."
+    },
+    {
+        "calc_position_size_exact",
+        native_calc_position_size_exact,
+        METH_VARARGS,
+        "Compute canonical exact-accounting position size using integer milli/ppm arithmetic."
+    },
+    {NULL, NULL, 0, NULL}
+};
+
+static struct PyModuleDef nativeoptimizermodule = {
+    PyModuleDef_HEAD_INIT,
+    "_native_optimizer_hotpath",
+    "Native optimizer-only position-management fast path.",
+    -1,
+    NativeOptimizerMethods
+};
+
+PyMODINIT_FUNC PyInit__native_optimizer_hotpath(void) {
+    return PyModule_Create(&nativeoptimizermodule);
+}

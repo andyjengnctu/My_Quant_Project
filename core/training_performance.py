@@ -10,6 +10,7 @@ import os
 
 from config.training_performance_policy import (
     OPTIMIZER_COMPILED_SIGNAL_KERNELS,
+    OPTIMIZER_NATIVE_HOTPATH_KERNELS,
     OPTIMIZER_FEATURE_BANK_MAX_ITEMS,
     OPTIMIZER_LOCAL_MIN_DEPENDENCY_STATS_ENABLED,
     OPTIMIZER_LOCAL_MIN_PORTFOLIO_DEPENDENCY_ORDER,
@@ -125,6 +126,14 @@ def is_optimizer_compiled_signal_kernels_enabled(environ=None) -> bool:
     return _resolve_env_permissive_bool(
         "OPTIMIZER_COMPILED_SIGNAL_KERNELS",
         config_default=OPTIMIZER_COMPILED_SIGNAL_KERNELS,
+        environ=environ,
+    )
+
+
+def is_optimizer_native_hotpath_kernels_enabled(environ=None) -> bool:
+    return _resolve_env_permissive_bool(
+        "OPTIMIZER_NATIVE_HOTPATH_KERNELS",
+        config_default=OPTIMIZER_NATIVE_HOTPATH_KERNELS,
         environ=environ,
     )
 
@@ -470,6 +479,7 @@ def build_optimizer_outer_rolling_env_defaults(fold_count: int) -> dict[str, str
         "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS": str(resolve_optimizer_rolling_parallel_prep_cache_max_items_default()),
         "OPTIMIZER_FEATURE_BANK_MAX_ITEMS": str(resolve_optimizer_feature_bank_max_items_default()),
         "OPTIMIZER_COMPILED_SIGNAL_KERNELS": "1" if is_optimizer_compiled_signal_kernels_enabled() else "0",
+        "OPTIMIZER_NATIVE_HOTPATH_KERNELS": "1" if is_optimizer_native_hotpath_kernels_enabled() else "0",
     }
 
 def build_training_performance_policy_snapshot(fold_count=None, seed_ensemble_size=None):
@@ -483,6 +493,7 @@ def build_training_performance_policy_snapshot(fold_count=None, seed_ensemble_si
         "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS": resolve_optimizer_rolling_parallel_prep_cache_max_items_default(),
         "OPTIMIZER_FEATURE_BANK_MAX_ITEMS": resolve_optimizer_feature_bank_max_items_default(),
         "OPTIMIZER_COMPILED_SIGNAL_KERNELS": is_optimizer_compiled_signal_kernels_enabled(),
+        "OPTIMIZER_NATIVE_HOTPATH_KERNELS": is_optimizer_native_hotpath_kernels_enabled(),
         "OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS": resolve_optimizer_single_fold_search_parallel_trials_default(),
         "OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH": is_optimizer_single_fold_tpe_parallel_search_allowed_default(),
         "OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_WORKERS": resolve_optimizer_single_fold_local_min_parallel_workers_default(),

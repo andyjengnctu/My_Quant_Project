@@ -1,5 +1,13 @@
 import numpy as np
 
+from core.training_performance import is_optimizer_native_hotpath_kernels_enabled
+
+from core.native_optimizer_hotpath import scan_position_span as _native_scan_position_span
+
+_NATIVE_POSITION_SCAN_ENABLED = bool(
+    _native_scan_position_span is not None and is_optimizer_native_hotpath_kernels_enabled()
+)
+
 from core.backtest_finalize import build_backtest_stats, finalize_open_position_at_end
 from core.breakout_reentry import create_breakout_reentry_signal_state, create_breakout_reentry_watch_state
 from core.capital_policy import resolve_scanner_live_capital, resolve_single_backtest_sizing_capital
@@ -134,13 +142,44 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
     C = df['Close'].to_numpy(dtype=np.float64, copy=False)
     O = df['Open'].to_numpy(dtype=np.float64, copy=False)
     V = df['Volume'].to_numpy(dtype=np.float64, copy=False)
-    # (AI註: backtest hot loop materializes Timestamp objects once; repeated DatetimeIndex[j] boxing was a measured CPU hotspot.)
-    Dates = df.index.tolist()
+    # AI註: immutable raw-cache DataFrames are reused across optimizer trials.
+    # Cache the already-materialized Timestamp tuple on the DataFrame so each
+    # trial does not re-box the same DatetimeIndex in Python.
+    Dates = df.attrs.get("_optimizer_backtest_dates")
+    if Dates is None or len(Dates) != len(df.index):
+        Dates = tuple(df.index.tolist())
+        df.attrs["_optimizer_backtest_dates"] = Dates
 
     if precomputed_signals is None:
         ATR_main, buyCondition, sellCondition, buy_limits = generate_signals(df, params, ticker=resolved_ticker)
     else:
         ATR_main, buyCondition, sellCondition, buy_limits = unpack_precomputed_signals(precomputed_signals)
+
+    native_sell_flags = None
+    native_month_end_exclusive = None
+    if _NATIVE_POSITION_SCAN_ENABLED and not collect_stats and not return_logs:
+        candidate_sell_flags = np.asarray(sellCondition, dtype=np.bool_)
+        candidate_atr = np.asarray(ATR_main, dtype=np.float64)
+        if (
+            H.flags.c_contiguous
+            and L.flags.c_contiguous
+            and candidate_atr.flags.c_contiguous
+            and candidate_sell_flags.flags.c_contiguous
+        ):
+            native_sell_flags = candidate_sell_flags
+            ATR_main = candidate_atr
+            native_month_end_exclusive = df.attrs.get("_optimizer_backtest_month_end_exclusive")
+            if native_month_end_exclusive is None or len(native_month_end_exclusive) != len(Dates):
+                native_month_end_exclusive = np.empty(len(Dates), dtype=np.int32)
+                start = 0
+                while start < len(Dates):
+                    current_key = (int(Dates[start].year), int(Dates[start].month))
+                    end = start + 1
+                    while end < len(Dates) and (int(Dates[end].year), int(Dates[end].month)) == current_key:
+                        end += 1
+                    native_month_end_exclusive[start:end] = end
+                    start = end
+                df.attrs["_optimizer_backtest_month_end_exclusive"] = native_month_end_exclusive
 
     position = {'qty': 0}
     active_extended_signal = None
@@ -242,6 +281,45 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         if pos_start_of_current_bar > 0:
             if collect_stats:
                 total_bars_held += 1
+
+            # AI註: Optimizer no-log PIT mode can batch consecutive active-position
+            # bars in native C.  The kernel never executes a sell: it stops before
+            # the first indicator/STOP/TP/boundary bar, so canonical Python still
+            # owns every actual transition and exact-accounting side effect.
+            if (
+                native_sell_flags is not None
+                and native_month_end_exclusive is not None
+                and position.get("pending_exit_action") is None
+            ):
+                security_profile = position.get("security_profile")
+                tick_profile = security_profile.get("tick_profile") if isinstance(security_profile, dict) else None
+                if tick_profile in {"stock_six_tier", "fund_two_tier"}:
+                    span_end = int(native_month_end_exclusive[j])
+                    native_result = _native_scan_position_span(
+                        H,
+                        L,
+                        ATR_main,
+                        native_sell_flags,
+                        int(j),
+                        int(span_end),
+                        int(position.get("highest_high_since_entry_milli", position["entry_fill_price_milli"])),
+                        int(position["initial_stop_milli"]),
+                        int(position.get("trailing_stop_milli", 0)),
+                        int(position["tp_half_milli"]),
+                        int(position["qty"]),
+                        bool(position.get("sold_half", False)),
+                        float(params.atr_times_trail),
+                        float(params.tp_percent),
+                        tick_profile == "fund_two_tier",
+                    )
+                    next_j, highest_high_milli, trailing_stop_milli, sl_milli = native_result
+                    if int(next_j) > j:
+                        position["highest_high_since_entry_milli"] = int(highest_high_milli)
+                        position["trailing_stop_milli"] = int(trailing_stop_milli)
+                        position["sl_milli"] = int(sl_milli)
+                        j = int(next_j)
+                        continue
+
             position, freed_cash_milli, _pnl_realized_milli, events = execute_bar_step(
                 position,
                 ATR_main[j - 1],

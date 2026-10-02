@@ -4,6 +4,7 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
+from core import backtest_core as backtest_core_module
 from core.backtest_finalize import finalize_open_position_at_end
 from core.config import V16StrategyParams
 from core.entry_plans import build_cash_capped_entry_plan, build_position_from_entry_fill
@@ -50,6 +51,8 @@ from core.portfolio_stats import (
 )
 from core.portfolio_exits import closeout_open_positions
 from core.position_step import SETTLEMENT_BASIS_BROKER_CASH, SETTLEMENT_BASIS_LEDGER_NET, execute_bar_step
+from core import price_utils as price_utils_module
+from core.native_optimizer_hotpath import is_native_optimizer_hotpath_available
 from core.price_utils import (
     adjust_long_buy_limit,
     adjust_long_sell_fill_price,
@@ -91,12 +94,30 @@ def validate_price_utils_unit_case(_base_params):
     check("position_size_entry_cost_respects_cap", True, entry_cost <= 10_000.0)
     check("position_size_actual_risk_respects_limit", True, actual_risk <= 200.0 + 1e-9)
     check("invalid_stop_returns_zero_qty", 0, calc_position_size(100.0, 101.0, 10_000.0, 0.02, params))
+
+    # The native extension is optional at formal-test time.  When it is built,
+    # require exact parity with the canonical Python sizing path; when it is
+    # absent, require the Python fallback to remain fully operational.
+    native_available = is_native_optimizer_hotpath_available()
+    with patch.object(price_utils_module, "_NATIVE_HOTPATH_ENABLED", False):
+        reference_qty = price_utils_module.calc_position_size(
+            100.0, 95.0, 10_000.0, 0.02, params, ticker="2330", trade_date="2026-01-02"
+        )
+    if native_available:
+        with patch.object(price_utils_module, "_NATIVE_HOTPATH_ENABLED", True):
+            native_qty = price_utils_module.calc_position_size(
+                100.0, 95.0, 10_000.0, 0.02, params, ticker="2330", trade_date="2026-01-02"
+            )
+        check("native_position_size_matches_python_reference_exactly", reference_qty, native_qty)
+    else:
+        check("native_hotpath_optional_python_fallback_operational", reference_qty, sized_qty)
     check("half_take_profit_qty_for_odd_lot", 1, calc_half_take_profit_sell_qty(3, 0.5))
     check("half_take_profit_qty_blocks_full_liquidation", 0, calc_half_take_profit_sell_qty(1, 0.5))
     check("can_execute_half_tp_false_for_single_share", False, can_execute_half_take_profit(1, 0.5))
     check("can_execute_half_tp_true_for_three_shares", True, can_execute_half_take_profit(3, 0.5))
 
     summary["checked_qty"] = sized_qty
+    summary["native_hotpath_available"] = bool(native_available)
     return results, summary
 
 
@@ -299,6 +320,24 @@ def _run_compiled_signal_equivalence_path(df, params, *, compiled_enabled):
     }
 
 
+def _run_native_backtest_equivalence_path(df, params, *, native_enabled):
+    with (
+        patch.object(backtest_core_module, "_NATIVE_POSITION_SCAN_ENABLED", bool(native_enabled)),
+        patch.object(price_utils_module, "_NATIVE_HOTPATH_ENABLED", bool(native_enabled)),
+    ):
+        dynamic_data, _logs, pit_stats_index = prep_optimizer_stock_data_bundle(
+            df,
+            params,
+            ticker="2330",
+            include_trade_logs=False,
+            include_pit_stats_index=True,
+        )
+    return {
+        "dynamic_data": dynamic_data,
+        "pit_stats_index": pit_stats_index,
+    }
+
+
 def validate_signal_utils_unit_case(_base_params):
     case_id = "UNIT_SIGNAL_UTILS"
     results = []
@@ -425,6 +464,41 @@ def validate_signal_utils_unit_case(_base_params):
         tol=0.0,
     )
 
+    native_hotpath_available = is_native_optimizer_hotpath_available()
+    if native_hotpath_available:
+        native_reference = _run_native_backtest_equivalence_path(
+            equivalence_df,
+            equivalence_params,
+            native_enabled=False,
+        )
+        native_path = _run_native_backtest_equivalence_path(
+            equivalence_df,
+            equivalence_params,
+            native_enabled=True,
+        )
+        add_check(
+            results,
+            "unit_signal_utils",
+            case_id,
+            "native_optimizer_dynamic_arrays_exact",
+            True,
+            _optimizer_bundle_arrays_exact(
+                native_reference["dynamic_data"],
+                native_path["dynamic_data"],
+            ),
+        )
+        add_check(
+            results,
+            "unit_signal_utils",
+            case_id,
+            "native_optimizer_pit_stats_index_exact",
+            True,
+            _pit_stats_index_exact(
+                native_reference["pit_stats_index"],
+                native_path["pit_stats_index"],
+            ),
+        )
+
     summary["breakout_return_pct"] = round((14.1 / 13.7 - 1.0) * 100.0, 4)
     summary["compiled_equivalence"] = {
         "native_signature_count": len(compiled_signatures),
@@ -433,6 +507,7 @@ def validate_signal_utils_unit_case(_base_params):
         "standalone_trade_count": len(compiled_path["standalone_logs"]),
         "portfolio_trade_count": int(compiled_path["portfolio_result"][2]),
         "objective_score": float(compiled_path["objective_score"]),
+        "native_hotpath_available": bool(native_hotpath_available),
     }
     return results, summary
 

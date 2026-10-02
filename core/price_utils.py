@@ -4,6 +4,15 @@ from functools import lru_cache
 import numpy as np
 import pandas as pd
 
+from config.broker_accounting import BROKER_FEE_RATE, BROKER_MIN_FEE_TWD
+from core.training_performance import is_optimizer_native_hotpath_kernels_enabled
+
+from core.native_optimizer_hotpath import calc_position_size_exact as _native_calc_position_size_exact
+
+_NATIVE_HOTPATH_ENABLED = bool(
+    _native_calc_position_size_exact is not None and is_optimizer_native_hotpath_kernels_enabled()
+)
+
 from core.capital_policy import resolve_scanner_live_capital
 from core.order_lot_policy import apply_board_lot_preferred_qty
 from core.exact_accounting import (
@@ -30,6 +39,9 @@ from core.exact_accounting import (
     resolve_sell_tax_ppm,
     round_price_to_tick_milli,
 )
+
+_NATIVE_BROKER_FEE_PPM = rate_to_ppm(BROKER_FEE_RATE)
+_NATIVE_BROKER_MIN_FEE_MILLI = money_to_milli(BROKER_MIN_FEE_TWD)
 
 
 def tv_round(number):
@@ -192,6 +204,24 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params, ticker=None, sec
     buy_fee_ppm = rate_to_ppm(params.buy_fee)
     sell_fee_ppm = rate_to_ppm(params.sell_fee)
     tax_ppm = resolve_sell_tax_ppm(params, ticker=ticker, security_profile=security_profile, trade_date=trade_date)
+
+    if _NATIVE_HOTPATH_ENABLED:
+        charge_rounding_mode = str(getattr(params, "charge_rounding_mode", "nearest_milli") or "nearest_milli")
+        if charge_rounding_mode in {"nearest_milli", "floor_twd"}:
+            return int(_native_calc_position_size_exact(
+                int(buy_price_milli),
+                int(stop_price_milli),
+                int(cap_milli),
+                int(max_risk_milli),
+                int(max_position_cap_milli),
+                int(buy_fee_ppm),
+                int(sell_fee_ppm),
+                int(tax_ppm),
+                int(money_to_milli(params.min_fee)),
+                charge_rounding_mode == "floor_twd",
+                int(_NATIVE_BROKER_FEE_PPM),
+                int(_NATIVE_BROKER_MIN_FEE_MILLI),
+            ))
 
     est_buy_fee_per_share_milli = 0 if buy_fee_ppm <= 0 else (buy_price_milli * buy_fee_ppm + 999_999) // 1_000_000
     est_sell_cost_per_share_milli = 0 if (sell_fee_ppm + tax_ppm) <= 0 else ((stop_price_milli * (sell_fee_ppm + tax_ppm) + 999_999) // 1_000_000)

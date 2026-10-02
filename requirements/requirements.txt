@@ -14,3 +14,4 @@ einops
 huggingface-hub
 safetensors
 pyarrow
+setuptools
