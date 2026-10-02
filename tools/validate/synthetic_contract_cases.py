@@ -1699,8 +1699,14 @@ def validate_single_ticker_compounding_parity_contract_case(base_params):
 
     # This parity case has fixed no-fee compounding oracles.  Keep the broker-fee
     # override local to the synthetic so production Research/Trading continue to
-    # consume the canonical broker settlement SSOT unchanged.
-    with patch("core.exact_accounting.calc_broker_fee_milli", return_value=0):
+    # consume the canonical broker settlement SSOT unchanged.  The optional
+    # native position-sizing fast path consumes production broker-fee inputs
+    # directly, so it must be disabled only for this mocked-accounting fixture;
+    # otherwise the fixture would mix two accounting policies in one oracle.
+    with (
+        patch("core.exact_accounting.calc_broker_fee_milli", return_value=0),
+        patch("core.price_utils._NATIVE_HOTPATH_ENABLED", False),
+    ):
         for scenario in scenarios:
             single_stats, standalone_logs = run_v16_backtest(
                 scenario["df"].copy(),

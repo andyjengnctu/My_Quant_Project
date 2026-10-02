@@ -253,8 +253,14 @@ def validate_synthetic_single_backtest_uses_compounding_capital_case(base_params
     # This case isolates compounding mechanics.  Production Research still uses
     # the canonical broker-cash fee; the synthetic explicitly removes that fee
     # so its fixed oracle remains a pure compounding contract rather than an
-    # accounting-policy test.
-    with patch("core.exact_accounting.calc_broker_fee_milli", return_value=0):
+    # accounting-policy test.  The optional native position-sizing kernel uses
+    # production broker-fee inputs directly, so disable only that sizing fast
+    # path while this synthetic monkeypatch is active; native backtest span
+    # scanning remains enabled and continues to exercise its equivalence path.
+    with (
+        patch("core.exact_accounting.calc_broker_fee_milli", return_value=0),
+        patch("core.price_utils._NATIVE_HOTPATH_ENABLED", False),
+    ):
         stats = run_v16_backtest(df, params, precomputed_signals=precomputed_signals)
 
     check("trade_count_after_two_round_trips", 2, int(stats["trade_count"]))
