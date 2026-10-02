@@ -3911,7 +3911,28 @@ def validate_price_utils_array_tick_normalization_contract_case(_base_params):
     add_check(results, "meta_contract", case_id, "position_step_exit_path_uses_position_ticker", True, position_step_exit_uses_position_ticker)
     add_check(results, "meta_contract", case_id, "portfolio_rotation_exit_path_uses_weakest_ticker", True, 'adjust_long_sell_fill_price(w_open, ticker=weakest_ticker)' in portfolio_exits_source)
     add_check(results, "meta_contract", case_id, "portfolio_rotation_exit_path_has_no_undefined_ticker_reference", False, 'adjust_long_sell_fill_price(w_open, ticker=ticker)' in portfolio_exits_source)
-    add_check(results, "meta_contract", case_id, "price_utils_position_size_routes_tax_schedule_by_security_profile", True, 'tax_ppm = resolve_sell_tax_ppm(params, ticker=ticker, security_profile=security_profile, trade_date=trade_date)' in price_source)
+    position_size_node = price_functions.get("calc_position_size")
+    position_size_routes_tax_schedule = False
+    if position_size_node is not None:
+        for node in ast.walk(position_size_node):
+            if not isinstance(node, ast.Call):
+                continue
+            if isinstance(node.func, ast.Name):
+                called_name = node.func.id
+            elif isinstance(node.func, ast.Attribute):
+                called_name = node.func.attr
+            else:
+                called_name = ""
+            if called_name not in {"resolve_sell_tax_ppm", "resolve_fee_schedule_tuple"}:
+                continue
+            keywords = {kw.arg: kw.value for kw in node.keywords if kw.arg}
+            if all(
+                isinstance(keywords.get(name), ast.Name) and keywords[name].id == name
+                for name in ("ticker", "security_profile", "trade_date")
+            ):
+                position_size_routes_tax_schedule = True
+                break
+    add_check(results, "meta_contract", case_id, "price_utils_position_size_routes_tax_schedule_by_security_profile", True, position_size_routes_tax_schedule)
     add_check(results, "meta_contract", case_id, "backtest_core_floating_sell_ledger_threads_trade_date_and_profile", True, "trade_date=Dates[j]" in backtest_source and "security_profile=position.get('security_profile')" in backtest_source)
     add_check(results, "meta_contract", case_id, "portfolio_rotation_exit_path_threads_trade_date_and_profile", True, 'trade_date=today' in portfolio_exits_source and "security_profile=pos.get('security_profile')" in portfolio_exits_source)
     add_check(results, "meta_contract", case_id, "price_utils_array_rounding_has_no_legacy_float_ratio_path", False, "ratios = valid_prices / ticks" in price_source)

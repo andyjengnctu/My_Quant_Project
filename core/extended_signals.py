@@ -379,7 +379,17 @@ def should_clear_extended_signal(
 
 
 # # (AI註: 單一真理來源 - 延續候選掛單價固定使用原始 limit；shadow_price 只繼承管理線 / 失效 / 達標狀態)
-def build_extended_candidate_plan_from_signal(signal_state, sizing_capital, params, ticker=None, security_profile=None, trade_date=None):
+def build_extended_candidate_plan_from_signal(
+    signal_state,
+    sizing_capital,
+    params,
+    ticker=None,
+    security_profile=None,
+    trade_date=None,
+    *,
+    resize_to_capital=True,
+    copy_shadow_position=True,
+):
     if signal_state is None:
         return None
 
@@ -425,8 +435,10 @@ def build_extended_candidate_plan_from_signal(signal_state, sizing_capital, para
     }
     if signal_state.get("source_entry_order_id"):
         base_plan["source_entry_order_id"] = str(signal_state.get("source_entry_order_id"))
-    if shadow_position is not None:
+    if shadow_position is not None and copy_shadow_position:
         base_plan["shadow_position_state"] = clone_shadow_position(shadow_position)
+    if not resize_to_capital:
+        return base_plan
     return resize_candidate_plan_to_capital(base_plan, sizing_capital, params)
 
 

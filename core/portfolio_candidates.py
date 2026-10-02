@@ -21,7 +21,9 @@ from core.trade_plans import (
     clone_shadow_position,
     build_normal_candidate_plan,
     create_signal_tracking_state,
+    has_extended_signal_orderable_context_for_day,
     is_extended_signal_orderable_for_day,
+    resize_candidate_plan_to_capital,
     resolve_signal_tracking_params,
 )
 from core.extended_signals import (
@@ -512,6 +514,11 @@ def _collect_extended_candidates(
 
         y_close = get_fast_close(fast_df, pos=y_pos)
         security_profile = get_fast_security_profile(fast_df)
+        # AI註: training replay normally only needs orderable rows. Build the stable
+        # extended-plan levels first, but defer expensive exact position sizing until
+        # the existing canonical orderability-context check says today's fixed limit
+        # can actually be placed. collect_all_candidates keeps the old full diagnostic
+        # path and still sizes non-orderable rows.
         plan_started = time.perf_counter() if profile_enabled else None
         candidate_plan = build_extended_candidate_plan_from_signal(
             signal_state,
@@ -520,6 +527,8 @@ def _collect_extended_candidates(
             ticker=ticker,
             security_profile=security_profile,
             trade_date=today,
+            resize_to_capital=False,
+            copy_shadow_position=False,
         )
         if profile_enabled:
             _candidate_profile_add(profile_stats, "portfolio_candidate_plan_sec", plan_started)
@@ -537,14 +546,29 @@ def _collect_extended_candidates(
         )
         if profile_enabled:
             _candidate_profile_add(profile_stats, "portfolio_candidate_quality_rank_sec", quality_started)
-        today_orderable = is_extended_signal_orderable_for_day(
+
+        orderable_context = has_extended_signal_orderable_context_for_day(
             signal_state,
             candidate_plan,
             y_close,
             ticker=ticker,
         )
+        if (not collect_all_candidates) and (not bool(orderable_context)):
+            continue
 
-        if (not collect_all_candidates) and (not bool(today_orderable)):
+        resize_started = time.perf_counter() if profile_enabled else None
+        candidate_plan = resize_candidate_plan_to_capital(
+            candidate_plan,
+            sizing_equity,
+            candidate_params,
+        )
+        if profile_enabled:
+            _candidate_profile_add(profile_stats, "portfolio_candidate_plan_sec", resize_started)
+        if candidate_plan is None:
+            continue
+
+        today_orderable = bool(orderable_context and candidate_plan.get("qty", 0) > 0)
+        if (not collect_all_candidates) and (not today_orderable):
             continue
 
         row_started = time.perf_counter() if profile_enabled else None
@@ -576,7 +600,7 @@ def _collect_extended_candidates(
             continuation_completion_barrier=candidate_plan.get('continuation_completion_barrier'),
             entry_ref_price=candidate_plan.get('entry_ref_price'),
             shadow_position_state=candidate_plan.get('shadow_position_state'),
-            shadow_position_state_is_snapshot=True,
+            shadow_position_state_is_snapshot=(candidate_plan.get('shadow_position_state') is not None),
             max_qty=candidate_plan.get('max_qty'),
             prev_close=y_close,
             quality_rank=quality_rank,
