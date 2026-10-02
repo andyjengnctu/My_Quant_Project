@@ -104,6 +104,7 @@ from services.optimizer.outer_rolling_progress import (
     _collect_seed_progress_phase_metrics,
     _count_local_min_completed_from_progress,
     _count_local_min_completed_neighbors_from_progress,
+    _effective_resume_total_elapsed,
     _format_parallel_fold_progress_line,
     _format_seed_ensemble_progress_line,
     _optimizer_resource_usage_suffix,
@@ -115,6 +116,7 @@ from services.optimizer.outer_rolling_progress import (
     _safe_progress_ts,
     _seed_progress_context_key,
     _write_parallel_fold_progress_event,
+    build_optimizer_study_progress_snapshot,
     build_optimizer_seed_ensemble_live_lines,
     format_optimizer_final_performance_summary,
     format_optimizer_seed_ensemble_progress_header,
@@ -1056,6 +1058,17 @@ def _run_outer_rolling_oos_fold_ensemble_task(task: dict) -> dict:
     ]
 
     def _progress_header(board: OptimizerSeedEnsembleProgressBoard) -> str:
+        search_wall_elapsed_sec = board.get_search_wall_elapsed_sec()
+        local_min_wall_elapsed_sec = (
+            board.get_local_min_wall_elapsed_sec() if show_local_min else None
+        )
+        replay_wall_elapsed_sec = board.get_replay_wall_elapsed_sec()
+        total_elapsed_sec = _effective_resume_total_elapsed(
+            max(0.0, time.perf_counter() - started),
+            search_wall_elapsed_sec=search_wall_elapsed_sec,
+            local_min_wall_elapsed_sec=local_min_wall_elapsed_sec,
+            replay_wall_elapsed_sec=replay_wall_elapsed_sec,
+        )
         return format_optimizer_seed_ensemble_progress_header(
             folds=1,
             seeds=len(seeds),
@@ -1069,17 +1082,15 @@ def _run_outer_rolling_oos_fold_ensemble_task(task: dict) -> dict:
             backend=str(parallel_backend),
             completed_folds=board.get_completed_fold_count(),
             pending_folds=max(0, 1 - board.get_completed_fold_count()),
-            total_elapsed_sec=max(0.0, time.perf_counter() - started),
+            total_elapsed_sec=total_elapsed_sec,
             completed_trials=board.get_completed_trial_count(),
-            search_wall_elapsed_sec=board.get_search_wall_elapsed_sec(),
+            search_wall_elapsed_sec=search_wall_elapsed_sec,
             completed_local_min_trials=(
                 board.get_completed_local_min_trial_count() if show_local_min else 0
             ),
-            local_min_wall_elapsed_sec=(
-                board.get_local_min_wall_elapsed_sec() if show_local_min else None
-            ),
+            local_min_wall_elapsed_sec=local_min_wall_elapsed_sec,
             completed_replays=board.get_completed_replay_count(),
-            replay_wall_elapsed_sec=board.get_replay_wall_elapsed_sec(),
+            replay_wall_elapsed_sec=replay_wall_elapsed_sec,
         )
 
     progress_board = OptimizerSeedEnsembleProgressBoard(
@@ -1529,6 +1540,9 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             ensure_study_effective_policy_compatible(study=study, walk_forward_policy=fold_policy)
             _ensure_study_runtime_identity_compatible(study, session)
             study_create_sec = max(0.0, time.perf_counter() - study_started)
+            resume_progress = build_optimizer_study_progress_snapshot(
+                study, best_trial_resolver=session.get_best_completed_trial_or_none
+            )
             seed_context = _seed_progress_context_from_task(task)
             progress = _FoldLogSearchProgress(
                 fold_idx=fold_idx,
@@ -1538,6 +1552,8 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 selection_end=selection_end,
                 total_trials=int(refit_trials),
                 seed_context=seed_context,
+                initial_best_score=resume_progress.get("best_base_score"),
+                historical_search_intervals=resume_progress.get("search_active_intervals"),
             )
             existing_trials, remaining_trials = _remaining_optimizer_trials(
                 study, int(refit_trials)
@@ -1558,17 +1574,22 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             optimize_started = time.perf_counter()
             search_parallel_trials = _resolve_single_fold_search_parallel_trials(os.environ, sampler_kind=sampler_kind)
             if remaining_trials > 0:
+                progress.start_search_session()
                 study.optimize(
                     session.objective,
                     n_trials=int(remaining_trials),
                     n_jobs=int(search_parallel_trials),
                     callbacks=[progress.callback(session)],
                 )
-            search_done_ts = time.time()
-            optimize_sec = max(0.0, time.perf_counter() - optimize_started)
+            current_optimize_sec = max(0.0, time.perf_counter() - optimize_started)
+            optimize_sec = float(
+                float(resume_progress.get("search_active_elapsed_sec", 0.0) or 0.0)
+                + current_optimize_sec
+            )
             trial_count = len(list(getattr(study, "trials", []) or []))
             session.current_session_trial = int(trial_count or refit_trials)
             progress.done(int(session.current_session_trial))
+            search_done_ts = progress.get_search_last_done_ts() or time.time()
             best_base_score = None if progress.best_score == float("-inf") else float(progress.best_score)
             best_base_text = format_optimizer_score_for_display(best_base_score, decimals=3)
             print(f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | optimizer search DONE | best_base_score={best_base_text} | elapsed={_fmt_duration(optimize_sec)}", flush=True)
@@ -1598,8 +1619,10 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                     best_base_score=best_base_score,
                     status=str(data.get("status") or "RUN"),
                     elapsed_sec=max(0.0, time.perf_counter() - local_started),
-                    search_started_ts=float(progress.stage_start_ts),
+                    search_started_ts=progress.get_search_started_ts(),
                     search_last_done_ts=search_done_ts,
+                    search_active_intervals=progress.get_search_active_intervals(),
+                    search_active_elapsed_sec=progress.get_search_active_elapsed_sec(),
                     local_min_started_ts=data.get("local_min_started_ts") or local_started_ts,
                     local_min_completed=int(data.get("local_min_completed", 0) or 0),
                     local_min_neighbor_completed=int(data.get("local_min_neighbor_completed", 0) or 0),
@@ -1656,8 +1679,10 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 best_local_min_score=best_local_min_score,
                 status="DONE",
                 elapsed_sec=local_elapsed,
-                search_started_ts=float(progress.stage_start_ts),
+                search_started_ts=progress.get_search_started_ts(),
                 search_last_done_ts=search_done_ts,
+                search_active_intervals=progress.get_search_active_intervals(),
+                search_active_elapsed_sec=progress.get_search_active_elapsed_sec(),
                 local_min_started_ts=local_started_ts,
                 local_min_completed=len(finalists),
                 local_min_neighbor_completed=sum(
@@ -1669,7 +1694,10 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             )
             policy_items = _build_policy_items(finalists, objective_mode=objective_mode, session=session)
             if not any(item is not None for item in policy_items.values()):
-                fold_elapsed = time.perf_counter() - fold_start
+                fold_elapsed = (
+                    time.perf_counter() - fold_start
+                    + float(resume_progress.get("search_active_elapsed_sec", 0.0) or 0.0)
+                )
                 timing_row = _build_outer_timing_row(
                     fold_idx=fold_idx,
                     fold_count=fold_count,
@@ -1736,7 +1764,10 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 best_local_min_score=best_local_min_score,
                 elapsed_sec=oos_diagnostics_sec,
             )
-            fold_elapsed = time.perf_counter() - fold_start
+            fold_elapsed = (
+                time.perf_counter() - fold_start
+                + float(resume_progress.get("search_active_elapsed_sec", 0.0) or 0.0)
+            )
             selection_period = str(selection_period)
             policy_schedules = {
                 name: _build_policy_schedule_entry(
@@ -1833,7 +1864,14 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 status="done",
                 best_base_score=best_base_score,
                 best_local_min_score=best_local_min_score,
-                elapsed_sec=fold_elapsed,
+                elapsed_sec=max(
+                    float(fold_elapsed),
+                    float(progress.get_search_active_elapsed_sec() + local_elapsed + oos_diagnostics_sec),
+                ),
+                search_started_ts=progress.get_search_started_ts(),
+                search_last_done_ts=search_done_ts,
+                search_active_intervals=progress.get_search_active_intervals(),
+                search_active_elapsed_sec=progress.get_search_active_elapsed_sec(),
             )
             return {
                 "status": "done",
@@ -2329,6 +2367,9 @@ def run_outer_rolling_oos(
             ensure_study_effective_policy_compatible(study=study, walk_forward_policy=fold_policy)
             _ensure_study_runtime_identity_compatible(study, session)
             study_create_sec = max(0.0, time.perf_counter() - study_started)
+            resume_progress = build_optimizer_study_progress_snapshot(
+                study, best_trial_resolver=session.get_best_completed_trial_or_none
+            )
             progress = _SearchProgress(
                 fold_idx=fold_idx,
                 fold_count=fold_count,
@@ -2338,6 +2379,8 @@ def run_outer_rolling_oos(
                 total_trials=config.trials_per_fold,
                 completed_results=rows,
                 overall_start=overall_start,
+                initial_best_score=resume_progress.get("best_base_score"),
+                historical_search_elapsed_sec=resume_progress.get("search_active_elapsed_sec", 0.0),
             )
             existing_trials, remaining_trials = _remaining_optimizer_trials(
                 study, int(config.trials_per_fold)
@@ -2352,13 +2395,18 @@ def run_outer_rolling_oos(
             optimize_started = time.perf_counter()
             search_parallel_trials = _resolve_single_fold_search_parallel_trials(os.environ, sampler_kind=sampler_kind)
             if remaining_trials > 0:
+                progress.start_search_session()
                 study.optimize(
                     session.objective,
                     n_trials=int(remaining_trials),
                     n_jobs=int(search_parallel_trials),
                     callbacks=[progress.callback(session)],
                 )
-            optimize_sec = max(0.0, time.perf_counter() - optimize_started)
+            current_optimize_sec = max(0.0, time.perf_counter() - optimize_started)
+            optimize_sec = float(
+                float(resume_progress.get("search_active_elapsed_sec", 0.0) or 0.0)
+                + current_optimize_sec
+            )
             progress.done(int(session.current_session_trial))
             best_base_score = None if progress.best_score == float("-inf") else float(progress.best_score)
 

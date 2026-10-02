@@ -2785,6 +2785,108 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         not compact_board.inline
         and compact_output.getvalue() == "",
     )
+
+    # Resume progress is display-only but must rehydrate persisted study truth:
+    # completed trials must not restart at zero elapsed, and best_base must not
+    # disappear merely because a new Python process opened the same study.
+    from datetime import datetime, timedelta, timezone
+    from services.optimizer.outer_rolling_progress import (
+        PARALLEL_FOLD_PROGRESS_PREFIX as _RESUME_PROGRESS_PREFIX,
+        _FoldLogSearchProgress as _ResumeFoldLogSearchProgress,
+        _collect_seed_progress_phase_metrics as _collect_resume_phase_metrics,
+        _effective_resume_total_elapsed as _resume_total_elapsed,
+        _safe_progress_json_loads as _resume_progress_json_loads,
+        build_optimizer_study_progress_snapshot as _build_resume_progress_snapshot,
+    )
+
+    resume_base = datetime(2026, 10, 1, 10, 0, 0, tzinfo=timezone.utc)
+    resume_trials = [
+        SimpleNamespace(
+            value=1.25,
+            datetime_start=resume_base,
+            datetime_complete=resume_base + timedelta(seconds=3.0),
+        ),
+        SimpleNamespace(
+            value=7.093,
+            datetime_start=resume_base + timedelta(seconds=3.2),
+            datetime_complete=resume_base + timedelta(seconds=6.2),
+        ),
+        SimpleNamespace(
+            value=0.0,
+            datetime_start=resume_base + timedelta(minutes=10),
+            datetime_complete=resume_base + timedelta(minutes=10, seconds=3.0),
+        ),
+    ]
+    resume_study = SimpleNamespace(trials=resume_trials)
+    resume_snapshot = _build_resume_progress_snapshot(
+        resume_study, best_trial_resolver=lambda study: study.trials[1]
+    )
+    check(
+        "optimizer_resume_progress_rehydrates_best_base_and_active_search_elapsed",
+        True,
+        resume_snapshot.get("completed_trials") == 3
+        and float(resume_snapshot.get("best_base_score")) == 7.093
+        and len(list(resume_snapshot.get("search_active_intervals") or [])) == 2
+        and float(resume_snapshot.get("search_active_elapsed_sec", 0.0)) > 9.0,
+    )
+
+    resume_progress = _ResumeFoldLogSearchProgress(
+        fold_idx=1,
+        fold_count=6,
+        oos_year=2021,
+        selection_start="2011-01-01",
+        selection_end="2020-12-31",
+        total_trials=1000,
+        seed_context={
+            "seed_ensemble_member_index": 1,
+            "seed_ensemble_member_count": 4,
+            "seed": 42,
+        },
+        initial_best_score=resume_snapshot.get("best_base_score"),
+        historical_search_intervals=resume_snapshot.get("search_active_intervals"),
+    )
+    resume_emit_output = io.StringIO()
+    with redirect_stdout(resume_emit_output):
+        resume_progress.emit(1000, force=True)
+    resume_event_line = next(
+        (
+            line
+            for line in resume_emit_output.getvalue().splitlines()
+            if line.startswith(_RESUME_PROGRESS_PREFIX)
+        ),
+        "",
+    )
+    resume_event = _resume_progress_json_loads(
+        resume_event_line.split("\t", 1)[1] if "\t" in resume_event_line else "{}"
+    )
+    check(
+        "optimizer_resume_progress_first_event_keeps_best_base_and_elapsed_instead_of_na_zero",
+        True,
+        int(resume_event.get("completed", 0) or 0) == 1000
+        and float(resume_event.get("best_base_score")) == 7.093
+        and float(resume_event.get("elapsed_sec", 0.0)) > 9.0
+        and len(list(resume_event.get("search_active_intervals") or [])) == 2,
+    )
+
+    resume_phase_metrics = _collect_resume_phase_metrics(
+        [
+            {
+                "fold_idx": 1,
+                "seed_ensemble_member_index": 1,
+                "completed": 1000,
+                "search_active_intervals": resume_snapshot.get("search_active_intervals"),
+            }
+        ]
+    )
+    check(
+        "optimizer_resume_header_uses_persisted_active_search_time_instead_of_new_process_clock",
+        True,
+        float(resume_phase_metrics.get("search_wall_elapsed_sec", 0.0)) > 9.0
+        and _resume_total_elapsed(
+            2.0, search_wall_elapsed_sec=resume_phase_metrics.get("search_wall_elapsed_sec")
+        ) > 9.0,
+    )
+
     import core.strategy_param_policy as strategy_param_policy
     disabled_profiles = {
         "synthetic_no_validation": {

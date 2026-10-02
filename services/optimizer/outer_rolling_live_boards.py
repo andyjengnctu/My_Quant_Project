@@ -28,7 +28,11 @@ from services.optimizer.outer_rolling_progress import (
     _collect_seed_progress_phase_metrics,
     _count_local_min_completed_from_progress,
     _count_local_min_completed_neighbors_from_progress,
+    _effective_resume_total_elapsed,
     _format_parallel_fold_progress_line,
+    _merge_progress_active_intervals,
+    _normalize_progress_active_intervals,
+    _progress_active_elapsed_sec,
     _read_latest_parallel_fold_seed_progresses_for_task,
     _safe_progress_float,
     _safe_progress_ts,
@@ -58,6 +62,7 @@ class OptimizerSeedEnsembleProgressBoard:
         self.completed_local_min_neighbors_by_key: dict[tuple[int, int], int] = {}
         self.search_started_ts_by_key: dict[tuple[int, int], float] = {}
         self.search_last_done_ts_by_key: dict[tuple[int, int], float] = {}
+        self.search_active_intervals_by_key: dict[tuple[int, int], list[list[float]]] = {}
         self.local_min_started_ts_by_key: dict[tuple[int, int], float] = {}
         self.local_min_last_done_ts_by_key: dict[tuple[int, int], float] = {}
         self.fold_progress_by_idx: dict[int, dict] = {}
@@ -97,6 +102,11 @@ class OptimizerSeedEnsembleProgressBoard:
             explicit_search_done = _safe_progress_ts(data)
         if explicit_search_done is not None:
             self.search_last_done_ts_by_key[key] = max(float(self.search_last_done_ts_by_key.get(key, 0.0) or 0.0), explicit_search_done)
+        active_intervals = _normalize_progress_active_intervals(data.get("search_active_intervals"))
+        if active_intervals:
+            self.search_active_intervals_by_key[key] = _merge_progress_active_intervals(
+                list(self.search_active_intervals_by_key.get(key) or []) + active_intervals
+            )
         explicit_local_start = _safe_progress_float(data, "local_min_started_ts")
         if explicit_local_start is not None:
             previous = self.local_min_started_ts_by_key.get(key)
@@ -121,6 +131,13 @@ class OptimizerSeedEnsembleProgressBoard:
         return sum(int(value or 0) for value in self.completed_local_min_trials_by_key.values())
 
     def get_search_wall_elapsed_sec(self) -> float | None:
+        active_intervals = [
+            interval
+            for intervals in self.search_active_intervals_by_key.values()
+            for interval in list(intervals or [])
+        ]
+        if active_intervals:
+            return _progress_active_elapsed_sec(active_intervals)
         if not self.search_started_ts_by_key or not self.search_last_done_ts_by_key:
             return None
         return max(0.0, max(self.search_last_done_ts_by_key.values()) - min(self.search_started_ts_by_key.values()))
@@ -328,6 +345,14 @@ class _ParallelFoldLiveBoard:
             )
             completed_trials = int(phase_metrics.get("completed_trials", 0) or 0)
             replay_metrics = _collect_parallel_fold_replay_phase_metrics(self.tasks)
+            total_elapsed = _effective_resume_total_elapsed(
+                total_elapsed,
+                search_wall_elapsed_sec=phase_metrics.get("search_wall_elapsed_sec"),
+                local_min_wall_elapsed_sec=(
+                    phase_metrics.get("local_min_wall_elapsed_sec") if show_local_min else None
+                ),
+                replay_wall_elapsed_sec=replay_metrics.get("replay_wall_elapsed_sec"),
+            )
             header = format_optimizer_seed_ensemble_progress_header(
                 folds=total_folds,
                 seeds=seed_count,

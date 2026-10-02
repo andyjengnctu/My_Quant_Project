@@ -43,6 +43,124 @@ def _safe_progress_json_loads(raw_text: str) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+# Human-progress timing only: coalesce tiny scheduler/callback gaps between
+# consecutive trials while still keeping a real process restart as a separate
+# active interval.  This does not participate in optimizer/scientific logic.
+_PROGRESS_ACTIVE_INTERVAL_MERGE_GAP_SEC = 5.0
+
+
+def _normalize_progress_active_intervals(value) -> list[list[float]]:
+    normalized: list[list[float]] = []
+    for raw in list(value or []):
+        if not isinstance(raw, (list, tuple)) or len(raw) < 2:
+            continue
+        try:
+            start = float(raw[0])
+            end = float(raw[1])
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(start) or not math.isfinite(end) or end < start:
+            continue
+        normalized.append([start, end])
+    return normalized
+
+
+def _merge_progress_active_intervals(value) -> list[list[float]]:
+    intervals = sorted(_normalize_progress_active_intervals(value), key=lambda item: (item[0], item[1]))
+    if not intervals:
+        return []
+    merged: list[list[float]] = [list(intervals[0])]
+    for start, end in intervals[1:]:
+        previous = merged[-1]
+        if start <= previous[1] + _PROGRESS_ACTIVE_INTERVAL_MERGE_GAP_SEC:
+            previous[1] = max(previous[1], end)
+        else:
+            merged.append([start, end])
+    return merged
+
+
+def _progress_active_elapsed_sec(value) -> float:
+    return float(sum(max(0.0, end - start) for start, end in _merge_progress_active_intervals(value)))
+
+
+def build_optimizer_study_progress_snapshot(study, *, best_trial_resolver=None) -> dict:
+    """Rehydrate display-only optimizer progress from an existing Optuna study.
+
+    Resume must not reset best score or elapsed search time.  Trial timestamps are
+    used only for human progress timing; they do not affect optimizer execution.
+    """
+    trials = list(getattr(study, "trials", []) or [])
+    intervals: list[list[float]] = []
+    for trial in trials:
+        started = getattr(trial, "datetime_start", None)
+        completed = getattr(trial, "datetime_complete", None)
+        if started is None or completed is None:
+            continue
+        try:
+            start_ts = float(started.timestamp())
+            end_ts = float(completed.timestamp())
+        except (AttributeError, OSError, OverflowError, TypeError, ValueError):
+            continue
+        if math.isfinite(start_ts) and math.isfinite(end_ts) and end_ts >= start_ts:
+            intervals.append([start_ts, end_ts])
+    merged_intervals = _merge_progress_active_intervals(intervals)
+
+    best_score = None
+    if callable(best_trial_resolver):
+        try:
+            best_trial = best_trial_resolver(study)
+        except (AttributeError, KeyError, RuntimeError, TypeError, ValueError):
+            best_trial = None
+        if best_trial is not None:
+            try:
+                best_score = float(best_trial.value)
+            except (AttributeError, TypeError, ValueError):
+                best_score = None
+    if best_score is None:
+        qualified_values: list[float] = []
+        for trial in trials:
+            value = getattr(trial, "value", None)
+            if value is None or not is_qualified_trial_value(value):
+                continue
+            try:
+                qualified_values.append(float(value))
+            except (TypeError, ValueError):
+                continue
+        if qualified_values:
+            best_score = max(qualified_values)
+
+    return {
+        "completed_trials": int(len(trials)),
+        "best_base_score": best_score,
+        "search_active_intervals": merged_intervals,
+        "search_active_elapsed_sec": _progress_active_elapsed_sec(merged_intervals),
+    }
+
+
+def _effective_resume_total_elapsed(
+    current_elapsed_sec: float,
+    *,
+    search_wall_elapsed_sec: float | None = None,
+    local_min_wall_elapsed_sec: float | None = None,
+    replay_wall_elapsed_sec: float | None = None,
+) -> float:
+    """Keep live-board total monotonic across process restarts.
+
+    Persisted phase timing is a lower bound for prior active work.  Taking the
+    maximum prevents a restarted process clock from resetting total to seconds
+    while avoiding double-counting phases that can overlap across parallel folds.
+    """
+    candidates = [max(0.0, float(current_elapsed_sec or 0.0))]
+    for value in (search_wall_elapsed_sec, local_min_wall_elapsed_sec, replay_wall_elapsed_sec):
+        if value is None:
+            continue
+        try:
+            candidates.append(max(0.0, float(value)))
+        except (TypeError, ValueError):
+            continue
+    return max(candidates) if candidates else 0.0
+
+
 def _write_parallel_fold_progress_event(*, stage: str, fold_idx: int, fold_count: int, oos_year: int, selection_start, selection_end, **payload) -> None:
     event = {
         "stage": str(stage),
@@ -208,6 +326,11 @@ def _merge_progress_phase_metrics(target: dict, progress: dict) -> None:
         search_end = ts
     if search_end is not None:
         target["search_last_done_ts"] = max(float(target.get("search_last_done_ts", 0.0) or 0.0), float(search_end))
+    active_intervals = _normalize_progress_active_intervals(data.get("search_active_intervals"))
+    if active_intervals:
+        target["search_active_intervals"] = _merge_progress_active_intervals(
+            list(target.get("search_active_intervals") or []) + active_intervals
+        )
     if completed > int(target.get("completed_trials", 0) or 0):
         target["completed_trials"] = int(completed)
 
@@ -248,6 +371,7 @@ def _collect_seed_progress_phase_metrics(progresses) -> dict:
     search_done: list[float] = []
     local_started: list[float] = []
     local_done: list[float] = []
+    search_active_intervals: list[list[float]] = []
     for metrics in merged_by_key.values():
         completed_trials += int(metrics.get("completed_trials", 0) or 0)
         completed_local += int(metrics.get("completed_local_min_finalists", 0) or 0)
@@ -256,12 +380,17 @@ def _collect_seed_progress_phase_metrics(progresses) -> dict:
             search_started.append(float(metrics["search_started_ts"]))
         if metrics.get("search_last_done_ts") is not None:
             search_done.append(float(metrics["search_last_done_ts"]))
+        search_active_intervals.extend(
+            _normalize_progress_active_intervals(metrics.get("search_active_intervals"))
+        )
         if metrics.get("local_min_started_ts") is not None:
             local_started.append(float(metrics["local_min_started_ts"]))
         if metrics.get("local_min_last_done_ts") is not None:
             local_done.append(float(metrics["local_min_last_done_ts"]))
     search_span = None
-    if search_started and search_done:
+    if search_active_intervals:
+        search_span = _progress_active_elapsed_sec(search_active_intervals)
+    elif search_started and search_done:
         search_span = max(0.0, max(search_done) - min(search_started))
     local_span = None
     if local_started and local_done:
@@ -765,9 +894,13 @@ def _read_latest_parallel_fold_seed_progresses(path: str) -> dict[int, dict]:
         search_dones = []
         local_starts = []
         local_dones = []
+        search_active_intervals: list[list[float]] = []
         for event in events:
             stage = str(event.get("stage") or "").upper()
             ts = _safe_progress_ts(event)
+            search_active_intervals.extend(
+                _normalize_progress_active_intervals(event.get("search_active_intervals"))
+            )
             search_start = _safe_progress_float(event, "search_started_ts")
             if search_start is not None:
                 search_starts.append(search_start)
@@ -792,6 +925,9 @@ def _read_latest_parallel_fold_seed_progresses(path: str) -> dict[int, dict]:
             payload["search_started_ts"] = min(search_starts)
         if search_dones:
             payload["search_last_done_ts"] = max(search_dones)
+        if search_active_intervals:
+            payload["search_active_intervals"] = _merge_progress_active_intervals(search_active_intervals)
+            payload["search_active_elapsed_sec"] = _progress_active_elapsed_sec(search_active_intervals)
         if local_starts:
             payload["local_min_started_ts"] = min(local_starts)
         if local_dones:
@@ -935,7 +1071,19 @@ def _seed_progress_context_from_task(task: dict) -> dict:
 
 
 class _FoldLogSearchProgress:
-    def __init__(self, *, fold_idx: int, fold_count: int, oos_year: int, selection_start, selection_end, total_trials: int, seed_context: dict | None = None):
+    def __init__(
+        self,
+        *,
+        fold_idx: int,
+        fold_count: int,
+        oos_year: int,
+        selection_start,
+        selection_end,
+        total_trials: int,
+        seed_context: dict | None = None,
+        initial_best_score=None,
+        historical_search_intervals=None,
+    ):
         self.fold_idx = int(fold_idx)
         self.fold_count = int(fold_count)
         self.oos_year = int(oos_year)
@@ -943,11 +1091,45 @@ class _FoldLogSearchProgress:
         self.selection_end = str(selection_end)
         self.total_trials = int(total_trials)
         self.seed_context = dict(seed_context or {})
-        self.stage_start = time.perf_counter()
-        self.stage_start_ts = time.time()
-        self.best_score = float("-inf")
+        self.historical_search_intervals = _merge_progress_active_intervals(
+            historical_search_intervals
+        )
+        self.historical_search_elapsed_sec = _progress_active_elapsed_sec(
+            self.historical_search_intervals
+        )
+        self.search_session_started_perf: float | None = None
+        self.search_session_started_ts: float | None = None
+        self.best_score = (
+            float(initial_best_score) if initial_best_score is not None else float("-inf")
+        )
         self.last_completed = -1
         self._lock = Lock()
+
+    def start_search_session(self) -> None:
+        if self.search_session_started_perf is not None:
+            return
+        self.search_session_started_perf = time.perf_counter()
+        self.search_session_started_ts = time.time()
+
+    def get_search_active_intervals(self) -> list[list[float]]:
+        intervals = list(self.historical_search_intervals)
+        if self.search_session_started_ts is not None:
+            intervals.append([float(self.search_session_started_ts), float(time.time())])
+        return _merge_progress_active_intervals(intervals)
+
+    def get_search_active_elapsed_sec(self) -> float:
+        current_elapsed = 0.0
+        if self.search_session_started_perf is not None:
+            current_elapsed = max(0.0, time.perf_counter() - self.search_session_started_perf)
+        return float(self.historical_search_elapsed_sec + current_elapsed)
+
+    def get_search_started_ts(self) -> float | None:
+        intervals = self.get_search_active_intervals()
+        return float(intervals[0][0]) if intervals else None
+
+    def get_search_last_done_ts(self) -> float | None:
+        intervals = self.get_search_active_intervals()
+        return float(intervals[-1][1]) if intervals else None
 
     def emit(self, completed: int, *, force: bool = False) -> None:
         completed = int(completed)
@@ -955,6 +1137,8 @@ class _FoldLogSearchProgress:
             return
         self.last_completed = completed
         best_score = None if self.best_score == float("-inf") else float(self.best_score)
+        active_intervals = self.get_search_active_intervals()
+        active_elapsed = self.get_search_active_elapsed_sec()
         _write_parallel_fold_progress_event(
             stage="OPTIMIZER_SEARCH",
             fold_idx=self.fold_idx,
@@ -966,9 +1150,12 @@ class _FoldLogSearchProgress:
             completed=completed,
             total=self.total_trials,
             best_score=best_score,
-            elapsed_sec=max(0.0, time.perf_counter() - self.stage_start),
-            search_started_ts=float(self.stage_start_ts),
-            search_last_done_ts=time.time() if int(completed) > 0 else None,
+            best_base_score=best_score,
+            elapsed_sec=active_elapsed,
+            search_started_ts=self.get_search_started_ts(),
+            search_last_done_ts=self.get_search_last_done_ts() if int(completed) > 0 else None,
+            search_active_intervals=active_intervals,
+            search_active_elapsed_sec=active_elapsed,
         )
 
     def callback(self, session):

@@ -24,7 +24,20 @@ from services.optimizer.study_utils import is_qualified_trial_value
 
 
 class _SearchProgress:
-    def __init__(self, *, fold_idx: int, fold_count: int, oos_year: int, selection_start, selection_end, total_trials: int, completed_results: list[dict], overall_start: float):
+    def __init__(
+        self,
+        *,
+        fold_idx: int,
+        fold_count: int,
+        oos_year: int,
+        selection_start,
+        selection_end,
+        total_trials: int,
+        completed_results: list[dict],
+        overall_start: float,
+        initial_best_score=None,
+        historical_search_elapsed_sec: float = 0.0,
+    ):
         self.fold_idx = int(fold_idx)
         self.fold_count = int(fold_count)
         self.oos_year = int(oos_year)
@@ -33,18 +46,30 @@ class _SearchProgress:
         self.total_trials = int(total_trials)
         self.completed_results = completed_results
         self.overall_start = float(overall_start)
-        self.stage_start = time.perf_counter()
-        self.stage_start_ts = time.time()
-        self.best_score = float("-inf")
+        self.historical_search_elapsed_sec = max(0.0, float(historical_search_elapsed_sec or 0.0))
+        self.search_session_started_perf: float | None = None
+        self.best_score = (
+            float(initial_best_score) if initial_best_score is not None else float("-inf")
+        )
         self.last_render = 0.0
         self._lock = Lock()
         self.inline_progress_enabled = stdout_supports_inline_progress()
         self.inline_progress_width = 0
 
+    def start_search_session(self) -> None:
+        if self.search_session_started_perf is None:
+            self.search_session_started_perf = time.perf_counter()
+
+    def get_search_elapsed_sec(self) -> float:
+        current_elapsed = 0.0
+        if self.search_session_started_perf is not None:
+            current_elapsed = max(0.0, time.perf_counter() - self.search_session_started_perf)
+        return float(self.historical_search_elapsed_sec + current_elapsed)
+
     def _eta_stage(self, completed: int) -> float | None:
         if completed <= 0:
             return None
-        elapsed = max(0.0, time.perf_counter() - self.stage_start)
+        elapsed = self.get_search_elapsed_sec()
         avg = elapsed / float(completed)
         return avg * max(0, self.total_trials - completed)
 
@@ -57,7 +82,8 @@ class _SearchProgress:
         self.last_render = now
         pct = 100.0 * float(completed) / max(1, self.total_trials)
         eta_stage = self._eta_stage(completed)
-        elapsed_total = now - self.overall_start
+        elapsed_stage = self.get_search_elapsed_sec()
+        elapsed_total = max(now - self.overall_start, elapsed_stage)
         eta_total = None
         done_folds = len(self.completed_results)
         if done_folds > 0:
@@ -67,7 +93,7 @@ class _SearchProgress:
         best_score = self.best_score if self.best_score != float("-inf") else 0.0
         selection_text = _display_month_period(self.selection_start, self.selection_end)
         oos_text = _display_month_value(self.oos_year)
-        elapsed_text = _fmt_duration_compact(now - self.stage_start)
+        elapsed_text = _fmt_duration_compact(elapsed_stage)
         eta_stage_text = _fmt_duration_compact(eta_stage)
         eta_total_text = _fmt_duration_compact(eta_total)
         line = choose_inline_progress_message((
