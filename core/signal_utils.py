@@ -20,6 +20,7 @@ OPTIMIZER_TRUE_RANGE_ATTR = '_optimizer_true_range'
 _NUMBA_SUPERTREND_LOOP = None
 _NUMBA_SUPERTREND_UNAVAILABLE = False
 _NUMBA_SUPERTREND_WARNING_EMITTED = False
+_NATIVE_SIGNAL_FALLBACK_WARNED = set()
 
 
 def _tv_supertrend_loop_reference(basic_ub, basic_lb, close, first):
@@ -52,6 +53,18 @@ def _warn_compiled_supertrend_fallback(exc):
     _NUMBA_SUPERTREND_WARNING_EMITTED = True
     warnings.warn(
         f"Optimizer compiled SuperTrend kernel unavailable; using reference path: {type(exc).__name__}: {exc}",
+        RuntimeWarning,
+        stacklevel=2,
+    )
+
+
+def _warn_native_signal_fallback(kernel_name, exc):
+    if kernel_name in _NATIVE_SIGNAL_FALLBACK_WARNED:
+        return
+    _NATIVE_SIGNAL_FALLBACK_WARNED.add(kernel_name)
+    warnings.warn(
+        f"Optimizer native {kernel_name} kernel unavailable; using canonical Python fallback: "
+        f"{type(exc).__name__}: {exc}",
         RuntimeWarning,
         stacklevel=2,
     )
@@ -193,8 +206,8 @@ def tv_supertrend(high, low, close, atr, multiplier, *, use_compiled_kernel=Fals
         try:
             if bool(_native_supertrend_direction_into(high, low, close, atr, native_direction, float(multiplier))):
                 return native_direction
-        except (TypeError, ValueError, BufferError):
-            pass
+        except (TypeError, ValueError, BufferError) as exc:
+            _warn_native_signal_fallback("SuperTrend", exc)
     hl2 = (high + low) / 2.0
     basic_ub = hl2 + multiplier * atr
     basic_lb = hl2 - multiplier * atr
@@ -224,8 +237,8 @@ def _rolling_high_shift1(source, window, *, use_native_hotpath=False):
         try:
             _native_rolling_max_shift1_into(source, out, window)
             return out
-        except (TypeError, ValueError, BufferError):
-            pass
+        except (TypeError, ValueError, BufferError) as exc:
+            _warn_native_signal_fallback("shifted rolling max", exc)
     return pd.Series(source).shift(1).rolling(window, min_periods=window).max().values
 
 
