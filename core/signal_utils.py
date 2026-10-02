@@ -9,6 +9,10 @@ from config.breakout_quality import (
 )
 from core.price_utils import adjust_long_buy_limit_array
 from core.feature_bank import coerce_feature_bank
+from core.native_optimizer_hotpath import (
+    rolling_max_shift1_into as _native_rolling_max_shift1_into,
+    supertrend_direction_into as _native_supertrend_direction_into,
+)
 from core.breakout_false_filter import build_breakout_false_filter_pass_condition
 from filters.breakout_quality.runtime import build_breakout_quality_filter_pass_condition
 OPTIMIZER_TRUE_RANGE_ATTR = '_optimizer_true_range'
@@ -171,11 +175,26 @@ def tv_ema(source, length):
     return ema
 
 
-def tv_supertrend(high, low, close, atr, multiplier, *, use_compiled_kernel=False):
+def tv_supertrend(high, low, close, atr, multiplier, *, use_compiled_kernel=False, use_native_hotpath=False):
     high = np.asarray(high, dtype=np.float64)
     low = np.asarray(low, dtype=np.float64)
     close = np.asarray(close, dtype=np.float64)
     atr = np.asarray(atr, dtype=np.float64)
+    if (
+        bool(use_native_hotpath)
+        and _native_supertrend_direction_into is not None
+        and high.ndim == low.ndim == close.ndim == atr.ndim == 1
+        and high.flags.c_contiguous
+        and low.flags.c_contiguous
+        and close.flags.c_contiguous
+        and atr.flags.c_contiguous
+    ):
+        native_direction = np.empty(close.shape, dtype=np.int8)
+        try:
+            if bool(_native_supertrend_direction_into(high, low, close, atr, native_direction, float(multiplier))):
+                return native_direction
+        except (TypeError, ValueError, BufferError):
+            pass
     hl2 = (high + low) / 2.0
     basic_ub = hl2 + multiplier * atr
     basic_lb = hl2 - multiplier * atr
@@ -192,7 +211,25 @@ def tv_supertrend(high, low, close, atr, multiplier, *, use_compiled_kernel=Fals
 
 
 
-def generate_signals(df, params, ticker=None, feature_bank=None, use_compiled_kernels=False):
+def _rolling_high_shift1(source, window, *, use_native_hotpath=False):
+    source = np.asarray(source, dtype=np.float64)
+    window = int(window)
+    if (
+        bool(use_native_hotpath)
+        and _native_rolling_max_shift1_into is not None
+        and source.ndim == 1
+        and source.flags.c_contiguous
+    ):
+        out = np.empty(source.shape, dtype=np.float64)
+        try:
+            _native_rolling_max_shift1_into(source, out, window)
+            return out
+        except (TypeError, ValueError, BufferError):
+            pass
+    return pd.Series(source).shift(1).rolling(window, min_periods=window).max().values
+
+
+def generate_signals(df, params, ticker=None, feature_bank=None, use_compiled_kernels=False, use_native_hotpath=False):
     resolved_ticker = ticker or df.attrs.get('ticker')
     if len(df) == 0:
         empty_float = np.array([], dtype=np.float64)
@@ -246,7 +283,7 @@ def generate_signals(df, params, ticker=None, feature_bank=None, use_compiled_ke
         HighN = _feature(
             'rolling_high_shift1',
             (high_len,),
-            lambda: pd.Series(H).shift(1).rolling(high_len, min_periods=high_len).max().values,
+            lambda: _rolling_high_shift1(H, high_len, use_native_hotpath=use_native_hotpath),
         )
         BreakoutEMA = (
             _feature('ema_close', (breakout_ema_len,), lambda: tv_ema(C, breakout_ema_len))
@@ -260,7 +297,11 @@ def generate_signals(df, params, ticker=None, feature_bank=None, use_compiled_ke
     SuperTrend_Dir = _feature(
         'supertrend_dir',
         (atr_len, atr_times_trail),
-        lambda: tv_supertrend(H, L, C, ATR_main, atr_times_trail, use_compiled_kernel=use_compiled_kernels),
+        lambda: tv_supertrend(
+            H, L, C, ATR_main, atr_times_trail,
+            use_compiled_kernel=use_compiled_kernels,
+            use_native_hotpath=use_native_hotpath,
+        ),
     )
 
     prev_supertrend = np.empty_like(SuperTrend_Dir)

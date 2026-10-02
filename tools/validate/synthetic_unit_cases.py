@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 
 from core import backtest_core as backtest_core_module
+from core import portfolio_fast_data as portfolio_fast_data_module
 from core.backtest_finalize import finalize_open_position_at_end
 from core.config import V16StrategyParams
 from core.entry_plans import build_cash_capped_entry_plan, build_position_from_entry_fill
@@ -52,7 +53,11 @@ from core.portfolio_stats import (
 from core.portfolio_exits import closeout_open_positions
 from core.position_step import SETTLEMENT_BASIS_BROKER_CASH, SETTLEMENT_BASIS_LEDGER_NET, execute_bar_step
 from core import price_utils as price_utils_module
-from core.native_optimizer_hotpath import is_native_optimizer_hotpath_available, scan_reentry_watch_span
+from core.native_optimizer_hotpath import (
+    is_native_optimizer_hotpath_available,
+    rolling_max_shift1_into,
+    scan_reentry_watch_span,
+)
 from core.price_utils import (
     adjust_long_buy_limit,
     adjust_long_sell_fill_price,
@@ -268,9 +273,15 @@ def _portfolio_training_result_exact(left, right):
 
 
 def _run_compiled_signal_equivalence_path(df, params, *, compiled_enabled):
-    with patch(
-        "core.portfolio_fast_data.is_optimizer_compiled_signal_kernels_enabled",
-        return_value=bool(compiled_enabled),
+    with (
+        patch(
+            "core.portfolio_fast_data.is_optimizer_compiled_signal_kernels_enabled",
+            return_value=bool(compiled_enabled),
+        ),
+        patch(
+            "core.portfolio_fast_data.is_optimizer_native_hotpath_kernels_enabled",
+            return_value=False,
+        ),
     ):
         dynamic_data, standalone_logs, pit_stats_index = prep_optimizer_stock_data_bundle(
             df,
@@ -325,6 +336,7 @@ def _run_native_backtest_equivalence_path(df, params, *, native_enabled):
         patch.object(backtest_core_module, "_NATIVE_POSITION_SCAN_ENABLED", bool(native_enabled)),
         patch.object(backtest_core_module, "_NATIVE_REENTRY_SCAN_ENABLED", bool(native_enabled)),
         patch.object(price_utils_module, "_NATIVE_HOTPATH_ENABLED", bool(native_enabled)),
+        patch.object(portfolio_fast_data_module, "is_optimizer_native_hotpath_kernels_enabled", return_value=bool(native_enabled)),
     ):
         dynamic_data, _logs, pit_stats_index = prep_optimizer_stock_data_bundle(
             df,
@@ -466,6 +478,19 @@ def validate_signal_utils_unit_case(_base_params):
     )
 
     native_hotpath_available = is_native_optimizer_hotpath_available()
+    if native_hotpath_available and rolling_max_shift1_into is not None:
+        rolling_source = np.ascontiguousarray([10.0, 12.0, np.nan, 11.0, 15.0, 14.0, 16.0], dtype=np.float64)
+        rolling_native = np.empty_like(rolling_source)
+        rolling_max_shift1_into(rolling_source, rolling_native, 3)
+        rolling_reference = pd.Series(rolling_source).shift(1).rolling(3, min_periods=3).max().to_numpy()
+        add_check(
+            results,
+            "unit_signal_utils",
+            case_id,
+            "native_shifted_rolling_high_matches_pandas_exactly",
+            True,
+            bool(np.array_equal(rolling_reference, rolling_native, equal_nan=True)),
+        )
     if native_hotpath_available and scan_reentry_watch_span is not None:
         reentry_close = np.ascontiguousarray([10.0, 10.5, 11.0, 11.5, 12.0, 12.5], dtype=np.float64)
         reentry_atr = np.ascontiguousarray([1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float64)

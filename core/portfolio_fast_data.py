@@ -12,7 +12,10 @@ from core.exact_accounting import (
     round_price_to_tick_milli,
 )
 from core.signal_utils import generate_signals, unpack_precomputed_signals
-from core.training_performance import is_optimizer_compiled_signal_kernels_enabled
+from core.training_performance import (
+    is_optimizer_compiled_signal_kernels_enabled,
+    is_optimizer_native_hotpath_kernels_enabled,
+)
 from core.portfolio_fast_access import (
     FAST_STATIC_FLOAT_FIELDS,
     FAST_DYNAMIC_FLOAT_FIELDS,
@@ -142,6 +145,7 @@ def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None
         ticker=resolved_ticker,
         feature_bank=feature_bank,
         use_compiled_kernels=is_optimizer_compiled_signal_kernels_enabled(),
+        use_native_hotpath=is_optimizer_native_hotpath_kernels_enabled(),
     )
     if profile_stats is not None:
         profile_stats['generate_signals_sec'] = time.perf_counter() - t0

@@ -2,6 +2,7 @@
 #include <Python.h>
 #include <math.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 /*
  * Optimizer-only native no-event position-management probe.
@@ -78,6 +79,228 @@ static int get_double_buffer(PyObject *obj, Py_buffer *view) {
     }
     return 1;
 }
+
+
+static int get_writable_double_buffer(PyObject *obj, Py_buffer *view) {
+    if (PyObject_GetBuffer(obj, view, PyBUF_CONTIG | PyBUF_FORMAT | PyBUF_WRITABLE) != 0) {
+        return 0;
+    }
+    if (view->itemsize != (Py_ssize_t)sizeof(double) || view->format == NULL || view->format[0] != 'd') {
+        PyBuffer_Release(view);
+        PyErr_SetString(PyExc_TypeError, "expected writable contiguous float64 buffer");
+        return 0;
+    }
+    return 1;
+}
+
+/*
+ * Exact shifted rolling maximum used by optimizer breakout features.
+ * out[j] = max(source[j-window:j]) for j >= window, NaN otherwise.
+ * A NaN anywhere inside the full window preserves pandas min_periods=window
+ * semantics by producing NaN for that output.  The operation uses only
+ * comparisons, so finite outputs are bit-identical to the source values.
+ */
+static PyObject *native_rolling_max_shift1_into(PyObject *self, PyObject *args) {
+    PyObject *source_obj, *out_obj;
+    Py_ssize_t window;
+    Py_buffer source_view = {0}, out_view = {0};
+    Py_ssize_t *deque = NULL;
+    (void)self;
+
+    if (!PyArg_ParseTuple(args, "OOn", &source_obj, &out_obj, &window)) {
+        return NULL;
+    }
+    if (window <= 0) {
+        PyErr_SetString(PyExc_ValueError, "window must be positive");
+        return NULL;
+    }
+    if (!get_double_buffer(source_obj, &source_view)) goto fail;
+    if (!get_writable_double_buffer(out_obj, &out_view)) goto fail;
+
+    const Py_ssize_t n = source_view.len / source_view.itemsize;
+    const Py_ssize_t n_out = out_view.len / out_view.itemsize;
+    if (n_out != n) {
+        PyErr_SetString(PyExc_ValueError, "source and output lengths must match");
+        goto fail;
+    }
+
+    const double *source = (const double *)source_view.buf;
+    double *out = (double *)out_view.buf;
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        out[i] = NAN;
+    }
+    if (n == 0 || window >= n) {
+        PyBuffer_Release(&out_view);
+        PyBuffer_Release(&source_view);
+        Py_RETURN_NONE;
+    }
+
+    deque = (Py_ssize_t *)PyMem_Malloc((size_t)n * sizeof(Py_ssize_t));
+    if (deque == NULL) {
+        PyErr_NoMemory();
+        goto fail;
+    }
+    Py_ssize_t head = 0, tail = 0;
+    Py_ssize_t nan_count = 0;
+
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        const double value = source[i];
+        if (isnan(value)) {
+            nan_count += 1;
+        } else {
+            while (tail > head && source[deque[tail - 1]] <= value) {
+                tail -= 1;
+            }
+            deque[tail++] = i;
+        }
+
+        if (i >= window) {
+            const Py_ssize_t outgoing = i - window;
+            if (isnan(source[outgoing])) {
+                nan_count -= 1;
+            }
+            if (tail > head && deque[head] == outgoing) {
+                head += 1;
+            }
+        }
+
+        const Py_ssize_t out_index = i + 1;
+        if (out_index < n && out_index >= window && nan_count == 0 && tail > head) {
+            out[out_index] = source[deque[head]];
+        }
+    }
+
+    PyMem_Free(deque);
+    PyBuffer_Release(&out_view);
+    PyBuffer_Release(&source_view);
+    Py_RETURN_NONE;
+
+fail:
+    if (deque != NULL) PyMem_Free(deque);
+    if (out_view.obj) PyBuffer_Release(&out_view);
+    if (source_view.obj) PyBuffer_Release(&source_view);
+    return NULL;
+}
+
+
+
+static int get_writable_byte_buffer(PyObject *obj, Py_buffer *view) {
+    if (PyObject_GetBuffer(obj, view, PyBUF_CONTIG | PyBUF_FORMAT | PyBUF_WRITABLE) != 0) {
+        return 0;
+    }
+    if (view->itemsize != 1) {
+        PyBuffer_Release(view);
+        PyErr_SetString(PyExc_TypeError, "expected writable contiguous 1-byte buffer");
+        return 0;
+    }
+    return 1;
+}
+
+/* Fused TradingView SuperTrend direction kernel.  It avoids materializing
+ * hl2/basic upper/basic lower/final band arrays.  The reference direction
+ * recursion and comparison order are preserved exactly; unsupported/nonfinite
+ * market inputs return False so Python can execute the canonical fallback. */
+static PyObject *native_supertrend_direction_into(PyObject *self, PyObject *args) {
+    PyObject *high_obj, *low_obj, *close_obj, *atr_obj, *out_obj;
+    double multiplier;
+    Py_buffer high_view = {0}, low_view = {0}, close_view = {0}, atr_view = {0}, out_view = {0};
+    (void)self;
+
+    if (!PyArg_ParseTuple(args, "OOOOOd", &high_obj, &low_obj, &close_obj, &atr_obj, &out_obj, &multiplier)) {
+        return NULL;
+    }
+    if (!isfinite(multiplier)) {
+        PyErr_SetString(PyExc_ValueError, "multiplier must be finite");
+        return NULL;
+    }
+    if (!get_double_buffer(high_obj, &high_view)) goto fail;
+    if (!get_double_buffer(low_obj, &low_view)) goto fail;
+    if (!get_double_buffer(close_obj, &close_view)) goto fail;
+    if (!get_double_buffer(atr_obj, &atr_view)) goto fail;
+    if (!get_writable_byte_buffer(out_obj, &out_view)) goto fail;
+
+    Py_ssize_t n = high_view.len / high_view.itemsize;
+    if (low_view.len / low_view.itemsize != n || close_view.len / close_view.itemsize != n ||
+        atr_view.len / atr_view.itemsize != n || out_view.len / out_view.itemsize != n) {
+        PyErr_SetString(PyExc_ValueError, "supertrend buffer lengths must match");
+        goto fail;
+    }
+
+    const double *H = (const double *)high_view.buf;
+    const double *L = (const double *)low_view.buf;
+    const double *C = (const double *)close_view.buf;
+    const double *ATR = (const double *)atr_view.buf;
+    signed char *OUT = (signed char *)out_view.buf;
+    for (Py_ssize_t i = 0; i < n; ++i) OUT[i] = 1;
+    if (n == 0) {
+        PyBuffer_Release(&out_view); PyBuffer_Release(&atr_view); PyBuffer_Release(&close_view);
+        PyBuffer_Release(&low_view); PyBuffer_Release(&high_view);
+        Py_RETURN_TRUE;
+    }
+
+    Py_ssize_t first = -1;
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        if (!isnan(ATR[i])) { first = i; break; }
+    }
+    if (first < 0) {
+        PyBuffer_Release(&out_view); PyBuffer_Release(&atr_view); PyBuffer_Release(&close_view);
+        PyBuffer_Release(&low_view); PyBuffer_Release(&high_view);
+        Py_RETURN_TRUE;
+    }
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        if (!isfinite(H[i]) || !isfinite(L[i]) || !isfinite(C[i])) {
+            PyBuffer_Release(&out_view); PyBuffer_Release(&atr_view); PyBuffer_Release(&close_view);
+            PyBuffer_Release(&low_view); PyBuffer_Release(&high_view);
+            Py_RETURN_FALSE;
+        }
+        if (i >= first && !isfinite(ATR[i])) {
+            PyBuffer_Release(&out_view); PyBuffer_Release(&atr_view); PyBuffer_Release(&close_view);
+            PyBuffer_Release(&low_view); PyBuffer_Release(&high_view);
+            Py_RETURN_FALSE;
+        }
+    }
+
+    double hl2 = (H[first] + L[first]) / 2.0;
+    double final_ub_prev = hl2 + multiplier * ATR[first];
+    double final_lb_prev = hl2 - multiplier * ATR[first];
+    signed char direction_prev = 1;
+    OUT[first] = 1;
+
+    for (Py_ssize_t i = first + 1; i < n; ++i) {
+        hl2 = (H[i] + L[i]) / 2.0;
+        const double basic_ub = hl2 + multiplier * ATR[i];
+        const double basic_lb = hl2 - multiplier * ATR[i];
+        const double final_lb = (C[i - 1] > final_lb_prev)
+            ? (basic_lb > final_lb_prev ? basic_lb : final_lb_prev)
+            : basic_lb;
+        const double final_ub = (C[i - 1] < final_ub_prev)
+            ? (basic_ub < final_ub_prev ? basic_ub : final_ub_prev)
+            : basic_ub;
+        signed char direction = direction_prev;
+        if (direction_prev == -1 && C[i] < final_lb_prev) {
+            direction = 1;
+        } else if (direction_prev == 1 && C[i] > final_ub_prev) {
+            direction = -1;
+        }
+        OUT[i] = direction;
+        direction_prev = direction;
+        final_lb_prev = final_lb;
+        final_ub_prev = final_ub;
+    }
+
+    PyBuffer_Release(&out_view); PyBuffer_Release(&atr_view); PyBuffer_Release(&close_view);
+    PyBuffer_Release(&low_view); PyBuffer_Release(&high_view);
+    Py_RETURN_TRUE;
+
+fail:
+    if (out_view.obj) PyBuffer_Release(&out_view);
+    if (atr_view.obj) PyBuffer_Release(&atr_view);
+    if (close_view.obj) PyBuffer_Release(&close_view);
+    if (low_view.obj) PyBuffer_Release(&low_view);
+    if (high_view.obj) PyBuffer_Release(&high_view);
+    return NULL;
+}
+
 
 static int get_byte_buffer(PyObject *obj, Py_buffer *view) {
     if (PyObject_GetBuffer(obj, view, PyBUF_CONTIG_RO | PyBUF_FORMAT) != 0) {
@@ -466,6 +689,18 @@ static PyObject *native_calc_position_size_exact(PyObject *self, PyObject *args)
 }
 
 static PyMethodDef NativeOptimizerMethods[] = {
+    {
+        "supertrend_direction_into",
+        native_supertrend_direction_into,
+        METH_VARARGS,
+        "Fill an int8 direction buffer with the fused exact-order SuperTrend recursion."
+    },
+    {
+        "rolling_max_shift1_into",
+        native_rolling_max_shift1_into,
+        METH_VARARGS,
+        "Fill a float64 output buffer with the exact shifted rolling maximum."
+    },
     {
         "scan_position_span",
         native_scan_position_span,
