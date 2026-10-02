@@ -1,3 +1,5 @@
+import weakref
+
 import numpy as np
 
 from core.training_performance import is_optimizer_native_hotpath_kernels_enabled
@@ -7,6 +9,42 @@ from core.native_optimizer_hotpath import scan_position_span as _native_scan_pos
 _NATIVE_POSITION_SCAN_ENABLED = bool(
     _native_scan_position_span is not None and is_optimizer_native_hotpath_kernels_enabled()
 )
+
+# AI註: Optimizer runtime index caches must remain process-local.  Storing long
+# Timestamp tuples / numpy arrays in DataFrame.attrs makes pandas propagate and
+# compare that payload on normal DataFrame/Series operations (especially costly
+# under pandas 3.x) and also serializes it into formal shared-prep-cache pickles.
+# Key by index identity and let weakref cleanup prevent stale/id-reuse entries.
+_BACKTEST_INDEX_RUNTIME_CACHE = {}
+
+
+def _get_backtest_index_runtime_state(df, *, need_month_end: bool = False):
+    index = df.index
+    cache_key = id(index)
+    cached = _BACKTEST_INDEX_RUNTIME_CACHE.get(cache_key)
+    if cached is None or cached[0]() is not index:
+        dates = tuple(index.tolist())
+
+        def _cleanup(_ref, key=cache_key):
+            _BACKTEST_INDEX_RUNTIME_CACHE.pop(key, None)
+
+        cached = [weakref.ref(index, _cleanup), dates, None]
+        _BACKTEST_INDEX_RUNTIME_CACHE[cache_key] = cached
+
+    dates = cached[1]
+    month_end_exclusive = cached[2]
+    if need_month_end and (month_end_exclusive is None or len(month_end_exclusive) != len(dates)):
+        month_end_exclusive = np.empty(len(dates), dtype=np.int32)
+        start = 0
+        while start < len(dates):
+            current_key = (int(dates[start].year), int(dates[start].month))
+            end = start + 1
+            while end < len(dates) and (int(dates[end].year), int(dates[end].month)) == current_key:
+                end += 1
+            month_end_exclusive[start:end] = end
+            start = end
+        cached[2] = month_end_exclusive
+    return dates, month_end_exclusive
 
 from core.backtest_finalize import build_backtest_stats, finalize_open_position_at_end
 from core.breakout_reentry import create_breakout_reentry_signal_state, create_breakout_reentry_watch_state
@@ -142,13 +180,10 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
     C = df['Close'].to_numpy(dtype=np.float64, copy=False)
     O = df['Open'].to_numpy(dtype=np.float64, copy=False)
     V = df['Volume'].to_numpy(dtype=np.float64, copy=False)
-    # AI註: immutable raw-cache DataFrames are reused across optimizer trials.
-    # Cache the already-materialized Timestamp tuple on the DataFrame so each
-    # trial does not re-box the same DatetimeIndex in Python.
-    Dates = df.attrs.get("_optimizer_backtest_dates")
-    if Dates is None or len(Dates) != len(df.index):
-        Dates = tuple(df.index.tolist())
-        df.attrs["_optimizer_backtest_dates"] = Dates
+    # AI註: immutable raw-cache DataFrames are reused across optimizer trials,
+    # but runtime caches must not live in DataFrame.attrs because attrs propagate
+    # into pandas objects and formal shared-cache pickles.
+    Dates, _runtime_month_end_unused = _get_backtest_index_runtime_state(df)
 
     if precomputed_signals is None:
         ATR_main, buyCondition, sellCondition, buy_limits = generate_signals(df, params, ticker=resolved_ticker)
@@ -168,18 +203,10 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         ):
             native_sell_flags = candidate_sell_flags
             ATR_main = candidate_atr
-            native_month_end_exclusive = df.attrs.get("_optimizer_backtest_month_end_exclusive")
-            if native_month_end_exclusive is None or len(native_month_end_exclusive) != len(Dates):
-                native_month_end_exclusive = np.empty(len(Dates), dtype=np.int32)
-                start = 0
-                while start < len(Dates):
-                    current_key = (int(Dates[start].year), int(Dates[start].month))
-                    end = start + 1
-                    while end < len(Dates) and (int(Dates[end].year), int(Dates[end].month)) == current_key:
-                        end += 1
-                    native_month_end_exclusive[start:end] = end
-                    start = end
-                df.attrs["_optimizer_backtest_month_end_exclusive"] = native_month_end_exclusive
+            _runtime_dates, native_month_end_exclusive = _get_backtest_index_runtime_state(
+                df,
+                need_month_end=True,
+            )
 
     position = {'qty': 0}
     active_extended_signal = None

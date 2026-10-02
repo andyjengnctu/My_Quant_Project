@@ -499,6 +499,23 @@ def validate_signal_utils_unit_case(_base_params):
             ),
         )
 
+    # Runtime acceleration caches must never be persisted in DataFrame.attrs.
+    # Formal shared-prep cache pickles these frames, and pandas propagates attrs
+    # through normal operations; large Timestamp/ndarray caches there can turn a
+    # small reduced chain check into a platform-specific performance regression.
+    transient_attr_keys = {
+        "_optimizer_backtest_dates",
+        "_optimizer_backtest_month_end_exclusive",
+    }
+    add_check(
+        results,
+        "unit_signal_utils",
+        case_id,
+        "optimizer_runtime_index_cache_not_persisted_in_dataframe_attrs",
+        True,
+        not bool(transient_attr_keys.intersection(equivalence_df.attrs)),
+    )
+
     summary["breakout_return_pct"] = round((14.1 / 13.7 - 1.0) * 100.0, 4)
     summary["compiled_equivalence"] = {
         "native_signature_count": len(compiled_signatures),
