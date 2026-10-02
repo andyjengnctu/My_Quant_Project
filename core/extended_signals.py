@@ -313,7 +313,9 @@ def update_extended_tbd_shadow_trade_for_bar(
     if int(shadow_position.get("qty", 0) or 0) <= 0:
         return None
 
-    return _sync_signal_shadow_fields(tbd_state, shadow_position, copy_shadow_position=copy_shadow_position)
+    # ``shadow_position`` is already isolated above when copy_shadow_position=True;
+    # assigning that snapshot directly avoids a second full shadow clone.
+    return _sync_signal_shadow_fields(tbd_state, shadow_position, copy_shadow_position=False)
 
 
 # # (AI註: 單一真理來源 - 延續候選盤後狀態推進與失效統一由此處理；若啟動當日已跌破影子初始停損，則當日盤後直接失效)

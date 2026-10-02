@@ -341,6 +341,7 @@ def cleanup_extended_signals_for_day(active_extended_signals, portfolio, all_dfs
             sizing_capital=sizing_capital,
             current_date=today,
             params=signal_params,
+            copy_shadow_position=False,
         ):
             del active_extended_signals[ticker]
 

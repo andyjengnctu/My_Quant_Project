@@ -51,6 +51,8 @@ def _sync_trailing_stop_display_fields(position):
 
 def _update_trailing_stop(position, *, y_high, y_atr, params, sync_display_fields=True):
     previous_high_milli = int(position.get('highest_high_since_entry_milli', position['entry_fill_price_milli']))
+    previous_trailing_milli = int(position.get('trailing_stop_milli', 0) or 0)
+    previous_sl_milli = int(position.get('sl_milli', 0) or 0)
     highest_high_milli = previous_high_milli
     made_new_high = False
 
@@ -70,10 +72,14 @@ def _update_trailing_stop(position, *, y_high, y_atr, params, sync_display_field
             security_profile=position.get('security_profile'),
         )
         candidate_trail_milli = price_to_milli(candidate_trail)
-        position['trailing_stop_milli'] = max(position.get('trailing_stop_milli', 0), candidate_trail_milli)
+        position['trailing_stop_milli'] = max(previous_trailing_milli, candidate_trail_milli)
 
     position['sl_milli'] = max(position['initial_stop_milli'], position['trailing_stop_milli'])
-    if sync_display_fields:
+    if sync_display_fields and (
+        highest_high_milli != previous_high_milli
+        or int(position['trailing_stop_milli']) != previous_trailing_milli
+        or int(position['sl_milli']) != previous_sl_milli
+    ):
         _sync_trailing_stop_display_fields(position)
 
 
@@ -175,6 +181,42 @@ def acknowledge_position_exit(position, *, event, complete=True):
         position.pop("pending_exit_remaining_qty", None)
 
 
+def _deliver_position_exit_decision(
+    position,
+    *,
+    on_decision,
+    events,
+    current_date,
+    event,
+    qty,
+    reference,
+    trigger=None,
+    deferred=False,
+    block=None,
+):
+    """Deliver one canonical exit decision without allocating a per-call closure."""
+    decision = PositionExitDecision(
+        event=event,
+        qty=int(qty),
+        reference_price=reference,
+        trigger_price=trigger,
+        deferred=deferred,
+        trade_date=current_date,
+        block_reason=block,
+    )
+    acknowledged = bool(on_decision(decision))
+    if acknowledged and not decision.executable:
+        raise ValueError("Execution adapter acknowledged a blocked decision")
+    if block is not None:
+        events.extend(["MISSED_SELL", block])
+    elif acknowledged:
+        acknowledge_position_exit(position, event=event)
+        if deferred:
+            events.append("DEFERRED_" + event + "_ON_OPEN")
+        events.append(event)
+    return acknowledged
+
+
 def step_position_management(
     position, *, y_atr, y_ind_sell, y_close, t_open, t_high, t_low,
     t_close, t_volume, params, on_decision: Callable[[PositionExitDecision], bool],
@@ -191,39 +233,27 @@ def step_position_management(
     if int(position.get("qty", 0) or 0) <= 0:
         return events
 
-    def deliver(event, qty, reference, *, trigger=None, deferred=False, block=None):
-        decision = PositionExitDecision(
-            event=event, qty=int(qty), reference_price=reference,
-            trigger_price=trigger, deferred=deferred,
-            trade_date=current_date, block_reason=block,
-        )
-        acknowledged = bool(on_decision(decision))
-        if acknowledged and not decision.executable:
-            raise ValueError("Execution adapter acknowledged a blocked decision")
-        if block is not None:
-            events.extend(["MISSED_SELL", block])
-        elif acknowledged:
-            acknowledge_position_exit(position, event=event)
-            if deferred:
-                events.append("DEFERRED_" + event + "_ON_OPEN")
-            events.append(event)
-        return acknowledged
-
     pending = position.get("pending_exit_action")
     pending_tp_unfilled = False
     if pending in {"STOP", "TP_HALF"}:
         block = get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close, ticker=position.get("ticker"))
         qty = position["qty"] if pending == "STOP" else int(position.get("pending_exit_remaining_qty", calc_half_take_profit_sell_qty(position["qty"], params.tp_percent)))
         if block is not None:
-            deliver(pending, qty, None, trigger=position.get("pending_exit_trigger_price"), deferred=True, block=block)
+            _deliver_position_exit_decision(
+                position, on_decision=on_decision, events=events, current_date=current_date,
+                event=pending, qty=qty, reference=None,
+                trigger=position.get("pending_exit_trigger_price"), deferred=True, block=block,
+            )
             return events
         if qty <= 0:
             position["pending_exit_action"] = None
             position["pending_exit_trigger_price"] = float("nan")
         else:
             qty_before_confirmation = int(position["qty"])
-            acknowledged = deliver(
-                pending, qty, adjust_long_sell_fill_price(t_open, ticker=position.get("ticker")),
+            acknowledged = _deliver_position_exit_decision(
+                position, on_decision=on_decision, events=events, current_date=current_date,
+                event=pending, qty=qty,
+                reference=adjust_long_sell_fill_price(t_open, ticker=position.get("ticker")),
                 trigger=position.get("pending_exit_trigger_price"), deferred=True,
             )
             if pending == "STOP" or int(position.get("qty", 0) or 0) <= 0:
@@ -237,17 +267,29 @@ def step_position_management(
     if y_ind_sell:
         block = get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close, ticker=position.get("ticker"))
         reference = None if block is not None else adjust_long_sell_fill_price(t_open, ticker=position.get("ticker"))
-        deliver("IND_SELL", position["qty"], reference, block=block)
+        _deliver_position_exit_decision(
+            position, on_decision=on_decision, events=events, current_date=current_date,
+            event="IND_SELL", qty=position["qty"], reference=reference, block=block,
+        )
         return events
 
     stop, tp = resolve_position_intraday_exit_hits(position, t_high=t_high, t_low=t_low, params=params)
     if tp and not pending_tp_unfilled and not (pd.isna(t_volume) or t_volume <= 0):
         target = milli_to_price(position["tp_half_milli"])
-        deliver("TP_HALF", calc_half_take_profit_sell_qty(position["qty"], params.tp_percent),
-                adjust_long_sell_fill_price(max(target, t_open), ticker=position.get("ticker")), trigger=target)
+        _deliver_position_exit_decision(
+            position, on_decision=on_decision, events=events, current_date=current_date,
+            event="TP_HALF",
+            qty=calc_half_take_profit_sell_qty(position["qty"], params.tp_percent),
+            reference=adjust_long_sell_fill_price(max(target, t_open), ticker=position.get("ticker")),
+            trigger=target,
+        )
     if stop and int(position.get("qty", 0) or 0) > 0:
         block = get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close, ticker=position.get("ticker"))
         stop_price = milli_to_price(position["sl_milli"])
         reference = None if block is not None else adjust_long_sell_fill_price(min(stop_price, t_open), ticker=position.get("ticker"))
-        deliver("STOP", position["qty"], reference, trigger=stop_price, block=block)
+        _deliver_position_exit_decision(
+            position, on_decision=on_decision, events=events, current_date=current_date,
+            event="STOP", qty=position["qty"], reference=reference,
+            trigger=stop_price, block=block,
+        )
     return events
