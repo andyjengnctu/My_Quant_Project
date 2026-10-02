@@ -125,6 +125,11 @@ def run_portfolio_timeline(
     settle_sec = 0.0
     buy_sec = 0.0
     equity_mark_sec = 0.0
+    day_setup_sec = 0.0
+    reentry_sec = 0.0
+    resource_select_sec = 0.0
+    cleanup_sec = 0.0
+    bookkeeping_sec = 0.0
     build_trade_index_sec = 0.0
     ticker_dates_sec = 0.0
     closeout_sec = 0.0
@@ -372,7 +377,11 @@ def run_portfolio_timeline(
         else:
             has_portfolio_work_today = bool(portfolio) or bool(active_extended_signals) or bool(active_reentry_watchlist) or bool(normal_setup_entries_today)
 
+        if profile_timing_enabled:
+            day_setup_sec += time.perf_counter() - t_day_start
+
         if bool(training_idle_fast_path_enabled) and not bool(has_portfolio_work_today):
+            t0 = time.perf_counter() if profile_timing_enabled else None
             current_equity_money = milli_to_money(current_equity)
             if today.month != current_month:
                 monthly_equities.append(yesterday_equity)
@@ -386,6 +395,7 @@ def run_portfolio_timeline(
             quarter_last_sim_date[quarter_key] = pd.Timestamp(today)
             idle_fast_path_days += 1
             if profile_timing_enabled:
+                bookkeeping_sec += time.perf_counter() - t0
                 day_loop_sec += time.perf_counter() - t_day_start
             continue
 
@@ -410,6 +420,7 @@ def run_portfolio_timeline(
         if has_portfolio_work_today:
             available_cash = cash
             sizing_equity = resolve_portfolio_sizing_equity(current_equity_money, initial_capital, day_params)
+            t0 = time.perf_counter() if profile_timing_enabled else None
             if use_param_ensemble:
                 _run_portfolio_replay_phase(
                     today,
@@ -436,6 +447,8 @@ def run_portfolio_timeline(
                     today=today,
                     params=day_params,
                 )
+            if profile_timing_enabled:
+                reentry_sec += time.perf_counter() - t0
             pre_market_occupied = len(portfolio) + len(sold_today)
             if use_param_ensemble:
                 candidate_sources_today = any(bool((ctx.get("normal_setup_index") or {}).get(today, [])) for ctx in day_ensemble_contexts) or any(bool(member_signals) for member_signals in active_extended_signals_by_member.values())
@@ -528,6 +541,7 @@ def run_portfolio_timeline(
                 if profile_timing_enabled:
                     candidate_scan_sec += time.perf_counter() - t0
 
+                t0 = time.perf_counter() if profile_timing_enabled else None
                 resource_selection_input_rows = list(orderable_candidates_today)
                 orderable_candidates_today, resource_selection_diag = _run_portfolio_replay_phase(
                     today,
@@ -544,6 +558,8 @@ def run_portfolio_timeline(
                     orderable_candidates_today,
                     resource_selection_diag,
                 )
+                if profile_timing_enabled:
+                    resource_select_sec += time.perf_counter() - t0
 
                 if replay_selector_trace_rows is not None:
                     repair_mechanism = build_max_dl_repair_mechanism_diagnostic(
@@ -778,6 +794,7 @@ def run_portfolio_timeline(
                 if profile_timing_enabled:
                     buy_sec += time.perf_counter() - t0
 
+            t0 = time.perf_counter() if profile_timing_enabled else None
             if use_param_ensemble:
                 _run_portfolio_replay_phase(
                     today,
@@ -804,6 +821,8 @@ def run_portfolio_timeline(
                     params=day_params,
                     sizing_capital=sizing_equity,
                 )
+            if profile_timing_enabled:
+                cleanup_sec += time.perf_counter() - t0
         elif replay_counts is not None:
             before_trade_rows = len(trade_history)
         else:
@@ -827,6 +846,7 @@ def run_portfolio_timeline(
         if profile_timing_enabled:
             equity_mark_sec += time.perf_counter() - t0
 
+        t0 = time.perf_counter() if profile_timing_enabled else None
         if active_level_rows is not None:
             _append_portfolio_active_level_rows(active_level_rows, portfolio, today)
             if use_param_ensemble:
@@ -1020,6 +1040,7 @@ def run_portfolio_timeline(
                 bucket.setdefault("trade_rows", []).append(row)
 
         if profile_timing_enabled:
+            bookkeeping_sec += time.perf_counter() - t0
             day_loop_sec += time.perf_counter() - t_day_start
 
     # # (AI註: 月底權益應以期末強制結算後的真實 final equity 為準，故移到 closeout 後再 append)
@@ -1230,10 +1251,28 @@ def run_portfolio_timeline(
             if candidate_subprofile is not None
             else 0.0
         )
+        profile_stats['portfolio_day_setup_sec'] = day_setup_sec
+        profile_stats['portfolio_reentry_sec'] = reentry_sec
+        profile_stats['portfolio_resource_select_sec'] = resource_select_sec
+        profile_stats['portfolio_cleanup_sec'] = cleanup_sec
+        profile_stats['portfolio_bookkeeping_sec'] = bookkeeping_sec
         profile_stats['portfolio_rotation_sec'] = rotation_sec
         profile_stats['portfolio_settle_sec'] = settle_sec
         profile_stats['portfolio_buy_sec'] = buy_sec
         profile_stats['portfolio_equity_mark_sec'] = equity_mark_sec
+        day_accounted_sec = (
+            float(candidate_scan_sec)
+            + float(day_setup_sec)
+            + float(reentry_sec)
+            + float(resource_select_sec)
+            + float(rotation_sec)
+            + float(settle_sec)
+            + float(buy_sec)
+            + float(cleanup_sec)
+            + float(equity_mark_sec)
+            + float(bookkeeping_sec)
+        )
+        profile_stats['portfolio_day_other_sec'] = max(0.0, float(day_loop_sec) - day_accounted_sec)
         profile_stats['portfolio_closeout_sec'] = closeout_sec
         profile_stats['curve_stats_sec'] = curve_stats_sec
         profile_stats['idle_fast_path_days'] = int(idle_fast_path_days)

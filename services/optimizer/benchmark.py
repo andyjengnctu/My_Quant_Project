@@ -70,6 +70,12 @@ def build_timing_summary(*, session, dataset_label: str, dataset_profile_key: st
             "portfolio_candidate_row_sec": _row_get_float(first_row, "portfolio_candidate_row_sec"),
             "portfolio_candidate_sort_sec": _row_get_float(first_row, "portfolio_candidate_sort_sec"),
             "portfolio_candidate_other_sec": _row_get_float(first_row, "portfolio_candidate_other_sec"),
+            "portfolio_day_setup_sec": _row_get_float(first_row, "portfolio_day_setup_sec"),
+            "portfolio_reentry_sec": _row_get_float(first_row, "portfolio_reentry_sec"),
+            "portfolio_resource_select_sec": _row_get_float(first_row, "portfolio_resource_select_sec"),
+            "portfolio_cleanup_sec": _row_get_float(first_row, "portfolio_cleanup_sec"),
+            "portfolio_bookkeeping_sec": _row_get_float(first_row, "portfolio_bookkeeping_sec"),
+            "portfolio_day_other_sec": _row_get_float(first_row, "portfolio_day_other_sec"),
         },
         "avg": avg,
     }
