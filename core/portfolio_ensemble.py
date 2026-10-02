@@ -367,6 +367,7 @@ def _build_daily_ensemble_candidates(
     collect_all_candidates,
     min_agree,
     verbose=False,
+    profile_stats=None,
 ):
     all_candidate_rows = []
     all_orderable_rows = []
@@ -395,6 +396,7 @@ def _build_daily_ensemble_candidates(
             sizing_equity=sizing_equity,
             params=params_obj,
             collect_all_candidates=collect_all_candidates,
+            profile_stats=profile_stats,
         )
         for row in candidates_today:
             all_candidate_rows.append(_annotate_ensemble_candidate(row, member=member, params_obj=params_obj, member_key=member_key, context=context))
@@ -424,6 +426,7 @@ def _track_ensemble_normal_setup_signals_for_day(
     portfolio,
     sold_today,
     today,
+    profile_stats=None,
 ):
     for idx, (member, context) in enumerate(_iter_ensemble_member_pairs(ensemble_members, ensemble_contexts), start=1):
         params_obj = member.get("params_obj") if isinstance(member, dict) else None
@@ -442,6 +445,7 @@ def _track_ensemble_normal_setup_signals_for_day(
             pit_stats_cursor=member_pit_cursor,
             today=today,
             params=params_obj,
+            profile_stats=profile_stats,
         )
 
 

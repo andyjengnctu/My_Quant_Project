@@ -262,6 +262,8 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
     # AI註: local_min review 只需要完整統計值，不需要每個 portfolio 子步驟的 timing。
     # AI註: profile_stats=None 時仍保留 yearly/dependency 等統計輸出，但關閉細部計時以避免重複 perf_counter 成本。
     pf_profile = {"_timing_enabled": False} if profile_stats is None else profile_stats
+    if profile_stats is not None and bool(getattr(session, "timing_mode", False)):
+        pf_profile["_candidate_timing_enabled"] = True
 
     with session.optimizer_runtime_context():
         (
@@ -686,6 +688,14 @@ def run_optimizer_objective(session, trial):
     profile_row["portfolio_build_trade_index_sec"] = float(pf_profile.get("portfolio_build_trade_index_sec", 0.0))
     profile_row["portfolio_day_loop_sec"] = float(pf_profile.get("portfolio_day_loop_sec", 0.0))
     profile_row["portfolio_candidate_scan_sec"] = float(pf_profile.get("portfolio_candidate_scan_sec", 0.0))
+    profile_row["portfolio_candidate_normal_sec"] = float(pf_profile.get("portfolio_candidate_normal_sec", 0.0))
+    profile_row["portfolio_candidate_extended_sec"] = float(pf_profile.get("portfolio_candidate_extended_sec", 0.0))
+    profile_row["portfolio_candidate_pit_stats_sec"] = float(pf_profile.get("portfolio_candidate_pit_stats_sec", 0.0))
+    profile_row["portfolio_candidate_plan_sec"] = float(pf_profile.get("portfolio_candidate_plan_sec", 0.0))
+    profile_row["portfolio_candidate_quality_rank_sec"] = float(pf_profile.get("portfolio_candidate_quality_rank_sec", 0.0))
+    profile_row["portfolio_candidate_row_sec"] = float(pf_profile.get("portfolio_candidate_row_sec", 0.0))
+    profile_row["portfolio_candidate_sort_sec"] = float(pf_profile.get("portfolio_candidate_sort_sec", 0.0))
+    profile_row["portfolio_candidate_other_sec"] = float(pf_profile.get("portfolio_candidate_other_sec", 0.0))
     profile_row["portfolio_rotation_sec"] = float(pf_profile.get("portfolio_rotation_sec", 0.0))
     profile_row["portfolio_settle_sec"] = float(pf_profile.get("portfolio_settle_sec", 0.0))
     profile_row["portfolio_buy_sec"] = float(pf_profile.get("portfolio_buy_sec", 0.0))

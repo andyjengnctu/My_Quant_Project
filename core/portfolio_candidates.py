@@ -1,3 +1,5 @@
+import time
+
 from core.buy_sort import (
     calc_buy_sort_value,
     calc_projected_capital_metrics,
@@ -32,6 +34,13 @@ from core.portfolio_fast_data import (
     get_fast_value,
     get_pit_stats_from_index,
 )
+
+
+def _candidate_profile_add(profile_stats, key, started_at):
+    profile_stats[key] = float(profile_stats.get(key, 0.0)) + max(
+        0.0,
+        time.perf_counter() - started_at,
+    )
 
 
 def _resolve_candidate_quality_ranking(
@@ -258,12 +267,19 @@ def _collect_normal_candidates(
     sizing_equity,
     params,
     collect_all_candidates,
+    profile_stats=None,
 ):
+    profile_enabled = profile_stats is not None
+    total_started = time.perf_counter() if profile_enabled else None
     candidates_today = [] if collect_all_candidates else None
     orderable_candidates_today = []
     normal_setup_tickers_today = set()
 
-    for ticker, y_pos, t_pos in sorted(normal_setup_entries, key=lambda x: x[0]):
+    sort_started = time.perf_counter() if profile_enabled else None
+    sorted_normal_setup_entries = sorted(normal_setup_entries, key=lambda x: x[0])
+    if profile_enabled:
+        _candidate_profile_add(profile_stats, "portfolio_candidate_sort_sec", sort_started)
+    for ticker, y_pos, t_pos in sorted_normal_setup_entries:
         normal_setup_tickers_today.add(ticker)
 
         # # (AI註: 新的 normal setup 必須先覆蓋舊延續訊號；即使當日因已持有/剛賣出而不能下單，
@@ -280,12 +296,16 @@ def _collect_normal_candidates(
         signal_date = get_fast_dates(fast_df)[y_pos]
         security_profile = get_fast_security_profile(fast_df)
 
+        pit_started = time.perf_counter() if profile_enabled else None
         is_candidate, ev, win_rate, trade_count, asset_growth_pct = get_pit_stats_from_index(
             pit_stats_index[ticker], today, params, cursor_state=pit_stats_cursor, ticker=ticker
         )
+        if profile_enabled:
+            _candidate_profile_add(profile_stats, "portfolio_candidate_pit_stats_sec", pit_started)
         if not is_candidate:
             continue
 
+        plan_started = time.perf_counter() if profile_enabled else None
         candidate_plan = build_normal_candidate_plan(
             y_buy_limit,
             y_atr,
@@ -295,15 +315,20 @@ def _collect_normal_candidates(
             security_profile=security_profile,
             trade_date=today,
         )
+        if profile_enabled:
+            _candidate_profile_add(profile_stats, "portfolio_candidate_plan_sec", plan_started)
         if candidate_plan is None:
             continue
 
+        quality_started = time.perf_counter() if profile_enabled else None
         quality_rank = _resolve_candidate_quality_ranking(
             params=params,
             ticker=ticker,
             signal_date=signal_date,
             information_date=signal_date,
         )
+        if profile_enabled:
+            _candidate_profile_add(profile_stats, "portfolio_candidate_quality_rank_sec", quality_started)
         signal_state = create_signal_tracking_state(
             y_buy_limit,
             y_atr,
@@ -319,6 +344,7 @@ def _collect_normal_candidates(
         if (not collect_all_candidates) and (not bool(candidate_plan['is_orderable'])):
             continue
 
+        row_started = time.perf_counter() if profile_enabled else None
         candidate_row = _make_candidate_row(
             buy_sort_method=buy_sort_method,
             ticker=ticker,
@@ -345,11 +371,15 @@ def _collect_normal_candidates(
             prev_close=y_close,
             quality_rank=quality_rank,
         )
+        if profile_enabled:
+            _candidate_profile_add(profile_stats, "portfolio_candidate_row_sec", row_started)
         if candidates_today is not None:
             candidates_today.append(candidate_row)
         if candidate_row['is_orderable']:
             orderable_candidates_today.append(candidate_row)
 
+    if profile_enabled:
+        _candidate_profile_add(profile_stats, "portfolio_candidate_normal_sec", total_started)
     return candidates_today, orderable_candidates_today, normal_setup_tickers_today
 
 
@@ -365,9 +395,16 @@ def track_normal_setup_signals_for_day(
     pit_stats_cursor,
     today,
     params,
+    profile_stats=None,
 ):
+    profile_enabled = profile_stats is not None
+    total_started = time.perf_counter() if profile_enabled else None
     normal_setup_tickers_today = set()
-    for ticker, y_pos, _t_pos in sorted(normal_setup_entries, key=lambda x: x[0]):
+    sort_started = time.perf_counter() if profile_enabled else None
+    sorted_normal_setup_entries = sorted(normal_setup_entries, key=lambda x: x[0])
+    if profile_enabled:
+        _candidate_profile_add(profile_stats, "portfolio_candidate_sort_sec", sort_started)
+    for ticker, y_pos, _t_pos in sorted_normal_setup_entries:
         normal_setup_tickers_today.add(ticker)
 
         # # (AI註: 與完整候選路徑一致：新的 normal setup 先覆蓋舊延續訊號；即使當日因已持有/剛賣出而不能下單，
@@ -383,18 +420,24 @@ def track_normal_setup_signals_for_day(
         signal_date = get_fast_dates(fast_df)[y_pos]
         security_profile = get_fast_security_profile(fast_df)
 
+        pit_started = time.perf_counter() if profile_enabled else None
         is_candidate, _ev, _win_rate, _trade_count, _asset_growth_pct = get_pit_stats_from_index(
             pit_stats_index[ticker], today, params, cursor_state=pit_stats_cursor, ticker=ticker
         )
+        if profile_enabled:
+            _candidate_profile_add(profile_stats, "portfolio_candidate_pit_stats_sec", pit_started)
         if not is_candidate:
             continue
 
+        quality_started = time.perf_counter() if profile_enabled else None
         quality_rank = _resolve_candidate_quality_ranking(
             params=params,
             ticker=ticker,
             signal_date=signal_date,
             information_date=signal_date,
         )
+        if profile_enabled:
+            _candidate_profile_add(profile_stats, "portfolio_candidate_quality_rank_sec", quality_started)
         signal_state = create_signal_tracking_state(
             y_buy_limit,
             y_atr,
@@ -406,6 +449,8 @@ def track_normal_setup_signals_for_day(
         if signal_state is not None:
             attach_breakout_quality_rank(signal_state, quality_rank)
             active_extended_signals[ticker] = signal_state
+    if profile_enabled:
+        _candidate_profile_add(profile_stats, "portfolio_candidate_normal_sec", total_started)
     return normal_setup_tickers_today
 
 def _collect_extended_candidates(
@@ -422,11 +467,18 @@ def _collect_extended_candidates(
     sizing_equity,
     params,
     collect_all_candidates,
+    profile_stats=None,
 ):
+    profile_enabled = profile_stats is not None
+    total_started = time.perf_counter() if profile_enabled else None
     candidates_today = [] if collect_all_candidates else None
     orderable_candidates_today = []
 
-    for ticker in sorted(list(active_extended_signals.keys())):
+    sort_started = time.perf_counter() if profile_enabled else None
+    sorted_extended_tickers = sorted(list(active_extended_signals.keys()))
+    if profile_enabled:
+        _candidate_profile_add(profile_stats, "portfolio_candidate_sort_sec", sort_started)
+    for ticker in sorted_extended_tickers:
         signal_state = active_extended_signals.get(ticker)
         candidate_params = resolve_signal_tracking_params(signal_state, params)
 
@@ -442,14 +494,18 @@ def _collect_extended_candidates(
             continue
         y_pos = t_pos - 1
 
+        pit_started = time.perf_counter() if profile_enabled else None
         is_candidate, ev, win_rate, trade_count, asset_growth_pct = get_pit_stats_from_index(
             pit_stats_index[ticker], today, candidate_params, cursor_state=pit_stats_cursor, ticker=ticker
         )
+        if profile_enabled:
+            _candidate_profile_add(profile_stats, "portfolio_candidate_pit_stats_sec", pit_started)
         if not is_candidate:
             continue
 
         y_close = get_fast_close(fast_df, pos=y_pos)
         security_profile = get_fast_security_profile(fast_df)
+        plan_started = time.perf_counter() if profile_enabled else None
         candidate_plan = build_extended_candidate_plan_from_signal(
             signal_state,
             sizing_equity,
@@ -458,10 +514,13 @@ def _collect_extended_candidates(
             security_profile=security_profile,
             trade_date=today,
         )
+        if profile_enabled:
+            _candidate_profile_add(profile_stats, "portfolio_candidate_plan_sec", plan_started)
         if candidate_plan is None:
             continue
 
         information_date = get_fast_dates(fast_df)[y_pos]
+        quality_started = time.perf_counter() if profile_enabled else None
         quality_rank = _resolve_candidate_quality_ranking(
             params=candidate_params,
             ticker=ticker,
@@ -469,6 +528,8 @@ def _collect_extended_candidates(
             information_date=information_date,
             signal_state=signal_state,
         )
+        if profile_enabled:
+            _candidate_profile_add(profile_stats, "portfolio_candidate_quality_rank_sec", quality_started)
         today_orderable = is_extended_signal_orderable_for_day(
             signal_state,
             candidate_plan,
@@ -479,6 +540,7 @@ def _collect_extended_candidates(
         if (not collect_all_candidates) and (not bool(today_orderable)):
             continue
 
+        row_started = time.perf_counter() if profile_enabled else None
         candidate_row = _make_candidate_row(
             buy_sort_method=buy_sort_method,
             ticker=ticker,
@@ -511,11 +573,15 @@ def _collect_extended_candidates(
             prev_close=y_close,
             quality_rank=quality_rank,
         )
+        if profile_enabled:
+            _candidate_profile_add(profile_stats, "portfolio_candidate_row_sec", row_started)
         if candidates_today is not None:
             candidates_today.append(candidate_row)
         if candidate_row['is_orderable']:
             orderable_candidates_today.append(candidate_row)
 
+    if profile_enabled:
+        _candidate_profile_add(profile_stats, "portfolio_candidate_extended_sec", total_started)
     return candidates_today, orderable_candidates_today
 
 
@@ -532,6 +598,7 @@ def build_daily_candidates(
     sizing_equity,
     params,
     collect_all_candidates=True,
+    profile_stats=None,
 ):
     buy_sort_method = get_buy_sort_method()
     normal_candidates, normal_orderable, normal_setup_tickers_today = _collect_normal_candidates(
@@ -547,6 +614,7 @@ def build_daily_candidates(
         sizing_equity=sizing_equity,
         params=params,
         collect_all_candidates=collect_all_candidates,
+        profile_stats=profile_stats,
     )
     extended_candidates, extended_orderable = _collect_extended_candidates(
         active_extended_signals=active_extended_signals,
@@ -561,6 +629,7 @@ def build_daily_candidates(
         sizing_equity=sizing_equity,
         params=params,
         collect_all_candidates=collect_all_candidates,
+        profile_stats=profile_stats,
     )
 
     if collect_all_candidates:
@@ -568,7 +637,11 @@ def build_daily_candidates(
     else:
         candidates_today = []
     orderable_candidates_today = normal_orderable + extended_orderable
+    profile_enabled = profile_stats is not None
+    sort_started = time.perf_counter() if profile_enabled else None
     if collect_all_candidates:
         sort_candidate_rows(candidates_today, buy_sort_method)
     sort_candidate_rows(orderable_candidates_today, buy_sort_method)
+    if profile_enabled:
+        _candidate_profile_add(profile_stats, "portfolio_candidate_sort_sec", sort_started)
     return candidates_today, orderable_candidates_today, normal_setup_tickers_today

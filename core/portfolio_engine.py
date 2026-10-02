@@ -114,6 +114,12 @@ def run_portfolio_timeline(
     capture_equity_curve = bool(profile_stats.get("capture_equity_curve", False)) if profile_stats is not None else False
     t_portfolio_start = time.perf_counter() if profile_timing_enabled else None
     candidate_scan_sec = 0.0
+    candidate_subprofile = (
+        {}
+        if profile_timing_enabled
+        and bool(profile_stats.get("_candidate_timing_enabled", False))
+        else None
+    )
     day_loop_sec = 0.0
     rotation_sec = 0.0
     settle_sec = 0.0
@@ -457,6 +463,7 @@ def run_portfolio_timeline(
                             portfolio=portfolio,
                             sold_today=sold_today,
                             today=today,
+                            profile_stats=candidate_subprofile,
                         )
                         if profile_timing_enabled:
                             candidate_scan_sec += time.perf_counter() - t0
@@ -475,6 +482,7 @@ def run_portfolio_timeline(
                         pit_stats_cursor=day_pit_stats_cursor,
                         today=today,
                         params=day_params,
+                        profile_stats=candidate_subprofile,
                     )
                     if profile_timing_enabled:
                         candidate_scan_sec += time.perf_counter() - t0
@@ -497,6 +505,7 @@ def run_portfolio_timeline(
                         collect_all_candidates=replay_counts is not None,
                         min_agree=int(day_ensemble_min_agree or 1),
                         verbose=bool(verbose and (not is_training)),
+                        profile_stats=candidate_subprofile,
                     )
                 else:
                     candidates_today, orderable_candidates_today, normal_setup_tickers_today = _run_portfolio_replay_phase(
@@ -514,6 +523,7 @@ def run_portfolio_timeline(
                         sizing_equity=sizing_equity,
                         params=day_params,
                         collect_all_candidates=replay_counts is not None,
+                        profile_stats=candidate_subprofile,
                     )
                 if profile_timing_enabled:
                     candidate_scan_sec += time.perf_counter() - t0
@@ -1200,6 +1210,26 @@ def run_portfolio_timeline(
         profile_stats['portfolio_build_trade_index_sec'] = build_trade_index_sec
         profile_stats['portfolio_day_loop_sec'] = day_loop_sec
         profile_stats['portfolio_candidate_scan_sec'] = candidate_scan_sec
+        candidate_operation_keys = (
+            'portfolio_candidate_pit_stats_sec',
+            'portfolio_candidate_plan_sec',
+            'portfolio_candidate_quality_rank_sec',
+            'portfolio_candidate_row_sec',
+            'portfolio_candidate_sort_sec',
+        )
+        candidate_profile_keys = (
+            'portfolio_candidate_normal_sec',
+            'portfolio_candidate_extended_sec',
+            *candidate_operation_keys,
+        )
+        for key in candidate_profile_keys:
+            profile_stats[key] = float((candidate_subprofile or {}).get(key, 0.0))
+        candidate_operation_sec = sum(float(profile_stats[key]) for key in candidate_operation_keys)
+        profile_stats['portfolio_candidate_other_sec'] = (
+            max(0.0, float(candidate_scan_sec) - candidate_operation_sec)
+            if candidate_subprofile is not None
+            else 0.0
+        )
         profile_stats['portfolio_rotation_sec'] = rotation_sec
         profile_stats['portfolio_settle_sec'] = settle_sec
         profile_stats['portfolio_buy_sec'] = buy_sec
