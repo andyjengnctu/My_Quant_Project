@@ -3763,6 +3763,56 @@ def validate_price_utils_array_tick_normalization_contract_case(_base_params):
 
     price_path = build_project_absolute_path("core", "price_utils.py")
     price_source = price_path.read_text(encoding="utf-8")
+    price_tree = ast.parse(price_source, filename=str(price_path))
+    price_functions = {
+        node.name: node
+        for node in price_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    def _called_function_names(function_node):
+        if function_node is None:
+            return set()
+        names = set()
+        for node in ast.walk(function_node):
+            if not isinstance(node, ast.Call):
+                continue
+            if isinstance(node.func, ast.Name):
+                names.add(node.func.id)
+            elif isinstance(node.func, ast.Attribute):
+                names.add(node.func.attr)
+        return names
+
+    profile_resolver_node = price_functions.get("_resolve_price_security_profile")
+    cached_profile_node = price_functions.get("_cached_price_security_profile")
+    profile_resolver_calls = _called_function_names(profile_resolver_node)
+    cached_profile_calls = _called_function_names(cached_profile_node)
+    profile_resolver_uses_ticker = bool(
+        profile_resolver_node is not None
+        and any(isinstance(node, ast.Name) and node.id == "ticker" for node in ast.walk(profile_resolver_node))
+    )
+    profile_resolver_preserves_explicit_profile = bool(
+        profile_resolver_node is not None
+        and any(
+            isinstance(node, ast.Return)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "security_profile"
+            for node in ast.walk(profile_resolver_node)
+        )
+    )
+    profile_resolver_reaches_canonical_inference = bool(
+        "infer_security_profile" in profile_resolver_calls
+        or (
+            "_cached_price_security_profile" in profile_resolver_calls
+            and "infer_security_profile" in cached_profile_calls
+        )
+    )
+    ticker_profile_resolution_contract = bool(
+        profile_resolver_node is not None
+        and profile_resolver_uses_ticker
+        and profile_resolver_preserves_explicit_profile
+        and profile_resolver_reaches_canonical_inference
+    )
     signal_path = build_project_absolute_path("core", "signal_utils.py")
     signal_source = signal_path.read_text(encoding="utf-8")
     backtest_path = build_project_absolute_path("core", "backtest_core.py")
@@ -3787,7 +3837,14 @@ def validate_price_utils_array_tick_normalization_contract_case(_base_params):
     add_check(results, "meta_contract", case_id, "price_utils_array_tick_size_uses_shared_raw_price_tick_helper", True, "milli_to_price(get_tick_milli_from_price(price, security_profile=resolved_profile)) for price in prices[valid]" in price_source)
     add_check(results, "meta_contract", case_id, "price_utils_scalar_rounding_uses_shared_raw_price_tick_helper", True, "milli_to_price(round_price_to_tick_milli(price, direction=direction, security_profile=resolved_profile))" in price_source)
     add_check(results, "meta_contract", case_id, "price_utils_array_rounding_uses_shared_raw_price_tick_helper", True, "milli_to_price(round_price_to_tick_milli(price, direction=direction, security_profile=resolved_profile))" in price_source)
-    add_check(results, "meta_contract", case_id, "price_utils_tick_lookup_resolves_security_profile_from_ticker", True, "resolved_profile = infer_security_profile(ticker) if security_profile is None else security_profile" in price_source)
+    add_check(
+        results,
+        "meta_contract",
+        case_id,
+        "price_utils_tick_lookup_resolves_security_profile_from_ticker",
+        True,
+        ticker_profile_resolution_contract,
+    )
     add_check(results, "meta_contract", case_id, "price_utils_tick_lookup_has_no_price_to_milli_prequantize_path", False, "get_tick_milli(price_to_milli(price))" in price_source)
     add_check(results, "meta_contract", case_id, "price_utils_rounding_has_no_price_to_milli_prequantize_path", False, "round_price_milli_to_tick(price_to_milli(price), direction=direction)" in price_source)
     add_check(results, "meta_contract", case_id, "price_utils_has_no_stock_only_global_tick_ladder_lookup", False, "MILLI_TICK_LADDER = STOCK_MILLI_TICK_LADDER" in price_source)
