@@ -50,6 +50,16 @@ from core.portfolio_fast_data import (
     get_fast_previous_management_values,
     get_fast_security_profile,
 )
+from core.native_optimizer_hotpath import (
+    cleanup_live_shadow_batch as _native_cleanup_live_shadow_batch,
+)
+from core.training_performance import is_optimizer_native_hotpath_kernels_enabled
+
+_NATIVE_LIVE_SHADOW_BATCH_ENABLED = bool(
+    _native_cleanup_live_shadow_batch is not None
+    and is_optimizer_native_hotpath_kernels_enabled()
+)
+
 from core.trade_plans import (
     clone_shadow_position,
     execute_pre_market_entry_plan,
@@ -410,6 +420,9 @@ def cleanup_extended_signals_for_day(
     )
     if sorted_tickers is None:
         sorted_tickers = sorted(active_extended_signals)
+    native_live_items = (
+        [] if training_fast_path and _NATIVE_LIVE_SHADOW_BATCH_ENABLED else None
+    )
     for ticker in sorted_tickers:
         signal_state = active_extended_signals.get(ticker)
         if signal_state is None:
@@ -491,6 +504,23 @@ def cleanup_extended_signals_for_day(
                     t_close, t_volume,
                 ) = get_fast_management_session_values(fast_df, t_pos)
         if live_shadow_position is not None:
+            if native_live_items is not None:
+                native_live_items.append((
+                    ticker,
+                    signal_state,
+                    live_shadow_position,
+                    float(t_low),
+                    float(t_high),
+                    float(t_open),
+                    float(t_close),
+                    float(t_volume),
+                    float(y_close),
+                    float(y_high),
+                    float(y_atr),
+                    bool(y_ind_sell),
+                    signal_params,
+                ))
+                continue
             if training_fast_path:
                 should_clear = should_clear_live_extended_signal_training_fast(
                     signal_state,
@@ -532,5 +562,34 @@ def cleanup_extended_signals_for_day(
             )
         if should_clear:
             del active_extended_signals[ticker]
+
+    if native_live_items:
+        fallback_indexes = _native_cleanup_live_shadow_batch(
+            active_extended_signals, native_live_items
+        )
+        for item_index in fallback_indexes:
+            (
+                ticker, signal_state, live_shadow_position, t_low, t_high,
+                t_open, t_close, t_volume, y_close, y_high, y_atr,
+                y_ind_sell, signal_params,
+            ) = native_live_items[int(item_index)]
+            if ticker not in active_extended_signals:
+                continue
+            should_clear = should_clear_live_extended_signal_training_fast(
+                signal_state,
+                shadow_position=live_shadow_position,
+                t_low=t_low,
+                t_high=t_high,
+                t_open=t_open,
+                t_close=t_close,
+                t_volume=t_volume,
+                y_close=y_close,
+                y_high=y_high,
+                y_atr=y_atr,
+                y_ind_sell=y_ind_sell,
+                params=signal_params,
+            )
+            if should_clear:
+                del active_extended_signals[ticker]
 
 

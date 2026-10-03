@@ -94,3 +94,6 @@ rolling_max_shift1_into = None if _native is None else getattr(_native, "rolling
 scan_position_span = None if _native is None else getattr(_native, "scan_position_span", None)
 scan_reentry_watch_span = None if _native is None else getattr(_native, "scan_reentry_watch_span", None)
 calc_position_size_exact = None if _native is None else getattr(_native, "calc_position_size_exact", None)
+cleanup_live_shadow_inplace = None if _native is None else getattr(_native, "cleanup_live_shadow_inplace", None)
+cleanup_live_shadow_batch = None if _native is None else getattr(_native, "cleanup_live_shadow_batch", None)
+resolve_live_extended_candidate_core = None if _native is None else getattr(_native, "resolve_live_extended_candidate_core", None)

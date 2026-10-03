@@ -44,6 +44,15 @@ from core.price_utils import (
     build_position_sizing_capital_context,
     build_position_sizing_fee_context,
 )
+from core.native_optimizer_hotpath import (
+    resolve_live_extended_candidate_core as _native_resolve_live_extended_candidate_core,
+)
+from core.training_performance import is_optimizer_native_hotpath_kernels_enabled
+
+_NATIVE_EXTENDED_CANDIDATE_CORE_ENABLED = bool(
+    _native_resolve_live_extended_candidate_core is not None
+    and is_optimizer_native_hotpath_kernels_enabled()
+)
 from core.portfolio_fast_data import (
     get_fast_extended_day_market_values,
     get_fast_security_profile,
@@ -704,52 +713,105 @@ def _collect_extended_candidates(
         y_close = previous_values[2]
         if not collect_all_candidates:
             plan_started = time.perf_counter() if profile_enabled else None
-            geometry = (
-                resolve_extended_candidate_plan_geometry_training_fast(
-                    signal_state,
-                    candidate_params,
-                    ticker=ticker,
-                    security_profile=security_profile,
-                )
-                if compact_training_rows
-                else resolve_extended_candidate_plan_geometry(
-                    signal_state,
-                    candidate_params,
-                    ticker=ticker,
-                    security_profile=security_profile,
-                )
+            ranking_enabled_for_candidate = bool(
+                getattr(candidate_params, "use_breakout_quality_ranking", False)
             )
-            if profile_enabled:
-                _candidate_profile_add(profile_stats, "portfolio_candidate_plan_sec", plan_started)
-            if geometry is None:
-                continue
-            (
-                limit_price, init_sl, init_trail, target_price, entry_atr,
-                orig_limit, entry_ref_price, _resolved_ticker, _resolved_profile,
-                signal_date, max_qty, entry_source, _source_entry_order_id,
-                _shadow_position,
-            ) = geometry
+            native_core = None
+            if (
+                compact_training_rows
+                and _NATIVE_EXTENDED_CANDIDATE_CORE_ENABLED
+                and not ranking_enabled_for_candidate
+            ):
+                live_shadow = signal_state.get("shadow_position")
+                if isinstance(live_shadow, dict) and int(live_shadow.get("qty", 0) or 0) > 0:
+                    native_core = _native_resolve_live_extended_candidate_core(
+                        signal_state,
+                        live_shadow,
+                        float(y_close),
+                        ticker,
+                        security_profile,
+                    )
 
-            if bool(getattr(candidate_params, "use_breakout_quality_ranking", False)):
-                quality_started = time.perf_counter() if profile_enabled else None
-                quality_rank = _resolve_candidate_quality_ranking(
-                    params=candidate_params, ticker=ticker, signal_date=signal_date,
-                    information_date=information_date, signal_state=signal_state,
-                )
+            if native_core is False:
                 if profile_enabled:
-                    _candidate_profile_add(profile_stats, "portfolio_candidate_quality_rank_sec", quality_started)
-            else:
-                quality_rank = None
-
-            limit_price_milli = price_to_milli(limit_price)
-            y_close_milli = price_to_milli(y_close)
-            orderable_context = has_extended_signal_orderable_context_for_limit(
-                signal_state, limit_price, y_close, ticker=ticker,
-                security_profile=security_profile,
-                limit_price_milli=limit_price_milli, y_close_milli=y_close_milli,
-            )
-            if not bool(orderable_context):
+                    _candidate_profile_add(
+                        profile_stats, "portfolio_candidate_plan_sec", plan_started
+                    )
                 continue
+
+            if native_core is not None:
+                (
+                    limit_price, init_sl, init_trail, target_price, entry_atr,
+                    entry_ref_price, signal_date, max_qty, entry_source,
+                    _source_entry_order_id, _shadow_position, limit_price_milli,
+                    stop_price_milli, y_close_milli,
+                ) = native_core
+                orig_limit = limit_price
+                quality_rank = None
+                orderable_context = True
+            else:
+                geometry = (
+                    resolve_extended_candidate_plan_geometry_training_fast(
+                        signal_state,
+                        candidate_params,
+                        ticker=ticker,
+                        security_profile=security_profile,
+                    )
+                    if compact_training_rows
+                    else resolve_extended_candidate_plan_geometry(
+                        signal_state,
+                        candidate_params,
+                        ticker=ticker,
+                        security_profile=security_profile,
+                    )
+                )
+                if geometry is None:
+                    if profile_enabled:
+                        _candidate_profile_add(
+                            profile_stats, "portfolio_candidate_plan_sec", plan_started
+                        )
+                    continue
+                (
+                    limit_price, init_sl, init_trail, target_price, entry_atr,
+                    orig_limit, entry_ref_price, _resolved_ticker, _resolved_profile,
+                    signal_date, max_qty, entry_source, _source_entry_order_id,
+                    _shadow_position,
+                ) = geometry
+
+                if ranking_enabled_for_candidate:
+                    quality_started = time.perf_counter() if profile_enabled else None
+                    quality_rank = _resolve_candidate_quality_ranking(
+                        params=candidate_params, ticker=ticker, signal_date=signal_date,
+                        information_date=information_date, signal_state=signal_state,
+                    )
+                    if profile_enabled:
+                        _candidate_profile_add(
+                            profile_stats,
+                            "portfolio_candidate_quality_rank_sec",
+                            quality_started,
+                        )
+                else:
+                    quality_rank = None
+
+                limit_price_milli = price_to_milli(limit_price)
+                stop_price_milli = price_to_milli(init_sl)
+                y_close_milli = price_to_milli(y_close)
+                orderable_context = has_extended_signal_orderable_context_for_limit(
+                    signal_state, limit_price, y_close, ticker=ticker,
+                    security_profile=security_profile,
+                    limit_price_milli=limit_price_milli, y_close_milli=y_close_milli,
+                )
+                if not bool(orderable_context):
+                    if profile_enabled:
+                        _candidate_profile_add(
+                            profile_stats, "portfolio_candidate_plan_sec", plan_started
+                        )
+                    continue
+
+            if profile_enabled:
+                _candidate_profile_add(
+                    profile_stats, "portfolio_candidate_plan_sec", plan_started
+                )
 
             resize_started = time.perf_counter() if profile_enabled else None
             candidate_capital_context = sizing_capital_context_cache.get(id(candidate_params))
@@ -767,7 +829,6 @@ def _collect_extended_candidates(
                 security_profile=security_profile,
                 trade_date=today,
             )
-            stop_price_milli = price_to_milli(init_sl)
             qty = _resolve_candidate_qty_cached(
                 sizing_qty_cache,
                 limit_price=limit_price, init_sl=init_sl, sizing_equity=sizing_equity,
