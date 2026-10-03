@@ -33,6 +33,8 @@ from services.optimizer.outer_rolling_params import (
 )
 from services.optimizer.outer_rolling_policy import _build_policy_items
 from services.optimizer.robustness import list_local_min_score_finalists
+from services.optimizer.score_display import format_optimizer_score_for_display
+from services.optimizer.study_utils import is_qualified_trial_value
 
 
 @dataclass(frozen=True)
@@ -422,9 +424,6 @@ def select_trial_budget_from_validation(
     }
 
 
-ADAPTIVE_VALIDATION_PROGRESS_INTERVAL_TRIALS = 10
-
-
 def _adaptive_observation_start(spec: ValidationBudgetSpec) -> int:
     return int(
         spec.observation_start_trial
@@ -471,6 +470,7 @@ class AdaptiveValidationBudgetController:
         self.validation_end_date = str(validation_end_date)
         self.progress_prefix = str(progress_prefix or "").strip()
         self.state_key = f"strategy_param_validation_state::{spec.protocol}"
+        self._progress_legend_printed = False
 
     def _empty_state(self) -> dict[str, Any]:
         return {
@@ -515,29 +515,79 @@ class AdaptiveValidationBudgetController:
     def _progress_label(self) -> str:
         return f"{self.progress_prefix} " if self.progress_prefix else ""
 
-    def _print_search_progress(self, state: dict[str, Any], trial_count: int, *, force: bool = False) -> None:
-        count = int(trial_count)
-        if not force and count % ADAPTIVE_VALIDATION_PROGRESS_INTERVAL_TRIALS != 0:
+    def _print_progress_legend_once(self) -> None:
+        if self._progress_legend_printed:
             return
+        print(
+            f"{self._progress_label()}逐 Trial：Train=training結果 | "
+            "Policy=新/既有/未成形 | Val=REPLAY/REUSE/- | "
+            "Score=本次validation | Best=目前最佳N*/score | NoImp=連續未改善/patience",
+            flush=True,
+        )
+        self._progress_legend_printed = True
+
+    def _trial_training_display(self, study, count: int) -> tuple[str, float]:
+        trials = list(getattr(study, "trials", []) or [])
+        if count < 1 or count > len(trials):
+            return "-", 0.0
+        trial = trials[count - 1]
+        duration = trial.duration.total_seconds() if getattr(trial, "duration", None) else 0.0
+        value = getattr(trial, "value", None)
+        if value is None:
+            state_name = getattr(getattr(trial, "state", None), "name", "UNKNOWN")
+            return str(state_name), float(duration)
+        if not is_qualified_trial_value(value):
+            fail_reason = str((getattr(trial, "user_attrs", {}) or {}).get("fail_reason") or "策略無效")
+            return f"淘汰[{fail_reason}]", float(duration)
+        return format_optimizer_score_for_display(value, decimals=3), float(duration)
+
+    def _print_trial_progress(self, study, state: dict[str, Any], record: dict[str, Any]) -> None:
+        self._print_progress_legend_once()
+        count = int(record.get("trials") or 0)
+        train_text, train_sec = self._trial_training_display(study, count)
+        source = str(record.get("validation_source") or "UNAVAILABLE")
+        if source == "EVALUATED":
+            policy_text = "新"
+            validation_text = "REPLAY"
+        elif source == "REUSED_SAME_SIGNATURE":
+            policy_text = "既有"
+            validation_text = "REUSE"
+        else:
+            policy_text = "未成形"
+            validation_text = "-"
+
+        score_text = (
+            "-"
+            if record.get("validation_score") is None
+            else f"{float(record['validation_score']):.6f}"
+        )
         best_trials = state.get("best_trials")
         best_score = state.get("best_validation_score")
+        best_text = (
+            "-"
+            if best_trials is None or best_score is None
+            else f"N{int(best_trials)}/{float(best_score):.6f}"
+        )
         last_improvement = state.get("last_improvement_trial")
         no_improve = (
             "-"
             if last_improvement is None
             else str(max(0, count - int(last_improvement)))
         )
-        min_stop = _adaptive_min_stop_trial(self.spec)
-        eligible = "Y" if count >= min_stop else "N"
-        best_text = "-" if best_trials is None else f"N{int(best_trials)}"
-        score_text = "-" if best_score is None else f"{float(best_score):.3f}"
+        patience = int(self.spec.patience_trials or 0)
+        eligible = "是" if count >= _adaptive_min_stop_trial(self.spec) else "否"
+        elapsed = max(0.0, float(train_sec) + float(record.get("observation_wall_sec") or 0.0))
+        events: list[str] = []
+        if bool(record.get("improved")):
+            events.append("★ NEW BEST")
+        if state.get("stop_reason") == "validation_plateau" and int(state.get("stop_trial") or 0) == count:
+            events.append("→ EARLY STOP")
+        event_text = f" | {' '.join(events)}" if events else ""
         print(
-            f"{self._progress_label()}[INNER SEARCH] trial={count}/{int(self.spec.max_trials)} | "
-            f"validation obs={len(list(state.get('observation_results') or []))} | "
-            f"replay={int(state.get('actual_validation_replays', 0) or 0)} | "
-            f"reuse={int(state.get('reused_validation_observations', 0) or 0)} | "
-            f"best={best_text}/{score_text} | no_improve={no_improve}/{int(self.spec.patience_trials or 0)} | "
-            f"stop_eligible={eligible}",
+            f"{self._progress_label()}T{count:03d}/{int(self.spec.max_trials):03d} | "
+            f"Train={train_text} | Policy={policy_text} | Val={validation_text} | "
+            f"Score={score_text} | Best={best_text} | NoImp={no_improve}/{patience} | "
+            f"可停止={eligible} | {elapsed:.1f}s{event_text}",
             flush=True,
         )
 
@@ -583,9 +633,10 @@ class AdaptiveValidationBudgetController:
                 ) + 1
             else:
                 replay_started = time.perf_counter()
+                self._print_progress_legend_once()
                 print(
-                    f"{self._progress_label()}[VALIDATION] trial={count} | policy changed | "
-                    f"replay START | holdout={self.validation_start_date}~{self.validation_end_date}",
+                    f"{self._progress_label()}↳ T{count:03d}/{int(self.spec.max_trials):03d} "
+                    f"正在跑 Validation REPLAY | {self.validation_start_date}~{self.validation_end_date}",
                     flush=True,
                 )
                 metrics_record = _evaluate_policy_item_on_validation(
@@ -617,19 +668,6 @@ class AdaptiveValidationBudgetController:
                 state["last_improvement_trial"] = count
                 record["improved"] = True
 
-        if record.get("validation_source") == "EVALUATED":
-            score_text = (
-                "-"
-                if record.get("validation_score") is None
-                else f"{float(record['validation_score']):.3f}"
-            )
-            status_text = "NEW BEST" if bool(record.get("improved")) else "DONE"
-            print(
-                f"{self._progress_label()}[VALIDATION] trial={count} | score={score_text} | "
-                f"replay={float(record.get('validation_replay_sec') or 0.0):.1f}s | {status_text}",
-                flush=True,
-            )
-
         observation_sec = max(0.0, time.perf_counter() - started)
         record["observation_wall_sec"] = float(observation_sec)
         state["validation_wall_sec"] = float(
@@ -650,6 +688,8 @@ class AdaptiveValidationBudgetController:
         ):
             state["stop_trial"] = count
             state["stop_reason"] = "validation_plateau"
+
+        self._print_trial_progress(study, state, record)
 
     def catch_up(self, study) -> dict[str, Any]:
         """Reconcile persisted validation state with already-completed study trials."""
@@ -676,14 +716,6 @@ class AdaptiveValidationBudgetController:
         if self._should_observe(completed):
             self._observe_prefix(study, state, completed)
             self._save_state(study, state)
-        self._print_search_progress(
-            state,
-            completed,
-            force=(
-                bool(state.get("stop_reason"))
-                or completed == _adaptive_observation_start(self.spec)
-            ),
-        )
         if state.get("stop_reason"):
             study.stop()
 
