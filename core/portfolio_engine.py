@@ -238,6 +238,11 @@ def run_portfolio_timeline(
 
     replay_progress_start = time.perf_counter()
     replay_total_days = max(0, len(sorted_dates) - start_idx)
+    # AI註: sizing fee/tax contracts are immutable for a params/security family
+    # except the explicitly date-keyed bond-ETF tax rule.  Share the cache
+    # across replay days so CandidateScan does not rebuild the same contract
+    # on every active day.
+    candidate_sizing_fee_context_cache = {}
     for i in range(start_idx, len(sorted_dates)):
         t_day_start = time.perf_counter() if profile_timing_enabled else None
         sim_days += 1
@@ -545,6 +550,7 @@ def run_portfolio_timeline(
                             and replay_selector_trace_rows is None
                             and not bool(getattr(day_params, "use_breakout_quality_ranking", False))
                         ),
+                        sizing_fee_context_cache=candidate_sizing_fee_context_cache,
                         profile_stats=candidate_subprofile,
                     )
                 if profile_timing_enabled:

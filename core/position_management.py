@@ -11,9 +11,14 @@ from typing import Callable
 import pandas as pd
 
 from core.exit_priority import resolve_stop_tp_hits
-from core.exact_accounting import milli_to_price, price_to_milli
+from core.exact_accounting import (
+    milli_to_price,
+    price_to_milli,
+    round_price_to_tick_milli,
+    round_price_to_tick_milli_for_tick_profile,
+)
 from core.price_utils import (
-    adjust_long_sell_fill_price, adjust_long_stop_price,
+    adjust_long_sell_fill_price,
     calc_half_take_profit_sell_qty, get_exit_sell_block_reason,
 )
 
@@ -66,12 +71,26 @@ def _update_trailing_stop(position, *, y_high, y_atr, params, sync_display_field
 
     if made_new_high and not pd.isna(y_atr):
         trail_reference = milli_to_price(highest_high_milli)
-        candidate_trail = adjust_long_stop_price(
-            trail_reference - (y_atr * params.atr_times_trail),
-            ticker=position.get('ticker'),
-            security_profile=position.get('security_profile'),
+        raw_candidate_trail = trail_reference - (y_atr * params.atr_times_trail)
+        security_profile = position.get('security_profile')
+        tick_profile = (
+            security_profile.get('tick_profile')
+            if isinstance(security_profile, dict)
+            else None
         )
-        candidate_trail_milli = price_to_milli(candidate_trail)
+        if tick_profile:
+            candidate_trail_milli = round_price_to_tick_milli_for_tick_profile(
+                raw_candidate_trail,
+                'up',
+                tick_profile,
+            )
+        else:
+            candidate_trail_milli = round_price_to_tick_milli(
+                raw_candidate_trail,
+                direction='up',
+                ticker=position.get('ticker'),
+                security_profile=security_profile,
+            )
         position['trailing_stop_milli'] = max(previous_trailing_milli, candidate_trail_milli)
 
     position['sl_milli'] = max(position['initial_stop_milli'], position['trailing_stop_milli'])

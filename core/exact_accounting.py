@@ -405,19 +405,38 @@ def _round_price_to_tick_milli_cached(price_text: str, direction: str, tick_prof
     return _price_text_to_milli_cached(str(rounded_ratio * tick_decimal))
 
 
-def round_price_to_tick_milli(price, direction: str = "nearest", *, ticker=None, security_profile=None, cfi_code=None, security_name=None) -> int:
-    resolved_profile = resolve_security_profile(security_profile, ticker=ticker, cfi_code=cfi_code, security_name=security_name)
-    tick_profile = resolved_profile.get("tick_profile", _TICK_PROFILE_STOCK)
+def round_price_to_tick_milli_for_tick_profile(price, direction: str, tick_profile: str) -> int:
+    """Round a price directly against an already-resolved tick profile.
+
+    This is the execution-hotpath form of :func:`round_price_to_tick_milli`.
+    Callers may use it only when they already own a canonical security profile;
+    the tick ladder and exact Decimal fallback remain owned here.
+    """
+    normalized_tick_profile = (
+        _TICK_PROFILE_FUND if tick_profile == _TICK_PROFILE_FUND else _TICK_PROFILE_STOCK
+    )
     price_type = type(price)
     if price_type is int:
-        numeric_result = _round_price_to_tick_milli_numeric(float(price), direction, tick_profile)
+        numeric_result = _round_price_to_tick_milli_numeric(
+            float(price), direction, normalized_tick_profile
+        )
         if numeric_result is not None:
             return numeric_result
     elif price_type is float or price_type.__module__ == "numpy":
-        numeric_result = _round_price_to_tick_milli_numeric(float(price), direction, tick_profile)
+        numeric_result = _round_price_to_tick_milli_numeric(
+            float(price), direction, normalized_tick_profile
+        )
         if numeric_result is not None:
             return numeric_result
-    return _round_price_to_tick_milli_cached(str(price), direction, tick_profile)
+    return _round_price_to_tick_milli_cached(
+        str(price), direction, normalized_tick_profile
+    )
+
+
+def round_price_to_tick_milli(price, direction: str = "nearest", *, ticker=None, security_profile=None, cfi_code=None, security_name=None) -> int:
+    resolved_profile = resolve_security_profile(security_profile, ticker=ticker, cfi_code=cfi_code, security_name=security_name)
+    tick_profile = resolved_profile.get("tick_profile", _TICK_PROFILE_STOCK)
+    return round_price_to_tick_milli_for_tick_profile(price, direction, tick_profile)
 
 
 CHARGE_ROUNDING_NEAREST_MILLI = "nearest_milli"
