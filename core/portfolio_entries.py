@@ -1,4 +1,3 @@
-from core.capital_policy import resolve_portfolio_entry_budget
 from core.fee_rebate import accrue_fee_rebate
 from core.exact_accounting import (
     coerce_money_like_to_milli,
@@ -43,6 +42,8 @@ from core.portfolio_fast_data import (
     get_fast_entry_session_values,
     get_fast_live_shadow_cleanup_values,
     get_fast_management_session_values,
+    get_fast_current_high_low_values,
+    get_fast_current_session_values,
     get_fast_pos,
 )
 from core.trade_plans import (
@@ -100,12 +101,11 @@ def execute_reserved_entries_for_day(
         if pre_market_occupied >= max_positions:
             break
         candidate_params = cand.get('params_obj') or params
-        effective_entry_budget = resolve_portfolio_entry_budget(
-            milli_to_money(available_cash_milli),
-            candidate_params.initial_capital,
-            candidate_params,
-        )
-        effective_entry_budget_milli = coerce_money_like_to_milli(effective_entry_budget)
+        # Portfolio entry budget is the currently available broker cash. Keep the
+        # canonical milli-money value end-to-end; only the rare cash-cap fallback
+        # needs a display-money conversion.
+        effective_entry_budget = None
+        effective_entry_budget_milli = int(available_cash_milli)
 
         if cand.get('is_orderable') is False:
             continue
@@ -144,7 +144,7 @@ def execute_reserved_entries_for_day(
                 "max_qty": cand.get("max_qty"),
                 "candidate_sizing_capital": cand.get("sizing_capital"),
                 "sizing_equity": sizing_equity,
-                "effective_entry_budget": effective_entry_budget,
+                "effective_entry_budget": milli_to_money(effective_entry_budget_milli),
                 "available_cash_before": milli_to_money(available_cash_milli),
                 "reserved_cost": chosen_entry_plan.get("reserved_cost"),
                 "params_obj": candidate_params,
@@ -341,8 +341,16 @@ def cleanup_extended_signals_for_day(
     sizing_capital,
     extended_day_market_cache=None,
 ):
-    for ticker in sorted(active_extended_signals):
+    sorted_tickers = (
+        None if extended_day_market_cache is None
+        else extended_day_market_cache.get(("__meta__", "sorted_extended_tickers"))
+    )
+    if sorted_tickers is None:
+        sorted_tickers = sorted(active_extended_signals)
+    for ticker in sorted_tickers:
         signal_state = active_extended_signals.get(ticker)
+        if signal_state is None:
+            continue
         signal_params = resolve_signal_tracking_params(signal_state, params)
 
         if ticker in portfolio:
@@ -353,28 +361,31 @@ def cleanup_extended_signals_for_day(
         if fast_df is None:
             continue
 
-        t_pos = get_fast_pos(fast_df, today)
-        if t_pos < 0:
-            continue
-
-        if t_pos <= 0:
-            continue
         cached_day_market = (
             None if extended_day_market_cache is None
             else extended_day_market_cache.get(ticker)
         )
-        cached_management = (
+        if cached_day_market is not None:
+            t_pos = int(cached_day_market[0])
+        else:
+            t_pos = get_fast_pos(fast_df, today)
+        if t_pos <= 0:
+            continue
+        cached_previous = (
             cached_day_market[1]
             if cached_day_market is not None and int(cached_day_market[0]) == int(t_pos)
             else None
         )
+
         if is_extended_tbd_shadow_alive(signal_state):
-            if cached_management is not None:
-                (
-                    y_atr, y_ind_sell, y_close, y_high, t_open, t_high, t_low,
-                    t_close, t_volume,
-                ) = cached_management
-                if not y_ind_sell:
+            if cached_previous is not None:
+                y_atr, y_ind_sell, y_close, y_high = cached_previous
+                t_high, t_low = get_fast_current_high_low_values(fast_df, t_pos)
+                if y_ind_sell:
+                    t_open, t_high, t_low, t_close, t_volume = get_fast_current_session_values(
+                        fast_df, t_pos
+                    )
+                else:
                     t_open = t_close = t_volume = y_close = float('nan')
             else:
                 t_high, t_low, y_high, y_atr, y_ind_sell = (
@@ -386,15 +397,13 @@ def cleanup_extended_signals_for_day(
                         _t_high, _t_low, t_close, t_volume,
                     ) = get_fast_management_session_values(fast_df, t_pos)
                 else:
-                    # These values are not consumed by the canonical live-shadow fast
-                    # path unless an indicator exit is present.
                     t_open = t_close = t_volume = y_close = float('nan')
         else:
-            if cached_management is not None:
-                (
-                    y_atr, y_ind_sell, y_close, y_high, t_open, t_high, t_low,
-                    t_close, t_volume,
-                ) = cached_management
+            if cached_previous is not None:
+                y_atr, y_ind_sell, y_close, y_high = cached_previous
+                t_open, t_high, t_low, t_close, t_volume = get_fast_current_session_values(
+                    fast_df, t_pos
+                )
             else:
                 (
                     y_atr, y_ind_sell, y_close, y_high, t_open, t_high, t_low,

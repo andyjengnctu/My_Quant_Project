@@ -108,6 +108,45 @@ def get_fast_entry_session_values(data, t_pos, y_pos=None):
     )
 
 
+def get_fast_previous_management_values(data, t_pos):
+    """Return only completed previous-bar fields needed before today's execution."""
+    y_pos = int(t_pos) - 1
+    if is_packed_market_data(data):
+        return (
+            float(data['ATR'][y_pos]),
+            bool(data['ind_sell_signal'][y_pos]),
+            float(data['Close'][y_pos]),
+            float(data['High'][y_pos]),
+        )
+    dates = get_fast_dates(data)
+    y_row = data[dates[y_pos]]
+    return y_row['ATR'], bool(y_row['ind_sell_signal']), y_row['Close'], y_row['High']
+
+
+def get_fast_current_high_low_values(data, t_pos):
+    """Return current High/Low only; used after pre-market decisions are frozen."""
+    if is_packed_market_data(data):
+        return float(data['High'][t_pos]), float(data['Low'][t_pos])
+    dates = get_fast_dates(data)
+    t_row = data[dates[t_pos]]
+    return t_row['High'], t_row['Low']
+
+
+def get_fast_current_session_values(data, t_pos):
+    """Return current OHLCV without re-reading any previous-bar fields."""
+    if is_packed_market_data(data):
+        return (
+            float(data['Open'][t_pos]),
+            float(data['High'][t_pos]),
+            float(data['Low'][t_pos]),
+            float(data['Close'][t_pos]),
+            float(data['Volume'][t_pos]),
+        )
+    dates = get_fast_dates(data)
+    t_row = data[dates[t_pos]]
+    return t_row['Open'], t_row['High'], t_row['Low'], t_row['Close'], t_row['Volume']
+
+
 def get_fast_management_session_values(data, t_pos):
     """Return all current/previous fields required by canonical position management."""
     y_pos = int(t_pos) - 1

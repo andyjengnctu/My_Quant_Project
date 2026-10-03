@@ -23,12 +23,15 @@ from filters.breakout_quality.runtime import (
 
 from core.trade_plans import (
     build_extended_candidate_plan_from_signal,
+    calc_candidate_qty_for_capital,
     clone_shadow_position,
     build_normal_candidate_plan,
     create_signal_tracking_state,
     has_extended_signal_orderable_context_for_day,
+    has_extended_signal_orderable_context_for_limit,
     is_extended_signal_orderable_for_day,
     resize_candidate_plan_to_capital,
+    resolve_extended_candidate_plan_geometry,
     resolve_signal_tracking_params,
 )
 from core.extended_signals import (
@@ -44,8 +47,7 @@ from core.portfolio_fast_data import (
     get_fast_pos,
     get_fast_security_profile,
     get_fast_normal_signal_values,
-    get_fast_extended_signal_values,
-    get_fast_management_session_values,
+    get_fast_previous_management_values,
     get_fast_dates,
     get_pit_stats_from_index,
 )
@@ -549,6 +551,8 @@ def _collect_extended_candidates(
 
     sort_started = time.perf_counter() if profile_enabled else None
     sorted_extended_tickers = sorted(active_extended_signals)
+    if extended_day_market_cache is not None:
+        extended_day_market_cache[("__meta__", "sorted_extended_tickers")] = tuple(sorted_extended_tickers)
     if profile_enabled:
         _candidate_profile_add(profile_stats, "portfolio_candidate_sort_sec", sort_started)
     for ticker in sorted_extended_tickers:
@@ -581,18 +585,18 @@ def _collect_extended_candidates(
             else extended_day_market_cache.get(ticker)
         )
         if cached_day_market is not None and int(cached_day_market[0]) == int(t_pos):
-            management_values = cached_day_market[1]
+            previous_values = cached_day_market[1]
             information_date = cached_day_market[2]
-            y_close = management_values[2]
+            security_profile = cached_day_market[3]
         else:
-            management_values = get_fast_management_session_values(fast_df, t_pos)
+            previous_values = get_fast_previous_management_values(fast_df, t_pos)
             information_date = get_fast_dates(fast_df)[y_pos]
-            y_close = management_values[2]
+            security_profile = get_fast_security_profile(fast_df)
             if extended_day_market_cache is not None:
                 extended_day_market_cache[ticker] = (
-                    int(t_pos), management_values, information_date
+                    int(t_pos), previous_values, information_date, security_profile
                 )
-        security_profile = get_fast_security_profile(fast_df)
+        y_close = previous_values[2]
         candidate_capital_context = sizing_capital_context_cache.get(id(candidate_params))
         if candidate_capital_context is None:
             candidate_capital_context = build_position_sizing_capital_context(
@@ -608,104 +612,143 @@ def _collect_extended_candidates(
             security_profile=security_profile,
             trade_date=today,
         )
-        # AI註: training replay normally only needs orderable rows. Build the stable
-        # extended-plan levels first, but defer expensive exact position sizing until
-        # the existing canonical orderability-context check says today's fixed limit
-        # can actually be placed. collect_all_candidates keeps the old full diagnostic
-        # path and still sizes non-orderable rows.
-        plan_started = time.perf_counter() if profile_enabled else None
-        candidate_plan = build_extended_candidate_plan_from_signal(
-            signal_state,
-            sizing_equity,
-            candidate_params,
-            ticker=ticker,
-            security_profile=security_profile,
-            trade_date=today,
-            resize_to_capital=False,
-            copy_shadow_position=False,
-        )
-        if profile_enabled:
-            _candidate_profile_add(profile_stats, "portfolio_candidate_plan_sec", plan_started)
-        if candidate_plan is None:
-            continue
+        if not collect_all_candidates:
+            plan_started = time.perf_counter() if profile_enabled else None
+            geometry = resolve_extended_candidate_plan_geometry(
+                signal_state, candidate_params, ticker=ticker,
+                security_profile=security_profile,
+            )
+            if profile_enabled:
+                _candidate_profile_add(profile_stats, "portfolio_candidate_plan_sec", plan_started)
+            if geometry is None:
+                continue
+            (
+                limit_price, init_sl, init_trail, target_price, entry_atr,
+                orig_limit, entry_ref_price, _resolved_ticker, _resolved_profile,
+                signal_date, max_qty, entry_source, _source_entry_order_id,
+                _shadow_position,
+            ) = geometry
 
-        quality_started = time.perf_counter() if profile_enabled else None
-        quality_rank = _resolve_candidate_quality_ranking(
-            params=candidate_params,
-            ticker=ticker,
-            signal_date=candidate_plan.get("signal_date"),
-            information_date=information_date,
-            signal_state=signal_state,
-        )
-        if profile_enabled:
-            _candidate_profile_add(profile_stats, "portfolio_candidate_quality_rank_sec", quality_started)
+            quality_started = time.perf_counter() if profile_enabled else None
+            quality_rank = _resolve_candidate_quality_ranking(
+                params=candidate_params, ticker=ticker, signal_date=signal_date,
+                information_date=information_date, signal_state=signal_state,
+            )
+            if profile_enabled:
+                _candidate_profile_add(profile_stats, "portfolio_candidate_quality_rank_sec", quality_started)
 
-        limit_price_milli = price_to_milli(candidate_plan['limit_price'])
-        stop_price_milli = price_to_milli(candidate_plan['init_sl'])
-        y_close_milli = price_to_milli(y_close)
-        orderable_context = has_extended_signal_orderable_context_for_day(
-            signal_state,
-            candidate_plan,
-            y_close,
-            ticker=ticker,
-            security_profile=security_profile,
-            limit_price_milli=limit_price_milli,
-            y_close_milli=y_close_milli,
-        )
-        if (not collect_all_candidates) and (not bool(orderable_context)):
-            continue
+            limit_price_milli = price_to_milli(limit_price)
+            y_close_milli = price_to_milli(y_close)
+            orderable_context = has_extended_signal_orderable_context_for_limit(
+                signal_state, limit_price, y_close, ticker=ticker,
+                security_profile=security_profile,
+                limit_price_milli=limit_price_milli, y_close_milli=y_close_milli,
+            )
+            if not bool(orderable_context):
+                continue
 
-        resize_started = time.perf_counter() if profile_enabled else None
-        candidate_plan = resize_candidate_plan_to_capital(
-            candidate_plan,
-            sizing_equity,
-            candidate_params,
-            sizing_capital_context=candidate_capital_context,
-            sizing_fee_context=sizing_fee_context,
-            limit_price_milli=limit_price_milli,
-            stop_price_milli=stop_price_milli,
-            copy_plan=False,
-        )
-        if profile_enabled:
-            _candidate_profile_add(profile_stats, "portfolio_candidate_plan_sec", resize_started)
-        if candidate_plan is None:
-            continue
+            resize_started = time.perf_counter() if profile_enabled else None
+            stop_price_milli = price_to_milli(init_sl)
+            qty = calc_candidate_qty_for_capital(
+                limit_price, init_sl, sizing_equity, candidate_params,
+                ticker=ticker, security_profile=security_profile, trade_date=today,
+                max_qty=max_qty, sizing_capital_context=candidate_capital_context,
+                sizing_fee_context=sizing_fee_context,
+                limit_price_milli=limit_price_milli,
+                stop_price_milli=stop_price_milli,
+            )
+            if profile_enabled:
+                _candidate_profile_add(profile_stats, "portfolio_candidate_plan_sec", resize_started)
+            if qty <= 0:
+                continue
+            today_orderable = True
+            candidate_plan = None
+        else:
+            # Diagnostic/inspection mode preserves the complete plan payload.
+            plan_started = time.perf_counter() if profile_enabled else None
+            candidate_plan = build_extended_candidate_plan_from_signal(
+                signal_state, sizing_equity, candidate_params, ticker=ticker,
+                security_profile=security_profile, trade_date=today,
+                resize_to_capital=False, copy_shadow_position=False,
+            )
+            if profile_enabled:
+                _candidate_profile_add(profile_stats, "portfolio_candidate_plan_sec", plan_started)
+            if candidate_plan is None:
+                continue
 
-        today_orderable = bool(orderable_context and candidate_plan.get("qty", 0) > 0)
-        if (not collect_all_candidates) and (not today_orderable):
-            continue
+            quality_started = time.perf_counter() if profile_enabled else None
+            quality_rank = _resolve_candidate_quality_ranking(
+                params=candidate_params, ticker=ticker,
+                signal_date=candidate_plan.get("signal_date"),
+                information_date=information_date, signal_state=signal_state,
+            )
+            if profile_enabled:
+                _candidate_profile_add(profile_stats, "portfolio_candidate_quality_rank_sec", quality_started)
+
+            limit_price_milli = price_to_milli(candidate_plan['limit_price'])
+            stop_price_milli = price_to_milli(candidate_plan['init_sl'])
+            y_close_milli = price_to_milli(y_close)
+            orderable_context = has_extended_signal_orderable_context_for_day(
+                signal_state, candidate_plan, y_close, ticker=ticker,
+                security_profile=security_profile,
+                limit_price_milli=limit_price_milli, y_close_milli=y_close_milli,
+            )
+            resize_started = time.perf_counter() if profile_enabled else None
+            candidate_plan = resize_candidate_plan_to_capital(
+                candidate_plan, sizing_equity, candidate_params,
+                sizing_capital_context=candidate_capital_context,
+                sizing_fee_context=sizing_fee_context,
+                limit_price_milli=limit_price_milli,
+                stop_price_milli=stop_price_milli, copy_plan=False,
+            )
+            if profile_enabled:
+                _candidate_profile_add(profile_stats, "portfolio_candidate_plan_sec", resize_started)
+            if candidate_plan is None:
+                continue
+            today_orderable = bool(orderable_context and candidate_plan.get("qty", 0) > 0)
+            qty = candidate_plan.get("qty", 0)
+            limit_price = candidate_plan['limit_price']
+            init_sl = candidate_plan['init_sl']
+            init_trail = candidate_plan['init_trail']
+            target_price = candidate_plan['target_price']
+            entry_atr = candidate_plan['entry_atr']
+            orig_limit = candidate_plan.get('orig_limit')
+            entry_ref_price = candidate_plan.get('entry_ref_price')
+            signal_date = candidate_plan.get('signal_date')
+            max_qty = candidate_plan.get('max_qty')
+            entry_source = str((signal_state or {}).get('source') or 'extended')
 
         row_started = time.perf_counter() if profile_enabled else None
         candidate_row = _make_candidate_row(
             buy_sort_method=buy_sort_method,
             ticker=ticker,
-            candidate_type=str((signal_state or {}).get('source') or 'extended'),
-            est_limit_px=candidate_plan['limit_price'],
+            candidate_type=entry_source,
+            est_limit_px=limit_price,
             ev=ev,
-            y_atr=candidate_plan['orig_atr'],
+            y_atr=entry_atr,
             t_pos=t_pos,
             y_pos=y_pos,
-            est_qty=candidate_plan['qty'],
+            est_qty=qty,
             win_rate=win_rate,
             trade_count=trade_count,
             asset_growth_pct=asset_growth_pct,
-            est_init_sl=candidate_plan['init_sl'],
-            est_init_trail=candidate_plan['init_trail'],
-            est_target_price=candidate_plan['target_price'],
-            entry_atr=candidate_plan['entry_atr'],
+            est_init_sl=init_sl,
+            est_init_trail=init_trail,
+            est_target_price=target_price,
+            entry_atr=entry_atr,
             is_orderable=today_orderable,
             params=candidate_params,
-            security_profile=candidate_plan.get('security_profile'),
+            security_profile=security_profile,
             trade_date=today,
-            signal_date=candidate_plan.get('signal_date'),
-            sizing_capital=candidate_plan.get('sizing_capital'),
+            signal_date=signal_date,
+            sizing_capital=sizing_equity,
             signal_state=signal_state,
-            continuation_invalidation_barrier=candidate_plan.get('continuation_invalidation_barrier'),
-            continuation_completion_barrier=candidate_plan.get('continuation_completion_barrier'),
-            entry_ref_price=candidate_plan.get('entry_ref_price'),
-            shadow_position_state=candidate_plan.get('shadow_position_state'),
-            shadow_position_state_is_snapshot=(candidate_plan.get('shadow_position_state') is not None),
-            max_qty=candidate_plan.get('max_qty'),
+            continuation_invalidation_barrier=init_sl,
+            continuation_completion_barrier=target_price,
+            entry_ref_price=entry_ref_price,
+            shadow_position_state=(None if candidate_plan is None else candidate_plan.get('shadow_position_state')),
+            shadow_position_state_is_snapshot=(candidate_plan is not None and candidate_plan.get('shadow_position_state') is not None),
+            max_qty=max_qty,
             prev_close=y_close,
             quality_rank=quality_rank,
             ranking_context=ranking_context,

@@ -6,6 +6,7 @@ from core.position_management import complete_position_entry_session, inherit_sh
 from core.exact_accounting import (
     build_buy_ledger,
     build_buy_ledger_from_price,
+    calc_cash_buy_total_milli_from_milli,
     build_sell_ledger_from_price,
     calc_initial_risk_total_milli,
     milli_to_money,
@@ -43,21 +44,22 @@ def _find_affordable_qty(limit_price, max_qty, available_cash_milli, params):
     if price_milli <= 0:
         return 0, 0
 
-    # # (AI註: 先用不含手續費的理論上限定位到可負擔股數附近，再由 exact accounting 微調；帳務仍由 build_buy_ledger() 單一真理來源決定)
+    # # (AI註: 先用不含手續費的理論上限定位到可負擔股數附近，再由 exact accounting 的
+    # #        broker cash-debit scalar helper 微調；不另造手續費公式。)
     candidate_qty = min(int(max_qty), int(available_cash_milli) // int(price_milli))
     if candidate_qty <= 0:
         return 0, 0
 
-    reserved_cost_milli = build_buy_ledger(price_milli, candidate_qty, params)["cash_buy_total_milli"]
+    reserved_cost_milli = calc_cash_buy_total_milli_from_milli(price_milli, candidate_qty)
     while candidate_qty > 0 and reserved_cost_milli > int(available_cash_milli):
         candidate_qty -= 1
         if candidate_qty <= 0:
             return 0, 0
-        reserved_cost_milli = build_buy_ledger(price_milli, candidate_qty, params)["cash_buy_total_milli"]
+        reserved_cost_milli = calc_cash_buy_total_milli_from_milli(price_milli, candidate_qty)
 
     while candidate_qty < int(max_qty):
         next_qty = candidate_qty + 1
-        next_cost_milli = build_buy_ledger(price_milli, next_qty, params)["cash_buy_total_milli"]
+        next_cost_milli = calc_cash_buy_total_milli_from_milli(price_milli, next_qty)
         if next_cost_milli > int(available_cash_milli):
             break
         candidate_qty = next_qty
@@ -67,7 +69,7 @@ def _find_affordable_qty(limit_price, max_qty, available_cash_milli, params):
     if candidate_qty <= 0:
         return 0, 0
 
-    reserved_cost_milli = build_buy_ledger(price_milli, candidate_qty, params)["cash_buy_total_milli"]
+    reserved_cost_milli = calc_cash_buy_total_milli_from_milli(price_milli, candidate_qty)
     if reserved_cost_milli > int(available_cash_milli):
         return 0, 0
 
@@ -83,6 +85,62 @@ def _resolve_candidate_sizing_capital(candidate_plan, fallback_capital):
     if sizing_capital is None or pd.isna(sizing_capital):
         return fallback_capital
     return sizing_capital
+
+
+# # (AI註: 單一真理來源 - 候選 sizing 的 exact qty 計算。
+# #        dict-based plan 與 training hot path 都必須共用此 primitive，避免為了效能複製 qty/board-lot 規則。)
+def calc_candidate_qty_for_capital(
+    limit_price,
+    init_sl,
+    sizing_capital,
+    params,
+    *,
+    ticker=None,
+    security_profile=None,
+    trade_date=None,
+    max_qty=None,
+    sizing_capital_context=None,
+    sizing_fee_context=None,
+    limit_price_milli=None,
+    stop_price_milli=None,
+):
+    if pd.isna(limit_price) or pd.isna(init_sl):
+        return 0
+
+    resolved_limit_price_milli = (
+        price_to_milli(limit_price) if limit_price_milli is None else int(limit_price_milli)
+    )
+    resolved_stop_price_milli = (
+        price_to_milli(init_sl) if stop_price_milli is None else int(stop_price_milli)
+    )
+    qty = calc_position_size(
+        limit_price,
+        init_sl,
+        sizing_capital,
+        params.fixed_risk,
+        params,
+        ticker=ticker,
+        security_profile=security_profile,
+        trade_date=trade_date,
+        _capital_context=sizing_capital_context,
+        _fee_context=sizing_fee_context,
+        _buy_price_milli=resolved_limit_price_milli,
+        _stop_price_milli=resolved_stop_price_milli,
+    )
+    if max_qty is not None:
+        try:
+            resolved_max_qty = int(max_qty)
+        except (TypeError, ValueError):
+            resolved_max_qty = 0
+        if resolved_max_qty > 0:
+            qty = min(qty, resolved_max_qty)
+    if sizing_fee_context is not None:
+        return apply_board_lot_preferred_qty_milli(
+            resolved_limit_price_milli,
+            qty,
+            sizing_fee_context[5],
+        )
+    return apply_board_lot_preferred_qty(limit_price, qty, params)
 
 
 # # (AI註: 單一真理來源 - 候選單在不同資金上限下的 qty / is_orderable 重算統一由此處理)
@@ -107,42 +165,20 @@ def resize_candidate_plan_to_capital(
 
     resolved_sizing_capital = _resolve_candidate_sizing_capital(candidate_plan, sizing_capital)
     resized_plan = dict(candidate_plan) if copy_plan else candidate_plan
-    resolved_limit_price_milli = (
-        price_to_milli(limit_price) if limit_price_milli is None else int(limit_price_milli)
-    )
-    resolved_stop_price_milli = (
-        price_to_milli(init_sl) if stop_price_milli is None else int(stop_price_milli)
-    )
-    qty = calc_position_size(
+    qty = calc_candidate_qty_for_capital(
         limit_price,
         init_sl,
         resolved_sizing_capital,
-        params.fixed_risk,
         params,
         ticker=candidate_plan.get("ticker"),
         security_profile=candidate_plan.get("security_profile"),
         trade_date=candidate_plan.get("trade_date"),
-        _capital_context=sizing_capital_context,
-        _fee_context=sizing_fee_context,
-        _buy_price_milli=resolved_limit_price_milli,
-        _stop_price_milli=resolved_stop_price_milli,
+        max_qty=candidate_plan.get("max_qty"),
+        sizing_capital_context=sizing_capital_context,
+        sizing_fee_context=sizing_fee_context,
+        limit_price_milli=limit_price_milli,
+        stop_price_milli=stop_price_milli,
     )
-    max_qty = candidate_plan.get("max_qty")
-    if max_qty is not None:
-        try:
-            resolved_max_qty = int(max_qty)
-        except (TypeError, ValueError):
-            resolved_max_qty = 0
-        if resolved_max_qty > 0:
-            qty = min(qty, resolved_max_qty)
-    if sizing_fee_context is not None:
-        qty = apply_board_lot_preferred_qty_milli(
-            resolved_limit_price_milli,
-            qty,
-            sizing_fee_context[5],
-        )
-    else:
-        qty = apply_board_lot_preferred_qty(limit_price, qty, params)
     resized_plan["qty"] = qty
     resized_plan["is_orderable"] = qty > 0
     resized_plan["sizing_capital"] = float(resolved_sizing_capital)

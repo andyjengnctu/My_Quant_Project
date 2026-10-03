@@ -66,6 +66,8 @@ def _build_cash_capped_entry_plan_for_candidate(candidate_row, effective_entry_b
     )
     if full_entry_plan is not None:
         return full_entry_plan
+    if effective_entry_budget is None:
+        effective_entry_budget = milli_to_money(effective_entry_budget_milli)
     return build_cash_capped_entry_plan(
         build_candidate_plan_seed(
             candidate_row,
