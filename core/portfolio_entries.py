@@ -5,8 +5,10 @@ from core.exact_accounting import (
     restore_money_like_from_milli,
 )
 from core.portfolio_entry_plans import (
+    build_candidate_plan_seed,  # B200 same-object compatibility alias; canonical owner remains portfolio_entry_plans.
     _build_candidate_full_entry_plan_if_affordable,
     _build_cash_capped_entry_plan_for_candidate,
+    _resolve_training_entry_plan,
 )
 from core.portfolio_entry_selection import (
     _candidate_binary_pass,
@@ -50,7 +52,6 @@ from core.portfolio_fast_data import (
 )
 from core.trade_plans import (
     clone_shadow_position,
-    entry_notional_meets_minimum,
     execute_pre_market_entry_plan,
     execute_pre_market_entry_plan_training,
     resolve_signal_tracking_params,
@@ -75,33 +76,6 @@ def _candidate_kind_label(candidate_type):
     if normalized == 'reentry':
         return 'Re-entry'
     return '新訊號'
-
-
-def _resolve_training_entry_plan(candidate_row, available_cash_milli, params, sizing_equity):
-    """Return the candidate row itself when its pre-sized reservation still fits.
-
-    Optimizer training already materialized canonical geometry, quantity and exact
-    reserved cash in the candidate row.  Rebuilding the same plan dict before every
-    attempted order is pure allocation overhead.  The rare cash-capped case keeps
-    the canonical builder as the fallback.
-    """
-    qty = int(candidate_row.get('qty', 0) or 0)
-    reserved_cost_milli = int(candidate_row.get('proj_cost_milli', 0) or 0)
-    if (
-        qty > 0
-        and reserved_cost_milli > 0
-        and reserved_cost_milli <= int(available_cash_milli)
-        and entry_notional_meets_minimum(candidate_row.get('limit_px'), qty, params)
-    ):
-        return candidate_row
-    return _build_cash_capped_entry_plan_for_candidate(
-        candidate_row,
-        None,
-        int(available_cash_milli),
-        params,
-        sizing_equity,
-        copy_shadow_position=False,
-    )
 
 
 def execute_reserved_entries_for_day(

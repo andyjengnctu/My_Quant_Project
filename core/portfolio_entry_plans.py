@@ -78,4 +78,29 @@ def _build_cash_capped_entry_plan_for_candidate(candidate_row, effective_entry_b
         params,
     )
 
+def _resolve_training_entry_plan(candidate_row, available_cash_milli, params, sizing_equity):
+    """Return the pre-sized candidate directly when its reservation still fits.
+
+    Optimizer training already materialized canonical geometry, quantity and exact
+    reserved cash in the candidate row. Rebuilding the same plan dict before every
+    attempted order is pure allocation overhead. The rare cash-capped case keeps
+    the canonical builder as the fallback.
+    """
+    qty = int(candidate_row.get('qty', 0) or 0)
+    reserved_cost_milli = int(candidate_row.get('proj_cost_milli', 0) or 0)
+    if (
+        qty > 0
+        and reserved_cost_milli > 0
+        and reserved_cost_milli <= int(available_cash_milli)
+        and entry_notional_meets_minimum(candidate_row.get('limit_px'), qty, params)
+    ):
+        return candidate_row
+    return _build_cash_capped_entry_plan_for_candidate(
+        candidate_row,
+        None,
+        int(available_cash_milli),
+        params,
+        sizing_equity,
+        copy_shadow_position=False,
+    )
 
