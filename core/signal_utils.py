@@ -11,6 +11,8 @@ from core.price_utils import adjust_long_buy_limit_array
 from core.feature_bank import coerce_feature_bank
 from core.native_optimizer_hotpath import (
     rolling_max_shift1_into as _native_rolling_max_shift1_into,
+    rolling_mean_shift1_into as _native_rolling_mean_shift1_into,
+    rolling_mean_std0_into as _native_rolling_mean_std0_into,
     supertrend_direction_into as _native_supertrend_direction_into,
 )
 from core.breakout_false_filter import build_breakout_false_filter_pass_condition
@@ -242,6 +244,34 @@ def _rolling_high_shift1(source, window, *, use_native_hotpath=False):
     return pd.Series(source).shift(1).rolling(window, min_periods=window).max().values
 
 
+def _rolling_mean_shift1(source, window, *, use_native_hotpath=False):
+    source = np.asarray(source, dtype=np.float64)
+    window = int(window)
+    if bool(use_native_hotpath) and _native_rolling_mean_shift1_into is not None and source.ndim == 1 and source.flags.c_contiguous:
+        out = np.empty(source.shape, dtype=np.float64)
+        try:
+            _native_rolling_mean_shift1_into(source, out, window)
+            return out
+        except (TypeError, ValueError, BufferError) as exc:
+            _warn_native_signal_fallback("shifted rolling mean", exc)
+    return pd.Series(source).shift(1).rolling(window, min_periods=window).mean().values
+
+
+def _rolling_mean_std0(source, window, *, use_native_hotpath=False):
+    source = np.asarray(source, dtype=np.float64)
+    window = int(window)
+    if bool(use_native_hotpath) and _native_rolling_mean_std0_into is not None and source.ndim == 1 and source.flags.c_contiguous:
+        mean_out = np.empty(source.shape, dtype=np.float64)
+        std_out = np.empty(source.shape, dtype=np.float64)
+        try:
+            _native_rolling_mean_std0_into(source, mean_out, std_out, window)
+            return mean_out, std_out
+        except (TypeError, ValueError, BufferError) as exc:
+            _warn_native_signal_fallback("rolling mean/std", exc)
+    series = pd.Series(source)
+    return series.rolling(window).mean().values, series.rolling(window).std(ddof=0).values
+
+
 def generate_signals(df, params, ticker=None, feature_bank=None, use_compiled_kernels=False, use_native_hotpath=False):
     resolved_ticker = ticker or df.attrs.get('ticker')
     if len(df) == 0:
@@ -340,27 +370,19 @@ def generate_signals(df, params, ticker=None, feature_bank=None, use_compiled_ke
 
         if use_bb:
             bb_len = int(params.bb_len)
-            close_series = pd.Series(C)
-            BB_Mid = _feature(
-                'close_rolling_mean',
-                (bb_len,),
-                lambda: close_series.rolling(bb_len).mean().values,
-            )
-            BB_Std = _feature(
-                'close_rolling_std0',
-                (bb_len,),
-                lambda: close_series.rolling(bb_len).std(ddof=0).values,
-            )
+            def _build_bb_pair():
+                return _rolling_mean_std0(C, bb_len, use_native_hotpath=use_native_hotpath)
+            bb_pair = _feature('close_rolling_mean_std0', (bb_len,), _build_bb_pair)
+            BB_Mid, BB_Std = bb_pair
             breakoutBuyCondition &= (C > (BB_Mid + params.bb_mult * BB_Std))
 
         if use_vol:
             vol_long_len = int(params.vol_long_len)
             vol_breakout_mult = float(getattr(params, 'vol_breakout_mult', 1.5))
-            volume_series = pd.Series(V)
             PrevVolAvg = _feature(
                 'volume_shift1_rolling_mean',
                 (vol_long_len,),
-                lambda: volume_series.shift(1).rolling(vol_long_len, min_periods=vol_long_len).mean().values,
+                lambda: _rolling_mean_shift1(V, vol_long_len, use_native_hotpath=use_native_hotpath),
             )
             breakoutBuyCondition &= (
                 np.isfinite(V)

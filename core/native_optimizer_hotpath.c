@@ -184,6 +184,88 @@ fail:
 
 
 
+/* Rolling mean with a one-bar shift: out[j] = mean(source[j-window:j]).
+ * NaNs preserve pandas rolling(min_periods=window) semantics. */
+static PyObject *native_rolling_mean_shift1_into(PyObject *self, PyObject *args) {
+    PyObject *source_obj, *out_obj;
+    Py_ssize_t window;
+    Py_buffer source_view = {0}, out_view = {0};
+    (void)self;
+    if (!PyArg_ParseTuple(args, "OOn", &source_obj, &out_obj, &window)) return NULL;
+    if (window <= 0) { PyErr_SetString(PyExc_ValueError, "window must be positive"); return NULL; }
+    if (!get_double_buffer(source_obj, &source_view)) goto fail;
+    if (!get_writable_double_buffer(out_obj, &out_view)) goto fail;
+    const Py_ssize_t n = source_view.len / source_view.itemsize;
+    if (out_view.len / out_view.itemsize != n) { PyErr_SetString(PyExc_ValueError, "source and output lengths must match"); goto fail; }
+    const double *src = (const double *)source_view.buf;
+    double *out = (double *)out_view.buf;
+    for (Py_ssize_t i=0;i<n;++i) out[i]=NAN;
+    if (n==0 || window>=n) { PyBuffer_Release(&out_view); PyBuffer_Release(&source_view); Py_RETURN_NONE; }
+    long double sum=0.0L;
+    Py_ssize_t nan_count=0;
+    for (Py_ssize_t i=0;i<n;++i) {
+        double v=src[i];
+        if (isnan(v)) nan_count++; else sum += (long double)v;
+        if (i>=window) {
+            double old=src[i-window];
+            if (isnan(old)) nan_count--; else sum -= (long double)old;
+        }
+        Py_ssize_t out_index=i+1;
+        if (out_index<n && out_index>=window && nan_count==0) out[out_index]=(double)(sum/(long double)window);
+    }
+    PyBuffer_Release(&out_view); PyBuffer_Release(&source_view); Py_RETURN_NONE;
+fail:
+    if (out_view.obj) PyBuffer_Release(&out_view);
+    if (source_view.obj) PyBuffer_Release(&source_view);
+    return NULL;
+}
+
+/* Rolling mean and population std (ddof=0) over the unshifted window.
+ * Designed for optimizer feature generation; NaN semantics match pandas with
+ * min_periods=window. */
+static PyObject *native_rolling_mean_std0_into(PyObject *self, PyObject *args) {
+    PyObject *source_obj, *mean_obj, *std_obj;
+    Py_ssize_t window;
+    Py_buffer source_view={0}, mean_view={0}, std_view={0};
+    (void)self;
+    if (!PyArg_ParseTuple(args, "OOOn", &source_obj, &mean_obj, &std_obj, &window)) return NULL;
+    if (window <= 0) { PyErr_SetString(PyExc_ValueError, "window must be positive"); return NULL; }
+    if (!get_double_buffer(source_obj,&source_view)) goto fail;
+    if (!get_writable_double_buffer(mean_obj,&mean_view)) goto fail;
+    if (!get_writable_double_buffer(std_obj,&std_view)) goto fail;
+    const Py_ssize_t n=source_view.len/source_view.itemsize;
+    if (mean_view.len/mean_view.itemsize!=n || std_view.len/std_view.itemsize!=n) { PyErr_SetString(PyExc_ValueError,"buffer lengths must match"); goto fail; }
+    const double *src=(const double*)source_view.buf;
+    double *mean_out=(double*)mean_view.buf, *std_out=(double*)std_view.buf;
+    for (Py_ssize_t i=0;i<n;++i) { mean_out[i]=NAN; std_out[i]=NAN; }
+    if (n==0 || window>n) { PyBuffer_Release(&std_view); PyBuffer_Release(&mean_view); PyBuffer_Release(&source_view); Py_RETURN_NONE; }
+    long double sum=0.0L, sumsq=0.0L;
+    Py_ssize_t nan_count=0;
+    for (Py_ssize_t i=0;i<n;++i) {
+        double v=src[i];
+        if (isnan(v)) nan_count++; else { long double lv=(long double)v; sum+=lv; sumsq+=lv*lv; }
+        if (i>=window) {
+            double old=src[i-window];
+            if (isnan(old)) nan_count--; else { long double lo=(long double)old; sum-=lo; sumsq-=lo*lo; }
+        }
+        if (i+1>=window && nan_count==0) {
+            long double mean=sum/(long double)window;
+            long double var=sumsq/(long double)window - mean*mean;
+            if (var<0.0L && var>-1e-18L) var=0.0L;
+            if (var<0.0L) var=0.0L;
+            mean_out[i]=(double)mean;
+            std_out[i]=sqrt((double)var);
+        }
+    }
+    PyBuffer_Release(&std_view); PyBuffer_Release(&mean_view); PyBuffer_Release(&source_view); Py_RETURN_NONE;
+fail:
+    if (std_view.obj) PyBuffer_Release(&std_view);
+    if (mean_view.obj) PyBuffer_Release(&mean_view);
+    if (source_view.obj) PyBuffer_Release(&source_view);
+    return NULL;
+}
+
+
 static int get_writable_byte_buffer(PyObject *obj, Py_buffer *view) {
     if (PyObject_GetBuffer(obj, view, PyBUF_CONTIG | PyBUF_FORMAT | PyBUF_WRITABLE) != 0) {
         return 0;
@@ -1363,55 +1445,28 @@ error:
     return NULL;
 }
 
-typedef struct {
-    PyObject *limit_obj;
-    PyObject *sl_obj;
-    PyObject *trail_obj;
-    PyObject *target_obj;
-    PyObject *entry_atr_obj;
-    PyObject *entry_ref_obj;
-    PyObject *signal_date_obj;
-    PyObject *max_qty_obj;
-    PyObject *entry_source_obj;
-    PyObject *source_order_obj;
-    PyObject *shadow_position;
-    int64_t limit_milli;
-    int64_t stop_milli;
-    int64_t y_close_milli;
-} ExtendedCandidateCoreNative;
-
-/*
- * Resolve the common live-shadow continuation geometry without allocating any
- * intermediate Python tuple.  Return codes:
- *   2 = success, out populated with borrowed refs
- *   1 = canonical blocked/non-orderable (public wrapper returns False)
- *   0 = unsupported edge case (public wrapper returns None)
- *  -1 = Python error
- */
-static int resolve_live_extended_candidate_core_values(
-    PyObject *signal_state,
-    PyObject *shadow_position,
-    double y_close,
-    PyObject *ticker_obj,
-    PyObject *security_profile,
-    ExtendedCandidateCoreNative *out
-) {
-    (void)ticker_obj;
-    if (!PyDict_Check(signal_state) || !PyDict_Check(shadow_position) || out == NULL) {
-        return 0;
+static PyObject *native_resolve_live_extended_candidate_core(PyObject *self, PyObject *args) {
+    PyObject *signal_state, *shadow_position, *ticker_obj, *security_profile;
+    double y_close;
+    (void)self;
+    if (!PyArg_ParseTuple(args, "OOdOO", &signal_state, &shadow_position, &y_close, &ticker_obj, &security_profile)) {
+        return NULL;
+    }
+    if (!PyDict_Check(signal_state) || !PyDict_Check(shadow_position)) {
+        Py_RETURN_NONE;
     }
     int64_t qty = 0;
     if (!dict_int64_default(shadow_position, "qty", 0, &qty) || qty <= 0) {
-        return 0;
+        Py_RETURN_NONE;
     }
     int is_fund = 0;
     if (!profile_is_fund(security_profile, &is_fund)) {
-        return 0;
+        Py_RETURN_NONE;
     }
 
     PyObject *pending_exit = dict_get_borrowed(shadow_position, "pending_exit_action");
     if (pending_exit != NULL && pending_exit != Py_None) {
-        return 1;
+        Py_RETURN_FALSE;
     }
 
     PyObject *entry_atr_obj = dict_get_borrowed(signal_state, "orig_atr");
@@ -1425,89 +1480,54 @@ static int resolve_live_extended_candidate_core_values(
         !object_to_double_noerr(sl_obj, &init_sl) ||
         !object_to_double_noerr(trail_obj, &init_trail) ||
         !object_to_double_noerr(target_obj, &target_price)) {
-        return 1;
+        Py_RETURN_FALSE;
     }
-    if (!(isfinite(entry_atr) && isfinite(limit_price) && isfinite(init_sl) &&
-          isfinite(init_trail) && isfinite(target_price) && isfinite(y_close))) {
-        return 1;
+    if (!(isfinite(entry_atr) && isfinite(limit_price) && isfinite(init_sl) && isfinite(init_trail) && isfinite(target_price) && isfinite(y_close))) {
+        Py_RETURN_FALSE;
     }
 
     const int64_t limit_milli = price_to_milli_double(limit_price);
     const int64_t stop_milli = price_to_milli_double(init_sl);
     const int64_t y_close_milli = price_to_milli_double(y_close);
     if (limit_milli <= 0 || y_close_milli <= 0) {
-        return 1;
+        Py_RETURN_FALSE;
     }
     int64_t limit_down_milli = 0;
     if (!calc_limit_down_milli_native(y_close_milli, is_fund, &limit_down_milli)) {
-        return 0;
+        Py_RETURN_NONE;
     }
     if (limit_milli < limit_down_milli) {
-        return 1;
+        Py_RETURN_FALSE;
     }
 
     PyObject *entry_ref_obj = dict_get_borrowed(signal_state, "entry_ref_price");
+    PyObject *owned_entry_ref_nan = NULL;
+    if (entry_ref_obj == NULL) {
+        owned_entry_ref_nan = PyFloat_FromDouble(NAN);
+        if (owned_entry_ref_nan == NULL) return NULL;
+        entry_ref_obj = owned_entry_ref_nan;
+    }
     PyObject *signal_date_obj = dict_get_borrowed(signal_state, "signal_date");
     PyObject *max_qty_obj = dict_get_borrowed(signal_state, "max_qty");
     PyObject *source_obj = dict_get_borrowed(signal_state, "source");
     PyObject *source_order_obj = dict_get_borrowed(signal_state, "source_entry_order_id");
 
-    if (entry_ref_obj == NULL) entry_ref_obj = Py_None;
     if (signal_date_obj == NULL) signal_date_obj = Py_None;
     if (max_qty_obj == NULL) max_qty_obj = Py_None;
     if (source_order_obj == NULL) source_order_obj = Py_None;
 
-    PyObject *entry_source_obj = source_obj;
+    PyObject *entry_source = NULL;
     int source_truth = source_obj == NULL ? 0 : PyObject_IsTrue(source_obj);
     if (source_truth < 0) {
         PyErr_Clear();
-        return 0;
+        Py_XDECREF(owned_entry_ref_nan);
+        Py_RETURN_NONE;
     }
-    if (!source_truth) entry_source_obj = NULL;
-
-    out->limit_obj = limit_obj;
-    out->sl_obj = sl_obj;
-    out->trail_obj = trail_obj;
-    out->target_obj = target_obj;
-    out->entry_atr_obj = entry_atr_obj;
-    out->entry_ref_obj = entry_ref_obj;
-    out->signal_date_obj = signal_date_obj;
-    out->max_qty_obj = max_qty_obj;
-    out->entry_source_obj = entry_source_obj;
-    out->source_order_obj = source_order_obj;
-    out->shadow_position = shadow_position;
-    out->limit_milli = limit_milli;
-    out->stop_milli = stop_milli;
-    out->y_close_milli = y_close_milli;
-    return 2;
-}
-
-static PyObject *native_resolve_live_extended_candidate_core(PyObject *self, PyObject *args) {
-    PyObject *signal_state, *shadow_position, *ticker_obj, *security_profile;
-    double y_close;
-    (void)self;
-    if (!PyArg_ParseTuple(args, "OOdOO", &signal_state, &shadow_position, &y_close, &ticker_obj, &security_profile)) {
-        return NULL;
-    }
-    ExtendedCandidateCoreNative core;
-    int rc = resolve_live_extended_candidate_core_values(
-        signal_state, shadow_position, y_close, ticker_obj, security_profile, &core
-    );
-    if (rc < 0) return NULL;
-    if (rc == 0) Py_RETURN_NONE;
-    if (rc == 1) Py_RETURN_FALSE;
-
-    PyObject *entry_source = NULL;
-    if (core.entry_source_obj != NULL) entry_source = PyObject_Str(core.entry_source_obj);
+    if (source_truth) entry_source = PyObject_Str(source_obj);
     else entry_source = PyUnicode_FromString("extended");
-    if (entry_source == NULL) return NULL;
-
-    PyObject *entry_ref = core.entry_ref_obj;
-    PyObject *owned_entry_ref_nan = NULL;
-    if (entry_ref == Py_None) {
-        owned_entry_ref_nan = PyFloat_FromDouble(NAN);
-        if (owned_entry_ref_nan == NULL) { Py_DECREF(entry_source); return NULL; }
-        entry_ref = owned_entry_ref_nan;
+    if (entry_source == NULL) {
+        Py_XDECREF(owned_entry_ref_nan);
+        return NULL;
     }
 
     PyObject *result = PyTuple_New(14);
@@ -1517,25 +1537,29 @@ static PyObject *native_resolve_live_extended_candidate_core(PyObject *self, PyO
         return NULL;
     }
 #define SET_TUPLE_INCREF(idx, obj) do { PyObject *_o = (obj); Py_INCREF(_o); PyTuple_SET_ITEM(result, (idx), _o); } while (0)
-    SET_TUPLE_INCREF(0, core.limit_obj);
-    SET_TUPLE_INCREF(1, core.sl_obj);
-    SET_TUPLE_INCREF(2, core.trail_obj);
-    SET_TUPLE_INCREF(3, core.target_obj);
-    SET_TUPLE_INCREF(4, core.entry_atr_obj);
-    SET_TUPLE_INCREF(5, entry_ref);
-    Py_XDECREF(owned_entry_ref_nan);
-    SET_TUPLE_INCREF(6, core.signal_date_obj);
-    SET_TUPLE_INCREF(7, core.max_qty_obj);
+    SET_TUPLE_INCREF(0, limit_obj);
+    SET_TUPLE_INCREF(1, sl_obj);
+    SET_TUPLE_INCREF(2, trail_obj);
+    SET_TUPLE_INCREF(3, target_obj);
+    SET_TUPLE_INCREF(4, entry_atr_obj);
+    SET_TUPLE_INCREF(5, entry_ref_obj);
+    if (owned_entry_ref_nan != NULL) { Py_DECREF(owned_entry_ref_nan); owned_entry_ref_nan = NULL; }
+    SET_TUPLE_INCREF(6, signal_date_obj);
+    SET_TUPLE_INCREF(7, max_qty_obj);
     PyTuple_SET_ITEM(result, 8, entry_source); /* steals */
-    SET_TUPLE_INCREF(9, core.source_order_obj);
-    SET_TUPLE_INCREF(10, core.shadow_position);
-    PyTuple_SET_ITEM(result, 11, PyLong_FromLongLong((long long)core.limit_milli));
-    PyTuple_SET_ITEM(result, 12, PyLong_FromLongLong((long long)core.stop_milli));
-    PyTuple_SET_ITEM(result, 13, PyLong_FromLongLong((long long)core.y_close_milli));
+    SET_TUPLE_INCREF(9, source_order_obj);
+    SET_TUPLE_INCREF(10, shadow_position);
+    PyTuple_SET_ITEM(result, 11, PyLong_FromLongLong((long long)limit_milli));
+    PyTuple_SET_ITEM(result, 12, PyLong_FromLongLong((long long)stop_milli));
+    PyTuple_SET_ITEM(result, 13, PyLong_FromLongLong((long long)y_close_milli));
 #undef SET_TUPLE_INCREF
-    if (PyErr_Occurred()) { Py_DECREF(result); return NULL; }
+    if (PyErr_Occurred()) {
+        Py_DECREF(result);
+        return NULL;
+    }
     return result;
 }
+
 
 static int parse_int_tuple_item(PyObject *seq, Py_ssize_t index, int64_t *out) {
     if (!PyTuple_Check(seq) || index < 0 || index >= PyTuple_GET_SIZE(seq)) return 0;
@@ -1590,15 +1614,27 @@ static PyObject *native_resolve_live_extended_candidate_batch_sized(PyObject *se
             PyErr_Clear(); Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
         }
 
-        ExtendedCandidateCoreNative core;
-        int core_rc = resolve_live_extended_candidate_core_values(
-            signal_state, shadow_position, y_close, ticker, security_profile, &core
-        );
-        if (core_rc < 0) { Py_DECREF(items); Py_DECREF(out); return NULL; }
-        if (core_rc == 0) { Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue; }
-        if (core_rc == 1) { Py_INCREF(Py_False); PyList_SET_ITEM(out, i, Py_False); continue; }
-        if (!PyTuple_Check(capital_context) || PyTuple_GET_SIZE(capital_context) < 3 ||
+        PyObject *core_args = PyTuple_New(5);
+        if (core_args == NULL) { Py_DECREF(items); Py_DECREF(out); return NULL; }
+#define SET_CORE_ARG(idx, obj) do { PyObject *_o=(obj); Py_INCREF(_o); PyTuple_SET_ITEM(core_args,(idx),_o); } while(0)
+        SET_CORE_ARG(0, signal_state);
+        SET_CORE_ARG(1, shadow_position);
+        PyTuple_SET_ITEM(core_args, 2, PyFloat_FromDouble(y_close));
+        SET_CORE_ARG(3, ticker);
+        SET_CORE_ARG(4, security_profile);
+#undef SET_CORE_ARG
+        if (PyErr_Occurred()) { Py_DECREF(core_args); Py_DECREF(items); Py_DECREF(out); return NULL; }
+        PyObject *core = native_resolve_live_extended_candidate_core(NULL, core_args);
+        Py_DECREF(core_args);
+        if (core == NULL) { Py_DECREF(items); Py_DECREF(out); return NULL; }
+        if (core == Py_None || core == Py_False) {
+            PyList_SET_ITEM(out, i, core); /* steals owned core reference */
+            continue;
+        }
+        if (!PyTuple_Check(core) || PyTuple_GET_SIZE(core) < 14 ||
+            !PyTuple_Check(capital_context) || PyTuple_GET_SIZE(capital_context) < 3 ||
             !PyTuple_Check(fee_context) || PyTuple_GET_SIZE(fee_context) < 6) {
+            Py_DECREF(core);
             Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
         }
 
@@ -1614,30 +1650,31 @@ static PyObject *native_resolve_live_extended_candidate_batch_sized(PyObject *se
             !parse_int_tuple_item(fee_context,4,&rounding_mode_code) ||
             !parse_int_tuple_item(fee_context,5,&min_entry_notional_milli) ||
             rounding_mode_code < 0) {
+            Py_DECREF(core);
             Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
         }
 
-        int64_t limit_milli = core.limit_milli;
-        int64_t stop_milli = core.stop_milli;
+        int64_t limit_milli = PyLong_AsLongLong(PyTuple_GET_ITEM(core,11));
+        int64_t stop_milli = PyLong_AsLongLong(PyTuple_GET_ITEM(core,12));
         if (PyErr_Occurred()) {
-            PyErr_Clear(); Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
+            PyErr_Clear(); Py_DECREF(core); Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
         }
         int64_t qty = calc_position_size_exact_core(
             limit_milli, stop_milli, cap_milli, max_risk_milli, max_position_cap_milli,
             buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, rounding_mode_code == 1,
             (int64_t)broker_fee_ppm_ll, (int64_t)broker_min_fee_milli_ll
         );
-        PyObject *max_qty_obj = core.max_qty_obj;
+        PyObject *max_qty_obj = PyTuple_GET_ITEM(core,7);
         if (max_qty_obj != Py_None) {
             int64_t max_qty = 0;
             if (!object_to_int64_noerr(max_qty_obj, &max_qty)) {
-                Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
+                Py_DECREF(core); Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
             }
             if (max_qty > 0 && qty > max_qty) qty = max_qty;
         }
         qty = apply_board_lot_preferred_qty_native(limit_milli, qty, min_entry_notional_milli);
         if (qty <= 0) {
-            Py_INCREF(Py_False); PyList_SET_ITEM(out, i, Py_False); continue;
+            Py_DECREF(core); Py_INCREF(Py_False); PyList_SET_ITEM(out, i, Py_False); continue;
         }
 
         const int64_t gross_buy = limit_milli * qty;
@@ -1645,220 +1682,33 @@ static PyObject *native_resolve_live_extended_candidate_batch_sized(PyObject *se
             gross_buy, (int64_t)broker_fee_ppm_ll, (int64_t)broker_min_fee_milli_ll
         );
         const int64_t proj_cost_milli = gross_buy + broker_fee;
-        double limit_price = 0.0;
-        if (!object_to_double_noerr(core.limit_obj, &limit_price)) {
-            Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
-        }
+        double limit_price = PyFloat_AsDouble(PyTuple_GET_ITEM(core,0));
         if (PyErr_Occurred() || !isfinite(limit_price) || limit_price <= 0.0 || !isfinite(y_close)) {
-            PyErr_Clear(); Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
+            PyErr_Clear(); Py_DECREF(core); Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
         }
         double sort_value = (y_close / limit_price - 1.0) * 100.0;
         if (sort_value < 0.0) sort_value = 0.0;
 
         PyObject *result = PyTuple_New(13);
-        if (result == NULL) { Py_DECREF(items); Py_DECREF(out); return NULL; }
-#define COPY_OBJ(dst, obj) do { PyObject *_o=(obj); Py_INCREF(_o); PyTuple_SET_ITEM(result,(dst),_o); } while(0)
-        COPY_OBJ(0, core.limit_obj);
-        COPY_OBJ(1, core.sl_obj);
-        COPY_OBJ(2, core.trail_obj);
-        COPY_OBJ(3, core.target_obj);
-        COPY_OBJ(4, core.entry_atr_obj);
-        COPY_OBJ(5, core.signal_date_obj);
-        COPY_OBJ(6, core.max_qty_obj);
-        if (core.entry_source_obj != NULL) {
-            PyObject *entry_source = PyObject_Str(core.entry_source_obj);
-            if (entry_source == NULL) { Py_DECREF(result); Py_DECREF(items); Py_DECREF(out); return NULL; }
-            PyTuple_SET_ITEM(result,7,entry_source);
-        } else {
-            PyTuple_SET_ITEM(result,7,PyUnicode_FromString("extended"));
-        }
-        PyTuple_SET_ITEM(result,8,PyLong_FromLongLong((long long)core.limit_milli));
-        PyTuple_SET_ITEM(result,9,PyLong_FromLongLong((long long)core.stop_milli));
-#undef COPY_OBJ
+        if (result == NULL) { Py_DECREF(core); Py_DECREF(items); Py_DECREF(out); return NULL; }
+#define COPY_CORE(dst, src) do { PyObject *_o=PyTuple_GET_ITEM(core,(src)); Py_INCREF(_o); PyTuple_SET_ITEM(result,(dst),_o); } while(0)
+        COPY_CORE(0,0); /* limit */
+        COPY_CORE(1,1); /* sl */
+        COPY_CORE(2,2); /* trail */
+        COPY_CORE(3,3); /* target */
+        COPY_CORE(4,4); /* atr */
+        COPY_CORE(5,6); /* signal date */
+        COPY_CORE(6,7); /* max qty */
+        COPY_CORE(7,8); /* entry source */
+        COPY_CORE(8,11); /* limit milli */
+        COPY_CORE(9,12); /* stop milli */
+#undef COPY_CORE
         PyTuple_SET_ITEM(result,10,PyLong_FromLongLong((long long)qty));
         PyTuple_SET_ITEM(result,11,PyLong_FromLongLong((long long)proj_cost_milli));
         PyTuple_SET_ITEM(result,12,PyFloat_FromDouble(sort_value));
+        Py_DECREF(core);
         if (PyErr_Occurred()) { Py_DECREF(result); Py_DECREF(items); Py_DECREF(out); return NULL; }
         PyList_SET_ITEM(out, i, result);
-    }
-    Py_DECREF(items);
-    return out;
-}
-
-
-static int dict_set_borrowed_key(PyObject *dict, const char *key, PyObject *value) {
-    return PyDict_SetItemString(dict, key, value == NULL ? Py_None : value) == 0;
-}
-
-static int dict_set_int64_key(PyObject *dict, const char *key, int64_t value) {
-    PyObject *obj = PyLong_FromLongLong((long long)value);
-    if (obj == NULL) return 0;
-    int ok = PyDict_SetItemString(dict, key, obj) == 0;
-    Py_DECREF(obj);
-    return ok;
-}
-
-static int dict_set_double_key(PyObject *dict, const char *key, double value) {
-    PyObject *obj = PyFloat_FromDouble(value);
-    if (obj == NULL) return 0;
-    int ok = PyDict_SetItemString(dict, key, obj) == 0;
-    Py_DECREF(obj);
-    return ok;
-}
-
-/*
- * Optimizer-only compact-row batch.  Each input item is:
- * (ticker, signal_state, shadow_position, y_close, security_profile,
- *  capital_context, fee_context, t_pos, y_pos, trade_date,
- *  sizing_equity, params_obj)
- *
- * The common live-shadow path returns the exact compact candidate dict consumed
- * by portfolio replay.  None requests canonical Python fallback; False means the
- * candidate is canonically blocked/non-orderable.
- */
-static PyObject *native_resolve_live_extended_candidate_batch_rows(PyObject *self, PyObject *args) {
-    PyObject *items_obj;
-    long long broker_fee_ppm_ll, broker_min_fee_milli_ll;
-    (void)self;
-    if (!PyArg_ParseTuple(args, "OLL", &items_obj, &broker_fee_ppm_ll, &broker_min_fee_milli_ll)) {
-        return NULL;
-    }
-
-    PyObject *items = PySequence_Fast(items_obj, "items must be a sequence");
-    if (items == NULL) return NULL;
-    const Py_ssize_t n = PySequence_Fast_GET_SIZE(items);
-    PyObject *out = PyList_New(n);
-    if (out == NULL) { Py_DECREF(items); return NULL; }
-
-    for (Py_ssize_t i = 0; i < n; ++i) {
-        PyObject *item = PySequence_Fast_GET_ITEM(items, i);
-        if (!PyTuple_Check(item) || PyTuple_GET_SIZE(item) < 12) {
-            Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
-        }
-        PyObject *ticker = PyTuple_GET_ITEM(item, 0);
-        PyObject *signal_state = PyTuple_GET_ITEM(item, 1);
-        PyObject *shadow_position = PyTuple_GET_ITEM(item, 2);
-        PyObject *y_close_obj = PyTuple_GET_ITEM(item, 3);
-        PyObject *security_profile = PyTuple_GET_ITEM(item, 4);
-        PyObject *capital_context = PyTuple_GET_ITEM(item, 5);
-        PyObject *fee_context = PyTuple_GET_ITEM(item, 6);
-        PyObject *t_pos_obj = PyTuple_GET_ITEM(item, 7);
-        PyObject *y_pos_obj = PyTuple_GET_ITEM(item, 8);
-        PyObject *trade_date_obj = PyTuple_GET_ITEM(item, 9);
-        PyObject *sizing_equity_obj = PyTuple_GET_ITEM(item, 10);
-        PyObject *params_obj = PyTuple_GET_ITEM(item, 11);
-        double y_close = PyFloat_AsDouble(y_close_obj);
-        if (PyErr_Occurred()) {
-            PyErr_Clear(); Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
-        }
-
-        ExtendedCandidateCoreNative core;
-        int core_rc = resolve_live_extended_candidate_core_values(
-            signal_state, shadow_position, y_close, ticker, security_profile, &core
-        );
-        if (core_rc < 0) { Py_DECREF(items); Py_DECREF(out); return NULL; }
-        if (core_rc == 0) { Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue; }
-        if (core_rc == 1) { Py_INCREF(Py_False); PyList_SET_ITEM(out, i, Py_False); continue; }
-        if (!PyTuple_Check(capital_context) || PyTuple_GET_SIZE(capital_context) < 3 ||
-            !PyTuple_Check(fee_context) || PyTuple_GET_SIZE(fee_context) < 6) {
-            Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
-        }
-
-        int64_t cap_milli, max_risk_milli, max_position_cap_milli;
-        int64_t buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, rounding_mode_code, min_entry_notional_milli;
-        if (!parse_int_tuple_item(capital_context,0,&cap_milli) ||
-            !parse_int_tuple_item(capital_context,1,&max_risk_milli) ||
-            !parse_int_tuple_item(capital_context,2,&max_position_cap_milli) ||
-            !parse_int_tuple_item(fee_context,0,&buy_fee_ppm) ||
-            !parse_int_tuple_item(fee_context,1,&sell_fee_ppm) ||
-            !parse_int_tuple_item(fee_context,2,&tax_ppm) ||
-            !parse_int_tuple_item(fee_context,3,&min_fee_milli) ||
-            !parse_int_tuple_item(fee_context,4,&rounding_mode_code) ||
-            !parse_int_tuple_item(fee_context,5,&min_entry_notional_milli) ||
-            rounding_mode_code < 0) {
-            Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
-        }
-
-        int64_t qty = calc_position_size_exact_core(
-            core.limit_milli, core.stop_milli, cap_milli, max_risk_milli, max_position_cap_milli,
-            buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, rounding_mode_code == 1,
-            (int64_t)broker_fee_ppm_ll, (int64_t)broker_min_fee_milli_ll
-        );
-        if (core.max_qty_obj != Py_None) {
-            int64_t max_qty = 0;
-            if (!object_to_int64_noerr(core.max_qty_obj, &max_qty)) {
-                Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
-            }
-            if (max_qty > 0 && qty > max_qty) qty = max_qty;
-        }
-        qty = apply_board_lot_preferred_qty_native(core.limit_milli, qty, min_entry_notional_milli);
-        if (qty <= 0) {
-            Py_INCREF(Py_False); PyList_SET_ITEM(out, i, Py_False); continue;
-        }
-
-        const int64_t gross_buy = core.limit_milli * qty;
-        const int64_t broker_fee = fee_floor_twd_milli(
-            gross_buy, (int64_t)broker_fee_ppm_ll, (int64_t)broker_min_fee_milli_ll
-        );
-        const int64_t proj_cost_milli = gross_buy + broker_fee;
-        double limit_price = 0.0;
-        if (!object_to_double_noerr(core.limit_obj, &limit_price) ||
-            !isfinite(limit_price) || limit_price <= 0.0 || !isfinite(y_close)) {
-            PyErr_Clear(); Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
-        }
-        double sort_value = (y_close / limit_price - 1.0) * 100.0;
-        if (sort_value < 0.0) sort_value = 0.0;
-
-        PyObject *entry_source = NULL;
-        if (core.entry_source_obj != NULL) entry_source = PyObject_Str(core.entry_source_obj);
-        else entry_source = PyUnicode_FromString("extended");
-        if (entry_source == NULL) { Py_DECREF(items); Py_DECREF(out); return NULL; }
-
-        PyObject *row = PyDict_New();
-        if (row == NULL) { Py_DECREF(entry_source); Py_DECREF(items); Py_DECREF(out); return NULL; }
-        int ok = 1;
-#define SET_BORROWED(key,obj) do { if (ok && !dict_set_borrowed_key(row,(key),(obj))) ok=0; } while(0)
-#define SET_INT(key,val) do { if (ok && !dict_set_int64_key(row,(key),(val))) ok=0; } while(0)
-#define SET_DOUBLE(key,val) do { if (ok && !dict_set_double_key(row,(key),(val))) ok=0; } while(0)
-        SET_BORROWED("ticker", ticker);
-        SET_BORROWED("type", entry_source);
-        SET_BORROWED("limit_px", core.limit_obj);
-        SET_BORROWED("today_pos", t_pos_obj);
-        SET_BORROWED("yesterday_pos", y_pos_obj);
-        SET_INT("qty", qty);
-        SET_DOUBLE("proj_cost", ((double)proj_cost_milli) / 1000.0);
-        SET_INT("proj_cost_milli", proj_cost_milli);
-        SET_DOUBLE("sort_value", sort_value);
-        SET_BORROWED("init_sl", core.sl_obj);
-        SET_BORROWED("init_trail", core.trail_obj);
-        SET_BORROWED("target_price", core.target_obj);
-        SET_BORROWED("entry_atr", core.entry_atr_obj);
-        SET_BORROWED("is_orderable", Py_True);
-        SET_BORROWED("security_profile", security_profile);
-        SET_BORROWED("trade_date", trade_date_obj);
-        SET_BORROWED("candidate_date", trade_date_obj);
-        SET_BORROWED("signal_date", core.signal_date_obj);
-        SET_BORROWED("sizing_capital", sizing_equity_obj);
-        SET_BORROWED("params_obj", params_obj);
-        SET_BORROWED("max_qty", core.max_qty_obj);
-        SET_BORROWED("orig_limit", core.limit_obj);
-        SET_BORROWED("orig_atr", core.entry_atr_obj);
-        PyObject *raw_source = dict_get_borrowed(signal_state, "source");
-        SET_BORROWED("entry_source", raw_source != NULL ? raw_source : entry_source);
-        SET_BORROWED("use_breakout_quality_ranking", Py_False);
-        SET_BORROWED("signal_state", signal_state);
-        PyObject *row_shadow = dict_get_borrowed(signal_state, "shadow_position");
-        if (row_shadow != NULL && row_shadow != Py_None) {
-            SET_BORROWED("shadow_position_state", row_shadow);
-        }
-#undef SET_BORROWED
-#undef SET_INT
-#undef SET_DOUBLE
-        Py_DECREF(entry_source);
-        if (!ok) {
-            Py_DECREF(row); Py_DECREF(items); Py_DECREF(out); return NULL;
-        }
-        PyList_SET_ITEM(out, i, row);
     }
     Py_DECREF(items);
     return out;
@@ -1870,6 +1720,18 @@ static PyMethodDef NativeOptimizerMethods[] = {
         native_supertrend_direction_into,
         METH_VARARGS,
         "Fill an int8 direction buffer with the fused exact-order SuperTrend recursion."
+    },
+    {
+        "rolling_mean_shift1_into",
+        native_rolling_mean_shift1_into,
+        METH_VARARGS,
+        "Fill a float64 output buffer with the shifted rolling mean."
+    },
+    {
+        "rolling_mean_std0_into",
+        native_rolling_mean_std0_into,
+        METH_VARARGS,
+        "Fill float64 mean/std buffers with rolling population statistics."
     },
     {
         "rolling_max_shift1_into",
@@ -1924,12 +1786,6 @@ static PyMethodDef NativeOptimizerMethods[] = {
         native_resolve_live_extended_candidate_batch_sized,
         METH_VARARGS,
         "Resolve and exact-size optimizer live continuation candidates in one native batch."
-    },
-    {
-        "resolve_live_extended_candidate_batch_rows",
-        native_resolve_live_extended_candidate_batch_rows,
-        METH_VARARGS,
-        "Resolve, exact-size, and materialize compact optimizer continuation candidate rows in one native batch."
     },
     {NULL, NULL, 0, NULL}
 };

@@ -49,7 +49,6 @@ from core.price_utils import (
 from core.native_optimizer_hotpath import (
     resolve_live_extended_candidate_core as _native_resolve_live_extended_candidate_core,
     resolve_live_extended_candidate_batch_sized as _native_resolve_live_extended_candidate_batch_sized,
-    resolve_live_extended_candidate_batch_rows as _native_resolve_live_extended_candidate_batch_rows,
 )
 from core.training_performance import is_optimizer_native_hotpath_kernels_enabled
 
@@ -59,10 +58,6 @@ _NATIVE_EXTENDED_CANDIDATE_CORE_ENABLED = bool(
 )
 _NATIVE_EXTENDED_CANDIDATE_BATCH_SIZED_ENABLED = bool(
     _native_resolve_live_extended_candidate_batch_sized is not None
-    and is_optimizer_native_hotpath_kernels_enabled()
-)
-_NATIVE_EXTENDED_CANDIDATE_BATCH_ROWS_ENABLED = bool(
-    _native_resolve_live_extended_candidate_batch_rows is not None
     and is_optimizer_native_hotpath_kernels_enabled()
 )
 from core.portfolio_fast_data import (
@@ -684,6 +679,7 @@ def _collect_extended_candidates(
     candidates_today = [] if collect_all_candidates else None
     orderable_candidates_today = []
     native_sized_batch_items = []
+    native_sized_batch_meta = []
 
     sort_started = time.perf_counter() if profile_enabled else None
     # The final executable candidate list is sorted canonically below.  Training
@@ -740,7 +736,7 @@ def _collect_extended_candidates(
         if (
             not collect_all_candidates
             and compact_training_rows
-            and _NATIVE_EXTENDED_CANDIDATE_BATCH_ROWS_ENABLED
+            and _NATIVE_EXTENDED_CANDIDATE_BATCH_SIZED_ENABLED
             and not bool(getattr(candidate_params, "use_breakout_quality_ranking", False))
         ):
             live_shadow = signal_state.get("shadow_position")
@@ -767,9 +763,11 @@ def _collect_extended_candidates(
                 if int(sizing_fee_context[4]) >= 0:
                     native_sized_batch_items.append((
                         ticker, signal_state, live_shadow, float(y_close), security_profile,
-                        candidate_capital_context, sizing_fee_context, t_pos, y_pos, today,
-                        sizing_equity, candidate_params, ev, win_rate, trade_count,
-                        asset_growth_pct,
+                        candidate_capital_context, sizing_fee_context,
+                    ))
+                    native_sized_batch_meta.append((
+                        ticker, candidate_params, t_pos, y_pos, ev, win_rate, trade_count,
+                        asset_growth_pct, y_close, security_profile, signal_state,
                     ))
                     if profile_enabled:
                         _candidate_profile_add(profile_stats, "portfolio_candidate_plan_sec", plan_started)
@@ -1028,76 +1026,110 @@ def _collect_extended_candidates(
 
     if native_sized_batch_items:
         plan_started = time.perf_counter() if profile_enabled else None
-        native_results = _native_resolve_live_extended_candidate_batch_rows(
+        native_results = _native_resolve_live_extended_candidate_batch_sized(
             native_sized_batch_items,
             int(_NATIVE_BROKER_FEE_PPM),
             int(_NATIVE_BROKER_MIN_FEE_MILLI),
         )
         if profile_enabled:
             _candidate_profile_add(profile_stats, "portfolio_candidate_plan_sec", plan_started)
-        for item, native_result in zip(native_sized_batch_items, native_results):
+        for meta, native_result in zip(native_sized_batch_meta, native_results):
+            (
+                ticker, candidate_params, t_pos, y_pos, ev, win_rate, trade_count,
+                asset_growth_pct, y_close, security_profile, signal_state,
+            ) = meta
             if native_result is False:
                 continue
-            if native_result is not None:
-                # Stage 6 native path already materializes the exact compact row.
-                orderable_candidates_today.append(native_result)
-                continue
+            if native_result is None:
+                # Unsupported edge cases remain owned by the canonical Python path.
+                geometry = resolve_extended_candidate_plan_geometry_training_fast(
+                    signal_state,
+                    candidate_params,
+                    ticker=ticker,
+                    security_profile=security_profile,
+                )
+                if geometry is None:
+                    continue
+                (
+                    limit_price, init_sl, init_trail, target_price, entry_atr,
+                    _orig_limit, _entry_ref_price, _resolved_ticker, _resolved_profile,
+                    signal_date, max_qty, entry_source, _source_entry_order_id,
+                    _shadow_position,
+                ) = geometry
+                limit_price_milli = price_to_milli(limit_price)
+                stop_price_milli = price_to_milli(init_sl)
+                y_close_milli = price_to_milli(y_close)
+                if not has_extended_signal_orderable_context_for_limit(
+                    signal_state, limit_price, y_close, ticker=ticker,
+                    security_profile=security_profile,
+                    limit_price_milli=limit_price_milli, y_close_milli=y_close_milli,
+                ):
+                    continue
+                candidate_capital_context = sizing_capital_context_cache.get(id(candidate_params))
+                if candidate_capital_context is None:
+                    candidate_capital_context = build_position_sizing_capital_context(
+                        sizing_equity, candidate_params.fixed_risk, candidate_params,
+                    )
+                    sizing_capital_context_cache[id(candidate_params)] = candidate_capital_context
+                sizing_fee_context = _resolve_candidate_sizing_fee_context(
+                    sizing_fee_context_cache, params=candidate_params, ticker=ticker,
+                    security_profile=security_profile, trade_date=today,
+                )
+                qty = _resolve_candidate_qty_cached(
+                    sizing_qty_cache, limit_price=limit_price, init_sl=init_sl,
+                    sizing_equity=sizing_equity, params=candidate_params, ticker=ticker,
+                    security_profile=security_profile, trade_date=today, max_qty=max_qty,
+                    sizing_capital_context=candidate_capital_context,
+                    sizing_fee_context=sizing_fee_context,
+                    limit_price_milli=limit_price_milli,
+                    stop_price_milli=stop_price_milli,
+                )
+                if qty <= 0:
+                    continue
+                proj_cost_milli = None
+                sort_value = None
+            else:
+                (
+                    limit_price, init_sl, init_trail, target_price, entry_atr,
+                    signal_date, max_qty, entry_source, limit_price_milli,
+                    stop_price_milli, qty, proj_cost_milli, sort_value,
+                ) = native_result
 
-            # Unsupported edge cases remain owned by the canonical Python path.
-            (
-                ticker, signal_state, _live_shadow, y_close, security_profile,
-                candidate_capital_context, sizing_fee_context, t_pos, y_pos, _trade_date,
-                _sizing_equity, candidate_params, ev, win_rate, trade_count,
-                asset_growth_pct,
-            ) = item
-            geometry = resolve_extended_candidate_plan_geometry_training_fast(
-                signal_state,
-                candidate_params,
-                ticker=ticker,
-                security_profile=security_profile,
-            )
-            if geometry is None:
-                continue
-            (
-                limit_price, init_sl, init_trail, target_price, entry_atr,
-                _orig_limit, _entry_ref_price, _resolved_ticker, _resolved_profile,
-                signal_date, max_qty, entry_source, _source_entry_order_id,
-                _shadow_position,
-            ) = geometry
-            limit_price_milli = price_to_milli(limit_price)
-            stop_price_milli = price_to_milli(init_sl)
-            y_close_milli = price_to_milli(y_close)
-            if not has_extended_signal_orderable_context_for_limit(
-                signal_state, limit_price, y_close, ticker=ticker,
-                security_profile=security_profile,
-                limit_price_milli=limit_price_milli, y_close_milli=y_close_milli,
-            ):
-                continue
-            qty = _resolve_candidate_qty_cached(
-                sizing_qty_cache, limit_price=limit_price, init_sl=init_sl,
-                sizing_equity=sizing_equity, params=candidate_params, ticker=ticker,
-                security_profile=security_profile, trade_date=today, max_qty=max_qty,
-                sizing_capital_context=candidate_capital_context,
-                sizing_fee_context=sizing_fee_context,
-                limit_price_milli=limit_price_milli,
-                stop_price_milli=stop_price_milli,
-            )
-            if qty <= 0:
-                continue
             row_started = time.perf_counter() if profile_enabled else None
             candidate_row = _make_candidate_row(
-                buy_sort_method=buy_sort_method, ticker=ticker, candidate_type=entry_source,
-                est_limit_px=limit_price, ev=ev, y_atr=entry_atr, t_pos=t_pos, y_pos=y_pos,
-                est_qty=qty, win_rate=win_rate, trade_count=trade_count,
-                asset_growth_pct=asset_growth_pct, est_init_sl=init_sl,
-                est_init_trail=init_trail, est_target_price=target_price,
-                entry_atr=entry_atr, is_orderable=True, params=candidate_params,
-                security_profile=security_profile, trade_date=today, signal_date=signal_date,
-                sizing_capital=sizing_equity, signal_state=signal_state,
+                buy_sort_method=buy_sort_method,
+                ticker=ticker,
+                candidate_type=entry_source,
+                est_limit_px=limit_price,
+                ev=ev,
+                y_atr=entry_atr,
+                t_pos=t_pos,
+                y_pos=y_pos,
+                est_qty=qty,
+                win_rate=win_rate,
+                trade_count=trade_count,
+                asset_growth_pct=asset_growth_pct,
+                est_init_sl=init_sl,
+                est_init_trail=init_trail,
+                est_target_price=target_price,
+                entry_atr=entry_atr,
+                is_orderable=True,
+                params=candidate_params,
+                security_profile=security_profile,
+                trade_date=today,
+                signal_date=signal_date,
+                sizing_capital=sizing_equity,
+                signal_state=signal_state,
                 continuation_invalidation_barrier=init_sl,
-                continuation_completion_barrier=target_price, max_qty=max_qty,
-                prev_close=y_close, quality_rank=None, ranking_context=ranking_context,
-                est_limit_px_milli=limit_price_milli, compact_training_row=True,
+                continuation_completion_barrier=target_price,
+                max_qty=max_qty,
+                prev_close=y_close,
+                quality_rank=None,
+                ranking_context=ranking_context,
+                est_limit_px_milli=limit_price_milli,
+                precomputed_proj_cost_milli=proj_cost_milli,
+                precomputed_sort_value=sort_value,
+                compact_training_row=True,
             )
             if profile_enabled:
                 _candidate_profile_add(profile_stats, "portfolio_candidate_row_sec", row_started)
