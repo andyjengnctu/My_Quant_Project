@@ -7,10 +7,12 @@ from core.entry_plans import (
     execute_pre_market_entry_plan,
     resize_candidate_plan_to_capital,
 )
+from core.position_management import rollforward_position_management_from_completed_bar
 from core.price_utils import (
     calc_frozen_target_price,
     calc_initial_stop_from_reference,
     calc_initial_trailing_stop_from_reference,
+    get_exit_sell_block_reason,
     is_limit_buy_price_reachable_for_day,
     price_to_milli,
 )
@@ -319,6 +321,69 @@ def update_extended_tbd_shadow_trade_for_bar(
 
 
 # # (AI註: 單一真理來源 - 延續候選盤後狀態推進與失效統一由此處理；若啟動當日已跌破影子初始停損，則當日盤後直接失效)
+def _should_clear_live_shadow_without_accounting(
+    signal_state,
+    *,
+    t_low,
+    t_high,
+    t_open,
+    t_close,
+    t_volume,
+    y_close,
+    y_high,
+    y_atr,
+    y_ind_sell,
+    params,
+):
+    """Training-only fast path for an already-live continuation shadow.
+
+    The caller owns ``signal_state`` in-place (``copy_shadow_position=False``).
+    Preserve the canonical management transition for every state that survives
+    this bar, while avoiding sell-ledger/accounting work for states that are
+    discarded immediately by the continuation barrier contract.
+    """
+    shadow_position = _resolve_shadow_position(signal_state)
+    if shadow_position is None:
+        return False
+
+    # ``execute_bar_step`` resets this transient payload every bar before the
+    # management transition.  Preserve that observable surviving-state detail
+    # without allocating sell contexts that training cleanup never consumes.
+    shadow_position["_last_exec_contexts"] = []
+
+    # A deferred STOP/TP obligation is itself a continuation terminal state.
+    # The normal path attempts execution before trailing roll-forward, but the
+    # signal is deleted regardless of whether that deferred order is blocked.
+    if shadow_position.get("pending_exit_action") in {"STOP", "TP_HALF"}:
+        return True
+
+    # Same canonical next-session trailing owner used by step_position_management.
+    rollforward_position_management_from_completed_bar(
+        shadow_position,
+        completed_high=y_high,
+        completed_atr=y_atr,
+        params=params,
+        sync_display_fields=True,
+    )
+    _sync_signal_shadow_fields(signal_state, shadow_position, copy_shadow_position=False)
+
+    # Indicator sell is terminal only when executable.  A blocked indicator sell
+    # leaves the shadow alive unless the normal STOP/TP continuation barrier is
+    # touched on this same bar.
+    if y_ind_sell:
+        block = get_exit_sell_block_reason(
+            t_open, t_high, t_low, t_close, t_volume, y_close,
+            ticker=shadow_position.get("ticker"),
+        )
+        if block is None:
+            signal_state["shadow_position"] = None
+            return True
+
+    return _did_extended_signal_touch_barrier(
+        signal_state, day_low=t_low, day_high=t_high
+    )
+
+
 def should_clear_extended_signal(
     signal_state,
     t_low,
@@ -340,6 +405,20 @@ def should_clear_extended_signal(
         return False
 
     if _has_live_shadow_position(signal_state):
+        if not copy_shadow_position:
+            return _should_clear_live_shadow_without_accounting(
+                signal_state,
+                t_low=t_low,
+                t_high=t_high,
+                t_open=t_open,
+                t_close=t_close,
+                t_volume=t_volume,
+                y_close=y_close,
+                y_high=y_high,
+                y_atr=y_atr,
+                y_ind_sell=y_ind_sell,
+                params=params,
+            )
         updated_state = update_extended_tbd_shadow_trade_for_bar(
             signal_state,
             y_atr=y_atr,
