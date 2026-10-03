@@ -3832,8 +3832,17 @@ def validate_price_utils_array_tick_normalization_contract_case(_base_params):
     entry_plan_seed_source = entry_plan_seed_path.read_text(encoding="utf-8")
     candidate_path = build_project_absolute_path("core", "portfolio_candidates.py")
     candidate_source = candidate_path.read_text(encoding="utf-8")
-    fast_data_path = build_project_absolute_path("core", "portfolio_fast_data.py")
-    fast_data_source = fast_data_path.read_text(encoding="utf-8")
+    fast_data_module = importlib.import_module("core.portfolio_fast_data")
+    pandas_module = importlib.import_module("pandas")
+    fast_data_probe = pandas_module.DataFrame(
+        {field: [1.0] for field in fast_data_module.FAST_STATIC_FLOAT_FIELDS}
+    )
+    explicit_security_profile = {"tick_profile": "fund_two_tier"}
+    fast_data_probe.attrs["security_profile"] = explicit_security_profile
+    packed_fast_data_probe = fast_data_module.pack_static_market_data(fast_data_probe)
+    pack_preserves_security_profile_contract = (
+        packed_fast_data_probe.get("security_profile") == explicit_security_profile
+    )
     entry_plans_path = build_project_absolute_path("core", "entry_plans.py")
     entry_plans_source = entry_plans_path.read_text(encoding="utf-8")
     scanner_processor_path = build_project_absolute_path("services", "scanner", "stock_processor.py")
@@ -3864,7 +3873,7 @@ def validate_price_utils_array_tick_normalization_contract_case(_base_params):
     add_check(results, "meta_contract", case_id, "backtest_core_normal_signal_state_threads_security_profile", True, "create_signal_tracking_state(" in backtest_source and "security_profile=resolved_security_profile" in backtest_source)
     add_check(results, "meta_contract", case_id, "backtest_core_normal_entry_plan_threads_security_profile", True, "entry_plan = build_normal_entry_plan(" in backtest_source and "security_profile=resolved_security_profile" in backtest_source)
     add_check(results, "meta_contract", case_id, "backtest_core_stats_thread_security_profile", True, "build_backtest_stats(" in backtest_source and "security_profile=resolved_security_profile" in backtest_source)
-    add_check(results, "meta_contract", case_id, "portfolio_fast_data_pack_preserves_security_profile", True, "'security_profile': df.attrs.get('security_profile')" in fast_data_source)
+    add_check(results, "meta_contract", case_id, "portfolio_fast_data_pack_preserves_security_profile", True, pack_preserves_security_profile_contract)
     add_check(results, "meta_contract", case_id, "portfolio_candidates_read_packed_security_profile", True, "get_fast_security_profile" in candidate_source and "security_profile = get_fast_security_profile(fast_df)" in candidate_source)
     add_check(results, "meta_contract", case_id, "portfolio_candidates_normal_candidate_threads_security_profile", True, "candidate_plan = build_normal_candidate_plan(" in candidate_source and "security_profile=security_profile" in candidate_source)
     add_check(results, "meta_contract", case_id, "portfolio_candidates_normal_signal_state_threads_security_profile", True, "signal_state = create_signal_tracking_state(" in candidate_source and "security_profile=security_profile" in candidate_source)
