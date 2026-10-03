@@ -221,6 +221,29 @@ def build_cash_capped_entry_plan(candidate_plan, available_cash, params):
     return resized_plan
 
 
+# # (AI註: 正常候選幾何的單一 owner；dict plan 與 optimizer training fast path 共用。)
+def resolve_normal_candidate_plan_geometry(
+    limit_price,
+    atr,
+    params,
+    *,
+    ticker=None,
+    security_profile=None,
+):
+    if pd.isna(limit_price) or pd.isna(atr):
+        return None
+    init_sl = calc_initial_stop_from_reference(
+        limit_price, atr, params, ticker=ticker, security_profile=security_profile
+    )
+    init_trail = calc_initial_trailing_stop_from_reference(
+        limit_price, atr, params, ticker=ticker, security_profile=security_profile
+    )
+    target_price = calc_frozen_target_price(
+        limit_price, init_sl, ticker=ticker, security_profile=security_profile
+    )
+    return limit_price, init_sl, init_trail, target_price, atr
+
+
 # # (AI註: 單一真理來源 - 正常候選的盤前 limit / worst-case sizing stop / trail / qty 規格統一由此產生；候選資格與可掛單分離)
 def build_normal_candidate_plan(
     limit_price,
@@ -234,12 +257,12 @@ def build_normal_candidate_plan(
     sizing_capital_context=None,
     sizing_fee_context=None,
 ):
-    if pd.isna(limit_price) or pd.isna(atr):
+    geometry = resolve_normal_candidate_plan_geometry(
+        limit_price, atr, params, ticker=ticker, security_profile=security_profile
+    )
+    if geometry is None:
         return None
-
-    init_sl = calc_initial_stop_from_reference(limit_price, atr, params, ticker=ticker, security_profile=security_profile)
-    init_trail = calc_initial_trailing_stop_from_reference(limit_price, atr, params, ticker=ticker, security_profile=security_profile)
-    target_price = calc_frozen_target_price(limit_price, init_sl, ticker=ticker, security_profile=security_profile)
+    limit_price, init_sl, init_trail, target_price, atr = geometry
     base_plan = {
         "limit_price": limit_price,
         "init_sl": init_sl,

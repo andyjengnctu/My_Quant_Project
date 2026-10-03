@@ -51,6 +51,11 @@ def _has_live_shadow_position(signal_state):
     return _resolve_shadow_position(signal_state) is not None
 
 
+def resolve_extended_tbd_shadow_position(signal_state):
+    """Return the live shadow once for orchestration paths that already branch on it."""
+    return _resolve_shadow_position(signal_state)
+
+
 def resolve_extended_signal_order_limit(signal_state):
     if signal_state is None:
         return np.nan
@@ -138,11 +143,12 @@ def resolve_breakout_quality_rank(signal_state):
     return dict(holder["breakout_quality_rank"])
 
 
-def _did_extended_signal_touch_barrier(signal_state, *, day_low, day_high):
+def _did_extended_signal_touch_barrier(signal_state, *, day_low, day_high, shadow_position=None):
     if signal_state is None:
         return False
 
-    shadow_position = _resolve_shadow_position(signal_state)
+    if shadow_position is None:
+        shadow_position = _resolve_shadow_position(signal_state)
     if shadow_position is not None:
         if shadow_position.get("pending_exit_action") in {"STOP", "TP_HALF"}:
             return True
@@ -337,6 +343,7 @@ def update_extended_tbd_shadow_trade_for_bar(
 def _should_clear_live_shadow_without_accounting(
     signal_state,
     *,
+    shadow_position=None,
     t_low,
     t_high,
     t_open,
@@ -355,7 +362,8 @@ def _should_clear_live_shadow_without_accounting(
     this bar, while avoiding sell-ledger/accounting work for states that are
     discarded immediately by the continuation barrier contract.
     """
-    shadow_position = _resolve_shadow_position(signal_state)
+    if shadow_position is None:
+        shadow_position = _resolve_shadow_position(signal_state)
     if shadow_position is None:
         return False
 
@@ -396,7 +404,31 @@ def _should_clear_live_shadow_without_accounting(
             return True
 
     return _did_extended_signal_touch_barrier(
-        signal_state, day_low=t_low, day_high=t_high
+        signal_state, day_low=t_low, day_high=t_high, shadow_position=shadow_position
+    )
+
+
+def should_clear_live_extended_signal_without_accounting(
+    signal_state,
+    *,
+    shadow_position,
+    t_low,
+    t_high,
+    t_open=np.nan,
+    t_close=np.nan,
+    t_volume=np.nan,
+    y_close=np.nan,
+    y_high=np.nan,
+    y_atr=np.nan,
+    y_ind_sell=False,
+    params=None,
+):
+    """Training cleanup adapter using an already-resolved live shadow."""
+    return _should_clear_live_shadow_without_accounting(
+        signal_state, shadow_position=shadow_position,
+        t_low=t_low, t_high=t_high, t_open=t_open, t_close=t_close,
+        t_volume=t_volume, y_close=y_close, y_high=y_high, y_atr=y_atr,
+        y_ind_sell=y_ind_sell, params=params,
     )
 
 

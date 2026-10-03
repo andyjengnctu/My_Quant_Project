@@ -52,7 +52,8 @@ from core.trade_plans import (
     execute_pre_market_entry_plan_training,
     resolve_signal_tracking_params,
     should_clear_extended_signal,
-    is_extended_tbd_shadow_alive,
+    resolve_extended_tbd_shadow_position,
+    should_clear_live_extended_signal_without_accounting,
 )
 
 
@@ -377,7 +378,8 @@ def cleanup_extended_signals_for_day(
             else None
         )
 
-        if is_extended_tbd_shadow_alive(signal_state):
+        live_shadow_position = resolve_extended_tbd_shadow_position(signal_state)
+        if live_shadow_position is not None:
             if cached_previous is not None:
                 y_atr, y_ind_sell, y_close, y_high = cached_previous
                 t_high, t_low = get_fast_current_high_low_values(fast_df, t_pos)
@@ -409,22 +411,21 @@ def cleanup_extended_signals_for_day(
                     y_atr, y_ind_sell, y_close, y_high, t_open, t_high, t_low,
                     t_close, t_volume,
                 ) = get_fast_management_session_values(fast_df, t_pos)
-        if should_clear_extended_signal(
-            signal_state,
-            t_low,
-            t_high,
-            t_open=t_open,
-            t_close=t_close,
-            t_volume=t_volume,
-            y_close=y_close,
-            y_high=y_high,
-            y_atr=y_atr,
-            y_ind_sell=y_ind_sell,
-            sizing_capital=sizing_capital,
-            current_date=today,
-            params=signal_params,
-            copy_shadow_position=False,
-        ):
+        if live_shadow_position is not None:
+            should_clear = should_clear_live_extended_signal_without_accounting(
+                signal_state, shadow_position=live_shadow_position,
+                t_low=t_low, t_high=t_high, t_open=t_open, t_close=t_close,
+                t_volume=t_volume, y_close=y_close, y_high=y_high, y_atr=y_atr,
+                y_ind_sell=y_ind_sell, params=signal_params,
+            )
+        else:
+            should_clear = should_clear_extended_signal(
+                signal_state, t_low, t_high, t_open=t_open, t_close=t_close,
+                t_volume=t_volume, y_close=y_close, y_high=y_high, y_atr=y_atr,
+                y_ind_sell=y_ind_sell, sizing_capital=sizing_capital,
+                current_date=today, params=signal_params, copy_shadow_position=False,
+            )
+        if should_clear:
             del active_extended_signals[ticker]
 
 
