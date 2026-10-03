@@ -461,6 +461,7 @@ def get_strategy_rolling_test_modes() -> tuple[dict[str, object], ...]:
             "current OOS／Rolling modes必須引用同一Compare Suite: "
             f"suite_ids={sorted(str(value) for value in current_suite_ids)}"
         )
+    current_robustness_suite_ids: set[str | None] = set()
     for item in rows:
         raw_robustness = dict(
             STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES[str(item["robustness_id"])]
@@ -473,11 +474,32 @@ def get_strategy_rolling_test_modes() -> tuple[dict[str, object], ...]:
                 "current robustness mode不可設定為disabled；若已綁定正式選單就必須可執行: "
                 f"robustness={item['robustness_id']}"
             )
-        if str(raw_robustness.get("suite_id") or "").strip() not in current_suite_ids:
+        robustness_suite_id = (
+            None
+            if raw_robustness.get("suite_id") in (None, "")
+            else str(raw_robustness.get("suite_id")).strip()
+        )
+        robustness_profile_id = str(raw_robustness.get("profile_id") or "").strip()
+        if robustness_profile_id not in STRATEGY_COMPARE_PROFILES:
             raise ValueError(
-                "current robustness mode必須引用與single-seed相同Compare Suite: "
-                f"robustness={item['robustness_id']}"
+                "current robustness mode引用不存在Strategy Compare profile: "
+                f"robustness={item['robustness_id']}, profile={robustness_profile_id!r}"
             )
+        robustness_profile_suite_id = _resolved_suite_id(
+            dict(STRATEGY_COMPARE_PROFILES[robustness_profile_id])
+        )
+        if robustness_suite_id is None or robustness_profile_suite_id != robustness_suite_id:
+            raise ValueError(
+                "current robustness mode的Compare Suite必須與其自身Strategy Compare profile一致: "
+                f"robustness={item['robustness_id']}, robustness_suite={robustness_suite_id}, "
+                f"profile={robustness_profile_id}, profile_suite={robustness_profile_suite_id}"
+            )
+        current_robustness_suite_ids.add(robustness_suite_id)
+    if None in current_robustness_suite_ids or len(current_robustness_suite_ids) != 1:
+        raise ValueError(
+            "current OOS／Rolling robustness modes必須引用同一Compare Suite: "
+            f"suite_ids={sorted(str(value) for value in current_robustness_suite_ids)}"
+        )
     return tuple(rows)
 
 

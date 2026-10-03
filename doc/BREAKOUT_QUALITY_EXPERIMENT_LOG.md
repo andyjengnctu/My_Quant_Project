@@ -12327,3 +12327,13 @@ Decision：`PARAM_P9_C88_REGISTERED / SINGLE_SEED_ADAPTIVE_VALIDATION / PREFIX_C
 - **Observability/UI**：adaptive search新增每10 trials摘要與實際validation replay START/DONE；Research Forward parameter training不再把12M parameter effective block標成final OOS horizon，明示12M inner validation與2021-01-01→2026-03-02 final Forward OOS evaluation。
 
 Decision：`PARAM_P9_C88_PROTOCOL_CORRECTED_TO_V3 / OBSERVE_FROM_TRIAL_1 / MIN_STOP_50 / PATIENCE_50 / V2_STALE_ONLY / RESULT_PENDING / PRIOR_IDENTITIES_IMMUTABLE`。
+
+## 2026-10-04 — P9/C88 staged single-seed current routing no longer forces unauthorized robustness rebinding
+
+- **Trigger**：formal consistency synthetic在`validate_breakout_quality_reusable_model_component_contract_case`呼叫current Strategy Compare mode resolver時，因`non_dl_validation_plateau_*` single-seed suite與暫留的`non_dl_production_multiseed_*` robustness suite不同而被舊cross-stage same-suite guard直接拋例外；因此synthetic suite本身中止，meta-quality連帶BLOCKED。
+- **Existing scientific decision preserved**：P9/C88仍只啟用single Seed42 adaptive plateau validation；adaptive multi-seed validation仍必須通過single-seed行為／成本Gate後另立新identity。P6/C85既有production-style multi-seed robustness reference保持immutable，不把P9語意塞入C85。
+- **Engineering correction**：`get_strategy_rolling_test_modes()`仍要求current OOS／Rolling single-seed pair共用一個Compare Suite；另獨立要求current OOS／Rolling robustness pair共用一個robustness Compare Suite，且每個robustness `suite_id`必須與其自身`profile_id`解析出的suite一致。移除「robustness suite必須等於current single-seed suite」這個會越權推進研究階段的限制。
+- **Regression contract**：Strategy Compare synthetic改驗兩個framework各自的Suite SSOT與self-consistency，不硬編兩個stage必須同suite。`doc/TEST_SUITE_CHECKLIST.md` B189已透過canonical checklist transaction同步；Registry與Research Queue現有P9/C88 staging敘述已正確，無需改變current research status。
+- **Scientific identity**：無新增／修改MR、SR、PARAM identity；不改P9 validation protocol、seed、trial、OOS／Rolling period、strategy semantics、artifact identity或報表contract。
+
+Decision：`ENGINEERING_ALIGNMENT_ONLY / STAGED_SINGLE_SEED_AND_ROBUSTNESS_BINDINGS_SEPARATED / ROBUSTNESS_PROFILE_SUITE_SELF_CONSISTENT / P9_MULTI_SEED_STILL_UNAUTHORIZED / SCIENTIFIC_IDENTITY_UNCHANGED`。

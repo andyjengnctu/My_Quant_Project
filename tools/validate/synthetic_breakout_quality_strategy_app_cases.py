@@ -810,13 +810,28 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         strategy_config.get_strategy_multi_seed_robustness_settings(str(mode["robustness_id"]))
         for mode in strategy_config.get_strategy_rolling_test_modes()
     ]
+    robustness_suite_ids = {item.suite_id for item in current_robustness}
+    robustness_suite_id = (
+        next(iter(robustness_suite_ids)) if len(robustness_suite_ids) == 1 else None
+    )
+    robustness_suite = (
+        strategy_config.get_strategy_compare_suite(str(robustness_suite_id))
+        if robustness_suite_id
+        else None
+    )
+    robustness_expected_arm_ids = (
+        tuple(robustness_suite["arm_ids"]) if robustness_suite is not None else ()
+    )
     check_true(
-        "current_robustness_routes_are_executable_and_share_current_suite",
-        all(
+        "current_robustness_routes_are_executable_and_share_one_self_consistent_suite",
+        bool(robustness_suite_id)
+        and all(
             item.enabled
-            and item.suite_id == suite_id
+            and item.suite_id == robustness_suite_id
+            and strategy_config.get_strategy_comparison_settings(item.profile_id).suite_id
+            == item.suite_id
             and not item.fixed_arm_ids
-            and tuple(item.stochastic_arm_ids) == expected_arm_ids
+            and tuple(item.stochastic_arm_ids) == robustness_expected_arm_ids
             for item in current_robustness
         ),
     )
