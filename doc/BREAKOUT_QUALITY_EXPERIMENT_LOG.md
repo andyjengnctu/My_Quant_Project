@@ -12337,3 +12337,13 @@ Decision：`PARAM_P9_C88_PROTOCOL_CORRECTED_TO_V3 / OBSERVE_FROM_TRIAL_1 / MIN_S
 - **Scientific identity**：無新增／修改MR、SR、PARAM identity；不改P9 validation protocol、seed、trial、OOS／Rolling period、strategy semantics、artifact identity或報表contract。
 
 Decision：`ENGINEERING_ALIGNMENT_ONLY / STAGED_SINGLE_SEED_AND_ROBUSTNESS_BINDINGS_SEPARATED / ROBUSTNESS_PROFILE_SUITE_SELF_CONSISTENT / P9_MULTI_SEED_STILL_UNAUTHORIZED / SCIENTIFIC_IDENTITY_UNCHANGED`。
+
+## 2026-10-04 — P9 current Compare Suite removes fixed-checkpoint prerequisite and restores C85 4×300 reference
+
+- **User decision**：current P9/C88 OOS／Rolling比較不再需要`PARAM-P5 / C84` fixed-checkpoint validation control；把既有`PARAM-P6 / C85` Full/formal/`base-finalists-agree`、4 fixed fitting seeds × 300 trials/seed重新加入current Compare Suite。
+- **Current suite**：`non_dl_validation_plateau_current`改為`C88 / C85 / C62 / C61 / C58`。C88仍以`C88-C62`作single-seed adaptive-validation primary controlled contrast；`C85-C62`保留既有multi-seed fitting reference；新增`C88-C85`只作跨fitting-bundle策略結果reference，因seed bundle不同，不宣稱為validation protocol單變量contrast。
+- **Dependency effect**：current Strategy Compare不再把`full_validation_budget_*_experiment`列為必要parameter prerequisite，因此不應為了P9 current比較自動REBUILD P5/C84；C85改解析既有`full_production_multiseed_*_experiment` P6 truth，符合契約時REUSE，缺失時只由P6 canonical Optimizer producer補齊。
+- **Identity preservation**：不刪除、不改寫P5/C84 historical scientific identity、fixed-checkpoint protocol、artifact namespace或既有evidence；P6/C85與P9/C88 scientific contracts、registered fingerprints、seed/trial semantics亦全部不變。本輪只改current comparison membership／contrast routing。
+
+Decision：`CURRENT_P9_SUITE_C84_REMOVED / C85_4X300_REFERENCE_RESTORED / C88_C62_PRIMARY_RETAINED / C88_C85_REFERENCE_NOT_SINGLE_VARIABLE / P5_C84_HISTORICAL_IDENTITY_PRESERVED / NO_PARAM_PROTOCOL_CHANGE`.
+

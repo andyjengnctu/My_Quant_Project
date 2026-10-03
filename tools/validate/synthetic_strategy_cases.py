@@ -3313,11 +3313,23 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and current_compare_settings.parameter_sources[arm.param_source].builder.builder_type
             == "optimizer_validation_budget_refit_strategy_params"
     }
+    current_fixed_multiseed_profiles = {
+        str(dict(current_compare_settings.parameter_sources[arm.param_source].builder.options).get("training_profile_id") or "")
+        for arm in current_compare_settings.enabled_arms
+        if current_compare_settings.parameter_sources[arm.param_source].builder is not None
+        and current_compare_settings.parameter_sources[arm.param_source].builder.builder_type
+            == "optimizer_fixed_multiseed_strategy_params"
+    }
     check(
-        "strategy_compare_round6_current_suite_contains_new_plateau_and_immutable_fixed_checkpoint_control",
+        "strategy_compare_round6_current_suite_uses_plateau_plus_registered_multiseed_reference",
         True,
         "optimizer_validation_budget_refit_strategy_params" in current_builder_types
-        and {"PARAM-P9", "PARAM-P5"}.issubset(current_validation_parameter_sets)
+        and current_validation_parameter_sets
+            == {plateau_validation_param_profile.parameter_set_identity}
+        and validation_param_profile.parameter_set_identity
+            not in current_validation_parameter_sets
+        and production_multiseed_param_profile.profile_id
+            in current_fixed_multiseed_profiles
         and validation_param_profile.validation_enabled
         and plateau_validation_param_profile.validation_enabled,
     )

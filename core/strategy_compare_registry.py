@@ -124,11 +124,11 @@ STRATEGY_COMPARE_SUITES = {
         },
     },
     "non_dl_validation_plateau_current": {
-        "arm_ids": ("C88", "C84", "C62", "C61", "C58"),
-        "contrast_ids": ("C88-C62", "C88-C84", "C88-C61", "C88-C58"),
+        "arm_ids": ("C88", "C85", "C62", "C61", "C58"),
+        "contrast_ids": ("C88-C62", "C88-C85", "C85-C62", "C88-C61", "C88-C58"),
         "display_name_bases": {
             "C88": "Full Adaptive Plateau Validation Refit",
-            "C84": "Full Fixed-Checkpoint Validation Refit",
+            "C85": "Full Base-Finalists-Agree 4x300",
             "C62": "Full Single-Seed Base-Finalists-Agree",
             "C61": "Full Base-Finalist-Best",
             "C58": "Min Base-Finalist-Best",
@@ -276,7 +276,7 @@ STRATEGY_COMPARE_PROFILES = {
         "reuse_output_roots": (),
         "arm_param_source_overrides": {
             "C88": "full_validation_plateau_oos_experiment",
-            "C84": "full_validation_budget_oos_experiment",
+            "C85": "full_production_multiseed_oos_experiment",
             "C62": "full_oos",
             "C61": "full_oos",
             "C58": "min_oos",
@@ -286,7 +286,8 @@ STRATEGY_COMPARE_PROFILES = {
         "label": "Non-DL Adaptive Validation | Rolling Test",
         "description": (
             "Round-6 primary PIT evaluation：C88/P9每fold只用selection內trailing 12M validation做plateau stop；"
-            "OOS禁止進入停止或N*選擇。C84固定checkpoint validation與C62固定300-trial作controlled references。"
+            "OOS禁止進入停止或N*選擇。C62保留固定300-trial single-seed controlled reference，"
+            "C85恢復為base-finalists-agree 4-seed×300 production-style reference；C84/P5不再是current prerequisite。"
         ),
         "display_alignment_group": "non_dl_validation_plateau",
         "suite_id": "non_dl_validation_plateau_current",
@@ -303,7 +304,7 @@ STRATEGY_COMPARE_PROFILES = {
         "reuse_output_roots": (),
         "arm_param_source_overrides": {
             "C88": "full_validation_plateau_rolling_experiment",
-            "C84": "full_validation_budget_rolling_experiment",
+            "C85": "full_production_multiseed_rolling_experiment",
             "C62": "full_rolling",
             "C61": "full_rolling",
             "C58": "min_rolling",
@@ -1348,6 +1349,7 @@ STRATEGY_COMPARE_CONTRASTS = {
         "description": "Round-2 production-style multi-seed相對Min base-finalist-best reference；整體策略體系比較",
     },
     "C88-C62": {"left": "C88", "right": "C62", "description": "Round-6 primary：adaptive plateau validation-selected N* + full refit相對固定300-trial single-seed control；其他Full/finalists-agree條件固定"},
+    "C88-C85": {"left": "C88", "right": "C85", "description": "Round-6 reference：adaptive plateau single-seed treatment相對既有base-finalists-agree 4-seed×300 reference；兩者seed bundle不同，僅作策略結果reference，不宣稱為單變量validation contrast"},
     "C88-C84": {"left": "C88", "right": "C84", "description": "Round-6 validation protocol contrast：逐trial plateau early stop相對既有50-step fixed-checkpoint validation；holdout/selector/full-refit語意固定"},
     "C88-C61": {"left": "C88", "right": "C61", "description": "Round-6 adaptive validation treatment相對Full base-finalist-best reference"},
     "C88-C58": {"left": "C88", "right": "C58", "description": "Round-6 adaptive validation treatment相對Min base-finalist-best reference；整體策略體系比較"},
