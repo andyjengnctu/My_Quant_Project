@@ -175,6 +175,12 @@ def run_portfolio_timeline(
     active_extended_signals_by_member = {}
     active_reentry_watchlist = {}
     active_reentry_watchlists_by_member = {}
+    # Optimizer single-member replay repeatedly sizes the same continuation geometry
+    # across adjacent days.  Fee semantics are immutable for ordinary stocks/funds,
+    # and exact qty is a pure function of the frozen geometry + capital/fee context.
+    # Keep these caches trial-local so no state can leak across scientific runs.
+    candidate_sizing_fee_context_cache = {}
+    candidate_sizing_qty_cache = {}
     trade_history, equity_curve, closed_trades_stats = [], [], []
     normal_trade_count, extended_trade_count = 0, 0
     portfolio_entry_stats = {'filled_buy_count': 0}
@@ -477,6 +483,8 @@ def run_portfolio_timeline(
                             and not bool(enable_rotation)
                             and not bool(getattr(day_params, "use_breakout_quality_ranking", False))
                         ),
+                        persistent_sizing_fee_context_cache=candidate_sizing_fee_context_cache,
+                        persistent_sizing_qty_cache=candidate_sizing_qty_cache,
                         profile_stats=candidate_subprofile,
                     )
                 if profile_timing_enabled:

@@ -71,17 +71,86 @@ def _resolve_candidate_sizing_fee_context(
     family = str(profile.get("family") or "")
     broad_type = str(profile.get("broad_type") or "")
     fallback_symbol = "" if profile else str(ticker or "")
-    key = (id(params), family, broad_type, fallback_symbol)
-    resolved = cache.get(key)
-    if resolved is None:
-        resolved = build_position_sizing_fee_context(
-            params,
-            ticker=ticker,
-            security_profile=security_profile,
-            trade_date=trade_date,
-        )
-        cache[key] = resolved
+    # Fee/tax semantics are date-independent for every supported family except
+    # bond ETFs.  Keep the cache reusable across the whole replay for stocks and
+    # normal funds, while preserving exact day-specific semantics for bond ETFs.
+    fee_date_key = (
+        str(trade_date)[:10]
+        if family == "etf" and broad_type == "bond"
+        else ""
+    )
+    key = (id(params), family, broad_type, fallback_symbol, fee_date_key)
+    cached = cache.get(key)
+    if cached is not None:
+        cached_params, resolved = cached
+        if cached_params is params:
+            return resolved
+    resolved = build_position_sizing_fee_context(
+        params,
+        ticker=ticker,
+        security_profile=security_profile,
+        trade_date=trade_date,
+    )
+    # Retain the params object alongside the value so an integer id key can never
+    # be accidentally reused by a later short-lived runtime params object.
+    cache[key] = (params, resolved)
     return resolved
+
+
+def _resolve_candidate_qty_cached(
+    cache,
+    *,
+    limit_price,
+    init_sl,
+    sizing_equity,
+    params,
+    ticker,
+    security_profile,
+    trade_date,
+    max_qty,
+    sizing_capital_context,
+    sizing_fee_context,
+    limit_price_milli,
+    stop_price_milli,
+):
+    if cache is None:
+        return calc_candidate_qty_for_capital(
+            limit_price, init_sl, sizing_equity, params,
+            ticker=ticker, security_profile=security_profile, trade_date=trade_date,
+            max_qty=max_qty, sizing_capital_context=sizing_capital_context,
+            sizing_fee_context=sizing_fee_context,
+            limit_price_milli=limit_price_milli, stop_price_milli=stop_price_milli,
+        )
+
+    profile = security_profile if isinstance(security_profile, dict) else {}
+    family = str(profile.get("family") or "")
+    broad_type = str(profile.get("broad_type") or "")
+    try:
+        normalized_max_qty = None if max_qty is None else int(max_qty)
+    except (TypeError, ValueError):
+        normalized_max_qty = 0
+    key = (
+        str(ticker or ""),
+        family,
+        broad_type,
+        int(limit_price_milli),
+        int(stop_price_milli),
+        tuple(sizing_capital_context),
+        tuple(sizing_fee_context),
+        normalized_max_qty,
+    )
+    cached_qty = cache.get(key)
+    if cached_qty is not None:
+        return int(cached_qty)
+    qty = calc_candidate_qty_for_capital(
+        limit_price, init_sl, sizing_equity, params,
+        ticker=ticker, security_profile=security_profile, trade_date=trade_date,
+        max_qty=max_qty, sizing_capital_context=sizing_capital_context,
+        sizing_fee_context=sizing_fee_context,
+        limit_price_milli=limit_price_milli, stop_price_milli=stop_price_milli,
+    )
+    cache[key] = int(qty)
+    return int(qty)
 
 
 def _resolve_candidate_quality_ranking(
@@ -569,6 +638,7 @@ def _collect_extended_candidates(
     sizing_capital_context,
     sizing_capital_context_cache,
     sizing_fee_context_cache,
+    sizing_qty_cache,
     params,
     collect_all_candidates,
     ranking_context,
@@ -698,10 +768,12 @@ def _collect_extended_candidates(
                 trade_date=today,
             )
             stop_price_milli = price_to_milli(init_sl)
-            qty = calc_candidate_qty_for_capital(
-                limit_price, init_sl, sizing_equity, candidate_params,
-                ticker=ticker, security_profile=security_profile, trade_date=today,
-                max_qty=max_qty, sizing_capital_context=candidate_capital_context,
+            qty = _resolve_candidate_qty_cached(
+                sizing_qty_cache,
+                limit_price=limit_price, init_sl=init_sl, sizing_equity=sizing_equity,
+                params=candidate_params, ticker=ticker, security_profile=security_profile,
+                trade_date=today, max_qty=max_qty,
+                sizing_capital_context=candidate_capital_context,
                 sizing_fee_context=sizing_fee_context,
                 limit_price_milli=limit_price_milli,
                 stop_price_milli=stop_price_milli,
@@ -849,6 +921,8 @@ def build_daily_candidates(
     collect_all_candidates=True,
     extended_day_market_cache=None,
     compact_training_rows=False,
+    persistent_sizing_fee_context_cache=None,
+    persistent_sizing_qty_cache=None,
     profile_stats=None,
 ):
     buy_sort_method = get_buy_sort_method()
@@ -864,7 +938,14 @@ def build_daily_candidates(
         params,
     )
     sizing_capital_context_cache = {id(params): sizing_capital_context}
-    sizing_fee_context_cache = {}
+    sizing_fee_context_cache = (
+        persistent_sizing_fee_context_cache
+        if persistent_sizing_fee_context_cache is not None
+        else {}
+    )
+    sizing_qty_cache = (
+        persistent_sizing_qty_cache if compact_training_rows else None
+    )
     normal_candidates, normal_orderable, normal_setup_tickers_today = _collect_normal_candidates(
         normal_setup_entries=normal_setup_index.get(today, []),
         portfolio=portfolio,
@@ -898,6 +979,7 @@ def build_daily_candidates(
         sizing_capital_context=sizing_capital_context,
         sizing_capital_context_cache=sizing_capital_context_cache,
         sizing_fee_context_cache=sizing_fee_context_cache,
+        sizing_qty_cache=sizing_qty_cache,
         params=params,
         collect_all_candidates=collect_all_candidates,
         ranking_context=ranking_context,

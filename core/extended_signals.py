@@ -463,7 +463,12 @@ def should_clear_live_extended_signal_training_fast(
     if signal_state is None or shadow_position is None:
         return False
 
-    shadow_position["_last_exec_contexts"] = []
+    # The canonical bar step clears transient execution contexts at the start of
+    # every bar.  Most optimizer shadow days already carry the same empty list;
+    # avoid allocating/replacing another list on every continuation-day.
+    last_exec_contexts = shadow_position.get("_last_exec_contexts")
+    if not isinstance(last_exec_contexts, list) or last_exec_contexts:
+        shadow_position["_last_exec_contexts"] = []
 
     if shadow_position.get("pending_exit_action") in {"STOP", "TP_HALF"}:
         return True
@@ -486,7 +491,8 @@ def should_clear_live_extended_signal_training_fast(
             highest_high_milli = y_high_milli
             made_new_high = True
 
-    shadow_position["highest_high_since_entry_milli"] = highest_high_milli
+    if made_new_high:
+        shadow_position["highest_high_since_entry_milli"] = highest_high_milli
 
     if made_new_high and y_atr == y_atr:
         candidate_trail = adjust_long_stop_price(
@@ -495,17 +501,17 @@ def should_clear_live_extended_signal_training_fast(
             security_profile=shadow_position.get("security_profile"),
         )
         candidate_trail_milli = price_to_milli(candidate_trail)
-        shadow_position["trailing_stop_milli"] = max(
-            previous_trailing_milli,
-            candidate_trail_milli,
-        )
+        resolved_trailing_milli = max(previous_trailing_milli, candidate_trail_milli)
+        if resolved_trailing_milli != previous_trailing_milli:
+            shadow_position["trailing_stop_milli"] = resolved_trailing_milli
 
     trailing_stop_milli = int(shadow_position.get("trailing_stop_milli", 0) or 0)
     sl_milli = max(
         int(shadow_position.get("initial_stop_milli", 0) or 0),
         trailing_stop_milli,
     )
-    shadow_position["sl_milli"] = sl_milli
+    if sl_milli != previous_sl_milli:
+        shadow_position["sl_milli"] = sl_milli
 
     if (
         highest_high_milli != previous_high_milli
@@ -516,7 +522,8 @@ def should_clear_live_extended_signal_training_fast(
         shadow_position["trailing_stop"] = milli_to_price(trailing_stop_milli)
         shadow_position["sl"] = milli_to_price(sl_milli)
 
-    signal_state["continuation_invalidation_barrier"] = shadow_position.get("sl", np.nan)
+    if sl_milli != previous_sl_milli:
+        signal_state["continuation_invalidation_barrier"] = shadow_position.get("sl", np.nan)
 
     if y_ind_sell:
         block = get_exit_sell_block_reason(
