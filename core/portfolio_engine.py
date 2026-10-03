@@ -384,6 +384,12 @@ def run_portfolio_timeline(
                     all_dfs_fast=day_all_dfs_fast,
                     today=today,
                     params=day_params,
+                    training_fast_path=bool(
+                        is_training
+                        and replay_counts is None
+                        and replay_execution_rows is None
+                        and replay_selector_trace_rows is None
+                    ),
                 )
             if profile_timing_enabled:
                 reentry_sec += time.perf_counter() - t0

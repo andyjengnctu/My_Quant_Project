@@ -1714,6 +1714,218 @@ static PyObject *native_resolve_live_extended_candidate_batch_sized(PyObject *se
     return out;
 }
 
+
+
+static int packed_bool1_at(PyObject *packed_data, const char *field, Py_ssize_t pos, int *out) {
+    if (!PyDict_Check(packed_data) || pos < 0) return 0;
+    PyObject *packed_flag = PyDict_GetItemString(packed_data, "_packed_market_data");
+    if (packed_flag == NULL || packed_flag != Py_True) return 0;
+    PyObject *array_obj = PyDict_GetItemString(packed_data, field);
+    if (array_obj == NULL) return 0;
+    Py_buffer view;
+    if (PyObject_GetBuffer(array_obj, &view, PyBUF_CONTIG_RO) != 0) {
+        PyErr_Clear();
+        return 0;
+    }
+    int ok = 0;
+    if (view.itemsize == 1 && pos < view.len) {
+        const unsigned char raw = *(((const unsigned char *)view.buf) + pos);
+        *out = raw ? 1 : 0;
+        ok = 1;
+    }
+    PyBuffer_Release(&view);
+    return ok;
+}
+
+/*
+ * Optimizer-only existing-position common no-event fast path.
+ *
+ * The canonical Python settlement path is retained for any day that can create
+ * an observable execution event (pending exit, indicator exit, STOP or TP), for
+ * non-packed/legacy market data, or for positions carrying a private data
+ * context.  This native batch only advances the very common no-event day:
+ * previous-bar trailing state + last close cache.  It intentionally performs no
+ * cash/accounting operation.
+ */
+static PyObject *native_settle_position_noevent_cached_batch(PyObject *self, PyObject *args) {
+    PyObject *portfolio, *tickers_obj, *all_dfs_fast, *today, *default_params;
+    (void)self;
+    if (!PyArg_ParseTuple(args, "OOOOO", &portfolio, &tickers_obj, &all_dfs_fast, &today, &default_params)) {
+        return NULL;
+    }
+    if (!PyDict_Check(portfolio) || !PyDict_Check(all_dfs_fast)) {
+        PyErr_SetString(PyExc_TypeError, "expected portfolio/all_dfs_fast dict inputs");
+        return NULL;
+    }
+    PyObject *tickers = PySequence_Fast(tickers_obj, "tickers must be a sequence");
+    if (tickers == NULL) return NULL;
+    PyObject *fallback = PyList_New(0);
+    if (fallback == NULL) { Py_DECREF(tickers); return NULL; }
+
+    PyObject *last_params = NULL;
+    double last_atr_times_trail = 0.0;
+    int have_last_params = 0;
+    const Py_ssize_t n = PySequence_Fast_GET_SIZE(tickers);
+    PyObject **items = PySequence_Fast_ITEMS(tickers);
+
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        PyObject *ticker = items[i];
+        PyObject *position = PyDict_GetItemWithError(portfolio, ticker);
+        if (position == NULL) {
+            if (PyErr_Occurred()) goto error;
+            continue;
+        }
+        if (!PyDict_Check(position)) {
+            if (PyList_Append(fallback, ticker) != 0) goto error;
+            continue;
+        }
+        int64_t qty = 0;
+        if (!dict_int64_default(position, "qty", 0, &qty)) {
+            if (PyList_Append(fallback, ticker) != 0) goto error;
+            continue;
+        }
+        if (qty <= 0) continue;
+
+        PyObject *entry_context = dict_get_borrowed(position, "_entry_context");
+        if (entry_context != NULL && PyDict_Check(entry_context)) {
+            PyObject *private_data = PyDict_GetItemString(entry_context, "all_dfs_fast");
+            if (private_data != NULL && private_data != Py_None) {
+                if (PyList_Append(fallback, ticker) != 0) goto error;
+                continue;
+            }
+        }
+
+        PyObject *pending = dict_get_borrowed(position, "pending_exit_action");
+        if (pending != NULL && pending != Py_None) {
+            int pending_truth = PyObject_IsTrue(pending);
+            if (pending_truth < 0) { PyErr_Clear(); pending_truth = 1; }
+            if (pending_truth) {
+                if (PyList_Append(fallback, ticker) != 0) goto error;
+                continue;
+            }
+        }
+
+        PyObject *packed = PyDict_GetItemWithError(all_dfs_fast, ticker);
+        if (packed == NULL) {
+            if (PyErr_Occurred()) goto error;
+            if (PyList_Append(fallback, ticker) != 0) goto error;
+            continue;
+        }
+        if (!PyDict_Check(packed) || PyDict_GetItemString(packed, "_packed_market_data") != Py_True) {
+            if (PyList_Append(fallback, ticker) != 0) goto error;
+            continue;
+        }
+        PyObject *date_to_pos = PyDict_GetItemString(packed, "date_to_pos");
+        if (!PyDict_Check(date_to_pos)) {
+            if (PyList_Append(fallback, ticker) != 0) goto error;
+            continue;
+        }
+        PyObject *pos_obj = PyDict_GetItemWithError(date_to_pos, today);
+        if (pos_obj == NULL) {
+            if (PyErr_Occurred()) goto error;
+            continue;
+        }
+        int64_t t_pos_i64 = 0;
+        if (!object_to_int64_noerr(pos_obj, &t_pos_i64) || t_pos_i64 <= 0) continue;
+        const Py_ssize_t t_pos = (Py_ssize_t)t_pos_i64;
+        const Py_ssize_t y_pos = t_pos - 1;
+
+        double y_atr, y_high, t_high, t_low, t_close;
+        int y_ind_sell = 0;
+        if (!packed_float64_at(packed, "ATR", y_pos, &y_atr) ||
+            !packed_float64_at(packed, "High", y_pos, &y_high) ||
+            !packed_float64_at(packed, "High", t_pos, &t_high) ||
+            !packed_float64_at(packed, "Low", t_pos, &t_low) ||
+            !packed_float64_at(packed, "Close", t_pos, &t_close) ||
+            !packed_bool1_at(packed, "ind_sell_signal", y_pos, &y_ind_sell)) {
+            if (PyList_Append(fallback, ticker) != 0) goto error;
+            continue;
+        }
+        if (!(isfinite(y_atr) && isfinite(y_high) && isfinite(t_high) && isfinite(t_low) && isfinite(t_close))) {
+            if (PyList_Append(fallback, ticker) != 0) goto error;
+            continue;
+        }
+        if (y_ind_sell) {
+            if (PyList_Append(fallback, ticker) != 0) goto error;
+            continue;
+        }
+
+        PyObject *params_obj = dict_get_borrowed(position, "_entry_params_obj");
+        if (params_obj == NULL || params_obj == Py_None) params_obj = default_params;
+        double atr_times_trail = 0.0;
+        if (have_last_params && params_obj == last_params) {
+            atr_times_trail = last_atr_times_trail;
+        } else {
+            if (!resolve_atr_times_trail_native(params_obj, &atr_times_trail)) {
+                if (PyList_Append(fallback, ticker) != 0) goto error;
+                continue;
+            }
+            last_params = params_obj;
+            last_atr_times_trail = atr_times_trail;
+            have_last_params = 1;
+        }
+
+        PyObject *security_profile = dict_get_borrowed(position, "security_profile");
+        int is_fund = 0;
+        if (!profile_is_fund(security_profile, &is_fund)) {
+            if (PyList_Append(fallback, ticker) != 0) goto error;
+            continue;
+        }
+        int64_t entry_fill_milli = 0, previous_high_milli = 0, previous_trailing_milli = 0;
+        int64_t previous_sl_milli = 0, initial_stop_milli = 0, tp_half_milli = 0;
+        if (!dict_int64_default(position, "entry_fill_price_milli", 0, &entry_fill_milli) ||
+            !dict_int64_default(position, "highest_high_since_entry_milli", entry_fill_milli, &previous_high_milli) ||
+            !dict_int64_default(position, "trailing_stop_milli", 0, &previous_trailing_milli) ||
+            !dict_int64_default(position, "sl_milli", 0, &previous_sl_milli) ||
+            !dict_int64_default(position, "initial_stop_milli", 0, &initial_stop_milli) ||
+            !dict_int64_default(position, "tp_half_milli", 0, &tp_half_milli)) {
+            if (PyList_Append(fallback, ticker) != 0) goto error;
+            continue;
+        }
+        PyObject *sold_half_obj = dict_get_borrowed(position, "sold_half");
+        int sold_half = sold_half_obj == NULL ? 0 : PyObject_IsTrue(sold_half_obj);
+        if (sold_half < 0) { PyErr_Clear(); if (PyList_Append(fallback, ticker) != 0) goto error; continue; }
+
+        int64_t highest_high_milli = previous_high_milli;
+        int64_t trailing_milli = previous_trailing_milli;
+        if (price_to_milli_double(y_high) > previous_high_milli) {
+            highest_high_milli = price_to_milli_double(y_high);
+            const double candidate_trail = ((double)highest_high_milli / 1000.0) - (y_atr * atr_times_trail);
+            int64_t candidate_trail_milli = 0;
+            if (!round_up_price_to_tick_milli(candidate_trail, is_fund, &candidate_trail_milli)) {
+                if (PyList_Append(fallback, ticker) != 0) goto error;
+                continue;
+            }
+            if (candidate_trail_milli > trailing_milli) trailing_milli = candidate_trail_milli;
+        }
+        const int64_t sl_milli = initial_stop_milli > trailing_milli ? initial_stop_milli : trailing_milli;
+        const int64_t t_low_milli = price_to_milli_double(t_low);
+        const int64_t t_high_milli = price_to_milli_double(t_high);
+        if (t_low_milli <= sl_milli || (!sold_half && tp_half_milli > 0 && t_high_milli >= tp_half_milli)) {
+            if (PyList_Append(fallback, ticker) != 0) goto error;
+            continue;
+        }
+
+        if (highest_high_milli != previous_high_milli &&
+            !set_dict_int64(position, "highest_high_since_entry_milli", highest_high_milli)) goto error;
+        if (trailing_milli != previous_trailing_milli &&
+            !set_dict_int64(position, "trailing_stop_milli", trailing_milli)) goto error;
+        if (sl_milli != previous_sl_milli &&
+            !set_dict_int64(position, "sl_milli", sl_milli)) goto error;
+        if (PyDict_DelItemString(position, "_last_exec_contexts") != 0 &&
+            !PyErr_ExceptionMatches(PyExc_KeyError)) goto error;
+        PyErr_Clear();
+        if (!set_dict_double(position, "last_px", t_close)) goto error;
+    }
+
+    Py_DECREF(tickers);
+    return fallback;
+error:
+    Py_DECREF(tickers);
+    Py_DECREF(fallback);
+    return NULL;
+}
+
 static PyMethodDef NativeOptimizerMethods[] = {
     {
         "supertrend_direction_into",
@@ -1774,6 +1986,12 @@ static PyMethodDef NativeOptimizerMethods[] = {
         native_cleanup_live_shadow_cached_batch,
         METH_VARARGS,
         "Advance cached optimizer live-shadow states directly from packed market data; return canonical fallback tickers."
+    },
+    {
+        "settle_position_noevent_cached_batch",
+        native_settle_position_noevent_cached_batch,
+        METH_VARARGS,
+        "Advance optimizer existing-position no-event settlement days directly from packed market data; return canonical fallback tickers."
     },
     {
         "resolve_live_extended_candidate_core",

@@ -22,6 +22,9 @@ from core.price_utils import (
     adjust_long_sell_fill_price,
     get_exit_sell_block_reason,
 )
+from core.native_optimizer_hotpath import (
+    settle_position_noevent_cached_batch as _native_settle_position_noevent_cached_batch,
+)
 from core.portfolio_fast_data import (
     get_fast_close,
     get_fast_management_session_values,
@@ -370,7 +373,19 @@ def settle_portfolio_positions(
     fee_rebate_state=None,
 ):
     tickers_to_remove = []
-    for ticker in sorted(portfolio.keys()):
+    settled_tickers = tuple(sorted(portfolio.keys()))
+    if bool(is_training) and _native_settle_position_noevent_cached_batch is not None and settled_tickers:
+        native_fallback = _native_settle_position_noevent_cached_batch(
+            portfolio,
+            settled_tickers,
+            all_dfs_fast,
+            today,
+            params,
+        )
+        if native_fallback is not None:
+            settled_tickers = tuple(native_fallback)
+
+    for ticker in settled_tickers:
         pos = portfolio[ticker]
         pre_step_qty = int(pos.get('qty', 0) or 0)
         pos_params = _resolve_position_params(pos, params)

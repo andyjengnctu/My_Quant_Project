@@ -297,6 +297,7 @@ def activate_breakout_reentry_signals_for_day(
     all_dfs_fast,
     today,
     params,
+    training_fast_path=False,
 ):
     if not active_reentry_watchlist:
         return 0
@@ -304,7 +305,8 @@ def activate_breakout_reentry_signals_for_day(
     from core.portfolio_fast_access import get_fast_close, get_fast_dates, get_fast_pos, get_fast_security_profile, get_fast_value
 
     activated = 0
-    for ticker in sorted(list(active_reentry_watchlist.keys())):
+    watch_tickers = tuple(active_reentry_watchlist) if training_fast_path else tuple(sorted(active_reentry_watchlist))
+    for ticker in watch_tickers:
         state = active_reentry_watchlist.get(ticker)
         if not isinstance(state, dict):
             active_reentry_watchlist.pop(ticker, None)
@@ -325,20 +327,30 @@ def activate_breakout_reentry_signals_for_day(
         if fast_df is None:
             continue
 
-        t_pos = get_fast_pos(fast_df, today)
-        if t_pos <= 0:
-            continue
-        y_pos = t_pos - 1
-        dates = get_fast_dates(fast_df)
-        signal_date = dates[y_pos]
-        signal_date_key = _format_date_key(signal_date)
-        if state.get("last_checked_date") == signal_date_key:
-            continue
+        if training_fast_path and isinstance(fast_df, dict) and fast_df.get("_packed_market_data", False) is True:
+            t_pos = int(fast_df["date_to_pos"].get(today, -1))
+            if t_pos <= 0:
+                continue
+            y_pos = t_pos - 1
+            signal_date = fast_df["dates"][y_pos]
+            y_close = float(fast_df["Close"][y_pos])
+            y_atr = float(fast_df["ATR"][y_pos])
+            state["bars_checked"] = int(state.get("bars_checked", 0) or 0) + 1
+        else:
+            t_pos = get_fast_pos(fast_df, today)
+            if t_pos <= 0:
+                continue
+            y_pos = t_pos - 1
+            dates = get_fast_dates(fast_df)
+            signal_date = dates[y_pos]
+            signal_date_key = _format_date_key(signal_date)
+            if state.get("last_checked_date") == signal_date_key:
+                continue
 
-        y_close = get_fast_close(fast_df, pos=y_pos)
-        y_atr = get_fast_value(fast_df, "ATR", pos=y_pos)
-        state["last_checked_date"] = signal_date_key
-        state["bars_checked"] = int(state.get("bars_checked", 0) or 0) + 1
+            y_close = get_fast_close(fast_df, pos=y_pos)
+            y_atr = get_fast_value(fast_df, "ATR", pos=y_pos)
+            state["last_checked_date"] = signal_date_key
+            state["bars_checked"] = int(state.get("bars_checked", 0) or 0) + 1
 
         signal_state = create_breakout_reentry_signal_state(
             state,
@@ -346,7 +358,7 @@ def activate_breakout_reentry_signals_for_day(
             atr=y_atr,
             params=params,
             ticker=ticker,
-            security_profile=get_fast_security_profile(fast_df),
+            security_profile=(fast_df.get("security_profile") if training_fast_path and isinstance(fast_df, dict) and fast_df.get("_packed_market_data", False) is True else get_fast_security_profile(fast_df)),
             signal_date=signal_date,
         )
         if signal_state is not None:
