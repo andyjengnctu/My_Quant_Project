@@ -256,7 +256,6 @@ def _make_candidate_row(
     precomputed_proj_cost_milli=None,
     precomputed_sort_value=None,
     compact_training_row=False,
-    sizing_fee_context=None,
 ):
     if precomputed_proj_cost_milli is not None:
         est_cost_milli = int(precomputed_proj_cost_milli)
@@ -323,8 +322,6 @@ def _make_candidate_row(
             'entry_source': (signal_state or {}).get('source') if signal_state is not None else candidate_type,
             'use_breakout_quality_ranking': False,
         }
-        if sizing_fee_context is not None:
-            row['_entry_fee_context'] = sizing_fee_context
     else:
         normalized_quality_rank = (
             None
@@ -574,7 +571,6 @@ def _collect_normal_candidates(
             prev_close=y_close, quality_rank=quality_rank, ranking_context=ranking_context,
             est_limit_px_milli=limit_price_milli,
             compact_training_row=bool(compact_training_rows),
-            sizing_fee_context=sizing_fee_context,
         )
         if profile_enabled:
             _candidate_profile_add(profile_stats, "portfolio_candidate_row_sec", row_started)
@@ -772,7 +768,6 @@ def _collect_extended_candidates(
                     native_sized_batch_meta.append((
                         ticker, candidate_params, t_pos, y_pos, ev, win_rate, trade_count,
                         asset_growth_pct, y_close, security_profile, signal_state,
-                        sizing_fee_context,
                     ))
                     if profile_enabled:
                         _candidate_profile_add(profile_stats, "portfolio_candidate_plan_sec", plan_started)
@@ -1021,7 +1016,6 @@ def _collect_extended_candidates(
             ranking_context=ranking_context,
             est_limit_px_milli=limit_price_milli,
             compact_training_row=bool(compact_training_rows),
-            sizing_fee_context=sizing_fee_context,
         )
         if profile_enabled:
             _candidate_profile_add(profile_stats, "portfolio_candidate_row_sec", row_started)
@@ -1043,7 +1037,6 @@ def _collect_extended_candidates(
             (
                 ticker, candidate_params, t_pos, y_pos, ev, win_rate, trade_count,
                 asset_growth_pct, y_close, security_profile, signal_state,
-                sizing_fee_context,
             ) = meta
             if native_result is False:
                 continue
@@ -1137,7 +1130,6 @@ def _collect_extended_candidates(
                 precomputed_proj_cost_milli=proj_cost_milli,
                 precomputed_sort_value=sort_value,
                 compact_training_row=True,
-                sizing_fee_context=sizing_fee_context,
             )
             if profile_enabled:
                 _candidate_profile_add(profile_stats, "portfolio_candidate_row_sec", row_started)
