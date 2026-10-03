@@ -3,6 +3,11 @@ import os
 from typing import Any
 
 from core.display_common import C_CYAN, C_RESET
+from core.native_optimizer_hotpath import is_native_optimizer_hotpath_available
+from core.training_performance import (
+    is_optimizer_compiled_signal_kernels_enabled,
+    is_optimizer_native_hotpath_kernels_enabled,
+)
 
 
 def build_timing_db_file_path(*, output_dir: str, dataset_profile_key: str, session_ts: str) -> str:
@@ -36,6 +41,9 @@ def build_timing_summary(*, session, dataset_label: str, dataset_profile_key: st
         "db_file": str(db_file),
         "timing_sampler_kind": str(timing_sampler_kind or ""),
         "optimizer_seed": (None if optimizer_seed is None else int(optimizer_seed)),
+        "compiled_signal_kernels_enabled": bool(is_optimizer_compiled_signal_kernels_enabled()),
+        "native_hotpath_kernels_enabled": bool(is_optimizer_native_hotpath_kernels_enabled()),
+        "native_hotpath_available": bool(is_native_optimizer_hotpath_available()),
         "requested_trials": int(getattr(session, "n_trials", 0)),
         "completed_trials": completed_trials,
         "raw_data_load_sec": float(raw_data_load_sec),
@@ -91,10 +99,17 @@ def write_timing_summary(*, output_dir: str, session_ts: str, payload: dict[str,
 
 def print_timing_summary(*, payload: dict[str, Any]):
     completed_trials = int(payload.get("completed_trials") or 0)
+    compiled_state = "ON" if bool(payload.get("compiled_signal_kernels_enabled", False)) else "OFF"
+    native_state = "ON" if bool(payload.get("native_hotpath_kernels_enabled", False)) else "OFF"
+    native_available = "YES" if bool(payload.get("native_hotpath_available", False)) else "NO"
     startup_total_sec = float(payload.get("startup_total_sec", payload.get("raw_data_load_sec", 0.0)) or 0.0)
     trial_sum_sec = float(payload.get("profile_trial_total_sum_sec", payload.get("optimize_wall_sec", 0.0)) or 0.0)
     total_accounting_sec = float(payload.get("total_accounting_sum_sec", startup_total_sec + trial_sum_sec) or 0.0)
     avg_training_sec = (trial_sum_sec / completed_trials) if completed_trials > 0 else 0.0
+    print(
+        "⚡ 執行加速｜"
+        f"CompiledSignals={compiled_state} | NativeHotpath={native_state} | NativeBinary={native_available}"
+    )
     print(
         "📏 Optimizer 測時摘要｜"
         f"{C_CYAN}總時間 : {total_accounting_sec:.3f}s{C_RESET}"

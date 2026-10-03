@@ -251,6 +251,7 @@ def ensure_extended_signal_counterfactual_anchor(
     params,
     current_date=None,
     copy_shadow_position=True,
+    counterfactual_anchor_plan=None,
 ):
     if signal_state is None or params is None or sizing_capital is None:
         return signal_state
@@ -262,14 +263,16 @@ def ensure_extended_signal_counterfactual_anchor(
     if pd.isna(original_limit) or pd.isna(original_atr) or pd.isna(t_open):
         return signal_state
 
-    candidate_plan = build_extended_candidate_plan_from_signal(
-        signal_state,
-        sizing_capital,
-        params,
-        ticker=signal_state.get("ticker"),
-        security_profile=signal_state.get("security_profile"),
-        trade_date=current_date,
-    )
+    candidate_plan = counterfactual_anchor_plan
+    if candidate_plan is None:
+        candidate_plan = build_extended_candidate_plan_from_signal(
+            signal_state,
+            sizing_capital,
+            params,
+            ticker=signal_state.get("ticker"),
+            security_profile=signal_state.get("security_profile"),
+            trade_date=current_date,
+        )
     if candidate_plan is None or candidate_plan.get("qty", 0) <= 0:
         return signal_state
 
@@ -448,6 +451,7 @@ def should_clear_extended_signal(
     current_date=None,
     params=None,
     copy_shadow_position=True,
+    counterfactual_anchor_plan=None,
 ):
     if signal_state is None:
         return False
@@ -499,6 +503,7 @@ def should_clear_extended_signal(
         params=params,
         current_date=current_date,
         copy_shadow_position=copy_shadow_position,
+        counterfactual_anchor_plan=counterfactual_anchor_plan,
     )
     shadow_position = _resolve_shadow_position(signal_state)
     if shadow_position is None:

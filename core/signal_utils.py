@@ -317,115 +317,99 @@ def generate_signals(df, params, ticker=None, feature_bank=None, use_compiled_ke
         ),
     )
 
-    prev_supertrend = np.empty_like(SuperTrend_Dir)
-    prev_supertrend[0] = SuperTrend_Dir[0]
-    prev_supertrend[1:] = SuperTrend_Dir[:-1]
-    isSupertrend_Bearish_Flip = (SuperTrend_Dir == 1) & (prev_supertrend == -1)
-    isSupertrend_Bearish_Flip[0] = False
+    # Optimizer hot path: compare adjacent views directly instead of allocating
+    # full-length shifted copies for SuperTrend, close, HighN and KC lower.
+    isSupertrend_Bearish_Flip = np.zeros_like(C, dtype=bool)
+    if len(C) > 1:
+        isSupertrend_Bearish_Flip[1:] = (SuperTrend_Dir[1:] == 1) & (SuperTrend_Dir[:-1] == -1)
 
-    prev_close = np.empty_like(C)
-    prev_close[0] = C[0]
-    prev_close[1:] = C[:-1]
     if use_breakout_buy:
-        prev_highn = np.empty_like(HighN)
-        prev_highn[0] = HighN[0]
-        prev_highn[1:] = HighN[:-1]
-        isPriceCrossover = (C > HighN) & (prev_close <= prev_highn)
-        isPriceCrossover[0] = False
+        isPriceCrossover = np.zeros_like(C, dtype=bool)
+        if len(C) > 1:
+            isPriceCrossover[1:] = (C[1:] > HighN[1:]) & (C[:-1] <= HighN[:-1])
     else:
         isPriceCrossover = np.zeros_like(C, dtype=bool)
 
-    if use_breakout_buy and use_bb:
-        bb_len = int(params.bb_len)
-        close_series = pd.Series(C)
-        BB_Mid = _feature(
-            'close_rolling_mean',
-            (bb_len,),
-            lambda: close_series.rolling(bb_len).mean().values,
-        )
-        BB_Std = _feature(
-            'close_rolling_std0',
-            (bb_len,),
-            lambda: close_series.rolling(bb_len).std(ddof=0).values,
-        )
-        BB_Upper = BB_Mid + params.bb_mult * BB_Std
-        bbCondition = C > BB_Upper
-    else:
-        bbCondition = np.ones_like(C, dtype=bool)
+    # Build the buy mask incrementally. Disabled filters no longer allocate
+    # throw-away all-True arrays, while the filter order/semantics stay identical.
+    if use_breakout_buy:
+        breakoutBuyCondition = is_tradable_bar & (C > O) & isPriceCrossover
 
-    if use_breakout_buy and use_vol:
-        vol_long_len = int(params.vol_long_len)
-        vol_breakout_mult = float(getattr(params, 'vol_breakout_mult', 1.5))
-        volume_series = pd.Series(V)
-        PrevVolAvg = _feature(
-            'volume_shift1_rolling_mean',
-            (vol_long_len,),
-            lambda: volume_series.shift(1).rolling(vol_long_len, min_periods=vol_long_len).mean().values,
-        )
-        volCondition = (
-            np.isfinite(V)
-            & np.isfinite(PrevVolAvg)
-            & (V > 0)
-            & (PrevVolAvg > 0)
-            & (V > PrevVolAvg * vol_breakout_mult)
-        )
-    else:
-        volCondition = np.ones_like(C, dtype=bool)
+        if use_breakout_ema_filter:
+            breakoutBuyCondition &= (C > BreakoutEMA)
 
-    if use_breakout_buy and use_breakout_return_filter:
-        breakout_return_min = float(getattr(params, 'breakout_return_min', 0.0))
-        breakoutReturnCondition = (
-            np.isfinite(C)
-            & np.isfinite(prev_close)
-            & (prev_close > 0)
-            & ((C / prev_close - 1.0) > breakout_return_min)
-        )
-    else:
-        breakoutReturnCondition = np.ones_like(C, dtype=bool)
+        if use_bb:
+            bb_len = int(params.bb_len)
+            close_series = pd.Series(C)
+            BB_Mid = _feature(
+                'close_rolling_mean',
+                (bb_len,),
+                lambda: close_series.rolling(bb_len).mean().values,
+            )
+            BB_Std = _feature(
+                'close_rolling_std0',
+                (bb_len,),
+                lambda: close_series.rolling(bb_len).std(ddof=0).values,
+            )
+            breakoutBuyCondition &= (C > (BB_Mid + params.bb_mult * BB_Std))
 
-    if use_breakout_buy and use_breakout_false_filter:
-        atr_pct_min = float(getattr(params, 'breakout_false_filter_atr_pct_min', 0.045))
-        falseBreakoutCondition = build_breakout_false_filter_pass_condition(C, ATR_main, atr_pct_min)
-    else:
-        falseBreakoutCondition = np.ones_like(C, dtype=bool)
+        if use_vol:
+            vol_long_len = int(params.vol_long_len)
+            vol_breakout_mult = float(getattr(params, 'vol_breakout_mult', 1.5))
+            volume_series = pd.Series(V)
+            PrevVolAvg = _feature(
+                'volume_shift1_rolling_mean',
+                (vol_long_len,),
+                lambda: volume_series.shift(1).rolling(vol_long_len, min_periods=vol_long_len).mean().values,
+            )
+            breakoutBuyCondition &= (
+                np.isfinite(V)
+                & np.isfinite(PrevVolAvg)
+                & (V > 0)
+                & (PrevVolAvg > 0)
+                & (V > PrevVolAvg * vol_breakout_mult)
+            )
 
-    if use_breakout_buy and use_breakout_quality_filter:
-        breakoutQualityCondition = build_breakout_quality_filter_pass_condition(
-            df,
-            ticker=resolved_ticker,
-            high_len=high_len,
-            score_threshold=breakout_quality_score_threshold,
-            candidate_condition=isPriceCrossover,
-            filter_id=breakout_quality_filter_id,
-        )
+        if use_breakout_return_filter:
+            breakout_return_min = float(getattr(params, 'breakout_return_min', 0.0))
+            return_condition = np.zeros_like(C, dtype=bool)
+            if len(C) > 1:
+                previous_close = C[:-1]
+                return_condition[1:] = (
+                    np.isfinite(C[1:])
+                    & np.isfinite(previous_close)
+                    & (previous_close > 0)
+                    & ((C[1:] / previous_close - 1.0) > breakout_return_min)
+                )
+            breakoutBuyCondition &= return_condition
+
+        if use_breakout_false_filter:
+            atr_pct_min = float(getattr(params, 'breakout_false_filter_atr_pct_min', 0.045))
+            breakoutBuyCondition &= build_breakout_false_filter_pass_condition(C, ATR_main, atr_pct_min)
+
+        if use_breakout_quality_filter:
+            breakoutBuyCondition &= build_breakout_quality_filter_pass_condition(
+                df,
+                ticker=resolved_ticker,
+                high_len=high_len,
+                score_threshold=breakout_quality_score_threshold,
+                candidate_condition=isPriceCrossover,
+                filter_id=breakout_quality_filter_id,
+            )
     else:
-        breakoutQualityCondition = np.ones_like(C, dtype=bool)
+        breakoutBuyCondition = np.zeros_like(C, dtype=bool)
 
     if use_kc:
         kc_len = int(params.kc_len)
         ATR_kc = ATR_main if kc_len == atr_len else _feature('atr', (kc_len,), lambda: tv_atr_from_true_range(TrueRange, kc_len))
         KC_Mid = _feature('ema_close', (kc_len,), lambda: tv_ema(C, kc_len))
         KC_Lower = KC_Mid - ATR_kc * params.kc_mult
-        prev_kc_lower = np.empty_like(KC_Lower)
-        prev_kc_lower[0] = KC_Lower[0]
-        prev_kc_lower[1:] = KC_Lower[:-1]
-        isKcCrossunder = (C < KC_Lower) & (prev_close >= prev_kc_lower)
-        isKcCrossunder[0] = False
+        isKcCrossunder = np.zeros_like(C, dtype=bool)
+        if len(C) > 1:
+            isKcCrossunder[1:] = (C[1:] < KC_Lower[1:]) & (C[:-1] >= KC_Lower[:-1])
         kcSellCondition = isKcCrossunder & (C < O)
     else:
         kcSellCondition = np.zeros_like(C, dtype=bool)
-
-    breakoutEmaCondition = (
-        (C > BreakoutEMA)
-        if use_breakout_buy and use_breakout_ema_filter
-        else np.ones_like(C, dtype=bool)
-    )
-
-    breakoutBuyCondition = (
-        is_tradable_bar & (C > O) & isPriceCrossover & breakoutEmaCondition & bbCondition & volCondition & breakoutReturnCondition & falseBreakoutCondition & breakoutQualityCondition
-        if use_breakout_buy
-        else np.zeros_like(C, dtype=bool)
-    )
 
     buyCondition = breakoutBuyCondition
     sellCondition = is_tradable_bar & ((isSupertrend_Bearish_Flip & (C <= O)) | kcSellCondition)

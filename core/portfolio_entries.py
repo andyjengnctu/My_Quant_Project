@@ -341,6 +341,7 @@ def cleanup_extended_signals_for_day(
     params,
     sizing_capital,
     extended_day_market_cache=None,
+    candidate_rows_by_ticker=None,
 ):
     sorted_tickers = (
         None if extended_day_market_cache is None
@@ -419,11 +420,25 @@ def cleanup_extended_signals_for_day(
                 y_ind_sell=y_ind_sell, params=signal_params,
             )
         else:
+            counterfactual_anchor_plan = None
+            if candidate_rows_by_ticker is not None:
+                candidate_row = candidate_rows_by_ticker.get(ticker)
+                if candidate_row is not None:
+                    counterfactual_anchor_plan = build_candidate_plan_seed(
+                        candidate_row,
+                        sizing_equity=sizing_capital,
+                        copy_shadow_position=False,
+                    )
+                    counterfactual_anchor_plan["qty"] = int(candidate_row.get("qty", 0) or 0)
+                    counterfactual_anchor_plan["is_orderable"] = bool(
+                        candidate_row.get("is_orderable", False)
+                    )
             should_clear = should_clear_extended_signal(
                 signal_state, t_low, t_high, t_open=t_open, t_close=t_close,
                 t_volume=t_volume, y_close=y_close, y_high=y_high, y_atr=y_atr,
                 y_ind_sell=y_ind_sell, sizing_capital=sizing_capital,
                 current_date=today, params=signal_params, copy_shadow_position=False,
+                counterfactual_anchor_plan=counterfactual_anchor_plan,
             )
         if should_clear:
             del active_extended_signals[ticker]

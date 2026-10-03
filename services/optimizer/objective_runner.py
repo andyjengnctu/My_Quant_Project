@@ -8,7 +8,7 @@ from core.config import get_buy_sort_method
 from core.history_filters import history_threshold_is_enabled
 from core.portfolio_fast_data import (
     build_score_single_stock_profile_fields,
-    build_trade_stats_index,
+    build_neutral_candidate_stats_index,
     summarize_single_stock_trade_stats_from_pit_index,
 )
 from core.portfolio_stats import calc_portfolio_score
@@ -51,10 +51,10 @@ def _can_defer_optimizer_pit_stats(session, params) -> bool:
     return True
 
 
-def _install_neutral_pit_stats_index(prep_result):
-    empty_index = build_trade_stats_index([])
+def _install_neutral_pit_stats_index(prep_result, params):
+    neutral_index = build_neutral_candidate_stats_index(params)
     prep_result["all_pit_stats_index"] = {
-        ticker: empty_index for ticker in (prep_result.get("all_dfs_fast") or {})
+        ticker: neutral_index for ticker in (prep_result.get("all_dfs_fast") or {})
     }
     prep_result["pit_stats_deferred"] = True
 
@@ -695,7 +695,7 @@ def run_optimizer_objective(session, trial):
             include_pit_stats_index=not defer_pit_stats,
         )
         if defer_pit_stats:
-            _install_neutral_pit_stats_index(prep_result)
+            _install_neutral_pit_stats_index(prep_result, ai_params)
         cache_prep = getattr(session, "cache_prepared_trial_inputs", None)
         if callable(cache_prep) and not defer_pit_stats:
             cache_prep(prep_cache_key, prep_result)

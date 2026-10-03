@@ -279,6 +279,22 @@ def prep_stock_data_and_trades(df, params, profile_stats=None, return_stats=Fals
     return df, standalone_logs
 
 
+_NEUTRAL_CANDIDATE_METRICS_KEY = "_neutral_candidate_metrics"
+
+
+def build_neutral_candidate_stats_index(params):
+    """Return an empty PIT index whose candidate metrics are intentionally neutral.
+
+    This marker is only legal when the optimizer has already proved that history
+    thresholds, history-sensitive ranking, rotation and inner validation do not
+    consume single-stock PIT metrics.  Consumers can then skip bisect/cache work
+    without changing candidate membership or ordering.
+    """
+    index = build_trade_stats_index([])
+    index[_NEUTRAL_CANDIDATE_METRICS_KEY] = _evaluate_pit_stats_at_cutoff(index, 0, params)
+    return index
+
+
 def build_trade_stats_index(trade_logs):
     if not trade_logs:
         return {
@@ -474,6 +490,12 @@ def _evaluate_pit_stats_at_cutoff(stats_index, cutoff, params):
 
 
 def get_pit_stats_from_index(stats_index, current_date, params, *, cursor_state=None, ticker=None):
+    neutral_metrics = stats_index.get(_NEUTRAL_CANDIDATE_METRICS_KEY)
+    if neutral_metrics is not None:
+        # This tuple was computed once by the canonical zero-history evaluator
+        # for the exact trial params; reuse it without date/cursor/cache work.
+        return neutral_metrics
+
     exit_dates = stats_index['exit_dates']
     if cursor_state is None or ticker is None:
         cutoff = bisect.bisect_left(exit_dates, current_date)

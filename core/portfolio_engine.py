@@ -295,6 +295,7 @@ def run_portfolio_timeline(
         daily_missed_buy_count_before = int(total_missed_buys)
         candidate_sources_today = False
         orderable_candidates_today = []
+        cleanup_candidate_rows_by_ticker = None
         resource_action_candidates_today = []
         resource_selection_diag = {
             'enabled': False,
@@ -549,6 +550,13 @@ def run_portfolio_timeline(
                     )
                 if profile_timing_enabled:
                     candidate_scan_sec += time.perf_counter() - t0
+
+                if (not use_param_ensemble) and orderable_candidates_today:
+                    cleanup_candidate_rows_by_ticker = {
+                        row.get("ticker"): row
+                        for row in orderable_candidates_today
+                        if row.get("ticker") is not None
+                    }
 
                 t0 = time.perf_counter() if profile_timing_enabled else None
                 resource_selection_input_rows = list(orderable_candidates_today)
@@ -830,6 +838,7 @@ def run_portfolio_timeline(
                     params=day_params,
                     sizing_capital=sizing_equity,
                     extended_day_market_cache=extended_day_market_cache,
+                    candidate_rows_by_ticker=cleanup_candidate_rows_by_ticker,
                 )
             if profile_timing_enabled:
                 cleanup_sec += time.perf_counter() - t0
