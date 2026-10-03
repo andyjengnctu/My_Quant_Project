@@ -890,7 +890,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             row for row in rows
             if row[0] == "REUSE" and str(row[1]).startswith("result:")
         ]
-        pending_rows = [row for row in rows if row[0] != "REUSE"]
+        # A reusable parameter artifact is still a parameter dependency row; only
+        # ``result:`` rows mean the whole scientific observation can be pruned.
+        parameter_dependency_rows = [
+            row for row in rows if str(row[1]).startswith("param-benchmark:")
+        ]
         check_true(
             f"robustness_reused_scientific_units_prune_param_dependencies:{robustness.robustness_id}",
             not blockers
@@ -900,13 +904,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 for arm_id in canonical_reuse_arm_ids
                 for seed in robustness.resolved_seeds
             )
-            and len(pending_rows) == len(fixed_multiseed_arm_ids) * len(robustness.resolved_seeds)
-            and len({str(row[1]) for row in pending_rows}) == len(pending_rows)
+            and len(parameter_dependency_rows)
+            == len(fixed_multiseed_arm_ids) * len(robustness.resolved_seeds)
+            and len({str(row[1]) for row in parameter_dependency_rows})
+            == len(parameter_dependency_rows)
             and all(
                 "replicate=" in str(row[1])
                 and "fixed_multiseed_v1" in str(row[1])
                 and ":profile=" in str(row[1])
-                for row in pending_rows
+                for row in parameter_dependency_rows
             ),
         )
 
@@ -956,9 +962,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         for arm_id in rolling_canonical_reuse_arm_ids
         for seed in rolling_robustness.resolved_seeds
     }
-    with patch(
-        "services.research.strategy_multi_seed_robustness._discover_registered_strategy_only_scientific_reuse",
-        return_value=rolling_reusable,
+    with (
+        patch(
+            "services.research.strategy_multi_seed_robustness._discover_registered_strategy_only_scientific_reuse",
+            return_value=rolling_reusable,
+        ),
+        # This fixture explicitly tests the plan before fixed-multiseed work is
+        # prepared; isolate it from parameter artifacts already present on disk.
+        patch(
+            "services.research.strategy_multi_seed_robustness.inspect_fixed_multiseed_robustness_strategy_parameter_artifact",
+            return_value={"action": "BUILD"},
+        ),
     ):
         rendered_robustness_plan, rendered_robustness_payload = (
             _render_robustness_execution_plan(
