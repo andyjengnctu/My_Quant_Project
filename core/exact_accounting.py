@@ -58,6 +58,46 @@ def milli_to_price(price_milli: int) -> float:
     return int(price_milli) / MILLI_SCALE
 
 
+def resolve_positive_price_barrier_hits_milli(
+    low_price,
+    high_price,
+    stop_milli: int,
+    target_milli: int,
+):
+    """Resolve STOP/target touches without materializing rounded milli prices.
+
+    For the normal finite non-negative float/numpy-float market-data path this
+    is exactly equivalent to ``price_to_milli(low) <= stop`` and
+    ``price_to_milli(high) >= target`` under the canonical half-up conversion.
+    Edge inputs deliberately fall back to ``price_to_milli`` so legacy error
+    and coercion semantics remain owned by the canonical converter.
+    """
+    stop_threshold = int(stop_milli)
+    target_threshold = int(target_milli)
+
+    low_type = type(low_price)
+    if low_type is float or low_type.__module__ == "numpy":
+        low_value = float(low_price)
+        if math.isfinite(low_value) and low_value >= 0.0:
+            stop_hit = (low_value * MILLI_SCALE) < (stop_threshold + 0.5)
+        else:
+            stop_hit = price_to_milli(low_price) <= stop_threshold
+    else:
+        stop_hit = price_to_milli(low_price) <= stop_threshold
+
+    high_type = type(high_price)
+    if high_type is float or high_type.__module__ == "numpy":
+        high_value = float(high_price)
+        if math.isfinite(high_value) and high_value >= 0.0:
+            target_hit = (high_value * MILLI_SCALE) >= (target_threshold - 0.5)
+        else:
+            target_hit = price_to_milli(high_price) >= target_threshold
+    else:
+        target_hit = price_to_milli(high_price) >= target_threshold
+
+    return bool(stop_hit), bool(target_hit)
+
+
 milli_to_money = milli_to_price
 
 
@@ -583,10 +623,48 @@ def calc_sell_net_total_milli_from_milli(exec_price_milli: int, qty: int, params
         cfi_code=cfi_code,
         security_name=security_name,
     )
+    fee_context = (
+        int(sell_fee_ppm),
+        int(tax_ppm),
+        int(min_fee_milli),
+        _resolve_charge_rounding_mode(params),
+    )
+    return calc_sell_net_total_milli_from_fee_context(exec_price_milli, qty, fee_context)
+
+
+def build_sell_fee_context(params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None):
+    """Resolve the immutable sell-side accounting inputs for repeated pricing."""
+    _buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli = _resolve_trade_fee_schedule_tuple(
+        params,
+        ticker=ticker,
+        security_profile=security_profile,
+        trade_date=trade_date,
+        cfi_code=cfi_code,
+        security_name=security_name,
+    )
+    return (
+        int(sell_fee_ppm),
+        int(tax_ppm),
+        int(min_fee_milli),
+        _resolve_charge_rounding_mode(params),
+    )
+
+
+def calc_sell_net_total_milli_from_fee_context(exec_price_milli: int, qty: int, fee_context) -> int:
+    """Exact sell net for callers that already own a canonical fee context."""
+    sell_fee_ppm, tax_ppm, min_fee_milli, fee_rounding_mode = fee_context
     gross_sell_milli = int(exec_price_milli) * int(qty)
-    fee_rounding_mode = _resolve_charge_rounding_mode(params)
-    sell_fee_milli = calc_fee_milli(gross_sell_milli, sell_fee_ppm, min_fee_milli, rounding_mode=fee_rounding_mode)
-    tax_milli = calc_tax_milli(gross_sell_milli, tax_ppm, rounding_mode=CHARGE_ROUNDING_FLOOR_TWD)
+    sell_fee_milli = calc_fee_milli(
+        gross_sell_milli,
+        int(sell_fee_ppm),
+        int(min_fee_milli),
+        rounding_mode=fee_rounding_mode,
+    )
+    tax_milli = calc_tax_milli(
+        gross_sell_milli,
+        int(tax_ppm),
+        rounding_mode=CHARGE_ROUNDING_FLOOR_TWD,
+    )
     return gross_sell_milli - sell_fee_milli - tax_milli
 
 

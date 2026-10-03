@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 
+from core.exact_accounting import resolve_positive_price_barrier_hits_milli
 
 from core.entry_plans import (
     build_counterfactual_shadow_position_from_plan,
@@ -157,14 +158,22 @@ def _did_extended_signal_touch_barrier(signal_state, *, day_low, day_high, shado
         stop_milli = shadow_position.get("sl_milli")
         target_milli = shadow_position.get("tp_half_milli")
         if stop_milli is not None and target_milli is not None:
-            stop_hit = (
-                not pd.isna(day_low)
-                and price_to_milli(day_low) <= int(stop_milli)
-            )
-            target_hit = (
-                not pd.isna(day_high)
-                and price_to_milli(day_high) >= int(target_milli)
-            )
+            if pd.isna(day_low) or pd.isna(day_high):
+                stop_hit = (
+                    not pd.isna(day_low)
+                    and price_to_milli(day_low) <= int(stop_milli)
+                )
+                target_hit = (
+                    not pd.isna(day_high)
+                    and price_to_milli(day_high) >= int(target_milli)
+                )
+            else:
+                stop_hit, target_hit = resolve_positive_price_barrier_hits_milli(
+                    day_low,
+                    day_high,
+                    int(stop_milli),
+                    int(target_milli),
+                )
             return stop_hit or target_hit
 
     invalidation_barrier = signal_state.get("continuation_invalidation_barrier", np.nan)

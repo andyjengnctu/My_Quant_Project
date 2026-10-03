@@ -14,6 +14,7 @@ from core.exit_priority import resolve_stop_tp_hits
 from core.exact_accounting import (
     milli_to_price,
     price_to_milli,
+    resolve_positive_price_barrier_hits_milli,
     round_price_to_tick_milli,
     round_price_to_tick_milli_for_tick_profile,
 )
@@ -134,10 +135,15 @@ def resolve_position_intraday_exit_hits(position, *, t_high, t_low, params):
     The canonical session transition owns timing: touches use geometry from
     prior completed information, never a stop raised by the same bar's high.
     """
-    is_stop_hit = price_to_milli(t_low) <= int(position['sl_milli'])
+    is_stop_hit, raw_tp_hit = resolve_positive_price_barrier_hits_milli(
+        t_low,
+        t_high,
+        int(position['sl_milli']),
+        int(position['tp_half_milli']),
+    )
     half_sell_qty = calc_half_take_profit_sell_qty(position['qty'], params.tp_percent)
     is_tp_hit = (
-        price_to_milli(t_high) >= int(position['tp_half_milli'])
+        raw_tp_hit
         and not position['sold_half']
         and half_sell_qty > 0
     )

@@ -243,6 +243,7 @@ def run_portfolio_timeline(
     # across replay days so CandidateScan does not rebuild the same contract
     # on every active day.
     candidate_sizing_fee_context_cache = {}
+    mark_to_market_sell_fee_context_cache = {}
     for i in range(start_idx, len(sorted_dates)):
         t_day_start = time.perf_counter() if profile_timing_enabled else None
         sim_days += 1
@@ -855,6 +856,7 @@ def run_portfolio_timeline(
                 day_params,
                 fee_rebate_receivable_milli=rebate_receivable_milli,
                 use_cached_last_px=True,
+                sell_fee_context_cache=mark_to_market_sell_fee_context_cache,
             )
         else:
             today_equity = cash + rebate_receivable_milli

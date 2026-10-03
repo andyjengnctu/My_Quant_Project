@@ -6,10 +6,14 @@ import numpy as np
 from core.backtest_core import run_v16_backtest
 from core.history_filters import evaluate_history_candidate_metrics
 from core.exact_accounting import (
+    build_sell_fee_context,
+    calc_sell_net_total_milli_from_fee_context,
     calc_sell_net_total_milli_from_milli,
     coerce_money_like_to_milli,
+    infer_security_profile,
     restore_money_like_from_milli,
     round_price_to_tick_milli,
+    round_price_to_tick_milli_for_tick_profile,
 )
 from core.signal_utils import generate_signals, unpack_precomputed_signals
 from core.training_performance import (
@@ -53,6 +57,7 @@ def calc_mark_to_market_equity(
     fee_rebate_receivable_milli=0,
     *,
     use_cached_last_px=False,
+    sell_fee_context_cache=None,
 ):
     cash_template = cash
     equity_milli = coerce_money_like_to_milli(cash) + int(fee_rebate_receivable_milli or 0)
@@ -60,6 +65,7 @@ def calc_mark_to_market_equity(
     for ticker in sorted(portfolio.keys()):
         pos = portfolio[ticker]
         position_params = pos.get('_entry_params_obj') or params
+        security_profile = pos.get('security_profile')
         position_context = pos.get('_entry_context') if isinstance(pos.get('_entry_context'), dict) else {}
         if use_cached_last_px and pos.get('last_px') is not None:
             px = pos.get('last_px')
@@ -75,27 +81,79 @@ def calc_mark_to_market_equity(
 
             pos['last_px'] = px
 
-        floating_exec_price_milli = round_price_to_tick_milli(
-            px, direction="down", ticker=ticker
+        tick_profile = (
+            security_profile.get('tick_profile')
+            if isinstance(security_profile, dict)
+            else None
         )
-        equity_milli += calc_sell_net_total_milli_from_milli(
-            floating_exec_price_milli,
-            pos['qty'],
-            position_params,
-            ticker=ticker,
-            security_profile=pos.get('security_profile'),
-            trade_date=today,
-        )
+        if tick_profile:
+            floating_exec_price_milli = round_price_to_tick_milli_for_tick_profile(
+                px,
+                "down",
+                tick_profile,
+            )
+        else:
+            floating_exec_price_milli = round_price_to_tick_milli(
+                px,
+                direction="down",
+                ticker=ticker,
+                security_profile=security_profile,
+            )
+
+        if sell_fee_context_cache is None:
+            equity_milli += calc_sell_net_total_milli_from_milli(
+                floating_exec_price_milli,
+                pos['qty'],
+                position_params,
+                ticker=ticker,
+                security_profile=security_profile,
+                trade_date=today,
+            )
+        else:
+            profile = security_profile if isinstance(security_profile, dict) else {}
+            family = str(profile.get('family') or '')
+            broad_type = str(profile.get('broad_type') or '')
+            fallback_symbol = '' if profile else str(ticker or '')
+            trade_date_key = today if family == 'etf' and broad_type == 'bond' else None
+            fee_key = (
+                id(position_params),
+                family,
+                broad_type,
+                fallback_symbol,
+                trade_date_key,
+            )
+            fee_context = sell_fee_context_cache.get(fee_key)
+            if fee_context is None:
+                fee_context = build_sell_fee_context(
+                    position_params,
+                    ticker=ticker,
+                    security_profile=security_profile,
+                    trade_date=today,
+                )
+                sell_fee_context_cache[fee_key] = fee_context
+            equity_milli += calc_sell_net_total_milli_from_fee_context(
+                floating_exec_price_milli,
+                pos['qty'],
+                fee_context,
+            )
 
     return restore_money_like_from_milli(equity_milli, cash_template)
 
 
 def pack_static_market_data(df):
+    security_profile = df.attrs.get('security_profile')
+    if not isinstance(security_profile, dict) or not security_profile:
+        ticker = df.attrs.get('ticker')
+        if ticker:
+            # AI註: packed optimizer data is long-lived for the whole trial.
+            # Resolve canonical security classification once here instead of
+            # re-inferring it inside tick/accounting hot paths every day.
+            security_profile = infer_security_profile(ticker)
     packed = {
         '_packed_market_data': True,
         'dates': tuple(df.index.tolist()),
         'date_to_pos': {dt: i for i, dt in enumerate(df.index)},
-        'security_profile': df.attrs.get('security_profile'),
+        'security_profile': security_profile,
     }
     for field in FAST_STATIC_FLOAT_FIELDS:
         packed[field] = df[field].to_numpy(dtype=np.float64, copy=True)
