@@ -3600,6 +3600,10 @@ def main(argv=None, environ=None):
         optimize_wall_sec = max(0.0, time.perf_counter() - optimize_started_at)
         print()
         _print_profile_summary_compatible(session.profile_recorder, emit_console=not timing_mode)
+        if timing_mode:
+            print_timing_breakdown = getattr(session.profile_recorder, "print_timing_breakdown", None)
+            if callable(print_timing_breakdown):
+                print_timing_breakdown()
         session.print_optimizer_prep_summary()
         should_export, export_policy = resolve_training_session_export_policy(
             requested_n_trials=session.n_trials,

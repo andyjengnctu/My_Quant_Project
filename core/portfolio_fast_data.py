@@ -144,7 +144,9 @@ def build_normal_setup_index(all_dfs_fast):
             continue
 
         if is_packed_market_data(fast_df):
-            setup_positions = np.flatnonzero(fast_df['is_setup'][:-1])
+            setup_positions = fast_df.get('_setup_positions')
+            if setup_positions is None:
+                setup_positions = np.flatnonzero(fast_df['is_setup'][:-1])
             for y_pos in setup_positions:
                 today = dates[y_pos + 1]
                 setup_index[today].append((ticker, y_pos, y_pos + 1))
@@ -178,7 +180,8 @@ def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None
 
     t0 = time.perf_counter() if profile_stats is not None else None
     _atr_main, buy_condition, _sell_condition, _buy_limits = unpack_precomputed_signals(precomputed_signals)
-    has_executable_setup = bool(np.any(np.asarray(buy_condition, dtype=bool)[:-1]))
+    setup_positions = np.flatnonzero(np.asarray(buy_condition, dtype=bool)[:-1])
+    has_executable_setup = bool(setup_positions.size)
     if not include_trade_logs and not include_pit_stats_index:
         # Optimizer fast path: when neither standalone logs nor PIT history stats
         # are observable outputs, the standalone backtest has no consumer.
@@ -210,6 +213,10 @@ def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None
 
     t0 = time.perf_counter() if profile_stats is not None else None
     dynamic_data = pack_optimizer_dynamic_data(precomputed_signals)
+    # Reuse the same scan that determines whether standalone replay is needed.
+    # Portfolio replay can consume these positions directly instead of scanning
+    # the full is_setup array a second time for every ticker in every trial.
+    dynamic_data['_setup_positions'] = setup_positions
     if profile_stats is not None:
         profile_stats['to_dict_sec'] = time.perf_counter() - t0
         profile_stats['total_sec'] = time.perf_counter() - t_total_start
@@ -299,13 +306,6 @@ def build_neutral_candidate_stats_index(params):
     index = build_trade_stats_index([])
     index[_NEUTRAL_CANDIDATE_METRICS_KEY] = _evaluate_pit_stats_at_cutoff(index, 0, params)
     return index
-
-
-def get_neutral_candidate_metrics(stats_index):
-    """Return the pre-evaluated neutral candidate tuple, if this is a neutral PIT index."""
-    if not isinstance(stats_index, dict):
-        return None
-    return stats_index.get(_NEUTRAL_CANDIDATE_METRICS_KEY)
 
 
 def build_trade_stats_index(trade_logs):

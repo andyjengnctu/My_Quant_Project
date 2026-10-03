@@ -12,7 +12,7 @@ from core.data_utils import get_required_min_rows
 from core.training_performance import resolve_optimizer_feature_bank_max_items_default
 from core.feature_bank import FeatureBank
 from core.log_utils import format_exception_summary
-from core.portfolio_fast_data import merge_static_market_with_dynamic, prep_optimizer_stock_data_bundle, pack_static_market_data
+from core.portfolio_fast_data import build_normal_setup_index, merge_static_market_with_dynamic, prep_optimizer_stock_data_bundle, pack_static_market_data
 from core.runtime_utils import get_process_pool_executor_kwargs
 from services.optimizer.raw_cache import is_insufficient_data_error, resolve_optimizer_max_workers
 
@@ -295,7 +295,7 @@ def _run_prep_with_executor(executor, tickers, params, all_dfs_fast, all_trade_l
         t_collect = time.perf_counter()
 
 
-def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_bundle=None, static_fast_cache=None, static_master_dates=None, include_trade_logs=True, include_pit_stats_index=False, profile_enabled=True):
+def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_bundle=None, static_fast_cache=None, static_master_dates=None, include_trade_logs=True, include_pit_stats_index=False, profile_enabled=True, include_normal_setup_index=False):
     t_static_pack = time.perf_counter()
     if static_fast_cache is None:
         resolved_static_fast_cache = {ticker: pack_static_market_data(df) for ticker, df in raw_data_cache.items()}
@@ -411,11 +411,18 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
                 master_dates.update(resolved_static_fast_cache[ticker]["dates"])
         prep_profile["master_union_sec"] += time.perf_counter() - t_master_union
 
+    normal_setup_index = (
+        build_normal_setup_index(all_dfs_fast)
+        if include_normal_setup_index
+        else None
+    )
+
     prep_wall_sec = time.perf_counter() - prep_wall_start
     return {
         "all_dfs_fast": all_dfs_fast,
         "all_trade_logs": all_trade_logs,
         "all_pit_stats_index": all_pit_stats_index,
+        "normal_setup_index": normal_setup_index,
         "master_dates": master_dates,
         "prep_failures": prep_failures,
         "prep_profile": prep_profile,

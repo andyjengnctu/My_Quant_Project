@@ -195,3 +195,26 @@ class OptimizerProfileRecorder:
             f"{C_CYAN}📊 Profiling 摘要（{summary['trial_count']} trials）:{C_RESET} "
             f"{C_GRAY}每 trial 平均訓練時間={avg_trial_sec:.3f}s{C_RESET}"
         )
+
+    def print_timing_breakdown(self):
+        if not self.enabled or not self.rows:
+            return
+        avg = self.build_summary_payload().get("avg", {})
+        print(
+            f"{C_CYAN}Hotpath avg/trial:{C_RESET} "
+            f"{C_GRAY}prep={float(avg.get('prep_wall_sec', 0.0)):.3f}s | "
+            f"portfolio={float(avg.get('portfolio_total_sec', 0.0)):.3f}s | "
+            f"candidate={float(avg.get('portfolio_candidate_scan_sec', 0.0)):.3f}s | "
+            f"cleanup={float(avg.get('portfolio_cleanup_sec', 0.0)):.3f}s | "
+            f"buy={float(avg.get('portfolio_buy_sec', 0.0)):.3f}s | "
+            f"book={float(avg.get('portfolio_bookkeeping_sec', 0.0)):.3f}s{C_RESET}"
+        )
+        print(
+            f"{C_CYAN}Candidate avg/trial:{C_RESET} "
+            f"{C_GRAY}normal={float(avg.get('portfolio_candidate_normal_sec', 0.0)):.3f}s | "
+            f"extended={float(avg.get('portfolio_candidate_extended_sec', 0.0)):.3f}s | "
+            f"pit={float(avg.get('portfolio_candidate_pit_stats_sec', 0.0)):.3f}s | "
+            f"plan={float(avg.get('portfolio_candidate_plan_sec', 0.0)):.3f}s | "
+            f"row={float(avg.get('portfolio_candidate_row_sec', 0.0)):.3f}s | "
+            f"sort={float(avg.get('portfolio_candidate_sort_sec', 0.0)):.3f}s{C_RESET}"
+        )

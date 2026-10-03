@@ -103,7 +103,7 @@ def run_portfolio_timeline(
     replay_counts=None,
     replay_execution_rows=None,
     pit_stats_index=None,
-    neutral_candidate_metrics=None,
+    normal_setup_index=None,
     active_params_resolver=None,
     active_context_resolver=None,
     active_param_ensemble_resolver=None,
@@ -154,14 +154,14 @@ def run_portfolio_timeline(
         if pit_stats_index is None:
             pit_stats_index = {t: build_trade_stats_index(logs) for t, logs in all_standalone_logs.items()}
         else:
-            pit_stats_index = dict(pit_stats_index)
             if all_standalone_logs:
+                pit_stats_index = dict(pit_stats_index)
                 for ticker, logs in all_standalone_logs.items():
                     if pit_stats_index.get(ticker) is None:
                         pit_stats_index[ticker] = build_trade_stats_index(logs)
-        normal_setup_index = build_normal_setup_index(all_dfs_fast)
     else:
         pit_stats_index = dict(pit_stats_index or {})
+    if normal_setup_index is None:
         normal_setup_index = build_normal_setup_index(all_dfs_fast)
     if profile_timing_enabled:
         build_trade_index_sec = time.perf_counter() - t0
@@ -239,10 +239,24 @@ def run_portfolio_timeline(
         and (not capture_equity_curve)
         and benchmark_period_stats is not None
     )
+    static_compact_training_rows = bool(
+        static_runtime_context
+        and is_training
+        and replay_counts is None
+        and replay_execution_rows is None
+        and replay_selector_trace_rows is None
+        and not bool(enable_rotation)
+        and not bool(getattr(params, "use_breakout_quality_ranking", False))
+    )
+    static_skip_noop_resource_selector = bool(
+        static_runtime_context
+        and is_training
+        and replay_counts is None
+        and replay_execution_rows is None
+        and replay_selector_trace_rows is None
+        and not bool(getattr(params, "use_breakout_quality_ranking", False))
+    )
 
-    active_year_key = None
-    active_month_key = None
-    active_quarter_key = None
     replay_progress_start = time.perf_counter()
     replay_total_days = max(0, len(sorted_dates) - start_idx)
     for i in range(start_idx, len(sorted_dates)):
@@ -295,30 +309,17 @@ def run_portfolio_timeline(
                 day_cursor_key = id(day_pit_stats_index)
                 day_pit_stats_cursor = pit_stats_cursor.setdefault(day_cursor_key, {})
 
-        year_key = int(today.year)
-        month_key = (year_key, int(today.month))
-        quarter_key = (year_key, int((today.month - 1) // 3 + 1))
-        if year_key != active_year_key:
-            active_year_key = year_key
-            year_start_equity[year_key] = milli_to_money(current_equity)
-            year_first_sim_date[year_key] = pd.Timestamp(today)
-        if month_key != active_month_key:
-            active_month_key = month_key
+        if today.year not in year_start_equity:
+            year_start_equity[today.year] = milli_to_money(current_equity)
+            year_first_sim_date[today.year] = pd.Timestamp(today)
+        month_key = (int(today.year), int(today.month))
+        if month_key not in month_start_equity:
             month_start_equity[month_key] = milli_to_money(current_equity)
             month_first_sim_date[month_key] = pd.Timestamp(today)
-        if quarter_key != active_quarter_key:
-            active_quarter_key = quarter_key
+        quarter_key = (int(today.year), int((today.month - 1) // 3 + 1))
+        if quarter_key not in quarter_start_equity:
             quarter_start_equity[quarter_key] = milli_to_money(current_equity)
             quarter_first_sim_date[quarter_key] = pd.Timestamp(today)
-
-        if i + 1 < len(sorted_dates):
-            next_day = sorted_dates[i + 1]
-            year_period_end = int(next_day.year) != year_key
-            month_period_end = year_period_end or int(next_day.month) != month_key[1]
-            next_quarter = int((next_day.month - 1) // 3 + 1)
-            quarter_period_end = year_period_end or next_quarter != quarter_key[1]
-        else:
-            year_period_end = month_period_end = quarter_period_end = True
 
         normal_setup_entries_today = day_normal_setup_index.get(today, [])
         if use_param_ensemble:
@@ -339,15 +340,12 @@ def run_portfolio_timeline(
                 monthly_equities.append(yesterday_equity)
                 current_month = today.month
             yesterday_equity = current_equity_money
-            if year_period_end:
-                year_end_equity[year_key] = current_equity_money
-                year_last_sim_date[year_key] = pd.Timestamp(today)
-            if month_period_end:
-                month_end_equity[month_key] = current_equity_money
-                month_last_sim_date[month_key] = pd.Timestamp(today)
-            if quarter_period_end:
-                quarter_end_equity[quarter_key] = current_equity_money
-                quarter_last_sim_date[quarter_key] = pd.Timestamp(today)
+            year_end_equity[today.year] = current_equity_money
+            year_last_sim_date[today.year] = pd.Timestamp(today)
+            month_end_equity[month_key] = current_equity_money
+            month_last_sim_date[month_key] = pd.Timestamp(today)
+            quarter_end_equity[quarter_key] = current_equity_money
+            quarter_last_sim_date[quarter_key] = pd.Timestamp(today)
             idle_fast_path_days += 1
             if profile_timing_enabled:
                 bookkeeping_sec += time.perf_counter() - t0
@@ -461,7 +459,6 @@ def run_portfolio_timeline(
                         pit_stats_cursor=day_pit_stats_cursor,
                         today=today,
                         params=day_params,
-                        neutral_candidate_metrics=neutral_candidate_metrics,
                         profile_stats=candidate_subprofile,
                     )
                     if profile_timing_enabled:
@@ -504,15 +501,18 @@ def run_portfolio_timeline(
                         params=day_params,
                         collect_all_candidates=replay_counts is not None,
                         extended_day_market_cache=extended_day_market_cache,
-                        compact_training_rows=bool(
-                            is_training
-                            and replay_counts is None
-                            and replay_execution_rows is None
-                            and replay_selector_trace_rows is None
-                            and not bool(enable_rotation)
-                            and not bool(getattr(day_params, "use_breakout_quality_ranking", False))
+                        compact_training_rows=(
+                            static_compact_training_rows
+                            if static_runtime_context
+                            else bool(
+                                is_training
+                                and replay_counts is None
+                                and replay_execution_rows is None
+                                and replay_selector_trace_rows is None
+                                and not bool(enable_rotation)
+                                and not bool(getattr(day_params, "use_breakout_quality_ranking", False))
+                            )
                         ),
-                        neutral_candidate_metrics=neutral_candidate_metrics,
                         profile_stats=candidate_subprofile,
                     )
                 if profile_timing_enabled:
@@ -538,12 +538,16 @@ def run_portfolio_timeline(
                     if replay_selector_trace_rows is not None
                     else None
                 )
-                skip_noop_resource_selector = bool(
-                    is_training
-                    and replay_counts is None
-                    and replay_execution_rows is None
-                    and replay_selector_trace_rows is None
-                    and not bool(getattr(day_params, "use_breakout_quality_ranking", False))
+                skip_noop_resource_selector = (
+                    static_skip_noop_resource_selector
+                    if static_runtime_context
+                    else bool(
+                        is_training
+                        and replay_counts is None
+                        and replay_execution_rows is None
+                        and replay_selector_trace_rows is None
+                        and not bool(getattr(day_params, "use_breakout_quality_ranking", False))
+                    )
                 )
                 if skip_noop_resource_selector:
                     # With DL/ranking disabled the selector is mathematically the
@@ -1009,15 +1013,12 @@ def run_portfolio_timeline(
         yesterday_equity = current_equity_money
         if benchmark_loop_enabled:
             yesterday_bm_px = current_bm_px
-        if year_period_end:
-            year_end_equity[year_key] = current_equity_money
-            year_last_sim_date[year_key] = pd.Timestamp(today)
-        if month_period_end:
-            month_end_equity[month_key] = current_equity_money
-            month_last_sim_date[month_key] = pd.Timestamp(today)
-        if quarter_period_end:
-            quarter_end_equity[quarter_key] = current_equity_money
-            quarter_last_sim_date[quarter_key] = pd.Timestamp(today)
+        year_end_equity[today.year] = current_equity_money
+        year_last_sim_date[today.year] = pd.Timestamp(today)
+        month_end_equity[month_key] = current_equity_money
+        month_last_sim_date[month_key] = pd.Timestamp(today)
+        quarter_end_equity[quarter_key] = current_equity_money
+        quarter_last_sim_date[quarter_key] = pd.Timestamp(today)
 
         if (not is_training) or capture_equity_curve:
             equity_curve.append({
