@@ -23,6 +23,16 @@ from typing import Any
 
 import pandas as pd
 
+from core.display_common import (
+    C_CYAN,
+    C_GRAY,
+    C_GREEN,
+    C_RED,
+    C_RESET,
+    C_YELLOW,
+    InlineProgress,
+    console_color_enabled,
+)
 from core.seed_ensemble_policy import normalize_seed_ensemble_members
 from core.strategy_param_policy import get_strategy_param_validation_protocol
 from services.optimizer.outer_rolling_evaluation import (
@@ -471,6 +481,8 @@ class AdaptiveValidationBudgetController:
         self.progress_prefix = str(progress_prefix or "").strip()
         self.state_key = f"strategy_param_validation_state::{spec.protocol}"
         self._progress_legend_printed = False
+        self._inline_progress = InlineProgress()
+        self._color_enabled = console_color_enabled()
 
     def _empty_state(self) -> dict[str, Any]:
         return {
@@ -515,13 +527,21 @@ class AdaptiveValidationBudgetController:
     def _progress_label(self) -> str:
         return f"{self.progress_prefix} " if self.progress_prefix else ""
 
+    def _paint(self, text: str, color: str) -> str:
+        value = str(text)
+        if not self._color_enabled:
+            return value
+        return f"{color}{value}{C_RESET}"
+
     def _print_progress_legend_once(self) -> None:
         if self._progress_legend_printed:
             return
         print(
-            f"{self._progress_label()}逐 Trial：Train=training結果 | "
-            "Policy=新/既有/未成形 | Val=REPLAY/REUSE/- | "
-            "Score=本次validation | Best=目前最佳N*/score | NoImp=連續未改善/patience",
+            f"{self._progress_label()}逐 Trial：每個 Trial 固定一行 | "
+            f"{self._paint('綠=NEW BEST', C_GREEN)} | "
+            f"{self._paint('黃=REPLAY/可停止', C_YELLOW)} | "
+            f"{self._paint('青=REUSE', C_CYAN)} | "
+            f"{self._paint('紅=淘汰/STOP', C_RED)}",
             flush=True,
         )
         self._progress_legend_printed = True
@@ -541,26 +561,44 @@ class AdaptiveValidationBudgetController:
             return f"淘汰[{fail_reason}]", float(duration)
         return format_optimizer_score_for_display(value, decimals=3), float(duration)
 
-    def _print_trial_progress(self, study, state: dict[str, Any], record: dict[str, Any]) -> None:
-        self._print_progress_legend_once()
+    def _render_trial_line(
+        self,
+        *,
+        study,
+        state: dict[str, Any],
+        record: dict[str, Any],
+        replay_pending: bool = False,
+    ) -> str:
         count = int(record.get("trials") or 0)
         train_text, train_sec = self._trial_training_display(study, count)
+        train_color = C_RED if train_text.startswith("淘汰[") else C_GREEN
         source = str(record.get("validation_source") or "UNAVAILABLE")
-        if source == "EVALUATED":
+        if replay_pending or source == "EVALUATED":
             policy_text = "新"
-            validation_text = "REPLAY"
+            policy_color = C_YELLOW
+            validation_text = "REPLAY中" if replay_pending else "REPLAY"
+            validation_color = C_YELLOW
         elif source == "REUSED_SAME_SIGNATURE":
             policy_text = "既有"
+            policy_color = C_CYAN
             validation_text = "REUSE"
+            validation_color = C_CYAN
         else:
             policy_text = "未成形"
+            policy_color = C_GRAY
             validation_text = "-"
+            validation_color = C_GRAY
 
-        score_text = (
-            "-"
-            if record.get("validation_score") is None
-            else f"{float(record['validation_score']):.6f}"
+        score_raw = record.get("validation_score")
+        score_text = "計算中" if replay_pending else (
+            "-" if score_raw is None else f"{float(score_raw):.6f}"
         )
+        score_color = C_GRAY
+        if replay_pending:
+            score_color = C_YELLOW
+        elif score_raw is not None:
+            score_color = C_GREEN if bool(record.get("improved")) else C_CYAN
+
         best_trials = state.get("best_trials")
         best_score = state.get("best_validation_score")
         best_text = (
@@ -575,20 +613,64 @@ class AdaptiveValidationBudgetController:
             else str(max(0, count - int(last_improvement)))
         )
         patience = int(self.spec.patience_trials or 0)
-        eligible = "是" if count >= _adaptive_min_stop_trial(self.spec) else "否"
+        stop_eligible = count >= _adaptive_min_stop_trial(self.spec)
+        stop_now = (
+            state.get("stop_reason") == "validation_plateau"
+            and int(state.get("stop_trial") or 0) == count
+        )
         elapsed = max(0.0, float(train_sec) + float(record.get("observation_wall_sec") or 0.0))
-        events: list[str] = []
+
+        trial_token = self._paint(f"T{count:03d}/{int(self.spec.max_trials):03d}", C_CYAN)
+        train_token = self._paint(train_text, train_color)
+        policy_token = self._paint(policy_text, policy_color)
+        validation_token = self._paint(validation_text, validation_color)
+        score_token = self._paint(score_text, score_color)
+        best_token = self._paint(best_text, C_GREEN if best_trials is not None else C_GRAY)
+        if no_improve == "-":
+            no_improve_color = C_GRAY
+        elif int(no_improve) >= patience:
+            no_improve_color = C_RED
+        elif int(no_improve) >= max(1, int(patience * 0.7)):
+            no_improve_color = C_YELLOW
+        else:
+            no_improve_color = C_GRAY
+        no_improve_token = self._paint(f"{no_improve}/{patience}", no_improve_color)
+        stop_token = self._paint("是" if stop_eligible else "否", C_YELLOW if stop_eligible else C_GRAY)
+        event_text = ""
         if bool(record.get("improved")):
-            events.append("★ NEW BEST")
-        if state.get("stop_reason") == "validation_plateau" and int(state.get("stop_trial") or 0) == count:
-            events.append("→ EARLY STOP")
-        event_text = f" | {' '.join(events)}" if events else ""
-        print(
-            f"{self._progress_label()}T{count:03d}/{int(self.spec.max_trials):03d} | "
-            f"Train={train_text} | Policy={policy_text} | Val={validation_text} | "
-            f"Score={score_text} | Best={best_text} | NoImp={no_improve}/{patience} | "
-            f"可停止={eligible} | {elapsed:.1f}s{event_text}",
-            flush=True,
+            event_text = f" | {self._paint('★ NEW BEST', C_GREEN)}"
+        if stop_now:
+            event_text = f" | {self._paint('→ EARLY STOP', C_RED)}"
+
+        return (
+            f"{self._progress_label()}{trial_token} | "
+            f"Train={train_token} | Policy={policy_token} | Val={validation_token} | "
+            f"Score={score_token} | Best={best_token} | NoImp={no_improve_token} | "
+            f"可停={stop_token} | {elapsed:.1f}s{event_text}"
+        )
+
+    def _print_trial_progress(self, study, state: dict[str, Any], record: dict[str, Any]) -> None:
+        self._print_progress_legend_once()
+        self._inline_progress.print_line(
+            self._render_trial_line(study=study, state=state, record=record),
+        )
+
+    def _show_replay_pending(self, study, state: dict[str, Any], count: int) -> None:
+        self._print_progress_legend_once()
+        pending_record = {
+            "trials": int(count),
+            "validation_source": "EVALUATED",
+            "validation_score": None,
+            "observation_wall_sec": 0.0,
+            "improved": False,
+        }
+        self._inline_progress.update(
+            self._render_trial_line(
+                study=study,
+                state=state,
+                record=pending_record,
+                replay_pending=True,
+            )
         )
 
     def _observe_prefix(self, study, state: dict[str, Any], trial_count: int) -> None:
@@ -633,12 +715,7 @@ class AdaptiveValidationBudgetController:
                 ) + 1
             else:
                 replay_started = time.perf_counter()
-                self._print_progress_legend_once()
-                print(
-                    f"{self._progress_label()}↳ T{count:03d}/{int(self.spec.max_trials):03d} "
-                    f"正在跑 Validation REPLAY | {self.validation_start_date}~{self.validation_end_date}",
-                    flush=True,
-                )
+                self._show_replay_pending(study, state, count)
                 metrics_record = _evaluate_policy_item_on_validation(
                     session=self.session,
                     item=item,
