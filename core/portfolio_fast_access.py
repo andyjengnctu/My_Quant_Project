@@ -62,6 +62,98 @@ def get_fast_close(data, *, pos=None, date=None):
     return get_fast_value(data, 'Close', pos=pos, date=date)
 
 
+def get_fast_normal_signal_values(data, y_pos):
+    """Return buy_limit, ATR, close and signal date for one completed bar."""
+    if is_packed_market_data(data):
+        return (
+            float(data['buy_limit'][y_pos]),
+            float(data['ATR'][y_pos]),
+            float(data['Close'][y_pos]),
+            data['dates'][y_pos],
+        )
+    dates = get_fast_dates(data)
+    y_date = dates[y_pos]
+    row = data[y_date]
+    return row['buy_limit'], row['ATR'], row['Close'], y_date
+
+
+def get_fast_extended_signal_values(data, t_pos):
+    """Return previous close and information date for an extended candidate day."""
+    y_pos = int(t_pos) - 1
+    if is_packed_market_data(data):
+        return float(data['Close'][y_pos]), data['dates'][y_pos]
+    dates = get_fast_dates(data)
+    y_date = dates[y_pos]
+    return data[y_date]['Close'], y_date
+
+
+def get_fast_entry_session_values(data, t_pos, y_pos=None):
+    """Return current OHLCV plus previous close with one packed-data dispatch."""
+    y_pos = int(t_pos) - 1 if y_pos is None else int(y_pos)
+    if is_packed_market_data(data):
+        return (
+            float(data['Open'][t_pos]),
+            float(data['High'][t_pos]),
+            float(data['Low'][t_pos]),
+            float(data['Close'][t_pos]),
+            float(data['Volume'][t_pos]),
+            float(data['Close'][y_pos]),
+        )
+    dates = get_fast_dates(data)
+    t_row = data[dates[t_pos]]
+    y_row = data[dates[y_pos]]
+    return (
+        t_row['Open'], t_row['High'], t_row['Low'], t_row['Close'],
+        t_row['Volume'], y_row['Close'],
+    )
+
+
+def get_fast_management_session_values(data, t_pos):
+    """Return all current/previous fields required by canonical position management."""
+    y_pos = int(t_pos) - 1
+    if is_packed_market_data(data):
+        return (
+            float(data['ATR'][y_pos]),
+            bool(data['ind_sell_signal'][y_pos]),
+            float(data['Close'][y_pos]),
+            float(data['High'][y_pos]),
+            float(data['Open'][t_pos]),
+            float(data['High'][t_pos]),
+            float(data['Low'][t_pos]),
+            float(data['Close'][t_pos]),
+            float(data['Volume'][t_pos]),
+        )
+    dates = get_fast_dates(data)
+    t_row = data[dates[t_pos]]
+    y_row = data[dates[y_pos]]
+    return (
+        y_row['ATR'], bool(y_row['ind_sell_signal']), y_row['Close'], y_row['High'],
+        t_row['Open'], t_row['High'], t_row['Low'], t_row['Close'], t_row['Volume'],
+    )
+
+
+def get_fast_live_shadow_cleanup_values(data, t_pos):
+    """Return only fields needed by the common live-shadow cleanup path.
+
+    For a non-indicator day the canonical fast cleanup only consumes current
+    high/low and previous high/ATR.  The remaining execution fields are read
+    lazily by the caller only when an indicator exit is present.
+    """
+    y_pos = int(t_pos) - 1
+    if is_packed_market_data(data):
+        return (
+            float(data['High'][t_pos]),
+            float(data['Low'][t_pos]),
+            float(data['High'][y_pos]),
+            float(data['ATR'][y_pos]),
+            bool(data['ind_sell_signal'][y_pos]),
+        )
+    dates = get_fast_dates(data)
+    t_row = data[dates[t_pos]]
+    y_row = data[dates[y_pos]]
+    return t_row['High'], t_row['Low'], y_row['High'], y_row['ATR'], bool(y_row['ind_sell_signal'])
+
+
 # # (AI註: benchmark 起算必須與模擬起點對齊；若起點當日無資料，取起點當日或之前最近一筆收盤價，避免之後才開始算 benchmark)
 def get_fast_close_on_or_before(data, date):
     dates = get_fast_dates(data)

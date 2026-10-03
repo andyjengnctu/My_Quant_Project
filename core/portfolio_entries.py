@@ -39,12 +39,18 @@ from core.portfolio_entry_selection import (
     select_resource_aware_action_candidates,
     reorder_candidates_for_resource_aware_quality,
 )
-from core.portfolio_fast_data import get_fast_close, get_fast_pos, get_fast_value
+from core.portfolio_fast_data import (
+    get_fast_entry_session_values,
+    get_fast_live_shadow_cleanup_values,
+    get_fast_management_session_values,
+    get_fast_pos,
+)
 from core.trade_plans import (
     clone_shadow_position,
     execute_pre_market_entry_plan,
     resolve_signal_tracking_params,
     should_clear_extended_signal,
+    is_extended_tbd_shadow_alive,
 )
 
 
@@ -85,13 +91,13 @@ def execute_reserved_entries_for_day(
     fee_rebate_state=None,
 ):
     pre_market_occupied = len(portfolio) + len(sold_today)
-    remaining_orderable_candidates = list(orderable_candidates_today)
     cash_template = cash
     cash_milli = coerce_money_like_to_milli(cash)
     available_cash_milli = coerce_money_like_to_milli(available_cash)
 
-    while remaining_orderable_candidates and pre_market_occupied < max_positions:
-        cand = remaining_orderable_candidates.pop(0)
+    for cand in orderable_candidates_today:
+        if pre_market_occupied >= max_positions:
+            break
         candidate_params = cand.get('params_obj') or params
         effective_entry_budget = resolve_portfolio_entry_budget(
             milli_to_money(available_cash_milli),
@@ -112,6 +118,9 @@ def execute_reserved_entries_for_day(
             effective_entry_budget_milli,
             candidate_params,
             sizing_equity,
+            # Candidate rows already own an isolated shadow snapshot; this plan
+            # is ephemeral and only reads inherited management on a fill.
+            copy_shadow_position=False,
         )
         if chosen_entry_plan is None:
             continue
@@ -150,12 +159,9 @@ def execute_reserved_entries_for_day(
         fast_df = candidate_all_dfs_fast[cand['ticker']]
         t_pos = cand['today_pos']
         y_pos = cand['yesterday_pos']
-        t_open = get_fast_value(fast_df, 'Open', pos=t_pos)
-        t_high = get_fast_value(fast_df, 'High', pos=t_pos)
-        t_low = get_fast_value(fast_df, 'Low', pos=t_pos)
-        t_close = get_fast_close(fast_df, pos=t_pos)
-        t_volume = get_fast_value(fast_df, 'Volume', pos=t_pos)
-        y_close = get_fast_close(fast_df, pos=y_pos)
+        t_open, t_high, t_low, t_close, t_volume, y_close = (
+            get_fast_entry_session_values(fast_df, t_pos, y_pos)
+        )
 
         reserved_cost_milli = chosen_entry_plan['reserved_cost_milli']
         available_cash_milli -= reserved_cost_milli
@@ -299,7 +305,7 @@ def execute_reserved_entries_for_day(
 
 
 def cleanup_extended_signals_for_day(active_extended_signals, portfolio, all_dfs_fast, today, params, sizing_capital):
-    for ticker in sorted(list(active_extended_signals.keys())):
+    for ticker in sorted(active_extended_signals):
         signal_state = active_extended_signals.get(ticker)
         signal_params = resolve_signal_tracking_params(signal_state, params)
 
@@ -317,16 +323,24 @@ def cleanup_extended_signals_for_day(active_extended_signals, portfolio, all_dfs
 
         if t_pos <= 0:
             continue
-        y_pos = t_pos - 1
-        t_open = get_fast_value(fast_df, 'Open', pos=t_pos)
-        t_low = get_fast_value(fast_df, 'Low', pos=t_pos)
-        t_high = get_fast_value(fast_df, 'High', pos=t_pos)
-        t_close = get_fast_close(fast_df, pos=t_pos)
-        t_volume = get_fast_value(fast_df, 'Volume', pos=t_pos)
-        y_close = get_fast_close(fast_df, pos=y_pos)
-        y_high = get_fast_value(fast_df, 'High', pos=y_pos)
-        y_atr = get_fast_value(fast_df, 'ATR', pos=y_pos)
-        y_ind_sell = bool(get_fast_value(fast_df, 'ind_sell_signal', pos=y_pos))
+        if is_extended_tbd_shadow_alive(signal_state):
+            t_high, t_low, y_high, y_atr, y_ind_sell = (
+                get_fast_live_shadow_cleanup_values(fast_df, t_pos)
+            )
+            if y_ind_sell:
+                (
+                    _y_atr, _y_ind_sell, y_close, _y_high, t_open,
+                    _t_high, _t_low, t_close, t_volume,
+                ) = get_fast_management_session_values(fast_df, t_pos)
+            else:
+                # These values are not consumed by the canonical live-shadow fast
+                # path unless an indicator exit is present.
+                t_open = t_close = t_volume = y_close = float('nan')
+        else:
+            (
+                y_atr, y_ind_sell, y_close, y_high, t_open, t_high, t_low,
+                t_close, t_volume,
+            ) = get_fast_management_session_values(fast_df, t_pos)
         if should_clear_extended_signal(
             signal_state,
             t_low,

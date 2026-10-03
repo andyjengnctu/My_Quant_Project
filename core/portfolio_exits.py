@@ -24,6 +24,7 @@ from core.price_utils import (
 )
 from core.portfolio_fast_data import (
     get_fast_close,
+    get_fast_management_session_values,
     get_fast_pos,
     get_fast_value,
     get_pit_stats_from_index,
@@ -380,19 +381,23 @@ def settle_portfolio_positions(
             continue
         y_pos = t_pos - 1
 
+        (
+            y_atr, y_ind_sell, y_close, y_high, t_open, t_high, t_low,
+            t_close, t_volume,
+        ) = get_fast_management_session_values(fast_df, t_pos)
         pos, freed_cash_milli, _pnl_realized_milli, events = execute_bar_step(
             pos,
-            get_fast_value(fast_df, 'ATR', pos=y_pos),
-            get_fast_value(fast_df, 'ind_sell_signal', pos=y_pos),
-            get_fast_close(fast_df, pos=y_pos),
-            get_fast_value(fast_df, 'Open', pos=t_pos),
-            get_fast_value(fast_df, 'High', pos=t_pos),
-            get_fast_value(fast_df, 'Low', pos=t_pos),
-            get_fast_close(fast_df, pos=t_pos),
-            get_fast_value(fast_df, 'Volume', pos=t_pos),
+            y_atr,
+            y_ind_sell,
+            y_close,
+            t_open,
+            t_high,
+            t_low,
+            t_close,
+            t_volume,
             pos_params,
             current_date=today,
-            y_high=get_fast_value(fast_df, 'High', pos=y_pos),
+            y_high=y_high,
             return_milli=is_training,
             record_exec_contexts=not is_training,
             sync_display_fields=not is_training,
@@ -446,7 +451,7 @@ def settle_portfolio_positions(
                         pos,
                         exit_date=today,
                         params=watch_params,
-                        exit_atr=get_fast_value(fast_df, 'ATR', pos=y_pos),
+                        exit_atr=y_atr,
                         exit_qty=pre_step_qty,
                         quality_rank=watch_quality_rank,
                     )

@@ -31,6 +31,11 @@ from core.portfolio_fast_access import (
     has_fast_date,
     get_fast_value,
     get_fast_close,
+    get_fast_normal_signal_values,
+    get_fast_extended_signal_values,
+    get_fast_entry_session_values,
+    get_fast_management_session_values,
+    get_fast_live_shadow_cleanup_values,
     get_fast_close_on_or_before,
 )
 

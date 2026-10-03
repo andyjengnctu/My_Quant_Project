@@ -33,11 +33,10 @@ from core.extended_signals import (
 )
 from core.price_utils import build_position_sizing_capital_context
 from core.portfolio_fast_data import (
-    get_fast_close,
-    get_fast_dates,
     get_fast_pos,
     get_fast_security_profile,
-    get_fast_value,
+    get_fast_normal_signal_values,
+    get_fast_extended_signal_values,
     get_pit_stats_from_index,
 )
 
@@ -307,10 +306,9 @@ def _collect_normal_candidates(
             continue
 
         fast_df = all_dfs_fast[ticker]
-        y_buy_limit = get_fast_value(fast_df, 'buy_limit', pos=y_pos)
-        y_atr = get_fast_value(fast_df, 'ATR', pos=y_pos)
-        y_close = get_fast_close(fast_df, pos=y_pos)
-        signal_date = get_fast_dates(fast_df)[y_pos]
+        y_buy_limit, y_atr, y_close, signal_date = get_fast_normal_signal_values(
+            fast_df, y_pos
+        )
         security_profile = get_fast_security_profile(fast_df)
 
         pit_started = time.perf_counter() if profile_enabled else None
@@ -434,9 +432,9 @@ def track_normal_setup_signals_for_day(
             continue
 
         fast_df = all_dfs_fast[ticker]
-        y_buy_limit = get_fast_value(fast_df, 'buy_limit', pos=y_pos)
-        y_atr = get_fast_value(fast_df, 'ATR', pos=y_pos)
-        signal_date = get_fast_dates(fast_df)[y_pos]
+        y_buy_limit, y_atr, _y_close, signal_date = get_fast_normal_signal_values(
+            fast_df, y_pos
+        )
         security_profile = get_fast_security_profile(fast_df)
 
         pit_started = time.perf_counter() if profile_enabled else None
@@ -496,7 +494,7 @@ def _collect_extended_candidates(
     orderable_candidates_today = []
 
     sort_started = time.perf_counter() if profile_enabled else None
-    sorted_extended_tickers = sorted(list(active_extended_signals.keys()))
+    sorted_extended_tickers = sorted(active_extended_signals)
     if profile_enabled:
         _candidate_profile_add(profile_stats, "portfolio_candidate_sort_sec", sort_started)
     for ticker in sorted_extended_tickers:
@@ -524,7 +522,7 @@ def _collect_extended_candidates(
         if not is_candidate:
             continue
 
-        y_close = get_fast_close(fast_df, pos=y_pos)
+        y_close, information_date = get_fast_extended_signal_values(fast_df, t_pos)
         security_profile = get_fast_security_profile(fast_df)
         # AI註: training replay normally only needs orderable rows. Build the stable
         # extended-plan levels first, but defer expensive exact position sizing until
@@ -547,7 +545,6 @@ def _collect_extended_candidates(
         if candidate_plan is None:
             continue
 
-        information_date = get_fast_dates(fast_df)[y_pos]
         quality_started = time.perf_counter() if profile_enabled else None
         quality_rank = _resolve_candidate_quality_ranking(
             params=candidate_params,
@@ -576,6 +573,7 @@ def _collect_extended_candidates(
             sizing_capital_context=(
                 sizing_capital_context if candidate_params is params else None
             ),
+            copy_plan=False,
         )
         if profile_enabled:
             _candidate_profile_add(profile_stats, "portfolio_candidate_plan_sec", resize_started)

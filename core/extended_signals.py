@@ -520,7 +520,7 @@ def build_extended_candidate_plan_from_signal(
         base_plan["shadow_position_state"] = clone_shadow_position(shadow_position)
     if not resize_to_capital:
         return base_plan
-    return resize_candidate_plan_to_capital(base_plan, sizing_capital, params)
+    return resize_candidate_plan_to_capital(base_plan, sizing_capital, params, copy_plan=False)
 
 
 # # (AI註: 單一真理來源 - TBD 只是同一份 shadow trade 的顯示視圖，不再另建第二套狀態機)

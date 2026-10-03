@@ -85,7 +85,7 @@ def _resolve_candidate_sizing_capital(candidate_plan, fallback_capital):
 
 
 # # (AI註: 單一真理來源 - 候選單在不同資金上限下的 qty / is_orderable 重算統一由此處理)
-def resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params, *, sizing_capital_context=None):
+def resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params, *, sizing_capital_context=None, copy_plan=True):
     if candidate_plan is None:
         return None
 
@@ -95,7 +95,7 @@ def resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params, *, 
         return None
 
     resolved_sizing_capital = _resolve_candidate_sizing_capital(candidate_plan, sizing_capital)
-    resized_plan = dict(candidate_plan)
+    resized_plan = dict(candidate_plan) if copy_plan else candidate_plan
     qty = calc_position_size(
         limit_price,
         init_sl,
@@ -179,6 +179,7 @@ def build_normal_candidate_plan(
         sizing_capital,
         params,
         sizing_capital_context=sizing_capital_context,
+        copy_plan=False,
     )
 
 
