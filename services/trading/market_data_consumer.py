@@ -90,18 +90,67 @@ def _execution_market_value_rows(
 ) -> pd.DataFrame:
     """Resolve MarketValue rows under its canonical Scan freshness policy."""
 
+    def _usable_rows(
+        frame: pd.DataFrame,
+        *,
+        end_date: str | None = None,
+        stock_ids: Iterable[str] = (),
+        latest_per_stock: bool = False,
+    ) -> pd.DataFrame:
+        """Keep only positive, date-valid MarketValue evidence.
+
+        FinMind can omit a symbol from an all-market snapshot and can also
+        surface a non-positive placeholder row. Under ``latest_synced`` both
+        cases are unusable cap evidence, so the caller may fall back to the
+        latest earlier positive synchronized row.
+        """
+
+        columns = ("date", "stock_id", "market_value")
+        if frame is None or not isinstance(frame, pd.DataFrame) or frame.empty:
+            return pd.DataFrame(columns=list(columns))
+        missing = [column for column in columns if column not in frame.columns]
+        if missing:
+            raise ValueError(f"TaiwanStockMarketValue frame 缺少欄位: {missing}")
+        work = frame.loc[:, list(columns)].copy()
+        work["date"] = pd.to_datetime(work["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+        work["stock_id"] = work["stock_id"].astype("string").str.strip()
+        work["market_value"] = pd.to_numeric(work["market_value"], errors="coerce")
+        mask = (
+            work["date"].notna()
+            & work["stock_id"].notna()
+            & (work["stock_id"] != "")
+            & work["market_value"].notna()
+            & (work["market_value"] > 0)
+        )
+        if end_date is not None:
+            mask &= work["date"] <= str(end_date)
+        wanted = {
+            str(stock_id).strip()
+            for stock_id in stock_ids
+            if str(stock_id).strip()
+        }
+        if wanted:
+            mask &= work["stock_id"].isin(wanted)
+        work = work.loc[mask]
+        if latest_per_stock and not work.empty:
+            work = (
+                work.sort_values(["stock_id", "date"], kind="stable")
+                .drop_duplicates("stock_id", keep="last")
+            )
+        return work.reset_index(drop=True)
+
     dataset = "TaiwanStockMarketValue"
     state = load_market_data_dataset_state(project_root, required=False)
     row = dict(((state or {}).get("datasets") or {}).get(dataset) or {})
     contract = get_market_data_freshness_contract(dataset)
     exact_target = market_data_contract_requires_target_freshness(contract, row)
     if exact_target:
-        return view.read_dataset_frame(
+        return _usable_rows(view.read_dataset_frame(
             dataset,
             columns=("date", "stock_id", "market_value"),
             start_date=market_date,
             end_date=market_date,
-        )
+        ), end_date=market_date)
 
     latest_data_date = str(row.get("latest_data_date") or "").strip() or None
     if latest_data_date is not None:
@@ -114,12 +163,12 @@ def _execution_market_value_rows(
         # keep the admissible-date rows for the broad snapshot, then carry the
         # latest earlier row only for required symbols that are absent that day.
         usable_date = min(latest_data_date, str(market_date))
-        frame = view.read_dataset_frame(
+        frame = _usable_rows(view.read_dataset_frame(
             dataset,
             columns=("date", "stock_id", "market_value"),
             start_date=usable_date,
             end_date=usable_date,
-        )
+        ))
         required = tuple(
             dict.fromkeys(
                 str(stock_id).strip()
@@ -127,69 +176,33 @@ def _execution_market_value_rows(
                 if str(stock_id).strip()
             )
         )
-        present = (
-            set(frame["stock_id"].astype("string").str.strip().dropna().astype(str).tolist())
-            if not frame.empty and "stock_id" in frame.columns
-            else set()
-        )
+        present = set(frame["stock_id"].astype(str).tolist()) if not frame.empty else set()
         missing_required = tuple(stock_id for stock_id in required if stock_id not in present)
         if not missing_required:
             return frame.reset_index(drop=True)
 
-        prior = view.read_dataset_frame_many_data_ids(
+        prior = _usable_rows(view.read_dataset_frame_many_data_ids(
             dataset,
             data_ids=missing_required,
             columns=("date", "stock_id", "market_value"),
             end_date=usable_date,
-        )
+        ), end_date=usable_date, stock_ids=missing_required, latest_per_stock=True)
         if prior.empty:
             return frame.reset_index(drop=True)
-        work = prior.copy()
-        work["date"] = pd.to_datetime(work["date"], errors="coerce").dt.strftime("%Y-%m-%d")
-        work["stock_id"] = work["stock_id"].astype("string").str.strip()
-        work = work.loc[
-            work["date"].notna()
-            & (work["date"] <= usable_date)
-            & work["stock_id"].notna()
-            & (work["stock_id"] != "")
-            & work["stock_id"].isin(missing_required)
-        ]
-        if work.empty:
-            return frame.reset_index(drop=True)
-        carry_forward = (
-            work.sort_values(["stock_id", "date"], kind="stable")
-            .drop_duplicates("stock_id", keep="last")
-            .reset_index(drop=True)
-        )
         if frame.empty:
-            return carry_forward
-        return pd.concat((frame, carry_forward), ignore_index=True)
+            return prior
+        return pd.concat((frame, prior), ignore_index=True)
 
     # Compatibility fallback for an old state that predates latest_data_date.
     # The target-as-of view still prevents future batches from entering the scan.
-    frame = view.read_dataset_frame(
+    frame = _usable_rows(view.read_dataset_frame(
         dataset,
         columns=("date", "stock_id", "market_value"),
         end_date=market_date,
-    )
+    ), end_date=market_date, latest_per_stock=True)
     if frame.empty:
         return frame
-    work = frame.copy()
-    work["date"] = pd.to_datetime(work["date"], errors="coerce").dt.strftime("%Y-%m-%d")
-    work["stock_id"] = work["stock_id"].astype("string").str.strip()
-    work = work.loc[
-        work["date"].notna()
-        & (work["date"] <= str(market_date))
-        & work["stock_id"].notna()
-        & (work["stock_id"] != "")
-    ]
-    if work.empty:
-        return work.reset_index(drop=True)
-    return (
-        work.sort_values(["stock_id", "date"], kind="stable")
-        .drop_duplicates("stock_id", keep="last")
-        .reset_index(drop=True)
-    )
+    return frame.reset_index(drop=True)
 
 
 def resolve_trading_v2_current_execution_pool(
@@ -207,10 +220,27 @@ def resolve_trading_v2_current_execution_pool(
         start_date=market_date,
         end_date=market_date,
     ).rename(columns={"Trading_Volume": "trading_volume"})
+    # MarketValue is needed only after the exact-date volume gate. Keeping the
+    # carry-forward lookup scoped to actionable high-volume common stocks avoids
+    # broad historical reads for low-volume symbols that cannot enter today's
+    # execution pool.
+    price_volume = pd.to_numeric(price.get("trading_volume"), errors="coerce")
+    high_volume_ids = set(
+        price.loc[price_volume >= float(DOWNLOADER_MIN_VOLUME), "stock_id"]
+        .astype("string")
+        .str.strip()
+        .dropna()
+        .astype(str)
+        .tolist()
+    )
     required_market_value_ids = tuple(sorted({
         str(item.get("stock_id") or "").strip()
         for item in members
-        if not bool(item.get("is_etf")) and str(item.get("stock_id") or "").strip()
+        if (
+            not bool(item.get("is_etf"))
+            and str(item.get("stock_id") or "").strip()
+            and str(item.get("stock_id") or "").strip() in high_volume_ids
+        )
     }))
     root_value = project_root if project_root is not None else getattr(view, "project_root", None)
     if root_value is None:

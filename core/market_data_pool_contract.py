@@ -18,7 +18,7 @@ import pandas as pd
 
 from core.file_integrity import canonical_json_sha256
 
-MARKET_DATA_POOL_LAYER_CONTRACT_VERSION = 2
+MARKET_DATA_POOL_LAYER_CONTRACT_VERSION = 3
 MARKET_DATA_MODEL_CONTEXT_POOL_ROLE = "date_local_pit_projection"
 MARKET_DATA_TRADING_EXECUTION_POOL_ROLE = "date_local_new_entry_eligibility"
 MARKET_DATA_POOL_SOURCE_ROLE = "neutral_daily_pit_market_universe"
@@ -37,6 +37,7 @@ class TradingExecutionPoolStats:
     high_volume_stock_count: int
     market_cap_pass_stock_count: int
     market_cap_below_min_stock_count: int
+    market_cap_missing_stock_count: int
     qualified_count: int
 
     def as_dict(self) -> dict[str, int]:
@@ -52,6 +53,7 @@ class TradingExecutionPoolStats:
             "high_volume_stock_count": int(self.high_volume_stock_count),
             "market_cap_pass_stock_count": int(self.market_cap_pass_stock_count),
             "market_cap_below_min_stock_count": int(self.market_cap_below_min_stock_count),
+            "market_cap_missing_stock_count": int(self.market_cap_missing_stock_count),
             "qualified_count": int(self.qualified_count),
         }
 
@@ -72,6 +74,7 @@ def market_data_pool_layer_contract_payload() -> dict[str, object]:
         "trading_execution_pool_scope": "new_entry_only",
         "trading_price_input_freshness": "exact_target",
         "trading_market_value_input_freshness": "caller_resolved_scan_freshness_policy",
+        "trading_market_value_missing_policy": "exclude_unproven_stock_from_new_entry_pool",
         "execution_pool_must_not_reduce_model_context": True,
         "holdings_data_retention_independent_of_current_execution_pool": True,
     }
@@ -192,14 +195,16 @@ def screen_daily_trading_execution_pool(
         value_column="trading_volume",
         dataset_label="Trading execution price",
     )
-    market_value_by_sid = _normalized_numeric_map(
-        market_value_rows,
-        value_column="market_value",
-        dataset_label="Trading execution market value",
-    )
+    if isinstance(market_value_rows, pd.DataFrame) and market_value_rows.empty:
+        market_value_by_sid: dict[str, float] = {}
+    else:
+        market_value_by_sid = _normalized_numeric_map(
+            market_value_rows,
+            value_column="market_value",
+            dataset_label="Trading execution market value",
+        )
 
     qualified: list[str] = []
-    missing_market_value_for_high_volume_stock: list[str] = []
     listed_without_exact_price = 0
     below_min_volume_count = 0
     high_volume_count = 0
@@ -207,6 +212,7 @@ def screen_daily_trading_execution_pool(
     high_volume_stock_count = 0
     market_cap_pass_stock_count = 0
     market_cap_below_min_stock_count = 0
+    market_cap_missing_stock_count = 0
     for sid, is_etf in universe_by_sid.items():
         volume = volume_by_sid.get(sid)
         if volume is None:
@@ -224,7 +230,7 @@ def screen_daily_trading_execution_pool(
         high_volume_stock_count += 1
         cap = market_value_by_sid.get(sid)
         if cap is None or cap <= 0:
-            missing_market_value_for_high_volume_stock.append(sid)
+            market_cap_missing_stock_count += 1
             continue
         if cap >= market_cap_floor:
             market_cap_pass_stock_count += 1
@@ -232,12 +238,10 @@ def screen_daily_trading_execution_pool(
         else:
             market_cap_below_min_stock_count += 1
 
-    if missing_market_value_for_high_volume_stock:
-        sample = ",".join(missing_market_value_for_high_volume_stock[:20])
-        raise RuntimeError(
-            "Trading execution pool 對高成交量股票缺少符合 Scan freshness policy 的 market_value，依保守原則中止；"
-            f"count={len(missing_market_value_for_high_volume_stock)} sample={sample}"
-        )
+    # Missing MarketValue must never make a stock eligible. Fail closed at the
+    # stock level instead of aborting the entire market scan: every symbol that
+    # lacks a proven positive cap is excluded from new-entry eligibility while
+    # independently verifiable symbols continue through the same gate.
 
     stats = TradingExecutionPoolStats(
         listed_count=len(universe_by_sid),
@@ -251,6 +255,7 @@ def screen_daily_trading_execution_pool(
         high_volume_stock_count=int(high_volume_stock_count),
         market_cap_pass_stock_count=int(market_cap_pass_stock_count),
         market_cap_below_min_stock_count=int(market_cap_below_min_stock_count),
+        market_cap_missing_stock_count=int(market_cap_missing_stock_count),
         qualified_count=len(qualified),
     )
     return qualified, stats.as_dict()

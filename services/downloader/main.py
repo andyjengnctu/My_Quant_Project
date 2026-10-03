@@ -300,6 +300,7 @@ def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
             stock_gate = int(pool.get("high_volume_stock_count") or 0)
             cap_pass = int(pool.get("market_cap_pass_stock_count") or 0)
             cap_fail = int(pool.get("market_cap_below_min_stock_count") or 0)
+            cap_missing = int(pool.get("market_cap_missing_stock_count") or 0)
             final_count = int(pool.get("qualified_count") or 0)
             print(f"StockInfo broad ref     : {_paint(broad, C_GRAY)}")
             print(f"PIT market members      : {_paint(listed, C_CYAN)}")
@@ -307,7 +308,8 @@ def _run_market_data_v2_daily_update(*, prompt_mode: bool = False) -> int:
             print(f"Volume >= {int(DOWNLOADER_MIN_VOLUME):,}     : {_paint(high_volume, C_CYAN)}  ({_paint(f'excluded {low_volume}', C_GRAY)})")
             print(f"  ETF pass              : {_paint(etf_pass, C_CYAN)}")
             print(f"  Stock to cap gate     : {_paint(stock_gate, C_CYAN)}")
-            print(f"Stock cap >= {int(DOWNLOADER_MIN_MARKET_CAP):,}: {_paint(cap_pass, C_CYAN)}  ({_paint(f'excluded {cap_fail}', C_GRAY)})")
+            cap_excluded = f"below {cap_fail} / unavailable {cap_missing}"
+            print(f"Stock cap >= {int(DOWNLOADER_MIN_MARKET_CAP):,}: {_paint(cap_pass, C_CYAN)}  ({_paint(cap_excluded, C_GRAY)})")
             print(f"Final execution pool    : {_paint(final_count, C_GREEN)}")
         except (RuntimeError, FileNotFoundError, ValueError, OSError, ImportError, ModuleNotFoundError) as exc:
             print(_paint("-" * 88, C_CYAN))

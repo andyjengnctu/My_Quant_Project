@@ -6861,6 +6861,7 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
 
     import pandas as pd
 
+    from core.market_data_pool_contract import screen_daily_trading_execution_pool
     from core.trading_data_dependencies import get_trading_data_dependency_spec
     from services.trading.market_data_consumer import (
         build_trading_v2_ohlcv_frame,
@@ -7023,12 +7024,13 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
                     "Trading_Volume": [2_000_000, 2_000_000],
                 })
             elif dataset == "TaiwanStockMarketValue":
-                # Provider's 09-09 MarketValue snapshot is sparse: 6550 is
-                # absent that day but has a previously synchronized valid row.
+                # Provider's 09-09 MarketValue snapshot has an unusable zero for
+                # 6550. latest_synced must treat that the same as a missing row
+                # and carry the latest earlier positive synchronized value.
                 frame = pd.DataFrame({
-                    "date": ["2026-09-09"],
-                    "stock_id": ["2330"],
-                    "market_value": [1_000_000_000_000],
+                    "date": ["2026-09-09", "2026-09-09"],
+                    "stock_id": ["2330", "6550"],
+                    "market_value": [1_000_000_000_000, 0],
                 })
             else:
                 frame = pd.DataFrame(columns=list(columns or ()))
@@ -7074,6 +7076,34 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
             2,
             sparse_stats["market_value_usable_count"],
         )
+
+    execution_pool_with_missing_cap, missing_cap_stats = screen_daily_trading_execution_pool(
+        (
+            {"stock_id": "2330", "is_etf": False},
+            {"stock_id": "6661", "is_etf": False},
+            {"stock_id": "0050", "is_etf": True},
+        ),
+        price_rows=pd.DataFrame({
+            "stock_id": ["2330", "6661", "0050"],
+            "trading_volume": [2_000_000, 2_000_000, 2_000_000],
+        }),
+        market_value_rows=pd.DataFrame({
+            "stock_id": ["2330"],
+            "market_value": [1_000_000_000_000],
+        }),
+        min_volume=1_000_000,
+        min_market_cap=10_000_000_000,
+    )
+    check(
+        "execution_pool_missing_market_value_fails_closed_per_stock_not_whole_pool",
+        ["2330", "0050"],
+        execution_pool_with_missing_cap,
+    )
+    check(
+        "execution_pool_counts_high_volume_stock_with_unavailable_market_value",
+        1,
+        missing_cap_stats["market_cap_missing_stock_count"],
+    )
 
     with TemporaryDirectory(prefix="round8_v2_consumer_") as temp_dir:
         root = Path(temp_dir)
