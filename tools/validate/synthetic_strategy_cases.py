@@ -2201,6 +2201,9 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     from services.optimizer.validation_budget_refit import resolve_validation_budget_spec
     active_param_profile = get_active_strategy_param_training_profile()
     validation_param_profile = get_strategy_param_training_profile("validation_budget_current")
+    plateau_validation_param_profile = get_strategy_param_training_profile(
+        "validation_plateau_current"
+    )
     production_multiseed_param_profile = get_strategy_param_training_profile(
         "production_multiseed_current"
     )
@@ -2211,10 +2214,34 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         validation_param_profile.fitting_seed_protocol
     )
     validation_spec = resolve_validation_budget_spec(300)
+    plateau_validation_spec = resolve_validation_budget_spec(
+        300, protocol_id="validation_plateau_refit_v2"
+    )
     check("strategy_param_training_target_is_config_driven", True, "ACTIVE_STRATEGY_PARAM_PROFILE" in strategy_param_config_source and "get_active_strategy_param_training_profile" in strategy_param_app_source)
     check("strategy_param_menu_contains_only_stable_work_types", True, all(label in strategy_param_app_source for label in ("Forward OOS 參數訓練", "Rolling OOS 參數訓練", "Forward OOS Robustness 參數訓練", "Rolling OOS Robustness 參數訓練", "進階／單次 Optimizer")) and "PARAM-P5" not in research_entry_source)
     check("strategy_param_validation_is_profile_config_not_optimizer_menu_switch", True, validation_param_profile.validation_enabled and validation_param_profile.validation_protocol == "validation_budget_refit_v1" and "STRATEGY_PARAM_VALIDATION_PROTOCOLS" in strategy_param_config_source)
     check("strategy_param_validation_config_preserves_phase2_contract", True, validation_spec.as_dict() == {"protocol": "validation_budget_refit_v1", "holdout_months": 12, "checkpoints": [50, 100, 150, 200, 250, 300], "policy_name": "base_finalists_agree", "selection_metric": "canonical_optimizer_portfolio_score", "tie_break": "smaller_budget", "oos_feedback_used": False, "full_refit_required": True})
+    check(
+        "strategy_param_round6_plateau_validation_is_new_versioned_contract",
+        True,
+        plateau_validation_param_profile.parameter_set_identity == "PARAM-P9"
+        and plateau_validation_param_profile.validation_protocol == "validation_plateau_refit_v2"
+        and plateau_validation_param_profile.fitting_seed_protocol == "single_seed_42"
+        and plateau_validation_spec.as_dict() == {
+            "protocol": "validation_plateau_refit_v2",
+            "holdout_months": 12,
+            "warmup_trials": 50,
+            "patience_trials": 50,
+            "observation_interval": 1,
+            "min_delta": 0.0,
+            "reuse_same_policy_signature": True,
+            "policy_name": "base_finalists_agree",
+            "selection_metric": "canonical_optimizer_portfolio_score",
+            "tie_break": "smaller_budget",
+            "oos_feedback_used": False,
+            "full_refit_required": True,
+        },
+    )
     from config.strategy_params import ACTIVE_STRATEGY_PARAM_PROFILE
     active_fitting_seed_protocol = get_strategy_param_fitting_seed_protocol(
         active_param_profile.fitting_seed_protocol
@@ -2280,12 +2307,12 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS
     )
     check(
-        "strategy_param_current_compare_and_robustness_bindings_are_relationally_atomic",
+        "strategy_param_round6_compare_switches_oos_rolling_atomically_but_defers_robustness",
         True,
-        current_oos_robustness.profile_id == current_oos_settings.profile_id
-        and current_rolling_robustness.profile_id == current_rolling_settings.profile_id
-        and current_oos_robustness.suite_id == current_oos_settings.suite_id
-        and current_rolling_robustness.suite_id == current_rolling_settings.suite_id,
+        current_oos_settings.suite_id == "non_dl_validation_plateau_current"
+        and current_rolling_settings.suite_id == "non_dl_validation_plateau_current"
+        and current_oos_robustness.suite_id == current_rolling_robustness.suite_id
+        and current_oos_robustness.suite_id != current_oos_settings.suite_id,
     )
     from services.optimizer.strategy_param_service import (
         _benchmark_schedule_build_contract,
@@ -2375,6 +2402,8 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             for source_id, source in current_oos_settings.parameter_sources.items()
             if source.builder is not None
             and source.builder.builder_type == "optimizer_fixed_multiseed_strategy_params"
+            and str(dict(source.builder.options).get("training_profile_id") or "")
+                == "production_multiseed_current"
         )
         legacy_actions = []
         legacy_rows, _legacy_paths, _legacy_arm_paths = _collect_parameter_artifact_status(
@@ -2417,9 +2446,10 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         ),
     )
     check(
-        "strategy_compare_legacy_unbound_p6_dependency_plan_is_rebuild_not_blocked",
-        ("REBUILD", "optimizer_fixed_multiseed_strategy_params"),
-        (legacy_rows[legacy_source_id]["action"], legacy_plan_action.builder_type),
+        "strategy_compare_legacy_unbound_p6_dependency_plan_remains_buildable_not_blocked",
+        True,
+        legacy_rows[legacy_source_id]["action"] in {"BUILD", "REBUILD"}
+        and legacy_plan_action.builder_type == "optimizer_fixed_multiseed_strategy_params",
     )
     check(
         "strategy_param_true_registered_p6_scientific_drift_remains_blocked",
@@ -3222,20 +3252,25 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             for arm, source, profile in canonical_profile_rows
         ),
     )
+    registered_fixed_multiseed_profiles = tuple(
+        get_strategy_param_training_profile(profile_id)
+        for profile_id in (
+            "production_multiseed_current",
+            "production_multiseed_8x300_compare",
+            "production_multiseed_4x1000_compare",
+        )
+    )
     check(
-        "strategy_compare_fixed_multiseed_arm_reuses_registered_profile",
+        "strategy_compare_registered_fixed_multiseed_profiles_remain_bound_after_round6_switch",
         True,
-        bool(fixed_multiseed_profile_rows)
-        and all(
+        all(
             not profile.validation_enabled
             and profile.registered_scientific_fingerprint_sha256 is not None
-            and profile.parameter_policy == str(arm.param_policy)
-            for arm, profile in fixed_multiseed_profile_rows
+            and profile.parameter_policy == "base-finalists-agree"
+            for profile in registered_fixed_multiseed_profiles
         ),
     )
-    fixed_profile_ids = tuple(
-        dict.fromkeys(profile.profile_id for _arm, profile in fixed_multiseed_profile_rows)
-    )
+    fixed_profile_ids = tuple(profile.profile_id for profile in registered_fixed_multiseed_profiles)
     fixed_profile_artifact_paths = tuple(
         fixed_multiseed_strategy_param_artifact_path(
             project_root,
@@ -3257,7 +3292,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     check(
         "strategy_compare_fixed_multiseed_profiles_have_isolated_artifact_namespaces",
         True,
-        len(fixed_profile_ids) >= 1
+        len(fixed_profile_ids) == 3
         and len(set(fixed_profile_artifact_paths)) == len(fixed_profile_ids)
         and len(set(fixed_profile_robustness_paths)) == len(fixed_profile_ids)
         and all(
@@ -3270,11 +3305,20 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         for arm in current_compare_settings.enabled_arms
         if current_compare_settings.parameter_sources[arm.param_source].builder is not None
     }
+    current_validation_parameter_sets = {
+        str(dict(current_compare_settings.parameter_sources[arm.param_source].builder.options).get("parameter_set") or "")
+        for arm in current_compare_settings.enabled_arms
+        if current_compare_settings.parameter_sources[arm.param_source].builder is not None
+        and current_compare_settings.parameter_sources[arm.param_source].builder.builder_type
+            == "optimizer_validation_budget_refit_strategy_params"
+    }
     check(
-        "strategy_compare_round4_leaves_validation_control_outside_current_non_validation_suite",
+        "strategy_compare_round6_current_suite_contains_new_plateau_and_immutable_fixed_checkpoint_control",
         True,
-        "optimizer_validation_budget_strategy_params" not in current_builder_types
-        and validation_param_profile.validation_enabled,
+        "optimizer_validation_budget_refit_strategy_params" in current_builder_types
+        and {"PARAM-P9", "PARAM-P5"}.issubset(current_validation_parameter_sets)
+        and validation_param_profile.validation_enabled
+        and plateau_validation_param_profile.validation_enabled,
     )
     min_profile = resolve_canonical_strategy_param_training_profile(
         "min", "base-finalist-best"

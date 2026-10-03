@@ -12304,3 +12304,15 @@ Decision：`ENGINEERING_ONLY / OUTER_FOLD_IDENTITY_FOLD_LOCAL / FORWARD_PREFIX_R
 - Registered scientific fingerprints：P7=`2fbe14e7d72d5e71936cfa152934cdb027f414910a2b737309c0488ec9b1da3c`；P8=`dbcbaf0653895bbfdf93462cb57845a565497d6fa4cef2baf5e7782ce0c26697`。P6仍=`b6162e8debd663a54fc3a56d2f738e7a217e11128a1fa2148dac01006bae976b`。
 - 狀態：implementation registered，**result pending**；本紀錄不預先宣稱任何performance結論。
 
+## 2026-10-04 — PARAM-P9 / C88 adaptive plateau validation registered and implemented
+
+- **Trigger evidence**：固定fitting-budget比較已取得正式Rolling輸出：C85 `4×300` Return/MDD/RoMD=`190.64% / 11.59% / 16.45`；C86 `8×300`=`116.56% / 19.57% / 5.96`；C87 `4×1000`=`168.05% / 11.50% / 14.62`。增加seeds或trials在此evidence下均未呈單調改善，因此下一輪不直接提高budget，而改驗證「何時繼續搜尋已沒有validation增量」。此紀錄不把該觀察提升為普遍性結論。
+- **New identity**：分配`PARAM-P9 / SR-C88`，不覆寫`PARAM-P5/C84` fixed-checkpoint validation，也不覆寫`PARAM-P6~P8/C85~C87` fitting-budget arms。Current first-stage treatment固定single Seed42、Full/formal/`base-finalists-agree`、120M selection、trailing 12M inner validation、max 300 trials。
+- **Adaptive protocol**：`validation_plateau_refit_v2`：warmup=`50`、observation interval=`1`、patience=`50`、min_delta=`0`。每個trial prefix都重新依canonical `base-finalists-agree`解析當下policy；只有effective params signature改變才執行新的validation replay，相同signature精確reuse。Validation score只能決定是否停止future inner-search與歷史最佳search budget `N*`；不得寫回training objective、sampler、search space或finalist ranking。
+- **Refit semantics**：`stop_trial != N*`。Plateau停在某trial時，仍取歷史最佳validation score對應的較早N*；之後建立全新Optimizer study，以完整120M selection window只跑N* trials，再把fresh-refit params供OOS/Rolling消費。OOS rows完全禁止參與stop/N*。
+- **Resume/evidence**：adaptive controller把prefix observation、policy signature cache、best N*、last improvement、stop reason、actual replay/reuse counts與validation wall time存入study user attrs，可在相容SQLite study resume後延續同一patience狀態。
+- **Stage rule**：本輪只啟用single-seed P9/C88。Primary=`C88-C62`，protocol contrast=`C88-C84`；multi-seed adaptive validation必須等single-seed behavior/cost gate後另立identity，不得直接把新語意塞入P6/C85。
+- **Status**：implementation complete，**RESULT_PENDING**；尚未產生P9/C88 OOS/Rolling performance evidence，不預先宣稱改善或promotion。
+
+Decision：`PARAM_P9_C88_REGISTERED / SINGLE_SEED_ADAPTIVE_VALIDATION / PREFIX_CANONICAL_POLICY_OBSERVATION / SIGNATURE_REPLAY_DEDUP / PLATEAU_STOP_50 / BEST_N_FULL_REFIT / OOS_FEEDBACK_FORBIDDEN / RESULT_PENDING / P5_P6_P7_P8_IMMUTABLE`。
+

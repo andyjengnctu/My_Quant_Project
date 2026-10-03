@@ -24,25 +24,52 @@ from core.seed_ensemble_policy import (
 @dataclass(frozen=True)
 class StrategyParamValidationProtocol:
     protocol_id: str
+    mode: str
     holdout_months: int
     checkpoints: tuple[int, ...]
+    warmup_trials: int | None
+    patience_trials: int | None
+    observation_interval: int | None
+    min_delta: float | None
     selection_policy: str
     selection_metric: str
     tie_break: str
     oos_feedback_used: bool
     full_refit_required: bool
+    reuse_same_policy_signature: bool
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "protocol": self.protocol_id,
             "holdout_months": int(self.holdout_months),
-            "checkpoints": [int(value) for value in self.checkpoints],
-            "policy_name": self.selection_policy,
-            "selection_metric": self.selection_metric,
-            "tie_break": self.tie_break,
-            "oos_feedback_used": bool(self.oos_feedback_used),
-            "full_refit_required": bool(self.full_refit_required),
         }
+        if self.mode == "fixed_checkpoints":
+            # Preserve the registered PARAM-P5/C84 v1 scientific payload exactly.
+            payload["checkpoints"] = [int(value) for value in self.checkpoints]
+        elif self.mode == "adaptive_plateau":
+            payload.update(
+                {
+                    "warmup_trials": int(self.warmup_trials or 0),
+                    "patience_trials": int(self.patience_trials or 0),
+                    "observation_interval": int(self.observation_interval or 0),
+                    "min_delta": float(self.min_delta or 0.0),
+                    "reuse_same_policy_signature": bool(
+                        self.reuse_same_policy_signature
+                    ),
+                }
+            )
+        else:
+            raise ValueError(f"不支援的validation protocol mode: {self.mode!r}")
+        payload.update(
+            {
+                "policy_name": self.selection_policy,
+                "selection_metric": self.selection_metric,
+                "tie_break": self.tie_break,
+                "oos_feedback_used": bool(self.oos_feedback_used),
+                "full_refit_required": bool(self.full_refit_required),
+            }
+        )
+        return payload
 
 
 @dataclass(frozen=True)
@@ -178,12 +205,36 @@ def get_strategy_param_validation_protocol(protocol_id: str) -> StrategyParamVal
     raw = STRATEGY_PARAM_VALIDATION_PROTOCOLS.get(key)
     if not key or not isinstance(raw, Mapping):
         raise ValueError(f"未登記strategy parameter validation protocol: {key or '(blank)'}")
-    checkpoints = tuple(int(value) for value in tuple(raw.get("checkpoints") or ()))
-    if not checkpoints or checkpoints != tuple(sorted(set(checkpoints))):
-        raise ValueError(f"validation protocol checkpoints必須嚴格遞增且不可重複: {key}")
     holdout = int(raw.get("holdout_months") or 0)
     if holdout <= 0:
         raise ValueError(f"validation protocol holdout_months必須>0: {key}")
+
+    raw_checkpoints = tuple(raw.get("checkpoints") or ())
+    if raw_checkpoints:
+        mode = "fixed_checkpoints"
+        checkpoints = tuple(int(value) for value in raw_checkpoints)
+        if checkpoints != tuple(sorted(set(checkpoints))) or any(value <= 0 for value in checkpoints):
+            raise ValueError(f"validation protocol checkpoints必須嚴格遞增且>0: {key}")
+        warmup_trials = None
+        patience_trials = None
+        observation_interval = None
+        min_delta = None
+        reuse_same_policy_signature = False
+    else:
+        mode = "adaptive_plateau"
+        checkpoints = ()
+        warmup_trials = int(raw.get("warmup_trials") or 0)
+        patience_trials = int(raw.get("patience_trials") or 0)
+        observation_interval = int(raw.get("observation_interval") or 0)
+        min_delta = float(raw.get("min_delta") or 0.0)
+        reuse_same_policy_signature = bool(raw.get("reuse_same_policy_signature", True))
+        if warmup_trials <= 0 or patience_trials <= 0 or observation_interval <= 0:
+            raise ValueError(
+                f"adaptive validation protocol warmup/patience/observation_interval必須>0: {key}"
+            )
+        if min_delta < 0.0:
+            raise ValueError(f"adaptive validation protocol min_delta不得<0: {key}")
+
     selection_policy = str(raw.get("selection_policy") or "").strip()
     selection_metric = str(raw.get("selection_metric") or "").strip()
     tie_break = str(raw.get("tie_break") or "").strip()
@@ -191,13 +242,19 @@ def get_strategy_param_validation_protocol(protocol_id: str) -> StrategyParamVal
         raise ValueError(f"validation protocol缺少selection contract: {key}")
     return StrategyParamValidationProtocol(
         protocol_id=key,
+        mode=mode,
         holdout_months=holdout,
         checkpoints=checkpoints,
+        warmup_trials=warmup_trials,
+        patience_trials=patience_trials,
+        observation_interval=observation_interval,
+        min_delta=min_delta,
         selection_policy=selection_policy,
         selection_metric=selection_metric,
         tie_break=tie_break,
         oos_feedback_used=bool(raw.get("oos_feedback_used", False)),
         full_refit_required=bool(raw.get("full_refit_required", True)),
+        reuse_same_policy_signature=reuse_same_policy_signature,
     )
 
 
@@ -274,6 +331,34 @@ def get_strategy_param_training_profile(profile_id: str) -> StrategyParamTrainin
     )
 
 
+def resolve_validation_strategy_param_training_profile(
+    parameter_set_identity: str, validation_protocol_id: str
+) -> StrategyParamTrainingProfile:
+    """Resolve the unique declarative profile owning a validation publication identity."""
+
+    parameter_set = str(parameter_set_identity or "").strip()
+    protocol_id = str(validation_protocol_id or "").strip()
+    matches: list[StrategyParamTrainingProfile] = []
+    for profile_id in STRATEGY_PARAM_PROFILES:
+        profile = get_strategy_param_training_profile(str(profile_id))
+        if (
+            profile.validation_enabled
+            and profile.parameter_set_identity == parameter_set
+            and profile.validation_protocol == protocol_id
+        ):
+            matches.append(profile)
+    if len(matches) != 1:
+        raise ValueError(
+            "validation strategy parameter publication identity必須唯一對應profile: "
+            f"parameter_set={parameter_set or '(blank)'}, "
+            f"protocol={protocol_id or '(blank)'}, matches={[item.profile_id for item in matches]}"
+        )
+    profile = matches[0]
+    if not profile.artifact_slug:
+        raise ValueError(f"validation strategy parameter profile缺少artifact_slug: {profile.profile_id}")
+    return profile
+
+
 def resolve_canonical_strategy_param_training_profile(
     family: str, parameter_policy: str
 ) -> StrategyParamTrainingProfile | None:
@@ -322,5 +407,6 @@ __all__ = [
     "get_active_strategy_param_training_profile",
     "get_strategy_param_training_profile",
     "get_strategy_param_validation_protocol",
+    "resolve_validation_strategy_param_training_profile",
     "resolve_canonical_strategy_param_training_profile",
 ]

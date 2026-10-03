@@ -95,7 +95,7 @@ def _validation_protocol(profile: StrategyParamTrainingProfile):
         return None
     protocol_id = str(profile.validation_protocol or "").strip()
     protocol = get_strategy_param_validation_protocol(protocol_id)
-    if protocol.protocol_id != "validation_budget_refit_v1":
+    if protocol.mode not in {"fixed_checkpoints", "adaptive_plateau"}:
         raise ValueError(
             "目前Optimizer尚未註冊此validation capability handler: "
             f"{protocol.protocol_id}"
@@ -337,9 +337,21 @@ def _render_profile_summary(profile: StrategyParamTrainingProfile) -> str:
             (
                 ("Validation Protocol", protocol.protocol_id),
                 ("Validation Holdout", f"{protocol.holdout_months} months"),
-                ("Budget Checkpoints", " / ".join(str(v) for v in protocol.checkpoints)),
             )
         )
+        if protocol.mode == "fixed_checkpoints":
+            rows.append(
+                ("Budget Checkpoints", " / ".join(str(v) for v in protocol.checkpoints))
+            )
+        else:
+            rows.extend(
+                (
+                    ("Validation Warmup", str(int(protocol.warmup_trials or 0))),
+                    ("Plateau Patience", str(int(protocol.patience_trials or 0))),
+                    ("Observation Interval", str(int(protocol.observation_interval or 0))),
+                    ("Min Delta", str(float(protocol.min_delta or 0.0))),
+                )
+            )
     if seed_protocol.enabled:
         rows.append(("Fixed Seed Bundle", ", ".join(str(v) for v in seed_protocol.resolved_seeds)))
     return render_table(("設定", "目前值"), rows)
@@ -503,6 +515,28 @@ def render_strategy_param_training_report(plan: dict) -> str:
                             str(item.get("member_count") or 0),
                         )
                         for item in checkpoints
+                    ],
+                ))
+            observations = list(protocol.get("observation_results") or [])
+            if observations:
+                lines.extend((
+                    f"Stop           ：{protocol.get('stop_trial') or '-'} / {protocol.get('stop_reason') or '-'}",
+                    f"Last Improve   ：{protocol.get('last_improvement_trial') or '-'}",
+                    f"Observations   ：{int(protocol.get('observation_count') or len(observations))}",
+                    f"Validation Replay / Reuse：{int(protocol.get('actual_validation_replays') or 0)} / {int(protocol.get('reused_validation_observations') or 0)}",
+                    f"Validation Wall：{float(protocol.get('validation_wall_sec') or 0.0):.2f}s",
+                ))
+                lines.append(render_table(
+                    ("Trials", "Source", "Improved", "Validation Score", "Members"),
+                    [
+                        (
+                            str(item.get("trials") or "-"),
+                            str(item.get("validation_source") or "-"),
+                            "Y" if bool(item.get("improved")) else "N",
+                            "-" if item.get("validation_score") is None else f"{float(item['validation_score']):.4f}",
+                            str(item.get("member_count") or 0),
+                        )
+                        for item in observations
                     ],
                 ))
     if not rendered_any:

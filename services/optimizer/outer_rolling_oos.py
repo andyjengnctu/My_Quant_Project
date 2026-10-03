@@ -94,6 +94,7 @@ from services.optimizer.outer_rolling_formatting import (
 )
 from services.optimizer.outer_rolling_search_progress import _SearchProgress
 from services.optimizer.validation_budget_refit import (
+    AdaptiveValidationBudgetController,
     build_inner_validation_policy,
     resolve_validation_budget_spec,
     select_trial_budget_from_validation,
@@ -1332,7 +1333,10 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
         session.disable_milestone_dashboard = True
         session.timing_mode = bool(timing_mode)
         validation_budget_spec = (
-            resolve_validation_budget_spec(int(config.trials_per_fold))
+            resolve_validation_budget_spec(
+                int(config.trials_per_fold),
+                protocol_id=str(fold_policy.get("optimizer_search_protocol") or "").strip(),
+            )
             if validation_budget_protocol_enabled(fold_policy)
             else None
         )
@@ -1496,31 +1500,70 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                     search_parallel_trials = _resolve_single_fold_search_parallel_trials(
                         os.environ, sampler_kind=sampler_kind
                     )
-                    if inner_remaining > 0:
-                        inner_study.optimize(
-                            inner_session.objective,
-                            n_trials=int(inner_remaining),
-                            n_jobs=int(search_parallel_trials),
+                    objective_mode = str(inner_policy.get("objective_mode", "split_train_romd"))
+                    if validation_budget_spec.adaptive:
+                        if int(search_parallel_trials) != 1:
+                            raise RuntimeError(
+                                "adaptive validation要求single-trial search order，"
+                                f"actual n_jobs={int(search_parallel_trials)}"
+                            )
+                        controller = AdaptiveValidationBudgetController(
+                            session=inner_session,
+                            objective_mode=objective_mode,
+                            spec=validation_budget_spec,
+                            validation_start_date=validation_start_date,
+                            validation_end_date=validation_end_date,
                         )
-                    print(
-                        f"[{fold_idx}/{fold_count}] PHASE 2/3 | VALIDATION BUDGET SELECTION | "
-                        f"checkpoints={','.join(str(value) for value in validation_budget_spec.checkpoints)} | "
-                        f"holdout={validation_start_date}~{validation_end_date}",
-                        flush=True,
-                    )
-                    validation_budget_result = select_trial_budget_from_validation(
-                        study=inner_study,
-                        session=inner_session,
-                        objective_mode=str(inner_policy.get("objective_mode", "split_train_romd")),
-                        spec=validation_budget_spec,
-                        validation_start_date=validation_start_date,
-                        validation_end_date=validation_end_date,
-                    )
+                        resume_state = controller.catch_up(inner_study)
+                        already_stopped = bool(resume_state.get("stop_reason"))
+                        if inner_remaining > 0 and not already_stopped:
+                            inner_study.optimize(
+                                inner_session.objective,
+                                n_trials=int(inner_remaining),
+                                n_jobs=1,
+                                callbacks=[controller.callback],
+                            )
+                        print(
+                            f"[{fold_idx}/{fold_count}] PHASE 2/3 | ADAPTIVE VALIDATION | "
+                            f"warmup={int(validation_budget_spec.warmup_trials or 0)} | "
+                            f"patience={int(validation_budget_spec.patience_trials or 0)} | "
+                            f"holdout={validation_start_date}~{validation_end_date}",
+                            flush=True,
+                        )
+                        validation_budget_result = controller.result(inner_study)
+                    else:
+                        if inner_remaining > 0:
+                            inner_study.optimize(
+                                inner_session.objective,
+                                n_trials=int(inner_remaining),
+                                n_jobs=int(search_parallel_trials),
+                            )
+                        print(
+                            f"[{fold_idx}/{fold_count}] PHASE 2/3 | VALIDATION BUDGET SELECTION | "
+                            f"checkpoints={','.join(str(value) for value in validation_budget_spec.checkpoints)} | "
+                            f"holdout={validation_start_date}~{validation_end_date}",
+                            flush=True,
+                        )
+                        validation_budget_result = select_trial_budget_from_validation(
+                            study=inner_study,
+                            session=inner_session,
+                            objective_mode=objective_mode,
+                            spec=validation_budget_spec,
+                            validation_start_date=validation_start_date,
+                            validation_end_date=validation_end_date,
+                        )
                     refit_trials = int(validation_budget_result["selected_trials"])
+                    stop_text = (
+                        f" | stop={int(validation_budget_result.get('stop_trial') or 0)}"
+                        f"/{validation_budget_result.get('stop_reason')}"
+                        if validation_budget_spec.adaptive
+                        else ""
+                    )
                     print(
                         f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | "
                         f"validation budget selected N*={refit_trials} | "
-                        f"score={float(validation_budget_result['selected_validation_score']):.3f}",
+                        f"score={float(validation_budget_result['selected_validation_score']):.3f}"
+                        f"{stop_text}",
                         flush=True,
                     )
                 finally:

@@ -941,7 +941,8 @@ def _collect_parameter_artifact_status(
             policy_identity_ready = identity_ready
             policy_identity_status = identity_status
             if builder_type == "optimizer_validation_budget_refit_strategy_params":
-                p5_state = inspect_validation_budget_strategy_parameter_artifact(
+                builder_options = {} if source.builder is None else dict(source.builder.options)
+                validation_state = inspect_validation_budget_strategy_parameter_artifact(
                     root,
                     policy=param_policy,
                     comparison_end_date=str(required_schedule_end),
@@ -950,9 +951,16 @@ def _collect_parameter_artifact_status(
                     rotation=str(settings.rotation),
                     fixed_risk=float(DEFAULT_FIXED_RISK),
                     max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+                    parameter_set_identity=str(
+                        builder_options.get("parameter_set") or "PARAM-P5"
+                    ).upper(),
+                    validation_protocol_id=str(
+                        builder_options.get("optimizer_search_protocol")
+                        or "validation_budget_refit_v1"
+                    ).strip(),
                 )
-                policy_identity_ready = bool(p5_state["ready"])
-                policy_identity_status = str(p5_state["status"])
+                policy_identity_ready = bool(validation_state["ready"])
+                policy_identity_status = str(validation_state["status"])
             elif builder_type == "optimizer_fixed_multiseed_strategy_params":
                 builder_options = {} if source.builder is None else dict(source.builder.options)
                 p6_state = inspect_fixed_multiseed_strategy_parameter_artifact(

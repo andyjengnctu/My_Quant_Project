@@ -73,13 +73,23 @@ def _execute_preparation_action(
     if action.builder_type == "optimizer_validation_budget_refit_strategy_params":
         _kind, source_id = action.artifact_key.split(":", 1)
         source = settings.parameter_sources[source_id]
+        builder = source.builder
+        if builder is None:
+            raise RuntimeError(f"validation-budget參數來源缺少builder: {source_id}")
+        options = dict(builder.options)
+        parameter_set_identity = str(options.get("parameter_set") or "PARAM-P5").upper()
+        validation_protocol_id = str(
+            options.get("optimizer_search_protocol") or "validation_budget_refit_v1"
+        ).strip()
         required_schedule_end = resolve_strategy_parameter_required_schedule_end(
             source,
             comparison_start=comparison_start_date,
             comparison_end=comparison_end_date,
         )
         if required_schedule_end in (None, ""):
-            raise RuntimeError("PARAM-P5 validation-budget builder缺少可解析的required schedule end")
+            raise RuntimeError(
+                f"{parameter_set_identity} validation-budget builder缺少可解析的required schedule end"
+            )
         for param_policy in resolve_required_param_policies_for_source(settings, source_id):
             ensure_validation_budget_strategy_parameter_artifact(
                 root,
@@ -90,6 +100,8 @@ def _execute_preparation_action(
                 rotation=str(settings.rotation),
                 fixed_risk=float(DEFAULT_FIXED_RISK),
                 max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+                parameter_set_identity=parameter_set_identity,
+                validation_protocol_id=validation_protocol_id,
             )
         return
     if action.builder_type == "optimizer_fixed_multiseed_strategy_params":

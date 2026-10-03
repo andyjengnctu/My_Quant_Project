@@ -14,9 +14,10 @@ from config.research import RESEARCH_MARKET_DATA_CUTOFF
 
 # Current Research strategy-parameter target.  Changing this value changes what
 # Research [2] trains; the interactive menu must not offer a second target selector.
-# Round 3 activates the production-style fixed multi-seed Research producer after
-# fitting-seed bundles and robustness replication bundles were made orthogonal.
-ACTIVE_STRATEGY_PARAM_PROFILE = "production_multiseed_current"
+# Round 6 activates the single-seed adaptive plateau validation producer.
+# PARAM-P5 fixed-checkpoint validation and PARAM-P6~P8 fitting-budget controls remain
+# immutable registered references; only this current Research target changes.
+ACTIVE_STRATEGY_PARAM_PROFILE = "validation_plateau_current"
 
 
 # Validation is a reusable Optimizer capability.  Profiles opt in/out below;
@@ -30,6 +31,19 @@ STRATEGY_PARAM_VALIDATION_PROTOCOLS: dict[str, dict] = {
         "tie_break": "smaller_budget",
         "oos_feedback_used": False,
         "full_refit_required": True,
+    },
+    "validation_plateau_refit_v2": {
+        "holdout_months": 12,
+        "warmup_trials": 50,
+        "patience_trials": 50,
+        "observation_interval": 1,
+        "min_delta": 0.0,
+        "selection_policy": "base_finalists_agree",
+        "selection_metric": "canonical_optimizer_portfolio_score",
+        "tie_break": "smaller_budget",
+        "oos_feedback_used": False,
+        "full_refit_required": True,
+        "reuse_same_policy_signature": True,
     },
 }
 
@@ -145,6 +159,23 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
             "protocol": "validation_budget_refit_v1",
         },
         "fitting_seed_protocol": "single_seed_42",
+        "artifact_slug": "param_p5_validation_budget_refit",
+    },
+    "validation_plateau_current": {
+        "label": "Adaptive Plateau Validation Refit",
+        "strategy_id": "breakout",
+        "filter_profile": "full",
+        "parameter_policy": "base-finalists-agree",
+        "parameter_set_identity": "PARAM-P9",
+        "dataset": "full",
+        "schedule_start_date": "2021-01-01",
+        "coverage_end_date": RESEARCH_MARKET_DATA_CUTOFF,
+        "validation": {
+            "enabled": True,
+            "protocol": "validation_plateau_refit_v2",
+        },
+        "fitting_seed_protocol": "single_seed_42",
+        "artifact_slug": "param_p9_validation_plateau_refit",
     },
     "production_multiseed_current": {
         "label": "Production-Style Fixed Multi-Seed",

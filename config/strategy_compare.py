@@ -14,11 +14,12 @@ from core.breakout_quality_registry import (
 
 # Current work-stage selection. Stable menu work types live in apps/research.py;
 # only the current scientific profiles/bindings change here.
-# Round 3 activates the production-style multi-seed suite atomically for OOS,
-# Rolling, and their robustness extensions.  PARAM-P5/C84 remain registered
-# historical/controlled validation references but are no longer the current suite.
-STRATEGY_COMPARE_CURRENT_OOS_PROFILE = "non_dl_production_multiseed_oos"
-STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE = "non_dl_production_multiseed_rolling"
+# Round 6 activates the single-seed adaptive validation treatment for OOS/Rolling.
+# Robustness remains on the prior production multi-seed suite until the adaptive
+# single-seed behavior/cost gate is completed; PARAM-P5/C84 remains an immutable
+# fixed-checkpoint validation control.
+STRATEGY_COMPARE_CURRENT_OOS_PROFILE = "non_dl_validation_plateau_oos"
+STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE = "non_dl_validation_plateau_rolling"
 STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS = "non_dl_production_multiseed_oos"
 STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS = "non_dl_production_multiseed_rolling"
 STRATEGY_COMPARE_DEFAULT_PROFILE = STRATEGY_COMPARE_CURRENT_OOS_PROFILE

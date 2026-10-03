@@ -664,7 +664,7 @@ def _runtime_contract(*, root, args, baseline_contract, fold_overrides, model_ar
 
         payload["optimizer_search_protocol"] = optimizer_search_protocol
         payload["validation_budget_refit"] = resolve_validation_budget_spec(
-            int(args.trials_per_fold)
+            int(args.trials_per_fold), protocol_id=optimizer_search_protocol
         ).as_dict()
         payload["parameter_set_identity"] = str(
             getattr(args, "parameter_set_identity", "PARAM-P5") or "PARAM-P5"
@@ -2018,25 +2018,53 @@ def _validate_selection_full_roos_params(*, path: Path, schedule_contract, args)
     optimizer_search_protocol = str(
         getattr(args, "optimizer_search_protocol", "") or ""
     ).strip()
-    if optimizer_search_protocol == "validation_budget_refit_v1":
-        from services.optimizer.validation_budget_refit import resolve_validation_budget_spec
+    if optimizer_search_protocol:
+        from services.optimizer.validation_budget_refit import (
+            resolve_validation_budget_spec,
+            validation_budget_protocol_enabled,
+        )
 
-        spec = resolve_validation_budget_spec(int(args.trials_per_fold))
-        folds = list(payload.get("folds") or [])
-        if not folds:
-            raise ValueError("validation-budget Full ROOS參數缺少fold evidence")
-        for fold in folds:
-            protocol = dict((fold or {}).get("training_protocol") or {})
-            if str(protocol.get("protocol") or "") != str(spec.protocol):
-                raise ValueError("validation-budget Full ROOS fold缺少正確training protocol")
-            selected_trials = int(protocol.get("selected_trials", 0) or 0)
-            if selected_trials not in set(spec.checkpoints):
-                raise ValueError(
-                    "validation-budget Full ROOS selected trials不在預先固定checkpoint: "
-                    f"{selected_trials}"
-                )
-            if bool(protocol.get("oos_feedback_used", True)):
-                raise ValueError("validation-budget Full ROOS禁止OOS feedback進入budget selection")
+        if validation_budget_protocol_enabled(
+            {"optimizer_search_protocol": optimizer_search_protocol}
+        ):
+            spec = resolve_validation_budget_spec(
+                int(args.trials_per_fold), protocol_id=optimizer_search_protocol
+            )
+            folds = list(payload.get("folds") or [])
+            if not folds:
+                raise ValueError("validation-budget Full ROOS參數缺少fold evidence")
+            for fold in folds:
+                protocol = dict((fold or {}).get("training_protocol") or {})
+                if str(protocol.get("protocol") or "") != str(spec.protocol):
+                    raise ValueError("validation-budget Full ROOS fold缺少正確training protocol")
+                selected_trials = int(protocol.get("selected_trials", 0) or 0)
+                if spec.mode == "fixed_checkpoints":
+                    if selected_trials not in set(spec.checkpoints):
+                        raise ValueError(
+                            "validation-budget Full ROOS selected trials不在預先固定checkpoint: "
+                            f"{selected_trials}"
+                        )
+                else:
+                    stop_trial = int(protocol.get("stop_trial", 0) or 0)
+                    if not (
+                        int(spec.warmup_trials or 0)
+                        <= selected_trials
+                        <= stop_trial
+                        <= int(args.trials_per_fold)
+                    ):
+                        raise ValueError(
+                            "adaptive validation Full ROOS selected/stop trial不合法: "
+                            f"selected={selected_trials}, stop={stop_trial}"
+                        )
+                    if str(protocol.get("stop_reason") or "") not in {
+                        "validation_plateau",
+                        "max_trials",
+                    }:
+                        raise ValueError("adaptive validation Full ROOS缺少合法stop_reason")
+                    if int(protocol.get("observation_count", 0) or 0) < 1:
+                        raise ValueError("adaptive validation Full ROOS缺少observation evidence")
+                if bool(protocol.get("oos_feedback_used", True)):
+                    raise ValueError("validation-budget Full ROOS禁止OOS feedback進入budget selection")
     seed_ensemble_policy = dict(
         getattr(args, "seed_ensemble_policy_override", None) or {}
     )
