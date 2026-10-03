@@ -92,8 +92,10 @@ def _resolve_training_entry_plan(candidate_row, available_cash_milli, params, si
         qty > 0
         and reserved_cost_milli > 0
         and reserved_cost_milli <= int(available_cash_milli)
-        and entry_notional_meets_minimum(candidate_row.get('limit_px'), qty, params)
     ):
+        # Candidate sizing already applies the canonical minimum-notional and
+        # board-lot policy.  Rechecking it here repeats price conversion and
+        # policy lookup for every optimizer order that still fits reserved cash.
         return candidate_row
     return _build_cash_capped_entry_plan_for_candidate(
         candidate_row,

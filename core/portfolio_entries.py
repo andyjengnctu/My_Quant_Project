@@ -54,10 +54,10 @@ from core.trade_plans import (
     clone_shadow_position,
     execute_pre_market_entry_plan,
     execute_pre_market_entry_plan_training,
-    resolve_signal_tracking_params,
     should_clear_extended_signal,
     resolve_extended_tbd_shadow_position,
     should_clear_live_extended_signal_without_accounting,
+    should_clear_live_extended_signal_training_fast,
 )
 
 
@@ -174,8 +174,12 @@ def execute_reserved_entries_for_day(
             }
             replay_execution_rows.append(execution_snapshot)
 
-        candidate_context = cand.get('_ensemble_context') if isinstance(cand.get('_ensemble_context'), dict) else {}
-        candidate_all_dfs_fast = candidate_context.get('all_dfs_fast') or all_dfs_fast
+        if compact_training_execution:
+            candidate_context = {}
+            candidate_all_dfs_fast = all_dfs_fast
+        else:
+            candidate_context = cand.get('_ensemble_context') if isinstance(cand.get('_ensemble_context'), dict) else {}
+            candidate_all_dfs_fast = candidate_context.get('all_dfs_fast') or all_dfs_fast
         fast_df = candidate_all_dfs_fast[cand['ticker']]
         t_pos = cand['today_pos']
         y_pos = cand['yesterday_pos']
@@ -398,6 +402,7 @@ def cleanup_extended_signals_for_day(
     sizing_capital,
     extended_day_market_cache=None,
     candidate_rows_by_ticker=None,
+    training_fast_path=False,
 ):
     sorted_tickers = (
         None if extended_day_market_cache is None
@@ -409,7 +414,7 @@ def cleanup_extended_signals_for_day(
         signal_state = active_extended_signals.get(ticker)
         if signal_state is None:
             continue
-        signal_params = resolve_signal_tracking_params(signal_state, params)
+        signal_params = signal_state.get("_params_obj") or params
 
         if ticker in portfolio:
             del active_extended_signals[ticker]
@@ -486,12 +491,28 @@ def cleanup_extended_signals_for_day(
                     t_close, t_volume,
                 ) = get_fast_management_session_values(fast_df, t_pos)
         if live_shadow_position is not None:
-            should_clear = should_clear_live_extended_signal_without_accounting(
-                signal_state, shadow_position=live_shadow_position,
-                t_low=t_low, t_high=t_high, t_open=t_open, t_close=t_close,
-                t_volume=t_volume, y_close=y_close, y_high=y_high, y_atr=y_atr,
-                y_ind_sell=y_ind_sell, params=signal_params,
-            )
+            if training_fast_path:
+                should_clear = should_clear_live_extended_signal_training_fast(
+                    signal_state,
+                    shadow_position=live_shadow_position,
+                    t_low=t_low,
+                    t_high=t_high,
+                    t_open=t_open,
+                    t_close=t_close,
+                    t_volume=t_volume,
+                    y_close=y_close,
+                    y_high=y_high,
+                    y_atr=y_atr,
+                    y_ind_sell=y_ind_sell,
+                    params=signal_params,
+                )
+            else:
+                should_clear = should_clear_live_extended_signal_without_accounting(
+                    signal_state, shadow_position=live_shadow_position,
+                    t_low=t_low, t_high=t_high, t_open=t_open, t_close=t_close,
+                    t_volume=t_volume, y_close=y_close, y_high=y_high, y_atr=y_atr,
+                    y_ind_sell=y_ind_sell, params=signal_params,
+                )
         else:
             counterfactual_anchor_plan = None
             if candidate_rows_by_ticker is not None:

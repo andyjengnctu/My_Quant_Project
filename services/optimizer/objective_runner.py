@@ -327,7 +327,6 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
     all_dfs_fast = prep_result["all_dfs_fast"]
     all_trade_logs = prep_result["all_trade_logs"]
     all_pit_stats_index = prep_result.get("all_pit_stats_index")
-    normal_setup_index = prep_result.get("normal_setup_index")
     benchmark_data = all_dfs_fast.get("0050", None)
     # AI註: local_min review 只需要完整統計值，不需要每個 portfolio 子步驟的 timing。
     # AI註: profile_stats=None 時仍保留 yearly/dependency 等統計輸出，但關閉細部計時以避免重複 perf_counter 成本。
@@ -374,7 +373,6 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
             profile_stats=pf_profile,
             verbose=False,
             pit_stats_index=all_pit_stats_index,
-            normal_setup_index=normal_setup_index,
         )
 
     full_year_count = int(pf_profile.get("full_year_count", 0))
@@ -572,7 +570,6 @@ def evaluate_prepared_inner_validate_score(session, *, ai_params, prep_result, v
     all_dfs_fast = prep_result["all_dfs_fast"]
     all_trade_logs = prep_result["all_trade_logs"]
     all_pit_stats_index = prep_result.get("all_pit_stats_index")
-    normal_setup_index = prep_result.get("normal_setup_index")
     benchmark_data = all_dfs_fast.get("0050", None)
     pf_profile = {} if profile_stats is None else profile_stats
     validate_dates = list(validate_scope.get("validate_dates") or [])
@@ -617,7 +614,6 @@ def evaluate_prepared_inner_validate_score(session, *, ai_params, prep_result, v
             profile_stats=pf_profile,
             verbose=False,
             pit_stats_index=all_pit_stats_index,
-            normal_setup_index=normal_setup_index,
         )
     min_full_year_return_pct = float(pf_profile.get("min_full_year_return_pct", 0.0))
     min_month_return_pct = float(pf_profile.get("min_month_return_pct", 0.0))
@@ -697,7 +693,6 @@ def run_optimizer_objective(session, trial):
             static_master_dates=session.master_dates,
             include_trade_logs=False,
             include_pit_stats_index=not defer_pit_stats,
-            include_normal_setup_index=True,
         )
         if defer_pit_stats:
             _install_neutral_pit_stats_index(prep_result, ai_params)

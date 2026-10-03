@@ -33,7 +33,7 @@ from core.trade_plans import (
     is_extended_signal_orderable_for_day,
     resize_candidate_plan_to_capital,
     resolve_extended_candidate_plan_geometry,
-    resolve_signal_tracking_params,
+    resolve_extended_candidate_plan_geometry_training_fast,
 )
 from core.extended_signals import (
     attach_breakout_quality_rank,
@@ -57,24 +57,6 @@ def _candidate_profile_add(profile_stats, key, started_at):
         0.0,
         time.perf_counter() - started_at,
     )
-
-
-def _sort_compact_training_orderable_rows(rows, buy_sort_method):
-    """Sort optimizer-only compact rows without diagnostic/ranking discovery overhead."""
-    if len(rows) <= 1:
-        return rows
-    if buy_sort_method == BUY_LIMIT_OVERAGE_SORT_METHOD:
-        # Canonical order is: lower overage, larger projected cost, ticker desc.
-        # proj_cost_milli is exactly monotonic with the display-money proj_cost.
-        rows.sort(
-            key=lambda item: (
-                item['sort_value'],
-                -int(item.get('proj_cost_milli', 0) or 0),
-                tuple(-ord(ch) for ch in str(item.get('ticker') or '')),
-            )
-        )
-        return rows
-    return sort_candidate_rows(rows, buy_sort_method)
 
 
 def _resolve_candidate_sizing_fee_context(
@@ -377,7 +359,6 @@ def _collect_normal_candidates(
     collect_all_candidates,
     ranking_context,
     compact_training_rows=False,
-    neutral_candidate_metrics=None,
     profile_stats=None,
 ):
     profile_enabled = profile_stats is not None
@@ -403,12 +384,9 @@ def _collect_normal_candidates(
         security_profile = get_fast_security_profile(fast_df)
 
         pit_started = time.perf_counter() if profile_enabled else None
-        if neutral_candidate_metrics is None:
-            is_candidate, ev, win_rate, trade_count, asset_growth_pct = get_pit_stats_from_index(
-                pit_stats_index[ticker], today, params, cursor_state=pit_stats_cursor, ticker=ticker
-            )
-        else:
-            is_candidate, ev, win_rate, trade_count, asset_growth_pct = neutral_candidate_metrics
+        is_candidate, ev, win_rate, trade_count, asset_growth_pct = get_pit_stats_from_index(
+            pit_stats_index[ticker], today, params, cursor_state=pit_stats_cursor, ticker=ticker
+        )
         if profile_enabled:
             _candidate_profile_add(profile_stats, "portfolio_candidate_pit_stats_sec", pit_started)
         if not is_candidate:
@@ -521,7 +499,6 @@ def track_normal_setup_signals_for_day(
     pit_stats_cursor,
     today,
     params,
-    neutral_candidate_metrics=None,
     profile_stats=None,
 ):
     profile_enabled = profile_stats is not None
@@ -544,12 +521,9 @@ def track_normal_setup_signals_for_day(
         security_profile = get_fast_security_profile(fast_df)
 
         pit_started = time.perf_counter() if profile_enabled else None
-        if neutral_candidate_metrics is None:
-            is_candidate, _ev, _win_rate, _trade_count, _asset_growth_pct = get_pit_stats_from_index(
-                pit_stats_index[ticker], today, params, cursor_state=pit_stats_cursor, ticker=ticker
-            )
-        else:
-            is_candidate, _ev, _win_rate, _trade_count, _asset_growth_pct = neutral_candidate_metrics
+        is_candidate, _ev, _win_rate, _trade_count, _asset_growth_pct = get_pit_stats_from_index(
+            pit_stats_index[ticker], today, params, cursor_state=pit_stats_cursor, ticker=ticker
+        )
         if profile_enabled:
             _candidate_profile_add(profile_stats, "portfolio_candidate_pit_stats_sec", pit_started)
         if not is_candidate:
@@ -600,7 +574,6 @@ def _collect_extended_candidates(
     ranking_context,
     extended_day_market_cache=None,
     compact_training_rows=False,
-    neutral_candidate_metrics=None,
     profile_stats=None,
 ):
     profile_enabled = profile_stats is not None
@@ -623,8 +596,8 @@ def _collect_extended_candidates(
     if profile_enabled:
         _candidate_profile_add(profile_stats, "portfolio_candidate_sort_sec", sort_started)
     for ticker in sorted_extended_tickers:
-        signal_state = active_extended_signals.get(ticker)
-        candidate_params = resolve_signal_tracking_params(signal_state, params)
+        signal_state = active_extended_signals[ticker]
+        candidate_params = signal_state.get("_params_obj") or params
 
         if ticker in portfolio or ticker in sold_today or ticker in normal_setup_tickers_today:
             continue
@@ -647,12 +620,9 @@ def _collect_extended_candidates(
         y_pos = t_pos - 1
 
         pit_started = time.perf_counter() if profile_enabled else None
-        if neutral_candidate_metrics is None:
-            is_candidate, ev, win_rate, trade_count, asset_growth_pct = get_pit_stats_from_index(
-                pit_stats_index[ticker], today, candidate_params, cursor_state=pit_stats_cursor, ticker=ticker
-            )
-        else:
-            is_candidate, ev, win_rate, trade_count, asset_growth_pct = neutral_candidate_metrics
+        is_candidate, ev, win_rate, trade_count, asset_growth_pct = get_pit_stats_from_index(
+            pit_stats_index[ticker], today, candidate_params, cursor_state=pit_stats_cursor, ticker=ticker
+        )
         if profile_enabled:
             _candidate_profile_add(profile_stats, "portfolio_candidate_pit_stats_sec", pit_started)
         if not is_candidate:
@@ -662,26 +632,22 @@ def _collect_extended_candidates(
         information_date = cached_day_market[2]
         security_profile = cached_day_market[3]
         y_close = previous_values[2]
-        candidate_capital_context = sizing_capital_context_cache.get(id(candidate_params))
-        if candidate_capital_context is None:
-            candidate_capital_context = build_position_sizing_capital_context(
-                sizing_equity,
-                candidate_params.fixed_risk,
-                candidate_params,
-            )
-            sizing_capital_context_cache[id(candidate_params)] = candidate_capital_context
-        sizing_fee_context = _resolve_candidate_sizing_fee_context(
-            sizing_fee_context_cache,
-            params=candidate_params,
-            ticker=ticker,
-            security_profile=security_profile,
-            trade_date=today,
-        )
         if not collect_all_candidates:
             plan_started = time.perf_counter() if profile_enabled else None
-            geometry = resolve_extended_candidate_plan_geometry(
-                signal_state, candidate_params, ticker=ticker,
-                security_profile=security_profile,
+            geometry = (
+                resolve_extended_candidate_plan_geometry_training_fast(
+                    signal_state,
+                    candidate_params,
+                    ticker=ticker,
+                    security_profile=security_profile,
+                )
+                if compact_training_rows
+                else resolve_extended_candidate_plan_geometry(
+                    signal_state,
+                    candidate_params,
+                    ticker=ticker,
+                    security_profile=security_profile,
+                )
             )
             if profile_enabled:
                 _candidate_profile_add(profile_stats, "portfolio_candidate_plan_sec", plan_started)
@@ -716,6 +682,21 @@ def _collect_extended_candidates(
                 continue
 
             resize_started = time.perf_counter() if profile_enabled else None
+            candidate_capital_context = sizing_capital_context_cache.get(id(candidate_params))
+            if candidate_capital_context is None:
+                candidate_capital_context = build_position_sizing_capital_context(
+                    sizing_equity,
+                    candidate_params.fixed_risk,
+                    candidate_params,
+                )
+                sizing_capital_context_cache[id(candidate_params)] = candidate_capital_context
+            sizing_fee_context = _resolve_candidate_sizing_fee_context(
+                sizing_fee_context_cache,
+                params=candidate_params,
+                ticker=ticker,
+                security_profile=security_profile,
+                trade_date=today,
+            )
             stop_price_milli = price_to_milli(init_sl)
             qty = calc_candidate_qty_for_capital(
                 limit_price, init_sl, sizing_equity, candidate_params,
@@ -765,6 +746,21 @@ def _collect_extended_candidates(
                 limit_price_milli=limit_price_milli, y_close_milli=y_close_milli,
             )
             resize_started = time.perf_counter() if profile_enabled else None
+            candidate_capital_context = sizing_capital_context_cache.get(id(candidate_params))
+            if candidate_capital_context is None:
+                candidate_capital_context = build_position_sizing_capital_context(
+                    sizing_equity,
+                    candidate_params.fixed_risk,
+                    candidate_params,
+                )
+                sizing_capital_context_cache[id(candidate_params)] = candidate_capital_context
+            sizing_fee_context = _resolve_candidate_sizing_fee_context(
+                sizing_fee_context_cache,
+                params=candidate_params,
+                ticker=ticker,
+                security_profile=security_profile,
+                trade_date=today,
+            )
             candidate_plan = resize_candidate_plan_to_capital(
                 candidate_plan, sizing_equity, candidate_params,
                 sizing_capital_context=candidate_capital_context,
@@ -853,7 +849,6 @@ def build_daily_candidates(
     collect_all_candidates=True,
     extended_day_market_cache=None,
     compact_training_rows=False,
-    neutral_candidate_metrics=None,
     profile_stats=None,
 ):
     buy_sort_method = get_buy_sort_method()
@@ -887,7 +882,6 @@ def build_daily_candidates(
         collect_all_candidates=collect_all_candidates,
         ranking_context=ranking_context,
         compact_training_rows=compact_training_rows,
-        neutral_candidate_metrics=neutral_candidate_metrics,
         profile_stats=profile_stats,
     )
     extended_candidates, extended_orderable = _collect_extended_candidates(
@@ -909,7 +903,6 @@ def build_daily_candidates(
         ranking_context=ranking_context,
         extended_day_market_cache=extended_day_market_cache,
         compact_training_rows=compact_training_rows,
-        neutral_candidate_metrics=neutral_candidate_metrics,
         profile_stats=profile_stats,
     )
 
@@ -922,16 +915,14 @@ def build_daily_candidates(
     sort_started = time.perf_counter() if profile_enabled else None
     if collect_all_candidates:
         sort_candidate_rows(candidates_today, buy_sort_method)
-    if compact_training_rows:
-        _sort_compact_training_orderable_rows(orderable_candidates_today, buy_sort_method)
-    else:
-        sort_candidate_rows(orderable_candidates_today, buy_sort_method)
+    sort_candidate_rows(orderable_candidates_today, buy_sort_method)
     if extended_day_market_cache is not None:
-        # Cleanup can only consume anchor rows for still-live extended/re-entry
-        # signals. Normal candidates never need to be indexed here.
+        # Cleanup runs later in the same simulated day.  Reuse the candidate rows
+        # that were already materialized instead of traversing the orderable list
+        # again in the portfolio engine just to build a ticker lookup.
         extended_day_market_cache[("__meta__", "orderable_candidate_rows_by_ticker")] = {
             row.get("ticker"): row
-            for row in extended_orderable
+            for row in orderable_candidates_today
             if row.get("ticker") is not None
         }
     if profile_enabled:

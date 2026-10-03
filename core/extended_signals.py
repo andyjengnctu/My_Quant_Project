@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 
+from core.exact_accounting import milli_to_price
 
 from core.entry_plans import (
     build_counterfactual_shadow_position_from_plan,
@@ -9,6 +10,7 @@ from core.entry_plans import (
 )
 from core.position_management import rollforward_position_management_from_completed_bar
 from core.price_utils import (
+    adjust_long_stop_price,
     calc_frozen_target_price,
     calc_initial_stop_from_reference,
     calc_initial_trailing_stop_from_reference,
@@ -435,6 +437,117 @@ def should_clear_live_extended_signal_without_accounting(
     )
 
 
+def should_clear_live_extended_signal_training_fast(
+    signal_state,
+    *,
+    shadow_position,
+    t_low,
+    t_high,
+    t_open=np.nan,
+    t_close=np.nan,
+    t_volume=np.nan,
+    y_close=np.nan,
+    y_high=np.nan,
+    y_atr=np.nan,
+    y_ind_sell=False,
+    params=None,
+):
+    """Optimizer-only in-place adapter for the common live-shadow cleanup path.
+
+    This is intentionally a semantic twin of
+    :func:`_should_clear_live_shadow_without_accounting`, but it removes the
+    generic position-management wrapper stack and pandas scalar-missing checks
+    from the hottest continuation loop.  Inputs come from packed optimizer
+    arrays and are therefore plain numeric scalars.
+    """
+    if signal_state is None or shadow_position is None:
+        return False
+
+    shadow_position["_last_exec_contexts"] = []
+
+    if shadow_position.get("pending_exit_action") in {"STOP", "TP_HALF"}:
+        return True
+
+    previous_high_milli = int(
+        shadow_position.get(
+            "highest_high_since_entry_milli",
+            shadow_position.get("entry_fill_price_milli", 0),
+        )
+        or 0
+    )
+    previous_trailing_milli = int(shadow_position.get("trailing_stop_milli", 0) or 0)
+    previous_sl_milli = int(shadow_position.get("sl_milli", 0) or 0)
+    highest_high_milli = previous_high_milli
+    made_new_high = False
+
+    if y_high == y_high:
+        y_high_milli = price_to_milli(y_high)
+        if y_high_milli > previous_high_milli:
+            highest_high_milli = y_high_milli
+            made_new_high = True
+
+    shadow_position["highest_high_since_entry_milli"] = highest_high_milli
+
+    if made_new_high and y_atr == y_atr:
+        candidate_trail = adjust_long_stop_price(
+            milli_to_price(highest_high_milli) - (y_atr * params.atr_times_trail),
+            ticker=shadow_position.get("ticker"),
+            security_profile=shadow_position.get("security_profile"),
+        )
+        candidate_trail_milli = price_to_milli(candidate_trail)
+        shadow_position["trailing_stop_milli"] = max(
+            previous_trailing_milli,
+            candidate_trail_milli,
+        )
+
+    trailing_stop_milli = int(shadow_position.get("trailing_stop_milli", 0) or 0)
+    sl_milli = max(
+        int(shadow_position.get("initial_stop_milli", 0) or 0),
+        trailing_stop_milli,
+    )
+    shadow_position["sl_milli"] = sl_milli
+
+    if (
+        highest_high_milli != previous_high_milli
+        or trailing_stop_milli != previous_trailing_milli
+        or sl_milli != previous_sl_milli
+    ):
+        shadow_position["highest_high_since_entry"] = milli_to_price(highest_high_milli)
+        shadow_position["trailing_stop"] = milli_to_price(trailing_stop_milli)
+        shadow_position["sl"] = milli_to_price(sl_milli)
+
+    signal_state["continuation_invalidation_barrier"] = shadow_position.get("sl", np.nan)
+
+    if y_ind_sell:
+        block = get_exit_sell_block_reason(
+            t_open,
+            t_high,
+            t_low,
+            t_close,
+            t_volume,
+            y_close,
+            ticker=shadow_position.get("ticker"),
+        )
+        if block is None:
+            signal_state["shadow_position"] = None
+            return True
+
+    if bool(shadow_position.get("sold_half", False)):
+        return True
+
+    if t_low == t_low and price_to_milli(t_low) <= sl_milli:
+        return True
+
+    target_milli = shadow_position.get("tp_half_milli")
+    if (
+        target_milli is not None
+        and t_high == t_high
+        and price_to_milli(t_high) >= int(target_milli)
+    ):
+        return True
+    return False
+
+
 def should_clear_extended_signal(
     signal_state,
     t_low,
@@ -563,6 +676,68 @@ def resolve_extended_candidate_plan_geometry(
         resolved_ticker, resolved_security_profile, signal_state.get("signal_date"),
         signal_state.get("max_qty"), str(signal_state.get("source") or "extended"),
         signal_state.get("source_entry_order_id"), shadow_position,
+    )
+
+
+def resolve_extended_candidate_plan_geometry_training_fast(
+    signal_state,
+    params,
+    ticker=None,
+    security_profile=None,
+):
+    """Optimizer adapter for the dominant already-live Shadow case.
+
+    Once a continuation Shadow exists, all candidate geometry is already frozen
+    in the state.  Avoid the generic pandas missing-value path and helper stack;
+    fall back to the canonical primitive for the one-time pre-Shadow case.
+    """
+    if signal_state is None:
+        return None
+    shadow_position = signal_state.get("shadow_position")
+    if shadow_position is None or int(shadow_position.get("qty", 0) or 0) <= 0:
+        return resolve_extended_candidate_plan_geometry(
+            signal_state,
+            params,
+            ticker=ticker,
+            security_profile=security_profile,
+        )
+
+    entry_atr = signal_state.get("orig_atr", np.nan)
+    limit_reference = signal_state.get("orig_limit", np.nan)
+    sizing_stop_ref = shadow_position.get("sl", np.nan)
+    sizing_trail_ref = shadow_position.get("trailing_stop", np.nan)
+    target_price = shadow_position.get("tp_half", np.nan)
+    if (
+        entry_atr is None
+        or limit_reference is None
+        or sizing_stop_ref is None
+        or sizing_trail_ref is None
+        or target_price is None
+        or entry_atr != entry_atr
+        or limit_reference != limit_reference
+        or sizing_stop_ref != sizing_stop_ref
+        or sizing_trail_ref != sizing_trail_ref
+        or target_price != target_price
+    ):
+        return None
+
+    resolved_ticker = ticker or signal_state.get("ticker")
+    resolved_security_profile = security_profile or signal_state.get("security_profile")
+    return (
+        limit_reference,
+        sizing_stop_ref,
+        sizing_trail_ref,
+        target_price,
+        entry_atr,
+        limit_reference,
+        signal_state.get("entry_ref_price", np.nan),
+        resolved_ticker,
+        resolved_security_profile,
+        signal_state.get("signal_date"),
+        signal_state.get("max_qty"),
+        str(signal_state.get("source") or "extended"),
+        signal_state.get("source_entry_order_id"),
+        shadow_position,
     )
 
 

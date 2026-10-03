@@ -103,7 +103,6 @@ def run_portfolio_timeline(
     replay_counts=None,
     replay_execution_rows=None,
     pit_stats_index=None,
-    normal_setup_index=None,
     active_params_resolver=None,
     active_context_resolver=None,
     active_param_ensemble_resolver=None,
@@ -154,14 +153,14 @@ def run_portfolio_timeline(
         if pit_stats_index is None:
             pit_stats_index = {t: build_trade_stats_index(logs) for t, logs in all_standalone_logs.items()}
         else:
+            pit_stats_index = dict(pit_stats_index)
             if all_standalone_logs:
-                pit_stats_index = dict(pit_stats_index)
                 for ticker, logs in all_standalone_logs.items():
                     if pit_stats_index.get(ticker) is None:
                         pit_stats_index[ticker] = build_trade_stats_index(logs)
+        normal_setup_index = build_normal_setup_index(all_dfs_fast)
     else:
         pit_stats_index = dict(pit_stats_index or {})
-    if normal_setup_index is None:
         normal_setup_index = build_normal_setup_index(all_dfs_fast)
     if profile_timing_enabled:
         build_trade_index_sec = time.perf_counter() - t0
@@ -226,35 +225,15 @@ def run_portfolio_timeline(
             bucket.setdefault("orderable_rows", [])
             bucket.setdefault("trade_rows", [])
 
-    static_runtime_context = bool(
-        active_params_resolver is None
-        and active_context_resolver is None
-        and active_param_ensemble_resolver is None
-        and active_context_ensemble_resolver is None
-    )
     training_idle_fast_path_enabled = bool(
         is_training
         and replay_counts is None
-        and static_runtime_context
+        and active_params_resolver is None
+        and active_context_resolver is None
+        and active_param_ensemble_resolver is None
+        and active_context_ensemble_resolver is None
         and (not capture_equity_curve)
         and benchmark_period_stats is not None
-    )
-    static_compact_training_rows = bool(
-        static_runtime_context
-        and is_training
-        and replay_counts is None
-        and replay_execution_rows is None
-        and replay_selector_trace_rows is None
-        and not bool(enable_rotation)
-        and not bool(getattr(params, "use_breakout_quality_ranking", False))
-    )
-    static_skip_noop_resource_selector = bool(
-        static_runtime_context
-        and is_training
-        and replay_counts is None
-        and replay_execution_rows is None
-        and replay_selector_trace_rows is None
-        and not bool(getattr(params, "use_breakout_quality_ranking", False))
     )
 
     replay_progress_start = time.perf_counter()
@@ -269,45 +248,34 @@ def run_portfolio_timeline(
         elif today_rebate_month_key != rebate_month_key:
             cash += settle_fee_rebate(fee_rebate_state)
             rebate_month_key = today_rebate_month_key
-        if static_runtime_context:
-            day_ensemble_members = ()
-            day_ensemble_contexts = ()
-            day_ensemble_min_agree = None
-            use_param_ensemble = False
-            day_params = params
+        day_ensemble_members = list(active_param_ensemble_resolver(today) or []) if active_param_ensemble_resolver is not None else []
+        day_ensemble_contexts = list(active_context_ensemble_resolver(today) or []) if active_context_ensemble_resolver is not None else []
+        day_ensemble_min_agree = resolve_seed_ensemble_min_agree(
+            len(day_ensemble_members),
+            ensemble_min_agree if ensemble_min_agree is not None else "auto",
+        ) if day_ensemble_members else None
+        single_member_identity_replay = bool(
+            len(day_ensemble_members) == 1
+            and int(day_ensemble_min_agree or 1) <= 1
+        )
+        use_param_ensemble = bool(day_ensemble_members) and not single_member_identity_replay
+        if day_ensemble_members:
+            day_params = day_ensemble_members[0].get("params_obj") or params
+            day_context = day_ensemble_contexts[0] if day_ensemble_contexts else None
+        else:
+            day_params = active_params_resolver(today) if active_params_resolver is not None else params
+            day_context = active_context_resolver(today) if active_context_resolver is not None else None
+        if day_context is None:
             day_all_dfs_fast = all_dfs_fast
             day_pit_stats_index = pit_stats_index
             day_normal_setup_index = normal_setup_index
             day_pit_stats_cursor = pit_stats_cursor
         else:
-            day_ensemble_members = list(active_param_ensemble_resolver(today) or []) if active_param_ensemble_resolver is not None else []
-            day_ensemble_contexts = list(active_context_ensemble_resolver(today) or []) if active_context_ensemble_resolver is not None else []
-            day_ensemble_min_agree = resolve_seed_ensemble_min_agree(
-                len(day_ensemble_members),
-                ensemble_min_agree if ensemble_min_agree is not None else "auto",
-            ) if day_ensemble_members else None
-            single_member_identity_replay = bool(
-                len(day_ensemble_members) == 1
-                and int(day_ensemble_min_agree or 1) <= 1
-            )
-            use_param_ensemble = bool(day_ensemble_members) and not single_member_identity_replay
-            if day_ensemble_members:
-                day_params = day_ensemble_members[0].get("params_obj") or params
-                day_context = day_ensemble_contexts[0] if day_ensemble_contexts else None
-            else:
-                day_params = active_params_resolver(today) if active_params_resolver is not None else params
-                day_context = active_context_resolver(today) if active_context_resolver is not None else None
-            if day_context is None:
-                day_all_dfs_fast = all_dfs_fast
-                day_pit_stats_index = pit_stats_index
-                day_normal_setup_index = normal_setup_index
-                day_pit_stats_cursor = pit_stats_cursor
-            else:
-                day_all_dfs_fast = day_context.get('all_dfs_fast') or all_dfs_fast
-                day_pit_stats_index = day_context.get('all_pit_stats_index') or pit_stats_index
-                day_normal_setup_index = day_context.get('normal_setup_index') or normal_setup_index
-                day_cursor_key = id(day_pit_stats_index)
-                day_pit_stats_cursor = pit_stats_cursor.setdefault(day_cursor_key, {})
+            day_all_dfs_fast = day_context.get('all_dfs_fast') or all_dfs_fast
+            day_pit_stats_index = day_context.get('all_pit_stats_index') or pit_stats_index
+            day_normal_setup_index = day_context.get('normal_setup_index') or normal_setup_index
+            day_cursor_key = id(day_pit_stats_index)
+            day_pit_stats_cursor = pit_stats_cursor.setdefault(day_cursor_key, {})
 
         if today.year not in year_start_equity:
             year_start_equity[today.year] = milli_to_money(current_equity)
@@ -501,17 +469,13 @@ def run_portfolio_timeline(
                         params=day_params,
                         collect_all_candidates=replay_counts is not None,
                         extended_day_market_cache=extended_day_market_cache,
-                        compact_training_rows=(
-                            static_compact_training_rows
-                            if static_runtime_context
-                            else bool(
-                                is_training
-                                and replay_counts is None
-                                and replay_execution_rows is None
-                                and replay_selector_trace_rows is None
-                                and not bool(enable_rotation)
-                                and not bool(getattr(day_params, "use_breakout_quality_ranking", False))
-                            )
+                        compact_training_rows=bool(
+                            is_training
+                            and replay_counts is None
+                            and replay_execution_rows is None
+                            and replay_selector_trace_rows is None
+                            and not bool(enable_rotation)
+                            and not bool(getattr(day_params, "use_breakout_quality_ranking", False))
                         ),
                         profile_stats=candidate_subprofile,
                     )
@@ -538,16 +502,12 @@ def run_portfolio_timeline(
                     if replay_selector_trace_rows is not None
                     else None
                 )
-                skip_noop_resource_selector = (
-                    static_skip_noop_resource_selector
-                    if static_runtime_context
-                    else bool(
-                        is_training
-                        and replay_counts is None
-                        and replay_execution_rows is None
-                        and replay_selector_trace_rows is None
-                        and not bool(getattr(day_params, "use_breakout_quality_ranking", False))
-                    )
+                skip_noop_resource_selector = bool(
+                    is_training
+                    and replay_counts is None
+                    and replay_execution_rows is None
+                    and replay_selector_trace_rows is None
+                    and not bool(getattr(day_params, "use_breakout_quality_ranking", False))
                 )
                 if skip_noop_resource_selector:
                     # With DL/ranking disabled the selector is mathematically the
@@ -831,6 +791,12 @@ def run_portfolio_timeline(
                     sizing_capital=sizing_equity,
                     extended_day_market_cache=extended_day_market_cache,
                     candidate_rows_by_ticker=cleanup_candidate_rows_by_ticker,
+                    training_fast_path=bool(
+                        is_training
+                        and replay_counts is None
+                        and replay_execution_rows is None
+                        and replay_selector_trace_rows is None
+                    ),
                 )
             if profile_timing_enabled:
                 cleanup_sec += time.perf_counter() - t0
