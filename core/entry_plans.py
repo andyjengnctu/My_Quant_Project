@@ -5,9 +5,8 @@ from core.position_management import complete_position_entry_session, inherit_sh
 
 from core.exact_accounting import (
     build_buy_ledger,
-    build_buy_ledger_from_price,
     calc_cash_buy_total_milli_from_milli,
-    build_sell_ledger_from_price,
+    calc_sell_net_total_milli_from_milli,
     calc_initial_risk_total_milli,
     milli_to_money,
     milli_to_price,
@@ -31,6 +30,7 @@ from core.price_utils import (
     calc_initial_stop_from_reference,
     calc_initial_trailing_stop_from_reference,
     calc_position_size,
+    calc_position_size_from_milli_context,
     is_locked_limit_up_bar,
 )
 
@@ -113,20 +113,32 @@ def calc_candidate_qty_for_capital(
     resolved_stop_price_milli = (
         price_to_milli(init_sl) if stop_price_milli is None else int(stop_price_milli)
     )
-    qty = calc_position_size(
-        limit_price,
-        init_sl,
-        sizing_capital,
-        params.fixed_risk,
-        params,
-        ticker=ticker,
-        security_profile=security_profile,
-        trade_date=trade_date,
-        _capital_context=sizing_capital_context,
-        _fee_context=sizing_fee_context,
-        _buy_price_milli=resolved_limit_price_milli,
-        _stop_price_milli=resolved_stop_price_milli,
-    )
+    if sizing_capital_context is not None and sizing_fee_context is not None:
+        qty = calc_position_size_from_milli_context(
+            resolved_limit_price_milli,
+            resolved_stop_price_milli,
+            sizing_capital_context,
+            sizing_fee_context,
+            params,
+            ticker=ticker,
+            security_profile=security_profile,
+            trade_date=trade_date,
+        )
+    else:
+        qty = calc_position_size(
+            limit_price,
+            init_sl,
+            sizing_capital,
+            params.fixed_risk,
+            params,
+            ticker=ticker,
+            security_profile=security_profile,
+            trade_date=trade_date,
+            _capital_context=sizing_capital_context,
+            _fee_context=sizing_fee_context,
+            _buy_price_milli=resolved_limit_price_milli,
+            _stop_price_milli=resolved_stop_price_milli,
+        )
     if max_qty is not None:
         try:
             resolved_max_qty = int(max_qty)
@@ -302,8 +314,8 @@ def _recompute_inherited_position_risk(position, *, params):
     if qty <= 0 or stop_price is None or pd.isna(stop_price):
         return sync_position_display_fields(position)
 
-    stop_sell_ledger = build_sell_ledger_from_price(
-        stop_price,
+    stop_net_sell_total_milli = calc_sell_net_total_milli_from_milli(
+        int(position.get('sl_milli') or price_to_milli(stop_price)),
         qty,
         params,
         ticker=position.get('ticker'),
@@ -312,7 +324,7 @@ def _recompute_inherited_position_risk(position, *, params):
     )
     position['initial_risk_total_milli'] = calc_initial_risk_total_milli(
         position.get('net_buy_total_milli', 0),
-        stop_sell_ledger['net_sell_total_milli'],
+        stop_net_sell_total_milli,
         rate_to_ppm(params.fixed_risk),
     )
     return sync_position_display_fields(position)
@@ -420,9 +432,9 @@ def build_position_from_entry_fill(
     target_price_milli = price_to_milli(resolved_target_price)
     pure_limit_price_milli = None if limit_price is None or pd.isna(limit_price) else price_to_milli(limit_price)
 
-    buy_ledger = build_buy_ledger_from_price(buy_price, qty, params)
-    stop_sell_ledger = build_sell_ledger_from_price(
-        resolved_init_sl,
+    buy_ledger = build_buy_ledger(buy_price_milli, qty, params)
+    stop_net_sell_total_milli = calc_sell_net_total_milli_from_milli(
+        initial_stop_milli,
         qty,
         params,
         ticker=ticker,
@@ -431,7 +443,7 @@ def build_position_from_entry_fill(
     )
     initial_risk_total_milli = calc_initial_risk_total_milli(
         buy_ledger["net_buy_total_milli"],
-        stop_sell_ledger["net_sell_total_milli"],
+        stop_net_sell_total_milli,
         rate_to_ppm(params.fixed_risk),
     )
 

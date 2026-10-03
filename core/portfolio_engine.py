@@ -538,6 +538,13 @@ def run_portfolio_timeline(
                         params=day_params,
                         collect_all_candidates=replay_counts is not None,
                         extended_day_market_cache=extended_day_market_cache,
+                        compact_training_rows=bool(
+                            is_training
+                            and replay_counts is None
+                            and replay_execution_rows is None
+                            and replay_selector_trace_rows is None
+                            and not bool(getattr(day_params, "use_breakout_quality_ranking", False))
+                        ),
                         profile_stats=candidate_subprofile,
                     )
                 if profile_timing_enabled:

@@ -148,6 +148,18 @@ def _did_extended_signal_touch_barrier(signal_state, *, day_low, day_high):
             return True
         if bool(shadow_position.get("sold_half", False)):
             return True
+        stop_milli = shadow_position.get("sl_milli")
+        target_milli = shadow_position.get("tp_half_milli")
+        if stop_milli is not None and target_milli is not None:
+            stop_hit = (
+                not pd.isna(day_low)
+                and price_to_milli(day_low) <= int(stop_milli)
+            )
+            target_hit = (
+                not pd.isna(day_high)
+                and price_to_milli(day_high) >= int(target_milli)
+            )
+            return stop_hit or target_hit
 
     invalidation_barrier = signal_state.get("continuation_invalidation_barrier", np.nan)
     completion_barrier = signal_state.get("continuation_completion_barrier", np.nan)
@@ -366,7 +378,10 @@ def _should_clear_live_shadow_without_accounting(
         params=params,
         sync_display_fields=True,
     )
-    _sync_signal_shadow_fields(signal_state, shadow_position, copy_shadow_position=False)
+    # The live training shadow is already the exact object stored in signal_state.
+    # Entry reference and half-target do not change while the continuation survives;
+    # only the effective stop mirror can move after trailing roll-forward.
+    signal_state["continuation_invalidation_barrier"] = shadow_position.get("sl", np.nan)
 
     # Indicator sell is terminal only when executable.  A blocked indicator sell
     # leaves the shadow alive unless the normal STOP/TP continuation barrier is

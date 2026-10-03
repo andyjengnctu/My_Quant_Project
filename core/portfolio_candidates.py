@@ -169,6 +169,7 @@ def _make_candidate_row(
     quality_rank=None,
     ranking_context=None,
     est_limit_px_milli=None,
+    compact_training_row=False,
 ):
     if est_qty > 0:
         if est_limit_px_milli is None:
@@ -195,101 +196,132 @@ def _make_candidate_row(
             prev_close=prev_close,
             limit_price=est_limit_px,
         )
-    normalized_quality_rank = (
-        None
-        if quality_rank is None
-        else normalize_breakout_quality_rank_payload(quality_rank)
-    )
-    resolved_ranking_context = (
-        get_breakout_quality_ranking_source_context()
-        if ranking_context is None
-        else ranking_context
-    )
-    max_position_cap_pct = float(getattr(params, "max_position_cap_pct"))
-    projected_capital_fraction, projected_capital_deployment_rate = (
-        calc_projected_capital_metrics(
-            proj_cost=est_cost,
-            sizing_capital=sizing_capital,
-            max_position_cap_pct=max_position_cap_pct,
+    if compact_training_row:
+        # Training replay only needs execution/sort state here.  Diagnostic and
+        # ranking payloads are preserved by the full-row path below.
+        row = {
+            'ticker': ticker,
+            'type': candidate_type,
+            'limit_px': est_limit_px,
+            'today_pos': t_pos,
+            'yesterday_pos': y_pos,
+            'qty': est_qty,
+            'proj_cost': est_cost,
+            'proj_cost_milli': est_cost_milli,
+            'sort_value': sort_value,
+            'init_sl': est_init_sl,
+            'init_trail': est_init_trail,
+            'target_price': est_target_price,
+            'entry_atr': entry_atr,
+            'is_orderable': is_orderable,
+            'security_profile': security_profile,
+            'trade_date': trade_date,
+            'candidate_date': trade_date,
+            'signal_date': signal_date,
+            'sizing_capital': sizing_capital,
+            'params_obj': params,
+            'max_qty': max_qty,
+            'orig_limit': (signal_state or {}).get('orig_limit') if signal_state is not None else est_limit_px,
+            'orig_atr': (signal_state or {}).get('orig_atr') if signal_state is not None else entry_atr,
+            'entry_source': (signal_state or {}).get('source') if signal_state is not None else candidate_type,
+            'use_breakout_quality_ranking': False,
+        }
+    else:
+        normalized_quality_rank = (
+            None
+            if quality_rank is None
+            else normalize_breakout_quality_rank_payload(quality_rank)
         )
-    )
-    row = {
-        'ticker': ticker,
-        'type': candidate_type,
-        'limit_px': est_limit_px,
-        'ev': ev,
-        'y_atr': y_atr,
-        'today_pos': t_pos,
-        'yesterday_pos': y_pos,
-        'qty': est_qty,
-        'proj_cost': est_cost,
-        'proj_cost_milli': est_cost_milli,
-        'sort_value': sort_value,
-        'buy_limit_overage_pct': buy_limit_overage_pct,
-        'prev_close': prev_close,
-        'hist_win_rate': win_rate,
-        'hist_trade_count': trade_count,
-        'asset_growth_pct': asset_growth_pct,
-        'init_sl': est_init_sl,
-        'init_trail': est_init_trail,
-        'target_price': est_target_price,
-        'entry_atr': entry_atr,
-        'is_orderable': is_orderable,
-        'continuation_invalidation_barrier': continuation_invalidation_barrier,
-        'continuation_completion_barrier': continuation_completion_barrier,
-        'entry_ref_price': entry_ref_price,
-        'security_profile': security_profile,
-        'trade_date': trade_date,
-        'candidate_date': trade_date,
-        'signal_date': signal_date,
-        'sizing_capital': sizing_capital,
-        'max_position_cap_pct': max_position_cap_pct,
-        'projected_capital_fraction': projected_capital_fraction,
-        'projected_capital_deployment_rate': projected_capital_deployment_rate,
-        'params_obj': params,
-        'max_qty': max_qty,
-        'orig_limit': (signal_state or {}).get('orig_limit') if signal_state is not None else est_limit_px,
-        'orig_atr': (signal_state or {}).get('orig_atr') if signal_state is not None else entry_atr,
-        'entry_source': (signal_state or {}).get('source') if signal_state is not None else candidate_type,
-        'use_breakout_quality_ranking': bool(normalized_quality_rank is not None),
-        'breakout_quality_ranking_policy': str(resolved_ranking_context.ranking_policy),
-        'breakout_quality_ranking_options': dict(resolved_ranking_context.ranking_options or {}),
-        'breakout_quality_score': (
-            None
-            if normalized_quality_rank is None
-            or not bool(normalized_quality_rank.get('available', False))
-            else normalized_quality_rank['score']
-        ),
-        'breakout_quality_score_date': (
-            '' if normalized_quality_rank is None
-            else str(normalized_quality_rank.get('score_date') or '')
-        ),
-        'breakout_quality_score_source': (
-            '' if normalized_quality_rank is None
-            else str(normalized_quality_rank.get('score_source') or '')
-        ),
-        'breakout_quality_safety_score': (
-            None
-            if normalized_quality_rank is None
-            or not bool(normalized_quality_rank.get('safety_available', False))
-            else normalized_quality_rank.get('safety_score')
-        ),
-        'breakout_quality_safety_score_available': bool(
-            normalized_quality_rank is not None
-            and normalized_quality_rank.get('safety_available', False)
-        ),
-        'breakout_quality_safety_score_date': (
-            '' if normalized_quality_rank is None
-            else str(normalized_quality_rank.get('safety_score_date') or '')
-        ),
-        'breakout_quality_safety_score_source': (
-            '' if normalized_quality_rank is None
-            else str(normalized_quality_rank.get('safety_score_source') or '')
-        ),
-        'breakout_quality_rank': (
-            None if normalized_quality_rank is None else dict(normalized_quality_rank)
-        ),
-    }
+        resolved_ranking_context = (
+            get_breakout_quality_ranking_source_context()
+            if ranking_context is None
+            else ranking_context
+        )
+        max_position_cap_pct = float(getattr(params, "max_position_cap_pct"))
+        projected_capital_fraction, projected_capital_deployment_rate = (
+            calc_projected_capital_metrics(
+                proj_cost=est_cost,
+                sizing_capital=sizing_capital,
+                max_position_cap_pct=max_position_cap_pct,
+            )
+        )
+        row = {
+            'ticker': ticker,
+            'type': candidate_type,
+            'limit_px': est_limit_px,
+            'ev': ev,
+            'y_atr': y_atr,
+            'today_pos': t_pos,
+            'yesterday_pos': y_pos,
+            'qty': est_qty,
+            'proj_cost': est_cost,
+            'proj_cost_milli': est_cost_milli,
+            'sort_value': sort_value,
+            'buy_limit_overage_pct': buy_limit_overage_pct,
+            'prev_close': prev_close,
+            'hist_win_rate': win_rate,
+            'hist_trade_count': trade_count,
+            'asset_growth_pct': asset_growth_pct,
+            'init_sl': est_init_sl,
+            'init_trail': est_init_trail,
+            'target_price': est_target_price,
+            'entry_atr': entry_atr,
+            'is_orderable': is_orderable,
+            'continuation_invalidation_barrier': continuation_invalidation_barrier,
+            'continuation_completion_barrier': continuation_completion_barrier,
+            'entry_ref_price': entry_ref_price,
+            'security_profile': security_profile,
+            'trade_date': trade_date,
+            'candidate_date': trade_date,
+            'signal_date': signal_date,
+            'sizing_capital': sizing_capital,
+            'max_position_cap_pct': max_position_cap_pct,
+            'projected_capital_fraction': projected_capital_fraction,
+            'projected_capital_deployment_rate': projected_capital_deployment_rate,
+            'params_obj': params,
+            'max_qty': max_qty,
+            'orig_limit': (signal_state or {}).get('orig_limit') if signal_state is not None else est_limit_px,
+            'orig_atr': (signal_state or {}).get('orig_atr') if signal_state is not None else entry_atr,
+            'entry_source': (signal_state or {}).get('source') if signal_state is not None else candidate_type,
+            'use_breakout_quality_ranking': bool(normalized_quality_rank is not None),
+            'breakout_quality_ranking_policy': str(resolved_ranking_context.ranking_policy),
+            'breakout_quality_ranking_options': dict(resolved_ranking_context.ranking_options or {}),
+            'breakout_quality_score': (
+                None
+                if normalized_quality_rank is None
+                or not bool(normalized_quality_rank.get('available', False))
+                else normalized_quality_rank['score']
+            ),
+            'breakout_quality_score_date': (
+                '' if normalized_quality_rank is None
+                else str(normalized_quality_rank.get('score_date') or '')
+            ),
+            'breakout_quality_score_source': (
+                '' if normalized_quality_rank is None
+                else str(normalized_quality_rank.get('score_source') or '')
+            ),
+            'breakout_quality_safety_score': (
+                None
+                if normalized_quality_rank is None
+                or not bool(normalized_quality_rank.get('safety_available', False))
+                else normalized_quality_rank.get('safety_score')
+            ),
+            'breakout_quality_safety_score_available': bool(
+                normalized_quality_rank is not None
+                and normalized_quality_rank.get('safety_available', False)
+            ),
+            'breakout_quality_safety_score_date': (
+                '' if normalized_quality_rank is None
+                else str(normalized_quality_rank.get('safety_score_date') or '')
+            ),
+            'breakout_quality_safety_score_source': (
+                '' if normalized_quality_rank is None
+                else str(normalized_quality_rank.get('safety_score_source') or '')
+            ),
+            'breakout_quality_rank': (
+                None if normalized_quality_rank is None else dict(normalized_quality_rank)
+            ),
+        }
     if signal_state is not None:
         row['signal_state'] = signal_state
     resolved_shadow_position = shadow_position_state
@@ -327,6 +359,7 @@ def _collect_normal_candidates(
     params,
     collect_all_candidates,
     ranking_context,
+    compact_training_rows=False,
     profile_stats=None,
 ):
     profile_enabled = profile_stats is not None
@@ -440,6 +473,7 @@ def _collect_normal_candidates(
             quality_rank=quality_rank,
             ranking_context=ranking_context,
             est_limit_px_milli=price_to_milli(candidate_plan['limit_price']),
+            compact_training_row=bool(compact_training_rows),
         )
         if profile_enabled:
             _candidate_profile_add(profile_stats, "portfolio_candidate_row_sec", row_started)
@@ -542,6 +576,7 @@ def _collect_extended_candidates(
     collect_all_candidates,
     ranking_context,
     extended_day_market_cache=None,
+    compact_training_rows=False,
     profile_stats=None,
 ):
     profile_enabled = profile_stats is not None
@@ -753,6 +788,7 @@ def _collect_extended_candidates(
             quality_rank=quality_rank,
             ranking_context=ranking_context,
             est_limit_px_milli=limit_price_milli,
+            compact_training_row=bool(compact_training_rows),
         )
         if profile_enabled:
             _candidate_profile_add(profile_stats, "portfolio_candidate_row_sec", row_started)
@@ -780,6 +816,7 @@ def build_daily_candidates(
     params,
     collect_all_candidates=True,
     extended_day_market_cache=None,
+    compact_training_rows=False,
     profile_stats=None,
 ):
     buy_sort_method = get_buy_sort_method()
@@ -807,6 +844,7 @@ def build_daily_candidates(
         params=params,
         collect_all_candidates=collect_all_candidates,
         ranking_context=ranking_context,
+        compact_training_rows=compact_training_rows,
         profile_stats=profile_stats,
     )
     extended_candidates, extended_orderable = _collect_extended_candidates(
@@ -827,6 +865,7 @@ def build_daily_candidates(
         collect_all_candidates=collect_all_candidates,
         ranking_context=ranking_context,
         extended_day_market_cache=extended_day_market_cache,
+        compact_training_rows=compact_training_rows,
         profile_stats=profile_stats,
     )
 

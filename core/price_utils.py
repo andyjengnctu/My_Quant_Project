@@ -24,6 +24,7 @@ from core.exact_accounting import (
     build_sell_ledger_from_price,
     calc_average_price_from_total_milli,
     calc_buy_net_total_milli_from_milli,
+    calc_cash_buy_total_milli_from_milli,
     calc_entry_total_cost,
     calc_exit_net_total,
     calc_initial_risk_total_milli,
@@ -232,61 +233,46 @@ def build_position_sizing_fee_context(params, *, ticker=None, security_profile=N
     )
 
 
-def calc_position_size(
-    bPrice,
-    stopPrice,
-    cap,
-    riskPct,
+def calc_position_size_from_milli_context(
+    buy_price_milli,
+    stop_price_milli,
+    capital_context,
+    fee_context,
     params,
+    *,
     ticker=None,
     security_profile=None,
     trade_date=None,
-    *,
-    _capital_context=None,
-    _fee_context=None,
-    _buy_price_milli=None,
-    _stop_price_milli=None,
 ):
-    if pd.isna(bPrice) or pd.isna(stopPrice) or bPrice <= 0 or stopPrice <= 0:
+    """Exact sizing primitive for hot paths that already own milli/context inputs.
+
+    The public float adapter below remains the generic API.  Candidate replay can
+    consume this primitive directly after its canonical price/context resolution,
+    avoiding duplicate NaN/type/context work without changing any sizing rule.
+    """
+    buy_price_milli = int(buy_price_milli)
+    stop_price_milli = int(stop_price_milli)
+    if buy_price_milli <= 0 or stop_price_milli <= 0:
         return 0
 
-    buy_price_milli = price_to_milli(bPrice) if _buy_price_milli is None else int(_buy_price_milli)
-    stop_price_milli = price_to_milli(stopPrice) if _stop_price_milli is None else int(_stop_price_milli)
-    if _capital_context is None:
-        cap_milli, max_risk_milli, max_position_cap_milli = build_position_sizing_capital_context(
-            cap, riskPct, params
-        )
-    else:
-        cap_milli, max_risk_milli, max_position_cap_milli = _capital_context
+    cap_milli, max_risk_milli, max_position_cap_milli = capital_context
+    buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, rounding_mode_code, _min_entry_notional_milli = fee_context
 
-    if _fee_context is None:
-        buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, rounding_mode_code, _min_entry_notional_milli = (
-            build_position_sizing_fee_context(
-                params,
-                ticker=ticker,
-                security_profile=security_profile,
-                trade_date=trade_date,
-            )
-        )
-    else:
-        buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, rounding_mode_code, _min_entry_notional_milli = _fee_context
-
-    if _NATIVE_HOTPATH_ENABLED:
-        if int(rounding_mode_code) >= 0:
-            return int(_native_calc_position_size_exact(
-                int(buy_price_milli),
-                int(stop_price_milli),
-                int(cap_milli),
-                int(max_risk_milli),
-                int(max_position_cap_milli),
-                int(buy_fee_ppm),
-                int(sell_fee_ppm),
-                int(tax_ppm),
-                int(min_fee_milli),
-                int(rounding_mode_code) == 1,
-                int(_NATIVE_BROKER_FEE_PPM),
-                int(_NATIVE_BROKER_MIN_FEE_MILLI),
-            ))
+    if _NATIVE_HOTPATH_ENABLED and int(rounding_mode_code) >= 0:
+        return int(_native_calc_position_size_exact(
+            int(buy_price_milli),
+            int(stop_price_milli),
+            int(cap_milli),
+            int(max_risk_milli),
+            int(max_position_cap_milli),
+            int(buy_fee_ppm),
+            int(sell_fee_ppm),
+            int(tax_ppm),
+            int(min_fee_milli),
+            int(rounding_mode_code) == 1,
+            int(_NATIVE_BROKER_FEE_PPM),
+            int(_NATIVE_BROKER_MIN_FEE_MILLI),
+        ))
 
     est_buy_fee_per_share_milli = 0 if buy_fee_ppm <= 0 else (buy_price_milli * buy_fee_ppm + 999_999) // 1_000_000
     est_sell_cost_per_share_milli = 0 if (sell_fee_ppm + tax_ppm) <= 0 else ((stop_price_milli * (sell_fee_ppm + tax_ppm) + 999_999) // 1_000_000)
@@ -303,9 +289,12 @@ def calc_position_size(
     ))
 
     def _is_valid_qty(test_qty):
-        entry_ledger = build_buy_ledger_from_price(bPrice, test_qty, params)
-        exact_entry_cost_milli = int(entry_ledger["net_buy_total_milli"])
-        exact_entry_cash_milli = int(entry_ledger["cash_buy_total_milli"])
+        exact_entry_cost_milli = calc_buy_net_total_milli_from_milli(
+            buy_price_milli, test_qty, params
+        )
+        exact_entry_cash_milli = calc_cash_buy_total_milli_from_milli(
+            buy_price_milli, test_qty
+        )
         exact_exit_net_milli = calc_sell_net_total_milli_from_milli(
             stop_price_milli,
             test_qty,
@@ -342,6 +331,53 @@ def calc_position_size(
         else:
             hi = mid - 1
     return lo
+
+
+def calc_position_size(
+    bPrice,
+    stopPrice,
+    cap,
+    riskPct,
+    params,
+    ticker=None,
+    security_profile=None,
+    trade_date=None,
+    *,
+    _capital_context=None,
+    _fee_context=None,
+    _buy_price_milli=None,
+    _stop_price_milli=None,
+):
+    if pd.isna(bPrice) or pd.isna(stopPrice) or bPrice <= 0 or stopPrice <= 0:
+        return 0
+
+    buy_price_milli = price_to_milli(bPrice) if _buy_price_milli is None else int(_buy_price_milli)
+    stop_price_milli = price_to_milli(stopPrice) if _stop_price_milli is None else int(_stop_price_milli)
+    capital_context = (
+        build_position_sizing_capital_context(cap, riskPct, params)
+        if _capital_context is None
+        else _capital_context
+    )
+    fee_context = (
+        build_position_sizing_fee_context(
+            params,
+            ticker=ticker,
+            security_profile=security_profile,
+            trade_date=trade_date,
+        )
+        if _fee_context is None
+        else _fee_context
+    )
+    return calc_position_size_from_milli_context(
+        buy_price_milli,
+        stop_price_milli,
+        capital_context,
+        fee_context,
+        params,
+        ticker=ticker,
+        security_profile=security_profile,
+        trade_date=trade_date,
+    )
 
 
 # # (AI註: scanner 參考投入 / 掛單股數統一使用 scanner_live_capital，避免顯示與實務下單資金來源分叉)
