@@ -43,7 +43,6 @@ from core.exact_accounting import (
     rate_to_ppm,
     resolve_fee_schedule_tuple,
     round_price_to_tick_milli,
-    round_price_to_tick_milli_for_tick_profile,
 )
 
 _NATIVE_BROKER_FEE_PPM = rate_to_ppm(BROKER_FEE_RATE)
@@ -76,28 +75,8 @@ def get_tick_size(price, ticker=None, security_profile=None):
 def round_to_tick(price, direction="nearest", ticker=None, security_profile=None):
     if pd.isna(price):
         return np.nan
-    # AI註: callers on the replay hot path already carry the canonical security
-    # profile.  Consume its resolved tick profile directly; otherwise fall back
-    # to the generic exact-accounting resolver.  The tick ladder and Decimal
-    # boundary fallback remain owned by exact_accounting in both branches.
-    if isinstance(security_profile, dict):
-        tick_profile = security_profile.get("tick_profile")
-        if tick_profile:
-            return milli_to_price(
-                round_price_to_tick_milli_for_tick_profile(
-                    price,
-                    direction,
-                    tick_profile,
-                )
-            )
-    return milli_to_price(
-        round_price_to_tick_milli(
-            price,
-            direction=direction,
-            ticker=ticker,
-            security_profile=security_profile,
-        )
-    )
+    resolved_profile = _resolve_price_security_profile(ticker, security_profile)
+    return milli_to_price(round_price_to_tick_milli(price, direction=direction, security_profile=resolved_profile))
 
 
 def adjust_to_tick(price, ticker=None, security_profile=None):

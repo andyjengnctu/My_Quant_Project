@@ -58,46 +58,6 @@ def milli_to_price(price_milli: int) -> float:
     return int(price_milli) / MILLI_SCALE
 
 
-def resolve_positive_price_barrier_hits_milli(
-    low_price,
-    high_price,
-    stop_milli: int,
-    target_milli: int,
-):
-    """Resolve STOP/target touches without materializing rounded milli prices.
-
-    For the normal finite non-negative float/numpy-float market-data path this
-    is exactly equivalent to ``price_to_milli(low) <= stop`` and
-    ``price_to_milli(high) >= target`` under the canonical half-up conversion.
-    Edge inputs deliberately fall back to ``price_to_milli`` so legacy error
-    and coercion semantics remain owned by the canonical converter.
-    """
-    stop_threshold = int(stop_milli)
-    target_threshold = int(target_milli)
-
-    low_type = type(low_price)
-    if low_type is float or low_type.__module__ == "numpy":
-        low_value = float(low_price)
-        if math.isfinite(low_value) and low_value >= 0.0:
-            stop_hit = (low_value * MILLI_SCALE) < (stop_threshold + 0.5)
-        else:
-            stop_hit = price_to_milli(low_price) <= stop_threshold
-    else:
-        stop_hit = price_to_milli(low_price) <= stop_threshold
-
-    high_type = type(high_price)
-    if high_type is float or high_type.__module__ == "numpy":
-        high_value = float(high_price)
-        if math.isfinite(high_value) and high_value >= 0.0:
-            target_hit = (high_value * MILLI_SCALE) >= (target_threshold - 0.5)
-        else:
-            target_hit = price_to_milli(high_price) >= target_threshold
-    else:
-        target_hit = price_to_milli(high_price) >= target_threshold
-
-    return bool(stop_hit), bool(target_hit)
-
-
 milli_to_money = milli_to_price
 
 
@@ -445,38 +405,19 @@ def _round_price_to_tick_milli_cached(price_text: str, direction: str, tick_prof
     return _price_text_to_milli_cached(str(rounded_ratio * tick_decimal))
 
 
-def round_price_to_tick_milli_for_tick_profile(price, direction: str, tick_profile: str) -> int:
-    """Round a price directly against an already-resolved tick profile.
-
-    This is the execution-hotpath form of :func:`round_price_to_tick_milli`.
-    Callers may use it only when they already own a canonical security profile;
-    the tick ladder and exact Decimal fallback remain owned here.
-    """
-    normalized_tick_profile = (
-        _TICK_PROFILE_FUND if tick_profile == _TICK_PROFILE_FUND else _TICK_PROFILE_STOCK
-    )
-    price_type = type(price)
-    if price_type is int:
-        numeric_result = _round_price_to_tick_milli_numeric(
-            float(price), direction, normalized_tick_profile
-        )
-        if numeric_result is not None:
-            return numeric_result
-    elif price_type is float or price_type.__module__ == "numpy":
-        numeric_result = _round_price_to_tick_milli_numeric(
-            float(price), direction, normalized_tick_profile
-        )
-        if numeric_result is not None:
-            return numeric_result
-    return _round_price_to_tick_milli_cached(
-        str(price), direction, normalized_tick_profile
-    )
-
-
 def round_price_to_tick_milli(price, direction: str = "nearest", *, ticker=None, security_profile=None, cfi_code=None, security_name=None) -> int:
     resolved_profile = resolve_security_profile(security_profile, ticker=ticker, cfi_code=cfi_code, security_name=security_name)
     tick_profile = resolved_profile.get("tick_profile", _TICK_PROFILE_STOCK)
-    return round_price_to_tick_milli_for_tick_profile(price, direction, tick_profile)
+    price_type = type(price)
+    if price_type is int:
+        numeric_result = _round_price_to_tick_milli_numeric(float(price), direction, tick_profile)
+        if numeric_result is not None:
+            return numeric_result
+    elif price_type is float or price_type.__module__ == "numpy":
+        numeric_result = _round_price_to_tick_milli_numeric(float(price), direction, tick_profile)
+        if numeric_result is not None:
+            return numeric_result
+    return _round_price_to_tick_milli_cached(str(price), direction, tick_profile)
 
 
 CHARGE_ROUNDING_NEAREST_MILLI = "nearest_milli"
@@ -623,48 +564,10 @@ def calc_sell_net_total_milli_from_milli(exec_price_milli: int, qty: int, params
         cfi_code=cfi_code,
         security_name=security_name,
     )
-    fee_context = (
-        int(sell_fee_ppm),
-        int(tax_ppm),
-        int(min_fee_milli),
-        _resolve_charge_rounding_mode(params),
-    )
-    return calc_sell_net_total_milli_from_fee_context(exec_price_milli, qty, fee_context)
-
-
-def build_sell_fee_context(params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None):
-    """Resolve the immutable sell-side accounting inputs for repeated pricing."""
-    _buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli = _resolve_trade_fee_schedule_tuple(
-        params,
-        ticker=ticker,
-        security_profile=security_profile,
-        trade_date=trade_date,
-        cfi_code=cfi_code,
-        security_name=security_name,
-    )
-    return (
-        int(sell_fee_ppm),
-        int(tax_ppm),
-        int(min_fee_milli),
-        _resolve_charge_rounding_mode(params),
-    )
-
-
-def calc_sell_net_total_milli_from_fee_context(exec_price_milli: int, qty: int, fee_context) -> int:
-    """Exact sell net for callers that already own a canonical fee context."""
-    sell_fee_ppm, tax_ppm, min_fee_milli, fee_rounding_mode = fee_context
     gross_sell_milli = int(exec_price_milli) * int(qty)
-    sell_fee_milli = calc_fee_milli(
-        gross_sell_milli,
-        int(sell_fee_ppm),
-        int(min_fee_milli),
-        rounding_mode=fee_rounding_mode,
-    )
-    tax_milli = calc_tax_milli(
-        gross_sell_milli,
-        int(tax_ppm),
-        rounding_mode=CHARGE_ROUNDING_FLOOR_TWD,
-    )
+    fee_rounding_mode = _resolve_charge_rounding_mode(params)
+    sell_fee_milli = calc_fee_milli(gross_sell_milli, sell_fee_ppm, min_fee_milli, rounding_mode=fee_rounding_mode)
+    tax_milli = calc_tax_milli(gross_sell_milli, tax_ppm, rounding_mode=CHARGE_ROUNDING_FLOOR_TWD)
     return gross_sell_milli - sell_fee_milli - tax_milli
 
 

@@ -73,12 +73,7 @@ def _resolve_candidate_sizing_fee_context(
     family = str(profile.get("family") or "")
     broad_type = str(profile.get("broad_type") or "")
     fallback_symbol = "" if profile else str(ticker or "")
-    # AI註: stock/REIT/ordinary fund fee schedules are date-invariant within
-    # one parameter object, so reuse the parsed sizing contract across replay
-    # days.  Bond ETF sell tax is the sole date-dependent family; keep its
-    # trade date in the cache key to preserve the statutory boundary exactly.
-    trade_date_key = trade_date if family == "etf" and broad_type == "bond" else None
-    key = (id(params), family, broad_type, fallback_symbol, trade_date_key)
+    key = (id(params), family, broad_type, fallback_symbol)
     resolved = cache.get(key)
     if resolved is None:
         resolved = build_position_sizing_fee_context(
@@ -835,7 +830,6 @@ def build_daily_candidates(
     collect_all_candidates=True,
     extended_day_market_cache=None,
     compact_training_rows=False,
-    sizing_fee_context_cache=None,
     profile_stats=None,
 ):
     buy_sort_method = get_buy_sort_method()
@@ -851,8 +845,7 @@ def build_daily_candidates(
         params,
     )
     sizing_capital_context_cache = {id(params): sizing_capital_context}
-    if sizing_fee_context_cache is None:
-        sizing_fee_context_cache = {}
+    sizing_fee_context_cache = {}
     normal_candidates, normal_orderable, normal_setup_tickers_today = _collect_normal_candidates(
         normal_setup_entries=normal_setup_index.get(today, []),
         portfolio=portfolio,

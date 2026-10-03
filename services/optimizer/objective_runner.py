@@ -3,6 +3,14 @@ from typing import Any
 
 import pandas as pd
 from core.portfolio_engine import run_portfolio_timeline
+from core.buy_sort import BUY_LIMIT_OVERAGE_SORT_METHOD, ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD
+from core.config import get_buy_sort_method
+from core.history_filters import history_threshold_is_enabled
+from core.portfolio_fast_data import (
+    build_score_single_stock_profile_fields,
+    build_trade_stats_index,
+    summarize_single_stock_trade_stats_from_pit_index,
+)
 from core.portfolio_stats import calc_portfolio_score
 from core.strategy_params import build_runtime_param_raw_value
 from services.optimizer.objective_filters import apply_filter_rules
@@ -20,6 +28,67 @@ from services.optimizer.scientific_runtime import (
     get_session_scientific_section,
     resolve_session_inner_validation_policy,
 )
+
+
+_HISTORY_INDEPENDENT_BUY_SORT_METHODS = frozenset({
+    BUY_LIMIT_OVERAGE_SORT_METHOD,
+    ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD,
+    "PROJ_COST",
+})
+
+
+def _can_defer_optimizer_pit_stats(session, params) -> bool:
+    if history_threshold_is_enabled(params):
+        return False
+    if bool(getattr(session, "train_enable_rotation", False)):
+        return False
+    if bool(getattr(params, "use_breakout_quality_ranking", False)):
+        return False
+    if str(get_buy_sort_method()) not in _HISTORY_INDEPENDENT_BUY_SORT_METHODS:
+        return False
+    if bool(resolve_inner_validate_policy(session).get("enabled", False)):
+        return False
+    return True
+
+
+def _install_neutral_pit_stats_index(prep_result):
+    empty_index = build_trade_stats_index([])
+    prep_result["all_pit_stats_index"] = {
+        ticker: empty_index for ticker in (prep_result.get("all_dfs_fast") or {})
+    }
+    prep_result["pit_stats_deferred"] = True
+
+
+def _materialize_deferred_pit_stats(session, params, prep_result):
+    if not bool(prep_result.get("pit_stats_deferred", False)):
+        return prep_result.get("all_pit_stats_index") or {}
+    prep_executor_bundle = session.get_trial_prep_executor_bundle(
+        build_runtime_param_raw_value(params, "optimizer_max_workers")
+    )
+    full_prep = prepare_trial_inputs(
+        raw_data_cache=session.raw_data_cache,
+        params=params,
+        default_max_workers=session.default_max_workers,
+        executor_bundle=prep_executor_bundle,
+        static_fast_cache=session.static_fast_cache,
+        static_master_dates=session.master_dates,
+        include_trade_logs=False,
+        include_pit_stats_index=True,
+        profile_enabled=False,
+    )
+    if full_prep.get("prep_failures") != prep_result.get("prep_failures"):
+        raise RuntimeError("deferred PIT stats materialization 與原 trial prep failure set 不一致")
+    prep_result["all_pit_stats_index"] = full_prep.get("all_pit_stats_index") or {}
+    prep_result["pit_stats_deferred"] = False
+    cache_prep = getattr(session, "cache_prepared_trial_inputs", None)
+    if callable(cache_prep):
+        cache_prep(
+            build_prep_cache_key(
+                params, runtime_identity=getattr(session, "runtime_cache_identity", None)
+            ),
+            prep_result,
+        )
+    return prep_result["all_pit_stats_index"]
 
 
 def _append_invalid_profile_row(*, session, trial, profile_row, fail_reason: str, objective_start: float):
@@ -400,6 +469,18 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
             "base_score": float(INVALID_TRIAL_VALUE),
         }
 
+    if bool(prep_result.get("pit_stats_deferred", False)):
+        materialized_pit_stats = _materialize_deferred_pit_stats(
+            session, ai_params, prep_result
+        )
+        single_stock_trade_stats = summarize_single_stock_trade_stats_from_pit_index(
+            materialized_pit_stats,
+            list(search_scope["search_train_dates"]),
+        )
+        pf_profile.update(build_score_single_stock_profile_fields(single_stock_trade_stats))
+        score_total_r = float(single_stock_trade_stats.get("total_r", 0.0) or 0.0)
+        score_median_r = float(single_stock_trade_stats.get("median_r", 0.0) or 0.0)
+
     base_score = calc_portfolio_score(
         ret_pct,
         mdd,
@@ -602,6 +683,7 @@ def run_optimizer_objective(session, trial):
     prep_result = get_cached_prep(prep_cache_key) if callable(get_cached_prep) else None
     if prep_result is None:
         prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, "optimizer_max_workers"))
+        defer_pit_stats = _can_defer_optimizer_pit_stats(session, ai_params)
         prep_result = prepare_trial_inputs(
             raw_data_cache=session.raw_data_cache,
             params=ai_params,
@@ -610,10 +692,12 @@ def run_optimizer_objective(session, trial):
             static_fast_cache=session.static_fast_cache,
             static_master_dates=session.master_dates,
             include_trade_logs=False,
-            include_pit_stats_index=True,
+            include_pit_stats_index=not defer_pit_stats,
         )
+        if defer_pit_stats:
+            _install_neutral_pit_stats_index(prep_result)
         cache_prep = getattr(session, "cache_prepared_trial_inputs", None)
-        if callable(cache_prep):
+        if callable(cache_prep) and not defer_pit_stats:
             cache_prep(prep_cache_key, prep_result)
     trial.set_user_attr("prep_mode", prep_result["prep_mode"])
     trial.set_user_attr("prep_start_method", prep_result["pool_start_method"] or "default")
