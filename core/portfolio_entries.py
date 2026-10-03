@@ -48,6 +48,7 @@ from core.portfolio_fast_data import (
 from core.trade_plans import (
     clone_shadow_position,
     execute_pre_market_entry_plan,
+    execute_pre_market_entry_plan_training,
     resolve_signal_tracking_params,
     should_clear_extended_signal,
     is_extended_tbd_shadow_alive,
@@ -167,78 +168,105 @@ def execute_reserved_entries_for_day(
         available_cash_milli -= reserved_cost_milli
         pre_market_occupied += 1
 
-        entry_result = execute_pre_market_entry_plan(
-            entry_plan=chosen_entry_plan,
-            t_open=t_open,
-            t_high=t_high,
-            t_low=t_low,
-            t_close=t_close,
-            t_volume=t_volume,
-            y_close=y_close,
-            params=candidate_params,
-            entry_type=cand['type'],
-            ticker=cand['ticker'],
-            trade_date=today,
-        )
+        compact_training_execution = bool(is_training and replay_execution_rows is None)
+        if compact_training_execution:
+            filled_position, count_as_missed_buy = execute_pre_market_entry_plan_training(
+                entry_plan=chosen_entry_plan,
+                t_open=t_open,
+                t_high=t_high,
+                t_low=t_low,
+                t_close=t_close,
+                t_volume=t_volume,
+                y_close=y_close,
+                params=candidate_params,
+                entry_type=cand['type'],
+                ticker=cand['ticker'],
+                trade_date=today,
+            )
+            entry_filled = filled_position is not None
+            entry_fill_price = (
+                None if filled_position is None else filled_position.get("entry_fill_price")
+            )
+        else:
+            entry_result = execute_pre_market_entry_plan(
+                entry_plan=chosen_entry_plan,
+                t_open=t_open,
+                t_high=t_high,
+                t_low=t_low,
+                t_close=t_close,
+                t_volume=t_volume,
+                y_close=y_close,
+                params=candidate_params,
+                entry_type=cand['type'],
+                ticker=cand['ticker'],
+                trade_date=today,
+            )
+            entry_filled = bool(entry_result.get("filled", False))
+            filled_position = entry_result.get("position")
+            count_as_missed_buy = bool(entry_result.get("count_as_missed_buy", False))
+            entry_fill_price = entry_result.get(
+                "entry_fill_price", entry_result.get("buy_price")
+            )
 
         if execution_snapshot is not None:
-            execution_snapshot["entry_filled"] = bool(entry_result.get("filled", False))
-            if entry_result.get("filled"):
-                execution_snapshot["filled_qty"] = int(entry_result["position"].get("initial_qty", 0) or 0)
+            execution_snapshot["entry_filled"] = bool(entry_filled)
+            if entry_filled:
+                execution_snapshot["filled_qty"] = int(filled_position.get("initial_qty", 0) or 0)
                 execution_snapshot["actual_initial_risk_total_milli"] = int(
-                    entry_result["position"].get("initial_risk_total_milli", 0) or 0
+                    filled_position.get("initial_risk_total_milli", 0) or 0
                 )
-                execution_snapshot["entry_fill_price"] = entry_result.get(
-                    "entry_fill_price", entry_result.get("buy_price")
-                )
+                execution_snapshot["entry_fill_price"] = entry_fill_price
 
-        if entry_result['filled']:
-            actual_total_cost_milli = int(entry_result['position']['cash_buy_total_milli'])
+        if entry_filled:
+            # The fill session already read today's close; preserve it for the
+            # later end-of-day equity mark so the same bar is not fetched twice.
+            filled_position['last_px'] = t_close
+            actual_total_cost_milli = int(filled_position['cash_buy_total_milli'])
             cash_milli -= actual_total_cost_milli
             accrue_fee_rebate(
                 fee_rebate_state,
-                entry_result['position']['buy_fee_rebate_receivable_milli'],
+                filled_position['buy_fee_rebate_receivable_milli'],
             )
-            entry_result['position']['_entry_params_obj'] = candidate_params
-            entry_result['position']['_entry_params_signature'] = str(cand.get('params_signature') or '')
-            entry_result['position']['_ensemble_vote_count'] = cand.get('ensemble_vote_count')
-            entry_result['position']['_ensemble_member_key'] = cand.get('ensemble_member_key')
-            entry_result['position']['_ensemble_min_agree'] = cand.get('ensemble_min_agree')
+            filled_position['_entry_params_obj'] = candidate_params
+            filled_position['_entry_params_signature'] = str(cand.get('params_signature') or '')
+            filled_position['_ensemble_vote_count'] = cand.get('ensemble_vote_count')
+            filled_position['_ensemble_member_key'] = cand.get('ensemble_member_key')
+            filled_position['_ensemble_min_agree'] = cand.get('ensemble_min_agree')
             ensemble_member_keys = cand.get('ensemble_member_keys')
             if isinstance(ensemble_member_keys, (list, tuple, set)):
-                entry_result['position']['_ensemble_member_keys'] = sorted({str(key) for key in ensemble_member_keys if str(key).strip()})
+                filled_position['_ensemble_member_keys'] = sorted({str(key) for key in ensemble_member_keys if str(key).strip()})
             ensemble_member_params_by_key = cand.get('ensemble_member_params_by_key')
             if isinstance(ensemble_member_params_by_key, dict):
                 # # (AI註: 持倉需承接本次共識的全部 member 參數，讓 STOP 後各 member 能獨立進入 reclaim watchlist。)
-                entry_result['position']['_ensemble_member_params_by_key'] = dict(ensemble_member_params_by_key)
+                filled_position['_ensemble_member_params_by_key'] = dict(ensemble_member_params_by_key)
             ensemble_member_quality_rank_by_key = cand.get('ensemble_member_quality_rank_by_key')
             if isinstance(ensemble_member_quality_rank_by_key, dict):
-                entry_result['position']['_ensemble_member_quality_rank_by_key'] = {
+                filled_position['_ensemble_member_quality_rank_by_key'] = {
                     str(key): dict(value)
                     for key, value in ensemble_member_quality_rank_by_key.items()
                     if str(key).strip() and isinstance(value, dict)
                 }
             if candidate_context:
-                entry_result['position']['_entry_context'] = candidate_context
+                filled_position['_entry_context'] = candidate_context
             # # (AI註: 保存本次實際進場對應的訊號／候選日期，只供 round-trip 歸因與稽核，不介入交易決策。)
-            entry_result['position']['signal_date'] = signal_date_text
-            entry_result['position']['candidate_date'] = candidate_date_text
-            entry_result['position']['candidate_type'] = candidate_kind_label
+            filled_position['signal_date'] = signal_date_text
+            filled_position['candidate_date'] = candidate_date_text
+            filled_position['candidate_type'] = candidate_kind_label
             # (AI註: 保存進場時的 quality ranking 診斷欄位；只供事後歸因，不介入持倉管理。)
-            entry_result['position']['breakout_quality_score'] = cand.get('breakout_quality_score')
-            entry_result['position']['breakout_quality_score_date'] = cand.get('breakout_quality_score_date')
-            entry_result['position']['use_breakout_quality_ranking'] = bool(cand.get('use_breakout_quality_ranking', False))
+            filled_position['breakout_quality_score'] = cand.get('breakout_quality_score')
+            filled_position['breakout_quality_score_date'] = cand.get('breakout_quality_score_date')
+            filled_position['use_breakout_quality_ranking'] = bool(cand.get('use_breakout_quality_ranking', False))
             quality_rank_payload = cand.get('breakout_quality_rank')
             if isinstance(quality_rank_payload, dict):
-                entry_result['position']['breakout_quality_rank'] = dict(quality_rank_payload)
-            portfolio[cand['ticker']] = entry_result['position']
+                filled_position['breakout_quality_rank'] = dict(quality_rank_payload)
+            portfolio[cand['ticker']] = filled_position
             if entry_stats is not None:
                 entry_stats['filled_buy_count'] = int(entry_stats.get('filled_buy_count', 0) or 0) + 1
 
             if cand['ticker'] in active_extended_signals:
                 del active_extended_signals[cand['ticker']]
             if not is_training:
-                buy_position = entry_result['position']
+                buy_position = filled_position
                 tp_half_price = buy_position.get('tp_half')
                 if bool(buy_position.get('sold_half', False)):
                     tp_half_price = None
@@ -251,7 +279,7 @@ def execute_reserved_entries_for_day(
                         '候選日': candidate_date_text,
                         '候選類型': candidate_kind_label,
                         '買入限價': chosen_entry_plan['limit_price'],
-                        '成交價': entry_result.get('entry_fill_price', entry_result['buy_price']),
+                        '成交價': entry_fill_price,
                         '成本均價': entry_result.get('cost_basis_price', entry_result['entry_price']),
                         '停損價': buy_position.get('sl'),
                         '半倉停利價': tp_half_price,
@@ -270,7 +298,7 @@ def execute_reserved_entries_for_day(
                         'Ensemble Vote Count': cand.get('ensemble_vote_count'),
                     }
                 )
-        elif entry_result['count_as_missed_buy']:
+        elif count_as_missed_buy:
             total_missed_buys += 1
             if not is_training:
                 miss_buy_type = '錯失買進(Re-entry)' if cand['type'] == 'reentry' else ('錯失買進(延續候選)' if cand['type'] == 'extended' else '錯失買進(新訊號)')
@@ -304,7 +332,15 @@ def execute_reserved_entries_for_day(
     return restore_money_like_from_milli(cash_milli, cash_template), total_missed_buys
 
 
-def cleanup_extended_signals_for_day(active_extended_signals, portfolio, all_dfs_fast, today, params, sizing_capital):
+def cleanup_extended_signals_for_day(
+    active_extended_signals,
+    portfolio,
+    all_dfs_fast,
+    today,
+    params,
+    sizing_capital,
+    extended_day_market_cache=None,
+):
     for ticker in sorted(active_extended_signals):
         signal_state = active_extended_signals.get(ticker)
         signal_params = resolve_signal_tracking_params(signal_state, params)
@@ -323,24 +359,47 @@ def cleanup_extended_signals_for_day(active_extended_signals, portfolio, all_dfs
 
         if t_pos <= 0:
             continue
+        cached_day_market = (
+            None if extended_day_market_cache is None
+            else extended_day_market_cache.get(ticker)
+        )
+        cached_management = (
+            cached_day_market[1]
+            if cached_day_market is not None and int(cached_day_market[0]) == int(t_pos)
+            else None
+        )
         if is_extended_tbd_shadow_alive(signal_state):
-            t_high, t_low, y_high, y_atr, y_ind_sell = (
-                get_fast_live_shadow_cleanup_values(fast_df, t_pos)
-            )
-            if y_ind_sell:
+            if cached_management is not None:
                 (
-                    _y_atr, _y_ind_sell, y_close, _y_high, t_open,
-                    _t_high, _t_low, t_close, t_volume,
-                ) = get_fast_management_session_values(fast_df, t_pos)
+                    y_atr, y_ind_sell, y_close, y_high, t_open, t_high, t_low,
+                    t_close, t_volume,
+                ) = cached_management
+                if not y_ind_sell:
+                    t_open = t_close = t_volume = y_close = float('nan')
             else:
-                # These values are not consumed by the canonical live-shadow fast
-                # path unless an indicator exit is present.
-                t_open = t_close = t_volume = y_close = float('nan')
+                t_high, t_low, y_high, y_atr, y_ind_sell = (
+                    get_fast_live_shadow_cleanup_values(fast_df, t_pos)
+                )
+                if y_ind_sell:
+                    (
+                        _y_atr, _y_ind_sell, y_close, _y_high, t_open,
+                        _t_high, _t_low, t_close, t_volume,
+                    ) = get_fast_management_session_values(fast_df, t_pos)
+                else:
+                    # These values are not consumed by the canonical live-shadow fast
+                    # path unless an indicator exit is present.
+                    t_open = t_close = t_volume = y_close = float('nan')
         else:
-            (
-                y_atr, y_ind_sell, y_close, y_high, t_open, t_high, t_low,
-                t_close, t_volume,
-            ) = get_fast_management_session_values(fast_df, t_pos)
+            if cached_management is not None:
+                (
+                    y_atr, y_ind_sell, y_close, y_high, t_open, t_high, t_low,
+                    t_close, t_volume,
+                ) = cached_management
+            else:
+                (
+                    y_atr, y_ind_sell, y_close, y_high, t_open, t_high, t_low,
+                    t_close, t_volume,
+                ) = get_fast_management_session_values(fast_df, t_pos)
         if should_clear_extended_signal(
             signal_state,
             t_low,

@@ -3912,9 +3912,12 @@ def validate_price_utils_array_tick_normalization_contract_case(_base_params):
     add_check(results, "meta_contract", case_id, "portfolio_rotation_exit_path_uses_weakest_ticker", True, 'adjust_long_sell_fill_price(w_open, ticker=weakest_ticker)' in portfolio_exits_source)
     add_check(results, "meta_contract", case_id, "portfolio_rotation_exit_path_has_no_undefined_ticker_reference", False, 'adjust_long_sell_fill_price(w_open, ticker=ticker)' in portfolio_exits_source)
     position_size_node = price_functions.get("calc_position_size")
-    position_size_routes_tax_schedule = False
-    if position_size_node is not None:
-        for node in ast.walk(position_size_node):
+    sizing_fee_context_node = price_functions.get("build_position_sizing_fee_context")
+
+    def _function_routes_tax_schedule(function_node):
+        if function_node is None:
+            return False
+        for node in ast.walk(function_node):
             if not isinstance(node, ast.Call):
                 continue
             if isinstance(node.func, ast.Name):
@@ -3930,8 +3933,17 @@ def validate_price_utils_array_tick_normalization_contract_case(_base_params):
                 isinstance(keywords.get(name), ast.Name) and keywords[name].id == name
                 for name in ("ticker", "security_profile", "trade_date")
             ):
-                position_size_routes_tax_schedule = True
-                break
+                return True
+        return False
+
+    position_size_calls = _called_function_names(position_size_node)
+    position_size_routes_tax_schedule = bool(
+        _function_routes_tax_schedule(position_size_node)
+        or (
+            "build_position_sizing_fee_context" in position_size_calls
+            and _function_routes_tax_schedule(sizing_fee_context_node)
+        )
+    )
     add_check(results, "meta_contract", case_id, "price_utils_position_size_routes_tax_schedule_by_security_profile", True, position_size_routes_tax_schedule)
     add_check(results, "meta_contract", case_id, "backtest_core_floating_sell_ledger_threads_trade_date_and_profile", True, "trade_date=Dates[j]" in backtest_source and "security_profile=position.get('security_profile')" in backtest_source)
     add_check(results, "meta_contract", case_id, "portfolio_rotation_exit_path_threads_trade_date_and_profile", True, 'trade_date=today' in portfolio_exits_source and "security_profile=pos.get('security_profile')" in portfolio_exits_source)

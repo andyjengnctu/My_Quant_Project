@@ -9,7 +9,12 @@ from core.buy_sort import (
     sort_candidate_rows,
 )
 from core.config import get_buy_sort_method
-from core.exact_accounting import calc_cash_buy_total_milli_from_price, milli_to_money
+from core.exact_accounting import (
+    calc_cash_buy_total_milli_from_milli,
+    calc_cash_buy_total_milli_from_price,
+    milli_to_money,
+    price_to_milli,
+)
 from filters.breakout_quality.runtime import (
     breakout_quality_ranking_uses_daily_information_date,
     get_breakout_quality_ranking_source_context,
@@ -31,12 +36,17 @@ from core.extended_signals import (
     normalize_breakout_quality_rank_payload,
     resolve_breakout_quality_rank,
 )
-from core.price_utils import build_position_sizing_capital_context
+from core.price_utils import (
+    build_position_sizing_capital_context,
+    build_position_sizing_fee_context,
+)
 from core.portfolio_fast_data import (
     get_fast_pos,
     get_fast_security_profile,
     get_fast_normal_signal_values,
     get_fast_extended_signal_values,
+    get_fast_management_session_values,
+    get_fast_dates,
     get_pit_stats_from_index,
 )
 
@@ -46,6 +56,31 @@ def _candidate_profile_add(profile_stats, key, started_at):
         0.0,
         time.perf_counter() - started_at,
     )
+
+
+def _resolve_candidate_sizing_fee_context(
+    cache,
+    *,
+    params,
+    ticker,
+    security_profile,
+    trade_date,
+):
+    profile = security_profile if isinstance(security_profile, dict) else {}
+    family = str(profile.get("family") or "")
+    broad_type = str(profile.get("broad_type") or "")
+    fallback_symbol = "" if profile else str(ticker or "")
+    key = (id(params), family, broad_type, fallback_symbol)
+    resolved = cache.get(key)
+    if resolved is None:
+        resolved = build_position_sizing_fee_context(
+            params,
+            ticker=ticker,
+            security_profile=security_profile,
+            trade_date=trade_date,
+        )
+        cache[key] = resolved
+    return resolved
 
 
 def _resolve_candidate_quality_ranking(
@@ -131,9 +166,15 @@ def _make_candidate_row(
     prev_close=None,
     quality_rank=None,
     ranking_context=None,
+    est_limit_px_milli=None,
 ):
     if est_qty > 0:
-        est_cost_milli = int(calc_cash_buy_total_milli_from_price(est_limit_px, est_qty))
+        if est_limit_px_milli is None:
+            est_cost_milli = int(calc_cash_buy_total_milli_from_price(est_limit_px, est_qty))
+        else:
+            est_cost_milli = int(
+                calc_cash_buy_total_milli_from_milli(est_limit_px_milli, est_qty)
+            )
         est_cost = milli_to_money(est_cost_milli)
     else:
         est_cost_milli = 0
@@ -280,6 +321,7 @@ def _collect_normal_candidates(
     today,
     sizing_equity,
     sizing_capital_context,
+    sizing_fee_context_cache,
     params,
     collect_all_candidates,
     ranking_context,
@@ -320,6 +362,13 @@ def _collect_normal_candidates(
         if not is_candidate:
             continue
 
+        sizing_fee_context = _resolve_candidate_sizing_fee_context(
+            sizing_fee_context_cache,
+            params=params,
+            ticker=ticker,
+            security_profile=security_profile,
+            trade_date=today,
+        )
         plan_started = time.perf_counter() if profile_enabled else None
         candidate_plan = build_normal_candidate_plan(
             y_buy_limit,
@@ -330,6 +379,7 @@ def _collect_normal_candidates(
             security_profile=security_profile,
             trade_date=today,
             sizing_capital_context=sizing_capital_context,
+            sizing_fee_context=sizing_fee_context,
         )
         if profile_enabled:
             _candidate_profile_add(profile_stats, "portfolio_candidate_plan_sec", plan_started)
@@ -387,6 +437,7 @@ def _collect_normal_candidates(
             prev_close=y_close,
             quality_rank=quality_rank,
             ranking_context=ranking_context,
+            est_limit_px_milli=price_to_milli(candidate_plan['limit_price']),
         )
         if profile_enabled:
             _candidate_profile_add(profile_stats, "portfolio_candidate_row_sec", row_started)
@@ -483,9 +534,12 @@ def _collect_extended_candidates(
     today,
     sizing_equity,
     sizing_capital_context,
+    sizing_capital_context_cache,
+    sizing_fee_context_cache,
     params,
     collect_all_candidates,
     ranking_context,
+    extended_day_market_cache=None,
     profile_stats=None,
 ):
     profile_enabled = profile_stats is not None
@@ -522,8 +576,38 @@ def _collect_extended_candidates(
         if not is_candidate:
             continue
 
-        y_close, information_date = get_fast_extended_signal_values(fast_df, t_pos)
+        cached_day_market = (
+            None if extended_day_market_cache is None
+            else extended_day_market_cache.get(ticker)
+        )
+        if cached_day_market is not None and int(cached_day_market[0]) == int(t_pos):
+            management_values = cached_day_market[1]
+            information_date = cached_day_market[2]
+            y_close = management_values[2]
+        else:
+            management_values = get_fast_management_session_values(fast_df, t_pos)
+            information_date = get_fast_dates(fast_df)[y_pos]
+            y_close = management_values[2]
+            if extended_day_market_cache is not None:
+                extended_day_market_cache[ticker] = (
+                    int(t_pos), management_values, information_date
+                )
         security_profile = get_fast_security_profile(fast_df)
+        candidate_capital_context = sizing_capital_context_cache.get(id(candidate_params))
+        if candidate_capital_context is None:
+            candidate_capital_context = build_position_sizing_capital_context(
+                sizing_equity,
+                candidate_params.fixed_risk,
+                candidate_params,
+            )
+            sizing_capital_context_cache[id(candidate_params)] = candidate_capital_context
+        sizing_fee_context = _resolve_candidate_sizing_fee_context(
+            sizing_fee_context_cache,
+            params=candidate_params,
+            ticker=ticker,
+            security_profile=security_profile,
+            trade_date=today,
+        )
         # AI註: training replay normally only needs orderable rows. Build the stable
         # extended-plan levels first, but defer expensive exact position sizing until
         # the existing canonical orderability-context check says today's fixed limit
@@ -556,11 +640,17 @@ def _collect_extended_candidates(
         if profile_enabled:
             _candidate_profile_add(profile_stats, "portfolio_candidate_quality_rank_sec", quality_started)
 
+        limit_price_milli = price_to_milli(candidate_plan['limit_price'])
+        stop_price_milli = price_to_milli(candidate_plan['init_sl'])
+        y_close_milli = price_to_milli(y_close)
         orderable_context = has_extended_signal_orderable_context_for_day(
             signal_state,
             candidate_plan,
             y_close,
             ticker=ticker,
+            security_profile=security_profile,
+            limit_price_milli=limit_price_milli,
+            y_close_milli=y_close_milli,
         )
         if (not collect_all_candidates) and (not bool(orderable_context)):
             continue
@@ -570,9 +660,10 @@ def _collect_extended_candidates(
             candidate_plan,
             sizing_equity,
             candidate_params,
-            sizing_capital_context=(
-                sizing_capital_context if candidate_params is params else None
-            ),
+            sizing_capital_context=candidate_capital_context,
+            sizing_fee_context=sizing_fee_context,
+            limit_price_milli=limit_price_milli,
+            stop_price_milli=stop_price_milli,
             copy_plan=False,
         )
         if profile_enabled:
@@ -618,6 +709,7 @@ def _collect_extended_candidates(
             prev_close=y_close,
             quality_rank=quality_rank,
             ranking_context=ranking_context,
+            est_limit_px_milli=limit_price_milli,
         )
         if profile_enabled:
             _candidate_profile_add(profile_stats, "portfolio_candidate_row_sec", row_started)
@@ -644,6 +736,7 @@ def build_daily_candidates(
     sizing_equity,
     params,
     collect_all_candidates=True,
+    extended_day_market_cache=None,
     profile_stats=None,
 ):
     buy_sort_method = get_buy_sort_method()
@@ -653,6 +746,8 @@ def build_daily_candidates(
         params.fixed_risk,
         params,
     )
+    sizing_capital_context_cache = {id(params): sizing_capital_context}
+    sizing_fee_context_cache = {}
     normal_candidates, normal_orderable, normal_setup_tickers_today = _collect_normal_candidates(
         normal_setup_entries=normal_setup_index.get(today, []),
         portfolio=portfolio,
@@ -665,6 +760,7 @@ def build_daily_candidates(
         today=today,
         sizing_equity=sizing_equity,
         sizing_capital_context=sizing_capital_context,
+        sizing_fee_context_cache=sizing_fee_context_cache,
         params=params,
         collect_all_candidates=collect_all_candidates,
         ranking_context=ranking_context,
@@ -682,9 +778,12 @@ def build_daily_candidates(
         today=today,
         sizing_equity=sizing_equity,
         sizing_capital_context=sizing_capital_context,
+        sizing_capital_context_cache=sizing_capital_context_cache,
+        sizing_fee_context_cache=sizing_fee_context_cache,
         params=params,
         collect_all_candidates=collect_all_candidates,
         ranking_context=ranking_context,
+        extended_day_market_cache=extended_day_market_cache,
         profile_stats=profile_stats,
     )
 

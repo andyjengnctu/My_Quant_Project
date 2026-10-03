@@ -41,7 +41,16 @@ from core.portfolio_fast_access import (
 
 
 # # (AI註: 單一真理來源 - 浮動權益估值與延續候選的 next-day sizing 共用同一口徑)
-def calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params, fee_rebate_receivable_milli=0):
+def calc_mark_to_market_equity(
+    cash,
+    portfolio,
+    all_dfs_fast,
+    today,
+    params,
+    fee_rebate_receivable_milli=0,
+    *,
+    use_cached_last_px=False,
+):
     cash_template = cash
     equity_milli = coerce_money_like_to_milli(cash) + int(fee_rebate_receivable_milli or 0)
 
@@ -49,16 +58,19 @@ def calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params, fee
         pos = portfolio[ticker]
         position_params = pos.get('_entry_params_obj') or params
         position_context = pos.get('_entry_context') if isinstance(pos.get('_entry_context'), dict) else {}
-        position_all_dfs_fast = position_context.get('all_dfs_fast') or all_dfs_fast
-        pt_data = position_all_dfs_fast[ticker]
-        pt_pos = get_fast_pos(pt_data, today)
-
-        if pt_pos >= 0:
-            px = get_fast_close(pt_data, pos=pt_pos)
+        if use_cached_last_px and pos.get('last_px') is not None:
+            px = pos.get('last_px')
         else:
-            px = pos.get('last_px', pos.get('pure_buy_price', pos['entry']))
+            position_all_dfs_fast = position_context.get('all_dfs_fast') or all_dfs_fast
+            pt_data = position_all_dfs_fast[ticker]
+            pt_pos = get_fast_pos(pt_data, today)
 
-        pos['last_px'] = px
+            if pt_pos >= 0:
+                px = get_fast_close(pt_data, pos=pt_pos)
+            else:
+                px = pos.get('last_px', pos.get('pure_buy_price', pos['entry']))
+
+            pos['last_px'] = px
 
         floating_exec_price_milli = round_price_to_tick_milli(
             px, direction="down", ticker=ticker

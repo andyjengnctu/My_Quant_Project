@@ -13,6 +13,7 @@ from core.price_utils import (
     calc_initial_stop_from_reference,
     calc_initial_trailing_stop_from_reference,
     get_exit_sell_block_reason,
+    is_limit_buy_price_milli_reachable_for_day,
     is_limit_buy_price_reachable_for_day,
     price_to_milli,
 )
@@ -575,7 +576,16 @@ def build_extended_tbd_candidate_plan_from_state(tbd_state, sizing_capital, para
 
 
 # # (AI註: 單一真理來源 - 延續訊號今日能否掛單；若 shadow 已進入待出場狀態，則不得再掛)
-def has_extended_signal_orderable_context_for_day(signal_state, candidate_plan, y_close, ticker=None, security_profile=None):
+def has_extended_signal_orderable_context_for_day(
+    signal_state,
+    candidate_plan,
+    y_close,
+    ticker=None,
+    security_profile=None,
+    *,
+    limit_price_milli=None,
+    y_close_milli=None,
+):
     if signal_state is None or candidate_plan is None:
         return False
     shadow_position = _resolve_shadow_position(signal_state)
@@ -583,7 +593,19 @@ def has_extended_signal_orderable_context_for_day(signal_state, candidate_plan, 
         return False
     resolved_ticker = ticker or candidate_plan.get("ticker") or signal_state.get("ticker")
     resolved_security_profile = security_profile or candidate_plan.get("security_profile") or signal_state.get("security_profile")
-    return is_limit_buy_price_reachable_for_day(candidate_plan.get("limit_price"), y_close, ticker=resolved_ticker, security_profile=resolved_security_profile)
+    if limit_price_milli is not None and y_close_milli is not None:
+        return is_limit_buy_price_milli_reachable_for_day(
+            limit_price_milli,
+            y_close_milli,
+            ticker=resolved_ticker,
+            security_profile=resolved_security_profile,
+        )
+    return is_limit_buy_price_reachable_for_day(
+        candidate_plan.get("limit_price"),
+        y_close,
+        ticker=resolved_ticker,
+        security_profile=resolved_security_profile,
+    )
 
 
 def is_extended_signal_orderable_for_day(signal_state, candidate_plan, y_close, ticker=None, security_profile=None):

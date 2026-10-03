@@ -14,7 +14,11 @@ _NATIVE_HOTPATH_ENABLED = bool(
 )
 
 from core.capital_policy import resolve_scanner_live_capital
-from core.order_lot_policy import apply_board_lot_preferred_qty
+from core.order_lot_policy import (
+    apply_board_lot_preferred_qty,
+    apply_board_lot_preferred_qty_milli,
+    get_min_entry_notional_milli,
+)
 from core.exact_accounting import (
     build_buy_ledger_from_price,
     build_sell_ledger_from_price,
@@ -202,6 +206,32 @@ def build_position_sizing_capital_context(cap, riskPct, params):
     return int(cap_milli), int(max_risk_milli), int(max_position_cap_milli)
 
 
+def build_position_sizing_fee_context(params, *, ticker=None, security_profile=None, trade_date=None):
+    """Pre-resolve fee/tax/rounding inputs reused by repeated exact sizing calls."""
+    buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, _fixed_risk_ppm = resolve_fee_schedule_tuple(
+        params,
+        ticker=ticker,
+        security_profile=security_profile,
+        trade_date=trade_date,
+    )
+    charge_rounding_mode = str(
+        getattr(params, "charge_rounding_mode", "nearest_milli") or "nearest_milli"
+    )
+    rounding_mode_code = (
+        1 if charge_rounding_mode == "floor_twd"
+        else 0 if charge_rounding_mode == "nearest_milli"
+        else -1
+    )
+    return (
+        int(buy_fee_ppm),
+        int(sell_fee_ppm),
+        int(tax_ppm),
+        int(min_fee_milli),
+        int(rounding_mode_code),
+        int(get_min_entry_notional_milli(params)),
+    )
+
+
 def calc_position_size(
     bPrice,
     stopPrice,
@@ -213,12 +243,15 @@ def calc_position_size(
     trade_date=None,
     *,
     _capital_context=None,
+    _fee_context=None,
+    _buy_price_milli=None,
+    _stop_price_milli=None,
 ):
     if pd.isna(bPrice) or pd.isna(stopPrice) or bPrice <= 0 or stopPrice <= 0:
         return 0
 
-    buy_price_milli = price_to_milli(bPrice)
-    stop_price_milli = price_to_milli(stopPrice)
+    buy_price_milli = price_to_milli(bPrice) if _buy_price_milli is None else int(_buy_price_milli)
+    stop_price_milli = price_to_milli(stopPrice) if _stop_price_milli is None else int(_stop_price_milli)
     if _capital_context is None:
         cap_milli, max_risk_milli, max_position_cap_milli = build_position_sizing_capital_context(
             cap, riskPct, params
@@ -226,16 +259,20 @@ def calc_position_size(
     else:
         cap_milli, max_risk_milli, max_position_cap_milli = _capital_context
 
-    buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, _fixed_risk_ppm = resolve_fee_schedule_tuple(
-        params,
-        ticker=ticker,
-        security_profile=security_profile,
-        trade_date=trade_date,
-    )
+    if _fee_context is None:
+        buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, rounding_mode_code, _min_entry_notional_milli = (
+            build_position_sizing_fee_context(
+                params,
+                ticker=ticker,
+                security_profile=security_profile,
+                trade_date=trade_date,
+            )
+        )
+    else:
+        buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, rounding_mode_code, _min_entry_notional_milli = _fee_context
 
     if _NATIVE_HOTPATH_ENABLED:
-        charge_rounding_mode = str(getattr(params, "charge_rounding_mode", "nearest_milli") or "nearest_milli")
-        if charge_rounding_mode in {"nearest_milli", "floor_twd"}:
+        if int(rounding_mode_code) >= 0:
             return int(_native_calc_position_size_exact(
                 int(buy_price_milli),
                 int(stop_price_milli),
@@ -246,7 +283,7 @@ def calc_position_size(
                 int(sell_fee_ppm),
                 int(tax_ppm),
                 int(min_fee_milli),
-                charge_rounding_mode == "floor_twd",
+                int(rounding_mode_code) == 1,
                 int(_NATIVE_BROKER_FEE_PPM),
                 int(_NATIVE_BROKER_MIN_FEE_MILLI),
             ))
@@ -369,13 +406,36 @@ def calc_limit_down_price(reference_price, ticker=None, security_profile=None):
 
 
 # # (AI註: 單一真理來源 - 盤前固定限價單今日是否仍有法定價格帶可達性統一由此判斷)
+def is_limit_buy_price_milli_reachable_for_day(
+    limit_price_milli,
+    y_close_milli,
+    ticker=None,
+    security_profile=None,
+):
+    try:
+        limit_milli = int(limit_price_milli)
+        close_milli = int(y_close_milli)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if limit_milli <= 0 or close_milli <= 0:
+        return False
+    resolved_profile = _resolve_price_security_profile(ticker, security_profile)
+    limit_down_milli = calc_limit_down_price_milli(
+        close_milli,
+        security_profile=resolved_profile,
+    )
+    return limit_milli >= int(limit_down_milli)
+
+
 def is_limit_buy_price_reachable_for_day(limit_price, y_close, ticker=None, security_profile=None):
     if pd.isna(limit_price) or limit_price <= 0 or pd.isna(y_close) or y_close <= 0:
         return False
-    limit_down_price = calc_limit_down_price(y_close, ticker=ticker, security_profile=security_profile)
-    if pd.isna(limit_down_price):
-        return False
-    return price_to_milli(limit_price) >= price_to_milli(limit_down_price)
+    return is_limit_buy_price_milli_reachable_for_day(
+        price_to_milli(limit_price),
+        price_to_milli(y_close),
+        ticker=ticker,
+        security_profile=security_profile,
+    )
 
 
 def is_limit_up_bar(t_open, t_high, t_low, t_close, y_close, ticker=None, security_profile=None):

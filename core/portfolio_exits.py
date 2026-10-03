@@ -407,6 +407,9 @@ def settle_portfolio_positions(
         if not is_training:
             freed_cash_milli = sum_last_exec_context_cash_milli(pos)
         cash += int(freed_cash_milli)
+        # This bar has already been consumed by canonical settlement; cache the
+        # same close for the later end-of-day mark instead of re-reading market data.
+        pos['last_px'] = t_close
 
         tp_context = _first_exec_context(pos, 'TP_HALF')
         stop_context = _first_exec_context(pos, 'STOP')

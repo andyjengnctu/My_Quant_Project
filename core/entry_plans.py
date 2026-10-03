@@ -18,6 +18,7 @@ from core.exact_accounting import (
 from core.exit_priority import resolve_stop_tp_hits
 from core.order_lot_policy import (
     apply_board_lot_preferred_qty,
+    apply_board_lot_preferred_qty_milli,
     calc_entry_notional_milli,
     entry_notional_meets_minimum,
     get_min_entry_notional_milli,
@@ -85,7 +86,17 @@ def _resolve_candidate_sizing_capital(candidate_plan, fallback_capital):
 
 
 # # (AI註: 單一真理來源 - 候選單在不同資金上限下的 qty / is_orderable 重算統一由此處理)
-def resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params, *, sizing_capital_context=None, copy_plan=True):
+def resize_candidate_plan_to_capital(
+    candidate_plan,
+    sizing_capital,
+    params,
+    *,
+    sizing_capital_context=None,
+    sizing_fee_context=None,
+    limit_price_milli=None,
+    stop_price_milli=None,
+    copy_plan=True,
+):
     if candidate_plan is None:
         return None
 
@@ -96,6 +107,12 @@ def resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params, *, 
 
     resolved_sizing_capital = _resolve_candidate_sizing_capital(candidate_plan, sizing_capital)
     resized_plan = dict(candidate_plan) if copy_plan else candidate_plan
+    resolved_limit_price_milli = (
+        price_to_milli(limit_price) if limit_price_milli is None else int(limit_price_milli)
+    )
+    resolved_stop_price_milli = (
+        price_to_milli(init_sl) if stop_price_milli is None else int(stop_price_milli)
+    )
     qty = calc_position_size(
         limit_price,
         init_sl,
@@ -106,6 +123,9 @@ def resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params, *, 
         security_profile=candidate_plan.get("security_profile"),
         trade_date=candidate_plan.get("trade_date"),
         _capital_context=sizing_capital_context,
+        _fee_context=sizing_fee_context,
+        _buy_price_milli=resolved_limit_price_milli,
+        _stop_price_milli=resolved_stop_price_milli,
     )
     max_qty = candidate_plan.get("max_qty")
     if max_qty is not None:
@@ -115,7 +135,14 @@ def resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params, *, 
             resolved_max_qty = 0
         if resolved_max_qty > 0:
             qty = min(qty, resolved_max_qty)
-    qty = apply_board_lot_preferred_qty(limit_price, qty, params)
+    if sizing_fee_context is not None:
+        qty = apply_board_lot_preferred_qty_milli(
+            resolved_limit_price_milli,
+            qty,
+            sizing_fee_context[5],
+        )
+    else:
+        qty = apply_board_lot_preferred_qty(limit_price, qty, params)
     resized_plan["qty"] = qty
     resized_plan["is_orderable"] = qty > 0
     resized_plan["sizing_capital"] = float(resolved_sizing_capital)
@@ -157,6 +184,7 @@ def build_normal_candidate_plan(
     trade_date=None,
     *,
     sizing_capital_context=None,
+    sizing_fee_context=None,
 ):
     if pd.isna(limit_price) or pd.isna(atr):
         return None
@@ -179,6 +207,9 @@ def build_normal_candidate_plan(
         sizing_capital,
         params,
         sizing_capital_context=sizing_capital_context,
+        sizing_fee_context=sizing_fee_context,
+        limit_price_milli=price_to_milli(limit_price),
+        stop_price_milli=price_to_milli(init_sl),
         copy_plan=False,
     )
 
@@ -411,18 +442,144 @@ def build_position_from_entry_fill(
 
 
 # # (AI註: 單一真理來源 - 盤前有效買單的當日成交 / miss buy 邏輯統一由此判斷)
+def _execute_pre_market_entry_plan_core(
+    entry_plan,
+    t_open,
+    t_high,
+    t_low,
+    t_close,
+    t_volume,
+    y_close,
+    params,
+    entry_type="normal",
+    ticker=None,
+    security_profile=None,
+    trade_date=None,
+):
+    """Canonical pre-market order execution without presentation-result allocation."""
+    if entry_plan is None:
+        return None, False, False, False, np.nan
+
+    qty = entry_plan.get("qty", 0)
+    resolved_ticker = ticker or entry_plan.get("ticker")
+    resolved_security_profile = security_profile or entry_plan.get("security_profile")
+    count_as_missed_buy = should_count_miss_buy(qty)
+    is_locked_limit_up = is_locked_limit_up_bar(
+        t_open,
+        t_high,
+        t_low,
+        t_close,
+        y_close,
+        ticker=resolved_ticker,
+        security_profile=resolved_security_profile,
+    )
+
+    if qty <= 0:
+        return None, False, False, is_locked_limit_up, np.nan
+
+    if pd.isna(t_volume) or t_volume <= 0 or pd.isna(t_open) or pd.isna(t_low) or is_locked_limit_up:
+        return None, count_as_missed_buy, False, is_locked_limit_up, np.nan
+
+    limit_price = entry_plan["limit_price"]
+    if price_to_milli(t_low) > price_to_milli(limit_price):
+        return None, count_as_missed_buy, False, is_locked_limit_up, np.nan
+
+    buy_price = adjust_long_buy_fill_price(
+        min(t_open, limit_price),
+        ticker=resolved_ticker,
+        security_profile=resolved_security_profile,
+    )
+
+    inherited_shadow_position = entry_plan.get("shadow_position_state")
+    if inherited_shadow_position is not None and not _is_entry_fill_above_inherited_stop(
+        buy_price=buy_price,
+        shadow_position=inherited_shadow_position,
+    ):
+        return (
+            None,
+            should_count_miss_buy(qty, is_worse_than_initial_stop=True),
+            True,
+            is_locked_limit_up,
+            buy_price,
+        )
+
+    position = build_position_from_frozen_entry_plan(
+        entry_plan,
+        buy_price=buy_price,
+        qty=qty,
+        params=params,
+        entry_type=entry_type,
+        ticker=resolved_ticker,
+        security_profile=resolved_security_profile,
+        trade_date=trade_date,
+        t_high=t_high,
+        t_low=t_low,
+    )
+    return position, False, False, is_locked_limit_up, buy_price
+
+
+def execute_pre_market_entry_plan_training(
+    entry_plan,
+    t_open,
+    t_high,
+    t_low,
+    t_close,
+    t_volume,
+    y_close,
+    params,
+    entry_type="normal",
+    ticker=None,
+    security_profile=None,
+    trade_date=None,
+):
+    """Training adapter: return only the state actually consumed by portfolio replay."""
+    position, count_as_missed_buy, _worse, _locked, _buy_price = (
+        _execute_pre_market_entry_plan_core(
+            entry_plan,
+            t_open,
+            t_high,
+            t_low,
+            t_close,
+            t_volume,
+            y_close,
+            params,
+            entry_type=entry_type,
+            ticker=ticker,
+            security_profile=security_profile,
+            trade_date=trade_date,
+        )
+    )
+    return position, bool(count_as_missed_buy)
+
+
 def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_volume, y_close, params, entry_type="normal", ticker=None, security_profile=None, trade_date=None):
+    position, count_as_missed_buy, is_worse_than_initial_stop, is_locked_limit_up, buy_price = (
+        _execute_pre_market_entry_plan_core(
+            entry_plan,
+            t_open,
+            t_high,
+            t_low,
+            t_close,
+            t_volume,
+            y_close,
+            params,
+            entry_type=entry_type,
+            ticker=ticker,
+            security_profile=security_profile,
+            trade_date=trade_date,
+        )
+    )
     result = {
-        "filled": False,
-        "count_as_missed_buy": False,
-        "is_worse_than_initial_stop": False,
-        "is_locked_limit_up": False,
-        "buy_price": np.nan,
+        "filled": position is not None,
+        "count_as_missed_buy": bool(count_as_missed_buy),
+        "is_worse_than_initial_stop": bool(is_worse_than_initial_stop),
+        "is_locked_limit_up": bool(is_locked_limit_up),
+        "buy_price": buy_price,
         "entry_fill_price": np.nan,
         "entry_price": np.nan,
         "cost_basis_price": np.nan,
         "tp_half": np.nan,
-        "position": None,
+        "position": position,
         "entry_type": entry_type,
         "entry_day_stop_triggered": False,
         "entry_day_tp_triggered": False,
@@ -431,47 +588,10 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
         "cash_buy_total_milli": 0,
         "buy_fee_rebate_receivable_milli": 0,
     }
-    if entry_plan is None:
+    if position is None:
         return result
 
-    qty = entry_plan.get("qty", 0)
-    resolved_ticker = ticker or entry_plan.get("ticker")
-    resolved_security_profile = security_profile or entry_plan.get("security_profile")
-    result["count_as_missed_buy"] = should_count_miss_buy(qty)
-    result["is_locked_limit_up"] = is_locked_limit_up_bar(t_open, t_high, t_low, t_close, y_close, ticker=resolved_ticker, security_profile=resolved_security_profile)
-
-    if qty <= 0:
-        result["count_as_missed_buy"] = False
-        return result
-
-    if pd.isna(t_volume) or t_volume <= 0 or pd.isna(t_open) or pd.isna(t_low) or result["is_locked_limit_up"]:
-        return result
-
-    limit_price = entry_plan["limit_price"]
-    if price_to_milli(t_low) > price_to_milli(limit_price):
-        return result
-
-    buy_price = adjust_long_buy_fill_price(min(t_open, limit_price), ticker=resolved_ticker, security_profile=resolved_security_profile)
-    result["buy_price"] = buy_price
-
-    inherited_shadow_position = entry_plan.get("shadow_position_state")
-    if inherited_shadow_position is not None and not _is_entry_fill_above_inherited_stop(
-        buy_price=buy_price,
-        shadow_position=inherited_shadow_position,
-    ):
-        result["is_worse_than_initial_stop"] = True
-        result["count_as_missed_buy"] = should_count_miss_buy(qty, is_worse_than_initial_stop=True)
-        return result
-
-    position = build_position_from_frozen_entry_plan(
-        entry_plan, buy_price=buy_price, qty=qty, params=params,
-        entry_type=entry_type, ticker=resolved_ticker,
-        security_profile=resolved_security_profile, trade_date=trade_date,
-        t_high=t_high, t_low=t_low,
-    )
-    result["filled"] = True
     result["count_as_missed_buy"] = False
-    result["position"] = position
     result["entry_fill_price"] = position["entry_fill_price"]
     result["entry_price"] = position["entry"]
     result["cost_basis_price"] = position["entry"]

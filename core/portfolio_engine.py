@@ -420,6 +420,7 @@ def run_portfolio_timeline(
         if has_portfolio_work_today:
             available_cash = cash
             sizing_equity = resolve_portfolio_sizing_equity(current_equity_money, initial_capital, day_params)
+            extended_day_market_cache = {} if not use_param_ensemble else None
             t0 = time.perf_counter() if profile_timing_enabled else None
             if use_param_ensemble:
                 _run_portfolio_replay_phase(
@@ -536,6 +537,7 @@ def run_portfolio_timeline(
                         sizing_equity=sizing_equity,
                         params=day_params,
                         collect_all_candidates=replay_counts is not None,
+                        extended_day_market_cache=extended_day_market_cache,
                         profile_stats=candidate_subprofile,
                     )
                 if profile_timing_enabled:
@@ -820,6 +822,7 @@ def run_portfolio_timeline(
                     today=today,
                     params=day_params,
                     sizing_capital=sizing_equity,
+                    extended_day_market_cache=extended_day_market_cache,
                 )
             if profile_timing_enabled:
                 cleanup_sec += time.perf_counter() - t0
@@ -838,6 +841,7 @@ def run_portfolio_timeline(
                 today,
                 day_params,
                 fee_rebate_receivable_milli=rebate_receivable_milli,
+                use_cached_last_px=True,
             )
         else:
             today_equity = cash + rebate_receivable_milli
