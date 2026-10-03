@@ -9,6 +9,7 @@ from core.history_filters import history_threshold_is_enabled
 from core.portfolio_fast_data import (
     build_score_single_stock_profile_fields,
     build_neutral_candidate_stats_index,
+    get_neutral_candidate_metrics,
     summarize_single_stock_trade_stats_from_pit_index,
 )
 from core.portfolio_stats import calc_portfolio_score
@@ -56,6 +57,9 @@ def _install_neutral_pit_stats_index(prep_result, params):
     prep_result["all_pit_stats_index"] = {
         ticker: neutral_index for ticker in (prep_result.get("all_dfs_fast") or {})
     }
+    # Candidate replay can consume this immutable tuple directly instead of
+    # repeating one function call + dict marker lookup for every candidate.
+    prep_result["neutral_candidate_metrics"] = get_neutral_candidate_metrics(neutral_index)
     prep_result["pit_stats_deferred"] = True
 
 
@@ -79,6 +83,7 @@ def _materialize_deferred_pit_stats(session, params, prep_result):
     if full_prep.get("prep_failures") != prep_result.get("prep_failures"):
         raise RuntimeError("deferred PIT stats materialization 與原 trial prep failure set 不一致")
     prep_result["all_pit_stats_index"] = full_prep.get("all_pit_stats_index") or {}
+    prep_result["neutral_candidate_metrics"] = None
     prep_result["pit_stats_deferred"] = False
     cache_prep = getattr(session, "cache_prepared_trial_inputs", None)
     if callable(cache_prep):
@@ -373,6 +378,11 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
             profile_stats=pf_profile,
             verbose=False,
             pit_stats_index=all_pit_stats_index,
+            neutral_candidate_metrics=(
+                prep_result.get("neutral_candidate_metrics")
+                if bool(prep_result.get("pit_stats_deferred", False))
+                else None
+            ),
         )
 
     full_year_count = int(pf_profile.get("full_year_count", 0))
@@ -614,6 +624,11 @@ def evaluate_prepared_inner_validate_score(session, *, ai_params, prep_result, v
             profile_stats=pf_profile,
             verbose=False,
             pit_stats_index=all_pit_stats_index,
+            neutral_candidate_metrics=(
+                prep_result.get("neutral_candidate_metrics")
+                if bool(prep_result.get("pit_stats_deferred", False))
+                else None
+            ),
         )
     min_full_year_return_pct = float(pf_profile.get("min_full_year_return_pct", 0.0))
     min_month_return_pct = float(pf_profile.get("min_month_return_pct", 0.0))

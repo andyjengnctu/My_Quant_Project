@@ -103,6 +103,7 @@ def run_portfolio_timeline(
     replay_counts=None,
     replay_execution_rows=None,
     pit_stats_index=None,
+    neutral_candidate_metrics=None,
     active_params_resolver=None,
     active_context_resolver=None,
     active_param_ensemble_resolver=None,
@@ -225,17 +226,23 @@ def run_portfolio_timeline(
             bucket.setdefault("orderable_rows", [])
             bucket.setdefault("trade_rows", [])
 
-    training_idle_fast_path_enabled = bool(
-        is_training
-        and replay_counts is None
-        and active_params_resolver is None
+    static_runtime_context = bool(
+        active_params_resolver is None
         and active_context_resolver is None
         and active_param_ensemble_resolver is None
         and active_context_ensemble_resolver is None
+    )
+    training_idle_fast_path_enabled = bool(
+        is_training
+        and replay_counts is None
+        and static_runtime_context
         and (not capture_equity_curve)
         and benchmark_period_stats is not None
     )
 
+    active_year_key = None
+    active_month_key = None
+    active_quarter_key = None
     replay_progress_start = time.perf_counter()
     replay_total_days = max(0, len(sorted_dates) - start_idx)
     for i in range(start_idx, len(sorted_dates)):
@@ -248,46 +255,70 @@ def run_portfolio_timeline(
         elif today_rebate_month_key != rebate_month_key:
             cash += settle_fee_rebate(fee_rebate_state)
             rebate_month_key = today_rebate_month_key
-        day_ensemble_members = list(active_param_ensemble_resolver(today) or []) if active_param_ensemble_resolver is not None else []
-        day_ensemble_contexts = list(active_context_ensemble_resolver(today) or []) if active_context_ensemble_resolver is not None else []
-        day_ensemble_min_agree = resolve_seed_ensemble_min_agree(
-            len(day_ensemble_members),
-            ensemble_min_agree if ensemble_min_agree is not None else "auto",
-        ) if day_ensemble_members else None
-        single_member_identity_replay = bool(
-            len(day_ensemble_members) == 1
-            and int(day_ensemble_min_agree or 1) <= 1
-        )
-        use_param_ensemble = bool(day_ensemble_members) and not single_member_identity_replay
-        if day_ensemble_members:
-            day_params = day_ensemble_members[0].get("params_obj") or params
-            day_context = day_ensemble_contexts[0] if day_ensemble_contexts else None
-        else:
-            day_params = active_params_resolver(today) if active_params_resolver is not None else params
-            day_context = active_context_resolver(today) if active_context_resolver is not None else None
-        if day_context is None:
+        if static_runtime_context:
+            day_ensemble_members = ()
+            day_ensemble_contexts = ()
+            day_ensemble_min_agree = None
+            use_param_ensemble = False
+            day_params = params
             day_all_dfs_fast = all_dfs_fast
             day_pit_stats_index = pit_stats_index
             day_normal_setup_index = normal_setup_index
             day_pit_stats_cursor = pit_stats_cursor
         else:
-            day_all_dfs_fast = day_context.get('all_dfs_fast') or all_dfs_fast
-            day_pit_stats_index = day_context.get('all_pit_stats_index') or pit_stats_index
-            day_normal_setup_index = day_context.get('normal_setup_index') or normal_setup_index
-            day_cursor_key = id(day_pit_stats_index)
-            day_pit_stats_cursor = pit_stats_cursor.setdefault(day_cursor_key, {})
+            day_ensemble_members = list(active_param_ensemble_resolver(today) or []) if active_param_ensemble_resolver is not None else []
+            day_ensemble_contexts = list(active_context_ensemble_resolver(today) or []) if active_context_ensemble_resolver is not None else []
+            day_ensemble_min_agree = resolve_seed_ensemble_min_agree(
+                len(day_ensemble_members),
+                ensemble_min_agree if ensemble_min_agree is not None else "auto",
+            ) if day_ensemble_members else None
+            single_member_identity_replay = bool(
+                len(day_ensemble_members) == 1
+                and int(day_ensemble_min_agree or 1) <= 1
+            )
+            use_param_ensemble = bool(day_ensemble_members) and not single_member_identity_replay
+            if day_ensemble_members:
+                day_params = day_ensemble_members[0].get("params_obj") or params
+                day_context = day_ensemble_contexts[0] if day_ensemble_contexts else None
+            else:
+                day_params = active_params_resolver(today) if active_params_resolver is not None else params
+                day_context = active_context_resolver(today) if active_context_resolver is not None else None
+            if day_context is None:
+                day_all_dfs_fast = all_dfs_fast
+                day_pit_stats_index = pit_stats_index
+                day_normal_setup_index = normal_setup_index
+                day_pit_stats_cursor = pit_stats_cursor
+            else:
+                day_all_dfs_fast = day_context.get('all_dfs_fast') or all_dfs_fast
+                day_pit_stats_index = day_context.get('all_pit_stats_index') or pit_stats_index
+                day_normal_setup_index = day_context.get('normal_setup_index') or normal_setup_index
+                day_cursor_key = id(day_pit_stats_index)
+                day_pit_stats_cursor = pit_stats_cursor.setdefault(day_cursor_key, {})
 
-        if today.year not in year_start_equity:
-            year_start_equity[today.year] = milli_to_money(current_equity)
-            year_first_sim_date[today.year] = pd.Timestamp(today)
-        month_key = (int(today.year), int(today.month))
-        if month_key not in month_start_equity:
+        year_key = int(today.year)
+        month_key = (year_key, int(today.month))
+        quarter_key = (year_key, int((today.month - 1) // 3 + 1))
+        if year_key != active_year_key:
+            active_year_key = year_key
+            year_start_equity[year_key] = milli_to_money(current_equity)
+            year_first_sim_date[year_key] = pd.Timestamp(today)
+        if month_key != active_month_key:
+            active_month_key = month_key
             month_start_equity[month_key] = milli_to_money(current_equity)
             month_first_sim_date[month_key] = pd.Timestamp(today)
-        quarter_key = (int(today.year), int((today.month - 1) // 3 + 1))
-        if quarter_key not in quarter_start_equity:
+        if quarter_key != active_quarter_key:
+            active_quarter_key = quarter_key
             quarter_start_equity[quarter_key] = milli_to_money(current_equity)
             quarter_first_sim_date[quarter_key] = pd.Timestamp(today)
+
+        if i + 1 < len(sorted_dates):
+            next_day = sorted_dates[i + 1]
+            year_period_end = int(next_day.year) != year_key
+            month_period_end = year_period_end or int(next_day.month) != month_key[1]
+            next_quarter = int((next_day.month - 1) // 3 + 1)
+            quarter_period_end = year_period_end or next_quarter != quarter_key[1]
+        else:
+            year_period_end = month_period_end = quarter_period_end = True
 
         normal_setup_entries_today = day_normal_setup_index.get(today, [])
         if use_param_ensemble:
@@ -308,12 +339,15 @@ def run_portfolio_timeline(
                 monthly_equities.append(yesterday_equity)
                 current_month = today.month
             yesterday_equity = current_equity_money
-            year_end_equity[today.year] = current_equity_money
-            year_last_sim_date[today.year] = pd.Timestamp(today)
-            month_end_equity[month_key] = current_equity_money
-            month_last_sim_date[month_key] = pd.Timestamp(today)
-            quarter_end_equity[quarter_key] = current_equity_money
-            quarter_last_sim_date[quarter_key] = pd.Timestamp(today)
+            if year_period_end:
+                year_end_equity[year_key] = current_equity_money
+                year_last_sim_date[year_key] = pd.Timestamp(today)
+            if month_period_end:
+                month_end_equity[month_key] = current_equity_money
+                month_last_sim_date[month_key] = pd.Timestamp(today)
+            if quarter_period_end:
+                quarter_end_equity[quarter_key] = current_equity_money
+                quarter_last_sim_date[quarter_key] = pd.Timestamp(today)
             idle_fast_path_days += 1
             if profile_timing_enabled:
                 bookkeeping_sec += time.perf_counter() - t0
@@ -427,6 +461,7 @@ def run_portfolio_timeline(
                         pit_stats_cursor=day_pit_stats_cursor,
                         today=today,
                         params=day_params,
+                        neutral_candidate_metrics=neutral_candidate_metrics,
                         profile_stats=candidate_subprofile,
                     )
                     if profile_timing_enabled:
@@ -477,6 +512,7 @@ def run_portfolio_timeline(
                             and not bool(enable_rotation)
                             and not bool(getattr(day_params, "use_breakout_quality_ranking", False))
                         ),
+                        neutral_candidate_metrics=neutral_candidate_metrics,
                         profile_stats=candidate_subprofile,
                     )
                 if profile_timing_enabled:
@@ -973,12 +1009,15 @@ def run_portfolio_timeline(
         yesterday_equity = current_equity_money
         if benchmark_loop_enabled:
             yesterday_bm_px = current_bm_px
-        year_end_equity[today.year] = current_equity_money
-        year_last_sim_date[today.year] = pd.Timestamp(today)
-        month_end_equity[month_key] = current_equity_money
-        month_last_sim_date[month_key] = pd.Timestamp(today)
-        quarter_end_equity[quarter_key] = current_equity_money
-        quarter_last_sim_date[quarter_key] = pd.Timestamp(today)
+        if year_period_end:
+            year_end_equity[year_key] = current_equity_money
+            year_last_sim_date[year_key] = pd.Timestamp(today)
+        if month_period_end:
+            month_end_equity[month_key] = current_equity_money
+            month_last_sim_date[month_key] = pd.Timestamp(today)
+        if quarter_period_end:
+            quarter_end_equity[quarter_key] = current_equity_money
+            quarter_last_sim_date[quarter_key] = pd.Timestamp(today)
 
         if (not is_training) or capture_equity_curve:
             equity_curve.append({

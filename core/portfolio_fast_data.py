@@ -301,6 +301,13 @@ def build_neutral_candidate_stats_index(params):
     return index
 
 
+def get_neutral_candidate_metrics(stats_index):
+    """Return the pre-evaluated neutral candidate tuple, if this is a neutral PIT index."""
+    if not isinstance(stats_index, dict):
+        return None
+    return stats_index.get(_NEUTRAL_CANDIDATE_METRICS_KEY)
+
+
 def build_trade_stats_index(trade_logs):
     if not trade_logs:
         return {
