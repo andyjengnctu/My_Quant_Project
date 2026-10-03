@@ -335,7 +335,7 @@ def _make_candidate_row(
         # A fallback read from signal_state is still cloned because it is live state.
         row['shadow_position_state'] = (
             resolved_shadow_position
-            if resolved_shadow_is_snapshot
+            if compact_training_row or resolved_shadow_is_snapshot
             else clone_shadow_position(resolved_shadow_position)
         )
     return row
@@ -582,9 +582,17 @@ def _collect_extended_candidates(
     orderable_candidates_today = []
 
     sort_started = time.perf_counter() if profile_enabled else None
-    sorted_extended_tickers = sorted(active_extended_signals)
+    # The final executable candidate list is sorted canonically below.  Training
+    # without diagnostic rows has no observable dependency on the traversal order
+    # of independent continuation states, so preserve the dict's deterministic
+    # insertion order and avoid re-sorting the active set every simulated day.
+    sorted_extended_tickers = (
+        tuple(active_extended_signals)
+        if compact_training_rows
+        else tuple(sorted(active_extended_signals))
+    )
     if extended_day_market_cache is not None:
-        extended_day_market_cache[("__meta__", "sorted_extended_tickers")] = tuple(sorted_extended_tickers)
+        extended_day_market_cache[("__meta__", "sorted_extended_tickers")] = sorted_extended_tickers
     if profile_enabled:
         _candidate_profile_add(profile_stats, "portfolio_candidate_sort_sec", sort_started)
     for ticker in sorted_extended_tickers:

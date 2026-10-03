@@ -398,7 +398,7 @@ def build_counterfactual_shadow_position_from_plan(entry_plan, *, t_open, t_high
     qty = int(entry_plan.get('qty', 0) or 0)
     resolved_ticker = ticker or entry_plan.get('ticker')
     resolved_security_profile = security_profile or entry_plan.get('security_profile')
-    limit_price = entry_plan.get('limit_price', np.nan)
+    limit_price = entry_plan.get('limit_price', entry_plan.get('limit_px', np.nan))
     if qty <= 0 or pd.isna(t_open) or pd.isna(limit_price):
         return None
 
@@ -551,7 +551,7 @@ def _execute_pre_market_entry_plan_core(
     if pd.isna(t_volume) or t_volume <= 0 or pd.isna(t_open) or pd.isna(t_low) or is_locked_limit_up:
         return None, count_as_missed_buy, False, is_locked_limit_up, np.nan
 
-    limit_price = entry_plan["limit_price"]
+    limit_price = entry_plan.get("limit_price", entry_plan.get("limit_px"))
     if price_to_milli(t_low) > price_to_milli(limit_price):
         return None, count_as_missed_buy, False, is_locked_limit_up, np.nan
 
@@ -695,7 +695,7 @@ def build_position_from_frozen_entry_plan(
     position = build_position_from_entry_fill(
         buy_price=buy_price, qty=qty, init_sl=seed.get("init_sl"),
         init_trail=seed.get("init_trail"), params=params, entry_type=entry_type,
-        target_price=seed.get("target_price"), limit_price=seed.get("limit_price"),
+        target_price=seed.get("target_price"), limit_price=seed.get("limit_price", seed.get("limit_px")),
         entry_atr=None if shadow is not None else seed.get("entry_atr"),
         target_reference_price=seed.get("target_reference_price"),
         ticker=ticker or seed.get("ticker"),

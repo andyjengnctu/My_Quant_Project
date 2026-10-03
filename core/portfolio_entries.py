@@ -5,7 +5,6 @@ from core.exact_accounting import (
     restore_money_like_from_milli,
 )
 from core.portfolio_entry_plans import (
-    build_candidate_plan_seed,
     _build_candidate_full_entry_plan_if_affordable,
     _build_cash_capped_entry_plan_for_candidate,
 )
@@ -51,6 +50,7 @@ from core.portfolio_fast_data import (
 )
 from core.trade_plans import (
     clone_shadow_position,
+    entry_notional_meets_minimum,
     execute_pre_market_entry_plan,
     execute_pre_market_entry_plan_training,
     resolve_signal_tracking_params,
@@ -75,6 +75,33 @@ def _candidate_kind_label(candidate_type):
     if normalized == 'reentry':
         return 'Re-entry'
     return '新訊號'
+
+
+def _resolve_training_entry_plan(candidate_row, available_cash_milli, params, sizing_equity):
+    """Return the candidate row itself when its pre-sized reservation still fits.
+
+    Optimizer training already materialized canonical geometry, quantity and exact
+    reserved cash in the candidate row.  Rebuilding the same plan dict before every
+    attempted order is pure allocation overhead.  The rare cash-capped case keeps
+    the canonical builder as the fallback.
+    """
+    qty = int(candidate_row.get('qty', 0) or 0)
+    reserved_cost_milli = int(candidate_row.get('proj_cost_milli', 0) or 0)
+    if (
+        qty > 0
+        and reserved_cost_milli > 0
+        and reserved_cost_milli <= int(available_cash_milli)
+        and entry_notional_meets_minimum(candidate_row.get('limit_px'), qty, params)
+    ):
+        return candidate_row
+    return _build_cash_capped_entry_plan_for_candidate(
+        candidate_row,
+        None,
+        int(available_cash_milli),
+        params,
+        sizing_equity,
+        copy_shadow_position=False,
+    )
 
 
 def execute_reserved_entries_for_day(
@@ -128,16 +155,19 @@ def execute_reserved_entries_for_day(
             signal_date_value = _format_candidate_date(cand.get('signal_date'))
             candidate_date_value = _format_candidate_date(cand.get('candidate_date') or cand.get('trade_date') or today)
 
-        chosen_entry_plan = _build_cash_capped_entry_plan_for_candidate(
-            cand,
-            effective_entry_budget,
-            effective_entry_budget_milli,
-            candidate_params,
-            sizing_equity,
-            # Candidate rows already own an isolated shadow snapshot; this plan
-            # is ephemeral and only reads inherited management on a fill.
-            copy_shadow_position=False,
-        )
+        if compact_training_execution:
+            chosen_entry_plan = _resolve_training_entry_plan(
+                cand, effective_entry_budget_milli, candidate_params, sizing_equity
+            )
+        else:
+            chosen_entry_plan = _build_cash_capped_entry_plan_for_candidate(
+                cand,
+                effective_entry_budget,
+                effective_entry_budget_milli,
+                candidate_params,
+                sizing_equity,
+                copy_shadow_position=False,
+            )
         if chosen_entry_plan is None:
             continue
 
@@ -205,7 +235,7 @@ def execute_reserved_entries_for_day(
                     current_session_values,
                 )
 
-        reserved_cost_milli = chosen_entry_plan['reserved_cost_milli']
+        reserved_cost_milli = int(chosen_entry_plan.get('reserved_cost_milli', chosen_entry_plan.get('proj_cost_milli', 0)) or 0)
         available_cash_milli -= reserved_cost_milli
         pre_market_occupied += 1
 
@@ -493,15 +523,11 @@ def cleanup_extended_signals_for_day(
             if candidate_rows_by_ticker is not None:
                 candidate_row = candidate_rows_by_ticker.get(ticker)
                 if candidate_row is not None:
-                    counterfactual_anchor_plan = build_candidate_plan_seed(
-                        candidate_row,
-                        sizing_equity=sizing_capital,
-                        copy_shadow_position=False,
-                    )
-                    counterfactual_anchor_plan["qty"] = int(candidate_row.get("qty", 0) or 0)
-                    counterfactual_anchor_plan["is_orderable"] = bool(
-                        candidate_row.get("is_orderable", False)
-                    )
+                    # Candidate rows already contain the frozen geometry and exact
+                    # quantity consumed by the counterfactual shadow constructor.
+                    # The constructor accepts the compact ``limit_px`` alias, so no
+                    # second plan dict is needed for optimizer cleanup.
+                    counterfactual_anchor_plan = candidate_row
             should_clear = should_clear_extended_signal(
                 signal_state, t_low, t_high, t_open=t_open, t_close=t_close,
                 t_volume=t_volume, y_close=y_close, y_high=y_high, y_atr=y_atr,

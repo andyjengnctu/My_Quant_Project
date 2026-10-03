@@ -289,20 +289,6 @@ def run_portfolio_timeline(
             quarter_start_equity[quarter_key] = milli_to_money(current_equity)
             quarter_first_sim_date[quarter_key] = pd.Timestamp(today)
 
-        sold_today = set()
-        pre_market_position_count = len(portfolio)
-        daily_filled_buy_count_before = int(portfolio_entry_stats.get('filled_buy_count', 0) or 0)
-        daily_missed_buy_count_before = int(total_missed_buys)
-        candidate_sources_today = False
-        orderable_candidates_today = []
-        cleanup_candidate_rows_by_ticker = None
-        resource_action_candidates_today = []
-        # Diagnostics are only populated when resource selection actually runs.
-        # The old path allocated a large ~70-field default dict on every replay day,
-        # including idle days where it was immediately discarded.  All consumers
-        # already use .get(..., default), so an empty dict is the same observable
-        # state at a fraction of the allocation cost.
-        resource_selection_diag = {}
         normal_setup_entries_today = day_normal_setup_index.get(today, [])
         if use_param_ensemble:
             has_ensemble_normal_setup = any(bool((ctx.get("normal_setup_index") or {}).get(today, [])) for ctx in day_ensemble_contexts)
@@ -336,6 +322,16 @@ def run_portfolio_timeline(
 
         current_equity_money = milli_to_money(current_equity)
         cash_money = milli_to_money(cash)
+
+        sold_today = set()
+        pre_market_position_count = len(portfolio)
+        daily_filled_buy_count_before = int(portfolio_entry_stats.get('filled_buy_count', 0) or 0)
+        daily_missed_buy_count_before = int(total_missed_buys)
+        candidate_sources_today = False
+        orderable_candidates_today = []
+        cleanup_candidate_rows_by_ticker = None
+        resource_action_candidates_today = []
+        resource_selection_diag = {}
 
         if verbose and (not is_training) and ((i - start_idx) % 5 == 0):
             rebate_receivable_money = milli_to_money(get_fee_rebate_receivable_milli(fee_rebate_state))
@@ -478,6 +474,7 @@ def run_portfolio_timeline(
                             and replay_counts is None
                             and replay_execution_rows is None
                             and replay_selector_trace_rows is None
+                            and not bool(enable_rotation)
                             and not bool(getattr(day_params, "use_breakout_quality_ranking", False))
                         ),
                         profile_stats=candidate_subprofile,
@@ -505,21 +502,34 @@ def run_portfolio_timeline(
                     if replay_selector_trace_rows is not None
                     else None
                 )
-                orderable_candidates_today, resource_selection_diag = _run_portfolio_replay_phase(
-                    today,
-                    "resource_aware_binary_order",
-                    reorder_candidates_for_resource_aware_quality,
-                    orderable_candidates_today,
-                    available_cash=available_cash,
-                    sizing_equity=sizing_equity,
-                    pre_market_occupied=pre_market_occupied,
-                    max_positions=max_positions,
-                    params=day_params,
+                skip_noop_resource_selector = bool(
+                    is_training
+                    and replay_counts is None
+                    and replay_execution_rows is None
+                    and replay_selector_trace_rows is None
+                    and not bool(getattr(day_params, "use_breakout_quality_ranking", False))
                 )
-                resource_action_candidates_today = select_resource_aware_action_candidates(
-                    orderable_candidates_today,
-                    resource_selection_diag,
-                )
+                if skip_noop_resource_selector:
+                    # With DL/ranking disabled the selector is mathematically the
+                    # identity.  Avoid two list copies plus diagnostic allocation on
+                    # every candidate day; preserve the exact sorted candidate list.
+                    resource_action_candidates_today = orderable_candidates_today
+                else:
+                    orderable_candidates_today, resource_selection_diag = _run_portfolio_replay_phase(
+                        today,
+                        "resource_aware_binary_order",
+                        reorder_candidates_for_resource_aware_quality,
+                        orderable_candidates_today,
+                        available_cash=available_cash,
+                        sizing_equity=sizing_equity,
+                        pre_market_occupied=pre_market_occupied,
+                        max_positions=max_positions,
+                        params=day_params,
+                    )
+                    resource_action_candidates_today = select_resource_aware_action_candidates(
+                        orderable_candidates_today,
+                        resource_selection_diag,
+                    )
                 if profile_timing_enabled:
                     resource_select_sec += time.perf_counter() - t0
 

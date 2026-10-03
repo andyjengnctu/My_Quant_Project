@@ -1,5 +1,6 @@
 import bisect
 import time
+from collections import defaultdict
 
 import numpy as np
 
@@ -132,8 +133,12 @@ def pack_prepared_stock_data(df):
 
 
 def build_normal_setup_index(all_dfs_fast):
-    setup_index = {}
-    for ticker, fast_df in all_dfs_fast.items():
+    # Candidate replay requires deterministic ticker order.  Sort the ticker
+    # universe once, then append into day buckets in that order.  This preserves
+    # the exact observable ordering while avoiding thousands of tiny per-day sorts.
+    setup_index = defaultdict(list)
+    for ticker in sorted(all_dfs_fast):
+        fast_df = all_dfs_fast[ticker]
         dates = get_fast_dates(fast_df)
         if len(dates) < 2:
             continue
@@ -142,18 +147,13 @@ def build_normal_setup_index(all_dfs_fast):
             setup_positions = np.flatnonzero(fast_df['is_setup'][:-1])
             for y_pos in setup_positions:
                 today = dates[y_pos + 1]
-                setup_index.setdefault(today, []).append((ticker, y_pos, y_pos + 1))
+                setup_index[today].append((ticker, y_pos, y_pos + 1))
         else:
             for i in range(1, len(dates)):
                 y_date = dates[i - 1]
                 if fast_df[y_date]['is_setup']:
-                    setup_index.setdefault(dates[i], []).append((ticker, i - 1, i))
-    # Candidate replay requires deterministic ticker order.  Sort once while the
-    # index is built instead of sorting the same day's setup rows again on every
-    # trial/day traversal.
-    for setup_rows in setup_index.values():
-        setup_rows.sort(key=lambda row: row[0])
-    return setup_index
+                    setup_index[dates[i]].append((ticker, i - 1, i))
+    return dict(setup_index)
 
 
 def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None, include_trade_logs=True, include_pit_stats_index=False, feature_bank=None):
