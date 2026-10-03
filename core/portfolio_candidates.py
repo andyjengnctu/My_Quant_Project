@@ -131,6 +131,7 @@ def _make_candidate_row(
     max_qty=None,
     prev_close=None,
     quality_rank=None,
+    ranking_context=None,
 ):
     if est_qty > 0:
         est_cost_milli = int(calc_cash_buy_total_milli_from_price(est_limit_px, est_qty))
@@ -157,7 +158,11 @@ def _make_candidate_row(
         if quality_rank is None
         else normalize_breakout_quality_rank_payload(quality_rank)
     )
-    ranking_context = get_breakout_quality_ranking_source_context()
+    resolved_ranking_context = (
+        get_breakout_quality_ranking_source_context()
+        if ranking_context is None
+        else ranking_context
+    )
     max_position_cap_pct = float(getattr(params, "max_position_cap_pct"))
     projected_capital_fraction, projected_capital_deployment_rate = (
         calc_projected_capital_metrics(
@@ -205,8 +210,8 @@ def _make_candidate_row(
         'orig_atr': (signal_state or {}).get('orig_atr') if signal_state is not None else entry_atr,
         'entry_source': (signal_state or {}).get('source') if signal_state is not None else candidate_type,
         'use_breakout_quality_ranking': bool(normalized_quality_rank is not None),
-        'breakout_quality_ranking_policy': str(ranking_context.ranking_policy),
-        'breakout_quality_ranking_options': dict(ranking_context.ranking_options or {}),
+        'breakout_quality_ranking_policy': str(resolved_ranking_context.ranking_policy),
+        'breakout_quality_ranking_options': dict(resolved_ranking_context.ranking_options or {}),
         'breakout_quality_score': (
             None
             if normalized_quality_rank is None
@@ -278,6 +283,7 @@ def _collect_normal_candidates(
     sizing_capital_context,
     params,
     collect_all_candidates,
+    ranking_context,
     profile_stats=None,
 ):
     profile_enabled = profile_stats is not None
@@ -382,6 +388,7 @@ def _collect_normal_candidates(
             sizing_capital=candidate_plan.get('sizing_capital'),
             prev_close=y_close,
             quality_rank=quality_rank,
+            ranking_context=ranking_context,
         )
         if profile_enabled:
             _candidate_profile_add(profile_stats, "portfolio_candidate_row_sec", row_started)
@@ -480,6 +487,7 @@ def _collect_extended_candidates(
     sizing_capital_context,
     params,
     collect_all_candidates,
+    ranking_context,
     profile_stats=None,
 ):
     profile_enabled = profile_stats is not None
@@ -611,6 +619,7 @@ def _collect_extended_candidates(
             max_qty=candidate_plan.get('max_qty'),
             prev_close=y_close,
             quality_rank=quality_rank,
+            ranking_context=ranking_context,
         )
         if profile_enabled:
             _candidate_profile_add(profile_stats, "portfolio_candidate_row_sec", row_started)
@@ -640,6 +649,7 @@ def build_daily_candidates(
     profile_stats=None,
 ):
     buy_sort_method = get_buy_sort_method()
+    ranking_context = get_breakout_quality_ranking_source_context()
     sizing_capital_context = build_position_sizing_capital_context(
         sizing_equity,
         params.fixed_risk,
@@ -659,6 +669,7 @@ def build_daily_candidates(
         sizing_capital_context=sizing_capital_context,
         params=params,
         collect_all_candidates=collect_all_candidates,
+        ranking_context=ranking_context,
         profile_stats=profile_stats,
     )
     extended_candidates, extended_orderable = _collect_extended_candidates(
@@ -675,6 +686,7 @@ def build_daily_candidates(
         sizing_capital_context=sizing_capital_context,
         params=params,
         collect_all_candidates=collect_all_candidates,
+        ranking_context=ranking_context,
         profile_stats=profile_stats,
     )
 
