@@ -31,6 +31,7 @@ from core.extended_signals import (
     normalize_breakout_quality_rank_payload,
     resolve_breakout_quality_rank,
 )
+from core.price_utils import build_position_sizing_capital_context
 from core.portfolio_fast_data import (
     get_fast_close,
     get_fast_dates,
@@ -274,6 +275,7 @@ def _collect_normal_candidates(
     buy_sort_method,
     today,
     sizing_equity,
+    sizing_capital_context,
     params,
     collect_all_candidates,
     profile_stats=None,
@@ -323,6 +325,7 @@ def _collect_normal_candidates(
             ticker=ticker,
             security_profile=security_profile,
             trade_date=today,
+            sizing_capital_context=sizing_capital_context,
         )
         if profile_enabled:
             _candidate_profile_add(profile_stats, "portfolio_candidate_plan_sec", plan_started)
@@ -474,6 +477,7 @@ def _collect_extended_candidates(
     buy_sort_method,
     today,
     sizing_equity,
+    sizing_capital_context,
     params,
     collect_all_candidates,
     profile_stats=None,
@@ -561,6 +565,9 @@ def _collect_extended_candidates(
             candidate_plan,
             sizing_equity,
             candidate_params,
+            sizing_capital_context=(
+                sizing_capital_context if candidate_params is params else None
+            ),
         )
         if profile_enabled:
             _candidate_profile_add(profile_stats, "portfolio_candidate_plan_sec", resize_started)
@@ -633,6 +640,11 @@ def build_daily_candidates(
     profile_stats=None,
 ):
     buy_sort_method = get_buy_sort_method()
+    sizing_capital_context = build_position_sizing_capital_context(
+        sizing_equity,
+        params.fixed_risk,
+        params,
+    )
     normal_candidates, normal_orderable, normal_setup_tickers_today = _collect_normal_candidates(
         normal_setup_entries=normal_setup_index.get(today, []),
         portfolio=portfolio,
@@ -644,6 +656,7 @@ def build_daily_candidates(
         buy_sort_method=buy_sort_method,
         today=today,
         sizing_equity=sizing_equity,
+        sizing_capital_context=sizing_capital_context,
         params=params,
         collect_all_candidates=collect_all_candidates,
         profile_stats=profile_stats,
@@ -659,6 +672,7 @@ def build_daily_candidates(
         buy_sort_method=buy_sort_method,
         today=today,
         sizing_equity=sizing_equity,
+        sizing_capital_context=sizing_capital_context,
         params=params,
         collect_all_candidates=collect_all_candidates,
         profile_stats=profile_stats,

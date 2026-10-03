@@ -190,16 +190,41 @@ def calc_net_sell_price(sPrice, sQty, params, ticker=None, security_profile=None
     return calc_average_price_from_total_milli(ledger["net_sell_total_milli"], int(sQty))
 
 
-def calc_position_size(bPrice, stopPrice, cap, riskPct, params, ticker=None, security_profile=None, trade_date=None):
+def build_position_sizing_capital_context(cap, riskPct, params):
+    """Precompute capital-only exact sizing bounds for repeated same-capital candidate sizing."""
+    cap_milli = money_to_milli(cap)
+    max_risk_milli = calc_risk_budget_milli(cap_milli, riskPct)
+    max_position_cap_pct = float(getattr(params, "max_position_cap_pct", 1.0))
+    max_position_cap_milli = min(
+        cap_milli,
+        calc_risk_budget_milli(cap_milli, max_position_cap_pct),
+    )
+    return int(cap_milli), int(max_risk_milli), int(max_position_cap_milli)
+
+
+def calc_position_size(
+    bPrice,
+    stopPrice,
+    cap,
+    riskPct,
+    params,
+    ticker=None,
+    security_profile=None,
+    trade_date=None,
+    *,
+    _capital_context=None,
+):
     if pd.isna(bPrice) or pd.isna(stopPrice) or bPrice <= 0 or stopPrice <= 0:
         return 0
 
     buy_price_milli = price_to_milli(bPrice)
     stop_price_milli = price_to_milli(stopPrice)
-    cap_milli = money_to_milli(cap)
-    max_risk_milli = calc_risk_budget_milli(cap_milli, riskPct)
-    max_position_cap_pct = float(getattr(params, "max_position_cap_pct", 1.0))
-    max_position_cap_milli = min(cap_milli, calc_risk_budget_milli(cap_milli, max_position_cap_pct))
+    if _capital_context is None:
+        cap_milli, max_risk_milli, max_position_cap_milli = build_position_sizing_capital_context(
+            cap, riskPct, params
+        )
+    else:
+        cap_milli, max_risk_milli, max_position_cap_milli = _capital_context
 
     buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, _fixed_risk_ppm = resolve_fee_schedule_tuple(
         params,

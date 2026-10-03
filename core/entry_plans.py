@@ -85,7 +85,7 @@ def _resolve_candidate_sizing_capital(candidate_plan, fallback_capital):
 
 
 # # (AI註: 單一真理來源 - 候選單在不同資金上限下的 qty / is_orderable 重算統一由此處理)
-def resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params):
+def resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params, *, sizing_capital_context=None):
     if candidate_plan is None:
         return None
 
@@ -105,6 +105,7 @@ def resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params):
         ticker=candidate_plan.get("ticker"),
         security_profile=candidate_plan.get("security_profile"),
         trade_date=candidate_plan.get("trade_date"),
+        _capital_context=sizing_capital_context,
     )
     max_qty = candidate_plan.get("max_qty")
     if max_qty is not None:
@@ -146,7 +147,17 @@ def build_cash_capped_entry_plan(candidate_plan, available_cash, params):
 
 
 # # (AI註: 單一真理來源 - 正常候選的盤前 limit / worst-case sizing stop / trail / qty 規格統一由此產生；候選資格與可掛單分離)
-def build_normal_candidate_plan(limit_price, atr, sizing_capital, params, ticker=None, security_profile=None, trade_date=None):
+def build_normal_candidate_plan(
+    limit_price,
+    atr,
+    sizing_capital,
+    params,
+    ticker=None,
+    security_profile=None,
+    trade_date=None,
+    *,
+    sizing_capital_context=None,
+):
     if pd.isna(limit_price) or pd.isna(atr):
         return None
 
@@ -163,7 +174,12 @@ def build_normal_candidate_plan(limit_price, atr, sizing_capital, params, ticker
         "security_profile": security_profile,
         "trade_date": trade_date,
     }
-    return resize_candidate_plan_to_capital(base_plan, sizing_capital, params)
+    return resize_candidate_plan_to_capital(
+        base_plan,
+        sizing_capital,
+        params,
+        sizing_capital_context=sizing_capital_context,
+    )
 
 
 # # (AI註: 單一真理來源 - 正常單實際掛單規格；僅接受可掛單候選)
