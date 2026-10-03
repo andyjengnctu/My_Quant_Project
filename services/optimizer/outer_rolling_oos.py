@@ -1274,9 +1274,10 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
         oos_period_display = _display_month_period(oos_period)
         oos_start_date = str(task.get("oos_start_date") or f"{str(oos_year)[:4]}-01-01")
         oos_end_date = str(task.get("oos_end_date") or f"{str(oos_year)[:4]}-12-31")
+        period_role = "PARAM" if validation_budget_protocol_enabled(base_policy) else "OOS"
         if not bool((task or {}).get("mirror_console", False)):
             print(
-                f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | parallel fold START | "
+                f"[{fold_idx}/{fold_count}] {period_role} {oos_period_display} | parallel fold START | "
                 f"selection={selection_period_display}",
                 flush=True,
             )
@@ -1377,7 +1378,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 raw_data_status = "raw data loaded"
             install_shared_cache_sec = max(0.0, time.perf_counter() - install_started)
             print(
-                f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | {raw_data_status} | "
+                f"[{fold_idx}/{fold_count}] {period_role} {oos_period_display} | {raw_data_status} | "
                 f"elapsed={_fmt_duration(install_shared_cache_sec)}",
                 flush=True,
             )
@@ -1492,7 +1493,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                             f"existing={inner_existing}, max={int(config.trials_per_fold)}"
                         )
                     print(
-                        f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | "
+                        f"[{fold_idx}/{fold_count}] {period_role} {oos_period_display} | "
                         f"validation search {inner_existing}/{int(config.trials_per_fold)} | "
                         f"holdout={validation_start_date}~{validation_end_date}",
                         flush=True,
@@ -1513,6 +1514,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                             spec=validation_budget_spec,
                             validation_start_date=validation_start_date,
                             validation_end_date=validation_end_date,
+                            progress_prefix=f"[{fold_idx}/{fold_count}]",
                         )
                         resume_state = controller.catch_up(inner_study)
                         already_stopped = bool(resume_state.get("stop_reason"))
@@ -1523,9 +1525,19 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                                 n_jobs=1,
                                 callbacks=[controller.callback],
                             )
+                        observation_start = int(
+                            validation_budget_spec.observation_start_trial
+                            if validation_budget_spec.observation_start_trial is not None
+                            else (validation_budget_spec.warmup_trials or 0)
+                        )
+                        min_stop = int(
+                            validation_budget_spec.min_trials_before_stop
+                            if validation_budget_spec.min_trials_before_stop is not None
+                            else (validation_budget_spec.warmup_trials or 0)
+                        )
                         print(
-                            f"[{fold_idx}/{fold_count}] PHASE 2/3 | ADAPTIVE VALIDATION | "
-                            f"warmup={int(validation_budget_spec.warmup_trials or 0)} | "
+                            f"[{fold_idx}/{fold_count}] PHASE 2/3 | ADAPTIVE VALIDATION SUMMARY | "
+                            f"observe_from={observation_start} | min_stop={min_stop} | "
                             f"patience={int(validation_budget_spec.patience_trials or 0)} | "
                             f"holdout={validation_start_date}~{validation_end_date}",
                             flush=True,
@@ -1560,7 +1572,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                         else ""
                     )
                     print(
-                        f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | "
+                        f"[{fold_idx}/{fold_count}] {period_role} {oos_period_display} | "
                         f"validation budget selected N*={refit_trials} | "
                         f"score={float(validation_budget_result['selected_validation_score']):.3f}"
                         f"{stop_text}",
@@ -1630,7 +1642,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             progress.emit(int(existing_trials), force=True)
             if resumed_db and existing_trials:
                 print(
-                    f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | "
+                    f"[{fold_idx}/{fold_count}] {period_role} {oos_period_display} | "
                     f"resume study {existing_trials}/{int(refit_trials)} trials",
                     flush=True,
                 )
@@ -1655,7 +1667,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             search_done_ts = progress.get_search_last_done_ts() or time.time()
             best_base_score = None if progress.best_score == float("-inf") else float(progress.best_score)
             best_base_text = format_optimizer_score_for_display(best_base_score, decimals=3)
-            print(f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | optimizer search DONE | best_base_score={best_base_text} | elapsed={_fmt_duration(optimize_sec)}", flush=True)
+            print(f"[{fold_idx}/{fold_count}] {period_role} {oos_period_display} | optimizer search DONE | best_base_score={best_base_text} | elapsed={_fmt_duration(optimize_sec)}", flush=True)
 
             local_started = time.perf_counter()
             local_started_ts = time.time()
@@ -1722,7 +1734,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             best_local_min_score = max((float(item.get("local_min_score", INVALID_TRIAL_VALUE)) for item in list(finalists or [])), default=None)
             best_local_min_text = format_optimizer_score_for_display(best_local_min_score, decimals=3)
             local_stage_label = "local-min review DONE" if resolve_session_local_min_review_enabled(session) else "local-min disabled (base equivalent)"
-            print(f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | {local_stage_label} | finalists={len(finalists)} | best_local_min={best_local_min_text} | elapsed={_fmt_duration(local_elapsed)}", flush=True)
+            print(f"[{fold_idx}/{fold_count}] {period_role} {oos_period_display} | {local_stage_label} | finalists={len(finalists)} | best_local_min={best_local_min_text} | elapsed={_fmt_duration(local_elapsed)}", flush=True)
             _write_parallel_fold_progress_event(
                 stage="LOCAL_MIN_REVIEW",
                 fold_idx=fold_idx,
@@ -2057,11 +2069,23 @@ def run_outer_rolling_oos(
     fold_workers = _resolve_rolling_fold_workers(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
     fold_parallel_enabled = _is_rolling_fold_parallel_enabled(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
     sampler_kind = "random" if bool(timing_mode) else "tpe"
+    plan_validation_spec = (
+        resolve_validation_budget_spec(
+            int(config.trials_per_fold),
+            protocol_id=str(base_policy.get("optimizer_search_protocol") or "").strip(),
+        )
+        if validation_budget_protocol_enabled(base_policy)
+        else None
+    )
     _print_plan(
         config,
         parallel_settings_line=_format_parallel_settings_line(environ, fold_workers=int(fold_workers), sampler_kind=sampler_kind)
         if (bool(timing_mode) and fold_parallel_enabled)
         else None,
+        parameter_schedule_build=plan_validation_spec is not None,
+        validation_holdout_months=(
+            None if plan_validation_spec is None else int(plan_validation_spec.holdout_months)
+        ),
     )
     if not _confirm_plan(config):
         print(f"{C_YELLOW}已取消 outer rolling OOS。{C_RESET}")
@@ -2225,8 +2249,10 @@ def run_outer_rolling_oos(
         selection_end = str(fold["selection_end_date"])
         oos_start_date = str(fold["oos_start_date"])
         oos_end_date = str(fold["oos_end_date"])
-        print(f"[{fold_idx}/{fold_count}] selection={selection_period_display} | OOS {oos_period_display} | fold START", flush=True)
-        if validation_budget_protocol_enabled(base_policy):
+        validation_parameter_build = validation_budget_protocol_enabled(base_policy)
+        period_role = "PARAM" if validation_parameter_build else "OOS"
+        print(f"[{fold_idx}/{fold_count}] selection={selection_period_display} | {period_role} {oos_period_display} | fold START", flush=True)
+        if validation_parameter_build:
             log_dir = os.path.join(output_dir, "outer_rolling_oos", "fold_logs", session_ts)
             os.makedirs(log_dir, exist_ok=True)
             config_payload = {
@@ -2286,7 +2312,7 @@ def run_outer_rolling_oos(
                 selected_budget = int(dict(row.get("training_protocol") or {}).get("selected_trials", 0) or 0)
                 print(
                     f"{C_GREEN}[{fold_idx}/{fold_count}] selection={selection_period_display} | "
-                    f"OOS {oos_period_display} | DONE validation-refit N*={selected_budget} | "
+                    f"PARAM {oos_period_display} | DONE validation-refit N*={selected_budget} | "
                     f"local_score={format_optimizer_score_for_display(local_oos, decimals=OOS_SCORE_DECIMALS)} | "
                     f"local_RoMD={local_romd:.{OOS_SCORE_DECIMALS}f} | elapsed={_fmt_duration(row.get('elapsed_sec'))}{C_RESET}"
                 )

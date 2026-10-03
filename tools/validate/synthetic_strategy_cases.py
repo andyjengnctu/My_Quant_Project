@@ -2215,7 +2215,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     )
     validation_spec = resolve_validation_budget_spec(300)
     plateau_validation_spec = resolve_validation_budget_spec(
-        300, protocol_id="validation_plateau_refit_v2"
+        300, protocol_id="validation_plateau_refit_v3"
     )
     check("strategy_param_training_target_is_config_driven", True, "ACTIVE_STRATEGY_PARAM_PROFILE" in strategy_param_config_source and "get_active_strategy_param_training_profile" in strategy_param_app_source)
     check("strategy_param_menu_contains_only_stable_work_types", True, all(label in strategy_param_app_source for label in ("Forward OOS 參數訓練", "Rolling OOS 參數訓練", "Forward OOS Robustness 參數訓練", "Rolling OOS Robustness 參數訓練", "進階／單次 Optimizer")) and "PARAM-P5" not in research_entry_source)
@@ -2225,16 +2225,17 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         "strategy_param_round6_plateau_validation_is_new_versioned_contract",
         True,
         plateau_validation_param_profile.parameter_set_identity == "PARAM-P9"
-        and plateau_validation_param_profile.validation_protocol == "validation_plateau_refit_v2"
+        and plateau_validation_param_profile.validation_protocol == "validation_plateau_refit_v3"
         and plateau_validation_param_profile.fitting_seed_protocol == "single_seed_42"
         and plateau_validation_spec.as_dict() == {
-            "protocol": "validation_plateau_refit_v2",
+            "protocol": "validation_plateau_refit_v3",
             "holdout_months": 12,
-            "warmup_trials": 50,
             "patience_trials": 50,
             "observation_interval": 1,
             "min_delta": 0.0,
             "reuse_same_policy_signature": True,
+            "observation_start_trial": 1,
+            "min_trials_before_stop": 50,
             "policy_name": "base_finalists_agree",
             "selection_metric": "canonical_optimizer_portfolio_score",
             "tie_break": "smaller_budget",

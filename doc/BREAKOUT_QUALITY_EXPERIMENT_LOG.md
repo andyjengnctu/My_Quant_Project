@@ -12316,3 +12316,14 @@ Decision：`ENGINEERING_ONLY / OUTER_FOLD_IDENTITY_FOLD_LOCAL / FORWARD_PREFIX_R
 
 Decision：`PARAM_P9_C88_REGISTERED / SINGLE_SEED_ADAPTIVE_VALIDATION / PREFIX_CANONICAL_POLICY_OBSERVATION / SIGNATURE_REPLAY_DEDUP / PLATEAU_STOP_50 / BEST_N_FULL_REFIT / OOS_FEEDBACK_FORBIDDEN / RESULT_PENDING / P5_P6_P7_P8_IMMUTABLE`。
 
+
+
+## 2026-10-04 — PARAM-P9 / C88 adaptive validation protocol correction: v3
+
+- **Trigger**：首次從Research正式入口啟動P9時，console停在`validation search 0/300`，檢查後確認`validation_plateau_refit_v2`把`warmup=50`同時當成validation observation起點；這與已核准的「每個training trial都有validation observation，50只限制early-stop最低trial」語意不一致。尚未產生P9/C88正式OOS/Rolling result evidence。
+- **Correction**：current P9/C88切換到`validation_plateau_refit_v3`。`observation_start_trial=1`、`min_trials_before_stop=50`、`observation_interval=1`、`patience=50`、`min_delta=0`。每trial都建立prefix canonical `base-finalists-agree` observation；signature不變精確reuse，變更才實際12M validation replay。
+- **Stop semantics**：Trial 50以前即使plateau成立也不得停止；達minimum stop後，若自最後validation新高起累積50 trials沒有改善才STOP。`stop_trial`與最佳`N*`分離，最佳N*可早於trial 50；完整120M fresh refit仍只跑N*。
+- **Artifact safety**：v2 protocol保留只為辨識舊partial/stale state；P9/C88 current source contract與runtime identity均改為v3，v2 artifact/workspace不得被current流程REUSE/RESUME。P5/C84、P6/C85、P7/C86、P8/C87 scientific identity保持不變。
+- **Observability/UI**：adaptive search新增每10 trials摘要與實際validation replay START/DONE；Research Forward parameter training不再把12M parameter effective block標成final OOS horizon，明示12M inner validation與2021-01-01→2026-03-02 final Forward OOS evaluation。
+
+Decision：`PARAM_P9_C88_PROTOCOL_CORRECTED_TO_V3 / OBSERVE_FROM_TRIAL_1 / MIN_STOP_50 / PATIENCE_50 / V2_STALE_ONLY / RESULT_PENDING / PRIOR_IDENTITIES_IMMUTABLE`。

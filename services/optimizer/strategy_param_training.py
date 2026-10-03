@@ -2046,23 +2046,44 @@ def _validate_selection_full_roos_params(*, path: Path, schedule_contract, args)
                         )
                 else:
                     stop_trial = int(protocol.get("stop_trial", 0) or 0)
+                    observation_start = int(
+                        spec.observation_start_trial
+                        if spec.observation_start_trial is not None
+                        else (spec.warmup_trials or 0)
+                    )
+                    min_stop = int(
+                        spec.min_trials_before_stop
+                        if spec.min_trials_before_stop is not None
+                        else (spec.warmup_trials or 0)
+                    )
                     if not (
-                        int(spec.warmup_trials or 0)
+                        observation_start
                         <= selected_trials
                         <= stop_trial
                         <= int(args.trials_per_fold)
                     ):
                         raise ValueError(
                             "adaptive validation Full ROOS selected/stop trial不合法: "
-                            f"selected={selected_trials}, stop={stop_trial}"
+                            f"selected={selected_trials}, observation_start={observation_start}, stop={stop_trial}"
                         )
-                    if str(protocol.get("stop_reason") or "") not in {
-                        "validation_plateau",
-                        "max_trials",
-                    }:
+                    stop_reason = str(protocol.get("stop_reason") or "")
+                    if stop_reason not in {"validation_plateau", "max_trials"}:
                         raise ValueError("adaptive validation Full ROOS缺少合法stop_reason")
-                    if int(protocol.get("observation_count", 0) or 0) < 1:
+                    if stop_reason == "validation_plateau" and stop_trial < min_stop:
+                        raise ValueError(
+                            "adaptive validation Full ROOS早於minimum stop trial停止: "
+                            f"stop={stop_trial}, min_stop={min_stop}"
+                        )
+                    observation_count = int(protocol.get("observation_count", 0) or 0)
+                    if observation_count < 1:
                         raise ValueError("adaptive validation Full ROOS缺少observation evidence")
+                    interval = int(spec.observation_interval or 1)
+                    expected_observations = ((stop_trial - observation_start) // interval) + 1
+                    if observation_count != expected_observations:
+                        raise ValueError(
+                            "adaptive validation Full ROOS observation count與protocol不一致: "
+                            f"expected={expected_observations}, actual={observation_count}"
+                        )
                 if bool(protocol.get("oos_feedback_used", True)):
                     raise ValueError("validation-budget Full ROOS禁止OOS feedback進入budget selection")
     seed_ensemble_policy = dict(

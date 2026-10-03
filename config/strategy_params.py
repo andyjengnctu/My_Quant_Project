@@ -32,9 +32,29 @@ STRATEGY_PARAM_VALIDATION_PROTOCOLS: dict[str, dict] = {
         "oos_feedback_used": False,
         "full_refit_required": True,
     },
+    # Historical Round-6 v2 protocol.  It started validation observation only after
+    # trial 50 and is kept only so stale/partial v2 artifacts remain identifiable.
+    # Current PARAM-P9 must use v3 below.
     "validation_plateau_refit_v2": {
         "holdout_months": 12,
         "warmup_trials": 50,
+        "patience_trials": 50,
+        "observation_interval": 1,
+        "min_delta": 0.0,
+        "selection_policy": "base_finalists_agree",
+        "selection_metric": "canonical_optimizer_portfolio_score",
+        "tie_break": "smaller_budget",
+        "oos_feedback_used": False,
+        "full_refit_required": True,
+        "reuse_same_policy_signature": True,
+    },
+    # Current corrected protocol: every completed training trial creates a
+    # validation observation from trial 1.  Trial 50 is only the minimum point
+    # at which plateau early stop is allowed; it is not a validation warmup.
+    "validation_plateau_refit_v3": {
+        "holdout_months": 12,
+        "observation_start_trial": 1,
+        "min_trials_before_stop": 50,
         "patience_trials": 50,
         "observation_interval": 1,
         "min_delta": 0.0,
@@ -172,7 +192,7 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
         "coverage_end_date": RESEARCH_MARKET_DATA_CUTOFF,
         "validation": {
             "enabled": True,
-            "protocol": "validation_plateau_refit_v2",
+            "protocol": "validation_plateau_refit_v3",
         },
         "fitting_seed_protocol": "single_seed_42",
         "artifact_slug": "param_p9_validation_plateau_refit",

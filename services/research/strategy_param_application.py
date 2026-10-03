@@ -344,9 +344,17 @@ def _render_profile_summary(profile: StrategyParamTrainingProfile) -> str:
                 ("Budget Checkpoints", " / ".join(str(v) for v in protocol.checkpoints))
             )
         else:
+            if protocol.observation_start_trial is not None and protocol.min_trials_before_stop is not None:
+                rows.extend(
+                    (
+                        ("Observation Start Trial", str(int(protocol.observation_start_trial))),
+                        ("Min Trials Before Stop", str(int(protocol.min_trials_before_stop))),
+                    )
+                )
+            else:
+                rows.append(("Legacy Validation Warmup", str(int(protocol.warmup_trials or 0))))
             rows.extend(
                 (
-                    ("Validation Warmup", str(int(protocol.warmup_trials or 0))),
                     ("Plateau Patience", str(int(protocol.patience_trials or 0))),
                     ("Observation Interval", str(int(protocol.observation_interval or 0))),
                     ("Min Delta", str(float(protocol.min_delta or 0.0))),
@@ -421,11 +429,39 @@ def render_strategy_param_plan(plan: dict) -> str:
         f"Validation           ：{'ON' if protocol is not None else 'OFF'}",
         f"Parameter Set        ：{profile.parameter_set_identity}",
         f"Required coverage end：{plan['required_end']}",
-        f"Train/OOS            ：{OUTER_ROLLING_TRAIN_WINDOW_MONTHS}m / {OUTER_ROLLING_OOS_HORIZON_MONTHS}m",
-        f"Fitting seeds        ：{seed_protocol.seed_count}",
-        f"Seed mode            ：{seed_protocol.seed_mode}",
-        f"Trials/seed          ：{seed_protocol.trials_per_seed}",
     ]
+    if protocol is not None:
+        lines.extend(
+            (
+                f"Selection window      ：{OUTER_ROLLING_TRAIN_WINDOW_MONTHS}m",
+                f"Inner validation      ：{int(protocol.holdout_months)}m",
+            )
+        )
+        if work.rolling:
+            lines.extend(
+                (
+                    f"Parameter cadence     ：{OUTER_ROLLING_OOS_HORIZON_MONTHS}m",
+                    f"Schedule coverage     ：{profile.schedule_start_date} ~ {plan['required_end']}",
+                )
+            )
+        else:
+            lines.extend(
+                (
+                    f"Parameter effective   ：{profile.schedule_start_date}",
+                    f"Final Forward OOS     ：{profile.schedule_start_date} ~ {profile.coverage_end_date}",
+                )
+            )
+    else:
+        lines.append(
+            f"Train/OOS            ：{OUTER_ROLLING_TRAIN_WINDOW_MONTHS}m / {OUTER_ROLLING_OOS_HORIZON_MONTHS}m"
+        )
+    lines.extend(
+        (
+            f"Fitting seeds        ：{seed_protocol.seed_count}",
+            f"Seed mode            ：{seed_protocol.seed_mode}",
+            f"Trials/seed          ：{seed_protocol.trials_per_seed}",
+        )
+    )
     if work.robustness:
         benchmark = dict(plan["benchmark"])
         lines.extend(

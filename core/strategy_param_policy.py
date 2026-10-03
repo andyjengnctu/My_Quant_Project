@@ -28,6 +28,8 @@ class StrategyParamValidationProtocol:
     holdout_months: int
     checkpoints: tuple[int, ...]
     warmup_trials: int | None
+    observation_start_trial: int | None
+    min_trials_before_stop: int | None
     patience_trials: int | None
     observation_interval: int | None
     min_delta: float | None
@@ -47,17 +49,24 @@ class StrategyParamValidationProtocol:
             # Preserve the registered PARAM-P5/C84 v1 scientific payload exactly.
             payload["checkpoints"] = [int(value) for value in self.checkpoints]
         elif self.mode == "adaptive_plateau":
-            payload.update(
-                {
-                    "warmup_trials": int(self.warmup_trials or 0),
-                    "patience_trials": int(self.patience_trials or 0),
-                    "observation_interval": int(self.observation_interval or 0),
-                    "min_delta": float(self.min_delta or 0.0),
-                    "reuse_same_policy_signature": bool(
-                        self.reuse_same_policy_signature
-                    ),
-                }
-            )
+            adaptive_payload = {
+                "patience_trials": int(self.patience_trials or 0),
+                "observation_interval": int(self.observation_interval or 0),
+                "min_delta": float(self.min_delta or 0.0),
+                "reuse_same_policy_signature": bool(self.reuse_same_policy_signature),
+            }
+            if self.observation_start_trial is not None and self.min_trials_before_stop is not None:
+                adaptive_payload.update(
+                    {
+                        "observation_start_trial": int(self.observation_start_trial),
+                        "min_trials_before_stop": int(self.min_trials_before_stop),
+                    }
+                )
+            else:
+                # Preserve legacy v2 payload exactly so old partial artifacts remain
+                # identifiable and cannot be mistaken for the corrected v3 contract.
+                adaptive_payload["warmup_trials"] = int(self.warmup_trials or 0)
+            payload.update(adaptive_payload)
         else:
             raise ValueError(f"不支援的validation protocol mode: {self.mode!r}")
         payload.update(
@@ -216,6 +225,8 @@ def get_strategy_param_validation_protocol(protocol_id: str) -> StrategyParamVal
         if checkpoints != tuple(sorted(set(checkpoints))) or any(value <= 0 for value in checkpoints):
             raise ValueError(f"validation protocol checkpoints必須嚴格遞增且>0: {key}")
         warmup_trials = None
+        observation_start_trial = None
+        min_trials_before_stop = None
         patience_trials = None
         observation_interval = None
         min_delta = None
@@ -223,14 +234,34 @@ def get_strategy_param_validation_protocol(protocol_id: str) -> StrategyParamVal
     else:
         mode = "adaptive_plateau"
         checkpoints = ()
-        warmup_trials = int(raw.get("warmup_trials") or 0)
         patience_trials = int(raw.get("patience_trials") or 0)
         observation_interval = int(raw.get("observation_interval") or 0)
         min_delta = float(raw.get("min_delta") or 0.0)
         reuse_same_policy_signature = bool(raw.get("reuse_same_policy_signature", True))
-        if warmup_trials <= 0 or patience_trials <= 0 or observation_interval <= 0:
+        explicit_start = "observation_start_trial" in raw or "min_trials_before_stop" in raw
+        if explicit_start:
+            warmup_trials = None
+            observation_start_trial = int(raw.get("observation_start_trial") or 0)
+            min_trials_before_stop = int(raw.get("min_trials_before_stop") or 0)
+            if observation_start_trial <= 0 or min_trials_before_stop <= 0:
+                raise ValueError(
+                    f"adaptive validation observation_start/min_trials_before_stop必須>0: {key}"
+                )
+            if min_trials_before_stop < observation_start_trial:
+                raise ValueError(
+                    f"adaptive validation min_trials_before_stop不得早於observation_start_trial: {key}"
+                )
+        else:
+            # Legacy v2 semantics: warmup controlled both observation start and
+            # stop eligibility.  Current P9 no longer uses this branch.
+            warmup_trials = int(raw.get("warmup_trials") or 0)
+            observation_start_trial = None
+            min_trials_before_stop = None
+            if warmup_trials <= 0:
+                raise ValueError(f"adaptive validation protocol warmup_trials必須>0: {key}")
+        if patience_trials <= 0 or observation_interval <= 0:
             raise ValueError(
-                f"adaptive validation protocol warmup/patience/observation_interval必須>0: {key}"
+                f"adaptive validation protocol patience/observation_interval必須>0: {key}"
             )
         if min_delta < 0.0:
             raise ValueError(f"adaptive validation protocol min_delta不得<0: {key}")
@@ -246,6 +277,8 @@ def get_strategy_param_validation_protocol(protocol_id: str) -> StrategyParamVal
         holdout_months=holdout,
         checkpoints=checkpoints,
         warmup_trials=warmup_trials,
+        observation_start_trial=observation_start_trial,
+        min_trials_before_stop=min_trials_before_stop,
         patience_trials=patience_trials,
         observation_interval=observation_interval,
         min_delta=min_delta,

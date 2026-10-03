@@ -274,27 +274,45 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
 
 
 
-def _print_plan(config: OuterRollingConfig, *, parallel_settings_line: str | None = None):
+def _print_plan(
+    config: OuterRollingConfig,
+    *,
+    parallel_settings_line: str | None = None,
+    parameter_schedule_build: bool = False,
+    validation_holdout_months: int | None = None,
+):
     folds = _build_rolling_folds(config)
     print(f"{C_CYAN}{'=' * 100}{C_RESET}")
-    print(f"OUTER ROLLING OOS TEST | NEXT {int(config.oos_horizon_months)} MONTHS")
+    if parameter_schedule_build:
+        print(
+            "STRATEGY PARAMETER SCHEDULE BUILD | "
+            f"NEXT {int(config.oos_horizon_months)} MONTH EFFECTIVE BLOCK"
+        )
+    else:
+        print(f"OUTER ROLLING OOS TEST | NEXT {int(config.oos_horizon_months)} MONTHS")
     print(f"{C_CYAN}{'=' * 100}{C_RESET}")
     print(f"window mode      : {config.window_mode}")
     if str(config.window_mode).lower() == "fixed":
-        print(f"train window     : {int(config.train_window_months)} months")
+        print(f"selection window : {int(config.train_window_months)} months" if parameter_schedule_build else f"train window     : {int(config.train_window_months)} months")
     else:
         print(f"training start   : {config.training_start_year}-01-01")
+    if parameter_schedule_build and validation_holdout_months is not None:
+        print(f"validation holdout: {int(validation_holdout_months)} months")
     print("oos feedback     : False")
     print("promotion        : disabled")
-    print(f"oos horizon      : next {int(config.oos_horizon_months)} months")
+    if parameter_schedule_build:
+        print(f"parameter block  : next {int(config.oos_horizon_months)} months")
+    else:
+        print(f"oos horizon      : next {int(config.oos_horizon_months)} months")
     print(f"optimizer trials : {config.trials_per_fold} per fold")
     if parallel_settings_line:
         print(str(parallel_settings_line))
     print(f"{C_GRAY}{'-' * 100}{C_RESET}")
-    print(f"{'fold':<6} | {'selection period':<15} | {'OOS test period':<15}")
+    period_header = "parameter effective period" if parameter_schedule_build else "OOS test period"
+    print(f"{'fold':<6} | {'selection period':<15} | {period_header:<26}")
     print(f"{C_GRAY}{'-' * 100}{C_RESET}")
     for idx, fold in enumerate(folds, start=1):
-        print(f"{idx}/{len(folds):<4} | {_fold_selection_label_display(fold):<15} | {_fold_label_display(fold):<15}")
+        print(f"{idx}/{len(folds):<4} | {_fold_selection_label_display(fold):<15} | {_fold_label_display(fold):<26}")
     print(f"{C_GRAY}{'-' * 100}{C_RESET}")
     print(f"LOCAL_MIN_SCORE              : {bool(is_optimizer_local_min_review_enabled())}")
     print(f"INNER_VALIDATE_RANK          : {bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED)}")

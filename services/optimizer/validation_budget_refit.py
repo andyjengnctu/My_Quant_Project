@@ -1,10 +1,12 @@
 """Validation-selected Optimizer search budget with full-selection refit.
 
-The capability has two versioned protocols:
+The capability has three versioned protocols:
 - ``validation_budget_refit_v1`` preserves the registered PARAM-P5 fixed-checkpoint
   control exactly.
-- ``validation_plateau_refit_v2`` observes the canonical base-finalists-agree policy
-  after a warmup and stops the inner search after a configured validation plateau.
+- ``validation_plateau_refit_v2`` is the historical Round-6 implementation that
+  began observation at its warmup boundary.
+- ``validation_plateau_refit_v3`` observes from trial 1; a separate minimum-trial
+  gate controls when plateau early stop is allowed.
 
 Neither protocol may use OOS feedback.  Validation only chooses the scalar search
 budget N*.  The chosen budget is consumed by a fresh Optimizer study over the full
@@ -40,6 +42,8 @@ class ValidationBudgetSpec:
     holdout_months: int
     checkpoints: tuple[int, ...]
     warmup_trials: int | None
+    observation_start_trial: int | None
+    min_trials_before_stop: int | None
     patience_trials: int | None
     observation_interval: int | None
     min_delta: float | None
@@ -56,8 +60,8 @@ class ValidationBudgetSpec:
         return self.mode == "adaptive_plateau"
 
     def as_dict(self) -> dict[str, Any]:
-        # Keep PARAM-P5/C84 v1 payload byte-semantically unchanged.  New v2 fields
-        # appear only for the new scientific identity.
+        # Keep PARAM-P5/C84 v1 payload byte-semantically unchanged.  Adaptive-only
+        # fields appear only for adaptive scientific protocols.
         payload: dict[str, Any] = {
             "protocol": self.protocol,
             "holdout_months": int(self.holdout_months),
@@ -65,17 +69,22 @@ class ValidationBudgetSpec:
         if self.mode == "fixed_checkpoints":
             payload["checkpoints"] = [int(value) for value in self.checkpoints]
         elif self.mode == "adaptive_plateau":
-            payload.update(
-                {
-                    "warmup_trials": int(self.warmup_trials or 0),
-                    "patience_trials": int(self.patience_trials or 0),
-                    "observation_interval": int(self.observation_interval or 0),
-                    "min_delta": float(self.min_delta or 0.0),
-                    "reuse_same_policy_signature": bool(
-                        self.reuse_same_policy_signature
-                    ),
-                }
-            )
+            adaptive_payload = {
+                "patience_trials": int(self.patience_trials or 0),
+                "observation_interval": int(self.observation_interval or 0),
+                "min_delta": float(self.min_delta or 0.0),
+                "reuse_same_policy_signature": bool(self.reuse_same_policy_signature),
+            }
+            if self.observation_start_trial is not None and self.min_trials_before_stop is not None:
+                adaptive_payload.update(
+                    {
+                        "observation_start_trial": int(self.observation_start_trial),
+                        "min_trials_before_stop": int(self.min_trials_before_stop),
+                    }
+                )
+            else:
+                adaptive_payload["warmup_trials"] = int(self.warmup_trials or 0)
+            payload.update(adaptive_payload)
         else:
             raise ValueError(f"不支援的validation budget mode: {self.mode!r}")
         payload.update(
@@ -124,21 +133,40 @@ def resolve_validation_budget_spec(
                 f"last={checkpoints[-1]}, max={max_trials}"
             )
         warmup_trials = None
+        observation_start_trial = None
+        min_trials_before_stop = None
         patience_trials = None
         observation_interval = None
         min_delta = None
         reuse_same_policy_signature = False
     elif configured.mode == "adaptive_plateau":
         checkpoints = ()
-        warmup_trials = int(configured.warmup_trials or 0)
+        warmup_trials = configured.warmup_trials
+        observation_start_trial = configured.observation_start_trial
+        min_trials_before_stop = configured.min_trials_before_stop
         patience_trials = int(configured.patience_trials or 0)
         observation_interval = int(configured.observation_interval or 0)
         min_delta = float(configured.min_delta or 0.0)
         reuse_same_policy_signature = bool(configured.reuse_same_policy_signature)
-        if warmup_trials > max_trials:
+        effective_observation_start = int(
+            observation_start_trial
+            if observation_start_trial is not None
+            else (warmup_trials or 0)
+        )
+        effective_min_stop = int(
+            min_trials_before_stop
+            if min_trials_before_stop is not None
+            else (warmup_trials or 0)
+        )
+        if effective_observation_start > max_trials:
             raise ValueError(
-                "adaptive validation warmup不得超過fold最大trial budget: "
-                f"warmup={warmup_trials}, max={max_trials}"
+                "adaptive validation observation start不得超過fold最大trial budget: "
+                f"start={effective_observation_start}, max={max_trials}"
+            )
+        if effective_min_stop > max_trials:
+            raise ValueError(
+                "adaptive validation minimum stop trial不得超過fold最大trial budget: "
+                f"min_stop={effective_min_stop}, max={max_trials}"
             )
         if patience_trials < 1 or observation_interval < 1:
             raise ValueError("adaptive validation patience/observation_interval必須>0")
@@ -151,6 +179,8 @@ def resolve_validation_budget_spec(
         holdout_months=int(configured.holdout_months),
         checkpoints=checkpoints,
         warmup_trials=warmup_trials,
+        observation_start_trial=observation_start_trial,
+        min_trials_before_stop=min_trials_before_stop,
         patience_trials=patience_trials,
         observation_interval=observation_interval,
         min_delta=min_delta,
@@ -392,8 +422,27 @@ def select_trial_budget_from_validation(
     }
 
 
+ADAPTIVE_VALIDATION_PROGRESS_INTERVAL_TRIALS = 10
+
+
+def _adaptive_observation_start(spec: ValidationBudgetSpec) -> int:
+    return int(
+        spec.observation_start_trial
+        if spec.observation_start_trial is not None
+        else (spec.warmup_trials or 0)
+    )
+
+
+def _adaptive_min_stop_trial(spec: ValidationBudgetSpec) -> int:
+    return int(
+        spec.min_trials_before_stop
+        if spec.min_trials_before_stop is not None
+        else (spec.warmup_trials or 0)
+    )
+
+
 class AdaptiveValidationBudgetController:
-    """Optuna callback implementing v2 validation plateau early stop.
+    """Optuna callback implementing versioned adaptive validation plateau stop.
 
     Validation is observational only: it never modifies trial values, sampler state,
     search space, finalists, or TPE suggestions.  It can only stop future inner-train
@@ -411,6 +460,7 @@ class AdaptiveValidationBudgetController:
         spec: ValidationBudgetSpec,
         validation_start_date: str,
         validation_end_date: str,
+        progress_prefix: str = "",
     ) -> None:
         if not spec.adaptive:
             raise ValueError("AdaptiveValidationBudgetController需要adaptive protocol")
@@ -419,6 +469,7 @@ class AdaptiveValidationBudgetController:
         self.spec = spec
         self.validation_start_date = str(validation_start_date)
         self.validation_end_date = str(validation_end_date)
+        self.progress_prefix = str(progress_prefix or "").strip()
         self.state_key = f"strategy_param_validation_state::{spec.protocol}"
 
     def _empty_state(self) -> dict[str, Any]:
@@ -456,10 +507,39 @@ class AdaptiveValidationBudgetController:
         study.set_user_attr(self.state_key, state)
 
     def _should_observe(self, trial_count: int) -> bool:
-        warmup = int(self.spec.warmup_trials or 0)
+        start = _adaptive_observation_start(self.spec)
         interval = int(self.spec.observation_interval or 1)
         count = int(trial_count)
-        return count >= warmup and ((count - warmup) % interval == 0)
+        return count >= start and ((count - start) % interval == 0)
+
+    def _progress_label(self) -> str:
+        return f"{self.progress_prefix} " if self.progress_prefix else ""
+
+    def _print_search_progress(self, state: dict[str, Any], trial_count: int, *, force: bool = False) -> None:
+        count = int(trial_count)
+        if not force and count % ADAPTIVE_VALIDATION_PROGRESS_INTERVAL_TRIALS != 0:
+            return
+        best_trials = state.get("best_trials")
+        best_score = state.get("best_validation_score")
+        last_improvement = state.get("last_improvement_trial")
+        no_improve = (
+            "-"
+            if last_improvement is None
+            else str(max(0, count - int(last_improvement)))
+        )
+        min_stop = _adaptive_min_stop_trial(self.spec)
+        eligible = "Y" if count >= min_stop else "N"
+        best_text = "-" if best_trials is None else f"N{int(best_trials)}"
+        score_text = "-" if best_score is None else f"{float(best_score):.3f}"
+        print(
+            f"{self._progress_label()}[INNER SEARCH] trial={count}/{int(self.spec.max_trials)} | "
+            f"validation obs={len(list(state.get('observation_results') or []))} | "
+            f"replay={int(state.get('actual_validation_replays', 0) or 0)} | "
+            f"reuse={int(state.get('reused_validation_observations', 0) or 0)} | "
+            f"best={best_text}/{score_text} | no_improve={no_improve}/{int(self.spec.patience_trials or 0)} | "
+            f"stop_eligible={eligible}",
+            flush=True,
+        )
 
     def _observe_prefix(self, study, state: dict[str, Any], trial_count: int) -> None:
         count = int(trial_count)
@@ -503,6 +583,11 @@ class AdaptiveValidationBudgetController:
                 ) + 1
             else:
                 replay_started = time.perf_counter()
+                print(
+                    f"{self._progress_label()}[VALIDATION] trial={count} | policy changed | "
+                    f"replay START | holdout={self.validation_start_date}~{self.validation_end_date}",
+                    flush=True,
+                )
                 metrics_record = _evaluate_policy_item_on_validation(
                     session=self.session,
                     item=item,
@@ -532,6 +617,19 @@ class AdaptiveValidationBudgetController:
                 state["last_improvement_trial"] = count
                 record["improved"] = True
 
+        if record.get("validation_source") == "EVALUATED":
+            score_text = (
+                "-"
+                if record.get("validation_score") is None
+                else f"{float(record['validation_score']):.3f}"
+            )
+            status_text = "NEW BEST" if bool(record.get("improved")) else "DONE"
+            print(
+                f"{self._progress_label()}[VALIDATION] trial={count} | score={score_text} | "
+                f"replay={float(record.get('validation_replay_sec') or 0.0):.1f}s | {status_text}",
+                flush=True,
+            )
+
         observation_sec = max(0.0, time.perf_counter() - started)
         record["observation_wall_sec"] = float(observation_sec)
         state["validation_wall_sec"] = float(
@@ -544,7 +642,12 @@ class AdaptiveValidationBudgetController:
 
         last_improvement = state.get("last_improvement_trial")
         patience = int(self.spec.patience_trials or 0)
-        if last_improvement is not None and count - int(last_improvement) >= patience:
+        min_stop = _adaptive_min_stop_trial(self.spec)
+        if (
+            count >= min_stop
+            and last_improvement is not None
+            and count - int(last_improvement) >= patience
+        ):
             state["stop_trial"] = count
             state["stop_reason"] = "validation_plateau"
 
@@ -573,6 +676,14 @@ class AdaptiveValidationBudgetController:
         if self._should_observe(completed):
             self._observe_prefix(study, state, completed)
             self._save_state(study, state)
+        self._print_search_progress(
+            state,
+            completed,
+            force=(
+                bool(state.get("stop_reason"))
+                or completed == _adaptive_observation_start(self.spec)
+            ),
+        )
         if state.get("stop_reason"):
             study.stop()
 
@@ -587,15 +698,24 @@ class AdaptiveValidationBudgetController:
             self._save_state(study, state)
         selected_trials = int(state["best_trials"])
         stop_trial = int(state.get("stop_trial") or completed)
-        if selected_trials < int(self.spec.warmup_trials or 0) or selected_trials > stop_trial:
+        observation_start = _adaptive_observation_start(self.spec)
+        min_stop = _adaptive_min_stop_trial(self.spec)
+        if selected_trials < observation_start or selected_trials > stop_trial:
             raise RuntimeError(
                 "adaptive validation selected budget不合法: "
-                f"selected={selected_trials}, stop={stop_trial}"
+                f"selected={selected_trials}, observation_start={observation_start}, stop={stop_trial}"
+            )
+        if stop_trial < min_stop and str(state.get("stop_reason") or "") == "validation_plateau":
+            raise RuntimeError(
+                "adaptive validation不得早於minimum stop trial停止: "
+                f"stop={stop_trial}, min_stop={min_stop}"
             )
         return {
             **self.spec.as_dict(),
             "validation_start_date": self.validation_start_date,
             "validation_end_date": self.validation_end_date,
+            "observation_start_trial": observation_start,
+            "min_trials_before_stop": min_stop,
             "selected_trials": selected_trials,
             "selected_validation_score": float(state["best_validation_score"]),
             "stop_trial": stop_trial,

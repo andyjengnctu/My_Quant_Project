@@ -258,8 +258,8 @@ STRATEGY_COMPARE_PROFILES = {
         "label": "Non-DL Adaptive Validation | OOS Test",
         "description": (
             "Round-6 single-seed controlled validation comparison：C88/P9固定Full/formal/"
-            "base-finalists-agree、Seed42、max 300 trials與12M inner validation；50-trial warmup後"
-            "逐trial觀察canonical policy，validation連續50 trials無改善即停止，最後以最佳N*做完整120M fresh refit。"
+            "base-finalists-agree、Seed42、max 300 trials與12M inner validation；trial 1起"
+            "逐trial觀察canonical policy，trial 50前禁止early stop；其後validation連續50 trials無改善即停止，最後以最佳N*做完整120M fresh refit。"
         ),
         "display_alignment_group": "non_dl_validation_plateau",
         "suite_id": "non_dl_validation_plateau_current",
@@ -859,7 +859,7 @@ STRATEGY_EXPERIMENTAL_PARAM_SOURCES = {
             "breakout_quality_param_adaptation": {
                 "parameter_set": "PARAM-P9",
                 "training_dl_enabled": False,
-                "optimizer_search_protocol": "validation_plateau_refit_v2",
+                "optimizer_search_protocol": "validation_plateau_refit_v3",
             }
         },
         "builder": {
@@ -868,7 +868,7 @@ STRATEGY_EXPERIMENTAL_PARAM_SOURCES = {
             "options": {
                 "training_profile_id": "validation_plateau_current",
                 "parameter_set": "PARAM-P9",
-                "optimizer_search_protocol": "validation_plateau_refit_v2",
+                "optimizer_search_protocol": "validation_plateau_refit_v3",
             },
         },
     },
@@ -882,7 +882,7 @@ STRATEGY_EXPERIMENTAL_PARAM_SOURCES = {
             "breakout_quality_param_adaptation": {
                 "parameter_set": "PARAM-P9",
                 "training_dl_enabled": False,
-                "optimizer_search_protocol": "validation_plateau_refit_v2",
+                "optimizer_search_protocol": "validation_plateau_refit_v3",
             }
         },
         "builder": {
@@ -891,7 +891,7 @@ STRATEGY_EXPERIMENTAL_PARAM_SOURCES = {
             "options": {
                 "training_profile_id": "validation_plateau_current",
                 "parameter_set": "PARAM-P9",
-                "optimizer_search_protocol": "validation_plateau_refit_v2",
+                "optimizer_search_protocol": "validation_plateau_refit_v3",
             },
         },
     },
@@ -1075,8 +1075,8 @@ STRATEGY_COMPARE_ARMS = {
         "name": STRATEGY_COMPARE_DISPLAY_FULL_VALIDATION_PLATEAU_REFIT,
         "description": (
             "PARAM-P9 Round-6 single-seed adaptive validation treatment；Full/formal/base-finalists-agree、"
-            "120M selection、12M trailing inner validation、Seed42與max 300 trials固定。50-trial warmup後"
-            "逐trial觀察canonical policy；validation plateau patience=50，停止點與最佳N*分離，"
+            "120M selection、12M trailing inner validation、Seed42與max 300 trials固定。trial 1起"
+            "逐trial觀察canonical policy；trial 50前禁止early stop，validation plateau patience=50，停止點與最佳N*分離，"
             "最後以完整selection window建立fresh study refit N*。"
         ),
         "param_source": "full_validation_plateau_rolling_experiment",
