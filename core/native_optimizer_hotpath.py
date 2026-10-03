@@ -97,3 +97,4 @@ calc_position_size_exact = None if _native is None else getattr(_native, "calc_p
 cleanup_live_shadow_inplace = None if _native is None else getattr(_native, "cleanup_live_shadow_inplace", None)
 cleanup_live_shadow_batch = None if _native is None else getattr(_native, "cleanup_live_shadow_batch", None)
 resolve_live_extended_candidate_core = None if _native is None else getattr(_native, "resolve_live_extended_candidate_core", None)
+resolve_live_extended_candidate_batch_sized = None if _native is None else getattr(_native, "resolve_live_extended_candidate_batch_sized", None)

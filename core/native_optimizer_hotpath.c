@@ -590,6 +590,80 @@ static int qty_is_valid_exact(
         && actual_risk <= max_risk_milli;
 }
 
+static int64_t calc_position_size_exact_core(
+    int64_t buy_price_milli,
+    int64_t stop_price_milli,
+    int64_t cap_milli,
+    int64_t max_risk_milli,
+    int64_t max_position_cap_milli,
+    int64_t buy_fee_ppm,
+    int64_t sell_fee_ppm,
+    int64_t tax_ppm,
+    int64_t min_fee_milli,
+    int floor_twd_mode,
+    int64_t broker_fee_ppm,
+    int64_t broker_min_fee_milli
+) {
+    if (buy_price_milli <= 0 || stop_price_milli <= 0 || cap_milli <= 0 || max_risk_milli < 0 || max_position_cap_milli <= 0) {
+        return 0;
+    }
+
+    const int64_t est_buy_fee_per_share = buy_fee_ppm <= 0
+        ? 0
+        : (buy_price_milli * buy_fee_ppm + 999999LL) / 1000000LL;
+    const int64_t combined_sell_ppm = sell_fee_ppm + tax_ppm;
+    const int64_t est_sell_cost_per_share = combined_sell_ppm <= 0
+        ? 0
+        : (stop_price_milli * combined_sell_ppm + 999999LL) / 1000000LL;
+    const int64_t est_entry_unit = buy_price_milli + est_buy_fee_per_share;
+    const int64_t est_exit_unit = stop_price_milli - est_sell_cost_per_share;
+    const int64_t risk_per_share = est_entry_unit - est_exit_unit;
+    if (risk_per_share <= 0 || est_entry_unit <= 0) {
+        return 0;
+    }
+
+    int64_t q_cap = cap_milli / est_entry_unit;
+    int64_t q_risk = max_risk_milli / risk_per_share;
+    int64_t q_pos = max_position_cap_milli / est_entry_unit;
+    int64_t qty = q_cap < q_risk ? q_cap : q_risk;
+    if (q_pos < qty) qty = q_pos;
+    if (qty <= 0) return 0;
+
+    if (qty_is_valid_exact(
+            qty, buy_price_milli, stop_price_milli, cap_milli, max_risk_milli,
+            max_position_cap_milli, buy_fee_ppm, sell_fee_ppm, tax_ppm,
+            min_fee_milli, floor_twd_mode, broker_fee_ppm, broker_min_fee_milli)) {
+        return qty;
+    }
+
+    int64_t probe_qty = qty;
+    for (int i = 0; i < 8; ++i) {
+        probe_qty -= 1;
+        if (probe_qty <= 0) return 0;
+        if (qty_is_valid_exact(
+                probe_qty, buy_price_milli, stop_price_milli, cap_milli, max_risk_milli,
+                max_position_cap_milli, buy_fee_ppm, sell_fee_ppm, tax_ppm,
+                min_fee_milli, floor_twd_mode, broker_fee_ppm, broker_min_fee_milli)) {
+            return probe_qty;
+        }
+    }
+
+    int64_t lo = 0;
+    int64_t hi = probe_qty - 1;
+    while (lo < hi) {
+        int64_t mid = (lo + hi + 1) / 2;
+        if (qty_is_valid_exact(
+                mid, buy_price_milli, stop_price_milli, cap_milli, max_risk_milli,
+                max_position_cap_milli, buy_fee_ppm, sell_fee_ppm, tax_ppm,
+                min_fee_milli, floor_twd_mode, broker_fee_ppm, broker_min_fee_milli)) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    return lo;
+}
+
 static PyObject *native_calc_position_size_exact(PyObject *self, PyObject *args) {
     long long buy_price_milli_ll, stop_price_milli_ll, cap_milli_ll;
     long long max_risk_milli_ll, max_position_cap_milli_ll;
@@ -628,64 +702,12 @@ static PyObject *native_calc_position_size_exact(PyObject *self, PyObject *args)
     const int64_t broker_fee_ppm = (int64_t)broker_fee_ppm_ll;
     const int64_t broker_min_fee_milli = (int64_t)broker_min_fee_milli_ll;
 
-    if (buy_price_milli <= 0 || stop_price_milli <= 0 || cap_milli <= 0 || max_risk_milli < 0 || max_position_cap_milli <= 0) {
-        return PyLong_FromLong(0);
-    }
-
-    const int64_t est_buy_fee_per_share = buy_fee_ppm <= 0
-        ? 0
-        : (buy_price_milli * buy_fee_ppm + 999999LL) / 1000000LL;
-    const int64_t combined_sell_ppm = sell_fee_ppm + tax_ppm;
-    const int64_t est_sell_cost_per_share = combined_sell_ppm <= 0
-        ? 0
-        : (stop_price_milli * combined_sell_ppm + 999999LL) / 1000000LL;
-    const int64_t est_entry_unit = buy_price_milli + est_buy_fee_per_share;
-    const int64_t est_exit_unit = stop_price_milli - est_sell_cost_per_share;
-    const int64_t risk_per_share = est_entry_unit - est_exit_unit;
-    if (risk_per_share <= 0 || est_entry_unit <= 0) {
-        return PyLong_FromLong(0);
-    }
-
-    int64_t q_cap = cap_milli / est_entry_unit;
-    int64_t q_risk = max_risk_milli / risk_per_share;
-    int64_t q_pos = max_position_cap_milli / est_entry_unit;
-    int64_t qty = q_cap < q_risk ? q_cap : q_risk;
-    if (q_pos < qty) qty = q_pos;
-    if (qty <= 0) return PyLong_FromLong(0);
-
-    if (qty_is_valid_exact(
-            qty, buy_price_milli, stop_price_milli, cap_milli, max_risk_milli,
-            max_position_cap_milli, buy_fee_ppm, sell_fee_ppm, tax_ppm,
-            min_fee_milli, floor_twd_mode, broker_fee_ppm, broker_min_fee_milli)) {
-        return PyLong_FromLongLong((long long)qty);
-    }
-
-    int64_t probe_qty = qty;
-    for (int i = 0; i < 8; ++i) {
-        probe_qty -= 1;
-        if (probe_qty <= 0) return PyLong_FromLong(0);
-        if (qty_is_valid_exact(
-                probe_qty, buy_price_milli, stop_price_milli, cap_milli, max_risk_milli,
-                max_position_cap_milli, buy_fee_ppm, sell_fee_ppm, tax_ppm,
-                min_fee_milli, floor_twd_mode, broker_fee_ppm, broker_min_fee_milli)) {
-            return PyLong_FromLongLong((long long)probe_qty);
-        }
-    }
-
-    int64_t lo = 0;
-    int64_t hi = probe_qty - 1;
-    while (lo < hi) {
-        int64_t mid = (lo + hi + 1) / 2;
-        if (qty_is_valid_exact(
-                mid, buy_price_milli, stop_price_milli, cap_milli, max_risk_milli,
-                max_position_cap_milli, buy_fee_ppm, sell_fee_ppm, tax_ppm,
-                min_fee_milli, floor_twd_mode, broker_fee_ppm, broker_min_fee_milli)) {
-            lo = mid;
-        } else {
-            hi = mid - 1;
-        }
-    }
-    return PyLong_FromLongLong((long long)lo);
+    const int64_t qty = calc_position_size_exact_core(
+        buy_price_milli, stop_price_milli, cap_milli, max_risk_milli,
+        max_position_cap_milli, buy_fee_ppm, sell_fee_ppm, tax_ppm,
+        min_fee_milli, floor_twd_mode, broker_fee_ppm, broker_min_fee_milli
+    );
+    return PyLong_FromLongLong((long long)qty);
 }
 
 
@@ -1246,6 +1268,160 @@ static PyObject *native_resolve_live_extended_candidate_core(PyObject *self, PyO
     return result;
 }
 
+
+static int parse_int_tuple_item(PyObject *seq, Py_ssize_t index, int64_t *out) {
+    if (!PyTuple_Check(seq) || index < 0 || index >= PyTuple_GET_SIZE(seq)) return 0;
+    return object_to_int64_noerr(PyTuple_GET_ITEM(seq, index), out);
+}
+
+static int64_t apply_board_lot_preferred_qty_native(
+    int64_t limit_price_milli,
+    int64_t qty,
+    int64_t min_entry_notional_milli
+) {
+    if (qty <= 0 || limit_price_milli <= 0) return 0;
+    const int64_t board_lot_qty = (qty / 1000LL) * 1000LL;
+    if (board_lot_qty > 0 &&
+        (min_entry_notional_milli <= 0 || limit_price_milli * board_lot_qty >= min_entry_notional_milli)) {
+        return board_lot_qty;
+    }
+    if (min_entry_notional_milli <= 0 || limit_price_milli * qty >= min_entry_notional_milli) {
+        return qty;
+    }
+    return 0;
+}
+
+static PyObject *native_resolve_live_extended_candidate_batch_sized(PyObject *self, PyObject *args) {
+    PyObject *items_obj;
+    long long broker_fee_ppm_ll, broker_min_fee_milli_ll;
+    (void)self;
+    if (!PyArg_ParseTuple(args, "OLL", &items_obj, &broker_fee_ppm_ll, &broker_min_fee_milli_ll)) {
+        return NULL;
+    }
+
+    PyObject *items = PySequence_Fast(items_obj, "items must be a sequence");
+    if (items == NULL) return NULL;
+    const Py_ssize_t n = PySequence_Fast_GET_SIZE(items);
+    PyObject *out = PyList_New(n);
+    if (out == NULL) { Py_DECREF(items); return NULL; }
+
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        PyObject *item = PySequence_Fast_GET_ITEM(items, i);
+        if (!PyTuple_Check(item) || PyTuple_GET_SIZE(item) != 7) {
+            Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
+        }
+        PyObject *ticker = PyTuple_GET_ITEM(item, 0);
+        PyObject *signal_state = PyTuple_GET_ITEM(item, 1);
+        PyObject *shadow_position = PyTuple_GET_ITEM(item, 2);
+        PyObject *y_close_obj = PyTuple_GET_ITEM(item, 3);
+        PyObject *security_profile = PyTuple_GET_ITEM(item, 4);
+        PyObject *capital_context = PyTuple_GET_ITEM(item, 5);
+        PyObject *fee_context = PyTuple_GET_ITEM(item, 6);
+        double y_close = PyFloat_AsDouble(y_close_obj);
+        if (PyErr_Occurred()) {
+            PyErr_Clear(); Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
+        }
+
+        PyObject *core_args = PyTuple_New(5);
+        if (core_args == NULL) { Py_DECREF(items); Py_DECREF(out); return NULL; }
+#define SET_CORE_ARG(idx, obj) do { PyObject *_o=(obj); Py_INCREF(_o); PyTuple_SET_ITEM(core_args,(idx),_o); } while(0)
+        SET_CORE_ARG(0, signal_state);
+        SET_CORE_ARG(1, shadow_position);
+        PyTuple_SET_ITEM(core_args, 2, PyFloat_FromDouble(y_close));
+        SET_CORE_ARG(3, ticker);
+        SET_CORE_ARG(4, security_profile);
+#undef SET_CORE_ARG
+        if (PyErr_Occurred()) { Py_DECREF(core_args); Py_DECREF(items); Py_DECREF(out); return NULL; }
+        PyObject *core = native_resolve_live_extended_candidate_core(NULL, core_args);
+        Py_DECREF(core_args);
+        if (core == NULL) { Py_DECREF(items); Py_DECREF(out); return NULL; }
+        if (core == Py_None || core == Py_False) {
+            PyList_SET_ITEM(out, i, core); /* steals owned core reference */
+            continue;
+        }
+        if (!PyTuple_Check(core) || PyTuple_GET_SIZE(core) < 14 ||
+            !PyTuple_Check(capital_context) || PyTuple_GET_SIZE(capital_context) < 3 ||
+            !PyTuple_Check(fee_context) || PyTuple_GET_SIZE(fee_context) < 6) {
+            Py_DECREF(core);
+            Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
+        }
+
+        int64_t cap_milli, max_risk_milli, max_position_cap_milli;
+        int64_t buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, rounding_mode_code, min_entry_notional_milli;
+        if (!parse_int_tuple_item(capital_context,0,&cap_milli) ||
+            !parse_int_tuple_item(capital_context,1,&max_risk_milli) ||
+            !parse_int_tuple_item(capital_context,2,&max_position_cap_milli) ||
+            !parse_int_tuple_item(fee_context,0,&buy_fee_ppm) ||
+            !parse_int_tuple_item(fee_context,1,&sell_fee_ppm) ||
+            !parse_int_tuple_item(fee_context,2,&tax_ppm) ||
+            !parse_int_tuple_item(fee_context,3,&min_fee_milli) ||
+            !parse_int_tuple_item(fee_context,4,&rounding_mode_code) ||
+            !parse_int_tuple_item(fee_context,5,&min_entry_notional_milli) ||
+            rounding_mode_code < 0) {
+            Py_DECREF(core);
+            Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
+        }
+
+        int64_t limit_milli = PyLong_AsLongLong(PyTuple_GET_ITEM(core,11));
+        int64_t stop_milli = PyLong_AsLongLong(PyTuple_GET_ITEM(core,12));
+        if (PyErr_Occurred()) {
+            PyErr_Clear(); Py_DECREF(core); Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
+        }
+        int64_t qty = calc_position_size_exact_core(
+            limit_milli, stop_milli, cap_milli, max_risk_milli, max_position_cap_milli,
+            buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, rounding_mode_code == 1,
+            (int64_t)broker_fee_ppm_ll, (int64_t)broker_min_fee_milli_ll
+        );
+        PyObject *max_qty_obj = PyTuple_GET_ITEM(core,7);
+        if (max_qty_obj != Py_None) {
+            int64_t max_qty = 0;
+            if (!object_to_int64_noerr(max_qty_obj, &max_qty)) {
+                Py_DECREF(core); Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
+            }
+            if (max_qty > 0 && qty > max_qty) qty = max_qty;
+        }
+        qty = apply_board_lot_preferred_qty_native(limit_milli, qty, min_entry_notional_milli);
+        if (qty <= 0) {
+            Py_DECREF(core); Py_INCREF(Py_False); PyList_SET_ITEM(out, i, Py_False); continue;
+        }
+
+        const int64_t gross_buy = limit_milli * qty;
+        const int64_t broker_fee = fee_floor_twd_milli(
+            gross_buy, (int64_t)broker_fee_ppm_ll, (int64_t)broker_min_fee_milli_ll
+        );
+        const int64_t proj_cost_milli = gross_buy + broker_fee;
+        double limit_price = PyFloat_AsDouble(PyTuple_GET_ITEM(core,0));
+        if (PyErr_Occurred() || !isfinite(limit_price) || limit_price <= 0.0 || !isfinite(y_close)) {
+            PyErr_Clear(); Py_DECREF(core); Py_INCREF(Py_None); PyList_SET_ITEM(out, i, Py_None); continue;
+        }
+        double sort_value = (y_close / limit_price - 1.0) * 100.0;
+        if (sort_value < 0.0) sort_value = 0.0;
+
+        PyObject *result = PyTuple_New(13);
+        if (result == NULL) { Py_DECREF(core); Py_DECREF(items); Py_DECREF(out); return NULL; }
+#define COPY_CORE(dst, src) do { PyObject *_o=PyTuple_GET_ITEM(core,(src)); Py_INCREF(_o); PyTuple_SET_ITEM(result,(dst),_o); } while(0)
+        COPY_CORE(0,0); /* limit */
+        COPY_CORE(1,1); /* sl */
+        COPY_CORE(2,2); /* trail */
+        COPY_CORE(3,3); /* target */
+        COPY_CORE(4,4); /* atr */
+        COPY_CORE(5,6); /* signal date */
+        COPY_CORE(6,7); /* max qty */
+        COPY_CORE(7,8); /* entry source */
+        COPY_CORE(8,11); /* limit milli */
+        COPY_CORE(9,12); /* stop milli */
+#undef COPY_CORE
+        PyTuple_SET_ITEM(result,10,PyLong_FromLongLong((long long)qty));
+        PyTuple_SET_ITEM(result,11,PyLong_FromLongLong((long long)proj_cost_milli));
+        PyTuple_SET_ITEM(result,12,PyFloat_FromDouble(sort_value));
+        Py_DECREF(core);
+        if (PyErr_Occurred()) { Py_DECREF(result); Py_DECREF(items); Py_DECREF(out); return NULL; }
+        PyList_SET_ITEM(out, i, result);
+    }
+    Py_DECREF(items);
+    return out;
+}
+
 static PyMethodDef NativeOptimizerMethods[] = {
     {
         "supertrend_direction_into",
@@ -1294,6 +1470,12 @@ static PyMethodDef NativeOptimizerMethods[] = {
         native_resolve_live_extended_candidate_core,
         METH_VARARGS,
         "Resolve live continuation frozen geometry, daily orderability, and milli values in one optimizer call."
+    },
+    {
+        "resolve_live_extended_candidate_batch_sized",
+        native_resolve_live_extended_candidate_batch_sized,
+        METH_VARARGS,
+        "Resolve and exact-size optimizer live continuation candidates in one native batch."
     },
     {NULL, NULL, 0, NULL}
 };
