@@ -52,11 +52,17 @@ from core.portfolio_fast_data import (
 )
 from core.native_optimizer_hotpath import (
     cleanup_live_shadow_batch as _native_cleanup_live_shadow_batch,
+    execute_pre_market_entry_training_fast as _native_execute_pre_market_entry_training_fast,
 )
+from core.price_utils import _NATIVE_BROKER_FEE_PPM, _NATIVE_BROKER_MIN_FEE_MILLI
 from core.training_performance import is_optimizer_native_hotpath_kernels_enabled
 
 _NATIVE_LIVE_SHADOW_BATCH_ENABLED = bool(
     _native_cleanup_live_shadow_batch is not None
+    and is_optimizer_native_hotpath_kernels_enabled()
+)
+_NATIVE_ENTRY_FAST_ENABLED = bool(
+    _native_execute_pre_market_entry_training_fast is not None
     and is_optimizer_native_hotpath_kernels_enabled()
 )
 
@@ -228,19 +234,43 @@ def execute_reserved_entries_for_day(
         pre_market_occupied += 1
 
         if compact_training_execution:
-            filled_position, count_as_missed_buy = execute_pre_market_entry_plan_training(
-                entry_plan=chosen_entry_plan,
-                t_open=t_open,
-                t_high=t_high,
-                t_low=t_low,
-                t_close=t_close,
-                t_volume=t_volume,
-                y_close=y_close,
-                params=candidate_params,
-                entry_type=cand['type'],
-                ticker=cand['ticker'],
-                trade_date=today,
-            )
+            native_entry_result = None
+            if _NATIVE_ENTRY_FAST_ENABLED:
+                fee_context = cand.get('_entry_fee_context')
+                if fee_context is not None:
+                    native_entry_result = _native_execute_pre_market_entry_training_fast(
+                        chosen_entry_plan,
+                        float(t_open),
+                        float(t_high),
+                        float(t_low),
+                        float(t_close),
+                        float(t_volume),
+                        float(y_close),
+                        candidate_params,
+                        cand['type'],
+                        cand['ticker'],
+                        cand.get('security_profile'),
+                        today,
+                        fee_context,
+                        int(_NATIVE_BROKER_FEE_PPM),
+                        int(_NATIVE_BROKER_MIN_FEE_MILLI),
+                    )
+            if native_entry_result is None:
+                filled_position, count_as_missed_buy = execute_pre_market_entry_plan_training(
+                    entry_plan=chosen_entry_plan,
+                    t_open=t_open,
+                    t_high=t_high,
+                    t_low=t_low,
+                    t_close=t_close,
+                    t_volume=t_volume,
+                    y_close=y_close,
+                    params=candidate_params,
+                    entry_type=cand['type'],
+                    ticker=cand['ticker'],
+                    trade_date=today,
+                )
+            else:
+                filled_position, count_as_missed_buy = native_entry_result
             entry_filled = filled_position is not None
             entry_fill_price = (
                 None if filled_position is None else filled_position.get("entry_fill_price")

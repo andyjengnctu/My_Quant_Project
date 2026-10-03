@@ -813,6 +813,18 @@ static int calc_limit_down_milli_native(int64_t reference_milli, int is_fund, in
     return 1;
 }
 
+static int calc_limit_up_milli_native(int64_t reference_milli, int is_fund, int64_t *out) {
+    if (reference_milli <= 0) return 0;
+    const int64_t numerator = reference_milli * 110LL;
+    const int64_t denominator = 100LL;
+    int64_t tick_milli = 0;
+    if (!get_tick_milli_for_ratio_native(numerator, denominator, is_fund, &tick_milli)) return 0;
+    const int64_t step = denominator * tick_milli;
+    *out = (numerator / step) * tick_milli;
+    return 1;
+}
+
+
 static int set_dict_int64(PyObject *dict_obj, const char *key, int64_t value) {
     PyObject *obj = PyLong_FromLongLong((long long)value);
     if (obj == NULL) return 0;
@@ -1422,6 +1434,279 @@ static PyObject *native_resolve_live_extended_candidate_batch_sized(PyObject *se
     return out;
 }
 
+
+static int resolve_param_double_native(PyObject *params_obj, const char *name, double *out) {
+    if (params_obj == NULL || params_obj == Py_None) return 0;
+    PyObject *attr = PyObject_GetAttrString(params_obj, name);
+    if (attr == NULL) { PyErr_Clear(); return 0; }
+    double value = PyFloat_AsDouble(attr);
+    Py_DECREF(attr);
+    if (PyErr_Occurred() || !isfinite(value)) { PyErr_Clear(); return 0; }
+    *out = value;
+    return 1;
+}
+
+static int set_dict_bool(PyObject *dict_obj, const char *key, int value) {
+    return PyDict_SetItemString(dict_obj, key, value ? Py_True : Py_False) == 0;
+}
+
+static int set_dict_none(PyObject *dict_obj, const char *key) {
+    return PyDict_SetItemString(dict_obj, key, Py_None) == 0;
+}
+
+static int set_dict_borrowed(PyObject *dict_obj, const char *key, PyObject *value) {
+    if (value == NULL) value = Py_None;
+    return PyDict_SetItemString(dict_obj, key, value) == 0;
+}
+
+static PyObject *build_entry_training_result(PyObject *position, int count_as_missed_buy) {
+    PyObject *result = PyTuple_New(2);
+    if (result == NULL) return NULL;
+    if (position == NULL) position = Py_None;
+    Py_INCREF(position);
+    PyTuple_SET_ITEM(result, 0, position);
+    PyObject *miss_obj = count_as_missed_buy ? Py_True : Py_False;
+    Py_INCREF(miss_obj);
+    PyTuple_SET_ITEM(result, 1, miss_obj);
+    return result;
+}
+
+/*
+ * Optimizer-only training entry fast path for candidates without inherited
+ * shadow management.  The function owns fill eligibility, exact fee/tax
+ * accounting, frozen position geometry and entry-session STOP/TP sealing in
+ * one C call.  None means "unsupported edge case: use canonical Python".
+ */
+static PyObject *native_execute_pre_market_entry_training_fast(PyObject *self, PyObject *args) {
+    PyObject *entry_plan, *params_obj, *entry_type_obj, *ticker_obj;
+    PyObject *security_profile, *trade_date_obj, *fee_context;
+    double t_open, t_high, t_low, t_close, t_volume, y_close;
+    long long broker_fee_ppm_ll, broker_min_fee_milli_ll;
+    (void)self;
+
+    if (!PyArg_ParseTuple(
+            args, "OddddddOOOOOOLL",
+            &entry_plan,
+            &t_open, &t_high, &t_low, &t_close, &t_volume, &y_close,
+            &params_obj, &entry_type_obj, &ticker_obj, &security_profile,
+            &trade_date_obj, &fee_context,
+            &broker_fee_ppm_ll, &broker_min_fee_milli_ll)) {
+        return NULL;
+    }
+
+    if (!PyDict_Check(entry_plan) || !PyTuple_Check(fee_context) || PyTuple_GET_SIZE(fee_context) < 6) {
+        Py_RETURN_NONE;
+    }
+    PyObject *shadow = dict_get_borrowed(entry_plan, "shadow_position_state");
+    if (shadow != NULL && shadow != Py_None) {
+        Py_RETURN_NONE;
+    }
+
+    int is_fund = 0;
+    if (!profile_is_fund(security_profile, &is_fund)) Py_RETURN_NONE;
+
+    int64_t qty = 0;
+    if (!dict_int64_default(entry_plan, "qty", 0, &qty)) Py_RETURN_NONE;
+    if (qty <= 0) return build_entry_training_result(NULL, 0);
+
+    PyObject *limit_obj = dict_get_borrowed(entry_plan, "limit_price");
+    if (limit_obj == NULL || limit_obj == Py_None) limit_obj = dict_get_borrowed(entry_plan, "limit_px");
+    double limit_price = 0.0;
+    if (!object_to_double_noerr(limit_obj, &limit_price) || !isfinite(limit_price) || limit_price <= 0.0) {
+        Py_RETURN_NONE;
+    }
+    const int64_t limit_milli = price_to_milli_double(limit_price);
+
+    int locked_limit_up = 0;
+    if (isfinite(t_open) && isfinite(t_high) && isfinite(t_low) && isfinite(t_close) && isfinite(y_close)) {
+        int64_t limit_up_milli = 0;
+        if (!calc_limit_up_milli_native(price_to_milli_double(y_close), is_fund, &limit_up_milli)) Py_RETURN_NONE;
+        locked_limit_up =
+            price_to_milli_double(t_open) == limit_up_milli &&
+            price_to_milli_double(t_high) == limit_up_milli &&
+            price_to_milli_double(t_low) == limit_up_milli &&
+            price_to_milli_double(t_close) == limit_up_milli;
+    }
+
+    if (!isfinite(t_volume) || t_volume <= 0.0 || !isfinite(t_open) || !isfinite(t_low) || locked_limit_up) {
+        return build_entry_training_result(NULL, 1);
+    }
+    if (price_to_milli_double(t_low) > limit_milli) {
+        return build_entry_training_result(NULL, 1);
+    }
+
+    const double raw_buy_price = t_open < limit_price ? t_open : limit_price;
+    int64_t buy_price_milli = 0;
+    if (!round_up_price_to_tick_milli(raw_buy_price, is_fund, &buy_price_milli) || buy_price_milli <= 0) {
+        Py_RETURN_NONE;
+    }
+    const double buy_price = (double)buy_price_milli / 1000.0;
+
+    int64_t buy_fee_ppm=0, sell_fee_ppm=0, tax_ppm=0, min_fee_milli=0, rounding_mode_code=0;
+    if (!parse_int_tuple_item(fee_context,0,&buy_fee_ppm) ||
+        !parse_int_tuple_item(fee_context,1,&sell_fee_ppm) ||
+        !parse_int_tuple_item(fee_context,2,&tax_ppm) ||
+        !parse_int_tuple_item(fee_context,3,&min_fee_milli) ||
+        !parse_int_tuple_item(fee_context,4,&rounding_mode_code) ||
+        (rounding_mode_code != 0 && rounding_mode_code != 1)) {
+        Py_RETURN_NONE;
+    }
+
+    double atr_times_init=0.0, atr_times_trail=0.0, fixed_risk=0.0, tp_percent=0.0;
+    if (!resolve_param_double_native(params_obj,"atr_times_init",&atr_times_init) ||
+        !resolve_param_double_native(params_obj,"atr_times_trail",&atr_times_trail) ||
+        !resolve_param_double_native(params_obj,"fixed_risk",&fixed_risk) ||
+        !resolve_param_double_native(params_obj,"tp_percent",&tp_percent)) {
+        Py_RETURN_NONE;
+    }
+    const int64_t fixed_risk_ppm = (int64_t)floor(fixed_risk * 1000000.0 + 0.5);
+
+    int64_t initial_stop_milli=0, trailing_stop_milli=0, target_milli=0;
+    PyObject *entry_atr_obj = dict_get_borrowed(entry_plan, "entry_atr");
+    double entry_atr = NAN;
+    const int has_entry_atr = object_to_double_noerr(entry_atr_obj, &entry_atr) && isfinite(entry_atr);
+    if (has_entry_atr) {
+        if (!round_up_price_to_tick_milli(buy_price - entry_atr * atr_times_init, is_fund, &initial_stop_milli) ||
+            !round_up_price_to_tick_milli(buy_price - entry_atr * atr_times_trail, is_fund, &trailing_stop_milli)) {
+            Py_RETURN_NONE;
+        }
+        double target_reference = buy_price;
+        PyObject *target_ref_obj = dict_get_borrowed(entry_plan, "target_reference_price");
+        double target_ref_tmp = 0.0;
+        if (object_to_double_noerr(target_ref_obj, &target_ref_tmp) && isfinite(target_ref_tmp)) {
+            target_reference = target_ref_tmp;
+        }
+        int64_t target_ref_stop_milli = 0;
+        if (!round_up_price_to_tick_milli(target_reference - entry_atr * atr_times_init, is_fund, &target_ref_stop_milli)) {
+            Py_RETURN_NONE;
+        }
+        const double target_raw = target_reference + (target_reference - ((double)target_ref_stop_milli / 1000.0));
+        if (!round_up_price_to_tick_milli(target_raw, is_fund, &target_milli)) Py_RETURN_NONE;
+    } else {
+        double init_sl=0.0, init_trail=0.0, target_price=0.0;
+        if (!object_to_double_noerr(dict_get_borrowed(entry_plan,"init_sl"),&init_sl) ||
+            !object_to_double_noerr(dict_get_borrowed(entry_plan,"init_trail"),&init_trail) ||
+            !object_to_double_noerr(dict_get_borrowed(entry_plan,"target_price"),&target_price) ||
+            !isfinite(init_sl) || !isfinite(init_trail) || !isfinite(target_price)) {
+            Py_RETURN_NONE;
+        }
+        initial_stop_milli = price_to_milli_double(init_sl);
+        trailing_stop_milli = price_to_milli_double(init_trail);
+        target_milli = price_to_milli_double(target_price);
+    }
+    if (initial_stop_milli <= 0 || trailing_stop_milli <= 0 || target_milli <= 0) Py_RETURN_NONE;
+    const int64_t sl_milli = initial_stop_milli > trailing_stop_milli ? initial_stop_milli : trailing_stop_milli;
+
+    const int floor_twd_mode = rounding_mode_code == 1;
+    const int64_t gross_buy_milli = buy_price_milli * qty;
+    const int64_t buy_fee_milli = economic_fee_milli(gross_buy_milli, buy_fee_ppm, min_fee_milli, floor_twd_mode);
+    const int64_t broker_buy_fee_milli = fee_floor_twd_milli(
+        gross_buy_milli, (int64_t)broker_fee_ppm_ll, (int64_t)broker_min_fee_milli_ll
+    );
+    const int64_t rebate_milli = broker_buy_fee_milli > buy_fee_milli ? broker_buy_fee_milli - buy_fee_milli : 0;
+    const int64_t net_buy_total_milli = gross_buy_milli + buy_fee_milli;
+    const int64_t cash_buy_total_milli = gross_buy_milli + broker_buy_fee_milli;
+
+    const int64_t gross_stop_milli = initial_stop_milli * qty;
+    const int64_t stop_sell_fee_milli = economic_fee_milli(gross_stop_milli, sell_fee_ppm, min_fee_milli, floor_twd_mode);
+    const int64_t stop_tax_milli = tax_floor_twd_milli(gross_stop_milli, tax_ppm);
+    const int64_t stop_net_sell_total_milli = gross_stop_milli - stop_sell_fee_milli - stop_tax_milli;
+    int64_t initial_risk_total_milli = net_buy_total_milli - stop_net_sell_total_milli;
+    if (initial_risk_total_milli <= 0) {
+        initial_risk_total_milli = (net_buy_total_milli * fixed_risk_ppm + 500000LL) / 1000000LL;
+        if (initial_risk_total_milli < 0) initial_risk_total_milli = 0;
+    }
+
+    int64_t highest_high_milli = buy_price_milli;
+    if (isfinite(t_high)) {
+        const int64_t high_milli = price_to_milli_double(t_high);
+        if (high_milli > highest_high_milli) highest_high_milli = high_milli;
+    }
+    int stop_hit = isfinite(t_low) && price_to_milli_double(t_low) <= sl_milli;
+    int tp_hit = isfinite(t_high) && price_to_milli_double(t_high) >= target_milli;
+    if (stop_hit) tp_hit = 0;
+    int half_qty = 0;
+    if (tp_percent > 0.0 && qty > 0) {
+        double raw_half = floor((double)qty * tp_percent);
+        if (isfinite(raw_half) && raw_half > 0.0 && raw_half < (double)qty) half_qty = (int)raw_half;
+    }
+
+    PyObject *position = PyDict_New();
+    if (position == NULL) return NULL;
+#define SET_I64(k,v) do { if (!set_dict_int64(position,(k),(v))) goto fail_position; } while(0)
+#define SET_DBL(k,v) do { if (!set_dict_double(position,(k),(v))) goto fail_position; } while(0)
+#define SET_BOOL(k,v) do { if (!set_dict_bool(position,(k),(v))) goto fail_position; } while(0)
+#define SET_OBJ(k,v) do { if (!set_dict_borrowed(position,(k),(v))) goto fail_position; } while(0)
+    SET_I64("qty",qty);
+    SET_I64("initial_qty",qty);
+    SET_I64("entry_fill_price_milli",buy_price_milli);
+    SET_DBL("entry_fill_price",buy_price);
+    SET_I64("gross_buy_milli",gross_buy_milli);
+    SET_I64("buy_fee_milli",buy_fee_milli);
+    SET_I64("broker_buy_fee_milli",broker_buy_fee_milli);
+    SET_I64("buy_fee_rebate_receivable_milli",rebate_milli);
+    SET_I64("net_buy_total_milli",net_buy_total_milli);
+    SET_I64("cash_buy_total_milli",cash_buy_total_milli);
+    SET_I64("remaining_cost_basis_milli",net_buy_total_milli);
+    SET_I64("sl_milli",sl_milli);
+    SET_I64("initial_stop_milli",initial_stop_milli);
+    SET_I64("trailing_stop_milli",trailing_stop_milli);
+    SET_I64("tp_half_milli",target_milli);
+    SET_DBL("sl",(double)sl_milli/1000.0);
+    SET_DBL("initial_stop",(double)initial_stop_milli/1000.0);
+    SET_DBL("trailing_stop",(double)trailing_stop_milli/1000.0);
+    SET_DBL("tp_half",(double)target_milli/1000.0);
+    SET_BOOL("sold_half",0);
+    SET_I64("pure_buy_price_milli",buy_price_milli);
+    SET_DBL("pure_buy_price",buy_price);
+    SET_I64("realized_pnl_milli",0);
+    SET_DBL("display_realized_pnl_sum",0.0);
+    SET_I64("initial_risk_total_milli",initial_risk_total_milli);
+    SET_OBJ("entry_type",entry_type_obj);
+    SET_OBJ("ticker",ticker_obj);
+    SET_OBJ("security_profile",security_profile);
+    SET_OBJ("entry_trade_date",trade_date_obj);
+    SET_OBJ("limit_price",limit_obj);
+    SET_I64("limit_price_milli",limit_milli);
+    SET_BOOL("entry_day_stop_triggered",stop_hit);
+    SET_BOOL("entry_day_tp_triggered",tp_hit);
+    if (stop_hit) {
+        PyObject *stop_text = PyUnicode_FromString("STOP");
+        if (stop_text == NULL) goto fail_position;
+        if (PyDict_SetItemString(position,"pending_exit_action",stop_text) != 0) { Py_DECREF(stop_text); goto fail_position; }
+        Py_DECREF(stop_text);
+        SET_DBL("pending_exit_trigger_price",(double)sl_milli/1000.0);
+    } else if (tp_hit && half_qty > 0) {
+        PyObject *tp_text = PyUnicode_FromString("TP_HALF");
+        if (tp_text == NULL) goto fail_position;
+        if (PyDict_SetItemString(position,"pending_exit_action",tp_text) != 0) { Py_DECREF(tp_text); goto fail_position; }
+        Py_DECREF(tp_text);
+        SET_DBL("pending_exit_trigger_price",(double)target_milli/1000.0);
+    } else {
+        if (!set_dict_none(position,"pending_exit_action")) goto fail_position;
+        SET_DBL("pending_exit_trigger_price",NAN);
+    }
+    SET_I64("highest_high_since_entry_milli",highest_high_milli);
+    SET_DBL("highest_high_since_entry",(double)highest_high_milli/1000.0);
+    SET_DBL("entry", ((double)net_buy_total_milli / (double)qty) / 1000.0);
+    SET_DBL("entry_capital_total",(double)net_buy_total_milli/1000.0);
+    SET_DBL("realized_pnl",0.0);
+    SET_DBL("initial_risk_total",(double)initial_risk_total_milli/1000.0);
+    SET_DBL("remaining_cost_basis",(double)net_buy_total_milli/1000.0);
+#undef SET_I64
+#undef SET_DBL
+#undef SET_BOOL
+#undef SET_OBJ
+    {
+        PyObject *result = build_entry_training_result(position,0);
+        Py_DECREF(position);
+        return result;
+    }
+fail_position:
+    Py_DECREF(position);
+    return NULL;
+}
+
 static PyMethodDef NativeOptimizerMethods[] = {
     {
         "supertrend_direction_into",
@@ -1452,6 +1737,12 @@ static PyMethodDef NativeOptimizerMethods[] = {
         native_calc_position_size_exact,
         METH_VARARGS,
         "Compute canonical exact-accounting position size using integer milli/ppm arithmetic."
+    },
+    {
+        "execute_pre_market_entry_training_fast",
+        native_execute_pre_market_entry_training_fast,
+        METH_VARARGS,
+        "Execute and materialize a no-shadow optimizer training entry in one native call."
     },
     {
         "cleanup_live_shadow_inplace",
