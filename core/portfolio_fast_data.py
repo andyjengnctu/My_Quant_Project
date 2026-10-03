@@ -39,6 +39,7 @@ from core.portfolio_fast_access import (
     get_fast_current_session_values,
     get_fast_management_session_values,
     get_fast_live_shadow_cleanup_values,
+    get_fast_extended_day_market_values,
     get_fast_close_on_or_before,
 )
 
@@ -147,6 +148,11 @@ def build_normal_setup_index(all_dfs_fast):
                 y_date = dates[i - 1]
                 if fast_df[y_date]['is_setup']:
                     setup_index.setdefault(dates[i], []).append((ticker, i - 1, i))
+    # Candidate replay requires deterministic ticker order.  Sort once while the
+    # index is built instead of sorting the same day's setup rows again on every
+    # trial/day traversal.
+    for setup_rows in setup_index.values():
+        setup_rows.sort(key=lambda row: row[0])
     return setup_index
 
 

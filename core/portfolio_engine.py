@@ -297,78 +297,12 @@ def run_portfolio_timeline(
         orderable_candidates_today = []
         cleanup_candidate_rows_by_ticker = None
         resource_action_candidates_today = []
-        resource_selection_diag = {
-            'enabled': False,
-            'mode': 'inactive',
-            'free_slots': max(0, int(max_positions) - int(pre_market_position_count)),
-            'candidate_count': 0,
-            'baseline_selected_count': 0,
-            'baseline_pass_count': 0,
-            'baseline_reserved_cost_milli': 0,
-            'selected_count': 0,
-            'selected_pass_count': 0,
-            'reserved_cost_milli': 0,
-            'promoted_pass_count': 0,
-            'changed': False,
-            'baseline_scored_selected_count': 0,
-            'selected_scored_count': 0,
-            'baseline_selected_score_sum': 0.0,
-            'selected_score_sum': 0.0,
-            'baseline_selected_score_mean': None,
-            'selected_score_mean': None,
-            'promoted_score_orders': 0,
-            'direct_score_order_feasible': False,
-            'pre_market_order_limit': None,
-            'max_dl_eligible': False,
-            'max_dl_repair_steps': 0,
-            'max_dl_repair_evaluations': 0,
-            'max_dl_fallback_to_baseline': False,
-            'max_dl_seed_fallback': False,
-            'max_dl_feasible_ascent_steps': 0,
-            'max_dl_feasible_ascent_evaluations': 0,
-            'max_dl_feasible_ascent_local_optimum': False,
-            'constrained_solver_optimality_certified': False,
-            'constrained_solver_search_states': 0,
-            'constrained_solver_pruned_states': 0,
-            'constrained_solver_feasible_baskets': 0,
-            'constrained_solver_safety_pruned_states': 0,
-            'safety_floor_enabled': False,
-            'safety_floor_contract': None,
-            'baseline_safety_scored_count': 0,
-            'selected_safety_scored_count': 0,
-            'baseline_safety_score_sum': 0.0,
-            'selected_safety_score_sum': 0.0,
-            'baseline_safety_score_mean': None,
-            'selected_safety_score_mean': None,
-            'safety_floor_binding': False,
-            'safety_floor_violation': False,
-            'constrained_solver_seed_source': None,
-            'constrained_solver_seed_repair_evaluations': 0,
-            'constrained_solver_seed_ascent_evaluations': 0,
-            'pareto_selection_method': None,
-            'pareto_max_score_coverage': None,
-            'pareto_quality_min': None,
-            'pareto_quality_max': None,
-            'pareto_capital_min_milli': None,
-            'pareto_capital_max_milli': None,
-            'pareto_selected_quality': None,
-            'pareto_selected_capital_milli': None,
-            'pareto_selected_quality_norm': None,
-            'pareto_selected_capital_norm': None,
-            'pareto_selected_product': None,
-            'pareto_quality_axis_degenerate': False,
-            'pareto_capital_axis_degenerate': False,
-            'pareto_score_pass_states': 0,
-            'pareto_capital_pass_states': 0,
-            'pareto_product_pass_states': 0,
-            'stale_score_membership_guard_enabled': False,
-            'stale_score_membership_guard_max_age_days': None,
-            'stale_score_candidate_count': 0,
-            'stale_score_guard_triggered': False,
-            'stale_score_guard_seed_blocked': False,
-            'stale_score_guard_blocked_swaps': 0,
-            'selector_elapsed_ns': 0,
-        }
+        # Diagnostics are only populated when resource selection actually runs.
+        # The old path allocated a large ~70-field default dict on every replay day,
+        # including idle days where it was immediately discarded.  All consumers
+        # already use .get(..., default), so an empty dict is the same observable
+        # state at a fraction of the allocation cost.
+        resource_selection_diag = {}
         normal_setup_entries_today = day_normal_setup_index.get(today, [])
         if use_param_ensemble:
             has_ensemble_normal_setup = any(bool((ctx.get("normal_setup_index") or {}).get(today, [])) for ctx in day_ensemble_contexts)
@@ -552,14 +486,25 @@ def run_portfolio_timeline(
                     candidate_scan_sec += time.perf_counter() - t0
 
                 if (not use_param_ensemble) and orderable_candidates_today:
-                    cleanup_candidate_rows_by_ticker = {
-                        row.get("ticker"): row
-                        for row in orderable_candidates_today
-                        if row.get("ticker") is not None
-                    }
+                    cleanup_candidate_rows_by_ticker = (
+                        None if extended_day_market_cache is None
+                        else extended_day_market_cache.get(
+                            ("__meta__", "orderable_candidate_rows_by_ticker")
+                        )
+                    )
+                    if cleanup_candidate_rows_by_ticker is None:
+                        cleanup_candidate_rows_by_ticker = {
+                            row.get("ticker"): row
+                            for row in orderable_candidates_today
+                            if row.get("ticker") is not None
+                        }
 
                 t0 = time.perf_counter() if profile_timing_enabled else None
-                resource_selection_input_rows = list(orderable_candidates_today)
+                resource_selection_input_rows = (
+                    list(orderable_candidates_today)
+                    if replay_selector_trace_rows is not None
+                    else None
+                )
                 orderable_candidates_today, resource_selection_diag = _run_portfolio_replay_phase(
                     today,
                     "resource_aware_binary_order",
@@ -667,8 +612,6 @@ def run_portfolio_timeline(
                             })
                             replay_selector_trace_rows.append(snapshot)
 
-                qualified_candidate_snapshots_today = []
-                orderable_candidate_snapshots_today = []
                 if replay_counts is not None:
                     for candidate in candidates_today:
                         snapshot = _candidate_replay_snapshot(
@@ -676,7 +619,6 @@ def run_portfolio_timeline(
                             fallback_trade_date=today,
                             is_orderable=False,
                         )
-                        qualified_candidate_snapshots_today.append(snapshot)
                         ticker = str(snapshot.get("ticker", ""))
                         bucket = replay_counts.setdefault(
                             ticker,
@@ -696,7 +638,6 @@ def run_portfolio_timeline(
                             fallback_trade_date=today,
                             is_orderable=True,
                         )
-                        orderable_candidate_snapshots_today.append(snapshot)
                         ticker = str(snapshot.get("ticker", ""))
                         bucket = replay_counts.setdefault(
                             ticker,
@@ -807,6 +748,7 @@ def run_portfolio_timeline(
                     entry_stats=portfolio_entry_stats,
                     replay_execution_rows=replay_execution_rows,
                     fee_rebate_state=fee_rebate_state,
+                    extended_day_market_cache=extended_day_market_cache,
                 )
                 if profile_timing_enabled:
                     buy_sec += time.perf_counter() - t0

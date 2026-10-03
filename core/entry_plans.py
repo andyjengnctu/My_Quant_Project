@@ -687,7 +687,10 @@ def build_position_from_frozen_entry_plan(
     Missing completed entry-day OHLC postpones the entry-session seal to replay;
     it must never be replaced by order-day or future OHLC.
     """
-    seed = dict(entry_plan or {})
+    # The frozen entry plan is read-only in this handoff.  Avoid copying the
+    # whole candidate-plan dict on every fill; inherited shadow management is
+    # applied to the newly-created position, never back into the plan.
+    seed = entry_plan or {}
     shadow = seed.get("shadow_position_state")
     position = build_position_from_entry_fill(
         buy_price=buy_price, qty=qty, init_sl=seed.get("init_sl"),

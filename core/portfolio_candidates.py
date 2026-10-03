@@ -45,11 +45,9 @@ from core.price_utils import (
     build_position_sizing_fee_context,
 )
 from core.portfolio_fast_data import (
-    get_fast_pos,
+    get_fast_extended_day_market_values,
     get_fast_security_profile,
     get_fast_normal_signal_values,
-    get_fast_previous_management_values,
-    get_fast_dates,
     get_pit_stats_from_index,
 )
 
@@ -369,11 +367,7 @@ def _collect_normal_candidates(
     orderable_candidates_today = []
     normal_setup_tickers_today = set()
 
-    sort_started = time.perf_counter() if profile_enabled else None
-    sorted_normal_setup_entries = sorted(normal_setup_entries, key=lambda x: x[0])
-    if profile_enabled:
-        _candidate_profile_add(profile_stats, "portfolio_candidate_sort_sec", sort_started)
-    for ticker, y_pos, t_pos in sorted_normal_setup_entries:
+    for ticker, y_pos, t_pos in normal_setup_entries:
         normal_setup_tickers_today.add(ticker)
 
         # # (AI註: 新的 normal setup 必須先覆蓋舊延續訊號；即使當日因已持有/剛賣出而不能下單，
@@ -510,11 +504,7 @@ def track_normal_setup_signals_for_day(
     profile_enabled = profile_stats is not None
     total_started = time.perf_counter() if profile_enabled else None
     normal_setup_tickers_today = set()
-    sort_started = time.perf_counter() if profile_enabled else None
-    sorted_normal_setup_entries = sorted(normal_setup_entries, key=lambda x: x[0])
-    if profile_enabled:
-        _candidate_profile_add(profile_stats, "portfolio_candidate_sort_sec", sort_started)
-    for ticker, y_pos, _t_pos in sorted_normal_setup_entries:
+    for ticker, y_pos, _t_pos in normal_setup_entries:
         normal_setup_tickers_today.add(ticker)
 
         # # (AI註: 與完整候選路徑一致：新的 normal setup 先覆蓋舊延續訊號；即使當日因已持有/剛賣出而不能下單，
@@ -608,7 +598,15 @@ def _collect_extended_candidates(
         if fast_df is None:
             continue
 
-        t_pos = get_fast_pos(fast_df, today)
+        cached_day_market = (
+            None if extended_day_market_cache is None
+            else extended_day_market_cache.get(ticker)
+        )
+        if cached_day_market is None:
+            cached_day_market = get_fast_extended_day_market_values(fast_df, today)
+            if extended_day_market_cache is not None:
+                extended_day_market_cache[ticker] = cached_day_market
+        t_pos = int(cached_day_market[0])
         if t_pos <= 0:
             continue
         y_pos = t_pos - 1
@@ -622,22 +620,9 @@ def _collect_extended_candidates(
         if not is_candidate:
             continue
 
-        cached_day_market = (
-            None if extended_day_market_cache is None
-            else extended_day_market_cache.get(ticker)
-        )
-        if cached_day_market is not None and int(cached_day_market[0]) == int(t_pos):
-            previous_values = cached_day_market[1]
-            information_date = cached_day_market[2]
-            security_profile = cached_day_market[3]
-        else:
-            previous_values = get_fast_previous_management_values(fast_df, t_pos)
-            information_date = get_fast_dates(fast_df)[y_pos]
-            security_profile = get_fast_security_profile(fast_df)
-            if extended_day_market_cache is not None:
-                extended_day_market_cache[ticker] = (
-                    int(t_pos), previous_values, information_date, security_profile
-                )
+        previous_values = cached_day_market[1]
+        information_date = cached_day_market[2]
+        security_profile = cached_day_market[3]
         y_close = previous_values[2]
         candidate_capital_context = sizing_capital_context_cache.get(id(candidate_params))
         if candidate_capital_context is None:
@@ -897,6 +882,15 @@ def build_daily_candidates(
     if collect_all_candidates:
         sort_candidate_rows(candidates_today, buy_sort_method)
     sort_candidate_rows(orderable_candidates_today, buy_sort_method)
+    if extended_day_market_cache is not None:
+        # Cleanup runs later in the same simulated day.  Reuse the candidate rows
+        # that were already materialized instead of traversing the orderable list
+        # again in the portfolio engine just to build a ticker lookup.
+        extended_day_market_cache[("__meta__", "orderable_candidate_rows_by_ticker")] = {
+            row.get("ticker"): row
+            for row in orderable_candidates_today
+            if row.get("ticker") is not None
+        }
     if profile_enabled:
         _candidate_profile_add(profile_stats, "portfolio_candidate_sort_sec", sort_started)
     return candidates_today, orderable_candidates_today, normal_setup_tickers_today
