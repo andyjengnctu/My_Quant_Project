@@ -3059,12 +3059,40 @@ def main(argv=None, environ=None):
     enable_line_buffered_stdout()
     argv = sys.argv if argv is None else argv
     environ = os.environ if environ is None else environ
-    validate_cli_args(argv, value_options=("--dataset", "--model", "--study-scope", "--trials", "--outer-train-start", "--outer-first-oos", "--outer-last-oos", "--outer-first-oos-date", "--outer-last-oos-date", "--outer-window-mode", "--outer-train-window-years", "--outer-train-window-months", "--outer-oos-months"), flag_options=("--timing", "--outer-oos", "--yes"))
+    validate_cli_args(argv, value_options=("--dataset", "--model", "--study-scope", "--trials", "--outer-train-start", "--outer-first-oos", "--outer-last-oos", "--outer-first-oos-date", "--outer-last-oos-date", "--outer-window-mode", "--outer-train-window-years", "--outer-train-window-months", "--outer-oos-months", "--timing-fold-workers"), flag_options=("--timing", "--outer-oos", "--yes"))
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "apps/research.py optimizer")
-        print(f"用法: python {program_name} [--dataset reduced|full] [--model study|full|oos|trade] [--study-scope oos|full] [--trials N] [--timing] [--outer-oos] [--outer-window-mode fixed|expanding] [--outer-train-window-months N] [--outer-oos-months N]")
+        print(f"用法: python {program_name} [--dataset reduced|full] [--model study|full|oos|trade] [--study-scope oos|full] [--trials N] [--timing] [--outer-oos] [--timing-fold-workers 1,2,3,4,6] [--outer-window-mode fixed|expanding] [--outer-train-window-months N] [--outer-oos-months N]")
         print("說明: 互動模式預設 Study，提供 Study/Full/OOS/Rolling OOS；Trade正式操作已移至Workbench。--model trade僅保留CLI/internal compatibility，不再出現在Research互動選單。")
+        print("Rolling timing: --timing-fold-workers 可用逗號列出多個 fold concurrency；每個 case 以全新 subprocess 執行，並固定 inner search parallel trials=1 以隔離 fold-level concurrency。")
         return 0
+
+    timing_fold_workers_raw = _extract_cli_value(argv, '--timing-fold-workers')
+    if timing_fold_workers_raw:
+        if not (_has_cli_flag(argv, '--timing') and _has_cli_flag(argv, '--outer-oos')):
+            raise ValueError('--timing-fold-workers 只可搭配 --timing --outer-oos 使用。')
+        from services.optimizer.outer_rolling_timing_sweep import (
+            parse_outer_rolling_timing_worker_sweep,
+            run_outer_rolling_timing_worker_sweep,
+        )
+
+        timing_fold_workers = parse_outer_rolling_timing_worker_sweep(timing_fold_workers_raw)
+        if len(timing_fold_workers) > 1:
+            return run_outer_rolling_timing_worker_sweep(
+                argv=argv,
+                environ=environ,
+                project_root=PROJECT_ROOT,
+                output_dir=build_output_dir(PROJECT_ROOT, 'ml_optimizer'),
+                workers=timing_fold_workers,
+            )
+        worker_count = int(timing_fold_workers[0])
+        os.environ['OPTIMIZER_ROLLING_FOLD_WORKERS'] = str(worker_count)
+        os.environ['OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS'] = '1'
+        os.environ['OPTIMIZER_RESOURCE_WRITE_CSV'] = '1'
+        if isinstance(environ, dict):
+            environ['OPTIMIZER_ROLLING_FOLD_WORKERS'] = str(worker_count)
+            environ['OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS'] = '1'
+            environ['OPTIMIZER_RESOURCE_WRITE_CSV'] = '1'
 
     from core.data_utils import discover_unique_csv_inputs
     from strategies.breakout.search_space import get_breakout_optimizer_required_min_rows

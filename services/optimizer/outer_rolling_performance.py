@@ -105,8 +105,10 @@ def _resolve_single_fold_search_parallel_trials(environ, *, sampler_kind: str) -
 
 
 def _apply_outer_rolling_resource_env_defaults(environ, *, timing_mode: bool, fold_count: int) -> None:
-    _ = timing_mode  # 本函式只處理效能/資源預設；正式模式與 timing mode 應盡可能一致。
-    for name, value in build_optimizer_outer_rolling_env_defaults(fold_count).items():
+    for name, value in build_optimizer_outer_rolling_env_defaults(
+        fold_count,
+        timing_mode=bool(timing_mode),
+    ).items():
         _set_env_default(environ, name, value)
 
 

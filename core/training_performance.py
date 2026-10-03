@@ -38,6 +38,8 @@ from config.training_performance_policy import (
     OPTIMIZER_LOCAL_MIN_PROGRESS_MIN_INTERVAL_SEC,
     OPTIMIZER_OUTER_ROLLING_PROFILE_WRITE_FILES,
     OPTIMIZER_OUTER_ROLLING_STUDY_STORAGE,
+    OPTIMIZER_OUTER_ROLLING_TIMING_RESOURCE_WRITE_CSV,
+    OPTIMIZER_OUTER_ROLLING_TIMING_SEARCH_PARALLEL_TRIALS,
     OPTIMIZER_PORTFOLIO_PREP_AUTO_MAX_WORKERS,
     OPTIMIZER_PORTFOLIO_PREP_PARALLEL_MIN_TICKERS,
     OPTIMIZER_PORTFOLIO_PREP_WORKERS,
@@ -179,6 +181,22 @@ def resolve_optimizer_single_fold_search_parallel_trials_default():
         default=1,
         min_value=1,
         max_value=16,
+    )
+
+
+def resolve_optimizer_outer_rolling_timing_search_parallel_trials_default():
+    return _coerce_int(
+        OPTIMIZER_OUTER_ROLLING_TIMING_SEARCH_PARALLEL_TRIALS,
+        default=1,
+        min_value=1,
+        max_value=16,
+    )
+
+
+def is_optimizer_outer_rolling_timing_resource_write_csv_enabled_default() -> bool:
+    return _coerce_bool(
+        OPTIMIZER_OUTER_ROLLING_TIMING_RESOURCE_WRITE_CSV,
+        default=True,
     )
 
 
@@ -462,17 +480,28 @@ def is_optimizer_active_replay_write_prepared_cache_enabled(environ=None) -> boo
     )
 
 
-def build_optimizer_outer_rolling_env_defaults(fold_count: int) -> dict[str, str]:
+def build_optimizer_outer_rolling_env_defaults(fold_count: int, *, timing_mode: bool = False) -> dict[str, str]:
+    timing_mode = bool(timing_mode)
+    search_parallel_trials = (
+        resolve_optimizer_outer_rolling_timing_search_parallel_trials_default()
+        if timing_mode
+        else resolve_optimizer_single_fold_search_parallel_trials_default()
+    )
+    resource_write_csv = (
+        is_optimizer_outer_rolling_timing_resource_write_csv_enabled_default()
+        if timing_mode
+        else bool(OPTIMIZER_RESOURCE_WRITE_CSV)
+    )
     return {
         "OPTIMIZER_PROFILE_WRITE_FILES": "1" if bool(OPTIMIZER_OUTER_ROLLING_PROFILE_WRITE_FILES) else "0",
         "OPTIMIZER_OUTER_ROLLING_STUDY_STORAGE": resolve_optimizer_outer_rolling_study_storage_default(),
-        "OPTIMIZER_RESOURCE_WRITE_CSV": "1" if bool(OPTIMIZER_RESOURCE_WRITE_CSV) else "0",
+        "OPTIMIZER_RESOURCE_WRITE_CSV": "1" if bool(resource_write_csv) else "0",
         "OPTIMIZER_ACTIVE_REPLAY_INCLUDE_TRADE_LOGS": "1" if bool(OPTIMIZER_ACTIVE_REPLAY_INCLUDE_TRADE_LOGS) else "0",
         "OPTIMIZER_ACTIVE_REPLAY_INCLUDE_PIT_STATS_INDEX": "1" if bool(OPTIMIZER_ACTIVE_REPLAY_INCLUDE_PIT_STATS_INDEX) else "0",
         "OPTIMIZER_ACTIVE_REPLAY_USE_PREPARED_CACHE": "1" if bool(OPTIMIZER_ACTIVE_REPLAY_USE_PREPARED_CACHE) else "0",
         "OPTIMIZER_ACTIVE_REPLAY_WRITE_PREPARED_CACHE": "1" if bool(OPTIMIZER_ACTIVE_REPLAY_WRITE_PREPARED_CACHE) else "0",
         "OPTIMIZER_ROLLING_FOLD_WORKERS": str(resolve_optimizer_rolling_fold_workers_default(fold_count)),
-        "OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS": str(resolve_optimizer_single_fold_search_parallel_trials_default()),
+        "OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS": str(search_parallel_trials),
         "OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH": "1" if is_optimizer_single_fold_tpe_parallel_search_allowed_default() else "0",
         "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS": str(resolve_optimizer_single_fold_local_min_parallel_workers_default()),
         "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS": str(resolve_optimizer_single_fold_local_min_process_workers_default()),
@@ -495,6 +524,8 @@ def build_training_performance_policy_snapshot(fold_count=None, seed_ensemble_si
         "OPTIMIZER_COMPILED_SIGNAL_KERNELS": is_optimizer_compiled_signal_kernels_enabled(),
         "OPTIMIZER_NATIVE_HOTPATH_KERNELS": is_optimizer_native_hotpath_kernels_enabled(),
         "OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS": resolve_optimizer_single_fold_search_parallel_trials_default(),
+        "OPTIMIZER_OUTER_ROLLING_TIMING_SEARCH_PARALLEL_TRIALS": resolve_optimizer_outer_rolling_timing_search_parallel_trials_default(),
+        "OPTIMIZER_OUTER_ROLLING_TIMING_RESOURCE_WRITE_CSV": is_optimizer_outer_rolling_timing_resource_write_csv_enabled_default(),
         "OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH": is_optimizer_single_fold_tpe_parallel_search_allowed_default(),
         "OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_WORKERS": resolve_optimizer_single_fold_local_min_parallel_workers_default(),
         "OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_MAX_WORKERS": int(OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_MAX_WORKERS),

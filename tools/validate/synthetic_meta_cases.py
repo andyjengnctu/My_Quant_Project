@@ -2343,6 +2343,8 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
             "OPTIMIZER_FEATURE_BANK_MAX_ITEMS",
             "OPTIMIZER_NATIVE_HOTPATH_KERNELS",
             "OPTIMIZER_TIMING_MODE_DEFAULT_TRIALS",
+            "OPTIMIZER_OUTER_ROLLING_TIMING_SEARCH_PARALLEL_TRIALS",
+            "OPTIMIZER_OUTER_ROLLING_TIMING_RESOURCE_WRITE_CSV",
             "OPTIMIZER_ROLLING_SHARED_PREP_CACHE_MAX_ITEMS",
             "OPTIMIZER_FULL_EVAL_CACHE_MAX_ITEMS",
             "OPTIMIZER_PORTFOLIO_PREP_WORKERS",
@@ -2356,6 +2358,8 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
             "build_training_performance_policy_snapshot",
             "build_optimizer_outer_rolling_env_defaults",
             "resolve_optimizer_rolling_fold_workers_default",
+            "resolve_optimizer_outer_rolling_timing_search_parallel_trials_default",
+            "is_optimizer_outer_rolling_timing_resource_write_csv_enabled_default",
             "resolve_optimizer_rolling_shared_prep_cache_max_items",
             "resolve_optimizer_full_evaluation_cache_max_items",
             "resolve_optimizer_portfolio_prep_workers",
@@ -2585,6 +2589,7 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
     )
 
     outer_defaults = performance_runtime.build_optimizer_outer_rolling_env_defaults(3)
+    timing_outer_defaults = performance_runtime.build_optimizer_outer_rolling_env_defaults(3, timing_mode=True)
     expected_outer_default_keys = {
         "OPTIMIZER_PROFILE_WRITE_FILES",
         "OPTIMIZER_OUTER_ROLLING_STUDY_STORAGE",
@@ -2612,9 +2617,25 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         (set(outer_defaults), outer_defaults.get("OPTIMIZER_ROLLING_FOLD_WORKERS")),
     )
 
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "outer_rolling_timing_defaults_isolate_fold_concurrency_and_write_resource_samples",
+        (
+            str(performance_runtime.resolve_optimizer_outer_rolling_timing_search_parallel_trials_default()),
+            "1" if performance_runtime.is_optimizer_outer_rolling_timing_resource_write_csv_enabled_default() else "0",
+        ),
+        (
+            timing_outer_defaults.get("OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS"),
+            timing_outer_defaults.get("OPTIMIZER_RESOURCE_WRITE_CSV"),
+        ),
+    )
+
     outer_runtime = importlib.import_module("services.optimizer.outer_rolling_oos")
     outer_performance = importlib.import_module("services.optimizer.outer_rolling_performance")
     outer_timing = importlib.import_module("services.optimizer.outer_rolling_timing")
+    outer_timing_sweep = importlib.import_module("services.optimizer.outer_rolling_timing_sweep")
     add_check(
         results,
         "meta_coverage",
@@ -2647,6 +2668,15 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
                 "_write_outer_timing_summary",
             )
         ),
+    )
+
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "outer_rolling_timing_sweep_parser_preserves_requested_order_and_deduplicates",
+        [1, 2, 4],
+        outer_timing_sweep.parse_outer_rolling_timing_worker_sweep("1,2,2,4"),
     )
 
     timing_summary_probe = outer_runtime._write_outer_timing_summary(

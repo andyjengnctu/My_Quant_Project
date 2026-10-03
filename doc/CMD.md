@@ -2,6 +2,7 @@
 
 python apps/research.py optimizer advanced --dataset full --timing --trials 10 `效能驗證`
 python apps/research.py optimizer advanced --dataset full --outer-oos --timing --trials 10 --outer-first-oos-date 2021-01-01 --outer-last-oos-date 2026-01-01 --outer-window-mode fixed --outer-train-window-months 120 --outer-oos-months 12 --yes `rolling效能驗證`
+python apps/research.py optimizer advanced --dataset full --outer-oos --timing --trials 10 --timing-fold-workers 1,2,3,4,6 --outer-first-oos-date 2021-01-01 --outer-last-oos-date 2026-01-01 --outer-window-mode fixed --outer-train-window-months 120 --outer-oos-months 12 --yes `rolling fold concurrency A/B（每case獨立process；inner trial=1）`
 
 ## 環境 / 測試
 

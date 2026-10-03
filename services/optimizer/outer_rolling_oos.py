@@ -2745,6 +2745,7 @@ def run_outer_rolling_oos(
         resource_summary=resource_sampler.summary(),
         resource_samples=resource_sampler.samples,
         performance_alignment_rows=performance_alignment_rows,
+        write_files=bool(timing_mode),
     )
     final_report = _format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained_for_report), color=True)
     if final_report.strip():
@@ -2793,7 +2794,16 @@ def run_outer_rolling_oos(
         color=True,
     ))
     if bool(timing_mode):
-        pass
+        timing_output_entries = [
+            ("timing JSON", str((timing_paths or {}).get("json") or "")),
+            ("fold timing CSV", str((timing_paths or {}).get("csv") or "")),
+            ("resource CSV", str((timing_paths or {}).get("resource_csv") or "")),
+        ]
+        print_optimizer_output_files(
+            [(label, path) for label, path in timing_output_entries if str(path).strip()],
+            title="💾 Rolling timing 輸出",
+            project_root=project_root,
+        )
     if not bool(timing_mode):
         visible_paramsets = [
             (get_optimizer_policy_output_label(str(policy_name)), str(paramset_path))

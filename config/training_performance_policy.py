@@ -12,6 +12,10 @@ OPTIMIZER_FEATURE_BANK_MAX_ITEMS = 1024
 OPTIMIZER_COMPILED_SIGNAL_KERNELS = True
 OPTIMIZER_NATIVE_HOTPATH_KERNELS = True
 OPTIMIZER_TIMING_MODE_DEFAULT_TRIALS = 3
+# Outer-Rolling timing isolates fold-level concurrency by default.  Explicit
+# environment overrides remain authoritative for ad-hoc diagnostics.
+OPTIMIZER_OUTER_ROLLING_TIMING_SEARCH_PARALLEL_TRIALS = 1
+OPTIMIZER_OUTER_ROLLING_TIMING_RESOURCE_WRITE_CSV = True
 
 # Random-seed ensemble parallelism.
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_WORKERS = "auto"
