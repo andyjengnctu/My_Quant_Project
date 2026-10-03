@@ -2640,6 +2640,17 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         results,
         "meta_coverage",
         case_id,
+        "outer_rolling_nested_trial_prep_is_inline_only_when_multiple_folds_run_concurrently",
+        ("process", "inline"),
+        (
+            outer_performance._resolve_outer_rolling_trial_prep_execution_mode(fold_workers=1),
+            outer_performance._resolve_outer_rolling_trial_prep_execution_mode(fold_workers=6),
+        ),
+    )
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
         "outer_rolling_search_parallel_resolver_remains_bound_after_responsibility_extraction",
         True,
         bool(
@@ -2678,6 +2689,21 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         [1, 2, 4],
         outer_timing_sweep.parse_outer_rolling_timing_worker_sweep("1,2,2,4"),
     )
+
+    windows_memory_probe = outer_performance._ResourceUsageSampler._read_windows_memory if os.name == "nt" else None
+    if windows_memory_probe is not None:
+        windows_memory_sample = windows_memory_probe()
+        add_check(
+            results,
+            "meta_coverage",
+            case_id,
+            "windows_native_resource_probe_reports_commit_separately_from_swap",
+            (True, False),
+            (
+                all(key in windows_memory_sample for key in ("commit_percent", "commit_used_gb", "commit_limit_gb", "commit_available_gb")),
+                any(key in windows_memory_sample for key in ("swap_percent", "swap_used_gb")),
+            ),
+        )
 
     timing_summary_probe = outer_runtime._write_outer_timing_summary(
         output_dir=".",

@@ -210,6 +210,82 @@ def merge_prep_result(result, all_dfs_fast, all_trade_logs, all_pit_stats_index,
     prep_failures.append((ticker, result["reason"]))
 
 
+def _new_prep_profile(*, static_pack_sec=0.0):
+    return {
+        "worker_total_sum_sec": 0.0,
+        "prep_total_sum_sec": 0.0,
+        "copy_sum_sec": 0.0,
+        "generate_signals_sum_sec": 0.0,
+        "assign_sum_sec": 0.0,
+        "run_backtest_sum_sec": 0.0,
+        "to_dict_sum_sec": 0.0,
+        "feature_bank_hits": 0,
+        "feature_bank_misses": 0,
+        "feature_bank_size_max": 0,
+        "feature_bank_max_items": 0,
+        "static_pack_sec": float(static_pack_sec),
+        "executor_setup_sec": 0.0,
+        "executor_submit_sec": 0.0,
+        "executor_collect_sec": 0.0,
+        "executor_shutdown_sec": 0.0,
+        "merge_sum_sec": 0.0,
+        "master_union_sec": 0.0,
+        "ticker_count": 0,
+        "batch_count": 0,
+        "ok_count": 0,
+        "fail_count": 0,
+    }
+
+
+def _run_prep_inline(
+    *,
+    raw_data_cache,
+    tickers,
+    params,
+    all_dfs_fast,
+    all_trade_logs,
+    all_pit_stats_index,
+    master_dates,
+    prep_failures,
+    prep_profile,
+    static_fast_cache,
+    include_trade_logs,
+    include_pit_stats_index,
+    ok_tickers=None,
+    update_master_dates=True,
+    profile_enabled=True,
+    feature_bank=None,
+):
+    if feature_bank is None:
+        feature_bank = _build_optimizer_feature_bank()
+    prep_profile["ticker_count"] += int(len(tickers))
+    prep_profile["batch_count"] += 1 if tickers else 0
+    for ticker in tickers:
+        result = worker_prep_data(
+            ticker,
+            raw_data_cache[ticker],
+            params,
+            include_trade_logs=include_trade_logs,
+            include_pit_stats_index=include_pit_stats_index,
+            feature_bank=feature_bank,
+            profile_enabled=profile_enabled,
+        )
+        t_merge = time.perf_counter()
+        merge_prep_result(
+            result,
+            all_dfs_fast,
+            all_trade_logs,
+            all_pit_stats_index,
+            master_dates,
+            prep_failures,
+            prep_profile,
+            static_fast_cache,
+            ok_tickers=ok_tickers,
+            update_master_dates=update_master_dates,
+        )
+        prep_profile["merge_sum_sec"] += time.perf_counter() - t_merge
+
+
 def _build_process_pool_executor(max_workers, raw_data_cache):
     process_pool_kwargs, pool_start_method = get_process_pool_executor_kwargs()
     executor_kwargs = dict(process_pool_kwargs)
@@ -307,30 +383,7 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
     prep_failures = []
     defer_master_date_union = static_master_dates is not None
     ok_tickers = [] if defer_master_date_union else None
-    prep_profile = {
-        "worker_total_sum_sec": 0.0,
-        "prep_total_sum_sec": 0.0,
-        "copy_sum_sec": 0.0,
-        "generate_signals_sum_sec": 0.0,
-        "assign_sum_sec": 0.0,
-        "run_backtest_sum_sec": 0.0,
-        "to_dict_sum_sec": 0.0,
-        "feature_bank_hits": 0,
-        "feature_bank_misses": 0,
-        "feature_bank_size_max": 0,
-        "feature_bank_max_items": 0,
-        "static_pack_sec": float(static_pack_sec),
-        "executor_setup_sec": 0.0,
-        "executor_submit_sec": 0.0,
-        "executor_collect_sec": 0.0,
-        "executor_shutdown_sec": 0.0,
-        "merge_sum_sec": 0.0,
-        "master_union_sec": 0.0,
-        "ticker_count": 0,
-        "batch_count": 0,
-        "ok_count": 0,
-        "fail_count": 0,
-    }
+    prep_profile = _new_prep_profile(static_pack_sec=static_pack_sec)
     max_workers = resolve_optimizer_max_workers(params, default_max_workers)
     prep_mode = "parallel"
     pool_start_method = None
@@ -341,7 +394,28 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
     executor_kind = 'process'
 
     try:
-        if executor_bundle is not None and int(executor_bundle.get("max_workers", 0)) == max_workers:
+        if executor_bundle is not None and str(executor_bundle.get("executor_kind", "")).strip().lower() == "inline":
+            prep_mode = "inline"
+            pool_start_method = "inline"
+            _run_prep_inline(
+                raw_data_cache=raw_data_cache,
+                tickers=tickers,
+                params=params,
+                all_dfs_fast=all_dfs_fast,
+                all_trade_logs=all_trade_logs,
+                all_pit_stats_index=all_pit_stats_index,
+                master_dates=master_dates,
+                prep_failures=prep_failures,
+                prep_profile=prep_profile,
+                static_fast_cache=resolved_static_fast_cache,
+                include_trade_logs=include_trade_logs,
+                include_pit_stats_index=include_pit_stats_index,
+                ok_tickers=ok_tickers,
+                update_master_dates=not defer_master_date_union,
+                profile_enabled=profile_enabled,
+                feature_bank=executor_bundle.get("feature_bank"),
+            )
+        elif executor_bundle is not None and int(executor_bundle.get("max_workers", 0)) == max_workers:
             created_executor = executor_bundle["executor"]
             pool_start_method = executor_bundle.get("pool_start_method")
             executor_kind = executor_bundle.get("executor_kind", 'process')
@@ -373,33 +447,24 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
         master_dates = set()
         prep_failures = []
         ok_tickers = [] if defer_master_date_union else None
-        prep_profile = {
-            "worker_total_sum_sec": 0.0,
-            "prep_total_sum_sec": 0.0,
-            "copy_sum_sec": 0.0,
-            "generate_signals_sum_sec": 0.0,
-            "assign_sum_sec": 0.0,
-            "run_backtest_sum_sec": 0.0,
-            "to_dict_sum_sec": 0.0,
-            "ok_count": 0,
-            "fail_count": 0,
-        }
-        sequential_feature_bank = _build_optimizer_feature_bank()
-        prep_profile["ticker_count"] += int(len(raw_data_cache))
-        prep_profile["batch_count"] += int(len(raw_data_cache))
-        for ticker, df in raw_data_cache.items():
-            result = worker_prep_data(
-                ticker,
-                df,
-                params,
-                include_trade_logs=include_trade_logs,
-                include_pit_stats_index=include_pit_stats_index,
-                feature_bank=sequential_feature_bank,
-                profile_enabled=profile_enabled,
-            )
-            t_merge = time.perf_counter()
-            merge_prep_result(result, all_dfs_fast, all_trade_logs, all_pit_stats_index, master_dates, prep_failures, prep_profile, resolved_static_fast_cache, ok_tickers=ok_tickers, update_master_dates=not defer_master_date_union)
-            prep_profile["merge_sum_sec"] += time.perf_counter() - t_merge
+        prep_profile = _new_prep_profile(static_pack_sec=static_pack_sec)
+        _run_prep_inline(
+            raw_data_cache=raw_data_cache,
+            tickers=list(raw_data_cache.keys()),
+            params=params,
+            all_dfs_fast=all_dfs_fast,
+            all_trade_logs=all_trade_logs,
+            all_pit_stats_index=all_pit_stats_index,
+            master_dates=master_dates,
+            prep_failures=prep_failures,
+            prep_profile=prep_profile,
+            static_fast_cache=resolved_static_fast_cache,
+            include_trade_logs=include_trade_logs,
+            include_pit_stats_index=include_pit_stats_index,
+            ok_tickers=ok_tickers,
+            update_master_dates=not defer_master_date_union,
+            profile_enabled=profile_enabled,
+        )
 
     if defer_master_date_union:
         t_master_union = time.perf_counter()

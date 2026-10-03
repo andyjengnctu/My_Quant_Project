@@ -67,6 +67,10 @@ def _resolve_rolling_fold_workers(environ, *, timing_mode: bool, fold_count: int
     return max(1, min(max_workers, resolved))
 
 
+def _resolve_outer_rolling_trial_prep_execution_mode(*, fold_workers: int) -> str:
+    return "inline" if int(fold_workers) > 1 else "process"
+
+
 def _is_rolling_fold_parallel_enabled(environ, *, timing_mode: bool, fold_count: int) -> bool:
     _ = (environ, timing_mode)
     # 多 fold 一律走 parallel live board 路徑；OPTIMIZER_ROLLING_FOLD_WORKERS 只控制同時執行幾個 fold，
@@ -132,6 +136,7 @@ def _format_parallel_settings_line(environ, *, fold_workers: int, sampler_kind: 
         "OPTIMIZER_FEATURE_BANK_MAX_ITEMS",
         str(resolve_optimizer_feature_bank_max_items_default()),
     )
+    nested_prep_mode = _resolve_outer_rolling_trial_prep_execution_mode(fold_workers=int(fold_workers))
     return (
         "平行化設定："
         f"OPTIMIZER_ROLLING_FOLD_WORKERS={rolling_workers} | "
@@ -139,7 +144,8 @@ def _format_parallel_settings_line(environ, *, fold_workers: int, sampler_kind: 
         f"OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS={local_min_workers} | "
         f"OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS={process_workers} | "
         f"OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS={parallel_prep_cache_max_items} | "
-        f"OPTIMIZER_FEATURE_BANK_MAX_ITEMS={feature_bank_max_items}"
+        f"OPTIMIZER_FEATURE_BANK_MAX_ITEMS={feature_bank_max_items} | "
+        f"nested_prep={nested_prep_mode}"
     )
 
 
@@ -169,6 +175,7 @@ def _build_training_performance_alignment_rows(environ, *, fold_count: int, fold
     field_order = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_SIGNAL_DEPENDENCY_FIELD_ORDER", ",".join(resolve_optimizer_local_min_signal_dependency_field_order()) or "original")
     portfolio_order = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PORTFOLIO_DEPENDENCY_ORDER", resolve_optimizer_local_min_portfolio_dependency_order())
     dep_stats = "on" if is_optimizer_local_min_dependency_stats_enabled() else "off"
+    nested_prep_mode = _resolve_outer_rolling_trial_prep_execution_mode(fold_workers=int(fold_workers))
 
     rows = [
         {
@@ -186,6 +193,14 @@ def _build_training_performance_alignment_rows(environ, *, fold_count: int, fold
             "consistent": True,
             "result_scope": "OOS period fold 彼此獨立；正式 OOS_CHAIN 仍在所有 fold 完成後重算",
             "display": "console plan / timing JSON summary: rolling_fold_parallel",
+        },
+        {
+            "item": "nested_trial_prep",
+            "normal_mode": nested_prep_mode,
+            "timing_mode": nested_prep_mode,
+            "consistent": True,
+            "result_scope": "outer fold process parallelism active => trial prep stays inside each fold process; single-fold mode retains the prep process pool",
+            "display": "console plan / timing JSON alignment / timing CSV fold rows",
         },
         {
             "item": "single_fold_search_parallel_trials",
@@ -575,15 +590,17 @@ class _ResourceUsageSampler:
             total = float(mem.ullTotalPhys or 0)
             avail = float(mem.ullAvailPhys or 0)
             used = max(0.0, total - avail)
-            page_total = float(mem.ullTotalPageFile or 0)
-            page_avail = float(mem.ullAvailPageFile or 0)
-            page_used = max(0.0, page_total - page_avail)
+            commit_limit = float(mem.ullTotalPageFile or 0)
+            commit_available = float(mem.ullAvailPageFile or 0)
+            commit_used = max(0.0, commit_limit - commit_available)
             return {
                 "memory_percent": float(mem.dwMemoryLoad or ((used / total * 100.0) if total else 0.0)),
                 "memory_available_gb": avail / (1024 ** 3),
                 "memory_used_gb": used / (1024 ** 3),
-                "swap_percent": (page_used / page_total * 100.0) if page_total > 0 else 0.0,
-                "swap_used_gb": page_used / (1024 ** 3),
+                "commit_percent": (commit_used / commit_limit * 100.0) if commit_limit > 0 else 0.0,
+                "commit_used_gb": commit_used / (1024 ** 3),
+                "commit_limit_gb": commit_limit / (1024 ** 3),
+                "commit_available_gb": commit_available / (1024 ** 3),
             }
         except Exception as exc:
             _mark_resource_probe_fallback(exc)
@@ -591,8 +608,10 @@ class _ResourceUsageSampler:
                 "memory_percent": 0.0,
                 "memory_available_gb": 0.0,
                 "memory_used_gb": 0.0,
-                "swap_percent": 0.0,
-                "swap_used_gb": 0.0,
+                "commit_percent": 0.0,
+                "commit_used_gb": 0.0,
+                "commit_limit_gb": 0.0,
+                "commit_available_gb": 0.0,
             }
 
     @staticmethod
@@ -753,6 +772,7 @@ class _ResourceUsageSampler:
             _mark_resource_probe_fallback(exc)
             swap_percent = 0.0
             swap_used_gb = 0.0
+        commit = self._read_windows_memory() if os.name == "nt" else {}
 
         read_mb_s = 0.0
         write_mb_s = 0.0
@@ -792,6 +812,10 @@ class _ResourceUsageSampler:
             "memory_used_gb": float(memory_used_gb),
             "swap_percent": float(swap_percent),
             "swap_used_gb": float(swap_used_gb),
+            "commit_percent": float(commit.get("commit_percent", 0.0) or 0.0),
+            "commit_used_gb": float(commit.get("commit_used_gb", 0.0) or 0.0),
+            "commit_limit_gb": float(commit.get("commit_limit_gb", 0.0) or 0.0),
+            "commit_available_gb": float(commit.get("commit_available_gb", 0.0) or 0.0),
             "disk_read_mb_per_sec": float(read_mb_s),
             "disk_write_mb_per_sec": float(write_mb_s),
             "disk_total_mb_per_sec": float(read_mb_s + write_mb_s),
@@ -839,6 +863,10 @@ class _ResourceUsageSampler:
             "memory_used_gb": float(mem.get("memory_used_gb", 0.0) or 0.0),
             "swap_percent": float(mem.get("swap_percent", 0.0) or 0.0),
             "swap_used_gb": float(mem.get("swap_used_gb", 0.0) or 0.0),
+            "commit_percent": float(mem.get("commit_percent", 0.0) or 0.0),
+            "commit_used_gb": float(mem.get("commit_used_gb", 0.0) or 0.0),
+            "commit_limit_gb": float(mem.get("commit_limit_gb", 0.0) or 0.0),
+            "commit_available_gb": float(mem.get("commit_available_gb", 0.0) or 0.0),
             "disk_read_mb_per_sec": float(read_mb_s),
             "disk_write_mb_per_sec": float(write_mb_s),
             "disk_total_mb_per_sec": float(read_mb_s + write_mb_s),
@@ -905,6 +933,11 @@ class _ResourceUsageSampler:
             "swap_avg_percent": avg("swap_percent"),
             "swap_max_percent": mx("swap_percent"),
             "swap_max_used_gb": mx("swap_used_gb"),
+            "commit_avg_percent": avg("commit_percent"),
+            "commit_max_percent": mx("commit_percent"),
+            "commit_max_used_gb": mx("commit_used_gb"),
+            "commit_max_limit_gb": mx("commit_limit_gb"),
+            "commit_min_available_gb": mn("commit_available_gb"),
             "disk_read_mb": disk_read_delta,
             "disk_write_mb": disk_write_delta,
             "disk_total_mb": disk_read_delta + disk_write_delta,

@@ -100,6 +100,7 @@ def _build_outer_timing_row(
         "prep_executor_created": int(prep_cache_stats.get("executor_created", 0) or 0),
         "prep_executor_reused": int(prep_cache_stats.get("executor_reused", 0) or 0),
         "prep_executor_shared": bool(prep_cache_stats.get("executor_shared", False)),
+        "prep_execution_mode": str(prep_cache_stats.get("prep_execution_mode", "process") or "process"),
         "prep_call_count": int(prep_cache_stats.get("prep_call_count", 0) or 0),
         "prep_wall_sum_sec": float(prep_cache_stats.get("prep_wall_sum_sec", 0.0) or 0.0),
         "prep_worker_total_sum_sec": float(prep_cache_stats.get("prep_worker_total_sum_sec", 0.0) or 0.0),
@@ -306,6 +307,7 @@ def _write_outer_timing_summary(
     rolling_fold_parallel = any(bool(row.get("rolling_fold_parallel", False)) for row in list(fold_timing_rows or []))
     prep_executor_created = sum(int(row.get("prep_executor_created", 0) or 0) for row in list(fold_timing_rows or []))
     prep_executor_reused = sum(int(row.get("prep_executor_reused", 0) or 0) for row in list(fold_timing_rows or []))
+    prep_execution_modes = sorted({str(row.get("prep_execution_mode", "process") or "process") for row in list(fold_timing_rows or [])})
     prep_call_count = sum(int(row.get("prep_call_count", 0) or 0) for row in list(fold_timing_rows or []))
     prep_ticker_count_sum = sum(int(row.get("prep_ticker_count_sum", 0) or 0) for row in list(fold_timing_rows or []))
     prep_batch_count_sum = sum(int(row.get("prep_batch_count_sum", 0) or 0) for row in list(fold_timing_rows or []))
@@ -432,6 +434,7 @@ def _write_outer_timing_summary(
             **dict(resource_summary or {}),
             "prep_executor_created": int(prep_executor_created),
             "prep_executor_reused": int(prep_executor_reused),
+            "prep_execution_modes": "/".join(prep_execution_modes),
         },
         "folds": fold_timing_rows,
         "csv_path": csv_path if fold_timing_rows else "",

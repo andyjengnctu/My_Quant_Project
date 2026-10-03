@@ -10,7 +10,7 @@ from core.training_performance import (
     resolve_optimizer_full_evaluation_cache_max_items,
     resolve_optimizer_rolling_parallel_prep_cache_max_items_default,
 )
-from services.optimizer.trial_inputs import _build_process_pool_executor
+from services.optimizer.trial_inputs import _build_optimizer_feature_bank, _build_process_pool_executor
 from core.raw_universe_contract import coerce_raw_universe_required_min_rows
 from core.portfolio_fast_data import get_fast_dates, pack_static_market_data
 from core.signal_utils import OPTIMIZER_TRUE_RANGE_ATTR, tv_true_range
@@ -137,6 +137,7 @@ class OptimizerSession:
         )
         self._trial_prep_executor_bundle = None
         self._shared_trial_prep_executor_holder = None
+        self.trial_prep_execution_mode = "process"
         self.prep_executor_stats = {
             "created": 0,
             "reused": 0,
@@ -493,6 +494,7 @@ class OptimizerSession:
             "executor_created": int(self.prep_executor_stats.get("created", 0)),
             "executor_reused": int(self.prep_executor_stats.get("reused", 0)),
             "executor_shared": self._shared_trial_prep_executor_holder is not None,
+            "prep_execution_mode": str(getattr(self, "trial_prep_execution_mode", "process") or "process"),
             **dict(getattr(self, "prep_phase_stats", {}) or {}),
         }
 
@@ -691,14 +693,53 @@ class OptimizerSession:
         if callable(shutdown):
             shutdown(wait=True, cancel_futures=False)
 
+    def set_trial_prep_execution_mode(self, mode):
+        normalized = str(mode or "process").strip().lower()
+        if normalized not in {"process", "inline"}:
+            raise ValueError(f"unsupported trial prep execution mode: {mode!r}")
+        if normalized == str(getattr(self, "trial_prep_execution_mode", "process")).strip().lower():
+            return
+        self.close_trial_prep_executor(force_shared=True)
+        self.trial_prep_execution_mode = normalized
+
     def get_trial_prep_executor_bundle(self, max_workers):
         try:
             requested_workers = int(max_workers)
         except (TypeError, ValueError):
             requested_workers = int(self.default_max_workers)
         requested_workers = max(1, requested_workers)
+        execution_mode = str(getattr(self, "trial_prep_execution_mode", "process")).strip().lower()
 
         with self._cache_lock:
+            if execution_mode == "inline":
+                shared_holder = self._shared_trial_prep_executor_holder
+                existing = shared_holder.get("bundle") if shared_holder is not None else self._trial_prep_executor_bundle
+                if (
+                    existing is not None
+                    and str(existing.get("executor_kind", "")).strip().lower() == "inline"
+                    and existing.get("data_dir") == self.raw_data_cache_data_dir
+                    and int(existing.get("max_workers", 0)) == requested_workers
+                ):
+                    return existing
+                if shared_holder is not None:
+                    self._shutdown_trial_prep_executor_bundle(shared_holder.pop("bundle", None))
+                elif self._trial_prep_executor_bundle is not None:
+                    self._shutdown_trial_prep_executor_bundle(self._trial_prep_executor_bundle)
+                    self._trial_prep_executor_bundle = None
+                bundle = {
+                    "executor": None,
+                    "max_workers": requested_workers,
+                    "data_dir": self.raw_data_cache_data_dir,
+                    "pool_start_method": "inline",
+                    "executor_kind": "inline",
+                    "feature_bank": _build_optimizer_feature_bank(),
+                }
+                if shared_holder is not None:
+                    shared_holder["bundle"] = bundle
+                else:
+                    self._trial_prep_executor_bundle = bundle
+                return bundle
+
             shared_holder = self._shared_trial_prep_executor_holder
             existing = shared_holder.get("bundle") if shared_holder is not None else self._trial_prep_executor_bundle
             if existing is not None:

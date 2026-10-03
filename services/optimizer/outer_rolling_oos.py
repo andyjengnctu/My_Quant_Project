@@ -59,6 +59,7 @@ from services.optimizer.outer_rolling_performance import (
     _resolve_resource_sample_interval_sec,
     _resolve_rolling_fold_workers,
     _resolve_rolling_shared_prep_cache_max_items,
+    _resolve_outer_rolling_trial_prep_execution_mode,
     _resolve_single_fold_search_parallel_trials,
     _shutdown_rolling_shared_prep_executor_holder,
 )
@@ -1325,6 +1326,9 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
         _validate_optimizer_runtime_context(session, session_spec)
         session.rolling_fold_workers_max = int(fold_workers)
         session.rolling_fold_parallel = True
+        session.set_trial_prep_execution_mode(
+            _resolve_outer_rolling_trial_prep_execution_mode(fold_workers=int(fold_workers))
+        )
         reset_prep_cache_stats = getattr(session, "reset_prep_cache_stats", None)
         if callable(reset_prep_cache_stats):
             reset_prep_cache_stats()
@@ -1442,6 +1446,9 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                     _validate_optimizer_runtime_context(inner_session, inner_session_spec)
                     inner_session.rolling_fold_workers_max = int(fold_workers)
                     inner_session.rolling_fold_parallel = True
+                    inner_session.set_trial_prep_execution_mode(
+                        _resolve_outer_rolling_trial_prep_execution_mode(fold_workers=int(fold_workers))
+                    )
                     inner_session.n_trials = int(config.trials_per_fold)
                     inner_session.disable_milestone_dashboard = True
                     inner_session.timing_mode = bool(timing_mode)

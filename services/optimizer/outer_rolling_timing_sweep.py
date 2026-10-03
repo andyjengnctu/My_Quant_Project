@@ -117,8 +117,9 @@ def _build_case_row(*, requested_workers: int, returncode: int, timing_path: Pat
         "memory_min_available_gb": float(summary.get("memory_min_available_gb", 0.0) or 0.0),
         "process_tree_rss_max_gb": float(summary.get("process_tree_rss_max_gb", 0.0) or 0.0),
         "process_tree_count_max": int(summary.get("process_tree_count_max", 0) or 0),
-        "swap_max_percent": float(summary.get("swap_max_percent", 0.0) or 0.0),
-        "swap_max_used_gb": float(summary.get("swap_max_used_gb", 0.0) or 0.0),
+        "commit_max_percent": float(summary.get("commit_max_percent", 0.0) or 0.0),
+        "commit_max_used_gb": float(summary.get("commit_max_used_gb", 0.0) or 0.0),
+        "commit_min_available_gb": float(summary.get("commit_min_available_gb", 0.0) or 0.0),
         "disk_read_mb": float(summary.get("disk_read_mb", 0.0) or 0.0),
         "disk_write_mb": float(summary.get("disk_write_mb", 0.0) or 0.0),
         "disk_total_mb_per_sec_avg": float(summary.get("disk_total_mb_per_sec_avg", 0.0) or 0.0),
@@ -162,8 +163,8 @@ def _print_comparison(rows: list[dict]) -> None:
     print("\n====================================================================================================")
     print(" Rolling timing｜fold concurrency A/B")
     print("====================================================================================================")
-    print(" workers  status  total(s)  avg_trial  CPU avg/max   MEM avg/max   RSS max  avail min  swap max  disk avg/max")
-    print(" -------  ------  --------  ---------  ------------  ------------  -------  ---------  --------  ------------")
+    print(" workers  status  total(s)  avg_trial  CPU avg/max   MEM avg/max   RSS max  avail min  commit max  disk avg/max")
+    print(" -------  ------  --------  ---------  ------------  ------------  -------  ---------  ----------  ------------")
     for row in rows:
         requested = int(row.get("requested_fold_workers", 0) or 0)
         effective = int(row.get("effective_fold_workers", 0) or 0)
@@ -176,7 +177,7 @@ def _print_comparison(rows: list[dict]) -> None:
             f"{float(row.get('memory_avg_percent', 0.0) or 0.0):>5.1f}/{float(row.get('memory_max_percent', 0.0) or 0.0):<5.1f}  "
             f"{float(row.get('process_tree_rss_max_gb', 0.0) or 0.0):>7.2f}  "
             f"{float(row.get('memory_min_available_gb', 0.0) or 0.0):>9.2f}  "
-            f"{float(row.get('swap_max_percent', 0.0) or 0.0):>8.1f}  "
+            f"{float(row.get('commit_max_percent', 0.0) or 0.0):>10.1f}  "
             f"{float(row.get('disk_total_mb_per_sec_avg', 0.0) or 0.0):>5.1f}/{float(row.get('disk_total_mb_per_sec_max', 0.0) or 0.0):<5.1f}"
         )
 
