@@ -3676,7 +3676,7 @@
       "order": 331,
       "category": "重現性",
       "item": "同 seed 下 optimizer / model inference 可重現",
-      "gap": "已新增 strategy repeatability case，直接雙跑 scanner inference 與 optimizer objective，驗證輸出 payload、trial params 與 profile_row 在固定 seed / 固定輸入下可重現",
+      "gap": "已新增 strategy repeatability case，直接雙跑 scanner inference 與 optimizer objective，驗證輸出 payload、trial params 與 profile_row 在固定 seed / 固定輸入下可重現；另以 optimizer sampler resume determinism case 驗證 seeded TPE 在 checkpoint/resume 後保留既有 trial count，且中斷續跑與 uninterrupted run 的 trial sequence / params / values 一致，legacy study 亦維持相同 sampler identity。",
       "entry": "`tools/validate/synthetic_strategy_cases.py`, `tools/local_regression/`, `tools/optimizer/`",
       "legacy_initial_status": true
     },
@@ -8503,6 +8503,13 @@
       "description": "`validate_optimizer_walk_forward_policy_contract_case` Round-5 extension：驗registered FIT protocol owns seed/trials、generic Optimizer defaults不得改registered fitting identity、single-seed/P6 robustness derived scientific identity與source-drift fail-fast；不得修改C84/P5 validation semantics。",
       "initial_status": "NEW",
       "order": 552
+    },
+    {
+      "id": "T563",
+      "description": "`validate_optimizer_sampler_resume_determinism_case`",
+      "b_id": "B48",
+      "initial_status": "NEW",
+      "order": 553
     }
   ],
   "transitions": [
@@ -27081,6 +27088,14 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_optimizer_walk_forward_policy_contract_case`"
+    },
+    {
+      "date": "2026-10-04",
+      "id": "T563",
+      "description": "Register seeded TPE checkpoint/resume determinism regression under the existing optimizer reproducibility contract.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_optimizer_sampler_resume_determinism_case`"
     }
   ]
 }
