@@ -12,6 +12,7 @@ from core.strategy_comparison import (
     StrategyComparisonSettings,
     StrategyPreparationAction,
     StrategyPreparationPlan,
+    resolve_strategy_parameter_consumption_mode,
     resolve_strategy_parameter_required_schedule_end,
 )
 from services.breakout_quality.export_scores import export_forward_oos_scores
@@ -90,6 +91,12 @@ def _execute_preparation_action(
             raise RuntimeError(
                 f"{parameter_set_identity} validation-budget builder缺少可解析的required schedule end"
             )
+        consumption_mode = resolve_strategy_parameter_consumption_mode(source)
+        oos_end_cap_date = (
+            str(comparison_end_date)
+            if consumption_mode != "oos" and comparison_end_date not in (None, "")
+            else None
+        )
         for param_policy in resolve_required_param_policies_for_source(settings, source_id):
             ensure_validation_budget_strategy_parameter_artifact(
                 root,
@@ -102,6 +109,7 @@ def _execute_preparation_action(
                 max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
                 parameter_set_identity=parameter_set_identity,
                 validation_protocol_id=validation_protocol_id,
+                oos_end_cap_date=oos_end_cap_date,
             )
         return
     if action.builder_type == "optimizer_fixed_multiseed_strategy_params":

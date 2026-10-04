@@ -2152,6 +2152,7 @@ def prepare_selection_historical_full_roos_params(
     optimizer_search_protocol: str | None = None,
     parameter_set_identity: str = "P4_HISTORY",
     seed_ensemble_policy_override: dict | None = None,
+    oos_end_cap_date: str | None = None,
 ):
     """Build/reuse Full rolling params using the canonical full search space.
 
@@ -2320,7 +2321,11 @@ def prepare_selection_historical_full_roos_params(
             "1" if bool(resume_parameter_training) else "0"
         )
         exit_code = run_outer_rolling_oos(
-            argv=build_outer_rolling_argv(args=args, baseline_contract=schedule_contract),
+            argv=build_outer_rolling_argv(
+                args=args,
+                baseline_contract=schedule_contract,
+                oos_end_cap_date=oos_end_cap_date,
+            ),
             environ=outer_environ,
             project_root=str(root),
             output_dir=str(optimizer_output_dir),

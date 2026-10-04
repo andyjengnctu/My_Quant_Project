@@ -67,11 +67,17 @@ def build_outer_rolling_argv(
     *,
     args,
     baseline_contract: dict[str, Any],
+    oos_end_cap_date: str | None = None,
 ) -> list[str]:
-    """Build the canonical outer-rolling schedule arguments."""
+    """Build the canonical outer-rolling schedule arguments.
+
+    ``last_oos_date`` controls the final fold-start bucket.  ``oos_end_cap_date``
+    is a separate execution boundary used only when a rolling evaluation has a
+    partial final fold (for example the Research cutoff 2026-03-02).
+    """
 
     meta = dict(baseline_contract["meta"])
-    return [
+    argv = [
         "--outer-first-oos-date",
         str(meta["first_oos_date"]),
         "--outer-last-oos-date",
@@ -83,6 +89,9 @@ def build_outer_rolling_argv(
         "--trials",
         str(int(args.trials_per_fold)),
     ]
+    if oos_end_cap_date not in (None, ""):
+        argv.extend(("--outer-oos-end-cap-date", str(oos_end_cap_date)))
+    return argv
 
 
 __all__ = ["build_outer_rolling_argv", "build_rolling_base_policy"]

@@ -152,7 +152,8 @@ def _single_state(profile: StrategyParamTrainingProfile, *, required_end: str) -
 
 
 def _ensure_single(
-    profile: StrategyParamTrainingProfile, *, required_end: str, force_rebuild: bool = False
+    profile: StrategyParamTrainingProfile, *, required_end: str, force_rebuild: bool = False,
+    oos_end_cap_date: str | None = None,
 ) -> dict:
     protocol = _validation_protocol(profile)
     seed_protocol = _fitting_seed_protocol(profile)
@@ -186,6 +187,7 @@ def _ensure_single(
             validation_protocol_id=protocol.protocol_id,
             force_rebuild=bool(force_rebuild),
             resume_parameter_training=not bool(force_rebuild),
+            oos_end_cap_date=oos_end_cap_date,
         )
     return ensure_strategy_parameter_artifact(
         PROJECT_ROOT,
@@ -256,7 +258,7 @@ def _benchmark_state(
 
 def _ensure_benchmark(
     profile: StrategyParamTrainingProfile, *, seed: int, required_end: str,
-    force_rebuild: bool = False,
+    force_rebuild: bool = False, oos_end_cap_date: str | None = None,
 ) -> dict:
     benchmark = get_robustness_benchmark_policy_snapshot()
     seed_protocol = _fitting_seed_protocol(profile)
@@ -295,6 +297,7 @@ def _ensure_benchmark(
             parameter_set_identity=profile.parameter_set_identity,
             validation_protocol_id=protocol.protocol_id,
             force_rebuild=bool(force_rebuild),
+            oos_end_cap_date=oos_end_cap_date,
         )
     return ensure_robustness_benchmark_strategy_parameter_artifact(
         PROJECT_ROOT,
@@ -584,6 +587,7 @@ def _execute_plan(plan: dict, *, force_rebuild: bool = False) -> dict:
     profile: StrategyParamTrainingProfile = plan["profile"]
     work: StrategyParamWorkType = plan["work"]
     required_end = str(plan["required_end"])
+    oos_end_cap_date = required_end if work.rolling else None
     if work.robustness:
         for row in plan["rows"]:
             if row["action"] == "REUSE" and not force_rebuild:
@@ -594,13 +598,15 @@ def _execute_plan(plan: dict, *, force_rebuild: bool = False) -> dict:
             _ensure_benchmark(
                 profile, seed=int(row["seed"]), required_end=required_end,
                 force_rebuild=bool(force_rebuild),
+                oos_end_cap_date=oos_end_cap_date,
             )
     else:
         row = plan["rows"][0]
         action = "FORCE_REBUILD" if force_rebuild else row["action"]
         print(f"[{action}] {row['item']}")
         _ensure_single(
-            profile, required_end=required_end, force_rebuild=bool(force_rebuild)
+            profile, required_end=required_end, force_rebuild=bool(force_rebuild),
+            oos_end_cap_date=oos_end_cap_date,
         )
     final_plan = _build_plan(profile, work)
     if final_plan["status"] != "READY":

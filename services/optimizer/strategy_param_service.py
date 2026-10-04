@@ -3456,6 +3456,7 @@ def ensure_validation_budget_robustness_strategy_parameter_artifact(
     quiet: bool = False, parameter_set_identity: str = "PARAM-P5",
     validation_protocol_id: str = "validation_budget_refit_v1",
     force_rebuild: bool = False,
+    oos_end_cap_date: str | None = None,
 ) -> dict[str, Any]:
     from services.optimizer.strategy_param_training import prepare_selection_historical_full_roos_params
     from services.optimizer.validation_budget_refit import resolve_validation_budget_spec
@@ -3536,6 +3537,7 @@ def ensure_validation_budget_robustness_strategy_parameter_artifact(
             f"Optimizer {contract['parameter_set']} robustness工作工件（非production）"
         ),
         optimizer_search_protocol=spec.protocol, parameter_set_identity=str(contract["parameter_set"]),
+        oos_end_cap_date=oos_end_cap_date,
     )
     source = Path(result["params_path"]).resolve()
     _assert_optimizer_work_source(source_path=source, work_root=work_root)
@@ -3685,6 +3687,7 @@ def ensure_validation_budget_strategy_parameter_artifact(
     validation_protocol_id: str = "validation_budget_refit_v1",
     force_rebuild: bool = False,
     resume_parameter_training: bool = True,
+    oos_end_cap_date: str | None = None,
 ) -> dict[str, Any]:
     """Build/reuse the PARAM-P5 validation-selected-budget Full PIT schedule.
 
@@ -3785,6 +3788,7 @@ def ensure_validation_budget_strategy_parameter_artifact(
         ),
         optimizer_search_protocol=spec.protocol,
         parameter_set_identity=str(contract["parameter_set"]),
+        oos_end_cap_date=oos_end_cap_date,
     )
     source = Path(result["params_path"]).resolve()
     _assert_optimizer_work_source(source_path=source, work_root=work_root)

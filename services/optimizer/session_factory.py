@@ -45,14 +45,16 @@ def configure_optuna_logging():
 
 
 def _fold_resume_snapshot_without_parent_horizon(snapshot: dict | None) -> dict | None:
-    """Normalize the one legacy outer-fold field that depended on parent schedule length.
+    """Normalize execution-only OOS diagnostic horizon fields for fold resume.
 
-    Outer rolling studies are fold-local search memories.  Before the 2026-10-01
-    fix, ``latest_data_date`` was inherited from the requested *whole schedule*
-    end, so Forward prefix build and later Rolling extension gave the same 2021
-    fold different effective-policy fingerprints.  The explicit selection/OOS
-    dates already pin the fold.  Only this field may be ignored for the legacy
-    migration, and only for fixed OOS single-fold snapshots.
+    Outer rolling studies are fold-local *training-search* memories.  Their TPE
+    objective is fixed by the selection/search-train period; OOS diagnostics do
+    not feed back into search or N* selection.  ``latest_data_date`` previously
+    leaked the parent schedule horizon into the fingerprint, and the Round-8
+    cutoff bug briefly wrote an incorrect ``oos_end_date`` for an otherwise
+    identical fold.  Both fields may therefore be ignored only for
+    ``oos_single_fold`` resume compatibility.  Selection/search dates and OOS
+    start remain strict and still fail fast on real scientific drift.
     """
 
     if not isinstance(snapshot, dict):
@@ -72,6 +74,7 @@ def _fold_resume_snapshot_without_parent_horizon(snapshot: dict | None) -> dict 
     if any(not str(walk_forward.get(key) or "").strip() for key in required_dates):
         return None
     walk_forward.pop("latest_data_date", None)
+    walk_forward.pop("oos_end_date", None)
     normalized["walk_forward_policy"] = walk_forward
     return normalized
 

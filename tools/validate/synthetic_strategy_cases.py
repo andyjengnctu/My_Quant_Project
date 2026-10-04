@@ -1893,6 +1893,26 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         current_contract["fingerprint_sha256"],
         fold_resume_study.user_attrs.get("optimizer_effective_policy_fingerprint_sha256"),
     )
+    cutoff_bug_policy = {**current_fold_policy, "oos_end_date": "2021-01-01"}
+    corrected_oos_policy = {**current_fold_policy, "oos_end_date": "2021-12-31"}
+    cutoff_bug_contract = build_optimizer_effective_policy_fingerprint(cutoff_bug_policy)
+    corrected_oos_contract = build_optimizer_effective_policy_fingerprint(corrected_oos_policy)
+    cutoff_resume_study = _SyntheticStudy(
+        {
+            "optimizer_effective_policy_fingerprint_sha256": cutoff_bug_contract["fingerprint_sha256"],
+            "optimizer_effective_policy_snapshot": cutoff_bug_contract["snapshot"],
+        },
+        trials=[object()],
+    )
+    ensure_study_effective_policy_compatible(
+        study=cutoff_resume_study,
+        walk_forward_policy=corrected_oos_policy,
+    )
+    check(
+        "outer_fold_resume_migrates_diagnostic_oos_end_only_bug",
+        corrected_oos_contract["fingerprint_sha256"],
+        cutoff_resume_study.user_attrs.get("optimizer_effective_policy_fingerprint_sha256"),
+    )
     drifted_fold_policy = {**current_fold_policy, "search_train_end_date": "2020-11-30"}
     rejected_real_drift = False
     try:
@@ -2304,23 +2324,60 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and plateau_best_patience100_spec.as_dict()["patience_trials"]
             != plateau_best_validation_spec.as_dict()["patience_trials"],
     )
-    from services.optimizer.outer_rolling_plan import OuterRollingConfig, _build_rolling_folds
-    cutoff_folds = _build_rolling_folds(
-        OuterRollingConfig(
-            training_start_year=2011,
-            first_oos_year=2021,
-            last_oos_year=2026,
-            trials_per_fold=300,
-            window_mode="fixed",
-            train_window_years=10,
-            confirm=False,
-            first_oos_date="2021-01-01",
-            last_oos_date="2026-03-02",
-            train_window_months=120,
-            oos_horizon_months=12,
-            oos_end_cap_date="2026-03-02",
-        )
+    from filters.breakout_quality.strategy_optimizer_policy import build_outer_rolling_argv
+    from services.optimizer.outer_rolling_plan import OuterRollingConfig, _build_rolling_folds, _resolve_config
+
+    forward_contract = {
+        "meta": {
+            "first_oos_date": "2021-01-01",
+            "last_oos_date": "2021-01-01",
+            "train_window_months": 120,
+            "oos_horizon_months": 12,
+        }
+    }
+    forward_argv = build_outer_rolling_argv(
+        args=SimpleNamespace(trials_per_fold=300),
+        baseline_contract=forward_contract,
     )
+    forward_config = _resolve_config(
+        forward_argv,
+        {},
+        base_policy={"oos_start_year": 2021},
+        latest_year=2026,
+        latest_date="2026-03-02",
+        default_trials=300,
+        timing_mode=False,
+    )
+    forward_folds = _build_rolling_folds(forward_config)
+    check(
+        "outer_rolling_forward_single_member_keeps_full_12m_oos",
+        ("", "2021-12-31"),
+        (forward_config.oos_end_cap_date, forward_folds[-1]["oos_end_date"]),
+    )
+
+    rolling_contract = {
+        "meta": {
+            "first_oos_date": "2021-01-01",
+            "last_oos_date": "2026-03-02",
+            "train_window_months": 120,
+            "oos_horizon_months": 12,
+        }
+    }
+    rolling_argv = build_outer_rolling_argv(
+        args=SimpleNamespace(trials_per_fold=300),
+        baseline_contract=rolling_contract,
+        oos_end_cap_date="2026-03-02",
+    )
+    rolling_config = _resolve_config(
+        rolling_argv,
+        {},
+        base_policy={"oos_start_year": 2021},
+        latest_year=2026,
+        latest_date="2026-03-02",
+        default_trials=300,
+        timing_mode=False,
+    )
+    cutoff_folds = _build_rolling_folds(rolling_config)
     check(
         "outer_rolling_last_fold_clips_exact_research_cutoff",
         "2026-03-02",

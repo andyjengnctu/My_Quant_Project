@@ -190,12 +190,12 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
     first_oos_date_default = pd.Timestamp(year=first_oos_year_default, month=1, day=1)
     latest_ts = pd.Timestamp(latest_date).normalize() if latest_date is not None else pd.Timestamp(year=int(latest_year or first_oos_year_default), month=1, day=1)
     last_oos_date_default = _month_start(latest_ts)
-    configured_oos_end_date = str(base_policy.get("oos_end_date") or "").strip()
+    # ``last_oos_date`` selects the final fold start bucket; it is not the
+    # diagnostic OOS end boundary.  An exact partial-tail cutoff must be passed
+    # explicitly via ``--outer-oos-end-cap-date``.  Keeping these semantics
+    # separate prevents Forward OOS (which requests only the 2021-01-01
+    # effective member) from being truncated to a one-day diagnostic period.
     oos_end_cap_date = ""
-    if configured_oos_end_date:
-        configured_oos_end_ts = pd.Timestamp(configured_oos_end_date).normalize()
-        last_oos_date_default = min(last_oos_date_default, _month_start(configured_oos_end_ts))
-        oos_end_cap_date = configured_oos_end_ts.strftime("%Y-%m-%d")
     trials_default = int(
         default_trials
         if int(default_trials or 0) > 0
@@ -218,6 +218,7 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
     cli_train_window_months = _extract_cli_value(argv, "--outer-train-window-months")
     cli_train_window_years = _extract_cli_value(argv, "--outer-train-window-years")
     cli_oos_months = _extract_cli_value(argv, "--outer-oos-months")
+    cli_oos_end_cap_date = _extract_cli_value(argv, "--outer-oos-end-cap-date")
 
     requested_window_mode = str(cli_window_mode or env.get("V16_OUTER_ROLLING_WINDOW_MODE", "fixed") or "fixed").strip().lower()
     if requested_window_mode != "fixed":
@@ -248,11 +249,11 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
         if last_source
         else last_oos_date_default
     )
-    last_source_text = str(last_source or "").strip()
-    if last_source_text and len(last_source_text) >= 8 and not (
-        len(last_source_text) in {4, 6} and last_source_text.isdigit()
-    ):
-        oos_end_cap_date = pd.Timestamp(last_source_text).normalize().strftime("%Y-%m-%d")
+    if cli_oos_end_cap_date not in (None, ""):
+        oos_end_cap_ts = pd.Timestamp(str(cli_oos_end_cap_date)).normalize()
+        if oos_end_cap_ts < first_oos_date:
+            raise ValueError("OOS end cap不可早於first OOS date")
+        oos_end_cap_date = oos_end_cap_ts.strftime("%Y-%m-%d")
 
     if cli_trials:
         trials = int(cli_trials)

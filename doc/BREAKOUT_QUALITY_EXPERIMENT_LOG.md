@@ -12377,3 +12377,11 @@ Decision：`ENGINEERING_ONLY / VALIDATION_REPLAY_SUPPORTS_SINGLE_FINALIST_AND_EN
 
 Decision：`PARAM_P11_C90_REGISTERED / PATIENCE_100_ONLY_VARIABLE / C89_PATIENCE50_CONTROL_PRESERVED / EXACT_RESEARCH_CUTOFF_2026_03_02 / ROLLING_PHASE_TIMING_AND_NSTAR_VISIBLE / SCORE_UNCHANGED / RESULT_PENDING`.
 
+## 2026-10-04 — P11 Forward OOS cutoff correction + patience A/B reproducibility caveat
+
+- **Observed failure**：P11 Forward parameter build把`Required coverage end=2021-01-01`誤當成exact OOS diagnostic end，造成Fold 1被裁成`OOS 2021-01-01~2021-01-01`並在OOS diagnostics拋出「無有效交易日期」。根因是Round-8工程修改把`--outer-last-oos-date`同時當作「最後fold start bucket」與「partial-tail OOS end cap」，混淆兩個時間語意。
+- **Correction**：恢復SSOT語意分離。`--outer-last-oos-date`只控制最後要建立哪個fold；新增明確`--outer-oos-end-cap-date` capability，只有Rolling partial-tail工作才傳入Research cutoff。Forward只建立2021 effective member時不傳cap，因此Fold 1 diagnostic維持自然12M `2021-01-01~2021-12-31`；Rolling最後fold明確cap為`2026-03-02`。不改P11 validation、sampler、score、N*或parameter identity。
+- **A/B reproducibility caveat**：既有P10/C89首次建立曾在T4 callback crash，修正後由SQLite `validation search 4/300` resume；P11/C90則以新namespace fresh study從0開始。Optuna TPE sampler在process restart時重新建立，既有study只持久化trial history而非此次process內RNG進度，因此P10 resume後的後續trial path與P11 fresh path已分叉。現有C90-C89設定上仍只差patience，但**既有兩份run evidence不能視為matched-trial純patience A/B**；正式解讀前需以fresh control重建P10或採等價的matched fresh-run evidence。
+- **N* clarification**：P11 T11的`N*=11`只是當時validation best；後續T57創新高，最終在T157 plateau stop時selected `N*=57`。P10先前selected `N*=12`不可直接與P11早期T11比較。
+
+Decision：`FORWARD_OOS_12M_RESTORED / ROLLING_PARTIAL_TAIL_EXPLICIT_CAP / P11_IDENTITY_UNCHANGED / EXISTING_C90_C89_EVIDENCE_NOT_MATCHED_TRIAL_AB / FRESH_CONTROL_REQUIRED_FOR_STRICT_PATIENCE_ATTRIBUTION`.
