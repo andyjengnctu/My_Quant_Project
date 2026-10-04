@@ -1010,6 +1010,32 @@ def _study_trial_objective_wall_sec(study) -> float:
     return float(total)
 
 
+def _build_validation_progress_period_context(
+    *,
+    selection_start: str,
+    selection_end: str,
+    validation_budget_spec,
+) -> dict[str, str]:
+    """Build display-only Training/Validation periods from the canonical split."""
+    if validation_budget_spec is None:
+        return {}
+    _, validation_start, validation_end = build_inner_validation_policy(
+        {},
+        selection_start_date=str(selection_start),
+        selection_end_date=str(selection_end),
+        spec=validation_budget_spec,
+    )
+    training_end = (
+        pd.Timestamp(validation_start).normalize() - pd.Timedelta(days=1)
+    ).strftime("%Y-%m-%d")
+    return {
+        "training_start_date": str(selection_start),
+        "training_end_date": str(training_end),
+        "validation_start_date": str(validation_start),
+        "validation_end_date": str(validation_end),
+    }
+
+
 def _task_seed_ensemble_policy(task: dict | None) -> dict:
     override = dict((task or {}).get("seed_ensemble_policy") or {})
     return override if override else _effective_rolling_seed_ensemble_policy_payload()
@@ -2253,6 +2279,11 @@ def run_outer_rolling_oos(
             oos_year = int(fold["oos_year"])
             selection_start = str(fold["selection_start_date"])
             selection_end = str(fold["selection_end_date"])
+            progress_period_context = _build_validation_progress_period_context(
+                selection_start=selection_start,
+                selection_end=selection_end,
+                validation_budget_spec=plan_validation_spec,
+            )
             tasks.append({
                 "project_root": str(project_root),
                 "output_dir": str(output_dir),
@@ -2270,6 +2301,7 @@ def run_outer_rolling_oos(
                 "selection_start_date": str(fold["selection_start_date"]),
                 "selection_end_date": str(fold["selection_end_date"]),
                 "selection_period": str(fold["selection_period"]),
+                **progress_period_context,
                 "optimizer_seed": optimizer_seed,
                 "sampler_kind": str(sampler_kind),
                 "timing_mode": bool(timing_mode),
@@ -2353,6 +2385,11 @@ def run_outer_rolling_oos(
                 "oos_end_cap_date": str(config.oos_end_cap_date or ""),
                 RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD: int(config.raw_universe_required_min_rows),
             }
+            progress_period_context = _build_validation_progress_period_context(
+                selection_start=selection_start,
+                selection_end=selection_end,
+                validation_budget_spec=plan_validation_spec,
+            )
             task = {
                 "project_root": str(project_root),
                 "output_dir": str(output_dir),
@@ -2370,6 +2407,7 @@ def run_outer_rolling_oos(
                 "selection_start_date": str(selection_start),
                 "selection_end_date": str(selection_end),
                 "selection_period": str(selection_period),
+                **progress_period_context,
                 "optimizer_seed": optimizer_seed,
                 "sampler_kind": str(sampler_kind),
                 "timing_mode": bool(timing_mode),

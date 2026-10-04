@@ -2383,6 +2383,22 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         "2026-03-02",
         cutoff_folds[-1]["oos_end_date"],
     )
+    from services.optimizer.outer_rolling_oos import _build_validation_progress_period_context
+    progress_period_context = _build_validation_progress_period_context(
+        selection_start="2011-01-01",
+        selection_end="2020-12-31",
+        validation_budget_spec=plateau_best_patience100_spec,
+    )
+    check(
+        "outer_rolling_progress_period_context_uses_canonical_validation_split",
+        {
+            "training_start_date": "2011-01-01",
+            "training_end_date": "2019-12-31",
+            "validation_start_date": "2020-01-01",
+            "validation_end_date": "2020-12-31",
+        },
+        progress_period_context,
+    )
     from services.optimizer.outer_rolling_progress import _format_parallel_fold_progress_line
     timing_progress_line = _format_parallel_fold_progress_line(
         {
@@ -2390,7 +2406,13 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             "fold_count": 6,
             "oos_year": 202601,
             "oos_period": "2026-01-01~2026-03-02",
+            "oos_start_date": "2026-01-01",
+            "oos_end_date": "2026-03-02",
             "selection_period": "2016-01-01~2025-12-31",
+            "training_start_date": "2016-01-01",
+            "training_end_date": "2024-12-31",
+            "validation_start_date": "2025-01-01",
+            "validation_end_date": "2025-12-31",
             "show_oos": True,
             "progress_display_contract": {"show_local_min": False},
         },
@@ -2409,14 +2431,15 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         },
     )
     check(
-        "outer_rolling_done_progress_shows_cutoff_nstar_and_phase_times",
+        "outer_rolling_done_progress_shows_training_validation_oos_periods",
         True,
-        "OOS 26-01-01~26-03-02" in timing_progress_line
+        "Training=16-01-01~24-12-31" in timing_progress_line
+        and "Validation=25-01-01~25-12-31" in timing_progress_line
+        and "OOS=26-01-01~26-03-02" in timing_progress_line
         and "N*=87" in timing_progress_line
         and "EarlyStop=T157" in timing_progress_line
-        and "Train=" in timing_progress_line
-        and "Val=" in timing_progress_line
-        and "OOS=" in timing_progress_line,
+        and "Train=02:03" not in timing_progress_line
+        and "Val=00:45" not in timing_progress_line,
     )
     validation_stop_progress_line = _format_parallel_fold_progress_line(
         {
@@ -2424,7 +2447,13 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             "fold_count": 6,
             "oos_year": 202101,
             "oos_period": "2021-01-01~2021-12-31",
+            "oos_start_date": "2021-01-01",
+            "oos_end_date": "2021-12-31",
             "selection_period": "2011-01-01~2020-12-31",
+            "training_start_date": "2011-01-01",
+            "training_end_date": "2019-12-31",
+            "validation_start_date": "2020-01-01",
+            "validation_end_date": "2020-12-31",
             "show_oos": True,
             "progress_display_contract": {"show_local_min": False},
         },
@@ -2446,9 +2475,13 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     check(
         "outer_rolling_validation_progress_shows_early_stop_trial",
         True,
-        "validation 157/300" in validation_stop_progress_line
+        "Training=11-01-01~19-12-31" in validation_stop_progress_line
+        and "Validation=20-01-01~20-12-31" in validation_stop_progress_line
+        and "OOS=21-01-01~21-12-31" in validation_stop_progress_line
+        and "validation 157/300" in validation_stop_progress_line
         and "N*=57" in validation_stop_progress_line
-        and "EarlyStop=T157" in validation_stop_progress_line,
+        and "EarlyStop=T157" in validation_stop_progress_line
+        and "Val=00:45" not in validation_stop_progress_line,
     )
     from services.optimizer import validation_budget_refit as validation_budget_refit_module
     validation_replay_session = SimpleNamespace(

@@ -529,20 +529,36 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
     oos_label = _display_short_month_period(task.get("oos_period") or oos_year) if show_oos else ""
     selection_start = str(progress.get("selection_start") or task.get("selection_period") or "").strip()
     selection_end = str(progress.get("selection_end") or "").strip()
-    if selection_start and selection_end:
+    training_start = str(progress.get("training_start_date") or task.get("training_start_date") or "").strip()
+    training_end = str(progress.get("training_end_date") or task.get("training_end_date") or "").strip()
+    validation_start = str(progress.get("validation_start_date") or task.get("validation_start_date") or "").strip()
+    validation_end = str(progress.get("validation_end_date") or task.get("validation_end_date") or "").strip()
+    oos_start = str(progress.get("oos_start_date") or task.get("oos_start_date") or "").strip()
+    oos_end = str(progress.get("oos_end_date") or task.get("oos_end_date") or "").strip()
+    if training_start and training_end and validation_start and validation_end:
+        selection_text = f"Training={_display_short_month_period(training_start, training_end)}"
+        validation_text = f"Validation={_display_short_month_period(validation_start, validation_end)}"
+    elif selection_start and selection_end:
         selection_text = f"train={_display_short_month_period(selection_start, selection_end)}"
+        validation_text = ""
     elif selection_start:
         selection_text = f"train={_display_short_month_period(selection_start)}"
+        validation_text = ""
     else:
         selection_text = "train=?"
+        validation_text = ""
+    if oos_start and oos_end:
+        oos_label = _display_short_month_period(oos_start, oos_end)
     stage = str(progress.get("stage") or "QUEUED").upper()
     display_contract = dict(task.get("progress_display_contract") or {})
     show_local_min = bool(display_contract.get("show_local_min", True))
 
     def _progress_prefix() -> str:
         parts = [f"[{fold_idx}/{fold_count}] {selection_text}"]
+        if validation_text:
+            parts.append(validation_text)
         if show_oos:
-            parts.append(f"OOS {oos_label}")
+            parts.append(f"OOS={oos_label}" if validation_text else f"OOS {oos_label}")
         return " | ".join(parts)
 
     elapsed_text = ""
@@ -568,14 +584,12 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
             best_val_text = "-" if best_val is None else f"{float(best_val):.6f}"
         except (TypeError, ValueError):
             best_val_text = "-"
-        val_elapsed = progress.get("validation_wall_sec")
-        val_text = _fmt_duration_compact(val_elapsed) if val_elapsed is not None else "-"
         no_improve = progress.get("no_improve")
         patience = int(progress.get("patience", 0) or 0)
         no_imp_text = "-" if no_improve is None else f"{int(no_improve)}/{patience}"
         return (
             f"{_progress_prefix()} | validation {completed}/{total} | N*={selected_text} | "
-            f"best_val={best_val_text} | NoImp={no_imp_text} | Val={val_text}{_early_stop_text()}"
+            f"best_val={best_val_text} | NoImp={no_imp_text}{_early_stop_text()}"
         )
     if stage == "OPTIMIZER_SEARCH":
         completed = int(progress.get("completed", 0) or 0)
@@ -647,10 +661,11 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         selected_n = progress.get("selected_n")
         selected_text = "" if selected_n in (None, "") else f" | N*={int(selected_n)}"
         parts = [f"{_progress_prefix()} | {done_label} | best_base={base_best_text}{selected_text}{_early_stop_text()}"]
-        for label, key in (("Train", "training_wall_sec"), ("Val", "validation_wall_sec"), ("OOS", "oos_wall_sec")):
-            value = progress.get(key)
-            if value is not None:
-                parts.append(f"{label}={_fmt_duration_compact(value)}")
+        if not validation_text:
+            for label, key in (("Train", "training_wall_sec"), ("Val", "validation_wall_sec"), ("OOS", "oos_wall_sec")):
+                value = progress.get(key)
+                if value is not None:
+                    parts.append(f"{label}={_fmt_duration_compact(value)}")
         if show_local_min:
             local_best = progress.get("best_local_min_score")
             parts.append(
@@ -1010,6 +1025,12 @@ def render_optimizer_fold_progress_line(
     selection_start: str = "",
     selection_end: str = "",
     selection_period: str = "",
+    training_start_date: str = "",
+    training_end_date: str = "",
+    validation_start_date: str = "",
+    validation_end_date: str = "",
+    oos_start_date: str = "",
+    oos_end_date: str = "",
     oos_period: str = "",
     oos_year: int = 0,
     show_oos: bool = True,
@@ -1033,7 +1054,13 @@ def render_optimizer_fold_progress_line(
         "fold_count": int(fold_count),
         "oos_year": int(oos_year or 0),
         "oos_period": str(oos_period or ""),
+        "oos_start_date": str(oos_start_date or ""),
+        "oos_end_date": str(oos_end_date or ""),
         "selection_period": str(selection_period or selection_start or ""),
+        "training_start_date": str(training_start_date or ""),
+        "training_end_date": str(training_end_date or ""),
+        "validation_start_date": str(validation_start_date or ""),
+        "validation_end_date": str(validation_end_date or ""),
         "show_oos": bool(show_oos),
     }
     progress = {
