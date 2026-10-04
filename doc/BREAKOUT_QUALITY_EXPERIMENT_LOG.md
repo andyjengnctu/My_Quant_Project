@@ -12347,3 +12347,23 @@ Decision：`ENGINEERING_ALIGNMENT_ONLY / STAGED_SINGLE_SEED_AND_ROBUSTNESS_BINDI
 
 Decision：`CURRENT_P9_SUITE_C84_REMOVED / C85_4X300_REFERENCE_RESTORED / C88_C62_PRIMARY_RETAINED / C88_C85_REFERENCE_NOT_SINGLE_VARIABLE / P5_C84_HISTORICAL_IDENTITY_PRESERVED / NO_PARAM_PROTOCOL_CHANGE`.
 
+## 2026-10-04 — C88 removed from current; PARAM-P10 / C89 finalist-best adaptive validation registered
+
+- **Trigger evidence**：P9/C88 Rolling full-refit diagnostic確認2021=`28.143`、2022=`2.696`，但2023~2026皆`best_base=0.000`。直接分解score後，2023/2024/2025/2026的`min_quarter_return_pct`分別=`-18.988/-17.499/-19.509/-12.626%`，均跨過`-10%` quarter multiplier floor，因此`QMult=0`、final `base_score=0`；四折full-refit best trial均為trial 1。2022雖非零，monthly/quarter multipliers亦造成強烈compression。
+- **Interpretation boundary**：zero-collapse發生於selector之前，所以不能把根因歸咎於`base-finalists-agree`；但agree consensus在低資訊ranking下可能使canonical policy更少變動，進一步加速validation plateau。P9/C88因此保留為診斷evidence，但不再作current validation結論。
+- **User decision**：先移除C88 current routing，改用`base-finalist-best`測adaptive validation；本輪不改optimizer score、不改patience、不改min-stop/max-trials，避免同時改多個scientific variables。
+- **New identity**：新增`PARAM-P10 / SR-C89`。Full/formal/Seed42/120M selection/trailing12M inner validation/max300/observation start1/min-stop50/patience50/min-delta0/fresh full-refit/OOS feedback=False全部沿用P9；唯一核心scientific change是prefix canonical selector=`base-finalist-best`。Protocol=`validation_plateau_best_refit_v1`，artifact namespace=`param_p10_validation_plateau_best_refit`。
+- **Current controlled contrast**：Primary=`C89-C61`，兩者同為Full/formal/base-finalist-best/Seed42與相同optimizer score；C61固定300 trials，C89由inner validation選N*後fresh refit。C85/C62保留reference；C88/P9、C84/P5仍保留historical identity但不在current suite。
+- **Production isolation**：Trading production仍維持random 8 seeds ×1000 trials/seed、`base-finalists-agree`；本研究不改Trading truth。
+
+Decision：`C88_REMOVED_FROM_CURRENT / P9_HISTORICAL_DIAGNOSTIC_ONLY / PARAM_P10_C89_REGISTERED / BASE_FINALIST_BEST_ADAPTIVE_VALIDATION / PATIENCE_50_UNCHANGED / SCORE_FUNCTION_UNCHANGED / PRIMARY_C89_C61 / RESULT_PENDING`.
+
+
+## 2026-10-04 — P10/C89 finalist-best validation replay capability correction
+
+- **Observed failure**：首次由正式Research入口建立`PARAM-P10 / C89`時，inner search在前三個被hard-gate淘汰的trial後，第一個可形成`base-finalist-best` policy的prefix於adaptive validation callback拋出`ValueError: validation policy signature缺少可用params_ensemble`。原因是既有P9 implementation只覆蓋`base-finalists-agree`，signature與validation replay均假設policy item必有`params_ensemble`；P10雖已由protocol registry合法切換selector，generic validation capability仍殘留ensemble-only implementation。
+- **Engineering correction**：validation policy signature現在依policy item形態解析effective params：有`params_ensemble`時完整保留P5/P9既有ensemble signature；single-finalist item則由canonical `build_effective_trial_params_payload()`取得該trial實際runtime params建立signature。Validation replay同樣分流：ensemble仍走既有`_evaluate_finalist_ensemble_oos_metrics()`；single-finalist直接重用canonical `_evaluate_period_oos()`與`_extract_period_metrics()`，沒有第二套portfolio score或PIT實作。single-finalist `member_count=1`。
+- **Resume safety**：本修正不改protocol identity、trial objective、sampler、seed、patience、N* selection rule或artifact namespace。已完成的inner study trials可由既有SQLite resume；callback state若尚未成功保存，`catch_up()`會依已完成trial prefix重新建立validation observation，不需要刪除或強制重訓。
+- **Regression coverage**：新增capability-level synthetic checks，驗證single-finalist signature可在沒有`params_ensemble`時建立，以及single-finalist validation replay會產生canonical validation score；Optimizer walk-forward contract=`124/124 PASS`。另獨立確認P9 agree signature/replay仍走原ensemble路徑。
+
+Decision：`ENGINEERING_ONLY / VALIDATION_REPLAY_SUPPORTS_SINGLE_FINALIST_AND_ENSEMBLE / P10_IDENTITY_UNCHANGED / P9_BEHAVIOR_PRESERVED / RESUME_SAFE`。

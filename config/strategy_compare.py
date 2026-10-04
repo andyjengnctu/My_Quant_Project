@@ -14,12 +14,12 @@ from core.breakout_quality_registry import (
 
 # Current work-stage selection. Stable menu work types live in apps/research.py;
 # only the current scientific profiles/bindings change here.
-# Round 6 activates the single-seed adaptive validation treatment for OOS/Rolling.
-# Robustness remains on the prior production multi-seed suite until the adaptive
-# single-seed behavior/cost gate is completed; PARAM-P5/C84 remains an immutable
-# fixed-checkpoint validation control.
-STRATEGY_COMPARE_CURRENT_OOS_PROFILE = "non_dl_validation_plateau_oos"
-STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE = "non_dl_validation_plateau_rolling"
+# Round 7 replaces C88 in the current single-seed validation comparison with
+# C89/P10, keeping adaptive plateau semantics but using base-finalist-best so the
+# validation mechanism can be isolated against C61.  P9/C88 remains historical.
+# Robustness remains on the prior production multi-seed suite.
+STRATEGY_COMPARE_CURRENT_OOS_PROFILE = "non_dl_validation_plateau_best_oos"
+STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE = "non_dl_validation_plateau_best_rolling"
 STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS = "non_dl_production_multiseed_oos"
 STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS = "non_dl_production_multiseed_rolling"
 STRATEGY_COMPARE_DEFAULT_PROFILE = STRATEGY_COMPARE_CURRENT_OOS_PROFILE

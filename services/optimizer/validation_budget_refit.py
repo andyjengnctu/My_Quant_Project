@@ -1,14 +1,13 @@
 """Validation-selected Optimizer search budget with full-selection refit.
 
-The capability has three versioned protocols:
-- ``validation_budget_refit_v1`` preserves the registered PARAM-P5 fixed-checkpoint
-  control exactly.
-- ``validation_plateau_refit_v2`` is the historical Round-6 implementation that
-  began observation at its warmup boundary.
-- ``validation_plateau_refit_v3`` observes from trial 1; a separate minimum-trial
-  gate controls when plateau early stop is allowed.
+The capability supports versioned fixed-checkpoint and adaptive-plateau protocols.
+PARAM-P5 and PARAM-P9 preserve their registered selectors exactly; newer treatments
+may reuse the same generic controller with another registered canonical policy.
+``validation_plateau_refit_v3`` observes from trial 1 with a separate minimum-trial
+stop gate; ``validation_plateau_best_refit_v1`` keeps those semantics and changes
+only the registered selector to base-finalist-best.
 
-Neither protocol may use OOS feedback.  Validation only chooses the scalar search
+No registered validation protocol may use OOS feedback.  Validation only chooses the scalar search
 budget N*.  The chosen budget is consumed by a fresh Optimizer study over the full
 selection window.
 """
@@ -37,9 +36,12 @@ from core.seed_ensemble_policy import normalize_seed_ensemble_members
 from core.strategy_param_policy import get_strategy_param_validation_protocol
 from services.optimizer.outer_rolling_evaluation import (
     _evaluate_finalist_ensemble_oos_metrics,
+    _evaluate_period_oos,
+    _extract_period_metrics,
 )
 from services.optimizer.outer_rolling_params import (
     _materialize_fixed_strategy_param_overrides_in_members,
+    build_effective_trial_params_payload,
 )
 from services.optimizer.outer_rolling_policy import _build_policy_items
 from services.optimizer.robustness import list_local_min_score_finalists
@@ -126,10 +128,12 @@ def resolve_validation_budget_spec(
     if max_trials < 1:
         raise ValueError("validation-budget max_trials必須>0")
     configured = get_strategy_param_validation_protocol(protocol_id)
-    if configured.selection_policy != "base_finalists_agree":
+    supported_selection_policies = {"base_finalist_best", "base_finalists_agree"}
+    if configured.selection_policy not in supported_selection_policies:
         raise ValueError(
-            "validation-budget refit capability目前要求base_finalists_agree selector，"
-            f"actual={configured.selection_policy!r}"
+            "validation refit capability不支援selector: "
+            f"actual={configured.selection_policy!r}, "
+            f"supported={sorted(supported_selection_policies)}"
         )
 
     if configured.mode == "fixed_checkpoints":
@@ -289,12 +293,24 @@ def _policy_replay_signature(*, session, item: dict[str, Any], spec: ValidationB
     )
     normalized = normalize_seed_ensemble_members(members)
     params_payload = [dict(member.get("params") or {}) for member in normalized]
-    if not params_payload:
-        raise ValueError("validation policy signature缺少可用params_ensemble")
-    material = {
-        "policy_name": str(spec.policy_name),
-        "params_ensemble": params_payload,
-    }
+    if params_payload:
+        material = {
+            "policy_name": str(spec.policy_name),
+            "params_ensemble": params_payload,
+        }
+    else:
+        trial = item.get("trial")
+        if trial is None:
+            raise ValueError("validation policy signature缺少可用trial或params_ensemble")
+        material = {
+            "policy_name": str(spec.policy_name),
+            "params": dict(
+                build_effective_trial_params_payload(
+                    session=session,
+                    trial=trial,
+                )
+            ),
+        }
     encoded = json.dumps(
         material,
         sort_keys=True,
@@ -337,17 +353,47 @@ def _evaluate_policy_item_on_validation(
     validation_start_date: str,
     validation_end_date: str,
 ) -> dict[str, Any]:
+    members = normalize_seed_ensemble_members(item.get("params_ensemble"))
     with session.optimizer_runtime_context():
-        metrics = _evaluate_finalist_ensemble_oos_metrics(
-            session=session,
-            item=item,
-            policy_name=spec.policy_name,
-            oos_year=int(pd.Timestamp(validation_start_date).year),
-            oos_start_date=str(validation_start_date),
-            oos_end_date=str(validation_end_date),
-        )
+        if members:
+            metrics = _evaluate_finalist_ensemble_oos_metrics(
+                session=session,
+                item=item,
+                policy_name=spec.policy_name,
+                oos_year=int(pd.Timestamp(validation_start_date).year),
+                oos_start_date=str(validation_start_date),
+                oos_end_date=str(validation_end_date),
+            )
+            member_count = int(len(members))
+        else:
+            trial = item.get("trial")
+            if trial is None:
+                return {
+                    "available": False,
+                    "validation_score": None,
+                    "plain_romd_score": None,
+                    "return_pct": None,
+                    "mdd_pct": None,
+                    "member_count": 0,
+                }
+            period_report = _evaluate_period_oos(
+                session=session,
+                trial=trial,
+                oos_year=int(pd.Timestamp(validation_start_date).year),
+                include_equity_curve=False,
+                oos_start_date=str(validation_start_date),
+                oos_end_date=str(validation_end_date),
+            )
+            period_metrics = _extract_period_metrics(period_report)
+            metrics = {
+                "score": period_metrics.get("oos_score"),
+                "plain_romd_score": period_metrics.get("oos_plain_romd_score"),
+                "return_pct": period_metrics.get("ret_pct"),
+                "mdd_pct": period_metrics.get("mdd_pct"),
+            }
+            member_count = 1
     record = _validation_metrics_record(metrics)
-    record["member_count"] = int(len(list(item.get("params_ensemble") or [])))
+    record["member_count"] = int(member_count)
     return record
 
 
@@ -852,7 +898,10 @@ def validation_budget_protocol_enabled(policy: dict[str, Any] | None) -> bool:
         protocol = get_strategy_param_validation_protocol(protocol_id)
     except ValueError:
         return False
-    return bool(protocol.full_refit_required) and protocol.selection_policy == "base_finalists_agree"
+    return bool(protocol.full_refit_required) and protocol.selection_policy in {
+        "base_finalist_best",
+        "base_finalists_agree",
+    }
 
 
 __all__ = [

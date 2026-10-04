@@ -2204,6 +2204,9 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     plateau_validation_param_profile = get_strategy_param_training_profile(
         "validation_plateau_current"
     )
+    plateau_best_validation_param_profile = get_strategy_param_training_profile(
+        "validation_plateau_best_current"
+    )
     production_multiseed_param_profile = get_strategy_param_training_profile(
         "production_multiseed_current"
     )
@@ -2216,6 +2219,9 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     validation_spec = resolve_validation_budget_spec(300)
     plateau_validation_spec = resolve_validation_budget_spec(
         300, protocol_id="validation_plateau_refit_v3"
+    )
+    plateau_best_validation_spec = resolve_validation_budget_spec(
+        300, protocol_id="validation_plateau_best_refit_v1"
     )
     check("strategy_param_training_target_is_config_driven", True, "ACTIVE_STRATEGY_PARAM_PROFILE" in strategy_param_config_source and "get_active_strategy_param_training_profile" in strategy_param_app_source)
     check("strategy_param_menu_contains_only_stable_work_types", True, all(label in strategy_param_app_source for label in ("Forward OOS 參數訓練", "Rolling OOS 參數訓練", "Forward OOS Robustness 參數訓練", "Rolling OOS Robustness 參數訓練", "進階／單次 Optimizer")) and "PARAM-P5" not in research_entry_source)
@@ -2241,6 +2247,84 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             "tie_break": "smaller_budget",
             "oos_feedback_used": False,
             "full_refit_required": True,
+        },
+    )
+    check(
+        "strategy_param_round7_plateau_best_validation_is_new_identity",
+        True,
+        plateau_best_validation_param_profile.parameter_set_identity == "PARAM-P10"
+        and plateau_best_validation_param_profile.parameter_policy == "base-finalist-best"
+        and plateau_best_validation_param_profile.validation_protocol == "validation_plateau_best_refit_v1"
+        and plateau_best_validation_param_profile.fitting_seed_protocol == "single_seed_42"
+        and plateau_best_validation_spec.as_dict() == {
+            "protocol": "validation_plateau_best_refit_v1",
+            "holdout_months": 12,
+            "patience_trials": 50,
+            "observation_interval": 1,
+            "min_delta": 0.0,
+            "reuse_same_policy_signature": True,
+            "observation_start_trial": 1,
+            "min_trials_before_stop": 50,
+            "policy_name": "base_finalist_best",
+            "selection_metric": "canonical_optimizer_portfolio_score",
+            "tie_break": "smaller_budget",
+            "oos_feedback_used": False,
+            "full_refit_required": True,
+        },
+    )
+    from services.optimizer import validation_budget_refit as validation_budget_refit_module
+    validation_replay_session = SimpleNamespace(
+        fixed_strategy_param_overrides=None,
+        optimizer_runtime_context=lambda: ExitStack(),
+    )
+    validation_replay_trial = SimpleNamespace(number=0)
+    with patch.object(
+        validation_budget_refit_module,
+        "build_effective_trial_params_payload",
+        return_value={"atr_len": 23, "stop_mult": 2.7},
+    ):
+        single_policy_signature = validation_budget_refit_module._policy_replay_signature(
+            session=validation_replay_session,
+            item={"trial": validation_replay_trial},
+            spec=plateau_best_validation_spec,
+        )
+    check(
+        "validation_replay_signature_supports_single_finalist_policy",
+        True,
+        isinstance(single_policy_signature, str) and len(single_policy_signature) == 64,
+    )
+    with patch.object(
+        validation_budget_refit_module,
+        "_evaluate_period_oos",
+        return_value={"period": {}},
+    ) as single_validation_replay, patch.object(
+        validation_budget_refit_module,
+        "_extract_period_metrics",
+        return_value={
+            "oos_score": 0.123456,
+            "oos_plain_romd_score": 1.75,
+            "ret_pct": 14.0,
+            "mdd_pct": 8.0,
+        },
+    ):
+        single_validation_record = validation_budget_refit_module._evaluate_policy_item_on_validation(
+            session=validation_replay_session,
+            item={"trial": validation_replay_trial},
+            spec=plateau_best_validation_spec,
+            validation_start_date="2020-01-01",
+            validation_end_date="2020-12-31",
+        )
+    check(
+        "validation_replay_executes_single_finalist_policy_without_ensemble",
+        True,
+        single_validation_replay.call_count == 1
+        and single_validation_record == {
+            "available": True,
+            "validation_score": 0.123456,
+            "plain_romd_score": 1.75,
+            "return_pct": 14.0,
+            "mdd_pct": 8.0,
+            "member_count": 1,
         },
     )
     from config.strategy_params import ACTIVE_STRATEGY_PARAM_PROFILE
@@ -2308,10 +2392,9 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS
     )
     check(
-        "strategy_param_round6_compare_switches_oos_rolling_atomically_but_defers_robustness",
+        "strategy_param_current_compare_switches_oos_rolling_atomically_but_defers_robustness",
         True,
-        current_oos_settings.suite_id == "non_dl_validation_plateau_current"
-        and current_rolling_settings.suite_id == "non_dl_validation_plateau_current"
+        current_oos_settings.suite_id == current_rolling_settings.suite_id
         and current_oos_robustness.suite_id == current_rolling_robustness.suite_id
         and current_oos_robustness.suite_id != current_oos_settings.suite_id,
     )
@@ -3321,17 +3404,20 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             == "optimizer_fixed_multiseed_strategy_params"
     }
     check(
-        "strategy_compare_round6_current_suite_uses_plateau_plus_registered_multiseed_reference",
+        "strategy_compare_current_suite_uses_registered_plateau_treatment_and_multiseed_reference",
         True,
         "optimizer_validation_budget_refit_strategy_params" in current_builder_types
         and current_validation_parameter_sets
-            == {plateau_validation_param_profile.parameter_set_identity}
+            == {plateau_best_validation_param_profile.parameter_set_identity}
+        and plateau_validation_param_profile.parameter_set_identity
+            not in current_validation_parameter_sets
         and validation_param_profile.parameter_set_identity
             not in current_validation_parameter_sets
         and production_multiseed_param_profile.profile_id
             in current_fixed_multiseed_profiles
         and validation_param_profile.validation_enabled
-        and plateau_validation_param_profile.validation_enabled,
+        and plateau_validation_param_profile.validation_enabled
+        and plateau_best_validation_param_profile.validation_enabled,
     )
     min_profile = resolve_canonical_strategy_param_training_profile(
         "min", "base-finalist-best"

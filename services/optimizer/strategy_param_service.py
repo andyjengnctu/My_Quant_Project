@@ -3256,18 +3256,29 @@ def validation_budget_strategy_param_manifest_path(
 
 def _resolve_validation_budget_publication_identity(
     *, parameter_set_identity: str, validation_protocol_id: str
-) -> tuple[str, str]:
-    from core.strategy_param_policy import resolve_validation_strategy_param_training_profile
+) -> tuple[str, str, str]:
+    from core.strategy_param_policy import (
+        get_strategy_param_validation_protocol,
+        resolve_validation_strategy_param_training_profile,
+    )
 
     parameter_set = str(parameter_set_identity or "").strip()
     protocol = str(validation_protocol_id or "").strip()
     profile = resolve_validation_strategy_param_training_profile(parameter_set, protocol)
-    if profile.parameter_policy != "base-finalists-agree" or profile.filter_profile != "full":
+    if profile.filter_profile != "full":
         raise ValueError(
-            "validation-budget durable publication目前要求Full/base-finalists-agree: "
+            "validation durable publication目前要求Full filter: "
             f"profile={profile.profile_id}"
         )
-    return parameter_set, protocol
+    validation_spec = get_strategy_param_validation_protocol(protocol)
+    optimizer_policy = normalize_strategy_param_policy(profile.parameter_policy)
+    if str(validation_spec.selection_policy) != str(optimizer_policy):
+        raise ValueError(
+            "validation profile與protocol selector不一致: "
+            f"profile={profile.profile_id}, profile_policy={profile.parameter_policy}, "
+            f"protocol_policy={validation_spec.selection_policy}"
+        )
+    return parameter_set, protocol, str(profile.parameter_policy)
 
 
 def _validation_budget_build_contract(
@@ -3294,7 +3305,7 @@ def _validation_budget_build_contract(
     )
     if optimizer_seed is not None:
         base["optimizer_seed"] = int(optimizer_seed)
-    parameter_set, protocol_id = _resolve_validation_budget_publication_identity(
+    parameter_set, protocol_id, _compare_policy = _resolve_validation_budget_publication_identity(
         parameter_set_identity=parameter_set_identity,
         validation_protocol_id=validation_protocol_id,
     )
@@ -3451,10 +3462,16 @@ def ensure_validation_budget_robustness_strategy_parameter_artifact(
 
     root = Path(project_root).resolve()
     compare_policy = str(policy).strip()
-    if compare_policy != "base-finalists-agree":
+    _parameter_set, _protocol_id, expected_compare_policy = (
+        _resolve_validation_budget_publication_identity(
+            parameter_set_identity=parameter_set_identity,
+            validation_protocol_id=validation_protocol_id,
+        )
+    )
+    if compare_policy != expected_compare_policy:
         raise ValueError(
-            "validation-budget robustness目前只允許base-finalists-agree，"
-            f"actual={compare_policy!r}"
+            "validation robustness policy與registered profile不一致: "
+            f"expected={expected_compare_policy!r}, actual={compare_policy!r}"
         )
     state = inspect_validation_budget_robustness_strategy_parameter_artifact(
         root, benchmark_id=benchmark_id, seed=seed, policy=compare_policy,
@@ -3688,10 +3705,16 @@ def ensure_validation_budget_strategy_parameter_artifact(
 
     root = Path(project_root).resolve()
     compare_policy = str(policy).strip()
-    if compare_policy != "base-finalists-agree":
+    _parameter_set, _protocol_id, expected_compare_policy = (
+        _resolve_validation_budget_publication_identity(
+            parameter_set_identity=parameter_set_identity,
+            validation_protocol_id=validation_protocol_id,
+        )
+    )
+    if compare_policy != expected_compare_policy:
         raise ValueError(
-            "validation-budget目前只允許base-finalists-agree，"
-            f"actual={compare_policy!r}"
+            "validation policy與registered profile不一致: "
+            f"expected={expected_compare_policy!r}, actual={compare_policy!r}"
         )
     end_date = str(comparison_end_date or "").strip()
     if not end_date:
