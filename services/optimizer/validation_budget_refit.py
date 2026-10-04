@@ -49,6 +49,12 @@ from services.optimizer.score_display import format_optimizer_score_for_display
 from services.optimizer.study_utils import is_qualified_trial_value
 
 
+# Engineering-only replay identity. This does not change the scientific score formula;
+# it marks validation replay implementations that correctly consume the bound scientific
+# score contract instead of falling back to mutable global training settings.
+VALIDATION_REPLAY_IMPLEMENTATION_CONTRACT = "bound_scientific_score_v1"
+
+
 @dataclass(frozen=True)
 class ValidationBudgetSpec:
     protocol: str
@@ -505,7 +511,7 @@ class AdaptiveValidationBudgetController:
     SQLite resume continues the same patience counter without OOS input.
     """
 
-    _STATE_SCHEMA_VERSION = 1
+    _STATE_SCHEMA_VERSION = 2
 
     def __init__(
         self,
@@ -554,11 +560,15 @@ class AdaptiveValidationBudgetController:
         if not isinstance(raw, dict):
             return self._empty_state()
         state = dict(raw)
-        if (
-            int(state.get("schema_version", 0) or 0) != self._STATE_SCHEMA_VERSION
-            or str(state.get("protocol") or "") != self.spec.protocol
-        ):
+        if str(state.get("protocol") or "") != self.spec.protocol:
             raise RuntimeError("adaptive validation resume state與current protocol不相容")
+        if int(state.get("schema_version", 0) or 0) != self._STATE_SCHEMA_VERSION:
+            # AI註: Validation observations are deterministic replay evidence, not
+            # optimizer fitting state.  When the replay/scoring implementation
+            # schema changes, rebuild observations from the already-persisted
+            # Optuna trial prefix instead of forcing users to discard or retrain
+            # the search study.  catch_up() will replay the completed prefixes.
+            return self._empty_state()
         state.setdefault("signature_cache", {})
         state.setdefault("observation_results", [])
         return state
@@ -934,6 +944,7 @@ def validation_budget_protocol_enabled(policy: dict[str, Any] | None) -> bool:
 
 
 __all__ = [
+    "VALIDATION_REPLAY_IMPLEMENTATION_CONTRACT",
     "AdaptiveValidationBudgetController",
     "ValidationBudgetSpec",
     "build_inner_validation_policy",

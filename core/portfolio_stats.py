@@ -192,8 +192,22 @@ def calc_portfolio_score(
         is_score_win_rate_amp_enabled,
     )
 
-    score_policy = dict(score_policy or {})
-    threshold_policy = dict(threshold_policy or {})
+    # AI註: Strategy-parameter producers bind one immutable scientific contract
+    # for the whole fitting/validation invocation.  Deep replay paths such as
+    # walk-forward validation do not always thread score_policy explicitly, so
+    # default to the active contract instead of silently falling back to mutable
+    # global config.  Explicit arguments remain authoritative.
+    if score_policy is None or threshold_policy is None:
+        from core.scientific_runtime_context import get_active_scientific_section
+
+    if score_policy is None:
+        score_policy = get_active_scientific_section("score") or {}
+    else:
+        score_policy = dict(score_policy)
+    if threshold_policy is None:
+        threshold_policy = get_active_scientific_section("hard_gates") or {}
+    else:
+        threshold_policy = dict(threshold_policy)
 
     def _score_value(key, fallback):
         return score_policy[key] if key in score_policy else fallback()

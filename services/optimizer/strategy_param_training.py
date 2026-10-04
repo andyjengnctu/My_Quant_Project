@@ -1941,6 +1941,17 @@ def _selection_full_roos_runtime_contract(
     )
     if score_policy_overrides:
         payload["score_policy_overrides"] = score_policy_overrides
+        # Engineering replay fidelity is part of the published work-artifact identity
+        # for treatments that override score policy. It intentionally is NOT part of
+        # the per-fold Optuna cache identity below, so corrected validation can replay
+        # existing training trials instead of restarting scientific search.
+        from services.optimizer.validation_budget_refit import (
+            VALIDATION_REPLAY_IMPLEMENTATION_CONTRACT,
+        )
+
+        payload["validation_replay_implementation_contract"] = (
+            VALIDATION_REPLAY_IMPLEMENTATION_CONTRACT
+        )
     payload["runtime_identity_sha256"] = _canonical_hash(payload)
     return payload
 
@@ -1962,6 +1973,9 @@ def _selection_full_roos_optimizer_runtime_cache_identity(
     if not protocol:
         return str(contract["runtime_identity_sha256"])
     payload = {key: value for key, value in dict(contract).items() if key != "runtime_identity_sha256"}
+    # Validation replay implementation is execution evidence, not the identity of
+    # already-computed training trials. Preserve the existing SQLite study identity.
+    payload.pop("validation_replay_implementation_contract", None)
     rolling_policy = dict(payload.get("rolling_policy") or {})
     rolling_policy.pop("last_oos_date", None)
     payload["rolling_policy"] = rolling_policy

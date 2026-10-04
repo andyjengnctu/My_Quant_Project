@@ -3709,6 +3709,16 @@ def inspect_validation_budget_strategy_parameter_artifact(
     actual_execution_contract = str(
         (manifest or {}).get("optimizer_execution_evidence_contract") or ""
     ).strip() or None
+    required_validation_replay_contract = None
+    if dict(profile.score_policy_overrides):
+        from services.optimizer.validation_budget_refit import (
+            VALIDATION_REPLAY_IMPLEMENTATION_CONTRACT,
+        )
+
+        required_validation_replay_contract = VALIDATION_REPLAY_IMPLEMENTATION_CONTRACT
+    actual_validation_replay_contract = str(
+        (manifest or {}).get("validation_replay_implementation_contract") or ""
+    ).strip() or None
 
     status = "READY"
     if payload is None:
@@ -3740,6 +3750,11 @@ def inspect_validation_budget_strategy_parameter_artifact(
     elif str(manifest.get("artifact_sha256") or "") != compute_strategy_param_file_sha256(target):
         status = "ARTIFACT_SHA_MISMATCH"
     elif (
+        required_validation_replay_contract is not None
+        and actual_validation_replay_contract != required_validation_replay_contract
+    ):
+        status = "VALIDATION_REPLAY_IMPLEMENTATION_STALE"
+    elif (
         required_execution_contract is not None
         and actual_execution_contract != required_execution_contract
     ):
@@ -3757,6 +3772,8 @@ def inspect_validation_budget_strategy_parameter_artifact(
         "build_contract": contract,
         "required_optimizer_execution_evidence_contract": required_execution_contract,
         "actual_optimizer_execution_evidence_contract": actual_execution_contract,
+        "required_validation_replay_implementation_contract": required_validation_replay_contract,
+        "actual_validation_replay_implementation_contract": actual_validation_replay_contract,
     }
 
 def ensure_validation_budget_strategy_parameter_artifact(
@@ -3844,6 +3861,9 @@ def ensure_validation_budget_strategy_parameter_artifact(
     )
     stale_execution_evidence = (
         str(state.get("status") or "") == "OPTIMIZER_EXECUTION_EVIDENCE_STALE"
+    )
+    stale_validation_replay = (
+        str(state.get("status") or "") == "VALIDATION_REPLAY_IMPLEMENTATION_STALE"
     )
     if stale_execution_evidence:
         if not required_execution_contract:
@@ -3941,6 +3961,9 @@ def ensure_validation_budget_strategy_parameter_artifact(
         )
 
     current_execution_contract = _current_optimizer_execution_evidence_contract()
+    required_validation_replay_contract = state.get(
+        "required_validation_replay_implementation_contract"
+    )
     if (
         required_execution_contract is not None
         and str(required_execution_contract) != current_execution_contract
@@ -3952,25 +3975,27 @@ def ensure_validation_budget_strategy_parameter_artifact(
     # Publish only after the complete rebuilt payload and execution contract are validated.
     _write_json(target, payload)
     target_sha = compute_strategy_param_file_sha256(target)
-    _write_json(
-        manifest_path,
-        {
-            "schema_type": "strategy_parameter_research_identity",
-            "schema_version": 1,
-            "producer": "optimizer",
-            "training_dl_enabled": False,
-            "parameter_set": str(contract["parameter_set"]),
-            "family": "full",
-            "policy": compare_policy,
-            "optimizer_search_protocol": spec.protocol,
-            "build_contract": contract,
-            "artifact_path": _project_relative(root, target),
-            "artifact_sha256": target_sha,
-            "coverage_end": coverage_end,
-            "optimizer_execution_evidence_contract": current_execution_contract,
-            "production_promotion": False,
-        },
-    )
+    manifest_payload = {
+        "schema_type": "strategy_parameter_research_identity",
+        "schema_version": 1,
+        "producer": "optimizer",
+        "training_dl_enabled": False,
+        "parameter_set": str(contract["parameter_set"]),
+        "family": "full",
+        "policy": compare_policy,
+        "optimizer_search_protocol": spec.protocol,
+        "build_contract": contract,
+        "artifact_path": _project_relative(root, target),
+        "artifact_sha256": target_sha,
+        "coverage_end": coverage_end,
+        "optimizer_execution_evidence_contract": current_execution_contract,
+        "production_promotion": False,
+    }
+    if required_validation_replay_contract is not None:
+        manifest_payload["validation_replay_implementation_contract"] = str(
+            required_validation_replay_contract
+        )
+    _write_json(manifest_path, manifest_payload)
     return {
         "action": "FORCE_REBUILD" if force_rebuild else ("REBUILD" if existed_before else "BUILD"),
         "path": target,
@@ -3979,7 +4004,9 @@ def ensure_validation_budget_strategy_parameter_artifact(
         "coverage_end": coverage_end,
         "build_contract": contract,
         "optimizer_execution_evidence_contract": current_execution_contract,
+        "validation_replay_implementation_contract": required_validation_replay_contract,
         "execution_evidence_rebuild": bool(stale_execution_evidence),
+        "validation_replay_rebuild": bool(stale_validation_replay),
     }
 
 

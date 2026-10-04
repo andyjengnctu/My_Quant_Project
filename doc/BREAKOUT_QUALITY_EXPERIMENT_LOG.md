@@ -12438,3 +12438,15 @@ Decision：`C89_DETERMINISTIC_CONTROL_READY / PATIENCE_EXTENSION_STOP / ZERO_COL
 
 Decision：`ZERO_COLLAPSE_ATTRIBUTED_TO_QUARTER_HARD_ZERO / AUDIT_DECISION_COMPLETE / AUDIT_IMPLEMENTATION_RETIRED / PARAM_P12_C91_REGISTERED / QUARTER_OFF_ONLY_VARIABLE / C89_QUARTER_ON_CONTROL_PRESERVED / MONTHLY_UNCHANGED / NO_OOS_FEEDBACK / RESULT_PENDING`.
 
+## 2026-10-04 — P12/C91 validation replay score-contract propagation repair
+
+- **Observed evidence**：首次P12正式Forward parameter build中，training score的exact-zero已明顯下降，但12M inner validation仍長時間顯示`Score=0.000000/-0.000000`；例如T4～T34幾乎全為0，只有T35=`0.000290`與T42=`0.000852`短暫成為新高。這與P12已宣告Quarter-OFF不一致。
+- **Root cause**：training objective在`objective_runner`顯式傳入resolved scientific `score_policy`，所以P12 Quarter-OFF正確生效；但single-finalist validation經`_evaluate_period_oos()`→`evaluate_walk_forward()`→`calc_portfolio_score()`時沒有顯式傳`score_policy`。雖外層已進入`session.optimizer_runtime_context()`，`calc_portfolio_score()`的fallback仍直接讀mutable global config，導致validation實際重新啟用global `SCORE_MIN_QUARTER_RETURN_AMP_ENABLED=True`。Ensemble validation replay的最終score extraction亦有相同deep-call風險。
+- **Engineering correction**：`calc_portfolio_score()`在caller未顯式提供policy時，改由`scientific_runtime_context`取得active `score`與`hard_gates` section；顯式參數仍最高優先。這使training、single-finalist validation、ensemble replay與其他同context deep scorer消費同一resolved scientific contract，不建立第二套score公式。
+- **Resume safety**：adaptive validation persisted state schema升版；舊validation observation/signature cache只屬deterministic replay evidence，因此遇舊schema時自動清空並由已存在Optuna trial prefix重新catch-up/replay，不刪training trials、不要求從0重訓。若舊錯誤validation已觸發early-stop，resume後會先以correct score重建state，再決定是否繼續剩餘trials。
+- **Published-artifact stale guard**：若pre-fix P12已跑完並發布canonical artifact，僅重置controller state仍不足，因舊manifest可能被誤判READY。新增engineering-only `validation_replay_implementation_contract=bound_scientific_score_v1`：P12這類帶score override的artifact缺stamp時自動回`VALIDATION_REPLAY_IMPLEMENTATION_STALE/REBUILD`。該implementation contract進work-artifact runtime identity以強制重新走producer，但**明確排除於per-fold Optuna SQLite cache identity**，因此既有training trials仍沿用，只重建correct validation replay與其後full-refit。P10/C89等無score override profile不受此guard牽連。
+- **Scientific boundary**：這是P12既有scientific contract的implementation fidelity修復，**不新增PARAM/SR identity、不改P12 fingerprint、Quarter/Monthly/selector/patience/search space/OOS邊界全部不變**。修正前P12 validation score不得作C91 result evidence；Monthly壓縮是否仍過強，只能等correct replay結果後再判斷，不在本輪調整。
+- **Focused regression**：Optimizer walk-forward contract涵蓋deep replay score-context、legacy validation-state rebuild、published P12 stale guard與「work identity refresh但training-study cache identity不變」，結果`140/140 PASS`。
+
+Decision：`ENGINEERING_ONLY / P12_SCIENTIFIC_IDENTITY_UNCHANGED / VALIDATION_NOW_USES_BOUND_SCORE_CONTRACT / PRE_FIX_VALIDATION_STATE_AND_PUBLISHED_ARTIFACT_STALE_AUTO_REPLAY / TRAINING_TRIALS_RESUME_SAFE / MONTHLY_UNCHANGED / RESULT_PENDING`.
+

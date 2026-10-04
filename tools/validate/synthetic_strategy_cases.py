@@ -2807,6 +2807,157 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             and _rebuilt_p10_state["actual_optimizer_execution_evidence_contract"]
                 == "optimizer_resume_determinism_v1",
         )
+
+    # Regression: P12's original published artifact can contain validation scores
+    # replayed under the global Quarter-ON default even though its scientific score
+    # override is Quarter-OFF. The repaired replay implementation must make that
+    # published artifact stale without changing the inner Optuna training-study cache.
+    from services.optimizer.strategy_param_training import (
+        _build_selection_full_roos_schedule_contract as _build_validation_schedule,
+        _selection_full_roos_optimizer_runtime_cache_identity as _fold_cache_identity,
+        _selection_full_roos_runtime_contract as _validation_runtime_contract,
+    )
+    from services.optimizer.validation_budget_refit import (
+        VALIDATION_REPLAY_IMPLEMENTATION_CONTRACT as _validation_replay_contract,
+    )
+
+    _p12_runtime_args = SimpleNamespace(
+        dataset="full", trials_per_fold=300, fixed_risk=float(_DEFAULT_FIXED_RISK),
+        max_position_cap_pct=float(_DEFAULT_MAX_POSITION_CAP_PCT),
+        max_positions=int(_DEFAULT_PORTFOLIO_MAX_POSITIONS),
+        rotation=str(_DEFAULT_PORTFOLIO_ROTATION),
+        score_policy_overrides={"SCORE_MIN_QUARTER_RETURN_AMP_ENABLED": False},
+        seed_ensemble_policy_override={},
+    )
+    _p12_schedule = _build_validation_schedule(
+        first_oos_date="2021-01-01", last_oos_date="2021-01-01",
+        train_window_months=120, oos_months=12,
+    )
+    _p12_runtime_contract = _validation_runtime_contract(
+        root=project_root, args=_p12_runtime_args, schedule_contract=_p12_schedule,
+        dataset_identity_override={"synthetic": True, "sha256": "b" * 64},
+    )
+    from copy import deepcopy as _p12_deepcopy
+    _p12_legacy_runtime_contract = _p12_deepcopy(_p12_runtime_contract)
+    _p12_legacy_runtime_contract.pop("validation_replay_implementation_contract", None)
+    check(
+        "p12_validation_replay_fix_refreshes_work_identity_but_preserves_training_study_identity",
+        True,
+        _p12_runtime_contract.get("validation_replay_implementation_contract")
+            == _validation_replay_contract
+        and _fold_cache_identity(
+            _p12_runtime_contract, optimizer_search_protocol="validation_plateau_best_refit_v1"
+        ) == _fold_cache_identity(
+            _p12_legacy_runtime_contract, optimizer_search_protocol="validation_plateau_best_refit_v1"
+        ),
+    )
+
+    with TemporaryDirectory() as _p12_replay_temp:
+        _p12_root = Path(_p12_replay_temp)
+        _p12_policy = "base-finalist-best"
+        _p12_set = "PARAM-P12"
+        _p12_protocol = "validation_plateau_best_refit_v1"
+        _p12_target = _validation_artifact_path(
+            _p12_root, policy=_p12_policy, parameter_set_identity=_p12_set,
+            validation_protocol_id=_p12_protocol,
+        )
+        _p12_manifest = _validation_manifest_path(
+            _p12_root, parameter_set_identity=_p12_set, validation_protocol_id=_p12_protocol,
+        )
+        _p12_target.parent.mkdir(parents=True, exist_ok=True)
+        _p12_payload = {
+            "schema_type": "optimizer_active_param_ensemble",
+            "schema_version": 1,
+            "mode": "rolling",
+            "type": "active_param_ensemble",
+            "selector": "base_finalist_best",
+            "params_ensemble_by_effective_date": {
+                "2021-01-01": [{"seed": 42, "params": {"high_len": 200}}]
+            },
+            "folds": [{
+                "oos_start_date": "2021-01-01",
+                "oos_end_date": "2021-12-31",
+            }],
+            "breakout_quality_param_adaptation": {
+                "parameter_set": _p12_set,
+                "training_dl_enabled": False,
+                "optimizer_search_protocol": _p12_protocol,
+            },
+        }
+        _p12_target.write_text(json.dumps(_p12_payload), encoding="utf-8")
+        _p12_contract = _validation_build_contract(
+            family="full", dataset="full",
+            max_positions=int(_DEFAULT_PORTFOLIO_MAX_POSITIONS),
+            rotation=str(_DEFAULT_PORTFOLIO_ROTATION),
+            fixed_risk=float(_DEFAULT_FIXED_RISK),
+            max_position_cap_pct=float(_DEFAULT_MAX_POSITION_CAP_PCT),
+            parameter_set_identity=_p12_set, validation_protocol_id=_p12_protocol,
+        )
+        _p12_manifest_payload = {
+            "schema_type": "strategy_parameter_research_identity",
+            "schema_version": 1,
+            "producer": "optimizer",
+            "training_dl_enabled": False,
+            "parameter_set": _p12_set,
+            "family": "full",
+            "policy": _p12_policy,
+            "optimizer_search_protocol": _p12_protocol,
+            "build_contract": _p12_contract,
+            "artifact_path": _p12_target.relative_to(_p12_root).as_posix(),
+            "artifact_sha256": _param_file_sha(_p12_target),
+            "coverage_end": "2021-12-31",
+            "optimizer_execution_evidence_contract": "optimizer_resume_determinism_v1",
+            "production_promotion": False,
+        }
+        _p12_manifest.write_text(json.dumps(_p12_manifest_payload), encoding="utf-8")
+        _stale_p12_state = _inspect_validation_artifact(
+            _p12_root, policy=_p12_policy, comparison_end_date="2021-12-31",
+            dataset="full", max_positions=int(_DEFAULT_PORTFOLIO_MAX_POSITIONS),
+            rotation=str(_DEFAULT_PORTFOLIO_ROTATION), fixed_risk=float(_DEFAULT_FIXED_RISK),
+            max_position_cap_pct=float(_DEFAULT_MAX_POSITION_CAP_PCT),
+            parameter_set_identity=_p12_set, validation_protocol_id=_p12_protocol,
+        )
+        _p12_rebuild_call = {}
+
+        def _fake_p12_replay_rebuild(**kwargs):
+            _p12_rebuild_call.update(kwargs)
+            _work_root = Path(kwargs["output_relative_dir"])
+            _source = _work_root / "active_params" / _p12_target.name
+            _source.parent.mkdir(parents=True, exist_ok=True)
+            _source.write_text(json.dumps(_p12_payload), encoding="utf-8")
+            return {"params_path": _source}
+
+        with patch(
+            "services.optimizer.strategy_param_training.prepare_selection_historical_full_roos_params",
+            side_effect=_fake_p12_replay_rebuild,
+        ):
+            _rebuilt_p12 = _ensure_validation_artifact(
+                _p12_root, policy=_p12_policy, comparison_end_date="2021-12-31",
+                dataset="full", max_positions=int(_DEFAULT_PORTFOLIO_MAX_POSITIONS),
+                rotation=str(_DEFAULT_PORTFOLIO_ROTATION), fixed_risk=float(_DEFAULT_FIXED_RISK),
+                max_position_cap_pct=float(_DEFAULT_MAX_POSITION_CAP_PCT),
+                parameter_set_identity=_p12_set, validation_protocol_id=_p12_protocol,
+            )
+        _current_p12_state = _inspect_validation_artifact(
+            _p12_root, policy=_p12_policy, comparison_end_date="2021-12-31",
+            dataset="full", max_positions=int(_DEFAULT_PORTFOLIO_MAX_POSITIONS),
+            rotation=str(_DEFAULT_PORTFOLIO_ROTATION), fixed_risk=float(_DEFAULT_FIXED_RISK),
+            max_position_cap_pct=float(_DEFAULT_MAX_POSITION_CAP_PCT),
+            parameter_set_identity=_p12_set, validation_protocol_id=_p12_protocol,
+        )
+        check(
+            "p12_prefixed_validation_artifact_auto_rebuilds_replay_without_retraining_study",
+            True,
+            _stale_p12_state["status"] == "VALIDATION_REPLAY_IMPLEMENTATION_STALE"
+            and _stale_p12_state["action"] == "REBUILD"
+            and _rebuilt_p12.get("validation_replay_rebuild") is True
+            and _p12_rebuild_call.get("resume_parameter_training") is True
+            and _current_p12_state["status"] == "READY"
+            and _current_p12_state["action"] == "REUSE"
+            and _current_p12_state.get("actual_validation_replay_implementation_contract")
+                == _validation_replay_contract,
+        )
+
     from filters.breakout_quality.strategy_optimizer_policy import build_outer_rolling_argv
     from services.optimizer.outer_rolling_plan import OuterRollingConfig, _build_rolling_folds, _resolve_config
 
@@ -3020,6 +3171,49 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             "mdd_pct": 8.0,
             "member_count": 1,
         },
+    )
+
+    class _LegacyValidationStateStudy:
+        def __init__(self, key, protocol):
+            self.user_attrs = {
+                key: {
+                    "schema_version": 1,
+                    "protocol": protocol,
+                    "last_observed_trials": 90,
+                    "best_trials": 42,
+                    "best_validation_score": 0.000852,
+                    "last_improvement_trial": 42,
+                    "stop_trial": None,
+                    "stop_reason": None,
+                    "signature_cache": {"legacy": {"validation_score": 0.0}},
+                    "observation_results": [{"trials": 90, "validation_score": 0.0}],
+                }
+            }
+
+        def set_user_attr(self, key, value):
+            self.user_attrs[key] = value
+
+    validation_state_controller = validation_budget_refit_module.AdaptiveValidationBudgetController(
+        session=validation_replay_session,
+        objective_mode="split_train_romd",
+        spec=plateau_best_validation_spec,
+        validation_start_date="2020-01-01",
+        validation_end_date="2020-12-31",
+    )
+    legacy_state_study = _LegacyValidationStateStudy(
+        validation_state_controller.state_key,
+        plateau_best_validation_spec.protocol,
+    )
+    rebuilt_validation_state = validation_state_controller._load_state(legacy_state_study)
+    check(
+        "adaptive_validation_old_replay_state_is_rebuilt_without_discarding_study",
+        True,
+        rebuilt_validation_state["schema_version"]
+            == validation_state_controller._STATE_SCHEMA_VERSION
+        and rebuilt_validation_state["last_observed_trials"] == 0
+        and rebuilt_validation_state["best_trials"] is None
+        and rebuilt_validation_state["signature_cache"] == {}
+        and rebuilt_validation_state["observation_results"] == [],
     )
     from config.strategy_params import ACTIVE_STRATEGY_PARAM_PROFILE
     active_fitting_seed_protocol = get_strategy_param_fitting_seed_protocol(
@@ -4302,6 +4496,42 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             threshold_policy=get_session_scientific_section(injected_session, "hard_gates"),
         )
     check("strategy_param_session_freezes_score_policy", frozen_score_value, runtime_score_value)
+
+    # Deep validation/replay callers intentionally omit explicit score_policy.
+    # They must still consume the bound scientific score contract rather than
+    # falling back to mutable global config.  Quarter-off is a useful regression
+    # because the global default remains ON and can hard-zero the same sample.
+    quarter_off_scientific = deepcopy(base_scientific)
+    quarter_off_score = dict(quarter_off_scientific["scientific_contract"]["score"])
+    quarter_off_score["SCORE_MIN_QUARTER_RETURN_AMP_ENABLED"] = False
+    quarter_off_scientific["scientific_contract"]["score"] = quarter_off_score
+    quarter_floor = float(quarter_off_score["SCORE_MIN_QUARTER_RETURN_FLOOR"])
+    score_kwargs = {
+        "sys_ret": 30.0,
+        "sys_mdd": -10.0,
+        "m_win_rate": 95.0,
+        "r_sq": 0.9,
+        "annual_return_pct": 20.0,
+        "trade_win_rate_pct": 70.0,
+        "min_full_year_return_pct": 10.0,
+        "min_month_return_pct": 10.0,
+        "min_quarter_return_pct": quarter_floor,
+        "total_r": 20.0,
+        "median_r": 0.5,
+    }
+    explicit_quarter_off_score = calc_portfolio_score(
+        **score_kwargs,
+        score_policy=quarter_off_score,
+        threshold_policy=quarter_off_scientific["scientific_contract"]["hard_gates"],
+    )
+    with scientific_runtime_context(quarter_off_scientific):
+        implicit_quarter_off_score = calc_portfolio_score(**score_kwargs)
+    check(
+        "strategy_param_runtime_context_applies_score_policy_to_deep_replay",
+        True,
+        explicit_quarter_off_score > 0.0
+        and abs(implicit_quarter_off_score - explicit_quarter_off_score) < 1e-12,
+    )
 
     frozen_local_enabled = bool(
         (injected_selection.get("local_min_review") or {}).get("default_enabled", False)
