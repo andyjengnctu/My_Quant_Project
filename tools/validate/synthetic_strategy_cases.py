@@ -35,7 +35,7 @@ from core.strategy_param_artifacts import (
 from core.portfolio_fast_data import build_score_single_stock_profile_fields
 from core.portfolio_stats import calc_plain_romd, calc_portfolio_score, calc_score_median_r_multiplier, calc_score_min_full_year_return_multiplier, calc_score_min_month_return_multiplier, calc_score_min_quarter_return_multiplier, calc_score_portfolio_return_multiplier, calc_score_positive_return_multiplier, calc_score_win_rate_multiplier
 from services.optimizer.objective_runner import run_optimizer_objective
-from tools.optimizer.session import OptimizerSession
+from tools.optimizer.session import OptimizerSession, close_study_storage
 from tools.optimizer import callbacks as optimizer_callbacks, study_utils
 from services.portfolio_sim.reporting import print_yearly_return_report
 from tools.optimizer.runtime import (
@@ -1765,209 +1765,219 @@ def validate_optimizer_sampler_resume_determinism_case(_base_params):
 
     try:
         with TemporaryDirectory() as temp_dir:
-            temp_root = Path(temp_dir)
-            uninterrupted_storage = f"sqlite:///{temp_root / 'uninterrupted.db'}"
-            resumed_storage = f"sqlite:///{temp_root / 'resumed.db'}"
-            legacy_storage = f"sqlite:///{temp_root / 'legacy.db'}"
+            opened_studies = []
 
-            uninterrupted = create_optimizer_study(
-                uninterrupted_storage, seed=42, sampler_kind="tpe"
-            )
-            uninterrupted.optimize(_objective, n_trials=30)
+            def _track_study(study):
+                opened_studies.append(study)
+                return study
 
-            plain_sampler_reference = optuna.create_study(
-                direction="maximize", sampler=optuna.samplers.TPESampler(seed=42)
-            )
-            plain_sampler_reference.optimize(_objective, n_trials=30)
-            add_check(
-                results,
-                "strategy_contract",
-                case_id,
-                "resume_checkpointing_does_not_change_fresh_tpe_trial_sequence",
-                _signature(plain_sampler_reference),
-                _signature(uninterrupted),
-            )
+            try:
+                temp_root = Path(temp_dir)
+                uninterrupted_storage = f"sqlite:///{temp_root / 'uninterrupted.db'}"
+                resumed_storage = f"sqlite:///{temp_root / 'resumed.db'}"
+                legacy_storage = f"sqlite:///{temp_root / 'legacy.db'}"
 
-            resumed = create_optimizer_study(resumed_storage, seed=42, sampler_kind="tpe")
-            resumed.optimize(_objective, n_trials=15)
-            resumed = create_optimizer_study(resumed_storage, seed=42, sampler_kind="tpe")
-            check_before = len(list(resumed.trials or []))
-            resumed.optimize(_objective, n_trials=15)
+                uninterrupted = _track_study(create_optimizer_study(
+                    uninterrupted_storage, seed=42, sampler_kind="tpe"
+                ))
+                uninterrupted.optimize(_objective, n_trials=30)
 
-            add_check(
-                results,
-                "strategy_contract",
-                case_id,
-                "seeded_tpe_resume_preserves_existing_trial_count",
-                15,
-                check_before,
-            )
-            add_check(
-                results,
-                "strategy_contract",
-                case_id,
-                "seeded_tpe_uninterrupted_and_resume_trial_sequence_exact_match",
-                _signature(uninterrupted),
-                _signature(resumed),
-            )
+                plain_sampler_reference = _track_study(optuna.create_study(
+                    direction="maximize", sampler=optuna.samplers.TPESampler(seed=42)
+                ))
+                plain_sampler_reference.optimize(_objective, n_trials=30)
+                add_check(
+                    results,
+                    "strategy_contract",
+                    case_id,
+                    "resume_checkpointing_does_not_change_fresh_tpe_trial_sequence",
+                    _signature(plain_sampler_reference),
+                    _signature(uninterrupted),
+                )
 
-            system_attrs = dict(
-                resumed._storage.get_study_system_attrs(resumed._study_id) or {}
-            )
-            add_check(
-                results,
-                "strategy_contract",
-                case_id,
-                "seeded_tpe_resume_persists_pre_and_post_rng_checkpoints",
-                True,
-                "optimizer_sampler_rng_pre_v1" in system_attrs
-                and "optimizer_sampler_rng_post_v1" in system_attrs,
-            )
+                resumed = _track_study(create_optimizer_study(resumed_storage, seed=42, sampler_kind="tpe"))
+                resumed.optimize(_objective, n_trials=15)
+                resumed = _track_study(create_optimizer_study(resumed_storage, seed=42, sampler_kind="tpe"))
+                check_before = len(list(resumed.trials or []))
+                resumed.optimize(_objective, n_trials=15)
 
-            persisted_seed_storage = f"sqlite:///{temp_root / 'persisted_seed.db'}"
-            persisted_seed_reference = create_optimizer_study(
-                None, seed=123, sampler_kind="tpe"
-            )
-            persisted_seed_reference.optimize(_objective, n_trials=6)
-            persisted_seed_study = create_optimizer_study(
-                persisted_seed_storage, seed=123, sampler_kind="tpe"
-            )
-            persisted_seed_study.optimize(_objective, n_trials=5)
-            persisted_seed_study = create_optimizer_study(
-                persisted_seed_storage, seed=0, sampler_kind="tpe"
-            )
-            persisted_seed_study.optimize(_objective, n_trials=1)
-            add_check(
-                results,
-                "strategy_contract",
-                case_id,
-                "persisted_study_seed_overrides_resume_call_seed",
-                _signature(persisted_seed_reference),
-                _signature(persisted_seed_study),
-            )
+                add_check(
+                    results,
+                    "strategy_contract",
+                    case_id,
+                    "seeded_tpe_resume_preserves_existing_trial_count",
+                    15,
+                    check_before,
+                )
+                add_check(
+                    results,
+                    "strategy_contract",
+                    case_id,
+                    "seeded_tpe_uninterrupted_and_resume_trial_sequence_exact_match",
+                    _signature(uninterrupted),
+                    _signature(resumed),
+                )
 
-            legacy = optuna.create_study(
-                study_name=OPTIMIZER_LEGACY_STUDY_NAME,
-                storage=legacy_storage,
-                load_if_exists=True,
-                direction="maximize",
-                sampler=optuna.samplers.TPESampler(seed=42),
-            )
-            legacy.optimize(_objective, n_trials=5)
-            migrated = create_optimizer_study(legacy_storage, seed=42, sampler_kind="tpe")
-            preserved_legacy = optuna.load_study(
-                study_name=OPTIMIZER_LEGACY_STUDY_NAME, storage=legacy_storage
-            )
-            add_check(
-                results,
-                "strategy_contract",
-                case_id,
-                "legacy_non_checkpointed_study_is_preserved_but_not_resumed",
-                (True, 0, 5),
-                (
-                    str(migrated.study_name).startswith(OPTIMIZER_DETERMINISTIC_RESUME_STUDY_NAME),
-                    len(list(migrated.trials or [])),
-                    len(list(preserved_legacy.trials or [])),
-                ),
-            )
+                system_attrs = dict(
+                    resumed._storage.get_study_system_attrs(resumed._study_id) or {}
+                )
+                add_check(
+                    results,
+                    "strategy_contract",
+                    case_id,
+                    "seeded_tpe_resume_persists_pre_and_post_rng_checkpoints",
+                    True,
+                    "optimizer_sampler_rng_pre_v1" in system_attrs
+                    and "optimizer_sampler_rng_post_v1" in system_attrs,
+                )
 
-            random_uninterrupted_storage = f"sqlite:///{temp_root / 'random_uninterrupted.db'}"
-            random_resumed_storage = f"sqlite:///{temp_root / 'random_resumed.db'}"
-            random_uninterrupted = create_optimizer_study(
-                random_uninterrupted_storage, seed=42, sampler_kind="random"
-            )
-            random_uninterrupted.optimize(_objective, n_trials=20)
-            random_resumed = create_optimizer_study(
-                random_resumed_storage, seed=42, sampler_kind="random"
-            )
-            random_resumed.optimize(_objective, n_trials=10)
-            random_resumed = create_optimizer_study(
-                random_resumed_storage, seed=42, sampler_kind="random"
-            )
-            random_resumed.optimize(_objective, n_trials=10)
-            add_check(
-                results,
-                "strategy_contract",
-                case_id,
-                "seeded_random_uninterrupted_and_resume_trial_sequence_exact_match",
-                _signature(random_uninterrupted),
-                _signature(random_resumed),
-            )
+                persisted_seed_storage = f"sqlite:///{temp_root / 'persisted_seed.db'}"
+                persisted_seed_reference = _track_study(create_optimizer_study(
+                    None, seed=123, sampler_kind="tpe"
+                ))
+                persisted_seed_reference.optimize(_objective, n_trials=6)
+                persisted_seed_study = _track_study(create_optimizer_study(
+                    persisted_seed_storage, seed=123, sampler_kind="tpe"
+                ))
+                persisted_seed_study.optimize(_objective, n_trials=5)
+                persisted_seed_study = _track_study(create_optimizer_study(
+                    persisted_seed_storage, seed=0, sampler_kind="tpe"
+                ))
+                persisted_seed_study.optimize(_objective, n_trials=1)
+                add_check(
+                    results,
+                    "strategy_contract",
+                    case_id,
+                    "persisted_study_seed_overrides_resume_call_seed",
+                    _signature(persisted_seed_reference),
+                    _signature(persisted_seed_study),
+                )
 
-            running_reference_storage = f"sqlite:///{temp_root / 'running_reference.db'}"
-            running_recovery_storage = f"sqlite:///{temp_root / 'running_recovery.db'}"
+                legacy = _track_study(optuna.create_study(
+                    study_name=OPTIMIZER_LEGACY_STUDY_NAME,
+                    storage=legacy_storage,
+                    load_if_exists=True,
+                    direction="maximize",
+                    sampler=optuna.samplers.TPESampler(seed=42),
+                ))
+                legacy.optimize(_objective, n_trials=5)
+                migrated = _track_study(create_optimizer_study(legacy_storage, seed=42, sampler_kind="tpe"))
+                preserved_legacy = _track_study(optuna.load_study(
+                    study_name=OPTIMIZER_LEGACY_STUDY_NAME, storage=legacy_storage
+                ))
+                add_check(
+                    results,
+                    "strategy_contract",
+                    case_id,
+                    "legacy_non_checkpointed_study_is_preserved_but_not_resumed",
+                    (True, 0, 5),
+                    (
+                        str(migrated.study_name).startswith(OPTIMIZER_DETERMINISTIC_RESUME_STUDY_NAME),
+                        len(list(migrated.trials or [])),
+                        len(list(preserved_legacy.trials or [])),
+                    ),
+                )
 
-            def _suggest_crash_prefix(trial):
-                trial.suggest_int("alpha", 1, 12)
-                trial.suggest_float("beta", 0.0, 1.0)
-                trial.suggest_categorical("mode", ["a", "b", "c"])
+                random_uninterrupted_storage = f"sqlite:///{temp_root / 'random_uninterrupted.db'}"
+                random_resumed_storage = f"sqlite:///{temp_root / 'random_resumed.db'}"
+                random_uninterrupted = _track_study(create_optimizer_study(
+                    random_uninterrupted_storage, seed=42, sampler_kind="random"
+                ))
+                random_uninterrupted.optimize(_objective, n_trials=20)
+                random_resumed = _track_study(create_optimizer_study(
+                    random_resumed_storage, seed=42, sampler_kind="random"
+                ))
+                random_resumed.optimize(_objective, n_trials=10)
+                random_resumed = _track_study(create_optimizer_study(
+                    random_resumed_storage, seed=42, sampler_kind="random"
+                ))
+                random_resumed.optimize(_objective, n_trials=10)
+                add_check(
+                    results,
+                    "strategy_contract",
+                    case_id,
+                    "seeded_random_uninterrupted_and_resume_trial_sequence_exact_match",
+                    _signature(random_uninterrupted),
+                    _signature(random_resumed),
+                )
 
-            running_reference = create_optimizer_study(
-                running_reference_storage, seed=42, sampler_kind="tpe"
-            )
-            reference_trial = running_reference.ask()
-            _suggest_crash_prefix(reference_trial)
-            running_reference.tell(reference_trial, state=optuna.trial.TrialState.FAIL)
-            running_reference.optimize(_objective, n_trials=10)
+                running_reference_storage = f"sqlite:///{temp_root / 'running_reference.db'}"
+                running_recovery_storage = f"sqlite:///{temp_root / 'running_recovery.db'}"
 
-            running_recovery = create_optimizer_study(
-                running_recovery_storage, seed=42, sampler_kind="tpe"
-            )
-            abandoned_trial = running_recovery.ask()
-            _suggest_crash_prefix(abandoned_trial)
-            running_recovery = create_optimizer_study(
-                running_recovery_storage, seed=42, sampler_kind="tpe"
-            )
-            running_recovery.optimize(_objective, n_trials=10)
-            add_check(
-                results,
-                "strategy_contract",
-                case_id,
-                "seeded_tpe_hard_restart_recovers_abandoned_running_trial_deterministically",
-                _signature(running_reference),
-                _signature(running_recovery),
-            )
+                def _suggest_crash_prefix(trial):
+                    trial.suggest_int("alpha", 1, 12)
+                    trial.suggest_float("beta", 0.0, 1.0)
+                    trial.suggest_categorical("mode", ["a", "b", "c"])
 
-            missing_post_reference_storage = f"sqlite:///{temp_root / 'missing_post_reference.db'}"
-            missing_post_recovery_storage = f"sqlite:///{temp_root / 'missing_post_recovery.db'}"
-            missing_post_reference = create_optimizer_study(
-                missing_post_reference_storage, seed=42, sampler_kind="tpe"
-            )
-            missing_post_reference.optimize(_objective, n_trials=20)
-            missing_post_recovery = create_optimizer_study(
-                missing_post_recovery_storage, seed=42, sampler_kind="tpe"
-            )
-            missing_post_recovery.optimize(_objective, n_trials=8)
-            missing_post_recovery._storage.set_study_system_attr(
-                missing_post_recovery._study_id, "optimizer_sampler_rng_post_v1", {}
-            )
-            missing_post_recovery = create_optimizer_study(
-                missing_post_recovery_storage, seed=42, sampler_kind="tpe"
-            )
-            missing_post_recovery.optimize(_objective, n_trials=12)
-            add_check(
-                results,
-                "strategy_contract",
-                case_id,
-                "seeded_tpe_resume_recovers_finished_trial_when_post_checkpoint_is_missing",
-                _signature(missing_post_reference),
-                _signature(missing_post_recovery),
-            )
+                running_reference = _track_study(create_optimizer_study(
+                    running_reference_storage, seed=42, sampler_kind="tpe"
+                ))
+                reference_trial = running_reference.ask()
+                _suggest_crash_prefix(reference_trial)
+                running_reference.tell(reference_trial, state=optuna.trial.TrialState.FAIL)
+                running_reference.optimize(_objective, n_trials=10)
 
-            add_check(
-                results,
-                "strategy_contract",
-                case_id,
-                "tpe_parallel_override_cannot_break_deterministic_trial_sequence",
-                1,
-                resolve_optimizer_single_fold_search_parallel_trials(
-                    {
-                        "OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS": "8",
-                        "OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH": "1",
-                    },
-                    sampler_kind="tpe",
-                ),
-            )
+                running_recovery = _track_study(create_optimizer_study(
+                    running_recovery_storage, seed=42, sampler_kind="tpe"
+                ))
+                abandoned_trial = running_recovery.ask()
+                _suggest_crash_prefix(abandoned_trial)
+                running_recovery = _track_study(create_optimizer_study(
+                    running_recovery_storage, seed=42, sampler_kind="tpe"
+                ))
+                running_recovery.optimize(_objective, n_trials=10)
+                add_check(
+                    results,
+                    "strategy_contract",
+                    case_id,
+                    "seeded_tpe_hard_restart_recovers_abandoned_running_trial_deterministically",
+                    _signature(running_reference),
+                    _signature(running_recovery),
+                )
+
+                missing_post_reference_storage = f"sqlite:///{temp_root / 'missing_post_reference.db'}"
+                missing_post_recovery_storage = f"sqlite:///{temp_root / 'missing_post_recovery.db'}"
+                missing_post_reference = _track_study(create_optimizer_study(
+                    missing_post_reference_storage, seed=42, sampler_kind="tpe"
+                ))
+                missing_post_reference.optimize(_objective, n_trials=20)
+                missing_post_recovery = _track_study(create_optimizer_study(
+                    missing_post_recovery_storage, seed=42, sampler_kind="tpe"
+                ))
+                missing_post_recovery.optimize(_objective, n_trials=8)
+                missing_post_recovery._storage.set_study_system_attr(
+                    missing_post_recovery._study_id, "optimizer_sampler_rng_post_v1", {}
+                )
+                missing_post_recovery = _track_study(create_optimizer_study(
+                    missing_post_recovery_storage, seed=42, sampler_kind="tpe"
+                ))
+                missing_post_recovery.optimize(_objective, n_trials=12)
+                add_check(
+                    results,
+                    "strategy_contract",
+                    case_id,
+                    "seeded_tpe_resume_recovers_finished_trial_when_post_checkpoint_is_missing",
+                    _signature(missing_post_reference),
+                    _signature(missing_post_recovery),
+                )
+
+                add_check(
+                    results,
+                    "strategy_contract",
+                    case_id,
+                    "tpe_parallel_override_cannot_break_deterministic_trial_sequence",
+                    1,
+                    resolve_optimizer_single_fold_search_parallel_trials(
+                        {
+                            "OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS": "8",
+                            "OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH": "1",
+                        },
+                        sampler_kind="tpe",
+                    ),
+                )
+            finally:
+                for study in reversed(opened_studies):
+                    close_study_storage(study)
     finally:
         optuna.logging.set_verbosity(previous_verbosity)
 
