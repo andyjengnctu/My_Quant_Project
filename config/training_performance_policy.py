@@ -23,6 +23,7 @@ OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_BACKEND = "process"
 
 # Parallelism inside one optimizer search unit.
 OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS = 8
+# Compatibility setting only: canonical TPE runtime is always sequential for deterministic semantics.
 OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH = False
 OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_WORKERS = 4
 OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_MAX_WORKERS = 4

@@ -238,7 +238,7 @@ def _write_outer_timing_summary(
         os.makedirs(report_dir, exist_ok=True)
     sampler_kind = "random" if bool(timing_mode) else "tpe"
     single_fold_search_parallel_trials = _resolve_single_fold_search_parallel_trials(os.environ, sampler_kind=sampler_kind)
-    single_fold_allow_tpe_parallel_search = _env_flag(
+    single_fold_allow_tpe_parallel_search = False if sampler_kind == "tpe" else _env_flag(
         os.environ,
         "OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH",
         is_optimizer_single_fold_tpe_parallel_search_allowed_default(),

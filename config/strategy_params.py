@@ -245,6 +245,10 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
         },
         "fitting_seed_protocol": "single_seed_42",
         "artifact_slug": "param_p10_validation_plateau_best_refit",
+        # Engineering-only reuse guard: the historical P10 evidence was created by
+        # a pre-fix crash/resume path whose TPE RNG trajectory cannot be certified.
+        # This flag does not participate in the scientific fingerprint.
+        "requires_resume_safe_execution_evidence": True,
     },
     "validation_plateau_best_patience100_current": {
         "label": "Adaptive Plateau Validation Refit / Finalist Best / Patience 100",

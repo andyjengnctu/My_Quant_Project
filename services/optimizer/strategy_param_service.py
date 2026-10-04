@@ -75,6 +75,65 @@ def _force_rebuild_attempt_root(base: Path) -> Path:
     return path
 
 
+def _current_optimizer_execution_evidence_contract() -> str:
+    from services.optimizer.runtime import OPTIMIZER_EXECUTION_EVIDENCE_CONTRACT
+
+    return str(OPTIMIZER_EXECUTION_EVIDENCE_CONTRACT)
+
+
+def _resume_safe_execution_rebuild_root(base: Path, *, contract: str) -> Path:
+    """Stable repair workspace for stale pre-deterministic execution evidence.
+
+    The path is deliberately stable for one execution contract so an interrupted
+    automatic repair resumes the same deterministic study rather than starting a
+    new force-rebuild attempt on every application restart. Historical workspace
+    remains untouched for audit.
+    """
+
+    token = "".join(
+        character if character.isalnum() or character in {"-", "_"} else "_"
+        for character in str(contract or "")
+    ).strip("_")
+    if not token:
+        raise ValueError("optimizer execution evidence contract不得為空")
+    path = Path(base) / "execution_evidence_rebuilds" / token
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _archive_stale_execution_evidence_once(
+    *, root: Path, target: Path, manifest_path: Path, work_root: Path, reason: str
+) -> Path | None:
+    """Preserve stale published bytes before an automatic execution-evidence repair."""
+
+    target = Path(target)
+    if not target.is_file():
+        return None
+    artifact_sha = compute_strategy_param_file_sha256(target)
+    archive_root = Path(work_root) / "execution_evidence_archive" / artifact_sha
+    archive_root.mkdir(parents=True, exist_ok=True)
+    archived_target = archive_root / target.name
+    if not archived_target.exists():
+        shutil.copy2(target, archived_target)
+    archived_manifest = archive_root / "identity_manifest.json"
+    if Path(manifest_path).is_file() and not archived_manifest.exists():
+        shutil.copy2(manifest_path, archived_manifest)
+    metadata_path = archive_root / "archive_metadata.json"
+    if not metadata_path.exists():
+        _write_json(
+            metadata_path,
+            {
+                "schema_type": "strategy_parameter_execution_evidence_archive",
+                "schema_version": 1,
+                "reason": str(reason),
+                "artifact_sha256": artifact_sha,
+                "artifact_path": _project_relative(root, target),
+                "manifest_path": _project_relative(root, manifest_path),
+            },
+        )
+    return archive_root
+
+
 def _project_relative(root: Path, path: Path) -> str:
     try:
         return path.resolve().relative_to(root.resolve()).as_posix()
@@ -3630,6 +3689,19 @@ def inspect_validation_budget_strategy_parameter_artifact(
     coverage_end = _canonical_schedule_coverage_end(target)
     spec_protocol = str(dict(contract.get("validation_budget_refit") or {}).get("protocol") or "")
     adaptation = dict((payload or {}).get("breakout_quality_param_adaptation") or {})
+    from core.strategy_param_policy import resolve_validation_strategy_param_training_profile
+
+    profile = resolve_validation_strategy_param_training_profile(
+        parameter_set_identity, validation_protocol_id
+    )
+    required_execution_contract = (
+        _current_optimizer_execution_evidence_contract()
+        if profile.requires_resume_safe_execution_evidence
+        else None
+    )
+    actual_execution_contract = str(
+        (manifest or {}).get("optimizer_execution_evidence_contract") or ""
+    ).strip() or None
 
     status = "READY"
     if payload is None:
@@ -3660,6 +3732,11 @@ def inspect_validation_budget_strategy_parameter_artifact(
         status = "BUILD_CONTRACT_MISMATCH"
     elif str(manifest.get("artifact_sha256") or "") != compute_strategy_param_file_sha256(target):
         status = "ARTIFACT_SHA_MISMATCH"
+    elif (
+        required_execution_contract is not None
+        and actual_execution_contract != required_execution_contract
+    ):
+        status = "OPTIMIZER_EXECUTION_EVIDENCE_STALE"
 
     ready = status == "READY"
     existed = bool(target.exists() or manifest_path.exists())
@@ -3671,6 +3748,8 @@ def inspect_validation_budget_strategy_parameter_artifact(
         "manifest_path": manifest_path,
         "coverage_end": coverage_end,
         "build_contract": contract,
+        "required_optimizer_execution_evidence_contract": required_execution_contract,
+        "actual_optimizer_execution_evidence_contract": actual_execution_contract,
     }
 
 def ensure_validation_budget_strategy_parameter_artifact(
@@ -3753,11 +3832,31 @@ def ensure_validation_budget_strategy_parameter_artifact(
         parameter_set_identity=parameter_set_identity,
         validation_protocol_id=validation_protocol_id,
     )
-    work_root = (
-        _force_rebuild_attempt_root(canonical_work_root)
-        if force_rebuild
-        else canonical_work_root
+    required_execution_contract = state.get(
+        "required_optimizer_execution_evidence_contract"
     )
+    stale_execution_evidence = (
+        str(state.get("status") or "") == "OPTIMIZER_EXECUTION_EVIDENCE_STALE"
+    )
+    if stale_execution_evidence:
+        if not required_execution_contract:
+            raise RuntimeError(
+                "execution evidence stale卻缺少required optimizer execution contract"
+            )
+        _archive_stale_execution_evidence_once(
+            root=root,
+            target=target,
+            manifest_path=manifest_path,
+            work_root=canonical_work_root,
+            reason=str(state.get("status") or "OPTIMIZER_EXECUTION_EVIDENCE_STALE"),
+        )
+        work_root = _resume_safe_execution_rebuild_root(
+            canonical_work_root, contract=str(required_execution_contract)
+        )
+    elif force_rebuild:
+        work_root = _force_rebuild_attempt_root(canonical_work_root)
+    else:
+        work_root = canonical_work_root
     spec = resolve_validation_budget_spec(int(contract["trials_per_fold"]), protocol_id=validation_protocol_id)
     result = prepare_selection_historical_full_roos_params(
         project_root=root,
@@ -3775,7 +3874,11 @@ def ensure_validation_budget_strategy_parameter_artifact(
             else max_position_cap_pct
         ),
         optimizer_seed=int(contract["optimizer_seed"]),
-        resume_parameter_training=(False if force_rebuild else bool(resume_parameter_training)),
+        resume_parameter_training=(
+            bool(resume_parameter_training)
+            if stale_execution_evidence
+            else (False if force_rebuild else bool(resume_parameter_training))
+        ),
         quiet=False,
         first_oos_date=str(contract["schedule_start"]),
         last_oos_date=end_date,
@@ -3797,8 +3900,26 @@ def ensure_validation_budget_strategy_parameter_artifact(
             f"{contract['parameter_set']} Optimizer完成但找不到策略參數工件: "
             + _project_relative(root, source)
         )
-    payload = _copy_json_payload(source, target)
-    coverage_end = _canonical_schedule_coverage_end(target)
+    source_payload = _load_json_object_permissive(source)
+    if source_payload is None:
+        raise ValueError(
+            f"{contract['parameter_set']} Optimizer source無法讀取或不是JSON object: "
+            + _project_relative(root, source)
+        )
+    payload = normalize_strategy_param_payload_for_persistence(source_payload)
+    if payload != source_payload:
+        # Keep the optimizer work artifact strict-JSON without publishing anything yet.
+        atomic_write_json(source, payload)
+    if not is_active_param_ensemble_payload(payload):
+        coverage_end = None
+    elif resolve_active_param_ensemble_mode(payload) != ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING:
+        coverage_end = None
+    else:
+        try:
+            _coverage_start, _coverage_end = get_active_param_ensemble_date_range(payload)
+            coverage_end = str(_coverage_end) if _coverage_end else None
+        except (TypeError, ValueError, KeyError):
+            coverage_end = None
     if coverage_end is None or str(coverage_end) < end_date:
         raise RuntimeError(
             f"{contract['parameter_set']} schedule coverage不足: "
@@ -3811,6 +3932,17 @@ def ensure_validation_budget_strategy_parameter_artifact(
             f"{contract['parameter_set']} artifact缺少validation-budget protocol identity"
         )
 
+    current_execution_contract = _current_optimizer_execution_evidence_contract()
+    if (
+        required_execution_contract is not None
+        and str(required_execution_contract) != current_execution_contract
+    ):
+        raise RuntimeError(
+            "目前Optimizer runtime無法滿足artifact要求的execution evidence contract: "
+            f"required={required_execution_contract}, current={current_execution_contract}"
+        )
+    # Publish only after the complete rebuilt payload and execution contract are validated.
+    _write_json(target, payload)
     target_sha = compute_strategy_param_file_sha256(target)
     _write_json(
         manifest_path,
@@ -3827,6 +3959,7 @@ def ensure_validation_budget_strategy_parameter_artifact(
             "artifact_path": _project_relative(root, target),
             "artifact_sha256": target_sha,
             "coverage_end": coverage_end,
+            "optimizer_execution_evidence_contract": current_execution_contract,
             "production_promotion": False,
         },
     )
@@ -3837,6 +3970,8 @@ def ensure_validation_budget_strategy_parameter_artifact(
         "sha256": target_sha,
         "coverage_end": coverage_end,
         "build_contract": contract,
+        "optimizer_execution_evidence_contract": current_execution_contract,
+        "execution_evidence_rebuild": bool(stale_execution_evidence),
     }
 
 

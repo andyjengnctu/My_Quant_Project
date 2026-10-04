@@ -3,18 +3,16 @@ import os
 import sqlite3
 import sys
 
+import numpy as np
+
 from core.console_report import render_menu_item
 from core.log_utils import format_exception_summary
 
-from core.training_performance import (
-    is_optimizer_single_fold_tpe_parallel_search_allowed_default,
-    resolve_optimizer_single_fold_search_parallel_trials_default,
-)
+from core.training_performance import resolve_optimizer_single_fold_search_parallel_trials_default
 
 from core.display import print_strategy_dashboard
 from services.optimizer.callbacks import print_optimizer_trial_milestone_dashboard
 from core.runtime_utils import is_interactive_console, safe_prompt_choice
-from core.runtime_utils import resolve_environment_flag as _env_flag_for_optimizer_runtime
 from services.optimizer.study_utils import (
     build_best_params_payload_from_trial,
     build_optimizer_trial_params,
@@ -44,25 +42,364 @@ def prompt_existing_db_policy(db_file, colors):
         print(f"{colors['red']}🗑️ 已刪除舊記憶。{colors['reset']}")
 
 
+OPTIMIZER_LEGACY_STUDY_NAME = "portfolio_optimization_overnight"
+OPTIMIZER_DETERMINISTIC_RESUME_STUDY_NAME = "portfolio_optimization_overnight_resume_safe_v1"
+OPTIMIZER_EXECUTION_EVIDENCE_CONTRACT = "optimizer_resume_determinism_v1"
+_OPTIMIZER_SAMPLER_PRE_CHECKPOINT_KEY = "optimizer_sampler_rng_pre_v1"
+_OPTIMIZER_SAMPLER_POST_CHECKPOINT_KEY = "optimizer_sampler_rng_post_v1"
+_OPTIMIZER_SAMPLER_CHECKPOINT_SCHEMA = "optimizer_sampler_rng_checkpoint_v1"
+
+
+def _deterministic_optimizer_study_name(*, sampler_kind: str, optuna_version: str) -> str:
+    safe_version = "".join(
+        character if character.isalnum() else "_" for character in str(optuna_version or "unknown")
+    ).strip("_") or "unknown"
+    sampler_key = str(sampler_kind or "tpe").strip().lower() or "tpe"
+    return f"{OPTIMIZER_DETERMINISTIC_RESUME_STUDY_NAME}_{sampler_key}_optuna_{safe_version}"
+
+
+def _serialize_numpy_random_state(state) -> dict:
+    return {
+        "bit_generator": str(state[0]),
+        "keys": [int(value) for value in np.asarray(state[1], dtype=np.uint32).tolist()],
+        "pos": int(state[2]),
+        "has_gauss": int(state[3]),
+        "cached_gaussian": float(state[4]),
+    }
+
+
+def _deserialize_numpy_random_state(payload: dict):
+    data = dict(payload or {})
+    return (
+        str(data["bit_generator"]),
+        np.asarray(list(data["keys"]), dtype=np.uint32),
+        int(data["pos"]),
+        int(data["has_gauss"]),
+        float(data["cached_gaussian"]),
+    )
+
+
+def _sampler_rng_snapshot(sampler, sampler_kind: str) -> dict:
+    sampler_key = str(sampler_kind or "tpe").strip().lower()
+    primary_rng = getattr(getattr(sampler, "_rng", None), "rng", None)
+    if primary_rng is None:
+        raise RuntimeError("Optimizer sampler缺少可持久化RNG state")
+    payload = {"primary": _serialize_numpy_random_state(primary_rng.get_state())}
+    if sampler_key == "tpe":
+        random_sampler = getattr(sampler, "_random_sampler", None)
+        random_rng = getattr(getattr(random_sampler, "_rng", None), "rng", None)
+        if random_rng is None:
+            raise RuntimeError("Optimizer TPE sampler缺少startup RandomSampler RNG state")
+        payload["startup_random"] = _serialize_numpy_random_state(random_rng.get_state())
+    return payload
+
+
+def _restore_sampler_rng_snapshot(sampler, sampler_kind: str, payload: dict) -> None:
+    sampler_key = str(sampler_kind or "tpe").strip().lower()
+    data = dict(payload or {})
+    primary_rng = getattr(getattr(sampler, "_rng", None), "rng", None)
+    if primary_rng is None or "primary" not in data:
+        raise RuntimeError("Optimizer sampler checkpoint缺少primary RNG state")
+    primary_rng.set_state(_deserialize_numpy_random_state(data["primary"]))
+    if sampler_key == "tpe":
+        random_sampler = getattr(sampler, "_random_sampler", None)
+        random_rng = getattr(getattr(random_sampler, "_rng", None), "rng", None)
+        if random_rng is None or "startup_random" not in data:
+            raise RuntimeError("Optimizer TPE sampler checkpoint缺少startup RandomSampler RNG state")
+        random_rng.set_state(_deserialize_numpy_random_state(data["startup_random"]))
+
+
+def _study_internal_attrs(study) -> dict:
+    return dict(study._storage.get_study_system_attrs(study._study_id) or {})
+
+
+def _set_study_internal_attr(study, key: str, value) -> None:
+    study._storage.set_study_system_attr(study._study_id, str(key), value)
+
+
+def _build_sampler_checkpoint(*, sampler, sampler_kind: str, seed: int, trial_number: int, phase: str, optuna_version: str) -> dict:
+    return {
+        "schema": _OPTIMIZER_SAMPLER_CHECKPOINT_SCHEMA,
+        "sampler_kind": str(sampler_kind),
+        "seed": int(seed),
+        "trial_number": int(trial_number),
+        "phase": str(phase),
+        "optuna_version": str(optuna_version),
+        "rng": _sampler_rng_snapshot(sampler, sampler_kind),
+    }
+
+
+def _persist_sampler_checkpoint(*, study, sampler, sampler_kind: str, seed: int, trial_number: int, phase: str, optuna_version: str) -> None:
+    key = (
+        _OPTIMIZER_SAMPLER_PRE_CHECKPOINT_KEY
+        if str(phase) == "pre"
+        else _OPTIMIZER_SAMPLER_POST_CHECKPOINT_KEY
+    )
+    _set_study_internal_attr(
+        study,
+        key,
+        _build_sampler_checkpoint(
+            sampler=sampler,
+            sampler_kind=sampler_kind,
+            seed=int(seed),
+            trial_number=int(trial_number),
+            phase=str(phase),
+            optuna_version=str(optuna_version),
+        ),
+    )
+
+
+def _checkpointing_sampler(optuna, *, seed: int | None, sampler_kind: str):
+    sampler_key = str(sampler_kind or "tpe").strip().lower()
+    if seed is None:
+        if sampler_key == "random":
+            return optuna.samplers.RandomSampler(seed=None)
+        return optuna.samplers.TPESampler()
+
+    resolved_seed = int(seed)
+    optuna_version = str(getattr(optuna, "__version__", ""))
+    if sampler_key == "random":
+        class _CheckpointingRandomSampler(optuna.samplers.RandomSampler):
+            def before_trial(self, study, trial):
+                super().before_trial(study, trial)
+                _persist_sampler_checkpoint(
+                    study=study, sampler=self, sampler_kind="random", seed=resolved_seed,
+                    trial_number=int(trial.number), phase="pre", optuna_version=optuna_version,
+                )
+
+            def after_trial(self, study, trial, state, values):
+                super().after_trial(study, trial, state, values)
+                _persist_sampler_checkpoint(
+                    study=study, sampler=self, sampler_kind="random", seed=resolved_seed,
+                    trial_number=int(trial.number), phase="post", optuna_version=optuna_version,
+                )
+
+        return _CheckpointingRandomSampler(seed=resolved_seed)
+
+    class _CheckpointingTPESampler(optuna.samplers.TPESampler):
+        def before_trial(self, study, trial):
+            super().before_trial(study, trial)
+            _persist_sampler_checkpoint(
+                study=study, sampler=self, sampler_kind="tpe", seed=resolved_seed,
+                trial_number=int(trial.number), phase="pre", optuna_version=optuna_version,
+            )
+
+        def after_trial(self, study, trial, state, values):
+            super().after_trial(study, trial, state, values)
+            _persist_sampler_checkpoint(
+                study=study, sampler=self, sampler_kind="tpe", seed=resolved_seed,
+                trial_number=int(trial.number), phase="post", optuna_version=optuna_version,
+            )
+
+    return _CheckpointingTPESampler(seed=resolved_seed)
+
+
+def _plain_seeded_sampler(optuna, *, seed: int, sampler_kind: str):
+    sampler_key = str(sampler_kind or "tpe").strip().lower()
+    if sampler_key == "random":
+        return optuna.samplers.RandomSampler(seed=int(seed))
+    return optuna.samplers.TPESampler(seed=int(seed))
+
+
+def _checkpoint_compatible(checkpoint: dict, *, sampler_kind: str, seed: int, optuna_version: str, phase: str) -> bool:
+    payload = dict(checkpoint or {})
+    return (
+        payload.get("schema") == _OPTIMIZER_SAMPLER_CHECKPOINT_SCHEMA
+        and str(payload.get("sampler_kind") or "") == str(sampler_kind)
+        and int(payload.get("seed", -1)) == int(seed)
+        and str(payload.get("optuna_version") or "") == str(optuna_version)
+        and str(payload.get("phase") or "") == str(phase)
+        and isinstance(payload.get("rng"), dict)
+    )
+
+
+def _trial_params_match(generated: dict, expected: dict) -> bool:
+    if list(generated) != list(expected):
+        return False
+    for key in generated:
+        left = generated[key]
+        right = expected[key]
+        if isinstance(left, float) or isinstance(right, float):
+            try:
+                if float(left) != float(right):
+                    return False
+            except (TypeError, ValueError):
+                return False
+        elif left != right:
+            return False
+    return True
+
+
+def _advance_sampler_over_running_trial(optuna, *, sampler, sampler_kind: str, seed: int, checkpoint: dict, study, running_trial) -> None:
+    replay_sampler = _plain_seeded_sampler(optuna, seed=int(seed), sampler_kind=sampler_kind)
+    _restore_sampler_rng_snapshot(replay_sampler, sampler_kind, dict(checkpoint.get("rng") or {}))
+    directions = list(getattr(study, "directions", []) or [])
+    if len(directions) == 1:
+        replay_study = optuna.create_study(direction=directions[0], sampler=replay_sampler)
+    else:
+        replay_study = optuna.create_study(directions=directions, sampler=replay_sampler)
+    for prior in list(getattr(study, "trials", []) or []):
+        if int(prior.number) >= int(running_trial.number):
+            break
+        if not prior.state.is_finished():
+            raise RuntimeError("Optimizer resume發現running trial之前仍有未完成trial，禁止非決定性接續")
+        replay_study.add_trial(prior)
+    replay_trial = replay_study.ask()
+    if int(replay_trial.number) != int(running_trial.number):
+        raise RuntimeError("Optimizer resume trial numbering無法重建，禁止非決定性接續")
+    generated = {}
+    for name, distribution in dict(running_trial.distributions or {}).items():
+        generated[str(name)] = replay_trial._suggest(str(name), distribution)
+    if not _trial_params_match(generated, dict(running_trial.params or {})):
+        raise RuntimeError("Optimizer resume無法重建中斷trial的sampler state，禁止非決定性接續")
+    _restore_sampler_rng_snapshot(
+        sampler, sampler_kind, _sampler_rng_snapshot(replay_sampler, sampler_kind)
+    )
+
+
+def _restore_seeded_sampler_resume_state(optuna, *, study, sampler, sampler_kind: str, seed: int) -> None:
+    trials = list(getattr(study, "trials", []) or [])
+    if not trials:
+        return
+    attrs = _study_internal_attrs(study)
+    optuna_version = str(getattr(optuna, "__version__", ""))
+    post = dict(attrs.get(_OPTIMIZER_SAMPLER_POST_CHECKPOINT_KEY) or {})
+    pre = dict(attrs.get(_OPTIMIZER_SAMPLER_PRE_CHECKPOINT_KEY) or {})
+    running = [trial for trial in trials if not trial.state.is_finished()]
+    if len(running) > 1:
+        raise RuntimeError("Optimizer resume發現多個未完成trial；deterministic TPE只允許單一trial序列")
+
+    if running:
+        current = running[0]
+        trial_number = int(current.number)
+        if _checkpoint_compatible(
+            post, sampler_kind=sampler_kind, seed=int(seed), optuna_version=optuna_version, phase="post"
+        ) and int(post.get("trial_number", -1)) == trial_number:
+            _restore_sampler_rng_snapshot(sampler, sampler_kind, dict(post["rng"]))
+        elif _checkpoint_compatible(
+            pre, sampler_kind=sampler_kind, seed=int(seed), optuna_version=optuna_version, phase="pre"
+        ) and int(pre.get("trial_number", -1)) == trial_number:
+            _advance_sampler_over_running_trial(
+                optuna, sampler=sampler, sampler_kind=sampler_kind, seed=int(seed),
+                checkpoint=pre, study=study, running_trial=current,
+            )
+        elif not dict(current.params or {}):
+            previous = [trial for trial in trials if trial.state.is_finished()]
+            if previous and _checkpoint_compatible(
+                post, sampler_kind=sampler_kind, seed=int(seed), optuna_version=optuna_version, phase="post"
+            ) and int(post.get("trial_number", -1)) == int(previous[-1].number):
+                _restore_sampler_rng_snapshot(sampler, sampler_kind, dict(post["rng"]))
+            else:
+                raise RuntimeError("Optimizer resume缺少可恢復的sampler checkpoint")
+        else:
+            raise RuntimeError("Optimizer resume缺少中斷trial的sampler checkpoint")
+        study.tell(trial_number, state=optuna.trial.TrialState.FAIL)
+        trials = list(getattr(study, "trials", []) or [])
+        attrs = _study_internal_attrs(study)
+        post = dict(attrs.get(_OPTIMIZER_SAMPLER_POST_CHECKPOINT_KEY) or {})
+
+    last_trial = trials[-1]
+    if not last_trial.state.is_finished():
+        raise RuntimeError("Optimizer resume仍存在未完成trial")
+    post_matches_last = (
+        _checkpoint_compatible(
+            post,
+            sampler_kind=sampler_kind,
+            seed=int(seed),
+            optuna_version=optuna_version,
+            phase="post",
+        )
+        and int(post.get("trial_number", -1)) == int(last_trial.number)
+    )
+    if not post_matches_last:
+        pre_matches_last = (
+            _checkpoint_compatible(
+                pre,
+                sampler_kind=sampler_kind,
+                seed=int(seed),
+                optuna_version=optuna_version,
+                phase="pre",
+            )
+            and int(pre.get("trial_number", -1)) == int(last_trial.number)
+        )
+        if not pre_matches_last or not dict(last_trial.params or {}):
+            raise RuntimeError("Optimizer resume缺少與最後完成trial一致的sampler checkpoint")
+        _advance_sampler_over_running_trial(
+            optuna,
+            sampler=sampler,
+            sampler_kind=sampler_kind,
+            seed=int(seed),
+            checkpoint=pre,
+            study=study,
+            running_trial=last_trial,
+        )
+        _persist_sampler_checkpoint(
+            study=study,
+            sampler=sampler,
+            sampler_kind=sampler_kind,
+            seed=int(seed),
+            trial_number=int(last_trial.number),
+            phase="post",
+            optuna_version=optuna_version,
+        )
+        attrs = _study_internal_attrs(study)
+        post = dict(attrs.get(_OPTIMIZER_SAMPLER_POST_CHECKPOINT_KEY) or {})
+    _restore_sampler_rng_snapshot(sampler, sampler_kind, dict(post["rng"]))
+
+
 def create_optimizer_study(db_name, *, seed=None, sampler_kind="tpe"):
     try:
         import optuna
         from sqlalchemy.exc import SQLAlchemyError
 
+        sampler_key = str(sampler_kind or "tpe").strip().lower()
+        deterministic_resume = seed is not None and db_name is not None
+        sampler = (
+            _checkpointing_sampler(optuna, seed=seed, sampler_kind=sampler_key)
+            if deterministic_resume
+            else (
+                _plain_seeded_sampler(optuna, seed=int(seed), sampler_kind=sampler_key)
+                if seed is not None
+                else _checkpointing_sampler(optuna, seed=None, sampler_kind=sampler_key)
+            )
+        )
         create_kwargs = {
-            "study_name": "portfolio_optimization_overnight",
+            "study_name": (
+                _deterministic_optimizer_study_name(
+                    sampler_kind=sampler_key,
+                    optuna_version=str(getattr(optuna, "__version__", "")),
+                )
+                if deterministic_resume
+                else OPTIMIZER_LEGACY_STUDY_NAME
+            ),
             "direction": "maximize",
+            "sampler": sampler,
         }
         if db_name is not None:
             create_kwargs["storage"] = db_name
             create_kwargs["load_if_exists"] = True
-        sampler_key = str(sampler_kind or "tpe").strip().lower()
-        if sampler_key == "random":
-            create_kwargs["sampler"] = optuna.samplers.RandomSampler(seed=(None if seed is None else int(seed)))
-        elif seed is not None:
-            create_kwargs["sampler"] = optuna.samplers.TPESampler(seed=int(seed))
 
-        return optuna.create_study(**create_kwargs)
+        study = optuna.create_study(**create_kwargs)
+        if deterministic_resume and db_name is not None:
+            attrs = _study_internal_attrs(study)
+            persisted_checkpoint = dict(
+                attrs.get(_OPTIMIZER_SAMPLER_POST_CHECKPOINT_KEY)
+                or attrs.get(_OPTIMIZER_SAMPLER_PRE_CHECKPOINT_KEY)
+                or {}
+            )
+            persisted_seed = persisted_checkpoint.get("seed")
+            if list(getattr(study, "trials", []) or []) and persisted_seed is not None:
+                resolved_persisted_seed = int(persisted_seed)
+                if resolved_persisted_seed != int(seed):
+                    sampler = _checkpointing_sampler(
+                        optuna, seed=resolved_persisted_seed, sampler_kind=sampler_key
+                    )
+                    study.sampler = sampler
+                    seed = resolved_persisted_seed
+            _restore_seeded_sampler_resume_state(
+                optuna, study=study, sampler=sampler, sampler_kind=sampler_key, seed=int(seed)
+            )
+        return study
     except ModuleNotFoundError as exc:
         raise RuntimeError(f"Optimizer 記憶庫開啟失敗: {format_exception_summary(exc, include_traceback=False)}") from exc
     except (sqlite3.Error, SQLAlchemyError, RuntimeError, ValueError, OSError) as exc:
@@ -93,14 +430,11 @@ def resolve_optimizer_single_fold_search_parallel_trials(environ=None, *, sample
         resolved = int(default_trials)
     resolved = max(1, min(16, resolved))
     sampler_text = str(sampler_kind or "").strip().lower()
-    if sampler_text == "tpe" and resolved > 1:
-        allow_tpe_parallel = _env_flag_for_optimizer_runtime(
-            environ,
-            "OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH",
-            is_optimizer_single_fold_tpe_parallel_search_allowed_default(),
-        )
-        if not allow_tpe_parallel:
-            return 1
+    if sampler_text == "tpe":
+        # TPE is history-dependent. Parallel trials can observe different completed-history
+        # frontiers and therefore change the scientific trial sequence. Keep intra-study
+        # TPE strictly sequential; parallelism belongs at the independent fold/seed level.
+        return 1
     return int(resolved)
 
 def ensure_optimizer_db_usable(db_file):

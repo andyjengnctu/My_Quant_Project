@@ -25,7 +25,6 @@ from core.training_performance import (
     resolve_optimizer_local_min_signal_dependency_field_order,
     resolve_optimizer_outer_rolling_study_storage_default,
     is_optimizer_resource_write_csv_enabled,
-    is_optimizer_single_fold_tpe_parallel_search_allowed_default,
     resolve_optimizer_feature_bank_max_items_default,
     resolve_optimizer_resource_disk_mbps_cap,
     resolve_optimizer_resource_sample_interval_sec,
@@ -152,7 +151,7 @@ def _format_parallel_settings_line(environ, *, fold_workers: int, sampler_kind: 
 def _build_training_performance_alignment_rows(environ, *, fold_count: int, fold_workers: int, sampler_kind: str) -> list[dict]:
     rolling_workers_text = _env_value_for_display(environ, "OPTIMIZER_ROLLING_FOLD_WORKERS", str(int(fold_workers)))
     search_parallel_trials_text = str(_resolve_single_fold_search_parallel_trials(environ, sampler_kind=sampler_kind))
-    allow_tpe_parallel = "on" if _env_flag(environ, "OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH", is_optimizer_single_fold_tpe_parallel_search_allowed_default()) else "off"
+    allow_tpe_parallel = "off (deterministic)" if str(sampler_kind or "").strip().lower() == "tpe" else "n/a"
     local_min_workers_text = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", str(resolve_optimizer_single_fold_local_min_parallel_workers_default()))
     local_min_process_workers_text = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", str(resolve_optimizer_single_fold_local_min_process_workers_default()))
     parallel_cache_text = _env_value_for_display(
@@ -207,7 +206,7 @@ def _build_training_performance_alignment_rows(environ, *, fold_count: int, fold
             "normal_mode": f"{search_parallel_trials_text}, tpe_parallel={allow_tpe_parallel}",
             "timing_mode": f"{search_parallel_trials_text}, tpe_parallel={allow_tpe_parallel}",
             "consistent": True,
-            "result_scope": "控制同一 fold 內 Optuna trial 併發；TPE 預設保護為 1，避免 trial 序列漂移",
+            "result_scope": "控制同一 fold 內 Optuna trial 併發；TPE 強制為 1，確保不中斷／resume trial 序列一致",
             "display": "console plan / timing JSON summary: single_fold_search_parallel_trials",
         },
         {

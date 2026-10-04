@@ -12393,3 +12393,27 @@ Decision：`FORWARD_OOS_12M_RESTORED / ROLLING_PARTIAL_TAIL_EXPLICIT_CAP / P11_I
 - **Scientific boundary**：純observability；不改P11/C90 patience、N* selection、sampler、score、trial順序、validation replay、OOS boundary或artifact identity。
 
 Decision：`ENGINEERING_ONLY / ROLLING_EARLY_STOP_TRIAL_VISIBLE / SCIENTIFIC_SEMANTICS_UNCHANGED`。
+
+## 2026-10-04 — Optimizer deterministic resume correction（engineering-only）
+
+- **User requirement**：使用者明確指出fresh／resume不應成為使用者選項；同一experiment identity、同一seed、同一資料與scientific contract，無論不中斷或process中斷後resume都必須產生相同trial trajectory。此要求依`PROJECT_SETTINGS` performance/determinism contract視為內部correctness，不建立新的Research選項。
+- **Observed defect**：既有P10/C89曾在T4 callback crash後由SQLite `validation search 4/300`接續。Optuna storage保存completed trial history，但舊runtime重新建立`TPESampler(seed=42)`時沒有恢復原process內TPE RNG與startup RandomSampler RNG游標，造成resume後T5起與不中斷fresh trajectory分叉；因此歷史C89與fresh C90不能視為matched-trial純patience A/B。
+- **Correction**：`services/optimizer/runtime.py`對所有seeded persistent Optuna study建立resume-safe internal study namespace，study name包含sampler kind與Optuna version。每個trial suggestion前後保存sampler RNG checkpoint；正常resume直接恢復post-checkpoint。若硬中斷留下RUNNING trial，runtime由pre-checkpoint＋SQLite已存params重建該trial的sampler advancement，將未完成trial標記FAIL後從正確RNG state續跑；若trial state已完成但post checkpoint缺失，同樣從pre checkpoint重建，不要求使用者刪DB或選fresh。
+- **Legacy safety**：修正前、沒有RNG checkpoint的legacy study不得假裝可精確resume；舊study與trials完整保留供audit，但runtime自動切到versioned resume-safe internal study namespace重新建立可證明deterministic的trajectory。這是內部migration，不新增menu選項，也不覆寫舊evidence。Persisted checkpoint seed為該study權威seed，read/export caller的不同seed不得改寫既有trajectory。
+- **Parallelism invariant**：TPE是history-dependent；同一study內parallel trial可能看到不同completed-history frontier，因此現在無論config／environment如何設定，TPE intra-study `n_jobs`強制為1。性能平行化只放在互相獨立的fold／seed層，符合「performance knob不得改optimizer updates／determinism」的既有專案契約。
+- **Regression evidence**：checkpoint wrapper fresh 30 trials與原生`TPESampler(seed=42)` exact-match；30 uninterrupted vs 15＋關閉／重開study＋15 exact-match；實際不同Python process 30 vs 15＋process restart＋15 exact-match；abandoned RUNNING trial recovery exact-match；finished-with-missing-post-checkpoint recovery exact-match；RandomSampler resume exact-match；legacy study保留且新safe study從0建立；TPE parallel override被強制解析為1。Capability synthetic=`10/10 PASS`，Optimizer objective/export=`45/45 PASS`，walk-forward policy=`131/131 PASS`。
+- **Scientific impact**：fresh-run sampler algorithm、seed、search space、objective、score、validation、N*、selector、P10/P11 identity均不變。本修正只使中斷／resume回到原本應有的scientific trajectory。既有C89/C90歷史結果不追溯改寫；若要做strict patience A/B，仍需在此修正後重新取得matched execution evidence。
+
+Decision：`ENGINEERING_ONLY / RESUME_MUST_EQUAL_UNINTERRUPTED / RNG_CHECKPOINT_RESTORE / HARD_INTERRUPT_RECOVERY / LEGACY_STUDY_PRESERVED / TPE_INTRA_STUDY_FORCED_SEQUENTIAL / NO_USER_FRESH_RESUME_CHOICE / SCIENTIFIC_IDENTITIES_UNCHANGED`.
+
+## 2026-10-04 — P10/C89 legacy nondeterministic-resume evidence automatic invalidation/rebuild
+
+- **Trigger / user requirement**：使用者明確指出resume是否發生屬內部實作細節，不能要求使用者選fresh/retrain來維持研究正確性。既有P10/C89首次建立曾在T4 callback crash後由舊runtime resume；該runtime未保存TPE primary RNG與startup RandomSampler RNG游標，因此其published C89只能保留為historical audit evidence，不再符合current strict patience-control reuse條件。
+- **Generic execution-evidence contract**：Optimizer runtime公開versioned execution contract=`optimizer_resume_determinism_v1`。Registered validation profile可用engineering-only `requires_resume_safe_execution_evidence`宣告current artifact reuse必須帶此stamp；P10開啟此guard，P11既有fresh evidence不因本修正被誤判。此欄位不進scientific fingerprint，P10 seed/search space/objective/score/selector/validation/patience/N*/OOS語意與identity全部不變。
+- **Automatic stale handling**：canonical inspector若發現required execution stamp缺失／不符，回傳`OPTIMIZER_EXECUTION_EVIDENCE_STALE`與`REBUILD`。Strategy Compare prerequisite沿用既有canonical producer自動執行，不新增fresh/resume或P10專用使用者選項，也不要求刪SQLite。
+- **Repair lifecycle**：首次repair前將舊published P10 artifact與identity manifest依artifact SHA封存至Optimizer workspace的`execution_evidence_archive/`；實際重建使用固定`execution_evidence_rebuilds/optimizer_resume_determinism_v1/` workspace。該workspace本身受deterministic-resume保護，故repair若中斷，下次正常流程會接續同一trajectory；只有完整build成功後才更新canonical artifact／manifest並寫入execution contract stamp，失敗或中斷不先破壞舊published bytes。
+- **Current evidence interpretation**：既有C89 Rolling=`150.53%/21.76%/6.92`與其fold diagnostics仍保留歷史紀錄，但不再作current `C90-C89` strict matched control。C90/P11既有fresh deterministic evidence保留。待正常Strategy Compare自動完成P10 repair後，再以新的C89 current evidence進行patience50 vs100解讀；不得把本工程修正本身解讀為新的scientific arm。
+- **Regression contract**：synthetic validation涵蓋legacy P10 artifact → `OPTIMIZER_EXECUTION_EVIDENCE_STALE/REBUILD` → stable repair workspace + `resume_parameter_training=True` → canonical manifest寫入`optimizer_resume_determinism_v1` → `READY/REUSE` lifecycle，並保留既有walk-forward、Strategy Compare config與report contracts。
+
+Decision：`ENGINEERING_ONLY / C89_CURRENT_EVIDENCE_AUTO_REBUILD / LEGACY_EVIDENCE_PRESERVED / NO_USER_FRESH_RESUME_CHOICE / P10_IDENTITY_UNCHANGED / CANONICAL_PUBLISH_ONLY_AFTER_SUCCESS`。
+

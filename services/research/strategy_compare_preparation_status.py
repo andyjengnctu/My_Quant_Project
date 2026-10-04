@@ -1069,13 +1069,23 @@ def _collect_parameter_artifact_status(
                 resumable=False,
             )
         )
+        execution_evidence_stale = any(
+            str(row.get("status") or "") == "OPTIMIZER_EXECUTION_EVIDENCE_STALE"
+            for row in policy_rows.values()
+        )
         if action == "REUSE":
             description = "重用既有策略參數工件"
             builder_type = None
         elif action in {"BUILD", "REBUILD", "RESUME"}:
             if builder is None:
                 raise RuntimeError(f"策略參數action={action}卻缺少builder: {source_id}")
-            if builder.builder_type in {
+            if execution_evidence_stale:
+                description = (
+                    "舊Optimizer resume evidence不可證明deterministic；"
+                    "由canonical producer自動以resume-safe execution重建"
+                    f"｜policies={','.join(policies)}"
+                )
+            elif builder.builder_type in {
                 "canonical_optimizer_strategy_params",
                 "optimizer_validation_budget_refit_strategy_params",
                 "optimizer_fixed_multiseed_strategy_params",

@@ -96,6 +96,7 @@ class StrategyParamTrainingProfile:
     validation_protocol: str | None
     fitting_seed_protocol: str
     artifact_slug: str | None
+    requires_resume_safe_execution_evidence: bool
     registered_scientific_fingerprint_sha256: str | None
 
 
@@ -360,6 +361,9 @@ def get_strategy_param_training_profile(profile_id: str) -> StrategyParamTrainin
         validation_protocol=protocol,
         fitting_seed_protocol=fitting_seed_protocol,
         artifact_slug=artifact_slug,
+        requires_resume_safe_execution_evidence=bool(
+            raw.get("requires_resume_safe_execution_evidence", False)
+        ),
         registered_scientific_fingerprint_sha256=registered_scientific_fingerprint_sha256,
     )
 

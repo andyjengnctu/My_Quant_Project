@@ -38,7 +38,13 @@ from services.optimizer.objective_runner import run_optimizer_objective
 from tools.optimizer.session import OptimizerSession
 from tools.optimizer import callbacks as optimizer_callbacks, study_utils
 from services.portfolio_sim.reporting import print_yearly_return_report
-from tools.optimizer.runtime import export_best_params_if_requested
+from tools.optimizer.runtime import (
+    OPTIMIZER_DETERMINISTIC_RESUME_STUDY_NAME,
+    OPTIMIZER_LEGACY_STUDY_NAME,
+    create_optimizer_study,
+    export_best_params_if_requested,
+    resolve_optimizer_single_fold_search_parallel_trials,
+)
 from tools.optimizer.score_display import format_optimizer_score_for_display
 from services.optimizer.outer_rolling_formatting import _format_system_score_compare_plain
 from tools.optimizer.study_utils import (
@@ -1728,6 +1734,246 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
     return results, summary
 
 
+
+def validate_optimizer_sampler_resume_determinism_case(_base_params):
+    case_id = "OPTIMIZER_SAMPLER_RESUME_DETERMINISM"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    import optuna
+
+    previous_verbosity = optuna.logging.get_verbosity()
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    def _objective(trial):
+        alpha = trial.suggest_int("alpha", 1, 12)
+        beta = trial.suggest_float("beta", 0.0, 1.0)
+        mode = trial.suggest_categorical("mode", ["a", "b", "c"])
+        gamma = trial.suggest_float("gamma", 1e-3, 1.0, log=True)
+        return float(alpha) + float(beta) + (0.0 if mode == "a" else 1.0) + float(gamma)
+
+    def _signature(study):
+        return [
+            (
+                int(trial.number),
+                tuple((str(key), value) for key, value in dict(trial.params or {}).items()),
+                None if trial.value is None else float(trial.value),
+                str(trial.state.name),
+            )
+            for trial in list(study.trials or [])
+        ]
+
+    try:
+        with TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            uninterrupted_storage = f"sqlite:///{temp_root / 'uninterrupted.db'}"
+            resumed_storage = f"sqlite:///{temp_root / 'resumed.db'}"
+            legacy_storage = f"sqlite:///{temp_root / 'legacy.db'}"
+
+            uninterrupted = create_optimizer_study(
+                uninterrupted_storage, seed=42, sampler_kind="tpe"
+            )
+            uninterrupted.optimize(_objective, n_trials=30)
+
+            plain_sampler_reference = optuna.create_study(
+                direction="maximize", sampler=optuna.samplers.TPESampler(seed=42)
+            )
+            plain_sampler_reference.optimize(_objective, n_trials=30)
+            add_check(
+                results,
+                "strategy_contract",
+                case_id,
+                "resume_checkpointing_does_not_change_fresh_tpe_trial_sequence",
+                _signature(plain_sampler_reference),
+                _signature(uninterrupted),
+            )
+
+            resumed = create_optimizer_study(resumed_storage, seed=42, sampler_kind="tpe")
+            resumed.optimize(_objective, n_trials=15)
+            resumed = create_optimizer_study(resumed_storage, seed=42, sampler_kind="tpe")
+            check_before = len(list(resumed.trials or []))
+            resumed.optimize(_objective, n_trials=15)
+
+            add_check(
+                results,
+                "strategy_contract",
+                case_id,
+                "seeded_tpe_resume_preserves_existing_trial_count",
+                15,
+                check_before,
+            )
+            add_check(
+                results,
+                "strategy_contract",
+                case_id,
+                "seeded_tpe_uninterrupted_and_resume_trial_sequence_exact_match",
+                _signature(uninterrupted),
+                _signature(resumed),
+            )
+
+            system_attrs = dict(
+                resumed._storage.get_study_system_attrs(resumed._study_id) or {}
+            )
+            add_check(
+                results,
+                "strategy_contract",
+                case_id,
+                "seeded_tpe_resume_persists_pre_and_post_rng_checkpoints",
+                True,
+                "optimizer_sampler_rng_pre_v1" in system_attrs
+                and "optimizer_sampler_rng_post_v1" in system_attrs,
+            )
+
+            persisted_seed_storage = f"sqlite:///{temp_root / 'persisted_seed.db'}"
+            persisted_seed_reference = create_optimizer_study(
+                None, seed=123, sampler_kind="tpe"
+            )
+            persisted_seed_reference.optimize(_objective, n_trials=6)
+            persisted_seed_study = create_optimizer_study(
+                persisted_seed_storage, seed=123, sampler_kind="tpe"
+            )
+            persisted_seed_study.optimize(_objective, n_trials=5)
+            persisted_seed_study = create_optimizer_study(
+                persisted_seed_storage, seed=0, sampler_kind="tpe"
+            )
+            persisted_seed_study.optimize(_objective, n_trials=1)
+            add_check(
+                results,
+                "strategy_contract",
+                case_id,
+                "persisted_study_seed_overrides_resume_call_seed",
+                _signature(persisted_seed_reference),
+                _signature(persisted_seed_study),
+            )
+
+            legacy = optuna.create_study(
+                study_name=OPTIMIZER_LEGACY_STUDY_NAME,
+                storage=legacy_storage,
+                load_if_exists=True,
+                direction="maximize",
+                sampler=optuna.samplers.TPESampler(seed=42),
+            )
+            legacy.optimize(_objective, n_trials=5)
+            migrated = create_optimizer_study(legacy_storage, seed=42, sampler_kind="tpe")
+            preserved_legacy = optuna.load_study(
+                study_name=OPTIMIZER_LEGACY_STUDY_NAME, storage=legacy_storage
+            )
+            add_check(
+                results,
+                "strategy_contract",
+                case_id,
+                "legacy_non_checkpointed_study_is_preserved_but_not_resumed",
+                (True, 0, 5),
+                (
+                    str(migrated.study_name).startswith(OPTIMIZER_DETERMINISTIC_RESUME_STUDY_NAME),
+                    len(list(migrated.trials or [])),
+                    len(list(preserved_legacy.trials or [])),
+                ),
+            )
+
+            random_uninterrupted_storage = f"sqlite:///{temp_root / 'random_uninterrupted.db'}"
+            random_resumed_storage = f"sqlite:///{temp_root / 'random_resumed.db'}"
+            random_uninterrupted = create_optimizer_study(
+                random_uninterrupted_storage, seed=42, sampler_kind="random"
+            )
+            random_uninterrupted.optimize(_objective, n_trials=20)
+            random_resumed = create_optimizer_study(
+                random_resumed_storage, seed=42, sampler_kind="random"
+            )
+            random_resumed.optimize(_objective, n_trials=10)
+            random_resumed = create_optimizer_study(
+                random_resumed_storage, seed=42, sampler_kind="random"
+            )
+            random_resumed.optimize(_objective, n_trials=10)
+            add_check(
+                results,
+                "strategy_contract",
+                case_id,
+                "seeded_random_uninterrupted_and_resume_trial_sequence_exact_match",
+                _signature(random_uninterrupted),
+                _signature(random_resumed),
+            )
+
+            running_reference_storage = f"sqlite:///{temp_root / 'running_reference.db'}"
+            running_recovery_storage = f"sqlite:///{temp_root / 'running_recovery.db'}"
+
+            def _suggest_crash_prefix(trial):
+                trial.suggest_int("alpha", 1, 12)
+                trial.suggest_float("beta", 0.0, 1.0)
+                trial.suggest_categorical("mode", ["a", "b", "c"])
+
+            running_reference = create_optimizer_study(
+                running_reference_storage, seed=42, sampler_kind="tpe"
+            )
+            reference_trial = running_reference.ask()
+            _suggest_crash_prefix(reference_trial)
+            running_reference.tell(reference_trial, state=optuna.trial.TrialState.FAIL)
+            running_reference.optimize(_objective, n_trials=10)
+
+            running_recovery = create_optimizer_study(
+                running_recovery_storage, seed=42, sampler_kind="tpe"
+            )
+            abandoned_trial = running_recovery.ask()
+            _suggest_crash_prefix(abandoned_trial)
+            running_recovery = create_optimizer_study(
+                running_recovery_storage, seed=42, sampler_kind="tpe"
+            )
+            running_recovery.optimize(_objective, n_trials=10)
+            add_check(
+                results,
+                "strategy_contract",
+                case_id,
+                "seeded_tpe_hard_restart_recovers_abandoned_running_trial_deterministically",
+                _signature(running_reference),
+                _signature(running_recovery),
+            )
+
+            missing_post_reference_storage = f"sqlite:///{temp_root / 'missing_post_reference.db'}"
+            missing_post_recovery_storage = f"sqlite:///{temp_root / 'missing_post_recovery.db'}"
+            missing_post_reference = create_optimizer_study(
+                missing_post_reference_storage, seed=42, sampler_kind="tpe"
+            )
+            missing_post_reference.optimize(_objective, n_trials=20)
+            missing_post_recovery = create_optimizer_study(
+                missing_post_recovery_storage, seed=42, sampler_kind="tpe"
+            )
+            missing_post_recovery.optimize(_objective, n_trials=8)
+            missing_post_recovery._storage.set_study_system_attr(
+                missing_post_recovery._study_id, "optimizer_sampler_rng_post_v1", {}
+            )
+            missing_post_recovery = create_optimizer_study(
+                missing_post_recovery_storage, seed=42, sampler_kind="tpe"
+            )
+            missing_post_recovery.optimize(_objective, n_trials=12)
+            add_check(
+                results,
+                "strategy_contract",
+                case_id,
+                "seeded_tpe_resume_recovers_finished_trial_when_post_checkpoint_is_missing",
+                _signature(missing_post_reference),
+                _signature(missing_post_recovery),
+            )
+
+            add_check(
+                results,
+                "strategy_contract",
+                case_id,
+                "tpe_parallel_override_cannot_break_deterministic_trial_sequence",
+                1,
+                resolve_optimizer_single_fold_search_parallel_trials(
+                    {
+                        "OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS": "8",
+                        "OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH": "1",
+                    },
+                    sampler_kind="tpe",
+                ),
+            )
+    finally:
+        optuna.logging.set_verbosity(previous_verbosity)
+
+    summary["checks"] = len(results)
+    return results, summary
+
 def validate_optimizer_session_milestone_cache_case(_base_params):
     case_id = "OPTIMIZER_SESSION_MILESTONE_CACHE"
     results = []
@@ -2324,6 +2570,199 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and plateau_best_patience100_spec.as_dict()["patience_trials"]
             != plateau_best_validation_spec.as_dict()["patience_trials"],
     )
+    check(
+        "strategy_param_p10_requires_resume_safe_execution_evidence_without_scientific_change",
+        True,
+        plateau_best_validation_param_profile.requires_resume_safe_execution_evidence
+        and not plateau_best_patience100_param_profile.requires_resume_safe_execution_evidence,
+    )
+
+    from config.execution_policy import (
+        DEFAULT_FIXED_RISK as _DEFAULT_FIXED_RISK,
+        DEFAULT_MAX_POSITION_CAP_PCT as _DEFAULT_MAX_POSITION_CAP_PCT,
+        DEFAULT_PORTFOLIO_MAX_POSITIONS as _DEFAULT_PORTFOLIO_MAX_POSITIONS,
+        DEFAULT_PORTFOLIO_ROTATION as _DEFAULT_PORTFOLIO_ROTATION,
+    )
+    from core.strategy_param_artifacts import compute_strategy_param_file_sha256 as _param_file_sha
+    from services.optimizer.strategy_param_service import (
+        _validation_budget_build_contract as _validation_build_contract,
+        ensure_validation_budget_strategy_parameter_artifact as _ensure_validation_artifact,
+        inspect_validation_budget_strategy_parameter_artifact as _inspect_validation_artifact,
+        validation_budget_strategy_param_artifact_path as _validation_artifact_path,
+        validation_budget_strategy_param_manifest_path as _validation_manifest_path,
+    )
+
+    with TemporaryDirectory() as _resume_safe_temp:
+        _resume_safe_root = Path(_resume_safe_temp)
+        _p10_policy = "base-finalist-best"
+        _p10_set = "PARAM-P10"
+        _p10_protocol = "validation_plateau_best_refit_v1"
+        _p10_target = _validation_artifact_path(
+            _resume_safe_root, policy=_p10_policy,
+            parameter_set_identity=_p10_set, validation_protocol_id=_p10_protocol,
+        )
+        _p10_manifest = _validation_manifest_path(
+            _resume_safe_root, parameter_set_identity=_p10_set,
+            validation_protocol_id=_p10_protocol,
+        )
+        _p10_target.parent.mkdir(parents=True, exist_ok=True)
+        _p10_payload = {
+            "schema_type": "optimizer_active_param_ensemble",
+            "schema_version": 1,
+            "mode": "rolling",
+            "type": "active_param_ensemble",
+            "selector": "base_finalist_best",
+            "params_ensemble_by_effective_date": {
+                "2021-01-01": [{"seed": 42, "params": {"high_len": 200}}]
+            },
+            "folds": [{
+                "oos_start_date": "2021-01-01",
+                "oos_end_date": "2021-12-31",
+            }],
+            "breakout_quality_param_adaptation": {
+                "parameter_set": _p10_set,
+                "training_dl_enabled": False,
+                "optimizer_search_protocol": _p10_protocol,
+            },
+        }
+        _p10_target.write_text(json.dumps(_p10_payload), encoding="utf-8")
+        _legacy_p10_sha = _param_file_sha(_p10_target)
+        _p10_contract = _validation_build_contract(
+            family="full", dataset="full",
+            max_positions=int(_DEFAULT_PORTFOLIO_MAX_POSITIONS),
+            rotation=str(_DEFAULT_PORTFOLIO_ROTATION),
+            fixed_risk=float(_DEFAULT_FIXED_RISK),
+            max_position_cap_pct=float(_DEFAULT_MAX_POSITION_CAP_PCT),
+            parameter_set_identity=_p10_set, validation_protocol_id=_p10_protocol,
+        )
+        _p10_manifest.write_text(json.dumps({
+            "schema_type": "strategy_parameter_research_identity",
+            "schema_version": 1,
+            "producer": "optimizer",
+            "training_dl_enabled": False,
+            "parameter_set": _p10_set,
+            "family": "full",
+            "policy": _p10_policy,
+            "optimizer_search_protocol": _p10_protocol,
+            "build_contract": _p10_contract,
+            "artifact_path": _p10_target.relative_to(_resume_safe_root).as_posix(),
+            "artifact_sha256": _legacy_p10_sha,
+            "coverage_end": "2021-12-31",
+            "production_promotion": False,
+        }), encoding="utf-8")
+        _legacy_p10_state = _inspect_validation_artifact(
+            _resume_safe_root, policy=_p10_policy, comparison_end_date="2021-12-31",
+            dataset="full", max_positions=int(_DEFAULT_PORTFOLIO_MAX_POSITIONS),
+            rotation=str(_DEFAULT_PORTFOLIO_ROTATION), fixed_risk=float(_DEFAULT_FIXED_RISK),
+            max_position_cap_pct=float(_DEFAULT_MAX_POSITION_CAP_PCT),
+            parameter_set_identity=_p10_set, validation_protocol_id=_p10_protocol,
+        )
+        _failed_repair_call = {}
+
+        def _fake_invalid_p10_repair(**kwargs):
+            _failed_repair_call.update(kwargs)
+            _repair_root = Path(kwargs["output_relative_dir"])
+            _repair_source = _repair_root / "active_params" / "roos_base_best.json"
+            _repair_source.parent.mkdir(parents=True, exist_ok=True)
+            _invalid_payload = json.loads(json.dumps(_p10_payload))
+            _invalid_payload["folds"][0]["oos_end_date"] = "2021-01-01"
+            _repair_source.write_text(json.dumps(_invalid_payload), encoding="utf-8")
+            return {"params_path": _repair_source}
+
+        _failed_repair_raised = False
+        with patch(
+            "services.optimizer.strategy_param_training.prepare_selection_historical_full_roos_params",
+            side_effect=_fake_invalid_p10_repair,
+        ):
+            try:
+                _ensure_validation_artifact(
+                    _resume_safe_root, policy=_p10_policy, comparison_end_date="2021-12-31",
+                    dataset="full", max_positions=int(_DEFAULT_PORTFOLIO_MAX_POSITIONS),
+                    rotation=str(_DEFAULT_PORTFOLIO_ROTATION),
+                    fixed_risk=float(_DEFAULT_FIXED_RISK),
+                    max_position_cap_pct=float(_DEFAULT_MAX_POSITION_CAP_PCT),
+                    parameter_set_identity=_p10_set, validation_protocol_id=_p10_protocol,
+                )
+            except RuntimeError as exc:
+                _failed_repair_raised = "schedule coverage不足" in str(exc)
+        _canonical_after_failed_repair = json.loads(_p10_target.read_text(encoding="utf-8"))
+        _manifest_after_failed_repair = json.loads(_p10_manifest.read_text(encoding="utf-8"))
+        check(
+            "p10_failed_execution_evidence_repair_does_not_publish_invalid_canonical",
+            True,
+            _failed_repair_raised
+            and _canonical_after_failed_repair["params_ensemble_by_effective_date"]["2021-01-01"][0]["params"]["high_len"] == 200
+            and _manifest_after_failed_repair.get("artifact_sha256") == _legacy_p10_sha
+            and "optimizer_execution_evidence_contract" not in _manifest_after_failed_repair,
+        )
+
+        _repair_call = {}
+
+        def _fake_p10_repair(**kwargs):
+            _repair_call.update(kwargs)
+            _repair_root = Path(kwargs["output_relative_dir"])
+            _repair_source = _repair_root / "active_params" / "roos_base_best.json"
+            _repair_source.parent.mkdir(parents=True, exist_ok=True)
+            _rebuilt_payload = json.loads(json.dumps(_p10_payload))
+            _rebuilt_payload["params_ensemble_by_effective_date"]["2021-01-01"][0]["params"]["high_len"] = 260
+            _repair_source.write_text(json.dumps(_rebuilt_payload), encoding="utf-8")
+            return {"params_path": _repair_source}
+
+        with patch(
+            "services.optimizer.strategy_param_training.prepare_selection_historical_full_roos_params",
+            side_effect=_fake_p10_repair,
+        ):
+            _rebuilt_p10 = _ensure_validation_artifact(
+                _resume_safe_root, policy=_p10_policy, comparison_end_date="2021-12-31",
+                dataset="full", max_positions=int(_DEFAULT_PORTFOLIO_MAX_POSITIONS),
+                rotation=str(_DEFAULT_PORTFOLIO_ROTATION),
+                fixed_risk=float(_DEFAULT_FIXED_RISK),
+                max_position_cap_pct=float(_DEFAULT_MAX_POSITION_CAP_PCT),
+                parameter_set_identity=_p10_set, validation_protocol_id=_p10_protocol,
+            )
+        _rebuilt_p10_state = _inspect_validation_artifact(
+            _resume_safe_root, policy=_p10_policy, comparison_end_date="2021-12-31",
+            dataset="full", max_positions=int(_DEFAULT_PORTFOLIO_MAX_POSITIONS),
+            rotation=str(_DEFAULT_PORTFOLIO_ROTATION), fixed_risk=float(_DEFAULT_FIXED_RISK),
+            max_position_cap_pct=float(_DEFAULT_MAX_POSITION_CAP_PCT),
+            parameter_set_identity=_p10_set, validation_protocol_id=_p10_protocol,
+        )
+        _repair_relative = Path(_repair_call.get("output_relative_dir") or ".").resolve().relative_to(
+            _resume_safe_root.resolve()
+        ).as_posix()
+        _archive_root = (
+            _resume_safe_root
+            / "outputs/optimizer/strategy_param_schedule/experiments/param_p10_validation_plateau_best_refit"
+            / "execution_evidence_archive"
+            / _legacy_p10_sha
+        )
+        _archived_payload = json.loads((_archive_root / _p10_target.name).read_text(encoding="utf-8"))
+        _archived_manifest = json.loads((_archive_root / "identity_manifest.json").read_text(encoding="utf-8"))
+        check(
+            "p10_legacy_resume_evidence_is_archived_before_canonical_republish",
+            True,
+            _archive_root.is_dir()
+            and (_archive_root / "archive_metadata.json").is_file()
+            and _archived_payload["params_ensemble_by_effective_date"]["2021-01-01"][0]["params"]["high_len"] == 200
+            and _archived_manifest.get("artifact_sha256") == _legacy_p10_sha
+            and "optimizer_execution_evidence_contract" not in _archived_manifest
+            and json.loads(_p10_target.read_text(encoding="utf-8"))["params_ensemble_by_effective_date"]["2021-01-01"][0]["params"]["high_len"] == 260,
+        )
+        check(
+            "p10_legacy_resume_evidence_auto_rebuilds_in_stable_resume_safe_workspace",
+            True,
+            _legacy_p10_state["status"] == "OPTIMIZER_EXECUTION_EVIDENCE_STALE"
+            and _legacy_p10_state["action"] == "REBUILD"
+            and _rebuilt_p10.get("execution_evidence_rebuild") is True
+            and _repair_call.get("resume_parameter_training") is True
+            and _repair_relative.endswith(
+                "param_p10_validation_plateau_best_refit/execution_evidence_rebuilds/optimizer_resume_determinism_v1"
+            )
+            and _rebuilt_p10_state["status"] == "READY"
+            and _rebuilt_p10_state["action"] == "REUSE"
+            and _rebuilt_p10_state["actual_optimizer_execution_evidence_contract"]
+                == "optimizer_resume_determinism_v1",
+        )
     from filters.breakout_quality.strategy_optimizer_policy import build_outer_rolling_argv
     from services.optimizer.outer_rolling_plan import OuterRollingConfig, _build_rolling_folds, _resolve_config
 
