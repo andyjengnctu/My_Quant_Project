@@ -81,6 +81,7 @@ STRATEGY_COMPARE_DISPLAY_FULL_VALIDATION_PLATEAU_BEST_QUARTER_OFF_REFIT = "Full 
 STRATEGY_COMPARE_DISPLAY_FULL_PRODUCTION_MULTI_SEED = "Full Production-Style Fixed Multi-Seed"
 STRATEGY_COMPARE_DISPLAY_FULL_MULTI_SEED_8X300 = "Full Fixed Multi-Seed 8x300"
 STRATEGY_COMPARE_DISPLAY_FULL_MULTI_SEED_4X1000 = "Full Fixed Multi-Seed 4x1000"
+STRATEGY_COMPARE_DISPLAY_FULL_TRADING_ALIGNED_8X1000 = "Full Base-Finalists-Agree 8x1000"
 STRATEGY_COMPARE_DISPLAY_MIN_FINALISTS_AGREE = "Min Base-Finalists-Agree"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13E_SCORE_CONSTRAINED = "Min MR-13E Constrained"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13E_K_FLEX_R0 = "Min MR-13E K-Flex R0 Exact (Compute-Blocked)"
@@ -108,6 +109,17 @@ STRATEGY_COMPARE_DISPLAY_MIN_MR13AK_NO_K_NO_R0 = "Min MR-13AK No-K No-R0"
 # Current Compare Suite是「比較誰／比較哪些差」的唯一真理來源。
 # OOS／Rolling／single-seed／multi-seed都只能引用suite，不得各自再列current arm matrix。
 STRATEGY_COMPARE_SUITES = {
+    "non_dl_trading_aligned_8x1000_current": {
+        # Human-facing comparison order is numeric ascending by contract.
+        "arm_ids": ("C58", "C61", "C85", "C92"),
+        "contrast_ids": ("C85-C61", "C85-C58", "C92-C85", "C92-C61", "C92-C58"),
+        "display_name_bases": {
+            "C58": "Min Base-Finalist-Best",
+            "C61": "Full Base-Finalist-Best",
+            "C85": "Full Base-Finalists-Agree 4x300",
+            "C92": "Full Base-Finalists-Agree 8x1000",
+        },
+    },
     "non_dl_production_multiseed_current": {
         "arm_ids": ("C85", "C86", "C87", "C62", "C61", "C58"),
         "contrast_ids": (
@@ -624,6 +636,60 @@ STRATEGY_COMPARE_PROFILES = {
             "C58": "min_rolling",
         },
     },
+    "non_dl_trading_aligned_8x1000_oos": {
+        "label": "Non-DL Trading-Aligned 8x1000 | OOS Test",
+        "description": (
+            "Round-10 non-validation comparison：保留C58/C61/C85 references，新增C92 Full/formal/"
+            "base-finalists-agree 8 fixed Research seeds × 1000 trials/seed。fitting budget與目前Trading"
+            "production一致；Research固定seed bundle只為可重現，不宣稱逐次重現Trading random seeds。"
+        ),
+        "display_alignment_group": "non_dl_trading_aligned_8x1000",
+        "suite_id": "non_dl_trading_aligned_8x1000_current",
+        "display_suffix": "OOS",
+        "start_date": "2021-01-01",
+        "end_date": "2026-03-02",
+        "point_in_time_score_start_date": _ROLLING_OOS.score_start_date,
+        "point_in_time_score_end_date": _ROLLING_OOS.score_end_date,
+        "point_in_time_fold_months": int(_ROLLING_OOS.fold_months),
+        "point_in_time_fold_anchor_date": _ROLLING_OOS.fold_anchor_date,
+        "point_in_time_single_score_block": bool(_ROLLING_OOS.single_score_block),
+        "point_in_time_dirname": _ROLLING_OOS.point_in_time_dirname,
+        "output_root": "outputs/strategy_compare/non_dl_trading_aligned_8x1000/oos_2021_forward",
+        "reuse_output_roots": (),
+        "arm_param_source_overrides": {
+            "C58": "min_oos",
+            "C61": "full_oos",
+            "C85": "full_production_multiseed_oos_experiment",
+            "C92": "full_trading_aligned_8x1000_oos_experiment",
+        },
+    },
+    "non_dl_trading_aligned_8x1000_rolling": {
+        "label": "Non-DL Trading-Aligned 8x1000 | Rolling Test",
+        "description": (
+            "Round-10 primary PIT comparison：C92使用Full/formal/base-finalists-agree、120M selection、"
+            "8 fixed Research seeds × 1000 trials/seed、validation off；與目前Trading production的"
+            "fitting budget/selector一致，僅固定Research seed bundle以維持可重現。C89/C91/C62退出current。"
+        ),
+        "display_alignment_group": "non_dl_trading_aligned_8x1000",
+        "suite_id": "non_dl_trading_aligned_8x1000_current",
+        "display_suffix": "Rolling",
+        "start_date": "2021-01-01",
+        "end_date": "2026-03-02",
+        "point_in_time_score_start_date": _ROLLING_ROLLING.score_start_date,
+        "point_in_time_score_end_date": _ROLLING_ROLLING.score_end_date,
+        "point_in_time_fold_months": int(_ROLLING_ROLLING.fold_months),
+        "point_in_time_fold_anchor_date": _ROLLING_ROLLING.fold_anchor_date,
+        "point_in_time_single_score_block": bool(_ROLLING_ROLLING.single_score_block),
+        "point_in_time_dirname": _ROLLING_ROLLING.point_in_time_dirname,
+        "output_root": "outputs/strategy_compare/non_dl_trading_aligned_8x1000/rolling_2021_forward",
+        "reuse_output_roots": (),
+        "arm_param_source_overrides": {
+            "C58": "min_rolling",
+            "C61": "full_rolling",
+            "C85": "full_production_multiseed_rolling_experiment",
+            "C92": "full_trading_aligned_8x1000_rolling_experiment",
+        },
+    },
     # Legacy evaluation policies retained only for historical replay / artifact interpretation.
     "selection_pit": {
         "label": "Selection PIT 策略比較",
@@ -1057,6 +1123,50 @@ STRATEGY_EXPERIMENTAL_PARAM_SOURCES = {
             "options": {"training_profile_id": "production_multiseed_4x1000_compare"},
         },
     },
+    "full_trading_aligned_8x1000_oos_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p13_trading_aligned_8x1000/{param_filename}",
+        "description": (
+            "PARAM-P13 optimizer-owned Trading-aligned fixed 8-seed x 1000-trial schedule；"
+            "OOS只freeze消費同一physical truth。"
+        ),
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p13_trading_aligned_8x1000/identity_manifest.json",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "oos",
+        "artifact_contract": {
+            "breakout_quality_param_adaptation": {
+                "parameter_set": "PARAM-P13",
+                "training_dl_enabled": False,
+                "optimizer_search_protocol": "fixed_multiseed_v1",
+            }
+        },
+        "builder": {
+            "enabled": True,
+            "builder_type": "optimizer_fixed_multiseed_strategy_params",
+            "options": {"training_profile_id": "trading_aligned_8x1000_current"},
+        },
+    },
+    "full_trading_aligned_8x1000_rolling_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p13_trading_aligned_8x1000/{param_filename}",
+        "description": (
+            "PARAM-P13 optimizer-owned Trading-aligned fixed 8-seed x 1000-trial schedule；"
+            "Rolling以date-effective語意消費同一physical truth。"
+        ),
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p13_trading_aligned_8x1000/identity_manifest.json",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "rolling",
+        "artifact_contract": {
+            "breakout_quality_param_adaptation": {
+                "parameter_set": "PARAM-P13",
+                "training_dl_enabled": False,
+                "optimizer_search_protocol": "fixed_multiseed_v1",
+            }
+        },
+        "builder": {
+            "enabled": True,
+            "builder_type": "optimizer_fixed_multiseed_strategy_params",
+            "options": {"training_profile_id": "trading_aligned_8x1000_current"},
+        },
+    },
     "full_validation_plateau_oos_experiment": {
         "path_template": "models/research/breakout_quality/strategy_params/param_p9_validation_plateau_refit/{param_filename}",
         "description": "PARAM-P9 optimizer-owned adaptive plateau validation schedule；OOS只freeze消費同一physical truth。",
@@ -1417,6 +1527,22 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": None,
         "robustness_role": "off",
     },
+    "C92": {
+        "name": STRATEGY_COMPARE_DISPLAY_FULL_TRADING_ALIGNED_8X1000,
+        "description": (
+            "PARAM-P13 Round-10 Trading-aligned Research treatment；Full/formal/base-finalists-agree、"
+            "120M selection + 12M annual PIT、validation off、8個固定Research fitting seeds × 1000 trials/seed。"
+            "與Trading production的seed count/trials/selector/window一致；Research seeds固定以利重現，"
+            "不宣稱逐次重現Trading random seed bundle。"
+        ),
+        "param_source": "full_trading_aligned_8x1000_rolling_experiment",
+        "param_policy": "base-finalists-agree",
+        "rule_policy": "formal",
+        "dl_enabled": False,
+        "dl_id": None,
+        "dl_runtime_mode": None,
+        "robustness_role": "off",
+    },
     "C88": {
         "name": STRATEGY_COMPARE_DISPLAY_FULL_VALIDATION_PLATEAU_REFIT,
         "description": (
@@ -1718,6 +1844,24 @@ STRATEGY_COMPARE_CONTRASTS = {
             "Fitting trial-budget primary：Full/formal/base-finalists-agree與4個固定Research fitting seeds固定；"
             "只比較1000 trials/seed相對300 trials/seed。"
         ),
+    },
+    "C92-C85": {
+        "left": "C92",
+        "right": "C85",
+        "description": (
+            "Round-10 production-budget comparison：兩者皆Full/formal/base-finalists-agree且validation off；"
+            "C92由fixed 4x300提升至fixed 8x1000，同時增加seed count與trial budget，故為Trading-aligned整體budget comparison而非單變量。"
+        ),
+    },
+    "C92-C61": {
+        "left": "C92",
+        "right": "C61",
+        "description": "Round-10 Trading-aligned 8x1000 finalists-agree相對Full base-finalist-best reference",
+    },
+    "C92-C58": {
+        "left": "C92",
+        "right": "C58",
+        "description": "Round-10 Trading-aligned 8x1000 Full策略相對Min base-finalist-best reference；整體策略體系比較",
     },
     "C85-C62": {
         "left": "C85",

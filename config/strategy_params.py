@@ -14,11 +14,12 @@ from config.research import RESEARCH_MARKET_DATA_CUTOFF
 
 # Current Research strategy-parameter target.  Changing this value changes what
 # Research [2] trains; the interactive menu must not offer a second target selector.
-# Round 9 follows the completed score zero-collapse Audit.  It keeps P10/C89's
-# adaptive finalist-best validation semantics fixed and changes only one scientific
-# score-shape variable: disable the minimum-quarter-return multiplier.  P10/C89
-# remains the canonical Quarter-ON control; earlier PARAM identities stay immutable.
-ACTIVE_STRATEGY_PARAM_PROFILE = "validation_plateau_best_quarter_off_current"
+# Round 10 closes the adaptive-validation line after C91 failed to improve the
+# established non-validation references materially.  Research now evaluates a
+# Trading-aligned Full/base-finalists-agree 8x1000 fitting budget.  Research pins a
+# deterministic seed bundle for reproducibility; Trading continues to draw a fresh
+# random 8-seed bundle on each explicit production retrain.
+ACTIVE_STRATEGY_PARAM_PROFILE = "trading_aligned_8x1000_current"
 
 
 # Validation is a reusable Optimizer capability.  Profiles opt in/out below;
@@ -131,6 +132,14 @@ STRATEGY_PARAM_FITTING_SEED_PROTOCOLS: dict[str, dict] = {
         "generator_seed": 42,
         "min_agree": "auto",
         "trials_per_seed": 300,
+    },
+    "research_fixed_multiseed_8x1000_v1": {
+        "enabled": True,
+        "seed_count": 8,
+        "seed_mode": "fixed_generated_bundle",
+        "generator_seed": 42,
+        "min_agree": "auto",
+        "trials_per_seed": 1000,
     },
     "research_fixed_multiseed_4x1000_v1": {
         "enabled": True,
@@ -342,6 +351,25 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
         "artifact_slug": "param_p8_multiseed_4x1000",
         "registered_scientific_fingerprint_sha256": (
             "dbcbaf0653895bbfdf93462cb57845a565497d6fa4cef2baf5e7782ce0c26697"
+        ),
+    },
+    "trading_aligned_8x1000_current": {
+        "label": "Trading-Aligned Fixed Multi-Seed 8x1000",
+        "strategy_id": "breakout",
+        "filter_profile": "full",
+        "parameter_policy": "base-finalists-agree",
+        "parameter_set_identity": "PARAM-P13",
+        "dataset": "full",
+        "schedule_start_date": "2021-01-01",
+        "coverage_end_date": RESEARCH_MARKET_DATA_CUTOFF,
+        "validation": {"enabled": False},
+        "fitting_seed_protocol": "research_fixed_multiseed_8x1000_v1",
+        "artifact_slug": "param_p13_trading_aligned_8x1000",
+        # Filled after resolving the canonical scientific contract for this new
+        # registered Research identity.  The digest excludes this registration
+        # field itself.
+        "registered_scientific_fingerprint_sha256": (
+            "6c12f7172b4dfe31a6bd2f9df471c8ee68154ae2cc067bd56bc7edb50a4cfc14"
         ),
     },
 }

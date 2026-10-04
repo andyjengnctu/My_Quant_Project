@@ -12450,12 +12450,13 @@ Decision：`ZERO_COLLAPSE_ATTRIBUTED_TO_QUARTER_HARD_ZERO / AUDIT_DECISION_COMPL
 
 Decision：`ENGINEERING_ONLY / P12_SCIENTIFIC_IDENTITY_UNCHANGED / VALIDATION_NOW_USES_BOUND_SCORE_CONTRACT / PRE_FIX_VALIDATION_STATE_AND_PUBLISHED_ARTIFACT_STALE_AUTO_REPLAY / TRAINING_TRIALS_RESUME_SAFE / MONTHLY_UNCHANGED / RESULT_PENDING`.
 
-## 2026-10-04 — Outer Rolling fold-worker process-environment isolation repair
+## 2026-10-04 — Validation line closure + PARAM-P13 / C92 Trading-aligned 8×1000
 
-- **Observed evidence**：P12/C91先完成Forward參數建立（單一2021 parameter block，`fold_count=1`）後，在同一`apps/research.py`程序接著啟動6-fold Rolling；live board只同時執行1個fold，其餘顯示`queued`，與`config/training_performance_policy.py`的`OPTIMIZER_ROLLING_FOLD_WORKERS=fold_count`預設不一致。
-- **Root cause**：outer-rolling啟動時會把resolved execution defaults與spawn worker所需的`OPTIMIZER_*`值寫入真實`os.environ`；run結束後沒有還原。Forward 1-fold因此留下`OPTIMIZER_ROLLING_FOLD_WORKERS=1`。下一個6-fold run建立`outer_environ=dict(os.environ)`時把這個前一輪自動值誤視為既有override，最終`ProcessPoolExecutor(max_workers=1)`。同類污染也可能影響timing/non-timing間其他execution-only knobs。
-- **Engineering correction**：`run_outer_rolling_oos()`現在以run-scoped process-environment isolation包覆整次執行；進入時snapshot既有`OPTIMIZER_*`與`V16_MODELS_DIR`，run內仍可把resolved值暴露給Windows spawn workers，無論成功或exception離開時都精確還原。若使用者在進入run前確實透過PowerShell/父程序設定override，該值會被保留並在run後恢復，不會被忽略。
-- **Regression evidence**：focused `OPTIMIZER_WALK_FORWARD_POLICY_CONTRACT`=`146/146 PASS`；新增case驗證Forward 1-fold自動解析為1但run後不殘留、隨後6-fold重新解析為6，以及既有顯式worker override=3仍被honor並完整restore。
-- **Scientific impact**：none。P12/C91 scientific fingerprint、training/validation score、N*、patience、seed/trials、selector、PIT/OOS語意均不變；只修正performance execution state不得跨run洩漏。
+- **Observed C91 result**：修正P12 validation replay score-contract propagation後，正式Rolling C91 Return/MDD/RoMD=`172.97%/24.23%/7.14`；同表C89=`227.29%/26.57%/8.55`、C61=`142.80%/11.97%/11.93`、C85=`190.64%/11.59%/16.45`。C91未形成足以延續adaptive-validation研究線的策略增量。
+- **User decision**：停止validation線，不再追加Quarter/Monthly/patience/N*衍生實驗；C91、C89、C62退出current Strategy Compare。歷史scientific identity、artifact與evidence保留，不刪除、不覆寫。
+- **New scientific identity**：新增`PARAM-P13 / SR-C92`。Full/formal/`base-finalists-agree`、120M selection + 12M annual PIT、validation off、8 fixed Research seeds ×1000 trials/seed、auto min-agree=`5`。Seed count/trials/selector/window對齊目前Trading production；Research固定generator seed=`42`只為controlled comparison可重現，Trading仍使用每次明確重訓重新隨機8-seed bundle。Registered scientific fingerprint=`6c12f7172b4dfe31a6bd2f9df471c8ee68154ae2cc067bd56bc7edb50a4cfc14`.
+- **Current Compare**：current OOS/Rolling suite=`C58/C61/C85/C92`。C85保留4×300縮尺reference；`C92-C85`是Trading-aligned完整fitting-budget comparison，因同時改seed_count與trials/seed，不宣稱單變量。
+- **Presentation authorization**：依使用者明確要求，Strategy Compare人讀表格的C-arm rows/Yearly columns/Execution Summary按C編號數值由小到大顯示；只改presentation order，不改scientific/execution order與result identity。
 
-Decision：`ENGINEERING_ONLY / OUTER_ROLLING_ENV_RUN_SCOPED / FORWARD_ONE_FOLD_NO_LONGER_POISONS_ROLLING_CONCURRENCY / EXPLICIT_ENV_OVERRIDE_PRESERVED / SCIENTIFIC_IDENTITY_UNCHANGED`.
+Decision：`VALIDATION_LINE_STOP / C91_C89_C62_REMOVED_FROM_CURRENT / PARAM_P13_C92_REGISTERED / TRADING_ALIGNED_8X1000_FIXED_RESEARCH_BUNDLE / CURRENT_C58_C61_C85_C92 / DISPLAY_C_ID_ASCENDING / NO_TRADING_PRODUCTION_CHANGE`.
+

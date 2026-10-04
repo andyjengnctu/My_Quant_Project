@@ -243,6 +243,20 @@ def collect_artifact_status(
     ).status_dict()
 
 
+def _strategy_arm_display_sort_key(arm: StrategyComparisonArm) -> tuple[int, int, str]:
+    arm_id = str(arm.arm_id or "").strip()
+    numeric = arm_id[1:] if arm_id.startswith("C") else ""
+    if numeric.isdigit():
+        return (0, int(numeric), arm_id)
+    return (1, 0, arm_id)
+
+
+def _display_ordered_strategy_arms(settings: StrategyComparisonSettings) -> tuple[StrategyComparisonArm, ...]:
+    """Return human-report arm order without changing scientific/execution order."""
+
+    return tuple(sorted(settings.enabled_arms, key=_strategy_arm_display_sort_key))
+
+
 def render_status(
     *,
     project_root: Path = PROJECT_ROOT,
@@ -266,7 +280,7 @@ def render_status(
             "DL-on" if arm.dl_enabled else "DL-off",
             arm.description,
         )
-        for arm in current.enabled_arms
+        for arm in _display_ordered_strategy_arms(current)
     ]
     contrast_rows = [
         (
@@ -530,7 +544,7 @@ def render_execution_plan(
     replay_cache = dict(status.get("replay_cache") or {})
     cached_pairs = dict(replay_cache.get("pairs") or {})
     arm_states = dict(replay_cache.get("arm_states") or {})
-    for arm in settings.enabled_arms:
+    for arm in _display_ordered_strategy_arms(settings):
         if blocked:
             rows.append(("NOT_RUN", arm.arm_id, f"{arm.name}｜上游前置工件BLOCKED，本次不執行"))
             continue
@@ -787,15 +801,16 @@ def _metric_table(
     metrics: tuple[Any, ...],
     target: str = "plain",
 ) -> str:
+    display_arms = _display_ordered_strategy_arms(settings)
     signals_by_metric = {
         metric.key: best_worst_signals(
-            {arm.arm_id: _metric(scenarios[arm.arm_id], metric.key) for arm in settings.enabled_arms},
+            {arm.arm_id: _metric(scenarios[arm.arm_id], metric.key) for arm in display_arms},
             preference=metric.preference,
         )
         for metric in metrics
     }
     rows = []
-    for arm in settings.enabled_arms:
+    for arm in display_arms:
         payload = scenarios[arm.arm_id]
         values = []
         for metric in metrics:
@@ -908,7 +923,7 @@ def render_strategy_yearly_values_table(
     settings: StrategyComparisonSettings,
     target: str = "plain",
 ) -> str:
-    enabled_ids = tuple(arm.arm_id for arm in settings.enabled_arms)
+    enabled_ids = tuple(arm.arm_id for arm in _display_ordered_strategy_arms(settings))
     years = sorted({year for values in by_id.values() for year in values})
     rows = []
     for year in years:
@@ -991,7 +1006,7 @@ def render_strategy_run_execution_table(
     del target  # Table is intentionally neutral for both console and Markdown.
     arm_rows = dict(execution_summary.get("arms") or {})
     rows: list[tuple[object, ...]] = []
-    for arm in settings.enabled_arms:
+    for arm in _display_ordered_strategy_arms(settings):
         row = dict(arm_rows.get(arm.arm_id) or {})
         rows.append(
             (

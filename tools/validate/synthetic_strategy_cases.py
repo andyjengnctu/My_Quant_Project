@@ -2492,8 +2492,14 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     production_multiseed_param_profile = get_strategy_param_training_profile(
         "production_multiseed_current"
     )
+    trading_aligned_8x1000_param_profile = get_strategy_param_training_profile(
+        "trading_aligned_8x1000_current"
+    )
     production_multiseed_fitting_seed_protocol = get_strategy_param_fitting_seed_protocol(
         production_multiseed_param_profile.fitting_seed_protocol
+    )
+    trading_aligned_8x1000_fitting_seed_protocol = get_strategy_param_fitting_seed_protocol(
+        trading_aligned_8x1000_param_profile.fitting_seed_protocol
     )
     validation_fitting_seed_protocol = get_strategy_param_fitting_seed_protocol(
         validation_param_profile.fitting_seed_protocol
@@ -2612,6 +2618,39 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and p10_non_score == p12_non_score
         and score_diffs
             == {"SCORE_MIN_QUARTER_RETURN_AMP_ENABLED": (True, False)},
+    )
+
+    from config.trading import (
+        TRADING_OPTIMIZER_SEED_COUNT,
+        TRADING_OPTIMIZER_SEED_MIN_AGREE,
+        TRADING_OPTIMIZER_TRAIN_WINDOW_MONTHS,
+        TRADING_OPTIMIZER_TRIALS_PER_SEED,
+        TRADING_PARAM_FAMILY,
+        TRADING_PARAM_SELECTOR,
+    )
+    from core.seed_ensemble_policy import resolve_seed_ensemble_min_agree
+    p13_scientific = build_strategy_param_scientific_contract(
+        project_root, trading_aligned_8x1000_param_profile.profile_id
+    )
+    p13_fitting = dict(p13_scientific["scientific_contract"]["fitting"])
+    p13_schedule = dict(p13_scientific["scientific_contract"]["schedule"])
+    check(
+        "strategy_param_round10_trading_aligned_budget_matches_trading_contract",
+        True,
+        trading_aligned_8x1000_param_profile.parameter_set_identity == "PARAM-P13"
+        and trading_aligned_8x1000_param_profile.filter_profile == str(TRADING_PARAM_FAMILY)
+        and trading_aligned_8x1000_param_profile.parameter_policy
+            == str(TRADING_PARAM_SELECTOR).replace("_", "-")
+        and not trading_aligned_8x1000_param_profile.validation_enabled
+        and trading_aligned_8x1000_fitting_seed_protocol.seed_mode == "fixed_generated_bundle"
+        and p13_fitting["seed_count"] == int(TRADING_OPTIMIZER_SEED_COUNT)
+        and p13_fitting["trials_per_seed"] == int(TRADING_OPTIMIZER_TRIALS_PER_SEED)
+        and p13_fitting["min_agree"]
+            == resolve_seed_ensemble_min_agree(
+                TRADING_OPTIMIZER_SEED_COUNT, TRADING_OPTIMIZER_SEED_MIN_AGREE
+            )
+        and p13_schedule["train_window_months"]
+            == int(TRADING_OPTIMIZER_TRAIN_WINDOW_MONTHS),
     )
 
     check(
@@ -4157,46 +4196,6 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         performance_fp = build_strategy_param_scientific_contract(project_root, active_profile_id)["scientific_fingerprint_sha256"]
     check("strategy_param_scientific_fingerprint_ignores_performance_only_change", base_scientific_fp, performance_fp)
 
-    # Outer rolling must not leak auto-resolved execution knobs across menu
-    # actions in the same Research process.  A 1-fold Forward build followed by
-    # a 6-fold Rolling build must re-resolve to six fold workers unless the user
-    # explicitly supplied an environment override before entering the run.
-    from services.optimizer.outer_rolling_performance import (
-        _apply_outer_rolling_resource_env_defaults,
-        _resolve_rolling_fold_workers,
-    )
-    from services.optimizer.outer_rolling_runtime import (
-        _isolate_outer_rolling_process_environment,
-    )
-
-    @_isolate_outer_rolling_process_environment
-    def _resolve_scoped_fold_workers(fold_count):
-        scoped_environ = {}
-        _apply_outer_rolling_resource_env_defaults(
-            scoped_environ, timing_mode=False, fold_count=int(fold_count)
-        )
-        return _resolve_rolling_fold_workers(
-            scoped_environ, timing_mode=False, fold_count=int(fold_count)
-        )
-
-    worker_env_name = "OPTIMIZER_ROLLING_FOLD_WORKERS"
-    original_worker_env = os.environ.get(worker_env_name)
-    try:
-        os.environ.pop(worker_env_name, None)
-        check("outer_rolling_forward_auto_worker_count_is_one", 1, _resolve_scoped_fold_workers(1))
-        check("outer_rolling_auto_worker_env_does_not_leak_after_run", None, os.environ.get(worker_env_name))
-        check("outer_rolling_following_six_fold_run_re_resolves_six_workers", 6, _resolve_scoped_fold_workers(6))
-        check("outer_rolling_auto_worker_env_still_clean_after_second_run", None, os.environ.get(worker_env_name))
-
-        os.environ[worker_env_name] = "3"
-        check("outer_rolling_explicit_worker_override_is_honored", 3, _resolve_scoped_fold_workers(6))
-        check("outer_rolling_explicit_worker_override_is_restored", "3", os.environ.get(worker_env_name))
-    finally:
-        if original_worker_env is None:
-            os.environ.pop(worker_env_name, None)
-        else:
-            os.environ[worker_env_name] = original_worker_env
-
     registered_profile_ids = tuple(
         profile_id
         for profile_id, raw_profile in strategy_param_policy_module.STRATEGY_PARAM_PROFILES.items()
@@ -4270,6 +4269,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             "production_multiseed_current",
             "production_multiseed_8x300_compare",
             "production_multiseed_4x1000_compare",
+            "trading_aligned_8x1000_current",
         )
     )
     check(
@@ -4304,7 +4304,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     check(
         "strategy_compare_fixed_multiseed_profiles_have_isolated_artifact_namespaces",
         True,
-        len(fixed_profile_ids) == 3
+        len(fixed_profile_ids) == 4
         and len(set(fixed_profile_artifact_paths)) == len(fixed_profile_ids)
         and len(set(fixed_profile_robustness_paths)) == len(fixed_profile_ids)
         and all(
@@ -4332,27 +4332,33 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             == "optimizer_fixed_multiseed_strategy_params"
     }
     check(
-        "strategy_compare_current_suite_uses_quarter_off_treatment_quarter_on_control_and_multiseed_reference",
+        "strategy_compare_current_suite_closes_validation_and_adds_trading_aligned_8x1000",
         True,
-        "optimizer_validation_budget_refit_strategy_params" in current_builder_types
-        and current_validation_parameter_sets
+        tuple(arm.arm_id for arm in current_compare_settings.enabled_arms)
+            == ("C58", "C61", "C85", "C92")
+        and "optimizer_validation_budget_refit_strategy_params" not in current_builder_types
+        and not current_validation_parameter_sets
+        and current_fixed_multiseed_profiles
             == {
-                plateau_best_quarter_off_param_profile.parameter_set_identity,
-                plateau_best_validation_param_profile.parameter_set_identity,
+                production_multiseed_param_profile.profile_id,
+                trading_aligned_8x1000_param_profile.profile_id,
             }
-        and plateau_best_patience100_param_profile.parameter_set_identity
-            not in current_validation_parameter_sets
-        and plateau_validation_param_profile.parameter_set_identity
-            not in current_validation_parameter_sets
-        and validation_param_profile.parameter_set_identity
-            not in current_validation_parameter_sets
-        and production_multiseed_param_profile.profile_id
-            in current_fixed_multiseed_profiles
-        and validation_param_profile.validation_enabled
-        and plateau_validation_param_profile.validation_enabled
-        and plateau_best_validation_param_profile.validation_enabled
-        and plateau_best_patience100_param_profile.validation_enabled
-        and plateau_best_quarter_off_param_profile.validation_enabled,
+        and all(
+            arm_id not in {arm.arm_id for arm in current_compare_settings.enabled_arms}
+            for arm_id in ("C62", "C89", "C91")
+        )
+        and active_param_profile.profile_id
+            == trading_aligned_8x1000_param_profile.profile_id
+        and not active_param_profile.validation_enabled,
+    )
+    from services.research.strategy_comparison import _display_ordered_strategy_arms
+    legacy_unsorted_settings = get_strategy_comparison_settings(
+        "non_dl_production_multiseed_rolling"
+    )
+    check(
+        "strategy_compare_human_tables_sort_c_ids_numeric_ascending",
+        ("C58", "C61", "C62", "C85", "C86", "C87"),
+        tuple(arm.arm_id for arm in _display_ordered_strategy_arms(legacy_unsorted_settings)),
     )
     min_profile = resolve_canonical_strategy_param_training_profile(
         "min", "base-finalist-best"

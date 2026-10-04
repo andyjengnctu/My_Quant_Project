@@ -14,12 +14,13 @@ from core.breakout_quality_registry import (
 
 # Current work-stage selection. Stable menu work types live in apps/research.py;
 # only the current scientific profiles/bindings change here.
-# Round 9 follows the completed score zero-collapse Audit.  C89/P10 is retained as
-# the Quarter-ON control and C91/P12 disables only the minimum-quarter-return score
-# multiplier.  Validation, selector, seed, search space and refit semantics stay fixed.
+# Round 10 closes the adaptive-validation line.  Current single-run comparison
+# keeps the established Min/Full references plus C85, and adds C92: a reproducible
+# Research 8x1000 Full/base-finalists-agree treatment aligned to Trading's fitting
+# budget.  Historical C89/C91/C62 identities remain registered but are not current.
 # Robustness remains on the prior production multi-seed suite.
-STRATEGY_COMPARE_CURRENT_OOS_PROFILE = "non_dl_validation_plateau_best_quarter_off_oos"
-STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE = "non_dl_validation_plateau_best_quarter_off_rolling"
+STRATEGY_COMPARE_CURRENT_OOS_PROFILE = "non_dl_trading_aligned_8x1000_oos"
+STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE = "non_dl_trading_aligned_8x1000_rolling"
 STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS = "non_dl_production_multiseed_oos"
 STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS = "non_dl_production_multiseed_rolling"
 STRATEGY_COMPARE_DEFAULT_PROFILE = STRATEGY_COMPARE_CURRENT_OOS_PROFILE
