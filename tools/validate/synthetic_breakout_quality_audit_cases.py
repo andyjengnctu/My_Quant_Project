@@ -761,5 +761,162 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             ),
         )
 
+    # Zero-collapse Audit must prove that an exact Quarter multiplier zero can
+    # erase otherwise non-zero ranking information without retraining or reading
+    # OOS results.  Build the same persisted-study shape used by PARAM-P10.
+    from core.audit_policy import get_audit_definitions
+    from core.portfolio_stats import calc_portfolio_score
+    from services.audit.optimizer_score_zero_collapse import (
+        collect_status as collect_zero_collapse_status,
+        run_audit as run_zero_collapse_audit,
+    )
+
+    zero_defs = [
+        item for item in get_audit_definitions("breakout_quality")
+        if item.audit_id == "AUD-optimizer-score-zero-collapse"
+    ]
+    check_true(
+        "optimizer_zero_collapse_audit_is_registered_as_enabled_read_only_one_time_audit",
+        len(zero_defs) == 1 and zero_defs[0].enabled,
+    )
+    if zero_defs:
+        zero_definition = zero_defs[0]
+        with TemporaryDirectory(prefix="synthetic_zero_collapse_audit_") as temp_text:
+            import optuna
+            from optuna.trial import TrialState, create_trial
+
+            temp_root = Path(temp_text)
+            source_root = temp_root / Path(str(zero_definition.source["path"]))
+            db_path = (
+                source_root
+                / "optimizer_runtime"
+                / "validation_budget_refit_3"
+                / "outer_rolling_oos"
+                / "db"
+                / "outer_oos_synthetic_2025.db"
+            )
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path = temp_root / Path(str(zero_definition.source["manifest_path"]))
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(
+                json.dumps({
+                    "producer": "optimizer",
+                    "parameter_set": "PARAM-P10",
+                    "optimizer_search_protocol": "validation_plateau_best_refit_v1",
+                    "optimizer_execution_evidence_contract": "optimizer_resume_determinism_v1",
+                }, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+            score_policy = {
+                "SCORE_CALC_METHOD": "RoMD",
+                "SCORE_NUMERATOR_METHOD": "TOTAL_RETURN",
+                "SCORE_MDD_POWER": 1.0,
+                "SCORE_MDD_DENOMINATOR_EPSILON": 0.0001,
+                "SCORE_WIN_RATE_AMP_ENABLED": False,
+                "SCORE_WIN_RATE_TARGET": 50.0,
+                "SCORE_MONTHLY_WIN_RATE_AMP_ENABLED": True,
+                "SCORE_MONTHLY_WIN_RATE_TARGET": 90.0,
+                "SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED": False,
+                "SCORE_MIN_FULL_YEAR_RETURN_TARGET": 10.0,
+                "SCORE_MIN_MONTH_RETURN_AMP_ENABLED": False,
+                "SCORE_MIN_MONTH_RETURN_FLOOR": -10.0,
+                "SCORE_MIN_MONTH_RETURN_TARGET": 10.0,
+                "SCORE_MIN_QUARTER_RETURN_AMP_ENABLED": True,
+                "SCORE_MIN_QUARTER_RETURN_FLOOR": -10.0,
+                "SCORE_MIN_QUARTER_RETURN_TARGET": 10.0,
+                "SCORE_MEDIAN_R_AMP_ENABLED": False,
+                "SCORE_MEDIAN_R_FLOOR": -1.0,
+                "SCORE_MEDIAN_R_TARGET": 1.0,
+            }
+            storage = f"sqlite:///{db_path.resolve()}"
+            study = optuna.create_study(
+                study_name="portfolio_optimization_overnight_resume_safe_v1_tpe_optuna_synthetic",
+                storage=storage,
+                direction="maximize",
+            )
+            study.set_user_attr("optimizer_effective_policy_snapshot", {
+                "training_score_policy": score_policy,
+                "walk_forward_policy": {
+                    "evaluation_scope": "oos_single_fold",
+                    "oos_start_date": "2025-01-01",
+                    "oos_end_date": "2025-12-31",
+                },
+            })
+
+            def _attrs(*, min_quarter: float, monthly_win: float) -> dict:
+                return {
+                    "pf_return": 100.0,
+                    "pf_mdd": 10.0,
+                    "m_win_rate": monthly_win,
+                    "r_squared": 0.9,
+                    "annual_return_pct": 20.0,
+                    "win_rate": 45.0,
+                    "min_full_year_return_pct": 1.0,
+                    "min_month_return_pct": -5.0,
+                    "min_quarter_return_pct": min_quarter,
+                    "score_total_r": 20.0,
+                    "score_median_r": 0.2,
+                }
+
+            rows = [
+                _attrs(min_quarter=-15.0, monthly_win=60.0),
+                _attrs(min_quarter=-12.0, monthly_win=65.0),
+                _attrs(min_quarter=0.0, monthly_win=60.0),
+            ]
+            for attrs in rows:
+                score = float(calc_portfolio_score(
+                    attrs["pf_return"], attrs["pf_mdd"], attrs["m_win_rate"], attrs["r_squared"],
+                    annual_return_pct=attrs["annual_return_pct"],
+                    trade_win_rate_pct=attrs["win_rate"],
+                    min_full_year_return_pct=attrs["min_full_year_return_pct"],
+                    min_month_return_pct=attrs["min_month_return_pct"],
+                    min_quarter_return_pct=attrs["min_quarter_return_pct"],
+                    total_r=attrs["score_total_r"], median_r=attrs["score_median_r"],
+                    score_policy=score_policy, threshold_policy={},
+                ))
+                attrs["base_score"] = score
+                study.add_trial(create_trial(
+                    state=TrialState.COMPLETE,
+                    value=score,
+                    params={},
+                    distributions={},
+                    user_attrs=attrs,
+                ))
+
+            synthetic_definition = type(zero_definition)(
+                module_id=zero_definition.module_id,
+                audit_id=zero_definition.audit_id,
+                enabled=zero_definition.enabled,
+                audit_type=zero_definition.audit_type,
+                description=zero_definition.description,
+                source={**dict(zero_definition.source), "expected_oos_years": (2025,)},
+                dimensions=dict(zero_definition.dimensions),
+                outcomes=dict(zero_definition.outcomes),
+                output_subdir=zero_definition.output_subdir,
+            )
+            zero_status = collect_zero_collapse_status(
+                synthetic_definition, project_root=temp_root
+            )
+            zero_result = run_zero_collapse_audit(
+                synthetic_definition, project_root=temp_root
+            )
+            fold = zero_result["folds"][0]
+            diagnosis = zero_result["diagnosis"]
+            check_true(
+                "optimizer_zero_collapse_audit_attributes_quarter_exact_zero_and_preserves_hidden_rank_signal",
+                bool(
+                    zero_status["status"] == "READY"
+                    and fold["qualified_trials"] == 3
+                    and fold["exact_zero_count"] == 2
+                    and fold["quarter_erased_count"] == 2
+                    and fold["quarter_erased_hidden_distinct_scores"] == 2
+                    and diagnosis["quarter_zero_erases_ranking"] is True
+                    and zero_result["oos_used_for_score_selection"] is False
+                    and zero_result["counterfactual_persisted_or_fitted"] is False
+                    and (temp_root / "outputs" / "audit" / zero_definition.output_subdir / "latest" / "audit.md").is_file()
+                ),
+            )
+
     summary["workflow"] = "config_driven_formal_audit_topology"
     return results, summary

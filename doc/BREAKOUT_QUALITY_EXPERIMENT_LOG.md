@@ -12417,3 +12417,13 @@ Decision：`ENGINEERING_ONLY / RESUME_MUST_EQUAL_UNINTERRUPTED / RNG_CHECKPOINT_
 
 Decision：`ENGINEERING_ONLY / C89_CURRENT_EVIDENCE_AUTO_REBUILD / LEGACY_EVIDENCE_PRESERVED / NO_USER_FRESH_RESUME_CHOICE / P10_IDENTITY_UNCHANGED / CANONICAL_PUBLISH_ONLY_AFTER_SUCCESS`。
 
+
+
+## 2026-10-04 — P10/C89 deterministic control corrected + Optimizer score zero-collapse Audit registered
+
+- **Corrected C89 evidence**：canonical prerequisite已在`optimizer_resume_determinism_v1`固定repair workspace完成P10 deterministic rebuild。Rolling C89 Return/MDD/RoMD=`227.29%/26.57%/8.55`；6 folds N*=`57/23/49/24/20/48`、EarlyStop=`T107/T73/T99/T74/T70/T98`、full-refit best_base=`28.143/4.980/18.446/5.098/0.000/168.898`。舊pre-fix C89=`150.53%/21.76%/6.92`保留historical audit evidence，不再作current control。
+- **Patience conclusion**：P11/C90 patience100仍在2025得到`N*=20 / best_base=0.000`，與corrected P10/C89同樣沒有解除zero-collapse；不再增加patience。C90最終RoMD=`5.41`、C89=`8.55`、fixed300 C61=`11.93`，但下一步不以OOS績效回頭調score。
+- **New one-time Audit**：註冊`AUD-optimizer-score-zero-collapse`。來源固定為P10 deterministic full-refit Optuna SQLite studies與current canonical manifest；要求execution evidence contract=`optimizer_resume_determinism_v1`。Audit從每個study persisted `training_score_policy`重建canonical score，量化exact-zero、Quarter=0、Monthly heavy compression，並只讀計算Quarter-off／Quarter+Monthly-off sensitivity。
+- **Scientific boundary**：Audit只使用training/full-refit evidence；`OOS used for score selection = NO`。Counterfactual score不寫回study、不參與fitting、不建立第二score engine；若historical score無法由persisted policy exact重建即BLOCKED。Audit不選新Quarter floor、Monthly target或公式。
+
+Decision：`C89_DETERMINISTIC_CONTROL_READY / PATIENCE_EXTENSION_STOP / ZERO_COLLAPSE_AUDIT_ACTIVE / TRAINING_EVIDENCE_ONLY / NO_OOS_FEEDBACK / NO_SCORE_CHANGE_YET`。

@@ -23,7 +23,7 @@ from filters.breakout_quality.continuous_target import (
     DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
 )
 
-AUDIT_SCHEMA_VERSION = 16
+AUDIT_SCHEMA_VERSION = 17
 
 AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
     "breakout_quality": {
@@ -198,6 +198,53 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                     ),
                 },
                 "output_subdir": "breakout_quality/c80_c81_allocator_path_attribution",
+            },
+            "AUD-optimizer-score-zero-collapse": {
+                "enabled": True,
+                "audit_type": "optimizer_score_zero_collapse",
+                "description": (
+                    "只讀PARAM-P10/C89 deterministic full-refit Optuna studies；"
+                    "量化qualified trials的exact-zero score、Quarter=0歸零、Monthly倍率壓縮，"
+                    "並用canonical score函式做Quarter-off sensitivity，不重訓、不使用OOS調score。"
+                ),
+                "source": {
+                    "parameter_set_identity": "PARAM-P10",
+                    "strategy_arm_id": "C89",
+                    "profile_id": "validation_plateau_best_current",
+                    "policy": "base-finalist-best",
+                    "validation_protocol_id": "validation_plateau_best_refit_v1",
+                    "execution_evidence_contract": "optimizer_resume_determinism_v1",
+                    "path": (
+                        "outputs/optimizer/strategy_param_schedule/experiments/"
+                        "param_p10_validation_plateau_best_refit/execution_evidence_rebuilds/"
+                        "optimizer_resume_determinism_v1"
+                    ),
+                    "manifest_path": (
+                        "models/research/breakout_quality/strategy_params/"
+                        "param_p10_validation_plateau_best_refit/identity_manifest.json"
+                    ),
+                    "study_phase": "full_refit",
+                    "expected_oos_years": (2021, 2022, 2023, 2024, 2025, 2026),
+                },
+                "dimensions": {
+                    "zero_abs_tolerance": 0.0,
+                    "monthly_heavy_multiplier_threshold": 0.01,
+                },
+                "outcomes": {
+                    "decision_question": (
+                        "目前Optimizer zero-collapse主要是否由Quarter exact-zero multiplier消滅"
+                        "原本仍可排序的qualified trial訊號；Monthly target=90是否另有大量heavy compression？"
+                    ),
+                    "critical_uncertainty": (
+                        "被Quarter乘成0的trials在關掉Quarter multiplier的只讀canonical sensitivity下，"
+                        "是否仍保留非零且可區分的score ranking。"
+                    ),
+                    "stopping_condition": (
+                        "6個P10 deterministic full-refit folds均完成score reconstruction且能明確判斷"
+                        "Quarter exact-zero與Monthly compression的各自影響後停止；Audit不得選新floor/target/formula。"
+                    ),
+                },
+                "output_subdir": "breakout_quality/optimizer_score_zero_collapse_p10_c89",
             },
         },
     },

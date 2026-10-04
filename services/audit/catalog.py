@@ -140,6 +140,20 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         status_function="collect_status",
         run_function="run_formal_audit",
     ),
+    "optimizer_score_zero_collapse": AuditCatalogEntry(
+        audit_type="optimizer_score_zero_collapse",
+        domain="breakout_quality",
+        module="services.audit.optimizer_score_zero_collapse",
+        mode="formal",
+        description="只讀Optimizer full-refit score zero-collapse與multiplier attribution",
+        read_only=True,
+        # One-time score attribution is selection/ranking diagnosis.  Reuse the
+        # existing method taxonomy only for catalog ownership; it is exposed from
+        # the one-time AUD menu, not the reusable report menu.
+        method_id="opportunity_selection_attribution",
+        status_function="collect_status",
+        run_function="run_formal_audit",
+    ),
     "opportunity_selection_attribution": AuditCatalogEntry(
         audit_type="opportunity_selection_attribution",
         domain="breakout_quality",
