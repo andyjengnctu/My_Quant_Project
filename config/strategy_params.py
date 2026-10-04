@@ -14,10 +14,10 @@ from config.research import RESEARCH_MARKET_DATA_CUTOFF
 
 # Current Research strategy-parameter target.  Changing this value changes what
 # Research [2] trains; the interactive menu must not offer a second target selector.
-# Round 7 activates the single-seed adaptive plateau validation producer using
-# base-finalist-best as the controlled selector.  PARAM-P9/C88 remains a historical
-# registered treatment; PARAM-P5 and PARAM-P6~P8 remain immutable references.
-ACTIVE_STRATEGY_PARAM_PROFILE = "validation_plateau_best_current"
+# Round 8 keeps the Round-7 finalist-best adaptive validation semantics and changes
+# only plateau patience 50 -> 100 as a controlled treatment.  PARAM-P10/C89 stays
+# registered as the patience-50 control; earlier PARAM identities remain immutable.
+ACTIVE_STRATEGY_PARAM_PROFILE = "validation_plateau_best_patience100_current"
 
 
 # Validation is a reusable Optimizer capability.  Profiles opt in/out below;
@@ -73,6 +73,22 @@ STRATEGY_PARAM_VALIDATION_PROTOCOLS: dict[str, dict] = {
         "observation_start_trial": 1,
         "min_trials_before_stop": 50,
         "patience_trials": 50,
+        "observation_interval": 1,
+        "min_delta": 0.0,
+        "selection_policy": "base_finalist_best",
+        "selection_metric": "canonical_optimizer_portfolio_score",
+        "tie_break": "smaller_budget",
+        "oos_feedback_used": False,
+        "full_refit_required": True,
+        "reuse_same_policy_signature": True,
+    },
+    # Round-8 controlled patience treatment.  The only scientific change relative
+    # to PARAM-P10 is patience 50 -> 100.
+    "validation_plateau_best_patience100_refit_v1": {
+        "holdout_months": 12,
+        "observation_start_trial": 1,
+        "min_trials_before_stop": 50,
+        "patience_trials": 100,
         "observation_interval": 1,
         "min_delta": 0.0,
         "selection_policy": "base_finalist_best",
@@ -229,6 +245,22 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
         },
         "fitting_seed_protocol": "single_seed_42",
         "artifact_slug": "param_p10_validation_plateau_best_refit",
+    },
+    "validation_plateau_best_patience100_current": {
+        "label": "Adaptive Plateau Validation Refit / Finalist Best / Patience 100",
+        "strategy_id": "breakout",
+        "filter_profile": "full",
+        "parameter_policy": "base-finalist-best",
+        "parameter_set_identity": "PARAM-P11",
+        "dataset": "full",
+        "schedule_start_date": "2021-01-01",
+        "coverage_end_date": RESEARCH_MARKET_DATA_CUTOFF,
+        "validation": {
+            "enabled": True,
+            "protocol": "validation_plateau_best_patience100_refit_v1",
+        },
+        "fitting_seed_protocol": "single_seed_42",
+        "artifact_slug": "param_p11_validation_plateau_best_patience100_refit",
     },
     "production_multiseed_current": {
         "label": "Production-Style Fixed Multi-Seed",

@@ -516,6 +516,7 @@ class AdaptiveValidationBudgetController:
         validation_start_date: str,
         validation_end_date: str,
         progress_prefix: str = "",
+        progress_sink=None,
     ) -> None:
         if not spec.adaptive:
             raise ValueError("AdaptiveValidationBudgetController需要adaptive protocol")
@@ -525,6 +526,7 @@ class AdaptiveValidationBudgetController:
         self.validation_start_date = str(validation_start_date)
         self.validation_end_date = str(validation_end_date)
         self.progress_prefix = str(progress_prefix or "").strip()
+        self.progress_sink = progress_sink
         self.state_key = f"strategy_param_validation_state::{spec.protocol}"
         self._progress_legend_printed = False
         self._inline_progress = InlineProgress()
@@ -813,6 +815,27 @@ class AdaptiveValidationBudgetController:
             state["stop_reason"] = "validation_plateau"
 
         self._print_trial_progress(study, state, record)
+        if callable(self.progress_sink):
+            last_improvement = state.get("last_improvement_trial")
+            no_improve = (
+                None
+                if last_improvement is None
+                else max(0, count - int(last_improvement))
+            )
+            self.progress_sink({
+                "completed": int(count),
+                "total": int(self.spec.max_trials),
+                "selected_n": (
+                    None if state.get("best_trials") is None else int(state.get("best_trials"))
+                ),
+                "validation_score": record.get("validation_score"),
+                "best_validation_score": state.get("best_validation_score"),
+                "validation_wall_sec": float(state.get("validation_wall_sec", 0.0) or 0.0),
+                "no_improve": no_improve,
+                "patience": int(self.spec.patience_trials or 0),
+                "stop_eligible": bool(count >= _adaptive_min_stop_trial(self.spec)),
+                "stop_reason": state.get("stop_reason"),
+            })
 
     def catch_up(self, study) -> dict[str, Any]:
         """Reconcile persisted validation state with already-completed study trials."""

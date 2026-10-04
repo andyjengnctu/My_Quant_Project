@@ -2207,6 +2207,9 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     plateau_best_validation_param_profile = get_strategy_param_training_profile(
         "validation_plateau_best_current"
     )
+    plateau_best_patience100_param_profile = get_strategy_param_training_profile(
+        "validation_plateau_best_patience100_current"
+    )
     production_multiseed_param_profile = get_strategy_param_training_profile(
         "production_multiseed_current"
     )
@@ -2222,6 +2225,9 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     )
     plateau_best_validation_spec = resolve_validation_budget_spec(
         300, protocol_id="validation_plateau_best_refit_v1"
+    )
+    plateau_best_patience100_spec = resolve_validation_budget_spec(
+        300, protocol_id="validation_plateau_best_patience100_refit_v1"
     )
     check("strategy_param_training_target_is_config_driven", True, "ACTIVE_STRATEGY_PARAM_PROFILE" in strategy_param_config_source and "get_active_strategy_param_training_profile" in strategy_param_app_source)
     check("strategy_param_menu_contains_only_stable_work_types", True, all(label in strategy_param_app_source for label in ("Forward OOS 參數訓練", "Rolling OOS 參數訓練", "Forward OOS Robustness 參數訓練", "Rolling OOS Robustness 參數訓練", "進階／單次 Optimizer")) and "PARAM-P5" not in research_entry_source)
@@ -2271,6 +2277,87 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             "oos_feedback_used": False,
             "full_refit_required": True,
         },
+    )
+    check(
+        "strategy_param_round8_patience100_is_single_variable_identity",
+        True,
+        plateau_best_patience100_param_profile.parameter_set_identity == "PARAM-P11"
+        and plateau_best_patience100_param_profile.parameter_policy == "base-finalist-best"
+        and plateau_best_patience100_param_profile.validation_protocol
+            == "validation_plateau_best_patience100_refit_v1"
+        and plateau_best_patience100_param_profile.fitting_seed_protocol == "single_seed_42"
+        and plateau_best_patience100_spec.as_dict() == {
+            "protocol": "validation_plateau_best_patience100_refit_v1",
+            "holdout_months": 12,
+            "patience_trials": 100,
+            "observation_interval": 1,
+            "min_delta": 0.0,
+            "reuse_same_policy_signature": True,
+            "observation_start_trial": 1,
+            "min_trials_before_stop": 50,
+            "policy_name": "base_finalist_best",
+            "selection_metric": "canonical_optimizer_portfolio_score",
+            "tie_break": "smaller_budget",
+            "oos_feedback_used": False,
+            "full_refit_required": True,
+        }
+        and plateau_best_patience100_spec.as_dict()["patience_trials"]
+            != plateau_best_validation_spec.as_dict()["patience_trials"],
+    )
+    from services.optimizer.outer_rolling_plan import OuterRollingConfig, _build_rolling_folds
+    cutoff_folds = _build_rolling_folds(
+        OuterRollingConfig(
+            training_start_year=2011,
+            first_oos_year=2021,
+            last_oos_year=2026,
+            trials_per_fold=300,
+            window_mode="fixed",
+            train_window_years=10,
+            confirm=False,
+            first_oos_date="2021-01-01",
+            last_oos_date="2026-03-02",
+            train_window_months=120,
+            oos_horizon_months=12,
+            oos_end_cap_date="2026-03-02",
+        )
+    )
+    check(
+        "outer_rolling_last_fold_clips_exact_research_cutoff",
+        "2026-03-02",
+        cutoff_folds[-1]["oos_end_date"],
+    )
+    from services.optimizer.outer_rolling_progress import _format_parallel_fold_progress_line
+    timing_progress_line = _format_parallel_fold_progress_line(
+        {
+            "fold_idx": 6,
+            "fold_count": 6,
+            "oos_year": 202601,
+            "oos_period": "2026-01-01~2026-03-02",
+            "selection_period": "2016-01-01~2025-12-31",
+            "show_oos": True,
+            "progress_display_contract": {"show_local_min": False},
+        },
+        {
+            "stage": "DONE",
+            "status": "done",
+            "selection_start": "2016-01-01",
+            "selection_end": "2025-12-31",
+            "best_base_score": 0.168898,
+            "selected_n": 87,
+            "training_wall_sec": 123.0,
+            "validation_wall_sec": 45.0,
+            "oos_wall_sec": 20.0,
+            "elapsed_sec": 190.0,
+        },
+    )
+    check(
+        "outer_rolling_done_progress_shows_cutoff_nstar_and_phase_times",
+        True,
+        "OOS 26-01-01~26-03-02" in timing_progress_line
+        and "N*=87" in timing_progress_line
+        and "Train=" in timing_progress_line
+        and "Val=" in timing_progress_line
+        and "OOS=" in timing_progress_line,
     )
     from services.optimizer import validation_budget_refit as validation_budget_refit_module
     validation_replay_session = SimpleNamespace(
@@ -3404,11 +3491,14 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             == "optimizer_fixed_multiseed_strategy_params"
     }
     check(
-        "strategy_compare_current_suite_uses_registered_plateau_treatment_and_multiseed_reference",
+        "strategy_compare_current_suite_uses_patience100_treatment_patience50_control_and_multiseed_reference",
         True,
         "optimizer_validation_budget_refit_strategy_params" in current_builder_types
         and current_validation_parameter_sets
-            == {plateau_best_validation_param_profile.parameter_set_identity}
+            == {
+                plateau_best_patience100_param_profile.parameter_set_identity,
+                plateau_best_validation_param_profile.parameter_set_identity,
+            }
         and plateau_validation_param_profile.parameter_set_identity
             not in current_validation_parameter_sets
         and validation_param_profile.parameter_set_identity
@@ -3417,7 +3507,8 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             in current_fixed_multiseed_profiles
         and validation_param_profile.validation_enabled
         and plateau_validation_param_profile.validation_enabled
-        and plateau_best_validation_param_profile.validation_enabled,
+        and plateau_best_validation_param_profile.validation_enabled
+        and plateau_best_patience100_param_profile.validation_enabled,
     )
     min_profile = resolve_canonical_strategy_param_training_profile(
         "min", "base-finalist-best"

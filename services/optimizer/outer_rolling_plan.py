@@ -93,11 +93,21 @@ class OuterRollingConfig:
     last_oos_date: str = ""
     train_window_months: int = OUTER_ROLLING_TRAIN_WINDOW_MONTHS
     oos_horizon_months: int = OUTER_ROLLING_OOS_HORIZON_MONTHS
+    oos_end_cap_date: str = ""
     raw_universe_required_min_rows: int | None = None
 
 def _build_rolling_folds(config: OuterRollingConfig) -> list[dict]:
     first_oos = _parse_oos_boundary(config.first_oos_date, default=pd.Timestamp(year=int(config.first_oos_year), month=1, day=1))
-    last_oos = _parse_oos_boundary(config.last_oos_date, default=pd.Timestamp(year=int(config.last_oos_year), month=12, day=1), year_boundary="end")
+    last_oos = _parse_oos_boundary(
+        config.last_oos_date,
+        default=pd.Timestamp(year=int(config.last_oos_year), month=12, day=1),
+        year_boundary="end",
+    )
+    oos_end_cap = (
+        pd.Timestamp(config.oos_end_cap_date).normalize()
+        if str(config.oos_end_cap_date or "").strip()
+        else None
+    )
     horizon_months = max(1, int(config.oos_horizon_months or OUTER_ROLLING_OOS_HORIZON_MONTHS))
     train_months = max(1, int(config.train_window_months or OUTER_ROLLING_TRAIN_WINDOW_MONTHS))
     training_start = pd.Timestamp(year=int(config.training_start_year), month=1, day=1)
@@ -107,7 +117,8 @@ def _build_rolling_folds(config: OuterRollingConfig) -> list[dict]:
     current = first_oos
     while current <= last_oos:
         oos_start = _month_start(current)
-        oos_end = oos_start + pd.DateOffset(months=horizon_months) - pd.Timedelta(days=1)
+        natural_oos_end = oos_start + pd.DateOffset(months=horizon_months) - pd.Timedelta(days=1)
+        oos_end = min(natural_oos_end, oos_end_cap) if oos_end_cap is not None else natural_oos_end
         selection_end = oos_start - pd.Timedelta(days=1)
         if str(config.window_mode).lower() == "fixed":
             selection_start = oos_start - pd.DateOffset(months=train_months)
@@ -180,8 +191,11 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
     latest_ts = pd.Timestamp(latest_date).normalize() if latest_date is not None else pd.Timestamp(year=int(latest_year or first_oos_year_default), month=1, day=1)
     last_oos_date_default = _month_start(latest_ts)
     configured_oos_end_date = str(base_policy.get("oos_end_date") or "").strip()
+    oos_end_cap_date = ""
     if configured_oos_end_date:
-        last_oos_date_default = min(last_oos_date_default, _month_start(pd.Timestamp(configured_oos_end_date).normalize()))
+        configured_oos_end_ts = pd.Timestamp(configured_oos_end_date).normalize()
+        last_oos_date_default = min(last_oos_date_default, _month_start(configured_oos_end_ts))
+        oos_end_cap_date = configured_oos_end_ts.strftime("%Y-%m-%d")
     trials_default = int(
         default_trials
         if int(default_trials or 0) > 0
@@ -229,7 +243,16 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
     first_source = cli_first_date or cli_first or str(env.get("V16_OUTER_ROLLING_FIRST_OOS_DATE", "")).strip() or str(env.get("V16_OUTER_ROLLING_FIRST_OOS", "")).strip()
     last_source = cli_last_date or cli_last or str(env.get("V16_OUTER_ROLLING_LAST_OOS_DATE", "")).strip() or str(env.get("V16_OUTER_ROLLING_LAST_OOS", "")).strip()
     first_oos_date = _parse_oos_boundary(first_source, default=first_oos_date_default) if first_source else first_oos_date_default
-    last_oos_date = _parse_oos_boundary(last_source, default=last_oos_date_default, year_boundary="end") if last_source else last_oos_date_default
+    last_oos_date = (
+        _parse_oos_boundary(last_source, default=last_oos_date_default, year_boundary="end")
+        if last_source
+        else last_oos_date_default
+    )
+    last_source_text = str(last_source or "").strip()
+    if last_source_text and len(last_source_text) >= 8 and not (
+        len(last_source_text) in {4, 6} and last_source_text.isdigit()
+    ):
+        oos_end_cap_date = pd.Timestamp(last_source_text).normalize().strftime("%Y-%m-%d")
 
     if cli_trials:
         trials = int(cli_trials)
@@ -270,6 +293,7 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
         last_oos_date=last_oos_date.strftime("%Y-%m-%d"),
         train_window_months=int(train_window_months),
         oos_horizon_months=int(oos_horizon_months),
+        oos_end_cap_date=str(oos_end_cap_date),
     )
 
 

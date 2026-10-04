@@ -548,6 +548,25 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
     elapsed_text = ""
     if progress.get("elapsed_sec") is not None:
         elapsed_text = f" | elapsed={_fmt_duration_compact(progress.get('elapsed_sec'))}"
+    if stage == "VALIDATION_SEARCH":
+        completed = int(progress.get("completed", 0) or 0)
+        total = int(progress.get("total", 0) or 0)
+        selected_n = progress.get("selected_n")
+        selected_text = "-" if selected_n in (None, "") else str(int(selected_n))
+        best_val = progress.get("best_validation_score")
+        try:
+            best_val_text = "-" if best_val is None else f"{float(best_val):.6f}"
+        except (TypeError, ValueError):
+            best_val_text = "-"
+        val_elapsed = progress.get("validation_wall_sec")
+        val_text = _fmt_duration_compact(val_elapsed) if val_elapsed is not None else "-"
+        no_improve = progress.get("no_improve")
+        patience = int(progress.get("patience", 0) or 0)
+        no_imp_text = "-" if no_improve is None else f"{int(no_improve)}/{patience}"
+        return (
+            f"{_progress_prefix()} | validation {completed}/{total} | N*={selected_text} | "
+            f"best_val={best_val_text} | NoImp={no_imp_text} | Val={val_text}"
+        )
     if stage == "OPTIMIZER_SEARCH":
         completed = int(progress.get("completed", 0) or 0)
         total = int(progress.get("total", 0) or 0)
@@ -555,7 +574,9 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         best_text = format_optimizer_score_for_display(best, decimals=3)
         status = str(progress.get("status") or "").strip()
         status_text = f"{status} | " if status else ""
-        parts = [f"{_progress_prefix()} | {status_text}trial {completed}/{total} | best_base={best_text}"]
+        selected_n = progress.get("selected_n")
+        selected_text = "" if selected_n in (None, "") else f" | N*={int(selected_n)}"
+        parts = [f"{_progress_prefix()} | {status_text}trial {completed}/{total} | best_base={best_text}{selected_text}"]
         if show_local_min:
             local_best = progress.get("best_local_min_score")
             parts.append(
@@ -590,7 +611,9 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         status = str(progress.get("status") or "RUN")
         base_best = progress.get("best_base_score")
         base_best_text = format_optimizer_score_for_display(base_best, decimals=3)
-        parts = [f"{_progress_prefix()} | diagnostics {status} | best_base={base_best_text}"]
+        selected_n = progress.get("selected_n")
+        selected_text = "" if selected_n in (None, "") else f" | N*={int(selected_n)}"
+        parts = [f"{_progress_prefix()} | diagnostics {status} | best_base={base_best_text}{selected_text}"]
         if show_local_min:
             local_best = progress.get("best_local_min_score")
             parts.append(
@@ -611,7 +634,13 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         done_label = "DONE" if not status or status.lower() == "done" else f"DONE {status}"
         base_best = progress.get("best_base_score")
         base_best_text = format_optimizer_score_for_display(base_best, decimals=3)
-        parts = [f"{_progress_prefix()} | {done_label} | best_base={base_best_text}"]
+        selected_n = progress.get("selected_n")
+        selected_text = "" if selected_n in (None, "") else f" | N*={int(selected_n)}"
+        parts = [f"{_progress_prefix()} | {done_label} | best_base={base_best_text}{selected_text}"]
+        for label, key in (("Train", "training_wall_sec"), ("Val", "validation_wall_sec"), ("OOS", "oos_wall_sec")):
+            value = progress.get(key)
+            if value is not None:
+                parts.append(f"{label}={_fmt_duration_compact(value)}")
         if show_local_min:
             local_best = progress.get("best_local_min_score")
             parts.append(
@@ -1083,6 +1112,7 @@ class _FoldLogSearchProgress:
         seed_context: dict | None = None,
         initial_best_score=None,
         historical_search_intervals=None,
+        selected_n: int | None = None,
     ):
         self.fold_idx = int(fold_idx)
         self.fold_count = int(fold_count)
@@ -1091,6 +1121,7 @@ class _FoldLogSearchProgress:
         self.selection_end = str(selection_end)
         self.total_trials = int(total_trials)
         self.seed_context = dict(seed_context or {})
+        self.selected_n = None if selected_n is None else int(selected_n)
         self.historical_search_intervals = _merge_progress_active_intervals(
             historical_search_intervals
         )
@@ -1151,6 +1182,7 @@ class _FoldLogSearchProgress:
             total=self.total_trials,
             best_score=best_score,
             best_base_score=best_score,
+            selected_n=self.selected_n,
             elapsed_sec=active_elapsed,
             search_started_ts=self.get_search_started_ts(),
             search_last_done_ts=self.get_search_last_done_ts() if int(completed) > 0 else None,

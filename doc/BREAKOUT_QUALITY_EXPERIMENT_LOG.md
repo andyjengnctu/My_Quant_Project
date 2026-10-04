@@ -12367,3 +12367,13 @@ Decision：`C88_REMOVED_FROM_CURRENT / P9_HISTORICAL_DIAGNOSTIC_ONLY / PARAM_P10
 - **Regression coverage**：新增capability-level synthetic checks，驗證single-finalist signature可在沒有`params_ensemble`時建立，以及single-finalist validation replay會產生canonical validation score；Optimizer walk-forward contract=`124/124 PASS`。另獨立確認P9 agree signature/replay仍走原ensemble路徑。
 
 Decision：`ENGINEERING_ONLY / VALIDATION_REPLAY_SUPPORTS_SINGLE_FINALIST_AND_ENSEMBLE / P10_IDENTITY_UNCHANGED / P9_BEHAVIOR_PRESERVED / RESUME_SAFE`。
+
+## 2026-10-04 — PARAM-P11 / C90 patience=100 controlled treatment + Rolling cutoff/timing observability
+
+- **Round-7 result evidence**：使用者正式Rolling輸出顯示C89/P10 Return/MDD/RoMD=`150.53%/21.76%/6.92`；6-fold full-refit `best_base=0.380/4.980/18.446/5.098/0.000/168.898`。相較P9/C88的4/6 zero-collapse，finalist-best已改善為1/6，但2025仍為0，故selector不是全部根因。
+- **User decision / new identity**：下一步先只增加early-stop無成長容忍度，不改score。新增`PARAM-P11 / SR-C90`，完整複製P10/C89的Full/formal/base-finalist-best、Seed42、120M selection、12M trailing validation、max300、observation start1、minimum stop50、min_delta0、fresh refit與OOS feedback=False；唯一scientific change=`patience 50→100`。Primary=`C90-C89`。P10/C89保留patience50 control與既有result，不覆寫。
+- **Research cutoff correction**：既有outer rolling fold builder把12M horizon自然展開到年度末，導致Research cutoff=`2026-03-02`時最後fold仍標示/診斷`2026-01-01~2026-12-31`。工程修正後保留既有month-based fold-start boundary，另由exact `oos_end_cap_date`裁切`oos_end_date=min(natural_horizon_end, exact cap)`；因此最後fold真正是`2026-01-01~2026-03-02`，同時不改其他月份／年度輸入的既有fold horizon語意、selection window或PIT。
+- **Rolling progress observability**：adaptive validation新增machine progress event，live board可顯示current `N*`與validation elapsed；full-refit、OOS diagnostics、DONE持續攜帶selected N*。DONE line分列`Train / Val / OOS` wall time：Train=inner objective duration + fresh-refit optimizer + finalist/local review，Val=controller persisted validation wall，OOS=diagnostic wall。此為engineering-only observability，不改score/sampler/stop/N* semantics。
+
+Decision：`PARAM_P11_C90_REGISTERED / PATIENCE_100_ONLY_VARIABLE / C89_PATIENCE50_CONTROL_PRESERVED / EXACT_RESEARCH_CUTOFF_2026_03_02 / ROLLING_PHASE_TIMING_AND_NSTAR_VISIBLE / SCORE_UNCHANGED / RESULT_PENDING`.
+

@@ -14,12 +14,11 @@ from core.breakout_quality_registry import (
 
 # Current work-stage selection. Stable menu work types live in apps/research.py;
 # only the current scientific profiles/bindings change here.
-# Round 7 replaces C88 in the current single-seed validation comparison with
-# C89/P10, keeping adaptive plateau semantics but using base-finalist-best so the
-# validation mechanism can be isolated against C61.  P9/C88 remains historical.
+# Round 8 keeps C89/P10 as the patience-50 control and activates C90/P11 as the
+# patience-100 treatment.  All other adaptive-validation semantics remain fixed.
 # Robustness remains on the prior production multi-seed suite.
-STRATEGY_COMPARE_CURRENT_OOS_PROFILE = "non_dl_validation_plateau_best_oos"
-STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE = "non_dl_validation_plateau_best_rolling"
+STRATEGY_COMPARE_CURRENT_OOS_PROFILE = "non_dl_validation_plateau_best_patience100_oos"
+STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE = "non_dl_validation_plateau_best_patience100_rolling"
 STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS = "non_dl_production_multiseed_oos"
 STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS = "non_dl_production_multiseed_rolling"
 STRATEGY_COMPARE_DEFAULT_PROFILE = STRATEGY_COMPARE_CURRENT_OOS_PROFILE

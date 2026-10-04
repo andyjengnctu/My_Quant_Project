@@ -997,6 +997,19 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
     }
 
 
+def _study_trial_objective_wall_sec(study) -> float:
+    total = 0.0
+    for trial in list(getattr(study, "trials", []) or []):
+        duration = getattr(trial, "duration", None)
+        if duration is None:
+            continue
+        try:
+            total += max(0.0, float(duration.total_seconds()))
+        except (TypeError, ValueError, AttributeError, OverflowError):
+            continue
+    return float(total)
+
+
 def _task_seed_ensemble_policy(task: dict | None) -> dict:
     override = dict((task or {}).get("seed_ensemble_policy") or {})
     return override if override else _effective_rolling_seed_ensemble_policy_payload()
@@ -1243,6 +1256,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             last_oos_date=str(config_payload.get("last_oos_date", "")),
             train_window_months=int(config_payload.get("train_window_months", OUTER_ROLLING_TRAIN_WINDOW_MONTHS)),
             oos_horizon_months=int(config_payload.get("oos_horizon_months", OUTER_ROLLING_OOS_HORIZON_MONTHS)),
+            oos_end_cap_date=str(config_payload.get("oos_end_cap_date", "") or ""),
             raw_universe_required_min_rows=coerce_raw_universe_required_min_rows(
                 config_payload.get(RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD),
                 allow_none=True,
@@ -1347,6 +1361,8 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
         )
         validation_budget_result = None
         refit_trials = int(config.trials_per_fold)
+        inner_training_wall_sec = 0.0
+        validation_wall_sec = 0.0
         sqlite_storage_enabled = _is_outer_rolling_sqlite_storage_enabled(os.environ)
         db_file = ""
         db_name = None
@@ -1515,6 +1531,29 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                                 "adaptive validation要求single-trial search order，"
                                 f"actual n_jobs={int(search_parallel_trials)}"
                             )
+                        def _parallel_validation_progress_sink(event: dict) -> None:
+                            data = dict(event or {})
+                            _write_parallel_fold_progress_event(
+                                stage="VALIDATION_SEARCH",
+                                fold_idx=fold_idx,
+                                fold_count=fold_count,
+                                oos_year=oos_year,
+                                selection_start=selection_start,
+                                selection_end=selection_end,
+                                **seed_context,
+                                completed=int(data.get("completed", 0) or 0),
+                                total=int(data.get("total", config.trials_per_fold) or config.trials_per_fold),
+                                selected_n=data.get("selected_n"),
+                                best_validation_score=data.get("best_validation_score"),
+                                validation_score=data.get("validation_score"),
+                                validation_wall_sec=float(data.get("validation_wall_sec", 0.0) or 0.0),
+                                no_improve=data.get("no_improve"),
+                                patience=int(data.get("patience", 0) or 0),
+                                stop_eligible=bool(data.get("stop_eligible", False)),
+                                stop_reason=data.get("stop_reason"),
+                                status="STOP" if data.get("stop_reason") else "RUN",
+                            )
+
                         controller = AdaptiveValidationBudgetController(
                             session=inner_session,
                             objective_mode=objective_mode,
@@ -1522,6 +1561,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                             validation_start_date=validation_start_date,
                             validation_end_date=validation_end_date,
                             progress_prefix=f"[{fold_idx}/{fold_count}]",
+                            progress_sink=_parallel_validation_progress_sink,
                         )
                         resume_state = controller.catch_up(inner_study)
                         already_stopped = bool(resume_state.get("stop_reason"))
@@ -1563,6 +1603,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                             f"holdout={validation_start_date}~{validation_end_date}",
                             flush=True,
                         )
+                        fixed_validation_started = time.perf_counter()
                         validation_budget_result = select_trial_budget_from_validation(
                             study=inner_study,
                             session=inner_session,
@@ -1571,6 +1612,13 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                             validation_start_date=validation_start_date,
                             validation_end_date=validation_end_date,
                         )
+                        validation_budget_result["validation_wall_sec"] = max(
+                            0.0, time.perf_counter() - fixed_validation_started
+                        )
+                    inner_training_wall_sec = _study_trial_objective_wall_sec(inner_study)
+                    validation_wall_sec = float(
+                        dict(validation_budget_result or {}).get("validation_wall_sec", 0.0) or 0.0
+                    )
                     refit_trials = int(validation_budget_result["selected_trials"])
                     stop_text = (
                         f" | stop={int(validation_budget_result.get('stop_trial') or 0)}"
@@ -1636,6 +1684,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 seed_context=seed_context,
                 initial_best_score=resume_progress.get("best_base_score"),
                 historical_search_intervals=resume_progress.get("search_active_intervals"),
+                selected_n=(int(refit_trials) if validation_budget_spec is not None else None),
             )
             existing_trials, remaining_trials = _remaining_optimizer_trials(
                 study, int(refit_trials)
@@ -1820,6 +1869,10 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 status="RUN",
                 best_base_score=best_base_score,
                 best_local_min_score=best_local_min_score,
+                selected_n=(int(refit_trials) if validation_budget_spec is not None else None),
+                training_wall_sec=float(inner_training_wall_sec + optimize_sec + local_elapsed),
+                validation_wall_sec=float(validation_wall_sec),
+                oos_wall_sec=0.0,
                 elapsed_sec=0.0,
             )
             with session.optimizer_runtime_context():
@@ -1844,6 +1897,10 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 status="DONE",
                 best_base_score=best_base_score,
                 best_local_min_score=best_local_min_score,
+                selected_n=(int(refit_trials) if validation_budget_spec is not None else None),
+                training_wall_sec=float(inner_training_wall_sec + optimize_sec + local_elapsed),
+                validation_wall_sec=float(validation_wall_sec),
+                oos_wall_sec=float(oos_diagnostics_sec),
                 elapsed_sec=oos_diagnostics_sec,
             )
             fold_elapsed = (
@@ -1908,6 +1965,10 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 "policy_schedules": policy_schedules,
                 "elapsed_sec": float(fold_elapsed),
                 "optimizer_search_sec": float(optimize_sec),
+                "inner_training_wall_sec": float(inner_training_wall_sec),
+                "training_wall_sec": float(inner_training_wall_sec + optimize_sec + local_elapsed),
+                "validation_wall_sec": float(validation_wall_sec),
+                "selected_n": (int(refit_trials) if validation_budget_spec is not None else None),
                 "local_min_review_sec": float(local_elapsed),
                 "oos_diagnostics_sec": float(oos_diagnostics_sec),
                 "install_shared_cache_sec": float(install_shared_cache_sec),
@@ -1946,6 +2007,10 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 status="done",
                 best_base_score=best_base_score,
                 best_local_min_score=best_local_min_score,
+                selected_n=(int(refit_trials) if validation_budget_spec is not None else None),
+                training_wall_sec=float(inner_training_wall_sec + optimize_sec + local_elapsed),
+                validation_wall_sec=float(validation_wall_sec),
+                oos_wall_sec=float(oos_diagnostics_sec),
                 elapsed_sec=max(
                     float(fold_elapsed),
                     float(progress.get_search_active_elapsed_sec() + local_elapsed + oos_diagnostics_sec),
@@ -2273,6 +2338,7 @@ def run_outer_rolling_oos(
                 "last_oos_date": str(config.last_oos_date),
                 "train_window_months": int(config.train_window_months),
                 "oos_horizon_months": int(config.oos_horizon_months),
+                "oos_end_cap_date": str(config.oos_end_cap_date or ""),
                 RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD: int(config.raw_universe_required_min_rows),
             }
             task = {
@@ -2339,6 +2405,7 @@ def run_outer_rolling_oos(
                 "last_oos_date": str(config.last_oos_date),
                 "train_window_months": int(config.train_window_months),
                 "oos_horizon_months": int(config.oos_horizon_months),
+                "oos_end_cap_date": str(config.oos_end_cap_date or ""),
                 RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD: int(config.raw_universe_required_min_rows),
             }
             task = {
