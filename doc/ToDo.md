@@ -5,7 +5,6 @@
 
 - non-DL 
     - ajd/raw整合交易策略 
-    - 加入validate period early stop，驗證最適回數，再用此回數retrain traning+valid完整資料，最後再用research的即有的選單來測試效果
 
 
 

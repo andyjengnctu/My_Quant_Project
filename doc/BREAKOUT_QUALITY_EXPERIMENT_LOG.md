@@ -12450,3 +12450,12 @@ Decision：`ZERO_COLLAPSE_ATTRIBUTED_TO_QUARTER_HARD_ZERO / AUDIT_DECISION_COMPL
 
 Decision：`ENGINEERING_ONLY / P12_SCIENTIFIC_IDENTITY_UNCHANGED / VALIDATION_NOW_USES_BOUND_SCORE_CONTRACT / PRE_FIX_VALIDATION_STATE_AND_PUBLISHED_ARTIFACT_STALE_AUTO_REPLAY / TRAINING_TRIALS_RESUME_SAFE / MONTHLY_UNCHANGED / RESULT_PENDING`.
 
+## 2026-10-04 — Outer Rolling fold-worker process-environment isolation repair
+
+- **Observed evidence**：P12/C91先完成Forward參數建立（單一2021 parameter block，`fold_count=1`）後，在同一`apps/research.py`程序接著啟動6-fold Rolling；live board只同時執行1個fold，其餘顯示`queued`，與`config/training_performance_policy.py`的`OPTIMIZER_ROLLING_FOLD_WORKERS=fold_count`預設不一致。
+- **Root cause**：outer-rolling啟動時會把resolved execution defaults與spawn worker所需的`OPTIMIZER_*`值寫入真實`os.environ`；run結束後沒有還原。Forward 1-fold因此留下`OPTIMIZER_ROLLING_FOLD_WORKERS=1`。下一個6-fold run建立`outer_environ=dict(os.environ)`時把這個前一輪自動值誤視為既有override，最終`ProcessPoolExecutor(max_workers=1)`。同類污染也可能影響timing/non-timing間其他execution-only knobs。
+- **Engineering correction**：`run_outer_rolling_oos()`現在以run-scoped process-environment isolation包覆整次執行；進入時snapshot既有`OPTIMIZER_*`與`V16_MODELS_DIR`，run內仍可把resolved值暴露給Windows spawn workers，無論成功或exception離開時都精確還原。若使用者在進入run前確實透過PowerShell/父程序設定override，該值會被保留並在run後恢復，不會被忽略。
+- **Regression evidence**：focused `OPTIMIZER_WALK_FORWARD_POLICY_CONTRACT`=`146/146 PASS`；新增case驗證Forward 1-fold自動解析為1但run後不殘留、隨後6-fold重新解析為6，以及既有顯式worker override=3仍被honor並完整restore。
+- **Scientific impact**：none。P12/C91 scientific fingerprint、training/validation score、N*、patience、seed/trials、selector、PIT/OOS語意均不變；只修正performance execution state不得跨run洩漏。
+
+Decision：`ENGINEERING_ONLY / OUTER_ROLLING_ENV_RUN_SCOPED / FORWARD_ONE_FOLD_NO_LONGER_POISONS_ROLLING_CONCURRENCY / EXPLICIT_ENV_OVERRIDE_PRESERVED / SCIENTIFIC_IDENTITY_UNCHANGED`.

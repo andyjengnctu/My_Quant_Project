@@ -8,6 +8,7 @@ It does not own fold construction, selection, replay, or scientific identity.
 from __future__ import annotations
 
 import os
+from functools import wraps
 
 from core.runtime_utils import resolve_environment_flag as _env_flag
 
@@ -240,3 +241,38 @@ def _apply_outer_rolling_process_environ(environ) -> None:
         key = str(raw_key)
         if key == "V16_MODELS_DIR" or key.startswith("OPTIMIZER_"):
             os.environ[key] = str(raw_value)
+
+
+def _isolate_outer_rolling_process_environment(func):
+    """Keep rolling execution-only environment mutations scoped to one run.
+
+    ``run_outer_rolling_oos`` must copy resolved OPTIMIZER_* values into the
+    real process environment before creating Windows spawn workers.  Those
+    values are execution strategy only and must not leak into a later Research
+    action in the same Python process (for example Forward 1-fold -> Rolling
+    6-fold).  Explicit environment values that existed on entry are restored
+    exactly.
+    """
+
+    @wraps(func)
+    def _wrapped(*args, **kwargs):
+        before = {
+            key: value
+            for key, value in os.environ.items()
+            if key == "V16_MODELS_DIR" or key.startswith("OPTIMIZER_")
+        }
+        try:
+            return func(*args, **kwargs)
+        finally:
+            current_keys = [
+                key
+                for key in os.environ
+                if key == "V16_MODELS_DIR" or key.startswith("OPTIMIZER_")
+            ]
+            for key in current_keys:
+                if key not in before:
+                    os.environ.pop(key, None)
+            for key, value in before.items():
+                os.environ[key] = value
+
+    return _wrapped

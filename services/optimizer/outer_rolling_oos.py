@@ -155,6 +155,7 @@ from services.optimizer.outer_rolling_runtime import (
     _ensure_study_runtime_identity_compatible,
     _format_exception_summary,
     _is_non_retryable_fold_failure,
+    _isolate_outer_rolling_process_environment,
     _optimizer_runtime_context_spec,
     _outer_rolling_db_member_suffix,
     _outer_rolling_runtime_identity,
@@ -2101,6 +2102,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
 
 
 
+@_isolate_outer_rolling_process_environment
 def run_outer_rolling_oos(
     *,
     argv,

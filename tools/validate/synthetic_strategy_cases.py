@@ -4157,6 +4157,46 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         performance_fp = build_strategy_param_scientific_contract(project_root, active_profile_id)["scientific_fingerprint_sha256"]
     check("strategy_param_scientific_fingerprint_ignores_performance_only_change", base_scientific_fp, performance_fp)
 
+    # Outer rolling must not leak auto-resolved execution knobs across menu
+    # actions in the same Research process.  A 1-fold Forward build followed by
+    # a 6-fold Rolling build must re-resolve to six fold workers unless the user
+    # explicitly supplied an environment override before entering the run.
+    from services.optimizer.outer_rolling_performance import (
+        _apply_outer_rolling_resource_env_defaults,
+        _resolve_rolling_fold_workers,
+    )
+    from services.optimizer.outer_rolling_runtime import (
+        _isolate_outer_rolling_process_environment,
+    )
+
+    @_isolate_outer_rolling_process_environment
+    def _resolve_scoped_fold_workers(fold_count):
+        scoped_environ = {}
+        _apply_outer_rolling_resource_env_defaults(
+            scoped_environ, timing_mode=False, fold_count=int(fold_count)
+        )
+        return _resolve_rolling_fold_workers(
+            scoped_environ, timing_mode=False, fold_count=int(fold_count)
+        )
+
+    worker_env_name = "OPTIMIZER_ROLLING_FOLD_WORKERS"
+    original_worker_env = os.environ.get(worker_env_name)
+    try:
+        os.environ.pop(worker_env_name, None)
+        check("outer_rolling_forward_auto_worker_count_is_one", 1, _resolve_scoped_fold_workers(1))
+        check("outer_rolling_auto_worker_env_does_not_leak_after_run", None, os.environ.get(worker_env_name))
+        check("outer_rolling_following_six_fold_run_re_resolves_six_workers", 6, _resolve_scoped_fold_workers(6))
+        check("outer_rolling_auto_worker_env_still_clean_after_second_run", None, os.environ.get(worker_env_name))
+
+        os.environ[worker_env_name] = "3"
+        check("outer_rolling_explicit_worker_override_is_honored", 3, _resolve_scoped_fold_workers(6))
+        check("outer_rolling_explicit_worker_override_is_restored", "3", os.environ.get(worker_env_name))
+    finally:
+        if original_worker_env is None:
+            os.environ.pop(worker_env_name, None)
+        else:
+            os.environ[worker_env_name] = original_worker_env
+
     registered_profile_ids = tuple(
         profile_id
         for profile_id, raw_profile in strategy_param_policy_module.STRATEGY_PARAM_PROFILES.items()
