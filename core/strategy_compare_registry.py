@@ -34,7 +34,7 @@ from config.training_policy import (
     ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 71
+STRATEGY_COMPARE_SCHEMA_VERSION = 72
 
 _ROLLING_OOS = get_breakout_quality_rolling_test_mode("oos")
 _ROLLING_ROLLING = get_breakout_quality_rolling_test_mode("rolling")
@@ -77,6 +77,7 @@ STRATEGY_COMPARE_DISPLAY_FULL_VALIDATION_BUDGET_REFIT = "Full Validation-Budget 
 STRATEGY_COMPARE_DISPLAY_FULL_VALIDATION_PLATEAU_REFIT = "Full Adaptive Plateau Validation Refit"
 STRATEGY_COMPARE_DISPLAY_FULL_VALIDATION_PLATEAU_BEST_REFIT = "Full Adaptive Plateau Validation Refit / Finalist Best"
 STRATEGY_COMPARE_DISPLAY_FULL_VALIDATION_PLATEAU_BEST_P100_REFIT = "Full Adaptive Plateau Validation / Finalist Best / Patience 100"
+STRATEGY_COMPARE_DISPLAY_FULL_VALIDATION_PLATEAU_BEST_QUARTER_OFF_REFIT = "Full Adaptive Plateau Validation / Finalist Best / Quarter Off"
 STRATEGY_COMPARE_DISPLAY_FULL_PRODUCTION_MULTI_SEED = "Full Production-Style Fixed Multi-Seed"
 STRATEGY_COMPARE_DISPLAY_FULL_MULTI_SEED_8X300 = "Full Fixed Multi-Seed 8x300"
 STRATEGY_COMPARE_DISPLAY_FULL_MULTI_SEED_4X1000 = "Full Fixed Multi-Seed 4x1000"
@@ -156,6 +157,18 @@ STRATEGY_COMPARE_SUITES = {
             "C85": "Full Base-Finalists-Agree 4x300",
             "C62": "Full Single-Seed Base-Finalists-Agree",
             "C61": "Full Base-Finalist-Best",
+            "C58": "Min Base-Finalist-Best",
+        },
+    },
+    "non_dl_validation_plateau_best_quarter_off_current": {
+        "arm_ids": ("C91", "C89", "C61", "C85", "C62", "C58"),
+        "contrast_ids": ("C91-C89", "C91-C61", "C89-C61", "C89-C85", "C85-C62", "C91-C58"),
+        "display_name_bases": {
+            "C91": "Full Adaptive Plateau Validation / Finalist Best / Quarter Off",
+            "C89": "Full Adaptive Plateau Validation / Finalist Best / Quarter On",
+            "C61": "Full Base-Finalist-Best",
+            "C85": "Full Base-Finalists-Agree 4x300",
+            "C62": "Full Single-Seed Base-Finalists-Agree",
             "C58": "Min Base-Finalist-Best",
         },
     },
@@ -444,6 +457,63 @@ STRATEGY_COMPARE_PROFILES = {
             "C85": "full_production_multiseed_rolling_experiment",
             "C62": "full_rolling",
             "C61": "full_rolling",
+            "C58": "min_rolling",
+        },
+    },
+    "non_dl_validation_plateau_best_quarter_off_oos": {
+        "label": "Non-DL Adaptive Validation / Finalist Best / Quarter Off | OOS Test",
+        "description": (
+            "Round-9 score-shape sensitivity：C91/P12與C89/P10皆固定Full/formal/base-finalist-best、Seed42、"
+            "max300、trailing12M validation、min-stop50、patience50與相同search space；唯一scientific change為"
+            "minimum-quarter-return score multiplier ON→OFF。OOS不參與score或N*選擇。"
+        ),
+        "display_alignment_group": "non_dl_validation_plateau_best_quarter_off",
+        "suite_id": "non_dl_validation_plateau_best_quarter_off_current",
+        "display_suffix": "OOS",
+        "start_date": "2021-01-01",
+        "end_date": "2026-03-02",
+        "point_in_time_score_start_date": _ROLLING_OOS.score_start_date,
+        "point_in_time_score_end_date": _ROLLING_OOS.score_end_date,
+        "point_in_time_fold_months": int(_ROLLING_OOS.fold_months),
+        "point_in_time_fold_anchor_date": _ROLLING_OOS.fold_anchor_date,
+        "point_in_time_single_score_block": bool(_ROLLING_OOS.single_score_block),
+        "point_in_time_dirname": _ROLLING_OOS.point_in_time_dirname,
+        "output_root": "outputs/strategy_compare/non_dl_validation_plateau_best_quarter_off/oos_2021_forward",
+        "reuse_output_roots": (),
+        "arm_param_source_overrides": {
+            "C91": "full_validation_plateau_best_quarter_off_oos_experiment",
+            "C89": "full_validation_plateau_best_oos_experiment",
+            "C61": "full_oos",
+            "C85": "full_production_multiseed_oos_experiment",
+            "C62": "full_oos",
+            "C58": "min_oos",
+        },
+    },
+    "non_dl_validation_plateau_best_quarter_off_rolling": {
+        "label": "Non-DL Adaptive Validation / Finalist Best / Quarter Off | Rolling Test",
+        "description": (
+            "Round-9 primary PIT comparison：C91/P12相對C89/P10只關閉minimum-quarter-return score multiplier；"
+            "validation/selector/Seed42/max300/min-stop50/patience50/fresh-refit固定，OOS禁止進入停止或N*選擇。"
+        ),
+        "display_alignment_group": "non_dl_validation_plateau_best_quarter_off",
+        "suite_id": "non_dl_validation_plateau_best_quarter_off_current",
+        "display_suffix": "Rolling",
+        "start_date": "2021-01-01",
+        "end_date": "2026-03-02",
+        "point_in_time_score_start_date": _ROLLING_ROLLING.score_start_date,
+        "point_in_time_score_end_date": _ROLLING_ROLLING.score_end_date,
+        "point_in_time_fold_months": int(_ROLLING_ROLLING.fold_months),
+        "point_in_time_fold_anchor_date": _ROLLING_ROLLING.fold_anchor_date,
+        "point_in_time_single_score_block": bool(_ROLLING_ROLLING.single_score_block),
+        "point_in_time_dirname": _ROLLING_ROLLING.point_in_time_dirname,
+        "output_root": "outputs/strategy_compare/non_dl_validation_plateau_best_quarter_off/rolling_2021_forward",
+        "reuse_output_roots": (),
+        "arm_param_source_overrides": {
+            "C91": "full_validation_plateau_best_quarter_off_rolling_experiment",
+            "C89": "full_validation_plateau_best_rolling_experiment",
+            "C61": "full_rolling",
+            "C85": "full_production_multiseed_rolling_experiment",
+            "C62": "full_rolling",
             "C58": "min_rolling",
         },
     },
@@ -1125,6 +1195,52 @@ STRATEGY_EXPERIMENTAL_PARAM_SOURCES = {
             },
         },
     },
+    "full_validation_plateau_best_quarter_off_oos_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p12_validation_plateau_best_quarter_off_refit/{param_filename}",
+        "description": "PARAM-P12 optimizer-owned adaptive plateau finalist-best Quarter-off schedule；OOS只freeze消費同一physical truth。",
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p12_validation_plateau_best_quarter_off_refit/identity_manifest.json",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "oos",
+        "artifact_contract": {
+            "breakout_quality_param_adaptation": {
+                "parameter_set": "PARAM-P12",
+                "training_dl_enabled": False,
+                "optimizer_search_protocol": "validation_plateau_best_refit_v1",
+            }
+        },
+        "builder": {
+            "enabled": True,
+            "builder_type": "optimizer_validation_budget_refit_strategy_params",
+            "options": {
+                "training_profile_id": "validation_plateau_best_quarter_off_current",
+                "parameter_set": "PARAM-P12",
+                "optimizer_search_protocol": "validation_plateau_best_refit_v1",
+            },
+        },
+    },
+    "full_validation_plateau_best_quarter_off_rolling_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p12_validation_plateau_best_quarter_off_refit/{param_filename}",
+        "description": "PARAM-P12 optimizer-owned adaptive plateau finalist-best Quarter-off schedule；Rolling以date-effective語意消費同一physical truth。",
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p12_validation_plateau_best_quarter_off_refit/identity_manifest.json",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "rolling",
+        "artifact_contract": {
+            "breakout_quality_param_adaptation": {
+                "parameter_set": "PARAM-P12",
+                "training_dl_enabled": False,
+                "optimizer_search_protocol": "validation_plateau_best_refit_v1",
+            }
+        },
+        "builder": {
+            "enabled": True,
+            "builder_type": "optimizer_validation_budget_refit_strategy_params",
+            "options": {
+                "training_profile_id": "validation_plateau_best_quarter_off_current",
+                "parameter_set": "PARAM-P12",
+                "optimizer_search_protocol": "validation_plateau_best_refit_v1",
+            },
+        },
+    },
     "full_validation_budget_oos_experiment": {
         "path_template": "models/research/breakout_quality/strategy_params/param_p5_validation_budget_refit/{param_filename}",
         "description": "PARAM-P5 optimizer-owned Full validation-budget schedule；OOS只freeze消費同一physical truth。",
@@ -1340,6 +1456,20 @@ STRATEGY_COMPARE_ARMS = {
             "唯一差異為validation plateau patience=100。"
         ),
         "param_source": "full_validation_plateau_best_patience100_rolling_experiment",
+        "param_policy": "base-finalist-best",
+        "rule_policy": "formal",
+        "dl_enabled": False,
+        "dl_id": None,
+        "dl_runtime_mode": None,
+        "robustness_role": "off",
+    },
+    "C91": {
+        "name": STRATEGY_COMPARE_DISPLAY_FULL_VALIDATION_PLATEAU_BEST_QUARTER_OFF_REFIT,
+        "description": (
+            "PARAM-P12 Round-9 single-seed score-shape treatment；scientific contract與C89/P10相同，"
+            "唯一差異為SCORE_MIN_QUARTER_RETURN_AMP_ENABLED=True→False。"
+        ),
+        "param_source": "full_validation_plateau_best_quarter_off_rolling_experiment",
         "param_policy": "base-finalist-best",
         "rule_policy": "formal",
         "dl_enabled": False,
@@ -1610,6 +1740,9 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C90-C89": {"left": "C90", "right": "C89", "description": "Round-8 primary：唯一scientific差異為adaptive validation plateau patience 100 vs 50；其餘Full/formal/base-finalist-best/Seed42/max300/12M validation/min-stop50/score完全相同"},
     "C90-C61": {"left": "C90", "right": "C61", "description": "Round-8 reference：patience100 adaptive validation-selected N* + full refit相對固定300-trial finalist-best control"},
     "C90-C58": {"left": "C90", "right": "C58", "description": "Round-8 patience100 adaptive finalist-best treatment相對Min base-finalist-best reference；整體策略體系比較"},
+    "C91-C89": {"left": "C91", "right": "C89", "description": "Round-9 primary：唯一scientific差異為minimum-quarter-return score multiplier OFF vs ON；其餘Full/formal/base-finalist-best/Seed42/max300/trailing12M validation/min-stop50/patience50/search space完全相同"},
+    "C91-C61": {"left": "C91", "right": "C61", "description": "Round-9 reference：Quarter-off adaptive validation-selected N* + full refit相對固定300-trial finalist-best control"},
+    "C91-C58": {"left": "C91", "right": "C58", "description": "Round-9 Quarter-off adaptive finalist-best treatment相對Min base-finalist-best reference；整體策略體系比較"},
     "C89-C61": {"left": "C89", "right": "C61", "description": "Round-7 primary：同為Full/formal/base-finalist-best、Seed42與相同optimizer score；只比較adaptive validation-selected N* + full refit相對固定300-trial control"},
     "C89-C62": {"left": "C89", "right": "C62", "description": "Round-7 reference：adaptive finalist-best treatment相對既有single-seed finalists-agree control；同時包含validation與selector差異，不宣稱單變量"},
     "C89-C85": {"left": "C89", "right": "C85", "description": "Round-7 reference：adaptive finalist-best single-seed treatment相對既有base-finalists-agree 4-seed×300 reference；selector與seed bundle皆不同"},

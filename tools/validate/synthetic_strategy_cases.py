@@ -2486,6 +2486,9 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     plateau_best_patience100_param_profile = get_strategy_param_training_profile(
         "validation_plateau_best_patience100_current"
     )
+    plateau_best_quarter_off_param_profile = get_strategy_param_training_profile(
+        "validation_plateau_best_quarter_off_current"
+    )
     production_multiseed_param_profile = get_strategy_param_training_profile(
         "production_multiseed_current"
     )
@@ -2580,6 +2583,37 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and plateau_best_patience100_spec.as_dict()["patience_trials"]
             != plateau_best_validation_spec.as_dict()["patience_trials"],
     )
+    from core.strategy_param_scientific_contract import build_strategy_param_scientific_contract
+    p10_scientific_contract = build_strategy_param_scientific_contract(
+        project_root, plateau_best_validation_param_profile.profile_id
+    )["scientific_contract"]
+    p12_scientific_contract = build_strategy_param_scientific_contract(
+        project_root, plateau_best_quarter_off_param_profile.profile_id
+    )["scientific_contract"]
+    p10_score = dict(p10_scientific_contract["score"])
+    p12_score = dict(p12_scientific_contract["score"])
+    p10_non_score = {key: value for key, value in p10_scientific_contract.items() if key != "score"}
+    p12_non_score = {key: value for key, value in p12_scientific_contract.items() if key != "score"}
+    score_diffs = {
+        key: (p10_score.get(key), p12_score.get(key))
+        for key in set(p10_score) | set(p12_score)
+        if p10_score.get(key) != p12_score.get(key)
+    }
+    check(
+        "strategy_param_round9_quarter_off_is_single_score_variable_identity",
+        True,
+        plateau_best_quarter_off_param_profile.parameter_set_identity == "PARAM-P12"
+        and plateau_best_quarter_off_param_profile.parameter_policy == "base-finalist-best"
+        and plateau_best_quarter_off_param_profile.validation_protocol
+            == plateau_best_validation_param_profile.validation_protocol
+        and plateau_best_quarter_off_param_profile.fitting_seed_protocol == "single_seed_42"
+        and dict(plateau_best_quarter_off_param_profile.score_policy_overrides)
+            == {"SCORE_MIN_QUARTER_RETURN_AMP_ENABLED": False}
+        and p10_non_score == p12_non_score
+        and score_diffs
+            == {"SCORE_MIN_QUARTER_RETURN_AMP_ENABLED": (True, False)},
+    )
+
     check(
         "strategy_param_p10_requires_resume_safe_execution_evidence_without_scientific_change",
         True,
@@ -4064,14 +4098,16 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             == "optimizer_fixed_multiseed_strategy_params"
     }
     check(
-        "strategy_compare_current_suite_uses_patience100_treatment_patience50_control_and_multiseed_reference",
+        "strategy_compare_current_suite_uses_quarter_off_treatment_quarter_on_control_and_multiseed_reference",
         True,
         "optimizer_validation_budget_refit_strategy_params" in current_builder_types
         and current_validation_parameter_sets
             == {
-                plateau_best_patience100_param_profile.parameter_set_identity,
+                plateau_best_quarter_off_param_profile.parameter_set_identity,
                 plateau_best_validation_param_profile.parameter_set_identity,
             }
+        and plateau_best_patience100_param_profile.parameter_set_identity
+            not in current_validation_parameter_sets
         and plateau_validation_param_profile.parameter_set_identity
             not in current_validation_parameter_sets
         and validation_param_profile.parameter_set_identity
@@ -4081,7 +4117,8 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and validation_param_profile.validation_enabled
         and plateau_validation_param_profile.validation_enabled
         and plateau_best_validation_param_profile.validation_enabled
-        and plateau_best_patience100_param_profile.validation_enabled,
+        and plateau_best_patience100_param_profile.validation_enabled
+        and plateau_best_quarter_off_param_profile.validation_enabled,
     )
     min_profile = resolve_canonical_strategy_param_training_profile(
         "min", "base-finalist-best"

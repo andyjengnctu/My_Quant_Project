@@ -1936,6 +1936,11 @@ def _selection_full_roos_runtime_contract(
     )
     if seed_ensemble_policy:
         payload["seed_ensemble_policy"] = seed_ensemble_policy
+    score_policy_overrides = dict(
+        getattr(args, "score_policy_overrides", None) or {}
+    )
+    if score_policy_overrides:
+        payload["score_policy_overrides"] = score_policy_overrides
     payload["runtime_identity_sha256"] = _canonical_hash(payload)
     return payload
 
@@ -2152,6 +2157,7 @@ def prepare_selection_historical_full_roos_params(
     optimizer_search_protocol: str | None = None,
     parameter_set_identity: str = "P4_HISTORY",
     seed_ensemble_policy_override: dict | None = None,
+    score_policy_overrides: dict[str, Any] | None = None,
     oos_end_cap_date: str | None = None,
 ):
     """Build/reuse Full rolling params using the canonical full search space.
@@ -2187,6 +2193,11 @@ def prepare_selection_historical_full_roos_params(
             None
             if not isinstance(seed_ensemble_policy_override, dict)
             else dict(seed_ensemble_policy_override)
+        ),
+        score_policy_overrides=(
+            None
+            if not isinstance(score_policy_overrides, dict)
+            else dict(score_policy_overrides)
         ),
     )
     output_dir = (
@@ -2237,6 +2248,11 @@ def prepare_selection_historical_full_roos_params(
         oos_horizon_months=int(oos_months),
         fitting=runtime_fitting_contract,
         validation={"enabled": False},
+        score_policy_overrides=(
+            dict(score_policy_overrides)
+            if isinstance(score_policy_overrides, dict)
+            else None
+        ),
         execution_overrides={
             "max_positions": int(max_positions),
             "rotation": str(rotation),

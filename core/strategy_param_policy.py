@@ -96,6 +96,7 @@ class StrategyParamTrainingProfile:
     validation_protocol: str | None
     fitting_seed_protocol: str
     artifact_slug: str | None
+    score_policy_overrides: Mapping[str, Any]
     requires_resume_safe_execution_evidence: bool
     registered_scientific_fingerprint_sha256: str | None
 
@@ -336,6 +337,17 @@ def get_strategy_param_training_profile(profile_id: str) -> StrategyParamTrainin
     if artifact_slug is not None:
         if Path(artifact_slug).name != artifact_slug or artifact_slug in {".", ".."}:
             raise ValueError(f"strategy parameter artifact_slug必須是安全單一資料夾名稱: {key}")
+    raw_score_policy_overrides = raw.get("score_policy_overrides")
+    if raw_score_policy_overrides in (None, {}):
+        score_policy_overrides: dict[str, Any] = {}
+    elif isinstance(raw_score_policy_overrides, Mapping):
+        score_policy_overrides = {
+            str(name): value for name, value in raw_score_policy_overrides.items()
+        }
+        if any(not name.strip() for name in score_policy_overrides):
+            raise ValueError(f"score_policy_overrides不得包含空白key: {key}")
+    else:
+        raise ValueError(f"score_policy_overrides必須是mapping: {key}")
     registered_scientific_fingerprint_sha256 = str(
         raw.get("registered_scientific_fingerprint_sha256") or ""
     ).strip().lower() or None
@@ -361,6 +373,7 @@ def get_strategy_param_training_profile(profile_id: str) -> StrategyParamTrainin
         validation_protocol=protocol,
         fitting_seed_protocol=fitting_seed_protocol,
         artifact_slug=artifact_slug,
+        score_policy_overrides=score_policy_overrides,
         requires_resume_safe_execution_evidence=bool(
             raw.get("requires_resume_safe_execution_evidence", False)
         ),

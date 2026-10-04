@@ -14,10 +14,11 @@ from config.research import RESEARCH_MARKET_DATA_CUTOFF
 
 # Current Research strategy-parameter target.  Changing this value changes what
 # Research [2] trains; the interactive menu must not offer a second target selector.
-# Round 8 keeps the Round-7 finalist-best adaptive validation semantics and changes
-# only plateau patience 50 -> 100 as a controlled treatment.  PARAM-P10/C89 stays
-# registered as the patience-50 control; earlier PARAM identities remain immutable.
-ACTIVE_STRATEGY_PARAM_PROFILE = "validation_plateau_best_patience100_current"
+# Round 9 follows the completed score zero-collapse Audit.  It keeps P10/C89's
+# adaptive finalist-best validation semantics fixed and changes only one scientific
+# score-shape variable: disable the minimum-quarter-return multiplier.  P10/C89
+# remains the canonical Quarter-ON control; earlier PARAM identities stay immutable.
+ACTIVE_STRATEGY_PARAM_PROFILE = "validation_plateau_best_quarter_off_current"
 
 
 # Validation is a reusable Optimizer capability.  Profiles opt in/out below;
@@ -265,6 +266,27 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
         },
         "fitting_seed_protocol": "single_seed_42",
         "artifact_slug": "param_p11_validation_plateau_best_patience100_refit",
+    },
+    "validation_plateau_best_quarter_off_current": {
+        "label": "Adaptive Plateau Validation Refit / Finalist Best / Quarter Off",
+        "strategy_id": "breakout",
+        "filter_profile": "full",
+        "parameter_policy": "base-finalist-best",
+        "parameter_set_identity": "PARAM-P12",
+        "dataset": "full",
+        "schedule_start_date": "2021-01-01",
+        "coverage_end_date": RESEARCH_MARKET_DATA_CUTOFF,
+        "validation": {
+            "enabled": True,
+            "protocol": "validation_plateau_best_refit_v1",
+        },
+        "fitting_seed_protocol": "single_seed_42",
+        "artifact_slug": "param_p12_validation_plateau_best_quarter_off_refit",
+        # Round-9 single-variable score-shape treatment.  Do not mutate the global
+        # canonical score policy: P10/C89 must remain an immutable Quarter-ON control.
+        "score_policy_overrides": {
+            "SCORE_MIN_QUARTER_RETURN_AMP_ENABLED": False,
+        },
     },
     "production_multiseed_current": {
         "label": "Production-Style Fixed Multi-Seed",

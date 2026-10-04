@@ -121,6 +121,23 @@ def _wrap_scientific_contract(
     }
 
 
+def _build_score_contract(
+    overrides: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    score = dict(build_optimizer_scientific_score_policy_snapshot())
+    if not isinstance(overrides, Mapping) or not overrides:
+        return score
+    unknown = sorted(set(str(key) for key in overrides) - set(score))
+    if unknown:
+        raise ValueError(
+            "strategy parameter score_policy_overrides包含未知scientific score key: "
+            + ", ".join(unknown)
+        )
+    for key, value in overrides.items():
+        score[str(key)] = value
+    return _jsonable(score)
+
+
 def build_strategy_param_runtime_scientific_contract(
     project_root: str | Path,
     *,
@@ -134,6 +151,7 @@ def build_strategy_param_runtime_scientific_contract(
     oos_horizon_months: int,
     fitting: Mapping[str, Any],
     validation: Mapping[str, Any],
+    score_policy_overrides: Mapping[str, Any] | None = None,
     execution_overrides: Mapping[str, Any] | None = None,
     dataset_generation_identity_override: Mapping[str, Any] | None = None,
     references: Mapping[str, Any] | None = None,
@@ -170,7 +188,7 @@ def build_strategy_param_runtime_scientific_contract(
             "oos_horizon_months": int(oos_horizon_months),
         },
         "parameter_generation": _build_parameter_generation_contract(strategy_id),
-        "score": build_optimizer_scientific_score_policy_snapshot(),
+        "score": _build_score_contract(score_policy_overrides),
         "hard_gates": build_training_threshold_snapshot(),
         "selection_and_anti_overfit": {
             "parameter_policy": str(parameter_policy),
@@ -225,6 +243,7 @@ def build_strategy_param_scientific_contract(
         oos_horizon_months=int(training["oos_horizon_months"]),
         fitting=fitting,
         validation=validation,
+        score_policy_overrides=profile.score_policy_overrides,
         execution_overrides=execution_overrides,
         references=references,
     )

@@ -14,11 +14,12 @@ from core.breakout_quality_registry import (
 
 # Current work-stage selection. Stable menu work types live in apps/research.py;
 # only the current scientific profiles/bindings change here.
-# Round 8 keeps C89/P10 as the patience-50 control and activates C90/P11 as the
-# patience-100 treatment.  All other adaptive-validation semantics remain fixed.
+# Round 9 follows the completed score zero-collapse Audit.  C89/P10 is retained as
+# the Quarter-ON control and C91/P12 disables only the minimum-quarter-return score
+# multiplier.  Validation, selector, seed, search space and refit semantics stay fixed.
 # Robustness remains on the prior production multi-seed suite.
-STRATEGY_COMPARE_CURRENT_OOS_PROFILE = "non_dl_validation_plateau_best_patience100_oos"
-STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE = "non_dl_validation_plateau_best_patience100_rolling"
+STRATEGY_COMPARE_CURRENT_OOS_PROFILE = "non_dl_validation_plateau_best_quarter_off_oos"
+STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE = "non_dl_validation_plateau_best_quarter_off_rolling"
 STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS = "non_dl_production_multiseed_oos"
 STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS = "non_dl_production_multiseed_rolling"
 STRATEGY_COMPARE_DEFAULT_PROFILE = STRATEGY_COMPARE_CURRENT_OOS_PROFILE

@@ -3368,15 +3368,21 @@ def _validation_budget_build_contract(
         parameter_set_identity=parameter_set_identity,
         validation_protocol_id=validation_protocol_id,
     )
+    from core.strategy_param_policy import resolve_validation_strategy_param_training_profile
+
+    profile = resolve_validation_strategy_param_training_profile(parameter_set, protocol_id)
     spec = resolve_validation_budget_spec(
         int(base["trials_per_fold"]), protocol_id=protocol_id
     )
-    return {
+    contract = {
         **base,
         "parameter_set": parameter_set,
         "optimizer_search_protocol": spec.protocol,
         "validation_budget_refit": spec.as_dict(),
     }
+    if profile.score_policy_overrides:
+        contract["score_policy_overrides"] = dict(profile.score_policy_overrides)
+    return contract
 
 
 
@@ -3596,6 +3602,7 @@ def ensure_validation_budget_robustness_strategy_parameter_artifact(
             f"Optimizer {contract['parameter_set']} robustness工作工件（非production）"
         ),
         optimizer_search_protocol=spec.protocol, parameter_set_identity=str(contract["parameter_set"]),
+        score_policy_overrides=dict(contract.get("score_policy_overrides") or {}),
         oos_end_cap_date=oos_end_cap_date,
     )
     source = Path(result["params_path"]).resolve()
@@ -3891,6 +3898,7 @@ def ensure_validation_budget_strategy_parameter_artifact(
         ),
         optimizer_search_protocol=spec.protocol,
         parameter_set_identity=str(contract["parameter_set"]),
+        score_policy_overrides=dict(contract.get("score_policy_overrides") or {}),
         oos_end_cap_date=oos_end_cap_date,
     )
     source = Path(result["params_path"]).resolve()

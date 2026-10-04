@@ -12427,3 +12427,14 @@ Decision：`ENGINEERING_ONLY / C89_CURRENT_EVIDENCE_AUTO_REBUILD / LEGACY_EVIDEN
 - **Scientific boundary**：Audit只使用training/full-refit evidence；`OOS used for score selection = NO`。Counterfactual score不寫回study、不參與fitting、不建立第二score engine；若historical score無法由persisted policy exact重建即BLOCKED。Audit不選新Quarter floor、Monthly target或公式。
 
 Decision：`C89_DETERMINISTIC_CONTROL_READY / PATIENCE_EXTENSION_STOP / ZERO_COLLAPSE_AUDIT_ACTIVE / TRAINING_EVIDENCE_ONLY / NO_OOS_FEEDBACK / NO_SCORE_CHANGE_YET`。
+
+## 2026-10-04 — Optimizer score zero-collapse Audit result + PARAM-P12 / C91 Quarter-off treatment
+
+- **Audit result / stop condition reached**：`AUD-optimizer-score-zero-collapse`只讀P10/C89 `optimizer_resume_determinism_v1` deterministic full-refit training studies。6 folds共`162` qualified trials；canonical exact-zero=`120/74.1%`，Quarter multiplier erased=`120/74.1%`，兩者逐trial完全重合。Monthly heavy compression=`55/34.0%`，存在但不是exact-zero的必要來源。各foldQuarter-off canonical reconstruction均恢復非零可排序score；2022/2023/2024/2025的best trial亦改變。
+- **Mechanism decision**：zero-collapse主因確定為現行minimum-quarter-return multiplier的hard-zero shape，而不是resume、selector或validation patience。P11/C90已證明提高patience到100仍保留2025 zero；因此patience線停止。Audit未使用OOS做score selection，也未寫回study或挑選新floor/target。
+- **New scientific identity**：新增`PARAM-P12 / SR-C91`。完整複製P10/C89的Full/formal/`base-finalist-best`、Seed42、120M selection、trailing12M validation、max300、observation start1、minimum stop50、patience50、interval1、min_delta0、fresh full-refit與OOS feedback=False；**唯一scientific change=`SCORE_MIN_QUARTER_RETURN_AMP_ENABLED: True→False`**。Monthly multiplier與所有其他score component保持不變。Primary=`C91-C89`。
+- **Implementation boundary**：不修改`config/training_policy.py` canonical global score。新增profile-level scientific score override，於producer boundary注入同一`strategy_param_scientific_contract`，training objective與inner-validation共同消費；override同時納入P12 runtime/cache/build identity，避免跨score-shape resume/reuse。P10/C89維持immutable Quarter-ON control。
+- **Evaluation boundary**：P12建立後可由current Forward/Rolling Compare消費；OOS仍只能作evaluation，不得反饋選Quarter floor、target、Monthly或其他score公式。是否再做score-shape experiment須等C91單變量結果。
+
+Decision：`ZERO_COLLAPSE_ATTRIBUTED_TO_QUARTER_HARD_ZERO / AUDIT_DECISION_COMPLETE / AUDIT_IMPLEMENTATION_RETIRED / PARAM_P12_C91_REGISTERED / QUARTER_OFF_ONLY_VARIABLE / C89_QUARTER_ON_CONTROL_PRESERVED / MONTHLY_UNCHANGED / NO_OOS_FEEDBACK / RESULT_PENDING`.
+
