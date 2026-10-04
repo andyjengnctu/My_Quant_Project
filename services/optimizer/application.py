@@ -1313,7 +1313,7 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
     log_path = str((task or {}).get("log_path") or "")
 
     def _execute() -> dict | None:
-        from services.optimizer.runtime import create_optimizer_study, resolve_optimizer_single_fold_search_parallel_trials
+        from services.optimizer.runtime import create_optimizer_study, resolve_optimizer_sampler_kind, resolve_optimizer_single_fold_search_parallel_trials
         from services.optimizer.robustness import print_local_min_score_finalist_review, print_local_min_score_winner_summary
         from services.optimizer.session import close_study_storage
         from services.optimizer.study_utils import build_best_params_payload_from_trial, is_qualified_trial_value
@@ -1348,7 +1348,7 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
             task_db_name = task.get("db_name")
             if isinstance(task_db_name, str) and task_db_name.strip().lower() in {"", "none", "null"}:
                 task_db_name = None
-            study = create_optimizer_study(task_db_name, seed=int(seed), sampler_kind="tpe")
+            study = create_optimizer_study(task_db_name, seed=int(seed), sampler_kind=resolve_optimizer_sampler_kind())
             _ensure_study_effective_policy_compatible(study=study, walk_forward_policy=walk_forward_policy)
             _emit_nonrolling_seed_process_progress_event(
                 task,
@@ -1375,7 +1375,7 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
                 elapsed_sec=0.0,
                 search_started_ts=search_started_ts,
             )
-            search_parallel_trials = resolve_optimizer_single_fold_search_parallel_trials(task.get("environ") or os.environ, sampler_kind="tpe")
+            search_parallel_trials = resolve_optimizer_single_fold_search_parallel_trials(task.get("environ") or os.environ, sampler_kind=resolve_optimizer_sampler_kind())
             study.optimize(
                 member_session.objective,
                 n_trials=int(requested_trials),
@@ -2088,6 +2088,8 @@ def _run_nonrolling_random_seed_ensemble_training(
     resolve_optimizer_single_fold_search_parallel_trials,
     build_best_params_payload_from_trial,
 ):
+    from services.optimizer.runtime import resolve_optimizer_sampler_kind
+
     if int(requested_trials) <= 0:
         return None
     if not os.path.isdir(selected_data_dir):
@@ -2149,7 +2151,7 @@ def _run_nonrolling_random_seed_ensemble_training(
 
     if compact_display:
         from services.optimizer.outer_rolling_live_boards import OptimizerSeedEnsembleProgressBoard
-        from services.optimizer.outer_rolling_progress import format_optimizer_seed_ensemble_progress_header
+        from services.optimizer.outer_rolling_progress import format_optimizer_progress_performance_header
 
         period_context = _build_nonrolling_single_fold_period_context(walk_forward_policy)
         contexts = []
@@ -2167,7 +2169,7 @@ def _run_nonrolling_random_seed_ensemble_training(
             contexts.append(context)
         def _format_nonrolling_seed_header(board):
             completed = board.get_completed_fold_count() if hasattr(board, "get_completed_fold_count") else 0
-            return format_optimizer_seed_ensemble_progress_header(
+            return format_optimizer_progress_performance_header(
                 folds=1,
                 seeds=len(seeds),
                 min_agree=None if selected_policy_uses_finalist_agreement else int(policy["min_agree"]),
@@ -2190,8 +2192,8 @@ def _run_nonrolling_random_seed_ensemble_training(
         )
         progress_board.render(force=True)
     else:
-        from services.optimizer.outer_rolling_progress import format_optimizer_seed_ensemble_progress_header
-        print(f"{C_GRAY}{format_optimizer_seed_ensemble_progress_header(folds=1, seeds=len(seeds), min_agree=None if selected_policy_uses_finalist_agreement else int(policy['min_agree']), parallel_workers=int(parallel_workers), selector=selected_policy_for_progress or None, backend=parallel_backend, completed_folds=0, total_elapsed_sec=0.0, completed_trials=0)}{C_RESET}")
+        from services.optimizer.outer_rolling_progress import format_optimizer_progress_performance_header
+        print(f"{C_GRAY}{format_optimizer_progress_performance_header(folds=1, seeds=len(seeds), min_agree=None if selected_policy_uses_finalist_agreement else int(policy['min_agree']), parallel_workers=int(parallel_workers), selector=selected_policy_for_progress or None, backend=parallel_backend, completed_folds=0, total_elapsed_sec=0.0, completed_trials=0)}{C_RESET}")
     configure_optuna_logging()
 
     def _emit_seed_progress_for_member(member_index: int, seed: int, **kwargs) -> None:
@@ -2224,7 +2226,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                 )
             else:
                 print(f"{C_CYAN}[seed {member_index}/{len(seeds)}] trials={int(requested_trials)}{C_RESET}")
-            study = create_optimizer_study(None, seed=int(seed), sampler_kind="tpe")
+            study = create_optimizer_study(None, seed=int(seed), sampler_kind=resolve_optimizer_sampler_kind())
             ensure_study_effective_policy_compatible(study=study, walk_forward_policy=walk_forward_policy)
             if compact_display:
                 _emit_seed_progress_for_member(member_index, int(seed),
@@ -2240,7 +2242,7 @@ def _run_nonrolling_random_seed_ensemble_training(
             )
             member_session.profile_recorder.init_output_files()
             member_session.profile_recorder.mark_run_started()
-            search_parallel_trials = resolve_optimizer_single_fold_search_parallel_trials(environ, sampler_kind="tpe")
+            search_parallel_trials = resolve_optimizer_single_fold_search_parallel_trials(environ, sampler_kind=resolve_optimizer_sampler_kind())
             search_callbacks = [member_session.monitoring_callback]
             # 多 seed 並行時避免多個 inline trial progress 同時爭用 stdout；仍保留 seed-level rolling 同源進度。
             emit_trial_progress = compact_display
@@ -2937,9 +2939,12 @@ def _build_optimizer_study_db_file_path(
 def _resolve_optimizer_db_file_for_mode(*, output_dir: str, dataset_profile_key: str, selected_model_mode: str, selected_study_scope: str, session_ts: str, timing_mode: bool, dataset_generation_namespace: str | None = None) -> str:
     from services.optimizer.benchmark import build_timing_db_file_path
 
+    normalized_mode = normalize_optimizer_model_mode(selected_model_mode)
     if bool(timing_mode):
-        return build_timing_db_file_path(output_dir=output_dir, dataset_profile_key=dataset_profile_key, session_ts=session_ts)
-    if normalize_optimizer_model_mode(selected_model_mode) == "study":
+        if normalized_mode == "study" or bool(OPTIMIZER_PERSIST_STUDY_DB):
+            return build_timing_db_file_path(output_dir=output_dir, dataset_profile_key=dataset_profile_key, session_ts=session_ts)
+        return ""
+    if normalized_mode == "study":
         return _build_optimizer_study_db_file_path(
             output_dir=output_dir,
             dataset_profile_key=dataset_profile_key,
@@ -3105,6 +3110,7 @@ def main(argv=None, environ=None):
         maybe_print_history_best,
         print_resolved_trial_count,
         prompt_existing_db_policy,
+        resolve_optimizer_sampler_kind,
         resolve_optimizer_single_fold_search_parallel_trials,
         resolve_training_session_export_policy,
         resolve_trial_count_or_exit,
@@ -3368,7 +3374,7 @@ def main(argv=None, environ=None):
                 study = create_optimizer_study(
                     db_name,
                     seed=(int(optimizer_seed) if optimizer_seed is not None else 0),
-                    sampler_kind=("random" if timing_mode else "tpe"),
+                    sampler_kind=resolve_optimizer_sampler_kind(),
                 )
                 _ensure_study_effective_policy_compatible(study=study, walk_forward_policy=walk_forward_policy)
                 best_trial = session.get_best_completed_trial_or_none(study)
@@ -3419,7 +3425,7 @@ def main(argv=None, environ=None):
         try:
             ensure_optimizer_db_usable(db_file)
             ensure_export_only_db_not_empty(db_file)
-            study = create_optimizer_study(db_name, seed=optimizer_seed, sampler_kind=("random" if timing_mode else "tpe"))
+            study = create_optimizer_study(db_name, seed=optimizer_seed, sampler_kind=resolve_optimizer_sampler_kind())
             _ensure_study_effective_policy_compatible(study=study, walk_forward_policy=walk_forward_policy)
         except RuntimeError as exc:
             print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
@@ -3568,7 +3574,7 @@ def main(argv=None, environ=None):
             os.makedirs(os.path.dirname(db_file), exist_ok=True)
         if os.path.exists(db_file):
             ensure_optimizer_db_usable(db_file)
-        sampler_kind = "random" if timing_mode else "tpe"
+        sampler_kind = resolve_optimizer_sampler_kind()
         study = create_optimizer_study(db_name, seed=optimizer_seed, sampler_kind=sampler_kind)
         _ensure_study_effective_policy_compatible(study=study, walk_forward_policy=walk_forward_policy)
     except (ValueError, RuntimeError) as exc:

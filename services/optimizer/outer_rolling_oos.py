@@ -103,7 +103,7 @@ from services.optimizer.validation_budget_refit import (
 )
 from services.optimizer.outer_rolling_progress import (
     PARALLEL_FOLD_PROGRESS_PREFIX,
-    _collect_seed_progress_phase_metrics,
+    _collect_optimizer_progress_phase_metrics,
     _count_local_min_completed_from_progress,
     _count_local_min_completed_neighbors_from_progress,
     _effective_resume_total_elapsed,
@@ -121,7 +121,7 @@ from services.optimizer.outer_rolling_progress import (
     build_optimizer_study_progress_snapshot,
     build_optimizer_seed_ensemble_live_lines,
     format_optimizer_final_performance_summary,
-    format_optimizer_seed_ensemble_progress_header,
+    format_optimizer_progress_performance_header,
     read_optimizer_seed_progresses_from_log_paths,
     render_optimizer_fold_progress_line,
     render_optimizer_seed_progress_line,
@@ -650,6 +650,27 @@ from services.optimizer.walk_forward import evaluate_walk_forward
 
 
 
+def _collect_parallel_task_performance_metrics(tasks: list[dict]) -> dict:
+    task_items = [dict(task) for task in list(tasks or [])]
+    if any(_task_seed_ensemble_enabled(task) for task in task_items):
+        progress_items = (
+            progress
+            for task in task_items
+            for progress in dict(_read_latest_parallel_fold_seed_progresses_for_task(task) or {}).values()
+        )
+    else:
+        progress_items = (
+            _read_latest_parallel_fold_progress(str(task.get("log_path") or ""))
+            for task in task_items
+        )
+    phase_metrics = _collect_optimizer_progress_phase_metrics(progress_items)
+    replay_metrics = _collect_parallel_fold_replay_phase_metrics(task_items)
+    return {
+        **dict(phase_metrics or {}),
+        **dict(replay_metrics or {}),
+    }
+
+
 def _run_missing_parallel_fold_tasks_sequentially(*, tasks: list[dict], rows: list[dict], fold_timing_rows: list[dict], chain_state: dict, cause: BaseException | None = None) -> dict:
     completed_oos = {int((row or {}).get("oos_year", 0) or 0) for row in list(rows or []) if row}
     completed_oos.update(
@@ -673,6 +694,12 @@ def _run_missing_parallel_fold_tasks_sequentially(*, tasks: list[dict], rows: li
         f"{len(missing_tasks)} 個 fold{cause_text}{C_RESET}",
         flush=True,
     )
+    missing_oos = {int(task.get("oos_year", 0) or 0) for task in missing_tasks}
+    performance_tasks = [
+        dict(task)
+        for task in list(tasks or [])
+        if int(task.get("oos_year", 0) or 0) not in missing_oos
+    ]
     for task in missing_tasks:
         fallback_task = dict(task)
         fallback_task["log_path"] = _parallel_fold_log_path_for_fallback(str(task.get("log_path") or ""))
@@ -690,9 +717,11 @@ def _run_missing_parallel_fold_tasks_sequentially(*, tasks: list[dict], rows: li
         except Exception as exc:
             raise RuntimeError(_build_parallel_fold_failure_message(task=fallback_task, exc=exc, label="sequential fallback fold failed")) from exc
         _consume_parallel_fold_result(result=result, rows=rows, fold_timing_rows=fold_timing_rows, chain_state=chain_state)
+        performance_tasks.append(dict(fallback_task))
         row = (result or {}).get("row")
         if row is not None:
             _print_parallel_fold_result(row)
+    chain_state["optimizer_performance_metrics"] = _collect_parallel_task_performance_metrics(performance_tasks)
     return chain_state
 
 
@@ -727,17 +756,7 @@ def _run_parallel_fold_futures(*, executor, tasks: list[dict], rows: list[dict],
             live_board.render(pending=pending, future_map=future_map, completed_rows=rows, fold_timing_rows=fold_timing_rows, force=bool(done))
     finally:
         live_board.close()
-    if any(_task_seed_ensemble_enabled(task) for task in list(tasks or [])):
-        phase_metrics = _collect_seed_progress_phase_metrics(
-            progress
-            for task in list(tasks or [])
-            for progress in dict(_read_latest_parallel_fold_seed_progresses_for_task(task) or {}).values()
-        )
-        replay_metrics = _collect_parallel_fold_replay_phase_metrics(list(tasks or []))
-        chain_state["seed_ensemble_performance_metrics"] = {
-            **dict(phase_metrics or {}),
-            **dict(replay_metrics or {}),
-        }
+    chain_state["optimizer_performance_metrics"] = _collect_parallel_task_performance_metrics(tasks)
     chain_state["retryable_fold_failures"] = retryable_failures
     return chain_state
 
@@ -1131,7 +1150,7 @@ def _run_outer_rolling_oos_fold_ensemble_task(task: dict) -> dict:
             local_min_wall_elapsed_sec=local_min_wall_elapsed_sec,
             replay_wall_elapsed_sec=replay_wall_elapsed_sec,
         )
-        return format_optimizer_seed_ensemble_progress_header(
+        return format_optimizer_progress_performance_header(
             folds=1,
             seeds=len(seeds),
             min_agree=(
@@ -2180,7 +2199,8 @@ def run_outer_rolling_oos(
     _apply_outer_rolling_process_environ(environ)
     fold_workers = _resolve_rolling_fold_workers(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
     fold_parallel_enabled = _is_rolling_fold_parallel_enabled(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
-    sampler_kind = "random" if bool(timing_mode) else "tpe"
+    from services.optimizer.runtime import resolve_optimizer_sampler_kind
+    sampler_kind = resolve_optimizer_sampler_kind()
     plan_validation_spec = (
         resolve_validation_budget_spec(
             int(config.trials_per_fold),
@@ -2222,7 +2242,7 @@ def run_outer_rolling_oos(
         fold_workers=int(fold_workers),
         sampler_kind=sampler_kind,
     )
-    seed_ensemble_performance_metrics: dict = {}
+    optimizer_performance_metrics: dict = {}
     shared_raw_context = None
     seed_ensemble_process_parallel = False
     if seed_ensemble_enabled:
@@ -2348,7 +2368,7 @@ def run_outer_rolling_oos(
             chain_max_positions = int(chain_state.get("chain_max_positions"))
         if chain_state.get("chain_enable_rotation") is not None:
             chain_enable_rotation = bool(chain_state.get("chain_enable_rotation"))
-        seed_ensemble_performance_metrics = dict(chain_state.get("seed_ensemble_performance_metrics") or {})
+        optimizer_performance_metrics = dict(chain_state.get("optimizer_performance_metrics") or {})
         rows[:] = sorted((normalize_optimizer_seed_ensemble_fold_row(item) for item in rows), key=optimizer_seed_ensemble_row_sort_key)
         fold_timing_rows.sort(key=lambda item: int(item.get("fold_idx", 0) or 0))
         for idx, row in enumerate(rows, start=1):
@@ -2863,6 +2883,7 @@ def run_outer_rolling_oos(
         config=config,
         timing_mode=bool(timing_mode),
         optimizer_seed=optimizer_seed,
+        sampler_kind=sampler_kind,
         raw_data_load_sec=raw_data_load_sec,
         active_replay_chain_sec=active_replay_chain_sec,
         report_write_sec=report_write_sec,
@@ -2871,6 +2892,7 @@ def run_outer_rolling_oos(
         resource_summary=resource_sampler.summary(),
         resource_samples=resource_sampler.samples,
         performance_alignment_rows=performance_alignment_rows,
+        progress_performance_metrics=optimizer_performance_metrics,
         write_files=bool(timing_mode),
     )
     final_report = _format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained_for_report), color=True)
@@ -2885,10 +2907,10 @@ def run_outer_rolling_oos(
     show_seed_min_agree = bool(progress_display_contract.get("show_seed_min_agree", True))
     show_local_min = bool(progress_display_contract.get("show_local_min", True))
     selector_for_display = str(progress_display_contract.get("selector") or "").strip() or None
-    if not seed_ensemble_performance_metrics:
-        seed_ensemble_performance_metrics = {
+    if not optimizer_performance_metrics:
+        optimizer_performance_metrics = {
             "completed_trials": int(timing_summary.get("completed_trials", 0) or 0),
-            "search_wall_elapsed_sec": float(timing_summary.get("optimize_sum_sec", 0.0) or 0.0),
+            "search_wall_elapsed_sec": timing_summary.get("search_wall_elapsed_sec"),
             "completed_local_min_trials": int(timing_summary.get("local_min_neighbors_evaluated", 0) or 0),
             "local_min_wall_elapsed_sec": float(timing_summary.get("local_min_review_sum_sec", 0.0) or 0.0),
             "completed_replays": 0,
@@ -2901,20 +2923,20 @@ def run_outer_rolling_oos(
         completed_folds=int(len(rows)),
         selector=selector_for_display,
         total_elapsed_sec=float(timing_summary.get("overall_sec", max(0.0, time.perf_counter() - overall_start)) or 0.0),
-        completed_trials=int(seed_ensemble_performance_metrics.get("completed_trials", 0) or 0),
-        search_wall_elapsed_sec=seed_ensemble_performance_metrics.get("search_wall_elapsed_sec"),
+        completed_trials=int(optimizer_performance_metrics.get("completed_trials", 0) or 0),
+        search_wall_elapsed_sec=optimizer_performance_metrics.get("search_wall_elapsed_sec"),
         completed_local_min_trials=(
-            int(seed_ensemble_performance_metrics.get("completed_local_min_trials", 0) or 0)
+            int(optimizer_performance_metrics.get("completed_local_min_trials", 0) or 0)
             if show_local_min
             else 0
         ),
         local_min_wall_elapsed_sec=(
-            seed_ensemble_performance_metrics.get("local_min_wall_elapsed_sec")
+            optimizer_performance_metrics.get("local_min_wall_elapsed_sec")
             if show_local_min
             else None
         ),
-        completed_replays=int(seed_ensemble_performance_metrics.get("completed_replays", 0) or 0),
-        replay_wall_elapsed_sec=seed_ensemble_performance_metrics.get("replay_wall_elapsed_sec"),
+        completed_replays=int(optimizer_performance_metrics.get("completed_replays", 0) or 0),
+        replay_wall_elapsed_sec=optimizer_performance_metrics.get("replay_wall_elapsed_sec"),
         resource_summary=timing_summary,
         seed_ensemble_enabled=bool(seed_ensemble_enabled),
         color=True,

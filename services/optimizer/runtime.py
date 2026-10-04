@@ -45,9 +45,15 @@ def prompt_existing_db_policy(db_file, colors):
 OPTIMIZER_LEGACY_STUDY_NAME = "portfolio_optimization_overnight"
 OPTIMIZER_DETERMINISTIC_RESUME_STUDY_NAME = "portfolio_optimization_overnight_resume_safe_v1"
 OPTIMIZER_EXECUTION_EVIDENCE_CONTRACT = "optimizer_resume_determinism_v1"
+OPTIMIZER_CANONICAL_SAMPLER_KIND = "tpe"
 _OPTIMIZER_SAMPLER_PRE_CHECKPOINT_KEY = "optimizer_sampler_rng_pre_v1"
 _OPTIMIZER_SAMPLER_POST_CHECKPOINT_KEY = "optimizer_sampler_rng_post_v1"
 _OPTIMIZER_SAMPLER_CHECKPOINT_SCHEMA = "optimizer_sampler_rng_checkpoint_v1"
+
+
+def resolve_optimizer_sampler_kind() -> str:
+    """Return the canonical production sampler used by Research, Trading, and timing."""
+    return OPTIMIZER_CANONICAL_SAMPLER_KIND
 
 
 def _deterministic_optimizer_study_name(*, sampler_kind: str, optuna_version: str) -> str:

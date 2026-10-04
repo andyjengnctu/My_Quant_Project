@@ -39,7 +39,6 @@ from config.training_performance_policy import (
     OPTIMIZER_OUTER_ROLLING_PROFILE_WRITE_FILES,
     OPTIMIZER_OUTER_ROLLING_STUDY_STORAGE,
     OPTIMIZER_OUTER_ROLLING_TIMING_RESOURCE_WRITE_CSV,
-    OPTIMIZER_OUTER_ROLLING_TIMING_SEARCH_PARALLEL_TRIALS,
     OPTIMIZER_PORTFOLIO_PREP_AUTO_MAX_WORKERS,
     OPTIMIZER_PORTFOLIO_PREP_PARALLEL_MIN_TICKERS,
     OPTIMIZER_PORTFOLIO_PREP_WORKERS,
@@ -178,15 +177,6 @@ def resolve_optimizer_local_min_signal_dependency_field_order() -> tuple[str, ..
 def resolve_optimizer_single_fold_search_parallel_trials_default():
     return _coerce_int(
         OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS,
-        default=1,
-        min_value=1,
-        max_value=16,
-    )
-
-
-def resolve_optimizer_outer_rolling_timing_search_parallel_trials_default():
-    return _coerce_int(
-        OPTIMIZER_OUTER_ROLLING_TIMING_SEARCH_PARALLEL_TRIALS,
         default=1,
         min_value=1,
         max_value=16,
@@ -482,11 +472,9 @@ def is_optimizer_active_replay_write_prepared_cache_enabled(environ=None) -> boo
 
 def build_optimizer_outer_rolling_env_defaults(fold_count: int, *, timing_mode: bool = False) -> dict[str, str]:
     timing_mode = bool(timing_mode)
-    search_parallel_trials = (
-        resolve_optimizer_outer_rolling_timing_search_parallel_trials_default()
-        if timing_mode
-        else resolve_optimizer_single_fold_search_parallel_trials_default()
-    )
+    # Timing is observability-only.  Execution defaults are identical to normal
+    # Research/Trading runtime; only diagnostic output may be enabled here.
+    search_parallel_trials = resolve_optimizer_single_fold_search_parallel_trials_default()
     resource_write_csv = (
         is_optimizer_outer_rolling_timing_resource_write_csv_enabled_default()
         if timing_mode
@@ -524,7 +512,6 @@ def build_training_performance_policy_snapshot(fold_count=None, seed_ensemble_si
         "OPTIMIZER_COMPILED_SIGNAL_KERNELS": is_optimizer_compiled_signal_kernels_enabled(),
         "OPTIMIZER_NATIVE_HOTPATH_KERNELS": is_optimizer_native_hotpath_kernels_enabled(),
         "OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS": resolve_optimizer_single_fold_search_parallel_trials_default(),
-        "OPTIMIZER_OUTER_ROLLING_TIMING_SEARCH_PARALLEL_TRIALS": resolve_optimizer_outer_rolling_timing_search_parallel_trials_default(),
         "OPTIMIZER_OUTER_ROLLING_TIMING_RESOURCE_WRITE_CSV": is_optimizer_outer_rolling_timing_resource_write_csv_enabled_default(),
         "OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH": is_optimizer_single_fold_tpe_parallel_search_allowed_default(),
         "OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_WORKERS": resolve_optimizer_single_fold_local_min_parallel_workers_default(),

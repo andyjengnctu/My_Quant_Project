@@ -353,7 +353,7 @@ def _merge_progress_phase_metrics(target: dict, progress: dict) -> None:
         target["local_min_last_done_ts"] = max(float(target.get("local_min_last_done_ts", 0.0) or 0.0), float(local_end))
 
 
-def _collect_seed_progress_phase_metrics(progresses) -> dict:
+def _collect_optimizer_progress_phase_metrics(progresses) -> dict:
     merged_by_key: dict[tuple[int, int], dict] = {}
     anonymous_index = 0
     for raw in list(progresses or []):
@@ -404,7 +404,10 @@ def _collect_seed_progress_phase_metrics(progresses) -> dict:
     }
 
 
-def format_optimizer_seed_ensemble_progress_header(
+_collect_seed_progress_phase_metrics = _collect_optimizer_progress_phase_metrics
+
+
+def format_optimizer_progress_performance_header(
     *,
     folds: int,
     seeds: int,
@@ -424,7 +427,7 @@ def format_optimizer_seed_ensemble_progress_header(
     completed_replays: int | None = None,
     replay_wall_elapsed_sec: float | None = None,
 ) -> str:
-    """Format the seed-ensemble progress header used by rolling and non-rolling paths."""
+    """Format canonical optimizer performance telemetry for any fold/seed topology."""
     _ = (parallel_workers, backend, pending_folds, fold_elapsed_sec, setup_elapsed_sec)
     parts = [
         f"folds={int(folds)}",
@@ -462,6 +465,9 @@ def format_optimizer_seed_ensemble_progress_header(
     return " | ".join(parts)
 
 
+format_optimizer_seed_ensemble_progress_header = format_optimizer_progress_performance_header
+
+
 def _optimizer_resource_usage_suffix(summary: dict | None) -> str:
     payload = dict(summary or {})
     if not bool(payload.get("resource_sampling_available", False)):
@@ -497,7 +503,7 @@ def format_optimizer_final_performance_summary(
     This is intentionally shared by rolling and non-rolling; callers only provide
     different fold counts and collected metrics.
     """
-    header = format_optimizer_seed_ensemble_progress_header(
+    header = format_optimizer_progress_performance_header(
         folds=int(folds),
         seeds=int(seeds),
         min_agree=None if min_agree is None else int(min_agree),
@@ -879,114 +885,71 @@ def build_optimizer_seed_ensemble_live_lines(
 
 
 def _read_latest_parallel_fold_seed_progresses(path: str) -> dict[int, dict]:
+    """Read latest seed events and attach canonical cumulative phase telemetry."""
     if not path or not os.path.exists(path):
         return {}
+    latest: dict[int, dict] = {}
+    phase_metrics_by_member: dict[int, dict] = {}
+    latest_best_base: dict[int, object] = {}
+    latest_best_local: dict[int, object] = {}
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
-            lines = handle.readlines()
+            for line in handle:
+                raw = str(line).strip()
+                if not raw.startswith(PARALLEL_FOLD_PROGRESS_PREFIX):
+                    continue
+                payload = _safe_progress_json_loads(raw.split("\t", 1)[1])
+                try:
+                    member_index = int(payload.get("seed_ensemble_member_index", 0) or 0)
+                except (TypeError, ValueError):
+                    member_index = 0
+                if member_index <= 0:
+                    continue
+                latest[member_index] = dict(payload)
+                metrics = phase_metrics_by_member.setdefault(member_index, {})
+                _merge_progress_phase_metrics(metrics, payload)
+                base_candidate = payload.get("best_base_score")
+                if base_candidate is None:
+                    base_candidate = payload.get("best_score")
+                if base_candidate is not None:
+                    latest_best_base[member_index] = base_candidate
+                local_candidate = payload.get("best_local_min_score")
+                if local_candidate is None and str(payload.get("stage") or "").upper() == "LOCAL_MIN_REVIEW":
+                    local_candidate = payload.get("best")
+                if local_candidate is not None:
+                    latest_best_local[member_index] = local_candidate
     except OSError:
         return {}
-    latest: dict[int, dict] = {}
-    events_by_member: dict[int, list[dict]] = {}
-    completed_by_member: dict[int, int] = {}
-    local_completed_by_member: dict[int, int] = {}
-    local_neighbor_completed_by_member: dict[int, int] = {}
-    for line in reversed(lines[-2000:]):
-        raw = str(line).strip()
-        if not raw.startswith(PARALLEL_FOLD_PROGRESS_PREFIX):
-            continue
-        payload = _safe_progress_json_loads(raw.split("\t", 1)[1])
-        try:
-            member_index = int(payload.get("seed_ensemble_member_index", 0) or 0)
-        except (TypeError, ValueError):
-            member_index = 0
-        if member_index <= 0:
-            continue
-        events_by_member.setdefault(member_index, []).append(dict(payload))
-        try:
-            completed = int(payload.get("completed", 0) or 0)
-        except (TypeError, ValueError):
-            completed = 0
-        if completed > int(completed_by_member.get(member_index, 0) or 0):
-            completed_by_member[member_index] = int(completed)
-        local_completed = _count_local_min_completed_from_progress(payload)
-        if local_completed > int(local_completed_by_member.get(member_index, 0) or 0):
-            local_completed_by_member[member_index] = int(local_completed)
-        local_neighbor_completed = _count_local_min_completed_neighbors_from_progress(payload)
-        if local_neighbor_completed > int(local_neighbor_completed_by_member.get(member_index, 0) or 0):
-            local_neighbor_completed_by_member[member_index] = int(local_neighbor_completed)
-        if member_index not in latest:
-            latest[member_index] = payload
+
     for member_index, payload in list(latest.items()):
-        completed = int(completed_by_member.get(member_index, 0) or 0)
+        metrics = dict(phase_metrics_by_member.get(member_index) or {})
+        completed = int(metrics.get("completed_trials", 0) or 0)
         if completed > int(payload.get("completed", 0) or 0):
-            payload["completed"] = int(completed)
-        local_completed = int(local_completed_by_member.get(member_index, 0) or 0)
+            payload["completed"] = completed
+        local_completed = int(metrics.get("completed_local_min_finalists", 0) or 0)
         if local_completed > int(payload.get("local_min_completed", 0) or 0):
-            payload["local_min_completed"] = int(local_completed)
-        local_neighbor_completed = int(local_neighbor_completed_by_member.get(member_index, 0) or 0)
+            payload["local_min_completed"] = local_completed
+        local_neighbor_completed = int(metrics.get("completed_local_min_neighbors", 0) or 0)
         if local_neighbor_completed > int(payload.get("local_min_neighbor_completed", 0) or 0):
-            payload["local_min_neighbor_completed"] = int(local_neighbor_completed)
-        events = events_by_member.get(member_index, [])
-        if payload.get("best_base_score") is None:
-            for event in events:
-                candidate = event.get("best_base_score")
-                if candidate is None:
-                    candidate = event.get("best_score")
-                if candidate is not None:
-                    payload["best_base_score"] = candidate
-                    break
-        if payload.get("best_local_min_score") is None:
-            for event in events:
-                candidate = event.get("best_local_min_score")
-                if candidate is None and str(event.get("stage") or "").upper() == "LOCAL_MIN_REVIEW":
-                    candidate = event.get("best")
-                if candidate is not None:
-                    payload["best_local_min_score"] = candidate
-                    break
-        search_starts = []
-        search_dones = []
-        local_starts = []
-        local_dones = []
-        search_active_intervals: list[list[float]] = []
-        for event in events:
-            stage = str(event.get("stage") or "").upper()
-            ts = _safe_progress_ts(event)
-            search_active_intervals.extend(
-                _normalize_progress_active_intervals(event.get("search_active_intervals"))
-            )
-            search_start = _safe_progress_float(event, "search_started_ts")
-            if search_start is not None:
-                search_starts.append(search_start)
-            elif stage == "OPTIMIZER_SEARCH" and ts is not None and int(event.get("completed", 0) or 0) <= 0:
-                search_starts.append(ts)
-            search_done = _safe_progress_float(event, "search_last_done_ts")
-            if search_done is not None:
-                search_dones.append(search_done)
-            elif stage == "OPTIMIZER_SEARCH" and ts is not None and int(event.get("completed", 0) or 0) > 0:
-                search_dones.append(ts)
-            local_start = _safe_progress_float(event, "local_min_started_ts")
-            if local_start is not None:
-                local_starts.append(local_start)
-            local_done = _safe_progress_float(event, "local_min_last_neighbor_done_ts")
-            if local_done is None:
-                local_done = _safe_progress_float(event, "local_min_last_done_ts")
-            if local_done is not None:
-                local_dones.append(local_done)
-            elif _count_local_min_completed_neighbors_from_progress(event) > 0 and ts is not None:
-                local_dones.append(ts)
-        if search_starts:
-            payload["search_started_ts"] = min(search_starts)
-        if search_dones:
-            payload["search_last_done_ts"] = max(search_dones)
-        if search_active_intervals:
-            payload["search_active_intervals"] = _merge_progress_active_intervals(search_active_intervals)
-            payload["search_active_elapsed_sec"] = _progress_active_elapsed_sec(search_active_intervals)
-        if local_starts:
-            payload["local_min_started_ts"] = min(local_starts)
-        if local_dones:
-            payload["local_min_last_neighbor_done_ts"] = max(local_dones)
-            payload["local_min_last_done_ts"] = max(local_dones)
+            payload["local_min_neighbor_completed"] = local_neighbor_completed
+        if payload.get("best_base_score") is None and member_index in latest_best_base:
+            payload["best_base_score"] = latest_best_base[member_index]
+        if payload.get("best_local_min_score") is None and member_index in latest_best_local:
+            payload["best_local_min_score"] = latest_best_local[member_index]
+        for key in (
+            "search_started_ts",
+            "search_last_done_ts",
+            "search_active_intervals",
+            "local_min_started_ts",
+            "local_min_last_done_ts",
+        ):
+            if metrics.get(key) is not None:
+                payload[key] = metrics[key]
+        active_intervals = _normalize_progress_active_intervals(metrics.get("search_active_intervals"))
+        if active_intervals:
+            payload["search_active_elapsed_sec"] = _progress_active_elapsed_sec(active_intervals)
+        if metrics.get("local_min_last_done_ts") is not None:
+            payload["local_min_last_neighbor_done_ts"] = metrics["local_min_last_done_ts"]
     return latest
 
 

@@ -2344,7 +2344,6 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
             "OPTIMIZER_FEATURE_BANK_MAX_ITEMS",
             "OPTIMIZER_NATIVE_HOTPATH_KERNELS",
             "OPTIMIZER_TIMING_MODE_DEFAULT_TRIALS",
-            "OPTIMIZER_OUTER_ROLLING_TIMING_SEARCH_PARALLEL_TRIALS",
             "OPTIMIZER_OUTER_ROLLING_TIMING_RESOURCE_WRITE_CSV",
             "OPTIMIZER_ROLLING_SHARED_PREP_CACHE_MAX_ITEMS",
             "OPTIMIZER_FULL_EVAL_CACHE_MAX_ITEMS",
@@ -2359,7 +2358,6 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
             "build_training_performance_policy_snapshot",
             "build_optimizer_outer_rolling_env_defaults",
             "resolve_optimizer_rolling_fold_workers_default",
-            "resolve_optimizer_outer_rolling_timing_search_parallel_trials_default",
             "is_optimizer_outer_rolling_timing_resource_write_csv_enabled_default",
             "resolve_optimizer_rolling_shared_prep_cache_max_items",
             "resolve_optimizer_full_evaluation_cache_max_items",
@@ -2622,15 +2620,54 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         results,
         "meta_coverage",
         case_id,
-        "outer_rolling_timing_defaults_isolate_fold_concurrency_and_write_resource_samples",
+        "outer_rolling_timing_defaults_preserve_execution_policy_and_enable_resource_samples",
         (
-            str(performance_runtime.resolve_optimizer_outer_rolling_timing_search_parallel_trials_default()),
+            outer_defaults.get("OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS"),
             "1" if performance_runtime.is_optimizer_outer_rolling_timing_resource_write_csv_enabled_default() else "0",
         ),
         (
             timing_outer_defaults.get("OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS"),
             timing_outer_defaults.get("OPTIMIZER_RESOURCE_WRITE_CSV"),
         ),
+    )
+
+    optimizer_runtime = importlib.import_module("services.optimizer.runtime")
+    optimizer_progress = importlib.import_module("services.optimizer.outer_rolling_progress")
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "optimizer_timing_uses_canonical_production_sampler",
+        "tpe",
+        optimizer_runtime.resolve_optimizer_sampler_kind(),
+    )
+    telemetry_probe = optimizer_progress._collect_optimizer_progress_phase_metrics([
+        {
+            "fold_idx": 1,
+            "seed_ensemble_member_index": 1,
+            "completed": 4,
+            "search_active_intervals": [[100.0, 104.0]],
+        },
+        {
+            "fold_idx": 2,
+            "seed_ensemble_member_index": 1,
+            "completed": 4,
+            "search_active_intervals": [[100.0, 104.0]],
+        },
+    ])
+    telemetry_header = optimizer_progress.format_optimizer_progress_performance_header(
+        folds=2, seeds=1, min_agree=None, parallel_workers=0, backend="",
+        completed_folds=0, total_elapsed_sec=4.0,
+        completed_trials=telemetry_probe.get("completed_trials"),
+        search_wall_elapsed_sec=telemetry_probe.get("search_wall_elapsed_sec"),
+    )
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "optimizer_timing_and_research_share_canonical_trial_throughput_formatter",
+        True,
+        "avg_trial=0.500s" in telemetry_header and "avg_all=0.500s" in telemetry_header,
     )
 
     outer_runtime = importlib.import_module("services.optimizer.outer_rolling_oos")
@@ -2691,6 +2728,32 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         outer_timing_sweep.parse_outer_rolling_timing_worker_sweep("1,2,2,4"),
     )
 
+    sweep_metric_probe = outer_timing_sweep._build_case_row(
+        requested_workers=2,
+        returncode=0,
+        timing_path=Path("outer_rolling_oos_timing_probe.json"),
+        payload={
+            "meta": {"completed_trials": 8},
+            "summary": {
+                "overall_sec": 4.0,
+                "effective_trial_wall_sec": 0.5,
+                "avg_optimize_sec_per_completed_trial": 1.25,
+            },
+        },
+        project_root=Path("."),
+    )
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "outer_rolling_timing_sweep_avg_trial_uses_canonical_effective_wall_metric",
+        (0.5, 1.25),
+        (
+            float(sweep_metric_probe.get("avg_trial_sec", 0.0) or 0.0),
+            float(sweep_metric_probe.get("avg_compute_trial_sec", 0.0) or 0.0),
+        ),
+    )
+
     windows_memory_probe = outer_performance._ResourceUsageSampler._read_windows_memory if os.name == "nt" else None
     if windows_memory_probe is not None:
         windows_memory_sample = windows_memory_probe()
@@ -2720,6 +2783,7 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         ),
         timing_mode=False,
         optimizer_seed=1,
+        sampler_kind="tpe",
         raw_data_load_sec=0.0,
         active_replay_chain_sec=0.0,
         report_write_sec=0.0,

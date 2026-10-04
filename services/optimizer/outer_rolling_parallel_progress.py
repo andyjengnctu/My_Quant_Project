@@ -13,6 +13,7 @@ from core.path_utils import project_relative_display_path
 from services.optimizer.outer_rolling_fold_context import normalize_optimizer_seed_ensemble_fold_row
 from services.optimizer.outer_rolling_progress import (
     PARALLEL_FOLD_PROGRESS_PREFIX,
+    _merge_progress_phase_metrics,
     _safe_progress_float,
     _safe_progress_json_loads,
     _safe_progress_ts,
@@ -145,21 +146,45 @@ def _latest_parallel_fold_log_status(path: str, *, max_chars: int = PARALLEL_FOL
 
 
 def _read_latest_parallel_fold_progress(path: str) -> dict:
+    """Return the latest fold event with canonical cumulative phase telemetry attached."""
     if not path or not os.path.exists(path):
         return {}
+    latest: dict = {}
+    phase_metrics: dict = {}
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
-            lines = handle.readlines()
+            for line in handle:
+                raw = str(line).strip()
+                if not raw.startswith(PARALLEL_FOLD_PROGRESS_PREFIX):
+                    continue
+                payload = _safe_progress_json_loads(raw.split("\t", 1)[1])
+                if not payload:
+                    continue
+                latest = dict(payload)
+                _merge_progress_phase_metrics(phase_metrics, payload)
     except OSError:
         return {}
-    for line in reversed(lines[-240:]):
-        raw = str(line).strip()
-        if not raw.startswith(PARALLEL_FOLD_PROGRESS_PREFIX):
-            continue
-        payload = _safe_progress_json_loads(raw.split("\t", 1)[1])
-        if payload:
-            return payload
-    return {}
+    if not latest:
+        return {}
+    completed_trials = int(phase_metrics.get("completed_trials", 0) or 0)
+    if completed_trials > int(latest.get("completed", 0) or 0):
+        latest["completed"] = completed_trials
+    local_neighbors = int(phase_metrics.get("completed_local_min_neighbors", 0) or 0)
+    if local_neighbors > int(latest.get("local_min_neighbor_completed", 0) or 0):
+        latest["local_min_neighbor_completed"] = local_neighbors
+    local_finalists = int(phase_metrics.get("completed_local_min_finalists", 0) or 0)
+    if local_finalists > int(latest.get("local_min_completed", 0) or 0):
+        latest["local_min_completed"] = local_finalists
+    for key in (
+        "search_started_ts",
+        "search_last_done_ts",
+        "search_active_intervals",
+        "local_min_started_ts",
+        "local_min_last_done_ts",
+    ):
+        if phase_metrics.get(key) is not None:
+            latest[key] = phase_metrics[key]
+    return latest
 
 
 def _read_parallel_fold_result_row(path: str) -> dict | None:

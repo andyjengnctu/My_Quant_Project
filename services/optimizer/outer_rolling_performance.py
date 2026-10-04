@@ -284,9 +284,9 @@ def _build_training_performance_alignment_rows(environ, *, fold_count: int, fold
         {
             "item": "sampler_kind",
             "normal_mode": str(sampler_kind),
-            "timing_mode": "random",
-            "consistent": str(sampler_kind).strip().lower() == "random",
-            "result_scope": "正式模式保留 TPE 選參；timing mode 保留 random 量測口徑，這是刻意差異",
+            "timing_mode": str(sampler_kind),
+            "consistent": True,
+            "result_scope": "timing 只增加觀測，不得改變 optimizer sampler／trial sequence／updates",
             "display": "timing JSON root: sampler_kind / console final timing summary",
         },
         {

@@ -218,6 +218,7 @@ def _write_outer_timing_summary(
     config: OuterRollingConfig,
     timing_mode: bool,
     optimizer_seed,
+    sampler_kind: str,
     raw_data_load_sec: float,
     active_replay_chain_sec: float,
     report_write_sec: float,
@@ -226,6 +227,7 @@ def _write_outer_timing_summary(
     resource_summary: dict | None = None,
     resource_samples: list[dict] | None = None,
     performance_alignment_rows: list[dict] | None = None,
+    progress_performance_metrics: dict | None = None,
     write_files: bool = False,
 ) -> dict:
     report_dir = os.path.join(output_dir, "outer_rolling_oos")
@@ -236,7 +238,9 @@ def _write_outer_timing_summary(
     resource_csv_path = os.path.join(report_dir, f"outer_rolling_oos_resource_{session_ts}.csv") if resource_write_csv else ""
     if bool(write_files):
         os.makedirs(report_dir, exist_ok=True)
-    sampler_kind = "random" if bool(timing_mode) else "tpe"
+    sampler_kind = str(sampler_kind or "").strip().lower()
+    if not sampler_kind:
+        raise ValueError("outer rolling timing summary requires canonical sampler_kind")
     single_fold_search_parallel_trials = _resolve_single_fold_search_parallel_trials(os.environ, sampler_kind=sampler_kind)
     single_fold_allow_tpe_parallel_search = False if sampler_kind == "tpe" else _env_flag(
         os.environ,
@@ -317,6 +321,16 @@ def _write_outer_timing_summary(
     prep_feature_bank_misses = sum(int(row.get("prep_feature_bank_misses", 0) or 0) for row in list(fold_timing_rows or []))
     prep_feature_bank_size_max = max((int(row.get("prep_feature_bank_size_max", 0) or 0) for row in list(fold_timing_rows or [])), default=0)
     prep_feature_bank_max_items = max((int(row.get("prep_feature_bank_max_items", 0) or 0) for row in list(fold_timing_rows or [])), default=0)
+    progress_metrics = dict(progress_performance_metrics or {})
+    search_wall_elapsed_sec = progress_metrics.get("search_wall_elapsed_sec")
+    performance_completed_trials = int(progress_metrics.get("completed_trials", 0) or 0)
+    if performance_completed_trials <= 0:
+        performance_completed_trials = int(completed_trials)
+    effective_trial_wall_sec = (
+        float(search_wall_elapsed_sec) / float(performance_completed_trials)
+        if performance_completed_trials > 0 and search_wall_elapsed_sec is not None
+        else 0.0
+    )
     payload = {
         "type": "outer_rolling_oos_timing",
         "version": 1,
@@ -352,6 +366,9 @@ def _write_outer_timing_summary(
             "report_write_sec": float(report_write_sec),
             "fold_total_sum_sec": float(fold_total_sec),
             "avg_optimize_sec_per_completed_trial": (float(optimize_sec) / float(completed_trials)) if completed_trials > 0 else 0.0,
+            "performance_completed_trials": int(performance_completed_trials),
+            "search_wall_elapsed_sec": None if search_wall_elapsed_sec is None else float(search_wall_elapsed_sec),
+            "effective_trial_wall_sec": float(effective_trial_wall_sec),
             "single_fold_search_parallel_trials": int(single_fold_search_parallel_trials),
             "single_fold_allow_tpe_parallel_search": bool(single_fold_allow_tpe_parallel_search),
             "avg_fold_total_sec": (float(fold_total_sec) / float(len(fold_timing_rows))) if fold_timing_rows else 0.0,

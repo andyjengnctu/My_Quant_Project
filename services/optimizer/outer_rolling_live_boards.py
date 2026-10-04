@@ -25,7 +25,7 @@ from services.optimizer.outer_rolling_policy import (
     _is_rolling_random_seed_ensemble_enabled,
 )
 from services.optimizer.outer_rolling_progress import (
-    _collect_seed_progress_phase_metrics,
+    _collect_optimizer_progress_phase_metrics,
     _count_local_min_completed_from_progress,
     _count_local_min_completed_neighbors_from_progress,
     _effective_resume_total_elapsed,
@@ -38,7 +38,7 @@ from services.optimizer.outer_rolling_progress import (
     _safe_progress_ts,
     _seed_progress_context_key,
     build_optimizer_seed_ensemble_live_lines,
-    format_optimizer_seed_ensemble_progress_header,
+    format_optimizer_progress_performance_header,
 )
 from services.optimizer.outer_rolling_results import _render_optimizer_results_tables
 
@@ -338,7 +338,7 @@ class _ParallelFoldLiveBoard:
             )
             show_local_min = bool(progress_display_contract.get("show_local_min", True))
             seed_progress_maps = {id(task): _read_latest_parallel_fold_seed_progresses_for_task(task) for task in self.tasks}
-            phase_metrics = _collect_seed_progress_phase_metrics(
+            phase_metrics = _collect_optimizer_progress_phase_metrics(
                 progress
                 for progress_map in seed_progress_maps.values()
                 for progress in dict(progress_map or {}).values()
@@ -353,7 +353,7 @@ class _ParallelFoldLiveBoard:
                 ),
                 replay_wall_elapsed_sec=replay_metrics.get("replay_wall_elapsed_sec"),
             )
-            header = format_optimizer_seed_ensemble_progress_header(
+            header = format_optimizer_progress_performance_header(
                 folds=total_folds,
                 seeds=seed_count,
                 min_agree=(
@@ -421,14 +421,36 @@ class _ParallelFoldLiveBoard:
             )
         else:
             _ = (pending, fold_wall_elapsed, setup_elapsed)
-            header = (
-                f"⏱️ Rolling fold parallel | completed={len(completed_rows_sorted)}/{total_folds} | "
-                f"total_time={_fmt_duration(total_elapsed)}"
+            progress_by_task = {
+                id(task): _read_latest_parallel_fold_progress(str(task.get("log_path") or ""))
+                for task in self.tasks
+            }
+            phase_metrics = _collect_optimizer_progress_phase_metrics(progress_by_task.values())
+            total_elapsed = _effective_resume_total_elapsed(
+                total_elapsed,
+                search_wall_elapsed_sec=phase_metrics.get("search_wall_elapsed_sec"),
+                local_min_wall_elapsed_sec=phase_metrics.get("local_min_wall_elapsed_sec"),
+            )
+            header = format_optimizer_progress_performance_header(
+                folds=total_folds,
+                seeds=1,
+                min_agree=None,
+                parallel_workers=0,
+                backend="",
+                completed_folds=len(completed_rows_sorted),
+                pending_folds=len(pending),
+                total_elapsed_sec=total_elapsed,
+                fold_elapsed_sec=fold_wall_elapsed,
+                setup_elapsed_sec=setup_elapsed,
+                completed_trials=int(phase_metrics.get("completed_trials", 0) or 0),
+                search_wall_elapsed_sec=phase_metrics.get("search_wall_elapsed_sec"),
+                completed_local_min_trials=int(phase_metrics.get("completed_local_min_trials", 0) or 0),
+                local_min_wall_elapsed_sec=phase_metrics.get("local_min_wall_elapsed_sec"),
             )
             lines = [f"{C_CYAN}{header}{C_RESET}"]
             for task in self.tasks:
                 log_path = str(task.get("log_path") or "")
-                progress = _read_latest_parallel_fold_progress(log_path)
+                progress = dict(progress_by_task.get(id(task)) or {})
                 if int(task.get("oos_year", 0) or 0) in completed_oos and not progress:
                     progress = {
                         "stage": "DONE",
