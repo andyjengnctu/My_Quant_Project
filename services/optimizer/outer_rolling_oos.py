@@ -1363,6 +1363,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
         refit_trials = int(config.trials_per_fold)
         inner_training_wall_sec = 0.0
         validation_wall_sec = 0.0
+        early_stop_trial = None
         sqlite_storage_enabled = _is_outer_rolling_sqlite_storage_enabled(os.environ)
         db_file = ""
         db_name = None
@@ -1551,6 +1552,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                                 patience=int(data.get("patience", 0) or 0),
                                 stop_eligible=bool(data.get("stop_eligible", False)),
                                 stop_reason=data.get("stop_reason"),
+                                early_stop_trial=data.get("early_stop_trial"),
                                 status="STOP" if data.get("stop_reason") else "RUN",
                             )
 
@@ -1620,6 +1622,12 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                         dict(validation_budget_result or {}).get("validation_wall_sec", 0.0) or 0.0
                     )
                     refit_trials = int(validation_budget_result["selected_trials"])
+                    early_stop_trial = (
+                        int(validation_budget_result.get("stop_trial"))
+                        if str(validation_budget_result.get("stop_reason") or "") == "validation_plateau"
+                        and validation_budget_result.get("stop_trial") is not None
+                        else None
+                    )
                     stop_text = (
                         f" | stop={int(validation_budget_result.get('stop_trial') or 0)}"
                         f"/{validation_budget_result.get('stop_reason')}"
@@ -1685,6 +1693,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 initial_best_score=resume_progress.get("best_base_score"),
                 historical_search_intervals=resume_progress.get("search_active_intervals"),
                 selected_n=(int(refit_trials) if validation_budget_spec is not None else None),
+                early_stop_trial=early_stop_trial,
             )
             existing_trials, remaining_trials = _remaining_optimizer_trials(
                 study, int(refit_trials)
@@ -1870,6 +1879,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 best_base_score=best_base_score,
                 best_local_min_score=best_local_min_score,
                 selected_n=(int(refit_trials) if validation_budget_spec is not None else None),
+                early_stop_trial=early_stop_trial,
                 training_wall_sec=float(inner_training_wall_sec + optimize_sec + local_elapsed),
                 validation_wall_sec=float(validation_wall_sec),
                 oos_wall_sec=0.0,
@@ -1898,6 +1908,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 best_base_score=best_base_score,
                 best_local_min_score=best_local_min_score,
                 selected_n=(int(refit_trials) if validation_budget_spec is not None else None),
+                early_stop_trial=early_stop_trial,
                 training_wall_sec=float(inner_training_wall_sec + optimize_sec + local_elapsed),
                 validation_wall_sec=float(validation_wall_sec),
                 oos_wall_sec=float(oos_diagnostics_sec),
@@ -2008,6 +2019,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 best_base_score=best_base_score,
                 best_local_min_score=best_local_min_score,
                 selected_n=(int(refit_trials) if validation_budget_spec is not None else None),
+                early_stop_trial=early_stop_trial,
                 training_wall_sec=float(inner_training_wall_sec + optimize_sec + local_elapsed),
                 validation_wall_sec=float(validation_wall_sec),
                 oos_wall_sec=float(oos_diagnostics_sec),

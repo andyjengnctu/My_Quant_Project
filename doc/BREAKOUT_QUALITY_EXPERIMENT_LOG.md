@@ -12385,3 +12385,11 @@ Decision：`PARAM_P11_C90_REGISTERED / PATIENCE_100_ONLY_VARIABLE / C89_PATIENCE
 - **N* clarification**：P11 T11的`N*=11`只是當時validation best；後續T57創新高，最終在T157 plateau stop時selected `N*=57`。P10先前selected `N*=12`不可直接與P11早期T11比較。
 
 Decision：`FORWARD_OOS_12M_RESTORED / ROLLING_PARTIAL_TAIL_EXPLICIT_CAP / P11_IDENTITY_UNCHANGED / EXISTING_C90_C89_EVIDENCE_NOT_MATCHED_TRIAL_AB / FRESH_CONTROL_REQUIRED_FOR_STRICT_PATIENCE_ATTRIBUTION`.
+
+## 2026-10-04 — Rolling early-stop trial observability（engineering-only）
+
+- **User request**：在既有Rolling live board已顯示`N* / Train / Val / OOS`之上，再明確顯示每個adaptive-validation fold實際在哪一個trial觸發early stop。
+- **Engineering correction**：adaptive validation progress event新增`early_stop_trial`，只在`stop_reason=validation_plateau`時有值；validation stop當下、後續fresh refit optimizer、OOS diagnostics與fold DONE都沿同一machine field持續傳遞，live board統一顯示`EarlyStop=T<n>`。若該fold跑到`max_trials`而未early stop，欄位不顯示，避免把一般停止誤標成early stop。
+- **Scientific boundary**：純observability；不改P11/C90 patience、N* selection、sampler、score、trial順序、validation replay、OOS boundary或artifact identity。
+
+Decision：`ENGINEERING_ONLY / ROLLING_EARLY_STOP_TRIAL_VISIBLE / SCIENTIFIC_SEMANTICS_UNCHANGED`。

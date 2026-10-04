@@ -2401,6 +2401,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             "selection_end": "2025-12-31",
             "best_base_score": 0.168898,
             "selected_n": 87,
+            "early_stop_trial": 157,
             "training_wall_sec": 123.0,
             "validation_wall_sec": 45.0,
             "oos_wall_sec": 20.0,
@@ -2412,9 +2413,42 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         True,
         "OOS 26-01-01~26-03-02" in timing_progress_line
         and "N*=87" in timing_progress_line
+        and "EarlyStop=T157" in timing_progress_line
         and "Train=" in timing_progress_line
         and "Val=" in timing_progress_line
         and "OOS=" in timing_progress_line,
+    )
+    validation_stop_progress_line = _format_parallel_fold_progress_line(
+        {
+            "fold_idx": 1,
+            "fold_count": 6,
+            "oos_year": 202101,
+            "oos_period": "2021-01-01~2021-12-31",
+            "selection_period": "2011-01-01~2020-12-31",
+            "show_oos": True,
+            "progress_display_contract": {"show_local_min": False},
+        },
+        {
+            "stage": "VALIDATION_SEARCH",
+            "selection_start": "2011-01-01",
+            "selection_end": "2020-12-31",
+            "completed": 157,
+            "total": 300,
+            "selected_n": 57,
+            "best_validation_score": 0.004399,
+            "validation_wall_sec": 45.0,
+            "no_improve": 100,
+            "patience": 100,
+            "stop_reason": "validation_plateau",
+            "early_stop_trial": 157,
+        },
+    )
+    check(
+        "outer_rolling_validation_progress_shows_early_stop_trial",
+        True,
+        "validation 157/300" in validation_stop_progress_line
+        and "N*=57" in validation_stop_progress_line
+        and "EarlyStop=T157" in validation_stop_progress_line,
     )
     from services.optimizer import validation_budget_refit as validation_budget_refit_module
     validation_replay_session = SimpleNamespace(

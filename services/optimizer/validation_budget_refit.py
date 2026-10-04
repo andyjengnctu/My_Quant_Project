@@ -835,6 +835,12 @@ class AdaptiveValidationBudgetController:
                 "patience": int(self.spec.patience_trials or 0),
                 "stop_eligible": bool(count >= _adaptive_min_stop_trial(self.spec)),
                 "stop_reason": state.get("stop_reason"),
+                "early_stop_trial": (
+                    int(state.get("stop_trial"))
+                    if str(state.get("stop_reason") or "") == "validation_plateau"
+                    and state.get("stop_trial") is not None
+                    else None
+                ),
             })
 
     def catch_up(self, study) -> dict[str, Any]:
