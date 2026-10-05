@@ -1846,17 +1846,49 @@ def _benchmark_workspace_source_path(
     return schedule_root / "active_params" / filename
 
 
+def _benchmark_optimizer_work_roots_for_inspection(
+    root: Path, *, benchmark_id: str, seed: int, family: str
+) -> tuple[Path, ...]:
+    """Return current + legacy Optimizer work roots without mutating either tree."""
+
+    current_root = resolve_strategy_param_optimizer_work_dir(
+        root,
+        scope=STRATEGY_PARAM_WORK_SCOPE_BENCHMARK,
+        benchmark_id=str(benchmark_id),
+        seed=int(seed),
+        family=normalize_strategy_param_family(family),
+    )
+    benchmark_dir = resolve_strategy_param_benchmark_dir(
+        root,
+        benchmark_id=str(benchmark_id),
+        seed=int(seed),
+        family=normalize_strategy_param_family(family),
+        evaluation_mode="rolling",
+    )
+    legacy_root = (
+        benchmark_dir
+        / "_optimizer_work"
+        / f"seed_{int(seed)}"
+        / normalize_strategy_param_family(family)
+    )
+    roots: list[Path] = []
+    for candidate in (Path(current_root), Path(legacy_root)):
+        if candidate not in roots:
+            roots.append(candidate)
+    return tuple(roots)
+
+
 def _benchmark_fast_republish_source(
     *, root: Path, benchmark_id: str, seed: int, family: str, policy: str,
     target_path: Path, manifest_path: Path, build_contract: dict[str, Any],
     scientific_identity: dict[str, Any], comparison_end_date: str,
 ) -> Path | None:
-    """Return an existing workspace payload that can repair publication metadata only.
+    """Return proof that publication metadata can be repaired without training.
 
-    This is intentionally stricter than simply trusting the target JSON: the current
-    target and the retained optimizer workspace output must normalize to the same
-    payload, the workspace fitting contract must match all scientific inputs, and
-    coverage/selector must still satisfy the requested schedule.
+    A bound manifest whose scientific hash/identity/contract still match is already
+    sufficient proof when only raw publication bytes drifted.  Otherwise a retained
+    current or legacy Optimizer workspace may prove the same scientific payload.
+    The helper is read-only so rendering a plan never migrates historical workspace.
     """
 
     if not target_path.is_file():
@@ -1872,42 +1904,51 @@ def _benchmark_fast_republish_source(
     manifest = _load_json_object(manifest_path)
     artifact = dict(dict((manifest or {}).get("artifacts") or {}).get(policy) or {})
     source = dict(artifact.get("source") or {})
-    if dict(source.get("scientific_identity") or {}) != _derived_scientific_identity_record(
-        scientific_identity
-    ):
+    expected_identity = _derived_scientific_identity_record(scientific_identity)
+    if dict(source.get("scientific_identity") or {}) != expected_identity:
         return None
-    work_root = resolve_strategy_param_optimizer_work_dir(
-        root,
-        scope=STRATEGY_PARAM_WORK_SCOPE_BENCHMARK,
-        benchmark_id=str(benchmark_id),
-        seed=int(seed),
-        family=normalize_strategy_param_family(family),
+    target_scientific_sha = compute_strategy_param_scientific_sha256(target_path)
+    manifest_scientific_sha = str(artifact.get("scientific_sha256") or "").strip().lower()
+    manifest_contract_matches = (
+        _benchmark_build_contract_scientific_payload(
+            dict(source.get("build_contract") or {})
+        )
+        == _benchmark_build_contract_scientific_payload(build_contract)
     )
-    work_contract_path = Path(work_root) / "work_contract.json"
-    source_path = _benchmark_workspace_source_path(
-        Path(work_root), family=family, policy=policy
-    )
-    if not work_contract_path.is_file() or not source_path.is_file():
-        return None
-    try:
-        retained_contract = load_json_strict(work_contract_path)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(retained_contract, dict):
-        return None
-    if _benchmark_build_contract_scientific_payload(retained_contract) != (
-        _benchmark_build_contract_scientific_payload(build_contract)
+    if (
+        manifest_contract_matches
+        and manifest_scientific_sha
+        and manifest_scientific_sha == target_scientific_sha
     ):
-        return None
-    source_payload = _load_json_object_permissive(source_path)
-    if source_payload is None:
-        return None
-    # Publication metadata (for example created_at/meta diagnostics) is allowed to
-    # differ.  Fast repair is safe when both retained payloads resolve to the same
-    # replay-scientific schedule identity.
-    if compute_strategy_param_scientific_sha256(source_path) != compute_strategy_param_scientific_sha256(target_path):
-        return None
-    return source_path.resolve()
+        # The manifest is already bound to the exact registered scientific identity
+        # and fitted-input contract.  A raw SHA mismatch is publication-only drift.
+        return target_path.resolve()
+
+    for work_root in _benchmark_optimizer_work_roots_for_inspection(
+        root, benchmark_id=str(benchmark_id), seed=int(seed), family=family
+    ):
+        work_contract_path = Path(work_root) / "work_contract.json"
+        source_path = _benchmark_workspace_source_path(
+            Path(work_root), family=family, policy=policy
+        )
+        if not work_contract_path.is_file() or not source_path.is_file():
+            continue
+        try:
+            retained_contract = load_json_strict(work_contract_path)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(retained_contract, dict):
+            continue
+        if _benchmark_build_contract_scientific_payload(retained_contract) != (
+            _benchmark_build_contract_scientific_payload(build_contract)
+        ):
+            continue
+        if _load_json_object_permissive(source_path) is None:
+            continue
+        if compute_strategy_param_scientific_sha256(source_path) != target_scientific_sha:
+            continue
+        return source_path.resolve()
+    return None
 
 
 def _benchmark_manifest_matches_current_policy(
@@ -2206,13 +2247,41 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
         }
 
     if str(state["action"]) == "REPAIR" and not force_rebuild:
-        source_path = Path(state["repair_source_path"]).resolve()
-        work_root = resolve_strategy_param_optimizer_work_dir(
-            root, scope=STRATEGY_PARAM_WORK_SCOPE_BENCHMARK,
-            benchmark_id=str(benchmark_id), seed=int(seed), family=family,
-        )
-        _assert_optimizer_work_source(source_path=source_path, work_root=Path(work_root))
-        _write_json(Path(work_root) / "work_contract.json", dict(build_contract))
+        repair_proof = Path(state["repair_source_path"]).resolve()
+        source_path = repair_proof
+        if repair_proof != target.resolve():
+            # Actual execution may migrate a compatible legacy workspace into the
+            # current outputs/optimizer namespace.  Plan inspection above remains
+            # read-only; migration happens only when the user executes the repair.
+            work_root = _benchmark_optimizer_work_root(
+                root, benchmark_id=str(benchmark_id), seed=int(seed), family=family
+            )
+            source_path = _benchmark_workspace_source_path(
+                Path(work_root), family=family, policy=policy
+            ).resolve()
+            _assert_optimizer_work_source(source_path=source_path, work_root=Path(work_root))
+            if not source_path.is_file():
+                raise FileNotFoundError(
+                    "benchmark publication repair source disappeared after workspace migration: "
+                    + _project_relative(root, source_path)
+                )
+            if compute_strategy_param_scientific_sha256(source_path) != (
+                compute_strategy_param_scientific_sha256(target)
+            ):
+                raise RuntimeError(
+                    "benchmark publication repair source scientific SHA drifted after workspace migration"
+                )
+            _write_json(Path(work_root) / "work_contract.json", dict(build_contract))
+        else:
+            old_manifest = _load_json_object(manifest_path) or {}
+            old_artifact = dict(dict(old_manifest.get("artifacts") or {}).get(policy) or {})
+            old_source = dict(old_artifact.get("source") or {})
+            old_source_path = str(old_source.get("path") or "").strip()
+            if old_source_path:
+                candidate = (root / old_source_path).resolve()
+                if candidate.is_file():
+                    source_path = candidate
+
         initial_member_sha = _benchmark_effective_member_sha256(target)
         manifest = refresh_strategy_parameter_benchmark_manifest(
             root, benchmark_id=str(benchmark_id), seed=int(seed), family=family,
@@ -2306,6 +2375,14 @@ def ensure_robustness_benchmark_strategy_parameter_artifact(
     published_paths: dict[str, Path] = {}
     source_records: dict[str, dict[str, Any]] = {}
     for compare_policy, optimizer_policy in COMPARE_PARAM_POLICY_TO_OPTIMIZER_POLICY.items():
+        # Optimizer workspaces may emit convenience selectors that are not registered
+        # canonical products for this family (for example Min + finalists-agree).
+        # Publication must be driven by the canonical strategy-param registry, not by
+        # whatever files happen to exist in the workspace.
+        if resolve_canonical_strategy_param_training_profile(
+            family, optimizer_policy
+        ) is None:
+            continue
         source_path = _benchmark_workspace_source_path(
             work_root, family=family, policy=optimizer_policy
         ).resolve()
@@ -3283,6 +3360,44 @@ def _fixed_multiseed_robustness_scientific_identity(
     )
 
 
+def _fixed_multiseed_robustness_repair_source(
+    *, root: Path, training_profile_id: str, benchmark_id: str, replication_seed: int,
+    policy: str, target: Path, manifest: dict[str, Any] | None,
+) -> Path | None:
+    """Return proof of publication-only drift for an already-trained replicate.
+
+    Bound manifest scientific SHA is sufficient when available.  Older manifests
+    can still be repaired without retraining when the retained Optimizer workspace
+    resolves to the exact same runtime-scientific parameter payload.
+    """
+
+    if not target.is_file() or manifest is None:
+        return None
+    target_scientific_sha = compute_strategy_param_scientific_sha256(target)
+    manifest_scientific_sha = str(
+        manifest.get("artifact_scientific_sha256") or ""
+    ).strip().lower()
+    if manifest_scientific_sha and manifest_scientific_sha == target_scientific_sha:
+        return target.resolve()
+
+    work_root = (
+        root
+        / _fixed_multiseed_work_relative(training_profile_id)
+        / "benchmark"
+        / normalize_strategy_param_benchmark_id(str(benchmark_id))
+        / f"replicate_{normalize_strategy_param_benchmark_seed(int(replication_seed))}"
+    )
+    filename = fixed_multiseed_strategy_param_artifact_path(
+        root, training_profile_id=training_profile_id, policy=policy
+    ).name
+    source = Path(work_root) / "active_params" / filename
+    if not source.is_file():
+        return None
+    if compute_strategy_param_scientific_sha256(source) != target_scientific_sha:
+        return None
+    return source.resolve()
+
+
 def inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
     project_root: str | Path,
     *,
@@ -3395,18 +3510,35 @@ def inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
         "SCIENTIFIC_IDENTITY_UNREGISTERED",
         "REGISTERED_SCIENTIFIC_CONTRACT_DRIFT",
     }
-    return {
-        "ready": ready,
-        "status": status,
-        "action": (
-            "REUSE"
-            if ready
+    repair_source = None
+    if status == "ARTIFACT_SHA_MISMATCH":
+        repair_source = _fixed_multiseed_robustness_repair_source(
+            root=root,
+            training_profile_id=training_profile_id,
+            benchmark_id=str(contract["benchmark_id"]),
+            replication_seed=int(contract["robustness_replication_seed"]),
+            policy=compare_policy,
+            target=target,
+            manifest=manifest,
+        )
+    action = (
+        "REUSE"
+        if ready
+        else (
+            "BLOCKED"
+            if status in blocked_statuses
             else (
-                "BLOCKED"
-                if status in blocked_statuses
+                "REPAIR"
+                if repair_source is not None
                 else ("REBUILD" if existed else "BUILD")
             )
-        ),
+        )
+    )
+    return {
+        "ready": ready,
+        "status": ("PUBLICATION_METADATA_STALE" if action == "REPAIR" else status),
+        "action": action,
+        "repair_source_path": repair_source,
         "path": target,
         "manifest_path": manifest_path,
         "coverage_end": coverage_end,
@@ -3478,6 +3610,66 @@ def ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
         }
     replicate = int(contract["robustness_replication_seed"])
     benchmark = str(contract["benchmark_id"])
+    if str(state.get("action") or "") == "REPAIR" and not force_rebuild:
+        repair_source = Path(state["repair_source_path"]).resolve()
+        if repair_source != target.resolve():
+            _assert_optimizer_work_source(
+                source_path=repair_source,
+                work_root=(
+                    root
+                    / _fixed_multiseed_work_relative(training_profile_id)
+                    / "benchmark"
+                    / benchmark
+                    / f"replicate_{replicate}"
+                ),
+            )
+            if compute_strategy_param_scientific_sha256(repair_source) != (
+                compute_strategy_param_scientific_sha256(target)
+            ):
+                raise RuntimeError(
+                    f"{contract['parameter_set']} robustness publication repair scientific SHA drift"
+                )
+        coverage_end = _canonical_schedule_coverage_end(target)
+        target_sha = compute_strategy_param_file_sha256(target)
+        target_scientific_sha = compute_strategy_param_scientific_sha256(target)
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_json(
+            manifest_path,
+            {
+                "schema_type": "strategy_parameter_research_robustness_identity",
+                "schema_version": 1,
+                "producer": "optimizer",
+                "training_dl_enabled": False,
+                "parameter_set": str(contract["parameter_set"]),
+                "family": "full",
+                "policy": compare_policy,
+                "optimizer_search_protocol": str(contract["optimizer_search_protocol"]),
+                "training_profile_id": str(contract["training_profile_id"]),
+                "fitting_seed_protocol": str(contract["fitting_seed_protocol"]),
+                "benchmark_id": benchmark,
+                "robustness_replication_seed": replicate,
+                "seed_ensemble_policy": dict(contract["seed_ensemble_policy"]),
+                "build_contract": contract,
+                "scientific_identity": _derived_scientific_identity_record(
+                    scientific_identity
+                ),
+                "artifact_path": _project_relative(root, target),
+                "artifact_sha256": target_sha,
+                "artifact_scientific_sha256": target_scientific_sha,
+                "coverage_end": coverage_end,
+                "production_promotion": False,
+            },
+        )
+        return {
+            "action": "REPAIR",
+            "path": target,
+            "manifest_path": manifest_path,
+            "sha256": target_sha,
+            "scientific_sha256": target_scientific_sha,
+            "coverage_end": coverage_end,
+            "build_contract": contract,
+            "scientific_identity": scientific_identity,
+        }
     canonical_work_root = (
         root
         / _fixed_multiseed_work_relative(training_profile_id)
@@ -3563,6 +3755,7 @@ def ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
             ),
             "artifact_path": _project_relative(root, target),
             "artifact_sha256": target_sha,
+            "artifact_scientific_sha256": compute_strategy_param_scientific_sha256(target),
             "coverage_end": coverage_end,
             "production_promotion": False,
         },

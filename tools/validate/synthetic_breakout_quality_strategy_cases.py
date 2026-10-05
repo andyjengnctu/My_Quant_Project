@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shutil
+
 from .checks import run_bound_checks
 
 from .synthetic_breakout_quality_support import (
@@ -1777,6 +1779,147 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         )
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_root = Path(temp_dir)
+        min_optimizer_calls = {"count": 0}
+
+        def fake_min_benchmark_optimizer(**kwargs):
+            min_optimizer_calls["count"] += 1
+            active_dir = (
+                Path(kwargs["output_relative_dir"])
+                / "p2_dl_off_trained"
+                / "active_params"
+            )
+            active_dir.mkdir(parents=True, exist_ok=True)
+            for selector, filename in (
+                ("base_finalist_best", "roos_base_best.json"),
+                ("base_finalists_agree", "roos_base_finalists_agree.json"),
+            ):
+                payload = {
+                    "schema_type": "active_param_ensemble",
+                    "schema_version": 1,
+                    "mode": "rolling",
+                    "selector": selector,
+                    "params_ensemble_by_effective_date": {
+                        "2021-01-01": [
+                            {
+                                "member_index": 1,
+                                "seed": benchmark_seed,
+                                "params": {"high_len": 201, "atr_len": 14},
+                            }
+                        ]
+                    },
+                    "meta": {"last_oos_date": "2026-03-02"},
+                    "summary": {"oos_end_date": "2026-03-02"},
+                }
+                (active_dir / filename).write_text(json.dumps(payload), encoding="utf-8")
+            return {"params_path": active_dir / "roos_base_best.json"}
+
+        min_kwargs = {
+            "benchmark_id": str(benchmark["benchmark_id"]),
+            "seed": benchmark_seed,
+            "family": "min",
+            "evaluation_mode": "rolling",
+            "comparison_end_date": "2026-03-02",
+            "dataset": "full",
+            "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+            "model_architecture": BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+            "experiment_profile": UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+            "max_positions": int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+            "rotation": str(DEFAULT_PORTFOLIO_ROTATION),
+            "fixed_risk": float(DEFAULT_FIXED_RISK),
+            "max_position_cap_pct": float(DEFAULT_MAX_POSITION_CAP_PCT),
+            "quiet": True,
+        }
+        with patch(
+            "services.optimizer.strategy_param_training.prepare_selection_historical_p2_params",
+            side_effect=fake_min_benchmark_optimizer,
+        ):
+            min_result = ensure_robustness_benchmark_strategy_parameter_artifact(
+                temp_root, policy="base-finalist-best", **min_kwargs
+            )
+        min_manifest = json.loads(
+            Path(min_result["manifest_path"]).read_text(encoding="utf-8")
+        )
+        check_true(
+            "robustness_min_workspace_extra_agree_selector_is_not_published_as_unregistered_canonical_profile",
+            min_optimizer_calls["count"] == 1
+            and str(min_result["action"]) in {"BUILD", "REBUILD"}
+            and "base_finalist_best" in set(min_manifest.get("artifacts") or {})
+            and "base_finalists_agree" not in set(min_manifest.get("artifacts") or {}),
+        )
+    with tempfile.TemporaryDirectory() as temp_dir:
+        from services.optimizer.strategy_param_service import (
+            ensure_fixed_multiseed_robustness_strategy_parameter_artifact,
+        )
+
+        temp_root = Path(temp_dir)
+        fixed_calls = {"count": 0}
+
+        def fake_fixed_multiseed_optimizer(**kwargs):
+            fixed_calls["count"] += 1
+            active_dir = Path(kwargs["output_relative_dir"]) / "active_params"
+            active_dir.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "schema_type": "active_param_ensemble",
+                "schema_version": 1,
+                "mode": "rolling",
+                "selector": "base_finalists_agree",
+                "params_ensemble_by_effective_date": {
+                    "2021-01-01": [
+                        {
+                            "member_index": 1,
+                            "seed": benchmark_seed,
+                            "params": {"high_len": 201, "atr_len": 14},
+                        }
+                    ]
+                },
+                "breakout_quality_param_adaptation": {
+                    "parameter_set": "PARAM-P6",
+                    "optimizer_search_protocol": "fixed_multiseed_v1",
+                    "seed_ensemble_policy": dict(kwargs["seed_ensemble_policy_override"]),
+                },
+                "meta": {"last_oos_date": "2026-03-02"},
+                "summary": {"oos_end_date": "2026-03-02"},
+            }
+            target = active_dir / "roos_base_finalists_agree.json"
+            target.write_text(json.dumps(payload), encoding="utf-8")
+            return {"params_path": target}
+
+        fixed_kwargs = {
+            "training_profile_id": "production_multiseed_current",
+            "benchmark_id": str(benchmark["benchmark_id"]),
+            "replication_seed": benchmark_seed,
+            "policy": "base-finalists-agree",
+            "comparison_end_date": "2026-03-02",
+            "dataset": "full",
+            "max_positions": int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+            "rotation": str(DEFAULT_PORTFOLIO_ROTATION),
+            "fixed_risk": float(DEFAULT_FIXED_RISK),
+            "max_position_cap_pct": float(DEFAULT_MAX_POSITION_CAP_PCT),
+            "quiet": True,
+        }
+        with patch(
+            "services.optimizer.strategy_param_training.prepare_selection_historical_full_roos_params",
+            side_effect=fake_fixed_multiseed_optimizer,
+        ):
+            fixed_built = ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
+                temp_root, **fixed_kwargs
+            )
+            fixed_target = Path(fixed_built["path"])
+            fixed_payload = json.loads(fixed_target.read_text(encoding="utf-8"))
+            fixed_payload["created_at"] = "publication-only-change"
+            fixed_target.write_text(json.dumps(fixed_payload), encoding="utf-8")
+            fixed_repaired = ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
+                temp_root, **fixed_kwargs
+            )
+        check_true(
+            "robustness_fixed_multiseed_publication_only_drift_repairs_without_optimizer_retrain",
+            fixed_calls["count"] == 1
+            and str(fixed_built["action"]) in {"BUILD", "REBUILD"}
+            and str(fixed_repaired["action"]) == "REPAIR",
+        )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
         p5_calls = []
 
         def fake_p5_benchmark_optimizer(**kwargs):
@@ -1979,7 +2122,8 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                             "source": {
                                 "scientific_identity": _derived_scientific_identity_record(
                                     benchmark_scientific_identity
-                                )
+                                ),
+                                "build_contract": benchmark_build_contract,
                             }
                         }
                     }
@@ -2043,10 +2187,72 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             and compute_strategy_param_scientific_sha256(fast_target)
             == compute_strategy_param_scientific_sha256(fast_source)
         )
+
+        # A bound scientific SHA is enough to repair raw publication metadata even
+        # when the old Optimizer workspace has already been cleaned.
+        bound_manifest = json.loads(fast_manifest_path.read_text(encoding="utf-8"))
+        bound_manifest["artifacts"][benchmark_policy]["scientific_sha256"] = (
+            compute_strategy_param_scientific_sha256(fast_target)
+        )
+        fast_manifest_path.write_text(json.dumps(bound_manifest), encoding="utf-8")
+        shutil.rmtree(fast_work_root)
+        manifest_only_repair = _benchmark_fast_republish_source(
+            root=temp_root,
+            benchmark_id=str(benchmark["benchmark_id"]),
+            seed=benchmark_seed,
+            family=benchmark_family,
+            policy=benchmark_policy,
+            target_path=fast_target,
+            manifest_path=fast_manifest_path,
+            build_contract=benchmark_build_contract,
+            scientific_identity=benchmark_scientific_identity,
+            comparison_end_date="2026-03-02",
+        )
+
+        # Legacy optimizer work roots remain valid read-side repair evidence; plan
+        # inspection must find them without moving them.
+        bound_manifest["artifacts"][benchmark_policy].pop("scientific_sha256", None)
+        fast_manifest_path.write_text(json.dumps(bound_manifest), encoding="utf-8")
+        legacy_root = (
+            temp_root
+            / "models"
+            / "strategy_params"
+            / "benchmark"
+            / str(benchmark["benchmark_id"])
+            / "_optimizer_work"
+            / f"seed_{benchmark_seed}"
+            / benchmark_family
+        )
+        legacy_source = (
+            legacy_root
+            / "schedule_2021_forward"
+            / "p2_dl_off_trained"
+            / "active_params"
+            / "roos_base_best.json"
+        )
+        legacy_source.parent.mkdir(parents=True, exist_ok=True)
+        legacy_source.write_text(json.dumps(fast_source_payload), encoding="utf-8")
+        (legacy_root / "work_contract.json").write_text(
+            json.dumps(retained_contract), encoding="utf-8"
+        )
+        legacy_workspace_repair = _benchmark_fast_republish_source(
+            root=temp_root,
+            benchmark_id=str(benchmark["benchmark_id"]),
+            seed=benchmark_seed,
+            family=benchmark_family,
+            policy=benchmark_policy,
+            target_path=fast_target,
+            manifest_path=fast_manifest_path,
+            build_contract=benchmark_build_contract,
+            scientific_identity=benchmark_scientific_identity,
+            comparison_end_date="2026-03-02",
+        )
     run_bound_checks(
         check_true,
         (
             ('robustness_benchmark_publication_only_stale_uses_fast_repair_not_optimizer_resume', publication_only_repair == fast_source.resolve() and scientific_change_not_repairable is None,),
+            ('robustness_benchmark_bound_manifest_scientific_sha_repairs_without_retained_workspace', manifest_only_repair == fast_target.resolve(),),
+            ('robustness_benchmark_legacy_optimizer_workspace_remains_read_side_repair_evidence', legacy_workspace_repair == legacy_source.resolve(),),
             ('strategy_param_runtime_identity_ignores_created_at_and_diagnostic_metadata', publication_raw_differs_but_scientific_matches,),
         ),
     )
