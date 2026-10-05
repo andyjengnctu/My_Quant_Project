@@ -1389,7 +1389,11 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     ).read_text(encoding="utf-8")
     from core.strategy_compare_policy import get_strategy_multi_seed_robustness_settings
     from services.research.strategy_multi_seed_robustness import (
+        _benchmark_param_binding,
         _benchmark_identity_payload,
+        _current_strategy_only_unit_scientific_signature,
+        _discover_registered_strategy_only_scientific_reuse,
+        _prepare_benchmark_strategy_parameter_artifacts,
         _scientific_benchmark_parameter_identities,
         _build_durable_result_artifacts,
         _model_artifact_identity_payload,
@@ -1592,7 +1596,140 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         ),
     )
 
+    # Regression: durable strategy-only observations are upstream of the current
+    # benchmark-param publication.  A BUILD/REBUILD parameter state must not stop
+    # historical arm x seed discovery before the source observation can supply the
+    # committed strategy-param scientific SHA.
     from core.strategy_compare_policy import get_strategy_comparison_settings
+    current_rolling_robustness = get_strategy_multi_seed_robustness_settings(
+        "non_dl_reference_only_rolling"
+    )
+    current_rolling_settings = get_strategy_comparison_settings(
+        current_rolling_robustness.profile_id
+    )
+    historical_seed = int(current_rolling_robustness.resolved_seeds[0])
+    historical_arm = next(
+        current_rolling_settings.arms[arm_id]
+        for arm_id in current_rolling_robustness.stochastic_arm_ids
+        if not current_rolling_settings.arms[arm_id].dl_enabled
+        and str(
+            _benchmark_param_binding(
+                settings=current_rolling_settings,
+                robustness=current_rolling_robustness,
+                arm=current_rolling_settings.arms[arm_id],
+                seed=historical_seed,
+            )["producer_variant"]
+        ) == "canonical_schedule_v1"
+    )
+    single_unit_robustness = replace(
+        current_rolling_robustness,
+        seed_count=1,
+        resolved_seeds=(historical_seed,),
+        stochastic_arm_ids=(historical_arm.arm_id,),
+        benchmark_strategy_arm_ids=(historical_arm.arm_id,),
+        model_seed_sensitive_arm_ids=(),
+        consensus_reference_arm_ids=(),
+        paired_contrasts=(),
+    )
+    with tempfile.TemporaryDirectory(prefix="robustness_result_first_reuse_") as temp_dir:
+        fake_binding = {
+            **_benchmark_param_binding(
+                settings=current_rolling_settings,
+                robustness=single_unit_robustness,
+                arm=historical_arm,
+                seed=historical_seed,
+            ),
+            "path": Path(temp_dir) / "missing_current_param.json",
+            "manifest_path": Path(temp_dir) / "missing_current_manifest.json",
+        }
+        current_unit_signature = _current_strategy_only_unit_scientific_signature(
+            settings=current_rolling_settings,
+            robustness=single_unit_robustness,
+            arm=historical_arm,
+            seed=historical_seed,
+            binding=fake_binding,
+            comparison_start="2021-01-01",
+            comparison_end="2026-03-02",
+        )
+        historical_param_sha = "historical-param-scientific-sha"
+        historical_contract = {
+            "scientific_contract_version": current_unit_signature["scientific_contract_version"],
+            "dataset": current_unit_signature["dataset"],
+            "dataset_identity": current_unit_signature["dataset_identity"],
+            "max_positions": current_unit_signature["max_positions"],
+            "rotation": current_unit_signature["rotation"],
+            "comparison_period": current_unit_signature["comparison_period"],
+            "benchmark_id": current_unit_signature["benchmark_id"],
+            "strategy_trials_per_fold": current_unit_signature["strategy_trials_per_fold"],
+            "seed_pairing": current_unit_signature["seed_pairing"],
+            "stochastic_arms": [current_unit_signature["arm"]],
+            "benchmark_parameter_artifact_identities": {
+                f"{historical_arm.arm_id}:seed={historical_seed}": {
+                    **current_unit_signature["benchmark_parameter"],
+                    "sha256": historical_param_sha,
+                }
+            },
+        }
+        historical_seed_frame = pd.DataFrame([{
+            "arm_id": historical_arm.arm_id,
+            "seed": historical_seed,
+            "strategy_param_sha256": historical_param_sha,
+            "strategy_param_manifest_sha256": "historical-manifest-sha",
+        }])
+        historical_yearly_frame = pd.DataFrame([{
+            "arm_id": historical_arm.arm_id,
+            "seed": historical_seed,
+            "year": 2021,
+        }])
+        with (
+            patch(
+                "services.research.strategy_multi_seed_robustness._benchmark_param_binding",
+                return_value=fake_binding,
+            ),
+            patch(
+                "services.research.strategy_multi_seed_robustness._inspect_benchmark_strategy_parameter_binding",
+                return_value={"action": "REBUILD", "status": "STALE_PUBLICATION"},
+            ),
+            patch(
+                "services.research.strategy_multi_seed_robustness._iter_registered_robustness_scientific_runs",
+                return_value=iter([(
+                    Path(temp_dir) / "historical_run",
+                    {
+                        "contract": historical_contract,
+                        "seed_frame": historical_seed_frame,
+                        "seed_yearly_frame": historical_yearly_frame,
+                    },
+                )]),
+            ),
+        ):
+            result_first_reuse = _discover_registered_strategy_only_scientific_reuse(
+                settings=current_rolling_settings,
+                robustness=single_unit_robustness,
+                stochastic_arms=(historical_arm,),
+                comparison_start="2021-01-01",
+                comparison_end="2026-03-02",
+            )
+            with patch(
+                "services.research.strategy_multi_seed_robustness.ensure_robustness_benchmark_strategy_parameter_artifact",
+                side_effect=AssertionError("result reuse must prune optimizer prerequisite"),
+            ):
+                result_first_bindings = _prepare_benchmark_strategy_parameter_artifacts(
+                    settings=current_rolling_settings,
+                    robustness=single_unit_robustness,
+                    benchmark_arms=(historical_arm,),
+                    comparison_start="2021-01-01",
+                    comparison_end="2026-03-02",
+                    reusable_observations=result_first_reuse,
+                )
+        result_first_binding = result_first_bindings[(historical_arm.arm_id, historical_seed)]
+    check_true(
+        "robustness_historical_result_reuse_precedes_missing_or_rebuild_param_prerequisite",
+        (historical_arm.arm_id, historical_seed) in result_first_reuse
+        and result_first_binding["sha256"] == historical_param_sha
+        and result_first_binding["parameter_payload_ready"] is False
+        and result_first_binding["result_reuse_only"] is True,
+    )
+
     materialize_settings = get_strategy_comparison_settings(
         "non_dl_validation_budget_rolling"
     )
@@ -3034,7 +3171,6 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                 and "selection_diagnostics" in diagnostics_source,
     )
 
-    from dataclasses import replace
     from core.strategy_compare_policy import get_strategy_comparison_settings
     from services.research.strategy_comparison import render_safety_gate_sensitivity_table
 
