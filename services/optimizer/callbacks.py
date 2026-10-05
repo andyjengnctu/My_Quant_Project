@@ -865,13 +865,23 @@ def run_optimizer_monitoring_callback(session, study, trial):
             session.optimizer_inline_progress_rendered = True
         return max(0.0, time.perf_counter() - status_started_at)
 
-    best_lookup_started_at = time.perf_counter()
-    best_completed_trial = session.get_best_completed_trial_or_none(study)
-    callback_best_lookup_sec = max(0.0, time.perf_counter() - best_lookup_started_at)
     disable_milestone_dashboard = getattr(session, "disable_milestone_dashboard", None)
     if disable_milestone_dashboard is None:
         disable_milestone_dashboard = True
     should_render_milestone_dashboard = not bool(disable_milestone_dashboard)
+
+    # Outer Rolling / production-aligned timing deliberately disables the
+    # per-trial milestone dashboard. In that mode there is no consumer of the
+    # current best trial, so scanning the study on every callback is pure
+    # overhead and gets increasingly expensive as SQLite trial history grows.
+    # Keep the canonical resolver untouched for dashboard-enabled workflows;
+    # only skip the lookup when its result is provably unobservable.
+    best_completed_trial = None
+    if should_render_milestone_dashboard:
+        best_lookup_started_at = time.perf_counter()
+        best_completed_trial = session.get_best_completed_trial_or_none(study)
+        callback_best_lookup_sec = max(0.0, time.perf_counter() - best_lookup_started_at)
+
     is_new_best = (
         should_render_milestone_dashboard
         and best_completed_trial is not None
