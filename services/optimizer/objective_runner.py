@@ -681,6 +681,10 @@ def run_optimizer_objective(session, trial):
     )
     get_cached_prep = getattr(session, "get_prepared_trial_inputs_from_cache", None)
     prep_result = get_cached_prep(prep_cache_key) if callable(get_cached_prep) else None
+    detailed_profile_enabled = bool(
+        getattr(getattr(session, "profile_recorder", None), "enabled", False)
+        and getattr(getattr(session, "profile_recorder", None), "write_files", False)
+    )
     if prep_result is None:
         prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, "optimizer_max_workers"))
         defer_pit_stats = _can_defer_optimizer_pit_stats(session, ai_params)
@@ -693,6 +697,7 @@ def run_optimizer_objective(session, trial):
             static_master_dates=session.master_dates,
             include_trade_logs=False,
             include_pit_stats_index=not defer_pit_stats,
+            profile_enabled=detailed_profile_enabled,
         )
         if defer_pit_stats:
             _install_neutral_pit_stats_index(prep_result, ai_params)
@@ -751,7 +756,12 @@ def run_optimizer_objective(session, trial):
     get_cached_evaluation = getattr(session, "get_full_evaluation_from_cache", None)
     evaluation = get_cached_evaluation(full_evaluation_cache_key) if callable(get_cached_evaluation) else None
 
-    pf_profile = {}
+    # Detailed per-phase timers are diagnostic-only and add many perf_counter calls
+    # inside the portfolio day loop.  When profile files are disabled (the
+    # canonical Outer Rolling / production-aligned timing default), keep only
+    # the top-level wall timers below and let the portfolio path run without
+    # detailed timing instrumentation.
+    pf_profile = {} if detailed_profile_enabled else None
     portfolio_start = time.perf_counter()
     score_start = time.perf_counter()
     if evaluation is None:
@@ -767,31 +777,32 @@ def run_optimizer_objective(session, trial):
             cache_evaluation(full_evaluation_cache_key, evaluation)
     profile_row["score_calc_sec"] = time.perf_counter() - score_start
     profile_row["portfolio_wall_sec"] = time.perf_counter() - portfolio_start
-    profile_row["portfolio_total_sec"] = float(pf_profile.get("portfolio_wall_sec", 0.0))
-    profile_row["portfolio_ticker_dates_sec"] = float(pf_profile.get("portfolio_ticker_dates_sec", 0.0))
-    profile_row["portfolio_build_trade_index_sec"] = float(pf_profile.get("portfolio_build_trade_index_sec", 0.0))
-    profile_row["portfolio_day_loop_sec"] = float(pf_profile.get("portfolio_day_loop_sec", 0.0))
-    profile_row["portfolio_candidate_scan_sec"] = float(pf_profile.get("portfolio_candidate_scan_sec", 0.0))
-    profile_row["portfolio_candidate_normal_sec"] = float(pf_profile.get("portfolio_candidate_normal_sec", 0.0))
-    profile_row["portfolio_candidate_extended_sec"] = float(pf_profile.get("portfolio_candidate_extended_sec", 0.0))
-    profile_row["portfolio_candidate_pit_stats_sec"] = float(pf_profile.get("portfolio_candidate_pit_stats_sec", 0.0))
-    profile_row["portfolio_candidate_plan_sec"] = float(pf_profile.get("portfolio_candidate_plan_sec", 0.0))
-    profile_row["portfolio_candidate_quality_rank_sec"] = float(pf_profile.get("portfolio_candidate_quality_rank_sec", 0.0))
-    profile_row["portfolio_candidate_row_sec"] = float(pf_profile.get("portfolio_candidate_row_sec", 0.0))
-    profile_row["portfolio_candidate_sort_sec"] = float(pf_profile.get("portfolio_candidate_sort_sec", 0.0))
-    profile_row["portfolio_candidate_other_sec"] = float(pf_profile.get("portfolio_candidate_other_sec", 0.0))
-    profile_row["portfolio_day_setup_sec"] = float(pf_profile.get("portfolio_day_setup_sec", 0.0))
-    profile_row["portfolio_reentry_sec"] = float(pf_profile.get("portfolio_reentry_sec", 0.0))
-    profile_row["portfolio_resource_select_sec"] = float(pf_profile.get("portfolio_resource_select_sec", 0.0))
-    profile_row["portfolio_cleanup_sec"] = float(pf_profile.get("portfolio_cleanup_sec", 0.0))
-    profile_row["portfolio_bookkeeping_sec"] = float(pf_profile.get("portfolio_bookkeeping_sec", 0.0))
-    profile_row["portfolio_day_other_sec"] = float(pf_profile.get("portfolio_day_other_sec", 0.0))
-    profile_row["portfolio_rotation_sec"] = float(pf_profile.get("portfolio_rotation_sec", 0.0))
-    profile_row["portfolio_settle_sec"] = float(pf_profile.get("portfolio_settle_sec", 0.0))
-    profile_row["portfolio_buy_sec"] = float(pf_profile.get("portfolio_buy_sec", 0.0))
-    profile_row["portfolio_equity_mark_sec"] = float(pf_profile.get("portfolio_equity_mark_sec", 0.0))
-    profile_row["portfolio_closeout_sec"] = float(pf_profile.get("portfolio_closeout_sec", 0.0))
-    profile_row["portfolio_curve_stats_sec"] = float(pf_profile.get("curve_stats_sec", 0.0))
+    pf_profile_stats = pf_profile if isinstance(pf_profile, dict) else {}
+    profile_row["portfolio_total_sec"] = float(pf_profile_stats.get("portfolio_wall_sec", 0.0))
+    profile_row["portfolio_ticker_dates_sec"] = float(pf_profile_stats.get("portfolio_ticker_dates_sec", 0.0))
+    profile_row["portfolio_build_trade_index_sec"] = float(pf_profile_stats.get("portfolio_build_trade_index_sec", 0.0))
+    profile_row["portfolio_day_loop_sec"] = float(pf_profile_stats.get("portfolio_day_loop_sec", 0.0))
+    profile_row["portfolio_candidate_scan_sec"] = float(pf_profile_stats.get("portfolio_candidate_scan_sec", 0.0))
+    profile_row["portfolio_candidate_normal_sec"] = float(pf_profile_stats.get("portfolio_candidate_normal_sec", 0.0))
+    profile_row["portfolio_candidate_extended_sec"] = float(pf_profile_stats.get("portfolio_candidate_extended_sec", 0.0))
+    profile_row["portfolio_candidate_pit_stats_sec"] = float(pf_profile_stats.get("portfolio_candidate_pit_stats_sec", 0.0))
+    profile_row["portfolio_candidate_plan_sec"] = float(pf_profile_stats.get("portfolio_candidate_plan_sec", 0.0))
+    profile_row["portfolio_candidate_quality_rank_sec"] = float(pf_profile_stats.get("portfolio_candidate_quality_rank_sec", 0.0))
+    profile_row["portfolio_candidate_row_sec"] = float(pf_profile_stats.get("portfolio_candidate_row_sec", 0.0))
+    profile_row["portfolio_candidate_sort_sec"] = float(pf_profile_stats.get("portfolio_candidate_sort_sec", 0.0))
+    profile_row["portfolio_candidate_other_sec"] = float(pf_profile_stats.get("portfolio_candidate_other_sec", 0.0))
+    profile_row["portfolio_day_setup_sec"] = float(pf_profile_stats.get("portfolio_day_setup_sec", 0.0))
+    profile_row["portfolio_reentry_sec"] = float(pf_profile_stats.get("portfolio_reentry_sec", 0.0))
+    profile_row["portfolio_resource_select_sec"] = float(pf_profile_stats.get("portfolio_resource_select_sec", 0.0))
+    profile_row["portfolio_cleanup_sec"] = float(pf_profile_stats.get("portfolio_cleanup_sec", 0.0))
+    profile_row["portfolio_bookkeeping_sec"] = float(pf_profile_stats.get("portfolio_bookkeeping_sec", 0.0))
+    profile_row["portfolio_day_other_sec"] = float(pf_profile_stats.get("portfolio_day_other_sec", 0.0))
+    profile_row["portfolio_rotation_sec"] = float(pf_profile_stats.get("portfolio_rotation_sec", 0.0))
+    profile_row["portfolio_settle_sec"] = float(pf_profile_stats.get("portfolio_settle_sec", 0.0))
+    profile_row["portfolio_buy_sec"] = float(pf_profile_stats.get("portfolio_buy_sec", 0.0))
+    profile_row["portfolio_equity_mark_sec"] = float(pf_profile_stats.get("portfolio_equity_mark_sec", 0.0))
+    profile_row["portfolio_closeout_sec"] = float(pf_profile_stats.get("portfolio_closeout_sec", 0.0))
+    profile_row["portfolio_curve_stats_sec"] = float(pf_profile_stats.get("curve_stats_sec", 0.0))
     profile_row["ret_pct"] = float(evaluation.get("ret_pct", 0.0))
     profile_row["mdd"] = float(evaluation.get("mdd", 0.0))
     profile_row["trade_count"] = int(evaluation.get("trade_count", 0))
