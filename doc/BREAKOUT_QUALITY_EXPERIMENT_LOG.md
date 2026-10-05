@@ -12513,3 +12513,12 @@ Decision：`ENGINEERING_ONLY / HISTORICAL_RESULT_REUSE_PRECEDES_PARAM_PREREQUISI
 
 Decision：`USER_AUTHORIZED_CORRECTION / END_TO_END_V1_RESTORED_TO_APPROVED_4_SEED_SPEC / SAME_ID_DRIFT_FAIL_FAST / NEW_BENCHMARK_REQUIRES_NEW_ID / HISTORICAL_8_SEED_RUNS_PRESERVED / C85_INNER_4X300_UNCHANGED`.
 
+## 2026-10-06 — Robustness per-arm seed-pairing reuse identity correction
+
+- **Observed defect**：current Rolling Robustness已回到`C58/C61/C85 × 4 = 12`，但plan仍顯示`scientific result REUSE=0/12`、C58/C61前四個benchmark seeds全部`REBUILD`。Historical result-first discovery本身已在執行，但current unit signature仍使用suite-level `seed_pairing`；因同一current suite包含C85/P6 fixed-multiseed arm，整個suite被標為`outer_replication_seed_with_arm_specific_fitting_seed_bundle`，連實際仍為same-seed canonical schedule的C58/C61 unit identity也一起改變，造成2026-09-28既有C58/C61 historical observations無法命中。
+- **Architecture correction**：新增arm-level seed-pairing resolver，語意由各arm canonical parameter source/builder唯一決定。C58/C61等canonical schedule維持`same_seed_strategy_optimizer_and_all_dl_sources`；C85/P6維持`outer_replication_seed_with_arm_specific_fitting_seed_bundle`。Whole-run top-level `seed_pairing`僅保留container摘要/compatibility，不再作strategy-only arm×seed reuse identity來源。新scientific contract於每個`stochastic_arms[]`保存arm-level `seed_pairing`；historical contract若缺此欄，unit projection才fallback舊top-level值，故既有same-seed-only historical runs仍可直接REUSE。
+- **Regression evidence**：新增mixed-suite regression，current full `C58/C61/C85` container下C58/C61必須解析same-seed、C85必須解析outer→inner bundle；另把真實historical discovery regression改為保留完整mixed current robustness設定而只搜尋一個canonical arm，current param故意`REBUILD`且source observation為legacy same-seed contract時仍必須RESULT_REUSE並剪掉Optimizer prerequisite。Strategy comparison=`19/19 PASS`；strategy readable/report=`60/60 PASS`；Strategy Compare app=`123/123 PASS`；optimizer walk-forward/policy=`142/142 PASS`；modified Python compile PASS。依PROJECT_SETTINGS未執行`apps/run_bundle.py`或`apps/test_suite.py`。
+- **Scientific impact**：無。C58/C61/C85 strategy semantics、`end_to_end_v1` 4-seed題庫、P6 inner 4×300、parameter scientific SHA、120M/12M、PIT與Trading production均未改；本輪只修per-unit scientific identity投影，避免neighbor arm污染historical REUSE。
+
+Decision：`ENGINEERING_ONLY / SEED_PAIRING_IS_ARM_LEVEL_PRODUCER_SEMANTICS / MIXED_SUITE_CANNOT_POLLUTE_PER_UNIT_REUSE_IDENTITY / C58_C61_SAME_SEED_PRESERVED / C85_OUTER_TO_INNER_BUNDLE_PRESERVED / NO_SCIENTIFIC_IDENTITY_CHANGE`.
+

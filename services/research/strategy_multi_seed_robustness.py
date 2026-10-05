@@ -564,12 +564,37 @@ def _robustness_seed_pairing_semantics(settings, robustness) -> str:
         return "legacy_model_seed_only"
     for arm_id in tuple(robustness.benchmark_strategy_arm_ids):
         arm = settings.arms[str(arm_id)]
-        source = settings.parameter_sources[str(arm.param_source)]
-        builder_type = (
-            "" if source.builder is None else str(source.builder.builder_type or "").strip()
-        )
-        if builder_type == "optimizer_fixed_multiseed_strategy_params":
+        if (
+            _robustness_arm_seed_pairing_semantics(
+                settings=settings, robustness=robustness, arm=arm
+            )
+            == "outer_replication_seed_with_arm_specific_fitting_seed_bundle"
+        ):
             return "outer_replication_seed_with_arm_specific_fitting_seed_bundle"
+    return "same_seed_strategy_optimizer_and_all_dl_sources"
+
+
+def _robustness_arm_seed_pairing_semantics(
+    *, settings, robustness, arm: StrategyComparisonArm
+) -> str:
+    """Return the fitting-seed semantics for one concrete robustness arm.
+
+    ``seed_pairing`` used to be projected from the whole suite.  Once a fixed
+    multi-seed arm (for example C85/P6) shared a suite with canonical single-seed
+    arms (for example C58/C61), that container-level label incorrectly changed the
+    per-unit historical reuse identity of the single-seed arms.  Pairing semantics
+    are a property of the arm's canonical parameter producer, not of neighboring
+    arms in the comparison suite.
+    """
+
+    if robustness.benchmark_id is None:
+        return "legacy_model_seed_only"
+    source = settings.parameter_sources[str(arm.param_source)]
+    builder_type = (
+        "" if source.builder is None else str(source.builder.builder_type or "").strip()
+    )
+    if builder_type == "optimizer_fixed_multiseed_strategy_params":
+        return "outer_replication_seed_with_arm_specific_fitting_seed_bundle"
     return "same_seed_strategy_optimizer_and_all_dl_sources"
 
 
@@ -1952,6 +1977,9 @@ def build_multi_seed_robustness_contract(
             "param_source": arm.param_source,
             "param_policy": resolve_strategy_comparison_arm_param_policy(settings, arm),
             "rule_policy": arm.rule_policy,
+            "seed_pairing": _robustness_arm_seed_pairing_semantics(
+                settings=settings, robustness=robustness, arm=arm
+            ),
             "strategy_seed_sensitive": arm.arm_id in set(robustness.benchmark_strategy_arm_ids),
             "model_seed_sensitive": arm.arm_id in set(robustness.model_seed_sensitive_arm_ids),
         }
@@ -2871,6 +2899,13 @@ def _strategy_only_unit_scientific_signature_from_contract(
     param_sha = _normalized_hash_value(parameter_identity.get("sha256"))
     if not param_sha:
         return None
+    arm_seed_pairing = str(arm_contract.get("seed_pairing") or "").strip()
+    if not arm_seed_pairing:
+        # Backward compatibility for durable observations produced before
+        # per-arm pairing semantics were persisted in ``stochastic_arms``.
+        # Historical same-seed-only suites already stored the correct top-level
+        # value, so their C58/C61 observations remain reusable.
+        arm_seed_pairing = str(contract.get("seed_pairing") or "")
     return {
         "unit_result_identity_schema": "robustness_strategy_seed_result_v1",
         "scientific_contract_version": int(
@@ -2884,7 +2919,7 @@ def _strategy_only_unit_scientific_signature_from_contract(
         "benchmark_id": str(contract.get("benchmark_id") or ""),
         "seed": int(seed),
         "strategy_trials_per_fold": contract.get("strategy_trials_per_fold"),
-        "seed_pairing": str(contract.get("seed_pairing") or ""),
+        "seed_pairing": arm_seed_pairing,
         "arm": {
             key: arm_contract.get(key)
             for key in (
@@ -2947,7 +2982,9 @@ def _current_strategy_only_unit_scientific_signature(
         "benchmark_id": str(robustness.benchmark_id or ""),
         "seed": int(seed),
         "strategy_trials_per_fold": robustness.strategy_trials_per_fold,
-        "seed_pairing": _robustness_seed_pairing_semantics(settings, robustness),
+        "seed_pairing": _robustness_arm_seed_pairing_semantics(
+            settings=settings, robustness=robustness, arm=arm
+        ),
         "arm": arm_contract,
         "benchmark_parameter": parameter_identity,
     }

@@ -1393,6 +1393,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         _benchmark_identity_payload,
         _current_strategy_only_unit_scientific_signature,
         _discover_registered_strategy_only_scientific_reuse,
+        _robustness_arm_seed_pairing_semantics,
         _prepare_benchmark_strategy_parameter_artifacts,
         _scientific_benchmark_parameter_identities,
         _build_durable_result_artifacts,
@@ -1588,11 +1589,22 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     sig_changed = _strategy_only_unit_scientific_signature_from_contract(
         contract=unit_contract_changed, arm_id="C62", seed=11
     )
+    mixed_container_contract = json.loads(json.dumps(unit_contract_a))
+    mixed_container_contract["seed_pairing"] = (
+        "outer_replication_seed_with_arm_specific_fitting_seed_bundle"
+    )
+    mixed_container_contract["stochastic_arms"][0]["seed_pairing"] = (
+        "same_seed_strategy_optimizer_and_all_dl_sources"
+    )
+    sig_mixed_container = _strategy_only_unit_scientific_signature_from_contract(
+        contract=mixed_container_contract, arm_id="C62", seed=11
+    )
     run_bound_checks(
         check_true,
         (
             ('robustness_benchmark_manifest_publication_sha_does_not_change_scientific_param_identity', _scientific_benchmark_parameter_identities(_benchmark_identity_payload(benchmark_binding_a)) == _scientific_benchmark_parameter_identities(_benchmark_identity_payload(benchmark_binding_b)),),
             ('robustness_cross_profile_strategy_only_reuse_ignores_container_identity_but_requires_unit_scientific_identity', sig_a is not None and sig_a == sig_b and sig_a != sig_changed and '_discover_registered_strategy_only_scientific_reuse(' in multi_seed_source and '_materialize_registered_strategy_only_scientific_reuse(' in multi_seed_source,),
+            ('robustness_strategy_only_unit_seed_pairing_prefers_arm_semantics_over_mixed_suite_container', sig_mixed_container is not None and sig_mixed_container["seed_pairing"] == "same_seed_strategy_optimizer_and_all_dl_sources",),
         ),
     )
 
@@ -1621,6 +1633,31 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             )["producer_variant"]
         ) == "canonical_schedule_v1"
     )
+    fixed_multiseed_arm = next(
+        current_rolling_settings.arms[arm_id]
+        for arm_id in current_rolling_robustness.stochastic_arm_ids
+        if str(
+            _benchmark_param_binding(
+                settings=current_rolling_settings,
+                robustness=current_rolling_robustness,
+                arm=current_rolling_settings.arms[arm_id],
+                seed=historical_seed,
+            )["producer_variant"]
+        ) == "fixed_multiseed_v1"
+    )
+    check_true(
+        "robustness_mixed_suite_seed_pairing_is_arm_specific_for_canonical_and_fixed_multiseed_params",
+        _robustness_arm_seed_pairing_semantics(
+            settings=current_rolling_settings,
+            robustness=current_rolling_robustness,
+            arm=historical_arm,
+        ) == "same_seed_strategy_optimizer_and_all_dl_sources"
+        and _robustness_arm_seed_pairing_semantics(
+            settings=current_rolling_settings,
+            robustness=current_rolling_robustness,
+            arm=fixed_multiseed_arm,
+        ) == "outer_replication_seed_with_arm_specific_fitting_seed_bundle",
+    )
     single_unit_robustness = replace(
         current_rolling_robustness,
         seed_count=1,
@@ -1644,7 +1681,10 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         }
         current_unit_signature = _current_strategy_only_unit_scientific_signature(
             settings=current_rolling_settings,
-            robustness=single_unit_robustness,
+            # Deliberately keep the full mixed C58/C61/C85 suite here.  The
+            # historical C58/C61 unit must remain same-seed even though C85 is
+            # a fixed multi-seed fitting arm in the same current container.
+            robustness=current_rolling_robustness,
             arm=historical_arm,
             seed=historical_seed,
             binding=fake_binding,
@@ -1704,7 +1744,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         ):
             result_first_reuse = _discover_registered_strategy_only_scientific_reuse(
                 settings=current_rolling_settings,
-                robustness=single_unit_robustness,
+                robustness=current_rolling_robustness,
                 stochastic_arms=(historical_arm,),
                 comparison_start="2021-01-01",
                 comparison_end="2026-03-02",
