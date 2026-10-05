@@ -116,13 +116,22 @@ def resolve_position_intraday_exit_hits(position, *, t_high, t_low, params):
     prior completed information, never a stop raised by the same bar's high.
     """
     is_stop_hit = price_to_milli(t_low) <= int(position['sl_milli'])
-    half_sell_qty = calc_half_take_profit_sell_qty(position['qty'], params.tp_percent)
-    is_tp_hit = (
-        price_to_milli(t_high) >= int(position['tp_half_milli'])
-        and not position['sold_half']
-        and half_sell_qty > 0
-    )
-    return resolve_stop_tp_hits(stop_hit=is_stop_hit, tp_hit=is_tp_hit)
+    if is_stop_hit:
+        return resolve_stop_tp_hits(stop_hit=True, tp_hit=False)
+
+    if position['sold_half']:
+        return resolve_stop_tp_hits(stop_hit=False, tp_hit=False)
+
+    tp_percent = params.tp_percent
+    if type(tp_percent) is float and tp_percent <= 0.0:
+        return resolve_stop_tp_hits(stop_hit=False, tp_hit=False)
+
+    half_sell_qty = calc_half_take_profit_sell_qty(position['qty'], tp_percent)
+    if half_sell_qty <= 0:
+        return resolve_stop_tp_hits(stop_hit=False, tp_hit=False)
+
+    is_tp_hit = price_to_milli(t_high) >= int(position['tp_half_milli'])
+    return resolve_stop_tp_hits(stop_hit=False, tp_hit=is_tp_hit)
 
 
 def complete_position_entry_session(position, *, t_high, t_low, params):

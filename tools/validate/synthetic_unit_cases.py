@@ -16,6 +16,7 @@ from core.exact_accounting import (
     calc_entry_total_cost,
     calc_buy_net_total_milli_from_milli,
     calc_sell_net_total_milli_from_milli,
+    calc_liquidation_net_total_milli_from_price,
     calc_exit_net_total,
     calc_risk_budget_milli,
     milli_to_money,
@@ -911,6 +912,39 @@ def validate_exact_accounting_tick_limit_integer_case(_base_params):
                 direct_params,
                 ticker=direct_ticker,
                 trade_date=direct_date,
+            ),
+        )
+
+    liquidation_cases = [
+        ("stock_raw", 34.35033333333333, 777, "1101", "2026-03-02"),
+        ("etf_raw", 80.3577, 1000, "0050", "2026-03-02"),
+        ("bond_before_deadline_raw", 28.0177, 1000, "00679B", "2026-03-02"),
+        ("bond_after_deadline_raw", 28.0177, 1000, "00679B", "2027-01-02"),
+        ("reit_raw", 10.0177, 1000, "01001T", "2026-03-02"),
+    ]
+    for liquidation_case, mark_price, qty, ticker, trade_date in liquidation_cases:
+        liquidation_params = V16StrategyParams()
+        expected_exec_milli = round_price_to_tick_milli(
+            mark_price,
+            direction="down",
+            ticker=ticker,
+        )
+        expected_total_milli = calc_sell_net_total_milli_from_milli(
+            expected_exec_milli,
+            qty,
+            liquidation_params,
+            ticker=ticker,
+            trade_date=trade_date,
+        )
+        check(
+            f"liquidation_fused_path_matches_composed_exact_path_{liquidation_case}",
+            expected_total_milli,
+            calc_liquidation_net_total_milli_from_price(
+                mark_price,
+                qty,
+                liquidation_params,
+                ticker=ticker,
+                trade_date=trade_date,
             ),
         )
 

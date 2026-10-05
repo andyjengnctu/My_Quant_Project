@@ -7,10 +7,9 @@ import numpy as np
 from core.backtest_core import run_v16_backtest
 from core.history_filters import evaluate_history_candidate_metrics
 from core.exact_accounting import (
-    calc_sell_net_total_milli_from_milli,
+    calc_liquidation_net_total_milli_from_price,
     coerce_money_like_to_milli,
     restore_money_like_from_milli,
-    round_price_to_tick_milli,
 )
 from core.signal_utils import generate_signals, unpack_precomputed_signals
 from core.training_performance import (
@@ -63,10 +62,9 @@ def calc_mark_to_market_equity(
     for ticker in settled_tickers:
         pos = portfolio[ticker]
         position_params = pos.get('_entry_params_obj') or params
-        position_context = pos.get('_entry_context') if isinstance(pos.get('_entry_context'), dict) else {}
-        if use_cached_last_px and pos.get('last_px') is not None:
-            px = pos.get('last_px')
-        else:
+        px = pos.get('last_px') if use_cached_last_px else None
+        if px is None:
+            position_context = pos.get('_entry_context') if isinstance(pos.get('_entry_context'), dict) else {}
             position_all_dfs_fast = position_context.get('all_dfs_fast') or all_dfs_fast
             pt_data = position_all_dfs_fast[ticker]
             pt_pos = get_fast_pos(pt_data, today)
@@ -78,18 +76,13 @@ def calc_mark_to_market_equity(
 
             pos['last_px'] = px
 
-        floating_exec_price_milli = round_price_to_tick_milli(
+        security_profile = pos.get('security_profile')
+        equity_milli += calc_liquidation_net_total_milli_from_price(
             px,
-            direction="down",
-            ticker=ticker,
-            security_profile=pos.get('security_profile'),
-        )
-        equity_milli += calc_sell_net_total_milli_from_milli(
-            floating_exec_price_milli,
             pos['qty'],
             position_params,
             ticker=ticker,
-            security_profile=pos.get('security_profile'),
+            security_profile=security_profile,
             trade_date=today,
         )
 

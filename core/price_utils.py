@@ -397,6 +397,17 @@ def calc_reference_candidate_qty(bPrice, stopPrice, params, ticker=None, securit
 
 # # (AI註: 單一真理來源 - 半倉停利可執行股數統一由此計算，避免核心/掃描/除錯工具各自判斷)
 def calc_half_take_profit_sell_qty(position_qty, tp_percent):
+    # Optimizer hotpath almost always supplies canonical Python int/float values.
+    # Keep the nullable/general fallback for external adapters, but avoid two
+    # pandas scalar-dispatch calls on every held-position day.
+    if type(position_qty) is int and type(tp_percent) is float:
+        if position_qty <= 0 or tp_percent <= 0.0:
+            return 0
+        sell_qty = int(math.floor(position_qty * tp_percent))
+        if sell_qty <= 0 or position_qty <= sell_qty:
+            return 0
+        return sell_qty
+
     if pd.isna(position_qty) or pd.isna(tp_percent):
         return 0
 

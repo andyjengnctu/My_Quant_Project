@@ -412,9 +412,12 @@ def settle_portfolio_positions(
         # same close for the later end-of-day mark instead of re-reading market data.
         pos['last_px'] = t_close
 
-        tp_context = _first_exec_context(pos, 'TP_HALF')
-        stop_context = _first_exec_context(pos, 'STOP')
-        ind_sell_context = _first_exec_context(pos, 'IND_SELL')
+        if is_training:
+            tp_context = stop_context = ind_sell_context = None
+        else:
+            tp_context = _first_exec_context(pos, 'TP_HALF')
+            stop_context = _first_exec_context(pos, 'STOP')
+            ind_sell_context = _first_exec_context(pos, 'IND_SELL')
 
         if 'TP_HALF' in events and not is_training:
             trade_history.append(

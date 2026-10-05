@@ -405,8 +405,7 @@ def _round_price_to_tick_milli_cached(price_text: str, direction: str, tick_prof
     return _price_text_to_milli_cached(str(rounded_ratio * tick_decimal))
 
 
-def round_price_to_tick_milli(price, direction: str = "nearest", *, ticker=None, security_profile=None, cfi_code=None, security_name=None) -> int:
-    resolved_profile = resolve_security_profile(security_profile, ticker=ticker, cfi_code=cfi_code, security_name=security_name)
+def _round_price_to_tick_milli_with_resolved_profile(price, direction: str, resolved_profile) -> int:
     tick_profile = resolved_profile.get("tick_profile", _TICK_PROFILE_STOCK)
     price_type = type(price)
     if price_type is int:
@@ -418,6 +417,11 @@ def round_price_to_tick_milli(price, direction: str = "nearest", *, ticker=None,
         if numeric_result is not None:
             return numeric_result
     return _round_price_to_tick_milli_cached(str(price), direction, tick_profile)
+
+
+def round_price_to_tick_milli(price, direction: str = "nearest", *, ticker=None, security_profile=None, cfi_code=None, security_name=None) -> int:
+    resolved_profile = resolve_security_profile(security_profile, ticker=ticker, cfi_code=cfi_code, security_name=security_name)
+    return _round_price_to_tick_milli_with_resolved_profile(price, direction, resolved_profile)
 
 
 CHARGE_ROUNDING_NEAREST_MILLI = "nearest_milli"
@@ -490,13 +494,7 @@ def calc_tax_milli(
     return (int(gross_milli) * int(tax_ppm) + (PPM_SCALE // 2)) // PPM_SCALE
 
 
-def _resolve_trade_fee_schedule_tuple(params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None):
-    resolved_profile = resolve_security_profile(
-        security_profile,
-        ticker=ticker,
-        cfi_code=cfi_code,
-        security_name=security_name,
-    )
+def _resolve_trade_fee_schedule_tuple_from_resolved_profile(params, resolved_profile, *, trade_date=None):
     family = resolved_profile.get("family", "stock")
     broad_type = resolved_profile.get("broad_type", _SECURITY_BROAD_STOCK)
     # AI註: only bond ETF tax semantics are date-dependent. Avoid repeated date
@@ -513,6 +511,20 @@ def _resolve_trade_fee_schedule_tuple(params, *, ticker=None, security_profile=N
         family,
         broad_type,
         trade_day_ord,
+    )
+
+
+def _resolve_trade_fee_schedule_tuple(params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None):
+    resolved_profile = resolve_security_profile(
+        security_profile,
+        ticker=ticker,
+        cfi_code=cfi_code,
+        security_name=security_name,
+    )
+    return _resolve_trade_fee_schedule_tuple_from_resolved_profile(
+        params,
+        resolved_profile,
+        trade_date=trade_date,
     )
 
 
@@ -555,6 +567,31 @@ def calc_cash_buy_total_milli_from_price(fill_price, qty: int) -> int:
     return calc_cash_buy_total_milli_from_milli(price_to_milli(fill_price), qty)
 
 
+def _calc_sell_net_total_milli_with_schedule(
+    exec_price_milli: int,
+    qty: int,
+    params,
+    *,
+    sell_fee_ppm: int,
+    tax_ppm: int,
+    min_fee_milli: int,
+) -> int:
+    gross_sell_milli = int(exec_price_milli) * int(qty)
+    fee_rounding_mode = _resolve_charge_rounding_mode(params)
+    sell_fee_milli = calc_fee_milli(
+        gross_sell_milli,
+        sell_fee_ppm,
+        min_fee_milli,
+        rounding_mode=fee_rounding_mode,
+    )
+    tax_milli = calc_tax_milli(
+        gross_sell_milli,
+        tax_ppm,
+        rounding_mode=CHARGE_ROUNDING_FLOOR_TWD,
+    )
+    return gross_sell_milli - sell_fee_milli - tax_milli
+
+
 def calc_sell_net_total_milli_from_milli(exec_price_milli: int, qty: int, params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None) -> int:
     _buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli = _resolve_trade_fee_schedule_tuple(
         params,
@@ -564,11 +601,59 @@ def calc_sell_net_total_milli_from_milli(exec_price_milli: int, qty: int, params
         cfi_code=cfi_code,
         security_name=security_name,
     )
-    gross_sell_milli = int(exec_price_milli) * int(qty)
-    fee_rounding_mode = _resolve_charge_rounding_mode(params)
-    sell_fee_milli = calc_fee_milli(gross_sell_milli, sell_fee_ppm, min_fee_milli, rounding_mode=fee_rounding_mode)
-    tax_milli = calc_tax_milli(gross_sell_milli, tax_ppm, rounding_mode=CHARGE_ROUNDING_FLOOR_TWD)
-    return gross_sell_milli - sell_fee_milli - tax_milli
+    return _calc_sell_net_total_milli_with_schedule(
+        exec_price_milli,
+        qty,
+        params,
+        sell_fee_ppm=sell_fee_ppm,
+        tax_ppm=tax_ppm,
+        min_fee_milli=min_fee_milli,
+    )
+
+
+def calc_liquidation_net_total_milli_from_price(
+    price,
+    qty: int,
+    params,
+    *,
+    ticker=None,
+    security_profile=None,
+    trade_date=None,
+    cfi_code=None,
+    security_name=None,
+) -> int:
+    """Round one mark price down to the canonical tick, then apply exact sell costs.
+
+    This fuses the two exact-accounting stages used by daily liquidation marks so
+    an already-resolved security profile is not redispatched twice per position.
+    The arithmetic and bond-ETF date rule remain owned by this module.
+    """
+    resolved_profile = resolve_security_profile(
+        security_profile,
+        ticker=ticker,
+        cfi_code=cfi_code,
+        security_name=security_name,
+    )
+    exec_price_milli = _round_price_to_tick_milli_with_resolved_profile(
+        price,
+        "down",
+        resolved_profile,
+    )
+    _buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli = (
+        _resolve_trade_fee_schedule_tuple_from_resolved_profile(
+            params,
+            resolved_profile,
+            trade_date=trade_date,
+        )
+    )
+    return _calc_sell_net_total_milli_with_schedule(
+        exec_price_milli,
+        qty,
+        params,
+        sell_fee_ppm=sell_fee_ppm,
+        tax_ppm=tax_ppm,
+        min_fee_milli=min_fee_milli,
+    )
 
 
 
