@@ -14,13 +14,13 @@ from core.breakout_quality_registry import (
 
 # Current work-stage selection. Stable menu work types live in apps/research.py;
 # only the current scientific profiles/bindings change here.
-# Round 10 closes the adaptive-validation line.  Current single-run comparison
-# keeps the established Min/Full references plus C85, and adds C92: a reproducible
-# Research 8x1000 Full/base-finalists-agree treatment aligned to Trading's fitting
-# budget.  Historical C89/C91/C62 identities remain registered but are not current.
+# Round 11 removes C92 from the current single-run comparison after its completed
+# 8x1000 evidence.  Current Compare now keeps only the established C58/C61/C85
+# references.  Historical C92/C89/C91/C62 identities and completed results remain
+# registered/replayable; this setting changes current membership only.
 # Robustness remains on the prior production multi-seed suite.
-STRATEGY_COMPARE_CURRENT_OOS_PROFILE = "non_dl_trading_aligned_8x1000_oos"
-STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE = "non_dl_trading_aligned_8x1000_rolling"
+STRATEGY_COMPARE_CURRENT_OOS_PROFILE = "non_dl_reference_only_oos"
+STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE = "non_dl_reference_only_rolling"
 STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS = "non_dl_production_multiseed_oos"
 STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS = "non_dl_production_multiseed_rolling"
 STRATEGY_COMPARE_DEFAULT_PROFILE = STRATEGY_COMPARE_CURRENT_OOS_PROFILE

@@ -34,7 +34,7 @@ from config.training_policy import (
     ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 72
+STRATEGY_COMPARE_SCHEMA_VERSION = 73
 
 _ROLLING_OOS = get_breakout_quality_rolling_test_mode("oos")
 _ROLLING_ROLLING = get_breakout_quality_rolling_test_mode("rolling")
@@ -109,6 +109,17 @@ STRATEGY_COMPARE_DISPLAY_MIN_MR13AK_NO_K_NO_R0 = "Min MR-13AK No-K No-R0"
 # Current Compare Suite是「比較誰／比較哪些差」的唯一真理來源。
 # OOS／Rolling／single-seed／multi-seed都只能引用suite，不得各自再列current arm matrix。
 STRATEGY_COMPARE_SUITES = {
+    "non_dl_reference_only_current": {
+        # Current human-facing comparison order is numeric ascending by contract.
+        "arm_ids": ("C58", "C61", "C85"),
+        "contrast_ids": ("C85-C61", "C85-C58"),
+        "display_name_bases": {
+            "C58": "Min Base-Finalist-Best",
+            "C61": "Full Base-Finalist-Best",
+            "C85": "Full Base-Finalists-Agree 4x300",
+        },
+    },
+    # Historical Round-10 suite retained unchanged for artifact interpretation/replay.
     "non_dl_trading_aligned_8x1000_current": {
         # Human-facing comparison order is numeric ascending by contract.
         "arm_ids": ("C58", "C61", "C85", "C92"),
@@ -636,6 +647,57 @@ STRATEGY_COMPARE_PROFILES = {
             "C58": "min_rolling",
         },
     },
+    "non_dl_reference_only_oos": {
+        "label": "Non-DL Current References | OOS Test",
+        "description": (
+            "Round-11 current comparison after C92 removal：只保留C58/C61/C85既有references；"
+            "C92/P13已完成8x1000 evidence並退出current Compare，但historical profile/result保持可重現。"
+        ),
+        "display_alignment_group": "non_dl_reference_only",
+        "suite_id": "non_dl_reference_only_current",
+        "display_suffix": "OOS",
+        "start_date": "2021-01-01",
+        "end_date": "2026-03-02",
+        "point_in_time_score_start_date": _ROLLING_OOS.score_start_date,
+        "point_in_time_score_end_date": _ROLLING_OOS.score_end_date,
+        "point_in_time_fold_months": int(_ROLLING_OOS.fold_months),
+        "point_in_time_fold_anchor_date": _ROLLING_OOS.fold_anchor_date,
+        "point_in_time_single_score_block": bool(_ROLLING_OOS.single_score_block),
+        "point_in_time_dirname": _ROLLING_OOS.point_in_time_dirname,
+        "output_root": "outputs/strategy_compare/non_dl_reference_only/oos_2021_forward",
+        "reuse_output_roots": (),
+        "arm_param_source_overrides": {
+            "C58": "min_oos",
+            "C61": "full_oos",
+            "C85": "full_production_multiseed_oos_experiment",
+        },
+    },
+    "non_dl_reference_only_rolling": {
+        "label": "Non-DL Current References | Rolling Test",
+        "description": (
+            "Round-11 current PIT comparison after C92 removal：只保留C58/C61/C85既有references；"
+            "不改P13/C92 historical evidence，也不改Trading production。"
+        ),
+        "display_alignment_group": "non_dl_reference_only",
+        "suite_id": "non_dl_reference_only_current",
+        "display_suffix": "Rolling",
+        "start_date": "2021-01-01",
+        "end_date": "2026-03-02",
+        "point_in_time_score_start_date": _ROLLING_ROLLING.score_start_date,
+        "point_in_time_score_end_date": _ROLLING_ROLLING.score_end_date,
+        "point_in_time_fold_months": int(_ROLLING_ROLLING.fold_months),
+        "point_in_time_fold_anchor_date": _ROLLING_ROLLING.fold_anchor_date,
+        "point_in_time_single_score_block": bool(_ROLLING_ROLLING.single_score_block),
+        "point_in_time_dirname": _ROLLING_ROLLING.point_in_time_dirname,
+        "output_root": "outputs/strategy_compare/non_dl_reference_only/rolling_2021_forward",
+        "reuse_output_roots": (),
+        "arm_param_source_overrides": {
+            "C58": "min_rolling",
+            "C61": "full_rolling",
+            "C85": "full_production_multiseed_rolling_experiment",
+        },
+    },
+    # Historical Round-10 profiles retained unchanged.
     "non_dl_trading_aligned_8x1000_oos": {
         "label": "Non-DL Trading-Aligned 8x1000 | OOS Test",
         "description": (

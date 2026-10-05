@@ -12460,3 +12460,13 @@ Decision：`ENGINEERING_ONLY / P12_SCIENTIFIC_IDENTITY_UNCHANGED / VALIDATION_NO
 
 Decision：`VALIDATION_LINE_STOP / C91_C89_C62_REMOVED_FROM_CURRENT / PARAM_P13_C92_REGISTERED / TRADING_ALIGNED_8X1000_FIXED_RESEARCH_BUNDLE / CURRENT_C58_C61_C85_C92 / DISPLAY_C_ID_ASCENDING / NO_TRADING_PRODUCTION_CHANGE`.
 
+## 2026-10-05 — Strategy-Parameter Round 11 current Compare removes C92
+
+- **Completed evidence**：C92/P13 Full `base-finalists-agree` 8 fixed Research seeds ×1000 trials/seed Rolling已完成；Return/MDD/RoMD=`144.33%/14.22%/10.15`，相對C85 4×300=`190.64%/11.59%/16.45`未形成增量。C92最差完整年度=`+2.39%`、Log R²=`0.9430`與月勝率=`69.84%`較穩，但核心RoMD與總報酬低於C85。
+- **User decision**：使用者明確要求「compare移除C92」。此決策只移除current Strategy Compare membership；不刪除或改寫`SR-C92 / PARAM-P13`、Round-10 profiles、contrasts、completed result或artifact evidence，也不改Trading production。
+- **Current Compare**：新增reference-only current profiles，single-run OOS/Rolling suite=`C58/C61/C85`；`C85-C61`與`C85-C58`為current contrasts。Round-10 `non_dl_trading_aligned_8x1000_*` profiles永久保留作歷史重現。
+- **Parameter producer scope**：`ACTIVE_STRATEGY_PARAM_PROFILE`仍維持P13；本輪沒有取得將Research參數訓練current profile切回P6或其他profile的授權，因此不得藉Compare membership變更隱性改producer。
+- **Presentation**：既有人讀C編號數值升冪規則不變。
+
+Decision：`C92_RESULT_AVAILABLE / C92_REMOVED_FROM_CURRENT_COMPARE / CURRENT_C58_C61_C85 / ROUND10_PROFILE_HISTORICAL / P13_PRODUCER_UNCHANGED / NO_TRADING_PRODUCTION_CHANGE`.
+

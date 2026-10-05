@@ -4344,21 +4344,20 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             == "optimizer_fixed_multiseed_strategy_params"
     }
     check(
-        "strategy_compare_current_suite_closes_validation_and_adds_trading_aligned_8x1000",
+        "strategy_compare_current_suite_excludes_completed_c92_and_validation_line",
         True,
         tuple(arm.arm_id for arm in current_compare_settings.enabled_arms)
-            == ("C58", "C61", "C85", "C92")
+            == ("C58", "C61", "C85")
         and "optimizer_validation_budget_refit_strategy_params" not in current_builder_types
         and not current_validation_parameter_sets
         and current_fixed_multiseed_profiles
-            == {
-                production_multiseed_param_profile.profile_id,
-                trading_aligned_8x1000_param_profile.profile_id,
-            }
+            == {production_multiseed_param_profile.profile_id}
         and all(
             arm_id not in {arm.arm_id for arm in current_compare_settings.enabled_arms}
-            for arm_id in ("C62", "C89", "C91")
+            for arm_id in ("C62", "C89", "C91", "C92")
         )
+        # P13 remains the active parameter-training profile; this user decision only
+        # changes current Strategy Compare membership.
         and active_param_profile.profile_id
             == trading_aligned_8x1000_param_profile.profile_id
         and not active_param_profile.validation_enabled,
