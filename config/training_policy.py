@@ -113,9 +113,26 @@ OPTIMIZER_RANDOM_SEED_DEFAULT = RESEARCH_SINGLE_SEED
 # End-to-end robustness benchmark 題庫。
 # 同一 benchmark seed 必須同時供 Strategy Optimizer 與所有 DL model source 使用；
 # resolved sequence 是跨版本可重現的 scientific identity，不得由 Strategy Compare 另設第二份。
+#
+# AI: Benchmark spec 是 append-only scientific identity registry：既有 benchmark_id 的 seed_count /
+# generator / resolved sequence 不得原地修改。若未來確實要改題庫，必須新增新的 benchmark_id
+# （例如 end_to_end_v2）並切換 ROBUSTNESS_BENCHMARK_ID。identity_fingerprint 由 runtime 對
+# benchmark_id + seed_count + generator + resolved sequence 驗證，用來阻止同一 identity 靜默漂移。
+ROBUSTNESS_BENCHMARK_SPECS = {
+    "end_to_end_v1": {
+        "seed_count": 4,
+        "seed_generator_seed": 20260810,
+        "identity_fingerprint": "ab3f5755a06e867fc90409f36bbb5a13bd20154fdef9791865e91544ce9ca7af",
+    },
+}
 ROBUSTNESS_BENCHMARK_ID = "end_to_end_v1"
-ROBUSTNESS_BENCHMARK_SEED_COUNT = 8
-ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED = 20260810
+
+# AI: Backward-compatible aliases. Numeric ownership remains the selected registered spec above.
+_ROBUSTNESS_BENCHMARK_CURRENT_SPEC = dict(ROBUSTNESS_BENCHMARK_SPECS[ROBUSTNESS_BENCHMARK_ID])
+ROBUSTNESS_BENCHMARK_SEED_COUNT = int(_ROBUSTNESS_BENCHMARK_CURRENT_SPEC["seed_count"])
+ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED = int(
+    _ROBUSTNESS_BENCHMARK_CURRENT_SPEC["seed_generator_seed"]
+)
 
 
 # random seed ensemble：production consensus／多人投標用途；與固定 robustness benchmark 題庫分離。

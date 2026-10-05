@@ -782,6 +782,47 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             tuple(benchmark["resolved_seeds"]),
         ),
     )
+
+    # AI: The benchmark registry is config-driven, but an existing benchmark_id is immutable.
+    # Isolated overrides remain legal for tests; changing the registered spec under the same ID
+    # must fail before runtime can silently reinterpret historical scientific evidence.
+    from config import training_policy as training_policy_config
+    current_benchmark_id = str(training_policy_config.ROBUSTNESS_BENCHMARK_ID)
+    current_benchmark_spec = dict(
+        training_policy_config.ROBUSTNESS_BENCHMARK_SPECS[current_benchmark_id]
+    )
+    check_true(
+        "robustness_benchmark_current_spec_is_registered_and_resolves_exactly",
+        int(current_benchmark_spec["seed_count"]) == int(benchmark["seed_count"])
+        and int(current_benchmark_spec["seed_generator_seed"])
+        == int(benchmark["seed_generator_seed"])
+        and int(benchmark["seed_count"]) == len(tuple(benchmark["resolved_seeds"]))
+        and len(set(int(value) for value in benchmark["resolved_seeds"]))
+        == int(benchmark["seed_count"]),
+    )
+    drifted_specs = {
+        str(key): dict(value)
+        for key, value in training_policy_config.ROBUSTNESS_BENCHMARK_SPECS.items()
+    }
+    drifted_specs[current_benchmark_id] = {
+        **current_benchmark_spec,
+        "seed_count": int(current_benchmark_spec["seed_count"]) + 1,
+    }
+    with patch.object(
+        training_policy_config, "ROBUSTNESS_BENCHMARK_SPECS", drifted_specs
+    ):
+        try:
+            resolve_robustness_benchmark_seeds()
+        except ValueError as exc:
+            benchmark_drift_error = str(exc)
+        else:
+            benchmark_drift_error = ""
+    check_true(
+        "robustness_benchmark_same_id_scientific_drift_fails_fast",
+        "scientific identity drift" in benchmark_drift_error
+        and "新的benchmark_id" in benchmark_drift_error,
+        note=benchmark_drift_error,
+    )
     seed = int(benchmark["resolved_seeds"][0])
     check_true(
         "benchmark_oos_and_rolling_share_per_seed_parameter_truth",

@@ -5,6 +5,8 @@ validation, derived policy snapshots, robustness seed resolution, and the
 optimizer runtime model-mode state so config remains declarative.
 """
 
+import hashlib
+import json
 import math
 import random
 
@@ -13,17 +15,10 @@ from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot
 
 _OPTIMIZER_RUNTIME_MODEL_MODE = None
 
-def resolve_robustness_benchmark_seeds(
-    *,
-    seed_count: int | None = None,
-    generator_seed: int | None = None,
-) -> tuple[int, ...]:
-    count = int(_settings.ROBUSTNESS_BENCHMARK_SEED_COUNT if seed_count is None else seed_count)
-    seed0 = int(
-        _settings.ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED
-        if generator_seed is None
-        else generator_seed
-    )
+
+def _generate_robustness_benchmark_seeds(*, seed_count: int, generator_seed: int) -> tuple[int, ...]:
+    count = int(seed_count)
+    seed0 = int(generator_seed)
     if count < 2:
         raise ValueError("robustness benchmark seed_count必須>=2")
     if seed0 < 0:
@@ -39,12 +34,99 @@ def resolve_robustness_benchmark_seeds(
         values.append(value)
     return tuple(values)
 
+
+def _robustness_benchmark_identity_fingerprint(
+    *,
+    benchmark_id: str,
+    seed_count: int,
+    generator_seed: int,
+    resolved_seeds: tuple[int, ...],
+) -> str:
+    payload = {
+        "benchmark_id": str(benchmark_id),
+        "resolved_seeds": [int(value) for value in resolved_seeds],
+        "seed_count": int(seed_count),
+        "seed_generator_seed": int(generator_seed),
+    }
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _resolve_registered_robustness_benchmark_spec(
+) -> tuple[str, int, int, tuple[int, ...], str]:
+    benchmark_id = str(_settings.ROBUSTNESS_BENCHMARK_ID).strip()
+    specs = dict(getattr(_settings, "ROBUSTNESS_BENCHMARK_SPECS", {}) or {})
+    if benchmark_id not in specs:
+        raise ValueError(
+            f"robustness benchmark未註冊scientific identity: {benchmark_id!r}; "
+            "新增題庫必須先建立新的benchmark_id spec"
+        )
+    spec = dict(specs[benchmark_id] or {})
+    count = int(spec.get("seed_count") or 0)
+    seed0 = int(
+        spec.get("seed_generator_seed")
+        if spec.get("seed_generator_seed") is not None
+        else -1
+    )
+    resolved = _generate_robustness_benchmark_seeds(
+        seed_count=count, generator_seed=seed0
+    )
+    actual_fingerprint = _robustness_benchmark_identity_fingerprint(
+        benchmark_id=benchmark_id,
+        seed_count=count,
+        generator_seed=seed0,
+        resolved_seeds=resolved,
+    )
+    approved_fingerprint = str(spec.get("identity_fingerprint") or "").strip().lower()
+    if not approved_fingerprint:
+        raise ValueError(
+            f"robustness benchmark缺少identity_fingerprint: {benchmark_id}; "
+            "scientific benchmark spec不得以未核准identity執行"
+        )
+    if actual_fingerprint != approved_fingerprint:
+        raise ValueError(
+            "robustness benchmark scientific identity drift: "
+            f"benchmark_id={benchmark_id}, approved={approved_fingerprint}, actual={actual_fingerprint}; "
+            "既有benchmark_id不得原地修改seed_count/generator/resolved sequence，"
+            "請建立新的benchmark_id後再切換current pointer"
+        )
+    if int(_settings.ROBUSTNESS_BENCHMARK_SEED_COUNT) != count:
+        raise ValueError("robustness benchmark compatibility seed_count alias與registered spec不一致")
+    if int(_settings.ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED) != seed0:
+        raise ValueError("robustness benchmark compatibility generator alias與registered spec不一致")
+    return benchmark_id, count, seed0, resolved, actual_fingerprint
+
+
+def resolve_robustness_benchmark_seeds(
+    *,
+    seed_count: int | None = None,
+    generator_seed: int | None = None,
+) -> tuple[int, ...]:
+    # AI: Explicit overrides are intentionally available for isolated tests/probes and do not
+    # redefine the registered current scientific identity. Normal runtime resolves only the
+    # registered spec.
+    if seed_count is not None or generator_seed is not None:
+        count = int(_settings.ROBUSTNESS_BENCHMARK_SEED_COUNT if seed_count is None else seed_count)
+        seed0 = int(
+            _settings.ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED
+            if generator_seed is None
+            else generator_seed
+        )
+        return _generate_robustness_benchmark_seeds(seed_count=count, generator_seed=seed0)
+    return _resolve_registered_robustness_benchmark_spec()[3]
+
+
 def get_robustness_benchmark_policy_snapshot() -> dict:
+    benchmark_id, count, seed0, resolved, _identity_fingerprint = (
+        _resolve_registered_robustness_benchmark_spec()
+    )
     return {
-        "benchmark_id": str(_settings.ROBUSTNESS_BENCHMARK_ID),
-        "seed_count": int(_settings.ROBUSTNESS_BENCHMARK_SEED_COUNT),
-        "seed_generator_seed": int(_settings.ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED),
-        "resolved_seeds": [int(value) for value in resolve_robustness_benchmark_seeds()],
+        "benchmark_id": benchmark_id,
+        "seed_count": count,
+        "seed_generator_seed": seed0,
+        "resolved_seeds": [int(value) for value in resolved],
         # Optimizer budget is not benchmark-owned: always inherit the canonical rolling policy.
         "strategy_trials_per_fold": int(_settings.OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT),
         "train_window_months": int(_settings.OUTER_ROLLING_TRAIN_WINDOW_MONTHS),

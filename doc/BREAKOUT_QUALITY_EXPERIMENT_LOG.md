@@ -12502,3 +12502,14 @@ Decision：`ENGINEERING_ONLY / LEGACY_TRAINED_WORKSPACE_IS_READ_SIDE_REPAIR_EVID
 - **Scientific impact**：無。C58/C61/C85、P6 4×300、`end_to_end_v1` seed sequence、120M/12M、OOS/Rolling PIT、parameter scientific SHA定義與Trading production皆未改；本輪只修cross-profile historical observation reuse的dependency ordering與transient context materialization範圍。
 
 Decision：`ENGINEERING_ONLY / HISTORICAL_RESULT_REUSE_PRECEDES_PARAM_PREREQUISITE / SOURCE_OBSERVATION_COMMITS_PARAM_SHA / AMBIGUOUS_SHA_FAILS_CLOSED / BLOCKED_CANNOT_BE_BYPASSED / LAZY_SINGLE_UNIT_CONTEXT_MATERIALIZATION / NO_SCIENTIFIC_IDENTITY_CHANGE`。
+
+## 2026-10-06 — Robustness benchmark identity drift correction + immutable-spec guard
+
+- **Trigger / user confirmation**：current Rolling Robustness plan顯示外層`Seed數量=8`、`3 arms × 8 replicates = 24 units`；使用者確認既定current Robustness外層應為4次。追溯既有evidence：2026-08-20～08-23 `end_to_end_v1`已正式使用4個benchmark seeds，且當時resolved sequence=`693545351 / 2014432738 / 104504529 / 762252050`。後續某次變更把同一`end_to_end_v1`的config seed count原地改為8，consumer與validator因都忠實讀同一SSOT而一致跟著變成8，未能判定這是benchmark scientific identity漂移。
+- **Scientific config correction**：`config/training_policy.py`將`end_to_end_v1`恢復為原核准4-seed spec；current外層Robustness因此回到4 replicates。C85/P6每個outer replicate內部仍維持獨立的fixed `4 seeds × 300 trials/seed` fitting bundle與`min_agree=3/4`，兩個「4」屬不同seed dimension，不互相取代。Current reference-only suite=`C58/C61/C85`，故current Robustness benchmark unit數回到`3 × 4 = 12`。
+- **Governance correction**：benchmark config改成append-only `ROBUSTNESS_BENCHMARK_SPECS` registry + current pointer。每個registered spec保存核准identity fingerprint；`core/training_policy.py`以`benchmark_id + seed_count + generator + resolved sequence`重算fingerprint。若既有benchmark ID被原地改動，normal runtime在解析seeds前即fail-fast並要求建立新的benchmark ID（例如`end_to_end_v2`）後再切current pointer。隔離synthetic/probe仍可透過explicit override測不同seed count，不會改寫registered current identity。
+- **Historical evidence boundary**：漂移期間以同一legacy label產生的8-seed完整run不刪除、不改寫；其config snapshot與結果只保留historical evidence。Current `end_to_end_v1`只解析核准4-seed題庫；historical strategy-only arm×seed observation只有在該seed屬current題庫且完整scientific unit identity仍一致時，才可依既有registered result resolver做identity-gated REUSE。第5～8個漂移replicate不得進current aggregate。
+- **Regression contract**：Strategy Compare config-driven synthetic新增「current spec由registry解析且count=resolved length」與「同benchmark ID改seed count但不建立新identity必須scientific identity drift fail-fast」案例；validator不硬編4或任何current seed sequence，因此仍遵守config-driven contract。
+
+Decision：`USER_AUTHORIZED_CORRECTION / END_TO_END_V1_RESTORED_TO_APPROVED_4_SEED_SPEC / SAME_ID_DRIFT_FAIL_FAST / NEW_BENCHMARK_REQUIRES_NEW_ID / HISTORICAL_8_SEED_RUNS_PRESERVED / C85_INNER_4X300_UNCHANGED`.
+
