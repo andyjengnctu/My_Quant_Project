@@ -1,10 +1,10 @@
 # 常用指令
 
-python apps/research.py optimizer timing --trials 30 --timing-fold-workers 6 `Strategy Parameter production-aligned timing；直接由active Research Strategy Parameter producer建立runtime contract，沿用正式profile／selector／fixed fitting seeds／TPE／SQLite／resume與execution topology；--trials只縮小每seed benchmark budget，timing不發布或REUSE正式Params truth`
+python apps/research.py optimizer timing --trials 30 --seeds 1 --timing-fold-workers 6 `Strategy Parameter production-aligned timing；直接由active Research Strategy Parameter producer建立runtime contract，沿用正式profile／selector／fixed fitting seed bundle／TPE／SQLite／resume與execution topology；--trials只縮小每seed benchmark budget，--seeds只取production固定seed bundle前N個且預設1，timing不發布或REUSE正式Params truth`
 python apps/research.py optimizer advanced --dataset full --outer-oos --timing --trials 30 --timing-fold-workers 6 --outer-first-oos-date 2021-01-01 --outer-last-oos-date 2026-01-01 --outer-window-mode fixed --outer-train-window-months 120 --outer-oos-months 12 --yes `相容舊寫法；現在只作optimizer timing的routing alias。dataset／schedule參數只驗證與active producer一致，不再建立第二套workload contract`
 python apps/research.py optimizer advanced --dataset full --timing --trials 10 `generic單次Optimizer hotpath timing；只適合isolated objective/prep/portfolio微基準，不代表Strategy Parameter producer的multi-seed／Rolling／SQLite end-to-end workload`
 
-- Strategy Parameter timing若要比較fold concurrency，請分開啟動不同process，例如依序執行`--timing-fold-workers 1`、`2`、`3`、`4`、`6`；production-aligned入口每次只接受一個值，避免同process cache／working-set污染A/B。
+- Strategy Parameter timing的`--seeds N`預設為`1`，合法範圍為`1..production seed_count`；永遠依production固定seed bundle原順序取前N個，不重新生成、不挑best seed。若要比較fold concurrency，請分開啟動不同process，例如依序執行`--timing-fold-workers 1`、`2`、`3`、`4`、`6`；production-aligned入口每次只接受一個值，避免同process cache／working-set污染A/B。
 - Strategy Parameter timing工件隔離於`outputs/ml_optimizer/strategy_param_timing/<artifact_slug>/<run>/`；manifest同時保存source production trial budget與本次benchmark trial budget。
 
 ## 環境 / 測試

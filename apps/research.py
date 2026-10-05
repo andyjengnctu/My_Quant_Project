@@ -786,7 +786,7 @@ def _print_help(program_name: str) -> None:
     print("說明: Research 單一正式入口；互動選單只選工作類型，研究標的與設定由 config/ 決定。")
     print("  model      目前 active model 的模型訓練／驗證；後續參數原樣轉交model provider")
     print("  optimizer  依 config/strategy_params.py 執行目前策略參數訓練 profile")
-    print("             Production-aligned timing：optimizer timing [--trials N] [--timing-fold-workers N]")
+    print("             Production-aligned timing：optimizer timing [--trials N] [--seeds N] [--timing-fold-workers N]")
     print("             進階單次 Optimizer：optimizer advanced [options]")
     print("             一次性SSOT migration：optimizer migrate-strategy-params")
     integration_actions = "/".join(runtime_integration_allowed_actions())

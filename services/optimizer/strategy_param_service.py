@@ -27,7 +27,11 @@ from core.active_param_ensemble import (
     is_active_param_ensemble_payload,
     resolve_active_param_ensemble_mode,
 )
-from core.seed_ensemble_policy import normalize_seed_ensemble_members
+from core.seed_ensemble_policy import (
+    normalize_seed_ensemble_members,
+    resolve_seed_ensemble_min_agree,
+    resolve_seed_ensemble_seeds,
+)
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
 from core.strategy_param_scientific_contract import (
     build_registered_strategy_param_scientific_identity,
@@ -2581,6 +2585,38 @@ def _fixed_multiseed_build_contract(
     }
 
 
+def _strategy_param_timing_seed_policy(
+    source_policy: dict[str, Any], *, benchmark_seed_count: int
+) -> tuple[dict[str, Any], tuple[int, ...]]:
+    """Return a deterministic timing-only prefix of the production seed bundle."""
+
+    source = dict(source_policy or {})
+    source_seeds = tuple(int(value) for value in resolve_seed_ensemble_seeds(source))
+    requested = int(benchmark_seed_count)
+    if requested < 1:
+        raise ValueError("Strategy Parameter timing seed count必須>=1")
+    if requested > len(source_seeds):
+        raise ValueError(
+            "Strategy Parameter timing seed count不得超過production fitting seed bundle: "
+            f"requested={requested}, production={len(source_seeds)}"
+        )
+    selected = tuple(source_seeds[:requested])
+    min_agree_requested = source.get("min_agree_requested", "auto")
+    policy = {
+        "enabled": bool(requested > 1),
+        "seed_count": int(requested),
+        "min_agree": int(resolve_seed_ensemble_min_agree(requested, min_agree_requested)),
+        "min_agree_requested": min_agree_requested,
+        "min_agree_max": int(requested),
+        "min_agree_rule": "clamp_1_to_seed_count",
+        "seed_mode": "fixed_generated_bundle" if requested > 1 else "fixed_single_seed",
+        "params_storage": str(source.get("params_storage") or "same_json"),
+        "generator_seed": int(source.get("generator_seed", selected[0]) or selected[0]),
+        "resolved_seeds": [int(value) for value in selected],
+    }
+    return policy, selected
+
+
 def _strategy_param_timing_last_fold_start(
     *, schedule_start: str, coverage_end: str, oos_horizon_months: int
 ) -> str:
@@ -2603,6 +2639,7 @@ def run_fixed_multiseed_strategy_parameter_timing_benchmark(
     *,
     training_profile_id: str,
     benchmark_trials_per_seed: int,
+    benchmark_seed_count: int = 1,
     dataset: str | None = None,
     fold_workers: int | None = None,
     requested_first_oos_date: str | None = None,
@@ -2660,6 +2697,13 @@ def run_fixed_multiseed_strategy_parameter_timing_benchmark(
 
     trials = int(benchmark_trials_per_seed)
     source_trials = int(contract["trials_per_fold"])
+    source_seed_policy = dict(contract["seed_ensemble_policy"])
+    benchmark_seed_policy, benchmark_seeds = _strategy_param_timing_seed_policy(
+        source_seed_policy, benchmark_seed_count=int(benchmark_seed_count)
+    )
+    source_seed_count = int(
+        source_seed_policy.get("seed_count", len(benchmark_seeds)) or len(benchmark_seeds)
+    )
     if trials < 1:
         raise ValueError("Strategy Parameter timing trials/seed必須>=1")
     if trials > source_trials:
@@ -2733,7 +2777,7 @@ def run_fixed_multiseed_strategy_parameter_timing_benchmark(
     print(
         "Strategy Parameter timing overlay | "
         f"profile={profile.profile_id} | parameter_set={contract['parameter_set']} | "
-        f"seeds={int(dict(contract['seed_ensemble_policy']).get('seed_count', 1) or 1)} | "
+        f"seeds={len(benchmark_seeds)} timing/{source_seed_count} production | "
         f"trials/seed={trials} (production={source_trials}) | "
         "storage=sqlite | resume=on | publish=off"
     )
@@ -2746,7 +2790,11 @@ def run_fixed_multiseed_strategy_parameter_timing_benchmark(
         rotation=str(contract["rotation"]),
         fixed_risk=float(contract["fixed_risk"]),
         max_position_cap_pct=float(contract["max_position_cap_pct"]),
-        optimizer_seed=int(contract["optimizer_seed"]),
+        optimizer_seed=(
+            int(benchmark_seeds[0])
+            if len(benchmark_seeds) == 1
+            else int(contract["optimizer_seed"])
+        ),
         resume_parameter_training=True,
         quiet=False,
         first_oos_date=expected_first,
@@ -2759,7 +2807,7 @@ def run_fixed_multiseed_strategy_parameter_timing_benchmark(
         environ_override=timing_environ,
         optimizer_search_protocol=str(contract["optimizer_search_protocol"]),
         parameter_set_identity=str(contract["parameter_set"]),
-        seed_ensemble_policy_override=dict(contract["seed_ensemble_policy"]),
+        seed_ensemble_policy_override=dict(benchmark_seed_policy),
         score_policy_overrides=(
             dict(profile.score_policy_overrides)
             if profile.score_policy_overrides
@@ -2787,7 +2835,11 @@ def run_fixed_multiseed_strategy_parameter_timing_benchmark(
             "publish_parameter_truth": False,
             "source_trials_per_seed": source_trials,
             "benchmark_trials_per_seed": trials,
-            "seed_ensemble_policy": dict(contract["seed_ensemble_policy"]),
+            "source_seed_count": int(source_seed_count),
+            "benchmark_seed_count": int(len(benchmark_seeds)),
+            "source_seed_ensemble_policy": dict(source_seed_policy),
+            "seed_ensemble_policy": dict(benchmark_seed_policy),
+            "benchmark_resolved_seeds": [int(value) for value in benchmark_seeds],
             "schedule_start": expected_first,
             "coverage_end": expected_coverage_end,
             "last_fold_start": expected_last_fold_start,

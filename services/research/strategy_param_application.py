@@ -146,6 +146,7 @@ def run_strategy_param_timing_cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--outer-oos", action="store_true")
     parser.add_argument("--dataset")
     parser.add_argument("--trials", type=int, default=int(OPTIMIZER_TIMING_MODE_DEFAULT_TRIALS))
+    parser.add_argument("--seeds", "--seed-count", dest="seed_count", type=int, default=1)
     parser.add_argument("--timing-fold-workers")
     parser.add_argument("--outer-first-oos-date")
     parser.add_argument("--outer-last-oos-date")
@@ -166,7 +167,8 @@ def run_strategy_param_timing_cli(argv: list[str] | None = None) -> int:
     if args.help:
         print(
             "用法: python apps/research.py optimizer timing "
-            "[--trials N] [--timing-fold-workers N]\n"
+            "[--trials N] [--seeds N] [--timing-fold-workers N]\n"
+            "--seeds預設1；只可選active production fitting seed bundle的前N個seed。\n"
             "相容舊命令: optimizer advanced --outer-oos --timing ...；"
             "schedule/dataset參數只做active producer一致性驗證，不建立第二套設定。"
         )
@@ -191,13 +193,24 @@ def run_strategy_param_timing_cli(argv: list[str] | None = None) -> int:
         )
     fold_workers = _parse_single_timing_fold_worker(args.timing_fold_workers)
     benchmark_trials = int(args.trials)
+    benchmark_seed_count = int(args.seed_count)
+    if benchmark_seed_count < 1:
+        raise ValueError("--seeds必須>=1")
+    if benchmark_seed_count > int(seed_protocol.seed_count):
+        raise ValueError(
+            "--seeds不得超過active production fitting seed數量: "
+            f"requested={benchmark_seed_count}, production={seed_protocol.seed_count}"
+        )
     print("\n====================================================================================================")
     print(" Strategy Parameter Timing | Production-Aligned Overlay")
     print("====================================================================================================")
     print(f"Source Profile     ：{profile.profile_id}")
     print(f"Parameter Set      ：{profile.parameter_set_identity}")
     print(f"Filter / Selector  ：{profile.filter_profile} / {profile.parameter_policy}")
-    print(f"Fitting Seeds      ：{seed_protocol.seed_count} | {seed_protocol.seed_mode}")
+    print(
+        f"Fitting Seeds      ：{benchmark_seed_count} timing / "
+        f"{seed_protocol.seed_count} production | {seed_protocol.seed_mode}"
+    )
     print(
         f"Trials / Seed      ：{benchmark_trials} timing / "
         f"{seed_protocol.trials_per_seed} production"
@@ -209,6 +222,7 @@ def run_strategy_param_timing_cli(argv: list[str] | None = None) -> int:
         PROJECT_ROOT,
         training_profile_id=profile.profile_id,
         benchmark_trials_per_seed=benchmark_trials,
+        benchmark_seed_count=benchmark_seed_count,
         dataset=args.dataset,
         fold_workers=fold_workers,
         requested_first_oos_date=args.outer_first_oos_date,
@@ -225,7 +239,11 @@ def run_strategy_param_timing_cli(argv: list[str] | None = None) -> int:
     print("\n=== Production-Aligned Timing Contract ===")
     print(f"Sampler             ：{timing_payload.get('sampler_kind') or '-'}")
     print(f"Study Storage       ：{timing_summary.get('study_storage') or '-'}")
-    print(f"Seeds               ：{seed_protocol.seed_count}")
+    benchmark_scope = dict(result.get("benchmark_manifest", {}).get("benchmark_scope") or {})
+    print(
+        f"Seeds               ：{benchmark_scope.get('benchmark_seed_count', benchmark_seed_count)} timing / "
+        f"{benchmark_scope.get('source_seed_count', seed_protocol.seed_count)} production"
+    )
     print(f"Trials / Seed       ：{benchmark_trials}")
     print(f"Fold Workers        ：{timing_summary.get('rolling_fold_workers_max') or '-'}")
     print(f"Timing JSON         ：{_relative(timing.get('json_path') or '')}")
