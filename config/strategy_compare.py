@@ -14,15 +14,16 @@ from core.breakout_quality_registry import (
 
 # Current work-stage selection. Stable menu work types live in apps/research.py;
 # only the current scientific profiles/bindings change here.
-# Round 11 removes C92 from the current single-run comparison after its completed
-# 8x1000 evidence.  Current Compare now keeps only the established C58/C61/C85
-# references.  Historical C92/C89/C91/C62 identities and completed results remain
-# registered/replayable; this setting changes current membership only.
-# Robustness remains on the prior production multi-seed suite.
+# Round 11 removes C92 from the current comparison after its completed 8x1000
+# evidence.  Current Compare keeps only the established C58/C61/C85 references.
+# Robustness is not an independent scientific-matrix selector: it must extend the
+# same current OOS/Rolling profile and Compare Suite across the benchmark seed set.
+# Historical C92/C89/C91/C62 identities and completed results remain registered and
+# discoverable for identity-based reuse/replay.
 STRATEGY_COMPARE_CURRENT_OOS_PROFILE = "non_dl_reference_only_oos"
 STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE = "non_dl_reference_only_rolling"
-STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS = "non_dl_production_multiseed_oos"
-STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS = "non_dl_production_multiseed_rolling"
+STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS = STRATEGY_COMPARE_CURRENT_OOS_PROFILE
+STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS = STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE
 STRATEGY_COMPARE_DEFAULT_PROFILE = STRATEGY_COMPARE_CURRENT_OOS_PROFILE
 STRATEGY_COMPARE_MENU_PROFILE_IDS = (
     STRATEGY_COMPARE_CURRENT_OOS_PROFILE,

@@ -3331,11 +3331,11 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS
     )
     check(
-        "strategy_param_current_compare_switches_oos_rolling_atomically_but_defers_robustness",
+        "strategy_param_current_compare_and_robustness_share_one_canonical_suite",
         True,
         current_oos_settings.suite_id == current_rolling_settings.suite_id
         and current_oos_robustness.suite_id == current_rolling_robustness.suite_id
-        and current_oos_robustness.suite_id != current_oos_settings.suite_id,
+        and current_oos_robustness.suite_id == current_oos_settings.suite_id,
     )
     from services.optimizer.strategy_param_service import (
         _benchmark_schedule_build_contract,
@@ -3343,6 +3343,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         _fixed_multiseed_build_contract,
         ensure_fixed_multiseed_robustness_strategy_parameter_artifact,
         fixed_multiseed_robustness_strategy_param_artifact_path,
+        fixed_multiseed_robustness_strategy_param_manifest_path,
         fixed_multiseed_strategy_param_artifact_path,
         inspect_fixed_multiseed_strategy_parameter_artifact,
         inspect_fixed_multiseed_robustness_strategy_parameter_artifact,
@@ -3696,11 +3697,34 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             fixed_risk=float(DEFAULT_FIXED_RISK),
             max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
         )
+        p6_manifest_path = fixed_multiseed_robustness_strategy_param_manifest_path(
+            temp_root,
+            training_profile_id="production_multiseed_current",
+            benchmark_id=str(benchmark_snapshot["benchmark_id"]),
+            replication_seed=replication_seed,
+        )
+        p6_manifest = json.loads(p6_manifest_path.read_text(encoding="utf-8"))
+        p6_manifest["build_contract"]["publication_schema"] = "legacy_workspace_v1"
+        p6_manifest_path.write_text(json.dumps(p6_manifest), encoding="utf-8")
+        p6_publication_metadata_drift_state = inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
+            temp_root,
+            training_profile_id="production_multiseed_current",
+            benchmark_id=str(benchmark_snapshot["benchmark_id"]),
+            replication_seed=replication_seed,
+            policy="base-finalists-agree",
+            comparison_end_date="2021-01-01",
+            dataset="full",
+            max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+            rotation=str(DEFAULT_PORTFOLIO_ROTATION),
+            fixed_risk=float(DEFAULT_FIXED_RISK),
+            max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+        )
     check(
         "strategy_param_round3_p6_robustness_builder_passes_inner_bundle_and_publishes_ready_artifact",
         True,
         built_p6_robustness["action"] == "BUILD"
         and rebuilt_p6_robustness_state["ready"]
+        and p6_publication_metadata_drift_state["action"] == "REUSE"
         and bool(
             rebuilt_p6_robustness_state["scientific_identity"][
                 "source_registration_matches"

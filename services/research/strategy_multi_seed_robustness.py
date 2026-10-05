@@ -700,6 +700,7 @@ def _benchmark_parameter_plan_rows(
             unit_key = (arm.arm_id, int(seed))
             bindings[unit_key] = binding
             if unit_key in reusable_units:
+                binding["plan_action"] = "RESULT_REUSE"
                 rows.append((
                     "REUSE",
                     f"result:{arm.arm_id}:seed={int(seed)}",
@@ -816,6 +817,8 @@ def _benchmark_parameter_plan_rows(
                     max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
                 )
             action = str(state["action"])
+            binding["plan_action"] = action
+            binding["plan_status"] = str(state.get("status") or "")
             if action == "REUSE":
                 detail = project_relative_display_path(path, project_root=PROJECT_ROOT)
             elif action == "REPAIR":
@@ -1533,13 +1536,15 @@ def _render_robustness_execution_plan(
     training_sources = _training_source_groups(tuple(model_arms), settings=settings)
     pending_optimizer_search_groups: set[tuple[int, str, str, str, str, str]] = set()
     if cfg.benchmark_id is not None:
-        reusable_units = set(registered_scientific_reuse)
         for seed in cfg.resolved_seeds:
             for arm in stochastic_arms:
-                if (arm.arm_id, int(seed)) in reusable_units:
-                    continue
                 binding = benchmark_bindings.get((arm.arm_id, int(seed)))
                 if binding is None:
+                    continue
+                # Count only units whose canonical parameter producer actually needs
+                # optimizer work.  Result REUSE, parameter REUSE and manifest-only
+                # REPAIR are not pending searches.
+                if str(binding.get("plan_action") or "") not in {"BUILD", "REBUILD"}:
                     continue
                 pending_optimizer_search_groups.add((
                     int(seed),

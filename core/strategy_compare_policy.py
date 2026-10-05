@@ -500,6 +500,12 @@ def get_strategy_rolling_test_modes() -> tuple[dict[str, object], ...]:
             "current OOS／Rolling robustness modes必須引用同一Compare Suite: "
             f"suite_ids={sorted(str(value) for value in current_robustness_suite_ids)}"
         )
+    if current_robustness_suite_ids != current_suite_ids:
+        raise ValueError(
+            "current robustness必須是current single-run Compare Suite的多seed延伸，不得維護第二份scientific matrix: "
+            f"single_run={sorted(str(value) for value in current_suite_ids)}, "
+            f"robustness={sorted(str(value) for value in current_robustness_suite_ids)}"
+        )
     return tuple(rows)
 
 

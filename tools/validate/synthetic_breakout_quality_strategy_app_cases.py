@@ -822,9 +822,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     robustness_expected_arm_ids = (
         tuple(robustness_suite["arm_ids"]) if robustness_suite is not None else ()
     )
+    current_compare_suite_ids = {
+        strategy_config.get_strategy_comparison_settings(str(mode["profile_id"])).suite_id
+        for mode in strategy_config.get_strategy_rolling_test_modes()
+    }
     check_true(
-        "current_robustness_routes_are_executable_and_share_one_self_consistent_suite",
+        "current_robustness_routes_extend_the_same_current_compare_suite",
         bool(robustness_suite_id)
+        and current_compare_suite_ids == {robustness_suite_id}
         and all(
             item.enabled
             and item.suite_id == robustness_suite_id
@@ -995,8 +1000,40 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and rendered_robustness_plan.count(" seed scientific results identity一致") == len(rolling_canonical_reuse_arm_ids)
         and "Strategy fitting budgets" in rendered_robustness_plan
         and "4 seeds x 300 trials" in rendered_robustness_plan
-        and "8 seeds x 300 trials" in rendered_robustness_plan
-        and "4 seeds x 1000 trials" in rendered_robustness_plan,
+        and "8 seeds x 300 trials" not in rendered_robustness_plan
+        and "4 seeds x 1000 trials" not in rendered_robustness_plan,
+    )
+
+    # Previously fitted robustness parameter artifacts are replay prerequisites, not
+    # pending Optimizer searches.  When their full scientific contracts are READY,
+    # the plan must show zero pending search even if no completed replay result exists.
+    with (
+        patch(
+            "services.research.strategy_multi_seed_robustness._discover_registered_strategy_only_scientific_reuse",
+            return_value={},
+        ),
+        patch(
+            "services.research.strategy_multi_seed_robustness.inspect_robustness_benchmark_strategy_parameter_artifact",
+            return_value={"action": "REUSE", "status": "READY"},
+        ),
+        patch(
+            "services.research.strategy_multi_seed_robustness.inspect_fixed_multiseed_robustness_strategy_parameter_artifact",
+            return_value={"action": "REUSE", "status": "READY"},
+        ),
+    ):
+        fitted_param_plan, fitted_param_payload = _render_robustness_execution_plan(
+            cfg=rolling_robustness,
+            settings=rolling_robust_settings,
+            status=collect_robustness_artifact_status(settings=rolling_robust_settings),
+            fixed_arms=rolling_fixed,
+            stochastic_arms=rolling_stochastic,
+        )
+    check_true(
+        "robustness_plan_does_not_count_ready_trained_params_as_pending_optimizer_search",
+        not fitted_param_payload.get("registered_scientific_reuse_units")
+        and "0 pending search units" in fitted_param_plan
+        and f"scientific result REUSE=0/{expected_total_units} arm×replicate" in fitted_param_plan
+        and fitted_param_plan.count("\nREUSE") == expected_total_units,
     )
 
     # The long-lived extending_current benchmark remains contract-tested even when

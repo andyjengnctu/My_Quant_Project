@@ -1965,7 +1965,9 @@ def _benchmark_manifest_matches_current_policy(
     if coverage_end is None or str(coverage_end) < str(comparison_end_date):
         return False
     source = dict(artifact.get("source") or {})
-    if dict(source.get("build_contract") or {}) != dict(build_contract):
+    if _benchmark_build_contract_scientific_payload(
+        dict(source.get("build_contract") or {})
+    ) != _benchmark_build_contract_scientific_payload(build_contract):
         return False
     if dict(source.get("scientific_identity") or {}) != _derived_scientific_identity_record(
         scientific_identity
@@ -3371,7 +3373,13 @@ def inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
         status = "MANIFEST_POLICY_MISMATCH"
     elif dict(manifest.get("seed_ensemble_policy") or {}) != expected_seed_policy:
         status = "MANIFEST_FITTING_SEED_POLICY_MISMATCH"
-    elif dict(manifest.get("build_contract") or {}) != contract:
+    elif {
+        key: dict(manifest.get("build_contract") or {}).get(key)
+        for key in contract
+    } != contract:
+        # Ignore legacy/publication-only extra manifest fields.  Every current
+        # scientific build input must still match exactly, and the bound registered
+        # scientific identity below remains the authoritative semantic guard.
         status = "BUILD_CONTRACT_MISMATCH"
     elif not manifest_scientific_identity:
         status = "LEGACY_SCIENTIFIC_IDENTITY_UNBOUND"

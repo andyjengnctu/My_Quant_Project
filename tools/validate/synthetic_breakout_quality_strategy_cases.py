@@ -1868,6 +1868,8 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         target_sha = compute_strategy_param_file_sha256(target)
         target_scientific_sha = compute_strategy_param_scientific_sha256(target)
         manifest_path = temp_root / "min_manifest.json"
+        retained_build_contract = dict(benchmark_build_contract)
+        retained_build_contract["schema"] = "robustness_strategy_schedule_work_v2"
         manifest = {
             "benchmark_id": str(benchmark["benchmark_id"]),
             "benchmark_seed": benchmark_seed,
@@ -1891,7 +1893,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                     "sha256": target_sha,
                     "scientific_sha256": target_scientific_sha,
                     "source": {
-                        "build_contract": benchmark_build_contract,
+                        "build_contract": retained_build_contract,
                         "scientific_identity": _derived_scientific_identity_record(
                             benchmark_scientific_identity
                         ),
@@ -1946,7 +1948,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             scientific_identity=benchmark_scientific_identity,
         )
     check_true(
-        "robustness_per_seed_param_reuse_ignores_membership_but_rejects_stale_contract_or_sha",
+        "robustness_per_seed_param_reuse_ignores_membership_and_workspace_schema_but_rejects_scientific_contract_or_sha_drift",
         membership_only_reuse and stale_contract_rejected and stale_sha_rejected,
     )
 
