@@ -1027,6 +1027,221 @@ static int indicator_sell_is_executable_native(
     return locked_down ? 0 : 1;
 }
 
+static int get_attr_double_native(PyObject *obj, const char *name, double *out) {
+    if (obj == NULL || obj == Py_None) return 0;
+    PyObject *attr = PyObject_GetAttrString(obj, name);
+    if (attr == NULL) { PyErr_Clear(); return 0; }
+    double value = PyFloat_AsDouble(attr);
+    Py_DECREF(attr);
+    if (PyErr_Occurred() || !isfinite(value)) { PyErr_Clear(); return 0; }
+    *out = value;
+    return 1;
+}
+
+static int rate_to_ppm_double_native(double value, int64_t *out) {
+    if (!isfinite(value)) return 0;
+    const double scaled = value * 1000000.0;
+    if (!isfinite(scaled) || scaled > (double)INT64_MAX || scaled < (double)INT64_MIN) return 0;
+    *out = scaled >= 0.0 ? (int64_t)floor(scaled + 0.5) : (int64_t)ceil(scaled - 0.5);
+    return 1;
+}
+
+static int money_to_milli_double_native(double value, int64_t *out) {
+    if (!isfinite(value)) return 0;
+    const double scaled = value * 1000.0;
+    if (!isfinite(scaled) || scaled > (double)INT64_MAX || scaled < (double)INT64_MIN) return 0;
+    *out = scaled >= 0.0 ? (int64_t)floor(scaled + 0.5) : (int64_t)ceil(scaled - 0.5);
+    return 1;
+}
+
+static int mul_nonnegative_i64_checked(int64_t a, int64_t b, int64_t *out) {
+    if (a < 0 || b < 0) return 0;
+    if (a != 0 && b > INT64_MAX / a) return 0;
+    *out = a * b;
+    return 1;
+}
+
+static int unicode_equals_ascii_native(PyObject *obj, const char *text, int *out) {
+    if (!PyUnicode_Check(obj)) return 0;
+    int cmp = PyUnicode_CompareWithASCIIString(obj, text);
+    if (cmp == -1 && PyErr_Occurred()) { PyErr_Clear(); return 0; }
+    *out = (cmp == 0);
+    return 1;
+}
+
+/* Optimizer-only cached mark-to-market batch.  Unsupported/date-dependent
+ * cases are returned to the canonical Python exact-accounting path. */
+static PyObject *native_mark_to_market_cached_batch(PyObject *self, PyObject *args) {
+    PyObject *portfolio, *tickers_obj, *default_params;
+    (void)self;
+    if (!PyArg_ParseTuple(args, "OOO", &portfolio, &tickers_obj, &default_params)) return NULL;
+    if (!PyDict_Check(portfolio)) {
+        PyErr_SetString(PyExc_TypeError, "expected portfolio dict input");
+        return NULL;
+    }
+    PyObject *tickers = PySequence_Fast(tickers_obj, "tickers must be a sequence");
+    if (tickers == NULL) return NULL;
+    PyObject *fallback = PyList_New(0);
+    if (fallback == NULL) { Py_DECREF(tickers); return NULL; }
+
+    PyObject *last_params = NULL;
+    int64_t last_sell_fee_ppm = 0, last_stock_tax_ppm = 0, last_min_fee_milli = 0;
+    int last_fee_floor_twd = 0, have_last_params = 0;
+    int64_t total_net_milli = 0;
+    const Py_ssize_t n = PySequence_Fast_GET_SIZE(tickers);
+    PyObject **items = PySequence_Fast_ITEMS(tickers);
+
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        PyObject *ticker = items[i];
+        PyObject *position = PyDict_GetItemWithError(portfolio, ticker);
+        if (position == NULL) {
+            if (PyErr_Occurred()) goto error;
+            continue;
+        }
+        if (!PyDict_Check(position)) { if (PyList_Append(fallback, ticker) != 0) goto error; continue; }
+
+        int64_t qty = 0;
+        if (!dict_int64_default(position, "qty", 0, &qty) || qty <= 0) {
+            if (PyList_Append(fallback, ticker) != 0) goto error;
+            continue;
+        }
+        PyObject *last_px_obj = dict_get_borrowed(position, "last_px");
+        if (last_px_obj == NULL || last_px_obj == Py_None) { if (PyList_Append(fallback, ticker) != 0) goto error; continue; }
+        double last_px = PyFloat_AsDouble(last_px_obj);
+        if (PyErr_Occurred() || !isfinite(last_px)) {
+            PyErr_Clear();
+            if (PyList_Append(fallback, ticker) != 0) goto error;
+            continue;
+        }
+
+        PyObject *security_profile = dict_get_borrowed(position, "security_profile");
+        int is_fund = 0;
+        if (!profile_is_fund(security_profile, &is_fund)) { if (PyList_Append(fallback, ticker) != 0) goto error; continue; }
+        PyObject *family_obj = PyDict_GetItemString(security_profile, "family");
+        PyObject *broad_type_obj = PyDict_GetItemString(security_profile, "broad_type");
+        if (!PyUnicode_Check(family_obj)) { if (PyList_Append(fallback, ticker) != 0) goto error; continue; }
+
+        int family_stock = 0, family_reit = 0, family_etf = 0, family_etn = 0;
+        if (!unicode_equals_ascii_native(family_obj, "stock", &family_stock) ||
+            !unicode_equals_ascii_native(family_obj, "reit", &family_reit) ||
+            !unicode_equals_ascii_native(family_obj, "etf", &family_etf) ||
+            !unicode_equals_ascii_native(family_obj, "etn", &family_etn)) {
+            if (PyList_Append(fallback, ticker) != 0) goto error;
+            continue;
+        }
+        if (family_etf) {
+            int broad_bond = 0;
+            if (broad_type_obj != NULL && PyUnicode_Check(broad_type_obj)) {
+                if (!unicode_equals_ascii_native(broad_type_obj, "bond", &broad_bond)) {
+                    if (PyList_Append(fallback, ticker) != 0) goto error;
+                    continue;
+                }
+            }
+            if (broad_bond) { if (PyList_Append(fallback, ticker) != 0) goto error; continue; }
+        }
+
+        PyObject *params_obj = dict_get_borrowed(position, "_entry_params_obj");
+        if (params_obj == NULL || params_obj == Py_None) params_obj = default_params;
+        int64_t sell_fee_ppm = 0, stock_tax_ppm = 0, min_fee_milli = 0;
+        int fee_floor_twd = 0;
+        if (have_last_params && params_obj == last_params) {
+            sell_fee_ppm = last_sell_fee_ppm;
+            stock_tax_ppm = last_stock_tax_ppm;
+            min_fee_milli = last_min_fee_milli;
+            fee_floor_twd = last_fee_floor_twd;
+        } else {
+            double sell_fee = 0.0, tax_rate = 0.0, min_fee = 0.0;
+            if (!get_attr_double_native(params_obj, "sell_fee", &sell_fee) ||
+                !get_attr_double_native(params_obj, "tax_rate", &tax_rate) ||
+                !get_attr_double_native(params_obj, "min_fee", &min_fee) ||
+                !rate_to_ppm_double_native(sell_fee, &sell_fee_ppm) ||
+                !rate_to_ppm_double_native(tax_rate, &stock_tax_ppm) ||
+                !money_to_milli_double_native(min_fee, &min_fee_milli)) {
+                if (PyList_Append(fallback, ticker) != 0) goto error;
+                continue;
+            }
+            PyObject *rounding_obj = PyObject_GetAttrString(params_obj, "charge_rounding_mode");
+            if (rounding_obj == NULL) {
+                PyErr_Clear();
+                fee_floor_twd = 0;
+            } else if (rounding_obj == Py_None) {
+                fee_floor_twd = 0;
+                Py_DECREF(rounding_obj);
+            } else if (PyUnicode_Check(rounding_obj)) {
+                int is_floor = 0, is_nearest = 0;
+                int ok_floor = unicode_equals_ascii_native(rounding_obj, "floor_twd", &is_floor);
+                int ok_nearest = unicode_equals_ascii_native(rounding_obj, "nearest_milli", &is_nearest);
+                Py_DECREF(rounding_obj);
+                if (!ok_floor || !ok_nearest || (!is_floor && !is_nearest)) {
+                    if (PyList_Append(fallback, ticker) != 0) goto error;
+                    continue;
+                }
+                fee_floor_twd = is_floor ? 1 : 0;
+            } else {
+                Py_DECREF(rounding_obj);
+                if (PyList_Append(fallback, ticker) != 0) goto error;
+                continue;
+            }
+            last_params = params_obj;
+            last_sell_fee_ppm = sell_fee_ppm;
+            last_stock_tax_ppm = stock_tax_ppm;
+            last_min_fee_milli = min_fee_milli;
+            last_fee_floor_twd = fee_floor_twd;
+            have_last_params = 1;
+        }
+
+        int64_t tick_milli = 0;
+        if (!resolve_tick_milli(last_px, is_fund, &tick_milli)) { if (PyList_Append(fallback, ticker) != 0) goto error; continue; }
+        const double ratio = (last_px * 1000.0) / (double)tick_milli;
+        const double rounded_ratio = floor(ratio + 1e-12);
+        if (!isfinite(rounded_ratio) || rounded_ratio < 0.0 || rounded_ratio > (double)(INT64_MAX / tick_milli)) {
+            if (PyList_Append(fallback, ticker) != 0) goto error;
+            continue;
+        }
+        const int64_t exec_price_milli = (int64_t)rounded_ratio * tick_milli;
+        int64_t gross_milli = 0;
+        if (!mul_nonnegative_i64_checked(exec_price_milli, qty, &gross_milli)) { if (PyList_Append(fallback, ticker) != 0) goto error; continue; }
+
+        int64_t tax_ppm = stock_tax_ppm;
+        if (family_reit) tax_ppm = 0;
+        else if (family_etf || family_etn) tax_ppm = 1000;
+        else if (!family_stock) tax_ppm = stock_tax_ppm;
+
+        int64_t fee_product = 0, tax_product = 0;
+        if (!mul_nonnegative_i64_checked(gross_milli, sell_fee_ppm, &fee_product) ||
+            !mul_nonnegative_i64_checked(gross_milli, tax_ppm, &tax_product)) {
+            if (PyList_Append(fallback, ticker) != 0) goto error;
+            continue;
+        }
+        int64_t sell_fee_milli = 0;
+        if (fee_floor_twd) {
+            sell_fee_milli = (fee_product / 1000000000LL) * 1000LL;
+        } else {
+            if (fee_product > INT64_MAX - 500000LL) { if (PyList_Append(fallback, ticker) != 0) goto error; continue; }
+            sell_fee_milli = (fee_product + 500000LL) / 1000000LL;
+        }
+        if (sell_fee_milli < min_fee_milli) sell_fee_milli = min_fee_milli;
+        const int64_t tax_milli = (tax_product / 1000000000LL) * 1000LL;
+        const int64_t net_milli = gross_milli - sell_fee_milli - tax_milli;
+        if ((net_milli > 0 && total_net_milli > INT64_MAX - net_milli) ||
+            (net_milli < 0 && total_net_milli < INT64_MIN - net_milli)) {
+            Py_DECREF(tickers);
+            Py_DECREF(fallback);
+            Py_RETURN_NONE;
+        }
+        total_net_milli += net_milli;
+    }
+
+    PyObject *result = Py_BuildValue("(LO)", (long long)total_net_milli, fallback);
+    Py_DECREF(fallback);
+    Py_DECREF(tickers);
+    return result;
+error:
+    Py_DECREF(tickers);
+    Py_DECREF(fallback);
+    return NULL;
+}
+
 static int resolve_atr_times_trail_native(PyObject *params_obj, double *out) {
     if (params_obj == NULL || params_obj == Py_None) return 0;
     PyObject *trail_attr = PyObject_GetAttrString(params_obj, "atr_times_trail");
@@ -1834,6 +2049,7 @@ static PyObject *native_settle_position_noevent_cached_batch(PyObject *self, PyO
 
     PyObject *last_params = NULL;
     double last_atr_times_trail = 0.0;
+    double last_tp_percent = 0.0;
     int have_last_params = 0;
     const Py_ssize_t n = PySequence_Fast_GET_SIZE(tickers);
     PyObject **items = PySequence_Fast_ITEMS(tickers);
@@ -1923,15 +2139,19 @@ static PyObject *native_settle_position_noevent_cached_batch(PyObject *self, PyO
         PyObject *params_obj = dict_get_borrowed(position, "_entry_params_obj");
         if (params_obj == NULL || params_obj == Py_None) params_obj = default_params;
         double atr_times_trail = 0.0;
+        double tp_percent = 0.0;
         if (have_last_params && params_obj == last_params) {
             atr_times_trail = last_atr_times_trail;
+            tp_percent = last_tp_percent;
         } else {
-            if (!resolve_atr_times_trail_native(params_obj, &atr_times_trail)) {
+            if (!resolve_atr_times_trail_native(params_obj, &atr_times_trail) ||
+                !get_attr_double_native(params_obj, "tp_percent", &tp_percent)) {
                 if (PyList_Append(fallback, ticker) != 0) goto error;
                 continue;
             }
             last_params = params_obj;
             last_atr_times_trail = atr_times_trail;
+            last_tp_percent = tp_percent;
             have_last_params = 1;
         }
 
@@ -1971,7 +2191,15 @@ static PyObject *native_settle_position_noevent_cached_batch(PyObject *self, PyO
         const int64_t sl_milli = initial_stop_milli > trailing_milli ? initial_stop_milli : trailing_milli;
         const int64_t t_low_milli = price_to_milli_double(t_low);
         const int64_t t_high_milli = price_to_milli_double(t_high);
-        if (t_low_milli <= sl_milli || (!sold_half && tp_half_milli > 0 && t_high_milli >= tp_half_milli)) {
+        int64_t half_qty = 0;
+        if (tp_percent > 0.0) {
+            const double raw_half = floor(((double)qty) * tp_percent);
+            if (isfinite(raw_half) && raw_half > 0.0 && raw_half < (double)qty) {
+                half_qty = (int64_t)raw_half;
+            }
+        }
+        if (t_low_milli <= sl_milli ||
+            (!sold_half && half_qty > 0 && tp_half_milli > 0 && t_high_milli >= tp_half_milli)) {
             if (PyList_Append(fallback, ticker) != 0) goto error;
             continue;
         }
@@ -2062,6 +2290,12 @@ static PyMethodDef NativeOptimizerMethods[] = {
         native_cleanup_live_shadow_cached_batch,
         METH_VARARGS,
         "Advance cached optimizer live-shadow states directly from packed market data; return canonical fallback tickers."
+    },
+    {
+        "mark_to_market_cached_batch",
+        native_mark_to_market_cached_batch,
+        METH_VARARGS,
+        "Return exact cached mark-to-market net liquidation for supported optimizer positions plus Python fallbacks."
     },
     {
         "settle_position_noevent_cached_batch",

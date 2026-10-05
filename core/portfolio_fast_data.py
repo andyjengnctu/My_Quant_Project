@@ -13,6 +13,7 @@ from core.exact_accounting import (
     round_price_to_tick_milli,
 )
 from core.signal_utils import generate_signals, unpack_precomputed_signals
+from core.native_optimizer_hotpath import mark_to_market_cached_batch as _native_mark_to_market_cached_batch
 from core.training_performance import (
     is_optimizer_compiled_signal_kernels_enabled,
     is_optimizer_native_hotpath_kernels_enabled,
@@ -55,11 +56,25 @@ def calc_mark_to_market_equity(
     fee_rebate_receivable_milli=0,
     *,
     use_cached_last_px=False,
+    use_native_cached_batch=False,
 ):
     cash_template = cash
     equity_milli = coerce_money_like_to_milli(cash) + int(fee_rebate_receivable_milli or 0)
 
-    for ticker in sorted(portfolio.keys()):
+    settled_tickers = tuple(sorted(portfolio.keys()))
+    if (
+        use_cached_last_px
+        and use_native_cached_batch
+        and _native_mark_to_market_cached_batch is not None
+        and settled_tickers
+    ):
+        native_result = _native_mark_to_market_cached_batch(portfolio, settled_tickers, params)
+        if native_result is not None:
+            native_total_milli, native_fallback = native_result
+            equity_milli += int(native_total_milli)
+            settled_tickers = tuple(native_fallback)
+
+    for ticker in settled_tickers:
         pos = portfolio[ticker]
         position_params = pos.get('_entry_params_obj') or params
         position_context = pos.get('_entry_context') if isinstance(pos.get('_entry_context'), dict) else {}
@@ -78,7 +93,10 @@ def calc_mark_to_market_equity(
             pos['last_px'] = px
 
         floating_exec_price_milli = round_price_to_tick_milli(
-            px, direction="down", ticker=ticker
+            px,
+            direction="down",
+            ticker=ticker,
+            security_profile=pos.get('security_profile'),
         )
         equity_milli += calc_sell_net_total_milli_from_milli(
             floating_exec_price_milli,

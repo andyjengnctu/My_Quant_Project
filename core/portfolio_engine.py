@@ -830,6 +830,7 @@ def run_portfolio_timeline(
                 day_params,
                 fee_rebate_receivable_milli=rebate_receivable_milli,
                 use_cached_last_px=True,
+                use_native_cached_batch=bool(is_training),
             )
         else:
             today_equity = cash + rebate_receivable_milli

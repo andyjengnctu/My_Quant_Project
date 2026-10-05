@@ -1294,6 +1294,40 @@ def validate_exact_accounting_single_vs_portfolio_parity_case(_base_params):
     check("portfolio_closeout_counts_normal_trade", 1, normal_trade_count)
     check("portfolio_closeout_keeps_extended_trade_count_zero", 0, extended_trade_count)
 
+    native_mtm = portfolio_fast_data_module._native_mark_to_market_cached_batch
+    if native_mtm is not None:
+        mtm_positions = {}
+        for ticker, last_px, security_profile in (
+            ("2330", 111.37, {"family": "stock", "broad_type": "stock", "tick_profile": "stock_six_tier"}),
+            ("0050", 58.73, {"family": "etf", "broad_type": "etf", "tick_profile": "fund_two_tier"}),
+            ("00679B", 31.42, {"family": "etf", "broad_type": "bond", "tick_profile": "fund_two_tier"}),
+        ):
+            mtm_position = copy.deepcopy(base_position)
+            mtm_position["last_px"] = last_px
+            mtm_position["security_profile"] = security_profile
+            mtm_positions[ticker] = mtm_position
+        mtm_cash_milli = 123_456_789
+        with patch.object(portfolio_fast_data_module, "_native_mark_to_market_cached_batch", None):
+            canonical_mtm = portfolio_fast_data_module.calc_mark_to_market_equity(
+                mtm_cash_milli,
+                mtm_positions,
+                {},
+                pd.Timestamp("2025-01-03"),
+                params,
+                use_cached_last_px=True,
+                use_native_cached_batch=True,
+            )
+        native_mtm_value = portfolio_fast_data_module.calc_mark_to_market_equity(
+            mtm_cash_milli,
+            mtm_positions,
+            {},
+            pd.Timestamp("2025-01-03"),
+            params,
+            use_cached_last_px=True,
+            use_native_cached_batch=True,
+        )
+        check("native_cached_mark_to_market_matches_canonical_exact_accounting", canonical_mtm, native_mtm_value)
+
     summary["final_cash_milli"] = portfolio_cash_milli
     return results, summary
 
