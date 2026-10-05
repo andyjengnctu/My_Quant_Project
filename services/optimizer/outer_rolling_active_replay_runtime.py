@@ -29,6 +29,7 @@ from services.optimizer.outer_rolling_formatting import _fmt_duration, _period_l
 from services.optimizer.outer_rolling_plan import OuterRollingConfig
 from services.optimizer.outer_rolling_policy import CHAIN_POLICY_NAMES
 from services.optimizer.prep import prepare_trial_inputs
+from services.optimizer.trial_inputs import _build_process_pool_executor
 
 def _load_active_replay_contexts_by_signature(
     *,
@@ -91,6 +92,7 @@ def _load_active_replay_contexts_by_signature(
     static_fast_cache = None
     static_master_dates = None
     active_prep_workers = None
+    reusable_prep_executor_bundle = None
     if total and not (use_prepared_cache or write_prepared_cache):
         params_required_min_rows = max(get_required_min_rows(record["params_obj"]) for record in records)
         contract_min_rows = max((int(record.get(RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD) or 0) for record in records), default=0)
@@ -101,6 +103,19 @@ def _load_active_replay_contexts_by_signature(
         for df in raw_data_cache.values():
             static_master_dates.update(df.index)
         active_prep_workers = resolve_optimizer_active_replay_prep_workers(len(raw_data_cache))
+        prep_executor, pool_start_method, supports_initializer = _build_process_pool_executor(
+            int(active_prep_workers or 1),
+            raw_data_cache,
+        )
+        if supports_initializer:
+            reusable_prep_executor_bundle = {
+                "executor": prep_executor,
+                "max_workers": int(active_prep_workers or 1),
+                "pool_start_method": pool_start_method,
+                "executor_kind": "process",
+            }
+        else:
+            prep_executor.shutdown(wait=True, cancel_futures=False)
 
     def _covers_text(index: int, item: dict) -> str:
         year = _record_year(item)
@@ -119,62 +134,67 @@ def _load_active_replay_contexts_by_signature(
             return str(year)
         return f"{year}~{end_year}"
 
-    for idx, record in enumerate(records, start=1):
-        signature = str(record["params_signature"])
-        policies_text = ",".join(record.get("_policies", [])) or "N/A"
-        chain_elapsed = max(0.0, time.perf_counter() - replay_context_start)
-        total_elapsed_text = ""
-        if overall_start is not None:
-            total_elapsed_text = f" | total={_fmt_duration(time.perf_counter() - float(overall_start))}"
-        message = (
-            f"{C_CYAN}⏱️ OOS_CHAIN active replay context [{idx}/{total}] | "
-            f"covers={_covers_text(idx, record)} | policies={policies_text} | effective={record.get('effective_date_text')} | "
-            f"signature={signature[:8]}{years_label} | chain={_fmt_duration(chain_elapsed)}{total_elapsed_text}{C_RESET}"
-        )
-        if supports_inline:
-            previous_width = write_inline_progress(message, previous_width=previous_width)
-        else:
-            print(message)
-
-        if raw_data_cache is not None:
-            prep_result = prepare_trial_inputs(
-                raw_data_cache=raw_data_cache,
-                params=record["params_obj"],
-                default_max_workers=int(active_prep_workers or 1),
-                static_fast_cache=static_fast_cache,
-                static_master_dates=static_master_dates,
-                include_trade_logs=bool(include_trade_logs),
-                include_pit_stats_index=bool(include_pit_stats_index),
-                profile_enabled=False,
+    try:
+        for idx, record in enumerate(records, start=1):
+            signature = str(record["params_signature"])
+            policies_text = ",".join(record.get("_policies", [])) or "N/A"
+            chain_elapsed = max(0.0, time.perf_counter() - replay_context_start)
+            total_elapsed_text = ""
+            if overall_start is not None:
+                total_elapsed_text = f" | total={_fmt_duration(time.perf_counter() - float(overall_start))}"
+            message = (
+                f"{C_CYAN}⏱️ OOS_CHAIN active replay context [{idx}/{total}] | "
+                f"covers={_covers_text(idx, record)} | policies={policies_text} | effective={record.get('effective_date_text')} | "
+                f"signature={signature[:8]}{years_label} | chain={_fmt_duration(chain_elapsed)}{total_elapsed_text}{C_RESET}"
             )
-            context = {
-                "all_dfs_fast": prep_result.get("all_dfs_fast") or {},
-                "all_trade_logs": prep_result.get("all_trade_logs") or {},
-                "all_pit_stats_index": prep_result.get("all_pit_stats_index") or {},
-                "sorted_dates": sorted(prep_result.get("master_dates") or []),
-                "prep_wall_sec": float(prep_result.get("prep_wall_sec", 0.0) or 0.0),
-                "prep_mode": f"active_replay_shared_raw_{prep_result.get('prep_mode')}",
-            }
-        else:
-            context = load_portfolio_market_context(
-                data_dir,
-                record["params_obj"],
-                verbose=False,
-                use_prepared_cache=use_prepared_cache,
-                write_prepared_cache=write_prepared_cache,
-                raw_universe_required_min_rows=record.get(RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD),
-            )
-            context = dict(context)
+            if supports_inline:
+                previous_width = write_inline_progress(message, previous_width=previous_width)
+            else:
+                print(message)
 
-        if not context.get("all_pit_stats_index"):
-            if not context.get("all_trade_logs"):
-                raise RuntimeError("active replay context 缺少 PIT stats index；請保留 OPTIMIZER_ACTIVE_REPLAY_INCLUDE_PIT_STATS_INDEX=1")
-            context["all_pit_stats_index"] = {
-                ticker: build_trade_stats_index(logs)
-                for ticker, logs in (context.get("all_trade_logs") or {}).items()
-            }
-        context["normal_setup_index"] = build_normal_setup_index(context.get("all_dfs_fast") or {})
-        contexts_by_signature[signature] = context
+            if raw_data_cache is not None:
+                prep_result = prepare_trial_inputs(
+                    raw_data_cache=raw_data_cache,
+                    params=record["params_obj"],
+                    default_max_workers=int(active_prep_workers or 1),
+                    executor_bundle=reusable_prep_executor_bundle,
+                    static_fast_cache=static_fast_cache,
+                    static_master_dates=static_master_dates,
+                    include_trade_logs=bool(include_trade_logs),
+                    include_pit_stats_index=bool(include_pit_stats_index),
+                    profile_enabled=False,
+                )
+                context = {
+                    "all_dfs_fast": prep_result.get("all_dfs_fast") or {},
+                    "all_trade_logs": prep_result.get("all_trade_logs") or {},
+                    "all_pit_stats_index": prep_result.get("all_pit_stats_index") or {},
+                    "sorted_dates": sorted(prep_result.get("master_dates") or []),
+                    "prep_wall_sec": float(prep_result.get("prep_wall_sec", 0.0) or 0.0),
+                    "prep_mode": f"active_replay_shared_raw_{prep_result.get('prep_mode')}",
+                }
+            else:
+                context = load_portfolio_market_context(
+                    data_dir,
+                    record["params_obj"],
+                    verbose=False,
+                    use_prepared_cache=use_prepared_cache,
+                    write_prepared_cache=write_prepared_cache,
+                    raw_universe_required_min_rows=record.get(RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD),
+                )
+                context = dict(context)
+
+            if not context.get("all_pit_stats_index"):
+                if not context.get("all_trade_logs"):
+                    raise RuntimeError("active replay context 缺少 PIT stats index；請保留 OPTIMIZER_ACTIVE_REPLAY_INCLUDE_PIT_STATS_INDEX=1")
+                context["all_pit_stats_index"] = {
+                    ticker: build_trade_stats_index(logs)
+                    for ticker, logs in (context.get("all_trade_logs") or {}).items()
+                }
+            context["normal_setup_index"] = build_normal_setup_index(context.get("all_dfs_fast") or {})
+            contexts_by_signature[signature] = context
+    finally:
+        if reusable_prep_executor_bundle is not None:
+            reusable_prep_executor_bundle["executor"].shutdown(wait=True, cancel_futures=False)
 
     if total:
         chain_elapsed = max(0.0, time.perf_counter() - replay_context_start)
