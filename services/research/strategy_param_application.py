@@ -7,6 +7,7 @@ parameter truth.  Stable menu choices express work types only.
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -24,6 +25,7 @@ from config.training_policy import (
     OUTER_ROLLING_OOS_HORIZON_MONTHS,
     OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
 )
+from config.training_performance_policy import OPTIMIZER_TIMING_MODE_DEFAULT_TRIALS
 from core.console_report import render_menu_item, render_table
 from core.strategy_param_policy import (
     StrategyParamTrainingProfile,
@@ -52,6 +54,7 @@ from services.optimizer.strategy_param_service import (
     inspect_strategy_parameter_artifact,
     inspect_validation_budget_robustness_strategy_parameter_artifact,
     inspect_validation_budget_strategy_parameter_artifact,
+    run_fixed_multiseed_strategy_parameter_timing_benchmark,
 )
 
 
@@ -105,6 +108,129 @@ def _validation_protocol(profile: StrategyParamTrainingProfile):
 
 def _fitting_seed_protocol(profile: StrategyParamTrainingProfile):
     return get_strategy_param_fitting_seed_protocol(profile.fitting_seed_protocol)
+
+
+def _parse_single_timing_fold_worker(raw_value: str | None) -> int | None:
+    text = str(raw_value or "").strip()
+    if not text:
+        return None
+    parts = [part.strip() for part in text.split(",") if part.strip()]
+    if len(parts) != 1:
+        raise ValueError(
+            "production-aligned Strategy Parameter timing每次只接受一個fold worker值；"
+            "請分開執行不同concurrency case，避免同process cache影響A/B。"
+        )
+    try:
+        value = int(parts[0])
+    except ValueError as exc:
+        raise ValueError(f"--timing-fold-workers不合法: {raw_value!r}") from exc
+    if value < 1:
+        raise ValueError("--timing-fold-workers必須>=1")
+    return value
+
+
+def run_strategy_param_timing_cli(argv: list[str] | None = None) -> int:
+    """Run timing as an overlay on the active Research parameter producer.
+
+    This is intentionally not a second Optimizer workload definition.  The
+    active Strategy Parameter profile owns seeds, selector, schedule, storage,
+    sampler and execution topology.  ``--trials`` only caps the benchmark
+    budget per production seed; timing telemetry is isolated under ``outputs/``.
+    """
+
+    parser = argparse.ArgumentParser(
+        prog="python apps/research.py optimizer timing",
+        add_help=False,
+    )
+    parser.add_argument("--timing", action="store_true")
+    parser.add_argument("--outer-oos", action="store_true")
+    parser.add_argument("--dataset")
+    parser.add_argument("--trials", type=int, default=int(OPTIMIZER_TIMING_MODE_DEFAULT_TRIALS))
+    parser.add_argument("--timing-fold-workers")
+    parser.add_argument("--outer-first-oos-date")
+    parser.add_argument("--outer-last-oos-date")
+    parser.add_argument("--outer-first-oos", type=int)
+    parser.add_argument("--outer-last-oos", type=int)
+    parser.add_argument("--outer-window-mode")
+    parser.add_argument("--outer-train-window-months", type=int)
+    parser.add_argument("--outer-train-window-years", type=int)
+    parser.add_argument("--outer-oos-months", type=int)
+    parser.add_argument("--yes", action="store_true")
+    parser.add_argument("-h", "--help", action="store_true")
+    args, unknown = parser.parse_known_args(list(argv or []))
+    if unknown:
+        raise ValueError(
+            "Strategy Parameter timing不接受會建立第二套producer contract的參數: "
+            + " ".join(str(value) for value in unknown)
+        )
+    if args.help:
+        print(
+            "用法: python apps/research.py optimizer timing "
+            "[--trials N] [--timing-fold-workers N]\n"
+            "相容舊命令: optimizer advanced --outer-oos --timing ...；"
+            "schedule/dataset參數只做active producer一致性驗證，不建立第二套設定。"
+        )
+        return 0
+
+    requested_train_months = args.outer_train_window_months
+    if args.outer_train_window_years is not None:
+        years_as_months = int(args.outer_train_window_years) * 12
+        if requested_train_months is not None and int(requested_train_months) != years_as_months:
+            raise ValueError(
+                "--outer-train-window-years與--outer-train-window-months互相矛盾"
+            )
+        requested_train_months = years_as_months
+
+    profile = get_active_strategy_param_training_profile()
+    seed_protocol = _fitting_seed_protocol(profile)
+    if profile.validation_enabled or not seed_protocol.enabled:
+        raise RuntimeError(
+            "目前active Strategy Parameter profile尚未註冊production-aligned timing overlay capability: "
+            f"profile={profile.profile_id}, validation={profile.validation_enabled}, "
+            f"multiseed={seed_protocol.enabled}"
+        )
+    fold_workers = _parse_single_timing_fold_worker(args.timing_fold_workers)
+    benchmark_trials = int(args.trials)
+    print("\n====================================================================================================")
+    print(" Strategy Parameter Timing | Production-Aligned Overlay")
+    print("====================================================================================================")
+    print(f"Source Profile     ：{profile.profile_id}")
+    print(f"Parameter Set      ：{profile.parameter_set_identity}")
+    print(f"Filter / Selector  ：{profile.filter_profile} / {profile.parameter_policy}")
+    print(f"Fitting Seeds      ：{seed_protocol.seed_count} | {seed_protocol.seed_mode}")
+    print(
+        f"Trials / Seed      ：{benchmark_trials} timing / "
+        f"{seed_protocol.trials_per_seed} production"
+    )
+    print("Sampler / Storage  ：由canonical producer決定；timing不得覆寫")
+    print("Publish Param Truth：OFF（benchmark artifacts與正式Strategy Parameter隔離）")
+
+    result = run_fixed_multiseed_strategy_parameter_timing_benchmark(
+        PROJECT_ROOT,
+        training_profile_id=profile.profile_id,
+        benchmark_trials_per_seed=benchmark_trials,
+        dataset=args.dataset,
+        fold_workers=fold_workers,
+        requested_first_oos_date=args.outer_first_oos_date,
+        requested_last_oos_date=args.outer_last_oos_date,
+        requested_window_mode=args.outer_window_mode,
+        requested_train_window_months=requested_train_months,
+        requested_oos_months=args.outer_oos_months,
+        requested_first_oos_year=args.outer_first_oos,
+        requested_last_oos_year=args.outer_last_oos,
+    )
+    timing = dict(result.get("timing") or {})
+    timing_payload = dict(timing.get("payload") or {})
+    timing_summary = dict(timing_payload.get("summary") or {})
+    print("\n=== Production-Aligned Timing Contract ===")
+    print(f"Sampler             ：{timing_payload.get('sampler_kind') or '-'}")
+    print(f"Study Storage       ：{timing_summary.get('study_storage') or '-'}")
+    print(f"Seeds               ：{seed_protocol.seed_count}")
+    print(f"Trials / Seed       ：{benchmark_trials}")
+    print(f"Fold Workers        ：{timing_summary.get('rolling_fold_workers_max') or '-'}")
+    print(f"Timing JSON         ：{_relative(timing.get('json_path') or '')}")
+    print(f"Benchmark Manifest  ：{_relative(result.get('benchmark_manifest_path') or '')}")
+    return 0
 
 
 def _single_state(profile: StrategyParamTrainingProfile, *, required_end: str) -> dict:
@@ -702,6 +828,7 @@ __all__ = [
     "WORK_TYPES",
     "render_strategy_param_plan",
     "render_strategy_param_training_report",
+    "run_strategy_param_timing_cli",
     "run_strategy_param_training_menu",
     "show_strategy_param_status",
 ]

@@ -153,11 +153,21 @@ def _run_optimizer(args: list[str] | None = None) -> int:
             raise ValueError(f"strategy-param migration不支援額外參數: {' '.join(routed[1:])}")
         return _run_strategy_param_migration()
 
-    # Backward-compatible explicit CLI options still route to the generic optimizer.
-    # The formal interactive Research [2] entry is config-driven and owns no target selector.
+    # Explicit production-aligned timing is owned by the active Research Strategy
+    # Parameter producer.  The legacy ``advanced --outer-oos --timing`` spelling is
+    # retained as a routing alias, but it no longer creates a second workload contract.
     if routed:
+        explicit_mode = str(routed[0]).strip().lower()
+        if explicit_mode in {"timing", "benchmark"}:
+            from services.research.strategy_param_application import run_strategy_param_timing_cli
+
+            return int(run_strategy_param_timing_cli(routed[1:]) or 0)
         if str(routed[0]).strip().lower() in {"advanced", "generic", "legacy"}:
             routed = routed[1:]
+        if "--timing" in routed and "--outer-oos" in routed:
+            from services.research.strategy_param_application import run_strategy_param_timing_cli
+
+            return int(run_strategy_param_timing_cli(routed) or 0)
         return _run_advanced_optimizer(routed)
 
     from services.research.strategy_param_application import run_strategy_param_training_menu
@@ -776,6 +786,7 @@ def _print_help(program_name: str) -> None:
     print("說明: Research 單一正式入口；互動選單只選工作類型，研究標的與設定由 config/ 決定。")
     print("  model      目前 active model 的模型訓練／驗證；後續參數原樣轉交model provider")
     print("  optimizer  依 config/strategy_params.py 執行目前策略參數訓練 profile")
+    print("             Production-aligned timing：optimizer timing [--trials N] [--timing-fold-workers N]")
     print("             進階單次 Optimizer：optimizer advanced [options]")
     print("             一次性SSOT migration：optimizer migrate-strategy-params")
     integration_actions = "/".join(runtime_integration_allowed_actions())

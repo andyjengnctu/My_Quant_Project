@@ -2173,6 +2173,7 @@ def prepare_selection_historical_full_roos_params(
     seed_ensemble_policy_override: dict | None = None,
     score_policy_overrides: dict[str, Any] | None = None,
     oos_end_cap_date: str | None = None,
+    timing_mode: bool = False,
 ):
     """Build/reuse Full rolling params using the canonical full search space.
 
@@ -2281,7 +2282,8 @@ def prepare_selection_historical_full_roos_params(
     )
     prior = _load_json(preflight_path)
     reusable = bool(
-        isinstance(prior, dict)
+        not bool(timing_mode)
+        and isinstance(prior, dict)
         and str(prior.get("runtime_identity_sha256") or "")
         == str(contract["runtime_identity_sha256"])
         and params_path.is_file()
@@ -2302,7 +2304,11 @@ def prepare_selection_historical_full_roos_params(
         preflight_path,
         {
             **contract,
-            "status": "P4_HISTORY_PREFLIGHT_PASS",
+            "status": (
+                "STRATEGY_PARAM_TIMING_PREFLIGHT_PASS"
+                if bool(timing_mode)
+                else "P4_HISTORY_PREFLIGHT_PASS"
+            ),
             "created_at": get_taipei_now().isoformat(),
         },
     )
@@ -2375,7 +2381,7 @@ def prepare_selection_historical_full_roos_params(
             optimizer_seed=int(optimizer_seed),
             optimizer_session_spec=session_spec,
             default_trials=int(trials_per_fold),
-            timing_mode=False,
+            timing_mode=bool(timing_mode),
             paramset_models_dir=str(active_param_dir.resolve()),
             latest_data_date_override=latest_data_date_override,
             output_files_title=str(optimizer_output_title or "💾 輸出檔案"),
@@ -2387,6 +2393,39 @@ def prepare_selection_historical_full_roos_params(
         )
         if int(exit_code) != 0:
             raise RuntimeError(f"Selection Full ROOS rolling optimizer失敗: {exit_code}")
+        if bool(timing_mode):
+            timing_root = optimizer_output_dir / "outer_rolling_oos"
+            timing_jsons = sorted(
+                timing_root.glob("outer_rolling_oos_timing_*.json"),
+                key=lambda path: path.stat().st_mtime_ns,
+            )
+            if not timing_jsons:
+                raise RuntimeError("Strategy Parameter timing完成但找不到timing JSON")
+            timing_json = timing_jsons[-1]
+            timing_payload = _load_json(timing_json)
+            if not isinstance(timing_payload, dict):
+                raise RuntimeError("Strategy Parameter timing JSON不合法")
+            timing_csv = timing_json.with_suffix(".csv")
+            resource_csv = timing_root / timing_json.name.replace(
+                "outer_rolling_oos_timing_", "outer_rolling_oos_resource_"
+            ).replace(".json", ".csv")
+            return {
+                "params_path": None,
+                "summary": {
+                    "parameter_set": str(parameter_set_identity),
+                    "status": "TIMING_COMPLETED",
+                    "folds": int(dict(timing_payload.get("meta") or {}).get("fold_count", 0) or 0),
+                    "trials_per_fold": int(trials_per_fold),
+                    "optimizer_search_reused": False,
+                },
+                "contract": contract,
+                "timing": {
+                    "json_path": timing_json,
+                    "csv_path": timing_csv if timing_csv.is_file() else None,
+                    "resource_csv_path": resource_csv if resource_csv.is_file() else None,
+                    "payload": timing_payload,
+                },
+            }
         payload = _validate_selection_full_roos_params(
             path=params_path,
             schedule_contract=schedule_contract,

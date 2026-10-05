@@ -8,6 +8,7 @@ settings for current parameter artifacts.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -2430,6 +2431,9 @@ _FIXED_MULTI_SEED_PARAMSET_ROOT_RELATIVE = (
 _FIXED_MULTI_SEED_WORK_ROOT_RELATIVE = (
     Path("outputs") / "optimizer" / "strategy_param_schedule" / "experiments"
 )
+_STRATEGY_PARAM_TIMING_ROOT_RELATIVE = (
+    Path("outputs") / "ml_optimizer" / "strategy_param_timing"
+)
 _FIXED_MULTI_SEED_SEARCH_PROTOCOL = "fixed_multiseed_v1"
 
 
@@ -2574,6 +2578,240 @@ def _fixed_multiseed_build_contract(
         "training_profile_id": str(profile.profile_id),
         "fitting_seed_protocol": str(seed_protocol.protocol_id),
         "seed_ensemble_policy": seed_policy,
+    }
+
+
+def _strategy_param_timing_last_fold_start(
+    *, schedule_start: str, coverage_end: str, oos_horizon_months: int
+) -> str:
+    first = datetime.strptime(str(schedule_start), "%Y-%m-%d").date()
+    coverage = datetime.strptime(str(coverage_end), "%Y-%m-%d").date()
+    step_months = int(oos_horizon_months)
+    if step_months < 1:
+        raise ValueError("Strategy Parameter timing OOS horizon必須>=1")
+    month_delta = (coverage.year - first.year) * 12 + (coverage.month - first.month)
+    if month_delta < 0:
+        raise ValueError("Strategy Parameter timing coverage早於schedule start")
+    step_count = month_delta // step_months
+    month_index = first.year * 12 + (first.month - 1) + step_count * step_months
+    year, month_zero = divmod(month_index, 12)
+    return f"{int(year):04d}-{int(month_zero + 1):02d}-01"
+
+
+def run_fixed_multiseed_strategy_parameter_timing_benchmark(
+    project_root: str | Path,
+    *,
+    training_profile_id: str,
+    benchmark_trials_per_seed: int,
+    dataset: str | None = None,
+    fold_workers: int | None = None,
+    requested_first_oos_date: str | None = None,
+    requested_last_oos_date: str | None = None,
+    requested_window_mode: str | None = None,
+    requested_train_window_months: int | None = None,
+    requested_oos_months: int | None = None,
+    requested_first_oos_year: int | None = None,
+    requested_last_oos_year: int | None = None,
+    max_positions: int | None = None,
+    rotation: str | None = None,
+    fixed_risk: float | None = None,
+    max_position_cap_pct: float | None = None,
+) -> dict[str, Any]:
+    """Run a timing overlay through the registered Research parameter producer.
+
+    The registered profile remains the owner of sampler, seed bundle, selector,
+    rolling schedule, SQLite storage and execution policy.  Timing may only reduce
+    the per-seed trial budget and add telemetry; the benchmark is isolated under
+    ``outputs/`` and never publishes or reuses canonical strategy-parameter truth.
+    """
+
+    from core.strategy_param_policy import get_strategy_param_training_profile
+    from services.optimizer.strategy_param_training import (
+        prepare_selection_historical_full_roos_params,
+    )
+
+    root = Path(project_root).resolve()
+    profile = get_strategy_param_training_profile(training_profile_id)
+    contract = _fixed_multiseed_build_contract(
+        training_profile_id=profile.profile_id,
+        dataset=dataset,
+        max_positions=max_positions,
+        rotation=rotation,
+        fixed_risk=fixed_risk,
+        max_position_cap_pct=max_position_cap_pct,
+    )
+    scientific_identity = _fixed_multiseed_scientific_identity(
+        root,
+        training_profile_id=profile.profile_id,
+        dataset=dataset,
+        max_positions=max_positions,
+        rotation=rotation,
+        fixed_risk=fixed_risk,
+        max_position_cap_pct=max_position_cap_pct,
+    )
+    if not bool(scientific_identity.get("registered", False)):
+        raise RuntimeError(
+            f"Strategy Parameter timing source未註冊scientific identity: {profile.profile_id}"
+        )
+    if not bool(scientific_identity.get("registration_matches", False)):
+        raise RuntimeError(
+            f"Strategy Parameter timing source scientific contract drift: {profile.profile_id}"
+        )
+
+    trials = int(benchmark_trials_per_seed)
+    source_trials = int(contract["trials_per_fold"])
+    if trials < 1:
+        raise ValueError("Strategy Parameter timing trials/seed必須>=1")
+    if trials > source_trials:
+        raise ValueError(
+            "Strategy Parameter timing只允許縮小registered fitting budget: "
+            f"requested={trials}, source={source_trials}"
+        )
+    if fold_workers is not None and int(fold_workers) < 1:
+        raise ValueError("Strategy Parameter timing fold workers必須>=1")
+
+    expected_first = str(profile.schedule_start_date)
+    expected_coverage_end = str(profile.coverage_end_date)
+    expected_train_months = int(contract["train_window_months"])
+    expected_oos_months = int(contract["oos_horizon_months"])
+    expected_last_fold_start = _strategy_param_timing_last_fold_start(
+        schedule_start=expected_first,
+        coverage_end=expected_coverage_end,
+        oos_horizon_months=expected_oos_months,
+    )
+
+    if requested_first_oos_date not in (None, "") and str(requested_first_oos_date) != expected_first:
+        raise ValueError(
+            "Timing schedule由active Strategy Parameter profile持有；"
+            f"first_oos expected={expected_first}, requested={requested_first_oos_date}"
+        )
+    if requested_last_oos_date not in (None, "") and str(requested_last_oos_date) not in {
+        expected_last_fold_start,
+        expected_coverage_end,
+    }:
+        raise ValueError(
+            "Timing schedule由active Strategy Parameter profile持有；"
+            f"last_oos_fold_start expected={expected_last_fold_start}, "
+            f"coverage_end={expected_coverage_end}, requested={requested_last_oos_date}"
+        )
+    if requested_window_mode not in (None, "") and str(requested_window_mode).strip().lower() != "fixed":
+        raise ValueError("目前active Strategy Parameter producer的rolling window mode固定為fixed")
+    if requested_train_window_months is not None and int(requested_train_window_months) != expected_train_months:
+        raise ValueError(
+            "Timing train window必須沿用active Strategy Parameter producer: "
+            f"expected={expected_train_months}, requested={requested_train_window_months}"
+        )
+    if requested_oos_months is not None and int(requested_oos_months) != expected_oos_months:
+        raise ValueError(
+            "Timing OOS horizon必須沿用active Strategy Parameter producer: "
+            f"expected={expected_oos_months}, requested={requested_oos_months}"
+        )
+    if requested_first_oos_year is not None and int(requested_first_oos_year) != int(expected_first[:4]):
+        raise ValueError(
+            "Timing first OOS year必須沿用active Strategy Parameter producer: "
+            f"expected={expected_first[:4]}, requested={requested_first_oos_year}"
+        )
+    if requested_last_oos_year is not None and int(requested_last_oos_year) != int(expected_last_fold_start[:4]):
+        raise ValueError(
+            "Timing last OOS year必須沿用active Strategy Parameter producer: "
+            f"expected={expected_last_fold_start[:4]}, requested={requested_last_oos_year}"
+        )
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
+    benchmark_root_relative = (
+        _STRATEGY_PARAM_TIMING_ROOT_RELATIVE
+        / _fixed_multiseed_artifact_slug(profile.profile_id)
+        / stamp
+    )
+    benchmark_root = root / benchmark_root_relative
+    benchmark_root.mkdir(parents=True, exist_ok=False)
+
+    timing_environ = dict(os.environ)
+    if fold_workers is not None:
+        timing_environ["OPTIMIZER_ROLLING_FOLD_WORKERS"] = str(int(fold_workers))
+
+    print(
+        "Strategy Parameter timing overlay | "
+        f"profile={profile.profile_id} | parameter_set={contract['parameter_set']} | "
+        f"seeds={int(dict(contract['seed_ensemble_policy']).get('seed_count', 1) or 1)} | "
+        f"trials/seed={trials} (production={source_trials}) | "
+        "storage=sqlite | resume=on | publish=off"
+    )
+    result = prepare_selection_historical_full_roos_params(
+        project_root=root,
+        dataset=str(contract["dataset"]),
+        param_policy=str(profile.parameter_policy),
+        trials_per_fold=trials,
+        max_positions=int(contract["max_positions"]),
+        rotation=str(contract["rotation"]),
+        fixed_risk=float(contract["fixed_risk"]),
+        max_position_cap_pct=float(contract["max_position_cap_pct"]),
+        optimizer_seed=int(contract["optimizer_seed"]),
+        resume_parameter_training=True,
+        quiet=False,
+        first_oos_date=expected_first,
+        last_oos_date=expected_coverage_end,
+        train_window_months=expected_train_months,
+        oos_months=expected_oos_months,
+        output_relative_dir=benchmark_root_relative,
+        build_context_label=f"{contract['parameter_set']} Timing",
+        optimizer_output_title="Strategy Parameter timing artifacts",
+        environ_override=timing_environ,
+        optimizer_search_protocol=str(contract["optimizer_search_protocol"]),
+        parameter_set_identity=str(contract["parameter_set"]),
+        seed_ensemble_policy_override=dict(contract["seed_ensemble_policy"]),
+        score_policy_overrides=(
+            dict(profile.score_policy_overrides)
+            if profile.score_policy_overrides
+            else None
+        ),
+        timing_mode=True,
+    )
+    timing = dict(result.get("timing") or {})
+    timing_payload = dict(timing.get("payload") or {})
+    timing_summary = dict(timing_payload.get("summary") or {})
+    benchmark_manifest = {
+        "schema_type": "strategy_parameter_timing_benchmark",
+        "schema_version": 1,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "producer": "optimizer_strategy_parameter",
+        "training_profile_id": str(profile.profile_id),
+        "parameter_set": str(contract["parameter_set"]),
+        "registered_scientific_fingerprint_sha256": str(
+            scientific_identity.get("registered_scientific_fingerprint_sha256") or ""
+        ),
+        "source_scientific_fingerprint_sha256": str(
+            scientific_identity.get("scientific_fingerprint_sha256") or ""
+        ),
+        "benchmark_scope": {
+            "publish_parameter_truth": False,
+            "source_trials_per_seed": source_trials,
+            "benchmark_trials_per_seed": trials,
+            "seed_ensemble_policy": dict(contract["seed_ensemble_policy"]),
+            "schedule_start": expected_first,
+            "coverage_end": expected_coverage_end,
+            "last_fold_start": expected_last_fold_start,
+            "train_window_months": expected_train_months,
+            "oos_horizon_months": expected_oos_months,
+            "study_storage": str(timing_summary.get("study_storage") or "sqlite"),
+            "sampler_kind": str(timing_payload.get("sampler_kind") or ""),
+            "fold_workers": int(timing_summary.get("rolling_fold_workers_max", 0) or 0),
+        },
+        "timing_outputs": {
+            "json": _project_relative(root, Path(timing["json_path"])) if timing.get("json_path") else None,
+            "csv": _project_relative(root, Path(timing["csv_path"])) if timing.get("csv_path") else None,
+            "resource_csv": _project_relative(root, Path(timing["resource_csv_path"])) if timing.get("resource_csv_path") else None,
+        },
+    }
+    manifest_path = benchmark_root / "timing_benchmark_manifest.json"
+    atomic_write_json(manifest_path, benchmark_manifest)
+    return {
+        **result,
+        "benchmark_root": benchmark_root,
+        "benchmark_manifest_path": manifest_path,
+        "benchmark_manifest": benchmark_manifest,
+        "source_build_contract": contract,
+        "source_scientific_identity": scientific_identity,
     }
 
 
@@ -4021,6 +4259,7 @@ __all__ = [
     "ensure_validation_budget_robustness_strategy_parameter_artifact",
     "inspect_validation_budget_robustness_strategy_parameter_artifact",
     "ensure_fixed_multiseed_strategy_parameter_artifact",
+    "run_fixed_multiseed_strategy_parameter_timing_benchmark",
     "ensure_fixed_multiseed_robustness_strategy_parameter_artifact",
     "inspect_fixed_multiseed_robustness_strategy_parameter_artifact",
     "fixed_multiseed_robustness_strategy_param_manifest_path",
