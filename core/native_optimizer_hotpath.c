@@ -266,6 +266,76 @@ fail:
 }
 
 
+
+/*
+ * Exact adjust=False EWM recurrence from an already-resolved seed.
+ *
+ * The Python caller owns canonical seed semantics (EMA first valid value or
+ * RMA/SMA seed) and only uses this kernel for a contiguous non-NaN tail.  This
+ * keeps the pandas/fallback edge-case contract unchanged while removing the
+ * Series/EWM allocation overhead from the optimizer hot path.
+ */
+static PyObject *native_ewm_adjust_false_from_seed_into(PyObject *self, PyObject *args) {
+    PyObject *source_obj, *out_obj;
+    Py_ssize_t start_index;
+    double seed, alpha;
+    Py_buffer source_view = {0}, out_view = {0};
+    (void)self;
+
+    if (!PyArg_ParseTuple(args, "OOndd", &source_obj, &out_obj, &start_index, &seed, &alpha)) {
+        return NULL;
+    }
+    if (!(alpha > 0.0 && alpha <= 1.0) || !isfinite(alpha)) {
+        PyErr_SetString(PyExc_ValueError, "alpha must be finite and in (0, 1]");
+        return NULL;
+    }
+    if (!get_double_buffer(source_obj, &source_view)) goto fail;
+    if (!get_writable_double_buffer(out_obj, &out_view)) goto fail;
+
+    const Py_ssize_t n = source_view.len / source_view.itemsize;
+    const Py_ssize_t n_out = out_view.len / out_view.itemsize;
+    if (n_out != n) {
+        PyErr_SetString(PyExc_ValueError, "source and output lengths must match");
+        goto fail;
+    }
+    if (start_index < 0 || start_index >= n) {
+        PyErr_SetString(PyExc_ValueError, "start_index out of range");
+        goto fail;
+    }
+
+    const double *source = (const double *)source_view.buf;
+    double *out = (double *)out_view.buf;
+    const double one_minus_alpha = 1.0 - alpha;
+    const double normalize_weight = one_minus_alpha + alpha;
+
+    for (Py_ssize_t i = 0; i < start_index; ++i) {
+        out[i] = NAN;
+    }
+    out[start_index] = seed;
+    for (Py_ssize_t i = start_index + 1; i < n; ++i) {
+        const double value = source[i];
+        if (isnan(value)) {
+            PyBuffer_Release(&out_view);
+            PyBuffer_Release(&source_view);
+            Py_RETURN_FALSE;
+        }
+        if (out[i - 1] != value) {
+            out[i] = ((one_minus_alpha * out[i - 1]) + (alpha * value)) / normalize_weight;
+        } else {
+            out[i] = out[i - 1];
+        }
+    }
+
+    PyBuffer_Release(&out_view);
+    PyBuffer_Release(&source_view);
+    Py_RETURN_TRUE;
+
+fail:
+    if (out_view.obj) PyBuffer_Release(&out_view);
+    if (source_view.obj) PyBuffer_Release(&source_view);
+    return NULL;
+}
+
 static int get_writable_byte_buffer(PyObject *obj, Py_buffer *view) {
     if (PyObject_GetBuffer(obj, view, PyBUF_CONTIG | PyBUF_FORMAT | PyBUF_WRITABLE) != 0) {
         return 0;
@@ -1950,6 +2020,12 @@ static PyMethodDef NativeOptimizerMethods[] = {
         native_rolling_max_shift1_into,
         METH_VARARGS,
         "Fill a float64 output buffer with the exact shifted rolling maximum."
+    },
+    {
+        "ewm_adjust_false_from_seed_into",
+        native_ewm_adjust_false_from_seed_into,
+        METH_VARARGS,
+        "Fill a float64 output buffer with the exact adjust=False EWM recurrence from a caller-provided seed."
     },
     {
         "scan_position_span",

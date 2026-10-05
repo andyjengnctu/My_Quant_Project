@@ -93,6 +93,7 @@ supertrend_direction_into = None if _native is None else getattr(_native, "super
 rolling_max_shift1_into = None if _native is None else getattr(_native, "rolling_max_shift1_into", None)
 rolling_mean_shift1_into = None if _native is None else getattr(_native, "rolling_mean_shift1_into", None)
 rolling_mean_std0_into = None if _native is None else getattr(_native, "rolling_mean_std0_into", None)
+ewm_adjust_false_from_seed_into = None if _native is None else getattr(_native, "ewm_adjust_false_from_seed_into", None)
 scan_position_span = None if _native is None else getattr(_native, "scan_position_span", None)
 scan_reentry_watch_span = None if _native is None else getattr(_native, "scan_reentry_watch_span", None)
 calc_position_size_exact = None if _native is None else getattr(_native, "calc_position_size_exact", None)

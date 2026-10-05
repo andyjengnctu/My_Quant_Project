@@ -13,6 +13,7 @@ from core.native_optimizer_hotpath import (
     rolling_max_shift1_into as _native_rolling_max_shift1_into,
     rolling_mean_shift1_into as _native_rolling_mean_shift1_into,
     rolling_mean_std0_into as _native_rolling_mean_std0_into,
+    ewm_adjust_false_from_seed_into as _native_ewm_adjust_false_from_seed_into,
     supertrend_direction_into as _native_supertrend_direction_into,
 )
 from core.breakout_false_filter import build_breakout_false_filter_pass_condition
@@ -120,7 +121,7 @@ def unpack_precomputed_signals(precomputed_signals):
     return atr_main, buy_condition, sell_condition, buy_limits
 
 
-def tv_rma(source, length):
+def tv_rma(source, length, *, use_native_hotpath=False):
     source = np.asarray(source, dtype=np.float64)
     rma = np.full(source.shape, np.nan, dtype=np.float64)
     valid_idx = np.where(~np.isnan(source))[0]
@@ -130,11 +131,24 @@ def tv_rma(source, length):
     tail_start = valid_idx[0]
     if valid_idx[-1] - tail_start + 1 == len(valid_idx):
         seed = np.mean(source[tail_start:first_valid + 1])
+        alpha_input = 1.0 / length
+        alpha = 1.0 / (1.0 + ((1.0 - alpha_input) / alpha_input))
+        if (
+            bool(use_native_hotpath)
+            and _native_ewm_adjust_false_from_seed_into is not None
+            and source.ndim == 1
+            and source.flags.c_contiguous
+        ):
+            try:
+                if bool(_native_ewm_adjust_false_from_seed_into(source, rma, int(first_valid), float(seed), float(alpha))):
+                    return rma
+            except (TypeError, ValueError, BufferError) as exc:
+                _warn_native_signal_fallback("RMA/EWM", exc)
         tail = np.empty(source.size - first_valid, dtype=np.float64)
         tail[0] = seed
         if tail.size > 1:
             tail[1:] = source[first_valid + 1:]
-        rma[first_valid:] = pd.Series(tail).ewm(alpha=1.0 / length, adjust=False).mean().to_numpy(dtype=np.float64, copy=False)
+        rma[first_valid:] = pd.Series(tail).ewm(alpha=alpha_input, adjust=False).mean().to_numpy(dtype=np.float64, copy=False)
         return rma
     rma[first_valid] = np.mean(source[valid_idx[0]:first_valid + 1])
     alpha = 1.0 / length
@@ -159,15 +173,19 @@ def tv_true_range(high, low, close):
     return np.nanmax([tr1, tr2, tr3], axis=0)
 
 
-def tv_atr_from_true_range(true_range, length):
-    return tv_rma(true_range, length)
+def tv_atr_from_true_range(true_range, length, *, use_native_hotpath=False):
+    return tv_rma(true_range, length, use_native_hotpath=use_native_hotpath)
 
 
-def tv_atr(high, low, close, length):
-    return tv_atr_from_true_range(tv_true_range(high, low, close), length)
+def tv_atr(high, low, close, length, *, use_native_hotpath=False):
+    return tv_atr_from_true_range(
+        tv_true_range(high, low, close),
+        length,
+        use_native_hotpath=use_native_hotpath,
+    )
 
 
-def tv_ema(source, length):
+def tv_ema(source, length, *, use_native_hotpath=False):
     source = np.asarray(source, dtype=np.float64)
     ema = np.full(source.shape, np.nan, dtype=np.float64)
     valid_idx = np.where(~np.isnan(source))[0]
@@ -175,6 +193,21 @@ def tv_ema(source, length):
         return ema
     first_valid = valid_idx[0]
     if valid_idx[-1] - first_valid + 1 == len(valid_idx):
+        com = (float(length) - 1.0) / 2.0
+        alpha = 1.0 / (1.0 + com)
+        if (
+            bool(use_native_hotpath)
+            and _native_ewm_adjust_false_from_seed_into is not None
+            and source.ndim == 1
+            and source.flags.c_contiguous
+        ):
+            try:
+                if bool(_native_ewm_adjust_false_from_seed_into(
+                    source, ema, int(first_valid), float(source[first_valid]), float(alpha)
+                )):
+                    return ema
+            except (TypeError, ValueError, BufferError) as exc:
+                _warn_native_signal_fallback("EMA/EWM", exc)
         ema[first_valid:] = pd.Series(source[first_valid:]).ewm(span=length, adjust=False).mean().to_numpy(dtype=np.float64, copy=False)
         return ema
     ema[first_valid] = source[first_valid]
@@ -320,7 +353,7 @@ def generate_signals(df, params, ticker=None, feature_bank=None, use_compiled_ke
         (),
         lambda: precomputed_true_range if precomputed_true_range is not None else tv_true_range(H, L, C),
     )
-    ATR_main = _feature('atr', (atr_len,), lambda: tv_atr_from_true_range(TrueRange, atr_len))
+    ATR_main = _feature('atr', (atr_len,), lambda: tv_atr_from_true_range(TrueRange, atr_len, use_native_hotpath=use_native_hotpath))
 
     if use_breakout_buy:
         HighN = _feature(
@@ -329,7 +362,7 @@ def generate_signals(df, params, ticker=None, feature_bank=None, use_compiled_ke
             lambda: _rolling_high_shift1(H, high_len, use_native_hotpath=use_native_hotpath),
         )
         BreakoutEMA = (
-            _feature('ema_close', (breakout_ema_len,), lambda: tv_ema(C, breakout_ema_len))
+            _feature('ema_close', (breakout_ema_len,), lambda: tv_ema(C, breakout_ema_len, use_native_hotpath=use_native_hotpath))
             if use_breakout_ema_filter
             else None
         )
@@ -423,8 +456,8 @@ def generate_signals(df, params, ticker=None, feature_bank=None, use_compiled_ke
 
     if use_kc:
         kc_len = int(params.kc_len)
-        ATR_kc = ATR_main if kc_len == atr_len else _feature('atr', (kc_len,), lambda: tv_atr_from_true_range(TrueRange, kc_len))
-        KC_Mid = _feature('ema_close', (kc_len,), lambda: tv_ema(C, kc_len))
+        ATR_kc = ATR_main if kc_len == atr_len else _feature('atr', (kc_len,), lambda: tv_atr_from_true_range(TrueRange, kc_len, use_native_hotpath=use_native_hotpath))
+        KC_Mid = _feature('ema_close', (kc_len,), lambda: tv_ema(C, kc_len, use_native_hotpath=use_native_hotpath))
         KC_Lower = KC_Mid - ATR_kc * params.kc_mult
         isKcCrossunder = np.zeros_like(C, dtype=bool)
         if len(C) > 1:

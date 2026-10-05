@@ -56,6 +56,7 @@ from core import price_utils as price_utils_module
 from core.native_optimizer_hotpath import (
     is_native_optimizer_hotpath_available,
     rolling_max_shift1_into,
+    ewm_adjust_false_from_seed_into,
     scan_reentry_watch_span,
 )
 from core.price_utils import (
@@ -490,6 +491,75 @@ def validate_signal_utils_unit_case(_base_params):
             "native_shifted_rolling_high_matches_pandas_exactly",
             True,
             bool(np.array_equal(rolling_reference, rolling_native, equal_nan=True)),
+        )
+    if native_hotpath_available and ewm_adjust_false_from_seed_into is not None:
+        ewm_source = np.ascontiguousarray([10.0, 11.5, 9.25, 13.0, 12.75, 15.5], dtype=np.float64)
+        ema_com = (5.0 - 1.0) / 2.0
+        ema_alpha = 1.0 / (1.0 + ema_com)
+        ema_native = np.empty_like(ewm_source)
+        ewm_adjust_false_from_seed_into(ewm_source, ema_native, 0, float(ewm_source[0]), ema_alpha)
+        ema_reference = pd.Series(ewm_source).ewm(span=5, adjust=False).mean().to_numpy(dtype=np.float64, copy=False)
+        add_check(
+            results,
+            "unit_signal_utils",
+            case_id,
+            "native_ema_ewm_matches_pandas_exactly",
+            True,
+            bool(np.array_equal(ema_reference, ema_native, equal_nan=True)),
+        )
+
+        rma_length = 3
+        rma_first = rma_length - 1
+        rma_seed = float(np.mean(ewm_source[:rma_length]))
+        rma_alpha_input = 1.0 / float(rma_length)
+        rma_com = (1.0 - rma_alpha_input) / rma_alpha_input
+        rma_alpha = 1.0 / (1.0 + rma_com)
+        rma_native = np.full_like(ewm_source, np.nan)
+        ewm_adjust_false_from_seed_into(
+            ewm_source,
+            rma_native,
+            rma_first,
+            rma_seed,
+            rma_alpha,
+        )
+        rma_tail = np.empty(ewm_source.size - rma_first, dtype=np.float64)
+        rma_tail[0] = rma_seed
+        rma_tail[1:] = ewm_source[rma_first + 1:]
+        rma_reference = np.full_like(ewm_source, np.nan)
+        rma_reference[rma_first:] = pd.Series(rma_tail).ewm(
+            alpha=1.0 / float(rma_length), adjust=False
+        ).mean().to_numpy(dtype=np.float64, copy=False)
+        add_check(
+            results,
+            "unit_signal_utils",
+            case_id,
+            "native_rma_ewm_matches_pandas_exactly",
+            True,
+            bool(np.array_equal(rma_reference, rma_native, equal_nan=True)),
+        )
+        add_check(
+            results,
+            "unit_signal_utils",
+            case_id,
+            "native_ema_wrapper_matches_canonical_exactly",
+            True,
+            bool(np.array_equal(
+                signal_utils_module.tv_ema(ewm_source, 5, use_native_hotpath=False),
+                signal_utils_module.tv_ema(ewm_source, 5, use_native_hotpath=True),
+                equal_nan=True,
+            )),
+        )
+        add_check(
+            results,
+            "unit_signal_utils",
+            case_id,
+            "native_rma_wrapper_matches_canonical_exactly",
+            True,
+            bool(np.array_equal(
+                signal_utils_module.tv_rma(ewm_source, rma_length, use_native_hotpath=False),
+                signal_utils_module.tv_rma(ewm_source, rma_length, use_native_hotpath=True),
+                equal_nan=True,
+            )),
         )
     if native_hotpath_available and scan_reentry_watch_span is not None:
         reentry_close = np.ascontiguousarray([10.0, 10.5, 11.0, 11.5, 12.0, 12.5], dtype=np.float64)
