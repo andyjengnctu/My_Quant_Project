@@ -15,6 +15,7 @@ from core.active_param_ensemble import get_active_param_ensemble_date_range, is_
 from core.file_integrity import canonical_json_sha256, load_json_strict
 from core.strategy_param_artifacts import (
     compute_strategy_param_file_sha256,
+    compute_strategy_param_scientific_sha256,
     normalize_strategy_param_policy,
     resolve_strategy_param_artifact_path,
     resolve_strategy_param_manifest_path,
@@ -143,6 +144,26 @@ def _load_target_payload(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _artifact_hash_contract(path: Path) -> tuple[str | None, str | None]:
+    """Return the canonical file/scientific hashes for a published parameter artifact.
+
+    Raw-price producers participate in the same Strategy Parameter consumer contract
+    as canonical/fixed-multiseed/validation producers.  Keep the hash pair on the
+    producer boundary so every consumer receives one uniform artifact identity.
+    Corrupt or non-JSON payloads are reported as not-ready by the inspector rather
+    than leaking a parsing exception from a read-only status check.
+    """
+
+    if not path.is_file():
+        return None, None
+    file_sha = compute_strategy_param_file_sha256(path)
+    try:
+        scientific_sha = compute_strategy_param_scientific_sha256(path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        scientific_sha = None
+    return str(file_sha), None if scientific_sha is None else str(scientific_sha)
+
+
 def _profile_seed_contract(training_profile_id: str) -> tuple[Any, dict[str, Any] | None]:
     profile = _raw_profile(training_profile_id)
     protocol = get_strategy_param_fitting_seed_protocol(profile.fitting_seed_protocol)
@@ -194,6 +215,8 @@ def inspect_raw_price_strategy_parameter_artifact(
             "status": str(dataset_state.get("status") or "RAW_PRICE_DATASET_NOT_READY"),
             "path": target,
             "manifest_path": manifest_path,
+            "sha256": None,
+            "scientific_sha256": None,
             "coverage_end": coverage,
             "training_profile_id": profile.profile_id,
         }
@@ -210,10 +233,14 @@ def inspect_raw_price_strategy_parameter_artifact(
         record = dict(dict(manifest.get("artifacts") or {}).get(policy_key) or {})
     source = dict(record.get("source") or {})
     target_payload = _load_target_payload(target)
+    artifact_sha, artifact_scientific_sha = _artifact_hash_contract(target)
     identity_ready = bool(
         target.is_file()
         and record
-        and str(record.get("sha256") or "") == compute_strategy_param_file_sha256(target)
+        and artifact_sha
+        and artifact_scientific_sha
+        and str(record.get("sha256") or "") == str(artifact_sha)
+        and str(record.get("scientific_sha256") or "") == str(artifact_scientific_sha)
         and str(source.get("runtime_domain") or "") == _runtime_domain(profile.profile_id)
         and str(source.get("data_identity_sha256") or "") == data_identity_sha
         and _multiseed_identity_ready(
@@ -240,6 +267,8 @@ def inspect_raw_price_strategy_parameter_artifact(
         "status": status,
         "path": target,
         "manifest_path": manifest_path,
+        "sha256": artifact_sha,
+        "scientific_sha256": artifact_scientific_sha,
         "coverage_end": coverage,
         "data_identity": data_identity,
         "training_profile_id": profile.profile_id,
@@ -452,6 +481,8 @@ def inspect_raw_price_robustness_strategy_parameter_artifact(
             "status": str(dataset_state.get("status") or "RAW_PRICE_DATASET_NOT_READY"),
             "path": target,
             "manifest_path": manifest_path,
+            "sha256": None,
+            "scientific_sha256": None,
             "coverage_end": coverage,
             "training_profile_id": profile.profile_id,
         }
@@ -469,6 +500,7 @@ def inspect_raw_price_robustness_strategy_parameter_artifact(
     source = dict(record.get("source") or {})
     build_contract = dict(source.get("build_contract") or {})
     target_payload = _load_target_payload(target)
+    artifact_sha, artifact_scientific_sha = _artifact_hash_contract(target)
     adaptation = dict((target_payload or {}).get("breakout_quality_param_adaptation") or {})
     expected_domain = _raw_robustness_runtime_domain(
         training_profile_id=profile.profile_id,
@@ -497,7 +529,10 @@ def inspect_raw_price_robustness_strategy_parameter_artifact(
     identity_ready = bool(
         target.is_file()
         and record
-        and str(record.get("sha256") or "") == compute_strategy_param_file_sha256(target)
+        and artifact_sha
+        and artifact_scientific_sha
+        and str(record.get("sha256") or "") == str(artifact_sha)
+        and str(record.get("scientific_sha256") or "") == str(artifact_scientific_sha)
         and str(source.get("runtime_domain") or "") == expected_domain
         and str(source.get("data_identity_sha256") or "") == data_identity_sha
         and int(build_contract.get("optimizer_seed") or 0) == int(seed)
@@ -519,6 +554,8 @@ def inspect_raw_price_robustness_strategy_parameter_artifact(
         "status": status,
         "path": target,
         "manifest_path": manifest_path,
+        "sha256": artifact_sha,
+        "scientific_sha256": artifact_scientific_sha,
         "coverage_end": coverage,
         "data_identity": data_identity,
         "benchmark_id": str(benchmark_id),

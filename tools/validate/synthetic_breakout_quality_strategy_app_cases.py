@@ -1178,6 +1178,109 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "Round 1目前只授權" not in run_multi_seed_source,
     )
 
+    # Regression: raw-price benchmark parameter producers must expose the same
+    # canonical file/scientific hash contract consumed by the shared robustness
+    # binder.  A prior implementation returned READY without scientific_sha256,
+    # so training completed and then crashed at the binding boundary.
+    from core.file_integrity import canonical_json_sha256
+    from core.strategy_param_artifacts import (
+        compute_strategy_param_file_sha256,
+        compute_strategy_param_scientific_sha256,
+        normalize_strategy_param_policy,
+    )
+    from services.research import raw_price_strategy_param as raw_param_producer
+
+    raw_profile_id = raw_param_producer.DEFAULT_RAW_PRICE_TRAINING_PROFILE_ID
+    raw_profile = raw_param_producer._raw_profile(raw_profile_id)
+    raw_benchmark_id = "end_to_end_v1"
+    raw_seed = 693545351
+    raw_data_identity = {"schema": "synthetic_raw_price_contract_v1", "fixture": True}
+    with tempfile.TemporaryDirectory(prefix="raw_param_hash_contract_") as temp_dir:
+        temp_root = Path(temp_dir)
+        raw_target = raw_param_producer.raw_price_robustness_strategy_param_artifact_path(
+            temp_root,
+            benchmark_id=raw_benchmark_id,
+            seed=raw_seed,
+            training_profile_id=raw_profile_id,
+        )
+        raw_manifest_path = raw_param_producer.raw_price_robustness_strategy_param_manifest_path(
+            temp_root,
+            benchmark_id=raw_benchmark_id,
+            seed=raw_seed,
+            training_profile_id=raw_profile_id,
+        )
+        raw_target.parent.mkdir(parents=True, exist_ok=True)
+        raw_payload = {
+            "schema_type": "active_param_ensemble",
+            "schema_version": 1,
+            "mode": "rolling",
+            "type": "active_param_ensemble",
+            "selector": "base_finalist_best",
+            "params_ensemble_by_effective_date": {
+                "2021-01-01": [
+                    {
+                        "member_index": 1,
+                        "seed": raw_seed,
+                        "params": {"high_len": 201, "atr_len": 14},
+                    }
+                ]
+            },
+            "summary": {"oos_end_date": "2026-03-02"},
+        }
+        raw_target.write_text(json.dumps(raw_payload), encoding="utf-8")
+        raw_file_sha = compute_strategy_param_file_sha256(raw_target)
+        raw_scientific_sha = compute_strategy_param_scientific_sha256(raw_target)
+        raw_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        raw_manifest_path.write_text(
+            json.dumps(
+                {
+                    "artifacts": {
+                        normalize_strategy_param_policy(raw_profile.parameter_policy): {
+                            "sha256": raw_file_sha,
+                            "scientific_sha256": raw_scientific_sha,
+                            "source": {
+                                "runtime_domain": raw_param_producer._raw_robustness_runtime_domain(
+                                    training_profile_id=raw_profile_id,
+                                    benchmark_id=raw_benchmark_id,
+                                    seed=raw_seed,
+                                ),
+                                "data_identity_sha256": canonical_json_sha256(
+                                    raw_data_identity
+                                ),
+                                "build_contract": {"optimizer_seed": raw_seed},
+                            },
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        with patch.object(
+            raw_param_producer,
+            "inspect_raw_price_strategy_dataset",
+            return_value={"ready": True, "data_identity": raw_data_identity},
+        ):
+            raw_contract = (
+                raw_param_producer.ensure_raw_price_robustness_strategy_parameter_artifact(
+                    temp_root,
+                    benchmark_id=raw_benchmark_id,
+                    seed=raw_seed,
+                    comparison_end_date="2026-03-02",
+                    training_profile_id=raw_profile_id,
+                )
+            )
+            raw_bound_contract = robustness_runtime._validate_strategy_parameter_producer_result(
+                raw_contract, arm_id="RAW_SYNTHETIC", seed=raw_seed
+            )
+    check_true(
+        "raw_price_robustness_producer_returns_canonical_file_and_scientific_hash_contract",
+        raw_contract.get("action") == "REUSE"
+        and raw_contract.get("sha256") == raw_file_sha
+        and raw_contract.get("scientific_sha256") == raw_scientific_sha
+        and raw_bound_contract[2] == raw_file_sha
+        and raw_bound_contract[3] == raw_scientific_sha,
+    )
+
     # The long-lived extending_current benchmark remains contract-tested even when
     # another research profile is selected as current. Current routing must never
     # redefine its historical/scientific membership.

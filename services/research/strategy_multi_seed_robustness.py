@@ -952,6 +952,51 @@ def _benchmark_parameter_plan_rows(
 
 
 
+def _validate_strategy_parameter_producer_result(
+    result: dict[str, Any], *, arm_id: str, seed: int
+) -> tuple[Path, Path, str, str]:
+    """Validate the shared producer -> robustness binding artifact contract.
+
+    Every registered Strategy Parameter producer must publish the same durable
+    artifact identity fields. The robustness consumer verifies those declared
+    hashes against the actual payload before binding so a malformed producer
+    fails at the contract boundary with a precise error instead of a late KeyError.
+    """
+
+    required = ("path", "manifest_path", "sha256", "scientific_sha256", "action")
+    missing = tuple(key for key in required if result.get(key) in (None, ""))
+    if missing:
+        raise RuntimeError(
+            "Strategy Parameter producer回傳contract不完整: "
+            f"arm={arm_id}, seed={int(seed)}, missing={','.join(missing)}"
+        )
+    result_path = Path(result["path"])
+    manifest_path = Path(result["manifest_path"])
+    if not result_path.is_file():
+        raise FileNotFoundError(
+            "Strategy Parameter producer回傳的artifact不存在: "
+            f"arm={arm_id}, seed={int(seed)}, path={result_path}"
+        )
+    if not manifest_path.is_file():
+        raise FileNotFoundError(
+            "Strategy Parameter producer回傳的manifest不存在: "
+            f"arm={arm_id}, seed={int(seed)}, path={manifest_path}"
+        )
+    actual_file_sha = compute_file_sha256(result_path)
+    actual_scientific_sha = compute_strategy_param_scientific_sha256(result_path)
+    if str(result["sha256"]) != str(actual_file_sha):
+        raise RuntimeError(
+            "Strategy Parameter producer file SHA與artifact不一致: "
+            f"arm={arm_id}, seed={int(seed)}"
+        )
+    if str(result["scientific_sha256"]) != str(actual_scientific_sha):
+        raise RuntimeError(
+            "Strategy Parameter producer scientific SHA與artifact不一致: "
+            f"arm={arm_id}, seed={int(seed)}"
+        )
+    return result_path, manifest_path, str(actual_file_sha), str(actual_scientific_sha)
+
+
 def _ensure_benchmark_strategy_parameter_binding(
     *, settings, robustness, binding: dict[str, Any], seed: int,
     comparison_start: str, comparison_end: str,
@@ -1030,20 +1075,24 @@ def _ensure_benchmark_strategy_parameter_binding(
             resume_parameter_training=True,
             quiet=False,
         )
-    result_path = Path(result["path"])
+    result_path, manifest_path, file_sha256, scientific_sha256 = (
+        _validate_strategy_parameter_producer_result(
+            result, arm_id=str(binding["arm_id"]), seed=int(seed)
+        )
+    )
     return {
         **binding,
         "path": result_path,
-        "manifest_path": Path(result["manifest_path"]),
-        "sha256": str(result["scientific_sha256"]),
+        "manifest_path": manifest_path,
+        "sha256": scientific_sha256,
         "evaluation_sha256": resolve_strategy_param_evaluation_identity_sha256(
             result_path,
             evaluation_mode=str(binding["evaluation_mode"]),
             start_date=str(comparison_start),
             end_date=str(comparison_end),
         ),
-        "file_sha256": str(result["sha256"]),
-        "manifest_sha256": compute_file_sha256(Path(result["manifest_path"])),
+        "file_sha256": file_sha256,
+        "manifest_sha256": compute_file_sha256(manifest_path),
         "parameter_payload_ready": True,
         "result_reuse_only": False,
         "producer_action": str(result["action"]),
