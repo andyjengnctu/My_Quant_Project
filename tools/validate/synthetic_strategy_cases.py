@@ -4380,11 +4380,20 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             arm_id not in {arm.arm_id for arm in current_compare_settings.enabled_arms}
             for arm_id in ("C62", "C89", "C91", "C92")
         )
-        # P13 remains the active parameter-training profile; this user decision only
-        # changes current Strategy Compare membership.
-        and active_param_profile.profile_id
-            == trading_aligned_8x1000_param_profile.profile_id
-        and not active_param_profile.validation_enabled,
+        # Round 1 raw-price research deliberately changes Research [2]'s active
+        # parameter-training target without reactivating completed P13/C92 in
+        # Strategy Compare.  P13 remains registered as historical evidence only.
+        and active_param_profile.profile_id == "raw_price_full_base_finalist_best_current"
+        and active_param_profile.parameter_set_identity == "PARAM-RAW-P1"
+        and active_param_profile.price_basis == "raw_unadjusted"
+        and active_param_profile.filter_profile == "full"
+        and active_param_profile.parameter_policy == "base-finalist-best"
+        and active_param_profile.fitting_seed_protocol == "single_seed_42"
+        and not active_param_profile.validation_enabled
+        and trading_aligned_8x1000_param_profile.profile_id
+            == "trading_aligned_8x1000_current"
+        and trading_aligned_8x1000_param_profile.parameter_set_identity == "PARAM-P13"
+        and not trading_aligned_8x1000_param_profile.validation_enabled,
     )
     from services.research.strategy_comparison import _display_ordered_strategy_arms
     legacy_unsorted_settings = get_strategy_comparison_settings(
