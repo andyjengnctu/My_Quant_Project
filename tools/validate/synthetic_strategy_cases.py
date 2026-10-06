@@ -4385,39 +4385,55 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and current_compare_settings.parameter_sources[arm.param_source].builder.builder_type
             == "optimizer_fixed_multiseed_strategy_params"
     }
-    current_raw_profiles = {
-        str(dict(current_compare_settings.parameter_sources[arm.param_source].builder.options).get("training_profile_id") or "")
-        for arm in current_compare_settings.enabled_arms
-        if current_compare_settings.parameter_sources[arm.param_source].builder is not None
-        and current_compare_settings.parameter_sources[arm.param_source].builder.builder_type
-            == "optimizer_raw_price_strategy_params"
-    }
+    current_raw_profile_rows = []
+    for arm in current_compare_settings.enabled_arms:
+        source = current_compare_settings.parameter_sources[arm.param_source]
+        builder = source.builder
+        if builder is None or builder.builder_type != "optimizer_raw_price_strategy_params":
+            continue
+        profile_id = str(dict(builder.options).get("training_profile_id") or "")
+        profile = get_strategy_param_training_profile(profile_id)
+        protocol = get_strategy_param_fitting_seed_protocol(profile.fitting_seed_protocol)
+        current_raw_profile_rows.append((arm, source, profile, protocol))
+    current_raw_profiles = {profile.profile_id for _arm, _source, profile, _protocol in current_raw_profile_rows}
+    current_arm_ids = tuple(arm.arm_id for arm in current_compare_settings.enabled_arms)
+    current_contrast_ids = tuple(contrast.contrast_id for contrast in current_compare_settings.enabled_contrasts)
+    required_reference_ids = {"C58", "C61", "C85"}
     check(
-        "strategy_compare_current_suite_preserves_references_and_appends_raw_price_arm",
+        "strategy_compare_current_suite_preserves_required_references_and_derives_raw_profiles",
         True,
-        tuple(arm.arm_id for arm in current_compare_settings.enabled_arms)
-            == ("C58", "C61", "C85", "C93")
-        and tuple(contrast.contrast_id for contrast in current_compare_settings.enabled_contrasts)
-            == ("C85-C61", "C85-C58", "C93-C61")
+        required_reference_ids.issubset(set(current_arm_ids))
+        and all(
+            contrast.left in set(current_arm_ids) and contrast.right in set(current_arm_ids)
+            for contrast in current_compare_settings.enabled_contrasts
+        )
+        and len(current_contrast_ids) == len(set(current_contrast_ids))
         and "optimizer_validation_budget_refit_strategy_params" not in current_builder_types
         and "optimizer_fixed_multiseed_strategy_params" in current_builder_types
+        and "optimizer_raw_price_strategy_params" in current_builder_types
         and not current_validation_parameter_sets
         and current_fixed_multiseed_profiles == {"production_multiseed_current"}
-        and current_raw_profiles == {active_param_profile.profile_id}
+        and active_param_profile.profile_id in current_raw_profiles
+        and len(current_raw_profiles) == len(current_raw_profile_rows)
+        and len({str(source.path_template or "") for _arm, source, _profile, _protocol in current_raw_profile_rows})
+            == len(current_raw_profile_rows)
+        and all(
+            arm.data_source == "raw_unadjusted_controlled"
+            and profile.price_basis == "raw_unadjusted"
+            and profile.filter_profile == "full"
+            and not profile.validation_enabled
+            and profile.parameter_policy == arm.param_policy
+            and bool(profile.artifact_slug)
+            and str(profile.artifact_slug) in str(source.path_template or "")
+            for arm, source, profile, _protocol in current_raw_profile_rows
+        )
+        and any(not protocol.enabled for _arm, _source, _profile, protocol in current_raw_profile_rows)
+        and any(protocol.enabled for _arm, _source, _profile, protocol in current_raw_profile_rows)
         and current_compare_settings.arms["C58"].data_source == "canonical"
         and current_compare_settings.arms["C61"].data_source == "canonical"
         and current_compare_settings.arms["C85"].data_source == "canonical"
-        and current_compare_settings.arms["C93"].data_source == "raw_unadjusted_controlled"
-        and all(
-            arm_id not in {arm.arm_id for arm in current_compare_settings.enabled_arms}
-            for arm_id in ("C62", "C89", "C91", "C92")
-        )
-        and active_param_profile.profile_id == "raw_price_full_base_finalist_best_current"
-        and active_param_profile.parameter_set_identity == "PARAM-RAW-P1"
         and active_param_profile.price_basis == "raw_unadjusted"
         and active_param_profile.filter_profile == "full"
-        and active_param_profile.parameter_policy == "base-finalist-best"
-        and active_param_profile.fitting_seed_protocol == "single_seed_42"
         and not active_param_profile.validation_enabled
         # Historical P13 remains registered and reproducible; it is not current.
         and trading_aligned_8x1000_param_profile.profile_id

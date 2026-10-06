@@ -50,6 +50,7 @@ from core.strategy_param_artifacts import (
     resolve_strategy_param_artifact_path,
     resolve_strategy_param_manifest_path,
 )
+from core.strategy_param_policy import get_strategy_param_training_profile
 from filters.breakout_quality.dataset_store import resolve_dataset_paths
 from filters.breakout_quality.expected_r_calibration import (
     EXPECTED_R_CALIBRATION_METHOD,
@@ -944,18 +945,27 @@ def _collect_parameter_artifact_status(
             policy_identity_ready = identity_ready
             policy_identity_status = identity_status
             if builder_type == "optimizer_raw_price_strategy_params":
-                if param_policy != "base-finalist-best":
+                builder_options = {} if source.builder is None else dict(source.builder.options)
+                training_profile_id = str(builder_options.get("training_profile_id") or "").strip()
+                if not training_profile_id:
                     policy_identity_ready = False
-                    policy_identity_status = "RAW_PRICE_POLICY_NOT_AUTHORIZED"
+                    policy_identity_status = "RAW_PRICE_TRAINING_PROFILE_MISSING"
                 elif required_schedule_end in (None, ""):
                     policy_identity_ready = False
                     policy_identity_status = "RAW_PRICE_REQUIRED_SCHEDULE_END_MISSING"
                 else:
-                    raw_state = inspect_raw_price_strategy_parameter_artifact(
-                        root, comparison_end_date=str(required_schedule_end)
-                    )
-                    policy_identity_ready = bool(raw_state["ready"])
-                    policy_identity_status = str(raw_state["status"])
+                    raw_profile = get_strategy_param_training_profile(training_profile_id)
+                    if param_policy != raw_profile.parameter_policy:
+                        policy_identity_ready = False
+                        policy_identity_status = "RAW_PRICE_PROFILE_POLICY_MISMATCH"
+                    else:
+                        raw_state = inspect_raw_price_strategy_parameter_artifact(
+                            root,
+                            comparison_end_date=str(required_schedule_end),
+                            training_profile_id=training_profile_id,
+                        )
+                        policy_identity_ready = bool(raw_state["ready"])
+                        policy_identity_status = str(raw_state["status"])
             elif builder_type == "optimizer_validation_budget_refit_strategy_params":
                 builder_options = {} if source.builder is None else dict(source.builder.options)
                 validation_state = inspect_validation_budget_strategy_parameter_artifact(

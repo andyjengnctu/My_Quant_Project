@@ -1343,6 +1343,12 @@ def build_isolated_strategy_parameter_schedule(
     runtime_domain: str,
     data_identity: dict[str, Any],
     optimizer_seed_override: int | None = None,
+    trials_per_fold_override: int | None = None,
+    seed_ensemble_policy_override: dict[str, Any] | None = None,
+    optimizer_search_protocol: str | None = None,
+    parameter_set_identity: str | None = None,
+    score_policy_overrides: dict[str, Any] | None = None,
+    resume_parameter_training: bool = True,
     environ=None,
 ) -> dict[str, Any]:
     """Build one PIT schedule with the canonical Optimizer into an isolated domain.
@@ -1378,6 +1384,21 @@ def build_isolated_strategy_parameter_schedule(
         if override_seed <= 0:
             raise ValueError("isolated PIT schedule optimizer_seed_override必須>0")
         contract = {**dict(contract), "optimizer_seed": override_seed}
+    if trials_per_fold_override is not None:
+        override_trials = int(trials_per_fold_override)
+        if override_trials <= 0:
+            raise ValueError("isolated PIT schedule trials_per_fold_override必須>0")
+        contract = {**dict(contract), "trials_per_fold": override_trials}
+    if seed_ensemble_policy_override is not None:
+        if not isinstance(seed_ensemble_policy_override, dict) or not seed_ensemble_policy_override:
+            raise ValueError("isolated PIT schedule seed_ensemble_policy_override必須為非空mapping")
+        contract = {**dict(contract), "seed_ensemble_policy": dict(seed_ensemble_policy_override)}
+    normalized_search_protocol = str(optimizer_search_protocol or "").strip()
+    normalized_parameter_set = str(parameter_set_identity or "").strip()
+    if normalized_search_protocol:
+        contract = {**dict(contract), "optimizer_search_protocol": normalized_search_protocol}
+    if normalized_parameter_set:
+        contract = {**dict(contract), "parameter_set": normalized_parameter_set}
     compare_policy = _compare_policy_name(normalized_policy)
     isolated_work_root = Path(work_root).resolve()
     schedule_work = isolated_work_root / "schedule_2021_forward"
@@ -1404,7 +1425,7 @@ def build_isolated_strategy_parameter_schedule(
         fixed_risk=float(contract["fixed_risk"]),
         max_position_cap_pct=float(contract["max_position_cap_pct"]),
         optimizer_seed=int(contract["optimizer_seed"]),
-        resume_parameter_training=True,
+        resume_parameter_training=bool(resume_parameter_training),
         quiet=False,
         first_oos_date=str(contract["schedule_start"]),
         last_oos_date=end_date,
@@ -1419,6 +1440,14 @@ def build_isolated_strategy_parameter_schedule(
         models_dir_override=models_dir,
         dataset_identity_override=dict(data_identity),
         environ_override=environ,
+        optimizer_search_protocol=(normalized_search_protocol or None),
+        parameter_set_identity=(normalized_parameter_set or "P4_HISTORY"),
+        seed_ensemble_policy_override=(
+            None if seed_ensemble_policy_override is None else dict(seed_ensemble_policy_override)
+        ),
+        score_policy_overrides=(
+            None if score_policy_overrides is None else dict(score_policy_overrides)
+        ),
     )
     source_path = Path(result["params_path"]).resolve()
     _assert_optimizer_work_source(source_path=source_path, work_root=isolated_work_root)

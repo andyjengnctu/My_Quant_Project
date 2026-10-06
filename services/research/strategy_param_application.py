@@ -260,10 +260,10 @@ def run_strategy_param_timing_cli(argv: list[str] | None = None) -> int:
 
 def _single_state(profile: StrategyParamTrainingProfile, *, required_end: str) -> dict:
     if profile.price_basis == "raw_unadjusted":
-        if profile.filter_profile != "full" or profile.parameter_policy != "base-finalist-best":
-            raise ValueError("raw-price baseline目前只支援Full + base-finalist-best")
         return inspect_raw_price_strategy_parameter_artifact(
-            PROJECT_ROOT, comparison_end_date=required_end
+            PROJECT_ROOT,
+            comparison_end_date=required_end,
+            training_profile_id=profile.profile_id,
         )
     protocol = _validation_protocol(profile)
     seed_protocol = _fitting_seed_protocol(profile)
@@ -313,10 +313,11 @@ def _ensure_single(
     oos_end_cap_date: str | None = None,
 ) -> dict:
     if profile.price_basis == "raw_unadjusted":
-        if profile.filter_profile != "full" or profile.parameter_policy != "base-finalist-best":
-            raise ValueError("raw-price baseline目前只支援Full + base-finalist-best")
         return ensure_raw_price_strategy_parameter_artifact(
-            PROJECT_ROOT, comparison_end_date=required_end, force_rebuild=bool(force_rebuild)
+            PROJECT_ROOT,
+            comparison_end_date=required_end,
+            training_profile_id=profile.profile_id,
+            force_rebuild=bool(force_rebuild),
         )
     protocol = _validation_protocol(profile)
     seed_protocol = _fitting_seed_protocol(profile)
@@ -373,13 +374,12 @@ def _benchmark_state(
 ) -> dict:
     benchmark = get_robustness_benchmark_policy_snapshot()
     if profile.price_basis == "raw_unadjusted":
-        if profile.filter_profile != "full" or profile.parameter_policy != "base-finalist-best":
-            raise ValueError("raw-price producer contract只支援Full + base-finalist-best")
         return inspect_raw_price_robustness_strategy_parameter_artifact(
             PROJECT_ROOT,
             benchmark_id=str(benchmark["benchmark_id"]),
             seed=int(seed),
             comparison_end_date=required_end,
+            training_profile_id=profile.profile_id,
         )
     seed_protocol = _fitting_seed_protocol(profile)
     if seed_protocol.enabled:
@@ -434,13 +434,12 @@ def _ensure_benchmark(
 ) -> dict:
     benchmark = get_robustness_benchmark_policy_snapshot()
     if profile.price_basis == "raw_unadjusted":
-        if profile.filter_profile != "full" or profile.parameter_policy != "base-finalist-best":
-            raise ValueError("raw-price producer contract只支援Full + base-finalist-best")
         return ensure_raw_price_robustness_strategy_parameter_artifact(
             PROJECT_ROOT,
             benchmark_id=str(benchmark["benchmark_id"]),
             seed=int(seed),
             comparison_end_date=required_end,
+            training_profile_id=profile.profile_id,
             force_rebuild=bool(force_rebuild),
         )
     seed_protocol = _fitting_seed_protocol(profile)

@@ -927,6 +927,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 ) == "optimizer_raw_price_strategy_params"
             )
         )
+        raw_price_profile_ids = {
+            str(dict(robust_settings.parameter_sources[str(robust_settings.arms[arm_id].param_source)].builder.options).get("training_profile_id") or "")
+            for arm_id in raw_price_arm_ids
+        }
         reusable = {
             (arm_id, int(seed)): {"source_run_root": Path("synthetic_registered_run")}
             for arm_id in canonical_reuse_arm_ids
@@ -973,7 +977,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 or (
                     ":seed=" in str(row[1])
                     and "raw_price_isolated_v1" in str(row[1])
-                    and ":profile=raw_price_full_base_finalist_best_current" in str(row[1])
+                    and any(
+                        f":profile={profile_id}" in str(row[1])
+                        for profile_id in raw_price_profile_ids
+                        if profile_id
+                    )
                 )
                 for row in parameter_dependency_rows
             ),

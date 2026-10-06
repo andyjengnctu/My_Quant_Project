@@ -647,10 +647,21 @@ def _validate_builder(
         if int(builder.options.get("inference_workers") or 0) < 1:
             raise ValueError(f"{field_name}.inference_workers必須>=1")
     if builder.builder_type == "optimizer_raw_price_strategy_params":
+        from core.strategy_param_policy import get_strategy_param_training_profile
+
         training_profile_id = str(builder.options.get("training_profile_id") or "").strip()
-        if training_profile_id != "raw_price_full_base_finalist_best_current":
+        if not training_profile_id:
+            raise ValueError(f"{field_name}.training_profile_id不可空白")
+        training_profile = get_strategy_param_training_profile(training_profile_id)
+        if (
+            training_profile.price_basis != "raw_unadjusted"
+            or training_profile.filter_profile != "full"
+            or training_profile.validation_enabled
+            or not training_profile.artifact_slug
+        ):
             raise ValueError(
-                f"{field_name}.training_profile_id必須是raw_price_full_base_finalist_best_current"
+                f"{field_name}.training_profile_id不是可用的raw-price Full capability: "
+                f"{training_profile_id}"
             )
     if builder.builder_type == "oos_param_freeze":
         source_param_source_id = str(builder.options.get("source_param_source_id") or "").strip()
@@ -1011,6 +1022,28 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                 ):
                     raise ValueError(
                         "current fixed multi-seed Strategy Compare arm與registered profile不一致: "
+                        f"arm={key}, profile={training_profile.profile_id}, policy={arm_policy}"
+                    )
+            elif builder_type == "optimizer_raw_price_strategy_params":
+                from core.strategy_param_policy import get_strategy_param_training_profile
+
+                options = dict(parameter_source.builder.options)
+                training_profile_id = str(options.get("training_profile_id") or "").strip()
+                if not training_profile_id:
+                    raise ValueError(
+                        f"current raw-price Strategy Compare arm缺少training_profile_id: arm={key}"
+                    )
+                training_profile = get_strategy_param_training_profile(training_profile_id)
+                arm_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
+                if (
+                    training_profile.price_basis != "raw_unadjusted"
+                    or training_profile.filter_profile != "full"
+                    or training_profile.parameter_policy != arm_policy
+                    or training_profile.validation_enabled
+                    or not training_profile.artifact_slug
+                ):
+                    raise ValueError(
+                        "current raw-price Strategy Compare arm與profile capability不一致: "
                         f"arm={key}, profile={training_profile.profile_id}, policy={arm_policy}"
                     )
         if arm.dl_enabled:

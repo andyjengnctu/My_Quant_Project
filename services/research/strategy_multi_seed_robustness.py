@@ -602,6 +602,19 @@ def _robustness_arm_seed_pairing_semantics(
     )
     if builder_type == "optimizer_fixed_multiseed_strategy_params":
         return "outer_replication_seed_with_arm_specific_fitting_seed_bundle"
+    if builder_type == "optimizer_raw_price_strategy_params":
+        options = {} if source.builder is None else dict(source.builder.options or {})
+        training_profile_id = str(options.get("training_profile_id") or "").strip()
+        if not training_profile_id:
+            raise ValueError(
+                f"raw-price robustness source缺少training_profile_id: {arm.arm_id}/{arm.param_source}"
+            )
+        training_profile = get_strategy_param_training_profile(training_profile_id)
+        fitting_seed_protocol = get_strategy_param_fitting_seed_protocol(
+            training_profile.fitting_seed_protocol
+        )
+        if fitting_seed_protocol.enabled:
+            return "outer_replication_seed_with_arm_specific_fitting_seed_bundle"
     return "same_seed_strategy_optimizer_and_all_dl_sources"
 
 
@@ -630,17 +643,31 @@ def _benchmark_param_binding(
     if builder_type == "optimizer_raw_price_strategy_params":
         family = "full"
         mode = str(source.consumption_evaluation_mode or "rolling").strip()
+        options = {} if source.builder is None else dict(source.builder.options or {})
+        training_profile_id = str(options.get("training_profile_id") or "").strip()
+        if not training_profile_id:
+            raise ValueError(
+                f"raw-price benchmark source缺少training_profile_id: {arm.arm_id}/{arm.param_source}"
+            )
+        training_profile = get_strategy_param_training_profile(training_profile_id)
+        fitting_seed_protocol = get_strategy_param_fitting_seed_protocol(
+            training_profile.fitting_seed_protocol
+        )
         path = raw_price_robustness_strategy_param_artifact_path(
-            PROJECT_ROOT, benchmark_id=str(robustness.benchmark_id), seed=int(seed)
+            PROJECT_ROOT,
+            benchmark_id=str(robustness.benchmark_id),
+            seed=int(seed),
+            training_profile_id=training_profile_id,
         )
         manifest_path = raw_price_robustness_strategy_param_manifest_path(
-            PROJECT_ROOT, benchmark_id=str(robustness.benchmark_id), seed=int(seed)
+            PROJECT_ROOT,
+            benchmark_id=str(robustness.benchmark_id),
+            seed=int(seed),
+            training_profile_id=training_profile_id,
         )
         producer_variant = "raw_price_isolated_v1"
-        options = {} if source.builder is None else dict(source.builder.options or {})
-        training_profile_id = str(options.get("training_profile_id") or "").strip() or None
-        fitting_seed_count = 1
-        fitting_trials_per_seed = 300
+        fitting_seed_count = int(fitting_seed_protocol.seed_count)
+        fitting_trials_per_seed = int(fitting_seed_protocol.trials_per_seed)
     elif builder_type == "optimizer_validation_budget_refit_strategy_params":
         family = "full"
         mode = str(source.consumption_evaluation_mode or "rolling").strip()
@@ -751,6 +778,7 @@ def _inspect_benchmark_strategy_parameter_binding(
             benchmark_id=str(robustness.benchmark_id),
             seed=int(seed),
             comparison_end_date=str(required_schedule_end),
+            training_profile_id=str(binding["training_profile_id"]),
         )
     if str(binding["producer_variant"]) == "validation_budget_refit_v1":
         return inspect_validation_budget_robustness_strategy_parameter_artifact(
@@ -804,8 +832,9 @@ def _benchmark_parameter_build_detail(binding: dict[str, Any]) -> str:
         )
     if variant == "raw_price_isolated_v1":
         return (
-            "由raw-price isolated Optimizer以相同benchmark seed建立非還原價參數；"
-            "ticker/date/Volume控制母體不變，禁止fallback到adjusted/production Seed42參數"
+            "由raw-price isolated Optimizer依arm profile建立非還原價參數；"
+            "single-seed沿用benchmark seed，multi-seed由outer replicate seed決定固定fitting bundle；"
+            "ticker/date/Volume控制母體不變，禁止fallback到adjusted參數"
         )
     return (
         "由canonical Optimizer以相同benchmark seed與統一trials/fold自動建立；"
@@ -948,6 +977,7 @@ def _ensure_benchmark_strategy_parameter_binding(
             benchmark_id=str(robustness.benchmark_id),
             seed=int(seed),
             comparison_end_date=str(required_schedule_end),
+            training_profile_id=str(binding["training_profile_id"]),
         )
     elif str(binding["producer_variant"]) == "validation_budget_refit_v1":
         result = ensure_validation_budget_robustness_strategy_parameter_artifact(
@@ -1653,7 +1683,7 @@ def _render_robustness_execution_plan(
             ]
             arm_bindings = [item for item in arm_bindings if isinstance(item, dict)]
             uses_fitting_bundle = any(
-                str(item.get("producer_variant") or "") == "fixed_multiseed_v1"
+                int(item.get("fitting_seed_count") or 0) > 1
                 for item in arm_bindings
             )
             uses_raw_price_isolated = any(
@@ -1751,23 +1781,22 @@ def _render_robustness_execution_plan(
                     f"{cfg.seed_count * sum(fold_counts)} slots（實際新訓練會扣除REUSE／rescore／跨mode checkpoint重用）",
                 ),
             ]
-    fixed_multiseed_fitting_budgets = {
+    multiseed_fitting_budgets = {
         (
             str(item.get("training_profile_id") or ""),
             int(item.get("fitting_seed_count") or 0),
             int(item.get("fitting_trials_per_seed") or 0),
         )
         for item in benchmark_bindings.values()
-        if str(item.get("producer_variant") or "") == "fixed_multiseed_v1"
-        and int(item.get("fitting_seed_count") or 0) > 0
+        if int(item.get("fitting_seed_count") or 0) > 1
         and int(item.get("fitting_trials_per_seed") or 0) > 0
     }
     fitting_bundle_rows = ()
-    if fixed_multiseed_fitting_budgets:
+    if multiseed_fitting_budgets:
         budget_text = " / ".join(
             f"{seed_count} seeds x {trials_per_seed} trials"
             for _profile_id, seed_count, trials_per_seed
-            in sorted(fixed_multiseed_fitting_budgets, key=lambda item: (item[1], item[2], item[0]))
+            in sorted(multiseed_fitting_budgets, key=lambda item: (item[1], item[2], item[0]))
         )
         fitting_bundle_rows = (("Strategy fitting budgets", budget_text),)
 

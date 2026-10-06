@@ -15,6 +15,7 @@ from core.strategy_comparison import (
     resolve_strategy_parameter_consumption_mode,
     resolve_strategy_parameter_required_schedule_end,
 )
+from core.strategy_param_policy import get_strategy_param_training_profile
 from services.breakout_quality.export_scores import export_forward_oos_scores
 from filters.breakout_quality.ranking_score_store import SCORE_SOURCE_SELECTION_POINT_IN_TIME
 from services.research.strategy_compare_preparation_status import (
@@ -118,6 +119,9 @@ def _execute_preparation_action(
     if action.builder_type == "optimizer_raw_price_strategy_params":
         _kind, source_id = action.artifact_key.split(":", 1)
         source = settings.parameter_sources[source_id]
+        builder = source.builder
+        if builder is None:
+            raise RuntimeError(f"raw-price參數來源缺少builder: {source_id}")
         required_schedule_end = resolve_strategy_parameter_required_schedule_end(
             source,
             comparison_start=comparison_start_date,
@@ -125,13 +129,21 @@ def _execute_preparation_action(
         )
         if required_schedule_end in (None, ""):
             raise RuntimeError("raw-price parameter builder缺少可解析的required schedule end")
+        training_profile_id = str(dict(builder.options).get("training_profile_id") or "").strip()
+        if not training_profile_id:
+            raise RuntimeError(f"raw-price builder缺少training_profile_id: {source_id}")
+        profile = get_strategy_param_training_profile(training_profile_id)
         policies = resolve_required_param_policies_for_source(settings, source_id)
-        if policies != ("base-finalist-best",):
+        if policies != (profile.parameter_policy,):
             raise RuntimeError(
-                "PARAM-RAW-P1目前只授權base-finalist-best: " + ",".join(policies)
+                "raw-price parameter source與profile selector不一致: "
+                f"source={source_id}, profile={training_profile_id}, "
+                f"expected={profile.parameter_policy}, actual={','.join(policies)}"
             )
         ensure_raw_price_strategy_parameter_artifact(
-            root, comparison_end_date=str(required_schedule_end)
+            root,
+            comparison_end_date=str(required_schedule_end),
+            training_profile_id=training_profile_id,
         )
         return
     if action.builder_type == "optimizer_fixed_multiseed_strategy_params":

@@ -14,10 +14,11 @@ from core.breakout_quality_registry import (
 
 # Current work-stage selection. Stable menu work types live in apps/research.py;
 # only the current scientific profiles/bindings change here.
-# Raw-price Round 1 current comparison: C61 adjusted Full base-finalist-best vs
-# C93 raw/unadjusted Full base-finalist-best.  Ticker/date/Volume and all strategy
-# semantics are controlled; the intended primary variable is OHLC price basis only.
-# Historical C58/C85/C92/C89/C91/C62 identities and completed results remain
+# Current reference suite is append-only: C58/C61/C85 remain active references.
+# Raw-price controlled counterparts are appended declaratively: C93 mirrors C61
+# (base-finalist-best) and C94 mirrors C85 (base-finalists-agree 4x300).  Each
+# raw-vs-adjusted contrast fixes ticker/date/Volume and strategy semantics so OHLC
+# price basis is the intended primary variable. Historical identities/results stay
 # registered and discoverable for identity-based reuse/replay.
 STRATEGY_COMPARE_CURRENT_OOS_PROFILE = "non_dl_reference_only_oos"
 STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE = "non_dl_reference_only_rolling"
