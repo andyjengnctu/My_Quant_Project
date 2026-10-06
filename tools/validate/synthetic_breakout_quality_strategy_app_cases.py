@@ -1112,6 +1112,64 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and fitted_param_plan.count("\nREUSE") == expected_total_units,
     )
 
+    # Regression: current suite capability already resolved C93/raw-price into the
+    # same-seed benchmark matrix, but a stale runtime-entry allowlist once rejected
+    # every non-canonical data_source before the shared planner was even reached.
+    # Exercise the formal entrypoint boundary so config/plan-only tests cannot miss
+    # another arm/profile/data-source-specific gate.
+    from services.research import strategy_multi_seed_robustness as robustness_runtime
+
+    class _SharedPlannerReached(RuntimeError):
+        pass
+
+    runtime_entry_reached_shared_planner = []
+    for robustness_settings in current_robustness:
+        with (
+            patch.object(robustness_runtime, "collect_artifact_status", return_value={}),
+            patch.object(
+                robustness_runtime,
+                "_render_robustness_execution_plan",
+                side_effect=_SharedPlannerReached("shared planner reached"),
+            ),
+        ):
+            try:
+                robustness_runtime.run_multi_seed_robustness(
+                    robustness_id=robustness_settings.robustness_id,
+                    confirm=False,
+                )
+            except _SharedPlannerReached:
+                runtime_entry_reached_shared_planner.append(True)
+            except Exception:
+                runtime_entry_reached_shared_planner.append(False)
+            else:
+                runtime_entry_reached_shared_planner.append(False)
+    check_true(
+        "current_robustness_runtime_entry_has_no_arm_profile_or_data_source_gate_before_shared_planner",
+        runtime_entry_reached_shared_planner
+        and all(runtime_entry_reached_shared_planner),
+    )
+
+    robustness_runtime_source = read_source_text(
+        "services/research/strategy_multi_seed_robustness.py"
+    )
+    robustness_runtime_tree = ast.parse(robustness_runtime_source)
+    run_multi_seed_node = next(
+        node
+        for node in robustness_runtime_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "run_multi_seed_robustness"
+    )
+    run_multi_seed_source = ast.get_source_segment(
+        robustness_runtime_source, run_multi_seed_node
+    ) or ""
+    check_true(
+        "current_robustness_runtime_entry_does_not_own_raw_price_or_c93_authorization",
+        "raw_price_arms" not in run_multi_seed_source
+        and "raw_unadjusted" not in run_multi_seed_source
+        and "C93" not in run_multi_seed_source
+        and "Round 1目前只授權" not in run_multi_seed_source,
+    )
+
     # The long-lived extending_current benchmark remains contract-tested even when
     # another research profile is selected as current. Current routing must never
     # redefine its historical/scientific membership.

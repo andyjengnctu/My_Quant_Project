@@ -172,6 +172,51 @@ def _arm_has_seed_sensitive_model_dependency(arm: StrategyComparisonArm) -> bool
     return bool(arm.dl_enabled and str(arm.dl_id or "").strip())
 
 
+# A current Compare Suite is one scientific matrix shared by single-run and
+# robustness work types.  Builder capability is the only place where an arm may
+# fail closed for robustness; menu/runtime entrypoints must not maintain their own
+# profile/arm/data-source allowlists.
+_ROBUSTNESS_PARAMETER_BUILDER_TYPES = frozenset({
+    "canonical_optimizer_strategy_params",
+    "optimizer_validation_budget_refit_strategy_params",
+    "optimizer_fixed_multiseed_strategy_params",
+    "optimizer_raw_price_strategy_params",
+})
+
+
+def _validate_robustness_parameter_source_capabilities(
+    profile_settings: StrategyComparisonSettings,
+    arms: tuple[StrategyComparisonArm, ...],
+) -> None:
+    unsupported: list[str] = []
+    for arm in arms:
+        source = profile_settings.parameter_sources[str(arm.param_source)]
+        builder_type = (
+            ""
+            if source.builder is None
+            else str(source.builder.builder_type or "").strip()
+        )
+        canonical_schedule = bool(
+            str(source.canonical_family or "").strip()
+            and str(source.canonical_evaluation_mode or "").strip()
+        )
+        builder_supported = bool(
+            source.builder is not None
+            and bool(source.builder.enabled)
+            and builder_type in _ROBUSTNESS_PARAMETER_BUILDER_TYPES
+        )
+        if not canonical_schedule and not builder_supported:
+            unsupported.append(
+                f"{arm.arm_id}:{arm.param_source}:builder={builder_type or '-'}"
+            )
+    if unsupported:
+        raise ValueError(
+            "Current Compare Suite arm缺少same-seed robustness parameter producer；"
+            "current suite一旦啟用arm，Forward/Rolling/Robustness必須由同一source contract展開，"
+            "不得在runtime入口另設白名單: " + ", ".join(unsupported)
+        )
+
+
 def _derived_robustness_membership(
     profile_settings: StrategyComparisonSettings,
 ) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
@@ -197,6 +242,9 @@ def _derived_robustness_membership(
                 profile_settings.dl_sources[str(arm.dl_id)].experiment_profile
             )
         )
+    )
+    _validate_robustness_parameter_source_capabilities(
+        profile_settings, robustness_eligible
     )
     benchmark = tuple(arm.arm_id for arm in robustness_eligible)
     model_sensitive = tuple(
@@ -507,6 +555,20 @@ def get_strategy_rolling_test_modes() -> tuple[dict[str, object], ...]:
             f"single_run={sorted(str(value) for value in current_suite_ids)}, "
             f"robustness={sorted(str(value) for value in current_robustness_suite_ids)}"
         )
+
+    # Resolve the full runtime capability contract while building the visible menu.
+    # This makes an unsupported arm fail before the user can select a work type, and
+    # prevents a menu that advertises Robustness while runtime owns a second allowlist.
+    for item in rows:
+        resolved = get_strategy_multi_seed_robustness_settings(
+            str(item["robustness_id"])
+        )
+        if resolved.profile_id != str(item["profile_id"]):
+            raise ValueError(
+                "current robustness menu binding與resolved profile不一致: "
+                f"mode={item['mode_id']}, menu_profile={item['profile_id']}, "
+                f"resolved_profile={resolved.profile_id}"
+            )
     return tuple(rows)
 
 
