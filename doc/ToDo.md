@@ -3,13 +3,10 @@
     - 刪除不再需要的相容層的code，精簡程式也避免之後誤接
     - 重新編號目前的research arm編號系統
 
-- non-DL 
-    - ajd/raw整合交易策略 
-
-
 
 - imrove DL learnability
     - 0050 only DL
+    - ajd/raw整合交易策略 
     - 還是應該廣義成圖形辦識的多層結構，而不是人為克意去分層
     - input with 還原/非還原價
     - input with 漲/跌家數

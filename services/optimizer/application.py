@@ -2661,6 +2661,7 @@ def run_static_strategy_parameter_training(
     seed_count: int,
     seed_min_agree="auto",
     trade_train_window_months: int,
+    seed_ensemble_policy_override: dict | None = None,
     environ=None,
     raw_data_loader=None,
     latest_data_date_override: str | None = None,
@@ -2735,11 +2736,29 @@ def run_static_strategy_parameter_training(
     manifest_training_policy = get_strategy_parameter_training_policy_snapshot(
         evaluation_mode="trade"
     )
-    requested_seed_policy = _resolve_nonrolling_seed_ensemble_policy(
-        enabled=True,
-        seed_count=seeds,
-        min_agree=seed_min_agree,
-    )
+    if seed_ensemble_policy_override is None:
+        requested_seed_policy = _resolve_nonrolling_seed_ensemble_policy(
+            enabled=True,
+            seed_count=seeds,
+            min_agree=seed_min_agree,
+        )
+    else:
+        from core.seed_ensemble_policy import resolve_seed_ensemble_min_agree
+
+        requested_seed_policy = dict(seed_ensemble_policy_override)
+        if not bool(requested_seed_policy.get("enabled", False)):
+            raise ValueError("strategy parameter seed ensemble override必須enabled")
+        if int(requested_seed_policy.get("seed_count") or 0) != seeds:
+            raise ValueError("strategy parameter seed ensemble override的seed_count與呼叫參數不一致")
+        expected_min_agree = resolve_seed_ensemble_min_agree(seeds, seed_min_agree)
+        if int(requested_seed_policy.get("min_agree") or 0) != int(expected_min_agree):
+            raise ValueError("strategy parameter seed ensemble override的min_agree與呼叫參數不一致")
+        if not str(requested_seed_policy.get("seed_mode") or "").strip():
+            raise ValueError("strategy parameter seed ensemble override缺少seed_mode")
+        override_resolved_seeds = resolve_seed_ensemble_seeds(requested_seed_policy)
+        if len(override_resolved_seeds) != seeds or len(set(override_resolved_seeds)) != seeds:
+            raise ValueError("strategy parameter seed ensemble override缺少完整且唯一的resolved seeds")
+        requested_seed_policy["resolved_seeds"] = [int(value) for value in override_resolved_seeds]
     manifest_training_policy.update(
         {
             "runtime_domain": "trading",
@@ -2821,6 +2840,12 @@ def run_static_strategy_parameter_training(
         raise RuntimeError("Trading strategy params seed_count與目前設定不一致")
     if int(artifact_seed_policy.get("min_agree") or 0) != int(requested_seed_policy["min_agree"]):
         raise RuntimeError("Trading strategy params min_agree與目前設定不一致")
+    if str(artifact_seed_policy.get("seed_mode") or "") != str(requested_seed_policy.get("seed_mode") or ""):
+        raise RuntimeError("Trading strategy params seed_mode與目前設定不一致")
+    if "generator_seed" in requested_seed_policy:
+        artifact_generator_seed = artifact_seed_policy.get("generator_seed")
+        if artifact_generator_seed is None or int(artifact_generator_seed) != int(requested_seed_policy["generator_seed"]):
+            raise RuntimeError("Trading strategy params generator_seed與目前設定不一致")
     if int(artifact_policy.get("trade_train_window_months") or artifact_policy.get("train_window_months") or 0) != train_window_months:
         raise RuntimeError("Trading strategy params train_window_months與目前設定不一致")
     if str(artifact_policy.get("latest_data_date") or "") != str(latest_data_date):
@@ -2849,6 +2874,10 @@ def run_static_strategy_parameter_training(
         raise RuntimeError("Trading strategy parameter manifest seed_count與目前設定不一致")
     if str(manifest_seed_policy.get("seed_mode") or "") != str(requested_seed_policy.get("seed_mode") or ""):
         raise RuntimeError("Trading strategy parameter manifest seed_mode與目前設定不一致")
+    if "generator_seed" in requested_seed_policy:
+        manifest_generator_seed = manifest_seed_policy.get("generator_seed")
+        if manifest_generator_seed is None or int(manifest_generator_seed) != int(requested_seed_policy["generator_seed"]):
+            raise RuntimeError("Trading strategy parameter manifest generator_seed與目前設定不一致")
     resolved_seeds = [int(value) for value in list(manifest_training.get("resolved_optimizer_seeds") or [])]
     manifest_resolved_seeds = [int(value) for value in list(manifest_seed_policy.get("resolved_seeds") or [])]
     artifact_resolved_seeds = [int(value) for value in list(meta.get("seeds") or [])]
@@ -2858,6 +2887,9 @@ def run_static_strategy_parameter_training(
         raise RuntimeError("Trading strategy parameter manifest seed lineage不一致")
     if resolved_seeds != artifact_resolved_seeds:
         raise RuntimeError("Trading strategy params artifact與manifest的實際 optimizer seeds不一致")
+    requested_resolved_seeds = [int(value) for value in list(requested_seed_policy.get("resolved_seeds") or [])]
+    if requested_resolved_seeds and resolved_seeds != requested_resolved_seeds:
+        raise RuntimeError("Trading strategy parameter實際 optimizer seeds與指定seed bundle不一致")
     return {
         "status": "READY",
         "latest_data_date": str(latest_data_date),

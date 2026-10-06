@@ -63,9 +63,9 @@ def generate_random_seed_ensemble(seed_count: Any) -> list[int]:
 def generate_deterministic_seed_ensemble(seed_count: Any, *, generator_seed: Any) -> list[int]:
     """Return a reproducible unique seed bundle for controlled Research fitting.
 
-    Trading intentionally uses ``generate_random_seed_ensemble`` on each explicit
-    retrain.  Research controlled comparisons may instead pin a generator seed so
-    every arm/fold can replay the same stochastic realizations.
+    Controlled profiles can pin a generator seed for reproducible fitting in Research
+    or a promoted Trading contract.  Legacy callers that omit explicit resolved seeds
+    retain the historical random-per-training behavior.
     """
 
     n = coerce_seed_ensemble_size(seed_count, default=1)

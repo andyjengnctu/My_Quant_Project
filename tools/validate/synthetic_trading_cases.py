@@ -52,8 +52,9 @@ def _build_synthetic_trading_pit_param_payload(*, members, selector: str, meta=N
     Historical rolling-runtime behavior is covered by explicit rolling fixtures.
     """
     from core.active_param_ensemble import build_static_active_param_ensemble_payload
-    from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot
+    from core.trading_policy import get_trading_strategy_profile
 
+    profile = get_trading_strategy_profile()
     meta_payload = dict(meta or {})
     walk_forward = dict(meta_payload.get("walk_forward_policy") or {})
     information_date = str(
@@ -63,14 +64,17 @@ def _build_synthetic_trading_pit_param_payload(*, members, selector: str, meta=N
     ).strip()
     if not information_date:
         raise ValueError("Synthetic Trading Params requires meta.walk_forward_policy.latest_data_date")
+    walk_forward.setdefault("latest_data_date", information_date)
+    walk_forward.setdefault("trade_train_window_months", int(profile.optimizer_train_window_months))
+    meta_payload["walk_forward_policy"] = walk_forward
+    meta_payload.setdefault("selected_model_mode", "trade")
+    meta_payload.setdefault("trials_per_seed", int(profile.optimizer_trials_per_seed))
+    meta_payload.setdefault("requested_random_seed_ensemble", profile.optimizer_seed_ensemble_policy())
+    meta_payload.setdefault("seeds", [int(value) for value in profile.optimizer_resolved_seeds])
     normalized_members = list(members)
     return build_static_active_param_ensemble_payload(
         members=normalized_members,
-        random_seed_ensemble=build_seed_ensemble_policy_snapshot(
-            enabled=len(normalized_members) > 1,
-            seed_count=max(1, len(normalized_members)),
-            min_agree="auto",
-        ),
+        random_seed_ensemble=profile.optimizer_seed_ensemble_policy(),
         selector=str(selector),
         meta=meta_payload,
     )

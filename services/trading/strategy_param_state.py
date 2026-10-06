@@ -14,7 +14,7 @@ from services.trading.market_data_consumer import (
     load_trading_v2_consumer_state,
 )
 
-TRADING_STRATEGY_PARAM_BINDING_SCHEMA_VERSION = 7
+TRADING_STRATEGY_PARAM_BINDING_SCHEMA_VERSION = 8
 TRADING_STRATEGY_PARAM_BINDING_FILENAME = "trading_param_binding.json"
 TRADING_PARAM_USAGE_TRAINED_CURRENT = "trained_current"
 TRADING_PARAM_USAGE_REUSE_EXISTING = "reuse_existing"
@@ -38,6 +38,9 @@ def _validate_binding(payload: dict[str, Any]) -> None:
         raise ValueError("Trading param binding runtime domain 不合法")
     for field in (
         "strategy_id",
+        "strategy_param_profile_id",
+        "parameter_set_identity",
+        "registered_scientific_fingerprint_sha256",
         "param_selector",
         "selected_params_sha256",
         "market_data_consumer_state_sha256",
@@ -46,10 +49,19 @@ def _validate_binding(payload: dict[str, Any]) -> None:
         "param_training_data_date",
         "param_schedule_mode",
         "usage_mode",
-        "param_member_count",
-        "param_min_agree",
+        "optimizer_seed_mode",
     ):
         if not str(payload.get(field) or ""):
+            raise ValueError(f"Trading param binding 缺少 {field}")
+    for field in (
+        "param_member_count",
+        "param_min_agree",
+        "optimizer_trials_per_seed",
+        "optimizer_seed_count",
+        "optimizer_seed_generator_seed",
+        "optimizer_resolved_seeds",
+    ):
+        if field not in payload or payload.get(field) is None:
             raise ValueError(f"Trading param binding 缺少 {field}")
     if str(payload.get("usage_mode")) not in TRADING_PARAM_USAGE_MODES:
         raise ValueError("Trading param binding usage_mode 不合法")
@@ -60,6 +72,13 @@ def _validate_binding(payload: dict[str, Any]) -> None:
     min_agree = int(payload.get("param_min_agree") or 0)
     if member_count < 1 or min_agree < 1 or min_agree > member_count:
         raise ValueError("Trading param binding Params ensemble metadata 不合法")
+    optimizer_seed_count = int(payload.get("optimizer_seed_count") or 0)
+    optimizer_trials_per_seed = int(payload.get("optimizer_trials_per_seed") or 0)
+    optimizer_resolved_seeds = [int(value) for value in list(payload.get("optimizer_resolved_seeds") or [])]
+    if optimizer_seed_count < 2 or optimizer_trials_per_seed < 1:
+        raise ValueError("Trading param binding optimizer contract 不合法")
+    if len(optimizer_resolved_seeds) != optimizer_seed_count or len(set(optimizer_resolved_seeds)) != optimizer_seed_count:
+        raise ValueError("Trading param binding optimizer resolved seeds 不完整或重複")
     training_date = str(payload.get("param_training_data_date") or "")
     latest_data_date = str(payload.get("latest_data_date") or "")
     if training_date > latest_data_date:
@@ -87,14 +106,56 @@ def _validate_binding(payload: dict[str, Any]) -> None:
 def _selected_param_metadata(
     selected_path: Path,
     *,
-    expected_selector: str,
+    expected_profile,
     information_date: str,
 ) -> dict[str, Any]:
     selected_payload = load_json_strict(selected_path)
     if not isinstance(selected_payload, dict):
         raise TypeError("Trading selected strategy params payload 必須是 object")
-    if str(selected_payload.get("selector") or "").strip() != str(expected_selector):
+    if str(selected_payload.get("selector") or "").strip() != str(expected_profile.param_selector):
         raise RuntimeError("Trading selected strategy params selector 與目前 Trading 設定不一致")
+
+    meta = dict(selected_payload.get("meta") or {})
+    requested_seed_policy = dict(meta.get("requested_random_seed_ensemble") or {})
+    walk_forward_policy = dict(meta.get("walk_forward_policy") or {})
+    artifact_resolved_seeds = [int(value) for value in list(meta.get("seeds") or [])]
+    requested_resolved_seeds = [
+        int(value) for value in list(requested_seed_policy.get("resolved_seeds") or [])
+    ]
+    expected_resolved_seeds = [int(value) for value in expected_profile.optimizer_resolved_seeds]
+
+    contract_errors: list[str] = []
+    if str(meta.get("selected_model_mode") or "") != "trade":
+        contract_errors.append("selected_model_mode")
+    if int(meta.get("trials_per_seed") or 0) != int(expected_profile.optimizer_trials_per_seed):
+        contract_errors.append("trials_per_seed")
+    if int(requested_seed_policy.get("seed_count") or 0) != int(expected_profile.optimizer_seed_count):
+        contract_errors.append("seed_count")
+    if int(requested_seed_policy.get("min_agree") or 0) != int(expected_profile.optimizer_seed_min_agree):
+        contract_errors.append("min_agree")
+    if str(requested_seed_policy.get("seed_mode") or "") != str(expected_profile.optimizer_seed_mode):
+        contract_errors.append("seed_mode")
+    requested_generator_seed = requested_seed_policy.get("generator_seed")
+    if requested_generator_seed is None or int(requested_generator_seed) != int(expected_profile.optimizer_seed_generator_seed):
+        contract_errors.append("generator_seed")
+    if requested_resolved_seeds != expected_resolved_seeds:
+        contract_errors.append("requested_resolved_seeds")
+    if artifact_resolved_seeds != expected_resolved_seeds:
+        contract_errors.append("artifact_resolved_seeds")
+    artifact_train_window = int(
+        walk_forward_policy.get("trade_train_window_months")
+        or walk_forward_policy.get("train_window_months")
+        or 0
+    )
+    if artifact_train_window != int(expected_profile.optimizer_train_window_months):
+        contract_errors.append("train_window_months")
+    if contract_errors:
+        raise RuntimeError(
+            "Trading selected strategy params不符合目前promoted Strategy Parameter profile "
+            f"{expected_profile.strategy_param_profile_id}/{expected_profile.parameter_set_identity} "
+            f"({', '.join(contract_errors)})；請重新訓練 Params。"
+        )
+
     param_runtime = load_trading_strategy_param_runtime(
         selected_path, information_date=str(information_date)
     )
@@ -118,6 +179,11 @@ def _selected_param_metadata(
         "valid_through_date": valid_through_date,
         "member_count": int(param_runtime["member_count"]),
         "min_agree": int(param_runtime["min_agree"]),
+        "optimizer_trials_per_seed": int(expected_profile.optimizer_trials_per_seed),
+        "optimizer_seed_count": int(expected_profile.optimizer_seed_count),
+        "optimizer_seed_mode": str(expected_profile.optimizer_seed_mode),
+        "optimizer_seed_generator_seed": int(expected_profile.optimizer_seed_generator_seed),
+        "optimizer_resolved_seeds": expected_resolved_seeds,
     }
 
 
@@ -143,7 +209,7 @@ def publish_trading_strategy_param_binding(
     current_data_date = str(consumer_state["market_date"])
     param_metadata = _selected_param_metadata(
         selected_path,
-        expected_selector=profile.param_selector,
+        expected_profile=profile,
         information_date=current_data_date,
     )
     param_training_data_date = str(param_metadata["training_date"])
@@ -159,6 +225,9 @@ def publish_trading_strategy_param_binding(
         "schema_version": TRADING_STRATEGY_PARAM_BINDING_SCHEMA_VERSION,
         "runtime_domain": RUNTIME_DOMAIN_TRADING,
         "strategy_id": profile.strategy_id,
+        "strategy_param_profile_id": profile.strategy_param_profile_id,
+        "parameter_set_identity": profile.parameter_set_identity,
+        "registered_scientific_fingerprint_sha256": profile.registered_scientific_fingerprint_sha256,
         "param_selector": profile.param_selector,
         "selected_params_path": project_relative_display_path(selected_path, project_root=root),
         "selected_params_sha256": compute_file_sha256(selected_path),
@@ -173,6 +242,11 @@ def publish_trading_strategy_param_binding(
         "usage_mode": normalized_usage_mode,
         "param_member_count": int(param_metadata["member_count"]),
         "param_min_agree": int(param_metadata["min_agree"]),
+        "optimizer_trials_per_seed": int(param_metadata["optimizer_trials_per_seed"]),
+        "optimizer_seed_count": int(param_metadata["optimizer_seed_count"]),
+        "optimizer_seed_mode": str(param_metadata["optimizer_seed_mode"]),
+        "optimizer_seed_generator_seed": int(param_metadata["optimizer_seed_generator_seed"]),
+        "optimizer_resolved_seeds": list(param_metadata["optimizer_resolved_seeds"]),
     }
     payload["binding_fingerprint"] = canonical_json_sha256(payload)
     path = resolve_trading_strategy_param_binding_path(root)
@@ -202,6 +276,12 @@ def load_trading_strategy_param_binding(
     selected_path = Path(resolve_trading_selected_strategy_param_path(root))
     if str(payload.get("strategy_id") or "") != profile.strategy_id:
         raise RuntimeError("Trading param binding strategy 已過期")
+    if str(payload.get("strategy_param_profile_id") or "") != profile.strategy_param_profile_id:
+        raise RuntimeError("Trading param binding Strategy Parameter profile 已過期；請重新訓練 Params")
+    if str(payload.get("parameter_set_identity") or "") != profile.parameter_set_identity:
+        raise RuntimeError("Trading param binding Parameter Set identity 已過期；請重新訓練 Params")
+    if str(payload.get("registered_scientific_fingerprint_sha256") or "") != profile.registered_scientific_fingerprint_sha256:
+        raise RuntimeError("Trading param binding registered scientific fingerprint 已過期；請重新訓練 Params")
     if str(payload.get("param_selector") or "") != profile.param_selector:
         raise RuntimeError("Trading param binding selector 已過期")
     if not selected_path.is_file() or str(payload.get("selected_params_sha256") or "") != compute_file_sha256(selected_path):
@@ -217,7 +297,7 @@ def load_trading_strategy_param_binding(
         raise RuntimeError("Trading params binding data date 已過期")
     param_metadata = _selected_param_metadata(
         selected_path,
-        expected_selector=profile.param_selector,
+        expected_profile=profile,
         information_date=str(consumer_state.get("market_date") or ""),
     )
     if str(payload.get("param_training_data_date") or "") != str(param_metadata["training_date"]):
@@ -235,6 +315,13 @@ def load_trading_strategy_param_binding(
         raise RuntimeError("Trading Params artifact member_count 已與 param binding 不一致")
     if int(payload.get("param_min_agree") or 0) != int(param_metadata["min_agree"]):
         raise RuntimeError("Trading Params artifact min_agree 已與 param binding 不一致")
+    for field in ("optimizer_trials_per_seed", "optimizer_seed_count", "optimizer_seed_generator_seed"):
+        if int(payload.get(field) or 0) != int(param_metadata[field]):
+            raise RuntimeError(f"Trading Params artifact {field} 已與 param binding 不一致")
+    if str(payload.get("optimizer_seed_mode") or "") != str(param_metadata["optimizer_seed_mode"]):
+        raise RuntimeError("Trading Params artifact optimizer_seed_mode 已與 param binding 不一致")
+    if [int(value) for value in list(payload.get("optimizer_resolved_seeds") or [])] != list(param_metadata["optimizer_resolved_seeds"]):
+        raise RuntimeError("Trading Params artifact optimizer_resolved_seeds 已與 param binding 不一致")
     return payload
 
 

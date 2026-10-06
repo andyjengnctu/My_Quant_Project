@@ -12541,3 +12541,12 @@ Decision：`ENGINEERING_ONLY / GLOBAL_FOLD_SEED_WORK_QUEUE / FIXED_8_PROCESSES /
 
 Decision：`ENGINEERING_ONLY / GLOBAL_FOLD_SEED_WORK_QUEUE / FIXED_12_PROCESSES / MAX_3_ACTIVE_SEEDS_PER_FOLD / SCHEDULER_SEMANTICS_UNCHANGED / NO_AUTOSCALING / NO_SCIENTIFIC_IDENTITY_CHANGE`.
 
+## 2026-10-06 — C85 / PARAM-P6 promoted as Trading strategy-parameter policy
+
+- **User decision**：使用者明確指定「將C85作為交易的策略」。此決策升格既有registered `SR-C85 / PARAM-P6` fitting／selector contract為current Trading strategy-parameter policy reference，不建立新的C-arm/PARAM identity，也不改寫C85既有Research scientific fingerprint。
+- **Current Trading producer contract**：`config/trading.py::TRADING_STRATEGY_PARAM_PROFILE_ID=production_multiseed_current`；由`core/trading_policy.py`解析registered profile/fitting protocol，得到Full／`base-finalists-agree`、120M、validation off、fixed 4-seed bundle × 300 trials/seed、generator seed=42及P6 exact resolved seeds。Trading training仍委派`services/optimizer/application.py::run_static_strategy_parameter_training()` canonical producer，透過explicit seed-policy override消費同一selector/search semantics。
+- **Physical isolation**：promotion只共享scientific policy reference，不共享physical truth。Research C85/P6 artifacts仍留在`models/research/.../param_p6_production_multiseed/`且歷史results/fingerprint保持immutable；Trading以Trading V2 latest-finalized data，在`models/trading`／`outputs/trading`／Trading strategy-param root重新產生static Params。Research cutoff與Trading freshness互不回寫。
+- **Binding / migration guard**：Trading Params binding schema升級並記錄active strategy-param profile ID、PARAM identity、registered scientific fingerprint、trials/seed、seed count/mode/generator、exact resolved seed bundle與train window。升格前random 8×1000 Trading Params即使family/selector filename相同，也因producer contract identity不符而拒絕current REUSE，要求重新訓練一次；後續同C85 contract才可沿用。
+- **Historical interpretation**：C92/P13的「Trading-aligned 8×1000」仍是Round-10對**升格前**Trading contract的Research evidence，不回寫成FAIL或刪除；2026-10-05移出current Compare的決策維持。
+
+Decision：`PROMOTION / C85_P6_IS_CURRENT_TRADING_POLICY_REFERENCE / CANONICAL_OPTIMIZER_SHARED / RESEARCH_TRADING_PHYSICAL_TRUTH_ISOLATED / PRE_PROMOTION_8X1000_PARAMS_MUST_RETRAIN / NO_C85_SCIENTIFIC_FINGERPRINT_CHANGE`.

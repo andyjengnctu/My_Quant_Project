@@ -3376,17 +3376,34 @@ def validate_runtime_domain_isolation_contract_case(_base_params):
     add_check(results, "runtime_domain", case_id, "trading_train_window_is_valid", True, int(profile.optimizer_train_window_months) >= 1)
     add_check(results, "runtime_domain", case_id, "trading_seed_mode_is_supported", True, str(profile.optimizer_seed_mode) in trading_policy.SUPPORTED_TRADING_OPTIMIZER_SEED_MODES)
 
-    with patch.object(trading_policy, "TRADING_PARAM_SELECTOR", "base_finalist_best"), \
-         patch.object(trading_policy, "TRADING_OPTIMIZER_TRIALS_PER_SEED", 7), \
-         patch.object(trading_policy, "TRADING_OPTIMIZER_SEED_COUNT", 3), \
-         patch.object(trading_policy, "TRADING_OPTIMIZER_SEED_MIN_AGREE", "auto"), \
-         patch.object(trading_policy, "TRADING_OPTIMIZER_TRAIN_WINDOW_MONTHS", 24):
+    from core.strategy_param_policy import (
+        get_strategy_param_fitting_seed_protocol,
+        get_strategy_param_training_profile,
+    )
+    promoted_param_profile = get_strategy_param_training_profile(
+        trading_policy.TRADING_STRATEGY_PARAM_PROFILE_ID
+    )
+    promoted_fitting = get_strategy_param_fitting_seed_protocol(
+        promoted_param_profile.fitting_seed_protocol
+    )
+    add_check(results, "runtime_domain", case_id, "trading_profile_is_promoted_strategy_param_profile", promoted_param_profile.profile_id, profile.strategy_param_profile_id)
+    add_check(results, "runtime_domain", case_id, "trading_profile_parameter_identity_matches_promoted_profile", promoted_param_profile.parameter_set_identity, profile.parameter_set_identity)
+    add_check(results, "runtime_domain", case_id, "trading_profile_trials_follow_promoted_profile", promoted_fitting.trials_per_seed, profile.optimizer_trials_per_seed)
+    add_check(results, "runtime_domain", case_id, "trading_profile_seed_count_follows_promoted_profile", promoted_fitting.seed_count, profile.optimizer_seed_count)
+    add_check(results, "runtime_domain", case_id, "trading_profile_resolved_seeds_follow_promoted_profile", list(promoted_fitting.resolved_seeds), list(profile.optimizer_resolved_seeds))
+
+    alternate_profile_id = "trading_aligned_8x1000_current"
+    alternate_registered_profile = get_strategy_param_training_profile(alternate_profile_id)
+    alternate_fitting = get_strategy_param_fitting_seed_protocol(
+        alternate_registered_profile.fitting_seed_protocol
+    )
+    with patch.object(trading_policy, "TRADING_STRATEGY_PARAM_PROFILE_ID", alternate_profile_id):
         patched_profile = trading_policy.get_trading_strategy_profile()
-    add_check(results, "runtime_domain", case_id, "trading_profile_follows_selector_config_override", "base_finalist_best", patched_profile.param_selector)
-    add_check(results, "runtime_domain", case_id, "trading_profile_follows_trials_config_override", 7, patched_profile.optimizer_trials_per_seed)
-    add_check(results, "runtime_domain", case_id, "trading_profile_follows_seed_count_config_override", 3, patched_profile.optimizer_seed_count)
-    add_check(results, "runtime_domain", case_id, "trading_profile_resolves_seed_min_agree_from_config", 2, patched_profile.optimizer_seed_min_agree)
-    add_check(results, "runtime_domain", case_id, "trading_profile_follows_train_window_config_override", 24, patched_profile.optimizer_train_window_months)
+    add_check(results, "runtime_domain", case_id, "trading_profile_follows_registered_profile_pointer", alternate_profile_id, patched_profile.strategy_param_profile_id)
+    add_check(results, "runtime_domain", case_id, "trading_profile_follows_registered_profile_trials", alternate_fitting.trials_per_seed, patched_profile.optimizer_trials_per_seed)
+    add_check(results, "runtime_domain", case_id, "trading_profile_follows_registered_profile_seed_count", alternate_fitting.seed_count, patched_profile.optimizer_seed_count)
+    add_check(results, "runtime_domain", case_id, "trading_profile_follows_registered_profile_seed_bundle", list(alternate_fitting.resolved_seeds), list(patched_profile.optimizer_resolved_seeds))
+    add_check(results, "runtime_domain", case_id, "trading_profile_uses_canonical_train_window", profile.optimizer_train_window_months, patched_profile.optimizer_train_window_months)
 
     from core.active_param_ensemble import build_static_active_param_ensemble_payload
     from core.params_io import params_to_json_dict
@@ -3489,7 +3506,7 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
     results, summary = _new_synthetic_case(case_id)
 
     from core.file_integrity import load_json_strict
-    from core.seed_ensemble_policy import generate_random_seed_ensemble
+    from core.seed_ensemble_policy import resolve_seed_ensemble_seeds
     from core.strategy_param_artifacts import (
         POLICY_FILENAME_BY_NAME,
         resolve_strategy_param_artifact_path,
@@ -3519,26 +3536,25 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
     add_check(results, "trading_param", case_id, "training_seed_count_is_valid", True, int(plan["optimizer_seed_count"]) >= 2)
     add_check(results, "trading_param", case_id, "training_trials_per_seed_is_valid", True, int(plan["optimizer_trials_per_seed"]) >= 1)
     add_check(results, "trading_param", case_id, "training_window_is_valid", True, int(plan["optimizer_train_window_months"]) >= 1)
-    add_check(results, "trading_param", case_id, "training_seed_mode_is_random_each_run", "random_n_each_training_run", str(plan["optimizer_seed_mode"]))
+    add_check(results, "trading_param", case_id, "training_seed_mode_matches_promoted_profile", str(profile.optimizer_seed_mode), str(plan["optimizer_seed_mode"]))
+    add_check(results, "trading_param", case_id, "training_plan_records_promoted_profile", profile.strategy_param_profile_id, str(plan["strategy_param_profile_id"]))
+    add_check(results, "trading_param", case_id, "training_plan_records_parameter_set_identity", profile.parameter_set_identity, str(plan["parameter_set_identity"]))
+    add_check(results, "trading_param", case_id, "training_plan_uses_exact_promoted_seed_bundle", list(profile.optimizer_resolved_seeds), list(plan["optimizer_resolved_seeds"]))
     add_check(results, "trading_param", case_id, "selected_policy_is_registry_driven", True, str(plan["param_selector"]) in POLICY_FILENAME_BY_NAME)
     add_check(results, "trading_param", case_id, "selected_artifact_is_under_trading_strategy_root", True, trading_selected.is_relative_to(trading_param_root))
     add_check(results, "trading_param", case_id, "selected_artifact_is_not_research_truth", True, trading_selected != research_selected.resolve())
     add_check(results, "trading_param", case_id, "optimizer_output_is_under_trading_outputs", True, Path(str(plan["output_dir"])).resolve().is_relative_to((root / "outputs" / "trading").resolve()))
     add_check(results, "trading_param", case_id, "optimizer_models_is_under_trading_models", True, Path(str(plan["models_root"])).resolve().is_relative_to((root / "models" / "trading").resolve()))
 
-    alternate_policies = [name for name in POLICY_FILENAME_BY_NAME if name != profile.param_selector]
-    alternate_policy = alternate_policies[0] if alternate_policies else profile.param_selector
-    with patch.object(trading_policy, "TRADING_PARAM_SELECTOR", alternate_policy):
+    # P6 and historical P13 intentionally share the same family/selector path.
+    # Therefore producer identity must be carried by the binding contract rather
+    # than inferred from the selected Params filename alone.
+    with patch.object(trading_policy, "TRADING_STRATEGY_PARAM_PROFILE_ID", "trading_aligned_8x1000_current"):
         alternate_path = Path(trading_policy.resolve_trading_selected_strategy_param_path(root)).resolve()
         alternate_profile = trading_policy.get_trading_strategy_profile()
-    expected_alternate_path = resolve_strategy_param_artifact_path(
-        root,
-        family=alternate_profile.param_family,
-        evaluation_mode="trade",
-        policy=alternate_policy,
-        strategy_params_root=trading_param_root,
-    ).resolve()
-    add_check(results, "trading_param", case_id, "selected_policy_path_follows_config_override", str(expected_alternate_path), str(alternate_path))
+    add_check(results, "trading_param", case_id, "same_selector_profiles_can_share_selected_path", str(trading_selected), str(alternate_path))
+    add_check(results, "trading_param", case_id, "profile_identity_distinguishes_same_selector_contracts", True, alternate_profile.parameter_set_identity != profile.parameter_set_identity)
+    add_check(results, "trading_param", case_id, "profile_training_budget_distinguishes_same_selector_contracts", True, (alternate_profile.optimizer_seed_count, alternate_profile.optimizer_trials_per_seed) != (profile.optimizer_seed_count, profile.optimizer_trials_per_seed))
 
     # Workbench delegates only execution roots/data identity to the canonical Optimizer;
     # the Trading profile owns production seed/trial semantics.
@@ -3552,6 +3568,7 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
 
     def _fake_canonical_runner(**kwargs):
         captured_service_kwargs.update(kwargs)
+        seed_policy = dict(kwargs["seed_ensemble_policy_override"])
         return {
             "status": "READY",
             "latest_data_date": "2099-01-01",
@@ -3561,10 +3578,10 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
             "manifest_path": str(fake_manifest),
             "trials_per_seed": int(kwargs["trials_per_seed"]),
             "seed_count": int(kwargs["seed_count"]),
-            "seed_mode": "random_n_each_training_run",
-            "resolved_optimizer_seeds": list(range(101, 101 + int(kwargs["seed_count"]))),
+            "seed_mode": str(seed_policy["seed_mode"]),
+            "resolved_optimizer_seeds": list(seed_policy["resolved_seeds"]),
             "trade_train_window_months": int(kwargs["trade_train_window_months"]),
-            "random_seed_ensemble": {},
+            "random_seed_ensemble": seed_policy,
         }
 
     synthetic_market = {"market_date": "2099-01-01", "source_view_fingerprint": "a" * 64}
@@ -3578,8 +3595,8 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
         "param_schedule_mode": "static",
         "param_effective_date": None,
         "param_valid_through_date": None,
-        "param_member_count": 3,
-        "param_min_agree": 2,
+        "param_member_count": int(plan["optimizer_seed_count"]),
+        "param_min_agree": int(plan["optimizer_seed_min_agree"]),
         "market_data_consumer_state_sha256": "d" * 64,
         "market_data_source_view_fingerprint": "a" * 64,
     }
@@ -3601,6 +3618,7 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
     add_check(results, "trading_param", case_id, "trading_service_uses_configured_seed_count", int(plan["optimizer_seed_count"]), int(captured_service_kwargs.get("seed_count", 0)))
     add_check(results, "trading_param", case_id, "trading_service_uses_configured_seed_min_agree", int(plan["optimizer_seed_min_agree"]), int(captured_service_kwargs.get("seed_min_agree", 0)))
     add_check(results, "trading_param", case_id, "trading_service_uses_configured_train_window", int(plan["optimizer_train_window_months"]), int(captured_service_kwargs.get("trade_train_window_months", 0)))
+    add_check(results, "trading_param", case_id, "trading_service_injects_exact_promoted_seed_policy", dict(plan["optimizer_seed_ensemble_policy"]), dict(captured_service_kwargs.get("seed_ensemble_policy_override") or {}))
     add_check(results, "trading_param", case_id, "trading_service_pins_latest_finalized_date", str(synthetic_market["market_date"]), str(captured_service_kwargs.get("latest_data_date_override")))
     add_check(results, "trading_param", case_id, "trading_service_returns_project_relative_paths", False, Path(str(service_result["selected_params_path"])).is_absolute())
     add_check(results, "trading_param", case_id, "trading_service_returns_static_training_date", "2099-01-01", str(service_result["param_training_data_date"]))
@@ -3609,23 +3627,23 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
     add_check(results, "trading_param", case_id, "trading_v2_loader_is_process_importable", "services.trading.market_data_consumer:load_trading_v2_optimizer_raw_data", loader_path)
     add_check(results, "trading_param", case_id, "process_loader_roundtrip_preserves_exact_trading_loader", True, optimizer_application._load_callable_from_import_path(loader_path) is trading_training.load_trading_v2_optimizer_raw_data)
 
-    # Random values are generated per invocation, while the actual resolved bundle is
-    # persisted into both the artifact and its manifest for audit/reproduction.
-    with patch("core.seed_ensemble_policy.secrets.randbelow", side_effect=[10, 20, 30, 40, 50, 60]):
-        seed_bundle_a = generate_random_seed_ensemble(3)
-        seed_bundle_b = generate_random_seed_ensemble(3)
-    add_check(results, "trading_param", case_id, "random_seed_bundle_is_fresh_per_training_invocation", True, seed_bundle_a != seed_bundle_b)
-    add_check(results, "trading_param", case_id, "random_seed_bundle_preserves_requested_count", 3, len(seed_bundle_a))
+    # Promoted C85/P6 fitting is deterministic: every explicit Trading retrain uses
+    # the registered four-seed bundle, while the artifact/manifest persist that exact
+    # lineage for audit and stale-Params rejection.
+    promoted_seed_policy = dict(plan["optimizer_seed_ensemble_policy"])
+    seed_bundle_a = resolve_seed_ensemble_seeds(promoted_seed_policy)
+    seed_bundle_b = resolve_seed_ensemble_seeds(promoted_seed_policy)
+    add_check(results, "trading_param", case_id, "promoted_seed_bundle_is_stable_per_training_invocation", seed_bundle_a, seed_bundle_b)
+    add_check(results, "trading_param", case_id, "promoted_seed_bundle_matches_profile", list(plan["optimizer_resolved_seeds"]), seed_bundle_a)
     nonrolling_source = inspect.getsource(optimizer_application._run_nonrolling_random_seed_ensemble_training)
-    seed_resolver_source = inspect.getsource(__import__("core.seed_ensemble_policy", fromlist=["resolve_seed_ensemble_seeds"]).resolve_seed_ensemble_seeds)
     add_check(
         results,
         "trading_param",
         case_id,
-        "canonical_optimizer_generates_random_seed_bundle_at_run_time",
+        "canonical_optimizer_resolves_explicit_seed_bundle",
         True,
         "resolve_seed_ensemble_seeds" in nonrolling_source
-        and "generate_random_seed_ensemble" in seed_resolver_source,
+        and "seed_ensemble_policy_override" in nonrolling_source,
     )
     add_check(results, "trading_param", case_id, "canonical_optimizer_persists_resolved_seeds_in_manifest", True, "resolved_optimizer_seeds" in nonrolling_source and "resolved_seeds" in nonrolling_source)
 
@@ -3653,7 +3671,7 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
         )
         fake_latest = "2099-01-02"
         captured_optimizer_kwargs = {}
-        resolved_seeds = list(range(501, 501 + int(plan["optimizer_seed_count"])))
+        resolved_seeds = [int(value) for value in plan["optimizer_resolved_seeds"]]
 
         def _fake_optimizer_run(**kwargs):
             captured_optimizer_kwargs.update(kwargs)
@@ -3676,7 +3694,7 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
             manifest_seed_policy.update({
                 "enabled": True,
                 "seed_count": len(resolved_seeds),
-                "seed_mode": "random_n_each_training_run",
+                "seed_mode": str(requested_policy["seed_mode"]),
                 "resolved_seeds": list(resolved_seeds),
             })
             manifest_policy["random_seed_ensemble"] = manifest_seed_policy
@@ -3707,6 +3725,7 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
                 seed_count=int(plan["optimizer_seed_count"]),
                 seed_min_agree=int(plan["optimizer_seed_min_agree"]),
                 trade_train_window_months=int(plan["optimizer_train_window_months"]),
+                seed_ensemble_policy_override=dict(plan["optimizer_seed_ensemble_policy"]),
                 environ={},
                 latest_data_date_override=fake_latest,
             )
@@ -3743,6 +3762,7 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
                     seed_count=int(plan["optimizer_seed_count"]),
                     seed_min_agree=int(plan["optimizer_seed_min_agree"]),
                     trade_train_window_months=int(plan["optimizer_train_window_months"]),
+                    seed_ensemble_policy_override=dict(plan["optimizer_seed_ensemble_policy"]),
                     environ={},
                     latest_data_date_override=fake_latest,
                 )
@@ -3764,16 +3784,24 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
         static_selected = Path(trading_policy.resolve_trading_selected_strategy_param_path(temp_root))
         static_selected.parent.mkdir(parents=True, exist_ok=True)
         static_params = params_to_json_dict(_base_params)
+        promoted_seeds = [int(value) for value in plan["optimizer_resolved_seeds"]]
         static_payload = build_static_active_param_ensemble_payload(
             members=[
-                {"member_index": idx, "seed": 700 + idx, "params": static_params}
-                for idx in (1, 2, 3)
+                {"member_index": idx, "seed": seed, "params": static_params}
+                for idx, seed in enumerate(promoted_seeds, start=1)
             ],
-            random_seed_ensemble=build_seed_ensemble_policy_snapshot(
-                enabled=True, seed_count=3, min_agree=2
-            ),
+            random_seed_ensemble=dict(plan["optimizer_seed_ensemble_policy"]),
             selector=str(plan["param_selector"]),
-            meta={"walk_forward_policy": {"latest_data_date": "2099-01-03"}},
+            meta={
+                "selected_model_mode": "trade",
+                "trials_per_seed": int(plan["optimizer_trials_per_seed"]),
+                "requested_random_seed_ensemble": dict(plan["optimizer_seed_ensemble_policy"]),
+                "seeds": promoted_seeds,
+                "walk_forward_policy": {
+                    "latest_data_date": "2099-01-03",
+                    "trade_train_window_months": int(plan["optimizer_train_window_months"]),
+                },
+            },
         )
         static_selected.write_text(json.dumps(static_payload, ensure_ascii=False), encoding="utf-8")
         static_consumer = {
@@ -3793,7 +3821,29 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
         add_check(results, "trading_param", case_id, "static_binding_records_static_schedule_mode", "static", str(static_binding["param_schedule_mode"]))
         add_check(results, "trading_param", case_id, "static_binding_has_no_effective_date", None, static_binding.get("param_effective_date"))
         add_check(results, "trading_param", case_id, "static_binding_has_no_valid_through_date", None, static_binding.get("param_valid_through_date"))
+        add_check(results, "trading_param", case_id, "static_binding_records_promoted_profile", profile.strategy_param_profile_id, str(static_binding["strategy_param_profile_id"]))
+        add_check(results, "trading_param", case_id, "static_binding_records_parameter_set_identity", profile.parameter_set_identity, str(static_binding["parameter_set_identity"]))
+        add_check(results, "trading_param", case_id, "static_binding_records_exact_optimizer_seed_bundle", promoted_seeds, list(static_binding["optimizer_resolved_seeds"]))
         add_check(results, "trading_param", case_id, "static_binding_roundtrip_remains_current", str(static_binding["binding_fingerprint"]), str(loaded_static_binding["binding_fingerprint"]))
+
+        stale_payload = dict(static_payload)
+        stale_meta = dict(stale_payload["meta"])
+        stale_meta["trials_per_seed"] = int(plan["optimizer_trials_per_seed"]) + 1
+        stale_payload["meta"] = stale_meta
+        static_selected.write_text(json.dumps(stale_payload, ensure_ascii=False), encoding="utf-8")
+        with patch.object(trading_param_state, "load_trading_v2_consumer_state", return_value=static_consumer), \
+             patch.object(trading_param_state, "get_trading_v2_consumer_state_sha256", return_value="f" * 64):
+            try:
+                trading_param_state.publish_trading_strategy_param_binding(
+                    temp_root,
+                    usage_mode=trading_param_state.TRADING_PARAM_USAGE_REUSE_EXISTING,
+                    verify_consumer_view=False,
+                )
+            except RuntimeError as exc:
+                stale_rejected = "請重新訓練 Params" in str(exc)
+            else:
+                stale_rejected = False
+        add_check(results, "trading_param", case_id, "stale_pre_c85_params_cannot_be_rebound", True, stale_rejected)
 
     summary["check_scope"] = "trading production multi-seed strategy-parameter producer"
     summary["selector"] = str(plan["param_selector"])

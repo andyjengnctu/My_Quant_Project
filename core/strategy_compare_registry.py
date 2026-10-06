@@ -608,7 +608,7 @@ STRATEGY_COMPARE_PROFILES = {
         "description": (
             "Full/formal/base-finalists-agree固定的fitting-budget controlled comparison："
             "C85=4 seeds×300、C86=8 seeds×300、C87=4 seeds×1000，另保留C62單一Seed42×300與Full/Min references。"
-            "三個multi-seed arms均使用固定Research bundles以利重現，不等同Trading每次重訓的random 8×1000 exact replay。"
+            "三個multi-seed arms均使用固定Research bundles以利重現；其中C85/P6已於2026-10-06升格為目前Trading producer contract。"
         ),
         "display_alignment_group": "non_dl_production_multiseed",
         "suite_id": "non_dl_production_multiseed_current",
@@ -724,8 +724,8 @@ STRATEGY_COMPARE_PROFILES = {
         "label": "Non-DL Trading-Aligned 8x1000 | OOS Test",
         "description": (
             "Round-10 non-validation comparison：保留C58/C61/C85 references，新增C92 Full/formal/"
-            "base-finalists-agree 8 fixed Research seeds × 1000 trials/seed。fitting budget與目前Trading"
-            "production一致；Research固定seed bundle只為可重現，不宣稱逐次重現Trading random seeds。"
+            "base-finalists-agree 8 fixed Research seeds × 1000 trials/seed。此處的Trading-aligned係指"
+            "2026-10-06升格C85/P6之前的Trading 8×1000 contract；保留作歷史Research comparison。"
         ),
         "display_alignment_group": "non_dl_trading_aligned_8x1000",
         "suite_id": "non_dl_trading_aligned_8x1000_current",
@@ -751,8 +751,8 @@ STRATEGY_COMPARE_PROFILES = {
         "label": "Non-DL Trading-Aligned 8x1000 | Rolling Test",
         "description": (
             "Round-10 primary PIT comparison：C92使用Full/formal/base-finalists-agree、120M selection、"
-            "8 fixed Research seeds × 1000 trials/seed、validation off；與目前Trading production的"
-            "fitting budget/selector一致，僅固定Research seed bundle以維持可重現。C89/C91/C62退出current。"
+            "8 fixed Research seeds × 1000 trials/seed、validation off；此處對齊的是2026-10-06之前的"
+            "Trading 8×1000 production contract，現保留為歷史comparison。C89/C91/C62退出current。"
         ),
         "display_alignment_group": "non_dl_trading_aligned_8x1000",
         "suite_id": "non_dl_trading_aligned_8x1000_current",
@@ -1701,7 +1701,8 @@ STRATEGY_COMPARE_ARMS = {
         "description": (
             "PARAM-P6 Round-3 non-DL production-style treatment；Full/formal/base-finalists-agree、"
             "120M selection + 12M annual PIT固定；使用4個固定Research fitting seeds × 300 trials/seed。"
-            "它重現Trading multi-seed fitting/selection語意，但不宣稱是8 random ×1000 production exact replay。"
+            "2026-10-06起此PARAM-P6 fitting/selection契約已升格為目前Trading producer contract；"
+            "Research與Trading仍維持資料與artifact實體隔離。"
         ),
         "param_source": "full_production_multiseed_rolling_experiment",
         "param_policy": "base-finalists-agree",
@@ -1744,8 +1745,8 @@ STRATEGY_COMPARE_ARMS = {
         "description": (
             "PARAM-P13 Round-10 Trading-aligned Research treatment；Full/formal/base-finalists-agree、"
             "120M selection + 12M annual PIT、validation off、8個固定Research fitting seeds × 1000 trials/seed。"
-            "與Trading production的seed count/trials/selector/window一致；Research seeds固定以利重現，"
-            "不宣稱逐次重現Trading random seed bundle。"
+            "其Trading-aligned名稱反映升格前的8×1000 production contract；自2026-10-06起目前Trading"
+            "改採C85/P6 4×300固定bundle，本arm保留為歷史Research evidence。"
         ),
         "param_source": "full_trading_aligned_8x1000_rolling_experiment",
         "param_policy": "base-finalists-agree",

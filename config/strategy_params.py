@@ -103,9 +103,10 @@ STRATEGY_PARAM_VALIDATION_PROTOCOLS: dict[str, dict] = {
 
 
 # Strategy fitting stochasticity is a scientific dimension independent from
-# Robustness replication.  Trading may intentionally draw a fresh random bundle
-# on each production retrain; controlled Research arms pin the bundle so arm-to-
-# arm comparisons are reproducible.  The bundle itself is derived by the policy
+# Robustness replication.  Controlled Research arms pin their fitting bundle so
+# arm-to-arm comparisons are reproducible; a promoted Trading strategy may point
+# at that same registered fitting protocol while still producing its own isolated
+# Trading artifact/data lineage.  The bundle itself is derived by the policy
 # resolver rather than duplicated here as literal seed values.
 STRATEGY_PARAM_FITTING_SEED_PROTOCOLS: dict[str, dict] = {
     "single_seed_42": {

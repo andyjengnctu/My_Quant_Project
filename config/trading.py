@@ -1,24 +1,37 @@
 """Trading declarative product configuration.
 
-Trading state/artifacts are physically isolated from Research.  Workbench production
-parameter training owns its product-level seed/trial contract here while reusing the
-canonical Optimizer engine/search semantics.  Research may replay or scale the same
-policy for controlled PIT experiments, but must not redefine Trading production.
+Trading state/artifacts remain physically isolated from Research.  The active
+strategy-parameter semantics are selected by one registered Strategy Parameter
+profile so production cannot silently drift from the promoted Research contract.
 """
+
+from config.strategy_params import STRATEGY_PARAM_FITTING_SEED_PROTOCOLS, STRATEGY_PARAM_PROFILES
+from config.training_policy import OUTER_ROLLING_TRAIN_WINDOW_MONTHS
+
 
 TRADING_ACTIVE_STRATEGY_ID = "full_rule_based_no_dl"
 TRADING_DATASET_PROFILE = "full"
-TRADING_PARAM_FAMILY = "full"
-TRADING_PARAM_SELECTOR = "base_finalists_agree"
 
-# Trading production parameter training is a product-level contract, not a
-# Research comparison knob.  Each explicit retrain uses a fresh random seed
-# bundle, matching the pre-2026-09-19 Workbench production semantics.
-TRADING_OPTIMIZER_TRIALS_PER_SEED = 1000
-TRADING_OPTIMIZER_SEED_COUNT = 8
-TRADING_OPTIMIZER_SEED_MODE = "random_n_each_training_run"
-TRADING_OPTIMIZER_SEED_MIN_AGREE = "auto"
-TRADING_OPTIMIZER_TRAIN_WINDOW_MONTHS = 120
+# 2026-10-06 user promotion decision: Trading adopts SR-C85 / PARAM-P6.
+# Runtime code resolves the typed profile from core.strategy_param_policy; the
+# derived constants below are compatibility/readability aliases only and are not
+# a second independently editable production contract.
+TRADING_STRATEGY_PARAM_PROFILE_ID = "production_multiseed_current"
+
+_TRADING_PARAM_PROFILE = STRATEGY_PARAM_PROFILES[TRADING_STRATEGY_PARAM_PROFILE_ID]
+_TRADING_FITTING_PROTOCOL = STRATEGY_PARAM_FITTING_SEED_PROTOCOLS[
+    str(_TRADING_PARAM_PROFILE["fitting_seed_protocol"])
+]
+
+TRADING_PARAM_FAMILY = str(_TRADING_PARAM_PROFILE["filter_profile"])
+TRADING_PARAM_SELECTOR = str(_TRADING_PARAM_PROFILE["parameter_policy"]).replace("-", "_")
+TRADING_PARAMETER_SET_IDENTITY = str(_TRADING_PARAM_PROFILE["parameter_set_identity"])
+TRADING_OPTIMIZER_TRIALS_PER_SEED = int(_TRADING_FITTING_PROTOCOL["trials_per_seed"])
+TRADING_OPTIMIZER_SEED_COUNT = int(_TRADING_FITTING_PROTOCOL["seed_count"])
+TRADING_OPTIMIZER_SEED_MODE = str(_TRADING_FITTING_PROTOCOL["seed_mode"])
+TRADING_OPTIMIZER_SEED_GENERATOR_SEED = int(_TRADING_FITTING_PROTOCOL["generator_seed"])
+TRADING_OPTIMIZER_SEED_MIN_AGREE = _TRADING_FITTING_PROTOCOL["min_agree"]
+TRADING_OPTIMIZER_TRAIN_WINDOW_MONTHS = int(OUTER_ROLLING_TRAIN_WINDOW_MONTHS)
 
 TRADING_DL_FILTER_ENABLED = False
 TRADING_DL_RANKING_ENABLED = False
@@ -43,11 +56,14 @@ TRADING_WORKBENCH_SINGLE_STOCK_ANALYSIS_PREFETCH_TICKERS = 3
 __all__ = [
     "TRADING_ACTIVE_STRATEGY_ID",
     "TRADING_DATASET_PROFILE",
+    "TRADING_STRATEGY_PARAM_PROFILE_ID",
     "TRADING_PARAM_FAMILY",
     "TRADING_PARAM_SELECTOR",
+    "TRADING_PARAMETER_SET_IDENTITY",
     "TRADING_OPTIMIZER_TRIALS_PER_SEED",
     "TRADING_OPTIMIZER_SEED_COUNT",
     "TRADING_OPTIMIZER_SEED_MODE",
+    "TRADING_OPTIMIZER_SEED_GENERATOR_SEED",
     "TRADING_OPTIMIZER_SEED_MIN_AGREE",
     "TRADING_OPTIMIZER_TRAIN_WINDOW_MONTHS",
     "TRADING_DL_FILTER_ENABLED",

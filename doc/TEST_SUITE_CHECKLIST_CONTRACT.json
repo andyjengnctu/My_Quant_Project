@@ -3865,7 +3865,7 @@
       "priority": "P1",
       "category": "Runtime domain / Trading strategy params",
       "item": "Trading canonical multi-seed production strategy-parameter producer and artifact isolation",
-      "gap": "Trading strategy parameter training必須委派既有canonical Optimizer multi-seed producer，使用Trading data/output/models/strategy-params namespace；product-level設定由`config/trading.py`持有：目前為120M training window、8個每次明確重訓重新隨機產生的optimizer seeds、1000 trials/seed與`base-finalists-agree`。實際resolved seed bundle必須持久化到selected artifact與manifest並exact一致，使每次production retrain保有隨機性但可事後稽核。Trading不得讀寫Research physical truth，也不得由Research seed/trial budget反向改寫production；current Workbench發布static latest-finalized-data artifact，runtime/binding同時相容既有rolling historical/migration artifact且必須依schedule mode驗證lineage。Research與Trading共享canonical search/selector implementation，不得建立第二套Optimizer演算法。",
+      "gap": "Trading strategy parameter training必須委派既有canonical Optimizer multi-seed producer，使用Trading data/output/models/strategy-params namespace；product contract只由`config/trading.py::TRADING_STRATEGY_PARAM_PROFILE_ID`選擇registered Strategy Parameter profile，runtime再從該profile解析family/selector/trials/seed-count/train-window/exact seed bundle，不得在Trading另維護第二份可漂移數值。selected artifact、manifest與current binding必須持久化active profile ID、PARAM identity、registered scientific fingerprint與exact resolved seed contract並互相一致；任何pre-promotion或其他profile artifact即使family/selector path相同也不得靜默REUSE。Trading不得讀寫Research physical truth；current Workbench發布static latest-finalized-data artifact，runtime仍可讀既有rolling historical/migration artifact但不得把legacy producer identity冒充current。Research與Trading共享canonical search/selector implementation，不得建立第二套Optimizer演算法。",
       "entry": "`core/trading_policy.py`, `core/strategy_param_artifacts.py`, `services/optimizer/strategy_param_service.py`, `services/optimizer/strategy_param_training.py`, `services/optimizer/outer_rolling_oos.py`, `services/trading/strategy_param_training.py`, `services/trading/strategy_param_runtime.py`, `services/trading/strategy_param_state.py`, `tools/validate/synthetic_meta_cases.py`",
       "initial_status": "NEW",
       "order": 348
@@ -7926,7 +7926,7 @@
     {
       "id": "T480",
       "b_id": "B360",
-      "description": "`validate_trading_strategy_param_producer_contract_case` 覆蓋Trading static multi-seed production plan、isolated strategy-param root、Trading-owned config-driven selector/trials/seed-count/train-window、每次run fresh random seed bundle、resolved seeds在artifact/manifest一致持久化、Trading V2 loader/data identity、canonical Optimizer delegation、static binding roundtrip／legacy rolling runtime compatibility與Research physical truth隔離。",
+      "description": "`validate_trading_strategy_param_producer_contract_case` 覆蓋Trading static multi-seed production plan、isolated strategy-param root、registered-profile-driven family/selector/trials/seed-count/train-window/exact resolved seed bundle、seed policy在artifact/manifest一致持久化、Trading V2 loader/data identity、canonical Optimizer delegation、profile/PARAM/fingerprint binding identity與stale pre-profile Params拒絕、static current binding roundtrip／legacy rolling historical runtime compatibility及Research physical truth隔離。",
       "initial_status": "NEW",
       "order": 470
     },

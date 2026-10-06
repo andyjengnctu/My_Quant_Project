@@ -2632,37 +2632,39 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             == {"SCORE_MIN_QUARTER_RETURN_AMP_ENABLED": (True, False)},
     )
 
-    from config.trading import (
-        TRADING_OPTIMIZER_SEED_COUNT,
-        TRADING_OPTIMIZER_SEED_MIN_AGREE,
-        TRADING_OPTIMIZER_TRAIN_WINDOW_MONTHS,
-        TRADING_OPTIMIZER_TRIALS_PER_SEED,
-        TRADING_PARAM_FAMILY,
-        TRADING_PARAM_SELECTOR,
+    from config.trading import TRADING_STRATEGY_PARAM_PROFILE_ID
+    from core.trading_policy import get_trading_strategy_profile
+    trading_promoted_param_profile = get_strategy_param_training_profile(
+        TRADING_STRATEGY_PARAM_PROFILE_ID
     )
-    from core.seed_ensemble_policy import resolve_seed_ensemble_min_agree
-    p13_scientific = build_strategy_param_scientific_contract(
-        project_root, trading_aligned_8x1000_param_profile.profile_id
+    trading_promoted_fitting = get_strategy_param_fitting_seed_protocol(
+        trading_promoted_param_profile.fitting_seed_protocol
     )
-    p13_fitting = dict(p13_scientific["scientific_contract"]["fitting"])
-    p13_schedule = dict(p13_scientific["scientific_contract"]["schedule"])
+    trading_runtime_profile = get_trading_strategy_profile()
     check(
-        "strategy_param_round10_trading_aligned_budget_matches_trading_contract",
+        "strategy_param_promoted_profile_drives_trading_contract",
         True,
-        trading_aligned_8x1000_param_profile.parameter_set_identity == "PARAM-P13"
-        and trading_aligned_8x1000_param_profile.filter_profile == str(TRADING_PARAM_FAMILY)
-        and trading_aligned_8x1000_param_profile.parameter_policy
-            == str(TRADING_PARAM_SELECTOR).replace("_", "-")
-        and not trading_aligned_8x1000_param_profile.validation_enabled
-        and trading_aligned_8x1000_fitting_seed_protocol.seed_mode == "fixed_generated_bundle"
-        and p13_fitting["seed_count"] == int(TRADING_OPTIMIZER_SEED_COUNT)
-        and p13_fitting["trials_per_seed"] == int(TRADING_OPTIMIZER_TRIALS_PER_SEED)
-        and p13_fitting["min_agree"]
-            == resolve_seed_ensemble_min_agree(
-                TRADING_OPTIMIZER_SEED_COUNT, TRADING_OPTIMIZER_SEED_MIN_AGREE
-            )
-        and p13_schedule["train_window_months"]
-            == int(TRADING_OPTIMIZER_TRAIN_WINDOW_MONTHS),
+        trading_runtime_profile.strategy_param_profile_id
+            == trading_promoted_param_profile.profile_id
+        and trading_runtime_profile.parameter_set_identity
+            == trading_promoted_param_profile.parameter_set_identity
+        and trading_runtime_profile.param_family
+            == trading_promoted_param_profile.filter_profile
+        and trading_runtime_profile.param_selector
+            == trading_promoted_param_profile.parameter_policy.replace("-", "_")
+        and not trading_promoted_param_profile.validation_enabled
+        and trading_runtime_profile.optimizer_trials_per_seed
+            == trading_promoted_fitting.trials_per_seed
+        and trading_runtime_profile.optimizer_seed_count
+            == trading_promoted_fitting.seed_count
+        and trading_runtime_profile.optimizer_seed_mode
+            == trading_promoted_fitting.seed_mode
+        and trading_runtime_profile.optimizer_seed_generator_seed
+            == trading_promoted_fitting.generator_seed
+        and trading_runtime_profile.optimizer_seed_min_agree
+            == trading_promoted_fitting.min_agree
+        and trading_runtime_profile.optimizer_resolved_seeds
+            == tuple(trading_promoted_fitting.resolved_seeds),
     )
 
     check(

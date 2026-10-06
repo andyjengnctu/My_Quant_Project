@@ -9,43 +9,60 @@ from config.trading import (
     TRADING_DATASET_PROFILE,
     TRADING_DL_FILTER_ENABLED,
     TRADING_DL_RANKING_ENABLED,
-    TRADING_OPTIMIZER_SEED_COUNT,
-    TRADING_OPTIMIZER_SEED_MIN_AGREE,
-    TRADING_OPTIMIZER_SEED_MODE,
-    TRADING_OPTIMIZER_TRAIN_WINDOW_MONTHS,
-    TRADING_OPTIMIZER_TRIALS_PER_SEED,
-    TRADING_PARAM_FAMILY,
-    TRADING_PARAM_SELECTOR,
+    TRADING_STRATEGY_PARAM_PROFILE_ID,
 )
+from config.training_policy import OUTER_ROLLING_TRAIN_WINDOW_MONTHS
 from core.dataset_profiles import DATASET_PROFILE_SPECS, normalize_dataset_profile_key
-from core.seed_ensemble_policy import resolve_seed_ensemble_min_agree
 from core.strategy_param_artifacts import (
-    POLICY_FILENAME_BY_NAME,
     normalize_strategy_param_family,
+    normalize_strategy_param_policy,
     resolve_strategy_param_artifact_path,
+)
+from core.strategy_param_policy import (
+    get_strategy_param_fitting_seed_protocol,
+    get_strategy_param_training_profile,
 )
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
 from core.trading_data_dependencies import get_trading_data_dependency_spec
 
 
 SUPPORTED_TRADING_STRATEGY_IDS = ("full_rule_based_no_dl",)
-SUPPORTED_TRADING_OPTIMIZER_SEED_MODES = ("random_n_each_training_run",)
+SUPPORTED_TRADING_OPTIMIZER_SEED_MODES = ("fixed_generated_bundle",)
 
 
 @dataclass(frozen=True)
 class TradingStrategyProfile:
     strategy_id: str
     dataset_profile: str
+    strategy_param_profile_id: str
+    parameter_set_identity: str
+    registered_scientific_fingerprint_sha256: str
     param_family: str
     param_selector: str
     optimizer_requires_multi_seed: bool
     optimizer_trials_per_seed: int
     optimizer_seed_count: int
     optimizer_seed_mode: str
+    optimizer_seed_generator_seed: int
     optimizer_seed_min_agree: int
+    optimizer_resolved_seeds: tuple[int, ...]
     optimizer_train_window_months: int
     dl_filter_enabled: bool
     dl_ranking_enabled: bool
+
+    def optimizer_seed_ensemble_policy(self) -> dict[str, object]:
+        return {
+            "enabled": True,
+            "seed_count": int(self.optimizer_seed_count),
+            "min_agree": int(self.optimizer_seed_min_agree),
+            "min_agree_requested": "auto",
+            "min_agree_max": int(self.optimizer_seed_count),
+            "min_agree_rule": "clamp_1_to_seed_count",
+            "seed_mode": str(self.optimizer_seed_mode),
+            "params_storage": "same_json",
+            "generator_seed": int(self.optimizer_seed_generator_seed),
+            "resolved_seeds": [int(value) for value in self.optimizer_resolved_seeds],
+        }
 
 
 def get_trading_strategy_profile() -> TradingStrategyProfile:
@@ -54,28 +71,42 @@ def get_trading_strategy_profile() -> TradingStrategyProfile:
         raise ValueError(f"不支援的Trading strategy: {strategy_id!r}")
     get_trading_data_dependency_spec(strategy_id)
 
-    dataset_profile = normalize_dataset_profile_key(TRADING_DATASET_PROFILE)
+    promoted_profile = get_strategy_param_training_profile(TRADING_STRATEGY_PARAM_PROFILE_ID)
+    if promoted_profile.strategy_id != "breakout":
+        raise ValueError(
+            "Trading目前只支援breakout Strategy Parameter profile: "
+            f"{promoted_profile.profile_id} -> {promoted_profile.strategy_id!r}"
+        )
+    if promoted_profile.validation_enabled:
+        raise ValueError("Trading production不得直接採用啟用validation的Strategy Parameter profile")
+    if promoted_profile.price_basis != "adjusted":
+        raise ValueError("Trading production目前只允許canonical adjusted-price Strategy Parameter profile")
+    if not promoted_profile.registered_scientific_fingerprint_sha256:
+        raise ValueError("Trading promoted Strategy Parameter profile必須已有registered scientific fingerprint")
+
+    dataset_profile = normalize_dataset_profile_key(promoted_profile.dataset)
+    configured_dataset = normalize_dataset_profile_key(TRADING_DATASET_PROFILE)
     if dataset_profile not in DATASET_PROFILE_SPECS:
         raise ValueError(f"不支援的Trading dataset profile: {dataset_profile!r}")
+    if configured_dataset != dataset_profile:
+        raise ValueError(
+            "Trading dataset與promoted Strategy Parameter profile不一致: "
+            f"trading={configured_dataset}, profile={dataset_profile}"
+        )
 
-    family = normalize_strategy_param_family(TRADING_PARAM_FAMILY)
-    selector = str(TRADING_PARAM_SELECTOR).strip()
-    if selector not in POLICY_FILENAME_BY_NAME:
-        raise ValueError(f"不支援的Trading strategy param selector: {selector!r}")
+    family = normalize_strategy_param_family(promoted_profile.filter_profile)
+    selector = normalize_strategy_param_policy(promoted_profile.parameter_policy)
+    fitting = get_strategy_param_fitting_seed_protocol(promoted_profile.fitting_seed_protocol)
+    if not fitting.enabled or fitting.seed_count < 2:
+        raise ValueError("Trading promoted Strategy Parameter profile必須使用multi-seed fitting")
+    if fitting.seed_mode not in SUPPORTED_TRADING_OPTIMIZER_SEED_MODES:
+        raise ValueError(f"不支援的Trading optimizer seed mode: {fitting.seed_mode!r}")
+    if len(fitting.resolved_seeds) != fitting.seed_count:
+        raise ValueError("Trading promoted Strategy Parameter profile缺少完整resolved seed bundle")
 
-    trials_per_seed = int(TRADING_OPTIMIZER_TRIALS_PER_SEED)
-    seed_count = int(TRADING_OPTIMIZER_SEED_COUNT)
-    seed_mode = str(TRADING_OPTIMIZER_SEED_MODE or "").strip().lower()
-    train_window_months = int(TRADING_OPTIMIZER_TRAIN_WINDOW_MONTHS)
-    if trials_per_seed < 1:
-        raise ValueError("Trading optimizer trials_per_seed必須>=1")
-    if seed_count < 2:
-        raise ValueError("Trading multi-seed producer 要求 seed_count>=2")
-    if seed_mode not in SUPPORTED_TRADING_OPTIMIZER_SEED_MODES:
-        raise ValueError(f"不支援的Trading optimizer seed mode: {seed_mode!r}")
+    train_window_months = int(OUTER_ROLLING_TRAIN_WINDOW_MONTHS)
     if train_window_months < 1:
         raise ValueError("Trading optimizer train_window_months必須>=1")
-    seed_min_agree = resolve_seed_ensemble_min_agree(seed_count, TRADING_OPTIMIZER_SEED_MIN_AGREE)
 
     dl_filter = bool(TRADING_DL_FILTER_ENABLED)
     dl_ranking = bool(TRADING_DL_RANKING_ENABLED)
@@ -85,13 +116,20 @@ def get_trading_strategy_profile() -> TradingStrategyProfile:
     return TradingStrategyProfile(
         strategy_id=strategy_id,
         dataset_profile=dataset_profile,
+        strategy_param_profile_id=promoted_profile.profile_id,
+        parameter_set_identity=promoted_profile.parameter_set_identity,
+        registered_scientific_fingerprint_sha256=str(
+            promoted_profile.registered_scientific_fingerprint_sha256
+        ),
         param_family=family,
         param_selector=selector,
         optimizer_requires_multi_seed=True,
-        optimizer_trials_per_seed=trials_per_seed,
-        optimizer_seed_count=seed_count,
-        optimizer_seed_mode=seed_mode,
-        optimizer_seed_min_agree=int(seed_min_agree),
+        optimizer_trials_per_seed=int(fitting.trials_per_seed),
+        optimizer_seed_count=int(fitting.seed_count),
+        optimizer_seed_mode=str(fitting.seed_mode),
+        optimizer_seed_generator_seed=int(fitting.generator_seed),
+        optimizer_seed_min_agree=int(fitting.min_agree),
+        optimizer_resolved_seeds=tuple(int(value) for value in fitting.resolved_seeds),
         optimizer_train_window_months=train_window_months,
         dl_filter_enabled=dl_filter,
         dl_ranking_enabled=dl_ranking,
@@ -123,6 +161,9 @@ def build_trading_strategy_param_training_plan(project_root) -> dict[str, object
         "runtime_domain": RUNTIME_DOMAIN_TRADING,
         "strategy_id": profile.strategy_id,
         "dataset_profile": profile.dataset_profile,
+        "strategy_param_profile_id": profile.strategy_param_profile_id,
+        "parameter_set_identity": profile.parameter_set_identity,
+        "registered_scientific_fingerprint_sha256": profile.registered_scientific_fingerprint_sha256,
         "data_dir": paths.data_dir,
         "models_root": paths.models_root,
         "strategy_params_root": paths.strategy_params_root,
@@ -134,7 +175,10 @@ def build_trading_strategy_param_training_plan(project_root) -> dict[str, object
         "optimizer_trials_per_seed": profile.optimizer_trials_per_seed,
         "optimizer_seed_count": profile.optimizer_seed_count,
         "optimizer_seed_mode": profile.optimizer_seed_mode,
+        "optimizer_seed_generator_seed": profile.optimizer_seed_generator_seed,
         "optimizer_seed_min_agree": profile.optimizer_seed_min_agree,
+        "optimizer_resolved_seeds": list(profile.optimizer_resolved_seeds),
+        "optimizer_seed_ensemble_policy": profile.optimizer_seed_ensemble_policy(),
         "optimizer_train_window_months": profile.optimizer_train_window_months,
         "selected_params_path": resolve_trading_selected_strategy_param_path(project_root),
     }
@@ -146,13 +190,18 @@ def get_trading_policy_snapshot() -> dict[str, object]:
     return {
         "strategy_id": profile.strategy_id,
         "dataset_profile": profile.dataset_profile,
+        "strategy_param_profile_id": profile.strategy_param_profile_id,
+        "parameter_set_identity": profile.parameter_set_identity,
+        "registered_scientific_fingerprint_sha256": profile.registered_scientific_fingerprint_sha256,
         "param_family": profile.param_family,
         "param_selector": profile.param_selector,
         "optimizer_requires_multi_seed": profile.optimizer_requires_multi_seed,
         "optimizer_trials_per_seed": profile.optimizer_trials_per_seed,
         "optimizer_seed_count": profile.optimizer_seed_count,
         "optimizer_seed_mode": profile.optimizer_seed_mode,
+        "optimizer_seed_generator_seed": profile.optimizer_seed_generator_seed,
         "optimizer_seed_min_agree": profile.optimizer_seed_min_agree,
+        "optimizer_resolved_seeds": list(profile.optimizer_resolved_seeds),
         "optimizer_train_window_months": profile.optimizer_train_window_months,
         "dl_filter_enabled": profile.dl_filter_enabled,
         "dl_ranking_enabled": profile.dl_ranking_enabled,
