@@ -12532,3 +12532,12 @@ Decision：`ENGINEERING_ONLY / SEED_PAIRING_IS_ARM_LEVEL_PRODUCER_SEMANTICS / MI
 
 Decision：`ENGINEERING_ONLY / GLOBAL_FOLD_SEED_WORK_QUEUE / FIXED_8_PROCESSES / MAX_3_ACTIVE_SEEDS_PER_FOLD / LARGEST_ESTIMATED_TAIL_FIRST / TPE_SEQUENCE_UNCHANGED / NO_SCIENTIFIC_IDENTITY_CHANGE`.
 
+## 2026-10-06 — Outer Rolling fixed-12 global fold×seed scheduler capacity adjustment
+
+- **Trigger / user authorization**：fixed-8 global `fold × seed` scheduler已落地後，使用者明確要求將global process capacity由8提升至12；本輪不啟用CPU/MEM autoscaling。
+- **Execution change**：`config/training_performance_policy.py::OPTIMIZER_ROLLING_SEED_ENSEMBLE_GLOBAL_WORKERS`由`8`調整為`12`。Scheduler仍使用同一global work queue、`estimated_tail = sec_per_trial × remaining_trials ÷ active_seeds` priority、每fold最多`3`個active seeds與既有warmup/fallback；只提高同時可執行的完整`fold × seed` search unit上限。
+- **Scientific invariance**：seed bundle、fold definition、trial budget、單一seed內TPE sequential update、selector、min-agree、aggregation、PIT與artifact identity均不變；本變更只屬execution/resource knob，不進scientific identity。
+- **Historical boundary**：前一筆fixed-8工程紀錄保留為當時已驗證的execution evidence，不回寫成12；current Architecture與config則以12為default truth。
+
+Decision：`ENGINEERING_ONLY / GLOBAL_FOLD_SEED_WORK_QUEUE / FIXED_12_PROCESSES / MAX_3_ACTIVE_SEEDS_PER_FOLD / SCHEDULER_SEMANTICS_UNCHANGED / NO_AUTOSCALING / NO_SCIENTIFIC_IDENTITY_CHANGE`.
+

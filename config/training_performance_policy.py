@@ -8,8 +8,8 @@ scientific semantics. Runtime resolution belongs to ``core.training_performance`
 # Rolling fold parallelism.
 OPTIMIZER_ROLLING_FOLD_WORKERS = "fold_count"  # "fold_count" / "auto" or a positive integer
 # Rolling random-seed ensembles use one global fold x seed work queue.  Keep the
-# first fixed-capacity version explicit; autoscaling is intentionally not enabled.
-OPTIMIZER_ROLLING_SEED_ENSEMBLE_GLOBAL_WORKERS = 8
+# current fixed-capacity version explicit; autoscaling is intentionally not enabled.
+OPTIMIZER_ROLLING_SEED_ENSEMBLE_GLOBAL_WORKERS = 12
 OPTIMIZER_ROLLING_SEED_ENSEMBLE_MAX_ACTIVE_PER_FOLD = 3
 OPTIMIZER_ROLLING_SEED_ENSEMBLE_PRIORITY_WARMUP_MAX_SEC = 30.0
 OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS = 0
