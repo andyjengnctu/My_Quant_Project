@@ -154,6 +154,13 @@ from services.research.strategy_compare_training import (
 from services.research.training_process import (
     terminate_registered_training_processes,
 )
+from services.research.raw_price_strategy_param import (
+    ensure_raw_price_robustness_strategy_parameter_artifact,
+    inspect_raw_price_robustness_strategy_parameter_artifact,
+    raw_price_robustness_strategy_param_artifact_path,
+    raw_price_robustness_strategy_param_manifest_path,
+)
+
 from services.optimizer.strategy_param_service import (
     ensure_fixed_multiseed_robustness_strategy_parameter_artifact,
     ensure_robustness_benchmark_strategy_parameter_artifact,
@@ -620,7 +627,21 @@ def _benchmark_param_binding(
     builder_type = (
         None if source.builder is None else str(source.builder.builder_type or "").strip()
     )
-    if builder_type == "optimizer_validation_budget_refit_strategy_params":
+    if builder_type == "optimizer_raw_price_strategy_params":
+        family = "full"
+        mode = str(source.consumption_evaluation_mode or "rolling").strip()
+        path = raw_price_robustness_strategy_param_artifact_path(
+            PROJECT_ROOT, benchmark_id=str(robustness.benchmark_id), seed=int(seed)
+        )
+        manifest_path = raw_price_robustness_strategy_param_manifest_path(
+            PROJECT_ROOT, benchmark_id=str(robustness.benchmark_id), seed=int(seed)
+        )
+        producer_variant = "raw_price_isolated_v1"
+        options = {} if source.builder is None else dict(source.builder.options or {})
+        training_profile_id = str(options.get("training_profile_id") or "").strip() or None
+        fitting_seed_count = 1
+        fitting_trials_per_seed = 300
+    elif builder_type == "optimizer_validation_budget_refit_strategy_params":
         family = "full"
         mode = str(source.consumption_evaluation_mode or "rolling").strip()
         path = validation_budget_robustness_strategy_param_artifact_path(
@@ -724,6 +745,13 @@ def _inspect_benchmark_strategy_parameter_binding(
     )
     if required_schedule_end in (None, ""):
         return None
+    if str(binding["producer_variant"]) == "raw_price_isolated_v1":
+        return inspect_raw_price_robustness_strategy_parameter_artifact(
+            PROJECT_ROOT,
+            benchmark_id=str(robustness.benchmark_id),
+            seed=int(seed),
+            comparison_end_date=str(required_schedule_end),
+        )
     if str(binding["producer_variant"]) == "validation_budget_refit_v1":
         return inspect_validation_budget_robustness_strategy_parameter_artifact(
             PROJECT_ROOT,
@@ -764,6 +792,24 @@ def _inspect_benchmark_strategy_parameter_binding(
         rotation=str(settings.rotation),
         fixed_risk=float(DEFAULT_FIXED_RISK),
         max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+    )
+
+
+def _benchmark_parameter_build_detail(binding: dict[str, Any]) -> str:
+    variant = str(binding.get("producer_variant") or "")
+    if variant == "fixed_multiseed_v1":
+        return (
+            "由canonical Optimizer以robustness replicate identity建立固定fitting-seed bundle；"
+            "不得把outer replicate seed當成單一optimizer seed"
+        )
+    if variant == "raw_price_isolated_v1":
+        return (
+            "由raw-price isolated Optimizer以相同benchmark seed建立非還原價參數；"
+            "ticker/date/Volume控制母體不變，禁止fallback到adjusted/production Seed42參數"
+        )
+    return (
+        "由canonical Optimizer以相同benchmark seed與統一trials/fold自動建立；"
+        "不得fallback到production Seed42策略參數"
     )
 
 
@@ -853,15 +899,7 @@ def _benchmark_parameter_plan_rows(
                 else:
                     rows.append((
                         "BUILD", label,
-                        (
-                            "由canonical Optimizer以robustness replicate identity建立固定fitting-seed bundle；"
-                            "不得把outer replicate seed當成單一optimizer seed"
-                            if str(binding["producer_variant"]) == "fixed_multiseed_v1"
-                            else (
-                                "由canonical Optimizer以相同benchmark seed與統一trials/fold自動建立；"
-                                "不得fallback到production Seed42策略參數"
-                            )
-                        ),
+                        _benchmark_parameter_build_detail(binding),
                     ))
                 continue
             action = str(state["action"])
@@ -879,15 +917,7 @@ def _benchmark_parameter_plan_rows(
                     "既有benchmark策略參數缺少／過期／scientific identity不符；由canonical Optimizer service自動REBUILD／RESUME"
                 )
             else:
-                detail = (
-                    "由canonical Optimizer以robustness replicate identity建立固定fitting-seed bundle；"
-                    "不得把outer replicate seed當成單一optimizer seed"
-                    if str(binding["producer_variant"]) == "fixed_multiseed_v1"
-                    else (
-                        "由canonical Optimizer以相同benchmark seed與統一trials/fold自動建立；"
-                        "不得fallback到production Seed42策略參數"
-                    )
-                )
+                detail = _benchmark_parameter_build_detail(binding)
             rows.append((action, label, detail))
     return rows, blockers, bindings
 
@@ -912,7 +942,14 @@ def _ensure_benchmark_strategy_parameter_binding(
             "robustness benchmark param缺少可解析required schedule end: "
             f"{binding['arm_id']}/seed={seed}"
         )
-    if str(binding["producer_variant"]) == "validation_budget_refit_v1":
+    if str(binding["producer_variant"]) == "raw_price_isolated_v1":
+        result = ensure_raw_price_robustness_strategy_parameter_artifact(
+            PROJECT_ROOT,
+            benchmark_id=str(robustness.benchmark_id),
+            seed=int(seed),
+            comparison_end_date=str(required_schedule_end),
+        )
+    elif str(binding["producer_variant"]) == "validation_budget_refit_v1":
         result = ensure_validation_budget_robustness_strategy_parameter_artifact(
             PROJECT_ROOT,
             benchmark_id=str(robustness.benchmark_id),
@@ -1619,6 +1656,10 @@ def _render_robustness_execution_plan(
                 str(item.get("producer_variant") or "") == "fixed_multiseed_v1"
                 for item in arm_bindings
             )
+            uses_raw_price_isolated = any(
+                str(item.get("producer_variant") or "") == "raw_price_isolated_v1"
+                for item in arm_bindings
+            )
             if uses_fitting_bundle:
                 fitting_counts = {
                     int(item.get("fitting_seed_count") or 0)
@@ -1642,6 +1683,10 @@ def _render_robustness_execution_plan(
                 )
                 description = (
                     f"{cfg.seed_count}個robustness replicates；每個replicate使用{fitting_label} + DL-off replay"
+                )
+            elif uses_raw_price_isolated:
+                description = (
+                    f"{cfg.seed_count}個固定benchmark seeds；同seed raw/unadjusted strategy params + DL-off replay"
                 )
             else:
                 description = (

@@ -257,6 +257,16 @@ def _display_ordered_strategy_arms(settings: StrategyComparisonSettings) -> tupl
     return tuple(sorted(settings.enabled_arms, key=_strategy_arm_display_sort_key))
 
 
+def _contrast_display_name(settings: StrategyComparisonSettings, item) -> str:
+    """Human-readable contrast label; contrast_id remains an internal stable key."""
+
+    left_arm = settings.arms.get(str(item.left))
+    right_arm = settings.arms.get(str(item.right))
+    left_name = str(item.left) if left_arm is None else f"{item.left} {left_arm.name}"
+    right_name = str(item.right) if right_arm is None else f"{item.right} {right_arm.name}"
+    return f"{left_name} vs {right_name}"
+
+
 def render_status(
     *,
     project_root: Path = PROJECT_ROOT,
@@ -285,10 +295,10 @@ def render_status(
     contrast_rows = [
         (
             "ON" if item.enabled else "OFF",
-            item.contrast_id,
+            _contrast_display_name(current, item),
             item.left,
             item.right,
-            item.description,
+            f"{item.description}｜internal_id={item.contrast_id}",
         )
         for item in current.enabled_contrasts
     ]
@@ -421,7 +431,8 @@ def _compact_execution_plan_item(value: object) -> str:
             "",
         )
         budget_label = f" {budget}" if budget else ""
-        text = f"Bench {family.title()} {policy_label}{budget_label} | {seed_label}".replace("  ", " ")
+        price_label = "Raw " if "raw_price_isolated_v1" in parts else ""
+        text = f"Bench {price_label}{family.title()} {policy_label}{budget_label} | {seed_label}".replace("  ", " ")
     elif text.startswith("param:"):
         source = text.split(":", 1)[1]
         source = source.replace("_oos", "").replace("_rolling", "")
@@ -454,6 +465,8 @@ def _compact_execution_plan_description(value: object) -> str:
         policies = text.split("policies=", 1)[1] if "policies=" in text else ""
         policy_count = len([item for item in policies.split(",") if item.strip()])
         text = "canonical params" + (f" | {policy_count} policies" if policy_count else "")
+    elif "由raw-price isolated Optimizer以相同benchmark seed" in text:
+        text = "same-seed RAW selector | isolated search"
     elif "由canonical Optimizer以相同benchmark seed與統一trials/fold自動建立" in text:
         text = "same-seed selector | shared search"
     elif text.startswith("canonical Dataset需更新："):
@@ -581,8 +594,9 @@ def render_execution_plan(
     rows.extend(
         (
             "NOT_RUN" if blocked else "REPORT",
-            item.contrast_id,
-            f"{item.description}｜上游前置工件BLOCKED，本次不產生報表" if blocked else item.description,
+            _contrast_display_name(settings, item),
+            (f"{item.description}｜internal_id={item.contrast_id}｜上游前置工件BLOCKED，本次不產生報表"
+             if blocked else f"{item.description}｜internal_id={item.contrast_id}"),
         )
         for item in settings.enabled_contrasts
     )

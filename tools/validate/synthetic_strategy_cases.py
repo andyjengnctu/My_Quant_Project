@@ -3337,6 +3337,24 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and current_oos_robustness.suite_id == current_rolling_robustness.suite_id
         and current_oos_robustness.suite_id == current_oos_settings.suite_id,
     )
+    from services.research.strategy_multi_seed_robustness import _benchmark_param_binding
+    raw_robustness_binding = _benchmark_param_binding(
+        settings=current_oos_settings,
+        robustness=current_oos_robustness,
+        arm=current_oos_settings.arms["C93"],
+        seed=int(current_oos_robustness.resolved_seeds[0]),
+    )
+    check(
+        "raw_price_compare_arm_robustness_is_derived_from_same_suite_and_profile",
+        True,
+        int(current_oos_robustness.seed_count) == 4
+        and len(tuple(current_oos_robustness.resolved_seeds)) == 4
+        and str(raw_robustness_binding.get("producer_variant")) == "raw_price_isolated_v1"
+        and str(raw_robustness_binding.get("training_profile_id"))
+            == active_param_profile.profile_id
+        and "robustness/end_to_end_v1/seed_"
+            in Path(raw_robustness_binding["path"]).as_posix(),
+    )
     from services.optimizer.strategy_param_service import (
         _benchmark_schedule_build_contract,
         _canonical_schedule_build_contract,
@@ -4375,22 +4393,24 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             == "optimizer_raw_price_strategy_params"
     }
     check(
-        "strategy_compare_current_suite_is_raw_price_controlled_c61_c93",
+        "strategy_compare_current_suite_preserves_references_and_appends_raw_price_arm",
         True,
         tuple(arm.arm_id for arm in current_compare_settings.enabled_arms)
-            == ("C61", "C93")
+            == ("C58", "C61", "C85", "C93")
         and tuple(contrast.contrast_id for contrast in current_compare_settings.enabled_contrasts)
-            == ("C93-C61",)
+            == ("C85-C61", "C85-C58", "C93-C61")
         and "optimizer_validation_budget_refit_strategy_params" not in current_builder_types
-        and "optimizer_fixed_multiseed_strategy_params" not in current_builder_types
+        and "optimizer_fixed_multiseed_strategy_params" in current_builder_types
         and not current_validation_parameter_sets
-        and not current_fixed_multiseed_profiles
+        and current_fixed_multiseed_profiles == {"production_multiseed_current"}
         and current_raw_profiles == {active_param_profile.profile_id}
+        and current_compare_settings.arms["C58"].data_source == "canonical"
         and current_compare_settings.arms["C61"].data_source == "canonical"
+        and current_compare_settings.arms["C85"].data_source == "canonical"
         and current_compare_settings.arms["C93"].data_source == "raw_unadjusted_controlled"
         and all(
             arm_id not in {arm.arm_id for arm in current_compare_settings.enabled_arms}
-            for arm_id in ("C58", "C62", "C85", "C89", "C91", "C92")
+            for arm_id in ("C62", "C89", "C91", "C92")
         )
         and active_param_profile.profile_id == "raw_price_full_base_finalist_best_current"
         and active_param_profile.parameter_set_identity == "PARAM-RAW-P1"
@@ -4404,6 +4424,20 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             == "trading_aligned_8x1000_current"
         and trading_aligned_8x1000_param_profile.parameter_set_identity == "PARAM-P13"
         and not trading_aligned_8x1000_param_profile.validation_enabled,
+    )
+    raw_work_plans = [
+        strategy_param_application._build_plan(active_param_profile, work)
+        for work in strategy_param_application.WORK_TYPES
+    ]
+    check(
+        "active_strategy_param_profile_opens_all_four_work_types_from_one_profile",
+        True,
+        len(raw_work_plans) == 4
+        and all(plan.get("status") in {"READY", "PREPARABLE"} for plan in raw_work_plans)
+        and len(raw_work_plans[2].get("rows") or ()) == 4
+        and len(raw_work_plans[3].get("rows") or ()) == 4
+        and "Robustness下一輪再開" not in strategy_param_app_source
+        and "RAW_PRICE_BASELINE_FIRST_ROBUSTNESS_NOT_ENABLED" not in strategy_param_app_source,
     )
     from services.research.strategy_comparison import _display_ordered_strategy_arms
     legacy_unsorted_settings = get_strategy_comparison_settings(

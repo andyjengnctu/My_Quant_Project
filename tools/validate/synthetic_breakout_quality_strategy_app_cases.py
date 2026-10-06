@@ -917,6 +917,16 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 ) == "optimizer_fixed_multiseed_strategy_params"
             )
         )
+        raw_price_arm_ids = tuple(
+            arm_id
+            for arm_id in robustness.stochastic_arm_ids
+            if (
+                robust_settings.parameter_sources[str(robust_settings.arms[arm_id].param_source)].builder is not None
+                and str(
+                    robust_settings.parameter_sources[str(robust_settings.arms[arm_id].param_source)].builder.builder_type
+                ) == "optimizer_raw_price_strategy_params"
+            )
+        )
         reusable = {
             (arm_id, int(seed)): {"source_run_root": Path("synthetic_registered_run")}
             for arm_id in canonical_reuse_arm_ids
@@ -951,13 +961,20 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 for seed in robustness.resolved_seeds
             )
             and len(parameter_dependency_rows)
-            == len(fixed_multiseed_arm_ids) * len(robustness.resolved_seeds)
+            == (len(fixed_multiseed_arm_ids) + len(raw_price_arm_ids)) * len(robustness.resolved_seeds)
             and len({str(row[1]) for row in parameter_dependency_rows})
             == len(parameter_dependency_rows)
             and all(
-                "replicate=" in str(row[1])
-                and "fixed_multiseed_v1" in str(row[1])
-                and ":profile=" in str(row[1])
+                (
+                    "replicate=" in str(row[1])
+                    and "fixed_multiseed_v1" in str(row[1])
+                    and ":profile=" in str(row[1])
+                )
+                or (
+                    ":seed=" in str(row[1])
+                    and "raw_price_isolated_v1" in str(row[1])
+                    and ":profile=raw_price_full_base_finalist_best_current" in str(row[1])
+                )
                 for row in parameter_dependency_rows
             ),
         )
@@ -996,6 +1013,16 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             ) == "optimizer_fixed_multiseed_strategy_params"
         )
     )
+    rolling_raw_price_arm_ids = tuple(
+        arm_id
+        for arm_id in rolling_robustness.stochastic_arm_ids
+        if (
+            rolling_robust_settings.parameter_sources[str(rolling_robust_settings.arms[arm_id].param_source)].builder is not None
+            and str(
+                rolling_robust_settings.parameter_sources[str(rolling_robust_settings.arms[arm_id].param_source)].builder.builder_type
+            ) == "optimizer_raw_price_strategy_params"
+        )
+    )
     rolling_reusable = {
         (arm_id, int(seed)): {
             "source_run_root": Path("synthetic_registered_extending_run"),
@@ -1019,6 +1046,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             "services.research.strategy_multi_seed_robustness.inspect_fixed_multiseed_robustness_strategy_parameter_artifact",
             return_value={"action": "BUILD"},
         ),
+        patch(
+            "services.research.strategy_multi_seed_robustness.inspect_raw_price_robustness_strategy_parameter_artifact",
+            return_value={"action": "BUILD", "status": "ARTIFACT_MISSING"},
+        ),
     ):
         rendered_robustness_plan, rendered_robustness_payload = (
             _render_robustness_execution_plan(
@@ -1030,14 +1061,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             )
         )
     expected_reuse_units = len(rolling_canonical_reuse_arm_ids) * len(rolling_robustness.resolved_seeds)
-    expected_pending_search_units = len(rolling_fixed_multiseed_arm_ids) * len(rolling_robustness.resolved_seeds)
+    expected_pending_search_units = (len(rolling_fixed_multiseed_arm_ids) + len(rolling_raw_price_arm_ids)) * len(rolling_robustness.resolved_seeds)
     expected_total_units = len(rolling_robustness.stochastic_arm_ids) * len(rolling_robustness.resolved_seeds)
     check_true(
         "robustness_plan_surfaces_cross_profile_seed_reuse_before_pending_fixed_multiseed_work",
         len(rendered_robustness_payload.get("registered_scientific_reuse_units") or ()) == expected_reuse_units
         and f"{expected_pending_search_units} pending search units" in rendered_robustness_plan
         and f"scientific result REUSE={expected_reuse_units}/{expected_total_units} arm×replicate" in rendered_robustness_plan
-        and rendered_robustness_plan.count("PARAM+REPLAY") == len(rolling_fixed_multiseed_arm_ids)
+        and rendered_robustness_plan.count("PARAM+REPLAY") == (len(rolling_fixed_multiseed_arm_ids) + len(rolling_raw_price_arm_ids))
         and rendered_robustness_plan.count(" seed scientific results identity一致") == len(rolling_canonical_reuse_arm_ids)
         and "Strategy fitting budgets" in rendered_robustness_plan
         and "4 seeds x 300 trials" in rendered_robustness_plan
@@ -1059,6 +1090,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         ),
         patch(
             "services.research.strategy_multi_seed_robustness.inspect_fixed_multiseed_robustness_strategy_parameter_artifact",
+            return_value={"action": "REUSE", "status": "READY"},
+        ),
+        patch(
+            "services.research.strategy_multi_seed_robustness.inspect_raw_price_robustness_strategy_parameter_artifact",
             return_value={"action": "REUSE", "status": "READY"},
         ),
     ):

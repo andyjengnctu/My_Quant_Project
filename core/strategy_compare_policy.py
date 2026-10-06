@@ -43,6 +43,7 @@ from core.strategy_compare_registry import (
     STRATEGY_COMPARE_PROFILES,
     STRATEGY_COMPARE_ROLLING_TEST_MODES,
     STRATEGY_COMPARE_SCHEMA_VERSION,
+    STRATEGY_COMPARE_SUITE_INVARIANTS,
     STRATEGY_COMPARE_SUITES,
     STRATEGY_DL_SOURCES,
     STRATEGY_PARAM_SOURCES,
@@ -533,6 +534,14 @@ def get_strategy_compare_suite(suite_id: str) -> dict[str, object]:
     if missing_arms or missing_contrasts:
         raise ValueError(
             f"Strategy Compare suite引用不存在設定: arms={missing_arms}, contrasts={missing_contrasts}"
+        )
+    invariant = dict(STRATEGY_COMPARE_SUITE_INVARIANTS.get(selected) or {})
+    required_arm_ids = tuple(str(value) for value in invariant.get("required_arm_ids", ()))
+    missing_required_arms = tuple(arm_id for arm_id in required_arm_ids if arm_id not in arm_ids)
+    if missing_required_arms:
+        raise ValueError(
+            "Strategy Compare append-only reference invariant violated: "
+            f"suite={selected}, missing_required_arms={missing_required_arms}"
         )
     for cid in contrast_ids:
         spec = dict(STRATEGY_COMPARE_CONTRASTS[cid])

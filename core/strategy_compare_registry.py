@@ -34,7 +34,7 @@ from config.training_policy import (
     ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 73
+STRATEGY_COMPARE_SCHEMA_VERSION = 74
 
 _ROLLING_OOS = get_breakout_quality_rolling_test_mode("oos")
 _ROLLING_ROLLING = get_breakout_quality_rolling_test_mode("rolling")
@@ -108,14 +108,26 @@ STRATEGY_COMPARE_DISPLAY_MIN_MR13AK_NO_K_NO_R0 = "Min MR-13AK No-K No-R0"
 
 # Current Compare Suite是「比較誰／比較哪些差」的唯一真理來源。
 # OOS／Rolling／single-seed／multi-seed都只能引用suite，不得各自再列current arm matrix。
+# Suite invariants are intentionally stored separately from the mutable current membership:
+# adding a treatment may append arms, but silently removing established references fails closed.
+STRATEGY_COMPARE_SUITE_INVARIANTS = {
+    "non_dl_reference_only_current": {
+        "membership_policy": "append_only_references",
+        "required_arm_ids": ("C58", "C61", "C85"),
+    },
+}
+
 STRATEGY_COMPARE_SUITES = {
     "non_dl_reference_only_current": {
-        # Raw-price Round 1 controlled comparison.  C61 and C93 share Full/formal/
-        # base-finalist-best/Seed42/300-trial semantics; only OHLC price basis differs.
-        "arm_ids": ("C61", "C93"),
-        "contrast_ids": ("C93-C61",),
+        # Current suite is append-only at the work-stage level: introducing the
+        # raw-price treatment must not silently remove the established references.
+        # C93 is added alongside the prior C58/C61/C85 matrix.
+        "arm_ids": ("C58", "C61", "C85", "C93"),
+        "contrast_ids": ("C85-C61", "C85-C58", "C93-C61"),
         "display_name_bases": {
+            "C58": "Min Base-Finalist-Best",
             "C61": "Full Adjusted Price Base-Finalist-Best",
+            "C85": "Full Base-Finalists-Agree 4x300",
             "C93": "Full Raw Price Base-Finalist-Best",
         },
     },
@@ -648,12 +660,13 @@ STRATEGY_COMPARE_PROFILES = {
         },
     },
     "non_dl_reference_only_oos": {
-        "label": "Raw Price Controlled Comparison | OOS Test",
+        "label": "Non-DL Current References + Raw Price | OOS Test",
         "description": (
-            "Raw-price Round 1 controlled comparison：C61 adjusted vs C93 raw_unadjusted；"
-            "兩者皆Full/formal/base-finalist-best/Seed42/300 trials，控制母體ticker/date/Volume一致。"
+            "保留既有C58/C61/C85 current references並新增C93 raw_unadjusted treatment；"
+            "C93-C61固定Full/formal/base-finalist-best/Seed42/300 trials與ticker/date/Volume，"
+            "唯一主要變量為OHLC price basis。"
         ),
-        "display_alignment_group": "raw_price_controlled",
+        "display_alignment_group": "non_dl_reference_plus_raw_price",
         "suite_id": "non_dl_reference_only_current",
         "display_suffix": "OOS",
         "start_date": "2021-01-01",
@@ -664,20 +677,23 @@ STRATEGY_COMPARE_PROFILES = {
         "point_in_time_fold_anchor_date": _ROLLING_OOS.fold_anchor_date,
         "point_in_time_single_score_block": bool(_ROLLING_OOS.single_score_block),
         "point_in_time_dirname": _ROLLING_OOS.point_in_time_dirname,
-        "output_root": "outputs/strategy_compare/raw_price_controlled/oos_2021_forward",
+        "output_root": "outputs/strategy_compare/non_dl_reference_plus_raw_price/oos_2021_forward",
         "reuse_output_roots": (),
         "arm_param_source_overrides": {
+            "C58": "min_oos",
             "C61": "full_oos",
+            "C85": "full_production_multiseed_oos_experiment",
             "C93": "raw_price_full_oos_experiment",
         },
     },
     "non_dl_reference_only_rolling": {
-        "label": "Raw Price Controlled Comparison | Rolling Test",
+        "label": "Non-DL Current References + Raw Price | Rolling Test",
         "description": (
-            "Raw-price Round 1 PIT controlled comparison：C61 adjusted vs C93 raw_unadjusted；"
-            "兩者皆Full/formal/base-finalist-best/Seed42/300 trials，唯一主要變量為OHLC price basis。"
+            "保留既有C58/C61/C85 current PIT references並新增C93 raw_unadjusted treatment；"
+            "C93-C61固定Full/formal/base-finalist-best/Seed42/300 trials與ticker/date/Volume，"
+            "唯一主要變量為OHLC price basis。"
         ),
-        "display_alignment_group": "raw_price_controlled",
+        "display_alignment_group": "non_dl_reference_plus_raw_price",
         "suite_id": "non_dl_reference_only_current",
         "display_suffix": "Rolling",
         "start_date": "2021-01-01",
@@ -688,10 +704,12 @@ STRATEGY_COMPARE_PROFILES = {
         "point_in_time_fold_anchor_date": _ROLLING_ROLLING.fold_anchor_date,
         "point_in_time_single_score_block": bool(_ROLLING_ROLLING.single_score_block),
         "point_in_time_dirname": _ROLLING_ROLLING.point_in_time_dirname,
-        "output_root": "outputs/strategy_compare/raw_price_controlled/rolling_2021_forward",
+        "output_root": "outputs/strategy_compare/non_dl_reference_plus_raw_price/rolling_2021_forward",
         "reuse_output_roots": (),
         "arm_param_source_overrides": {
+            "C58": "min_rolling",
             "C61": "full_rolling",
+            "C85": "full_production_multiseed_rolling_experiment",
             "C93": "raw_price_full_rolling_experiment",
         },
     },
@@ -868,9 +886,10 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "keep_replay_details": STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS,
         "keep_attribution_source": STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE,
         "romd_reference_baselines": {
-            "min": {"param_source": "full_oos", "param_policy": "base-finalist-best", "rule_policy": "formal"},
+            "min": {"param_source": "min_oos", "param_policy": "base-finalist-best", "rule_policy": "all_off"},
+            "full": {"param_source": "full_oos", "param_policy": "base-finalist-best", "rule_policy": "formal"},
         },
-        "output_root": "outputs/strategy_compare/robustness/raw_price_controlled/oos_2021_forward",
+        "output_root": "outputs/strategy_compare/robustness/non_dl_reference_plus_raw_price/oos_2021_forward",
         "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/non_dl_reference_only/oos_2021_forward",
         "checkpoint_cache_root": STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT,
     },
@@ -893,9 +912,10 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "keep_replay_details": STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS,
         "keep_attribution_source": STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE,
         "romd_reference_baselines": {
-            "min": {"param_source": "full_rolling", "param_policy": "base-finalist-best", "rule_policy": "formal"},
+            "min": {"param_source": "min_rolling", "param_policy": "base-finalist-best", "rule_policy": "all_off"},
+            "full": {"param_source": "full_rolling", "param_policy": "base-finalist-best", "rule_policy": "formal"},
         },
-        "output_root": "outputs/strategy_compare/robustness/raw_price_controlled/rolling_2021_forward",
+        "output_root": "outputs/strategy_compare/robustness/non_dl_reference_plus_raw_price/rolling_2021_forward",
         "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/non_dl_reference_only/rolling_2021_forward",
         "checkpoint_cache_root": STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT,
     },
@@ -2091,6 +2111,7 @@ __all__ = [
     "STRATEGY_COMPARE_SCHEMA_VERSION",
     "STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT",
     "STRATEGY_COMPARE_ROLLING_TEST_MODES",
+    "STRATEGY_COMPARE_SUITE_INVARIANTS",
     "STRATEGY_COMPARE_SUITES",
     "STRATEGY_COMPARE_PROFILES",
     "STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES",

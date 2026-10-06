@@ -1342,6 +1342,7 @@ def build_isolated_strategy_parameter_schedule(
     work_root: str | Path,
     runtime_domain: str,
     data_identity: dict[str, Any],
+    optimizer_seed_override: int | None = None,
     environ=None,
 ) -> dict[str, Any]:
     """Build one PIT schedule with the canonical Optimizer into an isolated domain.
@@ -1372,6 +1373,11 @@ def build_isolated_strategy_parameter_schedule(
         family=normalized_family,
         dataset=str(dataset),
     )
+    if optimizer_seed_override is not None:
+        override_seed = int(optimizer_seed_override)
+        if override_seed <= 0:
+            raise ValueError("isolated PIT schedule optimizer_seed_override必須>0")
+        contract = {**dict(contract), "optimizer_seed": override_seed}
     compare_policy = _compare_policy_name(normalized_policy)
     isolated_work_root = Path(work_root).resolve()
     schedule_work = isolated_work_root / "schedule_2021_forward"
