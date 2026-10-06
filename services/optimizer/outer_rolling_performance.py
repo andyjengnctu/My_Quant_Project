@@ -36,6 +36,7 @@ from core.training_performance import (
     resolve_optimizer_rolling_shared_prep_cache_max_items,
     resolve_optimizer_single_fold_local_min_parallel_workers_default,
     resolve_optimizer_single_fold_local_min_process_workers_default,
+    resolve_optimizer_trial_prep_execution_mode,
 )
 
 
@@ -70,7 +71,9 @@ def _resolve_rolling_fold_workers(environ, *, timing_mode: bool, fold_count: int
 
 
 def _resolve_outer_rolling_trial_prep_execution_mode(*, fold_workers: int) -> str:
-    return "inline" if int(fold_workers) > 1 else "process"
+    # Compatibility wrapper: the policy owner is core.training_performance so
+    # Research Rolling and Trading/Workbench cannot drift on nested parallelism.
+    return resolve_optimizer_trial_prep_execution_mode(outer_workers=int(fold_workers))
 
 
 def _is_rolling_fold_parallel_enabled(environ, *, timing_mode: bool, fold_count: int) -> bool:

@@ -83,7 +83,11 @@ from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS, DEFAULT_POR
 from config.training_policy import OPTIMIZER_RANDOM_SEED_DEFAULT
 
 
-from core.training_performance import resolve_optimizer_random_seed_ensemble_parallel_backend_default, resolve_optimizer_random_seed_ensemble_parallel_workers_default
+from core.training_performance import (
+    resolve_optimizer_random_seed_ensemble_parallel_backend_default,
+    resolve_optimizer_random_seed_ensemble_parallel_workers_default,
+    resolve_optimizer_trial_prep_execution_mode,
+)
 
 from services.optimizer.study_utils import INVALID_TRIAL_VALUE
 from services.optimizer.score_display import format_optimizer_score_for_display
@@ -1338,6 +1342,9 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
         member_session.run_action = "train"
         member_session.disable_milestone_dashboard = True
         member_session.disable_optimizer_status_line = True
+        member_session.set_trial_prep_execution_mode(
+            str(task.get("trial_prep_execution_mode") or "process")
+        )
         try:
             _emit_nonrolling_seed_process_progress_event(
                 task,
@@ -2126,6 +2133,9 @@ def _run_nonrolling_random_seed_ensemble_training(
     resource_sampler.start()
     parallel_workers = resolve_optimizer_random_seed_ensemble_parallel_workers_default(len(seeds))
     parallel_backend = resolve_optimizer_random_seed_ensemble_parallel_backend_default()
+    trial_prep_execution_mode = resolve_optimizer_trial_prep_execution_mode(
+        outer_workers=int(parallel_workers)
+    )
     raw_data_loader_path = _resolve_importable_callable_path(load_all_raw_data)
     process_parallel_enabled = bool(
         int(parallel_workers) > 1
@@ -2140,8 +2150,9 @@ def _run_nonrolling_random_seed_ensemble_training(
     progress_board = None
     if process_parallel_enabled:
         print(
-            f"{C_CYAN}⏱️ Multi-seed process mode：{int(parallel_workers)} 個 seed workers 進入同一 raw-data identity；"
-            "父程序不預載第 5 份資料，cache / reuse / process lock 由 canonical raw-data loader 統一處理。"
+            f"{C_CYAN}⏱️ Multi-seed process mode：outer_workers={int(parallel_workers)} | "
+            f"nested_prep={trial_prep_execution_mode}；{len(seeds)} 個 seed tasks 共用 canonical execution policy，"
+            "父程序不預載額外 raw-data 副本。"
             f"{C_RESET}",
             flush=True,
         )
@@ -2219,6 +2230,7 @@ def _run_nonrolling_random_seed_ensemble_training(
             walk_forward_policy=walk_forward_policy,
             output_dir=runtime_output_dir,
         )
+        member_session.set_trial_prep_execution_mode(trial_prep_execution_mode)
         member_session.n_trials = int(requested_trials)
         member_session.run_action = "train"
         member_session.disable_milestone_dashboard = compact_display
@@ -2410,6 +2422,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                 "optimizer_required_min_rows": int(optimizer_required_min_rows),
                 "objective_mode": str(objective_mode),
                 "requested_trials": int(requested_trials),
+                "trial_prep_execution_mode": str(trial_prep_execution_mode),
                 "output_dir": runtime_output_dir,
                 "db_name": None,
                 "environ": dict(environ or {}),

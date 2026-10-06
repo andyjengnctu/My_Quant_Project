@@ -271,6 +271,20 @@ def resolve_optimizer_random_seed_ensemble_parallel_backend_default():
     )
 
 
+def resolve_optimizer_trial_prep_execution_mode(*, outer_workers: int) -> str:
+    """Resolve nested trial-prep execution from the canonical outer concurrency.
+
+    When more than one optimizer unit is already running concurrently (folds,
+    seeds, or another outer orchestration), trial preparation must stay inline
+    inside each unit.  This prevents process-within-process fan-out and the
+    corresponding duplicate raw-data materialization, especially under the
+    Windows ``spawn`` start method.  A single outer unit may use the canonical
+    process-backed prep path.
+    """
+    resolved_outer_workers = _coerce_int(outer_workers, default=1, min_value=1)
+    return "inline" if resolved_outer_workers > 1 else "process"
+
+
 def resolve_optimizer_policy_replay_parallel_workers_default(policy_count):
     resolved_policy_count = _coerce_int(policy_count, default=1, min_value=1)
     raw_value = os.environ.get(

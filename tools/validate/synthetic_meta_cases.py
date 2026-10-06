@@ -2360,6 +2360,7 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         "core.training_performance": {
             "build_training_performance_policy_snapshot",
             "build_optimizer_outer_rolling_env_defaults",
+            "resolve_optimizer_trial_prep_execution_mode",
             "resolve_optimizer_rolling_fold_workers_default",
             "resolve_optimizer_rolling_seed_ensemble_global_workers",
             "resolve_optimizer_rolling_seed_ensemble_max_active_per_fold",
@@ -2591,6 +2592,18 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         "optimizer_performance_explicit_overrides_use_core_resolvers",
         True,
         explicit_worker_overrides_respected,
+    )
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "optimizer_nested_trial_prep_policy_is_owned_by_core_runtime",
+        ("process", "inline", "inline"),
+        (
+            performance_runtime.resolve_optimizer_trial_prep_execution_mode(outer_workers=1),
+            performance_runtime.resolve_optimizer_trial_prep_execution_mode(outer_workers=4),
+            performance_runtime.resolve_optimizer_trial_prep_execution_mode(outer_workers=12),
+        ),
     )
 
     outer_defaults = performance_runtime.build_optimizer_outer_rolling_env_defaults(3)
