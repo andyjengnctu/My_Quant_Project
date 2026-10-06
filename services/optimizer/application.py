@@ -2138,6 +2138,13 @@ def _run_nonrolling_random_seed_ensemble_training(
     process_log_paths: dict[int, str] = {}
     progress_lock = threading.Lock()
     progress_board = None
+    if process_parallel_enabled:
+        print(
+            f"{C_CYAN}⏱️ Multi-seed process mode：{int(parallel_workers)} 個 seed workers 進入同一 raw-data identity；"
+            "父程序不預載第 5 份資料，cache / reuse / process lock 由 canonical raw-data loader 統一處理。"
+            f"{C_RESET}",
+            flush=True,
+        )
     def _collect_policy_members(policy_members: dict | None) -> None:
         for policy_name, member in dict(policy_members or {}).items():
             if isinstance(member, list):

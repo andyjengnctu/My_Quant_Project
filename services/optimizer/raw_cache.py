@@ -46,6 +46,71 @@ def _build_raw_cache_paths(output_dir, profile_key, required_min_rows):
     }
 
 
+def _build_named_raw_cache_signature(source_identity, required_min_rows, *, cache_namespace):
+    safe_namespace = str(cache_namespace or "external").strip().lower() or "external"
+    signature_payload = {
+        "schema_version": RAW_CACHE_SCHEMA_VERSION,
+        "ohlcv_sanitization_contract_version": OHLCV_SANITIZATION_CONTRACT_VERSION,
+        "required_min_rows": int(required_min_rows),
+        "cache_namespace": safe_namespace,
+        "source_identity": dict(source_identity or {}),
+    }
+    payload_bytes = json.dumps(
+        signature_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload_bytes).hexdigest(), signature_payload
+
+
+def load_or_build_optimizer_persisted_raw_cache(
+    *,
+    output_dir,
+    cache_namespace,
+    required_min_rows,
+    source_identity,
+    builder,
+    verbose=True,
+):
+    """Load or build one process-safe Optimizer execution raw cache.
+
+    This is the shared persistence/locking capability for non-CSV Optimizer
+    sources. The source adapter owns only how frames are materialized; cache
+    identity, inter-process coordination, persistence and reuse stay here.
+    """
+
+    safe_namespace = str(cache_namespace or "external").strip().lower() or "external"
+    cache_paths = _build_raw_cache_paths(output_dir, safe_namespace, required_min_rows)
+    signature, signature_payload = _build_named_raw_cache_signature(
+        source_identity,
+        required_min_rows,
+        cache_namespace=safe_namespace,
+    )
+    data_root = str(dict(source_identity or {}).get("data_root") or safe_namespace)
+    persisted_payload, cache_hit = _load_or_build_raw_cache_payload(
+        cache_paths=cache_paths,
+        signature=signature,
+        signature_payload=signature_payload,
+        required_min_rows=int(required_min_rows),
+        profile_key=safe_namespace,
+        data_dir=data_root,
+        builder=builder,
+        use_cache=True,
+        write_cache=True,
+    )
+    raw_data_cache = persisted_payload["raw_data_cache"]
+    if bool(verbose):
+        _print_load_summary(
+            fresh_raw_data_cache=raw_data_cache,
+            totals=dict(persisted_payload.get("totals", {})),
+            load_issues=list(persisted_payload.get("load_issues", [])),
+            issue_path=None,
+            cache_hit=bool(cache_hit),
+            verbose=True,
+        )
+    return raw_data_cache
+
 def _build_raw_cache_signature(csv_inputs, required_min_rows, *, data_dir):
     signature_payload = {
         "schema_version": RAW_CACHE_SCHEMA_VERSION,
@@ -253,6 +318,71 @@ def _save_persisted_raw_cache(paths, *, signature, signature_payload, raw_data_c
         _safe_unlink(tmp_meta)
 
 
+def _load_or_build_raw_cache_payload(
+    *,
+    cache_paths,
+    signature,
+    signature_payload,
+    required_min_rows,
+    profile_key,
+    data_dir,
+    builder,
+    use_cache,
+    write_cache,
+):
+    """Canonical raw-cache coordination used by every Optimizer source."""
+
+    if bool(use_cache) and cache_paths is not None:
+        persisted_payload = _load_persisted_raw_cache(cache_paths, signature)
+        if persisted_payload is not None:
+            return persisted_payload, True
+
+    lock_context = (
+        _RawCacheBuildLock(cache_paths)
+        if bool(write_cache) and cache_paths is not None
+        else nullcontext()
+    )
+    with lock_context:
+        if bool(use_cache) and cache_paths is not None:
+            persisted_payload = _load_persisted_raw_cache(cache_paths, signature)
+            if persisted_payload is not None:
+                return persisted_payload, True
+
+        built = builder()
+        if not isinstance(built, tuple) or len(built) != 3:
+            raise TypeError(
+                "optimizer raw cache builder 必須回傳 (raw_data_cache, load_issues, totals)"
+            )
+        raw_data_cache, load_issues, totals = built
+        if not isinstance(raw_data_cache, dict) or not raw_data_cache:
+            raise RuntimeError("optimizer raw cache builder 未產生任何可用標的")
+        load_issues = list(load_issues or [])
+        totals = dict(totals or {})
+        if bool(write_cache) and cache_paths is not None:
+            _save_persisted_raw_cache(
+                cache_paths,
+                signature=signature,
+                signature_payload=signature_payload,
+                raw_data_cache=raw_data_cache,
+                load_issues=load_issues,
+                totals=totals,
+                profile_key=profile_key,
+                data_dir=data_dir,
+                required_min_rows=int(required_min_rows),
+            )
+        payload = {
+            "schema_version": RAW_CACHE_SCHEMA_VERSION,
+            "signature": str(signature or ""),
+            "profile_key": str(profile_key),
+            "data_dir": str(data_dir),
+            "required_min_rows": int(required_min_rows),
+            "raw_data_cache": raw_data_cache,
+            "load_issues": load_issues,
+            "totals": totals,
+        }
+        return payload, False
+
+
 def _write_load_issues_if_needed(load_issues, *, output_dir):
     if not load_issues:
         return None
@@ -312,28 +442,7 @@ def load_all_raw_data(data_dir, required_min_rows, output_dir, *, verbose=True):
             data_dir=data_dir,
         )
 
-    if use_raw_cache and cache_paths is not None:
-        persisted_payload = _load_persisted_raw_cache(cache_paths, signature)
-        if persisted_payload is not None:
-            return _persisted_payload_to_raw_data_cache(
-                persisted_payload,
-                duplicate_file_issue_lines,
-                output_dir=output_dir,
-                verbose=verbose,
-            )
-
-    lock_context = _RawCacheBuildLock(cache_paths) if write_raw_cache and cache_paths is not None else nullcontext()
-    with lock_context:
-        if use_raw_cache and cache_paths is not None:
-            persisted_payload = _load_persisted_raw_cache(cache_paths, signature)
-            if persisted_payload is not None:
-                return _persisted_payload_to_raw_data_cache(
-                    persisted_payload,
-                    duplicate_file_issue_lines,
-                    output_dir=output_dir,
-                    verbose=verbose,
-                )
-
+    def _build_csv_cache():
         load_issues = list(duplicate_file_issue_lines)
         total_invalid_rows = 0
         total_duplicate_dates = 0
@@ -345,10 +454,14 @@ def load_all_raw_data(data_dir, required_min_rows, output_dir, *, verbose=True):
             try:
                 raw_df = pd.read_csv(file_path)
                 if len(raw_df) < required_min_rows:
-                    load_issues.append(f"{ticker}: 原始資料列數不足 ({len(raw_df)})，至少需要 {required_min_rows} 列")
+                    load_issues.append(
+                        f"{ticker}: 原始資料列數不足 ({len(raw_df)})，至少需要 {required_min_rows} 列"
+                    )
                     continue
 
-                clean_df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=required_min_rows)
+                clean_df, sanitize_stats = sanitize_ohlcv_dataframe(
+                    raw_df, ticker, min_rows=required_min_rows
+                )
                 fresh_raw_data_cache[ticker] = clean_df
 
                 invalid_row_count = sanitize_stats["invalid_row_count"]
@@ -364,7 +477,16 @@ def load_all_raw_data(data_dir, required_min_rows, output_dir, *, verbose=True):
                         f"{ticker}: 清洗移除 {dropped_row_count} 列 "
                         f"(異常OHLCV={invalid_row_count}, 重複日期={duplicate_date_count})"
                     )
-            except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as exc:
+            except (
+                OSError,
+                pd.errors.EmptyDataError,
+                pd.errors.ParserError,
+                ValueError,
+                KeyError,
+                IndexError,
+                TypeError,
+                RuntimeError,
+            ) as exc:
                 if is_insufficient_data_error(exc):
                     load_issues.append(f"{ticker}: {type(exc).__name__}: {exc}")
                     continue
@@ -373,7 +495,10 @@ def load_all_raw_data(data_dir, required_min_rows, output_dir, *, verbose=True):
                 ) from exc
 
             if bool(verbose) and (count % 50 == 0 or count == total_files):
-                print(f"{C_GRAY}   進度: [{count}/{total_files}] 已掃描股票快取...{C_RESET}", end="\r")
+                print(
+                    f"{C_GRAY}   進度: [{count}/{total_files}] 已掃描股票快取...{C_RESET}",
+                    end="\r",
+                )
 
         if not fresh_raw_data_cache:
             raise RuntimeError("記憶體快取完成後仍無任何可用標的，無法進行 optimizer。")
@@ -383,26 +508,39 @@ def load_all_raw_data(data_dir, required_min_rows, output_dir, *, verbose=True):
             "total_duplicate_dates": total_duplicate_dates,
             "total_dropped_rows": total_dropped_rows,
         }
-        if write_raw_cache and cache_paths is not None:
-            _save_persisted_raw_cache(
-                cache_paths,
-                signature=signature,
-                signature_payload=signature_payload,
-                raw_data_cache=fresh_raw_data_cache,
-                load_issues=load_issues,
-                totals=totals,
-                profile_key=profile_key,
-                data_dir=data_dir,
-                required_min_rows=required_min_rows,
-            )
-        issue_path = _write_load_issues_if_needed(load_issues, output_dir=output_dir)
-        _print_load_summary(
-            fresh_raw_data_cache=fresh_raw_data_cache,
-            totals=totals,
-            load_issues=load_issues,
-            issue_path=issue_path,
-            cache_hit=False,
+        return fresh_raw_data_cache, load_issues, totals
+
+    persisted_payload, cache_hit = _load_or_build_raw_cache_payload(
+        cache_paths=cache_paths,
+        signature=signature,
+        signature_payload=signature_payload,
+        required_min_rows=int(required_min_rows),
+        profile_key=profile_key,
+        data_dir=data_dir,
+        builder=_build_csv_cache,
+        use_cache=bool(use_raw_cache),
+        write_cache=bool(write_raw_cache),
+    )
+
+    if cache_hit:
+        return _persisted_payload_to_raw_data_cache(
+            persisted_payload,
+            duplicate_file_issue_lines,
+            output_dir=output_dir,
             verbose=verbose,
         )
 
-        return fresh_raw_data_cache
+    fresh_raw_data_cache = persisted_payload["raw_data_cache"]
+    load_issues = list(persisted_payload.get("load_issues", []))
+    totals = dict(persisted_payload.get("totals", {}))
+    issue_path = _write_load_issues_if_needed(load_issues, output_dir=output_dir)
+    _print_load_summary(
+        fresh_raw_data_cache=fresh_raw_data_cache,
+        totals=totals,
+        load_issues=load_issues,
+        issue_path=issue_path,
+        cache_hit=False,
+        verbose=verbose,
+    )
+    return fresh_raw_data_cache
+

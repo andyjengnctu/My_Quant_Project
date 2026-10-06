@@ -220,10 +220,38 @@ class OptimizerSeedEnsembleProgressBoard:
             self._record_progress_metrics(normalized_key, dict(progress or {}))
         self.render(force=force)
 
+    @staticmethod
+    def _with_live_stage_elapsed(progress: dict) -> dict:
+        """Keep passive startup-stage elapsed time live between worker events.
+
+        RAW_DATA / START / STUDY_CREATE can legitimately run for a long time
+        without emitting another progress event.  Their event payload records
+        elapsed at stage entry, so a fixed renderer otherwise makes the worker
+        look stuck at 00:00 while the header total keeps advancing.
+        """
+        payload = dict(progress or {})
+        stage = str(payload.get("stage") or "").upper()
+        if stage not in {"START", "RAW_DATA", "STUDY_CREATE"}:
+            return payload
+        try:
+            event_ts = float(payload.get("ts"))
+        except (TypeError, ValueError):
+            return payload
+        if event_ts <= 0:
+            return payload
+        try:
+            elapsed_at_event = max(0.0, float(payload.get("elapsed_sec") or 0.0))
+        except (TypeError, ValueError):
+            elapsed_at_event = 0.0
+        payload["elapsed_sec"] = elapsed_at_event + max(0.0, time.time() - event_ts)
+        return payload
+
     def _build_lines(self) -> list[str]:
         header_text = str(self.header_factory(self) if callable(self.header_factory) else self.header)
         progress_by_key = {
-            self._context_key(context): dict(self.progress_by_key.get(self._context_key(context)) or {"stage": "QUEUED", "status": "queued"})
+            self._context_key(context): self._with_live_stage_elapsed(
+                dict(self.progress_by_key.get(self._context_key(context)) or {"stage": "QUEUED", "status": "queued"})
+            )
             for context in self.contexts
         }
         fold_progress_lines: list[str] = []

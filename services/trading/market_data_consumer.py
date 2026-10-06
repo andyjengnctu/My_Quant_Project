@@ -18,6 +18,7 @@ from core.runtime_utils import is_insufficient_data_error
 from core.display import C_GRAY, C_RESET
 from core.file_integrity import atomic_write_json, canonical_json_sha256, compute_file_sha256, load_json_strict
 from core.log_utils import write_issue_log
+from services.optimizer.raw_cache import load_or_build_optimizer_persisted_raw_cache
 from core.market_data_contract import FINMIND_ADJUSTED_PRICE_DATASET, FINMIND_RAW_PRICE_ARCHIVE_DATASET
 from core.market_data_dataset_readiness import market_data_contract_requires_target_freshness
 from core.market_data_freshness_contract import get_market_data_freshness_contract
@@ -31,6 +32,7 @@ from services.trading.market_data_v2_view import TradingMarketDataV2View
 from services.trading.market_data_dataset_state import load_market_data_dataset_state
 
 TRADING_V2_CONSUMER_STATE_SCHEMA_VERSION = 1
+TRADING_V2_OPTIMIZER_RAW_CACHE_ADAPTER_VERSION = 1
 TRADING_V2_CONSUMER_STATE_ROLE = "trading_v2_execution_consumer_state"
 TRADING_V2_CONSUMER_STATE_RELATIVE_PATH = Path(
     "state/trading/market_data_v2/execution_consumer_state.json"
@@ -352,6 +354,24 @@ def compute_trading_v2_ohlcv_frame_sha256(frame: pd.DataFrame) -> str:
     return canonical_json_sha256(payload)
 
 
+def _sanitize_trading_v2_ohlcv_frame(
+    raw: pd.DataFrame,
+    *,
+    ticker: str,
+    through_date: str,
+    min_rows: int,
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    sid = normalize_trading_ticker(ticker)
+    clean, stats = sanitize_ohlcv_dataframe(raw, sid, min_rows=int(min_rows))
+    cutoff = pd.Timestamp(through_date).normalize()
+    if pd.Timestamp(clean.index.max()).normalize() > cutoff:
+        raise RuntimeError(
+            f"Trading V2 consumer data 含超過 cutoff 的日K: {sid} "
+            f"latest={pd.Timestamp(clean.index.max()).strftime('%Y-%m-%d')} > allowed={through_date}"
+        )
+    return clean, dict(stats)
+
+
 def load_trading_v2_sanitized_ohlcv_frame(
     view: TradingMarketDataV2View,
     *,
@@ -360,13 +380,12 @@ def load_trading_v2_sanitized_ohlcv_frame(
     min_rows: int,
 ) -> pd.DataFrame:
     raw = build_trading_v2_ohlcv_frame(view, ticker=ticker, through_date=through_date)
-    clean, _stats = sanitize_ohlcv_dataframe(raw, normalize_trading_ticker(ticker), min_rows=int(min_rows))
-    cutoff = pd.Timestamp(through_date).normalize()
-    if pd.Timestamp(clean.index.max()).normalize() > cutoff:
-        raise RuntimeError(
-            f"Trading V2 consumer data 含超過 cutoff 的日K: {ticker} "
-            f"latest={pd.Timestamp(clean.index.max()).strftime('%Y-%m-%d')} > allowed={through_date}"
-        )
+    clean, _stats = _sanitize_trading_v2_ohlcv_frame(
+        raw,
+        ticker=ticker,
+        through_date=through_date,
+        min_rows=int(min_rows),
+    )
     return clean
 
 
@@ -560,41 +579,95 @@ def publish_trading_v2_consumer_state(
 
 
 def load_trading_v2_optimizer_raw_data(data_dir, required_min_rows, output_dir, *, verbose=True):
-    """Optimizer loader with the legacy loader signature, backed only by V2 view."""
+    """Load Trading V2 Optimizer frames through the shared raw-cache capability.
+
+    The immutable Trading V2 consumer state is the source identity.  One worker
+    materializes the batch PriceAdj/Volume view and persists it; concurrent seed
+    workers wait on the shared Optimizer cache lock and then reuse the same cache.
+    """
 
     root = Path(data_dir).resolve()
-    state = load_trading_v2_consumer_state(root, required=True, verify_current_view=True)
+    state = load_trading_v2_consumer_state(root, required=True, verify_current_view=False)
     through_date = str(state["market_date"])
-    view = open_trading_v2_consumer_view(root, consumer_state=state)
     tickers = list(state["training_tickers"])
-    cache: dict[str, pd.DataFrame] = {}
-    issues: list[str] = []
-    for index, ticker in enumerate(tickers, start=1):
+    source_identity = {
+        "adapter_version": TRADING_V2_OPTIMIZER_RAW_CACHE_ADAPTER_VERSION,
+        "source": "trading_market_data_v2_historical_latest_view",
+        "data_root": str(root),
+        "consumer_state_fingerprint": str(state["state_fingerprint"]),
+        "source_view_fingerprint": str(state["source_view_fingerprint"]),
+        "market_date": through_date,
+        "training_tickers": list(tickers),
+    }
+
+    def _build_cache():
+        view = open_trading_v2_consumer_view(root, consumer_state=state)
         try:
-            cache[ticker] = load_trading_v2_sanitized_ohlcv_frame(
+            raw_frames = build_trading_v2_ohlcv_frames(
                 view,
-                ticker=ticker,
+                tickers=tickers,
                 through_date=through_date,
-                min_rows=int(required_min_rows),
             )
         except (OSError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as exc:
-            if is_insufficient_data_error(exc):
-                issues.append(f"{ticker}: {type(exc).__name__}: {exc}")
-                continue
-            raise RuntimeError(f"Trading V2 optimizer raw data 讀取失敗: ticker={ticker} | {type(exc).__name__}: {exc}") from exc
-        if bool(verbose) and (index % 50 == 0 or index == len(tickers)):
-            print(f"{C_GRAY}   進度: [{index}/{len(tickers)}] 已讀取 Trading V2 stocks...{C_RESET}", end="\r")
-    if not cache:
-        raise RuntimeError("Trading V2 optimizer raw data 無任何可用標的")
-    if issues:
-        write_issue_log("optimizer_v2_load_issues", issues, log_dir=output_dir)
-    return cache
+            raise RuntimeError(
+                f"Trading V2 optimizer batch raw data 讀取失敗: {type(exc).__name__}: {exc}"
+            ) from exc
+
+        cache: dict[str, pd.DataFrame] = {}
+        issues: list[str] = []
+        totals = {
+            "total_invalid_rows": 0,
+            "total_duplicate_dates": 0,
+            "total_dropped_rows": 0,
+        }
+        for index, ticker in enumerate(tickers, start=1):
+            raw = raw_frames.get(ticker)
+            if raw is None:
+                raise RuntimeError(f"Trading V2 optimizer batch 缺 ticker frame: {ticker}")
+            try:
+                clean, stats = _sanitize_trading_v2_ohlcv_frame(
+                    raw,
+                    ticker=ticker,
+                    through_date=through_date,
+                    min_rows=int(required_min_rows),
+                )
+            except (OSError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as exc:
+                if is_insufficient_data_error(exc):
+                    issues.append(f"{ticker}: {type(exc).__name__}: {exc}")
+                    continue
+                raise RuntimeError(
+                    f"Trading V2 optimizer raw data 清洗失敗: ticker={ticker} | {type(exc).__name__}: {exc}"
+                ) from exc
+            cache[ticker] = clean
+            totals["total_invalid_rows"] += int(stats.get("invalid_row_count", 0) or 0)
+            totals["total_duplicate_dates"] += int(stats.get("duplicate_date_count", 0) or 0)
+            totals["total_dropped_rows"] += int(stats.get("dropped_row_count", 0) or 0)
+            if bool(verbose) and (index % 50 == 0 or index == len(tickers)):
+                print(
+                    f"{C_GRAY}   進度: [{index}/{len(tickers)}] 已建立 Trading V2 optimizer cache...{C_RESET}",
+                    end="\r",
+                )
+        if not cache:
+            raise RuntimeError("Trading V2 optimizer raw data 無任何可用標的")
+        if issues:
+            write_issue_log("optimizer_v2_load_issues", issues, log_dir=output_dir)
+        return cache, issues, totals
+
+    return load_or_build_optimizer_persisted_raw_cache(
+        output_dir=output_dir,
+        cache_namespace="trading_v2",
+        required_min_rows=int(required_min_rows),
+        source_identity=source_identity,
+        builder=_build_cache,
+        verbose=bool(verbose),
+    )
 
 
 __all__ = [
     "TRADING_V2_CONSUMER_STATE_SCHEMA_VERSION",
     "TRADING_V2_CONSUMER_STATE_ROLE",
     "TRADING_V2_CONSUMER_STATE_RELATIVE_PATH",
+    "TRADING_V2_OPTIMIZER_RAW_CACHE_ADAPTER_VERSION",
     "resolve_trading_v2_current_execution_pool",
     "build_trading_v2_ohlcv_frame",
     "build_trading_v2_ohlcv_frames",

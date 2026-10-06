@@ -7236,8 +7236,12 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
         "allocator": (repo / "services/trading/order_planning.py").read_text(encoding="utf-8"),
         "data_ops": (repo / "services/trading/market_data_ops.py").read_text(encoding="utf-8"),
         "v2_view": (repo / "services/trading/market_data_v2_view.py").read_text(encoding="utf-8"),
+        "v2_consumer": (repo / "services/trading/market_data_consumer.py").read_text(encoding="utf-8"),
+        "optimizer_raw_cache": (repo / "services/optimizer/raw_cache.py").read_text(encoding="utf-8"),
     }
     check_true("params_inject_v2_optimizer_loader", "raw_data_loader=load_trading_v2_optimizer_raw_data" in sources["params"])
+    check_true("trading_optimizer_loader_uses_bulk_v2_frames", "build_trading_v2_ohlcv_frames(" in sources["v2_consumer"] and "load_trading_v2_sanitized_ohlcv_frame(" not in sources["v2_consumer"].split("def load_trading_v2_optimizer_raw_data", 1)[1])
+    check_true("trading_optimizer_loader_reuses_shared_optimizer_raw_cache", "load_or_build_optimizer_persisted_raw_cache(" in sources["v2_consumer"] and "def load_or_build_optimizer_persisted_raw_cache(" in sources["optimizer_raw_cache"])
     check_true("scanner_runtime_uses_v2_consumer_state", "load_trading_v2_consumer_state" in sources["scanner_state"])
     check_true("trading_daily_scanner_passes_v2_prepared_frames", "prepared_frames=prepared_frames" in sources["daily"])
     check_true("trading_daily_scanner_uses_bulk_v2_ohlcv_preparation", "build_trading_v2_ohlcv_frames" in sources["daily"])
