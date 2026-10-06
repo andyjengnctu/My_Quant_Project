@@ -1131,6 +1131,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         pass
 
     runtime_entry_reached_shared_planner = []
+    runtime_entry_failures = []
     for robustness_settings in current_robustness:
         with (
             patch.object(robustness_runtime, "collect_artifact_status", return_value={}),
@@ -1147,8 +1148,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 )
             except _SharedPlannerReached:
                 runtime_entry_reached_shared_planner.append(True)
-            except Exception:
+            except Exception as exc:
                 runtime_entry_reached_shared_planner.append(False)
+                runtime_entry_failures.append(
+                    f"{robustness_settings.robustness_id}: {type(exc).__name__}: {exc}"
+                )
             else:
                 runtime_entry_reached_shared_planner.append(False)
     check_true(
@@ -2129,6 +2133,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             "arm_count": len(expected_arm_ids),
             "contrast_count": len(expected_contrast_ids),
             "current_dl_profiles": sorted({str(source.experiment_profile) for _profile_id, _dl_id, source in enabled_dl_sources}),
+            "runtime_entry_failures": runtime_entry_failures,
         }
     )
     return results, summary
