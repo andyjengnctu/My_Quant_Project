@@ -861,9 +861,14 @@ def load_active_research_v2_read_view(
     *,
     frame_reader: FrameReader | None = None,
     hash_fn: HashFn | None = None,
+    verify_materialization_file_content: bool = True,
 ) -> ActiveResearchV2ReadView:
     root = Path(project_root).resolve()
-    active = load_active_research_v2_promotion(root, required=True)
+    active = load_active_research_v2_promotion(
+        root,
+        required=True,
+        verify_materialization_file_content=bool(verify_materialization_file_content),
+    )
     freeze = load_research_v2_freeze_candidate(
         root,
         freeze_candidate_fingerprint=active.freeze_candidate_fingerprint,

@@ -57,6 +57,11 @@ from services.optimizer.strategy_param_service import (
     run_fixed_multiseed_strategy_parameter_timing_benchmark,
 )
 
+from services.research.raw_price_strategy_param import (
+    ensure_raw_price_strategy_parameter_artifact,
+    inspect_raw_price_strategy_parameter_artifact,
+)
+
 
 @dataclass(frozen=True)
 class StrategyParamWorkType:
@@ -252,6 +257,12 @@ def run_strategy_param_timing_cli(argv: list[str] | None = None) -> int:
 
 
 def _single_state(profile: StrategyParamTrainingProfile, *, required_end: str) -> dict:
+    if profile.price_basis == "raw_unadjusted":
+        if profile.filter_profile != "full" or profile.parameter_policy != "base-finalist-best":
+            raise ValueError("raw-price baseline目前只支援Full + base-finalist-best")
+        return inspect_raw_price_strategy_parameter_artifact(
+            PROJECT_ROOT, comparison_end_date=required_end
+        )
     protocol = _validation_protocol(profile)
     seed_protocol = _fitting_seed_protocol(profile)
     if protocol is not None and seed_protocol.enabled:
@@ -299,6 +310,12 @@ def _ensure_single(
     profile: StrategyParamTrainingProfile, *, required_end: str, force_rebuild: bool = False,
     oos_end_cap_date: str | None = None,
 ) -> dict:
+    if profile.price_basis == "raw_unadjusted":
+        if profile.filter_profile != "full" or profile.parameter_policy != "base-finalist-best":
+            raise ValueError("raw-price baseline目前只支援Full + base-finalist-best")
+        return ensure_raw_price_strategy_parameter_artifact(
+            PROJECT_ROOT, comparison_end_date=required_end, force_rebuild=bool(force_rebuild)
+        )
     protocol = _validation_protocol(profile)
     seed_protocol = _fitting_seed_protocol(profile)
     if protocol is not None and seed_protocol.enabled:
@@ -352,6 +369,12 @@ def _ensure_single(
 def _benchmark_state(
     profile: StrategyParamTrainingProfile, *, seed: int, required_end: str
 ) -> dict:
+    if profile.price_basis == "raw_unadjusted":
+        return {
+            "action": "BLOCKED",
+            "status": "RAW_PRICE_BASELINE_FIRST_ROBUSTNESS_NOT_ENABLED",
+            "path": "",
+        }
     benchmark = get_robustness_benchmark_policy_snapshot()
     seed_protocol = _fitting_seed_protocol(profile)
     if seed_protocol.enabled:
@@ -404,6 +427,10 @@ def _ensure_benchmark(
     profile: StrategyParamTrainingProfile, *, seed: int, required_end: str,
     force_rebuild: bool = False, oos_end_cap_date: str | None = None,
 ) -> dict:
+    if profile.price_basis == "raw_unadjusted":
+        raise RuntimeError(
+            "Raw/非還原價第一輪只建立Full + base-finalist-best baseline；Robustness尚未啟用"
+        )
     benchmark = get_robustness_benchmark_policy_snapshot()
     seed_protocol = _fitting_seed_protocol(profile)
     if seed_protocol.enabled:
@@ -473,6 +500,7 @@ def _render_profile_summary(profile: StrategyParamTrainingProfile) -> str:
         ("Validation", "ON" if protocol is not None else "OFF"),
         ("Parameter Set", profile.parameter_set_identity),
         ("Dataset", profile.dataset),
+        ("Price Basis", profile.price_basis),
         ("Fitting Seeds", str(seed_protocol.seed_count)),
         ("Seed Mode", seed_protocol.seed_mode),
         ("Trials / Seed", str(seed_protocol.trials_per_seed)),
@@ -517,6 +545,21 @@ def _build_plan(profile: StrategyParamTrainingProfile, work: StrategyParamWorkTy
     benchmark = get_robustness_benchmark_policy_snapshot()
     seed_protocol = _fitting_seed_protocol(profile)
     rows: list[dict] = []
+    if work.robustness and profile.price_basis == "raw_unadjusted":
+        return {
+            "work": work,
+            "profile": profile,
+            "required_end": required_end,
+            "benchmark": benchmark,
+            "rows": [{
+                "action": "BLOCKED",
+                "item": "Raw Price Full Base-Finalist-Best baseline",
+                "status": "先完成單次baseline；Robustness下一輪再開",
+                "path": "",
+                "seed": None,
+            }],
+            "status": "BLOCKED",
+        }
     if work.robustness:
         for seed in tuple(int(v) for v in benchmark["resolved_seeds"]):
             state = _benchmark_state(profile, seed=seed, required_end=required_end)
@@ -573,6 +616,7 @@ def render_strategy_param_plan(plan: dict) -> str:
         f"Training Profile     ：{profile.profile_id}",
         f"Filter Profile       ：{profile.filter_profile}",
         f"Param Policy         ：{profile.parameter_policy}",
+        f"Price Basis          ：{profile.price_basis}",
         f"Validation           ：{'ON' if protocol is not None else 'OFF'}",
         f"Parameter Set        ：{profile.parameter_set_identity}",
         f"Required coverage end：{plan['required_end']}",
@@ -728,6 +772,8 @@ def render_strategy_param_training_report(plan: dict) -> str:
 
 
 def _execute_plan(plan: dict, *, force_rebuild: bool = False) -> dict:
+    if str(plan.get("status") or "") == "BLOCKED":
+        raise RuntimeError("目前work type尚未開放；請先完成Raw Price baseline")
     profile: StrategyParamTrainingProfile = plan["profile"]
     work: StrategyParamWorkType = plan["work"]
     required_end = str(plan["required_end"])
@@ -818,6 +864,7 @@ def run_strategy_param_training_menu(*, advanced_handler: Callable[[], int]) -> 
         print(f"Training Profile ：{profile.profile_id}")
         print(f"Filter Profile   ：{profile.filter_profile}")
         print(f"Param Policy     ：{profile.parameter_policy}")
+        print(f"Price Basis      ：{profile.price_basis}")
         print(f"Validation       ：{'ON | ' + protocol.protocol_id if protocol else 'OFF'}")
         print(f"Parameter Set    ：{profile.parameter_set_identity}")
         print(f"Fitting Seeds    ：{seed_protocol.seed_count} | {seed_protocol.seed_mode} | {seed_protocol.trials_per_seed} trials/seed")

@@ -14,12 +14,11 @@ from config.research import RESEARCH_MARKET_DATA_CUTOFF
 
 # Current Research strategy-parameter target.  Changing this value changes what
 # Research [2] trains; the interactive menu must not offer a second target selector.
-# Round 10 closes the adaptive-validation line after C91 failed to improve the
-# established non-validation references materially.  Research now evaluates a
-# Trading-aligned Full/base-finalists-agree 8x1000 fitting budget.  Research pins a
-# deterministic seed bundle for reproducibility; Trading continues to draw a fresh
-# random 8-seed bundle on each explicit production retrain.
-ACTIVE_STRATEGY_PARAM_PROFILE = "trading_aligned_8x1000_current"
+# Current experiment starts the raw/unadjusted-price strategy line with the
+# smallest controlled baseline: Full + base-finalist-best, fixed seed 42,
+# 300 trials/fold.  It is isolated from adjusted-price canonical artifacts and
+# therefore cannot REUSE C61/C85 parameter truth.
+ACTIVE_STRATEGY_PARAM_PROFILE = "raw_price_full_base_finalist_best_current"
 
 
 # Validation is a reusable Optimizer capability.  Profiles opt in/out below;
@@ -163,6 +162,20 @@ STRATEGY_PARAM_CANONICAL_PROFILE_BY_FAMILY_POLICY: dict[tuple[str, str], str] = 
 
 
 STRATEGY_PARAM_PROFILES: dict[str, dict] = {
+    "raw_price_full_base_finalist_best_current": {
+        "label": "Raw Price Full Base-Finalist-Best",
+        "strategy_id": "breakout",
+        "filter_profile": "full",
+        "parameter_policy": "base-finalist-best",
+        "parameter_set_identity": "PARAM-RAW-P1",
+        "dataset": "full",
+        "price_basis": "raw_unadjusted",
+        "schedule_start_date": "2021-01-01",
+        "coverage_end_date": RESEARCH_MARKET_DATA_CUTOFF,
+        "validation": {"enabled": False},
+        "fitting_seed_protocol": "single_seed_42",
+        "artifact_slug": "param_raw_p1_full_base_finalist_best",
+    },
     "canonical_min_base_finalist_best": {
         "label": "Canonical Min Base-Finalist-Best",
         "strategy_id": "breakout",

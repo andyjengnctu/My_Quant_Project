@@ -90,6 +90,7 @@ class StrategyParamTrainingProfile:
     parameter_policy: str
     parameter_set_identity: str
     dataset: str
+    price_basis: str
     schedule_start_date: str
     coverage_end_date: str
     validation_enabled: bool
@@ -348,6 +349,9 @@ def get_strategy_param_training_profile(profile_id: str) -> StrategyParamTrainin
             raise ValueError(f"score_policy_overrides不得包含空白key: {key}")
     else:
         raise ValueError(f"score_policy_overrides必須是mapping: {key}")
+    price_basis = str(raw.get("price_basis") or "adjusted").strip().lower()
+    if price_basis not in {"adjusted", "raw_unadjusted"}:
+        raise ValueError(f"strategy parameter price_basis不支援: {key} -> {price_basis!r}")
     registered_scientific_fingerprint_sha256 = str(
         raw.get("registered_scientific_fingerprint_sha256") or ""
     ).strip().lower() or None
@@ -367,6 +371,7 @@ def get_strategy_param_training_profile(profile_id: str) -> StrategyParamTrainin
         parameter_policy=values["parameter_policy"],
         parameter_set_identity=values["parameter_set_identity"],
         dataset=values["dataset"],
+        price_basis=price_basis,
         schedule_start_date=start.isoformat(),
         coverage_end_date=end.isoformat(),
         validation_enabled=enabled,

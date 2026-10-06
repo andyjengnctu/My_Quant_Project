@@ -232,6 +232,34 @@ class ResearchV2ProviderView:
         yield from self._iter_verified_frames(name, columns=columns)
 
 
+    def iter_raw_price_strategy_frames(
+        self,
+        *,
+        columns: tuple[str, ...],
+    ) -> Iterator[pd.DataFrame]:
+        """Read frozen raw OHLCV for the explicit raw-price strategy experiment.
+
+        This is intentionally separate from ``iter_dataset_scope_frames`` so the
+        existing Research V2 foundation authorization/fingerprint remains unchanged.
+        The caller receives only the pinned immutable ``TaiwanStockPrice`` fields
+        required by the raw/unadjusted strategy dataset; this does not authorize
+        raw OHLC for any adjusted-price Research consumer.
+        """
+        allowed = {
+            "date", "stock_id", "open", "max", "min", "close", PROVIDER_VOLUME_FIELD
+        }
+        requested = tuple(str(column) for column in columns)
+        disallowed = sorted(set(requested).difference(allowed))
+        if disallowed:
+            raise RuntimeError(
+                "Research V2 raw-price strategy reader欄位未授權: "
+                f"{RESEARCH_V2_RAW_VOLUME_DATASET} -> {disallowed}"
+            )
+        yield from self._iter_verified_frames(
+            RESEARCH_V2_RAW_VOLUME_DATASET, columns=requested
+        )
+
+
     def iter_dataset_scope_frames(
         self,
         dataset: str,
