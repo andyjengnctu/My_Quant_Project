@@ -29,6 +29,9 @@ from services.optimizer.strategy_param_service import (
     ensure_strategy_parameter_artifact,
     ensure_validation_budget_strategy_parameter_artifact,
 )
+from services.research.raw_price_strategy_param import (
+    ensure_raw_price_strategy_parameter_artifact,
+)
 from services.research.artifact_orchestrator import run_research_artifact_preparation
 from services.optimizer.strategy_param_training import (
     prepare_extending_full_roos_params,
@@ -111,6 +114,25 @@ def _execute_preparation_action(
                 validation_protocol_id=validation_protocol_id,
                 oos_end_cap_date=oos_end_cap_date,
             )
+        return
+    if action.builder_type == "optimizer_raw_price_strategy_params":
+        _kind, source_id = action.artifact_key.split(":", 1)
+        source = settings.parameter_sources[source_id]
+        required_schedule_end = resolve_strategy_parameter_required_schedule_end(
+            source,
+            comparison_start=comparison_start_date,
+            comparison_end=comparison_end_date,
+        )
+        if required_schedule_end in (None, ""):
+            raise RuntimeError("raw-price parameter builder缺少可解析的required schedule end")
+        policies = resolve_required_param_policies_for_source(settings, source_id)
+        if policies != ("base-finalist-best",):
+            raise RuntimeError(
+                "PARAM-RAW-P1目前只授權base-finalist-best: " + ",".join(policies)
+            )
+        ensure_raw_price_strategy_parameter_artifact(
+            root, comparison_end_date=str(required_schedule_end)
+        )
         return
     if action.builder_type == "optimizer_fixed_multiseed_strategy_params":
         _kind, source_id = action.artifact_key.split(":", 1)

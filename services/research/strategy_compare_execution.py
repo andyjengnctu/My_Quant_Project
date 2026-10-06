@@ -44,6 +44,25 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 
+
+def resolve_strategy_compare_arm_data_dir(
+    arm: Any,
+    *,
+    project_root: str | Path = PROJECT_ROOT,
+) -> Path | None:
+    """Resolve an explicit per-arm dataset only for scientifically isolated arms."""
+
+    source = str(getattr(arm, "data_source", "canonical") or "canonical").strip()
+    if source == "canonical":
+        return None
+    if source == "raw_unadjusted_controlled":
+        from services.research.raw_price_strategy_dataset import ensure_raw_price_strategy_dataset
+
+        state = ensure_raw_price_strategy_dataset(Path(project_root).resolve())
+        return Path(state["dataset_dir"]).resolve()
+    raise ValueError(f"未知Strategy Compare arm data_source: {source!r}")
+
+
 def selection_pit_mode_paths(
     source: Any,
     *,
@@ -152,6 +171,9 @@ def run_strategy_compare_baseline_arm(
         shared_param_overrides=(ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None),
         baseline_reuse_dir=baseline_reuse_dir,
         param_evaluation_mode=str(param_evaluation_mode),
+        data_dir_override=resolve_strategy_compare_arm_data_dir(
+            arm, project_root=Path(project_root).resolve()
+        ),
     )
 
 

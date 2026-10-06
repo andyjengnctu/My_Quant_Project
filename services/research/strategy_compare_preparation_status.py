@@ -101,6 +101,9 @@ from services.optimizer.strategy_param_service import (
     inspect_validation_budget_strategy_parameter_artifact,
     validate_strategy_parameter_artifact_identity,
 )
+from services.research.raw_price_strategy_param import (
+    inspect_raw_price_strategy_parameter_artifact,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -940,7 +943,20 @@ def _collect_parameter_artifact_status(
             )
             policy_identity_ready = identity_ready
             policy_identity_status = identity_status
-            if builder_type == "optimizer_validation_budget_refit_strategy_params":
+            if builder_type == "optimizer_raw_price_strategy_params":
+                if param_policy != "base-finalist-best":
+                    policy_identity_ready = False
+                    policy_identity_status = "RAW_PRICE_POLICY_NOT_AUTHORIZED"
+                elif required_schedule_end in (None, ""):
+                    policy_identity_ready = False
+                    policy_identity_status = "RAW_PRICE_REQUIRED_SCHEDULE_END_MISSING"
+                else:
+                    raw_state = inspect_raw_price_strategy_parameter_artifact(
+                        root, comparison_end_date=str(required_schedule_end)
+                    )
+                    policy_identity_ready = bool(raw_state["ready"])
+                    policy_identity_status = str(raw_state["status"])
+            elif builder_type == "optimizer_validation_budget_refit_strategy_params":
                 builder_options = {} if source.builder is None else dict(source.builder.options)
                 validation_state = inspect_validation_budget_strategy_parameter_artifact(
                     root,
@@ -1089,6 +1105,7 @@ def _collect_parameter_artifact_status(
                 "canonical_optimizer_strategy_params",
                 "optimizer_validation_budget_refit_strategy_params",
                 "optimizer_fixed_multiseed_strategy_params",
+                "optimizer_raw_price_strategy_params",
             }:
                 description = (
                     "由canonical Optimizer parameter service解析／建立／接續策略參數工件"
@@ -1163,6 +1180,7 @@ def _collect_parameter_artifact_status(
                             "canonical_optimizer_strategy_params",
                             "optimizer_validation_budget_refit_strategy_params",
                             "optimizer_fixed_multiseed_strategy_params",
+                            "optimizer_raw_price_strategy_params",
                         }
                         else "strategy_parameter_optimization"
                     )

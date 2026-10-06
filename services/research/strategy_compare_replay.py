@@ -362,6 +362,7 @@ def run_standalone_baseline(
     shared_param_overrides=None,
     baseline_reuse_dir=None,
     param_evaluation_mode="rolling",
+    data_dir_override=None,
 ):
     """Run or rehydrate one canonical DL-off strategy baseline.
 
@@ -439,7 +440,11 @@ def run_standalone_baseline(
             f"params={param_start}~{param_end}, comparison={start_date}~{end_date}"
         )
 
-    data_dir = Path(get_dataset_dir(str(root), dataset)).resolve()
+    data_dir = (
+        Path(data_dir_override).resolve()
+        if data_dir_override not in (None, "")
+        else Path(get_dataset_dir(str(root), dataset)).resolve()
+    )
     replay_counts: dict[str, Any] | None = {}
     baseline_summary_override = None
     baseline_orderable_reused = None

@@ -235,9 +235,10 @@ class StrategyComparisonArm:
     dl_runtime_mode: str | None
     dl_runtime_options: Mapping[str, Any] | None = None
     robustness_role: str = "off"
+    data_source: str = "canonical"
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "arm_id": self.arm_id,
             "enabled": bool(self.enabled),
             "name": self.name,
@@ -253,6 +254,10 @@ class StrategyComparisonArm:
             ),
             "robustness_role": self.robustness_role,
         }
+        # Preserve historical fingerprints for every pre-existing canonical-data arm.
+        if self.data_source != "canonical":
+            payload["data_source"] = self.data_source
+        return payload
 
 
 STRATEGY_COMPARE_GPU_TRAIN_WORKERS_MIN = 1
@@ -641,6 +646,12 @@ def _validate_builder(
             raise ValueError(f"{field_name}.inference_batch_size必須>=1")
         if int(builder.options.get("inference_workers") or 0) < 1:
             raise ValueError(f"{field_name}.inference_workers必須>=1")
+    if builder.builder_type == "optimizer_raw_price_strategy_params":
+        training_profile_id = str(builder.options.get("training_profile_id") or "").strip()
+        if training_profile_id != "raw_price_full_base_finalist_best_current":
+            raise ValueError(
+                f"{field_name}.training_profile_id必須是raw_price_full_base_finalist_best_current"
+            )
     if builder.builder_type == "oos_param_freeze":
         source_param_source_id = str(builder.options.get("source_param_source_id") or "").strip()
         if not source_param_source_id:
@@ -812,6 +823,7 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                 "canonical_optimizer_strategy_params",
                 "optimizer_validation_budget_refit_strategy_params",
                 "optimizer_fixed_multiseed_strategy_params",
+                "optimizer_raw_price_strategy_params",
             },
         )
         if source.builder is not None and source.builder.enabled:

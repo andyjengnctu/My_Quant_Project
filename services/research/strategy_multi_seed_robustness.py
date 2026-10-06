@@ -4481,6 +4481,16 @@ def run_multi_seed_robustness(
     if not cfg.enabled:
         raise RuntimeError("Multiple-seed robustness目前由config關閉")
     settings = get_strategy_comparison_settings(cfg.profile_id)
+    raw_price_arms = tuple(
+        arm.arm_id for arm in settings.enabled_arms
+        if str(getattr(arm, "data_source", "canonical") or "canonical") != "canonical"
+    )
+    if raw_price_arms:
+        raise RuntimeError(
+            "Raw-price Round 1目前只授權single-seed Forward/Rolling controlled comparison；"
+            "multi-seed robustness尚未啟用，避免在未建立per-seed raw parameter producer前混用adjusted資料。"
+            f" arms={','.join(raw_price_arms)}"
+        )
     fixed_arms, stochastic_arms = _robustness_arms(settings, cfg)
     model_arms = (
         _model_seed_sensitive_arms(settings, cfg, tuple(stochastic_arms))

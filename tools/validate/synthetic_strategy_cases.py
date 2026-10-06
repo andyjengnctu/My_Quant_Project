@@ -4367,22 +4367,31 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and current_compare_settings.parameter_sources[arm.param_source].builder.builder_type
             == "optimizer_fixed_multiseed_strategy_params"
     }
+    current_raw_profiles = {
+        str(dict(current_compare_settings.parameter_sources[arm.param_source].builder.options).get("training_profile_id") or "")
+        for arm in current_compare_settings.enabled_arms
+        if current_compare_settings.parameter_sources[arm.param_source].builder is not None
+        and current_compare_settings.parameter_sources[arm.param_source].builder.builder_type
+            == "optimizer_raw_price_strategy_params"
+    }
     check(
-        "strategy_compare_current_suite_excludes_completed_c92_and_validation_line",
+        "strategy_compare_current_suite_is_raw_price_controlled_c61_c93",
         True,
         tuple(arm.arm_id for arm in current_compare_settings.enabled_arms)
-            == ("C58", "C61", "C85")
+            == ("C61", "C93")
+        and tuple(contrast.contrast_id for contrast in current_compare_settings.enabled_contrasts)
+            == ("C93-C61",)
         and "optimizer_validation_budget_refit_strategy_params" not in current_builder_types
+        and "optimizer_fixed_multiseed_strategy_params" not in current_builder_types
         and not current_validation_parameter_sets
-        and current_fixed_multiseed_profiles
-            == {production_multiseed_param_profile.profile_id}
+        and not current_fixed_multiseed_profiles
+        and current_raw_profiles == {active_param_profile.profile_id}
+        and current_compare_settings.arms["C61"].data_source == "canonical"
+        and current_compare_settings.arms["C93"].data_source == "raw_unadjusted_controlled"
         and all(
             arm_id not in {arm.arm_id for arm in current_compare_settings.enabled_arms}
-            for arm_id in ("C62", "C89", "C91", "C92")
+            for arm_id in ("C58", "C62", "C85", "C89", "C91", "C92")
         )
-        # Round 1 raw-price research deliberately changes Research [2]'s active
-        # parameter-training target without reactivating completed P13/C92 in
-        # Strategy Compare.  P13 remains registered as historical evidence only.
         and active_param_profile.profile_id == "raw_price_full_base_finalist_best_current"
         and active_param_profile.parameter_set_identity == "PARAM-RAW-P1"
         and active_param_profile.price_basis == "raw_unadjusted"
@@ -4390,6 +4399,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and active_param_profile.parameter_policy == "base-finalist-best"
         and active_param_profile.fitting_seed_protocol == "single_seed_42"
         and not active_param_profile.validation_enabled
+        # Historical P13 remains registered and reproducible; it is not current.
         and trading_aligned_8x1000_param_profile.profile_id
             == "trading_aligned_8x1000_current"
         and trading_aligned_8x1000_param_profile.parameter_set_identity == "PARAM-P13"

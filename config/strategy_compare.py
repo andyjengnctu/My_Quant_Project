@@ -14,12 +14,11 @@ from core.breakout_quality_registry import (
 
 # Current work-stage selection. Stable menu work types live in apps/research.py;
 # only the current scientific profiles/bindings change here.
-# Round 11 removes C92 from the current comparison after its completed 8x1000
-# evidence.  Current Compare keeps only the established C58/C61/C85 references.
-# Robustness is not an independent scientific-matrix selector: it must extend the
-# same current OOS/Rolling profile and Compare Suite across the benchmark seed set.
-# Historical C92/C89/C91/C62 identities and completed results remain registered and
-# discoverable for identity-based reuse/replay.
+# Raw-price Round 1 current comparison: C61 adjusted Full base-finalist-best vs
+# C93 raw/unadjusted Full base-finalist-best.  Ticker/date/Volume and all strategy
+# semantics are controlled; the intended primary variable is OHLC price basis only.
+# Historical C58/C85/C92/C89/C91/C62 identities and completed results remain
+# registered and discoverable for identity-based reuse/replay.
 STRATEGY_COMPARE_CURRENT_OOS_PROFILE = "non_dl_reference_only_oos"
 STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE = "non_dl_reference_only_rolling"
 STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS = STRATEGY_COMPARE_CURRENT_OOS_PROFILE
