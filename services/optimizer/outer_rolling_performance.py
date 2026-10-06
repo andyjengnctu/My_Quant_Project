@@ -29,6 +29,9 @@ from core.training_performance import (
     resolve_optimizer_resource_disk_mbps_cap,
     resolve_optimizer_resource_sample_interval_sec,
     resolve_optimizer_rolling_fold_workers_default,
+    resolve_optimizer_rolling_seed_ensemble_global_workers,
+    resolve_optimizer_rolling_seed_ensemble_max_active_per_fold,
+    resolve_optimizer_rolling_seed_ensemble_priority_warmup_max_sec,
     resolve_optimizer_rolling_parallel_prep_cache_max_items_default,
     resolve_optimizer_rolling_shared_prep_cache_max_items,
     resolve_optimizer_single_fold_local_min_parallel_workers_default,
@@ -136,9 +139,15 @@ def _format_parallel_settings_line(environ, *, fold_workers: int, sampler_kind: 
         str(resolve_optimizer_feature_bank_max_items_default()),
     )
     nested_prep_mode = _resolve_outer_rolling_trial_prep_execution_mode(fold_workers=int(fold_workers))
+    seed_global_workers = resolve_optimizer_rolling_seed_ensemble_global_workers(environ)
+    seed_per_fold_cap = resolve_optimizer_rolling_seed_ensemble_max_active_per_fold(64, environ)
+    seed_priority_warmup_sec = resolve_optimizer_rolling_seed_ensemble_priority_warmup_max_sec(environ)
     return (
         "平行化設定："
         f"OPTIMIZER_ROLLING_FOLD_WORKERS={rolling_workers} | "
+        f"ROLLING_SEED_GLOBAL_WORKERS={int(seed_global_workers)} | "
+        f"ROLLING_SEED_PER_FOLD_CAP={int(seed_per_fold_cap)} | "
+        f"ROLLING_SEED_PRIORITY_WARMUP={float(seed_priority_warmup_sec):.0f}s | "
         f"OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS={search_parallel_trials} | "
         f"OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS={local_min_workers} | "
         f"OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS={process_workers} | "
@@ -184,6 +193,14 @@ def _build_training_performance_alignment_rows(environ, *, fold_count: int, fold
             "consistent": True,
             "result_scope": "不改單一 fold 計算；只改不同 OOS period 的執行順序",
             "display": "console plan / timing JSON summary / timing CSV fold rows",
+        },
+        {
+            "item": "rolling_seed_global_scheduler",
+            "normal_mode": f"workers={resolve_optimizer_rolling_seed_ensemble_global_workers(environ)}, per_fold_cap={resolve_optimizer_rolling_seed_ensemble_max_active_per_fold(64, environ)}",
+            "timing_mode": f"workers={resolve_optimizer_rolling_seed_ensemble_global_workers(environ)}, per_fold_cap={resolve_optimizer_rolling_seed_ensemble_max_active_per_fold(64, environ)}",
+            "consistent": True,
+            "result_scope": "random-seed rolling only: fold x seed global queue; estimated-tail priority changes execution order only",
+            "display": "console scheduler line / timing policy snapshot",
         },
         {
             "item": "rolling_fold_parallel",

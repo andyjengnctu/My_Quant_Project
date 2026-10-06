@@ -2341,6 +2341,9 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         },
         "config.training_performance_policy": {
             "OPTIMIZER_ROLLING_FOLD_WORKERS",
+            "OPTIMIZER_ROLLING_SEED_ENSEMBLE_GLOBAL_WORKERS",
+            "OPTIMIZER_ROLLING_SEED_ENSEMBLE_MAX_ACTIVE_PER_FOLD",
+            "OPTIMIZER_ROLLING_SEED_ENSEMBLE_PRIORITY_WARMUP_MAX_SEC",
             "OPTIMIZER_FEATURE_BANK_MAX_ITEMS",
             "OPTIMIZER_NATIVE_HOTPATH_KERNELS",
             "OPTIMIZER_TIMING_MODE_DEFAULT_TRIALS",
@@ -2358,6 +2361,9 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
             "build_training_performance_policy_snapshot",
             "build_optimizer_outer_rolling_env_defaults",
             "resolve_optimizer_rolling_fold_workers_default",
+            "resolve_optimizer_rolling_seed_ensemble_global_workers",
+            "resolve_optimizer_rolling_seed_ensemble_max_active_per_fold",
+            "resolve_optimizer_rolling_seed_ensemble_priority_warmup_max_sec",
             "is_optimizer_outer_rolling_timing_resource_write_csv_enabled_default",
             "resolve_optimizer_rolling_shared_prep_cache_max_items",
             "resolve_optimizer_full_evaluation_cache_max_items",
@@ -2598,6 +2604,9 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         "OPTIMIZER_ACTIVE_REPLAY_USE_PREPARED_CACHE",
         "OPTIMIZER_ACTIVE_REPLAY_WRITE_PREPARED_CACHE",
         "OPTIMIZER_ROLLING_FOLD_WORKERS",
+        "OPTIMIZER_ROLLING_SEED_ENSEMBLE_GLOBAL_WORKERS",
+        "OPTIMIZER_ROLLING_SEED_ENSEMBLE_MAX_ACTIVE_PER_FOLD",
+        "OPTIMIZER_ROLLING_SEED_ENSEMBLE_PRIORITY_WARMUP_MAX_SEC",
         "OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS",
         "OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH",
         "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS",
@@ -2685,6 +2694,83 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
             outer_performance._resolve_outer_rolling_trial_prep_execution_mode(fold_workers=6),
         ),
     )
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "outer_rolling_seed_ensemble_global_scheduler_resolves_from_config_owner",
+        (
+            max(1, int(performance_config.OPTIMIZER_ROLLING_SEED_ENSEMBLE_GLOBAL_WORKERS)),
+            max(1, min(4, int(performance_config.OPTIMIZER_ROLLING_SEED_ENSEMBLE_MAX_ACTIVE_PER_FOLD))),
+        ),
+        (
+            performance_runtime.resolve_optimizer_rolling_seed_ensemble_global_workers({}),
+            performance_runtime.resolve_optimizer_rolling_seed_ensemble_max_active_per_fold(4, {}),
+        ),
+    )
+    scheduler_states = [
+        {
+            "task": {"fold_idx": 1},
+            "pending_members": [(2, 102)],
+            "active_members": {1},
+            "per_fold_cap": 3,
+            "rate_sec_per_trial": 2.0,
+            "remaining_trial_units": 600,
+        },
+        {
+            "task": {"fold_idx": 2},
+            "pending_members": [(2, 202)],
+            "active_members": {1},
+            "per_fold_cap": 3,
+            "rate_sec_per_trial": 5.0,
+            "remaining_trial_units": 500,
+        },
+    ]
+    selected_scheduler_state = outer_runtime._seed_scheduler_select_state(scheduler_states)
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "outer_rolling_seed_scheduler_prioritizes_largest_estimated_tail",
+        2,
+        int(dict((selected_scheduler_state or {}).get("task") or {}).get("fold_idx", 0) or 0),
+    )
+
+    balanced_tail_states = [
+        {
+            "task": {"fold_idx": 3},
+            "pending_members": [(3, 303)],
+            "active_members": {1, 2},
+            "per_fold_cap": 3,
+            "rate_sec_per_trial": 6.0,
+            "remaining_trial_units": 600,
+        },
+        {
+            "task": {"fold_idx": 6},
+            "pending_members": [(2, 602)],
+            "active_members": {1},
+            "per_fold_cap": 3,
+            "rate_sec_per_trial": 5.5,
+            "remaining_trial_units": 600,
+        },
+    ]
+    selected_balanced_tail_state = outer_runtime._seed_scheduler_select_state(
+        balanced_tail_states
+    )
+    add_check(
+        results,
+        "meta_coverage",
+        case_id,
+        "outer_rolling_seed_scheduler_accounts_for_existing_fold_concurrency",
+        6,
+        int(
+            dict((selected_balanced_tail_state or {}).get("task") or {}).get(
+                "fold_idx", 0
+            )
+            or 0
+        ),
+    )
+
     add_check(
         results,
         "meta_coverage",

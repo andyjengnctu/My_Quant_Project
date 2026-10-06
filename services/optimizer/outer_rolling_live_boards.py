@@ -353,6 +353,10 @@ class _ParallelFoldLiveBoard:
                 ),
                 replay_wall_elapsed_sec=replay_metrics.get("replay_wall_elapsed_sec"),
             )
+            scheduler_workers = max(
+                (int(task.get("seed_scheduler_global_workers", 0) or 0) for task in self.tasks),
+                default=0,
+            )
             header = format_optimizer_progress_performance_header(
                 folds=total_folds,
                 seeds=seed_count,
@@ -361,7 +365,11 @@ class _ParallelFoldLiveBoard:
                     if show_seed_min_agree
                     else None
                 ),
-                parallel_workers=resolve_optimizer_random_seed_ensemble_parallel_workers_default(seed_count),
+                parallel_workers=(
+                    int(scheduler_workers)
+                    if int(scheduler_workers) > 0
+                    else resolve_optimizer_random_seed_ensemble_parallel_workers_default(seed_count)
+                ),
                 selector=str(progress_display_contract.get("selector") or "").strip() or None,
                 backend=resolve_optimizer_random_seed_ensemble_parallel_backend_default(),
                 completed_folds=len(completed_rows_sorted),

@@ -22,6 +22,9 @@ from config.training_performance_policy import (
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_BACKEND,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_WORKERS,
     OPTIMIZER_ROLLING_FOLD_WORKERS,
+    OPTIMIZER_ROLLING_SEED_ENSEMBLE_GLOBAL_WORKERS,
+    OPTIMIZER_ROLLING_SEED_ENSEMBLE_MAX_ACTIVE_PER_FOLD,
+    OPTIMIZER_ROLLING_SEED_ENSEMBLE_PRIORITY_WARMUP_MAX_SEC,
     OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS,
     OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH,
     OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_WORKERS,
@@ -103,6 +106,37 @@ def resolve_optimizer_rolling_fold_workers_default(fold_count):
     if text in {"", "fold_count", "folds", "auto"}:
         return resolved_fold_count
     return _coerce_int(raw_value, default=resolved_fold_count, min_value=1)
+
+
+def resolve_optimizer_rolling_seed_ensemble_global_workers(environ=None) -> int:
+    return _resolve_env_int(
+        "OPTIMIZER_ROLLING_SEED_ENSEMBLE_GLOBAL_WORKERS",
+        config_default=OPTIMIZER_ROLLING_SEED_ENSEMBLE_GLOBAL_WORKERS,
+        environ=environ,
+        min_value=1,
+        max_value=64,
+    )
+
+
+def resolve_optimizer_rolling_seed_ensemble_max_active_per_fold(seed_count: int, environ=None) -> int:
+    resolved_seed_count = _coerce_int(seed_count, default=1, min_value=1)
+    return _resolve_env_int(
+        "OPTIMIZER_ROLLING_SEED_ENSEMBLE_MAX_ACTIVE_PER_FOLD",
+        config_default=OPTIMIZER_ROLLING_SEED_ENSEMBLE_MAX_ACTIVE_PER_FOLD,
+        environ=environ,
+        min_value=1,
+        max_value=resolved_seed_count,
+    )
+
+
+def resolve_optimizer_rolling_seed_ensemble_priority_warmup_max_sec(environ=None) -> float:
+    return _resolve_env_float(
+        "OPTIMIZER_ROLLING_SEED_ENSEMBLE_PRIORITY_WARMUP_MAX_SEC",
+        config_default=OPTIMIZER_ROLLING_SEED_ENSEMBLE_PRIORITY_WARMUP_MAX_SEC,
+        environ=environ,
+        min_value=0.0,
+        max_value=300.0,
+    )
 
 
 def resolve_optimizer_rolling_parallel_prep_cache_max_items_default():
@@ -489,6 +523,13 @@ def build_optimizer_outer_rolling_env_defaults(fold_count: int, *, timing_mode: 
         "OPTIMIZER_ACTIVE_REPLAY_USE_PREPARED_CACHE": "1" if bool(OPTIMIZER_ACTIVE_REPLAY_USE_PREPARED_CACHE) else "0",
         "OPTIMIZER_ACTIVE_REPLAY_WRITE_PREPARED_CACHE": "1" if bool(OPTIMIZER_ACTIVE_REPLAY_WRITE_PREPARED_CACHE) else "0",
         "OPTIMIZER_ROLLING_FOLD_WORKERS": str(resolve_optimizer_rolling_fold_workers_default(fold_count)),
+        "OPTIMIZER_ROLLING_SEED_ENSEMBLE_GLOBAL_WORKERS": str(resolve_optimizer_rolling_seed_ensemble_global_workers()),
+        "OPTIMIZER_ROLLING_SEED_ENSEMBLE_MAX_ACTIVE_PER_FOLD": str(
+            resolve_optimizer_rolling_seed_ensemble_max_active_per_fold(64)
+        ),
+        "OPTIMIZER_ROLLING_SEED_ENSEMBLE_PRIORITY_WARMUP_MAX_SEC": str(
+            resolve_optimizer_rolling_seed_ensemble_priority_warmup_max_sec()
+        ),
         "OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS": str(search_parallel_trials),
         "OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH": "1" if is_optimizer_single_fold_tpe_parallel_search_allowed_default() else "0",
         "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS": str(resolve_optimizer_single_fold_local_min_parallel_workers_default()),
@@ -507,6 +548,13 @@ def build_training_performance_policy_snapshot(fold_count=None, seed_ensemble_si
             if fold_count is None
             else resolve_optimizer_rolling_fold_workers_default(fold_count)
         ),
+        "OPTIMIZER_ROLLING_SEED_ENSEMBLE_GLOBAL_WORKERS": resolve_optimizer_rolling_seed_ensemble_global_workers(),
+        "OPTIMIZER_ROLLING_SEED_ENSEMBLE_MAX_ACTIVE_PER_FOLD": (
+            int(OPTIMIZER_ROLLING_SEED_ENSEMBLE_MAX_ACTIVE_PER_FOLD)
+            if seed_ensemble_size is None
+            else resolve_optimizer_rolling_seed_ensemble_max_active_per_fold(seed_ensemble_size)
+        ),
+        "OPTIMIZER_ROLLING_SEED_ENSEMBLE_PRIORITY_WARMUP_MAX_SEC": resolve_optimizer_rolling_seed_ensemble_priority_warmup_max_sec(),
         "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS": resolve_optimizer_rolling_parallel_prep_cache_max_items_default(),
         "OPTIMIZER_FEATURE_BANK_MAX_ITEMS": resolve_optimizer_feature_bank_max_items_default(),
         "OPTIMIZER_COMPILED_SIGNAL_KERNELS": is_optimizer_compiled_signal_kernels_enabled(),

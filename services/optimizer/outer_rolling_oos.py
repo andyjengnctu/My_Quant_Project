@@ -41,6 +41,9 @@ from core.training_performance import (
     resolve_optimizer_active_replay_prep_workers,
     resolve_optimizer_random_seed_ensemble_parallel_backend_default,
     resolve_optimizer_random_seed_ensemble_parallel_workers_default,
+    resolve_optimizer_rolling_seed_ensemble_global_workers,
+    resolve_optimizer_rolling_seed_ensemble_max_active_per_fold,
+    resolve_optimizer_rolling_seed_ensemble_priority_warmup_max_sec,
     is_optimizer_policy_replay_context_reuse_enabled_default,
     is_optimizer_policy_replay_dedup_by_signature_enabled_default,
     resolve_optimizer_policy_replay_parallel_backend_default,
@@ -1066,6 +1069,329 @@ def _task_seed_ensemble_enabled(task: dict | None) -> bool:
     return bool(policy.get("enabled", False)) and int(policy.get("seed_count", 1) or 1) > 1
 
 
+def _build_outer_rolling_seed_member_task(
+    task: dict,
+    *,
+    member_index: int,
+    seed: int,
+    global_workers: int | None = None,
+) -> dict:
+    member_task = dict(task)
+    member_task["seed_ensemble_member"] = True
+    member_task["optimizer_seed"] = int(seed)
+    member_task["seed_ensemble_member_index"] = int(member_index)
+    member_task["seed_ensemble_member_count"] = int(
+        len(resolve_seed_ensemble_seeds(_task_seed_ensemble_policy(task)))
+    )
+    if global_workers is not None:
+        member_task["fold_workers"] = max(2, int(global_workers))
+        member_task["seed_scheduler_global_workers"] = int(global_workers)
+    log_path = str(task.get("log_path") or "")
+    if log_path:
+        root, ext = os.path.splitext(log_path)
+        member_task["log_path"] = (
+            f"{root}_seed{int(member_index):02d}_{int(seed)}{ext or '.log'}"
+        )
+    # Global scheduler owns the live board. Worker stdout stays in the member log.
+    member_task["mirror_console"] = False
+    return member_task
+
+
+def _seed_scheduler_fold_rate_sec_per_trial(task: dict) -> float | None:
+    progresses = dict(_read_latest_parallel_fold_seed_progresses_for_task(task) or {})
+    total_trials = 0
+    total_elapsed = 0.0
+    for progress in progresses.values():
+        data = dict(progress or {})
+        try:
+            completed = int(data.get("completed", 0) or 0)
+        except (TypeError, ValueError):
+            completed = 0
+        if completed <= 0:
+            continue
+        elapsed = _safe_progress_float(data, "search_active_elapsed_sec")
+        if elapsed is None:
+            elapsed = _safe_progress_float(data, "elapsed_sec")
+        if elapsed is None or float(elapsed) <= 0.0:
+            continue
+        total_trials += int(completed)
+        total_elapsed += float(elapsed)
+    if total_trials <= 0 or total_elapsed <= 0.0:
+        return None
+    return float(total_elapsed) / float(total_trials)
+
+
+def _seed_scheduler_remaining_trial_units(state: dict) -> int:
+    task = dict(state.get("task") or {})
+    trials_per_seed = int(dict(task.get("config") or {}).get("trials_per_fold", 0) or 0)
+    pending_count = len(list(state.get("pending_members") or []))
+    remaining = max(0, int(pending_count) * int(trials_per_seed))
+    progresses = dict(_read_latest_parallel_fold_seed_progresses_for_task(task) or {})
+    for member_index in set(state.get("active_members") or set()):
+        progress = dict(progresses.get(int(member_index)) or {})
+        try:
+            completed = int(progress.get("completed", 0) or 0)
+        except (TypeError, ValueError):
+            completed = 0
+        remaining += max(0, int(trials_per_seed) - int(completed))
+    return int(remaining)
+
+
+def _seed_scheduler_select_state(states: list[dict]) -> dict | None:
+    eligible = [
+        state
+        for state in list(states or [])
+        if list(state.get("pending_members") or [])
+        and len(set(state.get("active_members") or set()))
+        < int(state.get("per_fold_cap", 1) or 1)
+    ]
+    if not eligible:
+        return None
+    known_rates = [
+        float(rate)
+        for rate in (state.get("rate_sec_per_trial") for state in eligible)
+        if rate is not None and float(rate) > 0.0
+    ]
+    fallback_rate = statistics.median(known_rates) if known_rates else 1.0
+
+    def _priority(state: dict):
+        rate = state.get("rate_sec_per_trial")
+        effective_rate = (
+            float(rate)
+            if rate is not None and float(rate) > 0.0
+            else float(fallback_rate)
+        )
+        remaining = int(state.get("remaining_trial_units", 0) or 0)
+        active_count = max(1, len(set(state.get("active_members") or set())))
+        # Estimate the fold tail after accounting for its current seed concurrency.
+        # This prevents two newly free slots from both piling onto the same slow fold
+        # before the next-slowest fold receives help.
+        estimated_tail_sec = (
+            float(effective_rate) * float(max(0, remaining)) / float(active_count)
+        )
+        return (
+            float(estimated_tail_sec),
+            -int(dict(state.get("task") or {}).get("fold_idx", 0) or 0),
+        )
+
+    return max(eligible, key=_priority)
+
+
+def _refresh_seed_scheduler_state(states: list[dict]) -> None:
+    for state in list(states or []):
+        task = dict(state.get("task") or {})
+        state["rate_sec_per_trial"] = _seed_scheduler_fold_rate_sec_per_trial(task)
+        state["remaining_trial_units"] = _seed_scheduler_remaining_trial_units(state)
+
+
+def _run_parallel_fold_seed_ensemble_futures(
+    *,
+    tasks: list[dict],
+    rows: list[dict],
+    fold_timing_rows: list[dict],
+    overall_start: float | None = None,
+    raw_data_load_sec: float = 0.0,
+    global_workers: int,
+    per_fold_cap: int,
+    priority_warmup_max_sec: float,
+) -> dict:
+    task_items = sorted(
+        [dict(task) for task in list(tasks or [])],
+        key=lambda item: int(item.get("fold_idx", 0) or 0),
+    )
+    if not task_items:
+        return {"chain_max_positions": None, "chain_enable_rotation": None}
+
+    worker_count = max(1, int(global_workers))
+    states: list[dict] = []
+    for task in task_items:
+        seeds = list(resolve_seed_ensemble_seeds(_task_seed_ensemble_policy(task)))
+        if not seeds:
+            raise RuntimeError("rolling seed ensemble global scheduler缺少resolved seeds")
+        cap = max(1, min(int(per_fold_cap), len(seeds)))
+        states.append({
+            "task": task,
+            "seeds": seeds,
+            "pending_members": [
+                (idx, int(seed)) for idx, seed in enumerate(seeds, start=1)
+            ],
+            "active_members": set(),
+            "results": {},
+            "aggregated": False,
+            "per_fold_cap": int(cap),
+            "rate_sec_per_trial": None,
+            "remaining_trial_units": int(len(seeds))
+            * int(dict(task.get("config") or {}).get("trials_per_fold", 0) or 0),
+        })
+
+    chain_state = {"chain_max_positions": None, "chain_enable_rotation": None}
+    live_board = _ParallelFoldLiveBoard(
+        task_items,
+        overall_start=overall_start,
+        raw_data_load_sec=raw_data_load_sec,
+    )
+    scheduler_started = time.perf_counter()
+    executor_kwargs, _start_method = get_process_pool_executor_kwargs()
+    active_futures: dict = {}
+
+    def _submit_next(executor, state: dict) -> bool:
+        pending_members = list(state.get("pending_members") or [])
+        if not pending_members:
+            return False
+        member_index, seed = pending_members.pop(0)
+        state["pending_members"] = pending_members
+        state.setdefault("active_members", set()).add(int(member_index))
+        member_task = _build_outer_rolling_seed_member_task(
+            dict(state.get("task") or {}),
+            member_index=int(member_index),
+            seed=int(seed),
+            global_workers=int(worker_count),
+        )
+        future = executor.submit(_run_outer_rolling_oos_fold_task, member_task)
+        active_futures[future] = {
+            "state": state,
+            "member_index": int(member_index),
+            "seed": int(seed),
+            "task": member_task,
+        }
+        return True
+
+    def _display_pending_folds() -> set[int]:
+        return {
+            int(dict(state.get("task") or {}).get("fold_idx", 0) or 0)
+            for state in states
+            if not bool(state.get("aggregated"))
+        }
+
+    try:
+        with ProcessPoolExecutor(max_workers=int(worker_count), **executor_kwargs) as executor:
+            # Bootstrap one seed per fold. Extra slots wait briefly for real trial rates,
+            # then are assigned to folds with the largest estimated remaining work.
+            for state in states:
+                if len(active_futures) >= int(worker_count):
+                    break
+                _submit_next(executor, state)
+
+            live_board.render(
+                pending=_display_pending_folds(),
+                future_map={},
+                completed_rows=rows,
+                fold_timing_rows=fold_timing_rows,
+                force=True,
+            )
+
+            while active_futures or any(
+                list(state.get("pending_members") or []) for state in states
+            ):
+                _refresh_seed_scheduler_state(states)
+                warmup_elapsed = max(0.0, time.perf_counter() - scheduler_started)
+                all_started_folds_have_rate = all(
+                    state.get("rate_sec_per_trial") is not None
+                    or not set(state.get("active_members") or set())
+                    for state in states
+                )
+                priority_ready = (
+                    bool(all_started_folds_have_rate)
+                    or warmup_elapsed >= float(priority_warmup_max_sec)
+                )
+
+                if priority_ready:
+                    while len(active_futures) < int(worker_count):
+                        _refresh_seed_scheduler_state(states)
+                        selected_state = _seed_scheduler_select_state(states)
+                        if selected_state is None or not _submit_next(executor, selected_state):
+                            break
+
+                if not active_futures:
+                    break
+
+                done, _pending = wait(
+                    set(active_futures),
+                    timeout=1.0,
+                    return_when=FIRST_COMPLETED,
+                )
+                for future in sorted(
+                    done,
+                    key=lambda item: (
+                        int(
+                            dict(active_futures[item]["state"].get("task") or {}).get(
+                                "fold_idx", 0
+                            )
+                            or 0
+                        ),
+                        int(active_futures[item].get("member_index", 0) or 0),
+                    ),
+                ):
+                    meta = dict(active_futures.pop(future) or {})
+                    state = meta.get("state")
+                    member_index = int(meta.get("member_index", 0) or 0)
+                    if isinstance(state, dict):
+                        state.setdefault("active_members", set()).discard(member_index)
+                    try:
+                        result = future.result()
+                    except Exception as exc:
+                        _cancel_parallel_fold_executor_after_failure(
+                            executor, set(active_futures)
+                        )
+                        task = dict(meta.get("task") or {})
+                        raise RuntimeError(
+                            _build_parallel_fold_failure_message(
+                                task=task,
+                                exc=exc,
+                                label="parallel fold x seed task failed",
+                            )
+                        ) from exc
+                    result = dict(result or {})
+                    result["seed_ensemble_member_index"] = int(member_index)
+                    if isinstance(state, dict):
+                        state.setdefault("results", {})[int(member_index)] = result
+
+                # Refill search slots before parent-side fold aggregation/replay.
+                _refresh_seed_scheduler_state(states)
+                while priority_ready and len(active_futures) < int(worker_count):
+                    selected_state = _seed_scheduler_select_state(states)
+                    if selected_state is None or not _submit_next(executor, selected_state):
+                        break
+                    _refresh_seed_scheduler_state(states)
+
+                for state in states:
+                    if bool(state.get("aggregated")):
+                        continue
+                    seed_count = len(list(state.get("seeds") or []))
+                    result_map = dict(state.get("results") or {})
+                    if len(result_map) != seed_count:
+                        continue
+                    ordered_results = [
+                        result_map[idx] for idx in range(1, seed_count + 1)
+                    ]
+                    fold_result = _aggregate_seed_ensemble_fold_results(
+                        task=dict(state.get("task") or {}),
+                        seed_results=ordered_results,
+                    )
+                    _consume_parallel_fold_result(
+                        result=fold_result,
+                        rows=rows,
+                        fold_timing_rows=fold_timing_rows,
+                        chain_state=chain_state,
+                    )
+                    state["aggregated"] = True
+
+                live_board.render(
+                    pending=_display_pending_folds(),
+                    future_map={},
+                    completed_rows=rows,
+                    fold_timing_rows=fold_timing_rows,
+                    force=bool(done),
+                )
+    finally:
+        live_board.close()
+
+    chain_state["optimizer_performance_metrics"] = (
+        _collect_parallel_task_performance_metrics(task_items)
+    )
+    return chain_state
+
+
 def _run_outer_rolling_oos_fold_ensemble_task(task: dict) -> dict:
     policy = _task_seed_ensemble_policy(task)
     seeds = resolve_seed_ensemble_seeds(policy)
@@ -1189,16 +1515,13 @@ def _run_outer_rolling_oos_fold_ensemble_task(task: dict) -> dict:
         )
 
     def _build_member_task(member_index: int, seed: int) -> dict:
-        member_task = dict(task)
-        member_task["seed_ensemble_member"] = True
-        member_task["optimizer_seed"] = int(seed)
-        member_task["seed_ensemble_member_index"] = int(member_index)
-        member_task["seed_ensemble_member_count"] = int(len(seeds))
-        if log_path:
-            root, ext = os.path.splitext(log_path)
-            member_task["log_path"] = f"{root}_seed{int(member_index):02d}_{int(seed)}{ext or '.log'}"
-        # Seed workers keep machine progress in their own logs. The parent live board
-        # renders the canonical seed-progress view so process-parallel output does not interleave.
+        member_task = _build_outer_rolling_seed_member_task(
+            task,
+            member_index=int(member_index),
+            seed=int(seed),
+        )
+        # Sequential single-fold mode may mirror console directly; process-parallel mode
+        # remains owned by the canonical parent live board.
         member_task["mirror_console"] = bool(task.get("mirror_console", False)) and int(parallel_workers) <= 1
         return member_task
 
@@ -2336,15 +2659,45 @@ def run_outer_rolling_oos(
             # Fold log path is kept internally for diagnostics, but not printed during normal progress.
         chain_state = {"chain_max_positions": None, "chain_enable_rotation": None}
         try:
-            with ProcessPoolExecutor(max_workers=int(fold_workers)) as executor:
-                chain_state = _run_parallel_fold_futures(
-                    executor=executor,
+            if seed_ensemble_enabled:
+                global_seed_workers = resolve_optimizer_rolling_seed_ensemble_global_workers(environ)
+                seed_count = len(resolve_seed_ensemble_seeds(runtime_seed_policy))
+                per_fold_seed_cap = resolve_optimizer_rolling_seed_ensemble_max_active_per_fold(
+                    seed_count, environ
+                )
+                priority_warmup_max_sec = (
+                    resolve_optimizer_rolling_seed_ensemble_priority_warmup_max_sec(environ)
+                )
+                for task in tasks:
+                    task["seed_scheduler_global_workers"] = int(global_seed_workers)
+                print(
+                    f"{C_CYAN}⏱️ Rolling fold×seed global scheduler | "
+                    f"processes={int(global_seed_workers)} | "
+                    f"per_fold_seed_cap={int(per_fold_seed_cap)} | "
+                    f"priority=largest_estimated_tail | "
+                    f"warmup_max={float(priority_warmup_max_sec):.0f}s{C_RESET}",
+                    flush=True,
+                )
+                chain_state = _run_parallel_fold_seed_ensemble_futures(
                     tasks=tasks,
                     rows=rows,
                     fold_timing_rows=fold_timing_rows,
                     overall_start=overall_start,
                     raw_data_load_sec=raw_data_load_sec,
+                    global_workers=int(global_seed_workers),
+                    per_fold_cap=int(per_fold_seed_cap),
+                    priority_warmup_max_sec=float(priority_warmup_max_sec),
                 )
+            else:
+                with ProcessPoolExecutor(max_workers=int(fold_workers)) as executor:
+                    chain_state = _run_parallel_fold_futures(
+                        executor=executor,
+                        tasks=tasks,
+                        rows=rows,
+                        fold_timing_rows=fold_timing_rows,
+                        overall_start=overall_start,
+                        raw_data_load_sec=raw_data_load_sec,
+                    )
         except Exception as exc:
             chain_state = _run_missing_parallel_fold_tasks_sequentially(
                 tasks=tasks,

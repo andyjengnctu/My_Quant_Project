@@ -12522,3 +12522,13 @@ Decision：`USER_AUTHORIZED_CORRECTION / END_TO_END_V1_RESTORED_TO_APPROVED_4_SE
 
 Decision：`ENGINEERING_ONLY / SEED_PAIRING_IS_ARM_LEVEL_PRODUCER_SEMANTICS / MIXED_SUITE_CANNOT_POLLUTE_PER_UNIT_REUSE_IDENTITY / C58_C61_SAME_SEED_PRESERVED / C85_OUTER_TO_INNER_BUNDLE_PRESERVED / NO_SCIENTIFIC_IDENTITY_CHANGE`.
 
+## 2026-10-06 — Outer Rolling fixed-8 global fold×seed scheduler
+
+- **Trigger**：4-seed Rolling parameter fitting以6個fold processes固定綁fold；不同fold的trial latency可接近2倍，快fold完成後worker閒置，總wall time由最後少數slow folds拖尾。使用者先要求固定process=8版本，不啟用CPU/MEM動態autoscaling。
+- **Execution correction**：multi-fold random-seed ensemble改成單一global `fold × seed` ProcessPool，default固定`8` processes、每fold同時最多`3`個seeds。啟動先讓每個fold各跑seed1；取得實際search progress後，以`estimated_tail = sec_per_trial × remaining_trials ÷ active_seeds`排序，新增slot與後續釋放slot都優先派給預估尾端完成時間最大的fold；同一slow fold取得額外seed後，其tail estimate會立刻按active concurrency下降，避免兩個新slot無條件堆到同一fold。若初始progress尚不足，最多等待30秒warmup後使用可得rate/median fallback繼續填滿global pool。
+- **Scientific invariance**：atomic task仍是一個完整`fold × seed` optimizer search；單一seed內TPE trial sequence保持sequential/deterministic，不拆trial、不共享study update、不改seed bundle、trial budget、base-finalists-agree、min_agree或fold aggregation。完成同一fold全部seed後仍沿用canonical `_aggregate_seed_ensemble_fold_results()`，並依member index固定排序；只有execution order/resource utilization改變。
+- **Resource boundary**：global pool只固定process上限8；本輪不依CPU/RAM動態增減。Process-parallel seed task仍各自載入raw data，且nested prep/process replay保持禁止/序列化契約，避免8個outer processes再衍生第二層ProcessPool。
+- **Focused evidence**：policy/meta contract targeted case=`22/22 PASS`，包含fixed-8/per-fold-cap、largest-estimated-tail與existing-concurrency balancing regression；optimizer walk-forward/policy contract=`142/142 PASS`；Strategy Compare app contract=`123/123 PASS`；modified Python compile PASS。依PROJECT_SETTINGS未執行`apps/run_bundle.py`或`apps/test_suite.py`。
+
+Decision：`ENGINEERING_ONLY / GLOBAL_FOLD_SEED_WORK_QUEUE / FIXED_8_PROCESSES / MAX_3_ACTIVE_SEEDS_PER_FOLD / LARGEST_ESTIMATED_TAIL_FIRST / TPE_SEQUENCE_UNCHANGED / NO_SCIENTIFIC_IDENTITY_CHANGE`.
+
