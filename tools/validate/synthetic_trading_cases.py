@@ -69,12 +69,20 @@ def _build_synthetic_trading_pit_param_payload(*, members, selector: str, meta=N
     meta_payload["walk_forward_policy"] = walk_forward
     meta_payload.setdefault("selected_model_mode", "trade")
     meta_payload.setdefault("trials_per_seed", int(profile.optimizer_trials_per_seed))
-    meta_payload.setdefault("requested_random_seed_ensemble", profile.optimizer_seed_ensemble_policy())
-    meta_payload.setdefault("seeds", [int(value) for value in profile.optimizer_resolved_seeds])
+    # A synthetic artifact needs durable exact seed evidence without drawing
+    # real random seeds. Production draws afresh only in the retrain producer.
+    seed_policy = dict(meta_payload.get("requested_random_seed_ensemble") or profile.optimizer_seed_ensemble_policy())
+    if not seed_policy.get("resolved_seeds"):
+        if str(seed_policy.get("seed_mode")) == "random_n_each_training_run":
+            seed_policy["resolved_seeds"] = [10_001 + idx for idx in range(int(profile.optimizer_seed_count))]
+        else:
+            seed_policy["resolved_seeds"] = [int(value) for value in profile.optimizer_resolved_seeds]
+    meta_payload["requested_random_seed_ensemble"] = seed_policy
+    meta_payload.setdefault("seeds", list(seed_policy["resolved_seeds"]))
     normalized_members = list(members)
     return build_static_active_param_ensemble_payload(
         members=normalized_members,
-        random_seed_ensemble=profile.optimizer_seed_ensemble_policy(),
+        random_seed_ensemble=seed_policy,
         selector=str(selector),
         meta=meta_payload,
     )
@@ -8237,10 +8245,12 @@ def validate_trading_live_reentry_broker_truth_contract_case(base_params):
     plan = {
         "limit_price": 101.0, "init_sl": 95.0, "init_trail": 95.0, "target_price": 110.0,
         "entry_atr": 2.0, "entry_source": "reentry", "source_entry_order_id": "ENTRY-1",
+        "signal_date": "2026-09-11",
     }
     row_template = {
         "ticker": "2330", "kind": "reentry", "sort_value": 1.0,
         "execution_plan_seed": dict(plan), "entry_source": "reentry", "source_entry_order_id": "ENTRY-1",
+        "signal_date": "2026-09-11",
     }
     with patch.object(live_reentry, "build_trading_live_reentry_watch_records", return_value=[candidate_watch]), patch.object(
         live_reentry, "open_trading_v2_consumer_view", return_value=object()
@@ -8262,6 +8272,37 @@ def validate_trading_live_reentry_broker_truth_contract_case(base_params):
     persisted_lineage = serialize_trading_candidate_member_params(live_row)
     check_true("live_reentry_candidate_persists_both_voter_params", set(persisted_lineage) == {"m1", "m2"})
     check_true("live_reentry_candidate_preserves_representative_signature", str(live_row.get("params_signature") or "") in {sig_a, sig_b})
+    check("live_reentry_candidate_uses_original_reclaim_date", "2026-09-11", live_row.get("signal_date"))
+
+    # One entry-order ensemble may have members that reclaim on different days.
+    # Re-entry can only reform min-agree when the underlying reclaim signal is
+    # the SAME dated event; ticker-only agreement must not reappear here.
+    def _different_reclaim_dates(*, params, **_kwargs):
+        replay_plan = dict(plan)
+        replay_plan["signal_date"] = (
+            "2026-09-10" if int(params.high_len) == int(params_a.high_len) else "2026-09-11"
+        )
+        return {"source": "reentry"}, replay_plan, True
+
+    def _row_from_reclaim_plan(**kwargs):
+        candidate_plan = dict(kwargs["candidate_plan"])
+        return {
+            **row_template,
+            "execution_plan_seed": candidate_plan,
+            "signal_date": candidate_plan["signal_date"],
+        }
+
+    with patch.object(live_reentry, "build_trading_live_reentry_watch_records", return_value=[candidate_watch]), patch.object(
+        live_reentry, "open_trading_v2_consumer_view", return_value=object()
+    ), patch.object(live_reentry, "load_trading_v2_sanitized_ohlcv_frame", return_value=fake_frame), patch.object(
+        live_reentry, "_replay_member_reentry_signal", side_effect=_different_reclaim_dates
+    ), patch.object(live_reentry, "run_v16_backtest", return_value={}), patch.object(
+        live_reentry, "build_extended_scanner_row_from_plan", side_effect=_row_from_reclaim_plan
+    ):
+        split_reclaim_rows = build_trading_live_reentry_candidate_rows(
+            Path("/tmp/trading-live-reentry"), information_date="2026-09-11"
+        )
+    check("different_reclaim_dates_cannot_combine_frozen_voter_quorum", 0, len(split_reclaim_rows))
 
     from core.file_integrity import canonical_json_sha256
     from core.runtime_domains import RUNTIME_DOMAIN_TRADING
@@ -8361,11 +8402,11 @@ def validate_trading_live_reentry_broker_truth_contract_case(base_params):
     project_root = Path(__file__).resolve().parents[2]
     fill_source = (project_root / "services" / "trading" / "fill_reconciliation.py").read_text(encoding="utf-8")
     consumer_source = (project_root / "services" / "trading" / "market_data_consumer.py").read_text(encoding="utf-8")
-    consumer_update_source = (project_root / "services" / "trading" / "market_data_update.py").read_text(encoding="utf-8")
+    consumer_promotion_source = (project_root / "services" / "trading" / "market_data_consumer_promotion.py").read_text(encoding="utf-8")
     check_true("stop_fill_persists_pre_fill_strategy_snapshot", "strategy_position_before_fill=stop_snapshot" in fill_source)
     check_true("stop_fill_persists_before_after_broker_qty", "position_qty_before_fill=position_qty_before_fill" in fill_source and "position_qty_after_fill=position_qty_after_fill" in fill_source)
     check_true("reentry_tickers_are_kept_in_v2_training_membership", "set(required_reentry)" in consumer_source and "required_reentry_tickers" in consumer_source)
-    check_true("market_update_derives_reentry_data_obligations_from_broker_truth", "resolve_trading_live_reentry_required_tickers" in consumer_update_source)
+    check_true("market_update_derives_reentry_data_obligations_from_broker_truth", "resolve_trading_live_reentry_required_tickers" in consumer_promotion_source)
     check("market_data_consumer_has_no_hardcoded_active_strategy_identity", False, 'get_trading_data_dependency_spec("full_rule_based_no_dl")' in consumer_source)
     check_true("market_data_consumer_uses_canonical_trading_strategy_identity", "get_trading_strategy_profile().strategy_id" in consumer_source)
 

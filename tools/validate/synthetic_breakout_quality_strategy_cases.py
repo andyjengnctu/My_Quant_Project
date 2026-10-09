@@ -169,6 +169,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         for member_idx in range(votes):
             ensemble_rows.append({
                 "ticker": ticker,
+                "signal_date": "2025-01-02",
                 "ensemble_member_key": f"m{member_idx}",
                 "params_obj": base,
                 "sort_value": 0.0,

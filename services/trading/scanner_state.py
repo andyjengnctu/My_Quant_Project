@@ -29,6 +29,7 @@ from services.trading.strategy_param_runtime import load_trading_strategy_param_
 from services.trading.strategy_param_state import (
     get_trading_strategy_param_binding_sha256,
     load_trading_strategy_param_binding,
+    validate_trading_selected_strategy_param_contract,
 )
 
 
@@ -204,8 +205,9 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
     if selected_path.is_file():
         try:
             payload = load_json_strict(selected_path)
-            if not isinstance(payload, dict):
-                raise ValueError("selected params root必須是object")
+            validate_trading_selected_strategy_param_contract(
+                payload, expected_profile=profile
+            )
             param_runtime = load_trading_strategy_param_runtime(
                 selected_path, information_date=latest_data_date
             )
@@ -214,8 +216,6 @@ def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str,
             param_valid_through_date = str(param_runtime.get("scheduled_effective_end_date") or "").strip()
             member_count = int(param_runtime["member_count"])
             param_min_agree = int(param_runtime["min_agree"])
-            if str(payload.get("selector") or "").strip() != str(profile.param_selector):
-                raise RuntimeError("selector mismatch")
             if not param_latest_data_date:
                 raise RuntimeError("selected params 缺少訓練資料日")
             if latest_data_date and param_latest_data_date > latest_data_date:

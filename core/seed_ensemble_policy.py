@@ -56,7 +56,8 @@ def generate_random_seed_ensemble(seed_count: Any) -> list[int]:
     n = coerce_seed_ensemble_size(seed_count, default=1)
     seeds: set[int] = set()
     while len(seeds) < n:
-        seeds.add(1 + secrets.randbelow(SEED_ENSEMBLE_MAX_SEED_VALUE))
+        # Both deterministic seeds and artifact validation use [1, MAX).
+        seeds.add(1 + secrets.randbelow(SEED_ENSEMBLE_MAX_SEED_VALUE - 1))
     return sorted(int(seed) for seed in seeds)
 
 

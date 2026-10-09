@@ -13,9 +13,9 @@ TRADING_ACTIVE_STRATEGY_ID = "full_rule_based_no_dl"
 TRADING_DATASET_PROFILE = "full"
 
 # 2026-10-06 user promotion decision: Trading adopts SR-C85 / PARAM-P6.
-# Runtime code resolves the typed profile from core.strategy_param_policy; the
-# derived constants below are compatibility/readability aliases only and are not
-# a second independently editable production contract.
+# Runtime resolves the registered profile for family/selector/budget, while the
+# live seed sampling mode is a Trading-only product setting. Research retains
+# the fixed seed bundle for controlled, reproducible C85 experiments.
 TRADING_STRATEGY_PARAM_PROFILE_ID = "production_multiseed_current"
 
 _TRADING_PARAM_PROFILE = STRATEGY_PARAM_PROFILES[TRADING_STRATEGY_PARAM_PROFILE_ID]
@@ -28,8 +28,14 @@ TRADING_PARAM_SELECTOR = str(_TRADING_PARAM_PROFILE["parameter_policy"]).replace
 TRADING_PARAMETER_SET_IDENTITY = str(_TRADING_PARAM_PROFILE["parameter_set_identity"])
 TRADING_OPTIMIZER_TRIALS_PER_SEED = int(_TRADING_FITTING_PROTOCOL["trials_per_seed"])
 TRADING_OPTIMIZER_SEED_COUNT = int(_TRADING_FITTING_PROTOCOL["seed_count"])
-TRADING_OPTIMIZER_SEED_MODE = str(_TRADING_FITTING_PROTOCOL["seed_mode"])
-TRADING_OPTIMIZER_SEED_GENERATOR_SEED = int(_TRADING_FITTING_PROTOCOL["generator_seed"])
+# Trading restores its original random-on-each-explicit-retrain behavior.
+# Research P6 still uses its immutable fixed Research generator seed=42.
+TRADING_OPTIMIZER_SEED_MODE = "random_n_each_training_run"
+TRADING_OPTIMIZER_SEED_GENERATOR_SEED = (
+    int(_TRADING_FITTING_PROTOCOL["generator_seed"])
+    if TRADING_OPTIMIZER_SEED_MODE == "fixed_generated_bundle"
+    else None
+)
 TRADING_OPTIMIZER_SEED_MIN_AGREE = _TRADING_FITTING_PROTOCOL["min_agree"]
 TRADING_OPTIMIZER_TRAIN_WINDOW_MONTHS = int(OUTER_ROLLING_TRAIN_WINDOW_MONTHS)
 

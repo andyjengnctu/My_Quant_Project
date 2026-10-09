@@ -813,7 +813,11 @@ def validate_trading_deferred_exit_full_cycle_case(base_params):
 def validate_trading_signal_origin_persistence_case(base_params):
     """Isolated source-routing fixture; persistence and hash verification are real."""
     results, summary, check, check_true = bind_synthetic_case("TRADING_SIGNAL_ORIGIN", "lifecycle_provenance")
-    from services.trading.signal_lineage import freeze_trading_candidate_lineages, resolve_trading_signal_lineage_path
+    from services.trading.signal_lineage import (
+        _record as record_signal_origin,
+        freeze_trading_candidate_lineages,
+        resolve_trading_signal_lineage_path,
+    )
     from core.file_integrity import load_json_strict
     p = _params(base_params)
     candidate = _candidate(p)
@@ -822,6 +826,20 @@ def validate_trading_signal_origin_persistence_case(base_params):
     frames = {"2330": _frame().reset_index(names="Date")}
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
+        second_signal = _candidate(
+            p, ticker="2330", signal_date="2026-09-09", information_date="2026-09-10"
+        )
+        try:
+            freeze_trading_candidate_lineages(
+                root, candidate_rows=[candidate, second_signal], prepared_frames=frames,
+                information_date="2026-09-10", strategy_id="fixture", source_binding="params-v1",
+            )
+        except ValueError as exc:
+            ambiguous_rejected = "多條候選" in str(exc)
+        else:
+            ambiguous_rejected = False
+        check("trading_lineage_rejects_two_same_ticker_signal_dates_before_freeze", True, ambiguous_rejected)
+        check("duplicate_ticker_rejection_does_not_create_registry", False, resolve_trading_signal_lineage_path(root).exists())
         first = freeze_trading_candidate_lineages(root, candidate_rows=[candidate], prepared_frames=frames,
             information_date="2026-09-10", strategy_id="fixture", source_binding="params-v1")
         original = first[0]["signal_lineage"]
@@ -834,13 +852,93 @@ def validate_trading_signal_origin_persistence_case(base_params):
             observed_dates = pd.to_datetime(frame["Date"] if "Date" in frame.columns else frame.index)
             seen.append((params.atr_times_init, observed_dates.max().strftime("%Y-%m-%d")))
             return deepcopy(frozen_result)
+        retroactive = _candidate(
+            p2, ticker="2317", signal_date="2026-08-01", information_date="2026-09-17"
+        )
         with patch("services.trading.signal_lineage.process_raw_stock_frame_actionable_detail", side_effect=producer):
-            current = freeze_trading_candidate_lineages(root, candidate_rows=[later], prepared_frames=frames,
+            current = freeze_trading_candidate_lineages(root, candidate_rows=[later, retroactive], prepared_frames=frames,
                 information_date="2026-09-17", strategy_id="fixture", source_binding="params-v2")
         check("continuing_signal_calls_producer_with_original_params_and_cutoff", [(2., "2026-09-17")], list(seen))
         check("continuing_signal_accepts_raw_scanner_range_index_frame", True, isinstance(frames["2330"].index, pd.RangeIndex))
         check("later_scan_cannot_replace_first_signal_identity", original, current[0]["signal_lineage"])
         check("continuing_candidate_is_recomputed_not_relabelled", "extended", current[0]["kind"])
+        check("current_params_historical_replay_cannot_create_live_lineage", ["2330"], [row["ticker"] for row in current])
+        persisted_after_replay = load_json_strict(resolve_trading_signal_lineage_path(root))
+        check("retroactive_replay_is_not_persisted_as_first_observation", 1, len(persisted_after_replay["signals"]))
+
+        # Regression for state already corrupted by the pre-fix adoption path:
+        # only same-day/current-binding retroactive origins are self-closed.
+        repair_root = root / "retroactive_repair"
+        repair_path = resolve_trading_signal_lineage_path(repair_root)
+        bad_origin = record_signal_origin(
+            retroactive, strategy_id="fixture", observed_date="2026-09-17", source_binding="params-v2"
+        )
+        repair_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(repair_path, {
+            "schema_version": 1,
+            "signals": {bad_origin["identity"]["signal_key"]: bad_origin},
+        })
+        repaired_rows = freeze_trading_candidate_lineages(
+            repair_root, candidate_rows=[retroactive], prepared_frames={"2317": frames["2330"]},
+            information_date="2026-09-17", strategy_id="fixture", source_binding="params-v2"
+        )
+        repaired_state = load_json_strict(repair_path)
+        repaired_record = next(iter(repaired_state["signals"].values()))
+        check("legacy_retroactive_current_binding_lineage_is_removed_from_live_output", [], repaired_rows)
+        check("legacy_retroactive_current_binding_lineage_is_closed", "CLOSED", repaired_record["status"])
+        check(
+            "legacy_retroactive_current_binding_lineage_has_auditable_close_reason",
+            "INVALID_RETROACTIVE_CURRENT_PARAMS_REPLAY", repaired_record.get("closed_reason")
+        )
+
+        # A stale snapshot from the original buggy day must still repair its
+        # exact binding/first-observation provenance after the market day advances.
+        stale_root = root / "stale_retroactive_repair"
+        stale_path = resolve_trading_signal_lineage_path(stale_root)
+        stale_path.parent.mkdir(parents=True, exist_ok=True)
+        stale_origin = record_signal_origin(
+            retroactive, strategy_id="fixture", observed_date="2026-09-17", source_binding="params-old"
+        )
+        atomic_write_json(stale_path, {
+            "schema_version": 1,
+            "signals": {stale_origin["identity"]["signal_key"]: stale_origin},
+        })
+        prior_snapshot = {
+            "latest_data_date": "2026-09-17",
+            "param_latest_data_date": "2026-09-17",
+            "param_binding_sha256": "params-old",
+            "candidate_rows": [retroactive],
+        }
+        stale_rows = freeze_trading_candidate_lineages(
+            stale_root, candidate_rows=[], prepared_frames={"2317": frames["2330"]},
+            information_date="2026-09-18", strategy_id="fixture", source_binding="params-new",
+            previous_snapshot=prior_snapshot,
+        )
+        stale_record = next(iter(load_json_strict(stale_path)["signals"].values()))
+        check("stale_snapshot_retroactive_lineage_is_not_live", [], stale_rows)
+        check("stale_snapshot_retroactive_lineage_is_closed", "CLOSED", stale_record["status"])
+        check("stale_snapshot_retroactive_lineage_closed_on_current_day", "2026-09-18", stale_record["closed_observed_date"])
+
+        # A previous-day durable snapshot remains legal evidence even when its
+        # original signal_date is older than today's information date.
+        bootstrap_root = root / "durable_snapshot_bootstrap"
+        previous_snapshot = {
+            "latest_data_date": "2026-09-16",
+            "param_binding_sha256": "params-v1",
+            "candidate_rows": [candidate],
+        }
+        with patch("services.trading.signal_lineage.process_raw_stock_frame_actionable_detail", side_effect=producer):
+            bootstrapped = freeze_trading_candidate_lineages(
+                bootstrap_root, candidate_rows=[], prepared_frames=frames,
+                information_date="2026-09-17", strategy_id="fixture", source_binding="params-v2",
+                previous_snapshot=previous_snapshot,
+            )
+        check("previous_day_snapshot_can_bootstrap_historical_continuation", ["2330"], [row["ticker"] for row in bootstrapped])
+        check(
+            "previous_day_snapshot_keeps_original_source_binding",
+            "params-v1", bootstrapped[0]["signal_lineage"]["identity"]["source_binding"]
+        )
+
         with patch("services.trading.signal_lineage.process_raw_stock_frame_actionable_detail", return_value=None):
             absent = freeze_trading_candidate_lineages(root, candidate_rows=[], prepared_frames=frames,
                 information_date="2026-09-17", strategy_id="fixture", source_binding="params-v2")

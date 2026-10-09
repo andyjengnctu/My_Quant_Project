@@ -3403,7 +3403,12 @@ def validate_runtime_domain_isolation_contract_case(_base_params):
     add_check(results, "runtime_domain", case_id, "trading_profile_parameter_identity_matches_promoted_profile", promoted_param_profile.parameter_set_identity, profile.parameter_set_identity)
     add_check(results, "runtime_domain", case_id, "trading_profile_trials_follow_promoted_profile", promoted_fitting.trials_per_seed, profile.optimizer_trials_per_seed)
     add_check(results, "runtime_domain", case_id, "trading_profile_seed_count_follows_promoted_profile", promoted_fitting.seed_count, profile.optimizer_seed_count)
-    add_check(results, "runtime_domain", case_id, "trading_profile_resolved_seeds_follow_promoted_profile", list(promoted_fitting.resolved_seeds), list(profile.optimizer_resolved_seeds))
+    expected_trading_seed_bundle = (
+        list(promoted_fitting.resolved_seeds)
+        if profile.optimizer_seed_mode == "fixed_generated_bundle" else []
+    )
+    add_check(results, "runtime_domain", case_id, "trading_profile_resolves_seed_mode_from_product_policy", str(trading_config.TRADING_OPTIMIZER_SEED_MODE), str(profile.optimizer_seed_mode))
+    add_check(results, "runtime_domain", case_id, "trading_profile_does_not_inherit_research_seed_bundle_in_random_mode", expected_trading_seed_bundle, list(profile.optimizer_resolved_seeds))
 
     alternate_profile_id = "trading_aligned_8x1000_current"
     alternate_registered_profile = get_strategy_param_training_profile(alternate_profile_id)
@@ -3415,7 +3420,7 @@ def validate_runtime_domain_isolation_contract_case(_base_params):
     add_check(results, "runtime_domain", case_id, "trading_profile_follows_registered_profile_pointer", alternate_profile_id, patched_profile.strategy_param_profile_id)
     add_check(results, "runtime_domain", case_id, "trading_profile_follows_registered_profile_trials", alternate_fitting.trials_per_seed, patched_profile.optimizer_trials_per_seed)
     add_check(results, "runtime_domain", case_id, "trading_profile_follows_registered_profile_seed_count", alternate_fitting.seed_count, patched_profile.optimizer_seed_count)
-    add_check(results, "runtime_domain", case_id, "trading_profile_follows_registered_profile_seed_bundle", list(alternate_fitting.resolved_seeds), list(patched_profile.optimizer_resolved_seeds))
+    add_check(results, "runtime_domain", case_id, "trading_profile_follows_registered_profile_seed_bundle", (list(alternate_fitting.resolved_seeds) if patched_profile.optimizer_seed_mode == "fixed_generated_bundle" else []), list(patched_profile.optimizer_resolved_seeds))
     add_check(results, "runtime_domain", case_id, "trading_profile_uses_canonical_train_window", profile.optimizer_train_window_months, patched_profile.optimizer_train_window_months)
 
     from core.active_param_ensemble import build_static_active_param_ensemble_payload
@@ -3442,7 +3447,7 @@ def validate_runtime_domain_isolation_contract_case(_base_params):
         candidate_rows = []
         for member in param_runtime["members"][:2]:
             candidate_rows.append(annotate_ensemble_candidate(
-                {"ticker": "2330", "kind": "buy", "sort_value": float(member["member_index"]), "trade_date": "2026-09-11"},
+                {"ticker": "2330", "kind": "buy", "sort_value": float(member["member_index"]), "signal_date": "2026-09-11", "trade_date": "2026-09-11"},
                 member=member, params_obj=member["params_obj"], member_key=member["member_key"],
             ))
         aggregated = aggregate_ensemble_candidate_rows(candidate_rows, min_agree=2)
@@ -3592,7 +3597,7 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
             "trials_per_seed": int(kwargs["trials_per_seed"]),
             "seed_count": int(kwargs["seed_count"]),
             "seed_mode": str(seed_policy["seed_mode"]),
-            "resolved_optimizer_seeds": list(seed_policy["resolved_seeds"]),
+            "resolved_optimizer_seeds": list(seed_policy.get("resolved_seeds") or [1001 + idx for idx in range(int(seed_policy["seed_count"]))]),
             "trade_train_window_months": int(kwargs["trade_train_window_months"]),
             "random_seed_ensemble": seed_policy,
         }
@@ -3631,7 +3636,16 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
     add_check(results, "trading_param", case_id, "trading_service_uses_configured_seed_count", int(plan["optimizer_seed_count"]), int(captured_service_kwargs.get("seed_count", 0)))
     add_check(results, "trading_param", case_id, "trading_service_uses_configured_seed_min_agree", int(plan["optimizer_seed_min_agree"]), int(captured_service_kwargs.get("seed_min_agree", 0)))
     add_check(results, "trading_param", case_id, "trading_service_uses_configured_train_window", int(plan["optimizer_train_window_months"]), int(captured_service_kwargs.get("trade_train_window_months", 0)))
-    add_check(results, "trading_param", case_id, "trading_service_injects_exact_promoted_seed_policy", dict(plan["optimizer_seed_ensemble_policy"]), dict(captured_service_kwargs.get("seed_ensemble_policy_override") or {}))
+    emitted_seed_policy = dict(captured_service_kwargs.get("seed_ensemble_policy_override") or {})
+    expected_seed_policy = dict(plan["optimizer_seed_ensemble_policy"])
+    emitted_resolved_seeds = list(emitted_seed_policy.pop("resolved_seeds", []))
+    add_check(results, "trading_param", case_id, "trading_service_injects_promoted_seed_policy_shape", expected_seed_policy, emitted_seed_policy)
+    if str(plan["optimizer_seed_mode"]) == "random_n_each_training_run":
+        add_check(results, "trading_param", case_id, "trading_service_does_not_sample_random_bundle_before_canonical_producer", [], emitted_resolved_seeds)
+        add_check(results, "trading_param", case_id, "trading_service_returns_seeds_from_canonical_producer", [1001 + idx for idx in range(int(plan["optimizer_seed_count"]))], list(service_result["optimizer_resolved_seeds"]))
+    else:
+        add_check(results, "trading_param", case_id, "trading_service_forwards_fixed_seed_bundle", list(plan["optimizer_resolved_seeds"]), emitted_resolved_seeds)
+        add_check(results, "trading_param", case_id, "trading_service_returns_seeds_from_canonical_producer", emitted_resolved_seeds, list(service_result["optimizer_resolved_seeds"]))
     add_check(results, "trading_param", case_id, "trading_service_pins_latest_finalized_date", str(synthetic_market["market_date"]), str(captured_service_kwargs.get("latest_data_date_override")))
     add_check(results, "trading_param", case_id, "trading_service_returns_project_relative_paths", False, Path(str(service_result["selected_params_path"])).is_absolute())
     add_check(results, "trading_param", case_id, "trading_service_returns_static_training_date", "2099-01-01", str(service_result["param_training_data_date"]))
@@ -3640,14 +3654,19 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
     add_check(results, "trading_param", case_id, "trading_v2_loader_is_process_importable", "services.trading.market_data_consumer:load_trading_v2_optimizer_raw_data", loader_path)
     add_check(results, "trading_param", case_id, "process_loader_roundtrip_preserves_exact_trading_loader", True, optimizer_application._load_callable_from_import_path(loader_path) is trading_training.load_trading_v2_optimizer_raw_data)
 
-    # Promoted C85/P6 fitting is deterministic: every explicit Trading retrain uses
-    # the registered four-seed bundle, while the artifact/manifest persist that exact
-    # lineage for audit and stale-Params rejection.
+    # The Trading plan leaves random seeds unresolved, then an explicit TRAIN
+    # realizes one bundle that is saved into artifact/manifest/binding. Research
+    # retains its registered fixed generator for controlled reproducibility.
     promoted_seed_policy = dict(plan["optimizer_seed_ensemble_policy"])
     seed_bundle_a = resolve_seed_ensemble_seeds(promoted_seed_policy)
     seed_bundle_b = resolve_seed_ensemble_seeds(promoted_seed_policy)
-    add_check(results, "trading_param", case_id, "promoted_seed_bundle_is_stable_per_training_invocation", seed_bundle_a, seed_bundle_b)
-    add_check(results, "trading_param", case_id, "promoted_seed_bundle_matches_profile", list(plan["optimizer_resolved_seeds"]), seed_bundle_a)
+    if plan["optimizer_seed_mode"] == "random_n_each_training_run":
+        add_check(results, "trading_param", case_id, "trading_random_seed_policy_is_unresolved_until_explicit_training", False, "resolved_seeds" in promoted_seed_policy)
+        add_check(results, "trading_param", case_id, "trading_random_seed_bundles_change_between_training_invocations", True, seed_bundle_a != seed_bundle_b)
+        add_check(results, "trading_param", case_id, "trading_random_seed_bundles_preserve_size", int(plan["optimizer_seed_count"]), len(seed_bundle_a))
+    else:
+        add_check(results, "trading_param", case_id, "promoted_seed_bundle_is_stable_per_training_invocation", seed_bundle_a, seed_bundle_b)
+        add_check(results, "trading_param", case_id, "promoted_seed_bundle_matches_profile", list(plan["optimizer_resolved_seeds"]), seed_bundle_a)
     nonrolling_source = inspect.getsource(optimizer_application._run_nonrolling_random_seed_ensemble_training)
     add_check(
         results,
@@ -3684,12 +3703,17 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
         )
         fake_latest = "2099-01-02"
         captured_optimizer_kwargs = {}
-        resolved_seeds = [int(value) for value in plan["optimizer_resolved_seeds"]]
+        resolved_seeds = []
 
         def _fake_optimizer_run(**kwargs):
             captured_optimizer_kwargs.update(kwargs)
             expected_selected.parent.mkdir(parents=True, exist_ok=True)
             requested_policy = dict(kwargs["seed_ensemble_policy_override"])
+            # Simulate the canonical producer resolving a fresh bundle once;
+            # Trading orchestration must pass an unresolved random policy.
+            if "resolved_seeds" not in requested_policy:
+                requested_policy["resolved_seeds"] = [2001 + idx for idx in range(int(requested_policy["seed_count"]))]
+            resolved_seeds[:] = [int(value) for value in requested_policy["resolved_seeds"]]
             payload = {
                 "selector": profile.param_selector,
                 "meta": {
@@ -3797,18 +3821,19 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
         static_selected = Path(trading_policy.resolve_trading_selected_strategy_param_path(temp_root))
         static_selected.parent.mkdir(parents=True, exist_ok=True)
         static_params = params_to_json_dict(_base_params)
-        promoted_seeds = [int(value) for value in plan["optimizer_resolved_seeds"]]
+        promoted_seeds = resolve_seed_ensemble_seeds(dict(plan["optimizer_seed_ensemble_policy"]))
+        artifact_seed_policy = {**dict(plan["optimizer_seed_ensemble_policy"]), "resolved_seeds": promoted_seeds}
         static_payload = build_static_active_param_ensemble_payload(
             members=[
                 {"member_index": idx, "seed": seed, "params": static_params}
                 for idx, seed in enumerate(promoted_seeds, start=1)
             ],
-            random_seed_ensemble=dict(plan["optimizer_seed_ensemble_policy"]),
+            random_seed_ensemble=dict(artifact_seed_policy),
             selector=str(plan["param_selector"]),
             meta={
                 "selected_model_mode": "trade",
                 "trials_per_seed": int(plan["optimizer_trials_per_seed"]),
-                "requested_random_seed_ensemble": dict(plan["optimizer_seed_ensemble_policy"]),
+                "requested_random_seed_ensemble": dict(artifact_seed_policy),
                 "seeds": promoted_seeds,
                 "walk_forward_policy": {
                     "latest_data_date": "2099-01-03",
@@ -3838,6 +3863,33 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
         add_check(results, "trading_param", case_id, "static_binding_records_parameter_set_identity", profile.parameter_set_identity, str(static_binding["parameter_set_identity"]))
         add_check(results, "trading_param", case_id, "static_binding_records_exact_optimizer_seed_bundle", promoted_seeds, list(static_binding["optimizer_resolved_seeds"]))
         add_check(results, "trading_param", case_id, "static_binding_roundtrip_remains_current", str(static_binding["binding_fingerprint"]), str(loaded_static_binding["binding_fingerprint"]))
+
+        # AI: Workbench's "reusable" hint must match the canonical selected-Params
+        # scientific fitting guard, rather than only file/date/member readiness.
+        from services.trading import scanner_state as trading_scanner_state
+        synthetic_readiness = {"ready": True, "status": "READY"}
+        with patch.object(trading_scanner_state, "load_trading_v2_consumer_state", return_value=static_consumer), \
+             patch.object(trading_scanner_state, "get_trading_v2_consumer_state_sha256", return_value="f" * 64), \
+             patch.object(trading_scanner_state, "build_trading_data_readiness_for_consumer_evidence", return_value=synthetic_readiness), \
+             patch.object(trading_scanner_state, "build_trading_market_data_v2_read_model", return_value={"status": "READY"}), \
+             patch.object(trading_scanner_state, "load_trading_strategy_param_binding", return_value=loaded_static_binding) as read_binding:
+            compatible_snapshot = trading_scanner_state.build_trading_daily_workflow_snapshot(temp_root)
+            add_check(results, "trading_param", case_id, "workbench_offers_reuse_for_matching_random_seed_contract", True, compatible_snapshot["params_reusable"])
+            add_check(results, "trading_param", case_id, "workbench_marks_matching_binding_ready_for_scan", True, compatible_snapshot["params_ready_for_scan"])
+
+            legacy_payload = dict(static_payload)
+            legacy_meta = dict(legacy_payload["meta"])
+            legacy_policy = dict(legacy_meta["requested_random_seed_ensemble"])
+            legacy_policy.update(seed_mode="fixed_generated_bundle", generator_seed=42)
+            legacy_meta["requested_random_seed_ensemble"] = legacy_policy
+            legacy_payload["meta"] = legacy_meta
+            static_selected.write_text(json.dumps(legacy_payload, ensure_ascii=False), encoding="utf-8")
+            read_binding.reset_mock()
+            legacy_snapshot = trading_scanner_state.build_trading_daily_workflow_snapshot(temp_root)
+            add_check(results, "trading_param", case_id, "workbench_rejects_stale_fixed_seed_reuse_before_action", False, legacy_snapshot["params_reusable"])
+            add_check(results, "trading_param", case_id, "workbench_does_not_advertise_stale_params_as_scan_ready", False, legacy_snapshot["params_ready_for_scan"])
+            add_check(results, "trading_param", case_id, "workbench_stale_reason_uses_canonical_seed_guard", True, "seed_mode" in str(legacy_snapshot["param_error"]) and "unexpected_fixed_generator_seed" in str(legacy_snapshot["param_error"]))
+            add_check(results, "trading_param", case_id, "workbench_does_not_load_binding_after_selected_contract_mismatch", False, read_binding.called)
 
         stale_payload = dict(static_payload)
         stale_meta = dict(stale_payload["meta"])

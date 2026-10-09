@@ -1715,7 +1715,7 @@
       "order": 153,
       "category": "交易規格 / Ensemble Re-entry 共識契約",
       "item": "ensemble 共識成交後的持倉必須保存所有投票 member 的各自參數；STOP 後必須為每個原始投票 member 建立 reclaim watch state，讓後續 Re-entry 仍能依 `min_agree` 重新形成共識；不得只保留代表 member，否則 `min_agree > 1` 時 Re-entry 會永久失效。Re-entry shadow level 輸出也必須保留 `reentry` 類型，不得誤標成一般 `extended`",
-      "gap": "已補 direct synthetic case，逐層驗證 ensemble candidate aggregation 保存全部 member params、成交持倉承接該 mapping、STOP 後為全部原始投票 member 建立含各自 confirm ATR 的 watch state、reclaim 後可再次聚合成符合 `min_agree` 的 Re-entry 共識，以及 shadow level 輸出維持 `reentry` 類型",
+      "gap": "ensemble 共識成交後的持倉必須保存所有投票 member 的各自參數；STOP 後必須為每個原始投票 member 建立 reclaim watch state，讓後續 Re-entry 仍能依 `min_agree` 重新形成共識；不得只保留代表 member，否則 `min_agree > 1` 時 Re-entry 會永久失效。Re-entry shadow level 輸出也必須保留 `reentry` 類型，不得誤標成一般 `extended` 同ticker多個各自達標的原始訊號必須由canonical ensemble排序只保留唯一可交易候選，平手才以原始signal_date較新者決勝；不得用ticker-only混票、不得丟失勝出lineage的完整member evidence，也不得讓freeze邊界接受同ticker重複候選。",
       "entry": "`tools/validate/synthetic_flow_cases.py`, `core/portfolio_engine.py`, `core/portfolio_entries.py`, `core/portfolio_exits.py`"
     },
     {
@@ -6406,7 +6406,7 @@
     },
     {
       "id": "T261",
-      "description": "`validate_synthetic_ensemble_reentry_consensus_watchlist_case`",
+      "description": "`validate_synthetic_ensemble_reentry_consensus_watchlist_case`；另驗證兩條不同日期各自達標只能產生唯一ticker、canonical優先順序與最新日期tie-break、原始members與代表候選對輸入次序不敏感。",
       "b_id": "B168",
       "initial_status": "NEW",
       "order": 253
@@ -8367,7 +8367,7 @@
     {
       "id": "T543",
       "b_id": "B419",
-      "description": "validate_trading_live_reentry_broker_truth_contract_case 鎖定 broker-confirmed full STOP truth、original agreeing-voter frozen Params lineage、canonical finalist re-agreement、historical hypothetical re-entry 排除與 V2 re-entry ticker continuity。",
+      "description": "validate_trading_live_reentry_broker_truth_contract_case 鎖定 broker-confirmed full STOP truth、original agreeing-voter frozen Params lineage、canonical finalist re-agreement、historical hypothetical re-entry 排除與 V2 re-entry ticker continuity。 另驗證Live Re-entry以原始reclaim signal_date重新集票，相同日期可重建agreement、不同日期不可湊成同ticker consensus；並由consumer promotion owner查核broker-truth re-entry training membership。",
       "initial_status": "NEW",
       "order": 533
     },
@@ -8409,7 +8409,7 @@
     {
       "id": "T549",
       "b_id": "B421",
-      "description": "validate_trading_signal_origin_persistence_case - First-observation lineage persistence, continued-signal rebinding prevention and tamper guard.",
+      "description": "validate_trading_signal_origin_persistence_case - First-observation lineage persistence, current-Params historical replay adoption prevention, continued-signal rebinding prevention and tamper guard.；包含frozen-lineage邊界在落盤前拒絕同ticker多條候選，並驗證拒絕前未產生state。",
       "initial_status": "NEW",
       "order": 539
     },

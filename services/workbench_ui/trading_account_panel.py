@@ -29,6 +29,7 @@ from services.trading.daily_workflow import (
 )
 from services.downloader.daily_console_progress import MarketDataDailyConsoleProgress
 from services.trading.strategy_param_state import (
+    TradingParamContractMismatchError,
     TRADING_PARAM_USAGE_REUSE_EXISTING,
     TRADING_PARAM_USAGE_TRAINED_CURRENT,
 )
@@ -2689,6 +2690,21 @@ class TradingAccountPanel(ttk.Frame):
             self._finish_workflow_success(action, result)
 
         def on_error(exc):
+            if isinstance(exc, TradingParamContractMismatchError):
+                # AI: Never silently reinterpret legacy fixed seed Params as
+                # random, or start a new retrain without explicit user action.
+                self._param_mode_var.set(PARAM_MODE_TRAIN_LABEL)
+                self._param_mode_user_selected = False
+                self._operations_next_var.set(
+                    "需重新訓練 Trading Params | 舊 Params 與目前的 seed/producer 契約不相容"
+                )
+                messagebox.showwarning(
+                    "Trading Params 需要重新訓練",
+                    "目前 Trading Params 與現行策略契約不相容，不能沿用。\n"
+                    "已切換至「重新訓練 Params」；請重新執行「套用參數Params」。",
+                    parent=self,
+                )
+                return
             self._operations_next_var.set(f"FAIL | {type(exc).__name__}: {exc} | 下一步：修正錯誤後重試")
             messagebox.showerror("Trading workflow 失敗", f"{type(exc).__name__}: {exc}", parent=self)
 

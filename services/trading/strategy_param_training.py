@@ -43,6 +43,8 @@ def run_trading_strategy_param_training(
     if not bool(plan["optimizer_requires_multi_seed"]):
         raise RuntimeError("目前Trading strategy要求multi-seed producer；設定卻未啟用")
 
+    # Producer owns the per-TRAIN random draw and records the resolved bundle.
+    # Workbench orchestration must not independently sample or pin seed truth.
     result = run_static_strategy_parameter_training(
         project_root=root,
         selected_data_dir=str(root),
@@ -89,8 +91,8 @@ def run_trading_strategy_param_training(
         "optimizer_trials_per_seed": int(plan["optimizer_trials_per_seed"]),
         "optimizer_seed_count": int(plan["optimizer_seed_count"]),
         "optimizer_seed_mode": str(plan["optimizer_seed_mode"]),
-        "optimizer_seed_generator_seed": int(plan["optimizer_seed_generator_seed"]),
-        "optimizer_resolved_seeds": [int(value) for value in plan["optimizer_resolved_seeds"]],
+        "optimizer_seed_generator_seed": plan["optimizer_seed_generator_seed"],
+        "optimizer_resolved_seeds": [int(value) for value in result["resolved_optimizer_seeds"]],
         "optimizer_train_window_months": int(plan["optimizer_train_window_months"]),
         "data_dir": "data/trading/market_data_v2",
         "market_data_source": "trading_market_data_v2_historical_latest_view",

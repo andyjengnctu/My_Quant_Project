@@ -2632,7 +2632,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             == {"SCORE_MIN_QUARTER_RETURN_AMP_ENABLED": (True, False)},
     )
 
-    from config.trading import TRADING_STRATEGY_PARAM_PROFILE_ID
+    from config.trading import TRADING_STRATEGY_PARAM_PROFILE_ID, TRADING_OPTIMIZER_SEED_MODE
     from core.trading_policy import get_trading_strategy_profile
     trading_promoted_param_profile = get_strategy_param_training_profile(
         TRADING_STRATEGY_PARAM_PROFILE_ID
@@ -2658,13 +2658,13 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and trading_runtime_profile.optimizer_seed_count
             == trading_promoted_fitting.seed_count
         and trading_runtime_profile.optimizer_seed_mode
-            == trading_promoted_fitting.seed_mode
+            == TRADING_OPTIMIZER_SEED_MODE
         and trading_runtime_profile.optimizer_seed_generator_seed
-            == trading_promoted_fitting.generator_seed
+            == (trading_promoted_fitting.generator_seed if trading_runtime_profile.optimizer_seed_mode == "fixed_generated_bundle" else None)
         and trading_runtime_profile.optimizer_seed_min_agree
             == trading_promoted_fitting.min_agree
         and trading_runtime_profile.optimizer_resolved_seeds
-            == tuple(trading_promoted_fitting.resolved_seeds),
+            == (tuple(trading_promoted_fitting.resolved_seeds) if trading_runtime_profile.optimizer_seed_mode == "fixed_generated_bundle" else ()),
     )
 
     check(

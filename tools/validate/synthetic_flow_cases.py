@@ -1164,6 +1164,7 @@ def validate_synthetic_ensemble_reentry_consensus_watchlist_case(base_params):
     candidate_rows = [
         {
             "ticker": ticker,
+            "signal_date": dates[0],
             "type": "normal",
             "sort_value": float(idx),
             "ensemble_member_key": member_key,
@@ -1184,6 +1185,53 @@ def validate_synthetic_ensemble_reentry_consensus_watchlist_case(base_params):
     ]
     aggregated_rows = _aggregate_ensemble_candidate_rows(candidate_rows, min_agree=2)
     aggregated = aggregated_rows[0] if aggregated_rows else {}
+
+    conflicting_lineage = [dict(row) for row in candidate_rows]
+    conflicting_lineage[1]["signal_date"] = dates[1]
+    check("different_signal_dates_cannot_form_full_agreement", 0, len(_aggregate_ensemble_candidate_rows(conflicting_lineage, min_agree=3)))
+    partial_agreement = _aggregate_ensemble_candidate_rows(conflicting_lineage, min_agree=2)
+    check("same_signal_date_votes_remain_eligible", 2, partial_agreement[0].get("ensemble_vote_count") if partial_agreement else None)
+    check("different_signal_date_member_not_in_frozen_params", ["m1", "m3"], sorted((partial_agreement[0].get("ensemble_member_params_by_key") or {}).keys()) if partial_agreement else [])
+    check("different_signal_dates_do_not_create_duplicate_ticker_votes", 1, len(partial_agreement))
+
+    # Two distinct legitimate breakouts of the same ticker can independently
+    # reach quorum. Their votes must never mix, and the canonical portfolio
+    # must never carry two simultaneous candidates for the same ticker.
+    two_qualified_lineages = [dict(row) for row in candidate_rows]
+    two_qualified_lineages.append(dict(candidate_rows[0]))
+    two_qualified_lineages[3]["ensemble_member_key"] = "m4"
+    two_qualified_lineages[2]["signal_date"] = dates[1]
+    two_qualified_lineages[3]["signal_date"] = dates[1]
+    # Equal buy sort and equal 2/2 voting: latest signal breaks the exact tie.
+    for row in two_qualified_lineages:
+        row["sort_value"] = 0.0
+    multi_winners = _aggregate_ensemble_candidate_rows(two_qualified_lineages, min_agree=2)
+    reversed_multi_winners = _aggregate_ensemble_candidate_rows(
+        list(reversed(two_qualified_lineages)), min_agree=2
+    )
+    check("two_qualified_lineages_produce_one_ticker", 1, len(multi_winners))
+    check("two_qualified_lineages_use_latest_date_only_on_exact_tie", dates[1].strftime("%Y-%m-%d"), str(multi_winners[0].get("signal_date")) if multi_winners else None)
+    check("two_qualified_lineages_are_input_order_invariant", [(str(row.get("signal_date")), row.get("ensemble_vote_count")) for row in multi_winners], [(str(row.get("signal_date")), row.get("ensemble_vote_count")) for row in reversed_multi_winners])
+    check("same_lineage_representative_is_input_order_invariant", [row.get("ensemble_member_key") for row in multi_winners], [row.get("ensemble_member_key") for row in reversed_multi_winners])
+    check("winning_lineage_keeps_only_its_frozen_members", ["m3", "m4"], sorted((multi_winners[0].get("ensemble_member_params_by_key") or {}).keys()) if multi_winners else [])
+    # A stronger same-lineage vote count wins over recency.
+    vote_priority_rows = [dict(row) for row in two_qualified_lineages]
+    vote_priority_rows.append(dict(candidate_rows[0]))
+    vote_priority_rows[-1]["ensemble_member_key"] = "m5"
+    vote_priority_rows[-1]["signal_date"] = dates[0]
+    vote_priority_rows[-1]["sort_value"] = 0.0
+    vote_priority_winners = _aggregate_ensemble_candidate_rows(vote_priority_rows, min_agree=2)
+    check("lineage_vote_priority_precedes_recency", dates[0].strftime("%Y-%m-%d"), str(vote_priority_winners[0].get("signal_date")) if vote_priority_winners else None)
+    check("stronger_lineage_frozen_members_are_exact", ["m1", "m2", "m5"], sorted((vote_priority_winners[0].get("ensemble_member_params_by_key") or {}).keys()) if vote_priority_winners else [])
+    invalid_lineage = [dict(row) for row in candidate_rows]
+    invalid_lineage[0]["signal_date"] = None
+    try:
+        _aggregate_ensemble_candidate_rows(invalid_lineage, min_agree=2)
+    except ValueError as exc:
+        missing_date_rejected = "signal_date" in str(exc)
+    else:
+        missing_date_rejected = False
+    check("missing_signal_date_fails_closed", True, missing_date_rejected)
 
     check("entry_consensus_row_count", 1, len(aggregated_rows))
     check("entry_consensus_vote_count", 3, aggregated.get("ensemble_vote_count"))
@@ -1256,7 +1304,7 @@ def validate_synthetic_ensemble_reentry_consensus_watchlist_case(base_params):
 
     check("reclaim_activates_signal_for_every_entry_voter", sorted(params_by_key), sorted(key for key, signals in signals_by_member.items() if ticker in signals))
     reentry_rows = [
-        {"ticker": ticker, "type": "reentry", "sort_value": float(idx), "ensemble_member_key": member_key, "params_obj": params_by_key[member_key]}
+        {"ticker": ticker, "signal_date": dates[4], "type": "reentry", "sort_value": float(idx), "ensemble_member_key": member_key, "params_obj": params_by_key[member_key]}
         for idx, member_key in enumerate(sorted(signals_by_member), start=1)
         if ticker in signals_by_member[member_key]
     ]

@@ -49,6 +49,72 @@ def _signal_key(row, strategy_id):
     return canonical_json_sha256({"strategy_id": strategy_id, "ticker": ticker, "signal_date": signal_date})
 
 
+def _normalized_lineage_day(value, *, field_name: str) -> str:
+    try:
+        day = pd.Timestamp(str(value)).normalize()
+    except Exception as exc:
+        raise ValueError(f"Trading signal lineage {field_name} is invalid: {value!r}") from exc
+    if pd.isna(day):
+        raise ValueError(f"Trading signal lineage {field_name} is invalid: {value!r}")
+    return day.date().isoformat()
+
+
+def _can_create_first_observation(row, *, information_date: str) -> bool:
+    """Return whether current scan evidence may create a brand-new live lineage.
+
+    A current-Params historical replay may expose an old ``extended`` state, but
+    that replay is not durable evidence that Trading actually observed the signal
+    on its original date. Historical continuations are therefore eligible only
+    through an already-persisted lineage or the explicit previous-snapshot
+    bootstrap above. A genuinely new live lineage must originate on today's
+    information date.
+    """
+
+    signal_day = _normalized_lineage_day(row.get("signal_date"), field_name="signal_date")
+    observed_day = _normalized_lineage_day(information_date, field_name="information_date")
+    if signal_day > observed_day:
+        raise ValueError(
+            f"Trading candidate signal_date {signal_day} is later than information_date {observed_day}"
+        )
+    return signal_day == observed_day
+
+
+def _close_impossible_current_replay_origins(
+    signals: dict, *, information_date: str, source_observation_days: dict
+) -> int:
+    """Repair precisely evidenced retroactive current-Params first observations.
+
+    The affected first observation may be from today's binding, or from the
+    previous durable snapshot (which can be from an earlier market day). We
+    never close an arbitrary historical lineage just because it is old: both
+    the originating binding and its first-observed day must match evidence.
+    """
+
+    current_day = _normalized_lineage_day(information_date, field_name="information_date")
+    closed = 0
+    for record in signals.values():
+        if record.get("status") != "ACTIVE":
+            continue
+        identity = record.get("identity") or {}
+        binding = str(identity.get("source_binding") or "")
+        allowed_days = source_observation_days.get(binding, ())
+        if not allowed_days:
+            continue
+        record_observed_day = _normalized_lineage_day(
+            record.get("observed_date"), field_name="observed_date"
+        )
+        if record_observed_day not in allowed_days:
+            continue
+        signal_day = _normalized_lineage_day(record.get("signal_date"), field_name="signal_date")
+        if signal_day >= record_observed_day:
+            continue
+        record["status"] = "CLOSED"
+        record["closed_observed_date"] = current_day
+        record["closed_reason"] = "INVALID_RETROACTIVE_CURRENT_PARAMS_REPLAY"
+        closed += 1
+    return closed
+
+
 def _record(row, *, strategy_id, observed_date, source_binding):
     frozen = _persistable(row)
     params, member = resolve_trading_candidate_frozen_params(frozen)
@@ -117,6 +183,13 @@ def freeze_trading_candidate_lineages(
     project_root, *, candidate_rows, prepared_frames, information_date,
     strategy_id, source_binding, previous_snapshot=None, pre_persist_guard=None,
 ):
+    # Core ensemble resolves competing signal dates before the frozen-state
+    # boundary. Never let a dict keyed by signal identity silently turn two
+    # simultaneous candidates for one ticker into two live Trading proposals.
+    candidate_rows = list(candidate_rows or [])
+    candidate_tickers = [str(row.get("ticker") or "").strip() for row in candidate_rows]
+    if len(candidate_tickers) != len(set(candidate_tickers)):
+        raise ValueError("Trading Scanner 一檔股票不能同時建立多條候選 signal lineage")
     path = resolve_trading_signal_lineage_path(project_root)
     existed = path.exists()
     state = load_json_strict(path) if existed else {"schema_version": SIGNAL_LINEAGE_SCHEMA_VERSION, "signals": {}}
@@ -132,6 +205,22 @@ def freeze_trading_candidate_lineages(
                           observed_date=previous_snapshot.get("latest_data_date"),
                           source_binding=previous_snapshot.get("param_binding_sha256"))
             signals[rec["identity"]["signal_key"]] = rec
+    # AI: Permit repair under today's binding, plus the precisely identified
+    # previous-snapshot binding if it was trained through its own information
+    # day. The snapshot may be older than today's scan (e.g. an overnight restart).
+    observed_day = _normalized_lineage_day(information_date, field_name="information_date")
+    repair_days: dict[str, set[str]] = {}
+    if str(source_binding or "").strip():
+        repair_days[str(source_binding)] = {observed_day}
+    if isinstance(previous_snapshot, Mapping):
+        snapshot_day = str(previous_snapshot.get("latest_data_date") or "")[:10]
+        snapshot_param_day = str(previous_snapshot.get("param_latest_data_date") or "")[:10]
+        snapshot_binding = str(previous_snapshot.get("param_binding_sha256") or "")
+        if snapshot_day and snapshot_day == snapshot_param_day and snapshot_day <= observed_day and snapshot_binding:
+            repair_days.setdefault(snapshot_binding, set()).add(snapshot_day)
+    _close_impossible_current_replay_origins(
+        signals, information_date=information_date, source_observation_days=repair_days
+    )
     current = {_signal_key(row, strategy_id): row for row in candidate_rows}
     output, occupied = [], set()
     for key, record in sorted(signals.items(), key=lambda item: (str(item[1]["signal_date"]), item[0])):
@@ -171,12 +260,24 @@ def freeze_trading_candidate_lineages(
     for key, row in current.items():
         if key in signals or row["ticker"] in occupied:
             continue
+        # AI: A backtest replay under today's trained Params is not historical
+        # first-observation evidence. Only today's signal may open a brand-new
+        # live lineage here; older signals require an existing lineage or the
+        # durable previous-snapshot bootstrap handled above.
+        if not _can_create_first_observation(row, information_date=information_date):
+            continue
         rec = _record(row, strategy_id=strategy_id, observed_date=information_date, source_binding=source_binding)
         signals[key] = rec
         new_row = deepcopy(row)
         new_row["signal_lineage"] = deepcopy(rec)
         output.append(new_row)
         occupied.add(row["ticker"])
+    # Legacy persisted sources must also fail closed if two active frozen
+    # lineages for one ticker would be offered simultaneously; do not rewrite
+    # either protected historical origin to guess which was intended.
+    output_tickers = [str(row.get("ticker") or "").strip() for row in output]
+    if len(output_tickers) != len(set(output_tickers)):
+        raise RuntimeError("Trading frozen lineage 同股票出現多條候選；禁止重複建議掛單")
     _validate_registry(state)
     if pre_persist_guard is not None:
         pre_persist_guard()

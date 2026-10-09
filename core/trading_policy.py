@@ -10,6 +10,7 @@ from config.trading import (
     TRADING_DL_FILTER_ENABLED,
     TRADING_DL_RANKING_ENABLED,
     TRADING_STRATEGY_PARAM_PROFILE_ID,
+    TRADING_OPTIMIZER_SEED_MODE,
 )
 from config.training_policy import OUTER_ROLLING_TRAIN_WINDOW_MONTHS
 from core.dataset_profiles import DATASET_PROFILE_SPECS, normalize_dataset_profile_key
@@ -18,6 +19,7 @@ from core.strategy_param_artifacts import (
     normalize_strategy_param_policy,
     resolve_strategy_param_artifact_path,
 )
+from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot
 from core.strategy_param_policy import (
     get_strategy_param_fitting_seed_protocol,
     get_strategy_param_training_profile,
@@ -27,7 +29,7 @@ from core.trading_data_dependencies import get_trading_data_dependency_spec
 
 
 SUPPORTED_TRADING_STRATEGY_IDS = ("full_rule_based_no_dl",)
-SUPPORTED_TRADING_OPTIMIZER_SEED_MODES = ("fixed_generated_bundle",)
+SUPPORTED_TRADING_OPTIMIZER_SEED_MODES = ("random_n_each_training_run", "fixed_generated_bundle")
 
 
 @dataclass(frozen=True)
@@ -43,7 +45,7 @@ class TradingStrategyProfile:
     optimizer_trials_per_seed: int
     optimizer_seed_count: int
     optimizer_seed_mode: str
-    optimizer_seed_generator_seed: int
+    optimizer_seed_generator_seed: int | None
     optimizer_seed_min_agree: int
     optimizer_resolved_seeds: tuple[int, ...]
     optimizer_train_window_months: int
@@ -51,18 +53,20 @@ class TradingStrategyProfile:
     dl_ranking_enabled: bool
 
     def optimizer_seed_ensemble_policy(self) -> dict[str, object]:
-        return {
-            "enabled": True,
-            "seed_count": int(self.optimizer_seed_count),
-            "min_agree": int(self.optimizer_seed_min_agree),
-            "min_agree_requested": "auto",
-            "min_agree_max": int(self.optimizer_seed_count),
-            "min_agree_rule": "clamp_1_to_seed_count",
-            "seed_mode": str(self.optimizer_seed_mode),
-            "params_storage": "same_json",
-            "generator_seed": int(self.optimizer_seed_generator_seed),
-            "resolved_seeds": [int(value) for value in self.optimizer_resolved_seeds],
-        }
+        # The canonical seed-policy builder owns min-agree and random fitting
+        # semantics; fixed Research seeds are not product defaults.
+        policy = build_seed_ensemble_policy_snapshot(
+            enabled=True,
+            seed_count=self.optimizer_seed_count,
+            min_agree=self.optimizer_seed_min_agree,
+        )
+        if self.optimizer_seed_mode == "fixed_generated_bundle":
+            policy.update({
+                "seed_mode": "fixed_generated_bundle",
+                "generator_seed": int(self.optimizer_seed_generator_seed),
+                "resolved_seeds": [int(seed) for seed in self.optimizer_resolved_seeds],
+            })
+        return policy
 
 
 def get_trading_strategy_profile() -> TradingStrategyProfile:
@@ -99,10 +103,11 @@ def get_trading_strategy_profile() -> TradingStrategyProfile:
     fitting = get_strategy_param_fitting_seed_protocol(promoted_profile.fitting_seed_protocol)
     if not fitting.enabled or fitting.seed_count < 2:
         raise ValueError("Trading promoted Strategy Parameter profile必須使用multi-seed fitting")
-    if fitting.seed_mode not in SUPPORTED_TRADING_OPTIMIZER_SEED_MODES:
-        raise ValueError(f"不支援的Trading optimizer seed mode: {fitting.seed_mode!r}")
-    if len(fitting.resolved_seeds) != fitting.seed_count:
-        raise ValueError("Trading promoted Strategy Parameter profile缺少完整resolved seed bundle")
+    trading_seed_mode = str(TRADING_OPTIMIZER_SEED_MODE).strip()
+    if trading_seed_mode not in SUPPORTED_TRADING_OPTIMIZER_SEED_MODES:
+        raise ValueError(f"不支援的Trading optimizer seed mode: {trading_seed_mode!r}")
+    if trading_seed_mode == "fixed_generated_bundle" and len(fitting.resolved_seeds) != fitting.seed_count:
+        raise ValueError("Trading fixed fitting profile缺少完整resolved seed bundle")
 
     train_window_months = int(OUTER_ROLLING_TRAIN_WINDOW_MONTHS)
     if train_window_months < 1:
@@ -126,10 +131,13 @@ def get_trading_strategy_profile() -> TradingStrategyProfile:
         optimizer_requires_multi_seed=True,
         optimizer_trials_per_seed=int(fitting.trials_per_seed),
         optimizer_seed_count=int(fitting.seed_count),
-        optimizer_seed_mode=str(fitting.seed_mode),
-        optimizer_seed_generator_seed=int(fitting.generator_seed),
+        optimizer_seed_mode=trading_seed_mode,
+        optimizer_seed_generator_seed=(int(fitting.generator_seed) if trading_seed_mode == "fixed_generated_bundle" else None),
         optimizer_seed_min_agree=int(fitting.min_agree),
-        optimizer_resolved_seeds=tuple(int(value) for value in fitting.resolved_seeds),
+        optimizer_resolved_seeds=(
+            tuple(int(value) for value in fitting.resolved_seeds)
+            if trading_seed_mode == "fixed_generated_bundle" else ()
+        ),
         optimizer_train_window_months=train_window_months,
         dl_filter_enabled=dl_filter,
         dl_ranking_enabled=dl_ranking,

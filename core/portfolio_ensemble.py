@@ -1,5 +1,6 @@
 import math
 import time
+from datetime import date
 
 from core.breakout_reentry import activate_breakout_reentry_signals_for_day
 from core.buy_sort import (
@@ -45,7 +46,14 @@ def _annotate_ensemble_candidate(candidate, *, member, params_obj, member_key, c
 
 
 def _median_candidate_row(rows):
-    ordered = sorted(rows, key=lambda item: (float(item.get("sort_value", 0.0) or 0.0), str(item.get("ticker") or "")))
+    ordered = sorted(
+        rows,
+        key=lambda item: (
+            float(item.get("sort_value", 0.0) or 0.0),
+            str(item.get("ticker") or ""),
+            str(item.get("ensemble_member_key") or ""),
+        ),
+    )
     return dict(ordered[(len(ordered) - 1) // 2])
 
 
@@ -55,16 +63,33 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
         ticker = str(row.get("ticker") or "").strip()
         if not ticker:
             continue
-        grouped.setdefault(ticker, []).append(row)
+        # Trading frozen-signal identity is (strategy, ticker, signal_date).
+        # Every member in this ensemble shares the strategy; candidate/trade
+        # dates are NOT the signal date. A historical extended signal cannot
+        # borrow votes from a different breakout event in the same stock.
+        signal_date = str(row.get("signal_date") or "").strip()[:10]
+        try:
+            # Date-only canonical lineage key; never substitute today/entry date.
+            signal_date = date.fromisoformat(signal_date).isoformat()
+        except ValueError as exc:
+            raise ValueError(f"ensemble candidate 缺少合法原始 signal_date: ticker={ticker}") from exc
+        grouped.setdefault((ticker, signal_date), []).append(row)
 
     aggregated = []
-    for ticker, group_rows in grouped.items():
+    for (ticker, signal_date), group_rows in grouped.items():
+        member_keys_in_group = [str(row.get("ensemble_member_key") or "").strip() for row in group_rows]
+        if not all(member_keys_in_group) or len(set(member_keys_in_group)) != len(group_rows):
+            raise ValueError(
+                f"同一 signal lineage 的 ensemble member 缺少身份或重複: "
+                f"ticker={ticker}, signal_date={signal_date}"
+            )
         member_keys = {str(row.get("ensemble_member_key") or "") for row in group_rows}
         member_keys.discard("")
         vote_count = len(member_keys)
         if vote_count < int(min_agree):
             continue
         representative = _median_candidate_row(group_rows)
+        representative["signal_date"] = signal_date
         sort_values = sorted(float(row.get("sort_value", 0.0) or 0.0) for row in group_rows)
         median_sort = sort_values[(len(sort_values) - 1) // 2]
         member_params_by_key = {
@@ -250,7 +275,34 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
         # #        只保存代表 member 會讓 min_agree>1 的 re-entry 共識或 score 語意分叉。)
         representative["ensemble_member_params_by_key"] = member_params_by_key
         aggregated.append(representative)
-    return _sort_aggregated_ensemble_candidate_rows(aggregated)
+    return select_one_ensemble_candidate_per_ticker(aggregated)
+
+
+def select_one_ensemble_candidate_per_ticker(rows):
+    """Select one same-lineage consensus per ticker using canonical trade order.
+
+    Agreement is computed independently for each original signal date BEFORE
+    this selection. A ticker with multiple qualifying breakouts cannot occupy
+    several portfolio slots or overwrite a Trading frozen-lineage dict. Reuse
+    the existing ensemble ordering (votes, quality, buy-sort), with the latest
+    original signal as a deterministic tie-break only when those values tie.
+    """
+    # _sort_aggregated_ensemble_candidate_rows is stable; pre-ordering by the
+    # canonical ISO signal date only affects otherwise tied rows of one ticker.
+    dated = sorted(
+        (dict(row) for row in (rows or [])),
+        key=lambda item: str(item.get("signal_date") or ""),
+        reverse=True,
+    )
+    ranked = _sort_aggregated_ensemble_candidate_rows(dated)
+    chosen, seen = [], set()
+    for row in ranked:
+        ticker = str(row.get("ticker") or "").strip()
+        if ticker in seen:
+            continue
+        seen.add(ticker)
+        chosen.append(row)
+    return chosen
 
 
 def _sort_aggregated_ensemble_candidate_rows(rows):

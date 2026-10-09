@@ -12550,3 +12550,16 @@ Decision：`ENGINEERING_ONLY / GLOBAL_FOLD_SEED_WORK_QUEUE / FIXED_12_PROCESSES 
 - **Historical interpretation**：C92/P13的「Trading-aligned 8×1000」仍是Round-10對**升格前**Trading contract的Research evidence，不回寫成FAIL或刪除；2026-10-05移出current Compare的決策維持。
 
 Decision：`PROMOTION / C85_P6_IS_CURRENT_TRADING_POLICY_REFERENCE / CANONICAL_OPTIMIZER_SHARED / RESEARCH_TRADING_PHYSICAL_TRUTH_ISOLATED / PRE_PROMOTION_8X1000_PARAMS_MUST_RETRAIN / NO_C85_SCIENTIFIC_FINGERPRINT_CHANGE`.
+
+## 2026-10-09 — Canonical same-signal consensus / Trading random-seed correction
+
+- **Trigger**：使用者提供149檔Scanner異常與同ticker不同historical signal的實際runtime證據，明確要求用最新Trading專案版本修正共用`base-finalists-agree`票數語意；並糾正Trading seeds原本每次重訓應為random，不應固定在Research generator seed42。
+- **Live first-observation guard（另條必要修正）**：實際 Scanner runtime 的大量 `extended_tbd` 為今日首次建立、但 `signal_date` 指向數月前的回放候選。Trading `signal_lineage.py` 現在禁止以 current Params 歷史回放直接建立新 live lineage，僅允許已持久存在或有前次 snapshot 證明的延續；已污染的 ACTIVE 只在可核對來源 binding 與首次觀察日的範圍內保守關閉，不得全量刪除合法既有訊號。這與 canonical ensemble `ticker+signal_date` 的跨會員合票修正是兩個獨立的必要條件，必須同輪驗證。
+- **Workbench reuse 介面一致性**：選單上的 Params 可沿用與後端 binding 使用同一個 selected-Params scientific/seed validator；舊 fixed-seed 或不符現行契約的 Params 在按下沿用前即不標示 READY，明確提示重訓，而非將舊工件無聲重新命名。
+- **Canonical behavior correction**：`core/portfolio_ensemble.py::_aggregate_ensemble_candidate_rows`改以`(ticker, signal_date)`聚合，只允許同原始breakout事件的不同finalists member貢獻`min_agree`，同一群不得重複member identity，代表Params/投票證據也只從該signal lineage取得。Research replay、Trading Scanner、Live Re-entry共用一個owner，不新增Scanner特例。 當同ticker兩條不同原始訊號各自達到quorum時，以既有canonical ensemble排序選出唯一可交易候選，完整同分才以原始訊號日期較新者作stable tie-break；落選lineage不可污染凍結member Params。
+- **Trading seed-mode correction**：Trading current profile仍使用registered P6 Full／base-finalists-agree／120M／4×300的budget與selector，改`random_n_each_training_run`，每次明確重訓由canonical Optimizer生成fresh random bundle；selected artifact/manifest/binding保存同一次訓練的realized seeds供exact REUSE與稽核。歷史fixed Trading binding不符新seed-mode契約，須重新訓練；Research P6的seed42/fingerprint/config與所有physical artifacts維持不變。 本輪cross-patch reconciliation將抽籤owner留給`services/optimizer/application.py`的canonical Optimizer；Trading service不得先行resolve random seeds，避免雙重抽樣與manifest/binding不一致。
+- **Research legality / evidence boundary**：consensus由ticker-only更正為ticker+signal_date是結果相關的scientific semantic change，原C85及任何受到相同canonical replay影響的historical metrics仍保留為pre-fix evidence，**不得宣稱與修正後口徑等價，也不得將舊Research artifact當成新語意的合法計算證據**。本輪不以同一P6 ID回寫已註冊scientific fingerprint或覆蓋舊工件；後續post-fix performance研究必須先依Registry新增經授權的scientific identity並重驗。
+- **Legacy runtime saved-snapshot dry run**：以2026-10-06使用者提供的`scanner_runtime_debug.zip`（唯讀）回放exact previous snapshot binding/date，165條當時ACTIVE中有127條歷史回放誤建的lineage符合保守關閉條件，另外38條ACTIVE保留；此為工件級模擬，並非目前Trading V2資料重新掃描結果，也不代表修正後必然只有38檔Scanner。
+- **Focused validation**：同ticker不同`signal_date`不合票、相同lineage投票/median params合法、Trading random mode每次生成不同4-seed bundle、per-artifact seeds persisted/binding一致、legacy fixed-seed binding fail-fast；使用者本機尚未重新執行Scanner或正式Research C85 Rolling，故不宣稱已知修正後候選筆數或績效。
+
+Decision：`CANONICAL_SIGNAL_DATE_AGREEMENT_FIX / RESEARCH_TRADING_SAME_OWNER / TRADING_RANDOM_4X300_RETRAIN / HISTORICAL_PRE_FIX_RESEARCH_EVIDENCE_RETAINED / NEW_POST_FIX_RESEARCH_IDENTITY_REQUIRES_AUTHORIZATION / NO_SILENT_P6_FINGERPRINT_DRIFT`.
