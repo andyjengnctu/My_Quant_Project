@@ -2661,6 +2661,13 @@ def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_
                     "load_continuous_ranker_oos_score_table",
                     return_value=fake_score_table,
                 ),
+                # Isolated report-schema fixture does not materialize real CSV
+                # inputs; current-source readiness is tested separately.
+                patch.object(
+                    ranking_store,
+                    "_validate_current_forward_score_source_lineage",
+                    return_value=None,
+                ),
             ):
                 return ranking_store.load_continuous_ranker_oos_contract(
                     str(contract_root),
@@ -10209,6 +10216,228 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
             conflict_raised,
         )
 
+    # Data-lineage regression: changed input bytes must not reuse a model just
+    # because train sample counts, input shape, and optimizer settings match.
+    from services.breakout_quality.fitted_model_artifacts import (
+        forward_fitted_source_provenance_issues,
+        source_training_identity,
+    )
+    dataset_records = {"feature_bank": {"filename": "bank.npy", "sha256": "before"}}
+    target_records = {"target_raw_r": {"filename": "target.npy", "sha256": "before"}}
+    source_inventory = {"csv_inventory_sha256": "original", "ohlcv_sanitization_contract_version": 2}
+    base_dataset = {
+        "dataset": "full", "policy": {"window": 300},
+        "source_data_inventory": source_inventory,
+        "source_dataset_artifacts": dataset_records,
+        "training_universe_start_date": "2011-01-01",
+    }
+    base_target = {"target_contract": {"target": "safety"}, "artifacts": target_records}
+    summary_bundle = SimpleNamespace(summary=base_dataset, target_manifest=base_target)
+    original_source = source_training_identity(summary_bundle)
+    changed_source = source_training_identity(SimpleNamespace(
+        summary={**base_dataset, "source_data_inventory": {**source_inventory, "csv_inventory_sha256": "after"}},
+        target_manifest=base_target,
+    ))
+    target_changed_source = source_training_identity(SimpleNamespace(
+        summary=base_dataset,
+        target_manifest={**base_target, "artifacts": {"target_raw_r": {"sha256": "after"}}},
+    ))
+    check_true(
+        "source_inventory_and_target_artifact_hashes_affect_fitting_identity",
+        original_source != changed_source and original_source != target_changed_source,
+    )
+    evaluation_only_source = source_training_identity(SimpleNamespace(
+        summary={**base_dataset, "score_eligibility_extended_to_source_tail": True},
+        target_manifest={**base_target, "date_range": {"end": "2030-01-01"}},
+    ))
+    check_true(
+        "forward_evaluation_tail_does_not_split_same_fitting_identity",
+        original_source == evaluation_only_source,
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        model_dir = root / "model"
+        model_dir.mkdir()
+        model_path = model_dir / "model.pt"
+        model_path.write_bytes(b"legacy-checkpoint-verified-by-original-manifests")
+        old_source = {key: value for key, value in original_source.items() if key not in (
+            "source_data_inventory", "source_dataset_artifacts", "source_target_artifacts"
+        )}
+        old_identity = {"seed": 42, "training_settings": {"batch_size": 128}, "source": old_source}
+        migrated_identity = {**old_identity, "source": original_source}
+        write_fitted_model_contract(
+            model_dir=model_dir, fitting_identity=old_identity,
+            selected_epoch=2, epoch_selection={}, final_refit_history=[],
+            trainable_parameter_count=10, total_parameter_count=12,
+        )
+        current_summary = {**base_dataset, "dataset_artifacts": dataset_records}
+        original_manifest = {
+            "source_dataset": current_summary,
+            "source_continuous_target": base_target,
+            "model": build_file_manifest(model_path),
+        }
+        original_report = {
+            "source_dataset": current_summary,
+            "target_manifest": base_target,
+        }
+        manifest_path = model_dir / "manifest.json"
+        report_path = root / "report.json"
+        manifest_path.write_text(json.dumps(original_manifest), encoding="utf-8")
+        report_path.write_text(json.dumps(original_report), encoding="utf-8")
+        compatible, reason = load_reusable_fitted_model_contract(
+            model_dir=model_dir, expected_identity=migrated_identity,
+            final_manifest_path=manifest_path, report_path=report_path,
+        )
+        check_true(
+            "legacy_sidecar_can_reuse_original_checkpoint_with_dual_source_proof",
+            compatible is not None and reason is None
+            and compatible.fitting_identity == old_identity,
+        )
+        mismatched_identity = {**migrated_identity, "source": changed_source}
+        stale, stale_reason = load_reusable_fitted_model_contract(
+            model_dir=model_dir, expected_identity=mismatched_identity,
+            final_manifest_path=manifest_path, report_path=report_path,
+        )
+        check_true(
+            "legacy_checkpoint_rejects_changed_inventory_even_with_unchanged_row_counts",
+            stale is None and "source data/target lineage unproven" in str(stale_reason),
+        )
+        stale_target, target_reason = load_reusable_fitted_model_contract(
+            model_dir=model_dir,
+            expected_identity={**migrated_identity, "source": target_changed_source},
+            final_manifest_path=manifest_path, report_path=report_path,
+        )
+        check_true(
+            "legacy_checkpoint_rejects_changed_target_artifact_hash",
+            stale_target is None and "source data/target lineage unproven" in str(target_reason),
+        )
+        issues = forward_fitted_source_provenance_issues(
+            model_dir=model_dir, model_manifest=original_manifest,
+            report=original_report, dataset_summary=current_summary,
+            target_manifest=base_target,
+        )
+        check_true("forward_source_lineage_matches_original_evidence", not issues)
+        tampered_report = {**original_report, "source_dataset": {
+            **current_summary, "source_dataset_artifacts": {"feature_bank": {"sha256": "tampered"}}
+        }}
+        issues = forward_fitted_source_provenance_issues(
+            model_dir=model_dir, model_manifest=original_manifest,
+            report=tampered_report, dataset_summary=current_summary,
+            target_manifest=base_target,
+        )
+        check_true(
+            "forward_reuse_rejects_report_source_lineage_divergence",
+            any("report source_dataset_artifacts mismatch" in issue for issue in issues),
+        )
+        sidecar_path = model_dir / "fitted_model_manifest.json"
+        sidecar_path.write_text("{broken", encoding="utf-8")
+        corrupt, corrupt_reason = load_reusable_fitted_model_contract(
+            model_dir=model_dir, expected_identity=migrated_identity,
+            final_manifest_path=manifest_path, report_path=report_path,
+        )
+        check_true(
+            "corrupt_fitted_sidecar_never_falls_back_to_legacy_manifest",
+            corrupt is None and "sidecar corrupt" in str(corrupt_reason),
+        )
+
+    # Direct score consumers must apply the same canonical Dataset gate as the
+    # interactive Forward menu, not just verify historical score file hashes.
+    from filters.breakout_quality import ranking_score_store as score_store
+    from filters.breakout_quality.artifact_dependency_registry import ARTIFACT_DATASET_CORE
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        dataset_summary_path = root / "dataset_summary.json"
+        current_summary = {
+            **base_dataset,
+            "dataset_artifacts": dataset_records,
+            "source_selection": {"requested_max_tickers": 0},
+        }
+        dataset_summary_path.write_text(json.dumps(current_summary), encoding="utf-8")
+        publications = {"source_dataset": current_summary}
+        upstream_ok = (SimpleNamespace(
+            artifact_type=ARTIFACT_DATASET_CORE,
+            ready=True, path=dataset_summary_path, description="READY",
+        ),)
+        upstream_stale = (SimpleNamespace(
+            artifact_type=ARTIFACT_DATASET_CORE,
+            ready=False, path=dataset_summary_path, description="inventory changed",
+        ),)
+        common_kwargs = {
+            "project_root": root,
+            "filter_id": "breakout_quality_v1",
+            "model_architecture": "inception_time_v1",
+            "experiment_profile": "synthetic_profile",
+            "manifest": publications,
+            "report": publications,
+        }
+        with patch(
+            "filters.breakout_quality.paths.resolve_filter_output_dir",
+            return_value=root,
+        ), patch(
+            "filters.breakout_quality.dataset_store.resolve_dataset_paths",
+            return_value=SimpleNamespace(summary=dataset_summary_path),
+        ), patch(
+            "filters.breakout_quality.artifact_dependency_registry.collect_model_upstream_readiness",
+            return_value=upstream_ok,
+        ):
+            score_store._validate_current_forward_score_source_lineage(**common_kwargs)
+            score_store.validate_current_pit_score_source_lineage(
+                **{key: value for key, value in common_kwargs.items() if key != "report"}
+            )
+            check_true(
+                "direct_pit_score_consumer_rejects_changed_source_inventory",
+                raises_expected(ValueError, lambda: score_store.validate_current_pit_score_source_lineage(
+                    **{**{key: value for key, value in common_kwargs.items() if key != "report"},
+                       "manifest": {"source_dataset": {
+                           **current_summary,
+                           "source_data_inventory": {**source_inventory, "csv_inventory_sha256": "after"},
+                       }}}
+                )),
+            )
+            tampered_manifest = {"source_dataset": {
+                **current_summary,
+                "source_data_inventory": {**source_inventory, "csv_inventory_sha256": "new"},
+            }}
+            check_true(
+                "direct_forward_score_consumer_rejects_changed_source_inventory",
+                raises_expected(ValueError, lambda: score_store._validate_current_forward_score_source_lineage(
+                    **{**common_kwargs, "manifest": tampered_manifest}
+                )),
+            )
+            check_true(
+                "direct_forward_score_consumer_rejects_changed_report_source_artifact",
+                raises_expected(ValueError, lambda: score_store._validate_current_forward_score_source_lineage(
+                    **{**common_kwargs, "report": {"source_dataset": {
+                        **current_summary,
+                        "source_dataset_artifacts": {"feature_bank": {"sha256": "new"}},
+                    }}}
+                )),
+            )
+        with patch(
+            "filters.breakout_quality.paths.resolve_filter_output_dir",
+            return_value=root,
+        ), patch(
+            "filters.breakout_quality.dataset_store.resolve_dataset_paths",
+            return_value=SimpleNamespace(summary=dataset_summary_path),
+        ), patch(
+            "filters.breakout_quality.artifact_dependency_registry.collect_model_upstream_readiness",
+            return_value=upstream_stale,
+        ):
+            check_true(
+                "direct_forward_score_consumer_rejects_not_ready_dataset",
+                raises_expected(ValueError, lambda: score_store._validate_current_forward_score_source_lineage(
+                    **common_kwargs
+                )),
+            )
+            check_true(
+                "direct_pit_score_consumer_rejects_not_ready_dataset",
+                raises_expected(ValueError, lambda: score_store.validate_current_pit_score_source_lineage(
+                    **{key: value for key, value in common_kwargs.items() if key != "report"}
+                )),
+            )
+
     # Regression for the Forward OOS -> Rolling fitting-identity bridge.  The
     # canonical Forward report intentionally does not own optimizer settings; those
     # live in fitted_model_manifest.json.  A valid Forward checkpoint must therefore
@@ -10756,6 +10985,65 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
         and "Fitted model training settings stale" in str(stale_reason)
         and "early_stopping_patience mismatch" in str(stale_reason),
     )
+
+    with patch.object(
+        research_app,
+        "load_continuous_ranker_oos_contract",
+        return_value=SimpleNamespace(
+            seed=int(settings.seed),
+            manifest={"source_dataset": {"dataset": "full"}},
+            report={"standard_model_sop": {}},
+            report_path=Path("synthetic_report.json"),
+        ),
+    ), patch.object(
+        research_app, "resolve_filter_artifact_paths",
+        return_value=SimpleNamespace(model_dir=Path("synthetic_model")),
+    ), patch.object(
+        research_app, "fitted_model_settings_issues", return_value=(),
+    ), patch.object(
+        research_app, "_forward_source_provenance_issues",
+        return_value=("source_data_inventory mismatch",),
+    ):
+        stale_loaded, stale_reason = research_app._load_reusable_continuous_forward_contract(settings)
+    check_true(
+        "complete_forward_report_cannot_bypass_data_lineage_preflight",
+        stale_loaded is None and "Forward fitted source lineage stale" in str(stale_reason)
+        and "source_data_inventory mismatch" in str(stale_reason),
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        pit_root = Path(temp_dir) / "pit"
+        pit_root.mkdir()
+        (pit_root / research_app.SELECTION_POINT_IN_TIME_MANIFEST_FILENAME).write_text(
+            json.dumps({
+                "filter_id": settings.filter_id,
+                "model_architecture": settings.model_architecture,
+                "experiment_profile": settings.experiment_profile,
+                "seed": 42,
+                "folds": [],
+            }), encoding="utf-8",
+        )
+        (pit_root / research_app.SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME).write_text(
+            json.dumps({"status": "RESULT_AVAILABLE"}), encoding="utf-8",
+        )
+        with patch.object(
+            research_app, "_model_robustness_dirs",
+            return_value=(pit_root, pit_root),
+        ), patch.object(
+            research_app, "pit_fold_fitting_settings_issues",
+            return_value=(),
+        ), patch.object(
+            research_app, "validate_current_pit_score_source_lineage",
+            side_effect=ValueError("source_data_inventory mismatch"),
+        ):
+            stale_payload, _stale_path, stale_reason = research_app._load_rolling_robustness_seed(
+                settings, seed=42
+            )
+        check_true(
+            "rolling_robustness_complete_audit_cannot_bypass_current_dataset_preflight",
+            stale_payload is None and "Rolling robustness source lineage stale" in str(stale_reason)
+            and "source_data_inventory mismatch" in str(stale_reason),
+        )
 
     rolling_contract = SimpleNamespace(
         manifest_path=Path("synthetic_point_in_time/selection_point_in_time_manifest.json"),

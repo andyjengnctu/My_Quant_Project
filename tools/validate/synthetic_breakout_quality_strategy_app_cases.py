@@ -2613,9 +2613,15 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
         )
         load_continuous_ranker_oos_contract.cache_clear()
         load_continuous_ranker_oos_score_table.cache_clear()
-        forward_contract = load_continuous_ranker_oos_contract(
-            str(root), filter_id, architecture, profile_name
-        )
+        # This fixture exercises score filename/lookup semantics without an
+        # upstream Dataset; current-source lineage has its own synthetic Gate.
+        with patch(
+            "filters.breakout_quality.ranking_score_store._validate_current_forward_score_source_lineage",
+            return_value=None,
+        ):
+            forward_contract = load_continuous_ranker_oos_contract(
+                str(root), filter_id, architecture, profile_name
+            )
         forward_table = load_continuous_ranker_oos_score_table(
             str(root), filter_id, architecture, profile_name
         )

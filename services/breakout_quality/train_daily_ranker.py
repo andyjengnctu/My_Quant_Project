@@ -1319,7 +1319,14 @@ def run(args) -> int:
 
     trainable_parameter_count = count_trainable_parameters(model)
     total_parameter_count = sum(int(parameter.numel()) for parameter in model.parameters())
-    if existing_fitted_contract is None or existing_fitted_contract.source != "fitted_model_manifest":
+    if (
+        existing_fitted_contract is None
+        or existing_fitted_contract.source != "fitted_model_manifest"
+        or existing_fitted_contract.fitting_identity != expected_fitting_identity
+    ):
+        # A legacy sidecar with verified source records is upgraded only after
+        # the canonical Dataset/Target loader verified current bytes and the
+        # exact old checkpoint has been loaded successfully.
         write_fitted_model_contract(
             model_dir=artifact_paths.model_dir,
             fitting_identity=expected_fitting_identity,

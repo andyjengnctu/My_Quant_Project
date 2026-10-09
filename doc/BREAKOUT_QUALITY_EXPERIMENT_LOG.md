@@ -12584,3 +12584,15 @@ Decision：`NEW_C95_P14_REGISTERED / ORIGINAL_C85_P6_ARCHIVED_AS_PRE_FIX_EVIDENC
 - **Decision**：接受使用者的研究停止方向，`MR-13BV`改`CLOSED / ADAPTIVE_INPUT_FAMILY_STOP / NOT_PROMOTED`，不再重跑BV或擴展look-back/gate/600-bar sweep；原模型profile與implementation為了可追溯性保留。`config/breakout_quality.py`的current模型研究pair回既有`MR-13AO` reference，canonical Model Compare/Test由reference + current model的de-duplicating owner導出`MR-13H/AH/AK/AO`；沒有新model research identity或strategy promotion，AO自身歷史`MODEL_GATE_FAIL`結論不撤銷。下一方向只先進行PIT-safe orthogonal-information availability/legality研究設計，需新的模型treatment時再依Registry/authorization分配identity。
 
 Decision：`USER_REPORTED_PRIOR_BV_POOR_RESULT / RAW_METRICS_UNAVAILABLE / BV_CLOSED / NO_ADAPTIVE_INPUT_SWEEP / AO_REFERENCE_RESTORED / NO_NEW_MR_IDENTITY / NO_SCIENTIFIC_REWRITE`.
+
+
+## 2026-10-10 — DL Dataset → Fitted checkpoint → Forward score REUSE source-lineage hardening
+
+- **Input / scope**：以使用者最新`test-branch-1_20261010_000208_c85a0c3e.zip`為基準，修復來源CSV/清洗版本或Dataset/Target SHA改變時，完整Forward報表及舊fitted sidecar仍可能無聲REUSE的工程缺口；不新增MR/architecture/profile，也不改既有Target、loss、seed、科學評分或正式報表schema。
+- **Canonical ownership**：沿用`artifact_dependency_registry.collect_model_upstream_readiness`與Dataset/Target canonical loader持有的readiness與檔案驗證；新增`model_source_provenance.py`作Forward原始manifest/report與PIT manifest的共用provenance比較。Daily Universal Dataset SHA須由`source_dataset_artifacts`對應到現行Dataset的`dataset_artifacts`。
+- **Fitting reuse semantics**：fitting identity補綁`source_data_inventory`、`source_dataset_artifacts`及適用的`source_target_artifacts`。舊sidecar只有在其餘fitting identity完全相同、原始兩份Forward publication都證明來源完全相同且checkpoint檔案SHA驗證通過時，才可在canonical loader驗證後升級；來源已變或缺少證據則fail-closed，重新建立受影響fit。單純Forward evaluation延長與報表欄位更新不加入新的fit identity。
+- **Score / PIT boundaries**：完整Forward及Robustness按seed的直接REUSE，在報表完整度前先驗證現行上游資料；直接讀取Forward與PIT score的consumer，以及Rolling robustness既有audit REUSE入口亦加入同一來源驗證。Rolling PIT fold及Forward→Rolling bridge修正Daily `source_dataset_artifacts`欄位，使既有Daily fold不再遺漏資料SHA。
+- **Validation**：合成Fitted Lifecycle `32/32 PASS`、Daily Full-list `7/7 PASS`、Daily PIT runtime `10/10 PASS`、修改模組`compileall PASS`；覆蓋同checkpoint/不同input inventory/target SHA、報表分叉、sidecar損壞、完整報表旁路、直接Forward/PIT score消費者、Rolling robustness旁路及PIT first-fold bridge。本輪不執行`apps/run_bundle.py`或`apps/test_suite.py`，未執行真實模型訓練。
+- **Limitations / next evidence**：本次ZIP沒有本機完整Research V1 Dataset、Target、舊H/AH/AK/AO checkpoints及scores，故無法直接比對歷史模型是否數值相容、無法產生重新驗證的四模型統計，更不能宣稱formal Gate通過；應在本機完整工件下依canonical menu執行source readiness及四模型定向validation，依實際`REUSE/FIT REQUIRED`結果決定重訓範圍。BV維持使用者報告已測效果差且結案，不再重跑。
+
+Decision：`CANONICAL_UPSTREAM_REUSE_GUARD / HISTORICAL_CHECKPOINT_REUSE_ONLY_WITH_DUAL_PROVENANCE / ROLLING_DAILY_SHA_IDENTITY_FIXED / NO_SCIENTIFIC_CHANGE / NO_FOUR_MODEL_NUMERICAL_RESULT_YET`。

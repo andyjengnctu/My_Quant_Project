@@ -25,11 +25,24 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_USE_INNER_VALIDATION,
 )
 from filters.breakout_quality.artifacts import build_file_manifest
+from filters.breakout_quality.model_source_provenance import (
+    canonical_source_dataset_artifacts,
+    forward_published_source_provenance_issues,
+)
 from filters.breakout_quality.models.factory import build_model, count_trainable_parameters
 
 
 FITTED_MODEL_MANIFEST_FILENAME = "fitted_model_manifest.json"
 FITTED_MODEL_CONTRACT_VERSION = 1
+
+# Dataset / target lineage that can change fitted weights, not Forward evaluation
+# horizon or report layout.  Historical sidecars without these fields are checked
+# against BOTH original Forward publication records before a one-time upgrade.
+FITTING_SOURCE_LINEAGE_KEYS = (
+    "source_data_inventory",
+    "source_dataset_artifacts",
+    "source_target_artifacts",
+)
 
 # Immutable compatibility contract for Daily Universal artifacts produced before
 # fitted_model_manifest.json existed.  These values describe historical bytes;
@@ -373,12 +386,15 @@ def fitting_split_identity(split_report: Mapping[str, Any]) -> dict[str, Any]:
 def source_training_identity(bundle) -> dict[str, Any]:
     summary = dict(bundle.summary or {})
     target = dict(bundle.target_manifest or {})
-    # Do not bind the fit to Forward score horizon/tail metadata.  Only source
-    # and target semantics that can affect Selection fitting belong here.
+    # Do not bind the fit to Forward score horizon/tail metadata. Only source
+    # and target bytes/semantics that can affect Selection fitting belong here.
     return {
         "dataset": summary.get("dataset"),
         "dataset_policy": summary.get("policy"),
         "training_universe_start_date": summary.get("training_universe_start_date"),
+        "source_data_inventory": summary.get("source_data_inventory"),
+        "source_dataset_artifacts": canonical_source_dataset_artifacts(summary),
+        "source_target_artifacts": target.get("artifacts"),
         "target_id": target.get("target_id"),
         "target_contract": target.get("target_contract"),
         "context_features": target.get("context_features"),
@@ -433,6 +449,114 @@ def _file_record_matches(record: Mapping[str, Any] | None, path: Path) -> bool:
     if not isinstance(record, Mapping) or not Path(path).is_file():
         return False
     return dict(record) == build_file_manifest(Path(path))
+
+
+def forward_fitted_source_provenance_issues(
+    *,
+    model_dir: Path,
+    model_manifest: Mapping[str, Any],
+    report: Mapping[str, Any],
+    dataset_summary: Mapping[str, Any],
+    target_manifest: Mapping[str, Any] | None = None,
+) -> tuple[str, ...]:
+    """Check current Dataset/Target lineage against BOTH Forward publications.
+
+    This is a fast manifest-identity check, not a Dataset readiness replacement:
+    callers MUST first use canonical upstream readiness (including current CSV
+    inventory / artifact metadata and Target hash validation). The canonical
+    training loader performs full Dataset SHA verification before checkpoint reuse.
+    """
+
+    expected_inventory = dataset_summary.get("source_data_inventory")
+    expected_artifacts = dataset_summary.get("dataset_artifacts")
+    if not isinstance(expected_inventory, Mapping) or not isinstance(expected_artifacts, Mapping):
+        return ("current Dataset lacks canonical source inventory/artifact hashes",)
+
+    issues: list[str] = list(forward_published_source_provenance_issues(
+        model_manifest=model_manifest,
+        report=report,
+        dataset_summary=dataset_summary,
+        target_manifest=target_manifest,
+    ))
+    expected_target_records = (
+        target_manifest.get("artifacts") if isinstance(target_manifest, Mapping) else None
+    )
+    sidecar_path = Path(model_dir) / FITTED_MODEL_MANIFEST_FILENAME
+    if sidecar_path.exists():
+        sidecar = _read_json(sidecar_path)
+        if sidecar is None or int(sidecar.get("contract_version", -1)) != FITTED_MODEL_CONTRACT_VERSION:
+            issues.append("fitted-model sidecar missing valid contract")
+        elif not _file_record_matches(sidecar.get("model"), Path(model_dir) / "model.pt"):
+            issues.append("fitted-model sidecar checkpoint hash mismatch")
+        else:
+            fitted_source = dict(dict(sidecar.get("fitting_identity") or {}).get("source") or {})
+            # Older sidecars did not persist these keys; their original manifest
+            # AND report above must still prove current source bytes. Present
+            # keys cannot be ignored when inconsistent.
+            for key, expected in (
+                ("source_data_inventory", expected_inventory),
+                ("source_dataset_artifacts", expected_artifacts),
+                ("source_target_artifacts", expected_target_records),
+            ):
+                if key in fitted_source and fitted_source[key] != expected:
+                    issues.append(f"fitted-model {key} mismatch")
+    return tuple(dict.fromkeys(issues))
+
+
+def _historical_fitted_source_compatible(
+    *,
+    persisted_identity: Mapping[str, Any],
+    expected_identity: Mapping[str, Any],
+    model_dir: Path,
+    final_manifest_path: Path,
+    report_path: Path,
+) -> bool:
+    """Allow old sidecar bytes only when original publications prove new lineage.
+
+    This does not infer source hashes from a model's shape or row counts.  The
+    newly added source keys are the ONLY allowable fitting-identity difference.
+    """
+
+    persisted = dict(persisted_identity)
+    expected = dict(expected_identity)
+    old_source = persisted.get("source")
+    new_source = expected.get("source")
+    if not isinstance(old_source, Mapping) or not isinstance(new_source, Mapping):
+        return False
+    if any(not isinstance(new_source.get(k), Mapping) for k in FITTING_SOURCE_LINEAGE_KEYS[:2]):
+        return False
+    if not any(k not in old_source for k in FITTING_SOURCE_LINEAGE_KEYS):
+        return False
+    if {k: v for k, v in persisted.items() if k != "source"} != {
+        k: v for k, v in expected.items() if k != "source"
+    }:
+        return False
+    if dict(old_source) != {k: v for k, v in new_source.items() if k not in FITTING_SOURCE_LINEAGE_KEYS}:
+        return False
+    manifest = _read_json(final_manifest_path)
+    report = _read_json(report_path)
+    if manifest is None or report is None:
+        return False
+    current_summary = {
+        "dataset": new_source.get("dataset"),
+        "policy": new_source.get("dataset_policy"),
+        "source_data_inventory": new_source.get("source_data_inventory"),
+        "dataset_artifacts": new_source.get("source_dataset_artifacts"),
+    }
+    expected_target = (
+        {
+            "artifacts": new_source.get("source_target_artifacts"),
+            "target_contract": new_source.get("target_contract"),
+        }
+        if new_source.get("source_target_artifacts") is not None else None
+    )
+    return not forward_fitted_source_provenance_issues(
+        model_dir=model_dir,
+        model_manifest=manifest,
+        report=report,
+        dataset_summary=current_summary,
+        target_manifest=expected_target,
+    )
 
 
 def _legacy_identity_issues(
@@ -507,6 +631,24 @@ def _legacy_identity_issues(
         issues.append("dataset policy mismatch")
     if source_dataset.get("training_universe_start_date") != expected_source.get("training_universe_start_date"):
         issues.append("training universe start mismatch")
+    if any(key in expected_source for key in FITTING_SOURCE_LINEAGE_KEYS):
+        source_records = forward_fitted_source_provenance_issues(
+            model_dir=model_path.parent,
+            model_manifest=manifest,
+            report=report,
+            dataset_summary={
+                "dataset": expected_source.get("dataset"),
+                "policy": expected_source.get("dataset_policy"),
+                "source_data_inventory": expected_source.get("source_data_inventory"),
+                "dataset_artifacts": expected_source.get("source_dataset_artifacts"),
+            },
+            target_manifest=(
+                {"artifacts": expected_source.get("source_target_artifacts"),
+                 "target_contract": expected_source.get("target_contract")}
+                if expected_source.get("source_target_artifacts") is not None else None
+            ),
+        )
+        issues.extend(source_records)
 
     if not _file_record_matches(manifest.get("model"), model_path):
         issues.append("manifest model file identity mismatch")
@@ -530,11 +672,20 @@ def load_reusable_fitted_model_contract(
         return None, "model.pt missing"
 
     sidecar = _read_json(sidecar_path)
-    if sidecar is not None:
+    if sidecar_path.exists():
+        if sidecar is None:
+            return None, "fitted-model sidecar corrupt or invalid"
         if int(sidecar.get("contract_version", -1)) != FITTED_MODEL_CONTRACT_VERSION:
             return None, "fitted-model contract version mismatch"
-        if dict(sidecar.get("fitting_identity") or {}) != dict(expected_identity):
-            return None, "fitted-model fitting identity mismatch"
+        persisted_identity = dict(sidecar.get("fitting_identity") or {})
+        if persisted_identity != dict(expected_identity) and not _historical_fitted_source_compatible(
+            persisted_identity=persisted_identity,
+            expected_identity=expected_identity,
+            model_dir=model_dir,
+            final_manifest_path=Path(final_manifest_path),
+            report_path=Path(report_path),
+        ):
+            return None, "fitted-model fitting identity mismatch (source data/target lineage unproven)"
         if not _file_record_matches(sidecar.get("model"), model_path):
             raise FittedModelConflictError(
                 "same fitted-model fitting identity points at incompatible checkpoint bytes"
@@ -547,7 +698,7 @@ def load_reusable_fitted_model_contract(
             manifest_path=sidecar_path,
             model_path=model_path,
             manifest=sidecar,
-            fitting_identity=dict(expected_identity),
+            fitting_identity=persisted_identity,
             selected_epoch=selected_epoch,
             epoch_selection=dict(result.get("epoch_selection") or {}),
             final_refit_history=list(result.get("final_refit_history") or []),
@@ -660,6 +811,7 @@ __all__ = [
     "canonical_fitting_settings",
     "current_default_fitting_settings",
     "fitted_model_settings_issues",
+    "forward_fitted_source_provenance_issues",
     "fitting_settings_issues",
     "legacy_default_fitting_settings",
     "load_fitted_model_training_evidence",

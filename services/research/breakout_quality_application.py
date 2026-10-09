@@ -109,6 +109,7 @@ from services.breakout_quality.model_report_extensions import (
 from services.breakout_quality.fitted_model_artifacts import (
     current_default_fitting_settings,
     fitted_model_settings_issues,
+    forward_fitted_source_provenance_issues,
     pit_fold_fitting_settings_issues,
 )
 from services.research.producer_execution import (
@@ -128,6 +129,9 @@ from services.research.training_process import (
 from core.training_policy import resolve_robustness_benchmark_seeds
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.artifact_dependency_registry import (
+    ARTIFACT_DATASET_CORE,
+    ARTIFACT_CONTINUOUS_TARGET,
+    collect_model_upstream_readiness,
     collect_model_upstream_preparation_plan,
 )
 from filters.breakout_quality.dataset_readiness import collect_dataset_readiness
@@ -182,6 +186,7 @@ from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
     derive_point_in_time_model_validation_gate,
     load_selection_point_in_time_ranking_contract,
+    validate_current_pit_score_source_lineage,
     load_continuous_ranker_oos_contract,
     load_continuous_ranker_oos_score_table,
     resolve_continuous_ranker_oos_score_path,
@@ -3684,6 +3689,56 @@ def _interactive_continuous_pit_validation(program_name: str, settings) -> int:
     return _interactive_continuous_rolling_test(program_name, settings)
 
 
+def _forward_source_provenance_issues(
+    settings, *, model_dir: Path, manifest, report
+) -> tuple[str, ...]:
+    """Canonical current-upstream + Forward FIT/SCORE source readiness gate.
+
+    Called for full Forward REUSE and per-seed robustness REUSE. It uses the
+    upstream owner rather than re-implementing Dataset / Target freshness policy.
+    Missing or unverifiable history fails closed; no implicit data rebuild here.
+    """
+
+    try:
+        upstream = collect_model_upstream_readiness(
+            PROJECT_ROOT,
+            filter_id=str(settings.filter_id),
+            model_architecture=str(settings.model_architecture),
+            experiment_profile=str(settings.experiment_profile),
+            dataset=str(INTERACTIVE_DATASET_PROFILE),
+            max_tickers=int(INTERACTIVE_MAX_TICKERS),
+        )
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return (f"upstream readiness unavailable: {type(exc).__name__}: {exc}",)
+    stale = tuple(
+        f"{item.artifact_type}: {item.description}"
+        for item in upstream if not item.ready
+    )
+    if stale:
+        return stale
+    dataset_nodes = [item for item in upstream if item.artifact_type == ARTIFACT_DATASET_CORE]
+    if len(dataset_nodes) != 1:
+        return ("canonical Dataset readiness record missing or duplicate",)
+    dataset_summary = load_json_object_or_none(Path(dataset_nodes[0].path))
+    if not isinstance(dataset_summary, dict):
+        return ("canonical Dataset summary missing or invalid",)
+    target_nodes = [item for item in upstream if item.artifact_type == ARTIFACT_CONTINUOUS_TARGET]
+    if len(target_nodes) > 1:
+        return ("canonical Continuous Target readiness record duplicate",)
+    target_manifest = None
+    if target_nodes:
+        target_manifest = load_json_object_or_none(Path(target_nodes[0].path))
+        if not isinstance(target_manifest, dict):
+            return ("canonical Continuous Target manifest missing or invalid",)
+    return forward_fitted_source_provenance_issues(
+        model_dir=Path(model_dir),
+        model_manifest=manifest,
+        report=report,
+        dataset_summary=dataset_summary,
+        target_manifest=target_manifest,
+    )
+
+
 def _load_reusable_continuous_forward_contract(settings):
     """Return the validated canonical Forward-OOS model contract, if reusable."""
 
@@ -3715,6 +3770,12 @@ def _load_reusable_continuous_forward_contract(settings):
     )
     if fit_issues:
         return None, "Fitted model training settings stale: " + "; ".join(fit_issues[:8])
+    provenance_issues = _forward_source_provenance_issues(
+        settings, model_dir=model_paths.model_dir,
+        manifest=contract.manifest, report=contract.report,
+    )
+    if provenance_issues:
+        return None, "Forward fitted source lineage stale: " + "; ".join(provenance_issues[:8])
     report_payload = dict(contract.report or {})
     if not isinstance(report_payload.get("standard_model_sop"), dict):
         migrated = migrate_legacy_forward_standard_model_sop(report_payload)
@@ -5138,6 +5199,11 @@ def _load_forward_robustness_seed(settings, *, seed: int):
     )
     if fit_issues:
         return None, report_path, "Forward robustness fitted-model training settings stale: " + "; ".join(fit_issues[:8])
+    provenance_issues = _forward_source_provenance_issues(
+        settings, model_dir=model_dir, manifest=manifest, report=report,
+    )
+    if provenance_issues:
+        return None, report_path, "Forward robustness fitted source lineage stale: " + "; ".join(provenance_issues[:8])
     issues = _validate_robustness_standard_payload(
         report, settings=settings, seed=seed, evaluation_mode="forward_oos"
     )
@@ -5172,6 +5238,14 @@ def _load_rolling_robustness_seed(settings, *, seed: int):
     )
     if fit_issues:
         return None, audit_path, "Rolling robustness fitted-model training settings stale: " + "; ".join(fit_issues[:8])
+    try:
+        validate_current_pit_score_source_lineage(
+            project_root=PROJECT_ROOT, filter_id=str(settings.filter_id),
+            model_architecture=str(settings.model_architecture),
+            experiment_profile=str(settings.experiment_profile), manifest=manifest,
+        )
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return None, audit_path, f"Rolling robustness source lineage stale: {type(exc).__name__}: {exc}"
     issues = _validate_robustness_standard_payload(
         audit, settings=settings, seed=seed, evaluation_mode="rolling_oos"
     )

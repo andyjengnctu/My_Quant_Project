@@ -111,6 +111,97 @@ PIT_REQUIRED_SCORE_COLUMNS = (
 PIT_OPTIONAL_SCORE_COLUMNS = get_continuous_ranker_persisted_score_columns()
 
 
+def _load_current_validated_model_source(
+    *, project_root: Path, filter_id: str, model_architecture: str,
+    experiment_profile: str,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """One upstream-readiness owner shared by Forward and Rolling score readers."""
+
+    from filters.breakout_quality.artifact_dependency_registry import (
+        ARTIFACT_DATASET_CORE,
+        ARTIFACT_CONTINUOUS_TARGET,
+        collect_model_upstream_readiness,
+    )
+    from filters.breakout_quality.dataset_store import resolve_dataset_paths
+    from filters.breakout_quality.paths import resolve_filter_output_dir
+
+    root = Path(project_root).resolve()
+    summary_path = resolve_dataset_paths(resolve_filter_output_dir(root, filter_id)).summary
+    current_summary = _read_json_object(
+        summary_path, label="Current Dataset summary", project_root=root
+    )
+    coverage = current_summary.get("source_selection")
+    if not isinstance(coverage, dict):
+        raise ValueError("current Dataset source_selection缺失；不可重用model score")
+    try:
+        max_tickers = int(coverage["requested_max_tickers"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("current Dataset ticker selection不可驗證") from exc
+    upstream = collect_model_upstream_readiness(
+        root, filter_id=filter_id, model_architecture=model_architecture,
+        experiment_profile=experiment_profile,
+        dataset=str(current_summary.get("dataset") or ""), max_tickers=max_tickers,
+    )
+    if not upstream or any(not item.ready for item in upstream):
+        stale = [item.description for item in upstream if not item.ready]
+        raise ValueError("Model score upstream not READY: " + "; ".join(stale[:8]))
+    dataset_nodes = [item for item in upstream if item.artifact_type == ARTIFACT_DATASET_CORE]
+    target_nodes = [item for item in upstream if item.artifact_type == ARTIFACT_CONTINUOUS_TARGET]
+    if len(dataset_nodes) != 1 or len(target_nodes) > 1:
+        raise ValueError("Model score canonical upstream identity ambiguous")
+    target_manifest = None
+    if target_nodes:
+        target_manifest = _read_json_object(
+            Path(target_nodes[0].path), label="Current Continuous Target", project_root=root
+        )
+    return current_summary, target_manifest
+
+
+def _validate_current_forward_score_source_lineage(
+    *, project_root: Path, filter_id: str, model_architecture: str,
+    experiment_profile: str, manifest: dict[str, Any], report: dict[str, Any]
+) -> None:
+    """Reject a Forward score read if upstream source data no longer matches."""
+    from filters.breakout_quality.model_source_provenance import (
+        forward_published_source_provenance_issues,
+    )
+
+    current_summary, target_manifest = _load_current_validated_model_source(
+        project_root=project_root, filter_id=filter_id,
+        model_architecture=model_architecture,
+        experiment_profile=experiment_profile,
+    )
+    issues = forward_published_source_provenance_issues(
+        model_manifest=manifest, report=report,
+        dataset_summary=current_summary, target_manifest=target_manifest,
+    )
+    if issues:
+        raise ValueError("Forward score Dataset/Target provenance stale: " + "; ".join(issues[:8]))
+
+
+def validate_current_pit_score_source_lineage(
+    *, project_root: Path, filter_id: str, model_architecture: str,
+    experiment_profile: str, manifest: dict[str, Any]
+) -> None:
+    """Prevent current PIT score/report reuse across changed source data."""
+    from filters.breakout_quality.model_source_provenance import (
+        pit_published_source_provenance_issues,
+    )
+
+    current_summary, target_manifest = _load_current_validated_model_source(
+        project_root=project_root, filter_id=filter_id,
+        model_architecture=model_architecture,
+        experiment_profile=experiment_profile,
+    )
+    issues = pit_published_source_provenance_issues(
+        pit_manifest=manifest,
+        dataset_summary=current_summary,
+        target_manifest=target_manifest,
+    )
+    if issues:
+        raise ValueError("PIT score Dataset/Target provenance stale: " + "; ".join(issues[:8]))
+
+
 @dataclass(frozen=True)
 class SelectionPointInTimeRankingContract:
     score_path: Path
@@ -485,6 +576,12 @@ def load_selection_point_in_time_ranking_contract(
     ):
         raise ValueError("Selection PIT audit score group count與manifest coverage不一致")
 
+
+    validate_current_pit_score_source_lineage(
+        project_root=root, filter_id=str(filter_id),
+        model_architecture=str(model_architecture),
+        experiment_profile=str(experiment_profile), manifest=manifest,
+    )
     gate = derive_point_in_time_model_validation_gate(audit)
     if require_model_validation_pass and gate["status"] != "PASS":
         failed = [name for name, passed in gate["checks"].items() if not passed]
@@ -936,6 +1033,12 @@ def load_continuous_ranker_oos_contract(
         manifest.get("model"), path=model_path, label="Continuous ranker model"
     )
     if bool(require_scores):
+        _validate_current_forward_score_source_lineage(
+            project_root=root, filter_id=str(filter_id),
+            model_architecture=str(model_architecture),
+            experiment_profile=str(experiment_profile),
+            manifest=manifest, report=report,
+        )
         research_outputs = dict(manifest.get("research_outputs") or {})
         report_artifacts = dict(report.get("artifacts") or {})
         score_record_key = "oos_scores_gzip" if is_daily else "scores"
@@ -1255,6 +1358,7 @@ __all__ = [
     "SelectionPointInTimeRankingContract",
     "derive_point_in_time_model_validation_gate",
     "load_selection_point_in_time_ranking_contract",
+    "validate_current_pit_score_source_lineage",
     "load_selection_point_in_time_score_table",
     "load_selection_point_in_time_score_table_from_path",
     "lookup_selection_point_in_time_candidate_score",
