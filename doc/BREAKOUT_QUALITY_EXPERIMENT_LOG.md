@@ -12563,3 +12563,14 @@ Decision：`PROMOTION / C85_P6_IS_CURRENT_TRADING_POLICY_REFERENCE / CANONICAL_O
 - **Focused validation**：同ticker不同`signal_date`不合票、相同lineage投票/median params合法、Trading random mode每次生成不同4-seed bundle、per-artifact seeds persisted/binding一致、legacy fixed-seed binding fail-fast；使用者本機尚未重新執行Scanner或正式Research C85 Rolling，故不宣稱已知修正後候選筆數或績效。
 
 Decision：`CANONICAL_SIGNAL_DATE_AGREEMENT_FIX / RESEARCH_TRADING_SAME_OWNER / TRADING_RANDOM_4X300_RETRAIN / HISTORICAL_PRE_FIX_RESEARCH_EVIDENCE_RETAINED / NEW_POST_FIX_RESEARCH_IDENTITY_REQUIRES_AUTHORIZATION / NO_SILENT_P6_FINGERPRINT_DRIFT`.
+
+
+## 2026-10-09 — C95 / PARAM-P14 corrected C85 same-signal Research registration (results pending)
+
+- **User decision**：保留舊C85/P6歷史研究證據與程式版本封存，不在current Research維護舊ticker-only可執行引擎；使用新Research scientific identity以修正後唯一canonical consensus重訓並做Rolling OOS。
+- **New scientific identity**：`SR-C95 / PARAM-P14`；相對C85/P6的受控差異僅為same-original-signal voting與single-winner-per-ticker candidate aggregation。Full/adjusted/formal、120M selection、12M annual PIT、fixed Research generator42、4×300 trials、validation off、同Optimizer／portfolio engine不變。
+- **Immutable scientific registration**：P14 scientific fingerprint=`8699cc086102e446b30e688e4a03b9fc6f4b067ee6669accd6b8fc53356eb623`，新增`candidate_consensus` protocol。舊P6 registered scientific fingerprint=`b6162e8debd663a54fc3a56d2f738e7a217e11128a1fa2148dac01006bae976b`維持不變，舊metric evidence不可在新引擎重算或冒稱新語意。
+- **Current Research entry**：Research `[2]`指向P14；Strategy Compare `[3] → [1]/[2]`指向專用C58/C61/C95 OOS／Rolling suite，OOS/Rolling共用P14 physical truth，保存獨立Compare outputs。當前Trading仍使用random seeds、獨立V2 artifact與原P6 producer reference；沒有自動promotion。
+- **Results**：`RESULT_PENDING`；此輪僅整合／靜態與合成驗證，尚未用完整Research資料跑正式6-fold 4×300與Rolling績效。舊C85 Return/MDD/RoMD=`190.64%/11.59%/16.45`只供修正前歷史參考，不作未來績效宣稱。
+
+Decision：`NEW_C95_P14_REGISTERED / ORIGINAL_C85_P6_ARCHIVED_AS_PRE_FIX_EVIDENCE / ONE_CANONICAL_ENSEMBLE_ENGINE / RESEARCH_OOS_ROLLING_RETRAIN_PENDING / NO_TRADING_PROMOTION`。

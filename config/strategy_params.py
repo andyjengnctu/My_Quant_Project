@@ -12,13 +12,10 @@ from __future__ import annotations
 from config.research import RESEARCH_MARKET_DATA_CUTOFF
 
 
-# Current Research strategy-parameter target.  Changing this value changes what
-# Research [2] trains; the interactive menu must not offer a second target selector.
-# Current experiment starts the raw/unadjusted-price strategy line with the
-# smallest controlled baseline: Full + base-finalist-best, fixed seed 42,
-# 300 trials/fold.  It is isolated from adjusted-price canonical artifacts and
-# therefore cannot REUSE C61/C85 parameter truth.
-ACTIVE_STRATEGY_PARAM_PROFILE = "raw_price_full_base_finalist_best_current"
+# Current Research [2] target: the corrected, independently registered
+# C95/P14 adjusted-price multi-seed revalidation. Trading's production producer
+# remains separate and resolves a fresh random bundle on every explicit retrain.
+ACTIVE_STRATEGY_PARAM_PROFILE = "c85_same_signal_revalidation_current"
 
 
 # Validation is a reusable Optimizer capability.  Profiles opt in/out below;
@@ -348,6 +345,23 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
         "registered_scientific_fingerprint_sha256": (
             "b6162e8debd663a54fc3a56d2f738e7a217e11128a1fa2148dac01006bae976b"
         ),
+    },
+    "c85_same_signal_revalidation_current": {
+        "label": "C85 Corrected Same-Signal Consensus Revalidation",
+        "strategy_id": "breakout",
+        "filter_profile": "full",
+        "parameter_policy": "base-finalists-agree",
+        "parameter_set_identity": "PARAM-P14",
+        "dataset": "full",
+        "schedule_start_date": "2021-01-01",
+        "coverage_end_date": RESEARCH_MARKET_DATA_CUTOFF,
+        "validation": {"enabled": False},
+        "fitting_seed_protocol": "research_fixed_multiseed_v1",
+        "artifact_slug": "param_p14_c85_same_signal_revalidation",
+        # Only P14 opts in to the result-affecting canonical consensus contract.
+        # P6's pre-fix immutable scientific SHA remains the historical evidence.
+        "candidate_consensus_contract": "canonical",
+        "registered_scientific_fingerprint_sha256": "8699cc086102e446b30e688e4a03b9fc6f4b067ee6669accd6b8fc53356eb623",
     },
     "production_multiseed_8x300_compare": {
         "label": "Fixed Multi-Seed 8x300",

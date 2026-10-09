@@ -3340,20 +3340,31 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and current_oos_robustness.suite_id == current_oos_settings.suite_id,
     )
     from services.research.strategy_multi_seed_robustness import _benchmark_param_binding
+    # Raw-price controls are historical; keep their scientific contract test
+    # against the archived suite rather than rewriting the new C95 suite.
+    historical_raw_oos_settings = get_strategy_comparison_settings(
+        "non_dl_reference_only_oos"
+    )
+    historical_raw_robustness = get_strategy_multi_seed_robustness_settings(
+        "non_dl_reference_only_oos"
+    )
+    historical_raw_profile = get_strategy_param_training_profile(
+        "raw_price_full_base_finalist_best_current"
+    )
     raw_robustness_binding = _benchmark_param_binding(
-        settings=current_oos_settings,
-        robustness=current_oos_robustness,
-        arm=current_oos_settings.arms["C93"],
-        seed=int(current_oos_robustness.resolved_seeds[0]),
+        settings=historical_raw_oos_settings,
+        robustness=historical_raw_robustness,
+        arm=historical_raw_oos_settings.arms["C93"],
+        seed=int(historical_raw_robustness.resolved_seeds[0]),
     )
     check(
         "raw_price_compare_arm_robustness_is_derived_from_same_suite_and_profile",
         True,
-        int(current_oos_robustness.seed_count) == 4
-        and len(tuple(current_oos_robustness.resolved_seeds)) == 4
+        int(historical_raw_robustness.seed_count) == 4
+        and len(tuple(historical_raw_robustness.resolved_seeds)) == 4
         and str(raw_robustness_binding.get("producer_variant")) == "raw_price_isolated_v1"
         and str(raw_robustness_binding.get("training_profile_id"))
-            == active_param_profile.profile_id
+            == historical_raw_profile.profile_id
         and "robustness/end_to_end_v1/seed_"
             in Path(raw_robustness_binding["path"]).as_posix(),
     )
@@ -4387,38 +4398,128 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and current_compare_settings.parameter_sources[arm.param_source].builder.builder_type
             == "optimizer_fixed_multiseed_strategy_params"
     }
-    current_raw_profile_rows = []
-    for arm in current_compare_settings.enabled_arms:
-        source = current_compare_settings.parameter_sources[arm.param_source]
+    # The new current matrix must not execute old C85/P6 as if it were the
+    # corrected scientific treatment.  Historical raw-price tests remain
+    # bound to their archived profile and are not silently removed.
+    current_arm_ids = tuple(arm.arm_id for arm in current_compare_settings.enabled_arms)
+    current_contrast_ids = tuple(contrast.contrast_id for contrast in current_compare_settings.enabled_contrasts)
+    corrected_arm = current_compare_settings.arms["C95"]
+    corrected_source = current_compare_settings.parameter_sources[corrected_arm.param_source]
+    corrected_profile_id = str(dict(corrected_source.builder.options).get("training_profile_id") or "")
+    from core.strategy_param_scientific_contract import build_strategy_param_scientific_contract
+    from core.portfolio_ensemble import get_ensemble_candidate_consensus_contract
+    corrected_science = build_strategy_param_scientific_contract(project_root, corrected_profile_id)
+    historical_science = build_strategy_param_scientific_contract(project_root, "production_multiseed_current")
+    check(
+        "strategy_compare_current_suite_is_new_identity_and_excludes_legacy_c85",
+        True,
+        current_arm_ids == ("C58", "C61", "C95")
+        and set(current_contrast_ids) == {"C95-C61", "C95-C58"}
+        and current_oos_settings.suite_id == current_rolling_settings.suite_id
+        and "C85" not in current_arm_ids
+        and corrected_arm.data_source == "canonical"
+        and corrected_source.builder.builder_type == "optimizer_fixed_multiseed_strategy_params"
+        and corrected_profile_id == active_param_profile.profile_id
+        and active_param_profile.price_basis == "adjusted"
+        and active_param_profile.filter_profile == "full"
+        and active_param_profile.parameter_policy == "base-finalists-agree"
+        and not active_param_profile.validation_enabled
+        and not current_validation_parameter_sets
+        and current_fixed_multiseed_profiles == {active_param_profile.profile_id}
+        and "optimizer_raw_price_strategy_params" not in current_builder_types
+        and "optimizer_validation_budget_refit_strategy_params" not in current_builder_types,
+    )
+    check(
+        "strategy_compare_corrected_c85_scientific_identity_is_registered_and_separate_from_p6",
+        True,
+        active_param_profile.parameter_set_identity == "PARAM-P14"
+        and corrected_science["scientific_fingerprint_sha256"]
+            == active_param_profile.registered_scientific_fingerprint_sha256
+        and corrected_science["scientific_fingerprint_sha256"]
+            != historical_science["scientific_fingerprint_sha256"]
+        and historical_science["scientific_fingerprint_sha256"]
+            == production_multiseed_param_profile.registered_scientific_fingerprint_sha256
+        and corrected_science["scientific_contract"].get("candidate_consensus")
+            == get_ensemble_candidate_consensus_contract(),
+    )
+    oos_corrected_source = current_oos_settings.parameter_sources[
+        current_oos_settings.arms["C95"].param_source
+    ]
+    rolling_corrected_source = current_rolling_settings.parameter_sources[
+        current_rolling_settings.arms["C95"].param_source
+    ]
+    check(
+        "strategy_compare_corrected_c85_oos_and_rolling_share_one_physical_param_truth",
+        True,
+        oos_corrected_source.path_template == rolling_corrected_source.path_template
+        and oos_corrected_source.identity_manifest_path
+            == rolling_corrected_source.identity_manifest_path
+        and "param_p14_c85_same_signal_revalidation" in oos_corrected_source.path_template
+        and "param_p6" not in oos_corrected_source.path_template.lower()
+        and oos_corrected_source.consumption_evaluation_mode == "oos"
+        and rolling_corrected_source.consumption_evaluation_mode == "rolling"
+        and current_oos_settings.output_root != current_rolling_settings.output_root,
+    )
+    # A legacy P6-shaped payload physically copied into the new P14 namespace
+    # may exist after a manual migration.  The producer must never REUSE it as
+    # corrected C95 params, even if the file exists at the new target path.
+    with TemporaryDirectory() as isolated_p14_dir:
+        from services.optimizer.strategy_param_service import (
+            fixed_multiseed_strategy_param_artifact_path,
+            inspect_fixed_multiseed_strategy_parameter_artifact,
+        )
+        old_payload_on_new_path = fixed_multiseed_strategy_param_artifact_path(
+            isolated_p14_dir,
+            training_profile_id=active_param_profile.profile_id,
+            policy=active_param_profile.parameter_policy,
+        )
+        old_payload_on_new_path.parent.mkdir(parents=True, exist_ok=True)
+        old_payload_on_new_path.write_text(json.dumps({
+            "type": "active_param_ensemble",
+            "selector": "base_finalists_agree",
+            "breakout_quality_param_adaptation": {
+                "parameter_set": production_multiseed_param_profile.parameter_set_identity,
+                "training_dl_enabled": False,
+            },
+        }), encoding="utf-8")
+        old_reuse_state = inspect_fixed_multiseed_strategy_parameter_artifact(
+            isolated_p14_dir,
+            training_profile_id=active_param_profile.profile_id,
+            policy=active_param_profile.parameter_policy,
+            comparison_end_date="2021-12-31",
+            dataset=active_param_profile.dataset,
+            max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+            rotation=str(DEFAULT_PORTFOLIO_ROTATION),
+            fixed_risk=float(DEFAULT_FIXED_RISK),
+            max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+        )
+    check(
+        "strategy_compare_c95_rejects_legacy_p6_params_even_when_copied_into_new_namespace",
+        True,
+        not bool(old_reuse_state["ready"])
+        and old_reuse_state["action"] != "REUSE"
+        and old_reuse_state["status"] == "PARAMETER_SET_MISMATCH",
+    )
+    historical_raw_oos_settings = get_strategy_comparison_settings(
+        "non_dl_reference_only_oos"
+    )
+    historical_raw_rows = []
+    for arm in historical_raw_oos_settings.enabled_arms:
+        source = historical_raw_oos_settings.parameter_sources[arm.param_source]
         builder = source.builder
         if builder is None or builder.builder_type != "optimizer_raw_price_strategy_params":
             continue
         profile_id = str(dict(builder.options).get("training_profile_id") or "")
         profile = get_strategy_param_training_profile(profile_id)
         protocol = get_strategy_param_fitting_seed_protocol(profile.fitting_seed_protocol)
-        current_raw_profile_rows.append((arm, source, profile, protocol))
-    current_raw_profiles = {profile.profile_id for _arm, _source, profile, _protocol in current_raw_profile_rows}
-    current_arm_ids = tuple(arm.arm_id for arm in current_compare_settings.enabled_arms)
-    current_contrast_ids = tuple(contrast.contrast_id for contrast in current_compare_settings.enabled_contrasts)
-    required_reference_ids = {"C58", "C61", "C85"}
+        historical_raw_rows.append((arm, source, profile, protocol))
     check(
-        "strategy_compare_current_suite_preserves_required_references_and_derives_raw_profiles",
+        "strategy_compare_historical_raw_controls_remain_reachable_without_affecting_current_c95",
         True,
-        required_reference_ids.issubset(set(current_arm_ids))
-        and all(
-            contrast.left in set(current_arm_ids) and contrast.right in set(current_arm_ids)
-            for contrast in current_compare_settings.enabled_contrasts
+        {"C58", "C61", "C85", "C93", "C94"}.issubset(
+            {arm.arm_id for arm in historical_raw_oos_settings.enabled_arms}
         )
-        and len(current_contrast_ids) == len(set(current_contrast_ids))
-        and "optimizer_validation_budget_refit_strategy_params" not in current_builder_types
-        and "optimizer_fixed_multiseed_strategy_params" in current_builder_types
-        and "optimizer_raw_price_strategy_params" in current_builder_types
-        and not current_validation_parameter_sets
-        and current_fixed_multiseed_profiles == {"production_multiseed_current"}
-        and active_param_profile.profile_id in current_raw_profiles
-        and len(current_raw_profiles) == len(current_raw_profile_rows)
-        and len({str(source.path_template or "") for _arm, source, _profile, _protocol in current_raw_profile_rows})
-            == len(current_raw_profile_rows)
+        and len(historical_raw_rows) == 2
         and all(
             arm.data_source == "raw_unadjusted_controlled"
             and profile.price_basis == "raw_unadjusted"
@@ -4427,33 +4528,23 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             and profile.parameter_policy == arm.param_policy
             and bool(profile.artifact_slug)
             and str(profile.artifact_slug) in str(source.path_template or "")
-            for arm, source, profile, _protocol in current_raw_profile_rows
+            for arm, source, profile, _protocol in historical_raw_rows
         )
-        and any(not protocol.enabled for _arm, _source, _profile, protocol in current_raw_profile_rows)
-        and any(protocol.enabled for _arm, _source, _profile, protocol in current_raw_profile_rows)
-        and current_compare_settings.arms["C58"].data_source == "canonical"
-        and current_compare_settings.arms["C61"].data_source == "canonical"
-        and current_compare_settings.arms["C85"].data_source == "canonical"
-        and active_param_profile.price_basis == "raw_unadjusted"
-        and active_param_profile.filter_profile == "full"
-        and not active_param_profile.validation_enabled
-        # Historical P13 remains registered and reproducible; it is not current.
-        and trading_aligned_8x1000_param_profile.profile_id
-            == "trading_aligned_8x1000_current"
-        and trading_aligned_8x1000_param_profile.parameter_set_identity == "PARAM-P13"
-        and not trading_aligned_8x1000_param_profile.validation_enabled,
+        and any(not protocol.enabled for _arm, _source, _profile, protocol in historical_raw_rows)
+        and any(protocol.enabled for _arm, _source, _profile, protocol in historical_raw_rows)
+        and trading_aligned_8x1000_param_profile.parameter_set_identity == "PARAM-P13",
     )
-    raw_work_plans = [
+    active_work_plans = [
         strategy_param_application._build_plan(active_param_profile, work)
         for work in strategy_param_application.WORK_TYPES
     ]
     check(
         "active_strategy_param_profile_opens_all_four_work_types_from_one_profile",
         True,
-        len(raw_work_plans) == 4
-        and all(plan.get("status") in {"READY", "PREPARABLE"} for plan in raw_work_plans)
-        and len(raw_work_plans[2].get("rows") or ()) == 4
-        and len(raw_work_plans[3].get("rows") or ()) == 4
+        len(active_work_plans) == 4
+        and all(plan.get("status") in {"READY", "PREPARABLE"} for plan in active_work_plans)
+        and len(active_work_plans[2].get("rows") or ()) == 4
+        and len(active_work_plans[3].get("rows") or ()) == 4
         and "Robustness下一輪再開" not in strategy_param_app_source
         and "RAW_PRICE_BASELINE_FIRST_ROBUSTNESS_NOT_ENABLED" not in strategy_param_app_source,
     )

@@ -231,7 +231,7 @@ def build_strategy_param_scientific_contract(
         **fitting_refs,
         **validation_refs,
     }
-    return build_strategy_param_runtime_scientific_contract(
+    scientific = build_strategy_param_runtime_scientific_contract(
         root,
         strategy_id=str(profile.strategy_id),
         filter_profile=str(profile.filter_profile),
@@ -247,6 +247,22 @@ def build_strategy_param_scientific_contract(
         execution_overrides=execution_overrides,
         references=references,
     )
+    if profile.candidate_consensus_contract is not None:
+        if profile.candidate_consensus_contract != "canonical":
+            raise ValueError(
+                "未支援的candidate consensus scientific contract selector: "
+                f"{profile.candidate_consensus_contract!r}"
+            )
+        # The contract is owned by the live canonical ensemble implementation;
+        # never implement an old ticker-only algorithm just to read old evidence.
+        from core.portfolio_ensemble import get_ensemble_candidate_consensus_contract
+
+        payload = dict(scientific["scientific_contract"])
+        payload["candidate_consensus"] = get_ensemble_candidate_consensus_contract()
+        return _wrap_scientific_contract(
+            payload, references=dict(scientific.get("references") or {})
+        )
+    return scientific
 
 
 def build_strategy_param_scientific_fingerprint(

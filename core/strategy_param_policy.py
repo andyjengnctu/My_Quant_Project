@@ -100,6 +100,7 @@ class StrategyParamTrainingProfile:
     score_policy_overrides: Mapping[str, Any]
     requires_resume_safe_execution_evidence: bool
     registered_scientific_fingerprint_sha256: str | None
+    candidate_consensus_contract: str | None
 
 
 @dataclass(frozen=True)
@@ -383,6 +384,9 @@ def get_strategy_param_training_profile(profile_id: str) -> StrategyParamTrainin
             raw.get("requires_resume_safe_execution_evidence", False)
         ),
         registered_scientific_fingerprint_sha256=registered_scientific_fingerprint_sha256,
+        candidate_consensus_contract=(
+            str(raw.get("candidate_consensus_contract") or "").strip() or None
+        ),
     )
 
 

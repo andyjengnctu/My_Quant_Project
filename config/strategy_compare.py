@@ -14,14 +14,11 @@ from core.breakout_quality_registry import (
 
 # Current work-stage selection. Stable menu work types live in apps/research.py;
 # only the current scientific profiles/bindings change here.
-# Current reference suite is append-only: C58/C61/C85 remain active references.
-# Raw-price controlled counterparts are appended declaratively: C93 mirrors C61
-# (base-finalist-best) and C94 mirrors C85 (base-finalists-agree 4x300).  Each
-# raw-vs-adjusted contrast fixes ticker/date/Volume and strategy semantics so OHLC
-# price basis is the intended primary variable. Historical identities/results stay
-# registered and discoverable for identity-based reuse/replay.
-STRATEGY_COMPARE_CURRENT_OOS_PROFILE = "non_dl_reference_only_oos"
-STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE = "non_dl_reference_only_rolling"
+# Current C95/P14 is a new scientific treatment with the corrected same-original-
+# signal finalist consensus. The old C85/P6 and C93/C94 raw-price comparison
+# remain registered as historical evidence, not current executable arms.
+STRATEGY_COMPARE_CURRENT_OOS_PROFILE = "non_dl_c85_same_signal_revalidation_oos"
+STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE = "non_dl_c85_same_signal_revalidation_rolling"
 STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS = STRATEGY_COMPARE_CURRENT_OOS_PROFILE
 STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS = STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE
 STRATEGY_COMPARE_DEFAULT_PROFILE = STRATEGY_COMPARE_CURRENT_OOS_PROFILE

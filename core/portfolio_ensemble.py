@@ -57,6 +57,22 @@ def _median_candidate_row(rows):
     return dict(ordered[(len(ordered) - 1) // 2])
 
 
+def get_ensemble_candidate_consensus_contract() -> dict:
+    """Scientific semantics of the only supported canonical finalist consensus.
+
+    This metadata is fingerprinted by new registered Research profiles. Legacy
+    pre-correction identity fingerprints are preserved unchanged for archival
+    evidence; no executable ticker-only engine is retained.
+    """
+    return {
+        "version": "same_original_signal_single_ticker_v1",
+        "vote_grouping": ["ticker", "signal_date"],
+        "member_uniqueness": "one_vote_per_member_per_signal",
+        "winner_per_ticker": "canonical_candidate_order_then_latest_signal_date",
+        "missing_signal_date": "fail_fast",
+    }
+
+
 def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
     grouped = {}
     for row in rows:

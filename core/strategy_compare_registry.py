@@ -118,6 +118,15 @@ STRATEGY_COMPARE_SUITE_INVARIANTS = {
 }
 
 STRATEGY_COMPARE_SUITES = {
+    "non_dl_c85_same_signal_revalidation_v1": {
+        "arm_ids": ("C58", "C61", "C95"),
+        "contrast_ids": ("C95-C61", "C95-C58"),
+        "display_name_bases": {
+            "C58": "Min Base-Finalist-Best",
+            "C61": "Full Adjusted Price Base-Finalist-Best",
+            "C95": "Full Adjusted Price Corrected Same-Signal Agree 4x300",
+        },
+    },
     "non_dl_reference_only_current": {
         # Current suite is append-only at the work-stage level: introducing the
         # raw-price treatment must not silently remove the established references.
@@ -661,6 +670,58 @@ STRATEGY_COMPARE_PROFILES = {
             "C58": "min_rolling",
         },
     },
+    "non_dl_c85_same_signal_revalidation_oos": {
+        "label": "Corrected C85 Revalidation | OOS Test",
+        "description": (
+            "SR-C95/PARAM-P14 corrected same-signal consensus; Full adjusted price, "
+            "fixed Research generator seed 42, 4 seeds x 300 trials, 120M/12M. "
+            "Old C85/P6 is historical read-only evidence, not a current replay arm."
+        ),
+        "display_alignment_group": "non_dl_c85_same_signal_revalidation_v1",
+        "suite_id": "non_dl_c85_same_signal_revalidation_v1",
+        "display_suffix": "OOS",
+        "start_date": "2021-01-01",
+        "end_date": "2026-03-02",
+        "point_in_time_score_start_date": _ROLLING_OOS.score_start_date,
+        "point_in_time_score_end_date": _ROLLING_OOS.score_end_date,
+        "point_in_time_fold_months": int(_ROLLING_OOS.fold_months),
+        "point_in_time_fold_anchor_date": _ROLLING_OOS.fold_anchor_date,
+        "point_in_time_single_score_block": bool(_ROLLING_OOS.single_score_block),
+        "point_in_time_dirname": _ROLLING_OOS.point_in_time_dirname,
+        "output_root": "outputs/strategy_compare/non_dl_c85_same_signal_revalidation/oos_2021_forward",
+        "reuse_output_roots": (),
+        "arm_param_source_overrides": {
+            "C58": "min_oos",
+            "C61": "full_oos",
+            "C95": "full_c85_same_signal_revalidation_oos_experiment",
+        },
+    },
+    "non_dl_c85_same_signal_revalidation_rolling": {
+        "label": "Corrected C85 Revalidation | Rolling Test",
+        "description": (
+            "SR-C95/PARAM-P14 corrected same-signal consensus; Full adjusted price, "
+            "fixed Research generator seed 42, 4 seeds x 300 trials, 120M/12M. "
+            "Old C85/P6 is historical read-only evidence, not a current replay arm."
+        ),
+        "display_alignment_group": "non_dl_c85_same_signal_revalidation_v1",
+        "suite_id": "non_dl_c85_same_signal_revalidation_v1",
+        "display_suffix": "Rolling",
+        "start_date": "2021-01-01",
+        "end_date": "2026-03-02",
+        "point_in_time_score_start_date": _ROLLING_ROLLING.score_start_date,
+        "point_in_time_score_end_date": _ROLLING_ROLLING.score_end_date,
+        "point_in_time_fold_months": int(_ROLLING_ROLLING.fold_months),
+        "point_in_time_fold_anchor_date": _ROLLING_ROLLING.fold_anchor_date,
+        "point_in_time_single_score_block": bool(_ROLLING_ROLLING.single_score_block),
+        "point_in_time_dirname": _ROLLING_ROLLING.point_in_time_dirname,
+        "output_root": "outputs/strategy_compare/non_dl_c85_same_signal_revalidation/rolling_2021_forward",
+        "reuse_output_roots": (),
+        "arm_param_source_overrides": {
+            "C58": "min_rolling",
+            "C61": "full_rolling",
+            "C95": "full_c85_same_signal_revalidation_rolling_experiment",
+        },
+    },
     "non_dl_reference_only_oos": {
         "label": "Non-DL Current References + Raw Price | OOS Test",
         "description": (
@@ -871,6 +932,58 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         },
         "output_root": "outputs/strategy_compare/robustness/non_dl_validation_budget/rolling_2021_forward",
         "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/non_dl_validation_budget/rolling_2021_forward",
+        "checkpoint_cache_root": STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT,
+    },
+    "non_dl_c85_same_signal_revalidation_oos": {
+        "label": "Corrected C85 Multi-seed Robustness | OOS Test",
+        "enabled": True,
+        "profile_id": "non_dl_c85_same_signal_revalidation_oos",
+        "suite_id": "non_dl_c85_same_signal_revalidation_v1",
+        "benchmark_id": ROBUSTNESS_BENCHMARK_ID,
+        "seed_count": ROBUSTNESS_BENCHMARK_SEED_COUNT,
+        "seed_generator_seed": ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED,
+        "gpu_train_workers": STRATEGY_COMPARE_GPU_TRAIN_WORKERS,
+        "cpu_replay_workers": STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
+        "reuse_completed": STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED,
+        "console_mode": STRATEGY_COMPARE_ROBUSTNESS_CONSOLE_MODE,
+        "progress_interval_seconds": STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS,
+        "yearly_report": STRATEGY_COMPARE_ROBUSTNESS_YEARLY_REPORT,
+        "keep_checkpoints": STRATEGY_COMPARE_ROBUSTNESS_KEEP_CHECKPOINTS,
+        "keep_scores": STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES,
+        "keep_replay_details": STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS,
+        "keep_attribution_source": STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE,
+        "romd_reference_baselines": {
+            "min": {"param_source": "min_oos", "param_policy": "base-finalist-best", "rule_policy": "all_off"},
+            "full": {"param_source": "full_oos", "param_policy": "base-finalist-best", "rule_policy": "formal"},
+        },
+        "output_root": "outputs/strategy_compare/robustness/non_dl_c85_same_signal_revalidation/oos_2021_forward",
+        "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/non_dl_c85_same_signal_revalidation/oos_2021_forward",
+        "checkpoint_cache_root": STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT,
+    },
+    "non_dl_c85_same_signal_revalidation_rolling": {
+        "label": "Corrected C85 Multi-seed Robustness | Rolling Test",
+        "enabled": True,
+        "profile_id": "non_dl_c85_same_signal_revalidation_rolling",
+        "suite_id": "non_dl_c85_same_signal_revalidation_v1",
+        "benchmark_id": ROBUSTNESS_BENCHMARK_ID,
+        "seed_count": ROBUSTNESS_BENCHMARK_SEED_COUNT,
+        "seed_generator_seed": ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED,
+        "gpu_train_workers": STRATEGY_COMPARE_GPU_TRAIN_WORKERS,
+        "cpu_replay_workers": STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
+        "reuse_completed": STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED,
+        "console_mode": STRATEGY_COMPARE_ROBUSTNESS_CONSOLE_MODE,
+        "progress_interval_seconds": STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS,
+        "yearly_report": STRATEGY_COMPARE_ROBUSTNESS_YEARLY_REPORT,
+        "keep_checkpoints": STRATEGY_COMPARE_ROBUSTNESS_KEEP_CHECKPOINTS,
+        "keep_scores": STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES,
+        "keep_replay_details": STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS,
+        "keep_attribution_source": STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE,
+        "romd_reference_baselines": {
+            "min": {"param_source": "min_rolling", "param_policy": "base-finalist-best", "rule_policy": "all_off"},
+            "full": {"param_source": "full_rolling", "param_policy": "base-finalist-best", "rule_policy": "formal"},
+        },
+        "output_root": "outputs/strategy_compare/robustness/non_dl_c85_same_signal_revalidation/rolling_2021_forward",
+        "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/non_dl_c85_same_signal_revalidation/rolling_2021_forward",
         "checkpoint_cache_root": STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT,
     },
     "non_dl_reference_only_oos": {
@@ -1213,6 +1326,44 @@ STRATEGY_EXPERIMENTAL_PARAM_SOURCES = {
             "enabled": True,
             "builder_type": "optimizer_raw_price_strategy_params",
             "options": {"training_profile_id": "raw_price_full_base_finalists_agree_4x300_current"},
+        },
+    },
+    "full_c85_same_signal_revalidation_oos_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p14_c85_same_signal_revalidation/{param_filename}",
+        "description": "PARAM-P14 corrected same-signal fixed multi-seed scientific truth; OOS freeze consumer.",
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p14_c85_same_signal_revalidation/identity_manifest.json",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "oos",
+        "artifact_contract": {
+            "breakout_quality_param_adaptation": {
+                "parameter_set": "PARAM-P14",
+                "training_dl_enabled": False,
+                "optimizer_search_protocol": "fixed_multiseed_v1",
+            }
+        },
+        "builder": {
+            "enabled": True,
+            "builder_type": "optimizer_fixed_multiseed_strategy_params",
+            "options": {"training_profile_id": "c85_same_signal_revalidation_current"},
+        },
+    },
+    "full_c85_same_signal_revalidation_rolling_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p14_c85_same_signal_revalidation/{param_filename}",
+        "description": "PARAM-P14 corrected same-signal fixed multi-seed scientific truth; Rolling date-effective consumer.",
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p14_c85_same_signal_revalidation/identity_manifest.json",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "rolling",
+        "artifact_contract": {
+            "breakout_quality_param_adaptation": {
+                "parameter_set": "PARAM-P14",
+                "training_dl_enabled": False,
+                "optimizer_search_protocol": "fixed_multiseed_v1",
+            }
+        },
+        "builder": {
+            "enabled": True,
+            "builder_type": "optimizer_fixed_multiseed_strategy_params",
+            "options": {"training_profile_id": "c85_same_signal_revalidation_current"},
         },
     },
     "full_production_multiseed_oos_experiment": {
@@ -1696,6 +1847,21 @@ STRATEGY_DL_SOURCES = {
 # Arm definition本身不保存第二份enabled/mode membership；current matrix不得在profile或robustness重複列出。
 
 STRATEGY_COMPARE_ARMS = {
+    "C95": {
+        "name": "Full Adjusted Price Corrected Same-Signal Agree 4x300",
+        "description": (
+            "SR-C95 / PARAM-P14; corrected canonical same-original-signal finalists consensus, "
+            "single winning lineage per ticker. Research fixed generator seed 42, 4 x 300. "
+            "Old C85/P6 remains immutable pre-fix history; no legacy engine fork."
+        ),
+        "param_source": "full_c85_same_signal_revalidation_rolling_experiment",
+        "param_policy": "base-finalists-agree",
+        "rule_policy": "formal",
+        "dl_enabled": False,
+        "dl_id": None,
+        "dl_runtime_mode": None,
+        "robustness_role": "off",
+    },
     "C85": {
         "name": STRATEGY_COMPARE_DISPLAY_FULL_PRODUCTION_MULTI_SEED,
         "description": (
@@ -2073,6 +2239,14 @@ STRATEGY_COMPARE_ARMS = {
 # Contrast 是否啟用只由 STRATEGY_COMPARE_PROFILES[*]["contrast_ids"] 決定。
 
 STRATEGY_COMPARE_CONTRASTS = {
+    "C95-C61": {
+        "left": "C95", "right": "C61",
+        "description": "corrected C95 Full same-signal consensus 4x300 versus Full base-finalist-best reference; non-isolated selector contrast",
+    },
+    "C95-C58": {
+        "left": "C95", "right": "C58",
+        "description": "corrected C95 Full same-signal consensus 4x300 versus Min base-finalist-best reference; non-isolated Full/Min+selector contrast",
+    },
     "C93-C61": {
         "left": "C93",
         "right": "C61",
