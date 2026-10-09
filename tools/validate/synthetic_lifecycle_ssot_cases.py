@@ -86,7 +86,15 @@ def _market_io(frames, state, reads=None):
             result[ticker] = frames[ticker].loc[:allowed_date].copy()
         return result
     with ExitStack() as stack:
-        for module in ("services.trading.lifecycle_sync", "services.trading.lifecycle_context", "services.trading.market_data_consumer"):
+        # AI: The pending-amendment path imports the consumer-state loader by
+        # value. Pin that read to this fixture as well; no local V2 publication
+        # should be needed for an isolated lifecycle integration case.
+        for module in (
+            "services.trading.lifecycle_sync",
+            "services.trading.lifecycle_context",
+            "services.trading.market_data_consumer",
+            "services.trading.pending_entry_service",
+        ):
             stack.enter_context(patch(module + ".load_trading_v2_consumer_state", side_effect=source))
         stack.enter_context(patch("services.trading.lifecycle_context.open_trading_v2_consumer_view", return_value=view))
         for module in ("services.trading.lifecycle_sync", "services.trading.pending_entry_service", "services.trading.entry_lifecycle_context"):
