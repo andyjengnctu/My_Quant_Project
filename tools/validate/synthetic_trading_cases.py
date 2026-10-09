@@ -1491,13 +1491,16 @@ def validate_trading_daily_workflow_contract_case(base_params):
     check("daily_workflow_reuse_mode_returns_ready", "READY", reuse_workflow_result.get("status"))
 
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
-    check("workbench_exposes_separate_data_button", True, '"1 更新資料"' in panel_source)
+    workflow_ui = panel_source.split('workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程"', 1)[1].split('header = ttk.LabelFrame(content, text="Trading 帳戶"', 1)[0]
+    check("workbench_daily_workflow_removes_data_and_batch_actions", True, '"1 更新資料"' not in workflow_ui and '"每日流程 1→2→3"' not in workflow_ui and '"data"' not in workflow_ui and '"all"' not in workflow_ui)
+    check("workbench_daily_workflow_uses_compact_one_row_layout", True, 'padding=(8, 4)' in workflow_ui and 'pady=(0, 4)' in workflow_ui and 'workflow_bar.pack(fill="x")' in workflow_ui and 'promotion_row' not in workflow_ui and 'param_mode_row' not in workflow_ui)
+    check("workbench_daily_workflow_strategy_selection_reuses_promotion", True, 'text="1 策略選擇"' in workflow_ui and 'command=self._open_strategy_promotion_dialog' in workflow_ui and 'textvariable=self._promotion_status_var' in workflow_ui)
     check("workbench_removes_manual_position_rollforward_button", True, '持股日終推進' not in panel_source)
-    check("workbench_exposes_separate_param_button", True, '"套用參數Params"' in panel_source and "套用新進場" not in panel_source)
+    check("workbench_exposes_separate_param_button", True, 'text="2 訓練／套用 Params"' in workflow_ui and 'self._start_workflow_action("params")' in workflow_ui and "套用新進場" not in workflow_ui)
     check("workbench_exposes_param_reuse_choice", True, '"沿用既有 Params"' in panel_source and '"重新訓練 Params"' in panel_source)
     check("workbench_uses_shared_downloader_console_progress", True, "MarketDataDailyConsoleProgress" in panel_source)
-    check("workbench_exposes_scanner_button", True, '"3 Scanner 候選"' in panel_source)
-    check("workbench_exposes_one_click_daily_sequence", True, '"每日流程 1→2→3"' in panel_source)
+    check("workbench_exposes_scanner_button", True, 'text="3 Scanner 候選"' in workflow_ui and 'self._start_workflow_action("scanner")' in workflow_ui)
+    check("workbench_daily_workflow_only_tracks_param_and_scanner_actions", True, 'self._workflow_action_buttons["params"] = params_button' in workflow_ui and 'self._workflow_action_buttons["scanner"] = scanner_button' in workflow_ui)
     check("workbench_long_workflow_uses_background_thread", True, "threading.Thread(" in panel_source)
     check("workbench_exposes_scanner_pool_without_broker_oms_in_primary_layout", True, "侯選區" in panel_source and "advanced_notebook.grid(" not in panel_source)
     check("workbench_overview_uses_data_center_style_kpi_cards", True, "_overview_vars" in panel_source and all(label in panel_source for label in ("總股數", "符合快篩數", "Scanner 候選數", "可操作檔位", "可操作資金", "策略 / Params")) and "同步狀態" not in panel_source.split('operations_box = ttk.LabelFrame(self, text="Trading 儀表板"', 1)[1].split('workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程"', 1)[0])
@@ -4892,8 +4895,8 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         "workbench_daily_workflow_auto_syncs_lifecycle_without_manual_rollforward_button",
         True,
         '("2 持股日終推進", "rollforward")' not in panel_source
-        and '("套用參數Params", "params")' in panel_source
-        and '("3 Scanner 候選", "scanner")' in panel_source
+        and 'self._workflow_action_buttons["params"] = params_button' in panel_source
+        and 'self._workflow_action_buttons["scanner"] = scanner_button' in panel_source
         and 'run_trading_lifecycle_sync' in panel_source
         and 'bundle["lifecycle_sync"]' in panel_source,
     )
@@ -7392,7 +7395,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         "market_data_v2_archive": {"status": "UPDATED", "data_requests": 31, "usage_requests": 2},
     })
     check("workbench_data_completion_is_compact_progress_and_next_step", True, all(
-        text in messages[-1] for text in ("DONE", "資料更新完成", "下一步：套用參數Params")
+        text in messages[-1] for text in ("DONE", "資料更新完成", "下一步：2 訓練／套用 Params")
     ))
     check("workbench_data_completion_does_not_repeat_dashboard_metrics", False, any(
         text in messages[-1] for text in ("2026-09-09", "新進場池 17", "訓練池 23", "V2 UPDATED", "31/2")

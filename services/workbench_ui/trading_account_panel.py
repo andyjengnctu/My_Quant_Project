@@ -195,7 +195,7 @@ PARAM_MODE_BY_LABEL = {
     PARAM_MODE_TRAIN_LABEL: TRADING_PARAM_MODE_TRAIN,
 }
 
-WORKFLOW_HINT = "更新資料與每次 Trading state refresh 都會先自動同步掛單／持股 lifecycle 到 latest finalized date；既有 lifecycle 一律沿用 frozen params。停損／停利／賣出訊號為決策資訊，券商操作由使用者自行完成。"
+WORKFLOW_HINT = "每日操作：1 選擇／核對策略 → 2 選擇 Params 模式並訓練／套用 → 3 掃描候選；資料更新由資料中心負責。Trading 狀態刷新會自動同步掛單／持股 lifecycle，既有部位沿用 frozen params；券商操作由使用者自行完成。"
 CASH_HINT = "初始化可留空；更新現金會留下 revision event，不直接改檔。"
 MANUAL_POSITION_HINT = "修正／移除只適用尚未有賣出歷史、尚未由策略接管的 manual adopted 持股；不改 cash。"
 FILL_HINT = "成交只接受券商實際股數／價格；PARTIAL 仍鎖定未成交餘額，FILLED 才解除 active order。"
@@ -1374,49 +1374,57 @@ class TradingAccountPanel(ttk.Frame):
         self._dashboard_metric_labels = {}
         self._dashboard_detail_var = tk.StringVar(value="account/ 衍生快照尚未載入")
 
-        workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程", padding=10, style=WORKBENCH_LABELLF_STYLE)
-        workflow_box.grid(row=2, column=0, sticky="ew", pady=(0, 8))
-        workflow_box.columnconfigure(0, weight=1)
-        promotion_row = ttk.Frame(workflow_box, style=WORKBENCH_FRAME_STYLE)
-        promotion_row.grid(row=0, column=0, sticky="ew")
-        ttk.Label(promotion_row, text="策略版本", foreground=WORKBENCH_TEXT, style=WORKBENCH_LABEL_STYLE).pack(side="left")
+        # AI: Keep the three daily decisions on one compact row. Data updates live
+        # in 資料中心; the separate market-data and batch runners remain available
+        # internally but are not exposed as daily Trading actions.
+        workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程", padding=(8, 4), style=WORKBENCH_LABELLF_STYLE)
+        workflow_box.grid(row=2, column=0, sticky="ew", pady=(0, 4))
+        workflow_bar = ttk.Frame(workflow_box, style=WORKBENCH_FRAME_STYLE)
+        workflow_bar.pack(fill="x")
+
+        ttk.Button(
+            workflow_bar, text="1 策略選擇",
+            command=self._open_strategy_promotion_dialog,
+            style=WORKBENCH_BUTTON_STYLE,
+        ).pack(side="left")
         self._promotion_status_var = tk.StringVar(value="目前 Trading 策略")
-        ttk.Label(promotion_row, textvariable=self._promotion_status_var, style=WORKBENCH_LABEL_STYLE).pack(side="left", padx=(10, 0))
-        ttk.Button(promotion_row, text="策略升格／切換", command=self._open_strategy_promotion_dialog, style=WORKBENCH_BUTTON_STYLE).pack(side="right")
-        param_mode_row = ttk.Frame(workflow_box, style=WORKBENCH_FRAME_STYLE)
-        param_mode_row.grid(row=1, column=0, sticky="ew", pady=(8, 0))
-        ttk.Label(param_mode_row, text="Params 模式", foreground=WORKBENCH_TEXT, style=WORKBENCH_LABEL_STYLE).pack(side="left")
+        ttk.Label(
+            workflow_bar, textvariable=self._promotion_status_var,
+            style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_TEXT,
+        ).pack(side="left", padx=(8, 0))
+
+        ttk.Separator(workflow_bar, orient="vertical").pack(side="left", fill="y", padx=12, pady=2)
+        ttk.Label(workflow_bar, text="Params 模式", style=WORKBENCH_LABEL_STYLE).pack(side="left")
         self._param_mode_var = tk.StringVar(value=PARAM_MODE_REUSE_LABEL)
         self._param_mode_combo = ttk.Combobox(
-            param_mode_row,
+            workflow_bar,
             textvariable=self._param_mode_var,
             values=(PARAM_MODE_REUSE_LABEL, PARAM_MODE_TRAIN_LABEL),
             state="readonly",
             width=18,
             style=WORKBENCH_COMBO_STYLE,
         )
-        self._param_mode_combo.pack(side="left", padx=(8, 0))
+        self._param_mode_combo.pack(side="left", padx=(6, 0))
         self._param_mode_combo.bind("<<ComboboxSelected>>", self._on_param_mode_selected)
-        # Params status/lineage is rendered once in Trading 儀表板.
+        params_button = ttk.Button(
+            workflow_bar, text="2 訓練／套用 Params",
+            command=lambda: self._start_workflow_action("params"),
+            style=WORKBENCH_BUTTON_STYLE,
+        )
+        params_button.pack(side="left", padx=(8, 0))
+        self._workflow_buttons.append(params_button)
+        self._workflow_action_buttons["params"] = params_button
 
-        workflow_buttons = ttk.Frame(workflow_box, style=WORKBENCH_FRAME_STYLE)
-        workflow_buttons.grid(row=2, column=0, sticky="w", pady=(8, 0))
-        for text, action in (
-            ("1 更新資料", "data"),
-            ("套用參數Params", "params"),
-            ("3 Scanner 候選", "scanner"),
-            ("每日流程 1→2→3", "all"),
-        ):
-            button = ttk.Button(
-                workflow_buttons,
-                text=text,
-                command=lambda selected=action: self._start_workflow_action(selected),
-                style=WORKBENCH_BUTTON_STYLE,
-            )
-            button.pack(side="left", padx=(0 if not self._workflow_buttons else 8, 0))
-            self._workflow_buttons.append(button)
-            self._workflow_action_buttons[action] = button
-        # Daily workflow dynamic status is centralized in Trading 儀表板.
+        ttk.Separator(workflow_bar, orient="vertical").pack(side="left", fill="y", padx=12, pady=2)
+        scanner_button = ttk.Button(
+            workflow_bar, text="3 Scanner 候選",
+            command=lambda: self._start_workflow_action("scanner"),
+            style=WORKBENCH_BUTTON_STYLE,
+        )
+        scanner_button.pack(side="left")
+        self._workflow_buttons.append(scanner_button)
+        self._workflow_action_buttons["scanner"] = scanner_button
+        # AI: Params lineage and workflow status are already visible in Trading 儀表板.
 
         header = ttk.LabelFrame(content, text="Trading 帳戶", padding=8, style=WORKBENCH_LABELLF_STYLE)
         header.grid(row=4, column=0, sticky="ew", pady=(0, 8))
@@ -2362,11 +2370,11 @@ class TradingAccountPanel(ttk.Frame):
 
         rollforward_due = list(snapshot.get("rollforward_due_tickers") or [])
         if not data_ready:
-            next_text = "1 更新 Trading 資料"
+            next_text = "至資料中心確認 Trading 資料"
         elif rollforward_due:
             next_text = "等待 lifecycle 自動同步／修正同步失敗"
         elif not snapshot.get("params_ready_for_scan"):
-            next_text = "套用參數Params"
+            next_text = "2 訓練／套用 Params"
         elif not scanner_fresh:
             next_text = "3 Scanner 候選"
         else:
@@ -2475,7 +2483,7 @@ class TradingAccountPanel(ttk.Frame):
             messagebox.showwarning("策略升格", "Trading 工作進行中，請稍後再操作策略升格。", parent=self)
             return
         win = tk.Toplevel(self)
-        win.title("Trading 策略升格／切換")
+        win.title("Trading 策略選擇／切換")
         win.transient(self.winfo_toplevel())
         win.geometry("850x420")
         win.configure(background=WORKBENCH_BG)
@@ -2540,6 +2548,10 @@ class TradingAccountPanel(ttk.Frame):
                 ))
             active = state.get("active") or {}
             pending = state.get("pending") or {}
+            self._promotion_status_var.set(
+                f"ACTIVE {active.get('arm_id') or '既有策略'}"
+                + (f" | 待啟用 {pending['arm_id']}" if pending else "")
+            )
             status_var.set(
                 f"ACTIVE：{active.get('arm_id') or '既有 Trading 策略'}  |  "
                 f"待啟用：{pending.get('arm_id') or '無'}  |  切換前持股與掛單不會自動換參數"
@@ -2587,7 +2599,7 @@ class TradingAccountPanel(ttk.Frame):
                 messagebox.showerror("準備失敗", str(exc), parent=win)
                 return
             refresh()
-            messagebox.showinfo("策略已準備", "待啟用策略已建立。請關閉視窗，執行「套用參數Params」（重新訓練）；完成後再來啟用。", parent=win)
+            messagebox.showinfo("策略已準備", "待啟用策略已建立。請執行「2 訓練／套用 Params」（選擇重新訓練）；完成後回到「1 策略選擇」啟用。", parent=win)
 
         def activate():
             try:
@@ -2884,7 +2896,7 @@ class TradingAccountPanel(ttk.Frame):
                 messagebox.showwarning(
                     "Trading Params 需要重新訓練",
                     "目前 Trading Params 與現行策略契約不相容，不能沿用。\n"
-                    "已切換至「重新訓練 Params」；請重新執行「套用參數Params」。",
+                    "已切換至「重新訓練 Params」；請重新執行「2 訓練／套用 Params」。",
                     parent=self,
                 )
                 return
@@ -4308,7 +4320,7 @@ class TradingAccountPanel(ttk.Frame):
 
     def _finish_workflow_success(self, action: str, result):
         labels = {
-            "data": ("資料更新完成", "套用參數Params"),
+            "data": ("資料更新完成", "2 訓練／套用 Params"),
             "params": ("Params 套用完成", "3 Scanner 候選"),
             "orders": ("建議掛單完成", "檢查掛單計畫"),
             "scanner": ("Scanner 完成", "查看 Scanner Pool；自行至券商交易，成交後回 Workbench 登錄"),
