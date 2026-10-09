@@ -174,7 +174,7 @@ def _optimizer_extended_entry_limit(active_extended_signal):
     return resolve_extended_signal_order_limit(active_extended_signal)
 
 
-def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=None, ticker=None, collect_stats=True, return_pit_stats_index=False):
+def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=None, ticker=None, collect_stats=True, return_pit_stats_index=False, include_tracking_evidence=False):
     if params is None:
         params = V16StrategyParams()
 
@@ -272,6 +272,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             avg_bars_held=0,
             final_date=None,
             security_profile=resolved_security_profile,
+            include_tracking_evidence=include_tracking_evidence,
         )
         stats_dict['is_candidate'] = False
         if return_pit_stats_index:
@@ -767,6 +768,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         avg_bars_held=avg_bars_held,
         final_date=Dates[-1],
         security_profile=resolved_security_profile,
+        include_tracking_evidence=include_tracking_evidence,
     )
 
     if return_pit_stats_index:

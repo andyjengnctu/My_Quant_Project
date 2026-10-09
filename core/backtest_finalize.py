@@ -192,6 +192,7 @@ def build_backtest_stats(
     final_date=None,
     ticker=None,
     security_profile=None,
+    include_tracking_evidence=False,
 ):
     win_rate = (full_wins / trade_count * 100) if trade_count > 0 else 0
     avg_win = total_profit / full_wins if full_wins > 0 else 0
@@ -336,7 +337,19 @@ def build_backtest_stats(
         'extended_orderable_today': extended_orderable_today,
         'extended_candidate_tbd_today': extended_candidate_tbd_today,
         'extended_tbd_orderable_today': extended_tbd_orderable_today,
+        # AI: Expose the actual canonical tracking owner independently of
+        # historical performance/quantity eligibility. Trading frozen lineage
+        # may then distinguish a temporary ineligible day from termination;
+        # it must not infer an exit merely from a missing Scanner row.
         'current_position': current_position,
         'score': score,
     }
+    if include_tracking_evidence:
+        # AI: Only the Scanner frozen-lineage consumer needs this auxiliary
+        # identity. Keep normal Research/Optimizer backtest result schemas
+        # byte-for-byte compatible with their established artifact contract.
+        stats_dict['tracked_signal_date_at_end'] = (
+            None if display_extended_signal is None
+            else display_extended_signal.get('signal_date')
+        )
     return stats_dict

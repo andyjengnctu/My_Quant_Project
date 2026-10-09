@@ -2280,6 +2280,48 @@ def project_trading_single_stock_chart_payload(
             item["detail_text"] = ""
         signal_annotations.append(item)
 
+    # AI: Trading transaction geometry is projected from a verified canonical
+    # lifecycle. Research BUY markers are only strategy-history context and may
+    # use a different Params lineage; they cannot be the sole evidence for
+    # whether a Trading SIGNAL bar exists. When a visible canonical SIGNAL
+    # was not marked by Research, use that exact persisted/replayed lifecycle
+    # date (not a guessed stop/target transition) to display its buy signal.
+    visible_buy_dates = {
+        date for item in signal_annotations
+        if str(item.get("signal_type") or "").lower() == "buy"
+        for date in (_date_text(item.get("date")),) if date is not None
+    }
+    for idx in sorted(lifecycle_by_index):
+        state = lifecycle_by_index[idx]
+        if str(state.get("state") or "") != TRADE_LIFECYCLE_SIGNAL:
+            continue
+        if idx < 0 or idx >= total:
+            continue
+        signal_date = _date_text(state.get("signal_date"))
+        if signal_date is None or signal_date != date_labels[idx] or signal_date in visible_buy_dates:
+            continue
+        try:
+            anchor_price = float(payload["low"][idx])
+        except (TypeError, ValueError, IndexError, KeyError):
+            continue
+        if not math.isfinite(anchor_price):
+            continue
+        signal_annotations.append({
+            "date": signal_date,
+            "x": idx,
+            "anchor_price": anchor_price,
+            "signal_type": "buy",
+            "title": "買訊",
+            "detail_text": "",
+            "note": "Trading canonical SIGNAL（與停利／停損線同一生命周期）",
+            "meta": {
+                "canonical_trading_signal": True,
+                "signal_date": signal_date,
+                "source": str(state.get("source") or "canonical_lifecycle"),
+            },
+        })
+        visible_buy_dates.add(signal_date)
+
     signal_annotations.extend(
         _canonical_trading_sell_signal_annotations(
             lifecycle_by_index=lifecycle_by_index,

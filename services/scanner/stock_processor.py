@@ -356,10 +356,15 @@ def build_scanner_response_from_stats(*, ticker, stats, params, sanitize_stats, 
 
 
 
-def process_prepared_stock_actionable_detail(df, ticker, params, sanitize_stats=None):
+def process_prepared_stock_actionable_detail(
+    df, ticker, params, sanitize_stats=None, *, include_lifecycle_evidence=False
+):
     sanitize_stats = sanitize_stats or {}
     precomputed_signals = _build_precomputed_signals(df)
-    stats = run_v16_backtest(df, params, precomputed_signals=precomputed_signals, ticker=ticker)
+    stats = run_v16_backtest(
+        df, params, precomputed_signals=precomputed_signals, ticker=ticker,
+        **({'include_tracking_evidence': True} if include_lifecycle_evidence else {}),
+    )
     trade_date = resolve_latest_trade_date_from_frame(df)
     row = build_history_qualified_row_from_stats(
         ticker=ticker,
@@ -368,10 +373,26 @@ def process_prepared_stock_actionable_detail(df, ticker, params, sanitize_stats=
         sanitize_stats=sanitize_stats,
         trade_date=trade_date,
     )
-    if row is None:
+    if row is None and not include_lifecycle_evidence:
         return None
-    detailed = dict(row)
+    detailed = dict(row) if row is not None else {
+        'ticker': ticker, 'trade_date': _normalize_scanner_trade_date(trade_date),
+        'kind': 'not_qualified',
+    }
     detailed['status'] = detailed['kind']
+    if include_lifecycle_evidence:
+        # AI: Backtest owns the signal state and its termination. Historical
+        # eligibility is not evidence of termination; return both independently.
+        detailed['canonical_tracking_evidence'] = {
+            'through_date': _normalize_scanner_trade_date(trade_date),
+            'tracked_signal_date': _normalize_scanner_trade_date(
+                stats.get('tracked_signal_date_at_end')
+            ),
+            'today_new_signal_date': (
+                _normalize_scanner_trade_date(trade_date)
+                if bool(stats.get('is_setup_today')) else None
+            ),
+        }
     return detailed
 
 
@@ -412,11 +433,16 @@ def process_raw_stock_frame(raw_df, ticker, params):
         raise RuntimeError(f"{ticker} 處理失敗 | {type(e).__name__}: {e}") from e
 
 
-def process_raw_stock_frame_actionable_detail(raw_df, ticker, params):
+def process_raw_stock_frame_actionable_detail(
+    raw_df, ticker, params, *, include_lifecycle_evidence=False
+):
     try:
         min_rows_needed = get_required_min_rows(params)
         df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
-        return process_prepared_stock_actionable_detail(df, ticker, params, sanitize_stats=sanitize_stats)
+        return process_prepared_stock_actionable_detail(
+            df, ticker, params, sanitize_stats=sanitize_stats,
+            include_lifecycle_evidence=include_lifecycle_evidence,
+        )
     except (ValueError, KeyError, IndexError, TypeError, RuntimeError) as e:
         if is_insufficient_data_error(e):
             return {'status': 'skip_insufficient', 'ticker': ticker, 'sanitize_issue': None}

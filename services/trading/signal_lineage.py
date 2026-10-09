@@ -76,46 +76,119 @@ def _can_create_first_observation(row, *, information_date: str) -> bool:
         raise ValueError(
             f"Trading candidate signal_date {signal_day} is later than information_date {observed_day}"
         )
-    return signal_day == observed_day
+    # An extended/extended_tbd row is never itself the original BUY signal,
+    # even if malformed replay metadata sets its signal_date to today. A stale
+    # per-ticker scanner row also cannot create today's frozen live signal.
+    trade_day = _normalized_lineage_day(row.get("trade_date"), field_name="trade_date")
+    return (signal_day == observed_day == trade_day and str(row.get("kind")) == "buy")
+
+
+FIRST_OBSERVATION_CURRENT_SIGNAL = "current_signal"
+FIRST_OBSERVATION_PREVIOUS_SNAPSHOT = "previous_snapshot"
+
+
+def _first_observation_has_durable_origin(record) -> bool:
+    """A continuation can only originate from an observed signal or verified snapshot.
+
+    Old registries did not record how a first-seen historical continuation was
+    admitted. Merely retaining its binding hash is not first-observation proof:
+    that hash can become neither current nor previous after later retrains.
+    """
+    observed = _normalized_lineage_day(record.get("observed_date"), field_name="observed_date")
+    signal = _normalized_lineage_day(record.get("signal_date"), field_name="signal_date")
+    if signal > observed:
+        raise ValueError("Trading first-observed signal is dated in the future")
+    if (record.get("identity") or {}).get("first_observation_source") == FIRST_OBSERVATION_PREVIOUS_SNAPSHOT:
+        return True
+    origin = record.get("origin_candidate") or {}
+    try:
+        origin_trade = _normalized_lineage_day(origin.get("trade_date"), field_name="origin.trade_date")
+    except ValueError:
+        # AI: Legacy signed origins without a recorded trade day do not become
+        # authentic by assumption; quarantine rather than aborting the Scanner.
+        return False
+    return signal == observed == origin_trade and str(origin.get("kind")) == "buy"
 
 
 def _close_impossible_current_replay_origins(
     signals: dict, *, information_date: str, source_observation_days: dict
 ) -> int:
-    """Repair precisely evidenced retroactive current-Params first observations.
+    """Quarantine unverified retroactive first observations across ALL bindings.
 
-    The affected first observation may be from today's binding, or from the
-    previous durable snapshot (which can be from an earlier market day). We
-    never close an arbitrary historical lineage just because it is old: both
-    the originating binding and its first-observed day must match evidence.
+    The original hotfix only checked the current/previous Params binding. Once
+    those bindings rotated, the same invalid origins became active again. A
+    first observation predating its live signal requires durable prior-snapshot
+    provenance, not a particular Params binding or a recent snapshot file.
+
+    Closure is an eligibility quarantine, NOT a retrospective trade exit. The
+    complete frozen origin and explicit audit reason remain in the registry.
     """
-
     current_day = _normalized_lineage_day(information_date, field_name="information_date")
     closed = 0
     for record in signals.values():
-        if record.get("status") != "ACTIVE":
+        if record.get("status") != "ACTIVE" or _first_observation_has_durable_origin(record):
             continue
         identity = record.get("identity") or {}
         binding = str(identity.get("source_binding") or "")
-        allowed_days = source_observation_days.get(binding, ())
-        if not allowed_days:
-            continue
-        record_observed_day = _normalized_lineage_day(
-            record.get("observed_date"), field_name="observed_date"
-        )
-        if record_observed_day not in allowed_days:
-            continue
-        signal_day = _normalized_lineage_day(record.get("signal_date"), field_name="signal_date")
-        if signal_day >= record_observed_day:
-            continue
+        observed = _normalized_lineage_day(record.get("observed_date"), field_name="observed_date")
+        known_bug_origin = observed in source_observation_days.get(binding, ())
         record["status"] = "CLOSED"
         record["closed_observed_date"] = current_day
-        record["closed_reason"] = "INVALID_RETROACTIVE_CURRENT_PARAMS_REPLAY"
+        record["closed_reason"] = (
+            "INVALID_RETROACTIVE_CURRENT_PARAMS_REPLAY" if known_bug_origin
+            else "UNVERIFIED_RETROACTIVE_FIRST_OBSERVATION"
+        )
         closed += 1
     return closed
 
 
-def _record(row, *, strategy_id, observed_date, source_binding):
+def _bootstrap_durable_previous_snapshot(signals, *, previous_snapshot, strategy_id):
+    """Recover proven frozen origins, not current-Params historical projections.
+
+    A snapshot from the bad Scanner version may embed an extended_tbd row that
+    was originally adopted retroactively. Such rows are not valid bootstrap
+    evidence even if the snapshot itself was saved to disk.
+    """
+    prior_date = _normalized_lineage_day(previous_snapshot.get("latest_data_date"), field_name="snapshot.latest_data_date")
+    for old in previous_snapshot.get("candidate_rows") or []:
+        if (old.get("execution_plan_seed") or {}).get("entry_source") == BREAKOUT_REENTRY_SOURCE:
+            continue
+        # The saved candidate itself must have been actionable on that exact
+        # information day, never a stale ticker frame or later data revision.
+        if _normalized_lineage_day(old.get("trade_date"), field_name="snapshot.trade_date") != prior_date:
+            continue
+        nested = old.get("signal_lineage")
+        if isinstance(nested, Mapping):
+            if (nested.get("status") != "ACTIVE"
+                    or str(nested.get("ticker")) != str(old.get("ticker"))
+                    or str(nested.get("signal_date")) != str(old.get("signal_date"))
+                    or _normalized_lineage_day(nested.get("observed_date"), field_name="nested.observed_date") > prior_date
+                    or not _first_observation_has_durable_origin(nested)):
+                continue
+            # The snapshot must carry an intact original frozen Params identity.
+            key = _signal_key(old, strategy_id)
+            if str((nested.get("identity") or {}).get("signal_key")) != key:
+                continue
+            candidate = deepcopy(dict(nested))
+            _validate_registry({"schema_version": SIGNAL_LINEAGE_SCHEMA_VERSION, "signals": {key: candidate}})
+        else:
+            # Legacy snapshots without frozen lineage cannot bootstrap an old
+            # continuation. A genuine same-day BUY is sufficient independent
+            # evidence, even without the newer embedded lineage format.
+            if (str(old.get("kind")) != "buy"
+                    or _normalized_lineage_day(old.get("signal_date"), field_name="snapshot.signal_date") != prior_date
+                    or _normalized_lineage_day(old.get("trade_date"), field_name="snapshot.trade_date") != prior_date):
+                continue
+            candidate = _record(
+                old, strategy_id=strategy_id, observed_date=prior_date,
+                source_binding=previous_snapshot.get("param_binding_sha256"),
+                first_observation_source=FIRST_OBSERVATION_PREVIOUS_SNAPSHOT,
+            )
+            key = candidate["identity"]["signal_key"]
+        signals.setdefault(key, candidate)
+
+
+def _record(row, *, strategy_id, observed_date, source_binding, first_observation_source=None):
     frozen = _persistable(row)
     params, member = resolve_trading_candidate_frozen_params(frozen)
     del params
@@ -127,6 +200,8 @@ def _record(row, *, strategy_id, observed_date, source_binding):
         "source_binding": source_binding,
         "frozen_candidate_sha256": canonical_json_sha256(frozen),
     }
+    if first_observation_source is not None:
+        identity["first_observation_source"] = str(first_observation_source)
     return {
         "lineage_id": canonical_json_sha256(identity), "identity": identity,
         "ticker": frozen["ticker"], "signal_date": frozen["signal_date"],
@@ -148,6 +223,13 @@ def _validate_registry(state):
         del params
         if member["params_signature"] != row["identity"]["params_signature"]:
             raise ValueError("Trading frozen signal Params differ from original identity")
+        source = row["identity"].get("first_observation_source")
+        if source is not None and source not in {
+            FIRST_OBSERVATION_CURRENT_SIGNAL, FIRST_OBSERVATION_PREVIOUS_SNAPSHOT
+        }:
+            raise ValueError("Trading signal first observation source is invalid")
+        if source == FIRST_OBSERVATION_CURRENT_SIGNAL and not _first_observation_has_durable_origin(row):
+            raise ValueError("Trading live signal cannot originate before its observation date")
 
 
 def _prepared_frame_through_information_date(frame, *, ticker: str, information_date: str):
@@ -178,6 +260,34 @@ def _prepared_frame_through_information_date(frame, *, ticker: str, information_
     )
 
 
+def _canonical_tracking_terminal_for_lineage(raw, *, record, information_date: str) -> bool:
+    """Only canonical end-of-bar tracking identity may terminate a frozen signal.
+
+    Missing Scanner eligibility, stale data, insufficient rows and a missing
+    producer result are *not* terminal evidence. A completed PIT replay whose
+    latest bar equals the Scanner information day and whose live tracking
+    identity no longer contains this origin is terminal evidence.
+    """
+    if not isinstance(raw, Mapping):
+        return False
+    evidence = raw.get("canonical_tracking_evidence")
+    if not isinstance(evidence, Mapping):
+        return False
+    through_day = _normalized_lineage_day(
+        evidence.get("through_date"), field_name="tracking.through_date"
+    )
+    if through_day != _normalized_lineage_day(information_date, field_name="information_date"):
+        return False
+    original = _normalized_lineage_day(record.get("signal_date"), field_name="signal_date")
+    tracked = evidence.get("tracked_signal_date")
+    future_signal = evidence.get("today_new_signal_date")
+    live_dates = {
+        _normalized_lineage_day(day, field_name="tracking.signal_date")
+        for day in (tracked, future_signal) if day
+    }
+    return original not in live_dates
+
+
 @serialized_trading_state_mutation
 def freeze_trading_candidate_lineages(
     project_root, *, candidate_rows, prepared_frames, information_date,
@@ -196,15 +306,12 @@ def freeze_trading_candidate_lineages(
     _validate_registry(state)
     old_state = deepcopy(state)
     signals = state["signals"]
-    # Bootstrap only from durable evidence, never from guessed historical params.
+    # Snapshot recovery must preserve the original signed frozen Params source.
+    # Current replay projections are never admissible as historical evidence.
     if not existed and isinstance(previous_snapshot, Mapping):
-        for old in previous_snapshot.get("candidate_rows") or []:
-            if (old.get("execution_plan_seed") or {}).get("entry_source") == BREAKOUT_REENTRY_SOURCE:
-                continue
-            rec = _record(old, strategy_id=strategy_id,
-                          observed_date=previous_snapshot.get("latest_data_date"),
-                          source_binding=previous_snapshot.get("param_binding_sha256"))
-            signals[rec["identity"]["signal_key"]] = rec
+        _bootstrap_durable_previous_snapshot(
+            signals, previous_snapshot=previous_snapshot, strategy_id=strategy_id
+        )
     # AI: Permit repair under today's binding, plus the precisely identified
     # previous-snapshot binding if it was trained through its own information
     # day. The snapshot may be older than today's scan (e.g. an overnight restart).
@@ -218,9 +325,15 @@ def freeze_trading_candidate_lineages(
         snapshot_binding = str(previous_snapshot.get("param_binding_sha256") or "")
         if snapshot_day and snapshot_day == snapshot_param_day and snapshot_day <= observed_day and snapshot_binding:
             repair_days.setdefault(snapshot_binding, set()).add(snapshot_day)
-    _close_impossible_current_replay_origins(
+    quarantined_count = _close_impossible_current_replay_origins(
         signals, information_date=information_date, source_observation_days=repair_days
     )
+    if quarantined_count:
+        print(
+            f"Trading Scanner lineage 修復：隔離 {quarantined_count} 條缺乏首次買訊證據的歷史延續；"
+            "保留原始紀錄與關閉原因。",
+            flush=True,
+        )
     current = {_signal_key(row, strategy_id): row for row in candidate_rows}
     output, occupied = [], set()
     for key, record in sorted(signals.items(), key=lambda item: (str(item[1]["signal_date"]), item[0])):
@@ -239,14 +352,23 @@ def freeze_trading_candidate_lineages(
             frame = _prepared_frame_through_information_date(
                 prepared_frames[ticker], ticker=ticker, information_date=information_date
             )
-            raw = process_raw_stock_frame_actionable_detail(frame, ticker, params)
-            if raw is None or raw.get("kind") not in {"buy", "extended", "extended_tbd"}:
-                # AI: Absence/eligibility is not evidence of strategy termination.
-                # Keep the original binding so a returning signal cannot rebind.
-                continue
-            if str(raw.get("signal_date")) != str(record["signal_date"]):
+            raw = process_raw_stock_frame_actionable_detail(
+                frame, ticker, params, include_lifecycle_evidence=True
+            )
+            if _canonical_tracking_terminal_for_lineage(
+                raw, record=record, information_date=information_date
+            ):
                 record["status"] = "CLOSED"
                 record["closed_observed_date"] = information_date
+                record["closed_reason"] = "CANONICAL_SIGNAL_TRACKING_TERMINATED"
+                continue
+            if raw is None or raw.get("kind") not in {"buy", "extended", "extended_tbd"}:
+                # AI: A non-qualifying day without explicit terminal tracking
+                # evidence is not a reason to rebind a durable frozen origin.
+                continue
+            if str(raw.get("signal_date")) != str(record["signal_date"]):
+                # Another observed signal is not itself a terminal event;
+                # closure is owned by the canonical tracking evidence above.
                 continue
             refreshed = annotate_ensemble_candidate(raw, member=member, params_obj=params, member_key=member["member_key"])
         # Membership and representative at birth are durable strategy identity.
@@ -266,7 +388,10 @@ def freeze_trading_candidate_lineages(
         # durable previous-snapshot bootstrap handled above.
         if not _can_create_first_observation(row, information_date=information_date):
             continue
-        rec = _record(row, strategy_id=strategy_id, observed_date=information_date, source_binding=source_binding)
+        rec = _record(
+            row, strategy_id=strategy_id, observed_date=information_date,
+            source_binding=source_binding, first_observation_source=FIRST_OBSERVATION_CURRENT_SIGNAL,
+        )
         signals[key] = rec
         new_row = deepcopy(row)
         new_row["signal_lineage"] = deepcopy(rec)

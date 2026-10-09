@@ -38,7 +38,11 @@ Core 不得反向引用 services、apps、tools 或 UI。`core/position_step.py`
 
 每日工作流程將首次觀察候選的原訊號日、代表 Params、成員證據及原始 execution-plan 存入 `state/trading/signal_lineages.json`。production Params 更新後，延續訊號仍由 canonical Scanner producer 使用原代表 Params 評估。暫時不在候選內不代表可以重新綁定；registry 不實作另一套 Scanner 或指標公式。
 
-升級時可以使用有效的舊 Scanner snapshot 建立 binding，但這只代表已保存的觀察證據，不能證明更早、從未記錄的原始參數。歷史來源不足不能用 current Params 補造；binding 損壞時明確失敗，不默默重設。
+既有 ACTIVE frozen lineage 的失效只能由相同 frozen Params、截至同一完成交易日的 canonical Scanner 訊號追蹤結果確認；原始 `signal_date` 已不在 live tracking identity 才以 `CANONICAL_SIGNAL_TRACKING_TERMINATED` 結束，並記錄觀察日。單日候選缺席／歷績暫不合格、資料不足或回放證據日期過舊，均不是終止證據，也不得改綁新的 Params。
+
+首次 live SIGNAL 僅能由當日原始 `buy` 訊號建立（`signal_date == information_date`）；`extended`／`extended_tbd` 即使標成當日，也不能獨立建立新 lineage。升級時只有帶有完整、可驗證 frozen SIGNAL 身分的有效舊 Scanner snapshot，或原訊號與 snapshot 日期一致的舊版 `buy` 列，才能重建 binding；重建須保留最初觀察日與原代表 Params，不能拿較新的 preview row 重新 freeze。歷史來源不足不能用 current Params 補造；binding 損壞時明確失敗，不默默重設。
+
+歷史版 registry 若首次觀察日已晚於原買訊日、又缺乏已驗證前份 snapshot 的 immutable provenance，屬不可證明的 retroactive first observation。掃描時不依賴當前／上一份 Params binding 的偶然相等性：跨多次重訓仍須將這種未驗證 lineage 標記 `CLOSED` 並註明 `UNVERIFIED_RETROACTIVE_FIRST_OBSERVATION`，保留原始 frozen 身分與稽核資訊；這是候選資格隔離，不是假設當日發生策略停損或停利。`first_observation_source` 由 identity hash 保護，只有真正當日買訊與通過來源驗證的 snapshot 繼承路徑可以寫入。
 
 Pending 與 Position 共用同一個固定的 finalized 日期及資料來源。來源身分包括資料版本、frozen binding、重播契約版本及已確認事件進度，不能只用日期判斷重用。相同輸入重跑不異動；同日資料更正或真實成交更正則重新重播。對 Market Data 而言，同一 target 後續新 verified batch 若觸及 active strategy required V2 dependency，即屬 source revision，必須產生新的 execution-consumer identity；不得因日期相同而繼續沿用舊 pinned generation。Current Trading batch 即使整體尚未 DONE，只要某 required dataset 的 manifest requests 已全數 DONE，該 dataset-complete subset 即可成為新的 verified source evidence；但同 dataset 只完成部分 request 時不得洩漏。finalized consumer 對此類 partial batch 只 pin 其 required dataset scope，之後無關 sibling dataset 完成不得改變既有 lifecycle source。管理同步不可修改帳務或券商欄位。
 
@@ -49,6 +53,8 @@ Pending 與 Position 共用同一個固定的 finalized 日期及資料來源。
 ## 查詢、圖表與持久化
 
 單股查詢使用完整建倉歷史及 frozen Params 產生共用管理投影，裁切後的圖表只負責日期／線段／標籤呈現，不能拿顯示視窗當完整策略歷史。虛擬投影不能建立真實 POSITION 或 BUY；舊版手動接管只有在明確 adoption 事件與券商建倉證據一致時才還原歷史持股。
+
+單股 Trading 圖表的買訊標記必須與其 Shadow／Stop／TP 幾何共享同一 verified lifecycle `SIGNAL` origin：如果 Research 版買訊 marker 因 Params 不同未出現，render adapter 可依該 Trading `SIGNAL` 當日證據補標記，但不能由 TP／Stop 線反向推測訊號，更不能把模擬買訊當實際成交。既有同日買訊不得重複繪製。
 
 既有 account、pending 與 OMS 仍各自持有其事實；衍生管理有受限的可寫欄位。沒有新增第二個券商帳本、事件平台或微服務。尚未存在的可選 OMS 使用 canonical empty-state schema，不使用缺欄位的臨時字典。
 
