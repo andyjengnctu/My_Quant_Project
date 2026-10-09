@@ -198,5 +198,98 @@ class StrategyPromotionMVPTest(unittest.TestCase):
         self.assertEqual(get_trading_strategy_profile(self.root).parameter_set_identity, "PARAM-P6")
 
 
+class StrategyPromotionDialogAppearanceTest(unittest.TestCase):
+    """Use a real Tk Treeview to guard against white-on-white native rows."""
+
+    def test_dark_rows_and_live_research_approval_refresh(self):
+        import tkinter as tk
+        from tkinter import ttk
+
+        from services.workbench_ui.trading_account_panel import TradingAccountPanel
+        from services.workbench_ui.workbench import (
+            configure_workbench_theme, WORKBENCH_SURFACE, WORKBENCH_TEXT,
+            WORKBENCH_TREE_STYLE,
+        )
+
+        try:
+            root = tk.Tk()
+        except tk.TclError as exc:
+            self.skipTest(f"Tk display unavailable: {exc}")
+        self.addCleanup(root.destroy)
+        configure_workbench_theme(root)
+        panel = tk.Frame(root)
+        panel.pack()
+        panel._command_thread = None
+        panel._param_mode_var = tk.StringVar(master=root, value="沿用既有 Params")
+        panel._param_mode_user_selected = False
+
+        rules = (
+            {"arm_id": "C58", "name": "Single Best", "trading_supported": False,
+             "trading_blockers": ("single seed",), "rule_sha256": "1" * 64},
+            {"arm_id": "C61", "name": "Full Best", "trading_supported": False,
+             "trading_blockers": ("single seed",), "rule_sha256": "2" * 64},
+            {"arm_id": "C95", "name": "Same-Signal Agree", "trading_supported": True,
+             "trading_blockers": (), "rule_sha256": "3" * 64},
+        )
+        state = {"approved": False, "invalid": False}
+
+        def approval(ignored_root, arm_id):
+            if arm_id == "C95" and state["approved"]:
+                return {"rule_sha256": "3" * 64}
+            raise RuntimeError("Research approval evidence missing or invalid")
+
+        def approval_records(ignored_root):
+            return {"approvals": {"C95": {"status": "APPROVED"}} if state["invalid"] else {}}
+
+        with patch("services.workbench_ui.trading_account_panel.current_strategy_rules", return_value=rules), \
+             patch("services.workbench_ui.trading_account_panel.get_approved_rule", side_effect=approval), \
+             patch("services.workbench_ui.trading_account_panel.load_promotion_approvals", side_effect=approval_records), \
+             patch("services.workbench_ui.trading_account_panel.load_trading_release_state", return_value={"active": None, "pending": None}):
+            TradingAccountPanel._open_strategy_promotion_dialog(panel)
+            root.update()
+
+            def descendants(widget):
+                for child in widget.winfo_children():
+                    yield child
+                    yield from descendants(child)
+
+            dialogs = [item for item in descendants(root) if isinstance(item, tk.Toplevel)]
+            self.assertEqual(len(dialogs), 1)
+            dialog = dialogs[0]
+            widgets = list(descendants(dialog))
+            tree = next(item for item in widgets if isinstance(item, ttk.Treeview))
+            refresh_button = next(
+                item for item in widgets if isinstance(item, ttk.Button) and item.cget("text") == "重新整理核准狀態"
+            )
+            stage_button = next(
+                item for item in widgets if isinstance(item, ttk.Button) and item.cget("text") == "準備選取策略"
+            )
+            self.assertEqual(tree.cget("style"), WORKBENCH_TREE_STYLE)
+            style = ttk.Style(root)
+            self.assertEqual(style.lookup(tree.cget("style"), "background"), WORKBENCH_SURFACE)
+            self.assertEqual(style.lookup(tree.cget("style"), "foreground"), WORKBENCH_TEXT)
+            self.assertEqual(tree.get_children(), ("C58", "C61", "C95"))
+            self.assertEqual(tree.selection(), ("C95",))
+            self.assertEqual(tree.set("C95", "approval"), "待核准")
+            self.assertEqual(str(stage_button.cget("state")), "disabled")
+
+            # Research [8] approval in another process, while the dialog stays open.
+            state["approved"] = True
+            refresh_button.invoke()
+            self.assertEqual(tree.set("C95", "approval"), "已核准")
+            self.assertEqual(tree.selection(), ("C95",))
+            self.assertEqual(str(stage_button.cget("state")), "normal")
+
+            # An old approval record whose scientific evidence drifted is invalid,
+            # not an ordinary request that Research still needs to approve.
+            state["approved"] = False
+            state["invalid"] = True
+            dialog.event_generate("<FocusIn>")
+            root.update()
+            self.assertEqual(tree.set("C95", "approval"), "核准失效")
+            self.assertEqual(str(stage_button.cget("state")), "disabled")
+            self.assertEqual(tree.get_children(), ("C58", "C61", "C95"))
+
+
 if __name__ == "__main__":
     unittest.main()

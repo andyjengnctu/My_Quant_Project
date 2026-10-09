@@ -14,7 +14,8 @@ from config.trading import TRADING_WORKBENCH_INITIAL_READ_WORKERS
 from core.console_report import project_relative_display_path
 from core.trading_policy import get_trading_policy_snapshot
 from core.strategy_promotion import (
-    current_strategy_rules, get_approved_rule, load_trading_release_state,
+    current_strategy_rules, get_approved_rule, load_promotion_approvals,
+    load_trading_release_state,
 )
 from services.trading.strategy_promotion import (
     stage_trading_release, activate_staged_trading_release,
@@ -2477,11 +2478,17 @@ class TradingAccountPanel(ttk.Frame):
         win.title("Trading 策略升格／切換")
         win.transient(self.winfo_toplevel())
         win.geometry("850x420")
+        win.configure(background=WORKBENCH_BG)
         outer = ttk.Frame(win, padding=12, style=WORKBENCH_FRAME_STYLE)
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text="與 Research [3] 策略組合比較使用同一份策略清單", style=WORKBENCH_LABEL_STYLE).pack(anchor="w")
         cols = ("name", "approval", "capability", "rule")
-        tree = ttk.Treeview(outer, columns=cols, show="headings", height=7)
+        # The default native Treeview has white rows; Workbench's inherited
+        # foreground is white.  Use the existing dark Treeview contract.
+        tree = ttk.Treeview(
+            outer, columns=cols, show="headings", height=7,
+            style=WORKBENCH_TREE_STYLE, selectmode="browse",
+        )
         for col, title, width in (("name", "策略", 390), ("approval", "Research 核准", 100),
                                   ("capability", "Trading", 150), ("rule", "Rule Fingerprint", 150)):
             tree.heading(col, text=title)
@@ -2496,25 +2503,38 @@ class TradingAccountPanel(ttk.Frame):
         selected_ids = {}
 
         def refresh():
+            # Read canonical approval/release state on every refresh.  Research
+            # can approve in a separate process while this dialog stays open.
             try:
                 rules = current_strategy_rules()
                 state = load_trading_release_state(WORKBENCH_PROJECT_ROOT)
+                approval_records = load_promotion_approvals(WORKBENCH_PROJECT_ROOT).get("approvals") or {}
+                rows = []
+                for arm in rules:
+                    try:
+                        get_approved_rule(WORKBENCH_PROJECT_ROOT, arm["arm_id"])
+                        approved, issue = True, ""
+                    except RuntimeError as exc:
+                        approved, issue = False, str(exc)
+                    rows.append((arm, approved, issue))
             except (OSError, RuntimeError, ValueError) as exc:
-                messagebox.showerror("策略升格", f"無法讀取策略規則：{exc}", parent=win)
+                messagebox.showerror("策略升格", f"無法讀取策略升格狀態：{exc}", parent=win)
                 return
             old_selection = tree.selection()
             tree.delete(*tree.get_children())
             selected_ids.clear()
-            for arm in rules:
+            for arm, approved, issue in rows:
                 arm_id = arm["arm_id"]
-                try:
-                    get_approved_rule(WORKBENCH_PROJECT_ROOT, arm_id)
-                    approved = True
-                except RuntimeError:
-                    approved = False
-                selected_ids[arm_id] = (arm, approved)
+                has_approval_record = arm_id in approval_records
+                selected_ids[arm_id] = (arm, approved, issue, has_approval_record)
+                if approved:
+                    approval_status = "已核准"
+                elif has_approval_record:
+                    approval_status = "核准失效"
+                else:
+                    approval_status = "待核准"
                 tree.insert("", "end", iid=arm_id, values=(
-                    f"{arm_id} — {arm['name']}", "已核准" if approved else "待核准",
+                    f"{arm_id} — {arm['name']}", approval_status,
                     "支援" if arm["trading_supported"] else "暫不支援",
                     arm["rule_sha256"][:12],
                 ))
@@ -2527,7 +2547,12 @@ class TradingAccountPanel(ttk.Frame):
             if old_selection and old_selection[0] in selected_ids:
                 tree.selection_set(old_selection[0])
             elif rules:
-                tree.selection_set(rules[0]["arm_id"])
+                # Prefer a ready-to-stage entry over an unsupported first row.
+                preferred = next(
+                    (arm["arm_id"] for arm, approved, _ in rows if approved and arm["trading_supported"]),
+                    None,
+                ) or next((arm["arm_id"] for arm in rules if arm["trading_supported"]), rules[0]["arm_id"])
+                tree.selection_set(preferred)
             on_selected()
 
         def on_selected(_event=None):
@@ -2535,9 +2560,12 @@ class TradingAccountPanel(ttk.Frame):
             if not selection or selection[0] not in selected_ids:
                 stage_button.configure(state="disabled")
                 return
-            arm, approved = selected_ids[selection[0]]
+            arm, approved, issue, has_approval_record = selected_ids[selection[0]]
             blockers = "；".join(arm["trading_blockers"]) if arm["trading_blockers"] else "已由共用 Trading producer 支援"
-            info.set(f"{arm['arm_id']} | {'Research 已核准' if approved else '請先到 Research [8] 核准'} | {blockers}")
+            approval_hint = "Research 已核准" if approved else (
+                issue if has_approval_record else "請先到 Research [8] 核准"
+            )
+            info.set(f"{arm['arm_id']} | {approval_hint} | {blockers}")
             stage_button.configure(state="normal" if approved and arm["trading_supported"] else "disabled")
 
         def stage():
@@ -2592,8 +2620,12 @@ class TradingAccountPanel(ttk.Frame):
         stage_button = ttk.Button(controls, text="準備選取策略", command=stage, style=WORKBENCH_BUTTON_STYLE)
         stage_button.pack(side="left")
         ttk.Button(controls, text="啟用已訓練策略", command=activate, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(10, 0))
+        ttk.Button(controls, text="重新整理核准狀態", command=refresh, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(10, 0))
         ttk.Button(controls, text="關閉", command=win.destroy, style=WORKBENCH_BUTTON_STYLE).pack(side="right")
         tree.bind("<<TreeviewSelect>>", on_selected)
+        # Returning to Workbench after approving via Research [8] must re-read
+        # the shared approval artifact, without a polling loop or auto-activation.
+        win.bind("<FocusIn>", lambda event: refresh() if event.widget is win else None, add="+")
         refresh()
 
     def _on_param_mode_selected(self, _event=None) -> None:
