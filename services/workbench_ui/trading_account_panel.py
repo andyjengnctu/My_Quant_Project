@@ -1387,12 +1387,6 @@ class TradingAccountPanel(ttk.Frame):
             command=self._open_strategy_promotion_dialog,
             style=WORKBENCH_BUTTON_STYLE,
         ).pack(side="left")
-        self._promotion_status_var = tk.StringVar(value="目前 Trading 策略")
-        ttk.Label(
-            workflow_bar, textvariable=self._promotion_status_var,
-            style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_TEXT,
-        ).pack(side="left", padx=(8, 0))
-
         ttk.Separator(workflow_bar, orient="vertical").pack(side="left", fill="y", padx=12, pady=2)
         ttk.Label(workflow_bar, text="Params 模式", style=WORKBENCH_LABEL_STYLE).pack(side="left")
         self._param_mode_var = tk.StringVar(value=PARAM_MODE_REUSE_LABEL)
@@ -2260,6 +2254,52 @@ class TradingAccountPanel(ttk.Frame):
         self._overview_primary_labels[key].configure(foreground=colors.get(str(tone), WORKBENCH_TEXT))
         self._overview_detail_labels[key].configure(foreground=colors.get(str(detail_tone), WORKBENCH_MUTED))
 
+    def _render_strategy_params_overview(self, snapshot: dict[str, object], *, release_state: dict | None = None) -> None:
+        """Show canonical Trading Release and bound Params in one dashboard card."""
+        policy = get_trading_policy_snapshot(WORKBENCH_PROJECT_ROOT)
+        dl_state = "OFF" if not policy.get("dl_filter_enabled") and not policy.get("dl_ranking_enabled") else "ON"
+        training_date = snapshot.get("param_training_data_date") or "尚無 Params"
+        usage_mode = {
+            TRADING_PARAM_USAGE_REUSE_EXISTING: "沿用既有",
+            TRADING_PARAM_USAGE_TRAINED_CURRENT: "重新訓練",
+        }.get(snapshot.get("param_usage_mode"), "未綁定")
+        detail = (
+            f"{snapshot.get('param_selector') or '-'} | {usage_mode} | "
+            f"訓練至 {training_date} | DL {dl_state}"
+        )
+        tone = "success" if snapshot.get("params_ready_for_scan") else (
+            "info" if snapshot.get("params_reusable") else "warning"
+        )
+        try:
+            # ACTIVE identity comes from the Release SSOT, not the engine strategy_id.
+            state = release_state if release_state is not None else load_trading_release_state(WORKBENCH_PROJECT_ROOT)
+            if not isinstance(state, dict):
+                raise ValueError("Trading Release 狀態格式不合法")
+            active = state.get("active")
+            pending = state.get("pending")
+            if active is not None and (
+                not isinstance(active, dict)
+                or active.get("status") != "ACTIVE"
+                or not str(active.get("arm_id") or "").strip()
+            ):
+                raise ValueError("ACTIVE Release 記錄不合法")
+            if pending is not None and (
+                not isinstance(pending, dict)
+                or not str(pending.get("arm_id") or "").strip()
+            ):
+                raise ValueError("待啟用 Release 記錄不合法")
+        except (OSError, TypeError, ValueError, RuntimeError) as exc:
+            self._set_overview_card(
+                "strategy_params", "Release 狀態異常",
+                f"{type(exc).__name__}: {exc}", tone="error", detail_tone="error",
+            )
+            return
+
+        primary = f"ACTIVE {active['arm_id']}" if active else "既有 Trading 策略"
+        if pending:
+            detail = f"{detail} | 待啟用 {pending['arm_id']}"
+        self._set_overview_card("strategy_params", primary, detail, tone=tone)
+
     def refresh_operations_status(self):
         if bool(getattr(self, "_suspend_operations_refresh", False)):
             return
@@ -2353,20 +2393,7 @@ class TradingAccountPanel(ttk.Frame):
             detail_tone="text",
         )
 
-        strategy_id = snapshot.get("strategy_id") or "-"
-        policy = get_trading_policy_snapshot(WORKBENCH_PROJECT_ROOT)
-        dl_state = "OFF" if not policy.get("dl_filter_enabled") and not policy.get("dl_ranking_enabled") else "ON"
-        param_training_date = snapshot.get("param_training_data_date") or "尚無 Params"
-        usage_mode = {
-            TRADING_PARAM_USAGE_REUSE_EXISTING: "沿用既有",
-            TRADING_PARAM_USAGE_TRAINED_CURRENT: "重新訓練",
-        }.get(snapshot.get("param_usage_mode"), "未綁定")
-        param_detail = (
-            f"{snapshot.get('param_selector') or '-'} | {usage_mode} | "
-            f"訓練至 {param_training_date} | DL {dl_state}"
-        )
-        param_tone = "success" if snapshot.get("params_ready_for_scan") else ("info" if snapshot.get("params_reusable") else "warning")
-        self._set_overview_card("strategy_params", strategy_id, param_detail, tone=param_tone)
+        self._render_strategy_params_overview(snapshot)
 
         rollforward_due = list(snapshot.get("rollforward_due_tickers") or [])
         if not data_ready:
@@ -2548,10 +2575,7 @@ class TradingAccountPanel(ttk.Frame):
                 ))
             active = state.get("active") or {}
             pending = state.get("pending") or {}
-            self._promotion_status_var.set(
-                f"ACTIVE {active.get('arm_id') or '既有策略'}"
-                + (f" | 待啟用 {pending['arm_id']}" if pending else "")
-            )
+            self._render_strategy_params_overview(self._operations_snapshot, release_state=state)
             status_var.set(
                 f"ACTIVE：{active.get('arm_id') or '既有 Trading 策略'}  |  "
                 f"待啟用：{pending.get('arm_id') or '無'}  |  切換前持股與掛單不會自動換參數"
@@ -2833,17 +2857,6 @@ class TradingAccountPanel(ttk.Frame):
             self._operations_next_var.set(f"FAIL | Workflow 狀態讀取失敗：{exc} | 下一步：全狀態刷新")
             return
         self._latest_workflow_snapshot = dict(snapshot)
-        if hasattr(self, "_promotion_status_var"):
-            try:
-                release_state = load_trading_release_state(WORKBENCH_PROJECT_ROOT)
-                active = release_state.get("active") or {}
-                pending = release_state.get("pending") or {}
-                self._promotion_status_var.set(
-                    f"ACTIVE {active.get('arm_id') or '既有策略'}"
-                    + (f" | 待啟用 {pending['arm_id']}" if pending else "")
-                )
-            except (OSError, RuntimeError, ValueError) as exc:
-                self._promotion_status_var.set(f"Release 記錄需檢查：{exc}")
         reusable = bool(snapshot.get("params_reusable"))
         if not self._param_mode_user_selected:
             self._param_mode_var.set(PARAM_MODE_REUSE_LABEL if reusable else PARAM_MODE_TRAIN_LABEL)

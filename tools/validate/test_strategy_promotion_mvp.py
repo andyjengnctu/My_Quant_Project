@@ -222,6 +222,11 @@ class StrategyPromotionDialogAppearanceTest(unittest.TestCase):
         panel._command_thread = None
         panel._param_mode_var = tk.StringVar(master=root, value="沿用既有 Params")
         panel._param_mode_user_selected = False
+        panel._operations_snapshot = {}
+        dashboard_updates = []
+        panel._render_strategy_params_overview = (
+            lambda snapshot, *, release_state: dashboard_updates.append(dict(release_state))
+        )
 
         rules = (
             {"arm_id": "C58", "name": "Single Best", "trading_supported": False,
@@ -272,6 +277,7 @@ class StrategyPromotionDialogAppearanceTest(unittest.TestCase):
             self.assertEqual(tree.selection(), ("C95",))
             self.assertEqual(tree.set("C95", "approval"), "待核准")
             self.assertEqual(str(stage_button.cget("state")), "disabled")
+            self.assertEqual(dashboard_updates[-1], {"active": None, "pending": None})
 
             # Research [8] approval in another process, while the dialog stays open.
             state["approved"] = True
@@ -289,6 +295,61 @@ class StrategyPromotionDialogAppearanceTest(unittest.TestCase):
             self.assertEqual(tree.set("C95", "approval"), "核准失效")
             self.assertEqual(str(stage_button.cget("state")), "disabled")
             self.assertEqual(tree.get_children(), ("C58", "C61", "C95"))
+
+
+class StrategyPromotionDashboardIdentityTest(unittest.TestCase):
+    """The fixed Trading dashboard, not the daily action bar, owns Release status."""
+
+    def test_active_and_pending_release_display_without_engine_id_duplication(self):
+        from types import SimpleNamespace
+        from services.workbench_ui.trading_account_panel import TradingAccountPanel
+
+        updates = []
+        panel = SimpleNamespace(_set_overview_card=lambda *a, **kw: updates.append((a, kw)))
+        snapshot = {
+            "strategy_id": "full_rule_based_no_dl",
+            "param_selector": "base_finalists_agree",
+            "param_usage_mode": "reuse_existing",
+            "param_training_data_date": "2026-10-08",
+            "params_ready_for_scan": True,
+        }
+        state = {
+            "active": {"arm_id": "C95", "status": "ACTIVE"},
+            "pending": {"arm_id": "C99", "status": "PENDING_PARAMS"},
+        }
+        with patch("services.workbench_ui.trading_account_panel.get_trading_policy_snapshot", return_value={}), \
+             patch("services.workbench_ui.trading_account_panel.load_trading_release_state", return_value=state):
+            TradingAccountPanel._render_strategy_params_overview(panel, snapshot)
+        (key, primary, detail), styles = updates[-1]
+        self.assertEqual(key, "strategy_params")
+        self.assertEqual(primary, "ACTIVE C95")
+        self.assertIn("C99", detail)
+        self.assertIn("base_finalists_agree", detail)
+        self.assertIn("2026-10-08", detail)
+        self.assertNotIn("full_rule_based_no_dl", primary)
+        self.assertEqual(styles["tone"], "success")
+
+        with patch("services.workbench_ui.trading_account_panel.get_trading_policy_snapshot", return_value={}):
+            TradingAccountPanel._render_strategy_params_overview(
+                panel, snapshot, release_state={"active": None, "pending": None}
+            )
+            self.assertNotIn("ACTIVE", updates[-1][0][1])
+            TradingAccountPanel._render_strategy_params_overview(
+                panel, snapshot, release_state={"active": {"arm_id": "C95", "status": "BROKEN"}, "pending": None}
+            )
+        self.assertEqual(updates[-1][1]["tone"], "error")
+
+    def test_invalid_canonical_release_read_does_not_show_stale_active(self):
+        from types import SimpleNamespace
+        from services.workbench_ui.trading_account_panel import TradingAccountPanel
+
+        updates = []
+        panel = SimpleNamespace(_set_overview_card=lambda *a, **kw: updates.append((a, kw)))
+        with patch("services.workbench_ui.trading_account_panel.get_trading_policy_snapshot", return_value={}), \
+             patch("services.workbench_ui.trading_account_panel.load_trading_release_state", side_effect=ValueError("invalid fingerprint")):
+            TradingAccountPanel._render_strategy_params_overview(panel, {})
+        self.assertIn("Release", updates[-1][0][1])
+        self.assertEqual(updates[-1][1]["tone"], "error")
 
 
 if __name__ == "__main__":

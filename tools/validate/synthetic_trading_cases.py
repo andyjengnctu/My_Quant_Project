@@ -1494,7 +1494,15 @@ def validate_trading_daily_workflow_contract_case(base_params):
     workflow_ui = panel_source.split('workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程"', 1)[1].split('header = ttk.LabelFrame(content, text="Trading 帳戶"', 1)[0]
     check("workbench_daily_workflow_removes_data_and_batch_actions", True, '"1 更新資料"' not in workflow_ui and '"每日流程 1→2→3"' not in workflow_ui and '"data"' not in workflow_ui and '"all"' not in workflow_ui)
     check("workbench_daily_workflow_uses_compact_one_row_layout", True, 'padding=(8, 4)' in workflow_ui and 'pady=(0, 4)' in workflow_ui and 'workflow_bar.pack(fill="x")' in workflow_ui and 'promotion_row' not in workflow_ui and 'param_mode_row' not in workflow_ui)
-    check("workbench_daily_workflow_strategy_selection_reuses_promotion", True, 'text="1 策略選擇"' in workflow_ui and 'command=self._open_strategy_promotion_dialog' in workflow_ui and 'textvariable=self._promotion_status_var' in workflow_ui)
+    check("workbench_daily_workflow_strategy_selection_reuses_promotion", True, 'text="1 策略選擇"' in workflow_ui and 'command=self._open_strategy_promotion_dialog' in workflow_ui)
+    check(
+        "workbench_daily_workflow_release_status_only_in_dashboard", True,
+        '_promotion_status_var' not in workflow_ui
+        and '_render_strategy_params_overview' in panel_source
+        and 'load_trading_release_state(WORKBENCH_PROJECT_ROOT)' in panel_source.split('def _render_strategy_params_overview', 1)[1].split('def refresh_operations_status', 1)[0]
+        and 'self._render_strategy_params_overview(snapshot)' in panel_source
+        and 'self._render_strategy_params_overview(self._operations_snapshot, release_state=state)' in panel_source,
+    )
     check("workbench_removes_manual_position_rollforward_button", True, '持股日終推進' not in panel_source)
     check("workbench_exposes_separate_param_button", True, 'text="2 訓練／套用 Params"' in workflow_ui and 'self._start_workflow_action("params")' in workflow_ui and "套用新進場" not in workflow_ui)
     check("workbench_exposes_param_reuse_choice", True, '"沿用既有 Params"' in panel_source and '"重新訓練 Params"' in panel_source)
