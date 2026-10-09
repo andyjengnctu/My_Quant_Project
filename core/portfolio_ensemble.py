@@ -93,6 +93,11 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
 
     aggregated = []
     for (ticker, signal_date), group_rows in grouped.items():
+        # AI: Canonical member order is independent of parallel scan completion.
+        # Besides stable rank provenance, it stabilizes per-member serialized maps.
+        group_rows = sorted(
+            group_rows, key=lambda row: str(row.get("ensemble_member_key") or "").strip()
+        )
         member_keys_in_group = [str(row.get("ensemble_member_key") or "").strip() for row in group_rows]
         if not all(member_keys_in_group) or len(set(member_keys_in_group)) != len(group_rows):
             raise ValueError(
@@ -208,7 +213,7 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
                             f"啟用 quality ranking 的 ensemble 候選缺少有效原始事件分數: ticker={ticker}"
                         )
                     normalized_rank["score"] = score
-                    quality_rows.append((score, score_date, normalized_rank))
+                    quality_rows.append((score, score_date, member_key, normalized_rank))
                 else:
                     normalized_rank["score"] = None
                 if member_key:
@@ -252,8 +257,12 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
             representative["ensemble_quality_score_unavailable_member_keys"] = unavailable_member_keys
 
             if availability_flags == {True}:
-                quality_rows.sort(key=lambda item: (item[0], item[1]))
-                median_score, median_score_date, median_rank = quality_rows[(len(quality_rows) - 1) // 2]
+                # AI: The score/date median stays unchanged. For exact ties,
+                # choose canonical member_key as the unique provenance owner.
+                quality_rows.sort(key=lambda item: (item[0], item[1], item[2]))
+                median_score, median_score_date, _member_key, median_rank = quality_rows[
+                    (len(quality_rows) - 1) // 2
+                ]
                 representative["ensemble_quality_score_availability"] = "all_available"
                 representative["ensemble_median_quality_score"] = float(median_score)
                 representative["ensemble_median_quality_score_date"] = median_score_date

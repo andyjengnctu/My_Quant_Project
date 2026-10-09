@@ -3897,8 +3897,8 @@
       "section": "B2",
       "priority": "P1",
       "category": "GUI / Workbench Trading daily workflow",
-      "item": "Workbench daily Trading data → params → scanner workflow uses canonical producers",
-      "gap": "Workbench實際交易頁必須可分步或依序執行Trading data update、Trading strategy-param update與candidate scanner；每一步只能委派既有canonical producer。Scanner必須使用Trading data／selected params／outputs namespace，且selected params latest-data date必須與目前Trading dataset一致；若selector解析成多member而Scanner尚無對應ensemble semantics，必須fail-fast，不得靜默取第一member。長流程不得阻塞Tk主thread；本輪只顯示candidate rows，不得提前形成account allocator、pending order或confirmed fill。",
+      "item": "Workbench Strategy → Params → Scanner decisions use canonical producers; Market Data stays in DataOps",
+      "gap": "Trading交易中心固定為獨立的策略選擇、Trading Params重訓／沿用及Scanner候選三個動作，不能夾帶Market Data更新或隱藏Data／all批次調度；V2 Market Data更新由獨立DataOps／Smart Downloader canonical producer負責。Scanner必須使用Trading data／selected params／outputs namespace，selected params latest-data date必須與目前Trading dataset一致；ensemble必須使用canonical共識語意，不得靜默取第一member。Scanner候選先經finalized frozen-lineage admission，真正被接受的regular ticker才可排除live broker-truth re-entry。長流程不得阻塞Tk主thread；Scanner不得提前形成account allocator、pending order或confirmed fill。",
       "entry": "`services/trading/market_data_update.py`, `services/trading/market_data_consumer.py`, `services/trading/data_readiness.py`, `services/trading/daily_workflow.py`, `services/scanner/scan_runner.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 351
@@ -3997,7 +3997,7 @@
       "priority": "P1",
       "category": "Trading completed-bar position management",
       "item": "Confirmed strategy positions roll forward from completed daily bars with immutable position strategy lineage",
-      "gap": "Trading既有strategy_fill持股必須在每日資料更新後、current Trading Params重訓與Scanner之前，以position-level immutable strategy_lineage凍結的strategy params消費已完成日K，逐bar重用canonical trailing-stop update，推進highest-high/trailing/effective Stop並記錄last_rollforward_date。Legacy持股才可fallback來源entry order frozen params；direct position lineage不得要求orders.json存在。此流程不得讀current selected params取代frozen params、不得使用未完成daily row、不得由OHLC推定任何券商SELL fill、不得改cash/qty/cost basis。Legacy active ENTRY BUY或stale protection只能作compatibility warning，不能阻擋primary roll-forward；roll-forward若改變Stop/Target，只更新decision truth/plan，Workbench不自行假設券商改單。Operations Status與Workbench必須把待roll-forward列為primary next-action，daily workflow固定Data→rollforward→Indicator decision→Params→Scanner。",
+      "gap": "Trading既有strategy_fill持股必須在每日資料更新後、current Trading Params重訓與Scanner之前，以position-level immutable strategy_lineage凍結的strategy params消費已完成日K，逐bar重用canonical trailing-stop update，推進highest-high/trailing/effective Stop並記錄last_rollforward_date。Legacy持股才可fallback來源entry order frozen params；direct position lineage不得要求orders.json存在。此流程不得讀current selected params取代frozen params、不得使用未完成daily row、不得由OHLC推定任何券商SELL fill、不得改cash/qty/cost basis。Legacy active ENTRY BUY或stale protection只能作compatibility warning，不能阻擋primary roll-forward；roll-forward若改變Stop/Target，只更新decision truth/plan，Workbench不自行假設券商改單。Operations Status與Workbench必須把待roll-forward列為primary next-action，Market Data由獨立DataOps更新；position rollforward須依canonical lifecycle sync完成並保留Operations Status的待同步阻擋，不得透過已退役的Data→rollforward→Indicator→Params→Scanner批次執行。",
       "entry": "`core/position_step.py`, `core/trading_account_state.py`, `core/trading_capabilities.py`, `services/trading/strategy_param_runtime.py`, `services/trading/account_state.py`, `services/trading/position_rollforward.py`, `services/trading/daily_workflow.py`, `services/trading/protection_planning.py`, `services/trading/operations_status.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 360
@@ -4008,7 +4008,7 @@
       "priority": "P1",
       "category": "Trading rule-based indicator exit execution",
       "item": "Completed-bar ind_sell_signal becomes a persistent position-lineage SELL decision obligation",
-      "gap": "Full rule-based strategy_fill持股在completed daily position roll-forward後，必須以position-level immutable strategy_lineage frozen params判定ind_sell_signal；legacy持股才可fallback entry-order frozen params。Signal成立後以immutable signal_key保存完整持股SELL decision obligation，後續completed bar即使signal轉false也不得洗掉，直到使用者登錄實際SELL fill或持股關閉。Primary Workbench只顯示SELL signal與建議動作，由使用者自行至券商處理；legacy explicit broker submission/cancel/retry lifecycle僅保留compatibility backend，不得成為primary UI前置。Operations Status必須優先處理persistent strategy indicator obligation；D3/D4 lock以actual account SELL fill date判定，不得以active broker order代替。daily workflow固定Data→position roll-forward→Indicator decision→Params→Scanner；pre-live audit仍須驗account/cash、roll-forward、fresh indicator decision與open-position SELL coverage。",
+      "gap": "Full rule-based strategy_fill持股在completed daily position roll-forward後，必須以position-level immutable strategy_lineage frozen params判定ind_sell_signal；legacy持股才可fallback entry-order frozen params。Signal成立後以immutable signal_key保存完整持股SELL decision obligation，後續completed bar即使signal轉false也不得洗掉，直到使用者登錄實際SELL fill或持股關閉。Primary Workbench只顯示SELL signal與建議動作，由使用者自行至券商處理；legacy explicit broker submission/cancel/retry lifecycle僅保留compatibility backend，不得成為primary UI前置。Operations Status必須優先處理persistent strategy indicator obligation；D3/D4 lock以actual account SELL fill date判定，不得以active broker order代替。Market Data由獨立DataOps更新、position roll-forward與Indicator decision透過canonical lifecycle sync管理，不得依賴已退役的Trading Data→Params→Scanner批次入口；pre-live audit仍須驗account/cash、roll-forward、fresh indicator decision與open-position SELL coverage。",
       "entry": "`core/trading_order_state.py`, `core/trading_capabilities.py`, `services/trading/strategy_param_runtime.py`, `services/trading/indicator_exit_planning.py`, `services/trading/indicator_exit_order_submission.py`, `services/trading/fill_reconciliation.py`, `services/trading/operations_status.py`, `services/trading/operational_audit.py`, `services/trading/daily_workflow.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
       "initial_status": "NEW",
       "order": 361
@@ -7947,7 +7947,7 @@
     {
       "id": "T483",
       "b_id": "B363",
-      "description": "`validate_trading_daily_workflow_contract_case` 覆蓋V2 Market Data update/consumer readiness、Params freshness、single-member scanner guard、Trading scanner output isolation、data→params→scanner順序與Workbench background-thread workflow controls。",
+      "description": "`validate_trading_daily_workflow_contract_case` 覆蓋V2 consumer readiness、Params freshness／REUSE、canonical ensemble Scanner及frozen-lineage admission先於live re-entry、Trading scanner output isolation、Trading Strategy/Params/Scanner獨立動作、DataOps不受連帶更新，以及Workbench background-thread controls。",
       "initial_status": "NEW",
       "order": 473
     },
@@ -8010,14 +8010,14 @@
     {
       "id": "T492",
       "b_id": "B372",
-      "description": "`validate_trading_position_rollforward_contract_case` 覆蓋completed-bar seal、position immutable strategy_lineage、legacy order fallback、direct lineage no-orders compatibility、canonical trailing/highest-high推進、cash/qty不變、last_rollforward/idempotence、legacy protection共存warning、no-hidden-recovery/no-market-fill，並鎖住daily Data→rollforward→Indicator decision→Params→Scanner順序。",
+      "description": "`validate_trading_position_rollforward_contract_case` 覆蓋completed-bar seal、position immutable strategy_lineage、legacy order fallback、direct lineage no-orders compatibility、canonical trailing/highest-high推進、cash/qty不變、last_rollforward/idempotence、legacy protection共存warning、no-hidden-recovery/no-market-fill，並驗證已退役批次調度不再繞過canonical lifecycle sync／獨立Trading操作。",
       "initial_status": "NEW",
       "order": 482
     },
     {
       "id": "T493",
       "b_id": "B373",
-      "description": "`validate_trading_indicator_sell_execution_contract_case` 覆蓋position-lineage completed-bar full-position SELL obligation、immutable signal identity、primary manual-broker decision/no hidden fill、legacy cancel/retry submission compatibility、canonical IND_SELL actual account event、actual SELL-fill D3/D4 session lock與Data→rollforward→Indicator→Params→Scanner runtime safety。",
+      "description": "`validate_trading_indicator_sell_execution_contract_case` 覆蓋position-lineage completed-bar full-position SELL obligation、immutable signal identity、primary manual-broker decision/no hidden fill、legacy cancel/retry submission compatibility、canonical IND_SELL actual account event、actual SELL-fill D3/D4 session lock與獨立DataOps／lifecycle sync／Trading Params、Scanner runtime safety。",
       "initial_status": "NEW",
       "order": 483
     },

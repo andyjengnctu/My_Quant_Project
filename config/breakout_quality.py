@@ -10,7 +10,7 @@ from __future__ import annotations
 from config.research import RESEARCH_SINGLE_SEED
 from config.breakout_policy import BREAKOUT_DEFAULT_HIGH_LEN
 from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS, DEFAULT_PORTFOLIO_ROTATION
-from core.breakout_quality_registry import merge_breakout_quality_model_profiles
+from config.model_profile_membership import merge_breakout_quality_model_profiles
 
 # =============================================================================
 # USER SETTINGS — edit this section only

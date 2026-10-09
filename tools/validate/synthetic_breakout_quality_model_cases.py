@@ -1679,7 +1679,8 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and canonical_training_pair in shared_test
         and all(item in shared_test for item in reference_test_profiles)
         and "BREAKOUT_QUALITY_MODEL_TEST_PROFILES = merge_breakout_quality_model_profiles(" in config_source
-        and "def merge_breakout_quality_model_profiles(" in read_source_text("core/breakout_quality_registry.py")
+        and "def merge_breakout_quality_model_profiles(" in read_source_text("config/model_profile_membership.py")
+        and "from config.model_profile_membership import merge_breakout_quality_model_profiles" in read_source_text("core/breakout_quality_registry.py")
         and "(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE,)" in config_source,
     )
     synthetic_new_training_pair = ("MR-SYNTHETIC-NEW", "synthetic_new_training_profile")

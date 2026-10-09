@@ -30,11 +30,8 @@ from services.trading.daily_workflow import (
     TRADING_PARAM_MODE_TRAIN,
     build_trading_daily_workflow_snapshot,
     run_trading_candidate_scan,
-    run_trading_daily_workflow,
-    run_trading_market_data_update,
     run_trading_param_step,
 )
-from services.downloader.daily_console_progress import MarketDataDailyConsoleProgress
 from services.trading.strategy_param_state import (
     TradingParamContractMismatchError,
     TRADING_PARAM_USAGE_REUSE_EXISTING,
@@ -2865,29 +2862,19 @@ class TradingAccountPanel(ttk.Frame):
     @staticmethod
     def _workflow_state_domains(action: str):
         mapping = {
-            "data": {STATE_MARKET_DATA},
             "params": {STATE_PARAMS, STATE_SCANNER_ELIGIBILITY},
             "scanner": {STATE_SCANNER, STATE_SCANNER_ELIGIBILITY},
             "orders": {STATE_ORDERS},
         }
-        if action == "all":
-            domains = set()
-            for key in ("data", "params", "scanner"):
-                domains.update(mapping[key])
-            domains.update(ACCOUNT_MUTATION_DOMAINS)
-            domains.update(PENDING_MUTATION_DOMAINS)
-            return domains
         return mapping.get(str(action), set())
 
     def _start_workflow_action(self, action: str):
         param_mode = self._selected_param_mode()
         param_label = "沿用既有 Trading Params" if param_mode == TRADING_PARAM_MODE_REUSE else "重新訓練 Trading Params"
         labels = {
-            "data": "更新 Trading 資料",
             "params": param_label,
             "scanner": "Scanner 候選",
             "orders": "產生建議掛單",
-            "all": f"每日流程 1→2→3（{param_label}）",
         }
         if action not in labels:
             messagebox.showerror("Trading workflow", f"未知 workflow action: {action}", parent=self)
@@ -2927,29 +2914,13 @@ class TradingAccountPanel(ttk.Frame):
 
     @staticmethod
     def _run_workflow_command(action: str, param_mode: str):
-        console_progress = MarketDataDailyConsoleProgress() if action in {"data", "all"} else None
-        try:
-            if action == "data":
-                return run_trading_market_data_update(
-                    project_root=WORKBENCH_PROJECT_ROOT,
-                    progress_fn=console_progress.progress,
-                    quota_wait_fn=console_progress.quota_wait,
-                )
-            if action == "params":
-                return run_trading_param_step(project_root=WORKBENCH_PROJECT_ROOT, mode=param_mode)
-            if action == "scanner":
-                return run_trading_candidate_scan(project_root=WORKBENCH_PROJECT_ROOT)
-            if action == "orders":
-                return build_trading_proposed_order_plan(project_root=WORKBENCH_PROJECT_ROOT)
-            return run_trading_daily_workflow(
-                project_root=WORKBENCH_PROJECT_ROOT,
-                param_mode=param_mode,
-                data_progress_fn=console_progress.progress,
-                data_quota_wait_fn=console_progress.quota_wait,
-            )
-        finally:
-            if console_progress is not None:
-                console_progress.close()
+        if action == "params":
+            return run_trading_param_step(project_root=WORKBENCH_PROJECT_ROOT, mode=param_mode)
+        if action == "scanner":
+            return run_trading_candidate_scan(project_root=WORKBENCH_PROJECT_ROOT)
+        if action == "orders":
+            return build_trading_proposed_order_plan(project_root=WORKBENCH_PROJECT_ROOT)
+        raise ValueError(f"不支援的 Trading workflow action: {action!r}")
 
     @staticmethod
     def _format_candidate_number(value, *, digits=2):
@@ -4333,22 +4304,13 @@ class TradingAccountPanel(ttk.Frame):
 
     def _finish_workflow_success(self, action: str, result):
         labels = {
-            "data": ("資料更新完成", "2 訓練／套用 Params"),
             "params": ("Params 套用完成", "3 Scanner 候選"),
             "orders": ("建議掛單完成", "檢查掛單計畫"),
             "scanner": ("Scanner 完成", "查看 Scanner Pool；自行至券商交易，成交後回 Workbench 登錄"),
-            "all": ("每日流程 1→2→3 完成", "查看 Scanner Pool；自行至券商交易，成交後回 Workbench 登錄"),
         }
-        done_text, next_text = labels.get(str(action), ("Trading 操作完成", "依目前 Trading 狀態操作"))
-        if action in {"data", "all"} and isinstance(result, dict) and str(result.get("status") or "").upper() == "PARTIAL":
-            data = result.get("data") if action == "all" else result
-            data = data if isinstance(data, dict) else {}
-            target = str(data.get("target_date") or "-")
-            market = str(data.get("market_date") or "-")
-            self._operations_next_var.set(
-                f"PARTIAL | Trading 資料尚未追上 {target}，可用 {market} | 下一步：資料中心確認必要資料"
-            )
-            return
+        if str(action) not in labels:
+            raise ValueError(f"不支援的 Trading workflow completion: {action!r}")
+        done_text, next_text = labels[str(action)]
         self._operations_next_var.set(f"DONE | {done_text} | 下一步：{next_text}")
 
 

@@ -3921,7 +3921,6 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     daily_console_source = (project_root / "services" / "downloader" / "daily_console_progress.py").read_text(encoding="utf-8")
     data_ops_panel_source = (project_root / "services" / "workbench_ui" / "data_ops_panel.py").read_text(encoding="utf-8")
     state_source = (project_root / "services" / "trading" / "market_data_v2_state.py").read_text(encoding="utf-8")
-    from services.trading import daily_workflow as daily_workflow_module
     from services.trading import market_data_update as market_data_update_module
 
     v2_pos = update_source.find("run_trading_market_data_auto_update(")
@@ -4043,7 +4042,13 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         and "dataset=rt.FINMIND_PRICE_DATASET" in price_refresh_source
         and "normalize_adjusted_price_frame" in price_refresh_source,
     )
-    check("daily_workflow_reuses_canonical_market_data_update_owner", True, daily_workflow_module.run_trading_market_data_update is market_data_update_module.run_trading_market_data_update and "def run_trading_market_data_update" not in workflow_source)
+    check(
+        "market_data_update_is_explicit_data_ops_not_hidden_in_trading_daily_scanner",
+        True,
+        "run_trading_market_data_update" not in workflow_source
+        and "from services.trading.market_data_update import run_trading_market_data_update" in data_ops_panel_source
+        and callable(market_data_update_module.run_trading_market_data_update),
+    )
     check("smart_downloader_uses_v2_daily_updater_as_option1_owner", True, "from services.trading.market_data_auto_update import run_trading_market_data_auto_update" in downloader_source and "force_market_date_discovery=True" in downloader_source)
     check("smart_downloader_option1_does_not_call_legacy_provider_update", False, "return _run_trading_dataset_update()" in downloader_source)
     from services.downloader.menu_contract import (

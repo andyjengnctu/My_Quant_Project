@@ -8,10 +8,6 @@ Scientific Compare Suite／arm／contrast／artifact-source catalog 由
 
 from __future__ import annotations
 
-from core.breakout_quality_registry import (
-    DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-)
-
 # Current work-stage selection. Stable menu work types live in apps/research.py;
 # only the current scientific profiles/bindings change here.
 # Current C95/P14 is a new scientific treatment with the corrected same-original-
@@ -51,9 +47,12 @@ STRATEGY_COMPARE_REUSE_SHARED_BASELINE = True
 # must never invalidate portfolio replay.
 STRATEGY_COMPARE_UPSIDE_REALIZATION_R_THRESHOLDS = (1.0, 2.0, 3.0)
 STRATEGY_COMPARE_UPSIDE_REALIZATION_ADVERSE_BUCKET_EDGES_R = (0.5, 1.0)
-STRATEGY_COMPARE_UPSIDE_REALIZATION_PATH_PROFILE = (
-    DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+# AI: This is a configuration selector, not a second scientific identity owner.
+# AI: Canonical profile legality stays in the downstream scientific registry.
+STRATEGY_COMPARE_PURE_MFE_REFERENCE_PROFILE = (
+    "daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise"
 )
+STRATEGY_COMPARE_UPSIDE_REALIZATION_PATH_PROFILE = STRATEGY_COMPARE_PURE_MFE_REFERENCE_PROFILE
 
 # Read-only main-report MFE × Safety geometry.
 STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_ENABLED = True
@@ -61,9 +60,7 @@ STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PROFILE_IDS = (
     "extending_window_oos",
     "extending_window_rolling",
 )
-STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PROFILE = (
-    DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
-)
+STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PROFILE = STRATEGY_COMPARE_PURE_MFE_REFERENCE_PROFILE
 STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PERCENTILE_CUTOFF = 0.50
 STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PERCENTILE_METHOD = "average_zero_based"
 

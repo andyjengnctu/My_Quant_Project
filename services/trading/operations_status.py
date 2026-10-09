@@ -200,14 +200,15 @@ def _workflow_action_availability(
     forced_stop_exit_count: int,
 ) -> dict[str, bool]:
     if fill_transaction_pending:
-        return {"data": False, "rollforward": False, "params": False, "scanner": False, "orders": False, "all": False}
+        return {"rollforward": False, "params": False, "scanner": False, "orders": False}
     latest_data_date = workflow.get("latest_data_date")
     trading_data_ready = bool(
         workflow.get("trading_data_ready", workflow.get("market_data_ready", bool(latest_data_date)))
     )
     account_ready = bool(account.get("initialized")) and account.get("cash") is not None
     return {
-        "data": True,
+        # AI: DataOps owns data updates; retired Trading data/all actions are
+        # intentionally absent from the canonical availability read model.
         # Lifecycle synchronization is automatic.  A due position is an
         # operational sync failure/pending state, never a user workflow step.
         "rollforward": False,
@@ -224,7 +225,6 @@ def _workflow_action_availability(
             and not same_day_entry_locked
             and not same_session_sell_locked
         ),
-        "all": bool(account_ready and indicator_due_count == 0),
     }
 
 
@@ -498,10 +498,8 @@ def derive_trading_operations_status(
     if "position_rollforward" in errors:
         availability["rollforward"] = False
         availability["orders"] = False
-        availability["all"] = False
     if allocation_blockers:
         availability["orders"] = False
-        availability["all"] = False
 
     warnings: list[str] = []
     blockers: list[str] = []

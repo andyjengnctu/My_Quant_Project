@@ -1457,41 +1457,123 @@ def validate_trading_daily_workflow_contract_case(base_params):
         check("multi_member_candidate_records_min_agree", 2, ensemble_row.get("ensemble_min_agree"))
         check("multi_member_candidate_keeps_representative_params_identity", True, bool(ensemble_row.get("params_signature")) and bool(ensemble_row.get("ensemble_member_key")))
 
-    call_order = []
-    with patch.object(daily_workflow, "run_trading_market_data_update", side_effect=lambda **_kwargs: call_order.append("data") or {"status": "READY"}), \
-         patch("services.trading.lifecycle_sync.run_trading_lifecycle_sync", side_effect=lambda **_kwargs: call_order.append("lifecycle_sync") or {"status": "最新", "position_result": {"status": "UP_TO_DATE"}}), \
-         patch("services.trading.indicator_exit_planning.build_trading_indicator_exit_plan", side_effect=lambda **_kwargs: call_order.append("indicator") or {"status": "PROPOSED_INDICATOR_EXIT", "exit_count": 0, "exits": []}), \
-         patch.object(daily_workflow, "run_trading_strategy_param_training", side_effect=lambda **_kwargs: call_order.append("params") or {"status": "READY"}), \
-         patch.object(daily_workflow, "run_trading_candidate_scan", side_effect=lambda **_kwargs: call_order.append("scanner") or {"status": "READY", "candidate_rows": []}):
-        workflow_result = daily_workflow.run_trading_daily_workflow(project_root=project_root, environ={})
-    check("daily_workflow_executes_data_lifecycle_sync_indicator_params_scanner_in_order", ["data", "lifecycle_sync", "indicator", "params", "scanner"], call_order)
-    check("daily_workflow_returns_lifecycle_sync_snapshot", "最新", (workflow_result.get("lifecycle_sync") or {}).get("status"))
-    check("daily_workflow_returns_ready_only_after_all_steps", "READY", workflow_result.get("status"))
-
-    # AI: A verified older consumer can keep Trading operable without claiming
-    # the newly discovered market-data target is READY.
-    with (
-        patch.object(daily_workflow, "run_trading_market_data_update", return_value={"status": "PARTIAL", "target_date": "2026-10-08", "market_date": "2026-10-06"}),
-        patch("services.trading.lifecycle_sync.run_trading_lifecycle_sync", return_value={"status": "最新", "position_result": {"status": "UP_TO_DATE"}}),
-        patch("services.trading.indicator_exit_planning.build_trading_indicator_exit_plan", return_value={"status": "PROPOSED_INDICATOR_EXIT", "exit_count": 0, "exits": []}),
-        patch.object(daily_workflow, "run_trading_strategy_param_training", return_value={"status": "READY"}),
-        patch.object(daily_workflow, "run_trading_candidate_scan", return_value={"status": "READY", "candidate_rows": []}),
+    # AI: Trading actions are independent explicit decisions. Removed legacy
+    # Data -> lifecycle -> Params -> Scanner batch is not an execution fallback.
+    param_calls = []
+    with patch.object(
+        daily_workflow, "run_trading_strategy_param_training",
+        side_effect=lambda **_kwargs: param_calls.append("train") or {"status": "READY"},
+    ), patch.object(
+        daily_workflow, "run_trading_candidate_scan",
+        side_effect=lambda **_kwargs: param_calls.append("scanner") or {"status": "READY", "candidate_rows": []},
+    ), patch(
+        "services.trading.market_data_update.run_trading_market_data_update",
+        side_effect=AssertionError("Trading action invoked Market Data update"),
     ):
-        partial_workflow = daily_workflow.run_trading_daily_workflow(project_root=project_root, environ={})
-    check("daily_workflow_does_not_report_ready_if_market_data_target_is_partial", "PARTIAL", partial_workflow["status"])
-    check("daily_workflow_preserves_verified_older_consumer", "2026-10-06", partial_workflow["data"]["market_date"])
-
-    reuse_call_order = []
-    with patch.object(daily_workflow, "run_trading_market_data_update", side_effect=lambda **_kwargs: reuse_call_order.append("data") or {"status": "READY"}), \
-         patch("services.trading.lifecycle_sync.run_trading_lifecycle_sync", side_effect=lambda **_kwargs: reuse_call_order.append("lifecycle_sync") or {"status": "最新", "position_result": {"status": "UP_TO_DATE"}}), \
-         patch("services.trading.indicator_exit_planning.build_trading_indicator_exit_plan", side_effect=lambda **_kwargs: reuse_call_order.append("indicator") or {"status": "PROPOSED_INDICATOR_EXIT", "exit_count": 0, "exits": []}), \
-         patch.object(daily_workflow, "reuse_trading_strategy_params", side_effect=lambda **_kwargs: reuse_call_order.append("reuse") or {"status": "READY"}), \
-         patch.object(daily_workflow, "run_trading_candidate_scan", side_effect=lambda **_kwargs: reuse_call_order.append("scanner") or {"status": "READY", "candidate_rows": []}):
-        reuse_workflow_result = daily_workflow.run_trading_daily_workflow(
-            project_root=project_root, environ={}, param_mode=daily_workflow.TRADING_PARAM_MODE_REUSE
+        trained = daily_workflow.run_trading_param_step(
+            project_root=project_root, mode=daily_workflow.TRADING_PARAM_MODE_TRAIN,
         )
-    check("daily_workflow_reuse_mode_skips_param_retraining", ["data", "lifecycle_sync", "indicator", "reuse", "scanner"], reuse_call_order)
-    check("daily_workflow_reuse_mode_returns_ready", "READY", reuse_workflow_result.get("status"))
+        check("trading_param_step_has_no_implicit_scanner_or_market_data_update", ["train"], param_calls)
+        scanned = daily_workflow.run_trading_candidate_scan(project_root=project_root)
+    check("trading_scanner_is_explicit_action_after_params", ["train", "scanner"], param_calls)
+    check("trading_param_and_scanner_steps_keep_own_status", ("READY", "READY"), (trained["status"], scanned["status"]))
+
+    reuse_calls = []
+    with patch.object(
+        daily_workflow, "reuse_trading_strategy_params",
+        side_effect=lambda **_kwargs: reuse_calls.append("reuse") or {"status": "READY"},
+    ), patch.object(
+        daily_workflow, "run_trading_strategy_param_training",
+        side_effect=AssertionError("reuse unexpectedly retrained Params"),
+    ):
+        reused = daily_workflow.run_trading_param_step(
+            project_root=project_root, mode=daily_workflow.TRADING_PARAM_MODE_REUSE,
+        )
+    check("trading_explicit_params_reuse_does_not_retrain", ["reuse"], reuse_calls)
+    check("trading_explicit_params_reuse_returns_ready", "READY", reused["status"])
+
+    # AI: Historical replay cannot suppress broker-truth reentry until first-
+    # observation/frozen admission actually accepts that replay.
+    from types import SimpleNamespace
+    with tempfile.TemporaryDirectory() as temp_dir:
+        reentry_root = Path(temp_dir)
+        reentry_runtime = {
+            "root": reentry_root,
+            "profile": SimpleNamespace(strategy_id="full_rule_based_no_dl", param_selector="base_finalists_agree"),
+            "latest_data_date": "2026-10-09",
+            "param_latest_data_date": "2026-10-09",
+            "param_member_count": 4,
+            "param_min_agree": 3,
+            "member_count": 4,
+            "current_universe_tickers": ["2330"],
+            "selected_path": reentry_root / "selected.json",
+            "selected_params_sha256": "selected_sha",
+            "market_data_consumer_state_sha256": "market_sha",
+            "market_data_source_view_fingerprint": "view_sha",
+            "param_binding_sha256": "binding_sha",
+        }
+        provisional = {"ticker": "2330", "signal_date": "2026-08-01", "sort_value": 1.0}
+        reentry = {
+            "ticker": "2330", "signal_date": "2026-10-05",
+            "entry_source": "breakout_reentry", "sort_value": 0.0,
+            "ensemble_vote_count": 3, "ensemble_min_agree": 3,
+            "ensemble_member_count": 4,
+        }
+        calls = []
+        accepted_regular = []
+
+        def _freeze(*_args, candidate_rows, **_kwargs):
+            calls.append(("freeze", len(candidate_rows)))
+            return list(accepted_regular)
+
+        def _reentry(*_args, information_date, excluded_tickers):
+            calls.append(("reentry", sorted(excluded_tickers)))
+            return [] if "2330" in excluded_tickers else [dict(reentry)]
+
+        with patch.object(daily_workflow, "load_trading_scanner_runtime", return_value=reentry_runtime), \
+             patch.object(daily_workflow, "resolve_runtime_output_dir", return_value=reentry_root), \
+             patch.object(daily_workflow, "open_trading_v2_consumer_view", return_value=object()), \
+             patch.object(daily_workflow, "build_trading_v2_ohlcv_frames", return_value={}), \
+             patch.object(daily_workflow, "_run_trading_scanner_param_runtime", return_value={"candidate_rows": [dict(provisional)], "scanned_tickers": ["2330"]}), \
+             patch.object(daily_workflow, "freeze_trading_candidate_lineages", side_effect=_freeze), \
+             patch.object(daily_workflow, "build_trading_live_reentry_candidate_rows", side_effect=_reentry), \
+             patch.object(daily_workflow, "resolve_trading_candidate_snapshot_path", return_value=reentry_root / "candidate.json"), \
+             patch.object(daily_workflow, "atomic_write_json"), \
+             patch.object(daily_workflow, "compute_file_sha256", return_value="snapshot_sha"), \
+             patch.object(daily_workflow, "partition_trading_candidate_rows_for_information_date", side_effect=lambda rows, **_kw: (rows, [])):
+            fallback_scan = daily_workflow.run_trading_candidate_scan(project_root=reentry_root)
+            check("trading_reentry_is_evaluated_after_frozen_admission", [("freeze", 1), ("reentry", [])], calls)
+            check("trading_reentry_survives_rejected_provisional_historical_replay", ["breakout_reentry"], [r.get("entry_source") for r in fallback_scan["candidate_rows"]])
+            check("trading_reentry_count_matches_actual_accepted_live_rows", 1, fallback_scan["live_reentry_candidate_count"])
+            accepted_regular = [dict(provisional)]
+            calls.clear()
+            admitted_scan = daily_workflow.run_trading_candidate_scan(project_root=reentry_root)
+            check("admitted_regular_lineage_suppresses_duplicate_broker_reentry", [("freeze", 1), ("reentry", ["2330"])], calls)
+            check("admitted_regular_lineage_does_not_create_second_candidate", 1, len(admitted_scan["candidate_rows"]))
+            check("admitted_regular_lineage_has_zero_live_reentry", 0, admitted_scan["live_reentry_candidate_count"])
+
+    # AI: Quality-median tie provenance must not depend on parallel member order.
+    from itertools import permutations
+    from core.portfolio_ensemble import aggregate_ensemble_candidate_rows
+    tied_member_rows = [
+        {
+            "ticker": "2330", "signal_date": "2026-10-08",
+            "ensemble_member_key": f"m{i}", "sort_value": 1.0,
+            "use_breakout_quality_ranking": True,
+            "breakout_quality_ranking_policy": "score",
+            "breakout_quality_ranking_options": {},
+            "breakout_quality_rank": {
+                "score": 0.5, "available": True, "score_date": "2026-10-08",
+                "score_source": "canonical_runtime", "filter_id": f"filter_{i}",
+            },
+        }
+        for i in range(1, 4)
+    ]
+    rank_rows = [aggregate_ensemble_candidate_rows(order, min_agree=3)[0] for order in permutations(tied_member_rows)]
+    check("quality_median_tie_provenance_is_permutation_invariant", {"filter_2"}, {row["breakout_quality_rank"]["filter_id"] for row in rank_rows})
+    check("quality_median_tie_member_map_is_permutation_invariant", 1, len({tuple(row["ensemble_member_quality_rank_by_key"].keys()) for row in rank_rows}))
+    check("quality_median_tie_keeps_canonical_score", {0.5}, {row["breakout_quality_score"] for row in rank_rows})
+
 
     panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
     workflow_ui = panel_source.split('workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程"', 1)[1].split('header = ttk.LabelFrame(content, text="Trading 帳戶"', 1)[0]
@@ -1509,7 +1591,7 @@ def validate_trading_daily_workflow_contract_case(base_params):
     check("workbench_removes_manual_position_rollforward_button", True, '持股日終推進' not in panel_source)
     check("workbench_exposes_separate_param_button", True, 'text="2 訓練／套用 Params"' in workflow_ui and 'self._start_workflow_action("params")' in workflow_ui and "套用新進場" not in workflow_ui)
     check("workbench_exposes_param_reuse_choice", True, '"沿用既有 Params"' in panel_source and '"重新訓練 Params"' in panel_source)
-    check("workbench_uses_shared_downloader_console_progress", True, "MarketDataDailyConsoleProgress" in panel_source)
+    check("workbench_daily_flow_has_no_hidden_provider_update_progress", True, "MarketDataDailyConsoleProgress" not in panel_source and "run_trading_market_data_update" not in panel_source)
     check("workbench_exposes_scanner_button", True, 'text="3 Scanner 候選"' in workflow_ui and 'self._start_workflow_action("scanner")' in workflow_ui)
     check("workbench_daily_workflow_only_tracks_param_and_scanner_actions", True, 'self._workflow_action_buttons["params"] = params_button' in workflow_ui and 'self._workflow_action_buttons["scanner"] = scanner_button' in workflow_ui)
     check("workbench_long_workflow_uses_background_thread", True, "threading.Thread(" in panel_source)
@@ -3133,17 +3215,13 @@ def validate_trading_position_rollforward_contract_case(base_params):
         and 'if action == "rollforward"' not in panel_source
         and 'run_trading_lifecycle_sync' in panel_source,
     )
-    workflow_step_tokens = (
-        "data_result = run_trading_market_data_update",
-        "lifecycle_sync_result = run_trading_lifecycle_sync",
-        "indicator_result = build_trading_indicator_exit_plan",
-        "param_result = run_trading_param_step",
-    )
-    workflow_step_positions = [daily_source.find(token) for token in workflow_step_tokens]
     check(
-        "daily_workflow_orders_lifecycle_sync_and_indicator_after_data_before_param_step",
+        "trading_daily_batch_update_is_retired_without_affecting_direct_steps",
         True,
-        all(position >= 0 for position in workflow_step_positions) and workflow_step_positions == sorted(workflow_step_positions),
+        "def run_trading_daily_workflow(" not in daily_source
+        and "run_trading_market_data_update" not in daily_source
+        and "def run_trading_candidate_scan(" in daily_source
+        and "def run_trading_param_step(" in daily_source,
     )
 
     summary["checks"] = len(results)
@@ -3310,7 +3388,8 @@ def validate_trading_operations_status_contract_case(base_params):
     recovery = derive(fill_transaction_pending=True)
     check("pending_fill_transaction_is_top_priority_blocker", NEXT_RECOVER_FILL, recovery["next_action_code"])
     check("pending_fill_transaction_status_is_blocked", OPERATIONS_STATUS_BLOCKED, recovery["overall_status"])
-    check("pending_fill_transaction_disables_all_workflow_actions", {"data": False, "rollforward": False, "params": False, "scanner": False, "orders": False, "all": False}, recovery["workflow_action_availability"])
+    check("pending_fill_transaction_disables_all_workflow_actions", {"rollforward": False, "params": False, "scanner": False, "orders": False}, recovery["workflow_action_availability"])
+    check("retired_data_all_workflow_actions_absent_from_status", True, not {"data", "all"}.intersection(recovery["workflow_action_availability"]))
 
     uninitialized = derive(account={"initialized": False, "revision": None, "cash": None, "positions": []})
     check("uninitialized_account_next_action", NEXT_INITIALIZE_ACCOUNT, uninitialized["next_action_code"])
@@ -3403,7 +3482,7 @@ def validate_trading_operations_status_contract_case(base_params):
     check("workflow_read_error_disables_all_workflow_actions", False, any(workflow_error["workflow_action_availability"].values()))
     rollforward_error = derive(component_errors={"position_rollforward": "RuntimeError: broken rollforward snapshot"})
     check("rollforward_read_error_blocks_operations_status", OPERATIONS_STATUS_BLOCKED, rollforward_error["overall_status"])
-    check("rollforward_read_error_blocks_allocation_and_daily_all", [False, False], [rollforward_error["workflow_action_availability"]["orders"], rollforward_error["workflow_action_availability"]["all"]])
+    check("rollforward_read_error_blocks_allocation", False, rollforward_error["workflow_action_availability"]["orders"])
 
     stale_candidate = derive(candidate={"exists": True, "valid": True, "fresh": False, "candidate_count": 3})
     check("stale_candidate_requires_scanner", NEXT_RUN_SCANNER, stale_candidate["next_action_code"])
@@ -5137,13 +5216,11 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         check("audit_sync_releases_lock_after_no_data", "NO_DATA", future.result(timeout=3)["position_result"]["status"])
 
     from services.trading import daily_workflow as _audit_workflow
-    with tempfile.TemporaryDirectory() as td, _AuditStack() as stack:
-        stack.enter_context(patch.object(_audit_workflow, "run_trading_market_data_update", return_value={"status":"UPDATED"}))
-        stack.enter_context(patch.object(_audit_workflow, "run_trading_param_step", return_value={"status":"READY"}))
-        stack.enter_context(patch.object(_audit_workflow, "run_trading_candidate_scan", return_value={"status":"READY"}))
-        stack.enter_context(patch.object(_sync, "run_trading_lifecycle_sync", return_value={"status":_sync.SYNC_STATUS_FAILED,"position_result":{"status":"NO_ACCOUNT"}}))
-        result = _audit_workflow.run_trading_daily_workflow(project_root=Path(td))
-        check("audit_daily_workflow_does_not_mask_sync_failure_as_ready", "PARTIAL", result["status"])
+    check(
+        "audit_legacy_daily_runner_is_not_callable_or_a_sync_bypass",
+        True,
+        not hasattr(_audit_workflow, "run_trading_daily_workflow"),
+    )
 
     _sync_projection_state = {
         "revision": 1,
@@ -7431,17 +7508,26 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     # canonical counts/dates remain in the dashboard and state refresh is applied once.
     messages = []
     panel = SimpleNamespace(_operations_next_var=SimpleNamespace(set=messages.append))
-    TradingAccountPanel._finish_workflow_success(panel, "data", {
-        "market_date": "2026-09-09", "current_execution_pool_ticker_count": 17,
-        "training_ticker_count": 23,
-        "market_data_v2_archive": {"status": "UPDATED", "data_requests": 31, "usage_requests": 2},
-    })
-    check("workbench_data_completion_is_compact_progress_and_next_step", True, all(
-        text in messages[-1] for text in ("DONE", "資料更新完成", "下一步：2 訓練／套用 Params")
+    TradingAccountPanel._finish_workflow_success(panel, "params", {"status": "READY"})
+    check("workbench_params_completion_is_compact_progress_and_next_step", True, all(
+        text in messages[-1] for text in ("DONE", "Params 套用完成", "下一步：3 Scanner 候選")
     ))
-    check("workbench_data_completion_does_not_repeat_dashboard_metrics", False, any(
-        text in messages[-1] for text in ("2026-09-09", "新進場池 17", "訓練池 23", "V2 UPDATED", "31/2")
+    check("workbench_params_completion_has_no_retired_data_or_batch_status", False, any(
+        text in messages[-1] for text in ("資料更新完成", "每日流程 1→2→3 完成", "V2 UPDATED")
     ))
+    # AI: Obsolete actions must reject even direct internal callers, not
+    # silently route to an all-in-one batch or report a false DONE status.
+    rejected_actions = []
+    for retired_action in ("data", "all"):
+        try:
+            TradingAccountPanel._run_workflow_command(retired_action, "reuse")
+        except ValueError:
+            rejected_actions.append((retired_action, "run"))
+        try:
+            TradingAccountPanel._finish_workflow_success(panel, retired_action, {"status": "READY"})
+        except ValueError:
+            rejected_actions.append((retired_action, "finish"))
+    check("retired_data_all_actions_fail_closed_including_callbacks", 4, len(rejected_actions))
 
     command_worker_body = panel_source.split("def _trading_command_worker", 1)[1].split("def _schedule_command_poll", 1)[0]
     command_finish_body = panel_source.split("def _finish_trading_command", 1)[1].split("def _request_state_refresh", 1)[0]

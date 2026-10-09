@@ -20,7 +20,6 @@ from core.portfolio_ensemble import (
     sort_aggregated_ensemble_candidate_rows,
 )
 from services.trading.market_data_consumer import build_trading_v2_ohlcv_frames, open_trading_v2_consumer_view
-from services.trading.market_data_update import run_trading_market_data_update
 from services.trading.live_reentry import build_trading_live_reentry_candidate_rows
 from services.scanner.scan_runner import run_daily_scanner
 from services.trading.scanner_state import (
@@ -156,19 +155,6 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
         expected_scanned_tickers=expected_scanned_tickers,
         prepared_frames=prepared_frames,
     )
-    current_rows = list(result.get("candidate_rows") or [])
-    current_tickers = {str(row.get("ticker") or "") for row in current_rows}
-    live_reentry_rows = build_trading_live_reentry_candidate_rows(
-        root,
-        information_date=str(runtime["latest_data_date"]),
-        excluded_tickers=current_tickers,
-    )
-    result["candidate_rows"] = sort_aggregated_ensemble_candidate_rows(current_rows + live_reentry_rows)
-    result["count_history_qualified"] = len(result["candidate_rows"])
-    result["live_reentry_candidate_count"] = len(live_reentry_rows)
-    live_reentry_tickers = {str(row.get("ticker") or "") for row in live_reentry_rows}
-    actual_scanned_tickers = sorted(set(result.get("scanned_tickers") or []) | live_reentry_tickers)
-    result["scanned_tickers"] = actual_scanned_tickers
     stable_fields = (
         "latest_data_date",
         "selected_params_sha256",
@@ -200,7 +186,27 @@ def run_trading_candidate_scan(*, project_root: str | Path) -> dict[str, Any]:
         source_binding=runtime["param_binding_sha256"], previous_snapshot=previous_snapshot,
         pre_persist_guard=assert_runtime_unchanged,
     )
-    result["candidate_rows"] = sort_aggregated_ensemble_candidate_rows(frozen_rows + reentry_rows)
+    # AI: Scanner output is provisional until canonical frozen admission completes.
+    # Only an admitted regular signal (or an already-admitted reentry row) may
+    # suppress the same stock's broker-truth live reentry candidate.
+    admitted_tickers = {
+        str(row.get("ticker") or "").strip()
+        for row in frozen_rows + reentry_rows
+        if str(row.get("ticker") or "").strip()
+    }
+    live_reentry_rows = build_trading_live_reentry_candidate_rows(
+        root,
+        information_date=str(runtime["latest_data_date"]),
+        excluded_tickers=admitted_tickers,
+    )
+    assert_runtime_unchanged()
+    result["live_reentry_candidate_count"] = len(live_reentry_rows)
+    live_reentry_tickers = {str(row.get("ticker") or "").strip() for row in live_reentry_rows}
+    actual_scanned_tickers = sorted(set(result.get("scanned_tickers") or []) | live_reentry_tickers)
+    result["scanned_tickers"] = actual_scanned_tickers
+    result["candidate_rows"] = sort_aggregated_ensemble_candidate_rows(
+        frozen_rows + reentry_rows + live_reentry_rows
+    )
     result["count_history_qualified"] = len(result["candidate_rows"])
     raw_candidate_rows = [_persistable_trading_candidate_row(dict(row)) for row in list(result.get('candidate_rows') or [])]
     candidate_rows, stale_candidate_rows = partition_trading_candidate_rows_for_information_date(
@@ -265,52 +271,6 @@ def run_trading_param_step(*, project_root: str | Path, mode: str, environ=None)
     raise ValueError(f"不支援的 Trading Params 模式: {mode!r}")
 
 
-def run_trading_daily_workflow(
-    *,
-    project_root: str | Path,
-    environ=None,
-    param_mode: str = TRADING_PARAM_MODE_TRAIN,
-    data_progress_fn=None,
-    data_quota_wait_fn=None,
-) -> dict[str, Any]:
-    from services.trading.indicator_exit_planning import build_trading_indicator_exit_plan
-    from services.trading.lifecycle_sync import run_trading_lifecycle_sync
-
-    data_result = run_trading_market_data_update(
-        project_root=project_root,
-        progress_fn=data_progress_fn,
-        quota_wait_fn=data_quota_wait_fn,
-    )
-    lifecycle_sync_result = run_trading_lifecycle_sync(project_root=project_root)
-    rollforward_result = dict(lifecycle_sync_result.get("position_result") or {})
-    if str(rollforward_result.get("status") or "") == "NO_ACCOUNT":
-        indicator_result = {"status": "NO_ACCOUNT", "exit_count": 0, "exits": []}
-    else:
-        indicator_result = build_trading_indicator_exit_plan(project_root=project_root)
-    param_result = run_trading_param_step(
-        project_root=project_root,
-        mode=param_mode,
-        environ=environ,
-    )
-    scan_result = run_trading_candidate_scan(project_root=project_root)
-    # AI: Completed substeps are retained, but a failed/outdated lifecycle is
-    # not an entirely READY daily workflow. This does not change scan policy.
-    from services.trading.lifecycle_sync_status import SYNC_STATUS_LATEST
-    return {
-        "status": (
-            "READY"
-            if str(data_result.get("status") or "") == "READY"
-            and lifecycle_sync_result.get("status") == SYNC_STATUS_LATEST
-            else "PARTIAL"
-        ),
-        "runtime_domain": RUNTIME_DOMAIN_TRADING,
-        "data": data_result,
-        "lifecycle_sync": lifecycle_sync_result,
-        "position_rollforward": rollforward_result,
-        "indicator_exit": indicator_result,
-        "params": param_result,
-        "scanner": scan_result,
-    }
 
 
 __all__ = [
@@ -320,10 +280,8 @@ __all__ = [
     "get_trading_candidate_snapshot_read_model",
     "load_trading_scanner_runtime",
     "resolve_trading_candidate_snapshot_path",
-    "run_trading_market_data_update",
     "run_trading_candidate_scan",
     "run_trading_param_step",
-    "run_trading_daily_workflow",
     "TRADING_PARAM_MODE_REUSE",
     "TRADING_PARAM_MODE_TRAIN",
     "TRADING_PARAM_MODES",
