@@ -26,6 +26,7 @@ from core.strategy_param_policy import (
 )
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
 from core.trading_data_dependencies import get_trading_data_dependency_spec
+from core.strategy_promotion import get_trading_release
 
 
 SUPPORTED_TRADING_STRATEGY_IDS = ("full_rule_based_no_dl",)
@@ -51,6 +52,8 @@ class TradingStrategyProfile:
     optimizer_train_window_months: int
     dl_filter_enabled: bool
     dl_ranking_enabled: bool
+    release_id: str | None = None
+    rule_sha256: str | None = None
 
     def optimizer_seed_ensemble_policy(self) -> dict[str, object]:
         # The canonical seed-policy builder owns min-agree and random fitting
@@ -69,13 +72,15 @@ class TradingStrategyProfile:
         return policy
 
 
-def get_trading_strategy_profile() -> TradingStrategyProfile:
+def get_trading_strategy_profile(project_root=None, *, purpose: str = "active") -> TradingStrategyProfile:
     strategy_id = str(TRADING_ACTIVE_STRATEGY_ID).strip()
     if strategy_id not in SUPPORTED_TRADING_STRATEGY_IDS:
         raise ValueError(f"不支援的Trading strategy: {strategy_id!r}")
     get_trading_data_dependency_spec(strategy_id)
 
-    promoted_profile = get_strategy_param_training_profile(TRADING_STRATEGY_PARAM_PROFILE_ID)
+    release = get_trading_release(project_root, purpose=purpose) if project_root is not None else None
+    profile_id = str(release["training_profile_id"]) if release is not None else TRADING_STRATEGY_PARAM_PROFILE_ID
+    promoted_profile = get_strategy_param_training_profile(profile_id)
     if promoted_profile.strategy_id != "breakout":
         raise ValueError(
             "Trading目前只支援breakout Strategy Parameter profile: "
@@ -141,11 +146,24 @@ def get_trading_strategy_profile() -> TradingStrategyProfile:
         optimizer_train_window_months=train_window_months,
         dl_filter_enabled=dl_filter,
         dl_ranking_enabled=dl_ranking,
+        release_id=None if release is None else str(release["release_id"]),
+        rule_sha256=None if release is None else str(release["rule_sha256"]),
     )
 
 
-def resolve_trading_selected_strategy_param_path(project_root) -> str:
-    profile = get_trading_strategy_profile()
+def resolve_trading_strategy_params_root(project_root, *, purpose: str = "active") -> Path:
+    """An unactivated release has physically isolated Params and manifests."""
+    profile = get_trading_strategy_profile(project_root, purpose=purpose)
+    paths = resolve_runtime_domain_paths(
+        project_root, domain=RUNTIME_DOMAIN_TRADING, dataset_profile=profile.dataset_profile
+    )
+    if profile.release_id:
+        return Path(paths.strategy_params_root) / "promotion_releases" / profile.release_id
+    return Path(paths.strategy_params_root)
+
+
+def resolve_trading_selected_strategy_param_path(project_root, *, purpose: str = "active") -> str:
+    profile = get_trading_strategy_profile(project_root, purpose=purpose)
     paths = resolve_runtime_domain_paths(
         project_root, domain=RUNTIME_DOMAIN_TRADING, dataset_profile=profile.dataset_profile
     )
@@ -155,16 +173,17 @@ def resolve_trading_selected_strategy_param_path(project_root) -> str:
             family=profile.param_family,
             evaluation_mode="trade",
             policy=profile.param_selector,
-            strategy_params_root=paths.strategy_params_root,
+            strategy_params_root=resolve_trading_strategy_params_root(project_root, purpose=purpose),
         )
     )
 
 
 def build_trading_strategy_param_training_plan(project_root) -> dict[str, object]:
-    profile = get_trading_strategy_profile()
+    profile = get_trading_strategy_profile(project_root, purpose="training")
     paths = resolve_runtime_domain_paths(
         project_root, domain=RUNTIME_DOMAIN_TRADING, dataset_profile=profile.dataset_profile
     )
+    strategy_params_root = resolve_trading_strategy_params_root(project_root, purpose="training")
     return {
         "runtime_domain": RUNTIME_DOMAIN_TRADING,
         "strategy_id": profile.strategy_id,
@@ -174,8 +193,8 @@ def build_trading_strategy_param_training_plan(project_root) -> dict[str, object
         "registered_scientific_fingerprint_sha256": profile.registered_scientific_fingerprint_sha256,
         "data_dir": paths.data_dir,
         "models_root": paths.models_root,
-        "strategy_params_root": paths.strategy_params_root,
-        "output_dir": str(Path(paths.outputs_root) / "optimizer"),
+        "strategy_params_root": strategy_params_root,
+        "output_dir": str(Path(paths.outputs_root) / "optimizer" / "promotion_releases" / profile.release_id) if profile.release_id else str(Path(paths.outputs_root) / "optimizer"),
         "param_family": profile.param_family,
         "param_selector": profile.param_selector,
         "evaluation_mode": "trade",
@@ -188,18 +207,22 @@ def build_trading_strategy_param_training_plan(project_root) -> dict[str, object
         "optimizer_resolved_seeds": list(profile.optimizer_resolved_seeds),
         "optimizer_seed_ensemble_policy": profile.optimizer_seed_ensemble_policy(),
         "optimizer_train_window_months": profile.optimizer_train_window_months,
-        "selected_params_path": resolve_trading_selected_strategy_param_path(project_root),
+        "selected_params_path": resolve_trading_selected_strategy_param_path(project_root, purpose="training"),
+        "release_id": profile.release_id,
+        "strategy_rule_sha256": profile.rule_sha256,
     }
 
 
-def get_trading_policy_snapshot() -> dict[str, object]:
-    profile = get_trading_strategy_profile()
+def get_trading_policy_snapshot(project_root=None) -> dict[str, object]:
+    profile = get_trading_strategy_profile(project_root)
     dependency = get_trading_data_dependency_spec(profile.strategy_id)
     return {
         "strategy_id": profile.strategy_id,
         "dataset_profile": profile.dataset_profile,
         "strategy_param_profile_id": profile.strategy_param_profile_id,
         "parameter_set_identity": profile.parameter_set_identity,
+        "trading_release_id": profile.release_id,
+        "strategy_rule_sha256": profile.rule_sha256,
         "registered_scientific_fingerprint_sha256": profile.registered_scientific_fingerprint_sha256,
         "param_family": profile.param_family,
         "param_selector": profile.param_selector,
@@ -223,6 +246,7 @@ __all__ = [
     "SUPPORTED_TRADING_OPTIMIZER_SEED_MODES",
     "TradingStrategyProfile",
     "get_trading_strategy_profile",
+    "resolve_trading_strategy_params_root",
     "resolve_trading_selected_strategy_param_path",
     "build_trading_strategy_param_training_plan",
     "get_trading_policy_snapshot",

@@ -10,13 +10,15 @@ from core.dataset_profiles import get_dataset_profile_label
 from core.path_utils import project_relative_display_path
 from core.trading_policy import build_trading_strategy_param_training_plan
 from core.file_integrity import compute_file_sha256
+from core.strategy_promotion import get_trading_release, load_trading_release_state
 from services.optimizer.application import run_static_strategy_parameter_training
 from services.trading.market_data_consumer import (
     get_trading_v2_consumer_state_sha256,
     load_trading_v2_consumer_state,
     load_trading_v2_optimizer_raw_data,
 )
-from services.trading.strategy_param_state import publish_trading_strategy_param_binding
+from services.trading.strategy_param_state import publish_trading_strategy_param_binding, get_trading_strategy_param_binding_sha256
+from services.trading.strategy_promotion import record_active_trading_release_fitting, _param_manifest_path
 from services.trading.strategy_param_state import (
     TRADING_PARAM_USAGE_REUSE_EXISTING,
     TRADING_PARAM_USAGE_TRAINED_CURRENT,
@@ -35,6 +37,9 @@ def run_trading_strategy_param_training(
     """Train the configured Trading strategy params without touching Research artifacts."""
     root = Path(project_root).resolve()
     plan = build_trading_strategy_param_training_plan(root)
+    expected_release_id = plan.get("release_id")
+    if expected_release_id:
+        get_trading_release(root, purpose="training", require_current=True)
 
     market_before = load_trading_v2_consumer_state(root, required=True, verify_current_view=True)
     consumer_state_sha_before = get_trading_v2_consumer_state_sha256(root)
@@ -71,14 +76,20 @@ def run_trading_strategy_param_training(
         raise RuntimeError("Trading V2 consumer state 在 Params 訓練期間已變更；本次 Params 不得投入 Scanner")
     if str(market_after.get("market_date") or "") != str(market_before.get("market_date") or ""):
         raise RuntimeError("Trading V2 latest date 在 Params 訓練期間已變更；本次 Params 不得投入 Scanner")
+    current_training = get_trading_release(root, purpose="training")
+    if (current_training or {}).get("release_id") != expected_release_id:
+        raise RuntimeError("Trading 待啟用策略在訓練期間變更；不得發布 Params")
     selected_path = Path(str(result["selected_params_path"]))
     selected_sha = compute_file_sha256(selected_path)
     binding = publish_trading_strategy_param_binding(
         root,
         usage_mode=TRADING_PARAM_USAGE_TRAINED_CURRENT,
+        purpose="training",
     )
     if str(binding.get("selected_params_sha256") or "") != selected_sha:
         raise RuntimeError("Trading Params binding 與剛產生的 selected params 不一致")
+    if expected_release_id and not load_trading_release_state(root).get("pending"):
+        record_active_trading_release_fitting(root, expected_release_id=expected_release_id, selected_params_sha256=selected_sha, binding_sha256=get_trading_strategy_param_binding_sha256(root, purpose="training"), manifest_sha256=compute_file_sha256(_param_manifest_path(root, purpose="training")))
 
     return {
         **dict(result),
@@ -125,6 +136,8 @@ def reuse_trading_strategy_params(
     print("⏳ 套用既有 Trading Params：綁定 finalized consumer identity...", flush=True)
     root = Path(project_root).resolve()
     plan = build_trading_strategy_param_training_plan(root)
+    if plan.get("release_id"):
+        get_trading_release(root, purpose="training", require_current=True)
     selected_path = Path(str(plan["selected_params_path"]))
     if not selected_path.is_file():
         raise FileNotFoundError(
@@ -138,7 +151,11 @@ def reuse_trading_strategy_params(
         root,
         usage_mode=TRADING_PARAM_USAGE_REUSE_EXISTING,
         verify_consumer_view=False,
+        purpose="training",
     )
+    plan_release = plan.get("release_id")
+    if plan_release and not load_trading_release_state(root).get("pending"):
+        record_active_trading_release_fitting(root, expected_release_id=str(plan_release), selected_params_sha256=compute_file_sha256(selected_path), binding_sha256=get_trading_strategy_param_binding_sha256(root, purpose="training"), manifest_sha256=compute_file_sha256(_param_manifest_path(root, purpose="training")))
     elapsed = time.perf_counter() - started
     print(f"✅ Trading Params 綁定完成 | elapsed={elapsed:.2f}s", flush=True)
     return {

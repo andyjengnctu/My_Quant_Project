@@ -13,6 +13,12 @@ from tkinter import font as tkfont, messagebox, ttk
 from config.trading import TRADING_WORKBENCH_INITIAL_READ_WORKERS
 from core.console_report import project_relative_display_path
 from core.trading_policy import get_trading_policy_snapshot
+from core.strategy_promotion import (
+    current_strategy_rules, get_approved_rule, load_trading_release_state,
+)
+from services.trading.strategy_promotion import (
+    stage_trading_release, activate_staged_trading_release,
+)
 from core.trading_order_state import (
     TRADING_ACTIVE_ORDER_STATUSES,
     TRADING_ORDER_PURPOSE_INDICATOR_EXIT,
@@ -440,7 +446,7 @@ def format_trading_money(value) -> str:
 
 def build_trading_account_panel_snapshot(project_root=WORKBENCH_PROJECT_ROOT) -> dict[str, object]:
     recover_trading_fill_transaction(project_root)
-    policy = get_trading_policy_snapshot()
+    policy = get_trading_policy_snapshot(project_root)
     state = load_trading_account_state(project_root, required=False)
     account_path = resolve_trading_account_state_path(project_root)
     if state is None:
@@ -1370,8 +1376,14 @@ class TradingAccountPanel(ttk.Frame):
         workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程", padding=10, style=WORKBENCH_LABELLF_STYLE)
         workflow_box.grid(row=2, column=0, sticky="ew", pady=(0, 8))
         workflow_box.columnconfigure(0, weight=1)
+        promotion_row = ttk.Frame(workflow_box, style=WORKBENCH_FRAME_STYLE)
+        promotion_row.grid(row=0, column=0, sticky="ew")
+        ttk.Label(promotion_row, text="策略版本", foreground=WORKBENCH_TEXT, style=WORKBENCH_LABEL_STYLE).pack(side="left")
+        self._promotion_status_var = tk.StringVar(value="目前 Trading 策略")
+        ttk.Label(promotion_row, textvariable=self._promotion_status_var, style=WORKBENCH_LABEL_STYLE).pack(side="left", padx=(10, 0))
+        ttk.Button(promotion_row, text="策略升格／切換", command=self._open_strategy_promotion_dialog, style=WORKBENCH_BUTTON_STYLE).pack(side="right")
         param_mode_row = ttk.Frame(workflow_box, style=WORKBENCH_FRAME_STYLE)
-        param_mode_row.grid(row=0, column=0, sticky="ew")
+        param_mode_row.grid(row=1, column=0, sticky="ew", pady=(8, 0))
         ttk.Label(param_mode_row, text="Params 模式", foreground=WORKBENCH_TEXT, style=WORKBENCH_LABEL_STYLE).pack(side="left")
         self._param_mode_var = tk.StringVar(value=PARAM_MODE_REUSE_LABEL)
         self._param_mode_combo = ttk.Combobox(
@@ -1387,7 +1399,7 @@ class TradingAccountPanel(ttk.Frame):
         # Params status/lineage is rendered once in Trading 儀表板.
 
         workflow_buttons = ttk.Frame(workflow_box, style=WORKBENCH_FRAME_STYLE)
-        workflow_buttons.grid(row=1, column=0, sticky="w", pady=(8, 0))
+        workflow_buttons.grid(row=2, column=0, sticky="w", pady=(8, 0))
         for text, action in (
             ("1 更新資料", "data"),
             ("套用參數Params", "params"),
@@ -2333,7 +2345,7 @@ class TradingAccountPanel(ttk.Frame):
         )
 
         strategy_id = snapshot.get("strategy_id") or "-"
-        policy = get_trading_policy_snapshot()
+        policy = get_trading_policy_snapshot(WORKBENCH_PROJECT_ROOT)
         dl_state = "OFF" if not policy.get("dl_filter_enabled") and not policy.get("dl_ranking_enabled") else "ON"
         param_training_date = snapshot.get("param_training_data_date") or "尚無 Params"
         usage_mode = {
@@ -2455,6 +2467,134 @@ class TradingAccountPanel(ttk.Frame):
                 target.bind("<Leave>", lambda _event: self._schedule_footer_hint_clear(), add="+")
             except tk.TclError as exc:
                 _warn_gui_fallback("Trading footer hint bind", exc)
+
+    def _open_strategy_promotion_dialog(self):
+        """Same Compare Suite as Research [3]/[8], never a Trading allowlist."""
+        if self._command_thread is not None and self._command_thread.is_alive():
+            messagebox.showwarning("策略升格", "Trading 工作進行中，請稍後再操作策略升格。", parent=self)
+            return
+        win = tk.Toplevel(self)
+        win.title("Trading 策略升格／切換")
+        win.transient(self.winfo_toplevel())
+        win.geometry("850x420")
+        outer = ttk.Frame(win, padding=12, style=WORKBENCH_FRAME_STYLE)
+        outer.pack(fill="both", expand=True)
+        ttk.Label(outer, text="與 Research [3] 策略組合比較使用同一份策略清單", style=WORKBENCH_LABEL_STYLE).pack(anchor="w")
+        cols = ("name", "approval", "capability", "rule")
+        tree = ttk.Treeview(outer, columns=cols, show="headings", height=7)
+        for col, title, width in (("name", "策略", 390), ("approval", "Research 核准", 100),
+                                  ("capability", "Trading", 150), ("rule", "Rule Fingerprint", 150)):
+            tree.heading(col, text=title)
+            tree.column(col, width=width, stretch=col == "name")
+        tree.pack(fill="both", expand=True, pady=(12, 8))
+        info = tk.StringVar(value="選擇一個策略；未核准／未支援的策略不可準備")
+        ttk.Label(outer, textvariable=info, style=WORKBENCH_LABEL_STYLE, wraplength=800).pack(anchor="w")
+        status_var = tk.StringVar(value="")
+        ttk.Label(outer, textvariable=status_var, style=WORKBENCH_LABEL_STYLE).pack(anchor="w", pady=(6, 0))
+        controls = ttk.Frame(outer, style=WORKBENCH_FRAME_STYLE)
+        controls.pack(fill="x", pady=(10, 0))
+        selected_ids = {}
+
+        def refresh():
+            try:
+                rules = current_strategy_rules()
+                state = load_trading_release_state(WORKBENCH_PROJECT_ROOT)
+            except (OSError, RuntimeError, ValueError) as exc:
+                messagebox.showerror("策略升格", f"無法讀取策略規則：{exc}", parent=win)
+                return
+            old_selection = tree.selection()
+            tree.delete(*tree.get_children())
+            selected_ids.clear()
+            for arm in rules:
+                arm_id = arm["arm_id"]
+                try:
+                    get_approved_rule(WORKBENCH_PROJECT_ROOT, arm_id)
+                    approved = True
+                except RuntimeError:
+                    approved = False
+                selected_ids[arm_id] = (arm, approved)
+                tree.insert("", "end", iid=arm_id, values=(
+                    f"{arm_id} — {arm['name']}", "已核准" if approved else "待核准",
+                    "支援" if arm["trading_supported"] else "暫不支援",
+                    arm["rule_sha256"][:12],
+                ))
+            active = state.get("active") or {}
+            pending = state.get("pending") or {}
+            status_var.set(
+                f"ACTIVE：{active.get('arm_id') or '既有 Trading 策略'}  |  "
+                f"待啟用：{pending.get('arm_id') or '無'}  |  切換前持股與掛單不會自動換參數"
+            )
+            if old_selection and old_selection[0] in selected_ids:
+                tree.selection_set(old_selection[0])
+            elif rules:
+                tree.selection_set(rules[0]["arm_id"])
+            on_selected()
+
+        def on_selected(_event=None):
+            selection = tree.selection()
+            if not selection or selection[0] not in selected_ids:
+                stage_button.configure(state="disabled")
+                return
+            arm, approved = selected_ids[selection[0]]
+            blockers = "；".join(arm["trading_blockers"]) if arm["trading_blockers"] else "已由共用 Trading producer 支援"
+            info.set(f"{arm['arm_id']} | {'Research 已核准' if approved else '請先到 Research [8] 核准'} | {blockers}")
+            stage_button.configure(state="normal" if approved and arm["trading_supported"] else "disabled")
+
+        def stage():
+            selection = tree.selection()
+            if not selection:
+                return
+            arm_id = selection[0]
+            if not messagebox.askyesno(
+                "準備 Trading 策略",
+                f"準備 {arm_id} 的獨立 Trading Params？\n目前 ACTIVE 不會切換；完成重訓後必須再次明確啟用。",
+                parent=win,
+            ):
+                return
+            try:
+                stage_trading_release(WORKBENCH_PROJECT_ROOT, arm_id)
+                self._param_mode_var.set(PARAM_MODE_TRAIN_LABEL)
+                self._param_mode_user_selected = True
+            except (OSError, RuntimeError, ValueError) as exc:
+                messagebox.showerror("準備失敗", str(exc), parent=win)
+                return
+            refresh()
+            messagebox.showinfo("策略已準備", "待啟用策略已建立。請關閉視窗，執行「套用參數Params」（重新訓練）；完成後再來啟用。", parent=win)
+
+        def activate():
+            try:
+                pending = load_trading_release_state(WORKBENCH_PROJECT_ROOT).get("pending")
+            except (OSError, RuntimeError, ValueError) as exc:
+                messagebox.showerror("策略升格", str(exc), parent=win)
+                return
+            if not pending:
+                messagebox.showwarning("策略升格", "尚無待啟用策略。", parent=win)
+                return
+            if not messagebox.askyesno("啟用 Trading Release", f"確認啟用 {pending.get('arm_id')}？需要獨立 Params 與有效 binding，既有持股維持 frozen lineage。", parent=win):
+                return
+
+            def success(result):
+                messagebox.showinfo("策略已啟用", f"{result['arm_id']} 已啟用，請重新執行 Scanner；舊候選快照不得沿用。", parent=self)
+                if win.winfo_exists():
+                    refresh()
+                self._request_state_refresh("Trading 策略升格")
+
+            def failure(exc):
+                messagebox.showerror("策略升格遭阻擋", str(exc), parent=self)
+
+            self._submit_trading_command(
+                "啟用 Trading Release",
+                lambda: activate_staged_trading_release(WORKBENCH_PROJECT_ROOT),
+                on_success=success, on_error=failure, refresh_state=True,
+                state_domains={STATE_PARAMS, STATE_SCANNER_ELIGIBILITY},
+            )
+
+        stage_button = ttk.Button(controls, text="準備選取策略", command=stage, style=WORKBENCH_BUTTON_STYLE)
+        stage_button.pack(side="left")
+        ttk.Button(controls, text="啟用已訓練策略", command=activate, style=WORKBENCH_BUTTON_STYLE).pack(side="left", padx=(10, 0))
+        ttk.Button(controls, text="關閉", command=win.destroy, style=WORKBENCH_BUTTON_STYLE).pack(side="right")
+        tree.bind("<<TreeviewSelect>>", on_selected)
+        refresh()
 
     def _on_param_mode_selected(self, _event=None) -> None:
         self._param_mode_user_selected = True
@@ -2649,6 +2789,17 @@ class TradingAccountPanel(ttk.Frame):
             self._operations_next_var.set(f"FAIL | Workflow 狀態讀取失敗：{exc} | 下一步：全狀態刷新")
             return
         self._latest_workflow_snapshot = dict(snapshot)
+        if hasattr(self, "_promotion_status_var"):
+            try:
+                release_state = load_trading_release_state(WORKBENCH_PROJECT_ROOT)
+                active = release_state.get("active") or {}
+                pending = release_state.get("pending") or {}
+                self._promotion_status_var.set(
+                    f"ACTIVE {active.get('arm_id') or '既有策略'}"
+                    + (f" | 待啟用 {pending['arm_id']}" if pending else "")
+                )
+            except (OSError, RuntimeError, ValueError) as exc:
+                self._promotion_status_var.set(f"Release 記錄需檢查：{exc}")
         reusable = bool(snapshot.get("params_reusable"))
         if not self._param_mode_user_selected:
             self._param_mode_var.set(PARAM_MODE_REUSE_LABEL if reusable else PARAM_MODE_TRAIN_LABEL)

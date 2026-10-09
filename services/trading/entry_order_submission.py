@@ -15,6 +15,7 @@ from core.trading_identity import normalize_trading_ticker
 from core.trading_order_state import active_trading_entry_orders, append_ordered_trading_proposal
 from core.trading_policy import resolve_trading_selected_strategy_param_path
 from services.trading.account_state import load_trading_account_state, resolve_trading_account_state_path
+from services.trading.strategy_promotion import assert_active_trading_release_ready
 from services.trading.operations_status import (
     assert_trading_proposed_submission_allowed,
     build_trading_operations_status,
@@ -78,6 +79,7 @@ def confirm_trading_order_submission(
     proposed_sha_before = compute_file_sha256(proposed_path)
 
     def source_guard() -> None:
+        assert_active_trading_release_ready(root)
         latest_operations = build_trading_operations_status(root)
         assert_trading_proposed_submission_allowed(latest_operations)
         if compute_file_sha256(account_path) != account_sha_before:

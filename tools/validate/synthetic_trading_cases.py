@@ -4193,7 +4193,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             {"Open": [99.0], "High": [101.0], "Low": [98.0], "Close": [100.0], "Volume": [1000.0]},
             index=pd.to_datetime(["2026-09-12"]),
         )
-        with patch("services.trading.pending_entry_service.load_trading_scanner_runtime", return_value={"latest_data_date": "2026-09-15"}), \
+        with patch("services.trading.pending_entry_service.load_trading_v2_consumer_state", return_value={"market_date": "2026-09-15"}), \
              patch("services.trading.pending_entry_service.resolve_trading_lifecycle_context", return_value=_fixture_context), \
              patch("services.trading.pending_entry_service.load_trading_v2_sanitized_ohlcv_frame", return_value=_fixture_prefill), \
              patch("services.trading.pending_entry_service.validate_trading_actual_fill", return_value=synthetic_evidence):

@@ -8,7 +8,7 @@ from core.seed_ensemble_policy import SEED_ENSEMBLE_MAX_SEED_VALUE
 from core.console_report import project_relative_display_path
 from core.file_integrity import atomic_write_json, canonical_json_sha256, compute_file_sha256, load_json_strict
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
-from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path
+from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path, resolve_trading_strategy_params_root
 from services.trading.strategy_param_runtime import load_trading_strategy_param_runtime
 from services.trading.market_data_consumer import (
     get_trading_v2_consumer_state_sha256,
@@ -27,11 +27,9 @@ class TradingParamContractMismatchError(RuntimeError):
     """The selected Trading Params were fitted under a different producer contract."""
 
 
-def resolve_trading_strategy_param_binding_path(project_root: str | Path) -> Path:
+def resolve_trading_strategy_param_binding_path(project_root: str | Path, *, purpose: str = "active") -> Path:
     root = Path(project_root).resolve()
-    profile = get_trading_strategy_profile()
-    paths = resolve_runtime_domain_paths(root, domain=RUNTIME_DOMAIN_TRADING, dataset_profile=profile.dataset_profile)
-    return Path(paths.strategy_params_root) / TRADING_STRATEGY_PARAM_BINDING_FILENAME
+    return resolve_trading_strategy_params_root(root, purpose=purpose) / TRADING_STRATEGY_PARAM_BINDING_FILENAME
 
 
 def _validate_binding(payload: dict[str, Any]) -> None:
@@ -233,13 +231,14 @@ def publish_trading_strategy_param_binding(
     *,
     usage_mode: str = TRADING_PARAM_USAGE_TRAINED_CURRENT,
     verify_consumer_view: bool = True,
+    purpose: str = "active",
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
-    profile = get_trading_strategy_profile()
+    profile = get_trading_strategy_profile(root, purpose=purpose)
     normalized_usage_mode = str(usage_mode or "").strip()
     if normalized_usage_mode not in TRADING_PARAM_USAGE_MODES:
         raise ValueError(f"不支援的 Trading Params usage mode: {usage_mode!r}")
-    selected_path = Path(resolve_trading_selected_strategy_param_path(root))
+    selected_path = Path(resolve_trading_selected_strategy_param_path(root, purpose=purpose))
     if not selected_path.is_file():
         raise FileNotFoundError("Trading selected strategy params 尚未產生")
     consumer_state = load_trading_v2_consumer_state(
@@ -289,8 +288,13 @@ def publish_trading_strategy_param_binding(
         "optimizer_seed_generator_seed": param_metadata["optimizer_seed_generator_seed"],
         "optimizer_resolved_seeds": list(param_metadata["optimizer_resolved_seeds"]),
     }
+    # Legacy Trading bindings preserve the original byte-level contract; only
+    # an explicitly promoted release adds release and rule identity fields.
+    if profile.release_id is not None:
+        payload["promotion_release_id"] = profile.release_id
+        payload["strategy_rule_sha256"] = profile.rule_sha256
     payload["binding_fingerprint"] = canonical_json_sha256(payload)
-    path = resolve_trading_strategy_param_binding_path(root)
+    path = resolve_trading_strategy_param_binding_path(root, purpose=purpose)
     atomic_write_json(path, payload)
     return payload
 
@@ -301,9 +305,10 @@ def load_trading_strategy_param_binding(
     required: bool = True,
     verify_current: bool = True,
     verify_dataset_content: bool = False,
+    purpose: str = "active",
 ) -> dict[str, Any] | None:
     root = Path(project_root).resolve()
-    path = resolve_trading_strategy_param_binding_path(root)
+    path = resolve_trading_strategy_param_binding_path(root, purpose=purpose)
     if not path.is_file():
         if required:
             raise FileNotFoundError("Trading param binding 尚未建立；請重新執行「2 套用 Trading Params」")
@@ -313,8 +318,10 @@ def load_trading_strategy_param_binding(
     if not verify_current:
         return payload
 
-    profile = get_trading_strategy_profile()
-    selected_path = Path(resolve_trading_selected_strategy_param_path(root))
+    profile = get_trading_strategy_profile(root, purpose=purpose)
+    selected_path = Path(resolve_trading_selected_strategy_param_path(root, purpose=purpose))
+    if payload.get("promotion_release_id") != profile.release_id or payload.get("strategy_rule_sha256") != profile.rule_sha256:
+        raise RuntimeError("Trading Params binding 與目前 Release Rule Identity 不一致")
     if str(payload.get("strategy_id") or "") != profile.strategy_id:
         raise RuntimeError("Trading param binding strategy 已過期")
     if str(payload.get("strategy_param_profile_id") or "") != profile.strategy_param_profile_id:
@@ -368,8 +375,8 @@ def load_trading_strategy_param_binding(
     return payload
 
 
-def get_trading_strategy_param_binding_sha256(project_root: str | Path) -> str:
-    path = resolve_trading_strategy_param_binding_path(project_root)
+def get_trading_strategy_param_binding_sha256(project_root: str | Path, *, purpose: str = "active") -> str:
+    path = resolve_trading_strategy_param_binding_path(project_root, purpose=purpose)
     if not path.is_file():
         raise FileNotFoundError("Trading param binding 尚未建立")
     return compute_file_sha256(path)

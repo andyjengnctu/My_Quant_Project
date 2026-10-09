@@ -582,3 +582,13 @@ python apps/research.py market-data verify
 ### Research generation downstream identity（Audit Repair 4）
 
 Research V2 promotion完成後，`full` 不再只是可重用artifact的完整資料 identity。`core/dataset_profiles.py` 會提供 canonical dataset-generation identity：V1/reduced沿用既有 identity/path；promoted V2才產生 generation namespace。Optimizer Study DB/effective policy、Strategy Compare run/pair cache、Breakout Quality model/output paths都必須消費此 identity，因此不得跨 V1/V2 或不同 V2 materialization REUSE／覆寫。Breakout Quality scientific identity（例如目前 `MR-13BV`）不因本工程修補改名或改狀態；V2只增加 `research_generations/<generation_namespace>/` physical isolation。
+
+## Research → Trading 策略升格（MVP）
+
+1. `python apps/research.py` → `[3] 策略組合比較` → `[2] Rolling OOS Test`，先取得目前 Compare Suite 的正式 Research 證據。
+2. 回 Research `[8] 策略升格（Research → Trading）`，選取與 `[3]` 完全相同的策略清單項目，檢視 Rule Fingerprint，再明確輸入 `APPROVE <策略編號>` 核准；不會因此自動切換 Trading。
+3. 打開 Workbench → Trading「策略升格／切換」，選已核准且受 Trading producer 支援的策略，按「準備選取策略」。現有 Trading ACTIVE 不變，Params 模式切為「重新訓練」。
+4. 在原 Trading 工作流程按「套用參數Params」，等候獨立 random-seed fitting 完成；再回升格視窗按「啟用已訓練策略」。未具合法 Params/manifest/binding 一律 BLOCKED，不得直接切換。
+5. 重新跑 Scanner，不能把舊 Release 的候選／買單當作新策略訊號；既有 Pending/Position 繼續沿用 frozen Params。僅為切換策略而核准 Rule，不會自動重跑完整 Research OOS。
+
+升格選單集合直接使用 `[3]` Compare Suite；能力不支援者仍顯示但不能在 Trading 準備，不另建 promotion 專屬策略清單。此流程不要求使用者執行診斷 CLI。

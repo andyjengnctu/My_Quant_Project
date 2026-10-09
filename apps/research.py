@@ -26,6 +26,10 @@ from core.strategy_compare_policy import (
     get_strategy_runtime_integration_settings,
 )
 from core.console_report import render_menu_item
+from core.strategy_promotion import (
+    approve_current_strategy_rule, current_strategy_rules,
+    get_approved_rule, load_promotion_approvals,
+)
 from core.runtime_utils import is_interactive_console, run_cli_entrypoint
 from services.research.strategy_compare_application import (
     dispatch_runtime_integration_action,
@@ -729,6 +733,50 @@ def _show_research_status() -> int:
     return 0
 
 
+def _strategy_promotion_menu() -> None:
+    """Research [8]: approve a Rule from the EXACT [3] Compare Suite list."""
+    while True:
+        print("\n" + "=" * 76)
+        print(" 策略升格（Research → Trading）| 與 [3] 使用同一 Compare Suite")
+        print("=" * 76)
+        rules = current_strategy_rules()
+        for i, arm in enumerate(rules, start=1):
+            try:
+                get_approved_rule(PROJECT_ROOT, arm["arm_id"])
+                status = "已核准"
+            except RuntimeError:
+                status = "待核准"
+            supported = "" if arm["trading_supported"] else " [Trading producer 暫不支援]"
+            print(f"[{i}] {arm['arm_id']} {arm['name']} | {status}{supported}")
+        print("[H] 核准歷史  [0] 返回")
+        choice = input("👉 選擇要檢視／核准的策略（編號）：").strip().lower()
+        if choice in {"0", "q", "back"}:
+            return
+        if choice == "h":
+            state = load_promotion_approvals(PROJECT_ROOT)
+            for item in list(state.get("history") or [])[-20:]:
+                print(f" {item.get('approved_at','-')} | {item.get('arm_id','-')} | {str(item.get('rule_sha256',''))[:12]}")
+            continue
+        if not choice.isdigit() or not 1 <= int(choice) <= len(rules):
+            print("選項無效")
+            continue
+        arm = rules[int(choice) - 1]
+        print(f"策略：{arm['arm_id']} {arm['name']}")
+        print(f"Rule Fingerprint：{arm['rule_sha256']}")
+        print(f"Research profile：{arm['training_profile_id']} / {arm['parameter_set_identity']}")
+        print("升格不會複製 Research Params，也不會自動切換 Trading")
+        if not arm["trading_supported"]:
+            print("Trading capability：" + "；".join(arm["trading_blockers"]))
+        confirmation = input(f"核准請輸入 APPROVE {arm['arm_id']}（其他返回）：").strip()
+        if confirmation != f"APPROVE {arm['arm_id']}":
+            continue
+        try:
+            result = approve_current_strategy_rule(PROJECT_ROOT, arm["arm_id"])
+            print(f"✅ 已核准 {arm['arm_id']} | rule={result['rule_sha256'][:12]} | evidence={result['evidence_path']}")
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"[BLOCKED] {exc}")
+
+
 def _print_main_menu() -> None:
     print("\n====================================================================================================")
     print(" Research")
@@ -744,6 +792,7 @@ def _print_main_menu() -> None:
     print(render_menu_item(5, integration_label))
     print(render_menu_item(6, "查看目前研究狀態與工件"))
     print(render_menu_item(7, "Market Data generation／Research V2 lifecycle"))
+    print(render_menu_item(8, "策略升格（Research → Trading）"))
     print(render_menu_item(0, "離開"))
 
 
@@ -773,8 +822,10 @@ def _interactive_menu() -> int:
                 _show_research_status()
             elif choice == "7":
                 _market_data_menu()
+            elif choice == "8":
+                _strategy_promotion_menu()
             else:
-                print("選項無效，請按 Enter 或輸入 0～7。")
+                print("選項無效，請按 Enter 或輸入 0～8。")
         except (FileNotFoundError, ImportError, RuntimeError, ValueError) as exc:
             print(f"[錯誤] {type(exc).__name__}: {exc}")
         except KeyboardInterrupt:

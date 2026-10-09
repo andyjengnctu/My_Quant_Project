@@ -278,3 +278,9 @@ seed, a valid timely seed, a new acquisition, historical/closed cycles, partial
 manual sells, read-only inspection, management-only synchronization, checkpoint
 compatibility, cache invalidation and repeatability. Positive post-fill parity is
 not a substitute for checking both sides of the actual acquisition boundary.
+
+## Strategy Promotion 與 Frozen Lifecycle 隔離
+
+Research `[8]` 僅核准 `[3]` Compare Suite 的 canonical Rule Identity；Trading Workbench「策略升格／切換」先 STAGE、新增獨立 Params 執行空間，再由使用者明確 ACTIVATE。`outputs/trading/strategy_promotion/release_state.json` 的 ACTIVE/PENDING 不參與原始 SIGNAL／SHADOW／PENDING／POSITION 策略規則，僅管理新策略入場的已核准發行狀態。Trading 訓練使用 canonical Optimizer 抽出 random 4×300 seeds；不可假定與 Research 固定 seed 42 的 Params 工件相同。
+
+所有新 Scanner 候選與 ORDERED ENTRY BUY 必須通過 Release Guard。既有 frozen Pending 的修改／實際成交確認只使用其原始 frozen Params 與 finalized market clock，舊持股則沿用真實券商事件和其 frozen lineage，不能因 Release 被阻擋而停止出場義務。Release 啟用前不更動任何 ACTIVE 交易策略、現有掛單或持股；切換後的舊 Scanner/建議掛單須依新的 selected Params／binding 身分重新驗證，不能直接沿用舊策略的買入候選。

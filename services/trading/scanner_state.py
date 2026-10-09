@@ -9,6 +9,7 @@ from core.file_integrity import compute_file_sha256, load_json_strict
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_output_dir
 from core.portfolio_ensemble import build_ensemble_candidate_display_metrics
 from core.trading_policy import get_trading_strategy_profile, resolve_trading_selected_strategy_param_path
+from services.trading.strategy_promotion import assert_active_trading_release_ready
 from core.trading_identity import normalize_trading_date, normalize_trading_ticker
 from services.trading.data_readiness import (
     assert_trading_data_readiness,
@@ -102,7 +103,8 @@ def load_trading_scanner_runtime(
     verify_dataset_content: bool = False,
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
-    profile = get_trading_strategy_profile()
+    assert_active_trading_release_ready(root)
+    profile = get_trading_strategy_profile(root)
     market_state = load_trading_v2_consumer_state(
         root, required=True, verify_current_view=verify_dataset_content
     )
@@ -181,7 +183,7 @@ def load_trading_scanner_runtime(
 
 def build_trading_daily_workflow_snapshot(project_root: str | Path) -> dict[str, Any]:
     root = Path(project_root).resolve()
-    profile = get_trading_strategy_profile()
+    profile = get_trading_strategy_profile(root)
     data_dir = root / "data" / "trading" / "market_data_v2"
     market_error = ""
     market_state = None

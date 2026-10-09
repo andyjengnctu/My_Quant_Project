@@ -44,6 +44,7 @@ from services.trading.account_state import (
 from services.trading.account_trade_entry import resolve_current_trading_scanner_candidate
 from services.trading.actual_fill_validation import validate_trading_actual_fill, validate_trading_fill_quantity, validate_pending_fill_terms
 from services.trading.market_data_consumer import (
+    load_trading_v2_consumer_state,
     load_trading_v2_sanitized_ohlcv_frame,
     open_trading_v2_consumer_view,
 )
@@ -83,6 +84,16 @@ def _timestamp() -> str:
 
 def _default_planned_trade_date() -> str:
     return get_taipei_now().date().isoformat()
+
+
+def _latest_finalized_date_for_frozen_pending(project_root) -> str:
+    """An existing PENDING uses its frozen rules, not a newly promoted Strategy.
+
+    Only the finalized Trading market clock is needed for its fill/update.  A
+    blocked new-entry Release must never prevent confirming an old broker fill.
+    """
+    state = load_trading_v2_consumer_state(project_root, required=True, verify_current_view=False)
+    return normalize_trading_date(state["market_date"], field_name="latest_finalized_date", allow_none=False)
 
 
 def _account_resources(
@@ -614,10 +625,7 @@ def _prepare_existing_pending_entry_update(
     information_date = normalize_trading_date(
         current.get("information_date"), field_name="information_date", allow_none=False
     )
-    runtime = load_trading_scanner_runtime(project_root)
-    latest_finalized_date = normalize_trading_date(
-        runtime["latest_data_date"], field_name="latest_finalized_date", allow_none=False
-    )
+    latest_finalized_date = _latest_finalized_date_for_frozen_pending(project_root)
     resources = _account_resources(
         project_root, information_date=information_date, exclude_pending_entry_id=pending_entry_id
     )
@@ -751,8 +759,7 @@ def get_trading_pending_entry_read_model(project_root) -> dict[str, Any]:
     # visible as ACTIVE indefinitely.
     recover_trading_pending_entry_transaction(project_root)
     try:
-        runtime = load_trading_scanner_runtime(project_root)
-        information_date = normalize_trading_date(runtime["latest_data_date"], allow_none=False)
+        information_date = _latest_finalized_date_for_frozen_pending(project_root)
     except (OSError, ValueError, RuntimeError, FileNotFoundError):
         information_date = None
     state = load_trading_pending_entry_state(project_root, required=False)
@@ -814,10 +821,7 @@ def preview_trading_pending_entry_fill(
     # AI: Original pending terms are shared by first fill and account corrections.
     validate_pending_fill_terms(entry, qty=qty_int, price=price, trade_date=trade_date)
     fill_date = normalize_trading_date(trade_date, field_name="trade_date", allow_none=False)
-    runtime = load_trading_scanner_runtime(project_root)
-    latest_finalized_date = normalize_trading_date(
-        runtime["latest_data_date"], field_name="latest_finalized_date", allow_none=False
-    )
+    latest_finalized_date = _latest_finalized_date_for_frozen_pending(project_root)
     evidence = validate_trading_actual_fill(
         project_root,
         ticker=entry["ticker"],
