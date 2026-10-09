@@ -3523,6 +3523,21 @@ def validate_runtime_domain_isolation_contract_case(_base_params):
 
 
 def validate_trading_strategy_param_producer_contract_case(_base_params):
+    # A real Trading project may have an active release and a *different*
+    # pending training release.  Producer synthetic tests must not inherit that
+    # mutable operator state; release routing is exercised explicitly below.
+    with tempfile.TemporaryDirectory(prefix="synthetic_trading_param_producer_") as temp_dir:
+        # The canonical Optimizer loads its default walk-forward policy from
+        # the supplied project root, not the imported config module.
+        synthetic_config = Path(temp_dir) / "config"
+        synthetic_config.mkdir()
+        shutil.copy2(PROJECT_ROOT / "config" / "training_policy.py", synthetic_config / "training_policy.py")
+        return _validate_trading_strategy_param_producer_contract_case(
+            _base_params, Path(temp_dir)
+        )
+
+
+def _validate_trading_strategy_param_producer_contract_case(_base_params, root):
     case_id = "META_TRADING_STRATEGY_PARAM_PRODUCER"
     results, summary = _new_synthetic_case(case_id)
 
@@ -3539,8 +3554,7 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
     from services.optimizer.strategy_param_repository import refresh_strategy_parameter_manifest
     import services.trading.strategy_param_training as trading_training
 
-    root = PROJECT_ROOT
-    profile = trading_policy.get_trading_strategy_profile()
+    profile = trading_policy.get_trading_strategy_profile(root, purpose="training")
     plan = trading_policy.build_trading_strategy_param_training_plan(root)
     research_selected = resolve_strategy_param_artifact_path(
         root,
@@ -3567,15 +3581,56 @@ def validate_trading_strategy_param_producer_contract_case(_base_params):
     add_check(results, "trading_param", case_id, "optimizer_output_is_under_trading_outputs", True, Path(str(plan["output_dir"])).resolve().is_relative_to((root / "outputs" / "trading").resolve()))
     add_check(results, "trading_param", case_id, "optimizer_models_is_under_trading_models", True, Path(str(plan["models_root"])).resolve().is_relative_to((root / "models" / "trading").resolve()))
 
-    # P6 and historical P13 intentionally share the same family/selector path.
-    # Therefore producer identity must be carried by the binding contract rather
-    # than inferred from the selected Params filename alone.
+    # Registered P6/P13 profiles intentionally share the family/selector path.
+    # Use two isolated profile selections with the *same* release scope, rather
+    # than comparing the training path with an unrelated active release path.
+    with patch.object(trading_policy, "TRADING_STRATEGY_PARAM_PROFILE_ID", "production_multiseed_current"):
+        reference_profile = trading_policy.get_trading_strategy_profile(root)
+        reference_path = Path(trading_policy.resolve_trading_selected_strategy_param_path(root)).resolve()
     with patch.object(trading_policy, "TRADING_STRATEGY_PARAM_PROFILE_ID", "trading_aligned_8x1000_current"):
         alternate_path = Path(trading_policy.resolve_trading_selected_strategy_param_path(root)).resolve()
-        alternate_profile = trading_policy.get_trading_strategy_profile()
-    add_check(results, "trading_param", case_id, "same_selector_profiles_can_share_selected_path", str(trading_selected), str(alternate_path))
-    add_check(results, "trading_param", case_id, "profile_identity_distinguishes_same_selector_contracts", True, alternate_profile.parameter_set_identity != profile.parameter_set_identity)
-    add_check(results, "trading_param", case_id, "profile_training_budget_distinguishes_same_selector_contracts", True, (alternate_profile.optimizer_seed_count, alternate_profile.optimizer_trials_per_seed) != (profile.optimizer_seed_count, profile.optimizer_trials_per_seed))
+        alternate_profile = trading_policy.get_trading_strategy_profile(root)
+    add_check(results, "trading_param", case_id, "same_selector_profiles_can_share_selected_path", str(reference_path), str(alternate_path))
+    add_check(results, "trading_param", case_id, "profile_identity_distinguishes_same_selector_contracts", True, alternate_profile.parameter_set_identity != reference_profile.parameter_set_identity)
+    add_check(results, "trading_param", case_id, "profile_training_budget_distinguishes_same_selector_contracts", True, (alternate_profile.optimizer_seed_count, alternate_profile.optimizer_trials_per_seed) != (reference_profile.optimizer_seed_count, reference_profile.optimizer_trials_per_seed))
+
+    # Route-only fixture: C95/P14 has the same family/selector/seed budget as
+    # P6, but a different scientific identity.  A pending release must select
+    # that exact registered identity, without modifying the active P6 release.
+    # Mocking the release *reader* here does not approve/activate either arm.
+    with patch.object(trading_policy, "TRADING_STRATEGY_PARAM_PROFILE_ID", "c85_same_signal_revalidation_current"):
+        staged_registered_profile = trading_policy.get_trading_strategy_profile(root)
+    active_release = {
+        "release_id": "a" * 32,
+        "training_profile_id": reference_profile.strategy_param_profile_id,
+        "rule_sha256": "c" * 64,
+    }
+    pending_release = {
+        "release_id": "b" * 32,
+        "training_profile_id": staged_registered_profile.strategy_param_profile_id,
+        "rule_sha256": "d" * 64,
+    }
+    with patch.object(
+        trading_policy,
+        "get_trading_release",
+        side_effect=lambda _root, *, purpose="active": (
+            pending_release if purpose == "training" else active_release
+        ),
+    ):
+        active_profile = trading_policy.get_trading_strategy_profile(root, purpose="active")
+        pending_profile = trading_policy.get_trading_strategy_profile(root, purpose="training")
+        pending_plan = trading_policy.build_trading_strategy_param_training_plan(root)
+        active_selected = Path(trading_policy.resolve_trading_selected_strategy_param_path(root, purpose="active")).resolve()
+        pending_selected = Path(trading_policy.resolve_trading_selected_strategy_param_path(root, purpose="training")).resolve()
+    add_check(results, "trading_param", case_id, "staged_training_profile_follows_pending_release", staged_registered_profile.strategy_param_profile_id, pending_profile.strategy_param_profile_id)
+    add_check(results, "trading_param", case_id, "staged_training_plan_uses_pending_registered_profile", staged_registered_profile.strategy_param_profile_id, str(pending_plan["strategy_param_profile_id"]))
+    add_check(results, "trading_param", case_id, "staged_training_plan_uses_pending_parameter_identity", staged_registered_profile.parameter_set_identity, str(pending_plan["parameter_set_identity"]))
+    add_check(results, "trading_param", case_id, "staged_training_plan_uses_pending_scientific_fingerprint", staged_registered_profile.registered_scientific_fingerprint_sha256, str(pending_plan["registered_scientific_fingerprint_sha256"]))
+    add_check(results, "trading_param", case_id, "staged_training_plan_uses_pending_release_root", str(pending_selected), str(Path(str(pending_plan["selected_params_path"])).resolve()))
+    add_check(results, "trading_param", case_id, "staged_training_does_not_retarget_active_profile", reference_profile.parameter_set_identity, active_profile.parameter_set_identity)
+    add_check(results, "trading_param", case_id, "staged_training_uses_distinct_params_root", True, active_selected != pending_selected)
+    add_check(results, "trading_param", case_id, "staged_training_keeps_release_isolation", True,
+              active_release["release_id"] in active_selected.parts and pending_release["release_id"] in pending_selected.parts)
 
     # Workbench delegates only execution roots/data identity to the canonical Optimizer;
     # the Trading profile owns production seed/trial semantics.
