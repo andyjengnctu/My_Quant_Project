@@ -1457,6 +1457,19 @@ def validate_trading_daily_workflow_contract_case(base_params):
     check("daily_workflow_returns_lifecycle_sync_snapshot", "最新", (workflow_result.get("lifecycle_sync") or {}).get("status"))
     check("daily_workflow_returns_ready_only_after_all_steps", "READY", workflow_result.get("status"))
 
+    # AI: A verified older consumer can keep Trading operable without claiming
+    # the newly discovered market-data target is READY.
+    with (
+        patch.object(daily_workflow, "run_trading_market_data_update", return_value={"status": "PARTIAL", "target_date": "2026-10-08", "market_date": "2026-10-06"}),
+        patch("services.trading.lifecycle_sync.run_trading_lifecycle_sync", return_value={"status": "最新", "position_result": {"status": "UP_TO_DATE"}}),
+        patch("services.trading.indicator_exit_planning.build_trading_indicator_exit_plan", return_value={"status": "PROPOSED_INDICATOR_EXIT", "exit_count": 0, "exits": []}),
+        patch.object(daily_workflow, "run_trading_strategy_param_training", return_value={"status": "READY"}),
+        patch.object(daily_workflow, "run_trading_candidate_scan", return_value={"status": "READY", "candidate_rows": []}),
+    ):
+        partial_workflow = daily_workflow.run_trading_daily_workflow(project_root=project_root, environ={})
+    check("daily_workflow_does_not_report_ready_if_market_data_target_is_partial", "PARTIAL", partial_workflow["status"])
+    check("daily_workflow_preserves_verified_older_consumer", "2026-10-06", partial_workflow["data"]["market_date"])
+
     reuse_call_order = []
     with patch.object(daily_workflow, "run_trading_market_data_update", side_effect=lambda **_kwargs: reuse_call_order.append("data") or {"status": "READY"}), \
          patch("services.trading.lifecycle_sync.run_trading_lifecycle_sync", side_effect=lambda **_kwargs: reuse_call_order.append("lifecycle_sync") or {"status": "最新", "position_result": {"status": "UP_TO_DATE"}}), \

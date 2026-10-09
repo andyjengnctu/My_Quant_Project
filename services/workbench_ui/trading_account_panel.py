@@ -4116,6 +4116,15 @@ class TradingAccountPanel(ttk.Frame):
             "all": ("每日流程 1→2→3 完成", "查看 Scanner Pool；自行至券商交易，成交後回 Workbench 登錄"),
         }
         done_text, next_text = labels.get(str(action), ("Trading 操作完成", "依目前 Trading 狀態操作"))
+        if action in {"data", "all"} and isinstance(result, dict) and str(result.get("status") or "").upper() == "PARTIAL":
+            data = result.get("data") if action == "all" else result
+            data = data if isinstance(data, dict) else {}
+            target = str(data.get("target_date") or "-")
+            market = str(data.get("market_date") or "-")
+            self._operations_next_var.set(
+                f"PARTIAL | Trading 資料尚未追上 {target}，可用 {market} | 下一步：資料中心確認必要資料"
+            )
+            return
         self._operations_next_var.set(f"DONE | {done_text} | 下一步：{next_text}")
 
 

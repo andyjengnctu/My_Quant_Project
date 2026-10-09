@@ -297,7 +297,12 @@ def run_trading_daily_workflow(
     # not an entirely READY daily workflow. This does not change scan policy.
     from services.trading.lifecycle_sync_status import SYNC_STATUS_LATEST
     return {
-        "status": "READY" if lifecycle_sync_result.get("status") == SYNC_STATUS_LATEST else "PARTIAL",
+        "status": (
+            "READY"
+            if str(data_result.get("status") or "") == "READY"
+            and lifecycle_sync_result.get("status") == SYNC_STATUS_LATEST
+            else "PARTIAL"
+        ),
         "runtime_domain": RUNTIME_DOMAIN_TRADING,
         "data": data_result,
         "lifecycle_sync": lifecycle_sync_result,

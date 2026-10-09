@@ -3925,14 +3925,111 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     from services.trading import market_data_update as market_data_update_module
 
     v2_pos = update_source.find("run_trading_market_data_auto_update(")
-    consumer_pos = update_source.find("publish_trading_v2_consumer_state(")
+    consumer_pos = update_source.find("promote_trading_v2_consumer_state_if_ready(")
     check("canonical_update_owner_runs_v2_then_consumer_state", True, 0 <= v2_pos < consumer_pos)
+    check("canonical_update_reuses_promotion_owner_for_same_target_revision", True, "promote_trading_v2_consumer_state_if_ready" in update_source and "publish_trading_v2_consumer_state(" not in update_source)
     check("canonical_update_owner_has_no_legacy_materialization_or_snapshot_stage", False, any(token in update_source for token in ("materialize_trading_v2_compatibility_dataset", "publish_trading_market_data_snapshot", "run_trading_dataset_update(")))
     executor_source = (project_root / "services" / "downloader" / "market_data_executor.py").read_text(encoding="utf-8")
     price_refresh_source = (project_root / "services" / "downloader" / "trading_price_refresh.py").read_text(encoding="utf-8")
     check("canonical_update_passes_provider_client_only_to_v2_updater", True, "client=provider_client" in update_source and "legacy_stage_data_requests" not in update_source)
     check("canonical_full_update_requests_fresh_quota_observation", True, "refresh_provider_quota=True" in update_source)
     check("canonical_full_update_busy_fails_closed_before_consumer_publication", True, 'v2_status == "BUSY"' in update_source and "本次沒有送出 provider request" in update_source)
+
+    # AI: Regression: an archive BLOCKED by one of 51 datasets must not be
+    # confused with the six-dataset execution gate, while a missing required
+    # dataset must never be presented as a current-target READY scan.
+    from types import SimpleNamespace
+    from core.market_data_dataset_readiness import MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION
+    from core.trading_data_dependencies import get_trading_data_dependency_spec
+    from core.trading_policy import get_trading_strategy_profile
+
+    regression_target, regression_fallback = "2026-10-08", "2026-10-06"
+    required_v2 = get_trading_data_dependency_spec(get_trading_strategy_profile().strategy_id).required_v2_datasets
+
+    def _regression_dataset_state(*, marketvalue_blocked):
+        rows = {}
+        for dataset in required_v2:
+            ready_through = (
+                regression_fallback
+                if dataset == "TaiwanStockMarketValue" and marketvalue_blocked
+                else regression_target
+            )
+            rows[dataset] = {
+                "status": "READY" if ready_through == regression_target else "WAIT_PUBLISH",
+                "last_ready_target_date": ready_through,
+                "last_exact_ready_target_date": ready_through if dataset != "TaiwanStockMarketValue" else regression_fallback,
+                "latest_data_date": regression_fallback if dataset == "TaiwanStockMarketValue" else ready_through,
+                "validation_contract_version": MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION,
+                "schema_status": "READY",
+                "coverage_status": "READY",
+            }
+        return {"datasets": rows}
+
+    def _regression_consumer(date_text):
+        return {
+            "market_date": date_text,
+            "source": "v2",
+            "state_fingerprint": "synthetic-consumer",
+            "source_view_fingerprint": "synthetic-view",
+            "current_execution_pool_tickers": ["2330"],
+            "current_execution_pool_ticker_count": 1,
+            "required_position_tickers": [],
+            "required_reentry_tickers": [],
+            "training_tickers": ["2330"],
+            "training_ticker_count": 1,
+        }
+
+    blocked_archive = {
+        "status": "BLOCKED",
+        "target_date": regression_target,
+        "data_requests": 2,
+        "usage_requests": 1,
+        "incomplete_datasets": ["TaiwanOptionVix"],
+        "archive_incomplete_datasets": [
+            {"dataset": "TaiwanOptionVix", "status": "BLOCKED", "last_error": "fixture provider error"}
+        ],
+    }
+    for marketvalue_blocked in (False, True):
+        fallback_date = regression_fallback if marketvalue_blocked else regression_target
+        fake_archive = dict(blocked_archive)
+        fake_archive["trading_blocking_datasets"] = (
+            ["TaiwanStockMarketValue"] if marketvalue_blocked else []
+        )
+        fake_view = SimpleNamespace(
+            training_horizon=lambda **_kwargs: SimpleNamespace(training_through_date=fallback_date)
+        )
+        with (
+            patch("services.trading.market_data_auto_update.run_trading_market_data_auto_update", return_value=fake_archive),
+            patch.object(market_data_update_module.TradingMarketDataV2View, "open", return_value=fake_view),
+            patch.object(market_data_update_module, "load_market_data_dataset_state", return_value=_regression_dataset_state(marketvalue_blocked=marketvalue_blocked)),
+            patch.object(market_data_update_module, "promote_trading_v2_consumer_state_if_ready", return_value={"promoted": False, "reason": "ALREADY_FINALIZED", "market_date": fallback_date}) as promotion_call,
+            patch.object(market_data_update_module, "load_trading_v2_consumer_state", return_value=_regression_consumer(fallback_date)) as load_consumer,
+        ):
+            regression_result = market_data_update_module.run_trading_market_data_update(project_root=project_root)
+        expected_status = "PARTIAL" if marketvalue_blocked else "READY"
+        label = "marketvalue_incomplete" if marketvalue_blocked else "unrelated_archive_dataset_blocked"
+        check(f"full_update_{label}_uses_required_dataset_gate", expected_status, regression_result["status"])
+        check(f"full_update_{label}_keeps_safe_consumer_date", fallback_date, regression_result["market_date"])
+        check(f"full_update_{label}_preserves_archive_status", "BLOCKED", regression_result["archive_status"])
+        check(f"full_update_{label}_delegates_to_promotion_owner", fallback_date, promotion_call.call_args.kwargs["target_date"])
+        check(f"full_update_{label}_verifies_consumer_lineage", True, load_consumer.call_args.kwargs["verify_current_view"])
+        check(
+            f"full_update_{label}_does_not_invent_target_readiness",
+            ["TaiwanStockMarketValue"] if marketvalue_blocked else [],
+            regression_result["trading_target_blocking_datasets"],
+        )
+
+    with (
+        patch("services.trading.market_data_auto_update.run_trading_market_data_auto_update", return_value={**blocked_archive, "status": "BUSY"}),
+        patch.object(market_data_update_module, "promote_trading_v2_consumer_state_if_ready") as busy_promotion,
+    ):
+        try:
+            market_data_update_module.run_trading_market_data_update(project_root=project_root)
+        except RuntimeError as exc:
+            busy_rejected = "worker" in str(exc)
+        else:
+            busy_rejected = False
+        check("full_update_busy_fails_closed_without_promotion", True, busy_rejected and busy_promotion.call_count == 0)
     check(
         "canonical_full_update_force_probes_all_included_v2_datasets",
         True,

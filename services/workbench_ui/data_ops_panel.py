@@ -1349,8 +1349,29 @@ class MarketDataOpsPanel(ttk.Frame):
         )
         canonical_status = str(canonical_result.get("status") or "").strip().upper() if isinstance(canonical_result, dict) else ""
         quota_error = canonical_result.get("quota_refresh_error") if isinstance(canonical_result, dict) else None
+        status_upper = str(status or "").strip().upper()
+        is_full = isinstance(result, dict) and isinstance(result.get("market_data_v2_archive"), dict)
         if canonical_status == "BUSY":
             self._status_var.set("BUSY：已有另一個 Market Data worker 執行中；本次未執行更新。")
+            self._status_label.configure(style=WORKBENCH_WARNING_LABEL_STYLE)
+        elif is_full and (status_upper == "PARTIAL" or canonical_status in {"BLOCKED", "DEFERRED"}):
+            target = str(result.get("target_date") or "-")
+            market = str(result.get("market_date") or "-")
+            ready = result.get("trading_target_ready_dataset_count")
+            total = result.get("trading_target_required_dataset_count")
+            fraction = f"{ready}/{total}" if ready is not None and total is not None else "-"
+            missing = ", ".join(str(item) for item in result.get("trading_target_blocking_datasets") or ())
+            detail = f"Trading {status_upper} {fraction} | target {target} | 可用 {market}"
+            if missing:
+                detail += f" | 未就緒 {missing}"
+            if canonical_status in {"BLOCKED", "DEFERRED"}:
+                detail += f" | V2 Archive {canonical_status}"
+            if quota_error:
+                detail += f" | Quota WARN：{quota_error}"
+            self._status_var.set(detail)
+            self._status_label.configure(style=WORKBENCH_WARNING_LABEL_STYLE)
+        elif status_upper == "PARTIAL" or canonical_status in {"BLOCKED", "DEFERRED"}:
+            self._status_var.set(f"未完全就緒：{status or canonical_status} | Quota WARN：{quota_error}" if quota_error else f"未完全就緒：{status or canonical_status}")
             self._status_label.configure(style=WORKBENCH_WARNING_LABEL_STYLE)
         elif quota_error:
             self._status_var.set(f"完成：{status or 'OK'} | Quota refresh WARN：{quota_error}")

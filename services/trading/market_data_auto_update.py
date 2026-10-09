@@ -721,6 +721,7 @@ def run_trading_market_data_auto_update(
             "archive_status": None if rollup is None else rollup.get("status"),
             "consumer_promotion": consumer_promotion,
             "batch_fingerprint": batch.get("batch_fingerprint"),
+            "ledger_path": batch.get("ledger_path"),
             "force_refresh": bool(force_refresh_current_target),
             "quota_refresh_requested": bool(refresh_provider_quota),
             "quota_refresh_error": quota_refresh_error,
