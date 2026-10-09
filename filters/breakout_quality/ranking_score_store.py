@@ -174,6 +174,7 @@ def _validate_current_forward_score_source_lineage(
     issues = forward_published_source_provenance_issues(
         model_manifest=manifest, report=report,
         dataset_summary=current_summary, target_manifest=target_manifest,
+        project_root=project_root,
     )
     if issues:
         raise ValueError("Forward score Dataset/Target provenance stale: " + "; ".join(issues[:8]))
@@ -197,6 +198,7 @@ def validate_current_pit_score_source_lineage(
         pit_manifest=manifest,
         dataset_summary=current_summary,
         target_manifest=target_manifest,
+        project_root=project_root,
     )
     if issues:
         raise ValueError("PIT score Dataset/Target provenance stale: " + "; ".join(issues[:8]))

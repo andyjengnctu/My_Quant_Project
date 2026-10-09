@@ -28,6 +28,7 @@ from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.model_source_provenance import (
     canonical_source_dataset_artifacts,
     forward_published_source_provenance_issues,
+    source_inventory_matches_current,
 )
 from filters.breakout_quality.models.factory import build_model, count_trainable_parameters
 
@@ -458,6 +459,7 @@ def forward_fitted_source_provenance_issues(
     report: Mapping[str, Any],
     dataset_summary: Mapping[str, Any],
     target_manifest: Mapping[str, Any] | None = None,
+    project_root: str | Path | None = None,
 ) -> tuple[str, ...]:
     """Check current Dataset/Target lineage against BOTH Forward publications.
 
@@ -477,6 +479,7 @@ def forward_fitted_source_provenance_issues(
         report=report,
         dataset_summary=dataset_summary,
         target_manifest=target_manifest,
+        project_root=project_root,
     ))
     expected_target_records = (
         target_manifest.get("artifacts") if isinstance(target_manifest, Mapping) else None
@@ -498,7 +501,14 @@ def forward_fitted_source_provenance_issues(
                 ("source_dataset_artifacts", expected_artifacts),
                 ("source_target_artifacts", expected_target_records),
             ):
-                if key in fitted_source and fitted_source[key] != expected:
+                if key == "source_data_inventory" and key in fitted_source:
+                    matches = source_inventory_matches_current(
+                        published=fitted_source[key], current=expected,
+                        project_root=project_root,
+                    )
+                else:
+                    matches = fitted_source.get(key) == expected
+                if key in fitted_source and not matches:
                     issues.append(f"fitted-model {key} mismatch")
     return tuple(dict.fromkeys(issues))
 
@@ -510,6 +520,7 @@ def _historical_fitted_source_compatible(
     model_dir: Path,
     final_manifest_path: Path,
     report_path: Path,
+    project_root: str | Path | None = None,
 ) -> bool:
     """Allow old sidecar bytes only when original publications prove new lineage.
 
@@ -525,14 +536,31 @@ def _historical_fitted_source_compatible(
         return False
     if any(not isinstance(new_source.get(k), Mapping) for k in FITTING_SOURCE_LINEAGE_KEYS[:2]):
         return False
-    if not any(k not in old_source for k in FITTING_SOURCE_LINEAGE_KEYS):
+    # Older sidecars can omit lineage fields or publish the archived V1 CSV
+    # inventory. No other source/fitting difference may be grandfathered.
+    missing_lineage = any(k not in old_source for k in FITTING_SOURCE_LINEAGE_KEYS)
+    changed_inventory = old_source.get("source_data_inventory") != new_source.get("source_data_inventory")
+    if not (missing_lineage or changed_inventory):
         return False
     if {k: v for k, v in persisted.items() if k != "source"} != {
         k: v for k, v in expected.items() if k != "source"
     }:
         return False
-    if dict(old_source) != {k: v for k, v in new_source.items() if k not in FITTING_SOURCE_LINEAGE_KEYS}:
+    if {k: v for k, v in old_source.items() if k not in FITTING_SOURCE_LINEAGE_KEYS} != {
+        k: v for k, v in new_source.items() if k not in FITTING_SOURCE_LINEAGE_KEYS
+    }:
         return False
+    for key in FITTING_SOURCE_LINEAGE_KEYS:
+        if key not in old_source:
+            continue
+        if key == "source_data_inventory":
+            if not source_inventory_matches_current(
+                published=old_source[key], current=new_source.get(key),
+                project_root=project_root,
+            ):
+                return False
+        elif old_source[key] != new_source.get(key):
+            return False
     manifest = _read_json(final_manifest_path)
     report = _read_json(report_path)
     if manifest is None or report is None:
@@ -556,6 +584,7 @@ def _historical_fitted_source_compatible(
         report=report,
         dataset_summary=current_summary,
         target_manifest=expected_target,
+        project_root=project_root,
     )
 
 
@@ -565,6 +594,7 @@ def _legacy_identity_issues(
     model_path: Path,
     final_manifest_path: Path,
     report_path: Path,
+    project_root: str | Path | None = None,
 ) -> tuple[str, ...]:
     manifest = _read_json(final_manifest_path)
     report = _read_json(report_path)
@@ -647,6 +677,7 @@ def _legacy_identity_issues(
                  "target_contract": expected_source.get("target_contract")}
                 if expected_source.get("source_target_artifacts") is not None else None
             ),
+            project_root=project_root,
         )
         issues.extend(source_records)
 
@@ -664,6 +695,7 @@ def load_reusable_fitted_model_contract(
     expected_identity: Mapping[str, Any],
     final_manifest_path: Path,
     report_path: Path,
+    project_root: str | Path | None = None,
 ) -> tuple[FittedModelContract | None, str | None]:
     model_dir = Path(model_dir).resolve()
     model_path = model_dir / "model.pt"
@@ -684,6 +716,7 @@ def load_reusable_fitted_model_contract(
             model_dir=model_dir,
             final_manifest_path=Path(final_manifest_path),
             report_path=Path(report_path),
+            project_root=project_root,
         ):
             return None, "fitted-model fitting identity mismatch (source data/target lineage unproven)"
         if not _file_record_matches(sidecar.get("model"), model_path):
@@ -710,6 +743,7 @@ def load_reusable_fitted_model_contract(
         model_path=model_path,
         final_manifest_path=Path(final_manifest_path),
         report_path=Path(report_path),
+        project_root=project_root,
     )
     if issues:
         return None, "; ".join(issues[:8])

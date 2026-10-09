@@ -7,7 +7,34 @@ only compares the source records published in scientific model artifacts.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Mapping
+
+from filters.breakout_quality.source_inventory import (
+    legacy_source_inventory_semantically_equivalent,
+)
+
+
+def source_inventory_matches_current(
+    *, published: Any, current: Any, project_root: str | Path | None = None,
+) -> bool:
+    """Strict provenance match, with only the verified 2026-09-12 bridge.
+
+    A caller without a canonical project root never guesses that differently
+    versioned inventories are equivalent. Dataset/Target hashes remain separate
+    mandatory checks; this function never weakens those comparisons.
+    """
+    if published == current:
+        return True
+    if (
+        project_root is None
+        or not isinstance(published, Mapping)
+        or not isinstance(current, Mapping)
+    ):
+        return False
+    return legacy_source_inventory_semantically_equivalent(
+        project_root, published=published, current=current,
+    )
 
 
 def canonical_source_dataset_artifacts(summary: Mapping[str, Any]) -> Any:
@@ -19,6 +46,7 @@ def _published_source_provenance_issues(
     *, label: str, source_dataset: Any, source_target: Any,
     dataset_summary: Mapping[str, Any],
     target_manifest: Mapping[str, Any] | None = None,
+    project_root: str | Path | None = None,
 ) -> tuple[str, ...]:
     expected_inventory = dataset_summary.get("source_data_inventory")
     expected_artifacts = dataset_summary.get("dataset_artifacts")
@@ -27,7 +55,10 @@ def _published_source_provenance_issues(
     if not isinstance(source_dataset, Mapping):
         return (f"{label} source_dataset missing",)
     issues: list[str] = []
-    if source_dataset.get("source_data_inventory") != expected_inventory:
+    if not source_inventory_matches_current(
+        published=source_dataset.get("source_data_inventory"),
+        current=expected_inventory, project_root=project_root,
+    ):
         issues.append(f"{label} source_data_inventory mismatch")
     if canonical_source_dataset_artifacts(source_dataset) != expected_artifacts:
         issues.append(f"{label} source_dataset_artifacts mismatch")
@@ -50,6 +81,7 @@ def forward_published_source_provenance_issues(
     *, model_manifest: Mapping[str, Any], report: Mapping[str, Any],
     dataset_summary: Mapping[str, Any],
     target_manifest: Mapping[str, Any] | None = None,
+    project_root: str | Path | None = None,
 ) -> tuple[str, ...]:
     """Require independent matching Dataset/Target evidence in both publications."""
     issues: list[str] = []
@@ -63,6 +95,7 @@ def forward_published_source_provenance_issues(
             source_target=publication.get(target_field),
             dataset_summary=dataset_summary,
             target_manifest=target_manifest,
+            project_root=project_root,
         ))
     return tuple(dict.fromkeys(issues))
 
@@ -70,6 +103,7 @@ def forward_published_source_provenance_issues(
 def pit_published_source_provenance_issues(
     *, pit_manifest: Mapping[str, Any], dataset_summary: Mapping[str, Any],
     target_manifest: Mapping[str, Any] | None = None,
+    project_root: str | Path | None = None,
 ) -> tuple[str, ...]:
     """Require PIT top-level source proof against present canonical Dataset truth.
 
@@ -82,11 +116,13 @@ def pit_published_source_provenance_issues(
         source_target=pit_manifest.get("source_continuous_target"),
         dataset_summary=dataset_summary,
         target_manifest=target_manifest,
+        project_root=project_root,
     )
 
 
 __all__ = [
     "canonical_source_dataset_artifacts",
+    "source_inventory_matches_current",
     "forward_published_source_provenance_issues",
     "pit_published_source_provenance_issues",
 ]

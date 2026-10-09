@@ -10222,6 +10222,163 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
         forward_fitted_source_provenance_issues,
         source_training_identity,
     )
+    from filters.breakout_quality import source_inventory
+    from filters.breakout_quality.model_source_provenance import (
+        pit_published_source_provenance_issues,
+    )
+    from filters.breakout_quality import ranking_score_store
+
+    # September 12 input-contract migration: identical metadata alone must
+    # NEVER approve old PIT bytes, but a CSV-only V1 fingerprint plus a full
+    # source scan with no non-finite values or duplicate dates can prove that
+    # both sanitizers produced the same input. The old manifests stay intact.
+    with tempfile.TemporaryDirectory() as temp_dir:
+        test_root = Path(temp_dir)
+        csv_dir = test_root / "historical_csv"
+        csv_dir.mkdir()
+        csv_file = csv_dir / "2330.csv"
+        clean_rows = [
+            {"Date": "2020-01-02", "Open": 10, "High": 12, "Low": 9, "Close": 11, "Volume": 100},
+            {"Date": "2020-01-03", "Open": 11, "High": 13, "Low": 10, "Close": 12, "Volume": 101},
+        ]
+        pd.DataFrame(clean_rows).to_csv(csv_file, index=False)
+        with patch.object(source_inventory, "get_dataset_dir", return_value=str(csv_dir)):
+            historical_inventory = source_inventory._build_source_data_inventory(
+                test_root, "reduced", legacy_csv_only=True,
+            )
+            current_inventory = source_inventory.build_source_data_inventory(test_root, "reduced")
+            source_records = {"features": {"sha256": "unchanged-feature-bytes"}}
+            target_records_v1 = {"target": {"sha256": "unchanged-target-bytes"}}
+            source_dataset = {
+                "dataset": "reduced", "policy": {"window": 300},
+                "source_data_inventory": historical_inventory,
+                "source_dataset_artifacts": source_records,
+            }
+            source_target = {"artifacts": target_records_v1, "target_contract": {"target": "safety"}}
+            current_dataset = {
+                **source_dataset, "source_data_inventory": current_inventory,
+                "dataset_artifacts": source_records,
+            }
+            pit_manifest = {"source_dataset": source_dataset, "source_continuous_target": source_target}
+            check_true(
+                "legacy_csv_only_inventory_recomputes_distinct_from_versioned_inventory",
+                historical_inventory["csv_inventory_sha256"] != current_inventory["csv_inventory_sha256"],
+            )
+            check_true(
+                "legacy_source_metadata_digest_must_match_archived_inventory_exactly",
+                not source_inventory.legacy_source_inventory_semantically_equivalent(
+                    test_root,
+                    published={**historical_inventory, "csv_inventory_sha256": "forged"},
+                    current=current_inventory,
+                ),
+            )
+            check_true(
+                "clean_legacy_pit_requires_full_csv_equivalence_proof",
+                not pit_published_source_provenance_issues(
+                    pit_manifest=pit_manifest, dataset_summary=current_dataset,
+                    target_manifest=source_target, project_root=test_root,
+                ) and "source_data_inventory mismatch" in str(pit_published_source_provenance_issues(
+                    pit_manifest=pit_manifest, dataset_summary=current_dataset,
+                    target_manifest=source_target,
+                )),
+            )
+            with patch.object(
+                ranking_score_store, "_load_current_validated_model_source",
+                return_value=(current_dataset, source_target),
+            ):
+                try:
+                    ranking_score_store.validate_current_pit_score_source_lineage(
+                        project_root=test_root,
+                        filter_id="breakout_quality_v1",
+                        model_architecture="inception_time_v1",
+                        experiment_profile="synthetic_profile",
+                        manifest=pit_manifest,
+                    )
+                    official_pit_consumer_reused = True
+                except ValueError:
+                    official_pit_consumer_reused = False
+            check_true(
+                "official_rolling_pit_consumer_uses_verified_legacy_bridge",
+                official_pit_consumer_reused,
+            )
+            check_true(
+                "legacy_pit_still_rejects_changed_target_sha",
+                any("source target artifacts mismatch" in issue for issue in
+                    pit_published_source_provenance_issues(
+                        pit_manifest=pit_manifest, dataset_summary=current_dataset,
+                        target_manifest={"artifacts": {"target": {"sha256": "altered"}},
+                                         "target_contract": source_target["target_contract"]},
+                        project_root=test_root,
+                    )),
+            )
+            model_dir = test_root / "historical_model"
+            model_dir.mkdir()
+            model_path = model_dir / "model.pt"
+            model_path.write_bytes(b"unaltered historical checkpoint")
+            old_fitting_source = {
+                "dataset": "reduced", "dataset_policy": source_dataset["policy"],
+                "source_data_inventory": historical_inventory,
+                "source_dataset_artifacts": source_records,
+                "source_target_artifacts": target_records_v1,
+                "target_contract": source_target["target_contract"],
+            }
+            old_fitting_identity = {"seed": 42, "source": old_fitting_source}
+            expected_fitting_identity = {
+                **old_fitting_identity,
+                "source": {**old_fitting_source, "source_data_inventory": current_inventory},
+            }
+            write_fitted_model_contract(
+                model_dir=model_dir, fitting_identity=old_fitting_identity,
+                selected_epoch=2, epoch_selection={}, final_refit_history=[],
+                trainable_parameter_count=1, total_parameter_count=1,
+            )
+            old_model_manifest = {
+                "source_dataset": source_dataset,
+                "source_continuous_target": source_target,
+                "model": build_file_manifest(model_path),
+            }
+            old_model_report = {"source_dataset": source_dataset, "target_manifest": source_target}
+            old_manifest_path = model_dir / "manifest.json"
+            old_report_path = model_dir / "report.json"
+            old_manifest_path.write_text(json.dumps(old_model_manifest), encoding="utf-8")
+            old_report_path.write_text(json.dumps(old_model_report), encoding="utf-8")
+            certified, certified_reason = load_reusable_fitted_model_contract(
+                model_dir=model_dir, expected_identity=expected_fitting_identity,
+                final_manifest_path=old_manifest_path, report_path=old_report_path,
+                project_root=test_root,
+            )
+            without_proof, _ = load_reusable_fitted_model_contract(
+                model_dir=model_dir, expected_identity=expected_fitting_identity,
+                final_manifest_path=old_manifest_path, report_path=old_report_path,
+            )
+            check_true(
+                "legacy_fitted_checkpoint_requires_original_publications_and_verified_sanitizer_equivalence",
+                certified is not None and certified_reason is None and without_proof is None
+                and certified.fitting_identity == old_fitting_identity,
+            )
+            for condition_name, affected_rows in (
+                ("nonfinite_high", [*clean_rows, {**clean_rows[1], "Date": "2020-01-04", "High": float("inf")}]),
+                ("duplicate_date", [*clean_rows, {**clean_rows[1], "Volume": 500}]),
+            ):
+                pd.DataFrame(affected_rows).to_csv(csv_file, index=False)
+                changed_current = source_inventory.build_source_data_inventory(test_root, "reduced")
+                changed_historical = source_inventory._build_source_data_inventory(
+                    test_root, "reduced", legacy_csv_only=True,
+                )
+                check_true(
+                    f"legacy_ohlcv_bridge_fail_closed_on_{condition_name}",
+                    not source_inventory.legacy_source_inventory_semantically_equivalent(
+                        test_root, published=changed_historical, current=changed_current,
+                    ),
+                )
+            check_true(
+                "legacy_ohlcv_bridge_never_accepts_other_cleaning_versions",
+                not source_inventory.legacy_source_inventory_semantically_equivalent(
+                    test_root, published=historical_inventory,
+                    current={**current_inventory, "ohlcv_sanitization_contract_version": 3},
+                ),
+            )
+
     dataset_records = {"feature_bank": {"filename": "bank.npy", "sha256": "before"}}
     target_records = {"target_raw_r": {"filename": "target.npy", "sha256": "before"}}
     source_inventory = {"csv_inventory_sha256": "original", "ohlcv_sanitization_contract_version": 2}

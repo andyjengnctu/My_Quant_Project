@@ -3736,6 +3736,7 @@ def _forward_source_provenance_issues(
         report=report,
         dataset_summary=dataset_summary,
         target_manifest=target_manifest,
+        project_root=PROJECT_ROOT,
     )
 
 

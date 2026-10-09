@@ -1250,6 +1250,7 @@ def run(args) -> int:
             expected_identity=expected_fitting_identity,
             final_manifest_path=artifact_paths.manifest_path,
             report_path=output_dir / ranker_api.RANKER_REPORT_JSON_FILENAME,
+            project_root=PROJECT_ROOT,
         )
 
     if existing_fitted_contract is not None:

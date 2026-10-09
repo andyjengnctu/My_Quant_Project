@@ -54,6 +54,7 @@ from core.breakout_quality_runtime import (
     get_continuous_ranker_training_policy,
 )
 from filters.breakout_quality.artifacts import build_file_manifest
+from filters.breakout_quality.model_source_provenance import source_inventory_matches_current
 from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME
 from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
 from filters.breakout_quality.ranking_score_store import clear_selection_point_in_time_ranking_contract_cache
@@ -1159,7 +1160,14 @@ def _forward_checkpoint_import_issues(
         ("training_universe_start_date", source_dataset.get("training_universe_start_date")),
     )
     for field, actual in source_pairs:
-        if field in expected_source and actual != expected_source.get(field):
+        if field == "source_data_inventory" and field in expected_source:
+            matched = source_inventory_matches_current(
+                published=actual, current=expected_source.get(field),
+                project_root=PROJECT_ROOT,
+            )
+        else:
+            matched = actual == expected_source.get(field)
+        if field in expected_source and not matched:
             issues.append(f"source_contract {field} mismatch")
 
     if checkpoint.get("model_spec") != fold_contract.get("model_spec"):
