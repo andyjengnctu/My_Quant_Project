@@ -1411,6 +1411,9 @@ def validate_trading_daily_workflow_contract_case(base_params):
         check("explicit_reuse_binds_current_trading_data_date", "2026-09-04", reuse_result.get("latest_data_date"))
         check("explicit_reuse_records_usage_mode", "reuse_existing", reuse_result.get("param_usage_mode"))
         rebound_snapshot = daily_workflow.build_trading_daily_workflow_snapshot(root)
+        # AI: Keep the real post-reuse read model for the headless Workbench
+        # rendering check below, before the fixture switches to an ensemble.
+        reused_workflow_snapshot = dict(rebound_snapshot)
         check("explicit_reuse_makes_params_ready_for_scan", True, rebound_snapshot.get("params_ready_for_scan"))
         with patch.object(daily_workflow, "run_daily_scanner", return_value=fake_scan):
             reused_scan = daily_workflow.run_trading_candidate_scan(project_root=root)
@@ -1532,16 +1535,47 @@ def validate_trading_daily_workflow_contract_case(base_params):
         and "掛單輸入（買入限價自動計算" not in panel_source
         and "直接補登買入（不經掛單區）" not in panel_source,
     )
-    # AI: This contract is about preserving and rendering the original parameter
-    # training date in reuse mode, not about freezing one historical UI phrase.
-    # The runtime checks above already prove reuse keeps the original training date;
-    # here we only verify that the Workbench overview consumes that canonical field.
+    # AI: Exercise the actual Workbench render path without creating Tk widgets.
+    # This must display the original training date after an explicit REUSE,
+    # rather than the newer Trading market-data date. Do not depend on local
+    # variable names or a fixed dashboard text layout.
+    from types import SimpleNamespace
+    from services.trading.operations_status import derive_trading_operations_status_from_preloaded
+    from services.workbench_ui.trading_account_panel import TradingAccountPanel
+
+    overview_snapshot = derive_trading_operations_status_from_preloaded(
+        workflow=reused_workflow_snapshot,
+        account=None,
+        orders=None,
+        candidate=None,
+        proposed=None,
+        protection=None,
+        indicator_exit=None,
+        position_rollforward=None,
+    )
+    overview_cards = []
+    panel_stub = SimpleNamespace(
+        _set_overview_card=lambda *args, **kwargs: overview_cards.append((args, kwargs))
+    )
+    with patch("services.workbench_ui.trading_account_panel.get_trading_policy_snapshot", return_value={}):
+        TradingAccountPanel._render_strategy_params_overview(
+            panel_stub, overview_snapshot, release_state={"active": None, "pending": None}
+        )
+    params_cards = [args for args, _ in overview_cards if args and args[0] == "strategy_params"]
+    params_detail = str(params_cards[-1][2]) if params_cards else ""
+    original_train_date = str(reuse_result.get("param_training_data_date") or "")
+    current_market_date = str(reuse_result.get("latest_data_date") or "")
     check(
         "workbench_reuse_mode_shows_original_param_training_date",
         True,
-        'param_training_date = snapshot.get("param_training_data_date")' in panel_source
-        and 'f"訓練至 {param_training_date} | DL {dl_state}"' in panel_source
-        and 'self._set_overview_card("strategy_params", strategy_id, param_detail' in panel_source,
+        bool(params_cards)
+        and bool(original_train_date)
+        and original_train_date != current_market_date
+        and overview_snapshot.get("param_training_data_date") == original_train_date
+        and overview_snapshot.get("param_usage_mode") == "reuse_existing"
+        and original_train_date in params_detail
+        and current_market_date not in params_detail
+        and "沿用既有" in params_detail,
     )
     check("workbench_page_does_not_render_artifact_paths", False, any(token in panel_source for token in ("_path_var", "snapshot.get('text_path')", "snapshot.get('json_path')", "scanner_output_dir")))
     audit_body = panel_source.split("def _run_operational_audit", 1)[1].split("def _refresh_all_trading_state", 1)[0]
