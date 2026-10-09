@@ -581,7 +581,7 @@ python apps/research.py market-data verify
 
 ### Research generation downstream identity（Audit Repair 4）
 
-Research V2 promotion完成後，`full` 不再只是可重用artifact的完整資料 identity。`core/dataset_profiles.py` 會提供 canonical dataset-generation identity：V1/reduced沿用既有 identity/path；promoted V2才產生 generation namespace。Optimizer Study DB/effective policy、Strategy Compare run/pair cache、Breakout Quality model/output paths都必須消費此 identity，因此不得跨 V1/V2 或不同 V2 materialization REUSE／覆寫。Breakout Quality scientific identity（例如目前 `MR-13BV`）不因本工程修補改名或改狀態；V2只增加 `research_generations/<generation_namespace>/` physical isolation。
+Research V2 promotion完成後，`full` 不再只是可重用artifact的完整資料 identity。`core/dataset_profiles.py` 會提供 canonical dataset-generation identity：V1/reduced沿用既有 identity/path；promoted V2才產生 generation namespace。Optimizer Study DB/effective policy、Strategy Compare run/pair cache、Breakout Quality model/output paths都必須消費此 identity，因此不得跨 V1/V2 或不同 V2 materialization REUSE／覆寫。Breakout Quality scientific identity（此段2026-09-09工程紀錄當時current為`MR-13BV`；後於2026-10-09結案）不因本工程修補改名或改狀態；V2只增加 `research_generations/<generation_namespace>/` physical isolation。
 
 ## Research → Trading 策略升格（MVP）
 

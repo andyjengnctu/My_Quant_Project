@@ -1,5 +1,3 @@
-這次將某個策略(c85)從research轉移到trading造成這麼大的問題，好不容易才解決，架構上要怎麼調整才能避免這種問題
-
 - restreucture
     - 刪除不再需要的相容層的code，精簡程式也避免之後誤接
     - 重新編號目前的research arm編號系統

@@ -99,9 +99,13 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 # from the same pair plus explicit historical/reference controls.  This makes
 # "trainable current DL => present in every compare/robustness list" an invariant
 # instead of a manual synchronization step whenever a new DL becomes the research focus.
+# MR-13BV was already tested and reported weak by the user (2026-10-09);
+# its original scientific profile remains registered for historical reproducibility.
+# Return the current executable research pointer to the existing AO reference;
+# this does not reopen AO's historical model-quality gate or promote a DL strategy.
 BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE = (
-    "MR-13BV",
-    "daily_universal_adaptive_input_context_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise",
+    "MR-13AO",
+    "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise",
 )
 # Compatibility alias for call sites that only need the executable profile slug.
 BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = (

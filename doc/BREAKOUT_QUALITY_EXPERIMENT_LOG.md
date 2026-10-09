@@ -12574,3 +12574,13 @@ Decision：`CANONICAL_SIGNAL_DATE_AGREEMENT_FIX / RESEARCH_TRADING_SAME_OWNER / 
 - **Results**：`RESULT_PENDING`；此輪僅整合／靜態與合成驗證，尚未用完整Research資料跑正式6-fold 4×300與Rolling績效。舊C85 Return/MDD/RoMD=`190.64%/11.59%/16.45`只供修正前歷史參考，不作未來績效宣稱。
 
 Decision：`NEW_C95_P14_REGISTERED / ORIGINAL_C85_P6_ARCHIVED_AS_PRE_FIX_EVIDENCE / ONE_CANONICAL_ENSEMBLE_ENGINE / RESEARCH_OOS_ROLLING_RETRAIN_PENDING / NO_TRADING_PROMOTION`。
+
+
+## 2026-10-09 — MR-13BV historical experiment outcome supplied by user / missing-result registration
+
+- **Correction trigger / source**：使用者明確指出「bv之前試過效果不好，只是你沒登錄」。原Registry、Experiment Log、Research Queue及`config/breakout_quality.py`皆把BV當成`IMPLEMENTED / RESULT_PENDING / CURRENT_MODEL_RESEARCH`，因此上一輪研究比較誤建議重跑BV。此補充是使用者提供的**已做過、效果不佳**結果與停止決策，不是本輪GPT自行執行模型訓練所得的數值證據。
+- **Immutable identity**：`MR-13BV / ARCH-inception_time_shared_adaptive_input_context_safety_mfe_v1 / PROFILE-daily_universal_adaptive_input_context_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise`原定義不變。相對AO只讓Safety學`30/60/120/300` bars look-back residual；AO的future target、loss與Conditional-MFE head保持不變。既有`MR-13BU`失敗紀錄與BV獨立，不得混用兩者的metric。
+- **Evidence scope / limitation**：本次所附ZIP不含BV原始完成報表、逐折／逐seed metric或canonical scored artifact；既有Experiment Log也沒有BV數值。因此只可登錄`USER_REPORTED_TESTED_POOR`，不得補造執行日期、Forward/Rolling模式、Seed42、best epoch、Raw Safety rho/Pair、Pred-HS purity、比較幅度或宣稱獨立完成formal numerical Model Gate。`METRICS_NOT_ARCHIVED`不代表`UNEXECUTED`。日後找到原始完整工件時可用append-only方式補錄，不回寫舊scientific identity。
+- **Decision**：接受使用者的研究停止方向，`MR-13BV`改`CLOSED / ADAPTIVE_INPUT_FAMILY_STOP / NOT_PROMOTED`，不再重跑BV或擴展look-back/gate/600-bar sweep；原模型profile與implementation為了可追溯性保留。`config/breakout_quality.py`的current模型研究pair回既有`MR-13AO` reference，canonical Model Compare/Test由reference + current model的de-duplicating owner導出`MR-13H/AH/AK/AO`；沒有新model research identity或strategy promotion，AO自身歷史`MODEL_GATE_FAIL`結論不撤銷。下一方向只先進行PIT-safe orthogonal-information availability/legality研究設計，需新的模型treatment時再依Registry/authorization分配identity。
+
+Decision：`USER_REPORTED_PRIOR_BV_POOR_RESULT / RAW_METRICS_UNAVAILABLE / BV_CLOSED / NO_ADAPTIVE_INPUT_SWEEP / AO_REFERENCE_RESTORED / NO_NEW_MR_IDENTITY / NO_SCIENTIFIC_REWRITE`.
