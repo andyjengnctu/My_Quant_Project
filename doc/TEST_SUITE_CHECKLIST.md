@@ -692,7 +692,7 @@
 | T258 | `validate_optimizer_session_milestone_cache_case` | B52 |
 | T259 | `validate_meta_quality_coverage_threshold_uses_target_scope_case` | B22 |
 | T260 | `validate_signal_utils_unit_case` | B13 |
-| T261 | `validate_synthetic_ensemble_reentry_consensus_watchlist_case`；另驗證兩條不同日期各自達標只能產生唯一ticker、canonical優先順序與最新日期tie-break、原始members與代表候選對輸入次序不敏感。 | B168 |
+| T261 | `validate_synthetic_ensemble_reentry_consensus_watchlist_case` | B168 |
 | T262 | `validate_synthetic_inherited_entry_fill_must_be_above_stop_case` | B169 |
 | T263 | `validate_optimizer_replay_raw_universe_contract_case` | B18 |
 | T264 | `validate_breakout_quality_policy_single_source_case` | B11 |

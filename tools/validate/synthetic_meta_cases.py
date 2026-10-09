@@ -3276,6 +3276,7 @@ def validate_market_data_governance_contract_case(_base_params):
     compat_core_source = (PROJECT_ROOT / "core/market_data_ohlcv_compatibility.py").read_text(encoding="utf-8")
     research_compat_source = (PROJECT_ROOT / "core/market_data_research_materialization.py").read_text(encoding="utf-8")
     trading_update_source = (PROJECT_ROOT / "services/trading/market_data_update.py").read_text(encoding="utf-8")
+    trading_promotion_source = (PROJECT_ROOT / "services/trading/market_data_consumer_promotion.py").read_text(encoding="utf-8")
     trading_consumer_source = (PROJECT_ROOT / "services/trading/market_data_consumer.py").read_text(encoding="utf-8")
     trading_readiness_source = (PROJECT_ROOT / "services/trading/data_readiness.py").read_text(encoding="utf-8")
     check(
@@ -3305,7 +3306,9 @@ def validate_market_data_governance_contract_case(_base_params):
     check(
         "v2_only_update_publishes_consumer_state_without_legacy_stage",
         True,
-        "publish_trading_v2_consumer_state" in trading_update_source
+        "promote_trading_v2_consumer_state_if_ready(" in trading_update_source
+        and "publish_trading_v2_consumer_state(" in trading_promotion_source
+        and "publish_trading_v2_consumer_state(" not in trading_update_source
         and not any(token in trading_update_source for token in ("market_data_compatibility", "market_data_state", "run_trading_dataset_update(")),
     )
     check(

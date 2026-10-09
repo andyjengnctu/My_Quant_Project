@@ -6406,7 +6406,7 @@
     },
     {
       "id": "T261",
-      "description": "`validate_synthetic_ensemble_reentry_consensus_watchlist_case`；另驗證兩條不同日期各自達標只能產生唯一ticker、canonical優先順序與最新日期tie-break、原始members與代表候選對輸入次序不敏感。",
+      "description": "`validate_synthetic_ensemble_reentry_consensus_watchlist_case`",
       "b_id": "B168",
       "initial_status": "NEW",
       "order": 253
