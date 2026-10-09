@@ -10,7 +10,6 @@ from __future__ import annotations
 from config.research import RESEARCH_SINGLE_SEED
 from config.breakout_policy import BREAKOUT_DEFAULT_HIGH_LEN
 from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS, DEFAULT_PORTFOLIO_ROTATION
-from config.model_profile_membership import merge_breakout_quality_model_profiles
 
 # =============================================================================
 # USER SETTINGS — edit this section only
@@ -374,10 +373,10 @@ BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES = (
 # same canonical pair that drives [1]/[2]; reference controls may only add membership.
 # Therefore every current training DL is structurally guaranteed to appear in Forward /
 # Rolling comparison and Forward / Rolling robustness without a second manual edit.
-BREAKOUT_QUALITY_MODEL_TEST_PROFILES = merge_breakout_quality_model_profiles(
-    BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES,
-    (BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE,),
-)
+BREAKOUT_QUALITY_MODEL_TEST_PROFILES = tuple(dict.fromkeys((
+    *BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES,
+    BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE,
+)))
 BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_MENU_LABEL = "模型比較（Standard SOP）"
 # Backward-compatible alias; there is no second model list.
 BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_PROFILES = BREAKOUT_QUALITY_MODEL_TEST_PROFILES

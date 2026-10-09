@@ -44,7 +44,10 @@ def get_breakout_quality_model_workflow_profile_names() -> tuple[str, ...]:
     """
 
     ordered = [str(cfg.BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE).strip()]
-    ordered.extend(str(profile).strip() for _model_id, profile in cfg.BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
+    ordered.extend(
+        str(profile).strip()
+        for _model_id, profile in get_breakout_quality_model_test_settings().model_profiles
+    )
     return tuple(dict.fromkeys(value for value in ordered if value))
 
 
@@ -59,7 +62,7 @@ def is_breakout_quality_model_test_profile(profile_name: str) -> bool:
     normalized = normalize_breakout_quality_experiment_profile(profile_name)
     return normalized in {
         normalize_breakout_quality_experiment_profile(profile)
-        for _model_id, profile in cfg.BREAKOUT_QUALITY_MODEL_TEST_PROFILES
+        for _model_id, profile in get_breakout_quality_model_test_settings().model_profiles
     }
 
 
