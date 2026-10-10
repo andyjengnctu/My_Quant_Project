@@ -49,9 +49,12 @@ class MaskedRawQuoteTests(unittest.TestCase):
         }, index=dates)
 
     def test_new_scientific_pair_without_bw_reuse(self):
-        model_id, profile_id = BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE
-        self.assertEqual(model_id, "MR-13BX")
-        self.assertIn((model_id, profile_id), BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
+        # Historical experiment identity stays valid after the current research
+        # model changes. Only the configured current pair must be in the active list.
+        model_id = "MR-13BX"
+        profile_id = "daily_universal_raw_mask_adjusted_target_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+        self.assertIn(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE,
+                      BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
         self.assertIn(("MR-13AO", "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
                       BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
         spec = get_continuous_ranker_research_spec(profile_id)

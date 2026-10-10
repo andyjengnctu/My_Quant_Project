@@ -100,11 +100,13 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 # instead of a manual synchronization step whenever a new DL becomes the research focus.
 # MR-13BV was already tested and reported weak by the user (2026-10-09);
 # its original scientific profile remains registered for historical reproducibility.
-# MR-13BX is a separate authorized quote-aware raw-input research experiment;
-# AO and the blocked direct-raw MR-13BW remain immutable historical controls.
+# MR-13BX completed Forward and six-fold Rolling OOS on 2026-10-10;
+# its quote-aware Raw+mask representation did not clear the AO-relative Safety/MFE
+# joint gate. Preserve the registered BX identity and artifacts as historical evidence.
+# AO remains the model-research reference; no historical model is promoted.
 BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE = (
-    "MR-13BX",
-    "daily_universal_raw_mask_adjusted_target_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise",
+    "MR-13AO",
+    "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise",
 )
 # Compatibility alias for call sites that only need the executable profile slug.
 BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = (
