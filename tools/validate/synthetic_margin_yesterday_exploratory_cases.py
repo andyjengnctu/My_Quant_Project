@@ -337,6 +337,7 @@ class ExploratoryMenuIntegrationCases(unittest.TestCase):
     def _settings(self):
         return SimpleNamespace(
             is_binary_classification=False, is_continuous_ranker=True,
+            rolling_authorized=True,
             experiment_profile=runner._STUDY.reference_profile,
         )
 
@@ -352,17 +353,91 @@ class ExploratoryMenuIntegrationCases(unittest.TestCase):
         explorer.assert_called_once_with(runner._STUDY, "forward")
         formal.assert_not_called()
 
-    def test_menu_compare_isolated_and_rolling_blocked(self):
+    def test_menu_only_advertises_registered_callable_actions(self):
+        import contextlib
+        import io
         from services.research import breakout_quality_application as app
+        output = io.StringIO()
         with (patch.object(app, "get_breakout_quality_model_research_settings", return_value=self._settings()),
               patch.object(app, "_configured_exploratory_research_study", return_value=runner._STUDY),
               patch.object(app, "_run_configured_model_comparison") as formal,
               patch.object(app, "_invoke_exploratory_research_action", return_value=0) as explorer,
-              patch("builtins.input", side_effect=["2", "4", "5", "6", "7", "3", "0"])):
+              patch("builtins.input", side_effect=["2", "4", "5", "6", "7", "3", "0"]),
+              contextlib.redirect_stdout(output)):
             result = app._interactive_model_research("apps/research.py model")
         self.assertEqual(result, 0)
+        self.assertIn("Forward OOS 模型比較", output.getvalue())
+        self.assertNotIn("Rolling OOS 模型訓練", output.getvalue())
+        self.assertNotIn("Robustness 模型測試", output.getvalue())
+        self.assertNotIn("[BLOCKED]", output.getvalue())
         explorer.assert_called_once_with(runner._STUDY, "compare")
         formal.assert_not_called()
+
+    def test_new_registered_action_is_visible_and_dispatchable_without_menu_edit(self):
+        from dataclasses import replace
+        from services.research import breakout_quality_application as app
+        study = replace(runner._STUDY, workflow_handlers=(
+            ("forward", "run_forward_menu"),
+            ("rolling", "run_synthetic_rolling"),
+            ("compare", "run_forward_comparison"),
+        ))
+        with (patch.object(runner, "run_synthetic_rolling", return_value=17, create=True) as producer,
+              patch.object(app, "get_breakout_quality_model_research_settings", return_value=self._settings()),
+              patch.object(app, "_configured_exploratory_research_study", return_value=study),
+              patch("builtins.input", side_effect=["2", "0"])):
+            menu_items = app._exploratory_model_menu_work_items(study)
+            self.assertEqual(tuple(int(item[0]) for item in menu_items), (1, 2, 3))
+            self.assertEqual(app._interactive_model_research("apps/research.py model"), 0)
+        producer.assert_called_once_with()
+
+    def test_missing_registered_producer_fails_before_menu_is_shown(self):
+        from dataclasses import replace
+        from services.research import breakout_quality_application as app
+        invalid = replace(runner._STUDY, workflow_handlers=(("forward", "missing_producer"),))
+        with self.assertRaisesRegex(RuntimeError, "缺少可執行 producer"):
+            app._exploratory_model_menu_work_items(invalid)
+        unregistered = replace(runner._STUDY, workflow_handlers=(("not_a_work_type", "run_forward_menu"),))
+        with self.assertRaisesRegex(ValueError, "未對應正式選單類型"):
+            app._exploratory_model_menu_work_items(unregistered)
+
+    def test_compare_missing_forward_delegates_canonical_producer(self):
+        from tempfile import TemporaryDirectory
+        import json
+        from core.file_integrity import compute_file_sha256
+        from services.breakout_quality import margin_yesterday_research as mod
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            score = root / "ao_scores.csv.gz"
+            score.write_bytes(b"valid-reference")
+            output = root / "comparison"
+            output.mkdir()
+            report = output / "experimental_report.json"
+            comparison = {
+                "fitting_fingerprint": "s" * 64,
+                "same_oos_group_count": 3,
+                "canonical_reference_score_sha256": compute_file_sha256(score),
+                "rows": [],
+            }
+            with (patch.object(mod, "ROOT", root),
+                  patch.object(mod, "_read_experimental_report", side_effect=[(None, None), (report, {"ok": True})]) as reader,
+                  patch.object(mod, "run_forward_menu", return_value=0) as producer,
+                  patch.object(mod, "_validate_current_exploratory_source"),
+                  patch.object(mod, "_comparison_payload", return_value=comparison),
+                  patch("filters.breakout_quality.ranking_score_store.resolve_continuous_ranker_oos_score_path", return_value=score)):
+                self.assertEqual(mod.run_forward_comparison(), 0)
+            self.assertEqual(reader.call_count, 2)
+            producer.assert_called_once_with()
+            self.assertTrue((output / "experimental_comparison.md").is_file())
+            self.assertEqual(json.loads((output / "experimental_comparison.json").read_text(encoding="utf-8")), comparison)
+
+    def test_compare_cancellation_stops_without_claiming_result(self):
+        from services.breakout_quality import margin_yesterday_research as mod
+        with (patch.object(mod, "_read_experimental_report", return_value=(None, None)),
+              patch.object(mod, "run_forward_menu", return_value=0) as producer,
+              patch.object(mod, "_comparison_payload") as consumer):
+            self.assertEqual(mod.run_forward_comparison(), 0)
+        producer.assert_called_once_with()
+        consumer.assert_not_called()
 
     def test_menu_switch_restores_unmodified_formal_ao(self):
         from services.research import breakout_quality_application as app

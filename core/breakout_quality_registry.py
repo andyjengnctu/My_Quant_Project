@@ -4160,10 +4160,19 @@ class ExploratoryModelResearchStudy:
     architecture_identity: str
     feature_contract: str
     service_module: str
-    permitted_actions: tuple[str, ...] = ("forward", "compare")
+    # A single registration owns BOTH action authorization and its canonical
+    # producer entrypoint. The Research menu must never display actions that
+    # are absent here, or maintain a second per-study action/handler switch.
+    # Authorization is mandatory per study, never implicitly inherited by a
+    # new scientific identity simply because an older exploration supported it.
+    workflow_handlers: tuple[tuple[str, str], ...] = ()
     historical_vintage_proven: bool = False
     formal_input_authorized: bool = False
     trading_promotion_authorized: bool = False
+
+    @property
+    def permitted_actions(self) -> tuple[str, ...]:
+        return tuple(action for action, _handler in self.workflow_handlers)
 
 
 _EXPLORATORY_MODEL_STUDIES = {
@@ -4174,6 +4183,10 @@ _EXPLORATORY_MODEL_STUDIES = {
         architecture_identity="inception_time_shared_safety_mfe_margin_yesterday_mask_v1",
         feature_contract="margin_yesterday_t_minus_two_current_vintage_masked_300x14_v1",
         service_module="services.breakout_quality.margin_yesterday_research",
+        workflow_handlers=(
+            ("forward", "run_forward_menu"),
+            ("compare", "run_forward_comparison"),
+        ),
     ),
 }
 
@@ -4184,10 +4197,27 @@ def get_exploratory_model_research_study(model_id: str) -> ExploratoryModelResea
         raise ValueError(f"未登錄的隔離探索性研究: {model_id}")
     if study.formal_input_authorized or study.trading_promotion_authorized or study.historical_vintage_proven:
         raise ValueError("隔離探索不得冒充正式PIT／Trading授權")
+    if not study.workflow_handlers:
+        raise ValueError("隔離探索缺少已授權的Research工作類型")
+    if len(study.permitted_actions) != len(set(study.permitted_actions)):
+        raise ValueError("隔離探索Research工作類型不得重複")
+    if any(not str(action).strip() or not str(handler).strip()
+           for action, handler in study.workflow_handlers):
+        raise ValueError("隔離探索Research工作類型與producer handler不得空白")
     reference = get_continuous_ranker_research_spec(study.reference_profile)
     if reference.model_research_id != study.reference_model_id:
         raise ValueError("探索實驗AO參照身分不一致")
     return study
+
+
+def iter_exploratory_model_research_studies() -> tuple[ExploratoryModelResearchStudy, ...]:
+    """Enumerate every registered study, not only the currently selected one.
+
+    Capability regressions must still detect broken handlers when a study is
+    temporarily inactive in config (no active-scope-dependent test skip).
+    """
+    return tuple(get_exploratory_model_research_study(model_id)
+                 for model_id in _EXPLORATORY_MODEL_STUDIES)
 
 
 def get_continuous_ranker_research_spec(

@@ -370,8 +370,18 @@ def run_forward_menu() -> int:
 def run_forward_comparison() -> int:
     path, result = _read_experimental_report()
     if path is None:
-        print("[BLOCKED] 探索性 Forward 工件尚未產生；請先執行[1]。")
-        return 1
+        # Missing evidence is a BUILD dependency, not an authorization BLOCK.
+        # Delegate to the same registered Forward producer; it owns the single
+        # explicit exploration confirmation and the immutable fitting identity.
+        print("BUILD｜Forward OOS 比較所需模型工件尚未存在，先委派 Forward Producer。")
+        code = run_forward_menu()
+        if code != 0:
+            return int(code)
+        path, result = _read_experimental_report()
+        if path is None:
+            # The only non-error path here is declining the producer confirmation.
+            print("已取消前置建立；未執行探索性比較。")
+            return 0
     _validate_current_exploratory_source(result)
     payload = _comparison_payload(result)
     # Official reference remains a separate canonical artifact; if its bytes

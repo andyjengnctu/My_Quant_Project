@@ -5561,25 +5561,57 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
     ))
     return 0
 
+# Stable work types and menu positions only. Scientific study membership and the
+# producer method for each action come solely from the research Registry.
+_MODEL_RESEARCH_MENU_WORK_ITEMS = (
+    ("1", "forward", "Forward OOS 模型訓練"),
+    ("2", "rolling", "Rolling OOS 模型訓練"),
+    ("3", "compare", "Forward OOS 模型比較"),
+    ("4", "rolling_compare", "Rolling OOS 模型比較"),
+    ("5", "robustness", "Forward OOS Robustness 模型測試"),
+    ("6", "rolling_robustness", "Rolling OOS Robustness 模型測試"),
+    ("7", "timing", "Timing Mode｜Rolling 訓練前後比較  [工程]"),
+)
+
+
 def _configured_exploratory_research_study():
-    """Config-driven selection; the formal model profile remains AO."""
+    """Resolve the selected isolated scope without changing the formal profile."""
     from config import breakout_quality as config
     identifier = str(getattr(config, "BREAKOUT_QUALITY_ACTIVE_EXPLORATORY_MODEL_STUDY", "") or "").strip()
     return get_exploratory_model_research_study(identifier) if identifier else None
 
 
-def _invoke_exploratory_research_action(study, action: str) -> int:
-    """No exploration can enter formal trainer, Compare, robustness or Trading."""
-    if str(action) not in study.permitted_actions:
-        raise ValueError("此探索性科學身分尚未授權此工作類型")
+def _exploratory_model_menu_work_items(study) -> tuple[tuple[str, str, str], ...]:
+    """Fail before rendering if any advertised action lacks a callable producer.
+
+    A new study must only register (work_type, handler) at its canonical owner;
+    the menu must not maintain a second per-study allow-list or handler switch.
+    """
     if study.formal_input_authorized or study.trading_promotion_authorized or study.historical_vintage_proven:
         raise ValueError("探索研究授權標籤不合法")
+    handlers = dict(study.workflow_handlers)
+    if not handlers or len(handlers) != len(study.workflow_handlers):
+        raise ValueError("探索研究工作註冊不得空白或重複")
+    supported = {action for _choice, action, _label in _MODEL_RESEARCH_MENU_WORK_ITEMS}
+    unknown = sorted(set(handlers) - supported)
+    if unknown:
+        raise ValueError("探索研究工作未對應正式選單類型: " + ", ".join(unknown))
     module = importlib.import_module(study.service_module)
-    method = {"forward": "run_forward_menu", "compare": "run_forward_comparison"}[str(action)]
-    callback = getattr(module, method, None)
-    if not callable(callback):
-        raise RuntimeError("隔離研究 producer 缺少正式選單委派介面: " + str(method))
-    return int(callback() or 0)
+    missing = [f"{action}:{method}" for action, method in handlers.items()
+               if not callable(getattr(module, method, None))]
+    if missing:
+        raise RuntimeError("探索研究已授權工作缺少可執行 producer: " + ", ".join(missing))
+    return tuple(item for item in _MODEL_RESEARCH_MENU_WORK_ITEMS if item[1] in handlers)
+
+
+def _invoke_exploratory_research_action(study, action: str) -> int:
+    """Dispatch strictly through the same registered producer used to render UI."""
+    _exploratory_model_menu_work_items(study)
+    method = dict(study.workflow_handlers).get(str(action))
+    if method is None:
+        raise ValueError("此探索性科學身分未授權此工作類型")
+    module = importlib.import_module(study.service_module)
+    return int(getattr(module, method)() or 0)
 
 
 def _interactive_model_research(program_name: str) -> int:
@@ -5609,13 +5641,17 @@ def _interactive_model_research(program_name: str) -> int:
                     for model_id, _profile in get_breakout_quality_model_test_settings().model_profiles
                 )
             )
-        print(render_menu_item(1, "Forward OOS 模型訓練", default=True))
-        print(render_menu_item(2, "Rolling OOS 模型訓練"))
-        print(render_menu_item(3, "Forward OOS 模型比較"))
-        print(render_menu_item(4, "Rolling OOS 模型比較"))
-        print(render_menu_item(5, "Forward OOS Robustness 模型測試"))
-        print(render_menu_item(6, "Rolling OOS Robustness 模型測試"))
-        print(render_menu_item(7, "Timing Mode｜Rolling 訓練前後比較  [工程]"))
+        # All visible items are executable. For an isolated scope the Registry
+        # determines membership, and every advertised handler was validated above.
+        workflow_items = (
+            _exploratory_model_menu_work_items(study)
+            if exploratory else tuple(
+                item for item in _MODEL_RESEARCH_MENU_WORK_ITEMS
+                if item[1] not in {"rolling", "timing"} or settings.rolling_authorized
+            )
+        )
+        for item_choice, _action, label in workflow_items:
+            print(render_menu_item(int(item_choice), label, default=item_choice == "1"))
         if study is not None:
             print(render_menu_item(8, "切換正式／隔離探索研究範圍"))
         print(render_menu_item(0, "返回"))
@@ -5631,14 +5667,15 @@ def _interactive_model_research(program_name: str) -> int:
             exploratory = not exploratory
             continue
         if exploratory:
+            selected = next((item for item in workflow_items if item[0] == choice), None)
+            if selected is None:
+                print("無效選項，請重新輸入。")
+                continue
+            result = _invoke_exploratory_research_action(study, selected[1])
             if choice == "1":
-                return _invoke_exploratory_research_action(study, "forward")
-            if choice == "3":
-                _invoke_exploratory_research_action(study, "compare")
-                continue
-            if choice in {"2", "4", "5", "6", "7"}:
-                print("[BLOCKED] 此 current-vintage 探索只授權 Seed42 Forward 與同樣本 AO/BY 比較；Rolling、Robustness、Timing 均不授權。")
-                continue
+                return result
+            continue
+        if choice not in {item[0] for item in workflow_items}:
             print("無效選項，請重新輸入。")
             continue
         if choice == "1":
@@ -5688,9 +5725,10 @@ def show_model_status() -> None:
     """Show official AO artifact status without disguising exploratory authorization."""
     study = _configured_exploratory_research_study()
     if study is not None:
+        enabled = "/".join(label for _choice, _action, label in _exploratory_model_menu_work_items(study))
         print(
-            f"\n隔離探索選單：{study.model_research_id}｜Forward/同樣本比較；"
-            "current-vintage、正式PIT=NO、Trading=NO（進入模型選單後按[8]可切回正式AO）"
+            f"\n隔離探索選單：{study.model_research_id}｜{enabled}；"
+            "current-vintage、正式PIT=NO、Trading=NO（進入模型選單後按[8]可切回正式研究）"
         )
     _print_workflow_status(get_breakout_quality_model_research_settings())
 

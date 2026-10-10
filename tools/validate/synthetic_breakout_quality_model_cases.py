@@ -1514,6 +1514,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
 
     with (
         patch.object(research_app, "get_breakout_quality_model_research_settings", return_value=model_gate_settings),
+        patch.object(research_app, "_configured_exploratory_research_study", return_value=None),
         patch("builtins.input", return_value=""),
         patch.object(research_app, "_interactive_continuous_forward_model_gate", return_value=29) as forward_gate,
         patch.object(research_app, "_interactive_continuous_rolling_model_gate", return_value=31) as rolling_gate,
@@ -1531,6 +1532,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     # and must not be re-gated by that current Training Model.
     with (
         patch.object(research_app, "get_breakout_quality_model_research_settings", return_value=model_gate_settings),
+        patch.object(research_app, "_configured_exploratory_research_study", return_value=None),
         patch("builtins.input", side_effect=["4", "0"]),
         patch.object(research_app, "_run_configured_model_comparison", return_value=0) as rolling_compare,
     ):
@@ -1542,19 +1544,87 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and bool(rolling_compare.call_args.kwargs.get("rolling")) is True,
     )
 
+    # An unsupported formal work type must not be falsely advertised as runnable.
+    import contextlib
+    import io
+    unsupported_stdout = io.StringIO()
+    with (
+        patch.object(research_app, "get_breakout_quality_model_research_settings", return_value=model_gate_settings),
+        patch.object(research_app, "_configured_exploratory_research_study", return_value=None),
+        patch("builtins.input", side_effect=["2", "7", "0"]),
+        contextlib.redirect_stdout(unsupported_stdout),
+    ):
+        unsupported_rc = research_app._interactive_model_research("apps/research.py model")
+    check_true(
+        "formal_menu_does_not_advertise_work_types_not_authorized_by_settings",
+        unsupported_rc == 0
+        and "Rolling OOS 模型訓練" not in unsupported_stdout.getvalue()
+        and "Timing Mode｜Rolling" not in unsupported_stdout.getvalue()
+        and "[BLOCKED]" not in unsupported_stdout.getvalue(),
+    )
+
     app_source = (project_root / "services" / "research" / "breakout_quality_application.py").read_text(encoding="utf-8")
+    # A stable work-type table may be reused by every configured research scope;
+    # this test deliberately checks behavioral membership rather than the source
+    # spelling of each render_menu_item call.
+    stable_work_items = research_app._MODEL_RESEARCH_MENU_WORK_ITEMS
     check_true(
         "continuous_model_menu_uses_shared_forward_rolling_train_compare_robustness_workflow",
-        'render_menu_item(1, "Forward OOS 模型訓練", default=True)' in app_source
-        and 'render_menu_item(2, "Rolling OOS 模型訓練")' in app_source
-        and 'render_menu_item(3, "Forward OOS 模型比較")' in app_source
-        and 'render_menu_item(4, "Rolling OOS 模型比較")' in app_source
-        and 'render_menu_item(5, "Forward OOS Robustness 模型測試")' in app_source
-        and 'render_menu_item(6, "Rolling OOS Robustness 模型測試")' in app_source
-        and 'render_menu_item(7, "Timing Mode｜Rolling 訓練前後比較  [工程]")' in app_source
-        and 'render_menu_item(3, "Fixed-Window Rolling")' not in app_source
+        tuple(choice for choice, _action, _label in stable_work_items) == tuple(str(i) for i in range(1, 8))
+        and len({action for _choice, action, _label in stable_work_items}) == len(stable_work_items)
         and "查看目前Workflow、工件與模型報表" not in app_source
         and "Actual MFE×Safety Truth Geometry（只讀）" not in app_source,
+    )
+    # Check *all* registered studies, including inactive ones. Disabling a
+    # study in config must never disable its formal wiring regression coverage.
+    import importlib as dynamic_importlib
+    from dataclasses import replace as dataclass_replace
+    registered_studies = breakout_quality_registry.iter_exploratory_model_research_studies()
+    for study in registered_studies:
+        advertised = research_app._exploratory_model_menu_work_items(study)
+        declared = set(study.permitted_actions)
+        check_true(
+            f"exploratory_{study.model_research_id}_menu_registry_capability_single_source",
+            {action for _choice, action, _label in advertised} == declared
+            and len(advertised) == len(study.workflow_handlers),
+        )
+        module = dynamic_importlib.import_module(study.service_module)
+        # A synthetic new action must be wired solely by a Registry edit, with
+        # no menu-specific id/handler switch added to the application.
+        unused = next((action for _choice, action, _label in stable_work_items
+                       if action not in declared), None)
+        if unused is not None:
+            alternate = dataclass_replace(
+                study,
+                workflow_handlers=tuple(study.workflow_handlers)
+                                  + ((unused, "synthetic_registered_work"),),
+            )
+            with patch.object(module, "synthetic_registered_work", return_value=0, create=True) as callable_work:
+                published = research_app._exploratory_model_menu_work_items(alternate)
+                research_app._invoke_exploratory_research_action(alternate, unused)
+            check_true(
+                f"exploratory_{study.model_research_id}_new_registered_workflow_without_app_edit",
+                unused in {action for _choice, action, _label in published}
+                and callable_work.call_count == 1,
+            )
+        absent = dataclass_replace(study, workflow_handlers=(("forward", "nonexistent_producer"),))
+        check_true(
+            f"exploratory_{study.model_research_id}_missing_producer_rejected_before_menu",
+            raises_expected(RuntimeError, lambda: research_app._exploratory_model_menu_work_items(absent)),
+        )
+
+    # Dedicated historical missing-BY-Forward regression: this science-specific
+    # producer belongs to its own isolated service, not the generic model engine.
+    from services.breakout_quality import margin_yesterday_research as experimental_runner
+    with (
+        patch.object(experimental_runner, "_read_experimental_report", return_value=(None, None)),
+        patch.object(experimental_runner, "run_forward_menu", return_value=0) as forward_builder,
+        patch.object(experimental_runner, "_comparison_payload") as forward_consumer,
+    ):
+        aborted = experimental_runner.run_forward_comparison()
+    check_true(
+        "missing_exploratory_forward_is_delegated_to_producer_not_blocked",
+        aborted == 0 and forward_builder.call_count == 1 and forward_consumer.call_count == 0,
     )
     daily_ranker_source = (
         project_root / "services" / "breakout_quality" / "train_daily_ranker.py"
