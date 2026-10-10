@@ -4771,8 +4771,8 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
 
     check_true(
-        "standard_model_sop_v9_common_section_order_is_contiguous_1_to_6",
-        int(MODEL_STANDARD_SOP.version) == 9
+        "standard_model_sop_20260904_v7_common_sections_unchanged",
+        int(MODEL_STANDARD_SOP.version) == 7
         and [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
         == [
             (1, "Learnability"),
@@ -4787,50 +4787,30 @@ def validate_research_report_contract_freeze_case(_base_params):
     comparison_generalization = table_contract(
         "model.standard_comparison", "generalization", "generalization"
     )
+    # Frozen to the user's 2026-09-04 standard comparison presentation.  These
+    # are UI invariants, not assertions about a particular experimental model.
     check_true(
-        "standard_multi_model_comparison_v14_has_five_common_sections_and_pivoted_generalization",
-        int(MODEL_STANDARD_COMPARISON.version) == 14
+        "standard_multi_model_comparison_20260904_v11_retains_six_sections_and_transition_tables",
+        int(MODEL_STANDARD_COMPARISON.version) == 11
         and not hasattr(MODEL_STANDARD_COMPARISON, "model_specific_extension_ids")
         and comparison_extension_ids() == tuple(MODEL_COMPARISON_EXTENSION_SCHEMAS)
-        and comparison_extension_ids() == tuple(
-            extension_id
-            for extension_id, extension in MODEL_EXTENSION_SCHEMAS.items()
-            if extension.comparison_mode is not None
-        )
-        and comparison_extension_ids() == ("multi_head_learnability", "hs_conditional_mfe_gate")
-        and comparison_sections == [
-            (1, "Learnability"),
-            (2, "Generalization"),
-            (3, "Upside / Downside Alignment"),
-            (4, "Top-tail Economic Quality"),
-            (5, "Ranking / Boundary"),
-        ]
-        and comparison_generalization.headers == (
-            "Model",
-            "Val→OOS Δ Daily rho", "Val→OOS Δ Pair", "Val→OOS Δ Top-Bottom",
-            "OOS→Breakout Δ Daily rho", "OOS→Breakout Δ Pair", "OOS→Breakout Δ Top-Bottom",
-        )
-        and len(comparison_generalization.columns) == 7
+        and comparison_sections == [(item.number, item.title) for item in MODEL_STANDARD_SOP.sections]
+        and comparison_generalization.headers == ("Model", "Δ Daily rho", "Δ Pair", "Δ Top-Bottom")
         and all(
             comparison_section.section_id == standard_section.section_id
             and comparison_section.number == standard_section.number
             and all(
-                comparison_table.headers
-                == (
+                comparison_table.headers == (
                     "Model",
-                    *tuple(
-                        column.label
-                        for column in standard_table.columns
-                        if column.key not in {"split", "comparison"}
-                    ),
+                    *(column.label for column in standard_table.columns
+                      if column.key not in {"split", "comparison"}),
                 )
                 for standard_table, comparison_table in zip(
                     standard_section.tables, comparison_section.tables
                 )
             )
             for standard_section, comparison_section in zip(
-                [section for section in MODEL_STANDARD_SOP.sections if section.section_id not in {"generalization", "evidence_coverage"}],
-                [section for section in MODEL_STANDARD_COMPARISON.sections if section.section_id != "generalization"],
+                MODEL_STANDARD_SOP.sections, MODEL_STANDARD_COMPARISON.sections
             )
         ),
     )
@@ -4912,9 +4892,9 @@ def validate_research_report_contract_freeze_case(_base_params):
         "rolling_and_robustness_use_mode_extensions_not_duplicate_persistent_report_contracts",
         set(MODEL_MODE_EXTENSION_SCHEMAS) == {"rolling_stability", "robustness_stability"}
         and mode_extension_contract("rolling_stability").title
-            == "Standard Mode Evidence｜Rolling Stability"
+            == "Rolling-specific Extension｜Fold / Year Stability"
         and mode_extension_contract("robustness_stability").title
-            == "Standard Mode Evidence｜Across-seed Stability"
+            == "Robustness-specific Extension｜Across-seed Stability"
         and len(mode_extension_contract("robustness_stability").tables) == 2
         and mode_extension_contract("robustness_stability").tables[1].headers
             == ("Model Extension", "Across-seed aggregation", "Status")
@@ -5300,16 +5280,14 @@ def validate_research_report_contract_freeze_case(_base_params):
         and comparison_text.count("模型比較 SOP｜5. Ranking / Boundary") == 1
         and "Forward OOS" in comparison_text
         and "Breakout slice" in comparison_text
-        and "Val→OOS Δ Daily rho" in comparison_text
-        and "OOS→Breakout Δ Daily rho" in comparison_text
-        and "Validation → OOS" not in comparison_text
-        and "OOS → Breakout slice" not in comparison_text
-        and "Comparison" not in comparison_text
+        and "Δ Daily rho" in comparison_text
+        and "Validation → OOS" in comparison_text
+        and "OOS → Breakout slice" in comparison_text
         and "Target→Safety rho" in comparison_text
         and "Top10 Low-Adverse" in comparison_text
         and "Top-K Lift" in comparison_text
         and "競爭日 / Pool日" in comparison_text
-        and "模型比較 SOP｜6. Evidence Coverage" not in comparison_text
+        and "模型比較 SOP｜6. Evidence Coverage" in comparison_text
         and comparison_text.find("模型比較 SOP｜1. Learnability")
             < comparison_text.find("模型比較 SOP｜2. Generalization")
             < comparison_text.find("模型比較 SOP｜3. Upside / Downside Alignment")
@@ -5410,11 +5388,11 @@ def validate_research_report_contract_freeze_case(_base_params):
         and "### <span" in comparison_markdown
         and "Forward OOS</span>" in comparison_markdown
         and "Breakout slice</span>" in comparison_markdown
-        and "Validation → OOS</span>" not in comparison_markdown
-        and "OOS → Breakout slice</span>" not in comparison_markdown
+        and "Validation → OOS</span>" in comparison_markdown
+        and "OOS → Breakout slice</span>" in comparison_markdown
         and "| Model | Groups | Daily rho |" in comparison_markdown
-        and "| Model | Val→OOS Δ Daily rho | Val→OOS Δ Pair | Val→OOS Δ Top-Bottom | OOS→Breakout Δ Daily rho | OOS→Breakout Δ Pair | OOS→Breakout Δ Top-Bottom |" in comparison_markdown
-        and "Evidence Coverage" not in comparison_markdown,
+        and "| Model | Δ Daily rho | Δ Pair | Δ Top-Bottom |" in comparison_markdown
+        and "Evidence Coverage" in comparison_markdown,
     )
 
     head_low = json.loads(json.dumps(control_payload))
@@ -5471,14 +5449,14 @@ def validate_research_report_contract_freeze_case(_base_params):
         and "validation" in rolling_simple.lower()
         and "Validation → OOS" in rolling_simple
         and "OOS → Breakout slice" in rolling_simple
-        and "Standard Mode Evidence｜Rolling Stability" in rolling_simple
+        and "Rolling-specific Extension｜Fold / Year Stability" in rolling_simple
         and rolling_comparison.count("模型比較 SOP｜1. Learnability") == 1
         and "Rolling OOS" in rolling_comparison
         and "Breakout slice" in rolling_comparison
-        and "Val→OOS Δ Daily rho" in rolling_comparison
-        and "OOS→Breakout Δ Daily rho" in rolling_comparison
-        and "模型比較 SOP｜6. Evidence Coverage" not in rolling_comparison
-        and "Standard Mode Evidence｜Rolling Stability" in rolling_comparison
+        and "Validation → OOS" in rolling_comparison
+        and "OOS → Breakout slice" in rolling_comparison
+        and "模型比較 SOP｜6. Evidence Coverage" in rolling_comparison
+        and "Rolling-specific Extension｜Fold / Year Stability" in rolling_comparison
         and "Fold count" in rolling_comparison
         and all(model in rolling_comparison for model in ("ROLL-A", "ROLL-B")),
         detail=rolling_comparison,
@@ -5496,13 +5474,10 @@ def validate_research_report_contract_freeze_case(_base_params):
         and "Model-specific Extension｜Truth / Prediction Geometry" not in rolling_multi_comparison
         and "ROLL-MULTI" in rolling_multi_comparison
         and "Rolling OOS" in rolling_multi_comparison
-        and "模型比較 SOP｜6. Evidence Coverage" not in rolling_multi_comparison
-        and "Rolling OOS Model-specific Extension" in rolling_multi_comparison
-        and "=" * 100 in rolling_multi_comparison
-        and rolling_multi_comparison.find("模型比較 SOP｜5. Ranking / Boundary")
-            < rolling_multi_comparison.find("Rolling OOS Model-specific Extension")
+        and "模型比較 SOP｜6. Evidence Coverage" in rolling_multi_comparison
+        and rolling_multi_comparison.find("模型比較 SOP｜6. Evidence Coverage")
             < rolling_multi_comparison.find("Model-specific Extension｜Multi-head Learnability")
-            < rolling_multi_comparison.find("Standard Mode Evidence｜Rolling Stability"),
+            < rolling_multi_comparison.find("Rolling-specific Extension｜Fold / Year Stability"),
         detail=rolling_multi_comparison,
     )
 
@@ -5551,10 +5526,10 @@ def validate_research_report_contract_freeze_case(_base_params):
     check_true(
         "robustness_reports_keep_same_common_sop_and_append_only_across_seed_extension",
         "模型比較 SOP｜1. Learnability" in robust_comparison
-        and "模型比較 SOP｜6. Evidence Coverage" not in robust_comparison
-        and "Val→OOS Δ Daily rho" in robust_comparison
-        and "OOS→Breakout Δ Daily rho" in robust_comparison
-        and "Standard Mode Evidence｜Across-seed Stability" in robust_comparison
+        and "模型比較 SOP｜6. Evidence Coverage" in robust_comparison
+        and "Validation → OOS" in robust_comparison
+        and "OOS → Breakout slice" in robust_comparison
+        and "Robustness-specific Extension｜Across-seed Stability" in robust_comparison
         and "OOS Daily rho σ" in robust_comparison
         and all(model in robust_comparison for model in ("ROBUST-A", "ROBUST-B")),
         detail=robust_comparison,

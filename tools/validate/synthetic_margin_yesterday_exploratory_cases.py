@@ -341,97 +341,110 @@ class ExploratoryMenuIntegrationCases(unittest.TestCase):
             experiment_profile=runner._STUDY.reference_profile,
         )
 
-    def test_menu_forward_isolated_from_formal_ao(self):
+    def test_standard_menu_does_not_dispatch_experiment_specific_runner(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
         from services.research import breakout_quality_application as app
+        output = StringIO()
         with (patch.object(app, "get_breakout_quality_model_research_settings", return_value=self._settings()),
-              patch.object(app, "_configured_exploratory_research_study", return_value=runner._STUDY),
-              patch.object(app, "_interactive_continuous_forward_model_gate") as formal,
-              patch.object(app, "_invoke_exploratory_research_action", return_value=0) as explorer,
-              patch("builtins.input", side_effect=["1"])):
-            result = app._interactive_model_research("apps/research.py model")
-        self.assertEqual(result, 0)
-        explorer.assert_called_once_with(runner._STUDY, "forward")
-        formal.assert_not_called()
+              patch.object(app, "_run_continuous_forward_model_gate", return_value=0) as formal,
+              patch.object(runner, "run_forward_menu", side_effect=AssertionError("BY must remain isolated")),
+              patch("builtins.input", side_effect=["1"]), redirect_stdout(output)):
+            self.assertEqual(app._interactive_model_research("apps/research.py model"), 0)
+        formal.assert_called_once()
+        self.assertNotIn("Research scope", output.getvalue())
+        self.assertNotIn("[8]", output.getvalue())
+        self.assertNotIn("[EXPLORATORY ONLY]", output.getvalue())
 
-    def test_menu_always_exposes_and_dispatches_all_seven_work_types(self):
-        import contextlib
-        import io
-        from services.research import breakout_quality_application as app
+    def test_standard_menu_cannot_be_shrunk_or_relabeled_by_study_registration(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
         from core.model_research_menu_contract import MODEL_RESEARCH_WORK_TYPES
-        output = io.StringIO()
+        from services.research import breakout_quality_application as app
+        output = StringIO()
         with (patch.object(app, "get_breakout_quality_model_research_settings", return_value=self._settings()),
-              patch.object(app, "_configured_exploratory_research_study", return_value=runner._STUDY),
-              patch.object(app, "_run_configured_model_comparison") as formal,
-              patch.object(app, "_invoke_exploratory_research_action", return_value=0) as explorer,
-              patch("builtins.input", side_effect=["2", "3", "4", "5", "6", "7", "0"]),
-              contextlib.redirect_stdout(output)):
-            result = app._interactive_model_research("apps/research.py model")
-        self.assertEqual(result, 0)
+              patch("builtins.input", side_effect=["0"]), redirect_stdout(output)):
+            self.assertEqual(app._interactive_model_research("apps/research.py model"), 0)
         for work in MODEL_RESEARCH_WORK_TYPES:
             self.assertIn(f"[{work.choice}]", output.getvalue())
             self.assertIn(work.label, output.getvalue())
-        self.assertNotIn("[BLOCKED]", output.getvalue())
+        self.assertNotIn("[8]", output.getvalue())
+
+    def test_standard_menu_matches_20260904_golden_layout_and_comparison_bases(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from services.research import breakout_quality_application as app
+        from core.breakout_quality_policy import get_breakout_quality_model_test_settings
+        from core.research_report_contract import MODEL_STANDARD_COMPARISON, MODEL_STANDARD_SOP
+
+        expected_choices = (
+            "[1]  Forward OOS 模型訓練  (Enter)",
+            "[2]  Rolling OOS 模型訓練",
+            "[3]  Forward OOS 模型比較",
+            "[4]  Rolling OOS 模型比較",
+            "[5]  Forward OOS Robustness 模型測試",
+            "[6]  Rolling OOS Robustness 模型測試",
+            "[7]  Timing Mode｜Rolling 訓練前後比較  [工程]",
+            "[0]  返回",
+        )
+        from config.breakout_quality import BREAKOUT_QUALITY_MODEL_TEST_PROFILES
+        names = tuple(model for model, _ in get_breakout_quality_model_test_settings().model_profiles)
+        # The comparison list is owned by user-editable config, never by an experiment or a test.
+        configured = tuple(model_id for model_id, _ in BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
+        self.assertEqual(names, configured)
+        self.assertGreaterEqual(len(names), 2)
+        self.assertNotIn("MR-13BY", names)
         self.assertEqual(
-            [(args[0][1]) for args in explorer.call_args_list],
-            [work.action for work in MODEL_RESEARCH_WORK_TYPES[1:]],
+            tuple((section.number, section.title) for section in MODEL_STANDARD_COMPARISON.sections),
+            tuple((section.number, section.title) for section in MODEL_STANDARD_SOP.sections),
         )
-        formal.assert_not_called()
-
-    def test_registry_never_owns_menu_selection_or_handler_allowlist(self):
-        from dataclasses import fields
-        from core.model_research_menu_contract import (
-            MODEL_RESEARCH_WORK_TYPES, validate_research_producer,
-        )
-        from core.breakout_quality_registry import iter_exploratory_model_research_studies
-        from importlib import import_module
-        self.assertNotIn("workflow_handlers", {field.name for field in fields(runner._STUDY)})
-        self.assertNotIn("permitted_actions", dir(runner._STUDY))
-        self.assertEqual(tuple(work.choice for work in MODEL_RESEARCH_WORK_TYPES), tuple(map(str, range(1, 8))))
-        for study in iter_exploratory_model_research_studies():
-            module = import_module(study.service_module)
-            validate_research_producer(module)
-            for work in MODEL_RESEARCH_WORK_TYPES:
-                with self.subTest(model=study.model_research_id, action=work.action):
-                    self.assertTrue(callable(getattr(module, work.producer_method, None)))
-
-    def test_missing_producer_is_integration_error_not_a_hidden_menu(self):
-        from services.research import breakout_quality_application as app
-        from core.model_research_menu_contract import validate_research_producer, model_research_menu_items
-        self.assertEqual(len(model_research_menu_items()), 7)
-        with patch.object(runner, "run_rolling_menu", None):
-            with self.assertRaisesRegex(RuntimeError, "run_rolling_menu"):
-                validate_research_producer(runner)
-            with self.assertRaisesRegex(RuntimeError, "run_rolling_menu"):
-                app._invoke_exploratory_research_action(runner._STUDY, "forward")
-            self.assertEqual(len(model_research_menu_items()), 7)
-
-    def test_broken_exploratory_producer_fails_before_menu_offers_choices(self):
-        from services.research import breakout_quality_application as app
-        import contextlib
-        import io
-        text = io.StringIO()
+        self.assertEqual(tuple(section.section_id for section in MODEL_STANDARD_COMPARISON.sections), (
+            "learnability", "generalization", "upside_downside_alignment",
+            "top_tail_economic_quality", "ranking_boundary", "evidence_coverage",
+        ))
+        text = StringIO()
         with (patch.object(app, "get_breakout_quality_model_research_settings", return_value=self._settings()),
-              patch.object(app, "_configured_exploratory_research_study", return_value=runner._STUDY),
-              patch.object(runner, "run_rolling_menu", None),
-              patch("builtins.input", side_effect=AssertionError("Must fail before asking user")),
-              contextlib.redirect_stdout(text)):
-            with self.assertRaisesRegex(RuntimeError, "run_rolling_menu"):
-                app._interactive_model_research("apps/research.py model")
-        self.assertNotIn("[1]", text.getvalue())
+              patch("builtins.input", side_effect=["0"]), redirect_stdout(text)):
+            self.assertEqual(app._interactive_model_research("apps/research.py model"), 0)
+        rows = [line.rstrip() for line in text.getvalue().splitlines()]
+        ordered = [line for line in rows if line.startswith("[") and "]" in line]
+        self.assertEqual(ordered, list(expected_choices))
+        self.assertIn("Model Compare/Test List：" + " / ".join(names), text.getvalue())
+        self.assertFalse(any(keyword in text.getvalue() for keyword in (
+            "Research scope", "[8]", "[EXPLORATORY ONLY]", "MR-13BY", "歷史 Vintage 未驗證",
+        )))
 
-    def test_real_producer_is_dispatched_by_all_seven_work_types(self):
-        from contextlib import ExitStack
+    def test_standard_menu_dispatches_september_direct_workflows_without_extra_confirmation(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from types import SimpleNamespace
         from services.research import breakout_quality_application as app
-        from core.model_research_menu_contract import MODEL_RESEARCH_WORK_TYPES
-        with ExitStack() as stack:
-            spies = {
-                work.action: stack.enter_context(patch.object(runner, work.producer_method, return_value=0))
-                for work in MODEL_RESEARCH_WORK_TYPES
-            }
-            for work in MODEL_RESEARCH_WORK_TYPES:
-                self.assertEqual(app._invoke_exploratory_research_action(runner._STUDY, work.action), 0)
-            for spy in spies.values():
-                spy.assert_called_once_with()
+
+        for choice, target, expected_rolling in (
+            ("1", "_run_continuous_forward_model_gate", None),
+            ("2", "_run_continuous_rolling_mode_direct", None),
+            ("3", "_run_configured_model_comparison", False),
+            ("4", "_run_configured_model_comparison", True),
+            ("5", "_run_configured_model_robustness", False),
+            ("6", "_run_configured_model_robustness", True),
+            ("7", "_interactive_rolling_timing_mode", None),
+        ):
+            with self.subTest(choice=choice):
+                keys = [choice] if choice in {"1", "7"} else [choice, "0"]
+                with (patch.object(app, "get_breakout_quality_model_research_settings", return_value=self._settings()),
+                      patch.object(app, "get_breakout_quality_rolling_timing_settings", return_value=SimpleNamespace(experiment_profile=self._settings().experiment_profile)),
+                      patch.object(app, "get_breakout_quality_workflow_settings", return_value=self._settings()),
+                      patch.object(app, target, return_value=0) as run,
+                      patch("builtins.input", side_effect=keys), redirect_stdout(StringIO())):
+                    self.assertEqual(app._interactive_model_research("apps/research.py model"), 0)
+                run.assert_called_once()
+                if expected_rolling is not None:
+                    self.assertIs(run.call_args.kwargs["rolling"], expected_rolling)
+                else:
+                    self.assertFalse(run.call_args.kwargs)
+        source = Path(app.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("prompt_producer_execution_action", source)
+        self.assertNotIn("_configured_exploratory_research_study", source)
 
     def test_rolling_schedule_retains_fold_end_predictions_without_future_fit(self):
         from core.breakout_quality_policy import get_breakout_quality_workflow_settings
@@ -634,17 +647,14 @@ class ExploratoryMenuIntegrationCases(unittest.TestCase):
         producer.assert_called_once_with()
         consumer.assert_not_called()
 
-    def test_menu_switch_restores_unmodified_formal_ao(self):
-        from services.research import breakout_quality_application as app
-        with (patch.object(app, "get_breakout_quality_model_research_settings", return_value=self._settings()),
-              patch.object(app, "_configured_exploratory_research_study", return_value=runner._STUDY),
-              patch.object(app, "_interactive_continuous_forward_model_gate", return_value=0) as formal,
-              patch.object(app, "_invoke_exploratory_research_action") as explorer,
-              patch("builtins.input", side_effect=["8", "1"])):
-            result = app._interactive_model_research("apps/research.py model")
-        self.assertEqual(result, 0)
-        formal.assert_called_once()
-        explorer.assert_not_called()
+    def test_formal_comparison_uses_configured_bases_not_ao_by_override(self):
+        from config.breakout_quality import BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES
+        from core.breakout_quality_policy import get_breakout_quality_model_test_settings
+        bases = tuple(row[0] for row in BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES)
+        compared = tuple(row[0] for row in get_breakout_quality_model_test_settings().model_profiles)
+        self.assertEqual(bases, ("MR-13H", "MR-13AH", "MR-13AK", "MR-13AO"))
+        self.assertEqual(compared[:len(bases)], bases)
+        self.assertNotIn("MR-13BY", compared)
 
     def test_exploratory_reference_is_exact_group_ticker_date_join(self):
         from tempfile import TemporaryDirectory

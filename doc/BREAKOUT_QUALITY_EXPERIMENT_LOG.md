@@ -12810,3 +12810,10 @@ Decision：`RAW_PROVIDER_ZERO_OHLC_CONFIRMED / SOURCE_QUALITY_BLOCKED / READY_VA
 - **工程變更與科學隔離**：`core/model_research_menu_contract.py` 作為七工作類型／Producer 方法唯一介面；Registry 移除第二份工作 allowlist／Handlers，Research application 無條件顯示固定工作類型並在 UI 前驗證所有已配置 Producer 可呼叫。BY 隔離 service 補上 Rolling 同 AO canonical PIT 日曆＋每fold選擇期 target maturity guard、Rolling AO 同樣本比較、Forward/Rolling多seed benchmark Robustness 與共用工程 Timing；缺可合法重建的 BY／AO 參照由原工作入口委派 canonical producer，而非要求另外先執行某個選單。工件身份／SHA／研究隔離 namespace、current-vintage 明確確認與PIT/Trading prohibition持續有效。此工程授權**不是歷史FinMind修訂版本PIT證明**。
 - **舊規則清理**：刪除探索 `workflow_handlers`／`permitted_actions`、選單 allowlist 及「Rolling 應被隱藏」的舊預期測試；改為跨模型通用定向合成與T458 機械契約。`doc/PROJECT_SETTINGS.md` 及 `doc/ARCHITECTURE.md` 加入不得再依模型刪減固定七項工作的長期治理規則。
 - **尚未取得的科學結果**：本輪只有隔離合成／Mock與研究契約檢查；使用者本機真實 FinMind Provider Snapshot 仍未於本輪執行 Forward、Rolling、Robustness 或 AO/BY 比較，**不得宣稱任何 OOS 成效、Rolling coverage、正式 PIT 合法性或產品策略可用**。原 Forward-only stop-rule 與當時授權作為歷史記錄保留，執行途徑變更也不得反向改寫過去已完成結果。
+
+
+## 2026-10-10 — Research 標準模型選單／模型比較報表恢復 2026-09-04 已核准介面（工程-only）
+
+- **使用者最新明確決策**：前輪MR-13BY專用Research scope切換、[8]、AO/BY九指標Markdown直接輸出、額外模型Producer操作確認及因此縮減／改寫正式比較清單，均屬未經授權的介面回歸。必須回復2026-09-04已有標準Research七工作項目的名稱／編號／順序／直接工作流程，仍維持七個選項完整可選。特殊模型實驗不可重新定義標準選單或Standard SOP；必要專題診斷只能隔離於一次性Audit，不能取代正式模型比較。
+- **恢復現行工程規格**：`services/research/breakout_quality_application.py`不再從探索Registry派生第二份使用者介面或選擇模型，正式Model Compare/Test List唯一讀取`config/breakout_quality.py`的比較設定（當前基準是MR-13H／AH／AK／AO，不硬編測試成不可變參數），Forward／Rolling／Robustness沿舊版直接進入canonical Producer。`core/research_report_contract.py`與canonical Renderer將Model Standard SOP/Comparison恢復原六章、Generalization兩個分開轉換表、Evidence Coverage，以及Model-specific Extension的附錄地位；格式差異由Golden/contract定向測試防回歸。
+- **科學與歷史隔離**：不修改MR-13BY或AO已存在的原始source/feature/target/fitting identity、已發表工件、scientific gate、Provider歷史Vintage風險判定或正式Trading。舊有每一輪工程記錄保留為歷史經過，本條取代其中已過時的正式選單scope與報表介面建議；本輪尚未執行使用者本機實際Provider訓練或完整formal suite。

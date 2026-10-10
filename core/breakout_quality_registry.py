@@ -4160,8 +4160,8 @@ class ExploratoryModelResearchStudy:
     architecture_identity: str
     feature_contract: str
     service_module: str
-    # The service module supplies every stable Research work type through the
-    # generic protocol; a study never owns a per-model menu/allow-list.
+    # Isolated diagnostics can resolve an experiment's service, but this metadata
+    # may never be consulted by the standard Research menu or comparison renderer.
     historical_vintage_proven: bool = False
     formal_input_authorized: bool = False
     trading_promotion_authorized: bool = False
@@ -4192,15 +4192,6 @@ def get_exploratory_model_research_study(model_id: str) -> ExploratoryModelResea
         raise ValueError("探索實驗AO參照身分不一致")
     return study
 
-
-def iter_exploratory_model_research_studies() -> tuple[ExploratoryModelResearchStudy, ...]:
-    """Enumerate every registered study, not only the currently selected one.
-
-    Capability regressions must still detect broken handlers when a study is
-    temporarily inactive in config (no active-scope-dependent test skip).
-    """
-    return tuple(get_exploratory_model_research_study(model_id)
-                 for model_id in _EXPLORATORY_MODEL_STUDIES)
 
 
 def get_continuous_ranker_research_spec(

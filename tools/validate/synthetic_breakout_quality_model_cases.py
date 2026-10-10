@@ -1514,10 +1514,9 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
 
     with (
         patch.object(research_app, "get_breakout_quality_model_research_settings", return_value=model_gate_settings),
-        patch.object(research_app, "_configured_exploratory_research_study", return_value=None),
         patch("builtins.input", return_value=""),
-        patch.object(research_app, "_interactive_continuous_forward_model_gate", return_value=29) as forward_gate,
-        patch.object(research_app, "_interactive_continuous_rolling_model_gate", return_value=31) as rolling_gate,
+        patch.object(research_app, "_run_continuous_forward_model_gate", return_value=29) as forward_gate,
+        patch.object(research_app, "_run_continuous_rolling_mode_direct", return_value=31) as rolling_gate,
     ):
         menu_rc = research_app._interactive_model_research("apps/research.py model")
     check_true(
@@ -1532,7 +1531,6 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     # and must not be re-gated by that current Training Model.
     with (
         patch.object(research_app, "get_breakout_quality_model_research_settings", return_value=model_gate_settings),
-        patch.object(research_app, "_configured_exploratory_research_study", return_value=None),
         patch("builtins.input", side_effect=["4", "0"]),
         patch.object(research_app, "_run_configured_model_comparison", return_value=0) as rolling_compare,
     ):
@@ -1551,7 +1549,6 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     universal_stdout = io.StringIO()
     with (
         patch.object(research_app, "get_breakout_quality_model_research_settings", return_value=model_gate_settings),
-        patch.object(research_app, "_configured_exploratory_research_study", return_value=None),
         patch("builtins.input", side_effect=["0"]),
         contextlib.redirect_stdout(universal_stdout),
     ):
@@ -1576,30 +1573,18 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and "查看目前Workflow、工件與模型報表" not in app_source
         and "Actual MFE×Safety Truth Geometry（只讀）" not in app_source,
     )
-    # Every registered (including inactive) scientific producer must expose all
-    # seven methods; no per-model action allowlist may be reconstructed in tests.
-    from core.model_research_menu_contract import (
-        MODEL_RESEARCH_WORK_TYPES, validate_research_producer,
+    # Scientific experiment registration must not control any stable model menu.
+    # The standard workflow dispatch is owned by the formal Research application;
+    # experiment-specific services remain isolated diagnostic implementations.
+    from core.model_research_menu_contract import MODEL_RESEARCH_WORK_TYPES
+    check_true(
+        "research_menu_work_types_do_not_bind_algorithm_specific_producers",
+        tuple(work.choice for work in MODEL_RESEARCH_WORK_TYPES) == tuple(str(i) for i in range(1, 8))
+        and all(not hasattr(work, "producer_method") for work in MODEL_RESEARCH_WORK_TYPES)
+        and "iter_exploratory_model_research_studies" not in app_source
+        and "get_exploratory_model_research_study" not in app_source
+        and "service_module" not in app_source[app_source.index("def _interactive_model_research"):app_source.index("def run_model_training_menu")],
     )
-    from dataclasses import fields as dataclass_fields
-    from importlib import import_module as dynamic_import_module
-    registered_studies = breakout_quality_registry.iter_exploratory_model_research_studies()
-    for study in registered_studies:
-        module = dynamic_import_module(study.service_module)
-        check_true(
-            f"exploratory_{study.model_research_id}_producer_implements_seven_universal_work_types",
-            not any(field.name == "workflow_handlers" for field in dataclass_fields(study))
-            and all(callable(getattr(module, item.producer_method, None))
-                    for item in MODEL_RESEARCH_WORK_TYPES)
-            and not raises_expected(RuntimeError, lambda: validate_research_producer(module)),
-        )
-        with patch.object(module, "run_rolling_menu", None):
-            check_true(
-                f"exploratory_{study.model_research_id}_missing_producer_is_test_failure_not_hidden_item",
-                raises_expected(RuntimeError, lambda: validate_research_producer(module))
-                and len(research_app._MODEL_RESEARCH_MENU_WORK_ITEMS) == 7,
-            )
-
     # Dedicated historical missing-BY-Forward regression: this science-specific
     # producer belongs to its own isolated service, not the generic model engine.
     from services.breakout_quality import margin_yesterday_research as experimental_runner
@@ -6386,7 +6371,6 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
     menu_output = StringIO()
     with (
         patch.object(research_app, "get_breakout_quality_model_research_settings", return_value=comparison_settings),
-        patch.object(research_app, "_configured_exploratory_research_study", return_value=None),
         patch.object(research_app, "get_breakout_quality_model_test_settings", return_value=SimpleNamespace(model_profiles=configured_models)) as menu_models,
         patch.object(research_app, "_run_configured_model_comparison", return_value=0) as run_comparison,
         patch.object(research_app, "_run_configured_model_robustness", return_value=0) as run_robustness,
@@ -6448,7 +6432,7 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
         patch.object(research_app, "resolve_robustness_benchmark_seeds", return_value=(11, 17)),
         patch.object(research_app, "_load_forward_robustness_seed", return_value=(None, outputs[0], "missing")),
         patch.object(research_app, "_load_rolling_robustness_seed", return_value=(None, outputs[0], "missing")),
-        patch.object(research_app, "prompt_producer_execution_action", return_value=SimpleNamespace(action=research_app.PRODUCER_ACTION_CANCEL)),
+        patch.object(research_app, "_prepare_continuous_research_inputs", return_value=98),
         patch.object(research_app, "_print_model_action_status") as robustness_status,
         redirect_stdout(StringIO()),
     ):
@@ -6458,7 +6442,7 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
         rolling_robustness_rows = robustness_status.call_args.args[0]
     check_true(
         "configured_forward_and_rolling_robustness_consume_same_runtime_model_list",
-        forward_robustness_return == rolling_robustness_return == 0
+        forward_robustness_return == rolling_robustness_return == 98
         and tuple((model_id, profile) for model_id, profile, _action, _reason in forward_robustness_rows) == configured_models
         and tuple((model_id, profile) for model_id, profile, _action, _reason in rolling_robustness_rows) == configured_models,
     )

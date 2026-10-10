@@ -4048,10 +4048,10 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     producer_execution_source = (project_root / "services" / "research" / "producer_execution.py").read_text(encoding="utf-8")
     model_app_source = (project_root / "services" / "research" / "breakout_quality_application.py").read_text(encoding="utf-8")
     check(
-        "research_training_producers_share_one_execution_action_contract",
+        "research_model_standard_menu_does_not_inherit_extra_producer_action_menu",
         True,
         "prompt_producer_execution_action" in strategy_param_app_source
-        and "prompt_producer_execution_action" in model_app_source
+        and "prompt_producer_execution_action" not in model_app_source
         and "強制重新訓練" in producer_execution_source
         and "查看既有訓練報表" in producer_execution_source,
     )

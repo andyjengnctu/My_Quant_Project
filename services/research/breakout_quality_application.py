@@ -32,7 +32,6 @@ from core.breakout_quality_registry import (
     SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES,
     get_breakout_quality_experiment_profile,
     get_continuous_ranker_research_spec,
-    get_exploratory_model_research_study,
 )
 from core.breakout_quality_policy import (
     get_breakout_quality_continuous_ranker_comparison_settings,
@@ -112,13 +111,6 @@ from services.breakout_quality.fitted_model_artifacts import (
     fitted_model_settings_issues,
     forward_fitted_source_provenance_issues,
     pit_fold_fitting_settings_issues,
-)
-from services.research.producer_execution import (
-    PRODUCER_ACTION_CANCEL,
-    PRODUCER_ACTION_FORCE_REBUILD,
-    PRODUCER_ACTION_NORMAL,
-    PRODUCER_ACTION_VIEW_REPORT,
-    prompt_producer_execution_action,
 )
 from services.research.strategy_compare_training import (
     run_strategy_compare_training_unit,
@@ -1376,6 +1368,7 @@ def _standard_model_comparison_rows(views: list[dict]) -> dict[str, object]:
         "upside_downside_alignment": [],
         "top_tail_economic_quality": [],
         "ranking_boundary": [],
+        "evidence_coverage": [],
         "ranking_settings": [],
     }
     for item in views:
@@ -1405,6 +1398,10 @@ def _standard_model_comparison_rows(views: list[dict]) -> dict[str, object]:
                 for row in list(ranking.get("rows") or [])
             )
 
+        for evidence, status in list(view.get("evidence") or []):
+            result["evidence_coverage"].append(
+                {"model": model, "evidence": evidence, "status": status}
+            )
     return result
 
 
@@ -1479,10 +1476,10 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
 
     [1][4] does not render Validation as a raw split table. For each scope-bearing
     Standard section, one numbered section title is followed by Forward OOS and
-    Breakout slice tables. Generalization pivots the two canonical transitions into
-    one seven-column model-comparison table. Evidence Coverage is intentionally not
-    rendered on the cross-model surface. Authorized capability-driven Model-specific
-    extensions are appended after Standard SOP section 5 and before mode evidence.
+    Breakout slice tables. Generalization uses two independent transition tables:
+    Validation → OOS and OOS → Breakout slice. The common scorecard remains
+    invariant; authorized capability-driven Model-specific extensions are appended
+    after Standard SOP section 6 and before evaluation-mode extensions.
     """
 
     views = _standard_model_comparison_views(models)
@@ -1536,49 +1533,31 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
                 best_worst_style=True,
             ))
 
-    # 1. Learnability: common final-model score only.  Semantic head metrics live
-    # in the capability-driven Multi-head Model-specific Extension.
-    append_scoped_section(
-        "learnability",
-        "learnability",
-        list(rows.get("learnability") or []),
-    )
+    # 1. Learnability
+    append_scoped_section("learnability", "learnability", list(rows.get("learnability") or []))
 
-    # 2. Generalization. The two canonical transition rows are display-pivoted into
-    # one model row; no metric is recomputed here.
+    # 2. Generalization. One section title, then two independent transition tables.
     generalization_rows = [dict(row) for row in list(rows.get("generalization") or [])]
-    generalization_by_model: dict[str, dict[str, dict]] = {}
-    for row in generalization_rows:
-        model = str(row.get("model") or "")
-        comparison = str(row.get("comparison") or "").strip()
-        if model and comparison:
-            generalization_by_model.setdefault(model, {})[comparison] = row
-    generalization_table_rows: list[dict] = []
-    for item in views:
-        model = str(item.get("model_id") or "")
-        transitions = generalization_by_model.get(model, {})
-        validation_to_oos = dict(transitions.get("Validation → OOS") or {})
-        oos_to_breakout = dict(transitions.get("OOS → Breakout slice") or {})
-        if not validation_to_oos or not oos_to_breakout:
-            continue
-        generalization_table_rows.append({
-            "model": model,
-            "validation_to_oos_delta_daily_rho": validation_to_oos.get("delta_daily_rho"),
-            "validation_to_oos_delta_pair": validation_to_oos.get("delta_pair"),
-            "validation_to_oos_delta_top_bottom": validation_to_oos.get("delta_top_bottom"),
-            "oos_to_breakout_delta_daily_rho": oos_to_breakout.get("delta_daily_rho"),
-            "oos_to_breakout_delta_pair": oos_to_breakout.get("delta_pair"),
-            "oos_to_breakout_delta_top_bottom": oos_to_breakout.get("delta_top_bottom"),
-        })
-    if generalization_table_rows:
+    transition_specs = ("Validation → OOS", "OOS → Breakout slice")
+    scoped_generalization = []
+    for transition_label in transition_specs:
+        table_rows = [
+            dict(row) for row in generalization_rows
+            if str(row.get("comparison") or "").strip() == transition_label
+        ]
+        if table_rows:
+            scoped_generalization.append((transition_label, table_rows))
+    if scoped_generalization:
         parts.append(section("generalization"))
-        parts.append(_render_model_comparison_contract_table(
-            "generalization",
-            "generalization",
-            generalization_table_rows,
-            target=target,
-            best_worst_style=True,
-        ))
+        for transition_label, table_rows in scoped_generalization:
+            parts.append(scope_heading(transition_label))
+            parts.append(_render_model_comparison_contract_table(
+                "generalization",
+                "generalization",
+                table_rows,
+                target=target,
+                best_worst_style=True,
+            ))
 
     # 3. Upside / Downside Alignment
     append_scoped_section(
@@ -1620,32 +1599,48 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
                 best_worst_style=True,
             ))
 
-    # Model-specific evidence is appended outside the numbered Standard SOP and
-    # is capability-driven from each model payload. Give this namespace a major
-    # visual boundary equivalent to the comparison title so SOP and Extension do
-    # not visually run together.
-    extension_parts = _render_model_comparison_specific_extensions(views, target=target)
-    if extension_parts:
-        robustness = any(
-            bool(dict(item.get("view") or {}).get("robustness_specific"))
-            for item in views
+    # 6. Evidence Coverage is always last and retains status-color semantics.
+    evidence_rows = []
+    for raw_row in list(rows.get("evidence_coverage") or []):
+        row = dict(raw_row)
+        normalized = str(row.get("status") or "").upper()
+        signal = {
+            "AVAILABLE": SIGNAL_POSITIVE,
+            "READY": SIGNAL_POSITIVE,
+            "PARTIAL": SIGNAL_WARNING,
+            "BLOCKED": SIGNAL_NEGATIVE,
+            "MISSING": SIGNAL_NEGATIVE,
+        }.get(normalized, SIGNAL_NEUTRAL)
+        row["status"] = styled_signal(
+            row.get("status"),
+            signal,
+            target=target,
+            enabled=color if target == "console" else None,
+            bold=True,
         )
-        extension_scope = "Rolling OOS" if rolling_oos else "Forward OOS"
-        if robustness:
-            extension_scope += " Robustness"
-        extension_title = f"{extension_scope} Model-specific Extension"
-        if target == "console":
-            parts.append(render_title(extension_title))
-        else:
-            parts.append(f"# {extension_title}")
-        parts.extend(extension_parts)
+        evidence_rows.append(row)
+    if evidence_rows:
+        parts.extend([
+            section("evidence_coverage"),
+            _render_model_comparison_contract_table(
+                "evidence_coverage",
+                "evidence_coverage",
+                evidence_rows,
+                target=target,
+            ),
+        ])
 
-    # Rolling uses the same cross-model Standard SOP 1～5, then adds one mode-specific
+    # Model-specific evidence is appended outside the numbered Standard SOP and
+    # is capability-driven from each model payload. The persistent comparison
+    # contract authorizes which extension namespaces may appear here.
+    parts.extend(_render_model_comparison_specific_extensions(views, target=target))
+
+    # Rolling keeps the exact same Standard SOP 1～6, then adds one mode-specific
     # stability extension. It is deliberately outside the numbered common SOP.
     if rolling_oos:
         rolling_rows = _rolling_specific_comparison_rows(views)
         if rolling_rows:
-            extension_title = mode_extension_contract("rolling_stability").title
+            extension_title = "Rolling-specific Extension｜Fold / Year Stability"
             if target == "console":
                 parts.append(render_section(paint(extension_title, "cyan", enabled=color, bold=True)))
             else:
@@ -4055,51 +4050,6 @@ def _run_continuous_forward_model_gate(program_name: str, settings) -> int:
     return 0
 
 
-def _interactive_continuous_forward_model_gate(program_name: str, settings) -> int:
-    """Apply the shared Research producer action contract to Forward model fitting."""
-
-    _print_workflow_status(settings)
-    research_spec = get_continuous_ranker_research_spec(settings.experiment_profile)
-    reusable_contract, reuse_reason = _load_reusable_continuous_forward_contract(settings)
-    _print_model_action_status(((
-        str(research_spec.model_research_id),
-        str(settings.experiment_profile),
-        "REUSE" if reusable_contract is not None else "BUILD/REFRESH",
-        "READY" if reusable_contract is not None else str(reuse_reason or "missing"),
-    ),))
-    choice = prompt_producer_execution_action(
-        ready=reusable_contract is not None,
-        can_view_report=reusable_contract is not None,
-    )
-    if choice.action == PRODUCER_ACTION_CANCEL:
-        return 0
-    if choice.action == PRODUCER_ACTION_VIEW_REPORT:
-        payload = dict(reusable_contract.report or {})
-        payload.setdefault("model_research_id", str(research_spec.model_research_id))
-        _emit_standard_model_sop_report(
-            settings, source_payload=payload, source_path=Path(reusable_contract.report_path), action="REUSE"
-        )
-        return 0
-    if choice.action == PRODUCER_ACTION_FORCE_REBUILD:
-        code, contract, action = _ensure_continuous_forward_model_report(
-            program_name, model_id=str(research_spec.model_research_id), settings=settings,
-            prompt_for_build=False, force_rebuild=True,
-        )
-    else:
-        code, contract, action = _ensure_continuous_forward_model_report(
-            program_name, model_id=str(research_spec.model_research_id), settings=settings,
-            prompt_for_build=True, force_rebuild=False,
-        )
-    if code != 0 or contract is None:
-        return int(code)
-    payload = dict(contract.report or {})
-    payload.setdefault("model_research_id", str(research_spec.model_research_id))
-    _emit_standard_model_sop_report(
-        settings, source_payload=payload, source_path=Path(contract.report_path), action=action
-    )
-    return 0
-
-
 def _rolling_pit_dir_for_loader(settings, mode) -> Path | None:
     return _rolling_mode_point_in_time_dir(settings, mode)
 
@@ -4315,51 +4265,6 @@ def _run_continuous_pit_profile(
                     )
                 return int(result)
     return _run_build_and_audit(build_args)
-
-
-def _interactive_continuous_rolling_model_gate(program_name: str, settings) -> int:
-    """Apply the shared producer action contract to canonical Rolling model fitting."""
-
-    mode = get_breakout_quality_rolling_test_mode("rolling")
-    print("\n=== Rolling OOS 模型訓練 ===")
-    if not settings.rolling_authorized:
-        print("目前Profile不在current Training／Model-Test SSOT，且沒有historical Rolling authorization；本次BLOCKED。")
-        return 0
-    _print_workflow_status(settings)
-    contract, payload, reason = _load_reusable_rolling_standard_report(settings, mode)
-    model_id = _model_display_id(settings.experiment_profile)
-    _print_model_action_status(((
-        model_id, str(settings.experiment_profile),
-        "REUSE" if contract is not None and payload is not None else "BUILD/REFRESH",
-        "READY" if contract is not None and payload is not None else str(reason or "missing"),
-    ),))
-    choice = prompt_producer_execution_action(
-        ready=contract is not None and payload is not None,
-        can_view_report=contract is not None and payload is not None,
-    )
-    if choice.action == PRODUCER_ACTION_CANCEL:
-        return 0
-    if choice.action == PRODUCER_ACTION_VIEW_REPORT:
-        _emit_standard_model_sop_report(
-            settings, source_payload=payload, source_path=Path(contract.audit_path), action="REUSE"
-        )
-        return 0
-    if choice.action == PRODUCER_ACTION_FORCE_REBUILD:
-        upstream_plan = _collect_continuous_research_input_plan(settings)
-        _render_continuous_research_input_plan(settings, upstream_plan)
-        if upstream_plan.blocked:
-            print("目前存在不可由canonical producer確定性補建的前置工件；本次不執行。")
-            return 0
-        code = _prepare_continuous_research_inputs(program_name, settings)
-        if code != 0:
-            return int(code)
-        spec = get_continuous_ranker_research_spec(settings.experiment_profile)
-        return _run_continuous_pit_profile(
-            program_name, model_id=spec.model_research_id,
-            profile_name=settings.experiment_profile, mode=mode,
-            forward_checkpoint_source=None, force_rebuild=True,
-        )
-    return _run_continuous_rolling_mode_direct(program_name, settings, prompt_for_build=False)
 
 
 def _refresh_rolling_audit_only(program_name: str, settings, mode) -> tuple[object | None, dict | None, str | None]:
@@ -5442,19 +5347,8 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
         plans.append((str(model_id), settings, seed_states))
 
     _print_model_action_status(rows)
-    all_ready = all(
-        all(payload is not None for _seed, payload, _path, _reason in seed_states)
-        for _model_id, _settings, seed_states in plans
-    )
-    choice = prompt_producer_execution_action(
-        ready=all_ready,
-        can_view_report=all_ready,
-        normal_label="執行必要 Robustness 模型訓練／刷新",
-        report_label="查看既有 Robustness 訓練報表",
-    )
-    if choice.action == PRODUCER_ACTION_CANCEL:
-        return 0
-    force_rebuild = choice.action == PRODUCER_ACTION_FORCE_REBUILD
+    # Keep the historical direct-run menu semantics; REUSE is decided by the canonical producer.
+    force_rebuild = False
 
     completed = []
     for model_id, settings, seed_states in plans:
@@ -5561,31 +5455,9 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
     ))
     return 0
 
-# One stable work-type inventory for every continuous model and research scope.
-# Scientific identity may select a producer, never the visible work types.
-from core.model_research_menu_contract import (
-    model_research_menu_items,
-    validate_research_producer,
-    model_research_producer_method,
-)
+# Stable seven-workflow menu, independent of model identity and experiments.
+from core.model_research_menu_contract import model_research_menu_items
 _MODEL_RESEARCH_MENU_WORK_ITEMS = model_research_menu_items()
-
-
-def _configured_exploratory_research_study():
-    """Resolve the selected isolated scope without changing the formal profile."""
-    from config import breakout_quality as config
-    identifier = str(getattr(config, "BREAKOUT_QUALITY_ACTIVE_EXPLORATORY_MODEL_STUDY", "") or "").strip()
-    return get_exploratory_model_research_study(identifier) if identifier else None
-
-
-def _invoke_exploratory_research_action(study, action: str) -> int:
-    """Dispatch the same seven work types; research identity only selects a producer."""
-    if study.formal_input_authorized or study.trading_promotion_authorized or study.historical_vintage_proven:
-        raise ValueError("隔離探索不得冒充正式PIT／Trading授權")
-    module = importlib.import_module(study.service_module)
-    validate_research_producer(module)
-    method = model_research_producer_method(str(action))
-    return int(getattr(module, method)() or 0)
 
 
 def _interactive_model_research(program_name: str) -> int:
@@ -5595,37 +5467,18 @@ def _interactive_model_research(program_name: str) -> int:
     if not settings.is_continuous_ranker:
         raise ValueError(f"不支援的 workflow training objective: {settings.training_objective!r}")
 
-    study = _configured_exploratory_research_study()
-    if study is not None:
-        # Fail fast before offering a broken workflow.  Never shrink the seven
-        # stable choices to conceal a model producer integration defect.
-        validate_research_producer(importlib.import_module(study.service_module))
-    # A registered current-vintage exploration is the visible research scope; the
-    # original AO formal workflow stays available through a stable scope switch.
-    exploratory = study is not None
     while True:
         print("\n=== Continuous DL 模型研究與驗證 ===")
-        if exploratory:
-            print(f"Research scope  ：隔離探索／歷史 Vintage 未驗證／不允許正式 PIT 或 Trading")
-            print("Training Model：" + _model_identity_text(study.model_research_id))
-            print("Model Compare/Test List：" + " / ".join((study.reference_model_id, study.model_research_id)) + " [EXPLORATORY ONLY]")
-        else:
-            print("Research scope  ：正式模型研究")
-            print("Training Model：" + _model_identity_text(_model_display_id(settings.experiment_profile)))
-            print(
-                "Model Compare/Test List："
-                + " / ".join(
-                    _model_identity_text(model_id)
-                    for model_id, _profile in get_breakout_quality_model_test_settings().model_profiles
-                )
+        print("Training Model：" + _model_identity_text(_model_display_id(settings.experiment_profile)))
+        print(
+            "Model Compare/Test List："
+            + " / ".join(
+                _model_identity_text(model_id)
+                for model_id, _profile in get_breakout_quality_model_test_settings().model_profiles
             )
-        # The display contract is globally fixed; no model/authorization/producer
-        # may filter, hide, renumber or relabel a work type.
-        workflow_items = _MODEL_RESEARCH_MENU_WORK_ITEMS
-        for item_choice, _action, label in workflow_items:
+        )
+        for item_choice, _action, label in _MODEL_RESEARCH_MENU_WORK_ITEMS:
             print(render_menu_item(int(item_choice), label, default=item_choice == "1"))
-        if study is not None:
-            print(render_menu_item(8, "切換正式／隔離探索研究範圍"))
         print(render_menu_item(0, "返回"))
         try:
             raw_choice = input("👉 請選擇：").strip().lower()
@@ -5635,32 +5488,15 @@ def _interactive_model_research(program_name: str) -> int:
         choice = "1" if raw_choice == "" else raw_choice
         if choice in {"0", "q", "quit", "exit"}:
             return 0
-        if choice == "8" and study is not None:
-            exploratory = not exploratory
-            continue
-        if exploratory:
-            selected = next((item for item in workflow_items if item[0] == choice), None)
-            if selected is None:
-                print("無效選項，請重新輸入。")
-                continue
-            result = _invoke_exploratory_research_action(study, selected[1])
-            if choice == "1":
-                return result
-            continue
-        if choice not in {item[0] for item in workflow_items}:
-            print("無效選項，請重新輸入。")
-            continue
         if choice == "1":
-            return _interactive_continuous_forward_model_gate(program_name, settings)
+            return _run_continuous_forward_model_gate(program_name, settings)
         if choice == "2":
-            _interactive_continuous_rolling_model_gate(program_name, settings)
+            _run_continuous_rolling_mode_direct(program_name, settings)
             continue
         if choice == "3":
             _run_configured_model_comparison(program_name, rolling=False)
             continue
         if choice == "4":
-            # [3]～[6] authorization is owned by the shared Model Compare/Test List.
-            # Do not re-gate the whole comparison by the current Training Model.
             _run_configured_model_comparison(program_name, rolling=True)
             continue
         if choice == "5":
@@ -5688,13 +5524,6 @@ def run_model_training_menu(program_name: str = "apps/research.py model") -> int
 
 
 def show_model_status() -> None:
-    """Show official AO artifact status without disguising exploratory authorization."""
-    study = _configured_exploratory_research_study()
-    if study is not None:
-        print(
-            f"\n隔離探索研究：{study.model_research_id}｜"
-            "current-vintage、正式PIT=NO、Trading=NO（模型選單[8]可切回正式研究）"
-        )
     _print_workflow_status(get_breakout_quality_model_research_settings())
 
 
