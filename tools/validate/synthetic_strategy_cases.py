@@ -4800,5 +4800,76 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         runtime_dependency_thresholds,
     )
 
+    # Generic publication checks are shared; each producer still owns its
+    # scientific-identity/authorization rules and diagnostic precedence.
+    from services.optimizer.strategy_param_artifact_validation import (
+        first_manifest_identity_mismatch as _first_reuse_mismatch,
+        manifest_artifact_sha_matches as _reuse_sha_matches,
+        resolve_artifact_reuse_action as _reuse_action,
+    )
+    _reuse_manifest = {
+        "producer": "optimizer",
+        "parameter_set": "PARAM-TEST",
+        "policy": "base-finalists-agree",
+        "build_contract": {"trial_count": 300, "dataset": "full", "publication_note": "legacy"},
+        "robustness_replication_seed": 42,
+        "training_dl_enabled": None,
+    }
+    _reuse_required = (
+        ("producer", "string", "optimizer", "PRODUCER_MISMATCH"),
+        ("parameter_set", "string", "PARAM-TEST", "PARAMETER_SET_MISMATCH"),
+        ("policy", "string", "base-finalists-agree", "POLICY_MISMATCH"),
+    )
+    check("strategy_param_reuse_manifest_matching_fields_ready", None,
+          _first_reuse_mismatch(_reuse_manifest, _reuse_required))
+    _reuse_bad = {**_reuse_manifest, "producer": "other", "policy": "wrong"}
+    check("strategy_param_reuse_mismatch_uses_first_declared_status", "PRODUCER_MISMATCH",
+          _first_reuse_mismatch(_reuse_bad, _reuse_required))
+    check("strategy_param_reuse_exact_contract_rejects_publication_extras", "BUILD_CONTRACT_MISMATCH",
+          _first_reuse_mismatch(_reuse_manifest, ((
+              "build_contract", "mapping", {"trial_count": 300, "dataset": "full"},
+              "BUILD_CONTRACT_MISMATCH"),)))
+    check("strategy_param_reuse_robustness_accepts_non_scientific_extra_fields", None,
+          _first_reuse_mismatch(_reuse_manifest, ((
+              "build_contract", "mapping_subset", {"trial_count": 300, "dataset": "full"},
+              "BUILD_CONTRACT_MISMATCH"),)))
+    check("strategy_param_reuse_robustness_rejects_changed_scientific_field", "BUILD_CONTRACT_MISMATCH",
+          _first_reuse_mismatch(_reuse_manifest, ((
+              "build_contract", "mapping_subset", {"trial_count": 301, "dataset": "full"},
+              "BUILD_CONTRACT_MISMATCH"),)))
+    check("strategy_param_reuse_replication_seed_must_match", "REPLICATION_SEED_MISMATCH",
+          _first_reuse_mismatch(_reuse_manifest, ((
+              "robustness_replication_seed", "integer", 43, "REPLICATION_SEED_MISMATCH"),)))
+    check("strategy_param_reuse_legacy_manifest_falsey_flag_preserved", None,
+          _first_reuse_mismatch(_reuse_manifest, ((
+              "training_dl_enabled", "boolean", False, "TRAINING_DL_MISMATCH"),)))
+    check("strategy_param_reuse_manifest_training_dl_flag_rejects_true", "TRAINING_DL_MISMATCH",
+          _first_reuse_mismatch({**_reuse_manifest, "training_dl_enabled": True}, ((
+              "training_dl_enabled", "boolean", False, "TRAINING_DL_MISMATCH"),)))
+    check("strategy_param_reuse_action_ready", "REUSE",
+          _reuse_action("READY", existed=True))
+    check("strategy_param_reuse_action_blocked_has_priority_over_repair", "BLOCKED",
+          _reuse_action("SCIENTIFIC_CONTRACT_DRIFT", existed=True,
+                        blocked_statuses={"SCIENTIFIC_CONTRACT_DRIFT"}, repair_available=True))
+    check("strategy_param_reuse_action_repairs_only_if_permitted", "REPAIR",
+          _reuse_action("ARTIFACT_SHA_MISMATCH", existed=True, repair_available=True))
+    check("strategy_param_reuse_action_stale_existing_is_rebuild", "REBUILD",
+          _reuse_action("ARTIFACT_SHA_MISMATCH", existed=True))
+    check("strategy_param_reuse_action_missing_is_build", "BUILD",
+          _reuse_action("ARTIFACT_MISSING", existed=False))
+    with TemporaryDirectory() as _reuse_temp:
+        _reuse_file = Path(_reuse_temp) / "params.json"
+        _reuse_file.write_text('{"selector":"base_finalists_agree"}', encoding="utf-8")
+        from core.strategy_param_artifacts import compute_strategy_param_file_sha256
+        _reuse_pinned = {"artifact_sha256": compute_strategy_param_file_sha256(_reuse_file)}
+        check("strategy_param_reuse_sha_uses_pinned_physical_file", True,
+              _reuse_sha_matches(_reuse_pinned, _reuse_file))
+        check("strategy_param_reuse_nested_manifest_sha_binding", True,
+              _reuse_sha_matches({"sha256": _reuse_pinned["artifact_sha256"]},
+                                 _reuse_file, sha_field="sha256"))
+        _reuse_file.write_text('{"selector":"base_finalist_best"}', encoding="utf-8")
+        check("strategy_param_reuse_sha_detects_payload_tamper", False,
+              _reuse_sha_matches(_reuse_pinned, _reuse_file))
+
     summary["checks"] = len(results)
     return results, summary

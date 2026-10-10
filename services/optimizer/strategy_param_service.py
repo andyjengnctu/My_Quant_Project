@@ -69,6 +69,11 @@ from services.optimizer.strategy_param_repository import (
     refresh_strategy_parameter_benchmark_manifest,
     refresh_strategy_parameter_manifest,
 )
+from services.optimizer.strategy_param_artifact_validation import (
+    first_manifest_identity_mismatch,
+    manifest_artifact_sha_matches,
+    resolve_artifact_reuse_action,
+)
 
 
 def _force_rebuild_attempt_root(base: Path) -> Path:
@@ -1076,12 +1081,16 @@ def _canonical_manifest_matches_current_schedule(
     manifest = _load_json_object(manifest_path)
     if manifest is None:
         return False, "MANIFEST_MISSING_OR_INVALID"
-    if str(manifest.get("producer") or "") != "optimizer":
-        return False, "PRODUCER_MISMATCH"
-    if str(manifest.get("family") or "") != str(family):
-        return False, "FAMILY_MISMATCH"
-    if str(manifest.get("evaluation_mode") or "") != "schedule":
-        return False, "STORAGE_MODE_MISMATCH"
+    manifest_issue = first_manifest_identity_mismatch(
+        manifest,
+        (
+            ("producer", "string", "optimizer", "PRODUCER_MISMATCH"),
+            ("family", "string", family, "FAMILY_MISMATCH"),
+            ("evaluation_mode", "string", "schedule", "STORAGE_MODE_MISMATCH"),
+        ),
+    )
+    if manifest_issue is not None:
+        return False, manifest_issue
     expected_policy = _canonical_schedule_training_policy(family)
     actual_policy = dict(manifest.get("training_policy") or {})
     if _schedule_training_policy_reuse_projection(actual_policy) != (
@@ -1095,7 +1104,7 @@ def _canonical_manifest_matches_current_schedule(
         return False, "ARTIFACT_PATH_MISMATCH"
     if not target.is_file():
         return False, "ARTIFACT_MISSING"
-    if str(record.get("sha256") or "") != compute_strategy_param_file_sha256(target):
+    if not manifest_artifact_sha_matches(record, target, sha_field="sha256"):
         return False, "ARTIFACT_SHA_MISMATCH"
     artifact_payload = _load_json_object(target)
     if artifact_payload is None:
@@ -1998,12 +2007,15 @@ def _benchmark_manifest_matches_current_policy(
         return False
     if not isinstance(payload, dict):
         return False
-    if (
-        str(payload.get("benchmark_id") or "") != str(benchmark_id)
-        or int(payload.get("benchmark_seed") or -1) != int(seed)
-        or str(payload.get("family") or "") != str(family)
-        or str(payload.get("evaluation_mode") or "") != "schedule"
-    ):
+    if first_manifest_identity_mismatch(
+        payload,
+        (
+            ("benchmark_id", "string", benchmark_id, "BENCHMARK_ID_MISMATCH"),
+            ("benchmark_seed", "integer", seed, "BENCHMARK_SEED_MISMATCH"),
+            ("family", "string", family, "FAMILY_MISMATCH"),
+            ("evaluation_mode", "string", "schedule", "STORAGE_MODE_MISMATCH"),
+        ),
+    ) is not None:
         return False
     pinned = dict(payload.get("benchmark") or {})
     # A per-seed Optimizer artifact is identified by its concrete seed plus the
@@ -2026,7 +2038,7 @@ def _benchmark_manifest_matches_current_policy(
     expected_sha = str(artifact.get("sha256") or "")
     if not expected_sha or not target_path.is_file():
         return False
-    if expected_sha != compute_strategy_param_file_sha256(target_path):
+    if not manifest_artifact_sha_matches(artifact, target_path, sha_field="sha256"):
         return False
     expected_scientific_sha = str(artifact.get("scientific_sha256") or "").strip().lower()
     actual_scientific_sha = compute_strategy_param_scientific_sha256(target_path)
@@ -3053,18 +3065,18 @@ def inspect_fixed_multiseed_strategy_parameter_artifact(
         status = "LEGACY_SCIENTIFIC_IDENTITY_UNBOUND"
     elif not manifest_scientific_identity:
         status = "LEGACY_SCIENTIFIC_IDENTITY_UNBOUND"
-    elif str(manifest.get("producer") or "") != "optimizer":
-        status = "PRODUCER_MISMATCH"
-    elif str(manifest.get("parameter_set") or "") != str(contract["parameter_set"]):
-        status = "MANIFEST_PARAMETER_SET_MISMATCH"
-    elif str(manifest.get("policy") or "") != compare_policy:
-        status = "MANIFEST_POLICY_MISMATCH"
-    elif str(manifest.get("optimizer_search_protocol") or "") != str(contract["optimizer_search_protocol"]):
-        status = "MANIFEST_PROTOCOL_MISMATCH"
-    elif dict(manifest.get("seed_ensemble_policy") or {}) != expected_seed_policy:
-        status = "MANIFEST_FITTING_SEED_POLICY_MISMATCH"
-    elif dict(manifest.get("build_contract") or {}) != contract:
-        status = "BUILD_CONTRACT_MISMATCH"
+    elif manifest_issue := first_manifest_identity_mismatch(
+        manifest,
+        (
+            ("producer", "string", "optimizer", "PRODUCER_MISMATCH"),
+            ("parameter_set", "string", contract["parameter_set"], "MANIFEST_PARAMETER_SET_MISMATCH"),
+            ("policy", "string", compare_policy, "MANIFEST_POLICY_MISMATCH"),
+            ("optimizer_search_protocol", "string", contract["optimizer_search_protocol"], "MANIFEST_PROTOCOL_MISMATCH"),
+            ("seed_ensemble_policy", "mapping", expected_seed_policy, "MANIFEST_FITTING_SEED_POLICY_MISMATCH"),
+            ("build_contract", "mapping", contract, "BUILD_CONTRACT_MISMATCH"),
+        ),
+    ):
+        status = manifest_issue
     elif int(manifest_scientific_identity.get("schema_version", 0) or 0) != int(
         scientific_identity["schema_version"]
     ):
@@ -3081,7 +3093,7 @@ def inspect_fixed_multiseed_strategy_parameter_artifact(
         scientific_identity.get("scientific_contract") or {}
     ):
         status = "SCIENTIFIC_CONTRACT_DRIFT"
-    elif str(manifest.get("artifact_sha256") or "") != compute_strategy_param_file_sha256(target):
+    elif not manifest_artifact_sha_matches(manifest, target):
         status = "ARTIFACT_SHA_MISMATCH"
 
     ready = status == "READY"
@@ -3103,14 +3115,8 @@ def inspect_fixed_multiseed_strategy_parameter_artifact(
     return {
         "ready": ready,
         "status": status,
-        "action": (
-            "REUSE"
-            if ready
-            else (
-                "BLOCKED"
-                if status in blocked_statuses
-                else ("REBUILD" if existed else "BUILD")
-            )
+        "action": resolve_artifact_reuse_action(
+            status, existed=existed, blocked_statuses=blocked_statuses,
         ),
         "path": target,
         "manifest_path": manifest_path,
@@ -3511,33 +3517,26 @@ def inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
         status = "SCHEDULE_COVERAGE_INCOMPLETE"
     elif manifest is None:
         status = "MANIFEST_MISSING_OR_INVALID"
-    elif str(manifest.get("producer") or "") != "optimizer":
-        status = "PRODUCER_MISMATCH"
-    elif str(manifest.get("benchmark_id") or "") != str(contract["benchmark_id"]):
-        status = "BENCHMARK_ID_MISMATCH"
-    elif int(manifest.get("robustness_replication_seed") or -1) != int(contract["robustness_replication_seed"]):
-        status = "REPLICATION_SEED_MISMATCH"
-    elif str(manifest.get("parameter_set") or "") != str(contract["parameter_set"]):
-        status = "MANIFEST_PARAMETER_SET_MISMATCH"
-    elif str(manifest.get("policy") or "") != compare_policy:
-        status = "MANIFEST_POLICY_MISMATCH"
-    elif dict(manifest.get("seed_ensemble_policy") or {}) != expected_seed_policy:
-        status = "MANIFEST_FITTING_SEED_POLICY_MISMATCH"
-    elif {
-        key: dict(manifest.get("build_contract") or {}).get(key)
-        for key in contract
-    } != contract:
-        # Ignore legacy/publication-only extra manifest fields.  Every current
-        # scientific build input must still match exactly, and the bound registered
-        # scientific identity below remains the authoritative semantic guard.
-        status = "BUILD_CONTRACT_MISMATCH"
+    elif manifest_issue := first_manifest_identity_mismatch(
+        manifest,
+        (
+            ("producer", "string", "optimizer", "PRODUCER_MISMATCH"),
+            ("benchmark_id", "string", contract["benchmark_id"], "BENCHMARK_ID_MISMATCH"),
+            ("robustness_replication_seed", "integer", contract["robustness_replication_seed"], "REPLICATION_SEED_MISMATCH"),
+            ("parameter_set", "string", contract["parameter_set"], "MANIFEST_PARAMETER_SET_MISMATCH"),
+            ("policy", "string", compare_policy, "MANIFEST_POLICY_MISMATCH"),
+            ("seed_ensemble_policy", "mapping", expected_seed_policy, "MANIFEST_FITTING_SEED_POLICY_MISMATCH"),
+            ("build_contract", "mapping_subset", contract, "BUILD_CONTRACT_MISMATCH"),
+        ),
+    ):
+        status = manifest_issue
     elif not manifest_scientific_identity:
         status = "LEGACY_SCIENTIFIC_IDENTITY_UNBOUND"
     elif manifest_scientific_identity != _derived_scientific_identity_record(
         scientific_identity
     ):
         status = "SCIENTIFIC_IDENTITY_MISMATCH"
-    elif str(manifest.get("artifact_sha256") or "") != compute_strategy_param_file_sha256(target):
+    elif not manifest_artifact_sha_matches(manifest, target):
         status = "ARTIFACT_SHA_MISMATCH"
     ready = status == "READY"
     existed = bool(target.exists() or manifest_path.exists())
@@ -3556,18 +3555,9 @@ def inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
             target=target,
             manifest=manifest,
         )
-    action = (
-        "REUSE"
-        if ready
-        else (
-            "BLOCKED"
-            if status in blocked_statuses
-            else (
-                "REPAIR"
-                if repair_source is not None
-                else ("REBUILD" if existed else "BUILD")
-            )
-        )
+    action = resolve_artifact_reuse_action(
+        status, existed=existed, blocked_statuses=blocked_statuses,
+        repair_available=repair_source is not None,
     )
     return {
         "ready": ready,
@@ -4028,15 +4018,23 @@ def inspect_validation_budget_robustness_strategy_parameter_artifact(
     ready = bool(
         target.is_file()
         and manifest is not None
-        and str(manifest.get("producer") or "") == "optimizer"
-        and str(manifest.get("parameter_set") or "") == str(contract["parameter_set"])
-        and str(manifest.get("policy") or "") == str(policy).strip()
-        and dict(manifest.get("build_contract") or {}) == contract
-        and str(manifest.get("artifact_sha256") or "") == compute_strategy_param_file_sha256(target)
+        and first_manifest_identity_mismatch(
+            manifest,
+            (
+                ("producer", "string", "optimizer", "PRODUCER_MISMATCH"),
+                ("parameter_set", "string", contract["parameter_set"], "MANIFEST_PARAMETER_SET_MISMATCH"),
+                ("policy", "string", str(policy).strip(), "MANIFEST_POLICY_MISMATCH"),
+                ("build_contract", "mapping", contract, "BUILD_CONTRACT_MISMATCH"),
+            ),
+        ) is None
+        and manifest_artifact_sha_matches(manifest, target)
         and coverage_end is not None
         and str(coverage_end) >= str(comparison_end_date)
     )
-    action = "REUSE" if ready else ("REBUILD" if target.exists() or manifest_path.exists() else "BUILD")
+    action = resolve_artifact_reuse_action(
+        "READY" if ready else "ARTIFACT_UNAVAILABLE_OR_STALE",
+        existed=bool(target.exists() or manifest_path.exists()),
+    )
     return {"action": action, "path": target, "manifest_path": manifest_path}
 
 
@@ -4261,19 +4259,19 @@ def inspect_validation_budget_strategy_parameter_artifact(
         status = "SCHEDULE_COVERAGE_INCOMPLETE"
     elif manifest is None:
         status = "MANIFEST_MISSING_OR_INVALID"
-    elif str(manifest.get("producer") or "") != "optimizer":
-        status = "PRODUCER_MISMATCH"
-    elif bool(manifest.get("training_dl_enabled")) is not False:
-        status = "MANIFEST_TRAINING_DL_MISMATCH"
-    elif str(manifest.get("parameter_set") or "") != str(contract["parameter_set"]):
-        status = "MANIFEST_PARAMETER_SET_MISMATCH"
-    elif str(manifest.get("policy") or "") != compare_policy:
-        status = "MANIFEST_POLICY_MISMATCH"
-    elif str(manifest.get("optimizer_search_protocol") or "") != spec_protocol:
-        status = "MANIFEST_PROTOCOL_MISMATCH"
-    elif dict(manifest.get("build_contract") or {}) != contract:
-        status = "BUILD_CONTRACT_MISMATCH"
-    elif str(manifest.get("artifact_sha256") or "") != compute_strategy_param_file_sha256(target):
+    elif manifest_issue := first_manifest_identity_mismatch(
+        manifest,
+        (
+            ("producer", "string", "optimizer", "PRODUCER_MISMATCH"),
+            ("training_dl_enabled", "boolean", False, "MANIFEST_TRAINING_DL_MISMATCH"),
+            ("parameter_set", "string", contract["parameter_set"], "MANIFEST_PARAMETER_SET_MISMATCH"),
+            ("policy", "string", compare_policy, "MANIFEST_POLICY_MISMATCH"),
+            ("optimizer_search_protocol", "string", spec_protocol, "MANIFEST_PROTOCOL_MISMATCH"),
+            ("build_contract", "mapping", contract, "BUILD_CONTRACT_MISMATCH"),
+        ),
+    ):
+        status = manifest_issue
+    elif not manifest_artifact_sha_matches(manifest, target):
         status = "ARTIFACT_SHA_MISMATCH"
     elif (
         required_validation_replay_contract is not None
@@ -4291,7 +4289,7 @@ def inspect_validation_budget_strategy_parameter_artifact(
     return {
         "ready": ready,
         "status": status,
-        "action": "REUSE" if ready else ("REBUILD" if existed else "BUILD"),
+        "action": resolve_artifact_reuse_action(status, existed=existed),
         "path": target,
         "manifest_path": manifest_path,
         "coverage_end": coverage_end,
