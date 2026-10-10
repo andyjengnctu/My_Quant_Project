@@ -1059,6 +1059,92 @@ def _build_validation_progress_period_context(
     }
 
 
+def _build_outer_rolling_fold_config_payload(config, *, include_end_cap_date: bool) -> dict:
+    """Preserve the original parallel vs. sequential worker config schema."""
+
+    payload = {
+        "training_start_year": int(config.training_start_year),
+        "first_oos_year": int(config.first_oos_year),
+        "last_oos_year": int(config.last_oos_year),
+        "trials_per_fold": int(config.trials_per_fold),
+        "window_mode": str(config.window_mode),
+        "train_window_years": int(config.train_window_years),
+        "first_oos_date": str(config.first_oos_date),
+        "last_oos_date": str(config.last_oos_date),
+        "train_window_months": int(config.train_window_months),
+        "oos_horizon_months": int(config.oos_horizon_months),
+    }
+    if include_end_cap_date:
+        payload["oos_end_cap_date"] = str(config.oos_end_cap_date or "")
+    payload[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = int(config.raw_universe_required_min_rows)
+    return payload
+
+
+def _build_outer_rolling_fold_task(
+    *,
+    mode: str,
+    fold: dict,
+    fold_idx: int,
+    fold_count: int,
+    config_payload: dict,
+    common: dict,
+    log_dir: str,
+    validation_budget_spec=None,
+    seed_ensemble_policy: dict | None = None,
+    shared_raw_context=None,
+) -> dict:
+    """Build the exact worker payload for parallel, validation or seed mode.
+
+    Mode only selects the historic *execution* payload. It must never choose a
+    scientific identity or modify the fold's date/seed membership.
+    """
+    if mode not in {"parallel", "validation", "seed"}:
+        raise ValueError(f"不支援的 Rolling fold task mode: {mode!r}")
+    oos_year = int(fold["oos_year"])
+    task = {
+        "project_root": str(common["project_root"]),
+        "output_dir": str(common["output_dir"]),
+        "base_policy": dict(common["base_policy"]),
+        "selected_data_dir": str(common["selected_data_dir"]),
+        "optimizer_required_min_rows": int(common["optimizer_required_min_rows"]),
+        "session_ts": str(common["session_ts"]),
+        "config": dict(config_payload),
+        "fold_idx": int(fold_idx),
+        "fold_count": int(fold_count),
+        "oos_year": oos_year,
+        "oos_start_date": str(fold["oos_start_date"]),
+        "oos_end_date": str(fold["oos_end_date"]),
+        "oos_period": str(fold["oos_period"]),
+        "selection_start_date": str(fold["selection_start_date"]),
+        "selection_end_date": str(fold["selection_end_date"]),
+        "selection_period": str(fold["selection_period"]),
+    }
+    if mode in {"parallel", "validation"}:
+        task.update(_build_validation_progress_period_context(
+            selection_start=str(fold["selection_start_date"]),
+            selection_end=str(fold["selection_end_date"]),
+            validation_budget_spec=validation_budget_spec,
+        ))
+    task.update({
+        "optimizer_seed": common["optimizer_seed"],
+        "sampler_kind": str(common["sampler_kind"]),
+        "timing_mode": bool(common["timing_mode"]),
+        "fold_workers": int(common["fold_workers"]),
+        "optimizer_session_spec": dict(common["optimizer_session_spec"]),
+        "progress_display_contract": dict(common["progress_display_contract"]),
+    })
+    if mode in {"parallel", "seed"}:
+        task["seed_ensemble_policy"] = dict(seed_ensemble_policy or {})
+    task["log_path"] = os.path.join(
+        log_dir, f"fold_{int(fold_idx):02d}_oos_{oos_year}.log"
+    )
+    if mode in {"validation", "seed"}:
+        task["mirror_console"] = True
+    if mode == "validation":
+        task["shared_raw_context"] = shared_raw_context
+    return task
+
+
 def _task_seed_ensemble_policy(task: dict | None) -> dict:
     override = dict((task or {}).get("seed_ensemble_policy") or {})
     return override if override else _effective_rolling_seed_ensemble_policy_payload()
@@ -2603,59 +2689,39 @@ def run_outer_rolling_oos(
         raw_data_load_sec = max(0.0, time.perf_counter() - shared_load_start)
         print(f"{C_CYAN}⏱️ Rolling 共用資料快取完成：raw_data_load_once={raw_data_load_sec:.3f}s | folds={fold_count}{C_RESET}")
 
+    fold_task_common = {
+        "project_root": project_root,
+        "output_dir": output_dir,
+        "base_policy": base_policy,
+        "selected_data_dir": selected_data_dir,
+        "optimizer_required_min_rows": optimizer_required_min_rows,
+        "session_ts": session_ts,
+        "optimizer_seed": optimizer_seed,
+        "sampler_kind": sampler_kind,
+        "timing_mode": timing_mode,
+        "fold_workers": fold_workers,
+        "optimizer_session_spec": session_spec,
+        "progress_display_contract": progress_display_contract,
+    }
     if fold_parallel_enabled:
         log_dir = os.path.join(output_dir, "outer_rolling_oos", "fold_logs", session_ts)
         os.makedirs(log_dir, exist_ok=True)
-        config_payload = {
-            "training_start_year": int(config.training_start_year),
-            "first_oos_year": int(config.first_oos_year),
-            "last_oos_year": int(config.last_oos_year),
-            "trials_per_fold": int(config.trials_per_fold),
-            "window_mode": str(config.window_mode),
-            "train_window_years": int(config.train_window_years),
-            "first_oos_date": str(config.first_oos_date),
-            "last_oos_date": str(config.last_oos_date),
-            "train_window_months": int(config.train_window_months),
-            "oos_horizon_months": int(config.oos_horizon_months),
-            RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD: int(config.raw_universe_required_min_rows),
-        }
+        config_payload = _build_outer_rolling_fold_config_payload(
+            config, include_end_cap_date=False,
+        )
         tasks = []
         for fold_idx, fold in enumerate(folds, start=1):
-            oos_year = int(fold["oos_year"])
-            selection_start = str(fold["selection_start_date"])
-            selection_end = str(fold["selection_end_date"])
-            progress_period_context = _build_validation_progress_period_context(
-                selection_start=selection_start,
-                selection_end=selection_end,
+            tasks.append(_build_outer_rolling_fold_task(
+                mode="parallel",
+                fold=fold,
+                fold_idx=fold_idx,
+                fold_count=fold_count,
+                config_payload=config_payload,
+                common=fold_task_common,
+                log_dir=log_dir,
                 validation_budget_spec=plan_validation_spec,
-            )
-            tasks.append({
-                "project_root": str(project_root),
-                "output_dir": str(output_dir),
-                "base_policy": dict(base_policy),
-                "selected_data_dir": str(selected_data_dir),
-                "optimizer_required_min_rows": int(optimizer_required_min_rows),
-                "session_ts": str(session_ts),
-                "config": dict(config_payload),
-                "fold_idx": int(fold_idx),
-                "fold_count": fold_count,
-                "oos_year": int(oos_year),
-                "oos_start_date": str(fold["oos_start_date"]),
-                "oos_end_date": str(fold["oos_end_date"]),
-                "oos_period": str(fold["oos_period"]),
-                "selection_start_date": str(fold["selection_start_date"]),
-                "selection_end_date": str(fold["selection_end_date"]),
-                "selection_period": str(fold["selection_period"]),
-                **progress_period_context,
-                "optimizer_seed": optimizer_seed,
-                "sampler_kind": str(sampler_kind),
-                "timing_mode": bool(timing_mode),
-                "fold_workers": int(fold_workers),
-                "optimizer_session_spec": dict(session_spec),
-                "progress_display_contract": dict(progress_display_contract),
-                "seed_ensemble_policy": dict(runtime_seed_policy),
-                "log_path": os.path.join(log_dir, f"fold_{int(fold_idx):02d}_oos_{int(oos_year)}.log"),
-            })
+                seed_ensemble_policy=runtime_seed_policy,
+            ))
             # Fold log path is kept internally for diagnostics, but not printed during normal progress.
         chain_state = {"chain_max_positions": None, "chain_enable_rotation": None}
         try:
@@ -2746,53 +2812,20 @@ def run_outer_rolling_oos(
         if validation_parameter_build:
             log_dir = os.path.join(output_dir, "outer_rolling_oos", "fold_logs", session_ts)
             os.makedirs(log_dir, exist_ok=True)
-            config_payload = {
-                "training_start_year": int(config.training_start_year),
-                "first_oos_year": int(config.first_oos_year),
-                "last_oos_year": int(config.last_oos_year),
-                "trials_per_fold": int(config.trials_per_fold),
-                "window_mode": str(config.window_mode),
-                "train_window_years": int(config.train_window_years),
-                "first_oos_date": str(config.first_oos_date),
-                "last_oos_date": str(config.last_oos_date),
-                "train_window_months": int(config.train_window_months),
-                "oos_horizon_months": int(config.oos_horizon_months),
-                "oos_end_cap_date": str(config.oos_end_cap_date or ""),
-                RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD: int(config.raw_universe_required_min_rows),
-            }
-            progress_period_context = _build_validation_progress_period_context(
-                selection_start=selection_start,
-                selection_end=selection_end,
-                validation_budget_spec=plan_validation_spec,
+            config_payload = _build_outer_rolling_fold_config_payload(
+                config, include_end_cap_date=True,
             )
-            task = {
-                "project_root": str(project_root),
-                "output_dir": str(output_dir),
-                "base_policy": dict(base_policy),
-                "selected_data_dir": str(selected_data_dir),
-                "optimizer_required_min_rows": int(optimizer_required_min_rows),
-                "session_ts": str(session_ts),
-                "config": dict(config_payload),
-                "fold_idx": int(fold_idx),
-                "fold_count": int(fold_count),
-                "oos_year": int(oos_year),
-                "oos_start_date": str(oos_start_date),
-                "oos_end_date": str(oos_end_date),
-                "oos_period": str(oos_period),
-                "selection_start_date": str(selection_start),
-                "selection_end_date": str(selection_end),
-                "selection_period": str(selection_period),
-                **progress_period_context,
-                "optimizer_seed": optimizer_seed,
-                "sampler_kind": str(sampler_kind),
-                "timing_mode": bool(timing_mode),
-                "fold_workers": int(fold_workers),
-                "optimizer_session_spec": dict(session_spec),
-                "progress_display_contract": dict(progress_display_contract),
-                "log_path": os.path.join(log_dir, f"fold_{int(fold_idx):02d}_oos_{int(oos_year)}.log"),
-                "mirror_console": True,
-                "shared_raw_context": shared_raw_context,
-            }
+            task = _build_outer_rolling_fold_task(
+                mode="validation",
+                fold=fold,
+                fold_idx=fold_idx,
+                fold_count=fold_count,
+                config_payload=config_payload,
+                common=fold_task_common,
+                log_dir=log_dir,
+                validation_budget_spec=plan_validation_spec,
+                shared_raw_context=shared_raw_context,
+            )
             result = _run_outer_rolling_oos_fold_task(task)
             chain_state = {"chain_max_positions": chain_max_positions, "chain_enable_rotation": chain_enable_rotation}
             _consume_parallel_fold_result(
@@ -2819,47 +2852,19 @@ def run_outer_rolling_oos(
         if seed_ensemble_enabled:
             log_dir = os.path.join(output_dir, "outer_rolling_oos", "fold_logs", session_ts)
             os.makedirs(log_dir, exist_ok=True)
-            config_payload = {
-                "training_start_year": int(config.training_start_year),
-                "first_oos_year": int(config.first_oos_year),
-                "last_oos_year": int(config.last_oos_year),
-                "trials_per_fold": int(config.trials_per_fold),
-                "window_mode": str(config.window_mode),
-                "train_window_years": int(config.train_window_years),
-                "first_oos_date": str(config.first_oos_date),
-                "last_oos_date": str(config.last_oos_date),
-                "train_window_months": int(config.train_window_months),
-                "oos_horizon_months": int(config.oos_horizon_months),
-                "oos_end_cap_date": str(config.oos_end_cap_date or ""),
-                RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD: int(config.raw_universe_required_min_rows),
-            }
-            task = {
-                "project_root": str(project_root),
-                "output_dir": str(output_dir),
-                "base_policy": dict(base_policy),
-                "selected_data_dir": str(selected_data_dir),
-                "optimizer_required_min_rows": int(optimizer_required_min_rows),
-                "session_ts": str(session_ts),
-                "config": dict(config_payload),
-                "fold_idx": int(fold_idx),
-                "fold_count": int(fold_count),
-                "oos_year": int(oos_year),
-                "oos_start_date": str(oos_start_date),
-                "oos_end_date": str(oos_end_date),
-                "oos_period": str(oos_period),
-                "selection_start_date": str(selection_start),
-                "selection_end_date": str(selection_end),
-                "selection_period": str(selection_period),
-                "optimizer_seed": optimizer_seed,
-                "sampler_kind": str(sampler_kind),
-                "timing_mode": bool(timing_mode),
-                "fold_workers": int(fold_workers),
-                "optimizer_session_spec": dict(session_spec),
-                "progress_display_contract": dict(progress_display_contract),
-                "seed_ensemble_policy": dict(runtime_seed_policy),
-                "log_path": os.path.join(log_dir, f"fold_{int(fold_idx):02d}_oos_{int(oos_year)}.log"),
-                "mirror_console": True,
-            }
+            config_payload = _build_outer_rolling_fold_config_payload(
+                config, include_end_cap_date=True,
+            )
+            task = _build_outer_rolling_fold_task(
+                mode="seed",
+                fold=fold,
+                fold_idx=fold_idx,
+                fold_count=fold_count,
+                config_payload=config_payload,
+                common=fold_task_common,
+                log_dir=log_dir,
+                seed_ensemble_policy=runtime_seed_policy,
+            )
             result = _run_outer_rolling_oos_fold_task(task)
             chain_state = {"chain_max_positions": chain_max_positions, "chain_enable_rotation": chain_enable_rotation}
             _consume_parallel_fold_result(result=result, rows=rows, fold_timing_rows=fold_timing_rows, chain_state=chain_state)

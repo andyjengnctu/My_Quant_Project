@@ -89,9 +89,9 @@ def _planned_initial_risk_milli(*, row, plan):
     )
 
 
-def _candidate_standalone_expected_pnl_milli(row):
-    expected_r = _candidate_expected_r(row)
-    if expected_r is None:
+def _candidate_standalone_economic_milli(row, *, metric):
+    value = metric(row)
+    if value is None:
         return None
     plan = {
         'qty': int(row.get('qty', 0) or 0),
@@ -104,7 +104,11 @@ def _candidate_standalone_expected_pnl_milli(row):
         return None
     if risk_milli is None:
         return None
-    return float(expected_r * float(risk_milli))
+    return float(value * float(risk_milli))
+
+
+def _candidate_standalone_expected_pnl_milli(row):
+    return _candidate_standalone_economic_milli(row, metric=_candidate_expected_r)
 
 
 def _expected_pnl_order(rows, *, base_rank):
@@ -129,24 +133,24 @@ def _expected_pnl_order(rows, *, base_rank):
     )
 
 
-def _expected_pnl_basket_quality_key(result, *, base_rank):
-    """Higher is better: calibration coverage, total Expected $PnL, deterministic ties."""
+def _economic_basket_quality_key(result, *, base_rank, metric, mismatch_label):
+    """Canonical risk-weighted basket objective; preserve its tie-break ordering."""
 
     rows = list(result.get('selected_rows') or [])
     plans = list(result.get('selected_plans') or [])
     if len(rows) != len(plans):
-        raise ValueError('Expected-PnL selector selected_rows/plans長度不一致')
+        raise ValueError(f'{mismatch_label} selector selected_rows/plans長度不一致')
     values = []
-    expected_rs = []
+    expected_metrics = []
     for row, plan in zip(rows, plans):
-        expected_r = _candidate_expected_r(row)
-        if expected_r is None:
+        metric_value = metric(row)
+        if metric_value is None:
             continue
         risk_milli = _planned_initial_risk_milli(row=row, plan=plan)
         if risk_milli is None:
             continue
-        values.append(float(expected_r * float(risk_milli)))
-        expected_rs.append(float(expected_r))
+        values.append(float(metric_value * float(risk_milli)))
+        expected_metrics.append(float(metric_value))
     stable_base_ranks = tuple(
         -base_rank[id(row)]
         for row in sorted(rows, key=lambda item: base_rank[id(item)])
@@ -155,27 +159,22 @@ def _expected_pnl_basket_quality_key(result, *, base_rank):
         int(len(values)),
         float(sum(values)),
         tuple(sorted(values, reverse=True)),
-        float(sum(expected_rs)),
+        float(sum(expected_metrics)),
         stable_base_ranks,
     )
 
 
+def _expected_pnl_basket_quality_key(result, *, base_rank):
+    """Higher is better: calibration coverage, total Expected $PnL, deterministic ties."""
+
+    return _economic_basket_quality_key(
+        result, base_rank=base_rank, metric=_candidate_expected_r,
+        mismatch_label='Expected-PnL',
+    )
+
+
 def _candidate_standalone_excess_alpha_milli(row):
-    expected_excess_r = _candidate_expected_excess_r(row)
-    if expected_excess_r is None:
-        return None
-    plan = {
-        'qty': int(row.get('qty', 0) or 0),
-        'limit_price': row.get('limit_px'),
-        'init_sl': row.get('init_sl'),
-    }
-    try:
-        risk_milli = _planned_initial_risk_milli(row=row, plan=plan)
-    except (TypeError, ValueError, KeyError, AttributeError):
-        return None
-    if risk_milli is None:
-        return None
-    return float(expected_excess_r * float(risk_milli))
+    return _candidate_standalone_economic_milli(row, metric=_candidate_expected_excess_r)
 
 
 def _excess_alpha_order(rows, *, base_rank):
@@ -203,31 +202,9 @@ def _excess_alpha_order(rows, *, base_rank):
 def _excess_alpha_basket_quality_key(result, *, base_rank):
     """Higher is better: calibration coverage, total expected alpha dollars, deterministic ties."""
 
-    rows = list(result.get('selected_rows') or [])
-    plans = list(result.get('selected_plans') or [])
-    if len(rows) != len(plans):
-        raise ValueError('Excess-Alpha selector selected_rows/plans長度不一致')
-    values = []
-    expected_excess_rs = []
-    for row, plan in zip(rows, plans):
-        expected_excess_r = _candidate_expected_excess_r(row)
-        if expected_excess_r is None:
-            continue
-        risk_milli = _planned_initial_risk_milli(row=row, plan=plan)
-        if risk_milli is None:
-            continue
-        values.append(float(expected_excess_r * float(risk_milli)))
-        expected_excess_rs.append(float(expected_excess_r))
-    stable_base_ranks = tuple(
-        -base_rank[id(row)]
-        for row in sorted(rows, key=lambda item: base_rank[id(item)])
-    )
-    return (
-        int(len(values)),
-        float(sum(values)),
-        tuple(sorted(values, reverse=True)),
-        float(sum(expected_excess_rs)),
-        stable_base_ranks,
+    return _economic_basket_quality_key(
+        result, base_rank=base_rank, metric=_candidate_expected_excess_r,
+        mismatch_label='Excess-Alpha',
     )
 
 

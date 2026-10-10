@@ -3769,11 +3769,123 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and "synthetic" in tty_live_handle.getvalue()
         and tty_log_handle.getvalue() == "",
     )
+    # Exercise the canonical task contract rather than matching its literal source layout.
+    from services.optimizer.outer_rolling_oos import (
+        _build_outer_rolling_fold_config_payload,
+        _build_outer_rolling_fold_task,
+    )
+    fold_task_common = {
+        "project_root": "/synthetic/project",
+        "output_dir": "/synthetic/output",
+        "base_policy": {"trial_marker": 42},
+        "selected_data_dir": "/synthetic/raw",
+        "optimizer_required_min_rows": 42,
+        "session_ts": "synthetic",
+        "optimizer_seed": 42,
+        "sampler_kind": "tpe",
+        "timing_mode": False,
+        "fold_workers": 6,
+        "optimizer_session_spec": {"profile": "synthetic"},
+        "progress_display_contract": {"show_local_min": False},
+    }
+    fold_task_seed_policy = {"enabled": True, "seed_count": 4, "min_agree": 3}
+    fold_task_shared_raw_context = {"raw_data_cache": {"0050": object()}}
+    fold_task_fixture = cutoff_folds[-1]
+    fold_task_config_fixture = SimpleNamespace(
+        **{**vars(rolling_config), "raw_universe_required_min_rows": 42}
+    )
+    fold_task_config_parallel = _build_outer_rolling_fold_config_payload(
+        fold_task_config_fixture, include_end_cap_date=False,
+    )
+    fold_task_config_sequential = _build_outer_rolling_fold_config_payload(
+        fold_task_config_fixture, include_end_cap_date=True,
+    )
+    fold_task_kwargs = {
+        "fold": fold_task_fixture,
+        "fold_idx": len(cutoff_folds),
+        "fold_count": len(cutoff_folds),
+        "common": fold_task_common,
+        "log_dir": "/synthetic/logs",
+    }
+    parallel_fold_task = _build_outer_rolling_fold_task(
+        **fold_task_kwargs, mode="parallel",
+        config_payload=fold_task_config_parallel,
+        validation_budget_spec=plateau_best_patience100_spec,
+        seed_ensemble_policy=fold_task_seed_policy,
+    )
+    validation_fold_task = _build_outer_rolling_fold_task(
+        **fold_task_kwargs, mode="validation",
+        config_payload=fold_task_config_sequential,
+        validation_budget_spec=plateau_best_patience100_spec,
+        shared_raw_context=fold_task_shared_raw_context,
+    )
+    seed_fold_task = _build_outer_rolling_fold_task(
+        **fold_task_kwargs, mode="seed",
+        config_payload=fold_task_config_sequential,
+        seed_ensemble_policy=fold_task_seed_policy,
+    )
+    check(
+        "rolling_fold_task_preserves_parallel_vs_sequential_config_fields",
+        True,
+        "oos_end_cap_date" not in parallel_fold_task["config"]
+        and parallel_fold_task["config"] is not fold_task_config_parallel
+        and validation_fold_task["config"].get("oos_end_cap_date") == "2026-03-02"
+        and seed_fold_task["config"].get("oos_end_cap_date") == "2026-03-02",
+    )
+    check(
+        "rolling_fold_task_keeps_pit_dates_membership_and_seed",
+        True,
+        all(
+            task["selection_start_date"] == fold_task_fixture["selection_start_date"]
+            and task["selection_end_date"] == fold_task_fixture["selection_end_date"]
+            and task["oos_start_date"] == fold_task_fixture["oos_start_date"]
+            and task["oos_end_date"] == fold_task_fixture["oos_end_date"]
+            and task["optimizer_seed"] == 42
+            and task["fold_workers"] == 6
+            for task in (parallel_fold_task, validation_fold_task, seed_fold_task)
+        ),
+    )
+    check(
+        "rolling_fold_task_parallel_keeps_worker_only_contract",
+        True,
+        "mirror_console" not in parallel_fold_task
+        and "shared_raw_context" not in parallel_fold_task
+        and parallel_fold_task["seed_ensemble_policy"] == fold_task_seed_policy
+        and "validation_start_date" in parallel_fold_task,
+    )
+    check(
+        "rolling_fold_task_seed_mode_excludes_validation_and_shared_raw_fields",
+        True,
+        seed_fold_task["mirror_console"] is True
+        and "shared_raw_context" not in seed_fold_task
+        and "validation_start_date" not in seed_fold_task
+        and seed_fold_task["seed_ensemble_policy"] == fold_task_seed_policy,
+    )
+    check(
+        "rolling_fold_task_isolates_mutable_policy_and_member_metadata",
+        True,
+        len({id(task["base_policy"]) for task in (parallel_fold_task, validation_fold_task, seed_fold_task)}) == 3
+        and len({id(task["optimizer_session_spec"]) for task in (parallel_fold_task, validation_fold_task, seed_fold_task)}) == 3
+        and parallel_fold_task["seed_ensemble_policy"] is not fold_task_seed_policy
+        and seed_fold_task["seed_ensemble_policy"] is not fold_task_seed_policy,
+    )
+    check(
+        "rolling_fold_task_rejects_unknown_execution_mode",
+        True,
+        raises_expected(
+            ValueError,
+            lambda: _build_outer_rolling_fold_task(
+                **fold_task_kwargs, mode="unknown", config_payload=fold_task_config_parallel,
+            ),
+        ),
+    )
     check(
         "validation_budget_sequential_fold_reuses_shared_raw_cache_and_exposes_three_live_phases",
         True,
-        '"mirror_console": True' in optimizer_outer_rolling_source
-        and '"shared_raw_context": shared_raw_context' in optimizer_outer_rolling_source
+        validation_fold_task.get("mirror_console") is True
+        and validation_fold_task.get("shared_raw_context") is fold_task_shared_raw_context
+        and "seed_ensemble_policy" not in validation_fold_task
+        and "validation_start_date" in validation_fold_task
         and 'shared raw cache installed' in optimizer_outer_rolling_source
         and 'PHASE 1/3 | INNER TRAIN SEARCH' in optimizer_outer_rolling_source
         and 'PHASE 2/3 | VALIDATION BUDGET SELECTION' in optimizer_outer_rolling_source
@@ -3788,7 +3900,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and "last_progress_render_at" not in optimizer_outer_rolling_source
         and "wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)" in optimizer_outer_rolling_source
         and "略過父程序 shared raw cache" in optimizer_outer_rolling_source
-        and '"mirror_console": True' in optimizer_outer_rolling_source,
+        and seed_fold_task.get("mirror_console") is True,
     )
     check(
         "optimizer_seed_and_parallel_fold_live_boards_reuse_fixed_progress_block_ssot",
