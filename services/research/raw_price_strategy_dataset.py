@@ -191,6 +191,29 @@ def _normalize_control_rows(path: Path, *, ticker: str, cutoff: str) -> list[tup
 
 
 
+def _adjusted_control_required_raw_rows(
+    raw_frame: pd.DataFrame, *, control_path: Path, ticker: str,
+) -> pd.DataFrame:
+    """Restrict the Raw quality gate to dates retained by the canonical adjusted loader.
+
+    The physical Raw CSV still preserves the full control file's original date and
+    Volume grid. Invalid Raw prices on dates already excluded from adjusted samples
+    cannot change this experiment's feature windows or targets; required-date Raw
+    defects must still fail closed. Both decisions use the same canonical sanitizer.
+    """
+    control = pd.read_csv(control_path, low_memory=False)
+    try:
+        adjusted, _stats = sanitize_ohlcv_dataframe(control, ticker, min_rows=1)
+    except ValueError as exc:
+        # With min_rows=1, an entirely invalid control source has no model dates.
+        if str(exc) != f"{ticker} \u6e05\u6d17\u5f8c\u7121\u6709\u6548\u8cc7\u6599":
+            raise
+        return raw_frame.iloc[0:0].copy()
+    required_dates = pd.DatetimeIndex(adjusted.index).normalize()
+    raw_dates = pd.to_datetime(raw_frame["Date"], errors="coerce").dt.normalize()
+    return raw_frame.loc[raw_dates.isin(required_dates)].copy()
+
+
 def _raw_quote_diagnostics(frame: pd.DataFrame) -> dict[str, int]:
     """Classify observed Raw zero-OHLC rows without inferring missing prices.
 
@@ -202,11 +225,23 @@ def _raw_quote_diagnostics(frame: pd.DataFrame) -> dict[str, int]:
     prices = frame.loc[:, ["Open", "High", "Low", "Close"]].apply(pd.to_numeric, errors="coerce")
     all_zero = prices.eq(0.0).all(axis=1)
     volume = pd.to_numeric(frame["Volume"], errors="coerce")
+    # Diagnostic overlaps are intentional. FinMind emerging-market Open can be a
+    # *previous-day average*, so outside-range Open does not prove provider error.
+    nonzero = ~all_zero
     return {
         "all_zero_ohlc": int(all_zero.sum()),
         "all_zero_control_volume_zero": int((all_zero & volume.eq(0.0)).sum()),
         "all_zero_control_volume_positive": int((all_zero & volume.gt(0.0)).sum()),
         "all_zero_control_volume_other": int((all_zero & ~(volume.eq(0.0) | volume.gt(0.0))).sum()),
+        "nonzero_open_outside_high_low": int((
+            nonzero & (prices["Open"].gt(prices["High"]) | prices["Open"].lt(prices["Low"]))
+        ).sum()),
+        "nonzero_close_outside_high_low": int((
+            nonzero & (prices["Close"].gt(prices["High"]) | prices["Close"].lt(prices["Low"]))
+        ).sum()),
+        "nonzero_any_nonpositive_price": int((
+            nonzero & prices.le(0.0).any(axis=1)
+        ).sum()),
     }
 
 
@@ -255,20 +290,23 @@ def _raw_price_quality_failures(frame: pd.DataFrame, *, ticker: str) -> tuple[in
 @lru_cache(maxsize=4096)
 def _cached_raw_price_quality(
     absolute_path: str, expected_content_sha256: str, sanitization_contract_version: int,
-    ticker: str,
-) -> tuple[int, list[dict[str, object]]]:
+    ticker: str, control_path: str, control_inventory_fingerprint: str,
+) -> tuple[int, list[dict[str, object]], dict[str, int]]:
     """Avoid re-parsing immutable, already-SHA-verified Raw files within one run.
 
     Callers check the content hash *before* this function.  A new file hash or
     canonical sanitizer version always invalidates the in-process cached proof.
     """
-    del expected_content_sha256, sanitization_contract_version
+    del expected_content_sha256, sanitization_contract_version, control_inventory_fingerprint
     try:
         frame = pd.read_csv(absolute_path, low_memory=False)
     except (ValueError, OSError, UnicodeDecodeError) as exc:
         raise ValueError(f"raw-price strategy dataset CSV無法檢查OHLCV: {Path(absolute_path).name}") from exc
-    invalid_rows, samples = _raw_price_quality_failures(frame, ticker=ticker)
-    return invalid_rows, samples, _raw_quote_diagnostics(frame)
+    required = _adjusted_control_required_raw_rows(
+        frame, control_path=Path(control_path), ticker=ticker,
+    )
+    invalid_rows, samples = _raw_price_quality_failures(required, ticker=ticker)
+    return invalid_rows, samples, _raw_quote_diagnostics(required)
 
 
 def _fail_on_raw_price_quality(issues: list[dict[str, object]], *, provider: str) -> None:
@@ -284,15 +322,24 @@ def _fail_on_raw_price_quality(issues: list[dict[str, object]], *, provider: str
     zero_volume = sum(int(issue.get("quote_diagnostics", {}).get("all_zero_control_volume_zero", 0)) for issue in issues)
     positive_volume = sum(int(issue.get("quote_diagnostics", {}).get("all_zero_control_volume_positive", 0)) for issue in issues)
     other_volume = sum(int(issue.get("quote_diagnostics", {}).get("all_zero_control_volume_other", 0)) for issue in issues)
+    open_outside = sum(int(issue.get("quote_diagnostics", {}).get("nonzero_open_outside_high_low", 0)) for issue in issues)
+    close_outside = sum(int(issue.get("quote_diagnostics", {}).get("nonzero_close_outside_high_low", 0)) for issue in issues)
+    partial_nonpositive = sum(int(issue.get("quote_diagnostics", {}).get("nonzero_any_nonpositive_price", 0)) for issue in issues)
     raise ValueError(
         "RAW_SOURCE_QUALITY_BLOCKED: FinMind TaiwanStockPrice Raw OHLCV "
-        f"has {total_rows} invalid controlled rows across {len(issues)} tickers; "
+        f"has {total_rows} invalid rows on canonical adjusted retained dates "
+        f"across {len(issues)} tickers; "
         f"all_zero_ohlc={zero_rows} (control_volume_zero={zero_volume}, "
         f"control_volume_positive={positive_volume}, control_volume_other={other_volume}); "
         f"other_invalid={total_rows - zero_rows}; "
+        f"diagnostic_nonzero_open_outside_range={open_outside}, "
+        f"close_outside_range={close_outside}, "
+        f"any_nonpositive_price={partial_nonpositive} (categories may overlap); "
         f"sample={sample}; provider_snapshot={provider}; "
-        "all-zero OHLC can mean no published market quote (not necessarily corrupt data); "
-        "a same-source re-download is not a demonstrated repair. Under the current "
+        "all-zero OHLC can mean no published market quote; emerging-market Open "
+        "can be the previous-day average outside same-day High/Low; neither "
+        "is automatically proof of corrupt provider data. "
+        "A same-source re-download is not a demonstrated repair. Under the current "
         "AO/BW exact-date, 300x10 raw-price input contract this source is not "
         "trainable. Any missing-quote representation, imputation, matched-date "
         "sample change or external price-source substitution requires separate "
@@ -345,6 +392,7 @@ def _build_files(
             raise ValueError(f"raw-price strategy source rows存在conflicting duplicate keys: {conflicts}")
 
         discovered, _duplicate_issues = discover_unique_csv_inputs(str(control_dir))
+        control_paths = {str(ticker): Path(raw_path) for ticker, raw_path in discovered}
         for ticker, raw_path in discovered:
             conn.executemany(
                 "INSERT INTO control_grid(date, stock_id, volume) VALUES (?, ?, ?)",
@@ -405,11 +453,14 @@ def _build_files(
             )
             if frame.empty:
                 continue
-            invalid_rows, bad_samples = _raw_price_quality_failures(frame, ticker=ticker)
+            required = _adjusted_control_required_raw_rows(
+                frame, control_path=control_paths[ticker], ticker=ticker,
+            )
+            invalid_rows, bad_samples = _raw_price_quality_failures(required, ticker=ticker)
             if invalid_rows:
                 quality_issues.append({
                     "ticker": ticker, "invalid_rows": invalid_rows, "samples": bad_samples,
-                    "quote_diagnostics": _raw_quote_diagnostics(frame),
+                    "quote_diagnostics": _raw_quote_diagnostics(required),
                 })
                 continue
             volume = pd.to_numeric(frame["Volume"], errors="raise")
@@ -449,7 +500,7 @@ def _load_manifest(path: Path) -> dict[str, object] | None:
 def inspect_raw_price_strategy_dataset(project_root: str | Path, *, deep: bool = False) -> dict[str, object]:
     root = Path(project_root).resolve()
     try:
-        identity, _view, _control_dir = _source_identity(root)
+        identity, _view, control_dir = _source_identity(root)
     except FileNotFoundError as exc:
         return {
             "ready": False,
@@ -500,6 +551,8 @@ def inspect_raw_price_strategy_dataset(project_root: str | Path, *, deep: bool =
         if expected != actual:
             raise ValueError("raw-price strategy dataset CSV file set drift")
         quality_issues: list[dict[str, object]] = []
+        discovered, _duplicate_issues = discover_unique_csv_inputs(str(control_dir))
+        control_paths = {str(ticker): Path(file_path) for ticker, file_path in discovered}
         for row in files:
             rel = str(row.get("relative_path") or "")
             path = dataset_dir / rel
@@ -509,10 +562,15 @@ def inspect_raw_price_strategy_dataset(project_root: str | Path, *, deep: bool =
                 raise ValueError(f"raw-price strategy dataset CSV size drift: {rel}")
             if compute_file_sha256(path) != str(row.get("content_sha256") or ""):
                 raise ValueError(f"raw-price strategy dataset CSV SHA256 drift: {rel}")
+            ticker = str(row.get("ticker") or Path(rel).stem)
+            control_path = control_paths.get(ticker)
+            if control_path is None:
+                raise ValueError(f"raw-price strategy control ticker missing: {ticker}")
             invalid_rows, bad_samples, quote_diagnostics = _cached_raw_price_quality(
                 str(path.resolve()), str(row["content_sha256"]),
-                int(OHLCV_SANITIZATION_CONTRACT_VERSION),
-                str(row.get("ticker") or Path(rel).stem),
+                int(OHLCV_SANITIZATION_CONTRACT_VERSION), ticker,
+                str(control_path.resolve()),
+                str(identity["control_dataset_inventory_fingerprint"]),
             )
             if invalid_rows:
                 quality_issues.append({

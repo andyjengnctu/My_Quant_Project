@@ -230,6 +230,7 @@ class AlternatePriceInputTests(unittest.TestCase):
         self.assertEqual(counts["all_zero_ohlc"], 2)
         self.assertEqual(counts["all_zero_control_volume_zero"], 1)
         self.assertEqual(counts["all_zero_control_volume_positive"], 1)
+        self.assertEqual(counts["nonzero_any_nonpositive_price"], 1)
         self.assertEqual(examples[0]["quote_class"], "ALL_ZERO_NO_PUBLISHED_QUOTE_POSSIBLE")
         self.assertEqual(examples[2]["quote_class"], "OTHER_INVALID_OHLC")
         with self.assertRaisesRegex(ValueError, "all_zero_ohlc=2") as caught:
@@ -239,6 +240,7 @@ class AlternatePriceInputTests(unittest.TestCase):
             }], provider="a" * 64)
         message = str(caught.exception)
         self.assertIn("other_invalid=1", message)
+        self.assertIn("diagnostic_nonzero_open_outside_range=1", message)
         self.assertIn("no published market quote", message)
         self.assertIn("scientific authorization", message)
 
@@ -292,16 +294,130 @@ class AlternatePriceInputTests(unittest.TestCase):
             self.assertTrue(np.allclose(output["Close"], provider["close"], atol=1e-10, rtol=0))
             self.assertEqual(files[0]["content_sha256"], compute_file_sha256(stage / "tw_stock_data_vip" / "0052.csv"))
 
+    def test_raw_invalid_outside_sanitized_control_grid_does_not_block_producer(self):
+        # An adjusted date already excluded by the canonical sanitizer is not an
+        # AO sample or feature bar. Preserve the original Raw evidence unchanged.
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            control = root / "control"
+            control.mkdir()
+            adjusted = self._frame(0.12).iloc[:12].reset_index(names="Date")
+            excluded_date = adjusted.loc[3, "Date"]
+            adjusted.loc[3, "High"] = 0.0
+            adjusted.to_csv(control / "0052.csv", index=False)
+            provider = self._frame(0.31).iloc[:12].reset_index(names="Date").rename(
+                columns={"Date": "date", "Open": "open", "High": "max", "Low": "min", "Close": "close"},
+            )
+            provider["date"] = provider["date"].dt.strftime("%Y-%m-%d")
+            provider["stock_id"] = "0052"
+            provider.loc[3, ["open", "max", "min", "close"]] = 0.0
+            view = SimpleNamespace(iter_raw_price_strategy_frames=lambda **_kw: iter([provider]))
+            stage = root / "stage"
+            files, rows = _build_files(
+                root=root, view=view, control_dir=control, stage_dir=stage,
+                source_identity={"frozen_cutoff": "2026-03-02", "provider_snapshot_fingerprint": "a" * 64},
+            )
+            self.assertEqual(rows, 12)
+            self.assertEqual(len(files), 1)
+            physical = pd.read_csv(stage / "tw_stock_data_vip" / "0052.csv")
+            self.assertEqual(float(physical.loc[3, "Close"]), 0.0)
+            self.assertEqual(pd.Timestamp(physical.loc[3, "Date"]), excluded_date)
+            from core.data_utils import sanitize_ohlcv_dataframe
+            accepted, _ = sanitize_ohlcv_dataframe(adjusted, "0052", min_rows=1)
+            aligned = load_aligned_alternate_ohlcv_frame(stage / "tw_stock_data_vip", "0052", accepted)
+            self.assertTrue(aligned.index.equals(accepted.index))
+            self.assertEqual(len(aligned), 11)
+
+    def test_raw_emerging_open_out_of_range_is_not_ignored_on_required_date(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            control = root / "control"
+            control.mkdir()
+            adjusted = self._frame(0.12).iloc[:9].reset_index(names="Date")
+            adjusted.to_csv(control / "0052.csv", index=False)
+            provider = adjusted.rename(columns={
+                "Date": "date", "Open": "open", "High": "max", "Low": "min", "Close": "close",
+            })
+            provider["date"] = provider["date"].dt.strftime("%Y-%m-%d")
+            provider["stock_id"] = "0052"
+            provider.loc[2, "open"] = provider.loc[2, "max"] + 10.0
+            view = SimpleNamespace(iter_raw_price_strategy_frames=lambda **_kw: iter([provider]))
+            with self.assertRaisesRegex(ValueError, "RAW_SOURCE_QUALITY_BLOCKED"):
+                _build_files(
+                    root=root, view=view, control_dir=control, stage_dir=root / "stage",
+                    source_identity={"frozen_cutoff": "2026-03-02", "provider_snapshot_fingerprint": "a" * 64},
+                )
+
+    def test_open_outside_high_low_excluded_from_both_control_and_raw_is_not_blocked(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            control = root / "control"
+            control.mkdir()
+            adjusted = self._frame(0.12).iloc[:9].reset_index(names="Date")
+            adjusted.loc[2, "Open"] = adjusted.loc[2, "High"] + 10.0
+            adjusted.to_csv(control / "0052.csv", index=False)
+            provider = adjusted.rename(columns={
+                "Date": "date", "Open": "open", "High": "max", "Low": "min", "Close": "close",
+            })
+            provider["date"] = provider["date"].dt.strftime("%Y-%m-%d")
+            provider["stock_id"] = "0052"
+            view = SimpleNamespace(iter_raw_price_strategy_frames=lambda **_kw: iter([provider]))
+            files, rows = _build_files(
+                root=root, view=view, control_dir=control, stage_dir=root / "stage",
+                source_identity={"frozen_cutoff": "2026-03-02", "provider_snapshot_fingerprint": "a" * 64},
+            )
+            self.assertEqual(rows, 9)
+            self.assertEqual(len(files), 1)
+
+    def test_deep_reuse_ignores_raw_quote_on_adjusted_excluded_day(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            control_dir = root / "control"
+            control_dir.mkdir()
+            adjusted = self._frame(0.15).iloc[:10].reset_index(names="Date")
+            adjusted.loc[3, "High"] = 0.0
+            adjusted.to_csv(control_dir / "0052.csv", index=False)
+            raw = self._frame(0.15).iloc[:10].reset_index(names="Date")
+            raw.loc[3, ["Open", "High", "Low", "Close"]] = 0.0
+            source_fp = "a" * 64
+            source = {"source_identity_fingerprint": source_fp,
+                      "control_dataset_inventory_fingerprint": "c" * 64,
+                      "provider_snapshot_fingerprint": "b" * 64}
+            folder = root / "outputs" / "research" / "raw_price_strategy_dataset" / source_fp
+            dataset_dir = folder / "tw_stock_data_vip"
+            dataset_dir.mkdir(parents=True)
+            path = dataset_dir / "0052.csv"
+            raw.to_csv(path, index=False)
+            files = [{"ticker": "0052", "relative_path": "0052.csv",
+                      "size_bytes": path.stat().st_size, "content_sha256": compute_file_sha256(path)}]
+            inventory = canonical_json_sha256(files)
+            materialization = canonical_json_sha256({
+                "source_identity_fingerprint": source_fp, "dataset_inventory_sha256": inventory,
+            })
+            manifest = {"source_identity": source, "files": files,
+                        "dataset_inventory_sha256": inventory,
+                        "data_identity": {"materialization_fingerprint": materialization}}
+            (folder / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            with patch("services.research.raw_price_strategy_dataset._source_identity",
+                       return_value=(source, None, control_dir)):
+                state = inspect_raw_price_strategy_dataset(root, deep=True)
+                self.assertTrue(state["ready"])
+            self.assertEqual(pd.read_csv(path).loc[3, "Close"], 0.0)
+
     def test_existing_sha_valid_raw_materialization_rejects_zero_bars(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            source = {"provider_snapshot_fingerprint": "b" * 64}
+            source = {"provider_snapshot_fingerprint": "b" * 64,
+                      "control_dataset_inventory_fingerprint": "c" * 64}
             source_fp = "a" * 64
             source["source_identity_fingerprint"] = source_fp
             base = root / "outputs" / "research" / "raw_price_strategy_dataset" / source_fp
             data_dir = base / "tw_stock_data_vip"
             data_dir.mkdir(parents=True)
             frame = self._frame(0.15).iloc[:10].reset_index(names="Date")
+            control_dir = root / "control"
+            control_dir.mkdir()
+            frame.to_csv(control_dir / "0052.csv", index=False)
             frame.loc[frame.index[3], ["Open", "High", "Low", "Close"]] = 0.0
             path = data_dir / "0052.csv"
             frame.to_csv(path, index=False)
@@ -315,7 +431,7 @@ class AlternatePriceInputTests(unittest.TestCase):
                         "data_identity": {"materialization_fingerprint": materialization}}
             (base / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
             with patch("services.research.raw_price_strategy_dataset._source_identity",
-                       return_value=(source, None, None)):
+                       return_value=(source, None, control_dir)):
                 with self.assertRaisesRegex(ValueError, "RAW_SOURCE_QUALITY_BLOCKED") as raised:
                     inspect_raw_price_strategy_dataset(root, deep=True)
                 self.assertIn("0052", str(raised.exception))
@@ -325,13 +441,17 @@ class AlternatePriceInputTests(unittest.TestCase):
     def test_existing_healthy_raw_materialization_remains_reusable(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            source = {"provider_snapshot_fingerprint": "b" * 64}
+            source = {"provider_snapshot_fingerprint": "b" * 64,
+                      "control_dataset_inventory_fingerprint": "c" * 64}
             source_fp = "a" * 64
             source["source_identity_fingerprint"] = source_fp
             base = root / "outputs" / "research" / "raw_price_strategy_dataset" / source_fp
             data_dir = base / "tw_stock_data_vip"
             data_dir.mkdir(parents=True)
             frame = self._frame(0.15).iloc[:10].reset_index(names="Date")
+            control_dir = root / "control"
+            control_dir.mkdir()
+            frame.to_csv(control_dir / "0052.csv", index=False)
             path = data_dir / "0052.csv"
             frame.to_csv(path, index=False)
             files = [{"ticker": "0052", "relative_path": "0052.csv", "size_bytes": path.stat().st_size,
@@ -344,7 +464,7 @@ class AlternatePriceInputTests(unittest.TestCase):
                         "data_identity": {"materialization_fingerprint": materialization}}
             (base / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
             with patch("services.research.raw_price_strategy_dataset._source_identity",
-                       return_value=(source, None, None)):
+                       return_value=(source, None, control_dir)):
                 state = inspect_raw_price_strategy_dataset(root, deep=True)
             self.assertTrue(state["ready"])
             self.assertEqual(state["data_identity"]["materialization_fingerprint"], materialization)
