@@ -62,7 +62,7 @@ from filters.breakout_quality.contract import (
     SCORE_COLUMN,
 )
 from filters.breakout_quality.inference import strict_parallel_batched_logits
-from filters.breakout_quality.model import require_torch
+from filters.breakout_quality.models.runtime import require_torch
 from filters.breakout_quality.models.spec import (
     get_model_spec,
     validate_model_sequence_length,

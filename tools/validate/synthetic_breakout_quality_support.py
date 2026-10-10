@@ -18,7 +18,7 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from tools.audit.catalog import get_domain_cli_commands
+from services.audit.catalog import get_domain_cli_commands
 
 
 def _source_has_render_menu_item_call(
@@ -365,10 +365,10 @@ from core.strategy_params import V16StrategyParams
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
 from filters.breakout_quality import workflow_io as breakout_quality_common
-from tools.filters.breakout_quality import evaluate as breakout_quality_evaluate
+from services.breakout_quality import evaluate as breakout_quality_evaluate
 from services.breakout_quality import export_scores as breakout_quality_export_scores
-from tools.filters.breakout_quality import train as breakout_quality_train
-from tools.filters.breakout_quality.report import (
+from services.breakout_quality import train as breakout_quality_train
+from services.breakout_quality.report import (
     build_report_payload,
     render_console_summary,
     render_markdown_report,
@@ -402,7 +402,7 @@ from services.research.strategy_compare_engine import (
     _to_json_native,
 )
 from filters.breakout_quality.trade_attribution import build_trade_attribution
-from tools.filters.breakout_quality.train_continuous_ranker import (
+from services.breakout_quality.train_continuous_ranker import (
     _scope_group_ids as continuous_ranker_scope_group_ids,
     _trade_alignment_metrics as continuous_ranker_trade_alignment_metrics,
     build_daily_percentile_targets,

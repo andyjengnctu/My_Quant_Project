@@ -1908,7 +1908,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "normal_parallel_training_keeps_canonical_workflow_seed_and_isolated_subprocess",
         int(normal_args[seed_arg_index]) == int(normal_workflow.seed)
         and normal_command[:3]
-        == [training_runtime.sys.executable, "-m", "tools.filters.breakout_quality.build_point_in_time_scores"]
+        == [training_runtime.sys.executable, "-m", "services.breakout_quality.point_in_time_scores"]
         and "--resume" in normal_args
         and "--inner-validation-months" in normal_args
         and "--checkpoint-cache-root" in normal_args
@@ -1929,7 +1929,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     check_true(
         "ah_shared_model_target_uses_generic_model_workflow_scope_for_single_and_multiseed",
         ah_command[:3]
-        == [training_runtime.sys.executable, "-m", "tools.filters.breakout_quality.build_point_in_time_scores"]
+        == [training_runtime.sys.executable, "-m", "services.breakout_quality.point_in_time_scores"]
         and "--strategy-compare-profile-id" not in ah_args
         and "--strategy-compare-source-id" not in ah_args
         and ah_workflow.rolling_authorized is True,
@@ -1944,7 +1944,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     check_true(
         "ah_shared_model_target_no_longer_needs_second_strategy_scope_selector",
         ah_unscoped_command[:3]
-        == [training_runtime.sys.executable, "-m", "tools.filters.breakout_quality.build_point_in_time_scores"]
+        == [training_runtime.sys.executable, "-m", "services.breakout_quality.point_in_time_scores"]
         and "--strategy-compare-profile-id" not in ah_unscoped_args
         and "--strategy-compare-source-id" not in ah_unscoped_args,
     )
@@ -1962,7 +1962,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     check_true(
         "ak_strategy_conversion_reuses_shared_model_workflow_without_second_scope",
         ak_command[:3]
-        == [training_runtime.sys.executable, "-m", "tools.filters.breakout_quality.build_point_in_time_scores"]
+        == [training_runtime.sys.executable, "-m", "services.breakout_quality.point_in_time_scores"]
         and "--strategy-compare-profile-id" not in ak_args
         and "--strategy-compare-source-id" not in ak_args
         and ak_workflow.rolling_authorized is True,
@@ -2374,7 +2374,7 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
         breakout_quality_ranking_source_context,
         resolve_breakout_quality_candidate_rank,
     )
-    from tools.filters.breakout_quality.build_point_in_time_scores import (
+    from services.breakout_quality.point_in_time_scores import (
         _fold_group_ids,
     )
 

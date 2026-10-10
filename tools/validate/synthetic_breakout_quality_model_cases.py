@@ -1930,7 +1930,7 @@ def validate_breakout_quality_all_event_no_time_ranker_contract_case(_base_param
     case_id = "BREAKOUT_QUALITY_ALL_EVENT_NO_TIME_RANKER"
     results, summary, check, check_true = _start_case(case_id)
 
-    from tools.filters.breakout_quality.train_continuous_ranker import (
+    from services.breakout_quality.train_continuous_ranker import (
         _profile_contract,
         _scope_group_ids,
         build_daily_percentile_targets,
@@ -2006,7 +2006,7 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
 
     from filters.breakout_quality.models.factory import require_torch
     from core.strategy_compare_policy import get_strategy_comparison_settings
-    from tools.filters.breakout_quality.train_continuous_ranker import (
+    from services.breakout_quality.train_continuous_ranker import (
         PAIRWISE_TRAINING_CONTRACT,
         _daily_top_k_metrics,
         _date_coherent_batches,
@@ -2025,7 +2025,7 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
     from filters.breakout_quality.continuous_ranker_quality import (
         exact_random_top_k_baseline,
     )
-    from tools.filters.breakout_quality.compare_continuous_rankers import (
+    from services.breakout_quality.continuous_ranker_comparison import (
         _load_model_frame,
         _dynamic_orderable_frame,
         _evaluate_dynamic_k_strata,
@@ -2198,7 +2198,7 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
             available_through="2021-12-31",
         )
         with patch(
-            "tools.filters.breakout_quality.compare_continuous_rankers.load_continuous_ranker_oos_contract",
+            "services.breakout_quality.continuous_ranker_comparison.load_continuous_ranker_oos_contract",
             return_value=fake_contract,
         ):
             comparable_frame, _comparable_meta = _load_model_frame(
@@ -2560,7 +2560,7 @@ def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_
     )
     from filters.breakout_quality.models.factory import require_torch
     from services.breakout_quality.train_continuous_ranker import _pairwise_logistic_loss
-    from tools.filters.breakout_quality.train_continuous_ranker import (
+    from services.breakout_quality.train_continuous_ranker import (
         parse_args as parse_continuous_ranker_args,
     )
 

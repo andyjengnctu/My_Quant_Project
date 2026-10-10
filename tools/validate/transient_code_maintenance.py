@@ -136,7 +136,7 @@ def _analyze_static_python_tree(
 
 def _active_dynamic_audit_modules() -> set[str]:
     from core.audit_policy import get_audit_module_ids, get_enabled_audit_definitions
-    from tools.audit.catalog import AUDIT_CATALOG, get_audit_entry
+    from services.audit.catalog import AUDIT_CATALOG, get_audit_entry
 
     # Research-mode catalog commands are dynamically routed by the model application
     # even though they are not config-driven formal Audits.  Treat every exposed CLI
@@ -173,7 +173,7 @@ def _reachable_from_production(graph: dict[str, set[str]], dynamic_roots: set[st
 
 
 def _catalog_modes_by_module() -> dict[str, list[str]]:
-    from tools.audit.catalog import AUDIT_CATALOG
+    from services.audit.catalog import AUDIT_CATALOG
 
     modes: dict[str, list[str]] = defaultdict(list)
     for entry in AUDIT_CATALOG.values():

@@ -65,7 +65,7 @@ from filters.breakout_quality.inference import (
     strict_parallel_batched_logits,
     strict_unique_group_batched_logits,
 )
-from filters.breakout_quality.model import build_model, require_torch
+from filters.breakout_quality.models import build_model, require_torch
 from filters.breakout_quality.paths import resolve_filter_artifact_paths
 from filters.breakout_quality.models.spec import (
     model_spec_from_manifest,

@@ -77,7 +77,7 @@ def build_strategy_compare_trainer_command(
             [
                 sys.executable,
                 "-m",
-                "tools.filters.breakout_quality.train_continuous_ranker",
+                "services.breakout_quality.ranker_cli",
                 *args,
             ],
             args,
@@ -162,7 +162,7 @@ def build_strategy_compare_trainer_command(
         [
             sys.executable,
             "-m",
-            "tools.filters.breakout_quality.build_point_in_time_scores",
+            "services.breakout_quality.point_in_time_scores",
             *args,
         ],
         args,

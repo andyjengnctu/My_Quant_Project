@@ -899,13 +899,13 @@ def validate_extended_tool_cli_contract_case(_base_params):
     app_market_data_auto_update = importlib.import_module("apps.market_data_auto_update")
     app_test_suite = importlib.import_module("apps.test_suite")
     app_workbench = importlib.import_module("apps.workbench")
-    optimizer_main = importlib.import_module("tools.optimizer.main")
+    optimizer_main = importlib.import_module("services.optimizer.application")
     portfolio_sim_main = importlib.import_module("services.portfolio_sim.main")
     scan_runner = importlib.import_module("services.scanner.scan_runner")
     validate_main = importlib.import_module("tools.validate.main")
 
     dataset_cases = [
-        ("tools/optimizer/main.py", optimizer_main.main, "environ", {}),
+        ("services/optimizer/application.py", optimizer_main.main, "environ", {}),
         ("services/portfolio_sim/main.py", portfolio_sim_main.main, "env", {"V16_AUTO_OPEN_BROWSER": "0"}),
         ("services/scanner/scan_runner.py", scan_runner.main, "env", {"TEST": "1"}),
         ("tools/validate/main.py", validate_main.main, "environ", {}),

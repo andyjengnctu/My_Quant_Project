@@ -18,7 +18,7 @@ ML_OPTIMIZER_OUTPUT_DIR = PROJECT_ROOT / "outputs" / "ml_optimizer"
 from core.active_param_ensemble import is_active_param_ensemble_payload, build_active_param_ensemble_schedule
 from core.model_paths import MODELS_DIR_ENV_VAR, RUN_BEST_PARAMS_PATH_ENV_VAR
 from core.runtime_utils import PeakProcessMemoryTracker, parse_no_arg_cli, run_cli_entrypoint
-from tools.optimizer.study_utils import MIN_QUALIFIED_TRIAL_VALUE, OPTIMIZER_SEED_ENV_VAR
+from services.optimizer.study_utils import MIN_QUALIFIED_TRIAL_VALUE, OPTIMIZER_SEED_ENV_VAR
 from tools.local_regression.common import ensure_dir, ensure_reduced_dataset, load_manifest, resolve_run_dir, run_command, write_json, write_text
 
 REQUIRED_PARAM_KEYS = [

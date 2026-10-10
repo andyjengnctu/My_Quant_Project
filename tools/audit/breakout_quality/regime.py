@@ -35,7 +35,7 @@ from filters.breakout_quality.paths import ensure_filter_report_dir
 from filters.breakout_quality.splits import KEY_COLUMNS, normalize_split_assignment_keys
 from core.console_report import print_artifact_paths
 from filters.breakout_quality.workflow_io import load_validated_dataset_bundle
-from tools.filters.breakout_quality.evaluate import (
+from services.breakout_quality.evaluate import (
     GROUP_SCORE_NUMERICAL_NOISE_ATOL,
     evaluate_frame_metrics,
     prepare_evaluation_context,

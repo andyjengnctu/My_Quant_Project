@@ -35,19 +35,19 @@ from core.strategy_param_artifacts import (
 from core.portfolio_fast_data import build_score_single_stock_profile_fields
 from core.portfolio_stats import calc_plain_romd, calc_portfolio_score, calc_score_median_r_multiplier, calc_score_min_full_year_return_multiplier, calc_score_min_month_return_multiplier, calc_score_min_quarter_return_multiplier, calc_score_portfolio_return_multiplier, calc_score_positive_return_multiplier, calc_score_win_rate_multiplier
 from services.optimizer.objective_runner import run_optimizer_objective
-from tools.optimizer.session import OptimizerSession, close_study_storage
-from tools.optimizer import callbacks as optimizer_callbacks, study_utils
+from services.optimizer.session import OptimizerSession, close_study_storage
+from services.optimizer import callbacks as optimizer_callbacks, study_utils
 from services.portfolio_sim.reporting import print_yearly_return_report
-from tools.optimizer.runtime import (
+from services.optimizer.runtime import (
     OPTIMIZER_DETERMINISTIC_RESUME_STUDY_NAME,
     OPTIMIZER_LEGACY_STUDY_NAME,
     create_optimizer_study,
     export_best_params_if_requested,
     resolve_optimizer_single_fold_search_parallel_trials,
 )
-from tools.optimizer.score_display import format_optimizer_score_for_display
+from services.optimizer.score_display import format_optimizer_score_for_display
 from services.optimizer.outer_rolling_formatting import _format_system_score_compare_plain
-from tools.optimizer.study_utils import (
+from services.optimizer.study_utils import (
     DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE,
     INVALID_TRIAL_VALUE,
     OBJECTIVE_MODE_LEGACY_BASE_SCORE,
@@ -775,7 +775,7 @@ def validate_score_numerator_option_case(_base_params):
         _candidate_metrics, benchmark_metrics, _range_text = optimizer_callbacks._portfolio_replay_metrics_from_result(replay_result, initial_capital=1000000.0)
     check("benchmark_oos_display_uses_plain_romd_under_total_r_numerator", calc_plain_romd(203.67, -33.96), benchmark_metrics["pf_romd"])
 
-    from tools.optimizer.outer_rolling_oos import _render_results_table
+    from services.optimizer.outer_rolling_oos import _render_results_table
     optimizer_table = _render_results_table(
         [
             {
@@ -1408,7 +1408,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         shipped_repr_map,
     )
 
-    optimizer_main = importlib.import_module("tools.optimizer.main")
+    optimizer_main = importlib.import_module("services.optimizer.application")
     incompatible_candidate_summary = {
         "base_score": 10.0,
         "local_min_score": 7.0,
@@ -1434,7 +1434,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     check("optimizer_promote_rejects_stale_run_best_policy_baseline", False, should_promote_stale_policy)
     check("optimizer_promote_reports_stale_run_best_policy_baseline", True, "effective policy" in stale_policy_reason)
 
-    robustness = importlib.import_module("tools.optimizer.robustness")
+    robustness = importlib.import_module("services.optimizer.robustness")
     training_policy = importlib.import_module("config.training_policy")
     training_policy_runtime = importlib.import_module("core.training_policy")
     no_neighbor_session = SimpleNamespace()
@@ -1467,7 +1467,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     check("optimizer_full_mode_local_retention_policy_indicators_disabled_by_default", ("base_finalist_best", "base_finalists_agree", "base"), full_mode_local_policy_names)
     check("optimizer_oos_mode_preserves_global_local_min_review_default", bool(training_policy.OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED), oos_mode_local_enabled)
 
-    outer_rolling_oos = importlib.import_module("tools.optimizer.outer_rolling_oos")
+    outer_rolling_oos = importlib.import_module("services.optimizer.outer_rolling_oos")
     check("optimizer_full_seed_ensemble_base_filename_has_ensemble_dimension", "full_ensemble_base.json", outer_rolling_oos.get_optimizer_nonrolling_policy_paramset_filename("base", mode="full"))
     check("optimizer_oos_seed_ensemble_base_filename_has_ensemble_dimension", "oos_ensemble_base.json", outer_rolling_oos.get_optimizer_nonrolling_policy_paramset_filename("base", mode="oos"))
     check("optimizer_roos_seed_ensemble_base_filename_has_ensemble_dimension", "roos_ensemble_base.json", outer_rolling_oos.get_optimizer_policy_paramset_filename("base"))
@@ -1503,7 +1503,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
 
 
 def validate_optimizer_interrupt_export_contract_case(_base_params):
-    from tools.optimizer.runtime import resolve_training_session_export_policy
+    from services.optimizer.runtime import resolve_training_session_export_policy
 
     case_id = "OPTIMIZER_INTERRUPT_EXPORT_CONTRACT"
     results, summary, check, check_true = bind_synthetic_case(case_id, 'strategy_contract')
@@ -1532,7 +1532,7 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
     check("export_policy_blocks_interrupted_partial_session", False, interrupted_allowed)
     check("export_policy_interrupted_reason", "interrupted_before_target", interrupted_reason)
 
-    optimizer_main = importlib.import_module("tools.optimizer.main")
+    optimizer_main = importlib.import_module("services.optimizer.application")
 
     class _FakeMainProfileRecorder:
         def __init__(self):
@@ -1642,18 +1642,18 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
             stack.enter_context(patch("core.dataset_profiles.get_dataset_dir", return_value=str(dataset_dir)))
             stack.enter_context(patch("core.dataset_profiles.get_dataset_profile_label", return_value="完整資料集"))
             stack.enter_context(patch("core.data_utils.discover_unique_csv_inputs", return_value=([str(csv_path)], None)))
-            stack.enter_context(patch("tools.optimizer.study_utils.build_optimizer_db_file_path", return_value=str(db_file)))
-            stack.enter_context(patch("tools.optimizer.study_utils.resolve_optimizer_seed", return_value=(None, "ENV:UNSET")))
-            stack.enter_context(patch("tools.optimizer.runtime.resolve_trial_count_or_exit", side_effect=_fake_resolve_trial_count_or_exit))
-            stack.enter_context(patch("tools.optimizer.runtime.ensure_optimizer_db_usable", return_value=None))
-            stack.enter_context(patch("tools.optimizer.runtime.prompt_existing_db_policy", return_value=None))
-            stack.enter_context(patch("tools.optimizer.runtime.create_optimizer_study", side_effect=_fake_create_optimizer_study))
-            stack.enter_context(patch("tools.optimizer.runtime.maybe_print_history_best", return_value=None))
-            stack.enter_context(patch("tools.optimizer.runtime.print_resolved_trial_count", return_value=None))
-            stack.enter_context(patch("tools.optimizer.runtime.export_best_params_if_requested", side_effect=_fake_export_best_params_if_requested))
+            stack.enter_context(patch("services.optimizer.study_utils.build_optimizer_db_file_path", return_value=str(db_file)))
+            stack.enter_context(patch("services.optimizer.study_utils.resolve_optimizer_seed", return_value=(None, "ENV:UNSET")))
+            stack.enter_context(patch("services.optimizer.runtime.resolve_trial_count_or_exit", side_effect=_fake_resolve_trial_count_or_exit))
+            stack.enter_context(patch("services.optimizer.runtime.ensure_optimizer_db_usable", return_value=None))
+            stack.enter_context(patch("services.optimizer.runtime.prompt_existing_db_policy", return_value=None))
+            stack.enter_context(patch("services.optimizer.runtime.create_optimizer_study", side_effect=_fake_create_optimizer_study))
+            stack.enter_context(patch("services.optimizer.runtime.maybe_print_history_best", return_value=None))
+            stack.enter_context(patch("services.optimizer.runtime.print_resolved_trial_count", return_value=None))
+            stack.enter_context(patch("services.optimizer.runtime.export_best_params_if_requested", side_effect=_fake_export_best_params_if_requested))
             stack.enter_context(redirect_stdout(stdout_buffer))
             stack.enter_context(redirect_stderr(stderr_buffer))
-            rc = optimizer_main.main(["tools/optimizer/main.py", "--dataset", "full"], environ={})
+            rc = optimizer_main.main(["services/optimizer/application.py", "--dataset", "full"], environ={})
 
         persisted_payload = json.loads(best_params_path.read_text(encoding="utf-8"))
 
@@ -2138,7 +2138,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         rejected_real_drift,
     )
 
-    from tools.optimizer.outer_rolling_oos import _resolve_config as resolve_outer_rolling_config
+    from services.optimizer.outer_rolling_oos import _resolve_config as resolve_outer_rolling_config
 
     rolling_config = resolve_outer_rolling_config(
         ["optimizer"],
@@ -2407,10 +2407,10 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     check("interactive_study_scope_menu_uses_one_for_oos", True, "[Enter] Study-Full [1] Study-OOS" in optimizer_study_utils_source and "[2] Study-OOS" not in optimizer_study_utils_source)
     check("study_oos_dashboard_shows_train_period_single_stock_breakout_stats", True, "def _study_single_stock_breakout_stats_title" in callbacks_source and "Study-OOS 單股突破統計｜Train Period" in callbacks_source and "study_full_breakout_stats_title" in callbacks_source)
     check("interactive_trial_prompt_exposes_zero_export", True, "[0] 輸出參數" in optimizer_study_utils_source and "min_value=0" in optimizer_study_utils_source)
-    with patch("builtins.input", side_effect=["S", "", "0"]), patch("tools.optimizer.study_utils.safe_prompt_choice", return_value=""):
+    with patch("builtins.input", side_effect=["S", "", "0"]), patch("services.optimizer.study_utils.safe_prompt_choice", return_value=""):
         interactive_zero_request = study_utils._resolve_interactive_optimizer_run_request()
     check("interactive_zero_trials_routes_to_export_candidate", True, interactive_zero_request.get("n_trials") == 0 and interactive_zero_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_EXPORT_CANDIDATE and interactive_zero_request.get("model_mode") == "study" and interactive_zero_request.get("study_db_action") == "resume")
-    with patch("builtins.input", side_effect=["", "", "0"]), patch("tools.optimizer.study_utils.safe_prompt_choice", return_value=""):
+    with patch("builtins.input", side_effect=["", "", "0"]), patch("services.optimizer.study_utils.safe_prompt_choice", return_value=""):
         interactive_default_zero_request = study_utils._resolve_interactive_optimizer_run_request()
     check("interactive_enter_mode_defaults_to_study_base_export", True, interactive_default_zero_request.get("model_mode") == "study" and interactive_default_zero_request.get("n_trials") == 0 and interactive_default_zero_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_EXPORT_CANDIDATE)
 
@@ -4084,7 +4084,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             and not (publication / "partial.txt").exists()
             and not list(publication.parent.glob("canonical_model.pre_force_rebuild_*")),
         )
-    with patch("builtins.input", side_effect=["S", "", "1"]), patch("tools.optimizer.study_utils.safe_prompt_choice", return_value="1"):
+    with patch("builtins.input", side_effect=["S", "", "1"]), patch("services.optimizer.study_utils.safe_prompt_choice", return_value="1"):
         interactive_restart_request = study_utils._resolve_interactive_optimizer_run_request()
     check("interactive_study_memory_one_routes_to_restart", True, interactive_restart_request.get("study_db_action") == "restart" and interactive_restart_request.get("n_trials") == 1 and interactive_restart_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_TRAIN)
 

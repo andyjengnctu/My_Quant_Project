@@ -420,7 +420,7 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
         build_breakout_quality_filter_pass_condition,
     )
     from strategies.breakout.search_space import build_trial_params
-    from tools.optimizer.outer_rolling_oos import (
+    from services.optimizer.outer_rolling_oos import (
         FOLD_FIXED_STRATEGY_OVERRIDES_KEY,
         _validate_optimizer_runtime_context,
         resolve_optimizer_session_spec_for_fold,
@@ -609,7 +609,7 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
     from services.optimizer.strategy_param_training import (
         validate_selection_historical_baseline_period,
     )
-    from tools.filters.breakout_quality.build_trade_path_labels import (
+    from services.breakout_quality.trade_path_label_builder import (
         _load_valid_ticker_shard,
         _ticker_shard_path,
         _write_ticker_shard,

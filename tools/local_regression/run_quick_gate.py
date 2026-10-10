@@ -45,16 +45,16 @@ HELP_TARGETS = [
     ([sys.executable, "requirements/export_requirements_lock.py", "--help"], "python requirements/export_requirements_lock.py"),
     ([sys.executable, "services/downloader/main.py", "--help"], "python services/downloader/main.py"),
     ([sys.executable, "services/breakout_quality/dataset_builder.py", "--help"], "python services/breakout_quality/dataset_builder.py"),
-    ([sys.executable, "tools/filters/breakout_quality/evaluate.py", "--help"], "python tools/filters/breakout_quality/evaluate.py"),
+    ([sys.executable, "services/breakout_quality/evaluate.py", "--help"], "python services/breakout_quality/evaluate.py"),
     ([sys.executable, "services/breakout_quality/export_scores.py", "--help"], "python services/breakout_quality/export_scores.py"),
-    ([sys.executable, "tools/filters/breakout_quality/report.py", "--help"], "python tools/filters/breakout_quality/report.py"),
-    ([sys.executable, "tools/filters/breakout_quality/train.py", "--help"], "python tools/filters/breakout_quality/train.py"),
+    ([sys.executable, "services/breakout_quality/report.py", "--help"], "python services/breakout_quality/report.py"),
+    ([sys.executable, "services/breakout_quality/train.py", "--help"], "python services/breakout_quality/train.py"),
     ([sys.executable, "tools/local_regression/run_all.py", "--help"], "python tools/local_regression/run_all.py"),
     ([sys.executable, "tools/local_regression/run_chain_checks.py", "--help"], "python tools/local_regression/run_chain_checks.py"),
     ([sys.executable, "tools/local_regression/run_ml_smoke.py", "--help"], "python tools/local_regression/run_ml_smoke.py"),
     ([sys.executable, "tools/local_regression/run_meta_quality.py", "--help"], "python tools/local_regression/run_meta_quality.py"),
     ([sys.executable, "tools/local_regression/run_quick_gate.py", "--help"], "python tools/local_regression/run_quick_gate.py"),
-    ([sys.executable, "tools/optimizer/main.py", "--help"], "python tools/optimizer/main.py"),
+    ([sys.executable, "services/optimizer/application.py", "--help"], "python services/optimizer/application.py"),
     ([sys.executable, "services/portfolio_sim/main.py", "--help"], "python services/portfolio_sim/main.py"),
     ([sys.executable, "services/scanner/main.py", "--help"], "python services/scanner/main.py"),
     ([sys.executable, "tools/validate/cli.py", "--help"], "python tools/validate/cli.py"),
@@ -87,16 +87,16 @@ INLINE_CLI_TARGETS = {
     "requirements/export_requirements_lock.py",
     "services/downloader/main.py",
     "services/breakout_quality/dataset_builder.py",
-    "tools/filters/breakout_quality/evaluate.py",
+    "services/breakout_quality/evaluate.py",
     "services/breakout_quality/export_scores.py",
-    "tools/filters/breakout_quality/report.py",
-    "tools/filters/breakout_quality/train.py",
+    "services/breakout_quality/report.py",
+    "services/breakout_quality/train.py",
     "tools/local_regression/run_all.py",
     "tools/local_regression/run_chain_checks.py",
     "tools/local_regression/run_ml_smoke.py",
     "tools/local_regression/run_meta_quality.py",
     "tools/local_regression/run_quick_gate.py",
-    "tools/optimizer/main.py",
+    "services/optimizer/application.py",
     "services/portfolio_sim/main.py",
     "services/scanner/main.py",
     "tools/validate/cli.py",
@@ -930,7 +930,7 @@ def check_dataset_runtime_error_paths() -> List[Dict[str, Any]]:
     results = []
     params = V16StrategyParams()
 
-    from tools.optimizer.raw_cache import load_all_raw_data
+    from services.optimizer.raw_cache import load_all_raw_data
     from services.portfolio_replay import run_portfolio_simulation
     from services.scanner.scan_runner import run_daily_scanner
 

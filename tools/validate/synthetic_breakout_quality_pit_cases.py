@@ -59,7 +59,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         resolve_forward_oos_score_group_ids,
         resolve_forward_oos_target_evaluable_group_ids,
     )
-    from tools.filters.breakout_quality.build_point_in_time_scores import (
+    from services.breakout_quality.point_in_time_scores import (
         _build_fold_periods,
         _checkpoint_matches_rescore_contract,
         _fold_training_contract_is_compatible,

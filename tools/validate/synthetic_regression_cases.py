@@ -25,7 +25,7 @@ from core.raw_universe_contract import (
 )
 from core.strategy_params import V16StrategyParams
 
-from tools.optimizer.raw_cache import load_all_raw_data
+from services.optimizer.raw_cache import load_all_raw_data
 from services.portfolio_replay import (
     _build_in_memory_raw_context_source,
     _build_portfolio_prepared_cache_paths,
