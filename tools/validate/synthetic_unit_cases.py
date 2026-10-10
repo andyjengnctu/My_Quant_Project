@@ -36,6 +36,10 @@ from core.fee_rebate import (
 )
 from core.history_filters import evaluate_history_candidate_metrics
 from core.portfolio_engine import run_portfolio_timeline
+from core.portfolio_run_result import (
+    as_portfolio_training_result,
+    as_portfolio_reporting_result,
+)
 from core.portfolio_fast_data import (
     merge_static_market_with_dynamic,
     pack_static_market_data,
@@ -78,7 +82,7 @@ from core.price_utils import (
 from core import signal_utils as signal_utils_module
 from core.signal_utils import generate_signals
 
-from .checks import bind_synthetic_case, bind_checks, add_check
+from .checks import bind_synthetic_case, bind_checks, add_check, raises_expected
 
 
 def validate_price_utils_unit_case(_base_params):
@@ -739,6 +743,40 @@ def validate_portfolio_stats_unit_case(_base_params):
     check("calc_sim_years_shared_period_basis", 366.0 / 365.25, sim_years, tol=1e-9)
     check("calc_annual_return_pct_cagr", 10.0, calc_annual_return_pct(100.0, 121.0, 2.0), tol=1e-9)
     check("calc_annual_return_pct_end_value_non_positive", -100.0, calc_annual_return_pct(100.0, 0.0, 2.0), tol=1e-9)
+
+    # AI註: 具名轉換只命名原 Portfolio tuple 的欄位，不得重排數值或改變公開回傳形狀。
+    train_legacy = tuple(range(23))
+    report_legacy = tuple(range(25))
+    train_named = as_portfolio_training_result(train_legacy)
+    report_named = as_portfolio_reporting_result(report_legacy)
+    check("training_result_preserves_legacy_tuple", train_legacy, tuple(train_named))
+    check(
+        "training_result_named_field_order",
+        (0, 1, 3, 6, 11, 13, 20, 21, 22),
+        (
+            train_named.total_return_pct, train_named.max_drawdown_pct,
+            train_named.final_equity, train_named.benchmark_return_pct,
+            train_named.missed_buy_count, train_named.log_r_squared,
+            train_named.reserved_buy_fill_rate, train_named.annual_return_pct,
+            train_named.benchmark_annual_return_pct,
+        ),
+    )
+    check("reporting_result_preserves_legacy_tuple", report_legacy, tuple(report_named))
+    check(
+        "reporting_result_named_field_order",
+        (0, 1, 2, 4, 8, 11, 23, 24),
+        (
+            report_named.equity_curve, report_named.trade_history,
+            report_named.total_return_pct, report_named.trade_count,
+            report_named.final_equity, report_named.benchmark_return_pct,
+            report_named.annual_return_pct, report_named.benchmark_annual_return_pct,
+        ),
+    )
+    check(
+        "portfolio_result_wrong_shape_fails_fast",
+        True,
+        raises_expected(TypeError, lambda: as_portfolio_training_result((0,))),
+    )
 
     summary["full_year_count"] = full_year_stats["full_year_count"]
     summary["full_month_count"] = full_month_stats["full_month_count"]
