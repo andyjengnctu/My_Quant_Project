@@ -337,7 +337,7 @@ class ExploratoryMenuIntegrationCases(unittest.TestCase):
     def _settings(self):
         return SimpleNamespace(
             is_binary_classification=False, is_continuous_ranker=True,
-            rolling_authorized=True,
+            rolling_authorized=False,  # Menu remains complete even on a synthetic disallowed profile.
             experiment_profile=runner._STUDY.reference_profile,
         )
 
@@ -353,52 +353,246 @@ class ExploratoryMenuIntegrationCases(unittest.TestCase):
         explorer.assert_called_once_with(runner._STUDY, "forward")
         formal.assert_not_called()
 
-    def test_menu_only_advertises_registered_callable_actions(self):
+    def test_menu_always_exposes_and_dispatches_all_seven_work_types(self):
         import contextlib
         import io
         from services.research import breakout_quality_application as app
+        from core.model_research_menu_contract import MODEL_RESEARCH_WORK_TYPES
         output = io.StringIO()
         with (patch.object(app, "get_breakout_quality_model_research_settings", return_value=self._settings()),
               patch.object(app, "_configured_exploratory_research_study", return_value=runner._STUDY),
               patch.object(app, "_run_configured_model_comparison") as formal,
               patch.object(app, "_invoke_exploratory_research_action", return_value=0) as explorer,
-              patch("builtins.input", side_effect=["2", "4", "5", "6", "7", "3", "0"]),
+              patch("builtins.input", side_effect=["2", "3", "4", "5", "6", "7", "0"]),
               contextlib.redirect_stdout(output)):
             result = app._interactive_model_research("apps/research.py model")
         self.assertEqual(result, 0)
-        self.assertIn("Forward OOS 模型比較", output.getvalue())
-        self.assertNotIn("Rolling OOS 模型訓練", output.getvalue())
-        self.assertNotIn("Robustness 模型測試", output.getvalue())
+        for work in MODEL_RESEARCH_WORK_TYPES:
+            self.assertIn(f"[{work.choice}]", output.getvalue())
+            self.assertIn(work.label, output.getvalue())
         self.assertNotIn("[BLOCKED]", output.getvalue())
-        explorer.assert_called_once_with(runner._STUDY, "compare")
+        self.assertEqual(
+            [(args[0][1]) for args in explorer.call_args_list],
+            [work.action for work in MODEL_RESEARCH_WORK_TYPES[1:]],
+        )
         formal.assert_not_called()
 
-    def test_new_registered_action_is_visible_and_dispatchable_without_menu_edit(self):
-        from dataclasses import replace
-        from services.research import breakout_quality_application as app
-        study = replace(runner._STUDY, workflow_handlers=(
-            ("forward", "run_forward_menu"),
-            ("rolling", "run_synthetic_rolling"),
-            ("compare", "run_forward_comparison"),
-        ))
-        with (patch.object(runner, "run_synthetic_rolling", return_value=17, create=True) as producer,
-              patch.object(app, "get_breakout_quality_model_research_settings", return_value=self._settings()),
-              patch.object(app, "_configured_exploratory_research_study", return_value=study),
-              patch("builtins.input", side_effect=["2", "0"])):
-            menu_items = app._exploratory_model_menu_work_items(study)
-            self.assertEqual(tuple(int(item[0]) for item in menu_items), (1, 2, 3))
-            self.assertEqual(app._interactive_model_research("apps/research.py model"), 0)
-        producer.assert_called_once_with()
+    def test_registry_never_owns_menu_selection_or_handler_allowlist(self):
+        from dataclasses import fields
+        from core.model_research_menu_contract import (
+            MODEL_RESEARCH_WORK_TYPES, validate_research_producer,
+        )
+        from core.breakout_quality_registry import iter_exploratory_model_research_studies
+        from importlib import import_module
+        self.assertNotIn("workflow_handlers", {field.name for field in fields(runner._STUDY)})
+        self.assertNotIn("permitted_actions", dir(runner._STUDY))
+        self.assertEqual(tuple(work.choice for work in MODEL_RESEARCH_WORK_TYPES), tuple(map(str, range(1, 8))))
+        for study in iter_exploratory_model_research_studies():
+            module = import_module(study.service_module)
+            validate_research_producer(module)
+            for work in MODEL_RESEARCH_WORK_TYPES:
+                with self.subTest(model=study.model_research_id, action=work.action):
+                    self.assertTrue(callable(getattr(module, work.producer_method, None)))
 
-    def test_missing_registered_producer_fails_before_menu_is_shown(self):
-        from dataclasses import replace
+    def test_missing_producer_is_integration_error_not_a_hidden_menu(self):
         from services.research import breakout_quality_application as app
-        invalid = replace(runner._STUDY, workflow_handlers=(("forward", "missing_producer"),))
-        with self.assertRaisesRegex(RuntimeError, "缺少可執行 producer"):
-            app._exploratory_model_menu_work_items(invalid)
-        unregistered = replace(runner._STUDY, workflow_handlers=(("not_a_work_type", "run_forward_menu"),))
-        with self.assertRaisesRegex(ValueError, "未對應正式選單類型"):
-            app._exploratory_model_menu_work_items(unregistered)
+        from core.model_research_menu_contract import validate_research_producer, model_research_menu_items
+        self.assertEqual(len(model_research_menu_items()), 7)
+        with patch.object(runner, "run_rolling_menu", None):
+            with self.assertRaisesRegex(RuntimeError, "run_rolling_menu"):
+                validate_research_producer(runner)
+            with self.assertRaisesRegex(RuntimeError, "run_rolling_menu"):
+                app._invoke_exploratory_research_action(runner._STUDY, "forward")
+            self.assertEqual(len(model_research_menu_items()), 7)
+
+    def test_broken_exploratory_producer_fails_before_menu_offers_choices(self):
+        from services.research import breakout_quality_application as app
+        import contextlib
+        import io
+        text = io.StringIO()
+        with (patch.object(app, "get_breakout_quality_model_research_settings", return_value=self._settings()),
+              patch.object(app, "_configured_exploratory_research_study", return_value=runner._STUDY),
+              patch.object(runner, "run_rolling_menu", None),
+              patch("builtins.input", side_effect=AssertionError("Must fail before asking user")),
+              contextlib.redirect_stdout(text)):
+            with self.assertRaisesRegex(RuntimeError, "run_rolling_menu"):
+                app._interactive_model_research("apps/research.py model")
+        self.assertNotIn("[1]", text.getvalue())
+
+    def test_real_producer_is_dispatched_by_all_seven_work_types(self):
+        from contextlib import ExitStack
+        from services.research import breakout_quality_application as app
+        from core.model_research_menu_contract import MODEL_RESEARCH_WORK_TYPES
+        with ExitStack() as stack:
+            spies = {
+                work.action: stack.enter_context(patch.object(runner, work.producer_method, return_value=0))
+                for work in MODEL_RESEARCH_WORK_TYPES
+            }
+            for work in MODEL_RESEARCH_WORK_TYPES:
+                self.assertEqual(app._invoke_exploratory_research_action(runner._STUDY, work.action), 0)
+            for spy in spies.values():
+                spy.assert_called_once_with()
+
+    def test_rolling_schedule_retains_fold_end_predictions_without_future_fit(self):
+        from core.breakout_quality_policy import get_breakout_quality_workflow_settings
+        from services.breakout_quality import point_in_time_scores
+        dates = ["2020-05-01"] * 60 + ["2021-01-05"] * 30
+        ends = dates.copy()
+        ends[-5:] = ["2021-02-28"] * 5
+        bundle = SimpleNamespace(
+            group_table=pd.DataFrame({"date": dates, "label_eval_end_date": ends}),
+            target_valid=np.ones(90, dtype=bool),
+            outer_policy={"effective_oos_end_date": "2021-01-31"},
+            summary={"training_universe_start_date": "2010-01-01"},
+        )
+        bundle.target_valid[84] = False
+        mode = SimpleNamespace(score_start_date="2021-01-01", score_end_date="2021-01-31",
+                               fold_months=12, fold_anchor_date=None, single_score_block=False)
+        settings = SimpleNamespace(point_in_time_inner_validation_months=24,
+                                   point_in_time_train_window_months=None)
+        ids = {"train_ids": np.arange(30, dtype=np.int64),
+               "validation_ids": np.arange(30, 60, dtype=np.int64),
+               "final_ids": np.arange(60, dtype=np.int64),
+               "score_ids": np.arange(60, 90, dtype=np.int64),
+               "history_start": None, "validation_start": pd.Timestamp("2020-01-01")}
+        with (patch("core.breakout_quality_policy.get_breakout_quality_rolling_test_mode", return_value=mode),
+              patch("core.breakout_quality_policy.get_breakout_quality_workflow_settings", return_value=settings),
+              patch.object(point_in_time_scores, "_fold_group_ids", return_value=ids) as canonical):
+            folds = runner._rolling_fold_plan(bundle, args=object())
+        self.assertEqual(len(folds), 1)
+        fold, split = folds[0]
+        canonical.assert_called_once()
+        # OOS target maturity past this fold does not exclude a prediction;
+        # it is never used to fit that fold.  Only truly invalid target rows
+        # are omitted from the post-hoc quality calculation.
+        self.assertTrue(np.array_equal(split.oos_ids, np.array([*range(60, 84), *range(85, 90)])))
+        self.assertEqual(split.report["counts"]["oos"], 29)
+        self.assertTrue(split.report["oos_outcomes_excluded_from_fit"])
+        self.assertEqual(fold["fold_id"], "fold_20210101_20210131")
+        np.testing.assert_array_equal(np.intersect1d(split.selection_ids, split.oos_ids), [])
+
+    def test_rolling_compare_missing_artifact_delegates_rolling_producer(self):
+        from services.breakout_quality import margin_yesterday_research as mod
+        with (patch.object(mod, "_read_isolated_result", return_value=(None, None)) as reader,
+              patch.object(mod, "run_rolling_menu", return_value=0) as builder,
+              patch.object(mod, "_rolling_reference_quality") as comparison):
+            self.assertEqual(mod.run_rolling_comparison(), 0)
+        self.assertEqual(reader.call_count, 2)
+        builder.assert_called_once_with()
+        comparison.assert_not_called()
+
+    def test_rolling_producer_reuses_committed_folds_after_aggregate_interruption(self):
+        """Exercise the actual on-disk BUILD/RESUME path without a real torch fit."""
+        from tempfile import TemporaryDirectory
+        from contextlib import ExitStack
+        from services.breakout_quality import margin_yesterday_research as mod
+        import shutil
+
+        class SyntheticBank:
+            shape = (2, 300, 14)
+            feature_columns = tuple(f"feat_{i}" for i in range(14))
+
+            def __len__(self):
+                return 2
+
+        quality = {
+            "raw_safety": {"group_count": 2, "mean_daily_spearman": 0.4},
+            "conditional_mfe_true_hs": {"group_count": 2, "mean_daily_spearman": 0.5},
+            "lexicographic_model_gate": {"predicted_hs_true_ls_pct": 20.0},
+        }
+        args = SimpleNamespace(
+            seed=42, allow_stale_source=False, filter_id="synthetic",
+            model_architecture=mod.AO_ARCHITECTURE,
+            experiment_profile=mod._STUDY.reference_profile,
+        )
+        original = SimpleNamespace(
+            feature_bank=object(), raw_target=np.array([.1, .2]),
+            group_table=pd.DataFrame({"ticker": ["2330", "2317"],
+                                      "date": ["2021-01-05", "2021-01-05"]}),
+            profile=SimpleNamespace(as_manifest_payload=lambda: {}),
+            model_spec=SimpleNamespace(as_manifest_payload=lambda: {}),
+        )
+        margin = SimpleNamespace(
+            arrays=(), source_identity={"snapshot_fingerprint": "synthetic"}, coverage={},
+        )
+        period = {"fold_id": "synthetic_fold"}
+        split = SimpleNamespace(report={"fold_id": "synthetic_fold"})
+        scored = pd.DataFrame({
+            "ticker": ["2330", "2317"], "date": ["2021-01-05", "2021-01-05"],
+            "raw_safety_score": [0.4, 0.5],
+            "conditional_mfe_score": [0.6, 0.7],
+        })
+        fitted = {
+            "group_ids": np.array([0, 1], dtype=np.int64),
+            "scores": scored,
+            "selected_epoch": 1, "selection_history": [], "final_history": [],
+            "quality": quality,
+            "model": SimpleNamespace(state_dict=lambda: {}),
+        }
+        torch = SimpleNamespace(save=lambda payload, path: Path(path).write_bytes(b"checkpoint"))
+        with TemporaryDirectory() as temp:
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(mod, "ROOT", Path(temp)))
+                stack.enter_context(patch.object(mod, "parse_canonical_training_args", return_value=args))
+                stack.enter_context(patch.object(mod, "get_continuous_ranker_execution_recipe", return_value=SimpleNamespace(
+                    objective_policy=SimpleNamespace(secondary_pair_scope_threshold=0.5)
+                )))
+                stack.enter_context(patch.object(mod, "load_daily_universal_ranker_data_with_price_source", return_value=original))
+                stack.enter_context(patch.object(mod, "load_margin_source_for_ao_bundle", return_value=margin))
+                stack.enter_context(patch.object(mod, "MarginAugmentedDailyFeatureBank", return_value=SyntheticBank()))
+                stack.enter_context(patch.object(mod, "replace", side_effect=lambda base, feature_bank: base))
+                stack.enter_context(patch.object(mod, "_rolling_fold_plan", return_value=[(period, split)]))
+                stack.enter_context(patch.object(mod, "resolve_ranker_execution_plan", return_value=(torch, object())))
+                stack.enter_context(patch.object(mod, "canonical_fitting_settings", return_value={"seed": 42}))
+                stack.enter_context(patch.object(mod, "scientific_torch_execution", return_value={}))
+                stack.enter_context(patch.object(mod, "source_training_identity", return_value={}))
+                stack.enter_context(patch.object(mod, "fitting_split_identity", side_effect=lambda value: dict(value)))
+                stack.enter_context(patch.object(mod.ranker_api, "training_semantics", return_value={}))
+                stack.enter_context(patch("filters.breakout_quality.hs_conditional_mfe.build_hs_conditional_mfe_targets", return_value=object()))
+                stack.enter_context(patch.object(mod.ranker_api, "hs_conditional_mfe_metrics", return_value=quality))
+                stack.enter_context(patch.object(mod, "_validate_current_exploratory_source"))
+                fitted_mock = stack.enter_context(patch.object(mod, "_fit_exploratory_segment", return_value=fitted))
+                first_report, result = mod._build_rolling_exploration(seed=42)
+                self.assertTrue(first_report.is_file())
+                self.assertTrue((first_report.parent / "experimental_report.md").is_file())
+                self.assertEqual(result["oos_groups"], 2)
+                self.assertEqual(fitted_mock.call_count, 1)
+                # Interrupt before the aggregate JSON commit: existing fold must REUSE.
+                shutil.rmtree(first_report.parent)
+                second_report, result2 = mod._build_rolling_exploration(seed=42)
+                self.assertTrue(second_report.is_file())
+                self.assertEqual(result2["fitting_fingerprint"], result["fitting_fingerprint"])
+                self.assertEqual(fitted_mock.call_count, 1)
+                # Interrupted fold has no committed record; retrain only that fold.
+                shutil.rmtree(second_report.parent)
+                fold_root = first_report.parent.parent / "folds"
+                fold_report = next(fold_root.glob("*/fold.json"))
+                fold_report.unlink()
+                third_report, _result3 = mod._build_rolling_exploration(seed=42)
+                self.assertTrue(third_report.is_file())
+                self.assertEqual(fitted_mock.call_count, 2)
+                ready, _ = mod._read_isolated_result(
+                    Path(temp) / mod.EXPERIMENT_RELATIVE_OUTPUT,
+                    expected_seed=42, mode="rolling",
+                )
+                self.assertEqual(ready, third_report)
+
+    def test_rolling_same_sample_reference_rejects_unmatched_stock_day(self):
+        from tempfile import TemporaryDirectory
+        from services.breakout_quality import margin_yesterday_research as mod
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            ao = root / "ao_rolling_scores.csv.gz"
+            pd.DataFrame({"ticker": ["2330"], "date": ["2021-01-06"],
+                          "raw_safety_score": [0.3], "conditional_mfe_score": [0.2]}).to_csv(ao, index=False, compression="gzip")
+            by = pd.DataFrame({"group_index": [0], "ticker": ["2330"], "date": ["2021-01-05"]})
+            with patch("filters.breakout_quality.ranking_score_store.load_selection_point_in_time_ranking_contract",
+                       return_value=SimpleNamespace(score_path=ao)):
+                with self.assertRaisesRegex(ValueError, "無法精確對齊"):
+                    mod._rolling_reference_quality(
+                        by, filter_id="synthetic", hs=object(),
+                        group_table=pd.DataFrame({"ticker": ["2330"], "date": ["2021-01-05"]})
+                    )
 
     def test_compare_missing_forward_delegates_canonical_producer(self):
         from tempfile import TemporaryDirectory
@@ -422,6 +616,7 @@ class ExploratoryMenuIntegrationCases(unittest.TestCase):
                   patch.object(mod, "_read_experimental_report", side_effect=[(None, None), (report, {"ok": True})]) as reader,
                   patch.object(mod, "run_forward_menu", return_value=0) as producer,
                   patch.object(mod, "_validate_current_exploratory_source"),
+                  patch.object(mod, "_resolve_forward_comparison_reference", return_value={"reference_profile": "synthetic"}),
                   patch.object(mod, "_comparison_payload", return_value=comparison),
                   patch("filters.breakout_quality.ranking_score_store.resolve_continuous_ranker_oos_score_path", return_value=score)):
                 self.assertEqual(mod.run_forward_comparison(), 0)

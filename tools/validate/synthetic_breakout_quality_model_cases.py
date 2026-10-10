@@ -1544,23 +1544,24 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and bool(rolling_compare.call_args.kwargs.get("rolling")) is True,
     )
 
-    # An unsupported formal work type must not be falsely advertised as runnable.
+    # The seven displayed work types are a universal UI contract, not a
+    # profile authorization list.  A false rolling flag must not hide anything.
     import contextlib
     import io
-    unsupported_stdout = io.StringIO()
+    universal_stdout = io.StringIO()
     with (
         patch.object(research_app, "get_breakout_quality_model_research_settings", return_value=model_gate_settings),
         patch.object(research_app, "_configured_exploratory_research_study", return_value=None),
-        patch("builtins.input", side_effect=["2", "7", "0"]),
-        contextlib.redirect_stdout(unsupported_stdout),
+        patch("builtins.input", side_effect=["0"]),
+        contextlib.redirect_stdout(universal_stdout),
     ):
-        unsupported_rc = research_app._interactive_model_research("apps/research.py model")
+        universal_rc = research_app._interactive_model_research("apps/research.py model")
     check_true(
-        "formal_menu_does_not_advertise_work_types_not_authorized_by_settings",
-        unsupported_rc == 0
-        and "Rolling OOS 模型訓練" not in unsupported_stdout.getvalue()
-        and "Timing Mode｜Rolling" not in unsupported_stdout.getvalue()
-        and "[BLOCKED]" not in unsupported_stdout.getvalue(),
+        "formal_menu_seven_items_always_visible_even_when_training_rolling_flag_false",
+        universal_rc == 0
+        and all(f"[{item[0]}]" in universal_stdout.getvalue() and item[2] in universal_stdout.getvalue()
+                for item in research_app._MODEL_RESEARCH_MENU_WORK_ITEMS)
+        and "[BLOCKED]" not in universal_stdout.getvalue(),
     )
 
     app_source = (project_root / "services" / "research" / "breakout_quality_application.py").read_text(encoding="utf-8")
@@ -1575,43 +1576,29 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and "查看目前Workflow、工件與模型報表" not in app_source
         and "Actual MFE×Safety Truth Geometry（只讀）" not in app_source,
     )
-    # Check *all* registered studies, including inactive ones. Disabling a
-    # study in config must never disable its formal wiring regression coverage.
-    import importlib as dynamic_importlib
-    from dataclasses import replace as dataclass_replace
+    # Every registered (including inactive) scientific producer must expose all
+    # seven methods; no per-model action allowlist may be reconstructed in tests.
+    from core.model_research_menu_contract import (
+        MODEL_RESEARCH_WORK_TYPES, validate_research_producer,
+    )
+    from dataclasses import fields as dataclass_fields
+    from importlib import import_module as dynamic_import_module
     registered_studies = breakout_quality_registry.iter_exploratory_model_research_studies()
     for study in registered_studies:
-        advertised = research_app._exploratory_model_menu_work_items(study)
-        declared = set(study.permitted_actions)
+        module = dynamic_import_module(study.service_module)
         check_true(
-            f"exploratory_{study.model_research_id}_menu_registry_capability_single_source",
-            {action for _choice, action, _label in advertised} == declared
-            and len(advertised) == len(study.workflow_handlers),
+            f"exploratory_{study.model_research_id}_producer_implements_seven_universal_work_types",
+            not any(field.name == "workflow_handlers" for field in dataclass_fields(study))
+            and all(callable(getattr(module, item.producer_method, None))
+                    for item in MODEL_RESEARCH_WORK_TYPES)
+            and not raises_expected(RuntimeError, lambda: validate_research_producer(module)),
         )
-        module = dynamic_importlib.import_module(study.service_module)
-        # A synthetic new action must be wired solely by a Registry edit, with
-        # no menu-specific id/handler switch added to the application.
-        unused = next((action for _choice, action, _label in stable_work_items
-                       if action not in declared), None)
-        if unused is not None:
-            alternate = dataclass_replace(
-                study,
-                workflow_handlers=tuple(study.workflow_handlers)
-                                  + ((unused, "synthetic_registered_work"),),
-            )
-            with patch.object(module, "synthetic_registered_work", return_value=0, create=True) as callable_work:
-                published = research_app._exploratory_model_menu_work_items(alternate)
-                research_app._invoke_exploratory_research_action(alternate, unused)
+        with patch.object(module, "run_rolling_menu", None):
             check_true(
-                f"exploratory_{study.model_research_id}_new_registered_workflow_without_app_edit",
-                unused in {action for _choice, action, _label in published}
-                and callable_work.call_count == 1,
+                f"exploratory_{study.model_research_id}_missing_producer_is_test_failure_not_hidden_item",
+                raises_expected(RuntimeError, lambda: validate_research_producer(module))
+                and len(research_app._MODEL_RESEARCH_MENU_WORK_ITEMS) == 7,
             )
-        absent = dataclass_replace(study, workflow_handlers=(("forward", "nonexistent_producer"),))
-        check_true(
-            f"exploratory_{study.model_research_id}_missing_producer_rejected_before_menu",
-            raises_expected(RuntimeError, lambda: research_app._exploratory_model_menu_work_items(absent)),
-        )
 
     # Dedicated historical missing-BY-Forward regression: this science-specific
     # producer belongs to its own isolated service, not the generic model engine.

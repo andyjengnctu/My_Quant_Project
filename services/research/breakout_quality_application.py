@@ -5561,17 +5561,14 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
     ))
     return 0
 
-# Stable work types and menu positions only. Scientific study membership and the
-# producer method for each action come solely from the research Registry.
-_MODEL_RESEARCH_MENU_WORK_ITEMS = (
-    ("1", "forward", "Forward OOS 模型訓練"),
-    ("2", "rolling", "Rolling OOS 模型訓練"),
-    ("3", "compare", "Forward OOS 模型比較"),
-    ("4", "rolling_compare", "Rolling OOS 模型比較"),
-    ("5", "robustness", "Forward OOS Robustness 模型測試"),
-    ("6", "rolling_robustness", "Rolling OOS Robustness 模型測試"),
-    ("7", "timing", "Timing Mode｜Rolling 訓練前後比較  [工程]"),
+# One stable work-type inventory for every continuous model and research scope.
+# Scientific identity may select a producer, never the visible work types.
+from core.model_research_menu_contract import (
+    model_research_menu_items,
+    validate_research_producer,
+    model_research_producer_method,
 )
+_MODEL_RESEARCH_MENU_WORK_ITEMS = model_research_menu_items()
 
 
 def _configured_exploratory_research_study():
@@ -5581,36 +5578,13 @@ def _configured_exploratory_research_study():
     return get_exploratory_model_research_study(identifier) if identifier else None
 
 
-def _exploratory_model_menu_work_items(study) -> tuple[tuple[str, str, str], ...]:
-    """Fail before rendering if any advertised action lacks a callable producer.
-
-    A new study must only register (work_type, handler) at its canonical owner;
-    the menu must not maintain a second per-study allow-list or handler switch.
-    """
-    if study.formal_input_authorized or study.trading_promotion_authorized or study.historical_vintage_proven:
-        raise ValueError("探索研究授權標籤不合法")
-    handlers = dict(study.workflow_handlers)
-    if not handlers or len(handlers) != len(study.workflow_handlers):
-        raise ValueError("探索研究工作註冊不得空白或重複")
-    supported = {action for _choice, action, _label in _MODEL_RESEARCH_MENU_WORK_ITEMS}
-    unknown = sorted(set(handlers) - supported)
-    if unknown:
-        raise ValueError("探索研究工作未對應正式選單類型: " + ", ".join(unknown))
-    module = importlib.import_module(study.service_module)
-    missing = [f"{action}:{method}" for action, method in handlers.items()
-               if not callable(getattr(module, method, None))]
-    if missing:
-        raise RuntimeError("探索研究已授權工作缺少可執行 producer: " + ", ".join(missing))
-    return tuple(item for item in _MODEL_RESEARCH_MENU_WORK_ITEMS if item[1] in handlers)
-
-
 def _invoke_exploratory_research_action(study, action: str) -> int:
-    """Dispatch strictly through the same registered producer used to render UI."""
-    _exploratory_model_menu_work_items(study)
-    method = dict(study.workflow_handlers).get(str(action))
-    if method is None:
-        raise ValueError("此探索性科學身分未授權此工作類型")
+    """Dispatch the same seven work types; research identity only selects a producer."""
+    if study.formal_input_authorized or study.trading_promotion_authorized or study.historical_vintage_proven:
+        raise ValueError("隔離探索不得冒充正式PIT／Trading授權")
     module = importlib.import_module(study.service_module)
+    validate_research_producer(module)
+    method = model_research_producer_method(str(action))
     return int(getattr(module, method)() or 0)
 
 
@@ -5622,6 +5596,10 @@ def _interactive_model_research(program_name: str) -> int:
         raise ValueError(f"不支援的 workflow training objective: {settings.training_objective!r}")
 
     study = _configured_exploratory_research_study()
+    if study is not None:
+        # Fail fast before offering a broken workflow.  Never shrink the seven
+        # stable choices to conceal a model producer integration defect.
+        validate_research_producer(importlib.import_module(study.service_module))
     # A registered current-vintage exploration is the visible research scope; the
     # original AO formal workflow stays available through a stable scope switch.
     exploratory = study is not None
@@ -5641,15 +5619,9 @@ def _interactive_model_research(program_name: str) -> int:
                     for model_id, _profile in get_breakout_quality_model_test_settings().model_profiles
                 )
             )
-        # All visible items are executable. For an isolated scope the Registry
-        # determines membership, and every advertised handler was validated above.
-        workflow_items = (
-            _exploratory_model_menu_work_items(study)
-            if exploratory else tuple(
-                item for item in _MODEL_RESEARCH_MENU_WORK_ITEMS
-                if item[1] not in {"rolling", "timing"} or settings.rolling_authorized
-            )
-        )
+        # The display contract is globally fixed; no model/authorization/producer
+        # may filter, hide, renumber or relabel a work type.
+        workflow_items = _MODEL_RESEARCH_MENU_WORK_ITEMS
         for item_choice, _action, label in workflow_items:
             print(render_menu_item(int(item_choice), label, default=item_choice == "1"))
         if study is not None:
@@ -5681,9 +5653,6 @@ def _interactive_model_research(program_name: str) -> int:
         if choice == "1":
             return _interactive_continuous_forward_model_gate(program_name, settings)
         if choice == "2":
-            if not settings.rolling_authorized:
-                print("[BLOCKED] Current Model只授權Forward Model Gate；Rolling尚未授權。")
-                continue
             _interactive_continuous_rolling_model_gate(program_name, settings)
             continue
         if choice == "3":
@@ -5701,9 +5670,6 @@ def _interactive_model_research(program_name: str) -> int:
             _run_configured_model_robustness(program_name, rolling=True)
             continue
         if choice == "7":
-            if not settings.rolling_authorized:
-                print("[BLOCKED] Current Model尚未授權Rolling，因此不執行Rolling Timing。")
-                continue
             timing = get_breakout_quality_rolling_timing_settings()
             timing_settings = get_breakout_quality_workflow_settings(
                 experiment_profile=str(timing.experiment_profile)
@@ -5725,10 +5691,9 @@ def show_model_status() -> None:
     """Show official AO artifact status without disguising exploratory authorization."""
     study = _configured_exploratory_research_study()
     if study is not None:
-        enabled = "/".join(label for _choice, _action, label in _exploratory_model_menu_work_items(study))
         print(
-            f"\n隔離探索選單：{study.model_research_id}｜{enabled}；"
-            "current-vintage、正式PIT=NO、Trading=NO（進入模型選單後按[8]可切回正式研究）"
+            f"\n隔離探索研究：{study.model_research_id}｜"
+            "current-vintage、正式PIT=NO、Trading=NO（模型選單[8]可切回正式研究）"
         )
     _print_workflow_status(get_breakout_quality_model_research_settings())
 
