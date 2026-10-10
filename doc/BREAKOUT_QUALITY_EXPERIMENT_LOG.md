@@ -12817,3 +12817,23 @@ Decision：`RAW_PROVIDER_ZERO_OHLC_CONFIRMED / SOURCE_QUALITY_BLOCKED / READY_VA
 - **使用者最新明確決策**：前輪MR-13BY專用Research scope切換、[8]、AO/BY九指標Markdown直接輸出、額外模型Producer操作確認及因此縮減／改寫正式比較清單，均屬未經授權的介面回歸。必須回復2026-09-04已有標準Research七工作項目的名稱／編號／順序／直接工作流程，仍維持七個選項完整可選。特殊模型實驗不可重新定義標準選單或Standard SOP；必要專題診斷只能隔離於一次性Audit，不能取代正式模型比較。
 - **恢復現行工程規格**：`services/research/breakout_quality_application.py`不再從探索Registry派生第二份使用者介面或選擇模型，正式Model Compare/Test List唯一讀取`config/breakout_quality.py`的比較設定（當前基準是MR-13H／AH／AK／AO，不硬編測試成不可變參數），Forward／Rolling／Robustness沿舊版直接進入canonical Producer。`core/research_report_contract.py`與canonical Renderer將Model Standard SOP/Comparison恢復原六章、Generalization兩個分開轉換表、Evidence Coverage，以及Model-specific Extension的附錄地位；格式差異由Golden/contract定向測試防回歸。
 - **科學與歷史隔離**：不修改MR-13BY或AO已存在的原始source/feature/target/fitting identity、已發表工件、scientific gate、Provider歷史Vintage風險判定或正式Trading。舊有每一輪工程記錄保留為歷史經過，本條取代其中已過時的正式選單scope與報表介面建議；本輪尚未執行使用者本機實際Provider訓練或完整formal suite。
+
+## 2026-10-10 — MR-13BY Seed42 Forward 同樣本AO比較：使用者本機結果與下一步
+
+- **證據來源／邊界**：使用者2026-10-10貼出的`apps/research.py → [4] Audit → [2] 一次性專題 → MR-13BY → [3] Forward OOS模型比較`終端輸出。BY與frozen AO以同一`608,204`個OOS group進行比較；BY fitting fingerprint=`d0619eff9ed392eaf286ca19b2a3e097c43908fa9adb7e2d4c80cdee3ed21486`。BY Forward `[1]` 顯示REUSE，`[3]` 顯示REUSE/DONE。使用者提供的ZIP沒有該環境原始score、JSON或Provider Snapshot可供GPT獨立驗證，因此以下註明**USER_REPORTED_RESULT**，不可冒稱本輪重新完成訓練或實體資料QA。
+- **受控單因素對比**：AO仍是Adjusted 300×10；BY在相同AO Target/Loss/Seed42/Forward劃分上只增加FinMind READY Snapshot current-vintage T−1 YesterdayBalance衍生的融資融券偏差與各自mask四欄（300×14）。未證明歷史首次發布／修訂Vintage，故正式PIT/Trading授權仍是NO。
+
+| 同樣本Forward指標 | AO | BY | BY−AO | 越高越好 |
+|---|---:|---:|---:|:---:|
+| Raw Safety Daily rho | 0.3532 | 0.3201 | -0.0331 | 是 |
+| Raw Safety Global rho | 0.2929 | 0.2668 | -0.0261 | 是 |
+| Raw Safety Pair | 0.6268 | 0.6138 | -0.0130 | 是 |
+| Conditional-MFE Daily rho | 0.3969 | 0.3723 | -0.0247 | 是 |
+| Conditional-MFE Global rho | 0.3104 | 0.2987 | -0.0117 | 是 |
+| Conditional-MFE Pair | 0.6390 | 0.6295 | -0.0095 | 是 |
+| Pred-HS true-LS (%) | 36.8430 | 38.0132 | +1.1703 pp | 否 |
+| Selected HM/HS (%) | 25.9352 | 25.0540 | -0.8811 pp | 是 |
+| Selected High-Safety (%) | 44.2228 | 43.3250 | -0.8978 pp | 是 |
+
+- **觀察與判斷**：九項方向全不利；Raw Safety Daily rho約降低`0.0331`、Pred-HS的true-LS污染約增加`1.17pp`，所以預先設定的「Safety與選股純度共同改善、Conditional-MFE不退步」Forward Gate **未通過**。這是同一迭代OOS的模型對照，不能從608,204股票日直接當成608,204個獨立統計樣本，也不能由九項負面差異推論新的正交資訊永遠不可能有效。
+- **使用者後續指示與最小下一步**：使用者要求不再花時間調整一次性BY Audit報表，繼續BY研究。既有Forward結果不可覆寫重算；下一步限定既有**Seed42 Rolling OOS → AO同樣本Rolling比較**，用來辨別Forward負面差異是否在年度再訓練後仍持續，不讓Rolling的OOS指標回流到 fitting、loss、epoch選擇或特徵設計。只有Rolling證明相對Safety與選股純度改善且Conditional-MFE不惡化時，才另外決定是否有必要研究跨seed穩健性；若Rolling仍全面退步，BY停止並保留負面結果。這不是解除PIT vintage gate的授權。
