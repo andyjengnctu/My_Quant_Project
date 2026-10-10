@@ -24,7 +24,6 @@ from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_PARETO_DOMINANCE,
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
-    CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY,
     CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE,
     CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY,
     CONTINUOUS_RANKER_PRIMARY_SUPERVISION_BINARY_HS,
@@ -34,25 +33,23 @@ from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_SINGLE,
     CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_REQUIRED,
     CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE,
+    HEAD_PAIR_WEIGHT_FROM_REQUEST,
+    HEAD_TARGET_WITH_DETACHED_PRIMARY_SAFETY_RANK,
     normalize_continuous_ranker_pair_weight_configuration,
     CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
     CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED,
     CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
     CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_SAFETY,
-    CONTINUOUS_RANKER_LOSS_HANDLER_CONDITIONAL_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R,
     CONTINUOUS_RANKER_LOSS_HANDLER_LISTWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_PERCENTILE_MSE,
     CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R,
-    CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE,
-    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_ADAPTIVE_HORIZON_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_DUAL_SUPERVISED_HS_SCOPED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_TOP_HS_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE,
-    CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
     CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
     CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R,
@@ -1653,6 +1650,68 @@ _SHARED_SAFETY_SCOPED_MFE_LOSS_HANDLERS = frozenset({
 })
 
 
+def _compute_independent_head_pairwise_loss(
+    torch,
+    model,
+    xb,
+    cb,
+    target,
+    batch_dates,
+    *,
+    training_policy,
+    pairwise_reduction: str,
+    pair_weight_policy: str,
+):
+    """Execute ordered multi-head loss from the canonical composition descriptor.
+
+    The detached predicted-Safety percentile is calculated only for a head that
+    declares that specific target transform; this preserves its stop-gradient
+    boundary and prevents one objective's pair weights leaking into another.
+    """
+
+    composition = training_policy.independent_head_composition
+    if composition is None:
+        raise ValueError("independent multi-head composition缺少宣告")
+    expected_width = len(composition.heads)
+    if target.ndim != 2 or int(target.shape[1]) != expected_width:
+        raise ValueError(composition.target_error)
+    forward = getattr(model, composition.forward_method, None)
+    if not callable(forward):
+        raise ValueError(composition.architecture_error)
+    head_logits = tuple(forward(xb, cb))
+    if len(head_logits) != expected_width:
+        raise ValueError("multi-head model output與composition的head count不一致")
+
+    detached_primary_rank = None
+    targets = []
+    pair_weight_policies = []
+    for component in composition.heads:
+        head_target = target[:, component.target_column]
+        if component.target_transform == HEAD_TARGET_WITH_DETACHED_PRIMARY_SAFETY_RANK:
+            if detached_primary_rank is None:
+                detached_primary_rank = _same_date_average_rank_percentile(
+                    torch,
+                    torch.softmax(head_logits[0].float(), dim=1)[:, LABEL_PASS].detach(),
+                    batch_dates,
+                )
+            head_target = torch.stack([head_target, detached_primary_rank], dim=1)
+        targets.append(head_target)
+        pair_weight_policies.append(
+            str(pair_weight_policy)
+            if component.pair_weight_policy == HEAD_PAIR_WEIGHT_FROM_REQUEST
+            else component.pair_weight_policy
+        )
+    return _combine_pairwise_head_supervision(
+        torch,
+        head_logits,
+        tuple(targets),
+        batch_dates,
+        training_policy=training_policy,
+        pairwise_reduction=str(pairwise_reduction),
+        pair_weight_policies=tuple(pair_weight_policies),
+    )
+
+
 def _compute_shared_safety_scoped_mfe_duo_loss(
     torch,
     model,
@@ -2129,20 +2188,17 @@ def _train_epoch(
                 np.array(adaptive_np, dtype=np.float32, copy=True, order="C")
             ).to(plan.device, non_blocking=True)
         with autocast_context(torch, plan):
-            if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE:
-                if target.ndim != 2 or int(target.shape[1]) != 3:
-                    raise ValueError("Safety/Raw-MFE/Joint tri-head target必須為[N,3]")
-                if not hasattr(model, "forward_safety_raw_mfe_hmhs_heads"):
-                    raise ValueError("Safety/Raw-MFE/Joint objective需要tri-head model architecture")
-                batch_dates = group_dates_series.iloc[ids].to_numpy()
-                loss, loss_weight = _combine_pairwise_head_supervision(
+            if training_policy.independent_head_composition is not None:
+                loss, loss_weight = _compute_independent_head_pairwise_loss(
                     torch,
-                    model.forward_safety_raw_mfe_hmhs_heads(xb, cb),
-                    tuple(target[:, index] for index in range(3)),
-                    batch_dates,
+                    model,
+                    xb,
+                    cb,
+                    target,
+                    group_dates_series.iloc[ids].to_numpy(),
                     training_policy=training_policy,
-                    pairwise_reduction=str(pairwise_reduction),
-                    pair_weight_policies=(str(pair_weight_policy),) * 3,
+                    pairwise_reduction=pairwise_reduction,
+                    pair_weight_policy=pair_weight_policy,
                 )
                 if loss is None:
                     continue
@@ -2185,66 +2241,6 @@ def _train_epoch(
                     )
                     if loss is None:
                         continue
-                if loss is None:
-                    continue
-            elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE:
-                if target.ndim != 2 or int(target.shape[1]) != 2:
-                    raise ValueError("Shared Safety-weighted duo-head target必須為[N,2]")
-                if not hasattr(model, "forward_safety_mfe_heads"):
-                    raise ValueError("Shared Safety-weighted objective需要independent duo-head model architecture")
-                safety_logits, raw_mfe_logits = model.forward_safety_mfe_heads(xb, cb)
-                batch_dates = group_dates_series.iloc[ids].to_numpy()
-                # A0/AH weights use same-date average-rank percentiles of predicted
-                # Safety, not raw probability. A1 changes only the Safety model source.
-                safety_percentile = _same_date_average_rank_percentile(
-                    torch, torch.softmax(safety_logits.float(), dim=1)[:, LABEL_PASS].detach(), batch_dates
-                )
-                loss, loss_weight = _combine_pairwise_head_supervision(
-                    torch,
-                    (safety_logits, raw_mfe_logits),
-                    (target[:, 0], torch.stack([target[:, 1], safety_percentile], dim=1)),
-                    batch_dates,
-                    training_policy=training_policy,
-                    pairwise_reduction=str(pairwise_reduction),
-                    pair_weight_policies=(
-                        CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
-                        CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY,
-                    ),
-                )
-                if loss is None:
-                    continue
-            elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE:
-                if target.ndim != 2 or int(target.shape[1]) != 2:
-                    raise ValueError("Safety→MFE duo-head target必須為[N,2]")
-                if not hasattr(model, "forward_safety_conditional_mfe_heads"):
-                    raise ValueError("Safety→MFE duo-head objective需要duo-head model architecture")
-                batch_dates = group_dates_series.iloc[ids].to_numpy()
-                loss, loss_weight = _combine_pairwise_head_supervision(
-                    torch,
-                    model.forward_safety_conditional_mfe_heads(xb, cb),
-                    (target[:, 0], target[:, 1]),
-                    batch_dates,
-                    training_policy=training_policy,
-                    pairwise_reduction=str(pairwise_reduction),
-                    pair_weight_policies=(str(pair_weight_policy),) * 2,
-                )
-                if loss is None:
-                    continue
-            elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_CONDITIONAL_DUO_PAIRWISE:
-                if target.ndim != 2 or int(target.shape[1]) != 2:
-                    raise ValueError("conditional MFE-safety target必須為[N,2]")
-                if not hasattr(model, "forward_conditional_heads"):
-                    raise ValueError("conditional MFE-safety objective需要dual-head model architecture")
-                batch_dates = group_dates_series.iloc[ids].to_numpy()
-                loss, loss_weight = _combine_pairwise_head_supervision(
-                    torch,
-                    model.forward_conditional_heads(xb, cb),
-                    (target[:, 0], target[:, 1]),
-                    batch_dates,
-                    training_policy=training_policy,
-                    pairwise_reduction=str(pairwise_reduction),
-                    pair_weight_policies=(CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,) * 2,
-                )
                 if loss is None:
                     continue
             else:

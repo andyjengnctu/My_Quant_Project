@@ -12,7 +12,7 @@ target/training/context/objective capabilities and is selected declaratively.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Callable
 
@@ -509,6 +509,104 @@ class ContinuousRankerTargetPolicy:
             raise ValueError("非daily-component target policy不得指定component_target_id")
 
 
+# The execution-only multi-head adapter is deliberately excluded from persisted
+# recipe payloads. Existing fitting/artifact identities remain unchanged.
+HEAD_PAIR_WEIGHT_FROM_REQUEST = "from_request"
+HEAD_TARGET_DIRECT = "target_column"
+HEAD_TARGET_WITH_DETACHED_PRIMARY_SAFETY_RANK = "target_with_detached_primary_safety_rank"
+
+
+@dataclass(frozen=True)
+class ContinuousRankerPairwiseHead:
+    """One ordered supervision component of a generic multi-head RankNet loss."""
+
+    target_column: int
+    pair_weight_policy: str = HEAD_PAIR_WEIGHT_FROM_REQUEST
+    target_transform: str = HEAD_TARGET_DIRECT
+
+    def __post_init__(self) -> None:
+        if self.target_column < 0:
+            raise ValueError("multi-head target column必須>=0")
+        if self.pair_weight_policy not in {
+            HEAD_PAIR_WEIGHT_FROM_REQUEST,
+            CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+            CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY,
+        }:
+            raise ValueError("multi-head pair weight policy不合法")
+        if self.target_transform not in {
+            HEAD_TARGET_DIRECT,
+            HEAD_TARGET_WITH_DETACHED_PRIMARY_SAFETY_RANK,
+        }:
+            raise ValueError("multi-head target transform不合法")
+        if (
+            self.target_transform == HEAD_TARGET_WITH_DETACHED_PRIMARY_SAFETY_RANK
+            and self.pair_weight_policy != CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY
+        ):
+            raise ValueError("detached Safety-rank target需搭配predicted-safety pair weight")
+
+
+@dataclass(frozen=True)
+class ContinuousRankerIndependentHeadComposition:
+    """Declared model forward, target mapping and ordered pair-loss components.
+
+    This is an execution capability, not a new scientific/profile identity.
+    Head order is intentional: it preserves the existing floating-point addition
+    and gradient propagation of the historical training objective.
+    """
+
+    forward_method: str
+    heads: tuple[ContinuousRankerPairwiseHead, ...]
+    target_error: str
+    architecture_error: str
+
+    def __post_init__(self) -> None:
+        if not self.forward_method or self.forward_method.startswith("_"):
+            raise ValueError("multi-head forward method不合法")
+        if len(self.heads) < 2:
+            raise ValueError("independent multi-head composition至少需要兩個head")
+        if tuple(head.target_column for head in self.heads) != tuple(range(len(self.heads))):
+            raise ValueError("multi-head target columns必須依head次序宣告")
+        for index, head in enumerate(self.heads):
+            if head.target_transform == HEAD_TARGET_WITH_DETACHED_PRIMARY_SAFETY_RANK and index != 1:
+                raise ValueError("detached Safety-rank context只能用於第二個head")
+
+
+PAIRWISE_CONDITIONAL_DUO_HEADS = ContinuousRankerIndependentHeadComposition(
+    forward_method="forward_conditional_heads",
+    heads=(
+        ContinuousRankerPairwiseHead(0, CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE),
+        ContinuousRankerPairwiseHead(1, CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE),
+    ),
+    target_error="conditional MFE-safety target必須為[N,2]",
+    architecture_error="conditional MFE-safety objective需要dual-head model architecture",
+)
+PAIRWISE_SAFETY_MFE_DUO_HEADS = ContinuousRankerIndependentHeadComposition(
+    forward_method="forward_safety_conditional_mfe_heads",
+    heads=(ContinuousRankerPairwiseHead(0), ContinuousRankerPairwiseHead(1)),
+    target_error="Safety→MFE duo-head target必須為[N,2]",
+    architecture_error="Safety→MFE duo-head objective需要duo-head model architecture",
+)
+PAIRWISE_SAFETY_WEIGHTED_MFE_DUO_HEADS = ContinuousRankerIndependentHeadComposition(
+    forward_method="forward_safety_mfe_heads",
+    heads=(
+        ContinuousRankerPairwiseHead(0, CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE),
+        ContinuousRankerPairwiseHead(
+            1,
+            CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY,
+            HEAD_TARGET_WITH_DETACHED_PRIMARY_SAFETY_RANK,
+        ),
+    ),
+    target_error="Shared Safety-weighted duo-head target必須為[N,2]",
+    architecture_error="Shared Safety-weighted objective需要independent duo-head model architecture",
+)
+PAIRWISE_SAFETY_MFE_TRI_HEADS = ContinuousRankerIndependentHeadComposition(
+    forward_method="forward_safety_raw_mfe_hmhs_heads",
+    heads=tuple(ContinuousRankerPairwiseHead(index) for index in range(3)),
+    target_error="Safety/Raw-MFE/Joint tri-head target必須為[N,3]",
+    architecture_error="Safety/Raw-MFE/Joint objective需要tri-head model architecture",
+)
+
+
 @dataclass(frozen=True)
 class ContinuousRankerTrainingPolicy:
     """Canonical objective/composition capability, independent of MR/profile identity.
@@ -532,6 +630,10 @@ class ContinuousRankerTrainingPolicy:
     primary_pair_weight_policy: str = CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE
     head_loss_combination: str = CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_SINGLE
     head_loss_component_count: int = 1
+    # Only non-persisted execution wiring; legacy loss_handler/manifest identity is unchanged.
+    independent_head_composition: ContinuousRankerIndependentHeadComposition | None = field(
+        default=None, compare=False, repr=False
+    )
     auxiliary_target_bundle: str = CONTINUOUS_RANKER_AUX_TARGET_NONE
     semantics_contract_key: str = CONTINUOUS_RANKER_SEMANTICS_DEFAULT
     score_transform: str = CONTINUOUS_RANKER_SCORE_TRANSFORM_PROBABILITY
@@ -625,6 +727,11 @@ class ContinuousRankerTrainingPolicy:
             CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE,
         }:
             raise ValueError(f"不支援的head loss combination: {self.head_loss_combination!r}")
+        if self.independent_head_composition is not None:
+            if self.pairwise_kind != CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR:
+                raise ValueError("independent multi-head composition必須使用scalar pairwise kind")
+            if len(self.independent_head_composition.heads) != int(self.head_loss_component_count):
+                raise ValueError("independent multi-head composition與loss component count不一致")
         if int(self.head_loss_component_count) < 1:
             raise ValueError("head_loss_component_count必須>=1")
         if (
@@ -1094,6 +1201,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_CONDITIONAL_DUO_PAIRWISE,
+            independent_head_composition=PAIRWISE_CONDITIONAL_DUO_HEADS,
             profile_loss_metrics=(("dual_head_pairwise_logistic", "conditional_safety_mean_daily_spearman"),),
             pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
             allows_context_pair_weight=True,
@@ -1121,6 +1229,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_CONDITIONAL_MFE,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE,
+            independent_head_composition=PAIRWISE_SAFETY_MFE_DUO_HEADS,
             profile_loss_metrics=(("dual_head_pairwise_logistic", "conditional_mfe_mean_daily_spearman"),),
             pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
             allows_context_pair_weight=True,
@@ -1136,6 +1245,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE,
+            independent_head_composition=PAIRWISE_SAFETY_MFE_DUO_HEADS,
             profile_loss_metrics=(("dual_head_pairwise_logistic", "raw_mfe_mean_daily_spearman"),),
             pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
             allows_context_pair_weight=True,
@@ -1152,6 +1262,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE,
+            independent_head_composition=PAIRWISE_SAFETY_WEIGHTED_MFE_DUO_HEADS,
             profile_loss_metrics=(("dual_head_pairwise_logistic", "raw_mfe_mean_daily_spearman"),),
             pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
             allows_context_pair_weight=True,
@@ -1168,6 +1279,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_PRIMARY,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE,
+            independent_head_composition=PAIRWISE_SAFETY_WEIGHTED_MFE_DUO_HEADS,
             profile_loss_metrics=(("dual_head_pairwise_logistic", "mean_daily_spearman"),),
             pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
             allows_context_pair_weight=True,
@@ -1316,6 +1428,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE,
+            independent_head_composition=PAIRWISE_SAFETY_MFE_TRI_HEADS,
             profile_loss_metrics=(("tri_head_pairwise_logistic", "raw_mfe_mean_daily_spearman"),),
             pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
             allows_context_pair_weight=True,
@@ -1330,6 +1443,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN,
             loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE,
+            independent_head_composition=PAIRWISE_SAFETY_MFE_TRI_HEADS,
             profile_loss_metrics=(("tri_head_pairwise_logistic", "raw_mfe_mean_daily_spearman"),),
             pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
             allows_context_pair_weight=True,

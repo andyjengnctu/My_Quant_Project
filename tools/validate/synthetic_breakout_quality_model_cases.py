@@ -6106,6 +6106,173 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
         and '"shared_safety_weighted_mfe_duo_head_contract": ranker_api.training_semantics' not in daily_trainer_source,
     )
 
+    # Generic independent-head composition is a capability, not an MR-specific matrix.
+    # Derive coverage from all registered profiles and verify the same owner drives
+    # target column order, forward routing and the canonical loss component count.
+    from core.breakout_quality_runtime import (
+        ContinuousRankerIndependentHeadComposition,
+        ContinuousRankerPairwiseHead,
+        CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+        CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY,
+        HEAD_TARGET_WITH_DETACHED_PRIMARY_SAFETY_RANK,
+        get_continuous_ranker_training_policy,
+    )
+    from services.breakout_quality.train_continuous_ranker import (
+        _combine_pairwise_head_supervision,
+        _compute_independent_head_pairwise_loss,
+        _same_date_average_rank_percentile,
+    )
+    registered_objectives = sorted({
+        get_breakout_quality_experiment_profile(name).training_objective
+        for name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+    })
+    independent_policies = [
+        (name, get_continuous_ranker_training_policy(name))
+        for name in registered_objectives
+        if get_continuous_ranker_training_policy(name).independent_head_composition is not None
+    ]
+    check_true("registered_independent_head_capabilities_are_discovered_from_runtime", bool(independent_policies))
+    for objective, policy in independent_policies:
+        comp = policy.independent_head_composition
+        check_true(
+            f"independent_head_contract_{objective}",
+            len(comp.heads) == int(policy.head_loss_component_count)
+            and tuple(head.target_column for head in comp.heads) == tuple(range(len(comp.heads)))
+            and bool(comp.forward_method)
+            and bool(comp.target_error)
+            and bool(comp.architecture_error),
+        )
+    check_true(
+        "independent_head_composition_rejects_unaligned_target_column_order",
+        raises_expected(
+            ValueError,
+            lambda: ContinuousRankerIndependentHeadComposition(
+                "forward_example_heads",
+                (ContinuousRankerPairwiseHead(0), ContinuousRankerPairwiseHead(0)),
+                "bad target",
+                "bad architecture",
+            ),
+        ),
+    )
+    check_true(
+        "independent_head_composition_rejects_predicted_safety_context_without_safety_pair_weight",
+        raises_expected(
+            ValueError,
+            lambda: ContinuousRankerPairwiseHead(
+                1,
+                CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+                HEAD_TARGET_WITH_DETACHED_PRIMARY_SAFETY_RANK,
+            ),
+        ),
+    )
+    weighted_policy = next(
+        (policy for _objective, policy in independent_policies
+         if any(head.target_transform == HEAD_TARGET_WITH_DETACHED_PRIMARY_SAFETY_RANK
+                for head in policy.independent_head_composition.heads)),
+        None,
+    )
+    check_true("detached_safety_rank_context_has_registered_generic_head_capability", weighted_policy is not None)
+    if weighted_policy is not None:
+        class _DeterministicDuoModel:
+            def __init__(self, primary, secondary):
+                self.primary = primary
+                self.secondary = secondary
+
+            def forward_safety_mfe_heads(self, _x, _context):
+                return self.primary, self.secondary
+
+        first = torch.tensor(
+            [[-.3, .1], [-.7, .9], [.8, -.1], [-.2, .5]],
+            dtype=torch.float32, requires_grad=True,
+        )
+        second = torch.tensor(
+            [[-.1, .2], [-.2, .7], [.6, -.4], [-.8, 1.2]],
+            dtype=torch.float32, requires_grad=True,
+        )
+        target = torch.tensor(
+            [[.1, .2], [.9, .7], [.3, .8], [.7, .4]], dtype=torch.float32,
+        )
+        dates = np.asarray(["2026-01-02"] * 4)
+        model = _DeterministicDuoModel(first, second)
+        actual_loss, actual_count = _compute_independent_head_pairwise_loss(
+            torch, model, None, None, target, dates,
+            training_policy=weighted_policy,
+            pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+            pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+        )
+        detached_rank = _same_date_average_rank_percentile(
+            torch, torch.softmax(first.float(), dim=1)[:, LABEL_PASS].detach(), dates
+        )
+        expected_loss, expected_count = _combine_pairwise_head_supervision(
+            torch,
+            (first, second),
+            (target[:, 0], torch.stack([target[:, 1], detached_rank], dim=1)),
+            dates,
+            training_policy=weighted_policy,
+            pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+            pair_weight_policies=(
+                CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+                CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY,
+            ),
+        )
+        actual_grads = torch.autograd.grad(actual_loss, (first, second), retain_graph=True)
+        expected_grads = torch.autograd.grad(expected_loss, (first, second))
+        check_true(
+            "independent_head_detached_safety_rank_preserves_exact_loss_and_gradients",
+            actual_count == expected_count
+            and torch.equal(actual_loss, expected_loss)
+            and all(torch.equal(left, right) for left, right in zip(actual_grads, expected_grads)),
+        )
+        check_true(
+            "independent_head_forward_method_missing_fails_fast",
+            raises_expected(
+                ValueError,
+                lambda: _compute_independent_head_pairwise_loss(
+                    torch, object(), None, None, target, dates,
+                    training_policy=weighted_policy,
+                    pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+                    pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+                ),
+            ),
+        )
+        check_true(
+            "independent_head_target_width_mismatch_fails_fast",
+            raises_expected(
+                ValueError,
+                lambda: _compute_independent_head_pairwise_loss(
+                    torch, model, None, None, target[:, :1], dates,
+                    training_policy=weighted_policy,
+                    pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+                    pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+                ),
+            ),
+        )
+        class _IncorrectHeadCountModel:
+            def forward_safety_mfe_heads(self, _x, _context):
+                return (first,)
+
+        check_true(
+            "independent_head_output_count_mismatch_fails_fast",
+            raises_expected(
+                ValueError,
+                lambda: _compute_independent_head_pairwise_loss(
+                    torch, _IncorrectHeadCountModel(), None, None, target, dates,
+                    training_policy=weighted_policy,
+                    pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+                    pair_weight_policy=CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+                ),
+            ),
+        )
+        from dataclasses import replace
+        check_true(
+            "independent_head_policy_loss_count_mismatch_fails_fast",
+            raises_expected(
+                ValueError,
+                lambda: replace(weighted_policy, head_loss_component_count=3),
+            ),
+        )
+
     summary["components"] = (
         "dual_component_regression",
         "equal_rank_target",
