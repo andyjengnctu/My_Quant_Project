@@ -26,7 +26,7 @@ from core.raw_universe_contract import (
 from core.strategy_params import V16StrategyParams
 
 from tools.optimizer.raw_cache import load_all_raw_data
-from services.portfolio_sim.simulation_runner import (
+from services.portfolio_replay import (
     _build_in_memory_raw_context_source,
     _build_portfolio_prepared_cache_paths,
 )
@@ -342,7 +342,7 @@ def validate_optimizer_replay_raw_universe_contract_case(_base_params):
         _build_raw_universe_contract_ohlcv_df(stable_rows).to_csv(data_dir / "0050.csv", index=False)
         _build_raw_universe_contract_ohlcv_df(boundary_rows).to_csv(data_dir / "BOUNDARY.csv", index=False)
 
-        with patch("services.portfolio_sim.simulation_runner.OUTPUT_DIR", str(output_dir)):
+        with patch("services.portfolio_replay.OUTPUT_DIR", str(output_dir)):
             with contextlib.redirect_stdout(io.StringIO()):
                 legacy_source = _build_in_memory_raw_context_source(str(data_dir), [params], verbose=False)
                 contracted_source = _build_in_memory_raw_context_source(

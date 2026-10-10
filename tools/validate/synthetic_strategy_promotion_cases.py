@@ -1,7 +1,7 @@
-"""Focused in-memory/disk-fixture verification of the Promotion MVP.
+"""Strategy promotion and activation capability regression fixtures.
 
-Run independently: python -m unittest tools.validate.test_strategy_promotion_mvp
-Never invokes the formal test suite or requires market Parquet data.
+Run independently: python -m unittest tools.validate.synthetic_strategy_promotion_cases
+Does not require market Parquet data or invoke the formal test suite.
 """
 from __future__ import annotations
 
@@ -350,6 +350,16 @@ class StrategyPromotionDashboardIdentityTest(unittest.TestCase):
             TradingAccountPanel._render_strategy_params_overview(panel, {})
         self.assertIn("Release", updates[-1][0][1])
         self.assertEqual(updates[-1][1]["tone"], "error")
+
+
+def validate_trading_strategy_promotion_capability_case(_base_params):
+    """In-memory promotion / frozen Params contract and headless Trading dashboard."""
+    from .check_result_utils import run_unittest_capability_cases
+
+    return run_unittest_capability_cases(
+        "TRADING_STRATEGY_PROMOTION_CAPABILITY", "trading_strategy_promotion",
+        (StrategyPromotionMVPTest, StrategyPromotionDashboardIdentityTest),
+    )
 
 
 if __name__ == "__main__":

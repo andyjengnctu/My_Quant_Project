@@ -125,3 +125,33 @@ def add_fail_result(results, module_name, ticker, metric, expected, actual, note
         "status": "FAIL",
         "note": note
     })
+
+
+def run_unittest_capability_cases(case_id, module_name, test_classes):
+    """Report selected isolated unittest fixtures as canonical synthetic cases.
+
+    Test classes are reusable capability invariants, not current model identities.
+    GUI-only tests remain independent of the headless synthetic runner.
+    """
+    import unittest
+
+    results, summary, _check, check_true = bind_synthetic_case(case_id, module_name)
+    completed = 0
+    failures = {}
+    for test_class in test_classes:
+        for method_name in unittest.defaultTestLoader.getTestCaseNames(test_class):
+            result = unittest.TestResult()
+            test_class(method_name).run(result)
+            metric = f"{test_class.__name__}.{method_name}"
+            problems = [*result.failures, *result.errors, *result.unexpectedSuccesses]
+            if result.skipped:
+                add_skip_result(results, module_name, case_id, metric, str(result.skipped[0][1]))
+            else:
+                check_true(metric, not problems)
+            if problems:
+                first = problems[0]
+                failures[metric] = (str(first[1]) if isinstance(first, tuple) else str(first))[-1000:]
+            completed += result.testsRun
+    summary["test_count"] = completed
+    summary["failures"] = failures
+    return results, summary

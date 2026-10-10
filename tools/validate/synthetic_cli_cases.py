@@ -63,7 +63,7 @@ def validate_dataset_cli_contract_case(_base_params):
     case_id = "CLI_DATASET_WRAPPER_CONTRACT"
     results, summary, check, check_true = bind_synthetic_case(case_id, "cli_contract")
 
-    app = importlib.import_module("tools.filters.breakout_quality.application")
+    app = importlib.import_module("services.research.breakout_quality_application")
     rc, help_text = _capture_stdout(app.main, ["apps/research.py model", "--help"])
     check("breakout_quality_app_help_rc", 0, rc)
     check_true(
@@ -453,7 +453,7 @@ def validate_package_zip_commit_test_suite_orchestration_case(_base_params):
 def validate_breakout_quality_app_simple_report_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_APP_SIMPLE_REPORT_CONTRACT"
     results, summary, check, check_true = bind_synthetic_case(case_id, "output_contract")
-    app_breakout_quality = importlib.import_module("tools.filters.breakout_quality.application")
+    app_breakout_quality = importlib.import_module("services.research.breakout_quality_application")
 
     with TemporaryDirectory() as tmp_dir:
         simple_root = Path(tmp_dir)

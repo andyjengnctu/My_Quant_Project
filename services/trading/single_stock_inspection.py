@@ -1210,40 +1210,6 @@ def _shadow_plan_from_pending_entry(entry: Mapping[str, Any], *, last_date: str 
     }
 
 
-def _pending_entry_is_effective_execution_evidence(
-    entry: Mapping[str, Any],
-    inspection: Mapping[str, Any],
-) -> bool:
-    """Return whether a pending-entry audit row may enter the live chart overlay.
-
-    ACTIVE rows are current user-confirmed order intent.  FILLED rows remain
-    visible only when the effective account journal still contains the managed
-    BUY produced from the same frozen lineage.  A deleted/voided account BUY
-    must not be resurrected merely because the immutable pending audit row is
-    still marked FILLED.
-    """
-
-    if not isinstance(entry, Mapping):
-        return False
-    status = str(entry.get("status") or "")
-    if status == PENDING_ENTRY_STATUS_ACTIVE:
-        return True
-    if status != PENDING_ENTRY_STATUS_FILLED:
-        return False
-
-    pending_lineage = entry.get("management_lineage")
-    pending_lineage_id = (
-        str((pending_lineage or {}).get("lineage_id") or "").strip()
-        if isinstance(pending_lineage, Mapping)
-        else ""
-    )
-    if not pending_lineage_id:
-        # Current pending-entry schema always carries a frozen lineage.  Fail
-        # closed for legacy/malformed FILLED rows rather than inventing a match
-        # from ticker/date/price coincidence.
-        return False
-
-    return _matching_account_buy_event_for_pending(entry, inspection) is not None
 
 
 def _matching_account_buy_event_for_pending(

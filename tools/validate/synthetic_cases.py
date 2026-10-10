@@ -369,6 +369,10 @@ from .synthetic_flow_cases import (
 )
 
 
+from .synthetic_market_raw_quote_cases import validate_shared_raw_market_quote_capability_case
+from .synthetic_strategy_promotion_cases import validate_trading_strategy_promotion_capability_case
+
+
 @dataclass(frozen=True)
 class SyntheticValidatorEntry:
     validator: Callable
@@ -710,6 +714,8 @@ def get_synthetic_validator_entries():
         _entry(validate_optimizer_raw_cache_rerun_consistency_case, layer="regression_contract", cost_class="medium"),
         _entry(validate_optimizer_replay_raw_universe_contract_case, layer="regression_contract", cost_class="medium"),
         _entry(validate_research_generation_execution_cache_isolation_case, layer="regression_contract", cost_class="fast"),
+        _entry(validate_shared_raw_market_quote_capability_case, layer="data_quality", cost_class="fast"),
+        _entry(validate_trading_strategy_promotion_capability_case, layer="strategy_contract", cost_class="fast"),
         _entry(validate_run_all_repeatability_case, layer="regression_contract", cost_class="medium"),
     ]
 

@@ -44,7 +44,7 @@ HELP_TARGETS = [
     ([sys.executable, "apps/vip_scanner.py", "--help"], "python apps/vip_scanner.py"),
     ([sys.executable, "requirements/export_requirements_lock.py", "--help"], "python requirements/export_requirements_lock.py"),
     ([sys.executable, "services/downloader/main.py", "--help"], "python services/downloader/main.py"),
-    ([sys.executable, "tools/filters/breakout_quality/build_dataset.py", "--help"], "python tools/filters/breakout_quality/build_dataset.py"),
+    ([sys.executable, "services/breakout_quality/dataset_builder.py", "--help"], "python services/breakout_quality/dataset_builder.py"),
     ([sys.executable, "tools/filters/breakout_quality/evaluate.py", "--help"], "python tools/filters/breakout_quality/evaluate.py"),
     ([sys.executable, "services/breakout_quality/export_scores.py", "--help"], "python services/breakout_quality/export_scores.py"),
     ([sys.executable, "tools/filters/breakout_quality/report.py", "--help"], "python tools/filters/breakout_quality/report.py"),
@@ -86,7 +86,7 @@ INLINE_CLI_TARGETS = {
     "apps/vip_scanner.py",
     "requirements/export_requirements_lock.py",
     "services/downloader/main.py",
-    "tools/filters/breakout_quality/build_dataset.py",
+    "services/breakout_quality/dataset_builder.py",
     "tools/filters/breakout_quality/evaluate.py",
     "services/breakout_quality/export_scores.py",
     "tools/filters/breakout_quality/report.py",
@@ -931,7 +931,7 @@ def check_dataset_runtime_error_paths() -> List[Dict[str, Any]]:
     params = V16StrategyParams()
 
     from tools.optimizer.raw_cache import load_all_raw_data
-    from services.portfolio_sim.simulation_runner import run_portfolio_simulation
+    from services.portfolio_replay import run_portfolio_simulation
     from services.scanner.scan_runner import run_daily_scanner
 
     runtime_cases = [

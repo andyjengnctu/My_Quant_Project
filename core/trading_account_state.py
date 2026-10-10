@@ -114,14 +114,6 @@ def _trade_event_by_revision(state: dict[str, Any], revision: int) -> dict[str, 
     raise ValueError(f"找不到可修改的有效交易明細 revision={target}")
 
 
-def _latest_effective_trade_revision_for_ticker(state: dict[str, Any], ticker: str) -> int | None:
-    ticker_key = _normalize_ticker(ticker)
-    revisions = []
-    for event in _effective_trade_events(state):
-        details = event.get("details") or {}
-        if _normalize_ticker(details.get("ticker")) == ticker_key:
-            revisions.append(int(event.get("revision") or 0))
-    return max(revisions) if revisions else None
 
 
 def _strategy_template_by_ticker(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -699,41 +691,6 @@ def rebuild_trading_account_economics(state: dict[str, Any], *, accounting_param
 
 
 
-def _effective_position_source_before_revision(
-    state: dict[str, Any],
-    ticker: str,
-    target_revision: int,
-) -> str | None:
-    """Infer the open-position source immediately before one historical trade.
-
-    Older account events predate persisted ``position_source`` on sell fills.  The
-    immutable event stream is sufficient to infer whether the position being sold
-    was a manual-adopted holding or strategy fill without mutating legacy history.
-    """
-    ticker_key = _normalize_ticker(ticker)
-    source: str | None = None
-    for event in effective_trading_account_events(state):
-        revision = int(event.get("revision") or 0)
-        if revision >= int(target_revision):
-            break
-        mutation = str(event.get("mutation_type") or "")
-        details = event.get("details") or {}
-        event_ticker = details.get("ticker")
-        if event_ticker is None or _normalize_ticker(event_ticker) != ticker_key:
-            continue
-        if mutation in {"adopt_manual_position", TRADE_MUTATION_BUY}:
-            source = POSITION_SOURCE_MANUAL_ADOPTED
-        elif mutation == ACCOUNT_MUTATION_ACTIVATE_MANUAL_MANAGEMENT:
-            source = POSITION_SOURCE_MANUAL_MANAGED
-        elif mutation == TRADE_MUTATION_MANUAL_MANAGED_BUY:
-            source = POSITION_SOURCE_MANUAL_MANAGED
-        elif mutation in {TRADE_MUTATION_STRATEGY_BUY, TRADE_MUTATION_STRATEGY_BUY_INCREMENT}:
-            source = POSITION_SOURCE_STRATEGY_FILL
-        elif mutation == "remove_manual_position":
-            source = None
-        elif mutation == TRADE_MUTATION_SELL and int(details.get("remaining_qty") or 0) <= 0:
-            source = None
-    return source
 
 
 _normalize_ticker = normalize_trading_ticker

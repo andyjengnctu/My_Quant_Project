@@ -40,8 +40,6 @@ from services.trading.strategy_param_runtime import resolve_trading_position_man
 TRADING_POSITION_ROLLFORWARD_SCHEMA_VERSION = 1
 
 
-def _build_initial_management_replay_position(record, *, binding, params):
-    return build_confirmed_position_origin(record, binding=binding, params=params)
 
 
 def _replay_position_sell_obligation(record, *, binding, frame, params):

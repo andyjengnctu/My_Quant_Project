@@ -3681,8 +3681,6 @@ def _rolling_publication_dir(settings, mode) -> Path:
 def _interactive_continuous_rolling_test(program_name: str, settings) -> int:
     return _run_continuous_rolling_mode_direct(program_name, settings)
 
-def _interactive_continuous_pit_validation(program_name: str, settings) -> int:
-    return _interactive_continuous_rolling_test(program_name, settings)
 
 
 def _forward_source_provenance_issues(

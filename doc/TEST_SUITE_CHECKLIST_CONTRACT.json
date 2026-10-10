@@ -216,7 +216,7 @@
       "category": "回歸",
       "item": "重跑一致性、狀態汙染、cache 汙染",
       "gap": "已補 `run_chain_checks.py` 雙跑 digest、`run_ml_smoke.py` fixed-seed 雙跑、`validate_optimizer_raw_cache_rerun_consistency_case`、`validate_optimizer_replay_raw_universe_contract_case` 與 `validate_run_all_repeatability_case`；正式入口與 cache 汙染隔離已收斂，且 optimizer 匯出 replay 必須沿用訓練時 raw universe 最低資料列數，prepared cache key 亦不得跨門檻共用",
-      "entry": "`tools/local_regression/`, `tools/optimizer/raw_cache.py`, `core/raw_universe_contract.py`, `services/portfolio_sim/simulation_runner.py`, `tools/validate/synthetic_regression_cases.py`",
+      "entry": "`tools/local_regression/`, `tools/optimizer/raw_cache.py`, `core/raw_universe_contract.py`, `services/portfolio_replay.py`, `tools/validate/synthetic_regression_cases.py`",
       "legacy_initial_status": true
     },
     {
@@ -252,7 +252,7 @@
       "category": "顯示",
       "item": "報表欄位、排序、百分比格式與來源一致",
       "gap": "已補 scanner header / start banner / summary、strategy dashboard、validate console summary、issue Excel report schema、portfolio yearly/export report，以及 `apps/test_suite.py` 在 PASS / FAIL / manifest-blocked / partial-selected-steps / preflight-failed / dataset-prepare-failed / summary-unreadable 下的人類可讀摘要契約；scanner summary 必須直接遵守 `BUY_SORT_METHOD` 的單一排序口徑，不得在 reporting 層對新訊號/延續候選額外二次排序；另補 score header 顯示契約，釘死 `評分模型` 與 `評分分子` 必須分欄顯示、不得再以 `/ 分子` 混入同一括號；Workbench、standalone portfolio simulator 與 Study-model 必須共用同一份績效列 builder，維持本輪候選、同期大盤、差異四欄表的欄位順序、合併風報比與期望值、交易類型拆分及格式一致；並補 checklist status vocabulary sync 與 meta quality coverage line/branch/min-threshold/missing-zero-target guard 摘要顯示，且以 `run_all.py` contract 釘死 preflight 早退時 dataset_prepare 仍需標記為 `NOT_RUN`，避免 real path 誤落成 `missing_summary_file`；另補 portfolio export 的 Plotly optional dependency fallback 契約，要求主要 Excel artifact 仍須成功匯出、HTML 可略過但必須輸出可追蹤錯誤摘要，且 `except (...)` tuple 不得引用未匯入模組",
-      "entry": "`tools/validate/synthetic_display_cases.py`, `tools/validate/synthetic_reporting_cases.py`, `tools/validate/synthetic_contract_cases.py`, `core/display.py`, `core/strategy_dashboard.py`, `tools/optimizer/callbacks.py`, `tools/optimizer/static_ensemble_dashboard.py`, `services/portfolio_sim/main.py`, `services/workbench_ui/portfolio_backtest_inspector.py`, `services/scanner/reporting.py`, `services/portfolio_sim/reporting.py`, `apps/test_suite.py`, `tools/local_regression/run_all.py`",
+      "entry": "`tools/validate/synthetic_display_cases.py`, `tools/validate/synthetic_reporting_cases.py`, `tools/validate/synthetic_contract_cases.py`, `core/display.py`, `core/strategy_dashboard.py`, `tools/optimizer/callbacks.py`, `services/optimizer/static_ensemble_dashboard.py`, `services/portfolio_sim/main.py`, `services/workbench_ui/portfolio_backtest_inspector.py`, `services/scanner/reporting.py`, `services/portfolio_sim/reporting.py`, `apps/test_suite.py`, `tools/local_regression/run_all.py`",
       "legacy_initial_status": true
     },
     {
@@ -324,7 +324,7 @@
       "category": "Meta",
       "item": "禁止循環依賴（module dependency cycle）",
       "gap": "已補完整 project import graph cycle guard，直接掃描 `apps/` / `config/` / `core/` / `filters/` / `services/` / `strategies/` / `tools/`；絕對 import、相對 import 與函式內 lazy import 都必須納入 dependency graph。2026-08-12 完整檢查並修正曾因 module index 漏掃 `services/filters/config/strategies` 而未檢出的 continuous/daily ranker service cycle；不得以延遲載入或漏掃正式 layer 規避架構 guard",
-      "entry": "`tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `core/portfolio_fast_access.py`, `core/portfolio_fast_data.py`, `core/breakout_reentry.py`, `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_contract_cases.py`, `tools/optimizer/static_ensemble_dashboard.py`, `tools/optimizer/session_factory.py`, `tools/optimizer/callbacks.py`, `tools/optimizer/main.py`, `tools/optimizer/outer_rolling_oos.py`, `services/breakout_quality/ranker_cli.py`, `services/breakout_quality/train_continuous_ranker.py`, `services/breakout_quality/train_daily_ranker.py`, `services/breakout_quality/ranker_training.py`"
+      "entry": "`tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `core/portfolio_fast_access.py`, `core/portfolio_fast_data.py`, `core/breakout_reentry.py`, `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_contract_cases.py`, `services/optimizer/static_ensemble_dashboard.py`, `services/optimizer/session_factory.py`, `tools/optimizer/callbacks.py`, `tools/optimizer/main.py`, `tools/optimizer/outer_rolling_oos.py`, `services/breakout_quality/ranker_cli.py`, `services/breakout_quality/train_continuous_ranker.py`, `services/breakout_quality/train_daily_ranker.py`, `services/breakout_quality/ranker_training.py`"
     },
     {
       "id": "B28",
@@ -1870,7 +1870,7 @@
       "category": "Research單一入口／模型provider與Rolling workflow契約",
       "item": "`apps/research.py`是研究工作的單一正式入口；`[1]  模型訓練  (Enter)`只dispatch至`config/research.py`指定的model provider，Breakout Quality provider只提供Dataset／Label／模型訓練、模型評估、模型工件狀態與必要research CLI，不得在model provider選單內包含策略組合比較、optimizer或特定比較版本名稱。`[3] 策略組合比較`與`[4] Audit／診斷`由同一Research shell dispatch到各自獨立application/service；Audit只可呼叫`services/audit/`正式backend；`tools/audit/`僅作compatibility wrapper，不得複製Audit registry／runner。Binary與continuous workflow均在模型報表及該模型所需score工件完成後停止，不得接續portfolio replay；特定model、比較arm與Audit module必須由`config/`指定，不得由選單選擇",
       "gap": "direct synthetic驗證Research單一入口只按工作類型dispatch、模型provider選單與help不含策略比較route、Audit與project-wide catalog／runner同源、Binary／continuous模型流程只完成research／forward score工件且不自動portfolio replay，model／compare／audit application責任仍分離",
-      "entry": "`apps/research.py`, `services/research/breakout_quality_application.py`, `services/audit/catalog.py`, `services/audit/runner.py`, `tools/audit/catalog.py`, `tools/audit/runner.py`, `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_cases.py`"
+      "entry": "`apps/research.py`, `services/research/breakout_quality_application.py`, `services/audit/catalog.py`, `services/audit/runner.py`, `tools/audit/catalog.py`, `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_cases.py`"
     },
     {
       "id": "B183",
@@ -1892,7 +1892,7 @@
       "category": "Breakout quality / 單一Seed與模型／策略工作類型分離契約",
       "item": "breakout-quality所有正式模型流程只能由`config/breakout_quality.py`的單一`BREAKOUT_QUALITY_RANDOM_SEED`派送；CLI `--seed`只作單次重現覆寫。研究正式入口固定為`apps/research.py`，模型訓練與策略組合比較必須維持`[1]`與`[3]`獨立工作類型及application/service責任分離；Strategy Compare不得複製trainer、改寫模型科學設定或自行產生另一套模型流程，但可作為orchestrator依`config/strategy_compare.py`已解析的current prerequisite委派canonical model-training service執行REUSE／BUILD／REBUILD／RESUME，完成後重新規劃並繼續strategy replay。策略比較的Suite／arms／contrasts／parameter sources／DL sources由`core/strategy_compare_registry.py`單一持有，解析／authorization由`core/strategy_compare_policy.py`負責；`config/strategy_compare.py`只保留使用者可調execution/profile knobs，不得回寫模型config或另設整套實驗ID",
       "gap": "direct synthetic驗證單一Seed、Research shell內模型／策略工作類型責任分離、model provider無策略route、Strategy Compare只透過config指定provider handler委派canonical模型服務且不複製trainer、缺模型前置可自動補建後re-plan、策略比較route泛化且config無`ACTIVE_STRATEGY_COMPARISON_ID`",
-      "entry": "`config/breakout_quality.py`, `config/strategy_compare.py`, `config/research.py`, `apps/research.py`, `services/research/breakout_quality_application.py`, `tools/filters/breakout_quality/application.py`, `tools/validate/synthetic_cases.py`"
+      "entry": "`config/breakout_quality.py`, `config/strategy_compare.py`, `config/research.py`, `apps/research.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_cases.py`"
     },
     {
       "id": "B185",
@@ -1925,7 +1925,7 @@
       "category": "Binary DL Filter參數適應研究契約",
       "item": "Binary DL Min策略參數訓練的current唯一正式owner位於`services/optimizer/strategy_param_training.py`；舊`filters/breakout_quality/strategy_param_training.py` compatibility alias已退役且不得重新建立第二套implementation。P2／P3、Binary PIT、worker transport與既有八操作點歷史契約保持可重現；目前Min search固定為`high_len`＋4個ATR欄位，其餘optimizer維度由canonical config/schema固定。Current seed／trials只讀`config/training_policy.py`，Research／Strategy Compare不得另帶`optimizer_seed`或`trials_per_fold`。Binary PIT最早合法日期以前固定以DL-off pass-through處理，PIT期間內缺少候選分數採保守REJECT，PIT尾端早於optimizer最新Selection則fail-fast。歷史Selection不要求不可能的100% PIT coverage，但必須輸出逐fold bootstrap／partial／full coverage稽核並納入runtime identity。",
       "gap": "Major Validation Reduction後，T284只保護current可重用契約：Optimizer-owned Min training唯一owner／retired legacy filter alias、Min trainable fields與fixed overrides、completed-fold reuse、Binary PIT direct/runtime一致及runtime identity；已結案4×2八操作點的專屬orchestration fixture退役，科學結果與歷史故障證據保留Experiment Log。",
-      "entry": "`services/optimizer/strategy_param_training.py`, `config/training_policy.py`, `filters/breakout_quality/strategy_optimizer_policy.py`, `filters/breakout_quality/binary_pit_score_store.py`, `tools/filters/breakout_quality/build_binary_point_in_time_scores.py`, `tools/validate/synthetic_cases.py`"
+      "entry": "`services/optimizer/strategy_param_training.py`, `config/training_policy.py`, `filters/breakout_quality/strategy_optimizer_policy.py`, `filters/breakout_quality/binary_pit_score_store.py`, `services/breakout_quality/binary_point_in_time_scores.py`, `tools/validate/synthetic_cases.py`"
     },
     {
       "id": "B188",
@@ -1958,7 +1958,7 @@
       "category": "Project-wide config-driven formal Audit最小化與read-only契約",
       "item": "Formal Audit definitions 必須 registry-driven；active module／output policy才由config持有；Audit run handler本身必須read-only。缺工件若無已宣告canonical source preparer即 BLOCKED；若catalog明確宣告preparation_function，Research dependency layer只可委派既有domain producer做scientifically identity-preserving的上游BUILD/DERIVE，完成後re-plan再進read-only Audit，不得在Audit handler內train/score/replay。已完成且無 current dependency 的一次性 Audit 必須依 disposable lifecycle 退役，maintenance scan 僅提供 advisory slimming 訊號。",
       "gap": "`services/audit/catalog.py`登記目前仍支援的Audit／research utility，`tools/audit/catalog.py`只作compatibility wrapper；`config/audit.py`只保存active module／output policy，`core/audit_registry.py`保存formal/reusable definitions，`core/audit_policy.py`負責typed validation/resolution，formal run handler必須read-only且不得train、score、replay或改runtime；缺工件只有在catalog declaration＋source status明確`preparable`時，shared Research dependency orchestration才可委派canonical producer補足，否則仍BLOCKED；Strategy Compare row evidence若為shared DL-off baseline，Audit必須依canonical current/history arm catalog的param-source／param-policy／rule-policy群組解析，從該群組實際存在的`pair_execution` paired artifact取證；current suite membership重排不得使仍合法的retained historical pair evidence失效，也不得要求不存在的direct `pair_execution[off_arm]`或重跑策略補資料；comparison mode判定必須直接重用`strategy_compare_contracts.py` canonical mode constant，不得在Audit／synthetic另寫underscore／hyphen變體。截至2026-10-10，使用者已要求清除一次性研究／Audit實作與registration，只有三種正式可重複使用的目的型 Audit 保留；歷史Evidence仍由Registry／Experiment Log保存。今後已完成且無current依賴的一次性Audit仍須從config／catalog／implementation／專屬tests退役；`meta quality`的advisory slimming scan列出disabled Audit、無current reachability模組、過大Audit-specific synthetic，以及Checklist已N/A且不再被其他active T-row共用、但仍殘留定義的retired dedicated validator；任何候選都不得單獨造成formal FAIL。generic shared validator不因單一歷史T項退役而被誤報。",
-      "entry": "`config/audit.py`, `core/audit_registry.py`, `core/audit_policy.py`, `core/report_metrics.py`, `services/audit/catalog.py`, `services/audit/runner.py`, `services/audit/strategy_compare_source.py`, `services/audit/mfe_safety_truth.py`, `tools/audit/catalog.py`, `tools/audit/runner.py`, `tools/validate/transient_code_maintenance.py`, `tools/validate/synthetic_breakout_quality_audit_cases.py`, `tools/validate/synthetic_breakout_quality_strategy_cases.py`"
+      "entry": "`config/audit.py`, `core/audit_registry.py`, `core/audit_policy.py`, `core/report_metrics.py`, `services/audit/catalog.py`, `services/audit/runner.py`, `services/audit/strategy_compare_source.py`, `services/audit/mfe_safety_truth.py`, `tools/audit/catalog.py`, `tools/validate/transient_code_maintenance.py`, `tools/validate/synthetic_breakout_quality_audit_cases.py`, `tools/validate/synthetic_breakout_quality_strategy_cases.py`"
     },
     {
       "id": "B191",
@@ -2058,7 +2058,7 @@
       "category": "Breakout Quality active model training／historical artifact physical isolation",
       "item": "正式新訓練只能由`models/active.py`解析與建立`ACTIVE_MODEL_ARCHITECTURES`，binary與continuous/daily trainer不得直接使用可解析全部歷史architecture的compatibility factory；legacy architecture必須在CLI／active model API層fail-fast。歷史checkpoint／manifest、forward score重建與read-only inference仍可經`models/factory.py`＋`models/legacy_compatibility.py`嚴格重建，且所有既有`model_spec` manifest payload不得改變。MOMENT／Mantis／TS2Vec builder、pretrained dependency與external contract只可在historical branch實際需要時lazy載入，不得污染current model-provider import graph",
       "gap": "`validate_breakout_quality_active_legacy_model_isolation_contract_case`驗證active API接受current architectures、拒絕legacy、formal trainers不import compatibility factory、active factory不import legacy builders、compatibility factory lazy delegation；`validate_dataset_cli_contract_case`釘死正式Research command surface不再公開legacy pretraining commands且legacy architecture在workflow execution前被拒絕；runtime artifact contract維持全部歷史MOMENT／Mantis／TS2Vec strict reconstruction，22個supported architecture model-spec payload與修改前逐一完全一致",
-      "entry": "`filters/breakout_quality/models/active.py`, `filters/breakout_quality/models/factory.py`, `filters/breakout_quality/models/legacy_compatibility.py`, `filters/breakout_quality/models/runtime.py`, `filters/breakout_quality/models/spec.py`, `services/breakout_quality/train.py`, `services/breakout_quality/train_continuous_ranker.py`, `filters/breakout_quality/artifacts.py`, `services/research/breakout_quality_application.py`, `tools/filters/breakout_quality/application.py`, `validate_breakout_quality_policy_single_source_case`, `validate_breakout_quality_runtime_artifact_contract_case`"
+      "entry": "`filters/breakout_quality/models/active.py`, `filters/breakout_quality/models/factory.py`, `filters/breakout_quality/models/legacy_compatibility.py`, `filters/breakout_quality/models/runtime.py`, `filters/breakout_quality/models/spec.py`, `services/breakout_quality/train.py`, `services/breakout_quality/train_continuous_ranker.py`, `filters/breakout_quality/artifacts.py`, `services/research/breakout_quality_application.py`, `validate_breakout_quality_policy_single_source_case`, `validate_breakout_quality_runtime_artifact_contract_case`"
     },
     {
       "id": "B200",
@@ -2520,7 +2520,7 @@
       "category": "MR-13H no-breach Target simplification / staged model research contract",
       "item": "MR-13H相對MR-13E只允許continuous Target移除first risk-breach path truncation；40D horizon、R scale、adverse-to-peak、daily universe、architecture、full-list Delta-NDCG pairwise loss與Seed policy必須固定。No-breach path的新舊Target必須一致；breach仍保留diagnostic。正式Model Research先提供只讀Target comparison；Selection PIT可用性由research-spec `selection_pit_authorized`作staged authorization。MR-13H取得Forward GO後必須顯示單profile Selection PIT入口，但因Target不同不得硬塞入13C/D/E同Target batch。Forward報表的reference profile只能在checkpoint後用同一score補reference-target diagnostics，不得影響learning／epoch selection。Production workflow仍固定MR-13E。",
       "gap": "新增`daily_full_horizon_opportunity_r_v1`、profile-driven MR-13H reference metadata、Target comparison正式model-provider命令與common-target OOS diagnostics；synthetic同時驗scalar/vector target parity、no-breach invariant、MR-13E training-profile固定、audit metrics、MR-13H PIT staged authorization與不同Target不加入shared batch。",
-      "entry": "`config/breakout_quality.py`, `filters/breakout_quality/continuous_target.py`, `filters/breakout_quality/daily_ranker_data.py`, `services/breakout_quality/daily_target_comparison.py`, `services/breakout_quality/train_daily_ranker.py`, `services/research/breakout_quality_application.py`, `tools/filters/breakout_quality/application.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`"
+      "entry": "`config/breakout_quality.py`, `filters/breakout_quality/continuous_target.py`, `filters/breakout_quality/daily_ranker_data.py`, `services/breakout_quality/daily_target_comparison.py`, `services/breakout_quality/train_daily_ranker.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`"
     },
     {
       "id": "B242",
@@ -2619,7 +2619,7 @@
       "category": "Historical C56/C57 full-flow PIT + same-seed dual-model robustness snapshot",
       "item": "C56 Seed42 Forward GO後，當時完整驗證新增Selection counterpart C57並限制MR-13M PIT作C57 secondary use。Historical Selection=`C32/C23/C42/C57`、Forward=`C1/C3/C44/C56`；當時Selection stochastic只=C57、Forward只=C56，每seed以同一generated seed建立13K與13M兩source。此列不再定義current matrix；current Extending contract由B189持有。",
       "gap": "新增`CONT13M_PIT`與C57；runtime dual-source loader支援Selection PIT且各自pin score/manifest；model-artifact preparation會解析secondary source；robustness scientific contract v2保存全部runtime source identity，training scheduler按`(dl_id,seed)`建立兩source並以same-seed readiness gate enqueue單一replay。Targeted Strategy Compare synthetic驗證current/historical catalog、C57 PIT lookup、兩stage每seed雙source與C56/C57-only robustness。",
-      "entry": "`config/breakout_quality.py`, `config/strategy_compare.py`, `config/compatibility/strategy_compare_history.py`, `services/research/breakout_quality_application.py`, `tools/filters/breakout_quality/application.py`, `filters/breakout_quality/runtime.py`, `services/research/strategy_comparison.py`, `services/research/strategy_multi_seed_robustness.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`"
+      "entry": "`config/breakout_quality.py`, `config/strategy_compare.py`, `config/compatibility/strategy_compare_history.py`, `services/research/breakout_quality_application.py`, `filters/breakout_quality/runtime.py`, `services/research/strategy_comparison.py`, `services/research/strategy_multi_seed_robustness.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`"
     },
     {
       "id": "B251",
@@ -3725,7 +3725,7 @@
       "category": "Optimizer 契約",
       "item": "objective 淘汰值 / fail_reason / profile_row / candidate_best/run_best 參數工件 export 穩定",
       "gap": "已新增 optimizer objective / export contract case，直接驗 `INVALID_TRIAL_VALUE`、fail_reason、profile_row、`tp_percent` 還原優先序、export 成敗、`atr_buy_tol` / `min_history_ev` / `tp_percent` step-float canonicalization、預設費率 decimal canonical 輸出、repo 內 `models/strategy_params/` canonical參數工件不得殘留浮點尾差，以及訓練中斷且未達指定 trial 數時不得自動覆寫 canonical Trade active state；僅完成指定訓練次數或輸入 0 走 export-only 模式時才可更新。另已補 training split policy loader / `.py` / `.json` override / `None -> auto-derive search_train_end_year` / Study-Full 與 OOS 結束年度 / Rolling OOS 預設終點上限 / legacy walk-forward policy symbol reject contract，並釘死 optimizer callbacks 的 train 篩選必須重用 core 單一來源、KC 顯示名稱須與 dashboard 一致、系統得分顯示必須套用倍率，且 Study / OOS / Rolling OOS / Trade、seed ensemble、local-min review 與 OOS Markdown 報表皆須沿用同一倍率；純 RoMD、0050 與 retention 必須維持原始口徑；累積進度列也必須用同一顯示倍率、訓練參數必須分成基礎濾網與進階濾網、Optimizer Mode 預設 Study 且數字熱鍵路由正確、Study 記憶庫與 0 輸出 base.json 互動選單契約，且 Study-OOS milestone dashboard 必須顯示 train-period 單股突破統計",
-      "entry": "`tools/validate/synthetic_strategy_cases.py`, `tools/validate/synthetic_cases.py`, `core/walk_forward_policy.py`, `config/training_policy.py`, `tools/optimizer/callbacks.py`, `tools/optimizer/static_ensemble_dashboard.py`, `tools/optimizer/main.py`, `tools/optimizer/score_display.py`, `tools/optimizer/robustness.py`, `tools/optimizer/outer_rolling_oos.py`, `tools/optimizer/walk_forward.py`, `services/optimizer/objective_runner.py`, `tools/optimizer/runtime.py`, `tools/optimizer/study_utils.py`, `strategies/breakout/search_space.py`, `strategies/breakout/adapter.py`, `config/execution_policy.py`, `models/strategy_params/` canonical parameter/state artifacts"
+      "entry": "`tools/validate/synthetic_strategy_cases.py`, `tools/validate/synthetic_cases.py`, `core/walk_forward_policy.py`, `config/training_policy.py`, `tools/optimizer/callbacks.py`, `services/optimizer/static_ensemble_dashboard.py`, `tools/optimizer/main.py`, `tools/optimizer/score_display.py`, `tools/optimizer/robustness.py`, `tools/optimizer/outer_rolling_oos.py`, `services/optimizer/walk_forward.py`, `services/optimizer/objective_runner.py`, `tools/optimizer/runtime.py`, `tools/optimizer/study_utils.py`, `strategies/breakout/search_space.py`, `strategies/breakout/adapter.py`, `config/execution_policy.py`, `models/strategy_params/` canonical parameter/state artifacts"
     },
     {
       "id": "B53",
@@ -8510,6 +8510,20 @@
       "b_id": "B48",
       "initial_status": "NEW",
       "order": 553
+    },
+    {
+      "id": "T564",
+      "b_id": "B386",
+      "description": "`validate_shared_raw_market_quote_capability_case`：共享Raw quote有效性／正量／Research診斷與Trading實際成交、掛單日期，以及observed quote mask、PIT window、raw source fingerprint／SHA256的共用契約；整合九個獨立回歸案例。",
+      "initial_status": "NEW",
+      "order": 554
+    },
+    {
+      "id": "T565",
+      "b_id": "B360",
+      "description": "`validate_trading_strategy_promotion_capability_case`：Strategy Compare核准evidence、Release staging／activation、random multi-seed fitting與Trading dashboard必須維持canonical lineage；重用原有headless promotion回歸案例。",
+      "initial_status": "NEW",
+      "order": 555
     }
   ],
   "transitions": [
@@ -27096,6 +27110,22 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_optimizer_sampler_resume_determinism_case`"
+    },
+    {
+      "date": "2026-10-11",
+      "id": "T564",
+      "description": "Integrate existing cross-domain raw market quote capability regression into the canonical synthetic registry.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`tools/validate/synthetic_market_raw_quote_cases.py`, `tools/validate/synthetic_cases.py`"
+    },
+    {
+      "date": "2026-10-11",
+      "id": "T565",
+      "description": "Integrate existing headless Strategy Promotion and Trading Release tests into the canonical synthetic registry.",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`tools/validate/synthetic_strategy_promotion_cases.py`, `tools/validate/synthetic_cases.py`"
     }
   ]
 }
