@@ -43,6 +43,11 @@ from services.research.strategy_compare_application import (
     show_strategy_multi_seed_robustness_status,
 )
 from services.audit.catalog import get_audit_methods
+from services.audit.one_off_model_studies import (
+    execute_one_off_model_study,
+    get_one_off_model_studies,
+    one_off_model_study_menu_items,
+)
 from services.audit.runner import (
     collect_audit_menu_state,
     render_audit_status,
@@ -441,21 +446,50 @@ def _run_one_time_audit(module_id: str, audit_id: str) -> int:
     return 0
 
 
-def _audit_one_time_menu(module_id: str) -> int:
-    definitions = get_audit_definitions(module_id)
+def _audit_one_off_model_study_menu(study_id: str) -> int:
+    """Run an isolated experiment through the already-existing one-time Audit UI."""
+    items = one_off_model_study_menu_items()
+    by_choice = {choice: action for choice, action, _ in items}
     while True:
-        print("\n=== 一次性專題 Audit ===")
-        if not definitions:
-            print("目前沒有一次性 Audit 設定。")
-        for index, definition in enumerate(definitions, start=1):
-            suffix = "  [可執行]" if definition.enabled else "  [歷史／停用]"
-            print(render_menu_item(index, definition.audit_id + suffix, default=index == 1))
+        print(f"\n=== 一次性專題 Audit｜{study_id} ===")
+        for choice, _, label in items:
+            print(render_menu_item(int(choice), label, default=choice == "1"))
         print(render_menu_item(0, "返回"))
         try:
             raw = input("👉 請選擇：").strip().lower()
         except EOFError:
             return 0
-        choice = "1" if raw == "" and definitions else raw
+        choice = "1" if raw == "" else raw
+        if choice in {"0", "q", "quit", "exit"}:
+            return 0
+        action = by_choice.get(choice)
+        if action is None:
+            print("選項無效。")
+            continue
+        result = execute_one_off_model_study(study_id, action)
+        if result:
+            raise RuntimeError(f"一次性探索研究失敗: {study_id}/{action}, returncode={result}")
+
+
+def _audit_one_time_menu(module_id: str) -> int:
+    definitions = get_audit_definitions(module_id)
+    studies = get_one_off_model_studies(module_id)
+    total = len(definitions) + len(studies)
+    while True:
+        print("\n=== 一次性專題 Audit ===")
+        if not definitions and not studies:
+            print("目前沒有一次性 Audit 設定。")
+        for index, definition in enumerate(definitions, start=1):
+            suffix = "  [可執行]" if definition.enabled else "  [歷史／停用]"
+            print(render_menu_item(index, definition.audit_id + suffix, default=index == 1))
+        for index, study in enumerate(studies, start=len(definitions) + 1):
+            print(render_menu_item(index, study.model_research_id + "  [可執行]"))
+        print(render_menu_item(0, "返回"))
+        try:
+            raw = input("👉 請選擇：").strip().lower()
+        except EOFError:
+            return 0
+        choice = "1" if raw == "" and total else raw
         if choice in {"0", "q", "quit", "exit", ""}:
             return 0
         try:
@@ -465,9 +499,10 @@ def _audit_one_time_menu(module_id: str) -> int:
             continue
         if 1 <= numeric <= len(definitions):
             _run_one_time_audit(module_id, definitions[numeric - 1].audit_id)
-            continue
-        print(f"無效選項，請輸入 0～{len(definitions)}。")
-
+        elif len(definitions) < numeric <= total:
+            _audit_one_off_model_study_menu(studies[numeric - len(definitions) - 1].model_research_id)
+        else:
+            print(f"無效選項，請輸入 0～{total}。")
 
 def _audit_menu() -> int:
     module_id = get_active_audit_module_id()

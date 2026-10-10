@@ -741,31 +741,76 @@ class ExploratoryMenuIntegrationCases(unittest.TestCase):
 
 class OneOffAuditEntrypointCases(unittest.TestCase):
     def test_actions_delegate_registered_producer_without_formal_menu(self):
-        from tools import audit_one_off_model_study as cli
+        from services.audit import one_off_model_studies as dispatch
         from unittest.mock import Mock
         from types import SimpleNamespace
         registry_study = SimpleNamespace(service_module="synthetic.one_off_producer")
-        for action, method in cli.ONE_OFF_ACTIONS.items():
+        for action, method in dispatch.ONE_OFF_ACTIONS.items():
             with self.subTest(action=action):
                 handler = Mock(return_value=0)
                 producer = SimpleNamespace(**{method: handler})
-                with (patch.object(cli, "get_exploratory_model_research_study", return_value=registry_study) as registry,
-                      patch.object(cli, "import_module", return_value=producer) as imported,
+                with (patch.object(dispatch, "get_exploratory_model_research_study", return_value=registry_study) as registry,
+                      patch.object(dispatch, "import_module", return_value=producer) as imported,
                       patch("builtins.input", side_effect=AssertionError("one-off must not ask for another confirmation"))):
-                    self.assertEqual(cli.execute("MR-13BY", action), 0)
+                    self.assertEqual(dispatch.execute_one_off_model_study("MR-13BY", action), 0)
                 registry.assert_called_once_with("MR-13BY")
                 imported.assert_called_once_with(registry_study.service_module)
                 handler.assert_called_once_with()
 
     def test_one_off_invalid_handler_does_not_fall_back_to_ao(self):
-        from tools import audit_one_off_model_study as cli
-        with (patch.object(cli, "get_exploratory_model_research_study",
+        from services.audit import one_off_model_studies as dispatch
+        with (patch.object(dispatch, "get_exploratory_model_research_study",
                            return_value=SimpleNamespace(service_module="synthetic.one_off_producer")),
-              patch.object(cli, "import_module", return_value=SimpleNamespace())):
+              patch.object(dispatch, "import_module", return_value=SimpleNamespace())):
             with self.assertRaisesRegex(RuntimeError, "缺少.*Producer"):
-                cli.execute("MR-13BY", "forward")
+                dispatch.execute_one_off_model_study("MR-13BY", "forward")
         with self.assertRaisesRegex(ValueError, "不支援"):
-            cli.execute("MR-13BY", "timing")
+            dispatch.execute_one_off_model_study("MR-13BY", "timing")
+
+    def test_existing_cli_is_only_a_wrapper_not_a_second_execution_path(self):
+        from tools import audit_one_off_model_study as cli
+        with patch.object(cli, "execute_one_off_model_study", return_value=0) as delegate:
+            self.assertEqual(cli.execute("MR-13BY", "compare-forward"), 0)
+        delegate.assert_called_once_with("MR-13BY", "compare-forward")
+
+    def test_one_off_audit_menu_uses_registered_study_and_standard_six_labels(self):
+        import io
+        from contextlib import redirect_stdout
+        from unittest.mock import Mock
+        import apps.research as app
+        from core.audit_policy import get_audit_definitions
+        from core.model_research_menu_contract import MODEL_RESEARCH_WORK_TYPES
+        from services.audit.one_off_model_studies import (
+            get_one_off_model_studies, one_off_model_study_menu_items,
+        )
+        self.assertIn("MR-13BY", [study.model_research_id for study in get_one_off_model_studies("breakout_quality")])
+        self.assertEqual(get_one_off_model_studies("unknown_domain"), ())
+        items = one_off_model_study_menu_items()
+        self.assertEqual(len(items), 6)
+        self.assertEqual([item[2] for item in items], [work.label for work in MODEL_RESEARCH_WORK_TYPES[:6]])
+        first_study = get_one_off_model_studies("breakout_quality")[0]
+        index_in_one_time = str(len(get_audit_definitions("breakout_quality")) + 1)
+        for work_choice, action, _ in items:
+            with self.subTest(work_choice=work_choice):
+                output = io.StringIO()
+                with (patch.object(app, "execute_one_off_model_study", return_value=0) as dispatched,
+                      patch("builtins.input", side_effect=["2", index_in_one_time, work_choice, "0", "0", "0"]),
+                      redirect_stdout(output)):
+                    self.assertEqual(app._audit_menu(), 0)
+                dispatched.assert_called_once_with(first_study.model_research_id, action)
+                console = output.getvalue()
+                self.assertIn("一次性專題 Audit", console)
+                self.assertIn(first_study.model_research_id + "  [可執行]", console)
+                for work in MODEL_RESEARCH_WORK_TYPES[:6]:
+                    self.assertIn(work.label, console)
+                self.assertNotIn("EXPLORE", console)
+
+    def test_one_off_audit_menu_producer_failure_is_not_reported_as_success(self):
+        import apps.research as app
+        with (patch.object(app, "execute_one_off_model_study", return_value=9),
+              patch("builtins.input", side_effect=["1"])):
+            with self.assertRaisesRegex(RuntimeError, "returncode=9"):
+                app._audit_one_off_model_study_menu("MR-13BY")
 
     def test_forward_missing_artifact_builds_without_explore_confirmation(self):
         from services.breakout_quality import margin_yesterday_research as mod

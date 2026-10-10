@@ -4181,6 +4181,14 @@ _EXPLORATORY_MODEL_STUDIES = {
 }
 
 
+def list_exploratory_model_research_studies() -> tuple[ExploratoryModelResearchStudy, ...]:
+    """Return all registered isolated experiments with the same safety checks."""
+    return tuple(
+        get_exploratory_model_research_study(model_id)
+        for model_id in _EXPLORATORY_MODEL_STUDIES
+    )
+
+
 def get_exploratory_model_research_study(model_id: str) -> ExploratoryModelResearchStudy:
     study = _EXPLORATORY_MODEL_STUDIES.get(str(model_id))
     if study is None:
