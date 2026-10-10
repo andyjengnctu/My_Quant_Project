@@ -76,6 +76,53 @@ class OfficialMarginPublicationProbeTests(unittest.TestCase):
             ["0050", "元大台灣50", "0", "0", "0", "0", "0", "1", "0", "0", "0", "0", "0", "1", "0", ""]])
         self.assertEqual(probe.parse_twse_mi_margn(zero_payload, report_date="2025-01-06")["0050"], (0, 0))
 
+    def test_official_known_aggregate_row_skipped_without_discarding_real_bad_rows(self):
+        # Some TWSE per-category tables have a first blank-code / aggregate row.
+        payload = _payload()
+        total = ["　", "合計", "1", "2", "3", "100", "200", "1000",
+                 "1", "2", "0", "4", "5", "1000", "0", ""]
+        payload["tables"][1]["data"].insert(0, total)
+        parsed = probe.parse_twse_mi_margn(payload, report_date="2025-01-06")
+        self.assertEqual(len(parsed), 2)
+        self.assertEqual(parsed["0050"], (102, 3))
+        payload["tables"][1]["data"][0][1] = "未知摘要"
+        with self.assertRaisesRegex(ValueError, "代碼不合法"):
+            probe.parse_twse_mi_margn(payload, report_date="2025-01-06")
+
+    def test_exact_failure_type_is_in_human_audit(self):
+        from urllib.error import HTTPError, URLError
+        self.assertEqual(probe._source_error_kind(HTTPError(
+            "https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN", 403,
+            "Forbidden", None, None)), "HTTP_403")
+        self.assertEqual(probe._source_error_kind(URLError("blocked")), "NETWORK_OR_TLS_FAILURE")
+        report = probe.markdown_report({
+            "status": "NO_OFFICIAL_COMPARISON_EVIDENCE", "research_cutoff": "2026-03-02",
+            "sample_dates": ["2025-02-03"], "sample_success": 0,
+            "samples": [{"report_date": "2025-02-03", "status": "SOURCE_NOT_VERIFIABLE",
+                         "error_kind": "HTTP_403", "error": "HTTPError: Forbidden"}],
+        })
+        self.assertIn("HTTP_403: HTTPError: Forbidden", report)
+        self.assertIn("模型 Input 授權：**NO**", report)
+        self.assertIn("| 失敗原因 |", report)
+
+    def test_existing_diagnosis_never_fetches_or_reads_provider(self):
+        with TemporaryDirectory(prefix="margin_official_existing_") as tmp:
+            base = Path(tmp) / probe.OUTPUT_ROOT / ("f" * 64)
+            base.mkdir(parents=True)
+            (base / "publication_probe.json").write_text(json.dumps({
+                "status": "NO_OFFICIAL_COMPARISON_EVIDENCE", "sample_success": 0,
+                "samples": [{"report_date": "2025-02-03", "status": "SOURCE_NOT_VERIFIABLE",
+                             "error": "HTTPError: HTTP Error 403: Forbidden"}]}, ensure_ascii=False), encoding="utf-8")
+            with (patch.object(probe, "_fetch_official", side_effect=AssertionError("network")),
+                  patch.object(probe, "load_ready_provider_snapshot_archive", side_effect=AssertionError("provider"))):
+                diagnosis, code = probe.existing_probe_diagnosis(Path(tmp))
+            self.assertEqual(code, 0)
+            self.assertIn("2025-02-03", diagnosis)
+            self.assertIn("HTTP Error 403", diagnosis)
+            self.assertIn("LEGACY_UNCLASSIFIED", diagnosis)
+            self.assertIn("沒有重新下載TWSE", diagnosis)
+            self.assertIn("模型Input授權維持NO", diagnosis)
+
     def test_report_tminus_one_confirms_tminus_two_not_same_day(self):
         calendar = pd.DatetimeIndex(["2025-01-02", "2025-01-03", "2025-01-06", "2025-01-07"])
         alignment = probe.forecast_alignment(calendar, "2025-01-06", cutoff="2025-01-07")
@@ -181,6 +228,29 @@ class OfficialMarginPublicationProbeTests(unittest.TestCase):
             self.assertEqual((folder / "captured_requeries" / "20250106.json").read_bytes(), report)
             self.assertTrue((folder / "publication_probe.md").exists())
             self.assertTrue((folder / "publication_probe.json").exists())
+
+    def test_error_response_retains_raw_bytes_and_diagnostic_in_markdown(self):
+        from types import SimpleNamespace
+        archive = SimpleNamespace(as_of_date="2026-03-02", snapshot_fingerprint="a" * 64)
+        class FakeVerifiedView:
+            def __init__(self, *args, **kwargs):
+                pass
+            def dataset_artifacts(self, dataset):
+                return [SimpleNamespace(request_id="r", content_sha256="b" * 64, row_count=4)]
+            def iter_verified_frames(self, dataset, columns):
+                yield pd.DataFrame({"date": ["2025-01-02", "2025-01-03", "2025-01-06", "2025-01-07"]})
+        blob = b"not json: invalid response"
+        with TemporaryDirectory(prefix="margin_official_bad_response_") as tmp:
+            with (patch.object(probe, "load_ready_provider_snapshot_archive", return_value=archive),
+                  patch.object(probe, "ProviderSnapshotView", FakeVerifiedView),
+                  patch.object(probe, "_fetch_official", return_value=(blob, probe._url("2025-01-06")))):
+                result, folder = probe.run_probe(Path(tmp), dates=["2025-01-06"], fetch_public=True)
+            self.assertEqual(result["status"], "NO_OFFICIAL_COMPARISON_EVIDENCE")
+            self.assertEqual(result["samples"][0]["error_kind"], "NON_JSON_OFFICIAL_RESPONSE")
+            self.assertEqual((folder / "captured_requeries" / "20250106.response").read_bytes(), blob)
+            self.assertFalse((folder / "captured_requeries" / "20250106.json").exists())
+            self.assertIn("NON_JSON_OFFICIAL_RESPONSE", (folder / "publication_probe.md").read_text(encoding="utf-8"))
+            self.assertFalse(result["model_input_authorized"])
 
     def test_no_snapshot_does_not_create_authorization(self):
         with TemporaryDirectory(prefix="margin_twse_missing_snapshot_") as tmp:

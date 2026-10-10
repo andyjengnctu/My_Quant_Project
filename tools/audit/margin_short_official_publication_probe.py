@@ -21,6 +21,7 @@ import sys
 import tempfile
 from typing import Iterable, Mapping
 from urllib.parse import urlencode
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import pandas as pd
@@ -111,6 +112,11 @@ def parse_twse_mi_margn(payload: Mapping[str, object], *, report_date: str) -> d
             if not isinstance(row, list) or len(row) != len(fields):
                 raise ValueError("TWSE個股報表欄位數量不符合schema；拒絕猜測欄位位置")
             ticker = _clean(row[ticker_pos]).upper()
+            # TWSE individual-category tables may have a leading, explicitly
+            # identified aggregate row with a blank code; never treat it as a
+            # security or relax validation for any other unrecognized row.
+            if not ticker and ticker_pos == 0 and len(row) > 1 and _clean(row[1]) in ("合計", "總計"):
+                continue
             if not _TICKER_PATTERN.fullmatch(ticker):
                 raise ValueError(f"TWSE個股代碼不合法: {ticker!r}")
             if ticker in rows:
@@ -228,6 +234,60 @@ def _fetch_official(date: str) -> tuple[bytes, str]:
     return raw, target
 
 
+def _source_error_kind(exc: Exception) -> str:
+    """Diagnostic reason only; source failure never becomes PIT approval."""
+    if isinstance(exc, HTTPError):
+        return f"HTTP_{exc.code}"
+    if isinstance(exc, URLError):
+        return "NETWORK_OR_TLS_FAILURE"
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return "NETWORK_OR_TLS_FAILURE"
+    if isinstance(exc, json.JSONDecodeError):
+        return "NON_JSON_OFFICIAL_RESPONSE"
+    if isinstance(exc, (ValueError, KeyError, TypeError)):
+        return "OFFICIAL_SCHEMA_OR_DATE_REJECTED"
+    return "SOURCE_IO_FAILURE"
+
+
+def _one_line(value: object, *, limit: int = 240) -> str:
+    """Avoid broken Markdown tables and multiline exception floods."""
+    line = " ".join(str(value).split()).replace("|", "/").replace("`", "'")
+    return line if len(line) <= limit else line[:limit - 3] + "..."
+
+
+def existing_probe_diagnosis(root: Path) -> tuple[str, int]:
+    """Read already-written one-off JSON; never fetch TWSE or touch Provider."""
+    base = (Path(root).resolve() / OUTPUT_ROOT).resolve()
+    if not base.is_dir():
+        return "找不到既有publication_probe.json；沒有再次連線TWSE。", 2
+    candidates = []
+    for file in base.glob("*/publication_probe.json"):
+        if file.is_file() and file.resolve().is_relative_to(base) and file.stat().st_size <= 5_000_000:
+            candidates.append(file)
+    if not candidates:
+        return "找不到既有publication_probe.json；沒有再次連線TWSE。", 2
+    target = max(candidates, key=lambda file: (file.stat().st_mtime_ns, file.as_posix()))
+    try:
+        result = json.loads(target.read_text(encoding="utf-8"))
+        if not isinstance(result, dict) or not isinstance(result.get("samples"), list):
+            raise ValueError("既有稽核JSON缺samples")
+    except (OSError, ValueError, UnicodeError) as exc:
+        return f"既有稽核JSON無法解析：{_one_line(type(exc).__name__ + ': ' + str(exc))}", 2
+    lines = ["僅檢查已保存的稽核結果；沒有重新下載TWSE、沒有修改資料或授權模型。",
+             f"既有報表：{target.relative_to(Path(root).resolve()).as_posix()}",
+             f"狀態：{_one_line(result.get('status', 'UNKNOWN'))}；成功：{result.get('sample_success', 0)}/{len(result['samples'])}"]
+    for entry in result["samples"]:
+        if not isinstance(entry, dict):
+            continue
+        label = _one_line(entry.get("report_date", "UNKNOWN"))
+        status = _one_line(entry.get("status", "UNKNOWN"))
+        kind = _one_line(entry.get("error_kind", "LEGACY_UNCLASSIFIED"))
+        error = _one_line(entry.get("error", "未記錄失敗原因"))
+        lines.append(f"{label} | {status} | {kind} | {error}")
+    lines.append("歷史首次發布／修訂版本仍未證實；模型Input授權維持NO。")
+    return "\n".join(lines), 0
+
+
 def _write_exact_capture(target: Path, raw: bytes) -> None:
     """Keep the actual response bytes, not a reserialized JSON approximation."""
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -263,16 +323,18 @@ def markdown_report(result: Mapping[str, object]) -> str:
              "- 本稽核僅查TWSE上市證券；TPEx上櫃、限額適用日／使用率、完整OOS適用性均未通過本稽核。",
              "- 官方與FinMind比較採同數字單位假設；一致率非最終單位確認或PIT授權。", "",
              "## 取樣結果（固定按年份，非依OOS表現選擇）", "",
-             "| 官方日期T-1 | 確認餘額日T-2 | 預測日T | TWSE個股 | 可比較 | 融資一致 | 融券一致 | 雙欄一致 | 證據層級 |",
-             "|---|---|---|---:|---:|---:|---:|---:|---|" ]
+             "| 官方日期T-1 | 確認餘額日T-2 | 預測日T | TWSE個股 | 可比較 | 融資一致 | 融券一致 | 雙欄一致 | 證據層級 | 失敗原因 |",
+             "|---|---|---|---:|---:|---:|---:|---:|---|---|" ]
     for entry in result.get("samples", []):
         if entry.get("status") == "OK":
             a, match = entry["alignment"], entry["comparison"]
             lines.append(f"| {a['official_report_date']} | {a['confirmed_balance_date']} | {a['prediction_date']} | "
                          f"{match['official_stock_count']} | {match['paired_count']} | {match['margin_equal']} | "
-                         f"{match['short_equal']} | {match['both_equal']} | CURRENT-VINTAGE REQUERY |")
+                         f"{match['short_equal']} | {match['both_equal']} | CURRENT-VINTAGE REQUERY | — |")
         else:
-            lines.append(f"| {entry['report_date']} | — | — | — | — | — | — | — | {entry['status']} |")
+            kind = _one_line(entry.get("error_kind", entry.get("status", "UNKNOWN")), limit=55)
+            detail = _one_line(entry.get("error", "來源無詳細錯誤紀錄"), limit=180)
+            lines.append(f"| {entry['report_date']} | — | — | — | — | — | — | — | {entry['status']} | {kind}: {detail} |")
     lines.extend(["", "## 資料缺口與正式Gate", "",
                   f"- 成功取樣：{result.get('sample_success', 0)}/{len(result.get('sample_dates', []))}。",
                   "- 取樣只可確認報表欄位語意與最新歷史數值的局部對照；不可推論完整歷史coverage或不可變版本。",
@@ -331,22 +393,26 @@ def run_probe(root: Path, *, snapshot_fingerprint: str | None = None,
                 else:
                     entry["status"] = "NO_HISTORICAL_OFFICIAL_RELEASE_INPUT"
                     continue
+                # Preserve byte identity even when a 200 response contains
+                # an error page or a nonconforming official JSON payload.
+                entry.update({"capture_utc": datetime.now(timezone.utc).isoformat(),
+                              "source_url": url, "raw_sha256": sha256(raw).hexdigest(),
+                              "source_vintage_grade": "CURRENT_VINTAGE_REQUERY_ONLY"})
+                raw_captures[report_date] = raw
                 payload = json.loads(raw)
                 if not isinstance(payload, dict):
                     raise ValueError("官方JSON根節點不是object")
                 rows = parse_twse_mi_margn(payload, report_date=report_date)
-                entry.update({"status": "PARSED_PENDING_COMPARE", "capture_utc": datetime.now(timezone.utc).isoformat(),
-                              "source_url": url, "raw_sha256": sha256(raw).hexdigest(),
-                              "source_vintage_grade": "CURRENT_VINTAGE_REQUERY_ONLY",
-                              "official_ticker_count": len(rows)})
+                entry.update({"status": "PARSED_PENDING_COMPARE", "official_ticker_count": len(rows)})
                 official_items.append((report_date, rows, entry))
-                raw_captures[report_date] = raw
-            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            except (OSError, ValueError, KeyError, TypeError) as exc:
                 safe = str(exc).replace(str(root) + "/", "").replace(str(root) + "\\", "")
                 if reports_dir is not None:
                     safe = safe.replace(str(Path(reports_dir).resolve()) + "/", "")
                     safe = safe.replace(str(Path(reports_dir).resolve()) + "\\", "")
-                entry.update({"status": "SOURCE_NOT_VERIFIABLE", "error": f"{type(exc).__name__}: {safe}"})
+                entry.update({"status": "SOURCE_NOT_VERIFIABLE",
+                              "error_kind": _source_error_kind(exc),
+                              "error": f"{type(exc).__name__}: {safe}"})
         if official_items:
             source_dates = {alignments[date]["confirmed_balance_date"] for date, _, _ in official_items}
             source_ids = {ticker for _, rows, _ in official_items for ticker in rows}
@@ -384,8 +450,12 @@ def run_probe(root: Path, *, snapshot_fingerprint: str | None = None,
                      r.get("status")) for r in result["samples"]],
     })
     output = root / OUTPUT_ROOT / str(result["audit_fingerprint"])
+    parsed_dates = {item["report_date"] for item in result["samples"]
+                    if item.get("status") in ("OK", "NO_COMPARABLE_FINMIND_ROWS", "PARSED_PENDING_COMPARE")}
     for report_date, raw in raw_captures.items():
-        _write_exact_capture(output / "captured_requeries" / (report_date.replace("-", "") + ".json"), raw)
+        # Never label an HTML / invalid-JSON response as a verified JSON report.
+        suffix = ".json" if report_date in parsed_dates else ".response"
+        _write_exact_capture(output / "captured_requeries" / (report_date.replace("-", "") + suffix), raw)
     atomic_write_json(output / "publication_probe.json", result)
     atomic_write_text(output / "publication_probe.md", markdown_report(result))
     return result, output
@@ -402,7 +472,15 @@ def main() -> int:
                        help="查詢TWSE公開歷史網頁（取得的是今日的歷史requery，非原始vintage）")
     group.add_argument("--reports-dir", type=Path,
                        help="匯入YYYYMMDD.json官方查詢檔；仍不能自稱當年vintage")
+    group.add_argument("--inspect-existing", action="store_true",
+                       help="只讀取既有publication_probe.json逐日失敗原因；不查TWSE、不讀Provider、不重跑6日")
     args = parser.parse_args()
+    if args.inspect_existing:
+        if args.dates is not None or args.snapshot_fingerprint is not None:
+            parser.error("--inspect-existing不得同時指定報表日期或Provider fingerprint")
+        message, code = existing_probe_diagnosis(args.project_root)
+        print(message)
+        return code
     result, folder = run_probe(args.project_root, snapshot_fingerprint=args.snapshot_fingerprint,
                                dates=args.dates, fetch_public=args.fetch_public,
                                reports_dir=args.reports_dir)
