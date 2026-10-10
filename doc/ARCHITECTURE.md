@@ -1,6 +1,6 @@
 # 架構概覽
 
-本文件只保留穩定分層、正式入口、依賴方向與共享邊界。操作步驟看 `doc/CMD.md`；formal contract 與狀態看 `doc/TEST_SUITE_CHECKLIST.md`。
+本文件僅說明目前可由程式驗證的架構、唯一 owner、正式入口與依賴邊界，不作歷史工程流水帳或研究待辦。`doc/CMD.md` 為使用者自行維護的常用指令筆記，非正式操作／設定真理；formal test contract 以 `doc/TEST_SUITE_CHECKLIST_CONTRACT.json` 為 owner，其 Markdown 清單為生成視圖。
 
 ## 穩定檔案樹
 
@@ -99,7 +99,7 @@ project/
 ├─ doc/
 │  ├─ TEST_SUITE_CHECKLIST.md         # formal test suite 主表與索引
 │  ├─ ARCHITECTURE.md                 # 本檔
-│  └─ CMD.md                          # 常用指令與操作說明
+│  └─ CMD.md                          # 使用者自行維護的常用指令筆記（GPT不得自動增改）
 ├─ filters/
 │  └─ breakout_quality/               # quality feature/label、shared split、artifact contract、model factory、正式 runtime score lookup
 ├─ services/
@@ -347,7 +347,7 @@ Inner Train只負責gradient更新，Validation以mean daily Spearman最大化�
 
 ## 共享邊界
 
-- 所有工具輸出皆落在 `outputs/<category>/`；輸出位置與 retention 規則以 `core/output_paths.py`、`core/output_retention.py` 與 `doc/CMD.md` 為準。
+- 所有工具輸出皆落在 `outputs/<category>/`；輸出位置與 retention 規則以 `core/output_paths.py`、`core/output_retention.py` 的 canonical 規範為準；使用者的 `CMD.md` 不另定第二套規則。
 - `core/file_integrity.py`是generic file SHA256與canonical JSON SHA256的單一真理來源；Breakout Quality artifacts、Strategy Compare identity、trade-path label identity與local-regression manifest不得各自重寫hash serialization。
 - `outputs/local_regression/_staging/` 為 local regression / validate 共用暫存 staging 子目錄；不新增 `outputs/validate/` 根分類。
 - `outputs/debug_trade_log/` 為 `trade_analysis` 相容輸出目錄；為維持相容性，暫沿用 `debug_trade_log` 這個 legacy 名稱。
@@ -359,7 +359,7 @@ Inner Train只負責gradient更新，Validation以mean daily Spearman最大化�
 ## 維護原則
 
 - 本檔只承接穩定子系統、正式入口、依賴方向與共享邊界。
-- 高波動操作細節移至 `doc/CMD.md`；formal 細部契約移至 `doc/TEST_SUITE_CHECKLIST.md`。
+- 操作流程由正式應用程式入口及 canonical config／contract 決定；`doc/CMD.md` 只作使用者自管備忘，不作工程變更的同步目標。formal 契約以 Checklist JSON 為 owner，Markdown 是生成視圖。
 - 不以 exact file-tree、helper 長清單、局部 alias 說明或暫時演進敘事作為本檔主要承載面。
 
 ### Continuous Target preparation boundary
@@ -391,7 +391,7 @@ Checkpoint寫入前不得建立OOS percentile；模型凍結後才輸出OOS PASS
 
 11H PASS realization-gap、11I Selection strategy-realization、11J per-candidate counterfactual與11K portfolio selection-pressure已完成其研究決策用途。其結論與實驗身份保留於`doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`／`doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`及既有輸出工件；對應一次性Audit implementation、CLI registration與專屬synthetic tests已從current tree移除，不再列為可執行正式命令。若未來出現新的決策不確定性，應依新的Audit identity與最小必要證據重新設計，不得復活舊臨時入口。
 
-### Binary DL 4×2 Min ROOS rolling parameter adaptation boundary
+### 歷史 Binary DL 4×2 Min ROOS 參數適應研究邊界（非現行正式流程）
 
 `services/optimizer/strategy_param_training.py`是CLI-only研究編排層，固定比較四種參數來源：P0原ROOS＋原正式規則、P1原ROOS＋rules全關、P2在rules全關／DL關環境訓練、P3在rules全關／DL開環境訓練。每套參數各以Binary DL關／開回放一次，形成A0／B0至A3／B3八個操作點。P2與P3都只搜尋`high_len`、`atr_len`、`atr_buy_tol`、`atr_times_init`與`atr_times_trail`；其餘optimizer維度依canonical config/schema固定，不再先訓練另一輪完整ROOS來提供`high_len`或非Min欄位。Outer Rolling trials的未覆寫預設只讀`config.training_policy.OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT`，不得另設200／300等第二套預設；不複製objective、portfolio replay、active-param export或統計。
 
@@ -414,9 +414,9 @@ Breakout Quality 的研究身份與可執行語意必須分層，避免每個新
 - **History**：MR/SR identity、phase、比較reference、已執行證據與GO/REJECT理由只由`doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`／`doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`保存；不得要求production service依歷史文件或舊approval report才能執行。
 - `selection_pit_authorized`只表示該歷史research recipe是否曾被授權建立PIT evidence／供重現；**不等於current OOS/Rolling授權**。Current time validation只看`current_time_validation_authorized`，避免過去曾做過PIT的profile重新滲入current workflow。
 
-### Daily Universal Risk-normalized Ranker（MR-13I / MR-13J）
+### 歷史 Daily Universal Risk-normalized Ranker（MR-13I / MR-13J；非 current 設定）
 
-- Production runtime anchor仍固定C42/C44的MR-13E exact K/R0 constrained contract；MR-13K Pure-MFE與MR-13M low-adverse保留為current研究source。Current evaluation framework不再以Selection/Frozen C56/C57 full-flow作Gate，而以同一`extending_current` Compare Suite的C61/C58/C59/C64/C66/C71/C72/C73/C74跑single-seed OOS／Rolling；C71/C72/C73保留Raw-Safety P50/P60/P70 completed sensitivity curve，C74為current parameter-free joint-selector candidate，C64/C66作成熟reference，C70已轉historical evidence，C62/C63/C60/C65/C68/C69/C67均轉historical compatibility，robustness/fixed-window先deferred：OOS固定2020 information cutoff並先作最小必要證據，Rolling 12M annual refit才是完整evidence/promotion basis；Multi-seed／Fixed-Window本輪均deferred；若後續依single-seed結果取得授權，必須由當時的canonical Compare Suite與robustness authorization產生same-seed benchmark，不得另維護第二份arm matrix。既有benchmark語意仍要求各授權arm逐seed使用same-seed strategy params，seed-sensitive模型亦使用同一題seed。Plan C-M與Plan A依Research Queue排在current framework最小驗證之後。
+- **歷史對照（非現行執行清單）**：MR-13I/J 與 C42/C44、C56/C57、C61/C58/C59/C64/C66/C71～C74 的評估敘述只記錄當時對照與架構語意，不得當成目前 Strategy Compare／Trading 設定。`config/strategy_compare.py` 的 current profiles、`config/trading.py` 的 production strategy/parameter profile 與 `core/strategy_compare_registry.py` 的 arm catalog 才是目前唯一可執行設定；歷史 C-series results 由 Registry／Experiment Log 追溯。
 - `services/breakout_quality/daily_target_comparison.py`是daily label simplification的正式read-only model-provider診斷：只從兩個config profile建立同一daily stock-day universe並比較Target ranking／breach diagnostics，輸出`outputs/filters/breakout_quality/<filter_id>/daily_target_comparison/`；不train、不fit、不建立PIT。`ContinuousRankerResearchSpec.reference_profile_name`代表可由Target-comparison入口直接比較的同量綱受控Target；`evaluation_reference_profile_name`只供checkpoint固定後補reference Target diagnostics，兩者都不得進learning或epoch selection。MR-13O不需要新的reference profile：其`continuous_target_id`直接沿用MR-13H economic Target供描述性R/ranking報表，但optimizer實際 supervision 由canonical MFE/low-adverse component percentiles與strict Pareto pair mask建立；epoch selection固定使用`mean_daily_pareto_pair_concordance`，不得以economic rho挑epoch。
 - MR-13I與MR-13E使用完全相同的daily feature-eligible stock-day universe、300×10 lazy sequence、固定40-bar horizon、InceptionTime sequence architecture與full-list Delta-NDCG pairwise training；13I只把Target改成`daily_risk_normalized_net_opportunity_r_v1`。Daily Universal training-history起點必須取Dataset寫入的`training_universe_start_date`，此欄位缺失時current split直接fail-fast；不得fallback到Optimizer的`selection_start_date`或任何舊2011 cutoff。
 - `filters/breakout_quality/risk_normalized_target.py`是risk target/context單一owner：historical-effective risk calibration只讀Strategy Compare Min ROOS sources的`atr_len / atr_times_init`；禁止`high_len / atr_buy_tol / atr_times_trail / breakout qualification / K / R0 / cash / holdings`。Target reference為decision-date close，initial stop/1% sizing/position cap/board lot/tick/fees/tax全部重用canonical core functions；future path仍固定`t+1…t+40`且adverse-first，不使用strategy exit。
@@ -428,13 +428,13 @@ Breakout Quality 的研究身份與可執行語意必須分層，避免每個新
 
 Current strategy-parameter artifacts intentionally maintain two hashes. `compute_strategy_param_file_sha256()` is exact-byte integrity/provenance and may change when `created_at`, optimizer diagnostics, manifest/publication metadata, or formatting changes. `compute_strategy_param_scientific_sha256()` projects the artifact through `build_strategy_param_runtime_identity_payload()` and hashes only replay-affecting selector/ensemble policy, raw-universe contract, effective-date coverage and runtime parameter members. Strategy Compare replay metadata, Robustness benchmark/result identity and cross-run reuse must use the runtime-scientific hash; raw file/manifest hashes may be retained only as integrity/provenance or exact-byte legacy migration evidence. Re-publishing an unchanged runtime schedule must therefore remain REUSE/REPAIR-compatible, while any effective runtime parameter change must remain stale.
 
-### MR-13P single-model conditional MFE-safety architecture
+### 歷史 MR-13P single-model conditional MFE-safety architecture
 
 - `inception_time_conditional_mfe_safety_v1` 是 `inception_time_v1` 的研究型雙 head architecture identity：300×10 sequence encoder、InceptionTime backbone、global-average embedding與primary two-logit MFE head沿用既有結構；另新增一個 conditional-safety two-logit head。
 - Primary head輸出 Pure-MFE rank score。Conditional head接收同一 shared latent 與 `stop-gradient(primary MFE softmax-pass probability)`；conditional loss不得回傳 primary-head weights，但兩個 head 的 loss 都可更新 shared encoder。這使 MFE 保持 primary axis，同時讓第二個 head學「在相同 MFE 水準下異常低 adverse」的 incremental safety signal。
 - MR-13P training profile使用兩個同尺度 [0,1] same-date percentile targets與 full-list Delta-NDCG pairwise loss，固定等權平均，不設 scalar MFE/MAE fusion weight。Conditional target中的 future MFE/adverse只屬 supervision，不是 inference feature；checkpoint／Forward score分別保存 primary MFE 與 conditional-safety score，`model_score`仍只指 primary MFE。Forward Model Gate GO後，current PIT producer仍只建立一個shared-encoder checkpoint，並在同一fold score artifact同時保存`breakout_quality_score`／`primary_mfe_score`／`conditional_safety_score`；C64 runtime由同一artifact分欄消費Primary MFE與Conditional Safety，不建立第二模型或再次OLS residualize。
 
-### Reverse-Conditional MFE A/B（MR-13Q / MR-13R）
+### 歷史 Reverse-Conditional MFE A/B（MR-13Q / MR-13R）
 
 - 共同supervision truth：每日`U=PctRank(Pure-MFE)`、`S=PctRank(-AdverseToMFEPeak)`，以同日含intercept OLS定義`J_raw=U-E(U|S)`，再以同日average-rank percentile形成final Conditional-MFE target。future truth只作label，不是inference feature。
 - `MR-13Q / inception_time_v1`：Single-head；原InceptionTime shared representation直接輸出final Conditional-MFE two-logit head，模型與策略都只使用J score。
@@ -444,103 +444,12 @@ Current strategy-parameter artifacts intentionally maintain two hashes. `compute
 - `core/training_policy.py`：Strategy Optimizer training policy 的 validation、derived snapshot、robustness seed resolver 與 runtime model-mode owner；`config/training_policy.py` 僅持有 declarative 使用者／專案設定。
 - `core/selection_policy.py`：history-selection 策略參數 schema 與 default snapshot 的唯一 owner；避免 training policy 為 selection schema 依賴完整 breakout strategy module。
 
-### Market Data V2 最終資料面收斂｜Round 1（2026-09-10）
+### Market Data V2 現行責任邊界（歷史 Rounds 1–8 以正式工程紀錄追溯）
 
-`core/market_data_contract.py::get_market_data_v2_lifecycle()` 是 V2 最終資料面 lifecycle 的 canonical owner，設定只由 `config/market_data.py::MARKET_DATA_V2_LIFECYCLE` 宣告。最終資料面固定為：neutral Market Data V2 Provider Archive 是 Research／Trading 共用的唯一 provider-history SSOT；Research 只能取得 frozen scientific view，Trading 只能取得 latest operational view；相同 provider history 不得因 domain 不同而各自重新下載成兩份 truth。Round 8 已達成 `v2_only` terminal state，Trading Legacy direct-provider/cache/snapshot 已退役；仍存在的 Research 六欄 compatibility materialization只是 frozen Research view 的輸出格式，不是 Trading provider truth。
-
-Round 1 當時只建立最終 target 與 migration phase；Round 2～7 逐步完成 PIT universe、pool layering、Trading latest view、V2-only daily updater、compatibility bridge與 direct consumer cutover，Round 8 最後關閉 Legacy producer/materializer/snapshot。下表因此顯示**目前 terminal architecture**，不是 Round 1 當時的過渡狀態。
-
-| 元件／依賴層 | 目前權威來源 | V2 終局來源／角色 | 目前狀態 | owner |
-|---|---|---|---|---|
-| Neutral Provider Snapshot | Market Data V2 bootstrap archive | 同一 neutral provider SSOT | V2-native | `services/market_data/provider_snapshot_repository.py` |
-| Historical daily PIT market universe | neutral V2 derived artifact | Research/Trading 共用 date-local PIT membership SSOT | **Round 2 已遷移** | `core/market_data_pit_universe.py` + `services/market_data/daily_pit_universe.py` |
-| Model context pool | 同日 PIT market universe 的 model-specific projection | 不得由 current execution pool 反推 | **Round 3 contract 已建立** | `core/market_data_pool_contract.py` + model declarative contract |
-| Trading execution pool | V2 PIT membership + PriceAdj Volume + MarketValue | 日期化 new-entry eligibility mask；與 model context 分離 | **Round 7 direct V2 / Round 8 terminal** | `core/market_data_pool_contract.py` + `services/trading/market_data_consumer.py` |
-| Research V2 candidate / freeze / promotion | pinned neutral Provider Snapshot + neutral daily PIT universe cutoff projection | V2 frozen scientific view | V2-native；Research cutoff/authorization 獨立 | Research V2 canonical services |
-| Trading V2 overlay / due planner | neutral Provider Snapshot + verified Trading overlay | V2 latest operational view | **Round 5 起唯一 Trading provider-update data plane** | `services/trading/market_data_auto_update.py` + `services/downloader/market_data_trading_sync.py` |
-| Legacy Trading OHLCV producer/cache | 無 current owner | RETIRED | **Round 8 已退役** | 無 |
-| Trading execution state / Params training | V2 execution consumer state + verified historical/latest view | V2-only lineage | **Round 8 terminal** | `services/trading/market_data_consumer.py` + Trading data/readiness + Optimizer owner |
-| Scanner / new-entry membership | V2 execution consumer state | V2 current execution mask over verified V2 view | **Round 7 direct V2 / Round 8 schema cleanup** | Scanner + Trading workflow owner |
-| Holdings / exit data | verified V2 historical/latest view | 不受 current execution mask 刪除 | **Round 7 direct V2** | Trading position/exit owners |
-| Workbench / Data Ops | Trading V2 services/read models | V2-only read model/actions；UI 不自建資料規則 | **Round 8 terminal** | Workbench UI + Trading orchestration owner |
-
-這張 inventory 只記錄 dependency 與 owner，不另建立 dataset requirement 真理；strategy/model 所需 V2 datasets 仍由 `core/trading_data_dependencies.py` 唯一宣告，Research field/PIT authorization 仍由既有 Research V2 scope/PIT contracts 唯一宣告。Market Data V2 Trading migration 已於 Round 8 收斂；後續若新增 Trading DL，只能新增其 declarative V2 dependency，不得復活 Legacy data plane。
-
-### Market Data V2 Historical PIT Universe｜Round 2（2026-09-10）
-
-`core/market_data_pit_universe.py` 現為 historical daily PIT market membership 的唯一語意 owner；其 membership 只由 immutable Provider Snapshot 內的 historical archive instrument pool、`TaiwanStockPrice` date/stock presence、`TaiwanStockTradingDate` calendar 與 `TaiwanStockInfo` market-state transition guard 決定。這個層級只描述「日期 d 當時市場中哪些股票/ETF 是合法 daily member」，明確排除 Research cutoff、model-context filter、成交量/市值 execution eligibility、strategy signal、cash/holdings 與 selector state。
-
-`services/market_data/daily_pit_universe.py` 將上述語意對每個 READY Provider Snapshot materialize 成 neutral derived artifact：`data/market_data_v2/derived/daily_pit_market_universe/<provider_snapshot_fingerprint>/daily_universe.sqlite3`，並以同目錄 manifest pin Provider Snapshot、contract fingerprint、historical market-state guard、trading calendar、logical universe fingerprint 與 physical SHA256。相同 immutable Provider Snapshot 的合法 artifact只能 REUSE；tamper／identity drift fail-closed。這個 artifact 建到 Provider Snapshot 的完整 `as_of_date`，因此不屬於 Research 或 Trading namespace。
-
-Research V2 candidate 仍維持既有 scientific horizon與 identity：builder 先取得上述 neutral artifact，再以 SQLite projection materialize `date <= required_cutoff` 的 Research candidate `daily_universe`；後續 scope coverage、freeze、promotion 仍只看到固定 Research horizon。原 `core/market_data_research_v2.py::build_daily_pit_universe()` 保留為 compatibility alias，但規則委派 neutral owner，避免純 ownership refactor 改變既有 scientific/artifact identity。Research candidate manifest新增 neutral PIT provenance僅作 supplemental dependency evidence，不進 `RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS`。
-
-`services/market_data/provider_snapshot_view.py` 同時成為 immutable Provider Snapshot artifact hash/read seam；neutral PIT producer直接使用此 view，Research-specific view只在其上附加 scientific authorization gates，不再各自實作另一套 provider artifact驗證。Round 2 **不**新增 Trading execution membership，也不把 current 556 universe 歷史化；Model Context Pool 與 Execution Pool 的正式分離留到 Round 3。
-
-### Market Data V2 Pool Layering｜Round 3（2026-09-10）
-
-`core/market_data_pool_contract.py` 現為 `Daily PIT Market Universe → Model Context Pool → Trading Execution Pool` 的 canonical layering owner。Daily PIT Market Universe 仍只描述日期 d 當時合法存在的市場 member；Model Context Pool 必須是**同一日期** PIT universe 的 model-specific projection，具體 context filter 仍由各模型／research declarative contract 決定，本輪不新增任何 DL scientific filter。任何 current/latest Trading execution pool 都不得被拿來定義 historical model context 或 historical training universe。
-
-Trading Execution Pool 是另一層 **date-local new-entry eligibility mask**。既有 `成交量 >= config.downloader.DOWNLOADER_MIN_VOLUME`、股票 `市值 >= DOWNLOADER_MIN_MARKET_CAP`、ETF 達成交量門檻後不要求股票市值門檻的篩選語意，已從歷史 `services/downloader/universe.py` 抽到 `core/market_data_pool_contract.py::screen_daily_trading_execution_pool()` 單一 owner；threshold 本身仍由 config 傳入，不在 core 硬編。Round 8 後 Legacy Downloader 已退役，latest execution pool 由 `services/trading/market_data_consumer.py` 直接以 verified V2 PIT membership 與同日 evidence 呼叫該 owner。其結果正式只代表**該日允許新進場的 execution pool**，不是歷史訓練股票集合。
-
-`project_daily_model_context_pool()` 提供純 membership boundary：model-specific context 必須由模型／scientific contract **明確傳入**；若要使用該日全部 PIT members，也必須顯式宣告，而不是由 core 猜測 default。任何 context 只允許選取該日 PIT universe 的 subset，不能加入當日不存在的股票。這個 primitive 不接受 execution pool 參數，避免 future cross-stock attention 形成 `latest 556 → 回切多年歷史` 的 survivorship/selection leakage。反之 execution pool 只限制 new-entry eligibility；持股資料保留與 exit management 仍獨立，不因股票掉出 current execution pool 而刪除歷史或停止持倉管理。
-
-Round 3 當時為維持 migration behavior 暫留 Legacy summary/schema；這些過渡欄位與 snapshot ownership已由 Round 7 direct consumer cutover、Round 8 lineage schema cleanup supersede。Current execution membership 使用 V2 consumer state 的 `current_execution_pool_tickers`，Historical Trading membership則維持 neutral V2 daily PIT artifact，不再存在 Legacy latest-membership source。
-
-### Market Data V2 Trading Historical / Latest View｜Round 4（2026-09-10）
-
-`core/market_data_trading_view.py` 定義 Trading V2 historical/latest read-view 的 pure contract；`services/trading/market_data_v2_view.py` 是唯一 domain read seam。它只組合 immutable neutral Provider Snapshot 與**完整驗證且 workload=DONE** 的 Trading V2 overlay batches，不呼叫 FinMind、不寫 Market Data artifact、不自行決定 model scientific scope，也不取得或重算今天的 execution pool。Round 4 只建立可供後續 production training/consumer migration 使用的 read capability，**不改目前 `full_rule_based_no_dl` 的 execution authority**。
-
-Trading production training 的可用終點必須由該模型／策略精確宣告的 `required_datasets` 計算：Provider Snapshot `as_of_date` 是所有 dataset 已完成驗證的最低共同 baseline；Trading dataset state 可讓各 dataset 往後延伸，但 training horizon 固定取 required datasets 的 `last_ready_target_date` **共同最小值**。Aggregate `SYNCED`、任一單一 dataset 的較新日期、或 UI 顯示不得替代這個 fail-closed common-ready horizon。較舊／缺少 operational dataset state 不得把已驗證 Provider Snapshot baseline 往回縮。
-
-Latest data view 依 registry `primary_key_hint` 合併 Provider Snapshot 與 verified overlays；fragment 依 lineage/完成時間 deterministic 排序，較新的 verified overlay 只在相同 primary key 上覆蓋較舊 row，其餘歷史 row 保留。這使 `TaiwanStockPriceAdj` 等 current-vintage dataset 可合法 restate 舊 adjusted-price row，同時 incomplete/resumable batch、ledger/artifact identity drift 或 SHA256 drift 全部不可進 read view。Provider Snapshot repository 的 ledger 讀取改為 SQLite read-only/query-only seam，讀 immutable truth 時不得初始化或修改 schema。
-
-Historical membership 明確延續 Round 2/3 SSOT：日期 `d <= Provider Snapshot as_of` 直接讀 neutral `daily_pit_market_universe` artifact；snapshot 之後且仍在 required PIT datasets 共同 READY horizon 內的日期，使用相同 `core/market_data_pit_universe.py` primitive，從 latest verified V2 rows 延伸 date-local PIT membership。`services/trading/market_data_v2_view.py` 不 import Legacy current-universe owner，也不呼叫 `screen_daily_trading_execution_pool()`；因此今天的 556 execution pool 永遠不能成為 historical training membership。Model Context 仍只能是**同日 PIT market universe** 的 explicit projection。
-
-Round 4 **不 materialize 歷史 execution eligibility，也不切 Scanner／Optimizer／Workbench**；這些 consumer 仍在 migration transition。Round 5 才處理 V2-only Daily Downloader，使日更 provider interaction 收斂到 dataset/date full-market bulk；後續 compatibility materialization 與 consumer cutover 再依 lifecycle inventory 逐輪完成。
-
-### Market Data V2 Canonical Daily Updater｜Round 5（2026-09-10）
-
-Smart Downloader `[1]`、非互動 Smart Downloader 與 scheduler/Workbench Due action 共用 `services/trading/market_data_auto_update.py` 的 V2 daily-update owner。V2 target 只可由 neutral READY Provider Snapshot 與 V2 operational/discovery state 推進；不得讀 Legacy Trading snapshot，也不得因 discovery 發現新 completed day 而 side-effect 刷新 `data/trading/tw_stock_data_vip/`。這使 provider interaction 從 Legacy execution producer 解耦，同一份 provider history 只往 V2 data plane 累積。
-
-V2 due manifest 仍由 dataset registry/freshness contract 決定。對宣告 `full_market_exact_date_expected=true` 的 daily incremental/recent/event dataset，每個缺少日期都以一個 full-market exact-date logical request 表示；不具該 capability 的 dataset 依其 canonical range/fixed-id/static geometry 執行。Daily updater 回報實際 request date window、unique exact dates、full-market exact-date/range/undated request count，因此可直接判斷本輪補了哪些日期與 request 形狀，而不是用「成功股票檔數」反推。Bootstrap `[3]` 的歷史最省 request geometry 與 daily update 是不同 workload，不因本輪改變。
-
-Round 5 **沒有切換現行 execution authority**：Workbench Full、legacy Trading snapshot、目前 Params/Scanner/holdings consumer 仍可暫時存在，直到 compatibility materialization 與 consumer migration 完成；但它們不得再反向定義 Smart Downloader/V2 daily target 或 provider-update 語意。
-
-- **Market Data V2 → Trading / Workbench migration transition**：Round 5 起 Smart Downloader `[1]` 與 scheduler/Workbench Due action 的 canonical daily path 都由 `services/trading/market_data_auto_update.py` 驅動 V2 due-dataset overlay sync，不再先執行 Legacy CSV refresh，也不從 Legacy Trading snapshot 解析 V2 target。Round 6 起 Workbench「完整更新 Trading 資料」改由 `services/trading/market_data_update.py` 編排 V2 updater → V2-derived compatibility materialization → existing Trading snapshot；Legacy direct-provider producer 在目前 `v2_execution_cutover` lifecycle 會在任何 provider/universe request 前 fail-closed。Round 7 起 Params/Scanner/holdings/allocation/Workbench operational read path 直接使用 verified V2 historical/latest view + V2 execution consumer state；compatibility CSV/snapshot 不再是 execution truth，也不得被反向提升為 provider truth。neutral `provider_snapshot_manifest.json` READY 後，V2 daily updater 由 `services/downloader/market_data_trading_sync.py` 維護 Trading-owned `data/trading/market_data_v2/` overlay 與 `state/trading/market_data_v2/archive_state.json`。V2 sidecar 共用 quota-aware resumable executor，但使用獨立 `market_data_v2_trading_sync` workload namespace/batch identity，且 schema 先與 neutral provider archive 對齊、不得反寫 provider。Workbench sidecar 使用 non-blocking wait mode：quota不足或retry backoff尚未到期時立即返回 `STALE`、不sleep等待跨quota window，unfinished jobs保留SQLite ledger並在下一次Workbench更新續跑；完整Bootstrap `[3]` 仍維持 blocking quota wait、自動跨quota window下載到底。daily repair query 由 `core/market_data_dataset_registry.py` declarative policy 決定：Backer full-market exact-date capability 用市場日期批次，periodic dataset 額外明確登記 month-start／quarter-end／recent-date／range lookback；這些 Trading-only cadence 不進 neutral bootstrap/provider artifact fingerprint。Provider Snapshot 尚未存在時 sidecar 回 `NOT_BOOTSTRAPPED` 且不呼叫 FinMind data API；同步失敗時目前 `full_rule_based_no_dl` 只標 `STALE`/warning。Execution readiness 不再由 aggregate V2 `SYNCED` 或 UI 自行推導，而由 `core/trading_data_dependencies.py` 的 strategy dependency contract 與 `services/trading/data_readiness.py` 的 local fail-closed gate唯一決定；Round 7 後 `full_rule_based_no_dl` 不再要求 Legacy execution snapshot，改明確要求 `TaiwanStockPriceAdj`、`TaiwanStockPrice`、`TaiwanStockMarketValue`、`TaiwanStockTradingDate`、`TaiwanStockInfo`、`TaiwanStockDelisting` 六個 V2 datasets。generic gate 只有在同一 target 的 freshness、schema 與 coverage evidence均合法時 READY，否則 BLOCKED；未來 DL-based Trading 仍必須另外登記其精確依賴。`core/market_data_freshness_contract.py` 現為 dataset-level freshness semantics SSOT：每個 current included registry dataset 都必須解析 cadence、expected-date mode、row expectation、completeness mode、schema requirement 與 publication first-check policy；`core/market_data_trading_sync.py` 在建立 manifest 前 fail-closed 驗證完整 coverage。`config/market_data.py::MARKET_DATA_V2_PUBLICATION_POLICY` 只持有 operational schedule：provider documentation 已明確者採 verified override + grace，其他採 conservative next-day fallback；schedule 不進 neutral provider snapshot/scientific identity。Round 3 起 `services/trading/market_data_dataset_state.py` 單一持有 `state/trading/market_data_v2/dataset_state.json` 動態 operational state（last attempt/success/ready、latest observed data date、expected publish/next check、schema/coverage status/error），state 只保存動態 evidence、不複製 cadence/publication 規則；`core/market_data_due_planner.py` 只以 contract + local state + caller-supplied target date/time 計算 WAIT_PUBLISH/DUE/READY，完全不建立 FinMind client，因此同 target 已 READY 時必須可得到 zero-due / zero-provider-request plan。Trading Parquet request metadata另保存實際 frame `observed_min_date/observed_max_date`，persistent freshness 不得以 request end date 冒充資料已發布；periodic/event/current-vintage 也各依自身 row/date semantics 判定，不要求 periodic 最新 row 等於 Trading target date。Automatic one-shot scheduler / provider retry/backoff 已由 Round 4 落地；Round 5 Workbench Data Ops UI 由 `services/trading/market_data_ops.py` 組裝 Trading snapshot、V2 aggregate state、dataset state、due planner 與 auto policy，不另算 freshness。UI local refresh 為 zero-provider-call；quota 顯示只使用 sync executor 已有 observation，不能由 archive `SYNCED` 自行推導 publication completeness。
-
-
-
-### Market Data V2 Compatibility Materialization｜Round 6（歷史 transition；Round 8 已退役）
-
-Round 6 完成 provider-authority cutover：Market Data V2 是 Trading/Research 共用的唯一 provider-history truth；`data/trading/tw_stock_data_vip/*.csv` 暫時保留給尚未遷移的 Params/Scanner/holdings/Workbench consumer，但正式角色降為 **V2-derived、可刪除、可重建的 compatibility cache**，不再是獨立 FinMind producer。Workbench「完整更新 Trading 資料」維持原 UI/action identity，但執行順序固定為 **V2 Daily Update → V2 compatibility materialization → existing Trading market-data snapshot publication**；只有 V2 updater 可以產生 provider request，compatibility materialization 的 `provider_calls` 必須固定為 0。
-
-六欄 OHLCV mapping 由 `core/market_data_ohlcv_compatibility.py` 單一持有並同時供 Research/Trading 使用：`Open/High/Low/Close` 只來自 FinMind `TaiwanStockPriceAdj`，`Volume` 只來自 raw `TaiwanStockPrice.Trading_Volume`，以 `stock_id + date` 精確 join；缺 raw Volume 不得合成或以前後值補齊。Trading compatibility materializer 只讀 `services/trading/market_data_v2_view.py` 的 verified historical/latest view，不能建立 FinMind client、不能 import Legacy universe/downloader，也不能用 compatibility CSV 本身定義市場真理。
-
-最新 Trading execution pool 由同日 neutral Daily PIT Market Universe、同日 `TaiwanStockPriceAdj.Trading_Volume`、依 canonical Scan freshness policy 解析的 `TaiwanStockMarketValue` 與既有 execution-screen contract 計算；MarketValue 若為 `latest_synced` 可使用截至該 Scan target 當時最新已同步的資料，不要求同日 row，且以 **stock_id 為單位**解析最新合法值：若 provider 該日 snapshot 對某檔可交易股票缺 row，或僅提供非正值的不可用 row，可沿用該 target 之前最近一次已同步且為正值的 MarketValue row；若歷史亦無可用值，該 stock 以 fail-closed 方式排除於 new-entry execution pool，而不是中止整個市場的 Scanner。這個 pool 只決定當日新 entry eligibility，不得成為 historical model context。實際需 materialize 的 compatibility target 是 **current execution pool ∪ current positions/required tickers ∪ retained compatibility dataset members**，因此今天掉出 execution pool 的既有持股或歷史 consumer ticker 不會被刪除。retained membership 只影響 compatibility file continuity，不能反向擴張 PIT market universe。
-
-Workbench Full 若 V2 updater 已解析出 target date `T`，compatibility materialization 必須在 PriceAdj、raw Price、MarketValue、TradingDate、StockInfo、Delisting 等 compatibility-critical datasets 的共同 READY horizon **至少到 T** 才能發布 snapshot；不得靜默退回較舊 common horizon 後仍宣告 READY。與目前 rule-based compatibility 無關的 optional V2 datasets 可依各自 publication/due cadence 延後，不會因此要求整個 51-dataset archive 同日完成。
-
-本節描述的是 Round 6 當時的 migration transition。Round 7 已完成 direct consumer cutover；Round 8 已確認無 production consumer 後刪除 Legacy direct-provider producer、六欄 Trading materializer、Legacy universe/sync 與 Trading snapshot state。上述 compatibility CSV/snapshot 現已不是 runtime artifact。
-
-
-### Market Data V2 Direct Trading Consumer Cutover｜Round 7（2026-09-11）
-
-Round 7 將 live rule-based Trading 的資料讀取權威從 Legacy compatibility CSV/snapshot 切到 verified Market Data V2。`services/trading/market_data_consumer.py` 是 consumer-side bridge：以 `services/trading/market_data_v2_view.py` 讀取 Provider Snapshot + DONE Trading overlay，OHLCV 仍委派 `core/market_data_ohlcv_compatibility.py` 的既有 PriceAdj OHLC + raw Price Volume mapping，不新增第二套價格語意，也不執行 provider request。
-
-`state/trading/market_data_v2/execution_consumer_state.json` 保存當期 execution pool、required positions、retained training membership 與 V2 view lineage。首次切換可由 Round 6 compatibility membership seed continuity；之後 training membership 由自身上一版 state 延續，因此 Params 不再需要掃描 Legacy CSV 才知道 historical training members。`full_rule_based_no_dl` 的 dependency contract 同步改為 Legacy execution dataset 非 required，並要求六個直接 V2 datasets：PriceAdj、raw Price、MarketValue、TradingDate、StockInfo、Delisting。
-
-Trading Params 透過 canonical Optimizer reusable seam 注入 V2 raw-data loader；live Scanner 將 V2 OHLCV frames 交給既有 scanner processor，Research/CLI file-based scanner 入口保持不變；strategy holdings roll-forward、Indicator SELL、proposed-order allocator mark-to-market 也共用 V2 position market context。Workbench Data Ops 的 target date 改由 V2 consumer state 取得。候選與 Params artifact 暫時保留 `market_data_snapshot_sha256` / `dataset_content_sha256` 欄位名稱以控制 schema 改動半徑，但值已分別綁定 V2 consumer-state SHA 與 V2 source-view fingerprint；欄位清名可在 Round 8 刪除 Legacy cache 時一併收斂。
-
-Round 6 compatibility materialization 暫時仍由 Full Update 產生，目的只剩 rollback/對照與 Round 8 安全刪除前過渡；任何 live Params/Scanner/holdings/allocator/Workbench read path 不得再直接讀 `data/trading/tw_stock_data_vip/*.csv` 或以 Legacy snapshot 作 readiness truth。
-
-
-### Market Data V2 Legacy Compatibility Retirement｜Round 8（2026-09-11）
-
-Round 8 是 Trading Market Data migration 的 terminal state。`config/market_data.py::TRADING_MARKET_DATA_LIFECYCLE.status` 固定解析為 `v2_only`；`services/trading/market_data_update.py` 的正式 Full Update 只允許 **V2 update/verify → `state/trading/market_data_v2/execution_consumer_state.json` publication**。Legacy `data/trading/tw_stock_data_vip/*.csv`、`state/trading/market_data_snapshot.json` 不再建立、不再讀取，也不能參與 readiness、Params、Scanner、holdings、exit planning 或 allocation lineage。
-
-舊 Trading direct-provider/cache owners `services/downloader/application.py`、`services/downloader/sync.py`、`services/downloader/universe.py`、`services/trading/market_data_compatibility.py`、`services/trading/market_data_state.py` 已退役。`services/downloader/trading_price_refresh.py` 只保留 Market Date Discovery 所需的 read-only `TaiwanStockPriceAdj` latest-day probe；不得寫 Legacy CSV。共用 `core/market_data_ohlcv_compatibility.py` 仍是 PriceAdj OHLC + raw Price Volume mapping SSOT，因 Research/V2 consumer 仍合法使用，不能與 Legacy Trading cache 一起刪除。
-
-Operational lineage 同步改名並 bump schema：Params binding / Scanner candidate-runtime 以 `market_data_consumer_state_sha256` pin V2 execution consumer-state file identity，以 `market_data_source_view_fingerprint` pin verified historical/latest source view；舊 `market_data_snapshot_sha256` / `dataset_content_sha256` 不再是合法 current schema。`core/trading_data_dependencies.py` 對 `full_rule_based_no_dl` 直接要求六個 V2 datasets，`services/trading/data_readiness.py` 完全 provider-free 且 V2-only；required target 的 freshness/schema/coverage 任一不合法即 BLOCKED，aggregate V2 archive status 不可替代。
+- **市場資料來源與時間語意**：`core/market_data_contract.py`、`core/market_data_dataset_registry.py`、`core/market_data_freshness_contract.py`、`core/market_data_instrument_universe.py` 持有資料集、provider、股票 universe、PIT 與 READY 語意；使用者可調參數仍在 `config/market_data.py`。
+- **Archive／更新／儲存**：`services/downloader/` 為 canonical FinMind provider fetch domain；`core/market_data_storage_contract.py`、`core/market_data_trading_storage_contract.py` 持有 archive 與 Trading overlay 物理規格，`core/market_data_due_planner.py`、`core/market_data_trading_sync.py` 持有 target／請求規劃。
+- **Trading／Research 消費分離**：Research V1 固定資料不可因 Trading 同步回改；Trading V2 daily/latest view 消費自身已發布的版本。歷史兼容不能成為新資料第二份 permanent truth。
+- **歷史工程遷移**：2026-09-10～11 的 Round 1–8 為已完成的實作過程而非現在的操作步驟，不再於架構文件重複列舉；需追查時依原 commit／Checklist append-only transitions 與對應模組原始紀錄。
 
 
 ### Workbench Market Data Data Ops Ownership

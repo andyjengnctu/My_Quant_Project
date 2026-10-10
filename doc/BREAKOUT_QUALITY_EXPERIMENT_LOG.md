@@ -1,17 +1,17 @@
-# Breakout Quality Filter 實驗紀錄與後續計畫
+# Breakout Quality Filter 歷史實驗與研究決策紀錄
 
 ## 1. 用途與更新規則
 
-本文件是 `breakout_quality filter` 改善工作的單一實驗紀錄。凡要分析、修改、比較或測試此 Filter，開始前必須先讀本文件，避免重複測試已淘汰方向或遺失目前基準。
+本文件是 `breakout_quality` **已實際執行研究、已取得 evidence 及當時決策**的歷史紀錄；已記錄的原始 scientific identity、negative results 與當時結論不可抹除。現行 Training Model、Compare/Test membership 與參數以 `config/breakout_quality.py` 等 canonical 設定及 Experiment Registry 的 current identity 為準；本文件中的舊「目前」「下一步」「Queue」屬當時歷史快照，**不得作為今天必須執行的研究待辦或建議優先序**。
 
-每次完成一個實驗後，必須在同一輪更新本文件，至少記錄：
+每次實際完成有科學意義的實驗或收到可追溯研究證據後，才在同一輪更新本文件，至少記錄：
 
 1. 日期與實驗狀態：`PLANNED`、`IMPLEMENTED`、`RESULT_AVAILABLE`、`ACCEPTED` 或 `REJECTED`。
 2. 程式基準：ZIP／commit／patch 名稱與 SHA256；未知時明確標示未知。
 3. 唯一變更、所有固定條件，以及是否需要重建 Dataset／重新 Label。
 4. Selection 與 OOS 的主要結果，至少包含原始 PASS、模型 PASS、PASS Precision、Precision Lift、PASS Recall、Accuracy、平均 Score。
-5. 與當前正式基準的差異、結論、是否採用，以及下一個單一變更。
-6. 尚未取得結果的實作只能標記為 `IMPLEMENTED`，不得先寫成有效或無效。
+5. 與實驗當時正式基準的差異、結果判讀、是否採用及停止條件；當時提出的下一步只作歷史決策脈絡，不形成現行待辦。
+6. 尚未取得結果的實作只能標記為 `IMPLEMENTED`，不得先寫成有效或無效。未嘗試的討論構想不登錄為 PLANNED，純 engineering-only 修補不再追加到研究日誌，除非會改變 scientific identity、PIT、模型／策略結果或 evidence 可重建性；既有歷史文字保留不追改。
 
 ### OOS 使用規則（2026-07-29 起）
 
@@ -26,7 +26,7 @@
 
 ---
 
-## 2. 目前基準
+## 2. 歷史研究基準快照（本節不是目前 runtime/config 真理）
 
 ### 2.1 程式基準
 
