@@ -23,6 +23,7 @@ from services.workbench_ui.param_sources import DEFAULT_PARAM_SOURCE_LABEL, buil
 from core.entry_plans import build_position_from_entry_fill
 from core.file_integrity import load_json_strict
 from core.portfolio_fast_data import get_fast_close, get_fast_dates, get_fast_pos, get_fast_value
+from core.portfolio_run_result import as_portfolio_replay_result
 from core.runtime_utils import parse_float_strict, parse_int_strict
 from core.log_utils import write_issue_log
 from core.walk_forward_policy import load_walk_forward_policy
@@ -1921,13 +1922,22 @@ class PortfolioBacktestInspectorPanel(WorkbenchInspectorSharedMixin, ttk.Frame):
             )
         end_time = time.time()
 
-        (
-            df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff,
-            final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed,
-            total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate,
-            normal_trade_count, extended_trade_count, annual_trades,
-            reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct, pf_profile,
-        ) = result
+        # AI註: GUI/CLI only rename canonical replay metrics for existing renderers.
+        # Preserve each visible field, formatting and the mutable profile object.
+        replay = as_portfolio_replay_result(result)
+        df_eq, df_tr = replay.equity_curve, replay.trade_history
+        tot_ret, mdd = replay.total_return_pct, replay.max_drawdown_pct
+        trade_count, win_rate = replay.trade_count, replay.win_rate_pct
+        pf_ev, pf_payoff = replay.portfolio_ev, replay.portfolio_payoff
+        final_eq, avg_exp, max_exp = replay.final_equity, replay.average_exposure, replay.maximum_exposure
+        bm_ret, bm_mdd = replay.benchmark_return_pct, replay.benchmark_max_drawdown_pct
+        total_missed, total_missed_sells = replay.missed_buy_count, replay.missed_sell_count
+        r_sq, m_win_rate = replay.log_r_squared, replay.monthly_win_rate_pct
+        bm_r_sq, bm_m_win_rate = replay.benchmark_log_r_squared, replay.benchmark_monthly_win_rate_pct
+        normal_trade_count, extended_trade_count = replay.normal_trade_count, replay.extended_trade_count
+        annual_trades, reserved_buy_fill_rate = replay.annual_trades, replay.reserved_buy_fill_rate
+        annual_return_pct, bm_annual_return_pct = replay.annual_return_pct, replay.benchmark_annual_return_pct
+        pf_profile = replay.profile
 
         if is_rolling_paramset or is_ensemble_paramset:
             context = dict(pf_profile.pop("_workbench_context", {}) or {})

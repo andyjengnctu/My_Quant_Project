@@ -787,6 +787,64 @@ def validate_portfolio_stats_unit_case(_base_params):
         raises_expected(TypeError, lambda: as_portfolio_training_result((0,))),
     )
 
+    # AI註: 26-field replay contract extends the canonical 25-field reporting
+    # result by exactly one profile; public tuple and report names stay frozen.
+    from core.portfolio_run_result import (
+        PortfolioReplayResult,
+        append_portfolio_replay_profile,
+        as_portfolio_replay_result,
+    )
+    from services.research.strategy_compare_replay import _unpack_result
+    from services.optimizer.outer_rolling_active_replay import _extract_active_replay_metrics
+    from services.optimizer.callbacks import _portfolio_replay_metrics_from_result
+
+    replay_profile = {"score_total_r": 1.25, "min_full_year_return_pct": -5.0}
+    replay_legacy = append_portfolio_replay_profile(report_legacy, replay_profile)
+    replay_named = as_portfolio_replay_result(replay_legacy)
+    check("replay_field_schema_extends_reporting", (*report_named._fields, "profile"), PortfolioReplayResult._fields)
+    check("replay_legacy_return_is_plain_tuple", tuple, type(replay_legacy))
+    check("replay_named_preserves_original_tuple", replay_legacy, tuple(replay_named))
+    check("replay_named_profile_identity", True, replay_named.profile is replay_profile)
+    check("replay_named_pass_through_identity", True, as_portfolio_replay_result(replay_named) is replay_named)
+    check("replay_append_wrong_reporting_shape_rejected", True, raises_expected(TypeError, lambda: append_portfolio_replay_profile((0,), {})))
+    check("replay_missing_profile_rejected", True, raises_expected(TypeError, lambda: as_portfolio_replay_result(report_legacy)))
+    check("replay_extra_field_rejected", True, raises_expected(TypeError, lambda: as_portfolio_replay_result((*replay_legacy, None))))
+    check("replay_named_field_order", (2, 5, 6, 7, 9, 10, 22, 23, 24), (
+        replay_named.total_return_pct, replay_named.win_rate_pct,
+        replay_named.portfolio_ev, replay_named.portfolio_payoff,
+        replay_named.average_exposure, replay_named.maximum_exposure,
+        replay_named.reserved_buy_fill_rate, replay_named.annual_return_pct,
+        replay_named.benchmark_annual_return_pct,
+    ))
+
+    # Independent replay consumers must preserve their published metrics and
+    # historical report labels; this is not a new metric or report schema.
+    replay_fixture = (
+        None, None, 141.48, -17.56, 10, 40.0, 0.4, 2.0, 2414813.0,
+        79.32, 88.0, 203.67, -33.96, 0, 0, 0.7, 58.73, 0.6, 61.90,
+        10, 0, 10.0, 95.0, 18.64, 24.03,
+        {"score_total_r": 728.1, "score_median_r": -0.117,
+         "min_full_year_return_pct": -5.89, "bm_min_full_year_return_pct": -21.84},
+    )
+    compare_payload = _unpack_result(replay_fixture)
+    dashboard_metrics, benchmark_metrics, _ = _portfolio_replay_metrics_from_result(
+        replay_fixture, initial_capital=1_000_000.0,
+    )
+    active_metrics = _extract_active_replay_metrics(replay_fixture)
+    check("strategy_compare_legacy_ev_report_name", 0.4, compare_payload["expected_value_r"])
+    check("strategy_compare_legacy_payoff_report_name", 2.0, compare_payload["payoff_ratio"])
+    check("strategy_compare_legacy_exposure_report_name", 79.32, compare_payload["avg_exposure_pct"])
+    check("strategy_compare_legacy_annual_trade_report_name", 10.0, compare_payload["annual_trade_count"])
+    check("strategy_compare_legacy_fill_rate_report_name", 95.0, compare_payload["reserved_buy_fill_rate_pct"])
+    check("strategy_compare_no_internal_alias_leak", False, "portfolio_ev" in compare_payload or "annual_trades" in compare_payload)
+    check("dashboard_replay_return_matches_legacy", 141.48, dashboard_metrics["pf_return"])
+    check("dashboard_replay_benchmark_matches_legacy", 203.67, benchmark_metrics["pf_return"])
+    check("active_replay_return_matches_legacy", 141.48, active_metrics["return_pct"])
+    check("active_replay_without_optional_profile_supported", 141.48, _extract_active_replay_metrics(replay_fixture[:25])["return_pct"])
+    check("strategy_compare_rejects_missing_profile", True, raises_expected(ValueError, lambda: _unpack_result(replay_fixture[:25])))
+    check("dashboard_replay_rejects_missing_profile", True, raises_expected(ValueError, lambda: _portfolio_replay_metrics_from_result(replay_fixture[:25], initial_capital=1_000_000.0)))
+    check("active_replay_rejects_short_result", True, raises_expected(RuntimeError, lambda: _extract_active_replay_metrics(replay_fixture[:24])))
+
     summary["full_year_count"] = full_year_stats["full_year_count"]
     summary["full_month_count"] = full_month_stats["full_month_count"]
     summary["full_quarter_count"] = full_quarter_stats["full_quarter_count"]

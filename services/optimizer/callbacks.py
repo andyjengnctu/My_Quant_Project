@@ -18,7 +18,11 @@ from core.params_io import build_params_from_mapping, load_params_from_json, par
 from core.portfolio_param_runtime import load_portfolio_param_source_from_json
 from core.active_param_ensemble import get_active_param_ensemble_policy, load_json_file
 from core.portfolio_engine import run_portfolio_timeline
-from core.portfolio_run_result import as_portfolio_training_result
+from core.portfolio_run_result import (
+    PortfolioReplayResult,
+    as_portfolio_replay_result,
+    as_portfolio_training_result,
+)
 from core.portfolio_stats import calc_plain_romd, calc_portfolio_score
 from core.report_style import SIGNAL_NEGATIVE, SIGNAL_POSITIVE, signal_for_signed_value, terminal_signal
 from core.runtime_utils import stdout_supports_inline_progress, write_inline_progress
@@ -274,31 +278,32 @@ def _build_hard_gate_lines():
 
 
 def _portfolio_replay_metrics_from_result(result, *, initial_capital: float) -> tuple[dict, dict, str]:
-    if len(result) < 26:
+    if len(result) < len(PortfolioReplayResult._fields):
         raise ValueError(f"portfolio replay result 欄位數不足：{len(result)}")
-    total_return = _safe_float(result[2])
-    max_drawdown = _safe_float(result[3])
-    trade_count = _safe_int(result[4])
-    win_rate = _safe_float(result[5])
-    pf_ev = _safe_float(result[6])
-    pf_payoff = _safe_float(result[7])
-    final_equity = _safe_float(result[8])
-    avg_exp = _safe_float(result[9])
-    benchmark_return = _safe_float(result[11])
-    benchmark_mdd = _safe_float(result[12])
-    missed_buys = _safe_int(result[13])
-    missed_sells = _safe_int(result[14])
-    r_squared = _safe_float(result[15])
-    monthly_win_rate = _safe_float(result[16])
-    bm_r_squared = _safe_float(result[17])
-    bm_monthly_win_rate = _safe_float(result[18])
-    normal_trade_count = _safe_int(result[19])
-    extended_trade_count = _safe_int(result[20])
-    annual_trades = _safe_float(result[21])
-    reserved_buy_fill_rate = _safe_float(result[22])
-    annual_return_pct = _safe_float(result[23])
-    bm_annual_return_pct = _safe_float(result[24])
-    profile = dict(result[25] or {})
+    named = as_portfolio_replay_result(result)
+    total_return = _safe_float(named.total_return_pct)
+    max_drawdown = _safe_float(named.max_drawdown_pct)
+    trade_count = _safe_int(named.trade_count)
+    win_rate = _safe_float(named.win_rate_pct)
+    pf_ev = _safe_float(named.portfolio_ev)
+    pf_payoff = _safe_float(named.portfolio_payoff)
+    final_equity = _safe_float(named.final_equity)
+    avg_exp = _safe_float(named.average_exposure)
+    benchmark_return = _safe_float(named.benchmark_return_pct)
+    benchmark_mdd = _safe_float(named.benchmark_max_drawdown_pct)
+    missed_buys = _safe_int(named.missed_buy_count)
+    missed_sells = _safe_int(named.missed_sell_count)
+    r_squared = _safe_float(named.log_r_squared)
+    monthly_win_rate = _safe_float(named.monthly_win_rate_pct)
+    bm_r_squared = _safe_float(named.benchmark_log_r_squared)
+    bm_monthly_win_rate = _safe_float(named.benchmark_monthly_win_rate_pct)
+    normal_trade_count = _safe_int(named.normal_trade_count)
+    extended_trade_count = _safe_int(named.extended_trade_count)
+    annual_trades = _safe_float(named.annual_trades)
+    reserved_buy_fill_rate = _safe_float(named.reserved_buy_fill_rate)
+    annual_return_pct = _safe_float(named.annual_return_pct)
+    bm_annual_return_pct = _safe_float(named.benchmark_annual_return_pct)
+    profile = dict(named.profile or {})
     portfolio_total_r = _safe_float(profile.get("portfolio_total_r", 0.0))
     portfolio_median_r = _safe_float(profile.get("portfolio_median_r", 0.0))
     score_total_r = _score_total_r_from_profile(profile)
@@ -362,9 +367,9 @@ def _portfolio_replay_metrics_from_result(result, *, initial_capital: float) -> 
     }
     range_start = str(profile.get("active_replay_start_date") or "").strip()
     range_end = str(profile.get("active_replay_end_date") or "").strip()
-    if not range_start and len(result) > 0 and hasattr(result[0], "empty") and not result[0].empty:
-        range_start = str(result[0].iloc[0].get("Date", ""))[:10]
-        range_end = str(result[0].iloc[-1].get("Date", ""))[:10]
+    if not range_start and len(result) > 0 and hasattr(named.equity_curve, "empty") and not named.equity_curve.empty:
+        range_start = str(named.equity_curve.iloc[0].get("Date", ""))[:10]
+        range_end = str(named.equity_curve.iloc[-1].get("Date", ""))[:10]
     range_text = f"{range_start} ~ {range_end}" if range_start and range_end else "-"
     return candidate_metrics, benchmark_metrics, range_text
 

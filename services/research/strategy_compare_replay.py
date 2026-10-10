@@ -24,6 +24,7 @@ from core.console_report import (
     render_title,
 )
 from core.dataset_profiles import get_dataset_dir
+from core.portfolio_run_result import PortfolioReplayResult, as_portfolio_replay_result
 from core.portfolio_stats import calc_plain_romd
 from core.rolling_oos_params import get_active_param_date_range
 from filters.breakout_quality.artifacts import load_runtime_artifact_contract
@@ -72,21 +73,29 @@ from services.portfolio_replay import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_VERSION = STRATEGY_COMPARE_SCHEMA_VERSION
-_RESULT_FIELDS = (
-    "equity_curve", "trade_history", "total_return_pct", "max_drawdown_pct",
-    "trade_count", "win_rate_pct", "expected_value_r", "payoff_ratio",
-    "final_equity", "avg_exposure_pct", "max_exposure_pct", "benchmark_return_pct",
-    "benchmark_max_drawdown_pct", "missed_buy_count", "missed_sell_count",
-    "log_r_squared", "monthly_win_rate_pct", "benchmark_log_r_squared",
-    "benchmark_monthly_win_rate_pct", "normal_trade_count", "extended_trade_count",
-    "annual_trade_count", "reserved_buy_fill_rate_pct", "annual_return_pct",
-    "benchmark_annual_return_pct", "profile",
-)
+# Only the Strategy Compare public report names are local to this consumer.
+# Positional/ordered truth belongs exclusively to core.portfolio_run_result.
+_COMPARE_REPORT_NAME_ALIASES = {
+    "portfolio_ev": "expected_value_r",
+    "portfolio_payoff": "payoff_ratio",
+    "average_exposure": "avg_exposure_pct",
+    "maximum_exposure": "max_exposure_pct",
+    "annual_trades": "annual_trade_count",
+    "reserved_buy_fill_rate": "reserved_buy_fill_rate_pct",
+}
+
 
 def _unpack_result(result) -> dict[str, Any]:
-    if len(result) != len(_RESULT_FIELDS):
-        raise ValueError(f"portfolio result 欄位數不一致: expected={len(_RESULT_FIELDS)}, actual={len(result)}")
-    payload = dict(zip(_RESULT_FIELDS, result))
+    if len(result) != len(PortfolioReplayResult._fields):
+        raise ValueError(
+            "portfolio result 欄位數不一致: "
+            f"expected={len(PortfolioReplayResult._fields)}, actual={len(result)}"
+        )
+    named = as_portfolio_replay_result(result)
+    payload = {
+        _COMPARE_REPORT_NAME_ALIASES.get(field, field): value
+        for field, value in named._asdict().items()
+    }
     payload["return_over_max_drawdown"] = calc_plain_romd(
         payload["total_return_pct"], payload["max_drawdown_pct"]
     )

@@ -11,6 +11,7 @@ from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_
 from core.model_paths import discover_model_param_sources, resolve_candidate_best_params_path, resolve_default_primary_param_source_record, resolve_run_best_params_path
 from core.rolling_oos_params import format_rolling_oos_summary_lines, get_active_param_date_range, get_active_param_year_range, get_active_params_for_date, is_rolling_oos_param_set_file, load_rolling_oos_param_set
 from core.portfolio_param_runtime import build_params_schedule_rows_from_payload
+from core.portfolio_run_result import as_portfolio_replay_result
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.console_report import project_relative_display_path
 from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, safe_prompt, safe_prompt_choice, safe_prompt_int, parse_int_strict, parse_float_strict, validate_cli_args
@@ -221,13 +222,22 @@ def main(argv=None, env=None):
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
 
-    (
-        df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff,
-        final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed,
-        total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate,
-        normal_trade_count, extended_trade_count, annual_trades,
-        reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct, pf_profile,
-    ) = result
+    # AI註: GUI/CLI only rename canonical replay metrics for existing renderers.
+    # Preserve each visible field, formatting and the mutable profile object.
+    replay = as_portfolio_replay_result(result)
+    df_eq, df_tr = replay.equity_curve, replay.trade_history
+    tot_ret, mdd = replay.total_return_pct, replay.max_drawdown_pct
+    trade_count, win_rate = replay.trade_count, replay.win_rate_pct
+    pf_ev, pf_payoff = replay.portfolio_ev, replay.portfolio_payoff
+    final_eq, avg_exp, max_exp = replay.final_equity, replay.average_exposure, replay.maximum_exposure
+    bm_ret, bm_mdd = replay.benchmark_return_pct, replay.benchmark_max_drawdown_pct
+    total_missed, total_missed_sells = replay.missed_buy_count, replay.missed_sell_count
+    r_sq, m_win_rate = replay.log_r_squared, replay.monthly_win_rate_pct
+    bm_r_sq, bm_m_win_rate = replay.benchmark_log_r_squared, replay.benchmark_monthly_win_rate_pct
+    normal_trade_count, extended_trade_count = replay.normal_trade_count, replay.extended_trade_count
+    annual_trades, reserved_buy_fill_rate = replay.annual_trades, replay.reserved_buy_fill_rate
+    annual_return_pct, bm_annual_return_pct = replay.annual_return_pct, replay.benchmark_annual_return_pct
+    pf_profile = replay.profile
 
     mode_display = "開啟 (強勢輪動)" if user_rotation else "關閉 (穩定鎖倉)"
     min_full_year_return_pct = pf_profile.get("min_full_year_return_pct", 0.0)

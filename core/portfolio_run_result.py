@@ -5,6 +5,7 @@ These views only name its pre-existing ordered return values; they do not
 recalculate metrics or alter the trading/accounting semantics.
 """
 
+from collections import namedtuple
 from typing import Any, NamedTuple
 
 
@@ -78,3 +79,26 @@ def as_portfolio_reporting_result(values) -> PortfolioReportingResult:
     if isinstance(values, PortfolioReportingResult):
         return values
     return PortfolioReportingResult(*values)
+
+
+# The replay service appends a diagnostic profile to the unchanged 25-field
+# reporting tuple. Its ordered schema must derive from PortfolioReportingResult,
+# never from a separately maintained 26-position field list.
+PortfolioReplayResult = namedtuple(
+    "PortfolioReplayResult",
+    (*PortfolioReportingResult._fields, "profile"),
+    module=__name__,
+)
+
+
+def as_portfolio_replay_result(values) -> PortfolioReplayResult:
+    """Name the existing 26-field replay tuple without reordering values."""
+    if isinstance(values, PortfolioReplayResult):
+        return values
+    return PortfolioReplayResult(*values)
+
+
+def append_portfolio_replay_profile(report_values, profile) -> tuple:
+    """Return the original plain 26-tuple shape, validated against its sole owner."""
+    as_portfolio_reporting_result(report_values)
+    return (*report_values, profile)

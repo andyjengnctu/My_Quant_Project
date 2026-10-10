@@ -228,6 +228,7 @@ def _run_active_replay_metrics_from_schedule_records(
     if not schedule_records:
         return {}
     from core.portfolio_engine import run_portfolio_timeline
+    from core.portfolio_run_result import append_portfolio_replay_profile
     from core.portfolio_stats import find_sim_start_idx
     from services.portfolio_replay import (
         _apply_active_single_stock_score_stats,
@@ -322,7 +323,7 @@ def _run_active_replay_metrics_from_schedule_records(
             active_context_ensemble_resolver=active_context_ensemble_resolver,
             ensemble_min_agree=int(ensemble_min_agree),
         )
-        return _extract_active_replay_metrics((*result, pf_profile))
+        return _extract_active_replay_metrics(append_portfolio_replay_profile(result, pf_profile))
 
     base_context = contexts_by_signature[str(first_record["params_signature"])]
     benchmark_data = (base_context.get("all_dfs_fast") or {}).get(benchmark_ticker)
@@ -374,7 +375,7 @@ def _run_active_replay_metrics_from_schedule_records(
         active_params_resolver=active_params_resolver,
         active_context_resolver=active_context_resolver,
     )
-    return _extract_active_replay_metrics((*result, pf_profile))
+    return _extract_active_replay_metrics(append_portfolio_replay_profile(result, pf_profile))
 
 def _build_active_replay_chained_oos_summary(
     *,

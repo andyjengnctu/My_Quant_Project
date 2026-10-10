@@ -36,6 +36,7 @@ from core.active_param_ensemble import (
     ACTIVE_PARAM_ENSEMBLE_MODE_STATIC,
 )
 from core.portfolio_engine import run_portfolio_timeline
+from core.portfolio_run_result import append_portfolio_replay_profile
 from core.portfolio_fast_data import (
     build_normal_setup_index,
     build_score_single_stock_profile_fields,
@@ -891,7 +892,7 @@ def run_portfolio_simulation_prepared(all_dfs_fast, all_trade_logs, sorted_dates
         replay_execution_rows=replay_execution_rows,
         replay_selector_trace_rows=replay_selector_trace_rows,
     )
-    return (*result, pf_profile)
+    return append_portfolio_replay_profile(result, pf_profile)
 
 
 
@@ -1032,7 +1033,7 @@ def run_portfolio_simulation_with_param_schedule(
             "prep_wall_sec": prep_wall_sec,
             "prep_mode": "active_param_replay",
         }
-    return (*result, pf_profile)
+    return append_portfolio_replay_profile(result, pf_profile)
 
 
 
@@ -1203,7 +1204,7 @@ def run_portfolio_simulation_with_param_ensemble(
             "prep_wall_sec": prep_wall_sec,
             "prep_mode": "active_param_ensemble_replay",
         }
-    return (*result, pf_profile)
+    return append_portfolio_replay_profile(result, pf_profile)
 
 def run_portfolio_simulation(
     data_dir,

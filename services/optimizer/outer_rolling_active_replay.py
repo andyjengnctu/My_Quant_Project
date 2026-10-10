@@ -12,6 +12,11 @@ from core.portfolio_param_runtime import (
     build_active_param_ensemble_objects_from_payload,
     build_active_param_objects_from_payload,
 )
+from core.portfolio_run_result import (
+    PortfolioReportingResult,
+    as_portfolio_replay_result,
+    as_portfolio_reporting_result,
+)
 from core.portfolio_stats import calc_plain_romd, calc_portfolio_score
 from core.raw_universe_contract import (
     RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD,
@@ -103,21 +108,28 @@ def _active_replay_payload_has_params(payload: dict) -> bool:
     return bool(dict(payload.get("params_by_effective_date") or {}) or dict(payload.get("params_by_oos_year") or {}))
 
 def _extract_active_replay_metrics(result) -> dict:
-    if not isinstance(result, tuple) or len(result) < 25:
+    if not isinstance(result, tuple) or len(result) < len(PortfolioReportingResult._fields):
         raise RuntimeError("active-param replay 回傳格式不完整，無法建立 OOS_CHAIN")
-    ret_pct = float(result[2])
-    mdd_pct = float(result[3])
-    trade_count = int(result[4] or 0)
-    win_rate = float(result[5] or 0.0)
-    bm_ret_pct = float(result[11])
-    bm_mdd_pct = float(result[12])
-    r_squared = float(result[15])
-    monthly_win_rate = float(result[16])
-    bm_r_squared = float(result[17])
-    bm_monthly_win_rate = float(result[18])
-    annual_return_pct = float(result[23])
-    bm_annual_return_pct = float(result[24])
-    profile = dict(result[-1]) if isinstance(result[-1], dict) else {}
+    # Legacy direct timeline callers could supply the original 25-field tuple
+    # without a profile; the 26-field replay service always appends a profile.
+    if len(result) == len(PortfolioReportingResult._fields):
+        named = as_portfolio_reporting_result(result)
+        profile = {}
+    else:
+        named = as_portfolio_replay_result(result)
+        profile = dict(named.profile) if isinstance(named.profile, dict) else {}
+    ret_pct = float(named.total_return_pct)
+    mdd_pct = float(named.max_drawdown_pct)
+    trade_count = int(named.trade_count or 0)
+    win_rate = float(named.win_rate_pct or 0.0)
+    bm_ret_pct = float(named.benchmark_return_pct)
+    bm_mdd_pct = float(named.benchmark_max_drawdown_pct)
+    r_squared = float(named.log_r_squared)
+    monthly_win_rate = float(named.monthly_win_rate_pct)
+    bm_r_squared = float(named.benchmark_log_r_squared)
+    bm_monthly_win_rate = float(named.benchmark_monthly_win_rate_pct)
+    annual_return_pct = float(named.annual_return_pct)
+    bm_annual_return_pct = float(named.benchmark_annual_return_pct)
     equity_curve_points = len(profile.get("equity_curve") or [])
     full_year_count = int(profile.get("full_year_count", 0) or 0)
     min_full_year_return_pct = float(profile.get("min_full_year_return_pct", 0.0) or 0.0)
