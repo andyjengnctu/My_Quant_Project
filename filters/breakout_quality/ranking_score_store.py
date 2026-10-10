@@ -24,17 +24,6 @@ from core.breakout_quality_registry import (
     get_breakout_quality_experiment_profile,
 )
 from core.breakout_quality_runtime import (
-    TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
-)
-
-from core.breakout_quality_runtime import (
     get_continuous_ranker_persisted_score_columns,
     get_continuous_ranker_score_output_columns,
 )
@@ -42,8 +31,7 @@ from core.breakout_quality_runtime import (
 from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
 from filters.breakout_quality.ranker_training_contract import (
-    training_semantics,
-    training_semantics_mismatches,
+    stored_training_semantics_mismatches,
 )
 from filters.breakout_quality.continuous_target import (
     TARGET_MANIFEST_FILENAME,
@@ -894,98 +882,17 @@ def load_continuous_ranker_oos_contract(
                 f"expected={profile.training_sample_scope}, actual={report_sample_scope!r}"
             )
 
-    expected_training_semantics = training_semantics(profile)
-    manifest_semantics = dict(manifest.get("training_semantics") or {})
-    if profile.training_objective in {
-        TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-    TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING,
-        TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
-    }:
-        expected_pairwise = dict(
-            expected_training_semantics.get("pairwise_contract") or {}
+    # Manifest and human-readable report are two views of the *same* frozen
+    # training recipe.  The canonical contract owns every objective-specific
+    # head/loss/weight/batching key, including newly registered compositions.
+    semantic_mismatches = stored_training_semantics_mismatches(
+        profile, manifest=manifest, report_training=report_training
+    )
+    if semantic_mismatches:
+        raise ValueError(
+            "Continuous ranker stored training semantics不一致: "
+            + "; ".join(semantic_mismatches)
         )
-        report_pairwise = dict(report_training.get("pairwise_contract") or {})
-        # Historical daily pairwise artifacts may predate the top-level
-        # training_semantics field.  When the field exists, validate every
-        # objective-relevant value while allowing later-added non-applicable
-        # null keys to be absent.  This preserves frozen checkpoints across
-        # metadata schema growth without weakening the trained pairwise contract.
-        if not is_daily or manifest_semantics:
-            semantic_mismatches = training_semantics_mismatches(
-                profile, manifest_semantics
-            )
-            if semantic_mismatches:
-                raise ValueError(
-                    "Continuous pairwise ranker manifest training semantics不一致: "
-                    + "; ".join(semantic_mismatches)
-                )
-        if str(report_training.get("batching") or "") != str(
-            expected_training_semantics.get("batching") or ""
-        ):
-            raise ValueError("Continuous pairwise ranker report batching contract不一致")
-        if report_pairwise != expected_pairwise:
-            raise ValueError("Continuous pairwise ranker report pairwise contract不一致")
-        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING:
-            expected_conditional = dict(
-                expected_training_semantics.get("conditional_mfe_safety_contract") or {}
-            )
-            report_conditional = dict(
-                report_training.get("conditional_mfe_safety_contract") or {}
-            )
-            if report_conditional != expected_conditional:
-                raise ValueError(
-                    "Conditional MFE-safety report training contract不一致"
-                )
-        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING:
-            expected_contract = dict(expected_training_semantics.get("conditional_mfe_single_head_contract") or {})
-            report_contract = dict(report_training.get("conditional_mfe_single_head_contract") or {})
-            if report_contract != expected_contract:
-                raise ValueError("Conditional-MFE single-head report training contract不一致")
-        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_SAFETY_CONDITIONAL_MFE_PAIRWISE_RANKING:
-            expected_contract = dict(expected_training_semantics.get("safety_conditional_mfe_duo_head_contract") or {})
-            report_contract = dict(report_training.get("safety_conditional_mfe_duo_head_contract") or {})
-            if report_contract != expected_contract:
-                raise ValueError("Safety→Conditional-MFE duo-head report training contract不一致")
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING:
-        expected_listwise = dict(
-            expected_training_semantics.get("listwise_contract") or {}
-        )
-        report_listwise = dict(report_training.get("listwise_contract") or {})
-        semantic_mismatches = training_semantics_mismatches(profile, manifest_semantics)
-        if semantic_mismatches:
-            raise ValueError(
-                "Continuous listwise ranker manifest training semantics不一致: "
-                + "; ".join(semantic_mismatches)
-            )
-        if str(report_training.get("batching") or "") != str(
-            expected_training_semantics.get("batching") or ""
-        ):
-            raise ValueError("Continuous listwise ranker report batching contract不一致")
-        if report_listwise != expected_listwise:
-            raise ValueError("Continuous listwise ranker report listwise contract不一致")
-    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION:
-        expected_dual = dict(
-            expected_training_semantics.get("dual_component_r_regression_contract") or {}
-        )
-        report_dual = dict(
-            report_training.get("dual_component_r_regression_contract") or {}
-        )
-        semantic_mismatches = training_semantics_mismatches(profile, manifest_semantics)
-        if semantic_mismatches:
-            raise ValueError(
-                "Continuous dual-component ranker manifest training semantics不一致: "
-                + "; ".join(semantic_mismatches)
-            )
-        if str(report_training.get("batching") or "") != str(
-            expected_training_semantics.get("batching") or ""
-        ):
-            raise ValueError("Continuous dual-component ranker report batching contract不一致")
-        if report_dual != expected_dual:
-            raise ValueError(
-                "Continuous dual-component ranker report component contract不一致"
-            )
     target_id = str(manifest.get("continuous_target_id") or "")
     if not target_id:
         raise ValueError("Continuous ranker manifest缺少continuous_target_id")

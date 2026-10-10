@@ -49,6 +49,7 @@ from core.breakout_quality_registry import (
     get_predicted_safety_context_contract,
     get_predicted_safety_pure_mfe_contract,
     get_predicted_upside_context_contract,
+    DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
 )
 
 
@@ -677,6 +678,65 @@ def training_semantics_mismatches(profile, payload) -> list[str]:
     return mismatches
 
 
+def stored_training_semantics_mismatches(
+    profile, *, manifest: dict[str, Any], report_training: dict[str, Any]
+) -> list[str]:
+    """Compare both stored copies against the same canonical training recipe.
+
+    The historical MR-13A manifest may omit the *entire* top-level semantics
+    payload.  Its report must still carry an exact training contract.  All other
+    profiles and all present manifest semantics fail closed on a missing or
+    malformed required field.  Null-only schema additions remain compatible
+    through ``training_semantics_mismatches``.
+    """
+
+    expected = training_semantics(profile)
+    mismatches: list[str] = []
+    if "training_semantics" not in manifest:
+        # Explicit frozen-artifact exception.  Do not generalize this to other
+        # objectives or to a manifest that explicitly contains null/empty data.
+        if str(profile.name) != DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE:
+            mismatches.append("manifest.training_semantics: missing")
+    else:
+        stored_manifest = manifest["training_semantics"]
+        if not isinstance(stored_manifest, dict):
+            mismatches.append("manifest.training_semantics: not an object")
+        else:
+            mismatches.extend(
+                "manifest.training_semantics." + item
+                for item in training_semantics_mismatches(profile, stored_manifest)
+            )
+
+    # Reports also include operational fields (seed, epoch, batch_size, etc.).
+    # Select only the semantic keys from the canonical recipe; any unexpected
+    # *contract* field is rejected rather than silently ignored.
+    report_semantics = {
+        key: value
+        for key, value in report_training.items()
+        if key in expected or key.endswith("_contract")
+    }
+    mismatches.extend(
+        "report.training." + item
+        for item in training_semantics_mismatches(profile, report_semantics)
+    )
+    # Daily trainer also stores these recipe selections as human-readable
+    # convenience fields outside training_semantics.  When published, they must
+    # agree with the same canonical recipe; older reports may omit them.
+    recipe = get_continuous_ranker_execution_recipe(profile.name)
+    report_recipe_fields = {
+        "pairwise_reduction": recipe.pairwise_reduction,
+        "pair_weight_policy": recipe.objective_policy.pair_weight_policy,
+        "epoch_selection_metric": profile.epoch_selection_metric,
+    }
+    for field, expected_value in report_recipe_fields.items():
+        if field in report_training and report_training[field] != expected_value:
+            mismatches.append(
+                f"report.training.{field}: expected={expected_value!r}, "
+                f"actual={report_training[field]!r}"
+            )
+    return mismatches
+
+
 __all__ = [
     "CONDITIONAL_MFE_SAFETY_TRAINING_CONTRACT",
     "DUAL_COMPONENT_R_REGRESSION_TRAINING_CONTRACT",
@@ -695,4 +755,5 @@ __all__ = [
     "SAFETY_RAW_MFE_JOINT_MIN_TRI_HEAD_TRAINING_CONTRACT",
     "training_semantics",
     "training_semantics_mismatches",
+    "stored_training_semantics_mismatches",
 ]

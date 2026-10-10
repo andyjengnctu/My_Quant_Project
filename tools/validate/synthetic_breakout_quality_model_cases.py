@@ -2549,6 +2549,97 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
     return _finish_case(results, summary)
 
 
+def _probe_continuous_oos_training_semantics(
+    profile_name, *, mutate_manifest=None, mutate_report=None
+):
+    """Exercise the real OOS loader without a fitted checkpoint or score CSV."""
+
+    from filters.breakout_quality import ranking_score_store as score_store
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+    from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+
+    profile = get_breakout_quality_experiment_profile(profile_name)
+    semantics = training_semantics(profile)
+    recipe = get_continuous_ranker_execution_recipe(profile.name)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        model_path = root / "synthetic-model.pt"
+        manifest_path = root / "manifest.json"
+        report_path = root / score_store.CONTINUOUS_RANKER_REPORT_FILENAME
+        model_path.write_bytes(b"synthetic-checkpoint")
+        coverage = {
+            "inference_eligible_groups": 1,
+            "target_evaluable_groups": 1,
+            "future_target_required_for_score": False,
+        }
+        eligibility = score_store.build_score_eligibility_contract(profile)
+        manifest = {
+            "filter_id": "synthetic",
+            "model_architecture": "synthetic_architecture",
+            "experiment_profile": profile.name,
+            "training_objective": profile.training_objective,
+            "training_label_scope": profile.training_label_scope,
+            "training_sample_scope": profile.training_sample_scope,
+            "training_semantics": json.loads(json.dumps(semantics)),
+            "continuous_target_id": profile.continuous_target_id,
+            "score_eligibility_contract": eligibility,
+            "forward_score_coverage": coverage,
+            "model": {},
+            "outer_oos_policy": {
+                "oos_start_date": "2021-01-01",
+                "configured_oos_end_date": "2021-12-31",
+            },
+            "model_information_cutoff": "2020-12-31",
+        }
+        report = {
+            "filter_id": "synthetic",
+            "model_architecture": "synthetic_architecture",
+            "experiment_profile": profile.name,
+            "experiment_settings": profile.as_manifest_payload(),
+            "training": {
+                "objective": profile.training_objective,
+                "loss": profile.loss_name,
+                "sample_scope": profile.training_sample_scope,
+                "training_label_scope": profile.training_label_scope,
+                **json.loads(json.dumps(semantics)),
+                "pairwise_reduction": recipe.pairwise_reduction,
+                "pair_weight_policy": recipe.objective_policy.pair_weight_policy,
+                "epoch_selection_metric": profile.epoch_selection_metric,
+                "seed": 42,
+            },
+            "score_eligibility_contract": eligibility,
+            "forward_score_coverage": coverage,
+            "status": "RESULT_AVAILABLE",
+        }
+        if mutate_manifest is not None:
+            mutate_manifest(manifest)
+        if mutate_report is not None:
+            mutate_report(report)
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        report_path.write_text(json.dumps(report), encoding="utf-8")
+        score_store.load_continuous_ranker_oos_contract.cache_clear()
+        with (
+            patch.object(
+                score_store, "resolve_filter_artifact_paths",
+                return_value=SimpleNamespace(
+                    manifest_path=manifest_path, model_path=model_path
+                ),
+            ),
+            patch.object(score_store, "resolve_filter_model_output_dir", return_value=root),
+            patch.object(
+                score_store, "_validate_file_record_simple", return_value=None
+            ),
+        ):
+            try:
+                contract = score_store.load_continuous_ranker_oos_contract(
+                    str(root), "synthetic", "synthetic_architecture", profile.name,
+                    require_scores=False,
+                )
+            except ValueError as exc:
+                return None, str(exc)
+            return contract, ""
+
+
 def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_params):
     """Pin MR-13E as a full-list position-aware Delta-NDCG RankNet experiment."""
 
@@ -2833,6 +2924,191 @@ def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_
     check_true(
         "full_list_delta_ndcg_naturally_prioritizes_top_positions_without_k_boundary_or_lambda",
         bool(top_adjacent_weight > bottom_adjacent_weight > 0.0),
+    )
+
+    # SSOT: the loader must enforce the canonical training semantics for *every*
+    # registered objective, not just a historical pairwise/listwise subset.
+    from core.breakout_quality_registry import (
+        DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+    )
+    from filters.breakout_quality.ranker_training_contract import (
+        training_semantics as _canonical_training_semantics,
+    )
+
+    def _corrupt_one_nested_contract(payload):
+        keys = [
+            key for key, value in payload.items()
+            if key.endswith("_contract") and isinstance(value, dict) and value
+        ]
+        specialized = next((key for key in keys if key != "pairwise_contract"), keys[0])
+        first_key = next(iter(payload[specialized]))
+        payload[specialized][first_key] = "altered-scientific-semantics"
+
+    all_oos_contract_profiles = tuple(SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES)
+    accepted_profiles = []
+    for registered_name in all_oos_contract_profiles:
+        actual_contract, error = _probe_continuous_oos_training_semantics(registered_name)
+        if actual_contract is not None and not error:
+            accepted_profiles.append(registered_name)
+        else:
+            summary.setdefault("generic_semantics_loader_errors", []).append(
+                f"{registered_name}: {error}"
+            )
+    check(
+        "all_registered_continuous_training_compositions_reuse_one_validated_oos_loader",
+        all_oos_contract_profiles,
+        tuple(accepted_profiles),
+    )
+
+    rejected_manifest_profiles = []
+    rejected_report_profiles = []
+    for registered_name in all_oos_contract_profiles:
+        # Pick the actual active semantic capability for each profile; no
+        # special-cased MR IDs or training-objective name list in the test.
+        semantic_payload = _canonical_training_semantics(
+            get_breakout_quality_experiment_profile(registered_name)
+        )
+        live_contract = next(
+            (key for key, value in semantic_payload.items()
+             if key.endswith("_contract") and value),
+            "batching",
+        )
+
+        def _break_semantic(mapping, key=live_contract):
+            if key == "batching":
+                mapping[key] = "wrong_date_batching"
+            else:
+                first_key = next(iter(mapping[key]))
+                mapping[key][first_key] = "wrong_training_semantics"
+
+        _loaded, error = _probe_continuous_oos_training_semantics(
+            registered_name,
+            mutate_manifest=lambda data: _break_semantic(data["training_semantics"]),
+        )
+        if _loaded is None and "training_semantics" in error:
+            rejected_manifest_profiles.append(registered_name)
+        _loaded, error = _probe_continuous_oos_training_semantics(
+            registered_name,
+            mutate_report=lambda data: _break_semantic(data["training"]),
+        )
+        if _loaded is None and "report.training" in error:
+            rejected_report_profiles.append(registered_name)
+    check(
+        "every_registered_objective_rejects_tampered_manifest_semantics",
+        all_oos_contract_profiles, tuple(rejected_manifest_profiles),
+    )
+    check(
+        "every_registered_objective_rejects_tampered_report_semantics",
+        all_oos_contract_profiles, tuple(rejected_report_profiles),
+    )
+
+    ao_name = DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    tri_name = DAILY_UNIVERSAL_SAFETY_RAW_MFE_HMHS_TRI_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    for label, name in (("ao_shared_hs", ao_name), ("tri_head", tri_name)):
+        canonical = _canonical_training_semantics(get_breakout_quality_experiment_profile(name))
+        semantic_key = next(
+            key for key, value in canonical.items()
+            if key.endswith("_contract") and key != "pairwise_contract" and value
+        )
+        contract, error = _probe_continuous_oos_training_semantics(
+            name,
+            mutate_manifest=lambda data, key=semantic_key: data["training_semantics"].pop(key),
+        )
+        check_true(
+            f"{label}_missing_required_head_contract_fails_closed",
+            contract is None and semantic_key in error,
+        )
+        contract, error = _probe_continuous_oos_training_semantics(
+            name,
+            mutate_manifest=lambda data, key=semantic_key: _corrupt_one_nested_contract(
+                {key: data["training_semantics"][key]}
+            ),
+        )
+        check_true(
+            f"{label}_tampered_head_semantics_fails_closed",
+            contract is None and semantic_key in error,
+        )
+        contract, error = _probe_continuous_oos_training_semantics(
+            name,
+            mutate_report=lambda data, key=semantic_key: _corrupt_one_nested_contract(
+                {key: data["training"][key]}
+            ),
+        )
+        check_true(
+            f"{label}_report_head_semantics_fails_closed",
+            contract is None and semantic_key in error,
+        )
+
+    _contract, error = _probe_continuous_oos_training_semantics(
+        ao_name,
+        mutate_manifest=lambda data: data.pop("training_semantics"),
+    )
+    check_true(
+        "modern_shared_hs_missing_entire_training_semantics_cannot_reuse",
+        _contract is None and "training_semantics" in error,
+    )
+    _contract, error = _probe_continuous_oos_training_semantics(
+        ao_name,
+        mutate_manifest=lambda data: data["training_semantics"].__setitem__(
+            "batching", "shuffled_unique_group_batches"
+        ),
+    )
+    check_true(
+        "modern_shared_hs_batching_mismatch_cannot_reuse",
+        _contract is None and "batching" in error,
+    )
+    _contract, error = _probe_continuous_oos_training_semantics(
+        ao_name,
+        mutate_report=lambda data: data["training"].__setitem__(
+            "unrecognized_future_contract", {"unsafe": True}
+        ),
+    )
+    check_true(
+        "unknown_semantics_contract_field_in_report_is_rejected",
+        _contract is None and "unexpected_keys" in error,
+    )
+    _contract, error = _probe_continuous_oos_training_semantics(
+        ao_name,
+        mutate_manifest=lambda data: data["training_semantics"].pop(
+            "raw_r_regression_contract", None
+        ),
+    )
+    check_true(
+        "historical_later_added_null_slot_may_be_absent_for_newer_composition",
+        _contract is not None and not error,
+    )
+    for label, field, invalid in (
+        ("reduction", "pairwise_reduction", "invalid_reduction"),
+        ("pair_policy", "pair_weight_policy", "invalid_policy"),
+        ("epoch_selection", "epoch_selection_metric", "invalid_metric"),
+    ):
+        _contract, error = _probe_continuous_oos_training_semantics(
+            ao_name,
+            mutate_report=lambda data, key=field, value=invalid: data["training"].__setitem__(
+                key, value
+            ),
+        )
+        check_true(
+            f"published_{label}_must_match_canonical_training_recipe",
+            _contract is None and field in error,
+        )
+
+    _contract, error = _probe_continuous_oos_training_semantics(
+        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+        mutate_manifest=lambda data: data.pop("training_semantics"),
+    )
+    check_true(
+        "only_historical_mr13a_missing_manifest_semantics_stays_compatible",
+        _contract is not None and not error,
+    )
+    _contract, error = _probe_continuous_oos_training_semantics(
+        DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        mutate_manifest=lambda data: data.pop("training_semantics"),
+    )
+    check_true(
+        "newer_full_list_pairwise_missing_manifest_semantics_cannot_reuse",
+        _contract is None and "training_semantics" in error,
     )
 
     summary["profile"] = DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE
