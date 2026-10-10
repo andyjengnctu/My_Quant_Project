@@ -2900,17 +2900,23 @@ def validate_gui_trade_count_and_sidebar_sync_contract_case(base_params):
             "r_mult": 0.5,
         },
     ])
+    from core.exact_accounting import build_sell_ledger_from_price
+    from core.fee_rebate import create_fee_rebate_state, get_fee_rebate_receivable_milli
+    from core.price_utils import adjust_long_sell_fill_price
+
     trade_logs = []
     chart_context = {"trade_markers": []}
+    forced_close_position = {
+        "entry": 100.0,
+        "qty": 100,
+        "initial_qty": 100,
+        "realized_pnl": 0.0,
+        "close_price": 105.0,
+        "sl": 95.0,
+    }
+    forced_close_fee_rebate_state = create_fee_rebate_state()
     append_debug_forced_closeout(
-        position={
-            "entry": 100.0,
-            "qty": 100,
-            "initial_qty": 100,
-            "realized_pnl": 0.0,
-            "close_price": 105.0,
-            "sl": 95.0,
-        },
+        position=forced_close_position,
         current_date=forced_close_date,
         atr_last=1.5,
         params=params,
@@ -2919,7 +2925,17 @@ def validate_gui_trade_count_and_sidebar_sync_contract_case(base_params):
         current_capital_before_event=float(params.initial_capital),
         stats_index=stats_index,
         overall_max_drawdown=6.78,
+        fee_rebate_state=forced_close_fee_rebate_state,
     )
+    expected_fee_rebate_milli = build_sell_ledger_from_price(
+        adjust_long_sell_fill_price(forced_close_position["close_price"]),
+        forced_close_position["qty"],
+        params,
+        trade_date=forced_close_date,
+    )["sell_fee_rebate_receivable_milli"]
+    check("forced_close_fee_rebate_matches_canonical_sell_ledger", expected_fee_rebate_milli,
+          get_fee_rebate_receivable_milli(forced_close_fee_rebate_state))
+    check("forced_close_fee_rebate_not_settled_early", 0, forced_close_fee_rebate_state["settled_milli"])
     forced_close_marker = chart_context["trade_markers"][-1] if chart_context.get("trade_markers") else {}
     forced_close_meta = forced_close_marker.get("meta") or {}
     expected_trade_count = int(stats_index["cum_trade_count"][-1]) if len(stats_index.get("cum_trade_count", [])) > 0 else 0
