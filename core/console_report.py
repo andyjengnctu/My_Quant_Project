@@ -7,10 +7,7 @@ from datetime import datetime
 from typing import Iterable, Sequence
 from zoneinfo import ZoneInfo
 
-from core.display_common import console_color_enabled
-from core.path_utils import project_relative_display_path
-
-from core.display import (
+from core.display_common import (
     C_CYAN,
     C_GRAY,
     C_GREEN,
@@ -19,7 +16,9 @@ from core.display import (
     C_YELLOW,
     _display_width,
     _strip_ansi,
+    console_color_enabled,
 )
+from core.path_utils import project_relative_display_path
 
 DEFAULT_REPORT_WIDTH = 100
 COMPACT_CONSOLE_ENV = "BREAKOUT_QUALITY_COMPACT_CONSOLE"

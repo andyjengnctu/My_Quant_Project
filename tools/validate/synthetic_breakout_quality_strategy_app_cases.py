@@ -1087,6 +1087,41 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     # Previously fitted robustness parameter artifacts are replay prerequisites, not
     # pending Optimizer searches.  When their full scientific contracts are READY,
     # the plan must show zero pending search even if no completed replay result exists.
+    # AI: Isolate both artifact existence and result-state discovery: a user's
+    # populated workspace can legitimately add arm-level REUSE rows, which must
+    # never be mistaken for extra parameter artifacts or Optimizer search work.
+    from services.research import strategy_multi_seed_robustness as robustness_plan_runtime
+
+    ready_param_paths = set()
+    for seed in rolling_robustness.resolved_seeds:
+        for arm in rolling_stochastic:
+            binding = robustness_plan_runtime._benchmark_param_binding(
+                settings=rolling_robust_settings,
+                robustness=rolling_robustness,
+                arm=arm,
+                seed=int(seed),
+            )
+            ready_param_paths.update((Path(binding["path"]), Path(binding["manifest_path"])))
+
+    original_is_file = Path.is_file
+
+    def _isolated_ready_param_is_file(path):
+        return path in ready_param_paths or original_is_file(path)
+
+    # A completed result for one arm yields one more REUSE display row than the
+    # number of parameter artifacts; the producer actions must remain unchanged.
+    result_reuse_arm = rolling_stochastic[0].arm_id
+    exact_result_reuse_states = {
+        (result_reuse_arm, int(seed)): {
+            "action": robustness_plan_runtime.RESULT_ACTION_REUSE,
+        }
+        for seed in rolling_robustness.resolved_seeds
+    }
+    isolated_robustness_status = {
+        "preparation_plan": SimpleNamespace(actions=[]),
+        "comparison_period": {"start": "2021-01-01", "end": "2026-03-02"},
+        "artifact_identities": {},
+    }
     with (
         patch(
             "services.research.strategy_multi_seed_robustness._discover_registered_strategy_only_scientific_reuse",
@@ -1104,20 +1139,48 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             "services.research.strategy_multi_seed_robustness.inspect_raw_price_robustness_strategy_parameter_artifact",
             return_value={"action": "REUSE", "status": "READY"},
         ),
+        patch.object(Path, "is_file", _isolated_ready_param_is_file),
+        patch(
+            "services.research.strategy_multi_seed_robustness.compute_strategy_param_scientific_sha256",
+            return_value="1" * 64,
+        ),
+        patch(
+            "services.research.strategy_multi_seed_robustness.resolve_strategy_param_evaluation_identity_sha256",
+            return_value="2" * 64,
+        ),
+        patch(
+            "services.research.strategy_multi_seed_robustness.compute_file_sha256",
+            return_value="3" * 64,
+        ),
+        patch(
+            "services.research.strategy_multi_seed_robustness._resolve_existing_scientific_unit_states",
+            return_value=({}, {}, exact_result_reuse_states),
+        ),
     ):
         fitted_param_plan, fitted_param_payload = _render_robustness_execution_plan(
             cfg=rolling_robustness,
             settings=rolling_robust_settings,
-            status=collect_robustness_artifact_status(settings=rolling_robust_settings),
+            status=isolated_robustness_status,
             fixed_arms=rolling_fixed,
             stochastic_arms=rolling_stochastic,
         )
+    ready_param_bindings = fitted_param_payload.get("benchmark_param_bindings") or {}
+    ready_result_states = fitted_param_payload.get("robustness_unit_states") or {}
     check_true(
         "robustness_plan_does_not_count_ready_trained_params_as_pending_optimizer_search",
-        not fitted_param_payload.get("registered_scientific_reuse_units")
+        fitted_param_payload.get("overall_status") == "READY"
+        and not fitted_param_payload.get("blockers")
+        and not fitted_param_payload.get("registered_scientific_reuse_units")
         and "0 pending search units" in fitted_param_plan
         and f"scientific result REUSE=0/{expected_total_units} arm×replicate" in fitted_param_plan
-        and fitted_param_plan.count("\nREUSE") == expected_total_units,
+        and len(ready_param_bindings) == expected_total_units
+        and all(binding.get("plan_action") == "REUSE" for binding in ready_param_bindings.values())
+        and len(ready_result_states) == len(rolling_robustness.resolved_seeds)
+        and all(
+            ready_result_states.get((result_reuse_arm, int(seed)), {}).get("action")
+            == robustness_plan_runtime.RESULT_ACTION_REUSE
+            for seed in rolling_robustness.resolved_seeds
+        ),
     )
 
     # Regression: current suite capability already resolved C93/raw-price into the
