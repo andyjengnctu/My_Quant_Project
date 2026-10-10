@@ -3286,7 +3286,8 @@ def validate_gui_workbench_contract_case(base_params):
 
     inspector_source = build_project_absolute_path("services", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
     portfolio_inspector_source = build_project_absolute_path("services", "workbench_ui", "portfolio_backtest_inspector.py").read_text(encoding="utf-8")
-    trading_account_panel_source = build_project_absolute_path("services", "workbench_ui", "trading_account_panel.py").read_text(encoding="utf-8")
+    from .trading_panel_source import read_trading_account_panel_source
+    trading_account_panel_source = read_trading_account_panel_source(Path(__file__).resolve().parents[2])
     accounting_center_source = build_project_absolute_path("services", "workbench_ui", "accounting_center_panel.py").read_text(encoding="utf-8")
     data_ops_panel_source = build_project_absolute_path("services", "workbench_ui", "data_ops_panel.py").read_text(encoding="utf-8")
     stock_names_source = build_project_absolute_path("services", "workbench_ui", "stock_names.py").read_text(encoding="utf-8")

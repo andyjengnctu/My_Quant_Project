@@ -566,7 +566,7 @@ def validate_trading_direct_fill_source_contract_case(base_params):
         harness = SimpleNamespace(_simple_trade_values=lambda: ("2330",600,Decimal("100"),"2026-08-03"),
                                   _selected_candidate_row=lambda: None,
                                   _submit_trading_command=lambda title, worker, **kw: queued.append(worker))
-        with patch.object(ui, "WORKBENCH_PROJECT_ROOT", roots["ui"]), \
+        with patch("services.workbench_ui.trading_account_panel_account.WORKBENCH_PROJECT_ROOT", roots["ui"]), \
              patch.object(ui.messagebox, "askyesno", side_effect=lambda title, text, **kw: confirmations.append(text) or True), \
              patch.object(ui.messagebox, "showerror", side_effect=lambda title, text, **kw: errors.append(text)):
             ui.TradingAccountPanel._record_simple_trade(harness, "BUY")

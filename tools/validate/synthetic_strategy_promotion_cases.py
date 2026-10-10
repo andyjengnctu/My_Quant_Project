@@ -246,10 +246,10 @@ class StrategyPromotionDialogAppearanceTest(unittest.TestCase):
         def approval_records(ignored_root):
             return {"approvals": {"C95": {"status": "APPROVED"}} if state["invalid"] else {}}
 
-        with patch("services.workbench_ui.trading_account_panel.current_strategy_rules", return_value=rules), \
-             patch("services.workbench_ui.trading_account_panel.get_approved_rule", side_effect=approval), \
-             patch("services.workbench_ui.trading_account_panel.load_promotion_approvals", side_effect=approval_records), \
-             patch("services.workbench_ui.trading_account_panel.load_trading_release_state", return_value={"active": None, "pending": None}):
+        with patch("services.workbench_ui.trading_account_panel_promotion.current_strategy_rules", return_value=rules), \
+             patch("services.workbench_ui.trading_account_panel_promotion.get_approved_rule", side_effect=approval), \
+             patch("services.workbench_ui.trading_account_panel_promotion.load_promotion_approvals", side_effect=approval_records), \
+             patch("services.workbench_ui.trading_account_panel_promotion.load_trading_release_state", return_value={"active": None, "pending": None}):
             TradingAccountPanel._open_strategy_promotion_dialog(panel)
             root.update()
 
@@ -317,8 +317,8 @@ class StrategyPromotionDashboardIdentityTest(unittest.TestCase):
             "active": {"arm_id": "C95", "status": "ACTIVE"},
             "pending": {"arm_id": "C99", "status": "PENDING_PARAMS"},
         }
-        with patch("services.workbench_ui.trading_account_panel.get_trading_policy_snapshot", return_value={}), \
-             patch("services.workbench_ui.trading_account_panel.load_trading_release_state", return_value=state):
+        with patch("services.workbench_ui.trading_account_panel_dashboard.get_trading_policy_snapshot", return_value={}), \
+             patch("services.workbench_ui.trading_account_panel_dashboard.load_trading_release_state", return_value=state):
             TradingAccountPanel._render_strategy_params_overview(panel, snapshot)
         (key, primary, detail), styles = updates[-1]
         self.assertEqual(key, "strategy_params")
@@ -329,7 +329,7 @@ class StrategyPromotionDashboardIdentityTest(unittest.TestCase):
         self.assertNotIn("full_rule_based_no_dl", primary)
         self.assertEqual(styles["tone"], "success")
 
-        with patch("services.workbench_ui.trading_account_panel.get_trading_policy_snapshot", return_value={}):
+        with patch("services.workbench_ui.trading_account_panel_dashboard.get_trading_policy_snapshot", return_value={}):
             TradingAccountPanel._render_strategy_params_overview(
                 panel, snapshot, release_state={"active": None, "pending": None}
             )
@@ -345,8 +345,8 @@ class StrategyPromotionDashboardIdentityTest(unittest.TestCase):
 
         updates = []
         panel = SimpleNamespace(_set_overview_card=lambda *a, **kw: updates.append((a, kw)))
-        with patch("services.workbench_ui.trading_account_panel.get_trading_policy_snapshot", return_value={}), \
-             patch("services.workbench_ui.trading_account_panel.load_trading_release_state", side_effect=ValueError("invalid fingerprint")):
+        with patch("services.workbench_ui.trading_account_panel_dashboard.get_trading_policy_snapshot", return_value={}), \
+             patch("services.workbench_ui.trading_account_panel_dashboard.load_trading_release_state", side_effect=ValueError("invalid fingerprint")):
             TradingAccountPanel._render_strategy_params_overview(panel, {})
         self.assertIn("Release", updates[-1][0][1])
         self.assertEqual(updates[-1][1]["tone"], "error")

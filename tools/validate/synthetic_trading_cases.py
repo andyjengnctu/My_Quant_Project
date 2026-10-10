@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from .checks import bind_synthetic_case, bind_checks, add_check, run_bound_checks
+from .trading_panel_source import read_trading_account_panel_source
 from core.file_integrity import atomic_write_json
 from core.exact_accounting import (
     allocate_cost_basis_milli,
@@ -1575,7 +1576,7 @@ def validate_trading_daily_workflow_contract_case(base_params):
     check("quality_median_tie_keeps_canonical_score", {0.5}, {row["breakout_quality_score"] for row in rank_rows})
 
 
-    panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    panel_source = read_trading_account_panel_source(project_root)
     workflow_ui = panel_source.split('workflow_box = ttk.LabelFrame(content, text="每日 Trading 流程"', 1)[1].split('header = ttk.LabelFrame(content, text="Trading 帳戶"', 1)[0]
     check("workbench_daily_workflow_removes_data_and_batch_actions", True, '"1 更新資料"' not in workflow_ui and '"每日流程 1→2→3"' not in workflow_ui and '"data"' not in workflow_ui and '"all"' not in workflow_ui)
     check("workbench_daily_workflow_uses_compact_one_row_layout", True, 'padding=(8, 4)' in workflow_ui and 'pady=(0, 4)' in workflow_ui and 'workflow_bar.pack(fill="x")' in workflow_ui and 'promotion_row' not in workflow_ui and 'param_mode_row' not in workflow_ui)
@@ -1639,7 +1640,7 @@ def validate_trading_daily_workflow_contract_case(base_params):
     panel_stub = SimpleNamespace(
         _set_overview_card=lambda *args, **kwargs: overview_cards.append((args, kwargs))
     )
-    with patch("services.workbench_ui.trading_account_panel.get_trading_policy_snapshot", return_value={}):
+    with patch("services.workbench_ui.trading_account_panel_dashboard.get_trading_policy_snapshot", return_value={}):
         TradingAccountPanel._render_strategy_params_overview(
             panel_stub, overview_snapshot, release_state={"active": None, "pending": None}
         )
@@ -1995,7 +1996,7 @@ def validate_trading_proposed_order_plan_contract_case(base_params):
             stale_snapshot_rejected = False
         check("candidate_snapshot_is_rejected_after_param_artifact_changes", True, stale_snapshot_rejected)
 
-    panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    panel_source = read_trading_account_panel_source(project_root)
     check("workbench_exposes_proposed_order_button", True, '"5 建議掛單"' in panel_source)
     check(
         "workbench_proposed_orders_use_background_thread",
@@ -2247,7 +2248,7 @@ def validate_trading_pending_order_state_contract_case(base_params):
             tamper_rejected = False
         check("order_event_hash_tamper_is_rejected", True, tamper_rejected)
 
-    panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    panel_source = read_trading_account_panel_source(project_root)
     order_service_source = (project_root / "services" / "trading" / "order_state.py").read_text(encoding="utf-8")
     entry_submission_source = (project_root / "services" / "trading" / "entry_order_submission.py").read_text(encoding="utf-8")
     check("workbench_requires_explicit_order_submission_confirmation", True, 'text="確認選取已送單"' in panel_source and "confirm_trading_order_submission(" in panel_source)
@@ -2470,7 +2471,7 @@ def validate_trading_confirmed_fill_reconciliation_contract_case(base_params):
         check("partial_cancel_preserves_filled_qty", first_qty, cancelled_record["filled_qty"])
         check("partial_cancel_preserves_position_and_cash", [first_qty, partial_cash], [load_trading_account_state(root)["positions"]["2454"]["broker"]["qty"], load_trading_account_state(root)["cash_milli"]])
 
-    panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    panel_source = read_trading_account_panel_source(project_root)
     check("workbench_requires_explicit_broker_fill_confirmation", True, 'text="確認選取成交"' in panel_source and "confirm_trading_buy_order_fill" in panel_source and "confirm_trading_protection_sell_order_fill" in panel_source)
     check(
         "workbench_fill_inputs_are_actual_qty_price_and_date",
@@ -2661,7 +2662,7 @@ def validate_trading_protection_plan_contract_case(base_params):
         check("direct_position_lineage_has_no_legacy_entry_order_binding", None, direct_row.get("legacy_entry_order_id"))
         check("direct_position_lineage_protection_plan_is_fresh", True, get_trading_protection_plan_read_model(root)["fresh"])
 
-    panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    panel_source = read_trading_account_panel_source(project_root)
     service_source = (project_root / "services" / "trading" / "protection_planning.py").read_text(encoding="utf-8")
     check("workbench_exposes_post_fill_protection_plan", True, "成交後 Stop / TP 保護單計畫" in panel_source and "build_trading_protection_plan(" in panel_source)
     check("workbench_explicitly_marks_protection_as_not_submitted", True, "尚未送券商" in panel_source)
@@ -2850,7 +2851,7 @@ def validate_trading_protection_order_submission_contract_case(base_params):
             oco_binding_tamper_rejected = False
         check("oco_confirmed_group_binding_tamper_is_rejected", True, oco_binding_tamper_rejected)
 
-    panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    panel_source = read_trading_account_panel_source(project_root)
     service_source = (project_root / "services" / "trading" / "protection_order_submission.py").read_text(encoding="utf-8")
     check("workbench_requires_explicit_stop_or_tp_submission_confirmation", True, "確認 Stop 已送單" in panel_source and "確認 TP 已送單" in panel_source)
     check("workbench_requires_explicit_broker_oco_group_confirmation", True, "確認 Stop+TP 已以券商 OCO 送單" in panel_source and "券商 OCO/互斥群組 ID" in panel_source)
@@ -2975,7 +2976,7 @@ def validate_trading_protection_sell_fill_reconciliation_contract_case(base_para
         check("full_stop_fill_closes_position", False, "2330" in stopped["account"]["positions"])
 
     service_source = (Path(__file__).resolve().parents[2] / "services" / "trading" / "fill_reconciliation.py").read_text(encoding="utf-8")
-    panel_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    panel_source = read_trading_account_panel_source(Path(__file__).resolve().parents[2])
     check("sell_fill_service_does_not_infer_market_high_low", False, any(token in service_source for token in ("t_high", "t_low", "shadow_fill")))
     check("workbench_routes_sell_fill_to_sell_reconciliation", True, "confirm_trading_protection_sell_order_fill" in panel_source)
     summary["checks"] = len(results)
@@ -3180,7 +3181,7 @@ def validate_trading_position_rollforward_contract_case(base_params):
     check("indicator_sell_execution_capability_is_implemented", True, bool(capability["capabilities"]["indicator_sell_execution"]["implemented"]))
 
     service_source = (project_root / "services" / "trading" / "position_rollforward.py").read_text(encoding="utf-8")
-    panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    panel_source = read_trading_account_panel_source(project_root)
     daily_source = (project_root / "services" / "trading" / "daily_workflow.py").read_text(encoding="utf-8")
     snapshot_body = service_source.split("def build_trading_position_rollforward_snapshot", 1)[1].split("def run_trading_position_rollforward", 1)[0]
     check("read_only_rollforward_snapshot_does_not_run_fill_recovery", False, "recover_trading_fill_transaction(" in snapshot_body)
@@ -3265,7 +3266,7 @@ def validate_trading_indicator_sell_execution_contract_case(base_params):
     submit=(project_root/"services/trading/indicator_exit_order_submission.py").read_text(encoding="utf-8")
     fill=(project_root/"services/trading/fill_reconciliation.py").read_text(encoding="utf-8")
     protection=(project_root/"services/trading/protection_order_submission.py").read_text(encoding="utf-8")
-    panel=(project_root/"services/workbench_ui/trading_account_panel.py").read_text(encoding="utf-8")
+    panel=read_trading_account_panel_source(project_root)
     check("planning_does_not_infer_broker_fill",False,"confirm_trading_indicator_sell_order_fill(" in planning )
     check(
         "indicator_planning_consumes_account_management_sell_ssot_instead_of_regenerating_signal",
@@ -3537,7 +3538,7 @@ def validate_trading_operations_status_contract_case(base_params):
     check("manual_adopted_is_reported_separately", ["0050"], manual_only["manual_tickers"])
 
     source = (Path(__file__).resolve().parents[2] / "services" / "trading" / "operations_status.py").read_text(encoding="utf-8")
-    panel_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    panel_source = read_trading_account_panel_source(Path(__file__).resolve().parents[2])
     check("operations_status_is_read_only_composition", False, any(token in source for token in ("atomic_write_json(", "confirm_trading_", "run_trading_market_data_update(")))
     check("operations_status_disables_hidden_protection_recovery", True, "get_trading_protection_plan_read_model(root, recover_pending_fill=False)" in source)
     check("operations_status_disables_hidden_indicator_recovery", True, "get_trading_indicator_exit_plan_read_model(root, recover_pending_fill=False)" in source)
@@ -3563,7 +3564,6 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         parse_trading_money_text,
         parse_trading_qty_text,
         holding_order_date_by_lineage,
-        trading_source_display_label,
     )
     from services.workbench_ui.workbench import (
         PANEL_SPECS,
@@ -3573,6 +3573,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         resolve_workbench_combobox_popdown_geometry,
     )
     from types import SimpleNamespace
+    from services.workbench_ui.trading_source_labels import trading_source_display_label
 
     # Historical regression: first-use GUI callbacks can compile successfully yet
     # fail at runtime when a newly referenced module global was never imported.
@@ -4513,7 +4514,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         missing_descriptor_rejected = False
     check("scanner_pool_current_snapshot_requires_dynamic_column_descriptor", True, missing_descriptor_rejected)
 
-    panel_source = (Path(__file__).resolve().parents[2] / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    panel_source = read_trading_account_panel_source(Path(__file__).resolve().parents[2])
     check("workbench_trading_page_is_vertically_scrollable", True, "self._page_canvas = tk.Canvas" in panel_source and "self._page_scrollbar = ttk.Scrollbar" in panel_source)
     check("workbench_proposed_table_exposes_agreement", True, '"agree": "同意/成員"' in panel_source)
     check("workbench_proposed_target_heading_uses_unified_take_profit_label", True, '"target": "停利線"' in panel_source)
@@ -4564,7 +4565,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     _diagnostic_before = deepcopy(_diagnostic_rows)
     check("pending_error_hit_uses_logical_column_not_display_number", _diagnostic_rows["failed"],
           _pending_sync_failure_at_cell(_diagnostic_tree, _diagnostic_rows, _diagnostic_event))
-    with patch("services.workbench_ui.trading_account_panel.messagebox.showerror") as _diagnostic_dialog:
+    with patch("services.workbench_ui.trading_account_panel_pending.messagebox.showerror") as _diagnostic_dialog:
         check("pending_error_click_does_not_run_order_edit", "break",
               TradingAccountPanel._on_pending_tree_click(_diagnostic_panel, _diagnostic_event))
         check("pending_error_dialog_is_explicit_not_automatic", 1, _diagnostic_dialog.call_count)
@@ -7494,8 +7495,8 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         _proposed_status_var=SimpleNamespace(set=persisted_status.append),
     )
     with (
-        patch("services.workbench_ui.trading_account_panel.get_trading_proposed_order_plan_read_model", return_value={"exists": True, "valid": True, "fresh": True}),
-        patch("services.workbench_ui.trading_account_panel.load_current_trading_proposed_order_plan", return_value={
+        patch("services.workbench_ui.trading_account_panel_scanner.get_trading_proposed_order_plan_read_model", return_value={"exists": True, "valid": True, "fresh": True}),
+        patch("services.workbench_ui.trading_account_panel_scanner.load_current_trading_proposed_order_plan", return_value={
             "orders": [{"rank": 1, "ticker": "2820"}],
             "account_revision": 0, "sizing_equity": 1_500_000, "reserved_total": 500_000, "cash_after_reservation": 1_000_000,
         }),
@@ -7545,7 +7546,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
 
     import queue as _queue
     background_panel = SimpleNamespace(_command_results=_queue.Queue())
-    with patch("services.workbench_ui.trading_account_panel.build_trading_account_panel_initial_bundle", return_value={"operations": (True, {"overall_status": "READY"})}):
+    with patch("services.workbench_ui.trading_account_panel_runtime.build_trading_account_panel_initial_bundle", return_value={"operations": (True, {"overall_status": "READY"})}):
         TradingAccountPanel._trading_command_worker(background_panel, 9, lambda: {"ok": True}, True)
     token, result, command_error, bundle, bundle_error = background_panel._command_results.get_nowait()
     check("workbench_background_command_preserves_result", [9, True, None, None], [token, bool(result.get("ok")), command_error, bundle_error])
@@ -7634,7 +7635,7 @@ def validate_trading_prelive_operational_audit_contract_case(_base_params):
         check("operational_audit_writes_machine_readable_report", True, (root / report["json_path"]).is_file())
 
     project_root = Path(__file__).resolve().parents[2]
-    panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    panel_source = read_trading_account_panel_source(project_root)
     audit_source = (project_root / "services" / "trading" / "operational_audit.py").read_text(encoding="utf-8")
     check("workbench_exposes_explicit_prelive_audit_action", True, "實盤就緒檢查" in panel_source)
     check("operational_audit_does_not_mutate_trading_state", False, any(token in audit_source for token in ("confirm_trading_", "mutate_trading_", "set_trading_cash_balance(")))
@@ -8040,7 +8041,7 @@ def validate_trading_stop_remainder_forced_exit_contract_case(base_params):
     planner_source = (project_root / "services" / "trading" / "indicator_exit_planning.py").read_text(encoding="utf-8")
     submit_source = (project_root / "services" / "trading" / "indicator_exit_order_submission.py").read_text(encoding="utf-8")
     audit_source = (project_root / "services" / "trading" / "operational_audit.py").read_text(encoding="utf-8")
-    panel_source = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    panel_source = read_trading_account_panel_source(project_root)
     check("indicator_plan_explicitly_skips_stop_forced_exit_lineage", True, "stop_forced_exit_skipped" in planner_source and "build_trading_stop_exit_progress" in planner_source)
     check("indicator_submission_defensively_rejects_already_triggered_stop_lineage", True, "剩餘持股必須沿 STOP forced-exit obligation" in submit_source)
     check("prelive_audit_has_explicit_forced_stop_continuity_gate", True, "trading_stop_forced_exit_continuity" in audit_source)
@@ -8202,7 +8203,7 @@ def validate_trading_operational_safety_ssot_contract_case(base_params):
     generic_order_state = (project_root / "services" / "trading" / "order_state.py").read_text(encoding="utf-8")
     account_service = (project_root / "services" / "trading" / "account_state.py").read_text(encoding="utf-8")
     audit = (project_root / "services" / "trading" / "operational_audit.py").read_text(encoding="utf-8")
-    panel = (project_root / "services" / "workbench_ui" / "trading_account_panel.py").read_text(encoding="utf-8")
+    panel = read_trading_account_panel_source(project_root)
     coverage = (project_root / "tools" / "local_regression" / "meta_quality_targets.py").read_text(encoding="utf-8")
 
     check("core_order_state_consumes_canonical_date_chronology_helpers", True, "require_trading_date_after" in order_core and "require_trading_date_not_before" in order_core)
