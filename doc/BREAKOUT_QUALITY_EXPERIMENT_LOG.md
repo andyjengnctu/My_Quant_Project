@@ -12607,6 +12607,14 @@ Decision：`CANONICAL_UPSTREAM_REUSE_GUARD / HISTORICAL_CHECKPOINT_REUSE_ONLY_WI
 
 Decision：`ENGINEERING_ONLY / LEGACY_SANITIZER_V1_V2_BRIDGE_REQUIRES_FULL_CSV_PROOF / DATASET_TARGET_SHA_STRICT / HISTORICAL_EVIDENCE_UNCHANGED / REAL_FULL_DATASET_UNVERIFIED / NO_FORMAL_SUITE_RUN`。
 
+## 2026-10-10 — MR-13BW source-quality blocker: 0052 required Raw dates missing after canonical sanitation (engineering-only)
+
+- **User-observed evidence**：套用前輪raw-only date projection修補後，使用者由Research `[1]→[1]`進行MR-13BW Seed42 Forward，`Daily target/index`仍正常取得`616/616` tickers、`target_valid=2,052,791`，但在載入Raw features時失敗：`raw/adjusted DL trading-date membership mismatch: 0052; missing_raw=6; raw_only=0`；前五個缺日為`2014-06-03`、`2017-04-05`、`2017-06-01`、`2017-07-20`、`2017-08-24`。沒有BW訓練、checkpoint或實測成績。原`model.pt`尚不存在對新profile而言正常，非本次根因。
+- **Root-cause boundary**：raw-price producer以Full control CSV的`Date/Volume`向固定FinMind `TaiwanStockPrice` Provider Snapshot索取Raw OHLC，檢查有對應且有限的OHLC就寫入；Daily-universal loader另套canonical `sanitize_ohlcv_dataframe()`，會排除價格非正或高低價邏輯不合法等列。依程式資料流，Raw資料即使曾被物化為READY，仍可能在DL清洗時消失。ZIP未包含Full 0052 Provider行，不能宣稱6日的具體raw OHLC值或Provider是否缺列。
+- **Engineering change**：保留原本Raw日期覆蓋與Volume fail-closed規則，僅在發生必要日期缺口時讀取同一verified materialization的原始CSV，逐日列出`raw_rows_removed_by_sanitizer`、`raw_rows_absent`及最多8日Raw OHLC evidence；不重寫CSV、Provider Snapshot、manifest、dataset、Target、sample、300-bar window、model/fitting/score identity或任何既有AO工件。
+- **Decision**：`IMPLEMENTED / RESULT_PENDING / RAW_SOURCE_DATE_COVERAGE_BLOCKED`。先用新診斷確認原始raw列是否存在且不合法。若Provider Raw OHLC不合法，須取得真正合法且時間來源可驗證的raw報價，產生新獨立Provider / materialization identity後重試；不得以Adjusted OHLC、forward fill、合成Raw或刪除控制組日期來掩蓋缺口，也不得把Data Gate FAIL誤記為BW模型成效FAIL。未完成資料修復前不啟動Forward/Rolling訓練。
+- **Code baseline**：`test-branch-1_20261010_083206_b5cf6ecf.zip`，SHA256=`a0712e805db0b2d185b2f2cc8bf8d561c93e9bc9d14e0e78b12afa779bf96737`。本次仅合成／直接依賴測試，未執行正式訓練或formal suite；完整617檔Raw Provider Snapshot不在此ZIP內。
+
 ## 2026-10-10 — MR-13BW raw / adjusted trading-date alignment correction (engineering-only)
 
 - **Observed failure**：使用者在Research `[1]→[2]` Rolling及`[1]→[1]` Forward執行MR-13BW，均完成Daily target/index建構後於`0052`遇到`ValueError: raw/adjusted DL trading-date membership mismatch`，因此當次無正式BW訓練或績效。`FileNotFoundError` 的缺少model/PIT scores屬新實驗尚未建立工件的正常BUILD狀態，不是這次程式異常原因。使用者提交的source ZIP未含本機Full adjusted／raw CSV，因此不能從這份證據判定0052究竟是raw多出日期或raw缺少必要日期。

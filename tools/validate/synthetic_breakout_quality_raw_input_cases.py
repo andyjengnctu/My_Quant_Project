@@ -178,6 +178,40 @@ class AlternatePriceInputTests(unittest.TestCase):
                 load_aligned_alternate_ohlcv_frame(raw_dir, "0052", control)
             self.assertIn(missing_date, str(raised.exception))
 
+    def test_raw_sanitizer_rejection_reports_original_ohlc_without_filling(self):
+        with TemporaryDirectory() as tmp:
+            raw_dir = Path(tmp)
+            control = self._frame(0.12)
+            raw = self._frame(0.31)
+            first_date = raw.index[19].date().isoformat()
+            second_date = raw.index[23].date().isoformat()
+            raw.loc[raw.index[19], "Open"] = 0.0
+            raw.loc[raw.index[23], "High"] = raw.loc[raw.index[23], "Close"] - 1.0
+            raw.reset_index(names="Date").to_csv(raw_dir / "0052.csv", index=False)
+            with self.assertRaisesRegex(ValueError, "missing_raw=2") as caught:
+                load_aligned_alternate_ohlcv_frame(raw_dir, "0052", control)
+            message = str(caught.exception)
+            self.assertIn("raw_rows_removed_by_sanitizer=2", message)
+            self.assertIn("raw_rows_absent=0", message)
+            self.assertIn("present_but_rejected_by_canonical_sanitizer", message)
+            self.assertIn("'Open': '0.0'", message)
+            self.assertIn(first_date, message)
+            self.assertIn(second_date, message)
+            self.assertIn("data_source_blocked", message)
+
+    def test_raw_source_absence_reports_absent_without_backfill(self):
+        with TemporaryDirectory() as tmp:
+            raw_dir = Path(tmp)
+            control = self._frame(0.12)
+            raw = self._frame(0.31).drop(self._frame(0.31).index[19])
+            raw.reset_index(names="Date").to_csv(raw_dir / "0052.csv", index=False)
+            with self.assertRaisesRegex(ValueError, "missing_raw=1") as caught:
+                load_aligned_alternate_ohlcv_frame(raw_dir, "0052", control)
+            message = str(caught.exception)
+            self.assertIn("raw_rows_removed_by_sanitizer=0", message)
+            self.assertIn("raw_rows_absent=1", message)
+            self.assertIn("source_row_absent", message)
+
     def test_raw_only_dates_do_not_hide_shared_date_volume_mismatch(self):
         with TemporaryDirectory() as tmp:
             raw_dir = Path(tmp)

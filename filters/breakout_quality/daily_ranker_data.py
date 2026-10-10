@@ -901,6 +901,43 @@ def resolve_daily_training_universe_start(
     return pd.Timestamp(normalized[first_pos]).normalize()
 
 
+def _missing_alternate_price_date_evidence(
+    path: Path, missing_dates: pd.DatetimeIndex,
+) -> tuple[int, int, list[dict[str, object]]]:
+    """Diagnose a rejected raw date without replacing the canonical OHLCV sanitizer.
+
+    This read happens only after the *sanitized* raw CSV lost dates required by
+    the adjusted reference.  Original provider/materialized rows can distinguish
+    missing raw evidence from physically invalid raw OHLCV; neither may be filled.
+    """
+    source = pd.read_csv(path, low_memory=False)
+    source.columns = [str(column).capitalize() for column in source.columns]
+    date_col = "Time" if "Time" in source.columns else "Date"
+    if date_col not in source.columns:
+        raise ValueError(f"Raw DL input缺少Date/Time欄位: {path.name}")
+    source[date_col] = pd.to_datetime(source[date_col], errors="coerce").dt.normalize()
+    missing = pd.DatetimeIndex(missing_dates).normalize()
+    rows = source.loc[source[date_col].isin(missing)].copy()
+    present = pd.DatetimeIndex(rows[date_col].dropna().unique()).normalize()
+    present_count = int(missing.isin(present).sum())
+    absent_count = len(missing) - present_count
+    evidence: list[dict[str, object]] = []
+    quote_columns = ("Open", "High", "Low", "Close")
+    for date in missing[:8]:
+        day_rows = rows.loc[rows[date_col] == date]
+        if day_rows.empty:
+            evidence.append({"date": date.strftime("%Y-%m-%d"), "raw": "source_row_absent"})
+            continue
+        sample = day_rows.iloc[0]
+        evidence.append({
+            "date": date.strftime("%Y-%m-%d"),
+            "raw": "present_but_rejected_by_canonical_sanitizer",
+            "ohlc": {column: str(sample[column]) if column in source else "missing"
+                     for column in quote_columns},
+        })
+    return present_count, absent_count, evidence
+
+
 def load_aligned_alternate_ohlcv_frame(raw_dir: Path, ticker: str, control: pd.DataFrame) -> pd.DataFrame:
     path = raw_dir / f"{ticker}.csv"
     if not path.is_file() or path.resolve().parent != raw_dir.resolve():
@@ -918,12 +955,20 @@ def load_aligned_alternate_ohlcv_frame(raw_dir: Path, ticker: str, control: pd.D
         missing_raw_dates = control_dates.difference(raw_dates)
         if len(missing_raw_dates):
             raw_only_dates = raw_dates.difference(control_dates)
+            rejected_count, absent_count, evidence = _missing_alternate_price_date_evidence(
+                path, missing_raw_dates,
+            )
             raise ValueError(
                 f"raw/adjusted DL trading-date membership mismatch: {ticker}; "
                 f"missing_raw={len(missing_raw_dates)} "
-                f"sample={[str(value.date()) for value in missing_raw_dates[:5]]}; "
+                f"sample={[str(value.date()) for value in missing_raw_dates[:8]]}; "
                 f"raw_only={len(raw_only_dates)} "
-                f"sample={[str(value.date()) for value in raw_only_dates[:5]]}"
+                f"sample={[str(value.date()) for value in raw_only_dates[:5]]}; "
+                f"raw_rows_removed_by_sanitizer={rejected_count}; "
+                f"raw_rows_absent={absent_count}; "
+                f"raw_row_evidence={evidence}; "
+                "data_source_blocked: 需修復具有合法來源證據的Raw OHLCV，"
+                "不可用Adjusted替代、前填或壓縮日期繼續訓練"
             )
         alternate = alternate.loc[control_dates].copy()
         alternate.index = control.index
