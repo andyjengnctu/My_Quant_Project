@@ -274,6 +274,16 @@ def _score_capital_basket_quality_key(result, *, base_rank):
     )
 
 
+def _max_dl_has_exact_target_count(result, *, target_count):
+    """Exact-K membership only; deliberately does not imply a reserved-cash floor."""
+    return int(result['selected_count']) == int(target_count)
+
+
+def _max_dl_count_within_physical_slots(selected_count, *, physical_free_slots):
+    """No-K selectors may legally return any count within pre-market free slots."""
+    return 0 <= int(selected_count) <= int(physical_free_slots)
+
+
 def _max_dl_resource_deficit(result, *, target_count, reserve_floor_milli):
     """Lexicographic hard-constraint deficit: planned order count first, then reserve floor."""
 
@@ -285,7 +295,7 @@ def _max_dl_resource_deficit(result, *, target_count, reserve_floor_milli):
 
 def _max_dl_basket_is_feasible(result, *, target_count, reserve_floor_milli):
     return bool(
-        int(result['selected_count']) == int(target_count)
+        _max_dl_has_exact_target_count(result, target_count=target_count)
         and int(result['reserved_cost_milli']) >= int(reserve_floor_milli)
     )
 
@@ -554,7 +564,7 @@ def _reorder_resource_aware_continuous_max_dl(
             },
             '_selector_repair_steps': list(repair_trace_steps or []),
         })
-        if int(result['selected_count']) != target_count:
+        if not _max_dl_has_exact_target_count(result, target_count=target_count):
             raise RuntimeError('max-DL Continuous輸出未維持同參數DL-off baseline預留單數')
         if preserve_reserve_floor and int(result['reserved_cost_milli']) < reserve_floor_milli:
             raise RuntimeError('max-DL Continuous輸出低於同參數DL-off baseline reserved-capital floor')
@@ -1511,7 +1521,7 @@ def _reorder_resource_aware_continuous_constrained_optimal(
         },
         '_selector_repair_steps': [],
     })
-    if int(best_result['selected_count']) != target_count:
+    if not _max_dl_has_exact_target_count(best_result, target_count=target_count):
         raise RuntimeError('constrained solver未維持同參數baseline K')
     if preserve_reserve_floor and int(best_result['reserved_cost_milli']) < reserve_floor_milli:
         raise RuntimeError('constrained solver輸出低於同參數baseline R0')
@@ -1746,7 +1756,7 @@ def _reorder_resource_aware_continuous_score_no_k_no_r0(
         selector='continuous-score-no-k-no-r0',
     )
     selected_count = int(selected.get('selected_count', 0) or 0)
-    if not (0 <= selected_count <= physical_free_slots):
+    if not _max_dl_count_within_physical_slots(selected_count, physical_free_slots=physical_free_slots):
         raise RuntimeError('No-K/No-R0 selector輸出超過physical free-slot contract')
     diag.update({
         'mode': 'dl-selection',
@@ -1818,7 +1828,7 @@ def _reorder_resource_aware_continuous_score_no_k_no_r0_raw_safety_gate(
         selector='continuous-score-no-k-no-r0-raw-safety-gate',
     )
     selected_count = int(selected.get('selected_count', 0) or 0)
-    if not (0 <= selected_count <= physical_free_slots):
+    if not _max_dl_count_within_physical_slots(selected_count, physical_free_slots=physical_free_slots):
         raise RuntimeError('No-K/No-R0 Raw Safety gate輸出超過physical free-slot contract')
     # Keep ineligible rows after the eligible score order for full diagnostics while
     # pre_market_order_limit prevents them from creating orders.
@@ -1901,7 +1911,7 @@ def _reorder_resource_aware_continuous_score_no_k_no_r0_safety_mfe_product(
         selector='continuous-score-no-k-no-r0-safety-mfe-product',
     )
     selected_count = int(selected.get('selected_count', 0) or 0)
-    if not (0 <= selected_count <= physical_free_slots):
+    if not _max_dl_count_within_physical_slots(selected_count, physical_free_slots=physical_free_slots):
         raise RuntimeError('No-K/No-R0 Safety×MFE product輸出超過physical free-slot contract')
     eligible_ids = {id(row) for row in joint_order}
     final_order = list(joint_order) + [row for row in candidates if id(row) not in eligible_ids]
@@ -2077,7 +2087,7 @@ def _reorder_resource_aware_continuous_score_capital_pareto_no_r0_constrained_op
     baseline_order, baseline_result = evaluate_basket(
         list(baseline.get('selected_rows') or [])
     )
-    if int(baseline_result['selected_count']) != target_count:
+    if not _max_dl_has_exact_target_count(baseline_result, target_count=target_count):
         raise RuntimeError('C48 Pareto exact無法取得同參數baseline K可行incumbent')
 
     standalone = []
@@ -2256,7 +2266,7 @@ def _reorder_resource_aware_continuous_score_capital_pareto_no_r0_constrained_op
             visit(idx + 1, basket, result)
 
         visit(0, [], empty_result)
-        if int(best_result['selected_count']) != target_count:
+        if not _max_dl_has_exact_target_count(best_result, target_count=target_count):
             raise RuntimeError('C48 exact search未維持同參數baseline K')
         return {
             'basket': list(best_basket),
@@ -2394,7 +2404,7 @@ def _reorder_resource_aware_continuous_score_capital_pareto_no_r0_constrained_op
         },
         '_selector_repair_steps': [],
     })
-    if int(final_result['selected_count']) != target_count:
+    if not _max_dl_has_exact_target_count(final_result, target_count=target_count):
         raise RuntimeError('C48 Pareto exact未維持同參數baseline K')
     return final_order, out
 

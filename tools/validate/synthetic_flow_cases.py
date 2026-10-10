@@ -1696,6 +1696,45 @@ def _run_resource_aware_entry_selection_matrix_case(base_params):
     ]
     add_check(results, "portfolio_entry_selection", case_id, "max_dl_feasibility_edges", [True, False, False], feasibility)
 
+    # AI: Exact-K, K+R0 and No-K have different legal count domains.
+    add_check(
+        results, "portfolio_entry_selection", case_id,
+        "max_dl_exact_k_uses_same_count_check_in_pareto_and_r0_solvers",
+        [True, False, False],
+        [
+            max_dl._max_dl_has_exact_target_count(
+                {"selected_count": count}, target_count=2,
+            )
+            for count in (2, 1, 3)
+        ],
+    )
+    add_check(
+        results, "portfolio_entry_selection", case_id,
+        "max_dl_no_k_accepts_zero_through_free_slots_but_not_oversubscription",
+        [False, True, True, True, False],
+        [
+            max_dl._max_dl_count_within_physical_slots(
+                count, physical_free_slots=2,
+            )
+            for count in (-1, 0, 1, 2, 3)
+        ],
+    )
+    add_check(
+        results, "portfolio_entry_selection", case_id,
+        "max_dl_resource_deficit_is_not_a_substitute_for_exact_k_feasibility",
+        ((0, 0), False),
+        (
+            max_dl._max_dl_resource_deficit(
+                {"selected_count": 3, "reserved_cost_milli": 100},
+                target_count=2, reserve_floor_milli=100,
+            ),
+            max_dl._max_dl_basket_is_feasible(
+                {"selected_count": 3, "reserved_cost_milli": 100},
+                target_count=2, reserve_floor_milli=100,
+            ),
+        ),
+    )
+
     malformed_row = {}
     base_rank = {id(malformed_row): 0}
     malformed_rejections = 0

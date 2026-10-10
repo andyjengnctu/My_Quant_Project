@@ -2738,6 +2738,88 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         ),
     )
 
+    # AI: Verify the scheduler's execution-state lifecycle without launching a fold.
+    seed_scheduler = importlib.import_module(
+        "services.optimizer.outer_rolling_seed_scheduler"
+    )
+    from unittest.mock import patch
+
+    add_check(
+        results, "meta_coverage", case_id,
+        "outer_rolling_seed_scheduler_uses_canonical_decision_owner",
+        True,
+        outer_runtime._seed_scheduler_select_state is seed_scheduler._seed_scheduler_select_state,
+    )
+    scheduler_probe = seed_scheduler._seed_scheduler_build_state(
+        {"fold_idx": 7, "config": {"trials_per_fold": 30}},
+        [101, 202, 303], per_fold_cap=2,
+    )
+    add_check(
+        results, "meta_coverage", case_id,
+        "outer_rolling_seed_scheduler_preserves_seed_member_numbering_and_trial_units",
+        ([(1, 101), (2, 202), (3, 303)], 90, 2),
+        (scheduler_probe["pending_members"], scheduler_probe["remaining_trial_units"],
+         scheduler_probe["per_fold_cap"]),
+    )
+    add_check(
+        results, "meta_coverage", case_id,
+        "outer_rolling_seed_scheduler_holds_extra_workers_until_rate_or_warmup",
+        (False, True),
+        (
+            seed_scheduler._seed_scheduler_priority_ready(
+                [dict(scheduler_probe, active_members={1})],
+                warmup_elapsed=0.5, warmup_max_sec=5.0,
+            ),
+            seed_scheduler._seed_scheduler_priority_ready(
+                [dict(scheduler_probe, active_members={1})],
+                warmup_elapsed=5.0, warmup_max_sec=5.0,
+            ),
+        ),
+    )
+    first_member = seed_scheduler._seed_scheduler_acquire_member(scheduler_probe)
+    add_check(
+        results, "meta_coverage", case_id,
+        "outer_rolling_seed_scheduler_acquires_oldest_seed_before_submit",
+        ((1, 101), [(2, 202), (3, 303)], {1}),
+        (first_member, scheduler_probe["pending_members"], scheduler_probe["active_members"]),
+    )
+    with patch.object(
+        seed_scheduler, "_read_latest_parallel_fold_seed_progresses_for_task",
+        return_value={1: {"completed": 10, "search_active_elapsed_sec": 5.0}},
+    ) as progress_read:
+        seed_scheduler._refresh_seed_scheduler_state([scheduler_probe])
+        progress_read_count = progress_read.call_count
+    add_check(
+        results, "meta_coverage", case_id,
+        "outer_rolling_seed_scheduler_estimates_live_tail_from_canonical_progress",
+        (0.5, 80, 2),
+        (scheduler_probe["rate_sec_per_trial"],
+         scheduler_probe["remaining_trial_units"], progress_read_count),
+    )
+    add_check(
+        results, "meta_coverage", case_id,
+        "outer_rolling_seed_scheduler_releases_extra_workers_when_rate_known",
+        True,
+        seed_scheduler._seed_scheduler_priority_ready(
+            [scheduler_probe], warmup_elapsed=0.0, warmup_max_sec=5.0,
+        ),
+    )
+    add_check(
+        results, "meta_coverage", case_id,
+        "outer_rolling_seed_scheduler_tracks_only_nonaggregated_fold_ids",
+        {7},
+        seed_scheduler._seed_scheduler_pending_fold_ids(
+            [scheduler_probe, {"task": {"fold_idx": 8}, "aggregated": True}],
+        ),
+    )
+    second_member = seed_scheduler._seed_scheduler_acquire_member(scheduler_probe)
+    add_check(
+        results, "meta_coverage", case_id,
+        "outer_rolling_seed_scheduler_rejects_more_work_when_fold_at_cap",
+        ((2, 202), None),
+        (second_member, seed_scheduler._seed_scheduler_select_state([scheduler_probe])),
+    )
+
     add_check(
         results,
         "meta_coverage",
