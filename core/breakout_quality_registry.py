@@ -4150,58 +4150,6 @@ SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES = (
 )
 
 
-# Model-research identities for strictly isolated, non-promotable retrospective
-# explorations.  This namespace cannot confer formal input/PIT authorization.
-@dataclass(frozen=True)
-class ExploratoryModelResearchStudy:
-    model_research_id: str
-    reference_model_id: str
-    reference_profile: str
-    architecture_identity: str
-    feature_contract: str
-    service_module: str
-    # Isolated diagnostics can resolve an experiment's service, but this metadata
-    # may never be consulted by the standard Research menu or comparison renderer.
-    historical_vintage_proven: bool = False
-    formal_input_authorized: bool = False
-    trading_promotion_authorized: bool = False
-
-
-
-_EXPLORATORY_MODEL_STUDIES = {
-    "MR-13BY": ExploratoryModelResearchStudy(
-        model_research_id="MR-13BY",
-        reference_model_id="MR-13AO",
-        reference_profile=DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        architecture_identity="inception_time_shared_safety_mfe_margin_yesterday_mask_v1",
-        feature_contract="margin_yesterday_t_minus_two_current_vintage_masked_300x14_v1",
-        service_module="services.breakout_quality.margin_yesterday_research",
-
-    ),
-}
-
-
-def list_exploratory_model_research_studies() -> tuple[ExploratoryModelResearchStudy, ...]:
-    """Return all registered isolated experiments with the same safety checks."""
-    return tuple(
-        get_exploratory_model_research_study(model_id)
-        for model_id in _EXPLORATORY_MODEL_STUDIES
-    )
-
-
-def get_exploratory_model_research_study(model_id: str) -> ExploratoryModelResearchStudy:
-    study = _EXPLORATORY_MODEL_STUDIES.get(str(model_id))
-    if study is None:
-        raise ValueError(f"未登錄的隔離探索性研究: {model_id}")
-    if study.formal_input_authorized or study.trading_promotion_authorized or study.historical_vintage_proven:
-        raise ValueError("隔離探索不得冒充正式PIT／Trading授權")
-    reference = get_continuous_ranker_research_spec(study.reference_profile)
-    if reference.model_research_id != study.reference_model_id:
-        raise ValueError("探索實驗AO參照身分不一致")
-    return study
-
-
-
 def get_continuous_ranker_research_spec(
     experiment_profile: str,
 ) -> ContinuousRankerResearchSpec:

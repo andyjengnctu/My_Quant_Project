@@ -82,75 +82,12 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         "research_audit_utilities_remain_catalogued_alongside_formal_gate",
         bool("regime-audit" in commands and "audit-point-in-time-scores" in commands),
     )
-    from services.audit.catalog import get_audit_entry
-    c80_c81_defs = [
-        item for item in definitions
-        if item.audit_id == "AUD-c80-c81-allocator-path-attribution"
-    ]
-    c80_c81_entry = get_audit_entry("c80_c81_allocator_path_attribution")
+    # One-time Audit may have zero definitions; this is not a failure of reusable Audit.
     check_true(
-        "c80_c81_allocator_path_audit_is_enabled_read_only_and_pinned_to_same_source_contrast",
-        bool(
-            len(c80_c81_defs) == 1
-            and c80_c81_entry.formal
-            and c80_c81_entry.read_only
-            and c80_c81_entry.method_id == "portfolio_drawdown_attribution"
-            and c80_c81_defs[0].enabled
-            and c80_c81_defs[0].source.get("constrained_arm_id") == "C80"
-            and c80_c81_defs[0].source.get("direct_arm_id") == "C81"
-            and c80_c81_defs[0].source.get("strategy_result_fingerprints", {}).get("extending_window_oos") == "4952368ccecb"
-            and c80_c81_defs[0].source.get("strategy_result_fingerprints", {}).get("extending_window_rolling") == "927bbb373d0f"
-        ),
-    )
-
-    from services.audit.c80_c81_allocator_path import render_result as render_c80_c81_audit_result
-
-    empty_c80_c81_arm = {
-        "core": {},
-        "path": {},
-        "truth": {},
-        "capital": {},
-        "mfe_adverse_matrix": [],
-        "drawdown_summary": {},
-    }
-    c80_c81_report_text = render_c80_c81_audit_result({
-        "audit_id": "AUD-c80-c81-allocator-path-attribution",
-        "constrained_arm_id": "C80",
-        "direct_arm_id": "C81",
-        "decision_question": "synthetic renderer contract",
-        "first_passage_thresholds_r": (1.0, 2.0, 3.0),
-        "evaluation_order": ["synthetic"],
-        "evaluations": {
-            "synthetic": {
-                "display_name": "Synthetic",
-                "arms": {
-                    "C80": dict(empty_c80_c81_arm),
-                    "C81": dict(empty_c80_c81_arm),
-                },
-                "planned_membership_cohorts": {
-                    "common_c80": {},
-                    "common_c81": {},
-                    "c80_only": {},
-                    "c81_only": {},
-                },
-                "c80_internal": {
-                    "resource_contract": {},
-                    "raw_top_k": {},
-                    "planned": {},
-                    "direct_infeasible_counts": {},
-                    "direct_infeasible_cohorts": {},
-                },
-            }
-        },
-    })
-    check_true(
-        "c80_c81_allocator_path_renderer_uses_keyword_only_section_number_contract",
-        bool(
-            "1. Synthetic｜C80 vs C81 core / MFE→Realized conversion" in c80_c81_report_text
-            and "7. Synthetic｜Exact peak→trough MTM drawdown attribution" in c80_c81_report_text
-            and "8. 判讀邊界" in c80_c81_report_text
-            and "C80 / C81 Allocator + Path Attribution Audit" in c80_c81_report_text
-        ),
+        "retired_one_time_studies_do_not_change_reusable_audit_contract",
+        len(definitions) == len(enabled)
+        and {entry.report_id for entry in get_reusable_audit_definitions("breakout_quality")}
+        == {"opportunity_selection", "trade_outcome_path", "portfolio_drawdown"},
     )
 
     import apps.research as research_app
@@ -170,6 +107,16 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and "一次性專題 Audit" in audit_menu_text
         and "最近結果／歷史 Evidence" in audit_menu_text
         and "查看全部 Audit 設定與工件狀態" not in audit_menu_text,
+    )
+
+    empty_one_time_console = io.StringIO()
+    with patch("builtins.input", return_value="0"), redirect_stdout(empty_one_time_console):
+        research_app._audit_one_time_menu("breakout_quality")
+    check_true(
+        "empty_one_time_audit_menu_keeps_existing_entry_and_exits_cleanly",
+        "=== 一次性專題 Audit ===" in empty_one_time_console.getvalue()
+        and "目前沒有一次性 Audit 設定。" in empty_one_time_console.getvalue()
+        and "[0]" in empty_one_time_console.getvalue(),
     )
 
     reusable_console = io.StringIO()
@@ -515,35 +462,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
 
 
 
-    from services.audit.selection_resource_constraints import summarize_resource_contract
-    from filters.breakout_quality.strategy_compare_diagnostics import (
-        render_mfe_safety_geometry_table,
-    )
-
-    retained_capacity = pd.DataFrame({
-        "Date": ["2025-01-02", "2025-01-03"],
-        "Pre_Market_Positions": [7, 8],
-        "Pre_Market_Free_Slots": [3, 2],
-        "Orderable_Candidates": [4, 2],
-        "Resource_Aware_Max_DL_Eligible": [True, True],
-        "Resource_Aware_Pre_Market_Order_Limit": [1, 2],
-        "Resource_Aware_Baseline_Reserved_Milli": [100000, 150000],
-        "Resource_Aware_Selected": [1, 2],
-        "Resource_Aware_Reserved_Milli": [100000, 160000],
-        "Resource_Aware_Direct_Score_Order_Feasible": [False, True],
-    })
-    retained_summary = summarize_resource_contract(retained_capacity)
-    check_true(
-        "retained_k_r0_audit_resource_contract_survives_shared_truth_refactor",
-        bool(
-            retained_summary["eligible_days"] == 2
-            and retained_summary["direct_infeasible_days"] == 1
-            and retained_summary["k_headroom_days"] == 1
-            and retained_summary["median_k"] == 1.5
-            and retained_summary["r0_exact_binding_days"] == 1
-        ),
-    )
-
+    from filters.breakout_quality.strategy_compare_diagnostics import render_mfe_safety_geometry_table
     import filters.breakout_quality.strategy_compare_diagnostics as strategy_diag
     with TemporaryDirectory() as geometry_temp_text:
         geometry_root = Path(geometry_temp_text)

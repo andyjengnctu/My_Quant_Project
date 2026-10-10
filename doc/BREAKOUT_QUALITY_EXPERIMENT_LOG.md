@@ -12837,3 +12837,10 @@ Decision：`RAW_PROVIDER_ZERO_OHLC_CONFIRMED / SOURCE_QUALITY_BLOCKED / READY_VA
 
 - **觀察與判斷**：九項方向全不利；Raw Safety Daily rho約降低`0.0331`、Pred-HS的true-LS污染約增加`1.17pp`，所以預先設定的「Safety與選股純度共同改善、Conditional-MFE不退步」Forward Gate **未通過**。這是同一迭代OOS的模型對照，不能從608,204股票日直接當成608,204個獨立統計樣本，也不能由九項負面差異推論新的正交資訊永遠不可能有效。
 - **使用者後續指示與最小下一步**：使用者要求不再花時間調整一次性BY Audit報表，繼續BY研究。既有Forward結果不可覆寫重算；下一步限定既有**Seed42 Rolling OOS → AO同樣本Rolling比較**，用來辨別Forward負面差異是否在年度再訓練後仍持續，不讓Rolling的OOS指標回流到 fitting、loss、epoch選擇或特徵設計。只有Rolling證明相對Safety與選股純度改善且Conditional-MFE不惡化時，才另外決定是否有必要研究跨seed穩健性；若Rolling仍全面退步，BY停止並保留負面結果。這不是解除PIT vintage gate的授權。
+
+## 2026-10-10 — 使用者指示退役所有一次性研究執行資產（implementation cleanup）
+
+- **基準**：`test-branch-1_20261010_224604_3d6468ce.zip`；SHA256=`b522b95bd8ff0c5bb28521d813e8ac163bf1cd6be83d48bfb44c5b0363889d9`。
+- **執行決策**：退役 MR-13BY 隔離 Forward／Rolling／Compare／Robustness Producer 與一鍵 CLI／Audit 選單派送、AUD-selection-k-r0-attribution 與 AUD-c80-c81-allocator-path-attribution 的 formal one-time implementation／catalog registration／專屬合成測試，以及已無引用的退役 Optimizer 一次性 Audit placeholder。保留泛用 Audit `[4]→[2]` 位置，清理後無已登錄的一次性研究。
+- **已知原結果不變**：MR-13BY Seed42 Forward 使用者回報 AO/BY 共同 `608,204` group、九項指標均退步，原 Gate FAIL；未取得 BY Rolling／Robustness 本機結果，不宣稱已跑過。AUD-selection-k-r0-attribution 的已完成研究證據照舊；AUD-c80-c81-allocator-path-attribution 退役時仍缺最終結果，不推定其答案。
+- **範圍邊界**：本輪為工程退役，不更改 AO／其他正式 model bases、策略參數、Trading、正式 Research 七項選單與 Standard SOP 報表。Registry ID 不回收，所有過往 result/evidence/artifact 不刪除、不改寫；本機非 ZIP 的舊輸出工件不在此次刪除範圍。

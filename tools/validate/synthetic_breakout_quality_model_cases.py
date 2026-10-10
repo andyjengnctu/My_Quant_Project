@@ -1585,26 +1585,6 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and "get_exploratory_model_research_study" not in app_source
         and "service_module" not in app_source[app_source.index("def _interactive_model_research"):app_source.index("def run_model_training_menu")],
     )
-    # Dedicated historical missing-BY-Forward regression: this science-specific
-    # producer belongs to its own isolated service, not the generic model engine.
-    from services.breakout_quality import margin_yesterday_research as experimental_runner
-    with (
-        patch.object(experimental_runner, "_read_experimental_report", return_value=(None, None)),
-        patch.object(experimental_runner, "run_forward_menu", return_value=0) as forward_builder,
-        patch.object(experimental_runner, "_comparison_payload") as forward_consumer,
-    ):
-        # Missing source calls the producer, but a producer that returns without
-        # evidence must NOT be interpreted as a successful comparison.
-        try:
-            experimental_runner.run_forward_comparison()
-        except RuntimeError as exc:
-            missing_producer_result = "Forward producer未產生" in str(exc)
-        else:
-            missing_producer_result = False
-    check_true(
-        "missing_exploratory_forward_is_delegated_and_unbuilt_dependency_fails",
-        missing_producer_result and forward_builder.call_count == 1 and forward_consumer.call_count == 0,
-    )
     daily_ranker_source = (
         project_root / "services" / "breakout_quality" / "train_daily_ranker.py"
     ).read_text(encoding="utf-8")
