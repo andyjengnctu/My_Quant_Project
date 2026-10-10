@@ -35,7 +35,8 @@ from services.breakout_quality.price_input_source import (
     resolve_feature_price_source,
 )
 from services.research.raw_price_strategy_dataset import (
-    _build_files, _raw_price_quality_failures, inspect_raw_price_strategy_dataset,
+    _build_files, _raw_price_quality_failures, _raw_quote_diagnostics,
+    _fail_on_raw_price_quality, inspect_raw_price_strategy_dataset,
 )
 
 
@@ -214,6 +215,32 @@ class AlternatePriceInputTests(unittest.TestCase):
         control.loc[control["Date"].isin(zero_dates), ["Open", "High", "Low", "Close"]] = 10.0
         count, examples = _raw_price_quality_failures(control, ticker="0052")
         self.assertEqual((count, examples), (0, []))
+
+    def test_raw_no_published_quote_is_not_misclassified_as_corrupt_price(self):
+        # FinMind can report an all-zero OHLC when no official price was published.
+        # Controlled adjusted Volume can be zero OR positive on these dates.
+        frame = self._frame(0.1).iloc[:6].reset_index(names="Date")
+        frame.loc[frame.index[1], ["Open", "High", "Low", "Close"]] = 0.0
+        frame.loc[frame.index[2], ["Open", "High", "Low", "Close"]] = 0.0
+        frame.loc[frame.index[1], "Volume"] = 0.0
+        frame.loc[frame.index[3], "High"] = 0.0  # other invalid, not all-zero
+        removed, examples = _raw_price_quality_failures(frame, ticker="0052")
+        counts = _raw_quote_diagnostics(frame)
+        self.assertEqual(removed, 3)
+        self.assertEqual(counts["all_zero_ohlc"], 2)
+        self.assertEqual(counts["all_zero_control_volume_zero"], 1)
+        self.assertEqual(counts["all_zero_control_volume_positive"], 1)
+        self.assertEqual(examples[0]["quote_class"], "ALL_ZERO_NO_PUBLISHED_QUOTE_POSSIBLE")
+        self.assertEqual(examples[2]["quote_class"], "OTHER_INVALID_OHLC")
+        with self.assertRaisesRegex(ValueError, "all_zero_ohlc=2") as caught:
+            _fail_on_raw_price_quality([{
+                "ticker": "0052", "invalid_rows": removed,
+                "samples": examples, "quote_diagnostics": counts,
+            }], provider="a" * 64)
+        message = str(caught.exception)
+        self.assertIn("other_invalid=1", message)
+        self.assertIn("no published market quote", message)
+        self.assertIn("scientific authorization", message)
 
     def test_raw_materializer_rejects_invalid_provider_rows_before_ready(self):
         with TemporaryDirectory() as tmp:

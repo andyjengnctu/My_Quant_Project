@@ -191,12 +191,31 @@ def _normalize_control_rows(path: Path, *, ticker: str, cutoff: str) -> list[tup
 
 
 
-def _raw_price_quality_failures(frame: pd.DataFrame, *, ticker: str) -> tuple[int, list[dict[str, object]]]:
-    """Apply the canonical OHLCV sanitizer to the *entire* controlled Raw grid.
+def _raw_quote_diagnostics(frame: pd.DataFrame) -> dict[str, int]:
+    """Classify observed Raw zero-OHLC rows without inferring missing prices.
 
-    A content-SHA-valid CSV may still contain zero/invalid provider prices.  This
-    validator must not repair, forward-fill or remove any date: those changes
-    would silently alter the AO-vs-BW controlled input comparison.
+    FinMind TaiwanStockPrice may encode a day with no published OHLC as four
+    zeros, even when volume is positive. The controlled Volume comes from the
+    adjusted Research dataset, so it is diagnostic context, not independent
+    proof of the Raw provider's published Trading_Volume.
+    """
+    prices = frame.loc[:, ["Open", "High", "Low", "Close"]].apply(pd.to_numeric, errors="coerce")
+    all_zero = prices.eq(0.0).all(axis=1)
+    volume = pd.to_numeric(frame["Volume"], errors="coerce")
+    return {
+        "all_zero_ohlc": int(all_zero.sum()),
+        "all_zero_control_volume_zero": int((all_zero & volume.eq(0.0)).sum()),
+        "all_zero_control_volume_positive": int((all_zero & volume.gt(0.0)).sum()),
+        "all_zero_control_volume_other": int((all_zero & ~(volume.eq(0.0) | volume.gt(0.0))).sum()),
+    }
+
+
+def _raw_price_quality_failures(frame: pd.DataFrame, *, ticker: str) -> tuple[int, list[dict[str, object]]]:
+    """Inspect Raw prices; retain unavailable-quote evidence, never repair it.
+
+    The canonical sanitizer rejects all-zero prices for numerical model input,
+    but zero OHLC may be an authentic provider no-quote record, rather than a
+    corrupt row that can be recovered by re-downloading the same dataset.
     """
     try:
         clean, stats = sanitize_ohlcv_dataframe(frame, ticker, min_rows=1)
@@ -219,13 +238,15 @@ def _raw_price_quality_failures(frame: pd.DataFrame, *, ticker: str) -> tuple[in
     sample: list[dict[str, object]] = []
     for offset in frame.index[rejected][:8]:
         row = frame.loc[offset]
-        # The materializer always has one unique row per (ticker, date).  Existing
-        # immutable files are checked independently and never corrected in place.
         date = source_dates.loc[offset]
+        values = pd.to_numeric(row.loc[["Open", "High", "Low", "Close"]], errors="coerce")
+        all_zero = bool(values.eq(0.0).all())
         sample.append({
             "ticker": str(ticker),
             "date": date.strftime("%Y-%m-%d") if pd.notna(date) else str(row["Date"]),
             "ohlc": {field: str(row[field]) for field in ("Open", "High", "Low", "Close")},
+            "quote_class": "ALL_ZERO_NO_PUBLISHED_QUOTE_POSSIBLE" if all_zero else "OTHER_INVALID_OHLC",
+            "control_volume": str(row["Volume"]),
         })
     return removed, sample
 
@@ -246,7 +267,8 @@ def _cached_raw_price_quality(
         frame = pd.read_csv(absolute_path, low_memory=False)
     except (ValueError, OSError, UnicodeDecodeError) as exc:
         raise ValueError(f"raw-price strategy dataset CSV無法檢查OHLCV: {Path(absolute_path).name}") from exc
-    return _raw_price_quality_failures(frame, ticker=ticker)
+    invalid_rows, samples = _raw_price_quality_failures(frame, ticker=ticker)
+    return invalid_rows, samples, _raw_quote_diagnostics(frame)
 
 
 def _fail_on_raw_price_quality(issues: list[dict[str, object]], *, provider: str) -> None:
@@ -258,13 +280,23 @@ def _fail_on_raw_price_quality(issues: list[dict[str, object]], *, provider: str
         for item in issue["samples"]:
             if len(sample) < 24:
                 sample.append(dict(item))
+    zero_rows = sum(int(issue.get("quote_diagnostics", {}).get("all_zero_ohlc", 0)) for issue in issues)
+    zero_volume = sum(int(issue.get("quote_diagnostics", {}).get("all_zero_control_volume_zero", 0)) for issue in issues)
+    positive_volume = sum(int(issue.get("quote_diagnostics", {}).get("all_zero_control_volume_positive", 0)) for issue in issues)
+    other_volume = sum(int(issue.get("quote_diagnostics", {}).get("all_zero_control_volume_other", 0)) for issue in issues)
     raise ValueError(
         "RAW_SOURCE_QUALITY_BLOCKED: FinMind TaiwanStockPrice Raw OHLCV "
         f"has {total_rows} invalid controlled rows across {len(issues)} tickers; "
+        f"all_zero_ohlc={zero_rows} (control_volume_zero={zero_volume}, "
+        f"control_volume_positive={positive_volume}, control_volume_other={other_volume}); "
+        f"other_invalid={total_rows - zero_rows}; "
         f"sample={sample}; provider_snapshot={provider}; "
-        "source prices must be corrected by verifiable raw-market evidence "
-        "under a new immutable source identity. No adjusted substitution, "
-        "forward fill, date removal or checkpoint reuse is permitted."
+        "all-zero OHLC can mean no published market quote (not necessarily corrupt data); "
+        "a same-source re-download is not a demonstrated repair. Under the current "
+        "AO/BW exact-date, 300x10 raw-price input contract this source is not "
+        "trainable. Any missing-quote representation, imputation, matched-date "
+        "sample change or external price-source substitution requires separate "
+        "scientific authorization and identity; no silent fallback or checkpoint reuse."
     )
 
 
@@ -375,7 +407,10 @@ def _build_files(
                 continue
             invalid_rows, bad_samples = _raw_price_quality_failures(frame, ticker=ticker)
             if invalid_rows:
-                quality_issues.append({"ticker": ticker, "invalid_rows": invalid_rows, "samples": bad_samples})
+                quality_issues.append({
+                    "ticker": ticker, "invalid_rows": invalid_rows, "samples": bad_samples,
+                    "quote_diagnostics": _raw_quote_diagnostics(frame),
+                })
                 continue
             volume = pd.to_numeric(frame["Volume"], errors="raise")
             rounded = volume.round()
@@ -474,7 +509,7 @@ def inspect_raw_price_strategy_dataset(project_root: str | Path, *, deep: bool =
                 raise ValueError(f"raw-price strategy dataset CSV size drift: {rel}")
             if compute_file_sha256(path) != str(row.get("content_sha256") or ""):
                 raise ValueError(f"raw-price strategy dataset CSV SHA256 drift: {rel}")
-            invalid_rows, bad_samples = _cached_raw_price_quality(
+            invalid_rows, bad_samples, quote_diagnostics = _cached_raw_price_quality(
                 str(path.resolve()), str(row["content_sha256"]),
                 int(OHLCV_SANITIZATION_CONTRACT_VERSION),
                 str(row.get("ticker") or Path(rel).stem),
@@ -484,6 +519,7 @@ def inspect_raw_price_strategy_dataset(project_root: str | Path, *, deep: bool =
                     "ticker": str(row.get("ticker") or Path(rel).stem),
                     "invalid_rows": invalid_rows,
                     "samples": bad_samples,
+                    "quote_diagnostics": quote_diagnostics,
                 })
         _fail_on_raw_price_quality(
             quality_issues, provider=str(identity["provider_snapshot_fingerprint"]),

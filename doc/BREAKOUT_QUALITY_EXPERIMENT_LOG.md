@@ -12643,3 +12643,11 @@ Decision：`ENGINEERING_FIX / ADJUSTED_DATE_GRID_CANONICAL / RAW_ONLY_ROWS_IGNOR
 - **Next source decision**：資料補正只能取得可信Raw市場報價，保留實際來源與as-of/CSV SHA等證據，建立新的合法source/materialization identity再重跑Data Gate；若同一FinMind來源無法給出合法報價，使用TWSE或其他來源作Raw修復屬額外source research authorization，不能在此engineering patch直接混入BW既有single-source對照。不得用Adjusted代替Raw、前填、刪除日期、遮蔽Source Gate或宣稱模型pass。
 
 Decision：`RAW_PROVIDER_ZERO_OHLC_CONFIRMED / SOURCE_QUALITY_BLOCKED / READY_VALIDATION_FIXED / HISTORICAL_EVIDENCE_PRESERVED / BW_RESULT_PENDING / NO_MODEL_TRAINING`。
+
+
+## 2026-10-10 — MR-13BW official no-quote semantics; Raw-quality diagnostic correction (engineering-only)
+
+- **New user evidence**：本機Research `[1]→[1]` 在DL fitting之前拋出`RAW_SOURCE_QUALITY_BLOCKED`：FinMind TaiwanStockPrice 受控Raw OHLCV共`20,147`筆不通過canonical sanitizer，分布於`118`檔股票；本機Provider Snapshot fingerprint=`3d32df230810a683733e59f85b5baf4d77f28522572758e336fb6b50163daa52`。使用者log的前24個sample均OHLC四欄為0，但尚**不能**以sample推論全部20,147筆皆為全零、或全部為無成交日。BW checkpoint不存在是此實驗尚未完成training的正常結果。
+- **External provider semantics checked**：FinMind官方 TaiwanStockPrice 文件（`https://finmind.github.io/tutor/TaiwanMarket/Technical/`，2026-10-10查閱）寫明：當個股當日沒有公告有效成交價，原始公告OHLC=`--`，其API四欄以`0`表示；停牌、無成交及有量但無公告價格都可能發生。`TaiwanStockPriceAdj`對此類日期可能沿用前一日還原價（但成交量仍按當日）。故本輪修正先前「所有0價都是上游資料錯誤，須重新補抓真價」的過度推論：**沒有原始交易價格的日期不可能藉重新取得同一份來源保證出現合法Raw OHLC**。
+- **Engineering-only change**：`services/research/raw_price_strategy_dataset.py`僅把Canonical sanitizer所拒絕的Raw受控列區分成`all_zero_ohlc`（並分控組Volume=0/>0/其他）、`other_invalid`，提供樣本分類、controlled Volume及來源指紋，避免把合法No-Quote記錄一概稱為可修復的corruption。全零不等於已逐筆證實無報價，volume是Adjusted控制組欄位而非額外Raw成交證據。原始Raw/Adjusted CSV、Provider Snapshot、Data/Feature/Target、日期集合、MR-13BW身份、AO模型、fitting、checkpoint、REUSE/PIT、報表均**未改**；需Valid Raw OHLC時仍fail-closed，沒有新增填值、忽略缺日或重新生成價格。
+- **Decision**：`IMPLEMENTED / RESULT_PENDING / SOURCE_NO_QUOTE_SEMANTICS_CONFIRMED / RAW_INPUT_POLICY_BLOCKED`。原獲授權的BW單變量實驗保持暫停；選擇「用歷史價格填補」、「explicit missingness/mask」或「matched-valid-date universe」都涉及模型feature／sample semantics，必須另獲新的科學實驗授權與identity。此輪為報錯／診斷修正，不執行Forward/Rolling訓練、不宣稱BW模型結果。
