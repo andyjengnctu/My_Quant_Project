@@ -30,7 +30,7 @@ from services.market_data.provider_snapshot_repository import load_ready_provide
 from services.market_data.provider_snapshot_view import ProviderSnapshotView
 
 DATASET = "TaiwanStockMarginPurchaseShortSale"
-AUDIT_CONTRACT = "margin_short_pit_data_gate_v1"
+AUDIT_CONTRACT = "margin_short_pit_data_gate_v2"
 AUDIT_RELATIVE_ROOT = Path("outputs/filters/breakout_quality/audits/margin_short_pit_data_gate")
 NUMERIC_COLUMNS = (
     "MarginPurchaseTodayBalance", "MarginPurchaseLimit",
@@ -88,7 +88,10 @@ def audit_coverage(
 
     Input control dates must already be canonical adjusted-sanitizer retained dates;
     this deliberately measures a broad control universe, NOT an exact AO eligible
-    stock-day population. No model fitting or feature-value fabrication occurs.
+    stock-day population. If verified trading dates are supplied, pre-calendar
+    control history is explicitly excluded from audited coverage (never filled),
+    and any gap within the available calendar still fails. No model fitting or
+    feature-value fabrication occurs.
     """
     if not control_dates_by_ticker:
         raise ValueError("Audit control calendar不可為空")
@@ -110,15 +113,63 @@ def audit_coverage(
         control[str(ticker).strip()] = idx
         calendar = calendar.union(idx)
     calendar = calendar.sort_values()
+    # The Full Research adjusted series may predate the provider trading-calendar
+    # archive (e.g. 1992 stock-days).  Only report PIT coverage where a dated,
+    # SHA-verified calendar actually exists; do not invent historical sessions.
+    # Any unexplained gap *inside* that calendar's evidenced period still fails.
+    calendar_scope: dict[str, object] = {
+        "calendar_source": "control_date_union_unverified" if trading_dates is None
+                           else "TaiwanStockTradingDate_provider_snapshot",
+        "requested_start_date": begin.strftime("%Y-%m-%d") if begin is not None else None,
+        "verified_calendar_first_date": None,
+        "verified_calendar_last_date": None,
+        "effective_start_date": begin.strftime("%Y-%m-%d") if begin is not None else None,
+        "pre_calendar_control_date_count": 0,
+        "pre_calendar_control_stock_days": 0,
+        "pre_calendar_control_first_date": None,
+        "pre_calendar_control_last_date": None,
+        "pre_calendar_history_audited": trading_dates is None,
+    }
     if trading_dates is not None:
         verified_calendar = pd.DatetimeIndex(trading_dates).normalize().sort_values()
         if verified_calendar.empty or verified_calendar.hasnans or verified_calendar.has_duplicates:
             raise ValueError("已驗證交易日曆含空白、重複或不合法日期")
-        uncovered_control_days = calendar.difference(verified_calendar)
+        first_calendar_date = verified_calendar[0]
+        last_calendar_date = verified_calendar[-1]
+        # Require a predecessor to the first OOS prediction day, otherwise an
+        # apparently good OOS percentage could hide a truncated recent calendar.
+        if first_calendar_date >= oos_start:
+            raise ValueError("台股交易日曆未涵蓋OOS開始前的交易日: "
+                             f"calendar_first={first_calendar_date:%Y-%m-%d}, "
+                             f"oos_start={oos_start:%Y-%m-%d}")
+        if begin is not None and begin < first_calendar_date:
+            raise ValueError("指定Audit起始日早於Provider台股交易日曆可驗證範圍: "
+                             f"requested={begin:%Y-%m-%d}, "
+                             f"calendar_first={first_calendar_date:%Y-%m-%d}")
+        legacy_days = calendar[(calendar < first_calendar_date) & (calendar <= end)]
+        effective_begin = first_calendar_date if begin is None else begin
+        in_verified_scope = calendar[(calendar >= effective_begin) & (calendar <= end)]
+        # This also rejects uncovered control dates after the last calendar day;
+        # it never silently shrinks a requested OOS or verified-history window.
+        uncovered_control_days = in_verified_scope.difference(verified_calendar)
         if len(uncovered_control_days):
-            raise ValueError("Adjusted控制日期不在已驗證台股交易日曆: "
+            raise ValueError("Adjusted控制日期不在已驗證台股交易日曆涵蓋期間: "
                              + str([day.strftime("%Y-%m-%d") for day in uncovered_control_days[:10]]))
-        calendar = verified_calendar
+        calendar_scope.update({
+            "verified_calendar_first_date": first_calendar_date.strftime("%Y-%m-%d"),
+            "verified_calendar_last_date": last_calendar_date.strftime("%Y-%m-%d"),
+            "effective_start_date": effective_begin.strftime("%Y-%m-%d"),
+            "pre_calendar_control_date_count": len(legacy_days),
+            "pre_calendar_control_stock_days": sum(
+                int(((dates < first_calendar_date) & (dates <= end)).sum())
+                for dates in control.values()
+            ),
+            "pre_calendar_control_first_date": legacy_days[0].strftime("%Y-%m-%d") if len(legacy_days) else None,
+            "pre_calendar_control_last_date": legacy_days[-1].strftime("%Y-%m-%d") if len(legacy_days) else None,
+            "pre_calendar_history_audited": len(legacy_days) == 0,
+        })
+        begin = effective_begin
+        calendar = verified_calendar[verified_calendar <= end]
 
     groups: dict[str, list[pd.DataFrame]] = defaultdict(list)
     schema_errors: list[str] = []
@@ -147,7 +198,8 @@ def audit_coverage(
         malformed_ticker_rows += int(part["stock_id"].isna().sum() + part["stock_id"].eq("").fillna(False).sum())
         part["date"] = pd.to_datetime(part["date"], errors="coerce", format="%Y-%m-%d").dt.normalize()
         malformed_dates += int(part["date"].isna().sum())
-        part = part.loc[part["date"].notna() & part["stock_id"].isin(ticker_set) & (part["date"] <= end)]
+        part = part.loc[part["date"].notna() & part["stock_id"].isin(ticker_set)
+                        & (part["date"] <= end) & (part["date"] >= calendar[0])]
         selected_rows += len(part)
         if not part.empty:
             earliest = part["date"].min().strftime("%Y-%m-%d")
@@ -253,11 +305,16 @@ def audit_coverage(
 
     return {
         "control_ticker_count": len(control),
+        "calendar_scope": calendar_scope,
         "control_trading_session_count": len(calendar),
         "control_earliest_date": calendar.min().strftime("%Y-%m-%d"),
         "control_latest_date": calendar.max().strftime("%Y-%m-%d"),
         "coverage_scope": "canonical adjusted retained ticker-days (not AO exact eligible sample)",
-        "availability_rule": "source.date = strictly_previous_union_control_trading_session(prediction_date); NO_FILL",
+        "availability_rule": (
+            "source.date = strictly_previous_TaiwanStockTradingDate_provider_session(prediction_date); NO_FILL"
+            if trading_dates is not None else
+            "source.date = strictly_previous_union_control_trading_session(prediction_date); NO_FILL"
+        ),
         "source": issues,
         "source_duplicate_examples": duplicate_examples,
         "source_missing_examples": missing_examples,
@@ -305,6 +362,17 @@ def markdown_report(result: Mapping[str, object]) -> str:
     if "coverage" in result:
         coverage = result["coverage"]
         overall = coverage["oos_control_window"]
+        scope = coverage["calendar_scope"]
+        if scope["verified_calendar_first_date"] is not None:
+            lines.extend([
+                "## 已驗證日曆與歷史涵蓋界線", "",
+                f"- Provider日曆範圍：`{scope['verified_calendar_first_date']}`～`{scope['verified_calendar_last_date']}`。",
+                f"- 本次有效稽核起點：`{scope['effective_start_date']}`。",
+                f"- 早於Provider日曆的控制日期：{scope['pre_calendar_control_date_count']:,} 日、"
+                f"{scope['pre_calendar_control_stock_days']:,} 股票日；**未稽核／不納入覆蓋率分母**。",
+                "- 既有Adjusted歷史沒有被刪除；未涵蓋期間不能聲稱已完成PIT驗證。", 
+            "- 此日期列表已驗證Provider Snapshot來源SHA；實際開市與歷史首發／修訂時點仍須獨立證明。", "",
+            ])
         lines.extend([
             "## 覆蓋率（OOS 年度控制格；非精確 AO Eligible 樣本）", "",
             "| 指標 | 數值 |", "|---|---:|",
@@ -464,7 +532,7 @@ def main() -> int:
     parser.add_argument("--snapshot-fingerprint", default=None,
                         help="指定已READY的immutable Provider Snapshot；預設最新READY")
     parser.add_argument("--start-date", default=None,
-                        help="統計起始日期（預設涵蓋Research Full控制組所有歷史）")
+                        help="統計起始日期（預設以Provider日曆可驗證期間為界；更早的Adjusted歷史另行列報）")
     args = parser.parse_args()
     result, folder = run_data_gate(args.project_root, snapshot_fingerprint=args.snapshot_fingerprint,
                                    start_date=args.start_date)

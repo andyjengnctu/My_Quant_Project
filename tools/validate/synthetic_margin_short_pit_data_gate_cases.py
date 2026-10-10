@@ -129,7 +129,7 @@ def test_schema_control_and_report():
         assert "重複" in str(exc)
     try:
         audit_coverage(_toy_control(), [source], end_date="2025-01-07", oos_start_date="2025-01-02",
-                       trading_dates=pd.DatetimeIndex(["2025-01-02", "2025-01-06", "2025-01-07"]))
+                       trading_dates=pd.DatetimeIndex(["2024-12-31", "2025-01-02", "2025-01-06", "2025-01-07"]))
         raise AssertionError("canonical control date outside verified calendar must be blocked")
     except ValueError as exc:
         assert "已驗證台股交易日曆" in str(exc)
@@ -140,10 +140,71 @@ def test_schema_control_and_report():
     return 5
 
 
+def test_legacy_control_before_provider_calendar_is_scoped_not_fabricated():
+    """1992 Research history cannot block a provable 2021 OOS Data Gate."""
+    control = {
+        "0050": pd.DatetimeIndex(["1992-01-04", "2020-12-30", "2021-01-04", "2021-01-05"]),
+        "2330": pd.DatetimeIndex(["1992-01-06", "2021-01-04", "2021-01-05"]),
+    }
+    verified = pd.DatetimeIndex(["2020-12-30", "2020-12-31", "2021-01-04", "2021-01-05"])
+    source = pd.DataFrame([
+        (ticker, day, 10, 100, 0, 10)
+        for ticker in ("0050", "2330") for day in ("2020-12-31", "2021-01-04")
+    ], columns=_toy_source().columns)
+    audit = audit_coverage(control, [source], end_date="2021-01-05",
+                           oos_start_date="2021-01-01", trading_dates=verified)
+    scope = audit["calendar_scope"]
+    assert scope["verified_calendar_first_date"] == "2020-12-30"
+    assert scope["effective_start_date"] == "2020-12-30"
+    assert scope["pre_calendar_control_date_count"] == 2
+    assert scope["pre_calendar_control_stock_days"] == 2
+    assert scope["pre_calendar_control_first_date"] == "1992-01-04"
+    assert scope["pre_calendar_control_last_date"] == "1992-01-06"
+    assert scope["pre_calendar_history_audited"] is False
+    assert audit["oos_control_window"]["control_stock_days"] == 4
+    assert audit["oos_control_window"]["both_ratio_valid"] == 4
+    assert "TaiwanStockTradingDate" in audit["availability_rule"]
+    report = markdown_report({"status": "PIT_REVIEW_REQUIRED", "cutoff": "2021-01-05", "coverage": audit})
+    assert "未稽核／不納入覆蓋率分母" in report
+    # A change on a score day cannot affect that day's previous-session input.
+    mutated = pd.concat([source, pd.DataFrame([
+        ("0050", "2021-01-05", 1000, 100, 0, 10)
+    ], columns=source.columns)], ignore_index=True)
+    other = audit_coverage(control, [mutated], end_date="2021-01-05",
+                           oos_start_date="2021-01-01", trading_dates=verified)
+    assert audit["oos_control_window"] == other["oos_control_window"]
+    return 12
+
+
+def test_verified_calendar_scope_never_masks_in_range_gaps():
+    control = {"0050": pd.DatetimeIndex(["1992-01-04", "2021-01-04", "2021-01-05"])}
+    source = _toy_source()
+    expected = (
+        (pd.DatetimeIndex(["2020-12-30", "2020-12-31", "2021-01-05"]),
+         None, "已驗證台股交易日曆涵蓋期間"),
+        (pd.DatetimeIndex(["2020-12-30", "2020-12-31", "2021-01-04"]),
+         None, "已驗證台股交易日曆涵蓋期間"),
+        (pd.DatetimeIndex(["2020-12-30", "2020-12-31", "2021-01-04", "2021-01-05"]),
+         "1992-01-04", "指定Audit起始日早於"),
+        (pd.DatetimeIndex(["2021-01-01", "2021-01-04", "2021-01-05"]),
+         None, "未涵蓋OOS開始前"),
+    )
+    for verified, begin, fragment in expected:
+        try:
+            audit_coverage(control, [source], end_date="2021-01-05", oos_start_date="2021-01-01",
+                           trading_dates=verified, start_date=begin)
+            raise AssertionError(f"Must block insufficient calendar evidence: {fragment}")
+        except ValueError as exc:
+            assert fragment in str(exc), str(exc)
+    return 4
+
+
 def main():
     tests = [test_pit_and_missing, test_no_future_lookahead, test_missing_and_zero_are_distinct,
              test_duplicate_and_invalid_dates, test_blank_and_negative_limits,
              test_multi_fragment_and_year_split, test_schema_control_and_report,
+             test_legacy_control_before_provider_calendar_is_scoped_not_fabricated,
+             test_verified_calendar_scope_never_masks_in_range_gaps,
              test_offline_report_integration, test_canonical_snapshot_view_sha]
     count = 0
     for test in tests:
@@ -193,13 +254,14 @@ def test_offline_report_integration():
                 return (fake_artifact,)
             def iter_verified_frames(self, dataset, *, columns):
                 assert dataset == "TaiwanStockTradingDate" and columns == ("date",)
-                yield pd.DataFrame({"date": ["2025-01-02", "2025-01-03", "2025-01-06", "2025-01-07"]})
+                yield pd.DataFrame({"date": ["2024-12-31", "2025-01-02", "2025-01-03", "2025-01-06", "2025-01-07"]})
             def iter_verified_frames_many_data_ids(self, dataset, *, columns, data_ids):
                 assert dataset == gate.DATASET and "0050" in data_ids and "2330" in data_ids
                 assert set(columns) == set(gate.REQUIRED_COLUMNS)
                 yield _toy_source()
         with patch.object(gate, "load_ready_provider_snapshot_archive", return_value=fake_archive), \
-             patch.object(gate, "ProviderSnapshotView", FakeView):
+             patch.object(gate, "ProviderSnapshotView", FakeView), \
+             patch.object(gate, "BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE", "2025-01-01"):
             result, path = gate.run_data_gate(root)
         assert result["status"] == "PIT_REVIEW_REQUIRED"
         assert result["model_input_authorized"] is False
