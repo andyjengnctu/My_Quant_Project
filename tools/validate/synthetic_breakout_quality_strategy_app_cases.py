@@ -55,9 +55,9 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
     canonical_app_path = project_root / "services" / "research" / "breakout_quality_application.py"
     compatibility_app_path = project_root / "tools" / "filters" / "breakout_quality" / "application.py"
     canonical_app_source = canonical_app_path.read_text(encoding="utf-8")
-    compatibility_app_source = compatibility_app_path.read_text(encoding="utf-8")
     strategy_app_path = project_root / "apps" / "research.py"
     strategy_config_path = project_root / "config" / "strategy_compare.py"
+    research_shell_source = strategy_app_path.read_text(encoding="utf-8")
 
     check_true(
         "single_seed_contract_has_one_neutral_research_seed_ssot",
@@ -112,7 +112,19 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
         check_true,
         (
             ('single_seed_contract_rejects_negative_seed', negative_seed_rejected,),
-            ('model_and_strategy_apps_are_separate_entries', canonical_app_path.is_file() and compatibility_app_path.is_file() and strategy_app_path.is_file() and strategy_config_path.is_file() and ('"strategy-compare"' not in canonical_app_source) and ('apps/research.py compare' in canonical_app_source) and ('services.research.breakout_quality_application' in compatibility_app_source),),
+            (
+                'model_and_strategy_apps_are_separate_entries',
+                canonical_app_path.is_file()
+                and not compatibility_app_path.exists()
+                and strategy_app_path.is_file()
+                and strategy_config_path.is_file()
+                and ('"strategy-compare"' not in canonical_app_source)
+                and ('apps/research.py compare' in canonical_app_source)
+                and 'if command == "model":' in research_shell_source
+                and 'if command in {"compare", "strategy-compare"}:' in research_shell_source
+                and '_load_provider_handler("cli_handler")' in research_shell_source
+                and 'from services.research.strategy_compare_application import' in research_shell_source,
+            ),
         ),
     )
 
@@ -127,7 +139,6 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
     from core.research_policy import get_active_model_research_provider
 
     provider = get_active_model_research_provider()
-    research_shell_source = strategy_app_path.read_text(encoding="utf-8")
     check_true(
         "research_formal_applications_are_service_owned_and_tools_are_compatibility_only",
         provider.module == "services.research.breakout_quality_application"
