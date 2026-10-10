@@ -12749,3 +12749,10 @@ Decision：`RAW_PROVIDER_ZERO_OHLC_CONFIRMED / SOURCE_QUALITY_BLOCKED / READY_VA
 - **測試／未驗證**：專題探針 `unittest` 22/22 PASS（新增嚴格成功、特定SKI單次重試、CA/hostname invariant、其他cert/HTTP錯誤拒絕、重試失敗留證、失敗工件指紋區隔）；原 Margin Data Gate 11 scenarios／65 assertions PASS。尚**未**在使用者 Python3.14／實際 TWSE 連線驗證相容模式是否能成功；未重跑官方六日，不執行formal suite。下個**最小可決策動作**僅在本機以事前固定日期 `2024-02-01` 做一次單日來源探針，先確認是否通過TLS並能讀取真實JSON；若CA/hostname或網路仍拒絕，直接保留具體錯誤並停止重試。
 - **研究授權不變**：即使單日或所有歷史 current-vintage TWSE 重新查詢成功，也不是歷史當時發布版本或可信交付時間，亦未涵蓋TPEx／限額有效日期；仍為 `PIT_REVIEW_REQUIRED / MODEL_INPUT_NO / HISTORICAL_VINTAGE_UNPROVEN / NO_MR / NO_FITTING`。不更動 Provider Snapshot、研究V1、AO、任一DL工件／Target／Trading／標準報表。
 
+## 2026-10-10 — TWSE 2024-02-01 單日官方確認餘額比較成功：來源交叉核對完成，Vintage 仍未證實
+
+- **本輪程式基準／證據性質**：使用者上傳 `test-branch-1_20261010_120843_c9e8c3d0.zip`，SHA256=`0f5f2621697c380c4b94182f7b6c0351e297feedcf1763f139b4e63d7ad875e2`；本輪新解壓目錄 `stock_margin_1131_review_20261010_u1/`。使用者另提供本機一次性 `publication_probe.md` 實際結果文字；GPT 未取得對應原始本機 Provider Snapshot、TWSE response bytes、`publication_probe.json` 或 5 筆股票差異內容，**不能杜撰差異股票或差額**。
+- **實測比對與時間語意**：已固定官方報表 T−1=`2024-02-01`，該報表「前日餘額」對應 T−2=`2024-01-31`，預測日 T=`2024-02-02`。TWSE個股=`1,136`，可比較=`1,136`，融資一致=`1,131/1,136`（`99.56%`），融券一致=`1,136/1,136`（`100%`），雙欄一致=`1,131/1,136`（`99.56%`）；融資差異=`5` 檔。TWSE來源TLS模式=`CA_CHAIN_AND_HOSTNAME_REQUIRED_X509_FORMAT_COMPAT`，確認局部 X.509 格式相容處理可在使用者本機完成安全連線；它不是舊版原始發布時間的證據。
+- **範圍與缺口**：這是今天重查官方2024-02-01報表的 **current-vintage** 數值交叉核對，只證明該日當前可得版本與FinMind相符程度，未證明2024-02-02盤前可得的歷史不可變版本、真正首發/後續修訂紀錄，亦未稽核TPEx、跨年份全部股票日、限額effective date／使用率。五筆融資差異已由現有 `comparison.sample_mismatches` 保留於本機 `publication_probe.json`；如需來源歸因，僅讀既有證據，不重新抓六日或重算覆蓋率。**不得把2024單日一致率外推為全歷史資料準確率或宣稱已通過PIT。**
+- **決策／stop rule**：`OFFICIAL_CURRENT_VINTAGE_SOURCE_COMPARISON_OBSERVED / TLS_ACCESS_RESOLVED / 5_MARGIN_DISCREPANCIES_UNATTRIBUTED / HISTORICAL_VINTAGE_NOT_PROVEN / PIT_REVIEW_REQUIRED / MODEL_INPUT_NO / NO_NEW_MR / NO_FITTING`。來源聯通與單日值對照問題已足夠回答，**結束重複的current-vintage官方網頁取樣鏈**。只有取得具可信封存／交付時間的當年TWSE/TPEx原始版本與適用日期證據（或另行授權且符合D1的新科學資料契約）才重啟margin Input科學授權審查；不更動AO、Provider Snapshot、Research V1、Target、checkpoint、正式SOP/Compare或Trading。研究紀錄同步不代表本機formal suite PASS。
+
