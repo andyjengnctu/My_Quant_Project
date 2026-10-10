@@ -282,6 +282,36 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         == str(TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS),
     )
 
+    from services.breakout_quality.train_continuous_ranker import parse_args as parse_ranker_args
+    from services.breakout_quality.point_in_time_scores import parse_args as parse_pit_args
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_TORCH_DEVICE, BREAKOUT_QUALITY_USE_MIXED_PRECISION,
+        BREAKOUT_QUALITY_MIXED_PRECISION_DTYPE, BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS,
+        BREAKOUT_QUALITY_ALLOW_TF32,
+    )
+    expected_torch_defaults = (
+        str(BREAKOUT_QUALITY_TORCH_DEVICE), bool(BREAKOUT_QUALITY_USE_MIXED_PRECISION),
+        str(BREAKOUT_QUALITY_MIXED_PRECISION_DTYPE), bool(BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS),
+        bool(BREAKOUT_QUALITY_ALLOW_TF32),
+    )
+    def torch_fields(arguments):
+        return (arguments.device, arguments.mixed_precision, arguments.mixed_precision_dtype,
+                arguments.deterministic_algorithms, arguments.allow_tf32)
+
+    for name, parser in (("train", parse_ranker_args), ("pit", parse_pit_args)):
+        check(
+            f"{name}_torch_cli_uses_config_defaults",
+            expected_torch_defaults, torch_fields(parser([])),
+        )
+        check(
+            f"{name}_torch_cli_override_preserves_boolean_optional_semantics",
+            ("cpu", False, "bfloat16", True, False),
+            torch_fields(parser([
+                "--device", "cpu", "--no-mixed-precision", "--mixed-precision-dtype", "bfloat16",
+                "--deterministic-algorithms", "--no-allow-tf32",
+            ])),
+        )
+
     summary.update(
         {
             "active_architectures": list(active),

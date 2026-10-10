@@ -4115,6 +4115,36 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("data_ops_reads_canonical_trading_data_readiness_without_provider_call", True, "build_trading_data_readiness" in data_ops_source and '"provider_calls": 0' in data_ops_source)
     check("readiness_gate_requires_schema_and_coverage_for_v2_dependencies", True, "schema_status" in readiness_source and "coverage_status" in readiness_source and "VALIDATION_STATUS_NOT_EVALUATED" not in readiness_source)
 
+    from services.workbench_ui.data_ops_panel import _last_v2_ready_detail
+    check(
+        "v2_last_ready_uses_pinned_historical_dataset_count",
+        "last 38/38 READY",
+        _last_v2_ready_detail({
+            "v2_latest_sync_target_date": "2026-10-01",
+            "v2_latest_sync_dataset_count": 38,
+            "dataset_count": 51,
+            "ready_count": 12,
+        }),
+    )
+    check(
+        "v2_last_ready_legacy_record_does_not_invent_dataset_count",
+        "last READY (count unavailable)",
+        _last_v2_ready_detail({"v2_latest_sync_target_date": "2026-09-01", "dataset_count": 51}),
+    )
+    check(
+        "v2_last_ready_absent_target_is_not_falsely_ready",
+        "no historical READY target",
+        _last_v2_ready_detail({"dataset_count": 51, "ready_count": 51}),
+    )
+    from .checks import raises_expected
+    check(
+        "v2_last_ready_rejects_nonpositive_historical_count",
+        True,
+        raises_expected(ValueError, lambda: _last_v2_ready_detail({
+            "v2_latest_sync_target_date": "2026-09-01", "v2_latest_sync_dataset_count": 0,
+        })),
+    )
+
     summary.update({
         "checks": len(results),
         "trading_request_count": manifest_a.total_requests,

@@ -202,6 +202,8 @@ def publish_trading_market_data_v2_auto_rollup(
         "base_as_of_date": provider_payload.get("as_of_date"),
         "last_attempt_target_date": str(target_date),
         "latest_sync_target_date": str(target_date) if all_ready else base.get("latest_sync_target_date"),
+        # Bind the count to the same historical all-ready target, not today's dataset status.
+        "latest_sync_dataset_count": total if all_ready else base.get("latest_sync_dataset_count"),
         "latest_auto_batch_fingerprint": result.get("batch_fingerprint"),
         "latest_auto_request_count": int(result.get("request_count") or 0),
         "latest_auto_data_requests": int(result.get("process_data_requests") or 0),
@@ -265,6 +267,7 @@ def build_trading_market_data_v2_read_model(project_root) -> dict[str, Any]:
         "provider_as_of_date": state.get("base_as_of_date"),
         "provider_snapshot_fingerprint": state.get("base_provider_snapshot_fingerprint"),
         "latest_sync_target_date": state.get("latest_sync_target_date"),
+        "latest_sync_dataset_count": state.get("latest_sync_dataset_count"),
         "latest_batch_fingerprint": state.get("latest_batch_fingerprint"),
         "latest_request_count": state.get("latest_request_count"),
         "latest_row_count": state.get("latest_row_count"),

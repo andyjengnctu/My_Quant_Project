@@ -6549,6 +6549,42 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             ),
         )
 
+    from filters.breakout_quality.models.frozen_encoder_contract import (
+        freeze_encoder_parameters, train_with_frozen_encoder,
+    )
+    import torch as _frozen_torch
+    class _FrozenEncoderProbe(_frozen_torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.encoder = _frozen_torch.nn.Linear(2, 2)
+            self.head = _frozen_torch.nn.Linear(2, 2)
+
+        def freeze_encoder(self):
+            freeze_encoder_parameters(self.encoder)
+
+        def train(self, mode=True):
+            return train_with_frozen_encoder(
+                parent_train=super().train, encoder=self.encoder, mode=mode,
+            )
+
+    probe = _FrozenEncoderProbe()
+    probe.freeze_encoder()
+    check_true(
+        "all_frozen_encoder_parameters_excluded_from_training",
+        all(not parameter.requires_grad for parameter in probe.encoder.parameters())
+        and all(parameter.requires_grad for parameter in probe.head.parameters()),
+    )
+    probe.train(True)
+    check_true(
+        "frozen_encoder_stays_in_eval_when_classifier_is_training",
+        probe.training and probe.head.training and not probe.encoder.training,
+    )
+    probe.train(False)
+    check_true(
+        "frozen_encoder_train_override_preserves_return_self_and_eval_state",
+        not probe.training and not probe.head.training and not probe.encoder.training,
+    )
+
     summary["components"] = (
         "dual_component_regression",
         "equal_rank_target",

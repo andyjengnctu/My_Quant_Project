@@ -334,6 +334,7 @@ def build_market_data_ops_read_model(
         "trading_blocking_dependencies": list(trading_readiness.get("blocking_dependencies") or []),
         "v2_status": v2.get("status"),
         "v2_latest_sync_target_date": v2.get("latest_sync_target_date"),
+        "v2_latest_sync_dataset_count": v2.get("latest_sync_dataset_count"),
         "provider_ready": bool(v2.get("provider_ready")),
         "provider_as_of_date": v2.get("provider_as_of_date"),
         "dataset_state_ready": bool(dataset_state.get("state_ready")),

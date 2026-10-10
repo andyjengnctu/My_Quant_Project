@@ -17,7 +17,7 @@ from core.breakout_quality_policy import (
     BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
     BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
 )
-from filters.breakout_quality.continuous_target import (
+from core.breakout_quality_runtime import (
     DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
     DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
     DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,

@@ -17,6 +17,16 @@ from functools import lru_cache
 from typing import Any, Callable
 
 
+# Continuous target identity strings are runtime contract values, not Filter implementation.
+STRATEGY_ALIGNED_TARGET_ID = "strategy_aligned_opportunity_r_v1"
+STRATEGY_ALIGNED_NO_TIME_TARGET_ID = "strategy_aligned_opportunity_no_time_r_v1"
+DAILY_OPPORTUNITY_NO_TIME_TARGET_ID = "daily_opportunity_no_time_r_v1"
+DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID = "daily_full_horizon_opportunity_r_v1"
+DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID = "daily_full_horizon_pure_mfe_r_v1"
+DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID = "daily_first_risk_breach_pure_mfe_r_v1"
+DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID = "daily_full_horizon_low_adverse_r_v1"
+DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID = "daily_full_horizon_equal_rank_mfe_low_adverse_v1"
+
 # Stable execution-capability identities live with the runtime policies that consume them.
 # ``core.breakout_quality_registry`` imports these names when declaring scientific profiles;
 # there must not be a reverse runtime->registry/config edge.

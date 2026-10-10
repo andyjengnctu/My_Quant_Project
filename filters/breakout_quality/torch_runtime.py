@@ -10,6 +10,26 @@ SUPPORTED_TORCH_DEVICES = ("auto", "cpu", "cuda")
 SUPPORTED_MIXED_PRECISION_DTYPES = ("auto", "float16", "bfloat16")
 
 
+def add_torch_execution_cli_arguments(
+    parser, *, device: str, mixed_precision: bool, mixed_precision_dtype: str,
+    deterministic_algorithms: bool, allow_tf32: bool,
+) -> None:
+    """Common CLI contract; defaults remain owned by the selected config/profile."""
+    import argparse
+
+    parser.add_argument("--device", choices=SUPPORTED_TORCH_DEVICES, default=device)
+    parser.add_argument("--mixed-precision", action=argparse.BooleanOptionalAction, default=mixed_precision)
+    parser.add_argument(
+        "--mixed-precision-dtype", choices=SUPPORTED_MIXED_PRECISION_DTYPES,
+        default=mixed_precision_dtype,
+    )
+    parser.add_argument(
+        "--deterministic-algorithms", action=argparse.BooleanOptionalAction,
+        default=deterministic_algorithms,
+    )
+    parser.add_argument("--allow-tf32", action=argparse.BooleanOptionalAction, default=allow_tf32)
+
+
 @dataclass(frozen=True)
 class TorchExecutionPlan:
     requested_device: str
@@ -122,6 +142,7 @@ def seed_torch(torch: Any, *, seed: int, plan: TorchExecutionPlan) -> None:
 __all__ = [
     "SUPPORTED_MIXED_PRECISION_DTYPES",
     "SUPPORTED_TORCH_DEVICES",
+    "add_torch_execution_cli_arguments",
     "TorchExecutionPlan",
     "autocast_context",
     "build_grad_scaler",

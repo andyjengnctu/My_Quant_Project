@@ -13,15 +13,18 @@ import numpy as np
 from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.contract import BreakoutQualityLabelPolicy
 
+from core.breakout_quality_runtime import (
+    STRATEGY_ALIGNED_TARGET_ID,
+    STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+    DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
+    DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
+    DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+    DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
+    DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
+    DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
+)
+
 CONTINUOUS_TARGET_SCHEMA_VERSION = 1
-STRATEGY_ALIGNED_TARGET_ID = "strategy_aligned_opportunity_r_v1"
-STRATEGY_ALIGNED_NO_TIME_TARGET_ID = "strategy_aligned_opportunity_no_time_r_v1"
-DAILY_OPPORTUNITY_NO_TIME_TARGET_ID = "daily_opportunity_no_time_r_v1"
-DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID = "daily_full_horizon_opportunity_r_v1"
-DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID = "daily_full_horizon_pure_mfe_r_v1"
-DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID = "daily_first_risk_breach_pure_mfe_r_v1"
-DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID = "daily_full_horizon_low_adverse_r_v1"
-DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID = "daily_full_horizon_equal_rank_mfe_low_adverse_v1"
 
 TARGET_RAW_FILENAME = "group_target_raw_r.npy"
 TARGET_FAVORABLE_RETURN_FILENAME = "group_favorable_return.npy"

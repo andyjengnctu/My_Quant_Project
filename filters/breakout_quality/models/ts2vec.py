@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from typing import Mapping
 
+from filters.breakout_quality.models.frozen_encoder_contract import (
+    freeze_encoder_parameters, train_with_frozen_encoder,
+)
+
 
 def _same_padding(kernel_size: int, dilation: int) -> int:
     effective = (int(kernel_size) - 1) * int(dilation)
@@ -103,14 +107,12 @@ def build_ts2vec_frozen_linear(
             self.freeze_encoder()
 
         def freeze_encoder(self) -> None:
-            for parameter in self.encoder.parameters():
-                parameter.requires_grad_(False)
-            self.encoder.eval()
+            freeze_encoder_parameters(self.encoder)
 
         def train(self, mode: bool = True):
-            super().train(mode)
-            self.encoder.eval()
-            return self
+            return train_with_frozen_encoder(
+                parent_train=super().train, encoder=self.encoder, mode=mode,
+            )
 
         def forward(self, sequence, context):
             del context

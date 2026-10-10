@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from typing import Mapping
 
+from filters.breakout_quality.models.frozen_encoder_contract import (
+    freeze_encoder_parameters, train_with_frozen_encoder,
+)
+
 from filters.breakout_quality.moment_contract import (
     MOMENT_INSTALL_HINT,
     MOMENT_PACKAGE_NAME,
@@ -60,14 +64,12 @@ def build_moment_frozen_linear(
             self.freeze_encoder()
 
         def freeze_encoder(self) -> None:
-            for parameter in self.encoder.parameters():
-                parameter.requires_grad_(False)
-            self.encoder.eval()
+            freeze_encoder_parameters(self.encoder)
 
         def train(self, mode: bool = True):
-            super().train(mode)
-            self.encoder.eval()
-            return self
+            return train_with_frozen_encoder(
+                parent_train=super().train, encoder=self.encoder, mode=mode,
+            )
 
         def forward(self, sequence, context):
             del context

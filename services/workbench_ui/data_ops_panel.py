@@ -67,6 +67,19 @@ def _fmt_datetime(value) -> str:
     )
 
 
+def _last_v2_ready_detail(snapshot: dict[str, object]) -> str:
+    """Render only validated historical sync evidence; never infer from today's rows."""
+    if not snapshot.get("v2_latest_sync_target_date"):
+        return "no historical READY target"
+    count = snapshot.get("v2_latest_sync_dataset_count")
+    if count is None:
+        return "last READY (count unavailable)"
+    count = int(count)
+    if count <= 0:
+        raise ValueError("historical V2 READY dataset count must be positive")
+    return f"last {count}/{count} READY"
+
+
 def _retry_text(row: dict[str, object]) -> str:
     return "/".join(
         str(int(row.get(key) or 0))
@@ -1014,7 +1027,7 @@ class MarketDataOpsPanel(ttk.Frame):
 
         last_all_ready = str(snapshot.get("v2_latest_sync_target_date") or "-")
         self._kpi_vars["v2"].set(last_all_ready)
-        self._kpi_detail_vars["v2"].set("last 51/51 READY")
+        self._kpi_detail_vars["v2"].set(_last_v2_ready_detail(snapshot))
         self._kpi_labels["v2"].configure(foreground=WORKBENCH_INFO if last_all_ready != "-" else WORKBENCH_MUTED)
 
         ready_count = int(snapshot.get("ready_count") or 0)
