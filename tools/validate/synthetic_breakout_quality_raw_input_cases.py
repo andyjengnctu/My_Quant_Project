@@ -34,6 +34,9 @@ from services.breakout_quality.price_input_source import (
     load_daily_universal_ranker_data_with_price_source,
     resolve_feature_price_source,
 )
+from services.research.raw_price_strategy_dataset import (
+    _build_files, _raw_price_quality_failures, inspect_raw_price_strategy_dataset,
+)
 
 
 class AlternatePriceInputTests(unittest.TestCase):
@@ -198,6 +201,126 @@ class AlternatePriceInputTests(unittest.TestCase):
             self.assertIn(first_date, message)
             self.assertIn(second_date, message)
             self.assertIn("data_source_blocked", message)
+
+    def test_canonical_raw_source_quality_detects_all_six_zero_bars(self):
+        control = self._frame(0.2).iloc[:30].reset_index(names="Date")
+        zero_dates = list(control.loc[[2, 4, 8, 11, 15, 22], "Date"])
+        control.loc[control["Date"].isin(zero_dates), ["Open", "High", "Low", "Close"]] = 0.0
+        count, examples = _raw_price_quality_failures(control, ticker="0052")
+        self.assertEqual(count, 6)
+        self.assertEqual(len(examples), 6)
+        self.assertTrue(all(item["ticker"] == "0052" for item in examples))
+        self.assertTrue(all(item["ohlc"]["Open"] == "0.0" for item in examples))
+        control.loc[control["Date"].isin(zero_dates), ["Open", "High", "Low", "Close"]] = 10.0
+        count, examples = _raw_price_quality_failures(control, ticker="0052")
+        self.assertEqual((count, examples), (0, []))
+
+    def test_raw_materializer_rejects_invalid_provider_rows_before_ready(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ctrl = root / "control"
+            ctrl.mkdir()
+            rows = self._frame(0.1).iloc[:8].reset_index(names="Date")
+            rows.to_csv(ctrl / "0052.csv", index=False)
+            provider = rows.rename(columns={"Date": "date", "Open": "open", "High": "max", "Low": "min", "Close": "close"})
+            provider["date"] = provider["date"].dt.strftime("%Y-%m-%d")
+            provider["stock_id"] = "0052"
+            provider.loc[provider.index[2], ["open", "max", "min", "close"]] = 0.0
+            view = SimpleNamespace(iter_raw_price_strategy_frames=lambda **_kw: iter([provider]))
+            stage = root / "stage"
+            with self.assertRaisesRegex(ValueError, "RAW_SOURCE_QUALITY_BLOCKED") as caught:
+                _build_files(
+                    root=root, view=view, control_dir=ctrl, stage_dir=stage,
+                    source_identity={"frozen_cutoff": "2026-03-02", "provider_snapshot_fingerprint": "a" * 64},
+                )
+            self.assertIn("0052", str(caught.exception))
+            self.assertIn("0.0", str(caught.exception))
+            self.assertIn("provider_snapshot=", str(caught.exception))
+            self.assertFalse((stage / "manifest.json").exists())
+
+    def test_raw_materializer_keeps_healthy_prices_and_control_volume(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            control = root / "control"
+            control.mkdir()
+            adjusted = self._frame(0.1).iloc[:8].reset_index(names="Date")
+            adjusted.to_csv(control / "0052.csv", index=False)
+            provider = adjusted.rename(columns={
+                "Date": "date", "Open": "open", "High": "max", "Low": "min", "Close": "close",
+            })
+            provider["date"] = provider["date"].dt.strftime("%Y-%m-%d")
+            provider["stock_id"] = "0052"
+            provider["close"] += 0.05
+            provider["max"] += 0.05
+            view = SimpleNamespace(iter_raw_price_strategy_frames=lambda **_kw: iter([provider]))
+            stage = root / "stage"
+            files, total_rows = _build_files(
+                root=root, view=view, control_dir=control, stage_dir=stage,
+                source_identity={"frozen_cutoff": "2026-03-02", "provider_snapshot_fingerprint": "a" * 64},
+            )
+            self.assertEqual(total_rows, len(adjusted))
+            self.assertEqual(len(files), 1)
+            output = pd.read_csv(stage / "tw_stock_data_vip" / "0052.csv")
+            self.assertTrue(np.array_equal(output["Volume"].to_numpy(), adjusted["Volume"].to_numpy()))
+            self.assertTrue(np.allclose(output["Close"], provider["close"], atol=1e-10, rtol=0))
+            self.assertEqual(files[0]["content_sha256"], compute_file_sha256(stage / "tw_stock_data_vip" / "0052.csv"))
+
+    def test_existing_sha_valid_raw_materialization_rejects_zero_bars(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = {"provider_snapshot_fingerprint": "b" * 64}
+            source_fp = "a" * 64
+            source["source_identity_fingerprint"] = source_fp
+            base = root / "outputs" / "research" / "raw_price_strategy_dataset" / source_fp
+            data_dir = base / "tw_stock_data_vip"
+            data_dir.mkdir(parents=True)
+            frame = self._frame(0.15).iloc[:10].reset_index(names="Date")
+            frame.loc[frame.index[3], ["Open", "High", "Low", "Close"]] = 0.0
+            path = data_dir / "0052.csv"
+            frame.to_csv(path, index=False)
+            files = [{"ticker": "0052", "relative_path": "0052.csv", "size_bytes": path.stat().st_size,
+                      "content_sha256": compute_file_sha256(path)}]
+            inventory = canonical_json_sha256(files)
+            materialization = canonical_json_sha256({"source_identity_fingerprint": source_fp,
+                                                       "dataset_inventory_sha256": inventory})
+            manifest = {"source_identity": source, "files": files,
+                        "dataset_inventory_sha256": inventory,
+                        "data_identity": {"materialization_fingerprint": materialization}}
+            (base / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            with patch("services.research.raw_price_strategy_dataset._source_identity",
+                       return_value=(source, None, None)):
+                with self.assertRaisesRegex(ValueError, "RAW_SOURCE_QUALITY_BLOCKED") as raised:
+                    inspect_raw_price_strategy_dataset(root, deep=True)
+                self.assertIn("0052", str(raised.exception))
+                self.assertIn("0.0", str(raised.exception))
+            self.assertTrue(path.exists())  # immutable historical evidence untouched
+
+    def test_existing_healthy_raw_materialization_remains_reusable(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = {"provider_snapshot_fingerprint": "b" * 64}
+            source_fp = "a" * 64
+            source["source_identity_fingerprint"] = source_fp
+            base = root / "outputs" / "research" / "raw_price_strategy_dataset" / source_fp
+            data_dir = base / "tw_stock_data_vip"
+            data_dir.mkdir(parents=True)
+            frame = self._frame(0.15).iloc[:10].reset_index(names="Date")
+            path = data_dir / "0052.csv"
+            frame.to_csv(path, index=False)
+            files = [{"ticker": "0052", "relative_path": "0052.csv", "size_bytes": path.stat().st_size,
+                      "content_sha256": compute_file_sha256(path)}]
+            inventory = canonical_json_sha256(files)
+            materialization = canonical_json_sha256({"source_identity_fingerprint": source_fp,
+                                                       "dataset_inventory_sha256": inventory})
+            manifest = {"source_identity": source, "files": files,
+                        "dataset_inventory_sha256": inventory,
+                        "data_identity": {"materialization_fingerprint": materialization}}
+            (base / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            with patch("services.research.raw_price_strategy_dataset._source_identity",
+                       return_value=(source, None, None)):
+                state = inspect_raw_price_strategy_dataset(root, deep=True)
+            self.assertTrue(state["ready"])
+            self.assertEqual(state["data_identity"]["materialization_fingerprint"], materialization)
 
     def test_raw_source_absence_reports_absent_without_backfill(self):
         with TemporaryDirectory() as tmp:

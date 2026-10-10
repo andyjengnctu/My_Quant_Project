@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+from functools import lru_cache
 from pathlib import Path
 import re
 import shutil
@@ -24,7 +25,11 @@ from typing import Mapping
 import pandas as pd
 
 from config.research import RESEARCH_MARKET_DATA_CUTOFF
-from core.data_utils import discover_unique_csv_inputs
+from core.data_utils import (
+    OHLCV_SANITIZATION_CONTRACT_VERSION,
+    discover_unique_csv_inputs,
+    sanitize_ohlcv_dataframe,
+)
 from core.dataset_profiles import build_dataset_generation_identity, get_dataset_dir
 from core.file_integrity import canonical_json_sha256, compute_file_sha256, load_json_strict
 from core.market_data_contract import FINMIND_RAW_PRICE_ARCHIVE_DATASET
@@ -185,6 +190,84 @@ def _normalize_control_rows(path: Path, *, ticker: str, cutoff: str) -> list[tup
     return rows
 
 
+
+def _raw_price_quality_failures(frame: pd.DataFrame, *, ticker: str) -> tuple[int, list[dict[str, object]]]:
+    """Apply the canonical OHLCV sanitizer to the *entire* controlled Raw grid.
+
+    A content-SHA-valid CSV may still contain zero/invalid provider prices.  This
+    validator must not repair, forward-fill or remove any date: those changes
+    would silently alter the AO-vs-BW controlled input comparison.
+    """
+    try:
+        clean, stats = sanitize_ohlcv_dataframe(frame, ticker, min_rows=1)
+    except ValueError as exc:
+        if "清洗後無有效資料" not in str(exc):
+            raise
+        removed = len(frame)
+        clean_dates = pd.DatetimeIndex([])
+        duplicate_count = 0
+    else:
+        removed = int(stats["invalid_row_count"]) + int(stats["duplicate_date_count"])
+        if not removed:
+            return 0, []
+        clean_dates = pd.DatetimeIndex(clean.index).normalize()
+        duplicate_count = int(stats["duplicate_date_count"])
+    source_dates = pd.to_datetime(frame["Date"], errors="coerce").dt.normalize()
+    rejected = ~source_dates.isin(clean_dates)
+    if duplicate_count:
+        rejected |= source_dates.duplicated(keep="last")
+    sample: list[dict[str, object]] = []
+    for offset in frame.index[rejected][:8]:
+        row = frame.loc[offset]
+        # The materializer always has one unique row per (ticker, date).  Existing
+        # immutable files are checked independently and never corrected in place.
+        date = source_dates.loc[offset]
+        sample.append({
+            "ticker": str(ticker),
+            "date": date.strftime("%Y-%m-%d") if pd.notna(date) else str(row["Date"]),
+            "ohlc": {field: str(row[field]) for field in ("Open", "High", "Low", "Close")},
+        })
+    return removed, sample
+
+
+
+@lru_cache(maxsize=4096)
+def _cached_raw_price_quality(
+    absolute_path: str, expected_content_sha256: str, sanitization_contract_version: int,
+    ticker: str,
+) -> tuple[int, list[dict[str, object]]]:
+    """Avoid re-parsing immutable, already-SHA-verified Raw files within one run.
+
+    Callers check the content hash *before* this function.  A new file hash or
+    canonical sanitizer version always invalidates the in-process cached proof.
+    """
+    del expected_content_sha256, sanitization_contract_version
+    try:
+        frame = pd.read_csv(absolute_path, low_memory=False)
+    except (ValueError, OSError, UnicodeDecodeError) as exc:
+        raise ValueError(f"raw-price strategy dataset CSV無法檢查OHLCV: {Path(absolute_path).name}") from exc
+    return _raw_price_quality_failures(frame, ticker=ticker)
+
+
+def _fail_on_raw_price_quality(issues: list[dict[str, object]], *, provider: str) -> None:
+    if not issues:
+        return
+    total_rows = sum(int(issue["invalid_rows"]) for issue in issues)
+    sample: list[dict[str, object]] = []
+    for issue in issues:
+        for item in issue["samples"]:
+            if len(sample) < 24:
+                sample.append(dict(item))
+    raise ValueError(
+        "RAW_SOURCE_QUALITY_BLOCKED: FinMind TaiwanStockPrice Raw OHLCV "
+        f"has {total_rows} invalid controlled rows across {len(issues)} tickers; "
+        f"sample={sample}; provider_snapshot={provider}; "
+        "source prices must be corrected by verifiable raw-market evidence "
+        "under a new immutable source identity. No adjusted substitution, "
+        "forward fill, date removal or checkpoint reuse is permitted."
+    )
+
+
 def _build_files(
     *,
     root: Path,
@@ -271,6 +354,7 @@ def _build_files(
 
         evidence: list[dict[str, object]] = []
         total_rows = 0
+        quality_issues: list[dict[str, object]] = []
         fixed_mtime_ns = deterministic_compatibility_file_mtime_ns(cutoff)
         for ticker in tickers:
             if not _SAFE_TICKER_RE.fullmatch(ticker) or Path(ticker).name != ticker:
@@ -289,6 +373,10 @@ def _build_files(
             )
             if frame.empty:
                 continue
+            invalid_rows, bad_samples = _raw_price_quality_failures(frame, ticker=ticker)
+            if invalid_rows:
+                quality_issues.append({"ticker": ticker, "invalid_rows": invalid_rows, "samples": bad_samples})
+                continue
             volume = pd.to_numeric(frame["Volume"], errors="raise")
             rounded = volume.round()
             if bool((volume == rounded).all()):
@@ -305,6 +393,9 @@ def _build_files(
                 "size_bytes": int(path.stat().st_size),
                 "content_sha256": compute_file_sha256(path),
             })
+        _fail_on_raw_price_quality(
+            quality_issues, provider=str(source_identity["provider_snapshot_fingerprint"]),
+        )
         evidence.sort(key=lambda row: (str(row["ticker"]), str(row["relative_path"])))
         return evidence, total_rows
     finally:
@@ -373,6 +464,7 @@ def inspect_raw_price_strategy_dataset(project_root: str | Path, *, deep: bool =
         actual = {path.relative_to(dataset_dir).as_posix() for path in dataset_dir.glob("*.csv") if path.is_file()}
         if expected != actual:
             raise ValueError("raw-price strategy dataset CSV file set drift")
+        quality_issues: list[dict[str, object]] = []
         for row in files:
             rel = str(row.get("relative_path") or "")
             path = dataset_dir / rel
@@ -382,6 +474,20 @@ def inspect_raw_price_strategy_dataset(project_root: str | Path, *, deep: bool =
                 raise ValueError(f"raw-price strategy dataset CSV size drift: {rel}")
             if compute_file_sha256(path) != str(row.get("content_sha256") or ""):
                 raise ValueError(f"raw-price strategy dataset CSV SHA256 drift: {rel}")
+            invalid_rows, bad_samples = _cached_raw_price_quality(
+                str(path.resolve()), str(row["content_sha256"]),
+                int(OHLCV_SANITIZATION_CONTRACT_VERSION),
+                str(row.get("ticker") or Path(rel).stem),
+            )
+            if invalid_rows:
+                quality_issues.append({
+                    "ticker": str(row.get("ticker") or Path(rel).stem),
+                    "invalid_rows": invalid_rows,
+                    "samples": bad_samples,
+                })
+        _fail_on_raw_price_quality(
+            quality_issues, provider=str(identity["provider_snapshot_fingerprint"]),
+        )
     data_identity = dict(payload.get("data_identity") or {})
     expected_data_fp = canonical_json_sha256({
         "source_identity_fingerprint": source_fp,

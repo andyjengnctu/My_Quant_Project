@@ -12632,3 +12632,14 @@ Decision：`ENGINEERING_FIX / ADJUSTED_DATE_GRID_CANONICAL / RAW_ONLY_ROWS_IGNOR
 - **Held constant**：300×10 AO InceptionTime shared encoder+Safety/Conditional-MFE雙head、40-bar經濟標籤、full-universe Safety、true-HS=P50 MFE、Delta-NDCG、head loss 1:1、Seed42、split、optimizer、epoch selection、PIT cutoffs、Model Standard SOP。AO checkpoints / adjusted datasets / Trader source不覆寫。
 - **Results**：`IMPLEMENTED / RESULT_PENDING / NOT_PROMOTED`。本ZIP未包含完整617檔正式raw Provider Snapshot與完整Research training artifacts，本輪沒有可宣稱的Seed42 Forward數值、OOS Gate或formal suite PASS。Seed42 Forward Compare通過Safety/MFE聯合Gate後才授權考慮Rolling/Robustness。
 - **Source**：`test-branch-1_20261010_081000_4c235afa.zip`（SHA256=`119598d457e539b4ff0153f52bf2a6c25886a7ec716654c9080fe49305a061f1`）。
+
+
+## 2026-10-10 — MR-13BW six zero-OHLCV raw-source rows confirmed; canonical source-quality gate (engineering-only)
+
+- **Observed user evidence**：使用者重新執行Research `[1]→[1]`，Daily target/index仍完成`616/616`與`target_valid=2,052,791`；Raw/Adjusted mismatch發生於`0052`。`raw_rows_removed_by_sanitizer=6`、`raw_rows_absent=0`，六日依序為`2014-06-03`、`2017-04-05`、`2017-06-01`、`2017-07-20`、`2017-08-24`、`2017-10-02`，每筆原始Raw列的Open/High/Low/Close均為`0.0`。資料來源阻擋發生在模型fitting前；沒有Forward/OOS結果，不能把Data Gate FAIL記成MR-13BW模型效果FAIL。
+- **Root cause**：既有`services/research/raw_price_strategy_dataset.py`對Raw Provider Snapshot只要求日期存在、OHLC finite、CSV SHA可驗證；因此可將0價格物化為`READY`，但`core.data_utils.sanitize_ohlcv_dataframe`（canonical V2）會依非正價格規則正確排除，形成上下游ready判斷不一致。已排除單純Raw日期多出或日期格式問題；完整617檔Provider Snapshot未包含在提交ZIP中，不能斷言除0052外沒有其他缺陷。
+- **Engineering change**：Raw materializer逐ticker使用同一canonical sanitizer驗證整份Raw OHLCV，不會把不合法列寫入新`READY` manifest；`inspect_raw_price_strategy_dataset(deep=True)`在逐檔SHA驗證後亦檢查**舊的**materialized CSV，杜絕舊SHA-valid含零價工件繼續REUSE。異常彙總ticker/date/原OHLC、count與Provider Snapshot fingerprint，fail-closed；含檔案SHA與sanitizer版本的in-process memo只降低重複讀取成本，不修改任何persistent fingerprint或sidecar。正常資料的source/materialization identity、Price Basis、Target、AO/BW fitting/settings、model compare/report皆不變。沒有建立外部Raw資料引擎、沒有修改Provider Snapshot或製造修復價格。
+- **Validation**：Synthetic raw-input 24/24，Daily Full-list 7/7，PIT Score Builder 32/32，Research Single Entry 8/8，Fitted Model Lifecycle 41/41，共112項定向檢查通過；Python語法檢查通過。尚未在使用者本機完整Full 617檔Provider Snapshot檢查其他異常，也未執行正式run_bundle/test_suite或DL訓練。
+- **Next source decision**：資料補正只能取得可信Raw市場報價，保留實際來源與as-of/CSV SHA等證據，建立新的合法source/materialization identity再重跑Data Gate；若同一FinMind來源無法給出合法報價，使用TWSE或其他來源作Raw修復屬額外source research authorization，不能在此engineering patch直接混入BW既有single-source對照。不得用Adjusted代替Raw、前填、刪除日期、遮蔽Source Gate或宣稱模型pass。
+
+Decision：`RAW_PROVIDER_ZERO_OHLC_CONFIRMED / SOURCE_QUALITY_BLOCKED / READY_VALIDATION_FIXED / HISTORICAL_EVIDENCE_PRESERVED / BW_RESULT_PENDING / NO_MODEL_TRAINING`。
