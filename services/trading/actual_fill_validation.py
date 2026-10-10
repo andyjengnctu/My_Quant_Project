@@ -14,6 +14,7 @@ from pathlib import Path
 import pandas as pd
 
 from core.exact_accounting import MILLI_SCALE, price_to_milli, round_price_to_tick_milli
+from core.market_data_raw_quote import raw_market_executable_quote_mask, raw_market_positive_volume_mask
 from core.trading_identity import normalize_trading_date, normalize_trading_ticker
 from services.trading.market_data_v2_view import TradingMarketDataV2View
 
@@ -116,9 +117,9 @@ def load_trading_actual_fill_market_evidence(
     low = _market_number(row, "min", ticker=ticker_key, trade_date=date_text)
     high = _market_number(row, "max", ticker=ticker_key, trade_date=date_text)
     volume = _market_number(row, "Trading_Volume", ticker=ticker_key, trade_date=date_text)
-    if low <= 0 or high <= 0 or high < low:
-        raise ValueError(f"{ticker_key} {date_text} raw 高低價資料不合法")
-    if volume <= 0:
+    if not bool(raw_market_executable_quote_mask(frame).iloc[0]):
+        if low <= 0 or high <= 0 or high < low:
+            raise ValueError(f"{ticker_key} {date_text} raw 高低價資料不合法或無公告報價")
         raise ValueError(f"{ticker_key} {date_text} 沒有有效成交量，不接受成交登錄")
     return {
         "ticker": ticker_key,
@@ -131,7 +132,7 @@ def load_trading_actual_fill_market_evidence(
     }
 
 
-def list_trading_actual_fill_dates(
+def _list_trading_raw_market_dates(
     project_root,
     *,
     ticker: object,
@@ -139,14 +140,9 @@ def list_trading_actual_fill_dates(
     today: date | str | None = None,
     latest_date: date | str | None = None,
     after_date: date | str | None = None,
+    require_executable_quote: bool,
 ) -> tuple[str, ...]:
-    """Return locally evidenced positive-volume dates eligible for a fill.
-
-    ``latest_date`` clamps the list to the currently finalized Trading horizon.
-    ``after_date`` is an exclusive lower bound used by pending-order fills so
-    the UI and service share the same ``fill_date > order_date`` contract.
-    """
-
+    """Shared row/date filtering with explicit use-specific quote requirement."""
     root = Path(project_root).resolve()
     ticker_key = normalize_trading_ticker(ticker)
     if today is None:
@@ -157,32 +153,85 @@ def list_trading_actual_fill_dates(
         today_date = date.fromisoformat(str(today))
     latest_bound = today_date
     if latest_date is not None:
-        latest_bound = min(latest_bound, latest_date if isinstance(latest_date, date) else date.fromisoformat(str(latest_date)))
-    exclusive_lower = None if after_date is None else (after_date if isinstance(after_date, date) else date.fromisoformat(str(after_date)))
+        latest_bound = min(
+            latest_bound,
+            latest_date if isinstance(latest_date, date) else date.fromisoformat(str(latest_date)),
+        )
+    exclusive_lower = None if after_date is None else (
+        after_date if isinstance(after_date, date) else date.fromisoformat(str(after_date))
+    )
     view = market_view or TradingMarketDataV2View.open(root)
+    columns = ("date", "stock_id", "Trading_Volume")
+    if require_executable_quote:
+        columns = (*columns, "max", "min")
     frame = view.read_dataset_frame(
         TRADING_FILL_EVIDENCE_DATASET,
-        columns=("date", "stock_id", "Trading_Volume"),
+        columns=columns,
         data_id=ticker_key,
     )
     if frame.empty:
         return ()
     dates = pd.to_datetime(frame.get("date"), errors="coerce")
-    volumes = pd.to_numeric(frame.get("Trading_Volume"), errors="coerce")
     stock_ids = frame.get("stock_id")
     if stock_ids is None:
         return ()
     normalized_tickers = stock_ids.astype(str).str.strip().str.upper()
-    mask = dates.notna() & volumes.notna() & (volumes > 0) & (normalized_tickers == ticker_key)
-    if not mask.any():
-        return ()
+    quote_mask = (
+        raw_market_executable_quote_mask(frame)
+        if require_executable_quote else raw_market_positive_volume_mask(frame)
+    )
+    mask = dates.notna() & quote_mask & normalized_tickers.eq(ticker_key)
+    if require_executable_quote:
+        # Submission rejects duplicate raw rows. Do not offer such a date as a
+        # selectable broker fill and then fail at the final validator.
+        matching_dates = dates.dt.normalize().where(normalized_tickers.eq(ticker_key))
+        mask &= ~matching_dates.duplicated(keep=False)
     eligible = dates.loc[mask].dt.date
-    values = sorted({
+    return tuple(sorted({
         value.isoformat()
         for value in eligible
         if value <= latest_bound and (exclusive_lower is None or value > exclusive_lower)
-    })
-    return tuple(values)
+    }))
+
+
+def list_trading_actual_fill_dates(
+    project_root,
+    *,
+    ticker: object,
+    market_view: TradingMarketDataV2View | None = None,
+    today: date | str | None = None,
+    latest_date: date | str | None = None,
+    after_date: date | str | None = None,
+) -> tuple[str, ...]:
+    """Only dates with positive volume and valid exact-date high/low evidence.
+
+    The UI offers only dates that the canonical broker-fill validator can assess.
+    It does not pretend that an exact trade print has been proven.
+    """
+    return _list_trading_raw_market_dates(
+        project_root, ticker=ticker, market_view=market_view, today=today,
+        latest_date=latest_date, after_date=after_date, require_executable_quote=True,
+    )
+
+
+def list_trading_positive_volume_dates(
+    project_root,
+    *,
+    ticker: object,
+    market_view: TradingMarketDataV2View | None = None,
+    today: date | str | None = None,
+    latest_date: date | str | None = None,
+    after_date: date | str | None = None,
+) -> tuple[str, ...]:
+    """Positive-volume historical evidence, independent of fill quote availability.
+
+    Keep pending-order date behavior separate from actual-fill options; even on a
+    day without published OHLC, market session/order-date history is not erased.
+    """
+    return _list_trading_raw_market_dates(
+        project_root, ticker=ticker, market_view=market_view, today=today,
+        latest_date=latest_date, after_date=after_date, require_executable_quote=False,
+    )
 
 
 def validate_trading_actual_fill(
@@ -246,6 +295,7 @@ def validate_trading_actual_fill(
 __all__ = [
     "TRADING_FILL_EVIDENCE_DATASET",
     "list_trading_actual_fill_dates",
+    "list_trading_positive_volume_dates",
     "load_trading_actual_fill_market_evidence",
     "validate_trading_actual_fill",
     "validate_trading_fill_quantity",

@@ -33,6 +33,7 @@ from core.data_utils import (
 from core.dataset_profiles import build_dataset_generation_identity, get_dataset_dir
 from core.file_integrity import canonical_json_sha256, compute_file_sha256, load_json_strict
 from core.market_data_contract import FINMIND_RAW_PRICE_ARCHIVE_DATASET
+from core.market_data_raw_quote import raw_ohlc_diagnostic_masks
 from core.market_data_research_materialization import deterministic_compatibility_file_mtime_ns
 from services.market_data.provider_snapshot_repository import load_ready_provider_snapshot_archive
 from services.research.market_data_v2 import ResearchV2ProviderView
@@ -215,33 +216,15 @@ def _adjusted_control_required_raw_rows(
 
 
 def _raw_quote_diagnostics(frame: pd.DataFrame) -> dict[str, int]:
-    """Classify observed Raw zero-OHLC rows without inferring missing prices.
+    """Project-wide raw-source diagnostics on an explicit controlled date grid.
 
-    FinMind TaiwanStockPrice may encode a day with no published OHLC as four
-    zeros, even when volume is positive. The controlled Volume comes from the
-    adjusted Research dataset, so it is diagnostic context, not independent
-    proof of the Raw provider's published Trading_Volume.
+    This does not decide whether a DL model, non-DL strategy or broker execution
+    may use a given raw bar.  The same provider observations have different
+    permitted downstream uses, determined by those consumer contracts.
     """
-    prices = frame.loc[:, ["Open", "High", "Low", "Close"]].apply(pd.to_numeric, errors="coerce")
-    all_zero = prices.eq(0.0).all(axis=1)
-    volume = pd.to_numeric(frame["Volume"], errors="coerce")
-    # Diagnostic overlaps are intentional. FinMind emerging-market Open can be a
-    # *previous-day average*, so outside-range Open does not prove provider error.
-    nonzero = ~all_zero
     return {
-        "all_zero_ohlc": int(all_zero.sum()),
-        "all_zero_control_volume_zero": int((all_zero & volume.eq(0.0)).sum()),
-        "all_zero_control_volume_positive": int((all_zero & volume.gt(0.0)).sum()),
-        "all_zero_control_volume_other": int((all_zero & ~(volume.eq(0.0) | volume.gt(0.0))).sum()),
-        "nonzero_open_outside_high_low": int((
-            nonzero & (prices["Open"].gt(prices["High"]) | prices["Open"].lt(prices["Low"]))
-        ).sum()),
-        "nonzero_close_outside_high_low": int((
-            nonzero & (prices["Close"].gt(prices["High"]) | prices["Close"].lt(prices["Low"]))
-        ).sum()),
-        "nonzero_any_nonpositive_price": int((
-            nonzero & prices.le(0.0).any(axis=1)
-        ).sum()),
+        name: int(mask.sum())
+        for name, mask in raw_ohlc_diagnostic_masks(frame).items()
     }
 
 
@@ -270,12 +253,12 @@ def _raw_price_quality_failures(frame: pd.DataFrame, *, ticker: str) -> tuple[in
     rejected = ~source_dates.isin(clean_dates)
     if duplicate_count:
         rejected |= source_dates.duplicated(keep="last")
+    raw_quote_masks = raw_ohlc_diagnostic_masks(frame)
     sample: list[dict[str, object]] = []
     for offset in frame.index[rejected][:8]:
         row = frame.loc[offset]
         date = source_dates.loc[offset]
-        values = pd.to_numeric(row.loc[["Open", "High", "Low", "Close"]], errors="coerce")
-        all_zero = bool(values.eq(0.0).all())
+        all_zero = bool(raw_quote_masks["all_zero_ohlc"].loc[offset])
         sample.append({
             "ticker": str(ticker),
             "date": date.strftime("%Y-%m-%d") if pd.notna(date) else str(row["Date"]),
@@ -340,10 +323,11 @@ def _fail_on_raw_price_quality(issues: list[dict[str, object]], *, provider: str
         "can be the previous-day average outside same-day High/Low; neither "
         "is automatically proof of corrupt provider data. "
         "A same-source re-download is not a demonstrated repair. Under the current "
-        "AO/BW exact-date, 300x10 raw-price input contract this source is not "
-        "trainable. Any missing-quote representation, imputation, matched-date "
-        "sample change or external price-source substitution requires separate "
-        "scientific authorization and identity; no silent fallback or checkpoint reuse."
+        "controlled raw-price source contract, affected Research consumers (including "
+        "non-DL raw-price studies and DL alternate-input studies) cannot use these "
+        "bars as valid numeric prices. Any missing-quote representation, imputation, "
+        "matched-date sample change or external price-source substitution requires "
+        "separate scientific authorization and identity; no silent fallback or checkpoint reuse."
     )
 
 

@@ -144,6 +144,14 @@ project/
 
 ## 關鍵 shipped 模組索引
 
+### 共用 Raw 市場報價語意（Research／Trading）
+
+- `core/market_data_raw_quote.py` 是 FinMind `TaiwanStockPrice` Raw OHLC **觀察狀態**與「具有有效 High／Low＋正成交量，能驗證可能成交價」的共用能力。全零 OHLC 只表示**可能沒有公告價**，不是可成交價格、也不能直接認定 Provider 損壞；興櫃 Open 超出當日 High／Low 只作診斷，不自動判為損壞。這裡不負責模型的清洗／缺值處理與預測模型 label。
+- `services/research/raw_price_strategy_dataset.py` 是 DL 替代價格輸入、non-DL Raw 策略與 Strategy Compare 共用的 immutable Raw 材料化 producer／quality evidence。其精確 Adjusted 控制組日期 Gate 由既有 Research scientific contract 決定；**Raw 來源檔完整、來源報價可用、某個 consumer 的模型／回測可用**是不同判斷，不得把 BW-specific error 或任意補價規則當全域 truth；舊 Provider Snapshot、CSV SHA 和已有 fitting identity 不因診斷字詞改版。
+- `core/data_utils.py::sanitize_ohlcv_dataframe()` 仍是既有數值 OHLCV 訓練／回測清洗真理，不能僅因 Raw 的無公告價而全域放寬，否則會改變歷史 sample membership、label 或 scientific identity。原 Raw 無效欄位不得代入 Adjusted 價格，也不得前填為假成交價。任何需要 missing-quote mask、新 sample policy 或 alternative input 的研究都要另行核准。
+- `services/trading/actual_fill_validation.py` 的成交日期選項與實際成交驗證共用 `raw_market_executable_quote_mask`（正成交量、正且有限的 Low／High、High≥Low）；`services/trading/order_form_constraints.py` 的掛單日期另依既有正量市場日 evidence，不得因缺公告價刪除掛單日期。相同 Raw 市場資料允許「掛單日」不等於允許「實際成交」，實際價格另依合法 tick 與日期內價帶檢查。
+
+
 ### Portfolio Core
 
 - `core/portfolio_engine.py`只保留`run_portfolio_timeline()`日序 orchestration；benchmark cache、replay diagnostics、active-level rows與seed-ensemble aggregation分別由`portfolio_benchmark.py`、`portfolio_replay_support.py`、`portfolio_levels.py`、`portfolio_ensemble.py`持有canonical implementation。engine只以同function-object import保留歷史private helper相容名稱，不保存第二套實作。

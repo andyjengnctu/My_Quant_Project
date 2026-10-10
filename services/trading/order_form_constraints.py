@@ -29,6 +29,7 @@ from core.exact_accounting import (
 from core.trading_identity import normalize_trading_date, normalize_trading_ticker
 from services.trading.actual_fill_validation import (
     list_trading_actual_fill_dates,
+    list_trading_positive_volume_dates,
     load_trading_actual_fill_market_evidence,
 )
 from services.trading.market_data_v2_view import TradingMarketDataV2View
@@ -110,9 +111,9 @@ def list_trading_pending_order_dates(
 
     A selectable order date must be a canonical Trading session, must not be
     later than the latest finalized date, and must have positive-volume raw
-    evidence for this ticker.  The last condition guarantees that the shared
-    price combobox can be built from an exact-date range instead of accepting a
-    free-form price with unknown day context.
+    evidence for this ticker.  The order-date calendar is separate from the
+    stricter actual-fill calendar; missing published OHLC is not grounds for
+    deleting a historical market session or for synthesizing a fill price.
     """
 
     root = Path(project_root).resolve()
@@ -130,7 +131,7 @@ def list_trading_pending_order_dates(
         )
     )
     evidence_dates = set(
-        list_trading_actual_fill_dates(
+        list_trading_positive_volume_dates(
             root,
             ticker=ticker,
             market_view=view,

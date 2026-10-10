@@ -12662,3 +12662,12 @@ Decision：`RAW_PROVIDER_ZERO_OHLC_CONFIRMED / SOURCE_QUALITY_BLOCKED / READY_VA
 - **Controlled checks**：新增/修訂synthetic涵蓋Adjusted已排除日Raw全零仍可物化＋對齊、兩組興櫃型態Open越界、Adjusted有效日Raw無效仍BLOCK、舊SHA-valid Raw工件的必要日期深度檢查與已排除日期安全REUSE。完整本機617個Full CSV和Provider Snapshot未附於ZIP，本輪不能宣稱實際問題全部解除，也未執行正式DL訓練／formal suite。
 - **Local independent validation**: MR-13BW Raw input synthetic 29/29 PASS, Python syntax compile PASS. No formal suite or real Full Provider Snapshot training performed.
 - **Decision**：`ENGINEERING_GATE_SCOPE_CORRECTED / ONLY_ADJUSTED_SANITIZED_DATES_REQUIRED / NO_RAW_FILL / MODEL_RESULT_PENDING / LOCAL_FULL_DATA_REVALIDATION_REQUIRED`。先重新檢視本機source gate所列必要日期異常；若0052或其他必要Raw仍全零，按既有單變量實驗契約維持BLOCKED，不創造價格或暗改模型科學身分。
+
+
+## 2026-10-10 — Cross-domain Raw market quote SSOT / Research and Trading consumer consistency (engineering-only)
+
+- **User direction**：使用者明確指出MR-13BW附近的Raw來源與OHLC清洗修正不應被視為BW-only；本輪沿最新ZIP逐一追查已授權的non-DL Raw strategy controls、BW alternate price features與Trading raw broker-fill evidence。最新本機已觀測 controlled Adjusted-retained date scope Raw sanitizer rejected=`1,746 / 74 tickers`，含`1,487`筆全零及其他診斷異常。這是Data Gate觀察證據，非BW模型實測結果。
+- **Scope diagnosis**：`services/research/raw_price_strategy_dataset.py` 是同一份Raw control材料化的正式producer，C93/C94等non-DL研究與BW均引用；`core/data_utils.py`現行numerical model sanitizer則對Adjusted與alternate input有既有scientific semantics，不得因No-Quote案例全域放寬。Trading的成交日期選單原僅查`Trading_Volume>0`，但正式成交登錄另查非零有效Raw High／Low，構成UI vs submission不同口徑。若直接把成交用的嚴格價格要求套到掛單日期，又會錯誤刪除原本合法的歷史掛單日。
+- **Implementation**：新增中立`core/market_data_raw_quote.py`，統一Raw全零與Open/Close越界等診斷，以及High／Low＋成交量「可能有有效成交價」的market evidence。共用Raw產製器的quote診斷改從同一owner衍生、保留其既有canonical model sanitation fail-closed；錯誤不再將此shared producer誤稱AO/BW專屬。Trading可選成交日期與正式成交登錄使用同一成交market-evidence mask；同一股票同日出現重複Raw records也不列入可選成交日。Trading掛單日期改調用分離的positive-volume evidence日集合，保留原歷史行為、不因缺報價而取消掛單日。`doc/ARCHITECTURE.md`補上用途層次。
+- **Unchanged boundaries**：不修改任何Provider原始OHLC/Volume、Raw物化格式/JSON identity/CSV SHA、Adjusted/Raw數值清洗算法、AO/BW training Target/Feature、PIT、model fitting identity、non-DL策略回測語意或既有績效。正量但全零OHLC無法合法驗證實際成交；原先Data Gate的無公告價缺口尚在，沒有因本輪工程修補解鎖BW或non-DL新的缺值策略。缺值遮罩、補價、matched sample、放寬Raw numeric sanitation等均須另行授權與scientific identity。
+- **Baseline**：`test-branch-1_20261010_090442_f4af1bc4.zip`（SHA256=`6cb3b93d256b6b0313e9fc0ab394f7a04a0051128cbb55ab1493710bd746983e`），解壓至本輪全新目錄；本輪只跑獨立定向合成，不執行formal bundle/test suite，未以使用者完整本機Provider Snapshot驗證1746行分類或重新訓練。
