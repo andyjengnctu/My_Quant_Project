@@ -32,6 +32,7 @@ from core.breakout_quality_registry import (
     SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES,
     get_breakout_quality_experiment_profile,
     get_continuous_ranker_research_spec,
+    get_exploratory_model_research_study,
 )
 from core.breakout_quality_policy import (
     get_breakout_quality_continuous_ranker_comparison_settings,
@@ -5560,6 +5561,27 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
     ))
     return 0
 
+def _configured_exploratory_research_study():
+    """Config-driven selection; the formal model profile remains AO."""
+    from config import breakout_quality as config
+    identifier = str(getattr(config, "BREAKOUT_QUALITY_ACTIVE_EXPLORATORY_MODEL_STUDY", "") or "").strip()
+    return get_exploratory_model_research_study(identifier) if identifier else None
+
+
+def _invoke_exploratory_research_action(study, action: str) -> int:
+    """No exploration can enter formal trainer, Compare, robustness or Trading."""
+    if str(action) not in study.permitted_actions:
+        raise ValueError("此探索性科學身分尚未授權此工作類型")
+    if study.formal_input_authorized or study.trading_promotion_authorized or study.historical_vintage_proven:
+        raise ValueError("探索研究授權標籤不合法")
+    module = importlib.import_module(study.service_module)
+    method = {"forward": "run_forward_menu", "compare": "run_forward_comparison"}[str(action)]
+    callback = getattr(module, method, None)
+    if not callable(callback):
+        raise RuntimeError("隔離研究 producer 缺少正式選單委派介面: " + str(method))
+    return int(callback() or 0)
+
+
 def _interactive_model_research(program_name: str) -> int:
     settings = get_breakout_quality_model_research_settings()
     if settings.is_binary_classification:
@@ -5567,16 +5589,26 @@ def _interactive_model_research(program_name: str) -> int:
     if not settings.is_continuous_ranker:
         raise ValueError(f"不支援的 workflow training objective: {settings.training_objective!r}")
 
+    study = _configured_exploratory_research_study()
+    # A registered current-vintage exploration is the visible research scope; the
+    # original AO formal workflow stays available through a stable scope switch.
+    exploratory = study is not None
     while True:
         print("\n=== Continuous DL 模型研究與驗證 ===")
-        print("Training Model：" + _model_identity_text(_model_display_id(settings.experiment_profile)))
-        print(
-            "Model Compare/Test List："
-            + " / ".join(
-                _model_identity_text(model_id)
-                for model_id, _profile in get_breakout_quality_model_test_settings().model_profiles
+        if exploratory:
+            print(f"Research scope  ：隔離探索／歷史 Vintage 未驗證／不允許正式 PIT 或 Trading")
+            print("Training Model：" + _model_identity_text(study.model_research_id))
+            print("Model Compare/Test List：" + " / ".join((study.reference_model_id, study.model_research_id)) + " [EXPLORATORY ONLY]")
+        else:
+            print("Research scope  ：正式模型研究")
+            print("Training Model：" + _model_identity_text(_model_display_id(settings.experiment_profile)))
+            print(
+                "Model Compare/Test List："
+                + " / ".join(
+                    _model_identity_text(model_id)
+                    for model_id, _profile in get_breakout_quality_model_test_settings().model_profiles
+                )
             )
-        )
         print(render_menu_item(1, "Forward OOS 模型訓練", default=True))
         print(render_menu_item(2, "Rolling OOS 模型訓練"))
         print(render_menu_item(3, "Forward OOS 模型比較"))
@@ -5584,6 +5616,8 @@ def _interactive_model_research(program_name: str) -> int:
         print(render_menu_item(5, "Forward OOS Robustness 模型測試"))
         print(render_menu_item(6, "Rolling OOS Robustness 模型測試"))
         print(render_menu_item(7, "Timing Mode｜Rolling 訓練前後比較  [工程]"))
+        if study is not None:
+            print(render_menu_item(8, "切換正式／隔離探索研究範圍"))
         print(render_menu_item(0, "返回"))
         try:
             raw_choice = input("👉 請選擇：").strip().lower()
@@ -5593,6 +5627,20 @@ def _interactive_model_research(program_name: str) -> int:
         choice = "1" if raw_choice == "" else raw_choice
         if choice in {"0", "q", "quit", "exit"}:
             return 0
+        if choice == "8" and study is not None:
+            exploratory = not exploratory
+            continue
+        if exploratory:
+            if choice == "1":
+                return _invoke_exploratory_research_action(study, "forward")
+            if choice == "3":
+                _invoke_exploratory_research_action(study, "compare")
+                continue
+            if choice in {"2", "4", "5", "6", "7"}:
+                print("[BLOCKED] 此 current-vintage 探索只授權 Seed42 Forward 與同樣本 AO/BY 比較；Rolling、Robustness、Timing 均不授權。")
+                continue
+            print("無效選項，請重新輸入。")
+            continue
         if choice == "1":
             return _interactive_continuous_forward_model_gate(program_name, settings)
         if choice == "2":
@@ -5637,7 +5685,13 @@ def run_model_training_menu(program_name: str = "apps/research.py model") -> int
 
 
 def show_model_status() -> None:
-    """Render current Breakout Quality model-research and artifact status."""
+    """Show official AO artifact status without disguising exploratory authorization."""
+    study = _configured_exploratory_research_study()
+    if study is not None:
+        print(
+            f"\n隔離探索選單：{study.model_research_id}｜Forward/同樣本比較；"
+            "current-vintage、正式PIT=NO、Trading=NO（進入模型選單後按[8]可切回正式AO）"
+        )
     _print_workflow_status(get_breakout_quality_model_research_settings())
 
 

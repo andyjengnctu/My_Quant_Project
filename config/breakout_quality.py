@@ -113,6 +113,12 @@ BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = (
     BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE[1]
 )
 
+# Optional already-authorized, current-vintage exploration.  The formal AO model
+# profile and official Compare Suite remain unchanged.  Research [1] defaults to
+# this explicitly isolated scope; the menu can switch to formal AO at any time.
+# Empty string disables the exploratory scope without changing any model identity.
+BREAKOUT_QUALITY_ACTIVE_EXPLORATORY_MODEL_STUDY = "MR-13BY"
+
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = RESEARCH_SINGLE_SEED
 
