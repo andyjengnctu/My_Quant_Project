@@ -40,6 +40,7 @@ from core.extended_signals import (
     normalize_breakout_quality_rank_payload,
     resolve_breakout_quality_rank,
 )
+from core.order_lot_policy import TAIWAN_BOARD_LOT_SHARES
 from core.price_utils import (
     _NATIVE_BROKER_FEE_PPM,
     _NATIVE_BROKER_MIN_FEE_MILLI,
@@ -1039,7 +1040,17 @@ def _collect_extended_candidates(
                 asset_growth_pct, y_close, security_profile, signal_state,
             ) = meta
             if native_result is False:
-                continue
+                # The native kernel treats NT$20 as the minimum at *every*
+                # quantity.  False may therefore be an invalid odd-lot sizing
+                # conclusion rather than a genuinely unorderable signal.
+                # The Python branch confirms both the signal and exact fee.
+                native_result = None
+            if isinstance(native_result, tuple) and 0 < int(native_result[10]) < TAIWAN_BOARD_LOT_SHARES:
+                # The compiled batch kernel uses a board-lot commission floor.
+                # Its sub-board-lot qty and precomputed cash cost are not legal
+                # for Yuanta odd-lot fees; recompute through the single Python
+                # fee/quantity owner instead of trusting the stale native cost.
+                native_result = None
             if native_result is None:
                 # Unsupported edge cases remain owned by the canonical Python path.
                 geometry = resolve_extended_candidate_plan_geometry_training_fast(

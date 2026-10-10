@@ -1270,6 +1270,33 @@ def validate_trading_account_state_contract_case(base_params):
         ],
     )
 
+    # A frozen Research tax/fee schedule must never enter the actual brokerage
+    # ledger. A real fee discount refund is entered only through cash reconcile.
+    from core.strategy_params import V16StrategyParams as _StrategyParams
+    _frozen_strategy = _StrategyParams(tax_rate=0.017, min_fee=0.0, buy_fee=0.000399, sell_fee=0.000399)
+    _broker_overlay = overlay_trading_accounting_params(_frozen_strategy)
+    check("trading_broker_overlay_ignores_frozen_research_stock_tax", 0.003, _broker_overlay.tax_rate)
+    check("trading_broker_overlay_ignores_frozen_research_min_fee", 20.0, _broker_overlay.min_fee)
+    check("trading_broker_overlay_ignores_frozen_research_fee_discount", 0.001425, _broker_overlay.buy_fee)
+    check("trading_stock_tax_on_actual_sell_is_three_thousandths", money_to_milli(300), build_sell_ledger_from_price(100, 1000, _broker_overlay, ticker="2330")["tax_milli"])
+    check("trading_etf_tax_on_actual_sell_is_one_thousandth", money_to_milli(100), build_sell_ledger_from_price(100, 1000, _broker_overlay, ticker="0050")["tax_milli"])
+    with tempfile.TemporaryDirectory() as _broker_root:
+        _cash_state = initialize_trading_account_state(_broker_root, cash=200_000)
+        _cash_state = record_manual_trading_buy(
+            _broker_root, ticker="2330", qty=1000, price=100,
+            trade_date="2026-09-01", expected_revision=_cash_state["revision"],
+        )
+        _raw_cash_after_fill = money_to_milli(200_000 - 100_000 - 142)
+        check("trading_buy_cash_is_raw_fee_without_automatic_sixfold_refund", _raw_cash_after_fill, _cash_state["cash_milli"])
+        _manual_refund_milli = money_to_milli(57)
+        _cash_state = set_trading_cash_balance(
+            _broker_root, cash=200_000 - 100_000 - 142 + 57,
+            expected_revision=_cash_state["revision"], note="synthetic broker cashback received",
+        )
+        check("trading_manual_rebate_updates_cash_only_when_user_enters_balance", _raw_cash_after_fill + _manual_refund_milli, _cash_state["cash_milli"])
+        check("trading_manual_rebate_is_an_explicit_cash_event_not_trade_repricing", "set_cash_balance", _cash_state["events"][-1]["mutation_type"])
+        check("trading_manual_rebate_replays_same_cash_delta", _cash_state["cash_milli"], rebuild_trading_account_economics(_cash_state, accounting_params=build_standalone_trading_accounting_params())["cash_milli"])
+
     summary["checks"] = len(results)
     return results, summary
 

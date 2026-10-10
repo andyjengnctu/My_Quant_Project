@@ -1,9 +1,10 @@
 import pandas as pd
 
 from core.exact_accounting import money_to_milli, price_to_milli
+from config.broker_accounting import BROKER_BOARD_LOT_SHARES
 
 
-TAIWAN_BOARD_LOT_SHARES = 1000
+TAIWAN_BOARD_LOT_SHARES = BROKER_BOARD_LOT_SHARES
 
 
 def calc_entry_notional_milli(limit_price, qty):

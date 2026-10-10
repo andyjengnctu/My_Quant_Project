@@ -7,10 +7,13 @@ import math
 from functools import lru_cache
 from typing import Any, Dict
 
+from config.execution_policy import YUANTA_RESEARCH_FEE_RATE
 from config.broker_accounting import (
     BROKER_CHARGE_ROUNDING_MODE,
     BROKER_FEE_RATE,
     BROKER_MIN_FEE_TWD,
+    BROKER_ODD_LOT_MIN_FEE_TWD,
+    BROKER_BOARD_LOT_SHARES,
 )
 
 MILLI_SCALE = 1000
@@ -93,6 +96,20 @@ def rate_to_ppm(rate) -> int:
 
 _BROKER_FEE_PPM = rate_to_ppm(BROKER_FEE_RATE)
 _BROKER_MIN_FEE_MILLI = money_to_milli(BROKER_MIN_FEE_TWD)
+_BROKER_ODD_LOT_MIN_FEE_MILLI = money_to_milli(BROKER_ODD_LOT_MIN_FEE_TWD)
+_BROKER_BOARD_LOT_SHARES = BROKER_BOARD_LOT_SHARES
+
+
+def _fee_minimum_for_quantity(minimum_milli: int, qty: int) -> int:
+    """Apply Yuanta's NT$1 odd-lot floor only to a pure sub-board-lot fill.
+
+    A mixed-lot fill may comprise separate orders; never silently reduce its
+    minimum as though it were a single odd-lot transaction. Other explicitly
+    configured (historical/custom) minimums retain their original meaning.
+    """
+    if 0 < int(qty) < _BROKER_BOARD_LOT_SHARES and int(minimum_milli) == _BROKER_MIN_FEE_MILLI:
+        return _BROKER_ODD_LOT_MIN_FEE_MILLI
+    return int(minimum_milli)
 
 
 STOCK_MILLI_TICK_LADDER = (
@@ -428,11 +445,31 @@ CHARGE_ROUNDING_NEAREST_MILLI = "nearest_milli"
 CHARGE_ROUNDING_FLOOR_TWD = BROKER_CHARGE_ROUNDING_MODE
 
 
-def _resolve_charge_rounding_mode(params) -> str:
-    mode = str(getattr(params, "charge_rounding_mode", CHARGE_ROUNDING_NEAREST_MILLI) or CHARGE_ROUNDING_NEAREST_MILLI)
+def resolve_charge_rounding_mode(params) -> str:
+    """One rounding rule for ledger, cash planning, and native sizing.
+
+    Explicit frozen legacy/custom rounding remains authoritative. New canonical
+    Yuanta six-tenths Research economics use integer-TWD settlement; older
+    Research snapshots with a different frozen fee stay on the former
+    nearest-milli economic rule rather than silently changing their policy.
+    """
+    explicit_mode = getattr(params, "charge_rounding_mode", None)
+    if explicit_mode is None:
+        is_current_yuanta_economic_policy = (
+            float(params.buy_fee) == YUANTA_RESEARCH_FEE_RATE
+            and float(params.sell_fee) == YUANTA_RESEARCH_FEE_RATE
+            and float(params.min_fee) == float(BROKER_MIN_FEE_TWD)
+        )
+        mode = CHARGE_ROUNDING_FLOOR_TWD if is_current_yuanta_economic_policy else CHARGE_ROUNDING_NEAREST_MILLI
+    else:
+        mode = str(explicit_mode)
     if mode not in {CHARGE_ROUNDING_NEAREST_MILLI, CHARGE_ROUNDING_FLOOR_TWD}:
         raise ValueError(f"Unsupported charge_rounding_mode: {mode}")
     return mode
+
+
+# Keep the old intra-module name for existing implementation call sites.
+_resolve_charge_rounding_mode = resolve_charge_rounding_mode
 
 
 def calc_fee_milli(
@@ -451,7 +488,7 @@ def calc_fee_milli(
     return max(int(fee_milli), int(min_fee_milli))
 
 
-def calc_broker_fee_milli(gross_milli: int) -> int:
+def calc_broker_fee_milli(gross_milli: int, *, qty: int | None = None) -> int:
     """Return the actual broker cash fee for one transaction.
 
     Research may record a lower eventual economic fee after rebate, but the
@@ -460,7 +497,7 @@ def calc_broker_fee_milli(gross_milli: int) -> int:
     return calc_fee_milli(
         int(gross_milli),
         _BROKER_FEE_PPM,
-        _BROKER_MIN_FEE_MILLI,
+        _BROKER_MIN_FEE_MILLI if qty is None else _fee_minimum_for_quantity(_BROKER_MIN_FEE_MILLI, qty),
         rounding_mode=CHARGE_ROUNDING_FLOOR_TWD,
     )
 
@@ -469,7 +506,7 @@ def _calc_fee_rebate_receivable_from_broker_fee_milli(broker_fee_milli: int, eco
     return max(0, int(broker_fee_milli) - int(economic_fee_milli))
 
 
-def calc_fee_rebate_receivable_milli(gross_milli: int, economic_fee_milli: int) -> int:
+def calc_fee_rebate_receivable_milli(gross_milli: int, economic_fee_milli: int, *, qty: int | None = None) -> int:
     """Economic fee rebate receivable versus the broker cash fee.
 
     A non-positive difference is never converted into a negative rebate.  This
@@ -477,7 +514,7 @@ def calc_fee_rebate_receivable_milli(gross_milli: int, economic_fee_milli: int) 
     (whose economic fee already equals the broker fee) at zero receivable.
     """
     return _calc_fee_rebate_receivable_from_broker_fee_milli(
-        calc_broker_fee_milli(int(gross_milli)),
+        calc_broker_fee_milli(int(gross_milli), qty=qty),
         int(economic_fee_milli),
     )
 
@@ -554,13 +591,13 @@ def resolve_fee_schedule_tuple(params, *, ticker=None, security_profile=None, tr
 def calc_buy_net_total_milli_from_milli(fill_price_milli: int, qty: int, params) -> int:
     buy_fee_ppm, min_fee_milli = _resolve_buy_fee_cached(float(params.buy_fee), float(params.min_fee))
     gross_buy_milli = int(fill_price_milli) * int(qty)
-    return gross_buy_milli + calc_fee_milli(gross_buy_milli, buy_fee_ppm, min_fee_milli, rounding_mode=_resolve_charge_rounding_mode(params))
+    return gross_buy_milli + calc_fee_milli(gross_buy_milli, buy_fee_ppm, _fee_minimum_for_quantity(min_fee_milli, qty), rounding_mode=_resolve_charge_rounding_mode(params))
 
 
 def calc_cash_buy_total_milli_from_milli(fill_price_milli: int, qty: int) -> int:
     """Return broker-facing cash debit for a buy without constructing a full ledger."""
     gross_buy_milli = int(fill_price_milli) * int(qty)
-    return gross_buy_milli + calc_broker_fee_milli(gross_buy_milli)
+    return gross_buy_milli + calc_broker_fee_milli(gross_buy_milli, qty=qty)
 
 
 def calc_cash_buy_total_milli_from_price(fill_price, qty: int) -> int:
@@ -581,7 +618,7 @@ def _calc_sell_net_total_milli_with_schedule(
     sell_fee_milli = calc_fee_milli(
         gross_sell_milli,
         sell_fee_ppm,
-        min_fee_milli,
+        _fee_minimum_for_quantity(min_fee_milli, qty),
         rounding_mode=fee_rounding_mode,
     )
     tax_milli = calc_tax_milli(
@@ -665,10 +702,10 @@ def build_buy_ledger(fill_price_milli: int, qty: int, params) -> Dict[str, int]:
     buy_fee_milli = calc_fee_milli(
         gross_buy_milli,
         buy_fee_ppm,
-        min_fee_milli,
+        _fee_minimum_for_quantity(min_fee_milli, qty),
         rounding_mode=_resolve_charge_rounding_mode(params),
     )
-    broker_buy_fee_milli = calc_broker_fee_milli(gross_buy_milli)
+    broker_buy_fee_milli = calc_broker_fee_milli(gross_buy_milli, qty=qty)
     buy_fee_rebate_receivable_milli = _calc_fee_rebate_receivable_from_broker_fee_milli(
         broker_buy_fee_milli, buy_fee_milli
     )
@@ -701,13 +738,13 @@ def build_sell_ledger(exec_price_milli: int, qty: int, params, *, ticker=None, s
     sell_fee_milli = calc_fee_milli(
         gross_sell_milli,
         sell_fee_ppm,
-        min_fee_milli,
+        _fee_minimum_for_quantity(min_fee_milli, qty),
         rounding_mode=fee_rounding_mode,
     )
     # Tax has no rebate layer; Research and Trading therefore share the actual
     # broker integer-TWD tax settlement semantics.
     tax_milli = calc_tax_milli(gross_sell_milli, tax_ppm, rounding_mode=CHARGE_ROUNDING_FLOOR_TWD)
-    broker_sell_fee_milli = calc_broker_fee_milli(gross_sell_milli)
+    broker_sell_fee_milli = calc_broker_fee_milli(gross_sell_milli, qty=qty)
     sell_fee_rebate_receivable_milli = _calc_fee_rebate_receivable_from_broker_fee_milli(
         broker_sell_fee_milli, sell_fee_milli
     )

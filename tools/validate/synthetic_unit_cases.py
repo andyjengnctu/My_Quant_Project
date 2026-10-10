@@ -99,12 +99,21 @@ def validate_price_utils_unit_case(_base_params):
 
     check("buy_limit_rounds_down_to_tick", 10.0, adjust_long_buy_limit(10.03), tol=1e-9)
     check("sell_fill_rounds_down_to_tick", 10.0, adjust_long_sell_fill_price(10.03), tol=1e-9)
-    check("entry_price_uses_min_fee", 102.0, calc_entry_price(100.0, 10, params), tol=1e-9)
-    check("net_sell_price_includes_fee_and_tax", 97.7, calc_net_sell_price(100.0, 10, params), tol=1e-9)
+    check("entry_price_uses_min_fee", 100.1, calc_entry_price(100.0, 10, params), tol=1e-9)
+    check("net_sell_price_includes_fee_and_tax", 99.6, calc_net_sell_price(100.0, 10, params), tol=1e-9)
     check("position_size_expected_qty", 29, sized_qty)
     check("position_size_entry_cost_respects_cap", True, entry_cost <= 10_000.0)
     check("position_size_actual_risk_respects_limit", True, actual_risk <= 200.0 + 1e-9)
     check("invalid_stop_returns_zero_qty", 0, calc_position_size(100.0, 101.0, 10_000.0, 0.02, params))
+    # A previously compiled kernel knows only the board-lot NT$20 minimum.
+    # Sub-board-lot sizing must fall back to the same NT$1 Python contract.
+    with patch.object(price_utils_module, "_NATIVE_HOTPATH_ENABLED", False):
+        _odd_python_qty = calc_position_size(100.0, 95.0, 20_000.0, 0.05, params)
+    with patch.object(price_utils_module, "_NATIVE_HOTPATH_ENABLED", True), patch.object(
+        price_utils_module, "_native_calc_position_size_exact", return_value=0,
+    ):
+        _odd_native_fallback_qty = calc_position_size(100.0, 95.0, 20_000.0, 0.05, params)
+    check("native_sizing_odd_lot_policy_falls_back_to_canonical_python", _odd_python_qty, _odd_native_fallback_qty)
 
     # The native extension is optional at formal-test time.  When it is built,
     # require exact parity with the canonical Python sizing path; when it is
@@ -1082,6 +1091,65 @@ def validate_research_fee_rebate_cash_timing_case(_base_params):
     check("month_end_settlement_moves_full_receivable_to_cash", pre_settlement_receivable, settled)
     check("month_end_settlement_clears_receivable", 0, get_fee_rebate_receivable_milli(rebate_state))
     check("month_end_settlement_preserves_economic_equity", economic_equity_before_settlement, post_settlement_cash)
+
+    # The registered legacy Research default must remain frozen; actual Yuanta
+    # economics are an explicit new scientific treatment, never a P6/P14 rewrite.
+    from config.execution_policy import (
+        DEFAULT_FEE_RATE,
+        YUANTA_RESEARCH_FEE_RATE,
+        build_yuanta_research_execution_overrides,
+    )
+    check("registered_legacy_research_default_fee_retains_scientific_contract", 0.000399, params.buy_fee)
+    check("yuanta_execution_overrides_requires_changed_fee", YUANTA_RESEARCH_FEE_RATE, build_yuanta_research_execution_overrides()["buy_fee"])
+    yuanta_overrides = build_yuanta_research_execution_overrides()
+    yuanta_params = V16StrategyParams(**{**{
+        "buy_fee": params.buy_fee,
+        "sell_fee": params.sell_fee,
+        "tax_rate": params.tax_rate,
+        "min_fee": params.min_fee,
+    }, **yuanta_overrides})
+
+    # YuanTa electronic-execution policy: raw cash charge first; the 6/10
+    # discount is only a future receivable, subject to the minimum charge.
+    from config.broker_accounting import (
+        BROKER_ELECTRONIC_FEE_EFFECTIVE_RATIO,
+        BROKER_FEE_RATE,
+        BROKER_MIN_FEE_TWD,
+        BROKER_ODD_LOT_MIN_FEE_TWD,
+    )
+    from core.exact_accounting import calc_cash_buy_total_milli_from_milli
+
+    check("yuanta_research_default_uses_electronic_six_tenths_rate", float(BROKER_FEE_RATE * BROKER_ELECTRONIC_FEE_EFFECTIVE_RATIO), yuanta_params.buy_fee)
+    check("yuanta_research_minimum_matches_broker_board_lot", float(BROKER_MIN_FEE_TWD), yuanta_params.min_fee)
+    regular_buy = build_buy_ledger_from_price(100, 1000, yuanta_params)
+    check("yuanta_board_lot_raw_cash_fee_before_rebate", money_to_milli(142), regular_buy["broker_buy_fee_milli"])
+    check("yuanta_board_lot_eventual_economic_fee", money_to_milli(85), regular_buy["buy_fee_milli"])
+    check("yuanta_board_lot_rebate_is_the_difference", money_to_milli(57), regular_buy["buy_fee_rebate_receivable_milli"])
+    check("yuanta_board_lot_cash_buy_matches_direct_cash_helper", regular_buy["cash_buy_total_milli"], calc_cash_buy_total_milli_from_milli(price_to_milli(100), 1000))
+    from core.fee_rebate import get_fee_rebate_settled_milli
+    yuanta_rebate_state = create_fee_rebate_state()
+    accrue_fee_rebate(yuanta_rebate_state, regular_buy["buy_fee_rebate_receivable_milli"])
+    check("yuanta_research_discount_is_receivable_not_immediate_cash", money_to_milli(57), get_fee_rebate_receivable_milli(yuanta_rebate_state))
+    check("yuanta_research_refund_not_yet_settled", 0, get_fee_rebate_settled_milli(yuanta_rebate_state))
+    check("yuanta_research_next_month_cash_settlement", money_to_milli(57), settle_fee_rebate(yuanta_rebate_state))
+    check("yuanta_research_postsettlement_receivable_is_zero", 0, get_fee_rebate_receivable_milli(yuanta_rebate_state))
+    from core.exact_accounting import resolve_charge_rounding_mode
+    check("yuanta_research_refund_uses_integer_TWD_economics", "floor_twd", resolve_charge_rounding_mode(yuanta_params))
+    _frozen_legacy = V16StrategyParams(buy_fee=0.000399, sell_fee=0.000399)
+    check("historical_research_fee_rounding_policy_not_overwritten", "nearest_milli", resolve_charge_rounding_mode(_frozen_legacy))
+
+    small_board_buy = build_buy_ledger_from_price(10, 1000, yuanta_params)
+    check("yuanta_small_board_lot_cash_minimum", money_to_milli(20), small_board_buy["broker_buy_fee_milli"])
+    check("yuanta_small_board_lot_discount_does_not_break_minimum", money_to_milli(20), small_board_buy["buy_fee_milli"])
+    check("yuanta_small_board_lot_has_no_refund_below_minimum", 0, small_board_buy["buy_fee_rebate_receivable_milli"])
+
+    odd_buy = build_buy_ledger_from_price(10, 100, yuanta_params)
+    odd_sell = build_sell_ledger_from_price(10, 100, params, ticker="2330")
+    check("yuanta_odd_lot_raw_minimum", money_to_milli(BROKER_ODD_LOT_MIN_FEE_TWD), odd_buy["broker_buy_fee_milli"])
+    check("yuanta_odd_lot_economic_minimum", money_to_milli(BROKER_ODD_LOT_MIN_FEE_TWD), odd_buy["buy_fee_milli"])
+    check("yuanta_odd_lot_sell_minimum", money_to_milli(1), odd_sell["sell_fee_milli"])
+    check("yuanta_stock_sell_tax_three_thousandths", money_to_milli(300), build_sell_ledger_from_price(100, 1000, params, ticker="2330")["tax_milli"])
+    check("yuanta_etf_sell_tax_one_thousandth", money_to_milli(100), build_sell_ledger_from_price(100, 1000, params, ticker="0050")["tax_milli"])
 
     summary["rebate_settled_milli"] = settled
     return results, summary

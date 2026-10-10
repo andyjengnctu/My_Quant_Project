@@ -18,9 +18,9 @@ from config.broker_accounting import (
 from config.execution_policy import EXECUTION_POLICY_PARAM_SPECS
 
 TRADING_ACCOUNT_BROKER_FEE_RATE = float(BROKER_FEE_RATE)
-# User-defined broker accounting: fee = consideration * 0.001425, then discard
-# all fractional TWD.  Do not apply strategy/backtest discount or an unstated
-# minimum fee to actual account records.
+# Yuanta cash settlement: charge the undiscounted 0.1425% commission with its
+# minimum at execution; manual Trading cash reconciliation reflects later
+# rebates. Never pre-credit a Research rebate to a live brokerage account.
 TRADING_ACCOUNT_MIN_FEE = float(BROKER_MIN_FEE_TWD)
 TRADING_ACCOUNT_STOCK_TAX_RATE = float(BROKER_STOCK_TAX_RATE)
 TRADING_ACCOUNT_FIXED_RISK_FALLBACK = float(EXECUTION_POLICY_PARAM_SPECS["fixed_risk"]["default"])
@@ -33,6 +33,7 @@ class _TradingAccountingParamsProxy:
         self._base = base
         self.buy_fee = TRADING_ACCOUNT_BROKER_FEE_RATE
         self.sell_fee = TRADING_ACCOUNT_BROKER_FEE_RATE
+        self.tax_rate = TRADING_ACCOUNT_STOCK_TAX_RATE
         self.min_fee = TRADING_ACCOUNT_MIN_FEE
         self.charge_rounding_mode = BROKER_CHARGE_ROUNDING_MODE
 

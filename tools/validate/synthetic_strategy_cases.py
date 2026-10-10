@@ -4245,6 +4245,23 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         project_root, active_profile_id
     )
     base_scientific_fp = base_scientific["scientific_fingerprint_sha256"]
+    from config.execution_policy import build_yuanta_research_execution_overrides
+    _new_broker_economics = build_strategy_param_scientific_contract(
+        project_root,
+        active_profile_id,
+        execution_overrides=build_yuanta_research_execution_overrides(),
+    )
+    check(
+        "yuanta_research_real_cost_requires_new_scientific_fingerprint",
+        True,
+        _new_broker_economics["scientific_fingerprint_sha256"] != base_scientific_fp,
+    )
+    check(
+        "registered_research_profiles_retained_frozen_fee_economics",
+        True,
+        base_scientific["scientific_contract"]["execution"]["buy_fee"]
+        != _new_broker_economics["scientific_contract"]["execution"]["buy_fee"],
+    )
     check(
         "strategy_param_scientific_contract_matches_active_profile_owners",
         True,

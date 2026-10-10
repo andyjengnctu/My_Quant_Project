@@ -15,6 +15,7 @@ _NATIVE_HOTPATH_ENABLED = bool(
 
 from core.capital_policy import resolve_scanner_live_capital
 from core.order_lot_policy import (
+    TAIWAN_BOARD_LOT_SHARES,
     apply_board_lot_preferred_qty,
     apply_board_lot_preferred_qty_milli,
     get_min_entry_notional_milli,
@@ -42,6 +43,7 @@ from core.exact_accounting import (
     price_to_milli,
     rate_to_ppm,
     resolve_fee_schedule_tuple,
+    resolve_charge_rounding_mode,
     round_price_to_tick_milli,
 )
 
@@ -215,9 +217,7 @@ def build_position_sizing_fee_context(params, *, ticker=None, security_profile=N
         security_profile=security_profile,
         trade_date=trade_date,
     )
-    charge_rounding_mode = str(
-        getattr(params, "charge_rounding_mode", "nearest_milli") or "nearest_milli"
-    )
+    charge_rounding_mode = resolve_charge_rounding_mode(params)
     rounding_mode_code = (
         1 if charge_rounding_mode == "floor_twd"
         else 0 if charge_rounding_mode == "nearest_milli"
@@ -259,7 +259,7 @@ def calc_position_size_from_milli_context(
     buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, rounding_mode_code, _min_entry_notional_milli = fee_context
 
     if _NATIVE_HOTPATH_ENABLED and int(rounding_mode_code) >= 0:
-        return int(_native_calc_position_size_exact(
+        native_qty = int(_native_calc_position_size_exact(
             int(buy_price_milli),
             int(stop_price_milli),
             int(cap_milli),
@@ -273,6 +273,11 @@ def calc_position_size_from_milli_context(
             int(_NATIVE_BROKER_FEE_PPM),
             int(_NATIVE_BROKER_MIN_FEE_MILLI),
         ))
+        # The compiled kernel still accepts one minimum for every lot size.
+        # For a sub-board-lot result, run the canonical Python path with NT$1
+        # minimum; board-lot results retain the original native fast path.
+        if native_qty >= TAIWAN_BOARD_LOT_SHARES:
+            return native_qty
 
     est_buy_fee_per_share_milli = 0 if buy_fee_ppm <= 0 else (buy_price_milli * buy_fee_ppm + 999_999) // 1_000_000
     est_sell_cost_per_share_milli = 0 if (sell_fee_ppm + tax_ppm) <= 0 else ((stop_price_milli * (sell_fee_ppm + tax_ppm) + 999_999) // 1_000_000)
