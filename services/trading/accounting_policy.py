@@ -1,9 +1,8 @@
 """Actual-broker accounting policy for Trading account records.
 
-Research/backtest may apply a separate economic fee-rebate policy, while this
-module always consumes the shared raw broker settlement constants.  Real
-Trading account valuation and manually/broker-confirmed fills therefore keep
-the broker cash semantics unchanged.
+Current Research/backtest and Trading use the same raw broker-fee and tax
+rules. Trading refunds remain manual cash reconciliation and must not be
+pre-credited to an execution ledger; historical Research inputs are frozen.
 """
 from __future__ import annotations
 

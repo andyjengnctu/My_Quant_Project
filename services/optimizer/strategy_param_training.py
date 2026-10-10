@@ -2182,6 +2182,11 @@ def prepare_selection_historical_full_roos_params(
     default path.
     """
 
+    # Old registered Research PARAM identities carry different economic fees.
+    # Never rebuild them with the new broker-cash defaults and mislabel output.
+    from core.strategy_param_policy import assert_broker_cash_research_build_identity
+
+    assert_broker_cash_research_build_identity(parameter_set_identity)
     root = Path(project_root).resolve()
     resolved_first_oos_date, resolved_last_oos_date = _resolve_selection_historical_oos_period(
         first_oos_date, last_oos_date

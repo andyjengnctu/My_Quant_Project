@@ -7,7 +7,7 @@ import math
 from functools import lru_cache
 from typing import Any, Dict
 
-from config.execution_policy import YUANTA_RESEARCH_FEE_RATE
+from config.execution_policy import HISTORICAL_RESEARCH_FEE_RATE
 from config.broker_accounting import (
     BROKER_CHARGE_ROUNDING_MODE,
     BROKER_FEE_RATE,
@@ -448,19 +448,18 @@ CHARGE_ROUNDING_FLOOR_TWD = BROKER_CHARGE_ROUNDING_MODE
 def resolve_charge_rounding_mode(params) -> str:
     """One rounding rule for ledger, cash planning, and native sizing.
 
-    Explicit frozen legacy/custom rounding remains authoritative. New canonical
-    Yuanta six-tenths Research economics use integer-TWD settlement; older
-    Research snapshots with a different frozen fee stay on the former
-    nearest-milli economic rule rather than silently changing their policy.
+    Explicit frozen legacy/custom rounding remains authoritative. Current
+    Research and Trading use the same integer-TWD broker settlement; legacy
+    Research snapshots retain the former nearest-milli economic rule.
     """
     explicit_mode = getattr(params, "charge_rounding_mode", None)
     if explicit_mode is None:
-        is_current_yuanta_economic_policy = (
-            float(params.buy_fee) == YUANTA_RESEARCH_FEE_RATE
-            and float(params.sell_fee) == YUANTA_RESEARCH_FEE_RATE
+        is_broker_cash_policy = (
+            float(params.buy_fee) == float(BROKER_FEE_RATE)
+            and float(params.sell_fee) == float(BROKER_FEE_RATE)
             and float(params.min_fee) == float(BROKER_MIN_FEE_TWD)
         )
-        mode = CHARGE_ROUNDING_FLOOR_TWD if is_current_yuanta_economic_policy else CHARGE_ROUNDING_NEAREST_MILLI
+        mode = CHARGE_ROUNDING_FLOOR_TWD if is_broker_cash_policy else CHARGE_ROUNDING_NEAREST_MILLI
     else:
         mode = str(explicit_mode)
     if mode not in {CHARGE_ROUNDING_NEAREST_MILLI, CHARGE_ROUNDING_FLOOR_TWD}:

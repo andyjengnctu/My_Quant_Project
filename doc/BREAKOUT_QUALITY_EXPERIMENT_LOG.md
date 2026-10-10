@@ -12844,3 +12844,11 @@ Decision：`RAW_PROVIDER_ZERO_OHLC_CONFIRMED / SOURCE_QUALITY_BLOCKED / READY_VA
 - **執行決策**：退役 MR-13BY 隔離 Forward／Rolling／Compare／Robustness Producer 與一鍵 CLI／Audit 選單派送、AUD-selection-k-r0-attribution 與 AUD-c80-c81-allocator-path-attribution 的 formal one-time implementation／catalog registration／專屬合成測試，以及已無引用的退役 Optimizer 一次性 Audit placeholder。保留泛用 Audit `[4]→[2]` 位置，清理後無已登錄的一次性研究。
 - **已知原結果不變**：MR-13BY Seed42 Forward 使用者回報 AO/BY 共同 `608,204` group、九項指標均退步，原 Gate FAIL；未取得 BY Rolling／Robustness 本機結果，不宣稱已跑過。AUD-selection-k-r0-attribution 的已完成研究證據照舊；AUD-c80-c81-allocator-path-attribution 退役時仍缺最終結果，不推定其答案。
 - **範圍邊界**：本輪為工程退役，不更改 AO／其他正式 model bases、策略參數、Trading、正式 Research 七項選單與 Standard SOP 報表。Registry ID 不回收，所有過往 result/evidence/artifact 不刪除、不改寫；本機非 ZIP 的舊輸出工件不在此次刪除範圍。
+
+
+## 2026-10-11 — Research／Trading 券商稅費口徑切換為 Trading 現金扣款規則（使用者授權，未產生新績效）
+
+- **使用者決策**：為使新 Research 與實際 Trading 的交易成本一致，Research 不再採用舊72%手續費回饋或自動模擬元大6折退款。新計算以元大原始手續費0.1425%、整股最低20元、純零股最低1元、商品別賣出交易稅及整元捨去為準，直接認列券商成交當下費稅。Trading的折扣退款只在使用者手動調整現金時反映，不因策略模擬自動生成入帳。
+- **新科學身分**：`PARAM-P15`，沿用 P14 的Adjusted／同原始訊號共識／120M/12M／fixed4×300／validation-off架構，只切換費用經濟語意。新的registered scientific fingerprint與獨立artifact namespace請以Registry及`config/strategy_params.py`為準。`ACTIVE_STRATEGY_PARAM_PROFILE`切至P15，**本輪未完成任何P15正式訓練、Rolling、Compare或PIT真實資料回測**；不得沿用P14結果宣稱P15績效。
+- **歷史保護**：八個已註冊Strategy Parameter profile的原scientific SHA維持不變；只有這些凍結身分的歷史解讀保留原72% Research經濟費率與舊回饋邏輯。舊模型與Compare工件不重新標記，不回填新費用結果；後續新訓練／評估須以P15或另行合法分配的新身分執行。此為結果敏感的研究政策更動，非等價工程重構。
+- **本輪證據界線**：完成程式及synthetic費稅／工件科學身分測試，但沒有使用者Windows正式double check，也未取得元大實際退款個別交易對應資料，因此Trading手動現金調整僅用於帳戶餘額對帳，不由系統把該款重新分攤到每一筆交易損益。

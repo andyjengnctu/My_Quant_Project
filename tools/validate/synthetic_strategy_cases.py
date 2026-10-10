@@ -1377,8 +1377,8 @@ def validate_optimizer_objective_export_contract_case(_base_params):
             ('export_best_params_preserves_best_trial_high_len', qualified_high_len, exported_payload['high_len'],),
             ('export_best_params_canonicalizes_atr_buy_tol_step_float', _canonicalize_optimizer_export_repr('atr_buy_tol', qualified_atr_buy_tol), repr(exported_payload['atr_buy_tol']),),
             ('export_best_params_canonicalizes_min_history_ev_step_float', _canonicalize_optimizer_export_repr('min_history_ev', qualified_min_history_ev), repr(exported_payload['min_history_ev']),),
-            ('export_best_params_keeps_default_buy_fee_canonical_decimal', '0.000399', repr(exported_payload['buy_fee']),),
-            ('export_best_params_keeps_default_sell_fee_canonical_decimal', '0.000399', repr(exported_payload['sell_fee']),),
+            ('export_best_params_keeps_default_buy_fee_canonical_decimal', repr(V16StrategyParams().buy_fee), repr(exported_payload['buy_fee']),),
+            ('export_best_params_keeps_default_sell_fee_canonical_decimal', repr(V16StrategyParams().sell_fee), repr(exported_payload['sell_fee']),),
             ('export_best_params_failure_status_for_unqualified_best_trial', 1, failure_status,),
             ('export_best_params_failure_does_not_create_payload', False, failure_export_path.exists(),),
         ),
@@ -4245,22 +4245,28 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         project_root, active_profile_id
     )
     base_scientific_fp = base_scientific["scientific_fingerprint_sha256"]
-    from config.execution_policy import build_yuanta_research_execution_overrides
+    from core.execution_policy import build_yuanta_research_execution_overrides
+    from core.strategy_param_scientific_contract import build_registered_strategy_param_scientific_identity
     _new_broker_economics = build_strategy_param_scientific_contract(
         project_root,
         active_profile_id,
         execution_overrides=build_yuanta_research_execution_overrides(),
     )
+    _frozen_p14 = build_registered_strategy_param_scientific_identity(
+        project_root, "c85_same_signal_revalidation_current",
+    )
     check(
         "yuanta_research_real_cost_requires_new_scientific_fingerprint",
         True,
-        _new_broker_economics["scientific_fingerprint_sha256"] != base_scientific_fp,
+        _frozen_p14["scientific_fingerprint_sha256"] != base_scientific_fp,
     )
     check(
         "registered_research_profiles_retained_frozen_fee_economics",
         True,
-        base_scientific["scientific_contract"]["execution"]["buy_fee"]
-        != _new_broker_economics["scientific_contract"]["execution"]["buy_fee"],
+        _frozen_p14["registration_matches"]
+        and _frozen_p14["scientific_contract"]["execution"]["buy_fee"]
+        != _new_broker_economics["scientific_contract"]["execution"]["buy_fee"]
+        and base_scientific_fp == _new_broker_economics["scientific_fingerprint_sha256"],
     )
     check(
         "strategy_param_scientific_contract_matches_active_profile_owners",
@@ -4473,6 +4479,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     corrected_profile_id = str(dict(corrected_source.builder.options).get("training_profile_id") or "")
     from core.strategy_param_scientific_contract import build_strategy_param_scientific_contract
     from core.portfolio_ensemble import get_ensemble_candidate_consensus_contract
+    corrected_profile = get_strategy_param_training_profile(corrected_profile_id)
     corrected_science = build_strategy_param_scientific_contract(project_root, corrected_profile_id)
     historical_science = build_strategy_param_scientific_contract(project_root, "production_multiseed_current")
     check(
@@ -4484,22 +4491,27 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and "C85" not in current_arm_ids
         and corrected_arm.data_source == "canonical"
         and corrected_source.builder.builder_type == "optimizer_fixed_multiseed_strategy_params"
-        and corrected_profile_id == active_param_profile.profile_id
+        # The current comparison suite stays frozen at C95/P14; the newly
+        # authorized broker-cash Research fitting has a distinct P15 identity.
+        and corrected_profile_id == "c85_same_signal_revalidation_current"
+        and active_param_profile.profile_id == "c85_same_signal_broker_cash_current"
+        and active_param_profile.fee_accounting_policy == "broker_cash_v1"
         and active_param_profile.price_basis == "adjusted"
         and active_param_profile.filter_profile == "full"
         and active_param_profile.parameter_policy == "base-finalists-agree"
         and not active_param_profile.validation_enabled
         and not current_validation_parameter_sets
-        and current_fixed_multiseed_profiles == {active_param_profile.profile_id}
+        and current_fixed_multiseed_profiles == {corrected_profile_id}
         and "optimizer_raw_price_strategy_params" not in current_builder_types
         and "optimizer_validation_budget_refit_strategy_params" not in current_builder_types,
     )
     check(
         "strategy_compare_corrected_c85_scientific_identity_is_registered_and_separate_from_p6",
         True,
-        active_param_profile.parameter_set_identity == "PARAM-P14"
+        corrected_profile.parameter_set_identity == "PARAM-P14"
+        and active_param_profile.parameter_set_identity == "PARAM-P15"
         and corrected_science["scientific_fingerprint_sha256"]
-            == active_param_profile.registered_scientific_fingerprint_sha256
+            == corrected_profile.registered_scientific_fingerprint_sha256
         and corrected_science["scientific_fingerprint_sha256"]
             != historical_science["scientific_fingerprint_sha256"]
         and historical_science["scientific_fingerprint_sha256"]
@@ -4535,8 +4547,8 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         )
         old_payload_on_new_path = fixed_multiseed_strategy_param_artifact_path(
             isolated_p14_dir,
-            training_profile_id=active_param_profile.profile_id,
-            policy=active_param_profile.parameter_policy,
+            training_profile_id=corrected_profile.profile_id,
+            policy=corrected_profile.parameter_policy,
         )
         old_payload_on_new_path.parent.mkdir(parents=True, exist_ok=True)
         old_payload_on_new_path.write_text(json.dumps({
@@ -4549,10 +4561,10 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         }), encoding="utf-8")
         old_reuse_state = inspect_fixed_multiseed_strategy_parameter_artifact(
             isolated_p14_dir,
-            training_profile_id=active_param_profile.profile_id,
-            policy=active_param_profile.parameter_policy,
+            training_profile_id=corrected_profile.profile_id,
+            policy=corrected_profile.parameter_policy,
             comparison_end_date="2021-12-31",
-            dataset=active_param_profile.dataset,
+            dataset=corrected_profile.dataset,
             max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
             rotation=str(DEFAULT_PORTFOLIO_ROTATION),
             fixed_risk=float(DEFAULT_FIXED_RISK),

@@ -30,7 +30,7 @@ project/
 │  ├─ training_performance_policy.py  # optimizer execution/performance／timing benchmark knobs（declarative）
 │  ├─ display_policy.py               # console/report 顯示設定值（declarative）
 │  ├─ broker_accounting.py            # 券商原始手續費／稅率／整元捨去 settlement SSOT
-│  └─ execution_policy.py             # Research資金／回饋後經濟費用與 runtime parameter schema（declarative）
+│  └─ execution_policy.py             # Research資金／與Trading一致的券商現金費稅預設、凍結研究費率常數與runtime parameter schema（declarative）
 ├─ core/
 │  ├─ config.py                       # 相容 façade；穩定匯出設定常數與參數契約
 │  ├─ execution_policy.py             # execution config snapshot runtime helper
@@ -158,7 +158,7 @@ project/
 - `core/portfolio_engine.py`只保留`run_portfolio_timeline()`日序 orchestration；benchmark cache、replay diagnostics、active-level rows與seed-ensemble aggregation分別由`portfolio_benchmark.py`、`portfolio_replay_support.py`、`portfolio_levels.py`、`portfolio_ensemble.py`持有canonical implementation。engine只以同function-object import保留歷史private helper相容名稱，不保存第二套實作。
 - Entry path採三層責任：`portfolio_entry_plans.py`只建立reserved／cash-capped pre-market entry plan；`portfolio_entry_selection.py`是resource-aware policy thin router，Binary／Continuous共用搜尋在`portfolio_entry_selection_common.py`，Max-DL／feasible-ascent在`portfolio_entry_selection_max_dl.py`；`portfolio_entries.py`只保留reserved order fill、missed-buy記錄與extended-signal cleanup state transition。selection不得反向import`portfolio_entries.py`，所有實際成交仍由同一`execute_pre_market_entry_plan()`與exact-accounting執行。
 - Portfolio Core split是infrastructure refactor，不改candidate validity、盤前reservation、fill、fee/tax、TP/SL、rotation、Round-Trip、resource-aware K/R0／stale-score semantics或Strategy Compare identity。Formal impact registry與coverage targets必須指向canonical split modules，compatibility façade coverage不得取代implementation coverage。
-- 券商 settlement 與 Research 經濟成本分層：`config/broker_accounting.py`唯一持有 raw broker fee、stock tax 與 charge rounding；`core/exact_accounting.py`同時產生 economic `net_*_total_milli` 與 broker-cash `cash_*_total_milli`，兩者差額只可成為 fee-rebate receivable。Research 的 cost basis / PnL / equity 保留回饋後經濟口徑，但 affordability、position sizing 與可用現金必須使用 broker-cash ledger；`core/fee_rebate.py`只負責 receivable 的月界線 settlement，未結算回饋可計入 economic equity、不得提前成為 spendable cash。所有共用 Research exit/final-closeout 路徑都必須顯式宣告 `broker_cash` 或 `ledger_net` settlement basis；`broker_cash` 才可累積 rebate receivable，strategy/label-only `ledger_net` 路徑不得攜帶 rebate state，禁止缺參數時靜默 fallback 到另一種現金語意。Trading 的 accounting policy 直接 overlay 同一 raw broker settlement 常數，因此 `cash_* == net_*`、rebate receivable 必須為 0，既有實際帳務數字不變。交易稅無 rebate layer，Research/Trading 共用實際整數元 settlement rounding。
+- **現行 Research 與 Trading 共用券商現金費稅真理**：`config/broker_accounting.py`持有元大原始買賣手續費、整股／純零股最低費用、股票稅與整元捨去；`core/exact_accounting.py`唯一計算商品別稅、cash／economic ledger。自`PARAM-P15`起，**新的 Research**採與 Trading 完全相同的原始券商扣款，`net_*_total_milli == cash_*_total_milli`，不建立折扣退款應收或自動月底退佣；Trading 收到實際優惠退款後，僅由使用者手動調整現金，不自動入帳。`core/fee_rebate.py`仍保留**歷史 frozen Research**的72%回饋經濟口徑與跨月應收結算重建能力；舊P6／P14等註冊工件、scientific fingerprint和Compare歷史結果不可用新費率偷偷重算、REUSE或覆寫。`core/strategy_param_policy.py`是新舊費用科學身分的唯一區分來源：新 P15 `broker_cash_v1`；已註冊歷史身分 `frozen_research_rebate_v1`，在新券商預設下禁止BUILD，僅容許其已驗證合法的既有工件REUSE。所有共用Research exit／final-closeout路徑仍須顯式宣告`broker_cash`或`ledger_net` settlement basis；`ledger_net`不可累積退款應收，禁止靜默切換現金語意。
 
 ### `services/portfolio_replay.py` 與 `services/optimizer/`
 

@@ -100,6 +100,7 @@ class StrategyParamTrainingProfile:
     score_policy_overrides: Mapping[str, Any]
     requires_resume_safe_execution_evidence: bool
     registered_scientific_fingerprint_sha256: str | None
+    fee_accounting_policy: str
     candidate_consensus_contract: str | None
 
 
@@ -128,6 +129,26 @@ class StrategyParamFittingSeedProtocol:
             "generator_seed": int(self.generator_seed),
             "resolved_seeds": [int(value) for value in self.resolved_seeds],
         }
+
+
+def assert_broker_cash_research_build_identity(parameter_set_identity: str) -> None:
+    """Fail fast before fitting under a frozen historical refund identity.
+
+    Existing immutable historical artifacts may be read/reused via their own
+    manifests; the current broker-cash Optimizer must never publish a rebuilt
+    result under a registered 72%-refund PARAM identity.
+    """
+    requested = str(parameter_set_identity or "").strip()
+    for profile_id, raw in STRATEGY_PARAM_PROFILES.items():
+        if str(raw.get("parameter_set_identity") or "") != requested:
+            continue
+        profile = get_strategy_param_training_profile(profile_id)
+        if profile.fee_accounting_policy == "frozen_research_rebate_v1":
+            raise RuntimeError(
+                f"{requested} 使用已凍結舊Research退款科學身分；"
+                "目前Optimizer費稅已統一到Trading券商現金口徑，"
+                "不可在舊身分下重新BUILD。請使用新的合法broker-cash參數研究身分。"
+            )
 
 
 def get_strategy_param_fitting_seed_protocol(
@@ -364,6 +385,12 @@ def get_strategy_param_training_profile(profile_id: str) -> StrategyParamTrainin
             "registered_scientific_fingerprint_sha256必須是64字元小寫SHA256: "
             f"{key}"
         )
+    fee_accounting_policy = str(
+        raw.get("fee_accounting_policy")
+        or ("frozen_research_rebate_v1" if registered_scientific_fingerprint_sha256 else "broker_cash_v1")
+    )
+    if fee_accounting_policy not in {"frozen_research_rebate_v1", "broker_cash_v1"}:
+        raise ValueError(f"不支援的fee_accounting_policy: {key} -> {fee_accounting_policy!r}")
     return StrategyParamTrainingProfile(
         profile_id=key,
         label=values["label"],
@@ -384,6 +411,7 @@ def get_strategy_param_training_profile(profile_id: str) -> StrategyParamTrainin
             raw.get("requires_resume_safe_execution_evidence", False)
         ),
         registered_scientific_fingerprint_sha256=registered_scientific_fingerprint_sha256,
+        fee_accounting_policy=fee_accounting_policy,
         candidate_consensus_contract=(
             str(raw.get("candidate_consensus_contract") or "").strip() or None
         ),

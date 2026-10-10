@@ -231,6 +231,19 @@ def build_strategy_param_scientific_contract(
         **fitting_refs,
         **validation_refs,
     }
+    # Older registered PARAM identities were frozen with 72%-rebate economic
+    # assumptions, while newly registered broker-cash identities (P15 onward)
+    # explicitly opt into Trading settlement. The historical fee projection is
+    # *identity-only* and never changes a frozen artifact or its runtime params.
+    resolved_execution_overrides = dict(execution_overrides or {})
+    if profile.fee_accounting_policy == "frozen_research_rebate_v1":
+        from config.execution_policy import HISTORICAL_RESEARCH_FEE_RATE
+
+        resolved_execution_overrides = {
+            "buy_fee": HISTORICAL_RESEARCH_FEE_RATE,
+            "sell_fee": HISTORICAL_RESEARCH_FEE_RATE,
+            **resolved_execution_overrides,
+        }
     scientific = build_strategy_param_runtime_scientific_contract(
         root,
         strategy_id=str(profile.strategy_id),
@@ -244,7 +257,7 @@ def build_strategy_param_scientific_contract(
         fitting=fitting,
         validation=validation,
         score_policy_overrides=profile.score_policy_overrides,
-        execution_overrides=execution_overrides,
+        execution_overrides=resolved_execution_overrides,
         references=references,
     )
     if profile.candidate_consensus_contract is not None:
