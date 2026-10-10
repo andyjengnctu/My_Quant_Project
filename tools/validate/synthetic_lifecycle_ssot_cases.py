@@ -227,9 +227,13 @@ def _check_accepted_pending_reservation_capability(base_params, check, check_tru
     from services.trading.strategy_param_runtime import build_trading_manual_management_lineage
     from services.trading.single_stock_inspection import (build_trading_single_stock_inspection,
                                                          project_trading_single_stock_chart_payload)
+    # AI: The isolated 1.1% risk budget keeps the 16,000-share original
+    # approval legal under the canonical broker fees, while the later
+    # recalculated strategy ceiling remains 10,000 shares. Production sizing
+    # and the accepted-order immutability checks are unchanged.
     p = replace(_params(base_params), use_bb=False, use_kc=False, use_vol=False,
                 use_breakout_false_filter=False, use_breakout_return_filter=False,
-                min_entry_notional=0, fixed_risk=.01, max_position_cap_pct=.5, atr_times_trail=5.)
+                min_entry_notional=0, fixed_risk=.011, max_position_cap_pct=.5, atr_times_trail=5.)
     frame = _frame()
     frame.loc[:, ["Open", "High", "Low", "Close"]] = [19.65, 19.9, 19.45, 19.65]
     market = {"market_date": "2026-09-18", "state_fingerprint": "accepted-reservation"}
