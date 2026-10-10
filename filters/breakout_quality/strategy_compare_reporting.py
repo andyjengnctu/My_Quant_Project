@@ -23,7 +23,7 @@ from filters.breakout_quality.strategy_compare_contracts import (
     COMPARISON_MODE_SCORE_RANKING,
     comparison_labels as _comparison_labels,
 )
-from core.report_metrics import PAIR_MAIN_METRICS
+from core.report_metrics import PAIR_MAIN_METRICS, pair_main_metric_spec
 from core.report_style import (
     SIGNAL_NEGATIVE,
     SIGNAL_NEUTRAL,
@@ -525,21 +525,21 @@ def _compact_metric_rows(
     baseline: dict[str, Any],
     quality: dict[str, Any],
     delta: dict[str, Any],
-    specs: tuple[tuple[str, str, str, str], ...],
+    specs: tuple[tuple[str, ...], ...],
     *,
     use_color: bool,
 ) -> list[tuple[str, str, str, str, str]]:
     rows: list[tuple[str, str, str, str, str]] = []
-    integer_keys = {
-        "trade_count", "candidate_supply_gap_days", "underfilled_end_days",
-        "end_position_gap_slot_days",
-    }
-    for label, key, unit, preference in specs:
-        digits = 0 if key in integer_keys else 4 if key == "log_r_squared" else 2
+    for display_spec in specs:
+        # Legacy 4-tuples remain readable, but no caller can override the
+        # canonical metric semantics with a private unit/preference table.
+        label, key = display_spec[:2]
+        metric = pair_main_metric_spec(key)
+        digits, unit = metric.digits, metric.unit
         signal = signal_for_delta(
             delta.get(key),
-            preference=preference,
-            warning_threshold=5.0 if key == "avg_exposure_pct" else 0.0,
+            preference=metric.preference,
+            warning_threshold=metric.warning_threshold,
         )
         rows.append((
             label,
@@ -689,13 +689,13 @@ def _render_compact_strategy_console_report(
         )
 
     portfolio_specs = (
-        ("淨總報酬", "total_return_pct", "%", "higher"),
-        ("最大回撤", "max_drawdown_pct", "%", "lower"),
-        ("報酬／最大回撤", "return_over_max_drawdown", "", "higher"),
-        ("年化報酬", "annual_return_pct", "%", "higher"),
-        ("Log R²", "log_r_squared", "", "higher"),
-        ("月勝率", "monthly_win_rate_pct", "%", "higher"),
-        ("最差完整年度", "min_full_year_return_pct", "%", "higher"),
+        ("淨總報酬", "total_return_pct"),
+        ("最大回撤", "max_drawdown_pct"),
+        ("報酬／最大回撤", "return_over_max_drawdown"),
+        ("年化報酬", "annual_return_pct"),
+        ("Log R²", "log_r_squared"),
+        ("月勝率", "monthly_win_rate_pct"),
+        ("最差完整年度", "min_full_year_return_pct"),
     )
     lines.extend((
         render_section("投組報酬與風險", number=2),
@@ -710,10 +710,10 @@ def _render_compact_strategy_console_report(
     ))
 
     trade_specs = (
-        ("交易數", "trade_count", "", "neutral"),
-        ("勝率", "win_rate_pct", "%", "higher"),
-        ("Payoff", "payoff_ratio", "", "higher"),
-        ("EV", "expected_value_r", " R", "higher"),
+        ("交易數", "trade_count"),
+        ("勝率", "win_rate_pct"),
+        ("Payoff", "payoff_ratio"),
+        ("EV", "expected_value_r"),
     )
     lines.extend((
         render_section("單筆交易品質", number=3),
@@ -728,11 +728,11 @@ def _render_compact_strategy_console_report(
     ))
 
     capital_specs = (
-        ("平均曝險", "avg_exposure_pct", "%", "attention"),
-        ("平均每日可掛單候選", "avg_orderable_candidates", "", "neutral"),
-        ("候選供給不足日", "candidate_supply_gap_days", " 日", "lower"),
-        ("每日結束未滿倉日", "underfilled_end_days", " 日", "lower"),
-        ("每日結束持股缺口", "end_position_gap_slot_days", " 格日", "lower"),
+        ("平均曝險", "avg_exposure_pct"),
+        ("平均每日可掛單候選", "avg_orderable_candidates"),
+        ("候選供給不足日", "candidate_supply_gap_days"),
+        ("每日結束未滿倉日", "underfilled_end_days"),
+        ("每日結束持股缺口", "end_position_gap_slot_days"),
     )
     lines.extend((
         render_section("資金使用與持倉容量", number=4),

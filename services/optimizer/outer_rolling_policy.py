@@ -851,6 +851,27 @@ def _finalists_agree_metadata_keys() -> tuple[str, ...]:
 
 
 
+def rolling_schedule_member_metadata_keys(*, replay: bool = False) -> tuple[str, ...]:
+    """Ordered metadata projection shared by paramset and seed-replay artifacts.
+
+    These outputs have historically different base/replay fields.  Preserve
+    that ordering while deriving shared finalists-agree keys from one owner.
+    """
+    result = ["base_score", "base_rank"]
+    if replay:
+        result.extend((
+            "local_min", "local_rank", "retention", "retention_rank",
+            "local_min_review_enabled", "local_min_review_mode", "local_min_exact",
+        ))
+    result.extend(
+        key for key in _finalists_agree_metadata_keys()
+        if key not in ("member_selection", "intra_seed_agree")
+    )
+    if not replay:
+        result.extend(("min_agree", "min_agree_requested", "member_count"))
+    return tuple(result)
+
+
 def _build_policy_schedule_entry(
     *,
     item: dict,

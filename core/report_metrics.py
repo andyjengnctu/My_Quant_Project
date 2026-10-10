@@ -198,6 +198,13 @@ R_ANALYSIS_MERGED_METRICS = tuple(
     for metric in group_metrics
 )
 
+# Optimizer dashboard's signed-return columns use the same report-direction rule.
+# This is a presentation alias registry, not a second definition of a metric value.
+OPTIMIZER_DASHBOARD_SIGNED_RETURN_LABELS = frozenset({
+    "總資產報酬率", "年化報酬率", "年度最差報酬", "季度最差報酬", "月度最差報酬",
+})
+
+
 # Pair reports keep the same canonical metrics as before, but source their labels,
 # units and direction semantics from this shared registry.
 PAIR_MAIN_METRICS = (
@@ -207,6 +214,18 @@ PAIR_MAIN_METRICS = (
     PORTFOLIO_RESULT_METRICS[-2],
     *EXECUTION_CAPACITY_METRICS,
 )
+
+
+# Strategy Compare compact report retains its approved local labels but must
+# resolve numeric precision, unit, direction and warning threshold from here.
+_PAIR_MAIN_METRIC_BY_KEY = {metric.key: metric for metric in PAIR_MAIN_METRICS}
+
+
+def pair_main_metric_spec(key: str) -> ReportMetricSpec:
+    try:
+        return _PAIR_MAIN_METRIC_BY_KEY[str(key)]
+    except KeyError as exc:
+        raise ValueError(f"Unknown Strategy Compare report metric: {key!r}") from exc
 
 
 # Multi-seed robustness extensions reuse the same ReportMetricSpec contract as
@@ -324,6 +343,8 @@ __all__ = [
     "UPSIDE_SURVIVAL_BASE_METRICS",
     "MARGINAL_POSITION_ATTRIBUTION_METRICS",
     "PAIR_MAIN_METRICS",
+    "pair_main_metric_spec",
+    "OPTIMIZER_DASHBOARD_SIGNED_RETURN_LABELS",
     "R_ACTUAL_TRADE_METRICS",
     "R_MODEL_PREDICTION_METRICS",
     "R_SELECTION_TRANSLATION_METRICS",

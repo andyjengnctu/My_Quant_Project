@@ -30,6 +30,7 @@ from core.display_common import (
     get_p,
 )
 from core.portfolio_stats import calc_plain_romd, calc_portfolio_score
+from core.report_metrics import OPTIMIZER_DASHBOARD_SIGNED_RETURN_LABELS
 from core.report_style import (
     SIGNAL_NEGATIVE,
     SIGNAL_NEUTRAL,
@@ -414,7 +415,7 @@ def _format_split_bucket(total: int, left_label: str, left_value: int, right_lab
 
 
 def _first_zone_base_color(metric_name: str, numeric_value: float) -> str:
-    if metric_name in {"總資產報酬率", "年化報酬率", "年度最差報酬", "季度最差報酬", "月度最差報酬"}:
+    if metric_name in OPTIMIZER_DASHBOARD_SIGNED_RETURN_LABELS:
         return terminal_color_for_signal(signal_for_signed_value(numeric_value))
     if metric_name == "最大回撤 (MDD)":
         signal = SIGNAL_WARNING if abs(float(numeric_value)) <= float(MAX_PORTFOLIO_MDD_PCT) else SIGNAL_NEGATIVE
@@ -722,7 +723,7 @@ def _optimizer_dashboard_metric_color(metric_name: str, value: str) -> str:
         return terminal_color_for_signal(SIGNAL_NEUTRAL)
     if any(token in metric_name for token in ("報酬回撤比", "RoMD")):
         return terminal_color_for_signal(SIGNAL_NEUTRAL)
-    if metric_name in {"總資產報酬率", "年化報酬率", "年度最差報酬", "季度最差報酬", "月度最差報酬"}:
+    if metric_name in OPTIMIZER_DASHBOARD_SIGNED_RETURN_LABELS:
         try:
             numeric = float(value_text.replace('%', '').replace('R', '').replace(',', '').strip())
         except ValueError:

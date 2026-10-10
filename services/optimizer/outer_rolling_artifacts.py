@@ -35,6 +35,7 @@ from services.optimizer.outer_rolling_policy import (
     _policy_is_available,
     _policy_plain_romd_score,
     _resolve_finalists_agree_min_agree,
+    rolling_schedule_member_metadata_keys,
 )
 from services.optimizer.outer_rolling_results import (
     _build_chained_oos_summary,
@@ -110,27 +111,7 @@ def _build_params_ensemble_members_for_schedule(schedule: dict) -> list[dict]:
         "selected_trial": schedule.get("selected_trial"),
         "params": params_payload,
     }
-    for key in (
-        "base_score",
-        "base_rank",
-        "selection_rule",
-        "policy_type",
-        "base_agree_seed_finalist_count",
-        "base_agree_seed_base_score_sum",
-        "base_agree_seed_selected_trials",
-        "base_agree_min_agree_requested",
-        "local_agree_seed_finalist_count",
-        "local_agree_seed_local_min_sum",
-        "local_agree_seed_selected_trials",
-        "local_agree_min_agree_requested",
-        "retention_agree_seed_finalist_count",
-        "retention_agree_seed_retention_sum",
-        "retention_agree_seed_selected_trials",
-        "retention_agree_min_agree_requested",
-        "min_agree",
-        "min_agree_requested",
-        "member_count",
-    ):
+    for key in rolling_schedule_member_metadata_keys(replay=False):
         if key in schedule:
             member[key] = schedule.get(key)
     return [member]

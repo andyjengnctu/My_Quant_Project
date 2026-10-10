@@ -3285,5 +3285,111 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and synthetic_scenarios["C73"]["total_return_pct"] == 3.0,
     )
 
+    # AI: SSOT-04/06 behavior checks.  Test values deliberately differ from
+    # display aliases so an accidental second unit/direction source is rejected.
+    from core.report_metrics import (
+        PAIR_MAIN_METRICS as canonical_pair_metrics,
+        pair_main_metric_spec,
+        OPTIMIZER_DASHBOARD_SIGNED_RETURN_LABELS,
+    )
+    from filters.breakout_quality.strategy_compare_reporting import _compact_metric_rows
+    from core.strategy_dashboard import _first_zone_base_color, _optimizer_dashboard_metric_color
+    from core.report_style import SIGNAL_WARNING, signal_for_delta
+    from services.optimizer.outer_rolling_policy import (
+        _finalists_agree_metadata_keys,
+        rolling_schedule_member_metadata_keys,
+    )
+    from services.optimizer.outer_rolling_artifacts import _build_params_ensemble_members_for_schedule
+    from services.optimizer.outer_rolling_policy_replay import _build_members_from_seed_rows_for_policy
+
+    all_specs_resolve = all(pair_main_metric_spec(metric.key) is metric for metric in canonical_pair_metrics)
+    check_true("strategy_compact_metric_precision_direction_derive_from_canonical_registry", all_specs_resolve)
+    try:
+        pair_main_metric_spec("invented_private_metric")
+    except ValueError:
+        rejects_unregistered_metric = True
+    else:
+        rejects_unregistered_metric = False
+    check_true("strategy_compact_unknown_metric_is_fail_fast", rejects_unregistered_metric)
+
+    forced_alias_row = _compact_metric_rows(
+        {"log_r_squared": 0.123456},
+        {"log_r_squared": 0.223456},
+        {"log_r_squared": 0.1},
+        (("Log R²", "log_r_squared", "WRONG_UNIT", "lower"),),
+        use_color=False,
+    )
+    check_true(
+        "strategy_compact_legacy_alias_cannot_override_canonical_precision_or_direction",
+        forced_alias_row == [("Log R²", "0.1235", "0.2235", "+0.1000", "改善")],
+    )
+    check_true(
+        "strategy_compact_exposure_warning_threshold_is_canonical",
+        pair_main_metric_spec("avg_exposure_pct").warning_threshold == 5.0
+        and signal_for_delta(4.9, preference="attention", warning_threshold=5.0) != SIGNAL_WARNING
+        and signal_for_delta(5.1, preference="attention", warning_threshold=5.0) == SIGNAL_WARNING,
+    )
+    check_true(
+        "optimizer_dashboard_signed_return_labels_share_one_owner",
+        all(
+            _first_zone_base_color(label, 1.0)
+            == _optimizer_dashboard_metric_color(label, "1.0")
+            for label in OPTIMIZER_DASHBOARD_SIGNED_RETURN_LABELS
+        ),
+    )
+
+    shared_keys = tuple(
+        key for key in _finalists_agree_metadata_keys()
+        if key not in {"member_selection", "intra_seed_agree"}
+    )
+    artifact_keys = rolling_schedule_member_metadata_keys(replay=False)
+    replay_keys = rolling_schedule_member_metadata_keys(replay=True)
+    check_true(
+        "ensemble_paramset_metadata_projection_retains_approved_order",
+        artifact_keys == (
+            "base_score", "base_rank", *shared_keys,
+            "min_agree", "min_agree_requested", "member_count",
+        ) and len(artifact_keys) == len(set(artifact_keys)),
+    )
+    check_true(
+        "ensemble_replay_metadata_projection_retains_approved_order",
+        replay_keys == (
+            "base_score", "base_rank", "local_min", "local_rank",
+            "retention", "retention_rank", "local_min_review_enabled",
+            "local_min_review_mode", "local_min_exact", *shared_keys,
+        ) and len(replay_keys) == len(set(replay_keys)),
+    )
+    metadata_schedule = {
+        "params": {"high_len": 260},
+        "optimizer_seed": 42,
+        "selected_trial": 3,
+        "member_count": 4,
+        "min_agree": 3,
+        "min_agree_requested": "auto",
+        "member_selection": "must_not_copy",
+        "intra_seed_agree": "must_not_copy",
+    }
+    metadata_schedule.update({
+        key: f"sentinel:{key}"
+        for key in (*artifact_keys, *replay_keys)
+        if key not in metadata_schedule
+    })
+    artifact_members = _build_params_ensemble_members_for_schedule(metadata_schedule)
+    replay_members = _build_members_from_seed_rows_for_policy(
+        [{"policy_schedules": {"base": metadata_schedule}}], "base"
+    )
+    check_true(
+        "ensemble_paramset_serializer_consumes_canonical_metadata_projection",
+        len(artifact_members) == 1
+        and all(artifact_members[0].get(key) == metadata_schedule[key] for key in artifact_keys)
+        and not ({"member_selection", "intra_seed_agree"} & set(artifact_members[0])),
+    )
+    check_true(
+        "ensemble_replay_serializer_consumes_canonical_metadata_projection",
+        len(replay_members) == 1
+        and all(replay_members[0].get(key) == metadata_schedule[key] for key in replay_keys)
+        and not ({"member_selection", "intra_seed_agree"} & set(replay_members[0])),
+    )
+
     summary["strategy_output_contracts"] = [row[0] for row in contract_rows]
     return results, summary

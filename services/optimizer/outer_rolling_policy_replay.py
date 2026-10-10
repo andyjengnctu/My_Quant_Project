@@ -34,6 +34,7 @@ from services.optimizer.outer_rolling_policy import (
     _is_finalists_agree_policy,
     _is_rolling_random_seed_ensemble_enabled,
     _resolve_finalists_agree_min_agree,
+    rolling_schedule_member_metadata_keys,
     select_finalist_best_members,
     select_finalists_agree_members,
 )
@@ -94,31 +95,7 @@ def _build_members_from_seed_rows_for_policy(seed_rows: list[dict], policy_name:
             "selected_trial": schedule.get("selected_trial"),
             "params": params_payload,
         }
-        for key in (
-            "base_score",
-            "base_rank",
-            "local_min",
-            "local_rank",
-            "retention",
-            "retention_rank",
-            "local_min_review_enabled",
-            "local_min_review_mode",
-            "local_min_exact",
-            "selection_rule",
-            "policy_type",
-            "base_agree_seed_finalist_count",
-            "base_agree_seed_base_score_sum",
-            "base_agree_seed_selected_trials",
-            "base_agree_min_agree_requested",
-            "local_agree_seed_finalist_count",
-            "local_agree_seed_local_min_sum",
-            "local_agree_seed_selected_trials",
-            "local_agree_min_agree_requested",
-            "retention_agree_seed_finalist_count",
-            "retention_agree_seed_retention_sum",
-            "retention_agree_seed_selected_trials",
-            "retention_agree_min_agree_requested",
-        ):
+        for key in rolling_schedule_member_metadata_keys(replay=True):
             if key in schedule:
                 member[key] = schedule.get(key)
         members.append(member)
