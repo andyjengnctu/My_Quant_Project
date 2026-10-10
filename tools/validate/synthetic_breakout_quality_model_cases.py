@@ -6381,24 +6381,102 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
         bool(single_spec.selection_pit_authorized and duo_spec.selection_pit_authorized),
     )
 
-    project_root = Path(__file__).resolve().parents[2]
-    app_source = (
-        project_root / "services" / "research" / "breakout_quality_application.py"
-    ).read_text(encoding="utf-8")
+    from contextlib import redirect_stdout
+    from io import StringIO
+    from services.research import breakout_quality_application as research_app
+
+    # [AI] Exercise the registered work types and producer routes, not the exact
+    # source spelling used by the menu renderer.
+    configured_models = tuple(reversed(
+        breakout_quality_policy.get_breakout_quality_model_test_settings().model_profiles
+    ))
+    comparison_settings = SimpleNamespace(
+        is_binary_classification=False,
+        is_continuous_ranker=True,
+        rolling_authorized=False,
+        experiment_profile=single.name,
+    )
+    menu_output = StringIO()
+    with (
+        patch.object(research_app, "get_breakout_quality_model_research_settings", return_value=comparison_settings),
+        patch.object(research_app, "_configured_exploratory_research_study", return_value=None),
+        patch.object(research_app, "get_breakout_quality_model_test_settings", return_value=SimpleNamespace(model_profiles=configured_models)) as menu_models,
+        patch.object(research_app, "_run_configured_model_comparison", return_value=0) as run_comparison,
+        patch.object(research_app, "_run_configured_model_robustness", return_value=0) as run_robustness,
+        patch("builtins.input", side_effect=("3", "4", "5", "6", "0")),
+        redirect_stdout(menu_output),
+    ):
+        menu_return = research_app._interactive_model_research("apps/research.py model")
+    menu_text = menu_output.getvalue()
+    model_route_items = {
+        str(choice): (action, label)
+        for choice, action, label in research_app._MODEL_RESEARCH_MENU_WORK_ITEMS
+        if action in {"compare", "rolling_compare", "robustness", "rolling_robustness"}
+    }
     check_true(
         "reverse_conditional_profiles_share_config_driven_standard_model_comparison_route_without_dedicated_menu",
-        'model_list = get_breakout_quality_model_test_settings().model_profiles' in app_source
-        and 'for model_id, profile_name in model_list:' in app_source
-        and 'render_menu_item(3, "Forward OOS 模型比較")' in app_source
-        and 'render_menu_item(4, "Rolling OOS 模型比較")' in app_source
-        and 'if choice == "3":' in app_source
-        and '_run_configured_model_comparison(program_name, rolling=False)' in app_source
-        and '_run_configured_model_comparison(program_name, rolling=True)' in app_source
-        and '_run_configured_model_robustness(program_name, rolling=False)' in app_source
-        and '_run_configured_model_robustness(program_name, rolling=True)' in app_source
-        and '_run_shared_strategy_robustness' not in app_source
-        and 'Conditional-MFE Single／Duo Forward Model Gate' not in app_source,
+        menu_return == 0
+        and {choice: action for choice, (action, _label) in model_route_items.items()}
+        == {"3": "compare", "4": "rolling_compare", "5": "robustness", "6": "rolling_robustness"}
+        and all(f"[{choice}]" in menu_text and label in menu_text
+                for choice, (_action, label) in model_route_items.items())
+        and " / ".join(model_id for model_id, _profile in configured_models) in menu_text
+        and menu_models.call_count >= 1
+        and tuple(call.kwargs["rolling"] for call in run_comparison.call_args_list) == (False, True)
+        and tuple(call.kwargs["rolling"] for call in run_robustness.call_args_list) == (False, True)
+        and "Conditional-MFE Single／Duo Forward Model Gate" not in menu_text,
     )
+
+    # [AI] Verify both consumers read the runtime model-list contract even when
+    # the active Training Model does not authorize its own Rolling training.
+    report_stub = SimpleNamespace(report={})
+    outputs = (Path("synthetic_comparison.json"), Path("synthetic_comparison.md"))
+    settings_stub = lambda experiment_profile: SimpleNamespace(experiment_profile=experiment_profile)
+    with (
+        patch.object(research_app, "get_breakout_quality_model_test_settings", return_value=SimpleNamespace(model_profiles=configured_models)),
+        patch.object(research_app, "get_breakout_quality_workflow_settings", side_effect=settings_stub),
+        patch.object(research_app, "get_breakout_quality_rolling_test_mode", return_value=object()),
+        patch.object(research_app, "_load_reusable_continuous_forward_contract", return_value=(report_stub, None)),
+        patch.object(research_app, "_load_reusable_rolling_standard_report", return_value=(report_stub, {}, None)),
+        patch.object(research_app, "_print_model_action_status") as comparison_status,
+        patch.object(research_app, "_render_standard_model_comparison", return_value="SYNTHETIC"),
+        patch.object(research_app, "_write_standard_model_comparison_report", return_value=outputs),
+        patch.object(research_app, "render_status_paths", return_value=""),
+        redirect_stdout(StringIO()),
+    ):
+        forward_return = research_app._run_configured_model_comparison("apps/research.py model", rolling=False)
+        forward_rows = comparison_status.call_args.args[0]
+        rolling_return = research_app._run_configured_model_comparison("apps/research.py model", rolling=True)
+        rolling_rows = comparison_status.call_args.args[0]
+    check_true(
+        "configured_forward_and_rolling_comparison_consume_same_runtime_model_list",
+        forward_return == rolling_return == 0
+        and tuple((model_id, profile) for model_id, profile, _action, _reason in forward_rows) == configured_models
+        and tuple((model_id, profile) for model_id, profile, _action, _reason in rolling_rows) == configured_models,
+    )
+
+    with (
+        patch.object(research_app, "get_breakout_quality_model_test_settings", return_value=SimpleNamespace(model_profiles=configured_models)),
+        patch.object(research_app, "get_breakout_quality_workflow_settings", side_effect=settings_stub),
+        patch.object(research_app, "resolve_robustness_benchmark_seeds", return_value=(11, 17)),
+        patch.object(research_app, "_load_forward_robustness_seed", return_value=(None, outputs[0], "missing")),
+        patch.object(research_app, "_load_rolling_robustness_seed", return_value=(None, outputs[0], "missing")),
+        patch.object(research_app, "prompt_producer_execution_action", return_value=SimpleNamespace(action=research_app.PRODUCER_ACTION_CANCEL)),
+        patch.object(research_app, "_print_model_action_status") as robustness_status,
+        redirect_stdout(StringIO()),
+    ):
+        forward_robustness_return = research_app._run_configured_model_robustness("apps/research.py model", rolling=False)
+        forward_robustness_rows = robustness_status.call_args.args[0]
+        rolling_robustness_return = research_app._run_configured_model_robustness("apps/research.py model", rolling=True)
+        rolling_robustness_rows = robustness_status.call_args.args[0]
+    check_true(
+        "configured_forward_and_rolling_robustness_consume_same_runtime_model_list",
+        forward_robustness_return == rolling_robustness_return == 0
+        and tuple((model_id, profile) for model_id, profile, _action, _reason in forward_robustness_rows) == configured_models
+        and tuple((model_id, profile) for model_id, profile, _action, _reason in rolling_robustness_rows) == configured_models,
+    )
+
+    project_root = Path(__file__).resolve().parents[2]
     daily_source = (
         project_root / "services" / "breakout_quality" / "train_daily_ranker.py"
     ).read_text(encoding="utf-8")
