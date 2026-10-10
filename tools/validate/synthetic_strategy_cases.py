@@ -217,6 +217,26 @@ def _canonicalize_optimizer_export_repr(field_name, raw_value):
     return repr(float(Decimal(str(float(raw_value))).quantize(quantizer)))
 
 
+def _registered_optimizer_fee_repr(value):
+    """Require a canonical fee representation from a registered accounting policy.
+
+    Frozen Research evidence used the historical rebate-effective fee, while
+    new Research/Trading broker-cash artifacts use the raw settlement fee.
+    Neither policy can be inferred from the name of a local params JSON file.
+    """
+    from config.broker_accounting import BROKER_FEE_RATE
+    from config.execution_policy import HISTORICAL_RESEARCH_FEE_RATE
+
+    recognized = frozenset({
+        repr(float(HISTORICAL_RESEARCH_FEE_RATE)),
+        repr(float(BROKER_FEE_RATE)),
+    })
+    observed = repr(value)
+    if type(value) is float and observed in recognized:
+        return observed
+    return f"registered fee repr required: {', '.join(sorted(recognized))}"
+
+
 def _history_threshold_payload_is_neutral(payload):
     try:
         min_trades = int(payload.get("min_history_trades", 0))
@@ -1388,9 +1408,13 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     canonical_field_names = set(_optimizer_export_canonical_decimal_places()) | {"buy_fee", "sell_fee"}
     shipped_repr_map = {}
     expected_shipped_repr_map = {}
+    mixed_fee_policy_members = []
     for artifact_path in canonical_model_files:
         artifact_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
         for member_idx, param_payload in enumerate(_extract_reference_param_payloads(artifact_payload), start=1):
+            if "buy_fee" in param_payload and "sell_fee" in param_payload:
+                if param_payload["buy_fee"] != param_payload["sell_fee"]:
+                    mixed_fee_policy_members.append(f"{artifact_path.name}::member#{member_idx}")
             for field_name in canonical_field_names:
                 if field_name not in param_payload:
                     continue
@@ -1399,13 +1423,33 @@ def validate_optimizer_objective_export_contract_case(_base_params):
                 map_key = f"{artifact_path.name}::member#{member_idx}::{field_name}"
                 shipped_repr_map[map_key] = repr(param_payload[field_name])
                 if field_name in {"buy_fee", "sell_fee"}:
-                    expected_shipped_repr_map[map_key] = "0.000399"
+                    expected_shipped_repr_map[map_key] = _registered_optimizer_fee_repr(param_payload[field_name])
                 else:
                     expected_shipped_repr_map[map_key] = _canonicalize_optimizer_export_repr(field_name, param_payload[field_name])
 
     check("repo_shipped_reference_artifacts_use_canonical_optimizer_decimal_repr",
         expected_shipped_repr_map,
         shipped_repr_map,
+    )
+    check("repo_shipped_reference_artifacts_do_not_mix_buy_sell_fee_policies",
+        [], mixed_fee_policy_members,
+    )
+    from config.broker_accounting import BROKER_FEE_RATE
+    from config.execution_policy import HISTORICAL_RESEARCH_FEE_RATE
+
+    check("canonical_optimizer_fee_repr_preserves_historical_policy",
+        repr(float(HISTORICAL_RESEARCH_FEE_RATE)),
+        _registered_optimizer_fee_repr(float(HISTORICAL_RESEARCH_FEE_RATE)),
+    )
+    check("canonical_optimizer_fee_repr_preserves_broker_cash_policy",
+        repr(float(BROKER_FEE_RATE)),
+        _registered_optimizer_fee_repr(float(BROKER_FEE_RATE)),
+    )
+    check("canonical_optimizer_fee_repr_rejects_unregistered_fee",
+        False, _registered_optimizer_fee_repr(0.001426) == repr(0.001426),
+    )
+    check("canonical_optimizer_fee_repr_rejects_float_tail",
+        False, _registered_optimizer_fee_repr(float(BROKER_FEE_RATE) + 1e-17) == repr(float(BROKER_FEE_RATE) + 1e-17),
     )
 
     optimizer_main = importlib.import_module("services.optimizer.application")
