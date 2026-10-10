@@ -132,6 +132,62 @@ class AlternatePriceInputTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'trading-date membership mismatch'):
                 load_aligned_alternate_ohlcv_frame(root,'2330',baseline)
 
+    def test_raw_extra_dates_are_projected_to_adjusted_sample_grid(self):
+        # The raw materializer retains the original full control date grid.
+        # Adjusted OHLCV sanitation can remove dates that must not become new
+        # training samples or additional 300-bar history in this experiment.
+        with TemporaryDirectory() as tmp:
+            raw_dir = Path(tmp)
+            raw = self._frame(0.31)
+            unclean_adjusted = self._frame(0.12)
+            unclean_adjusted.iloc[18, unclean_adjusted.columns.get_loc("Open")] = 0.0
+            unclean_adjusted.iloc[45, unclean_adjusted.columns.get_loc("High")] = 0.0
+            from core.data_utils import sanitize_ohlcv_dataframe
+            control, stats = sanitize_ohlcv_dataframe(
+                unclean_adjusted.reset_index(names="Date"), "0052", min_rows=1,
+            )
+            self.assertEqual(stats["invalid_row_count"], 2)
+            raw.reset_index(names="Date").to_csv(raw_dir / "0052.csv", index=False)
+            aligned = load_aligned_alternate_ohlcv_frame(raw_dir, "0052", control)
+            self.assertTrue(aligned.index.equals(control.index))
+            self.assertEqual(len(aligned), len(control))
+            self.assertTrue(np.array_equal(aligned["Volume"], control["Volume"]))
+            self.assertTrue(np.allclose(aligned["Close"], raw.loc[control.index, "Close"], rtol=0, atol=1e-12))
+            bank = LazyDailyFeatureBank(
+                frames=(control,), benchmark=control,
+                feature_frames=(aligned,), feature_benchmark=aligned,
+                ticker_ids=np.asarray([0]), source_positions=np.asarray([300]),
+                benchmark_positions=np.asarray([300]),
+                policy=SimpleNamespace(feature_window_bars=300),
+            )
+            self.assertEqual(bank.shape, (1, 300, 10))
+            self.assertTrue(np.isfinite(bank[:]).all())
+            self.assertTrue(np.array_equal(bank._frame_arrays[0][:, 3], control["Close"]))
+
+    def test_raw_missing_adjusted_date_fails_with_diagnostics(self):
+        with TemporaryDirectory() as tmp:
+            raw_dir = Path(tmp)
+            control = self._frame(0.12)
+            raw = self._frame(0.31)
+            missing_date = raw.index[19].date().isoformat()
+            raw.iloc[19, raw.columns.get_loc("High")] = 0.0
+            # Canonical sanitizer drops invalid raw bar; no price substitution or
+            # forward filling is allowed for a date needed by adjusted targets.
+            raw.reset_index(names="Date").to_csv(raw_dir / "0052.csv", index=False)
+            with self.assertRaisesRegex(ValueError, "missing_raw=1") as raised:
+                load_aligned_alternate_ohlcv_frame(raw_dir, "0052", control)
+            self.assertIn(missing_date, str(raised.exception))
+
+    def test_raw_only_dates_do_not_hide_shared_date_volume_mismatch(self):
+        with TemporaryDirectory() as tmp:
+            raw_dir = Path(tmp)
+            control = self._frame(0.12).iloc[1:]
+            raw = self._frame(0.31)
+            raw.loc[control.index[5], "Volume"] += 1.0
+            raw.reset_index(names="Date").to_csv(raw_dir / "0052.csv", index=False)
+            with self.assertRaisesRegex(ValueError, "volume mismatch"):
+                load_aligned_alternate_ohlcv_frame(raw_dir, "0052", control)
+
     def test_service_source_is_pinned_to_verified_canonical_record(self):
         with TemporaryDirectory() as tmp:
             root=Path(tmp)

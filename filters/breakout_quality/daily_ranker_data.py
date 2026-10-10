@@ -906,8 +906,27 @@ def load_aligned_alternate_ohlcv_frame(raw_dir: Path, ticker: str, control: pd.D
     if not path.is_file() or path.resolve().parent != raw_dir.resolve():
         raise FileNotFoundError(f"raw DL feature stock missing: {ticker}")
     alternate = load_dataset_frame(path, ticker, min_rows=1)
-    if not pd.DatetimeIndex(alternate.index).equals(pd.DatetimeIndex(control.index)):
-        raise ValueError(f"raw/adjusted DL trading-date membership mismatch: {ticker}")
+    control_dates = pd.DatetimeIndex(control.index)
+    raw_dates = pd.DatetimeIndex(alternate.index)
+    if not raw_dates.equals(control_dates):
+        # The raw-price materializer preserves the original full control CSV date
+        # grid, while the canonical adjusted loader may remove invalid OHLCV rows.
+        # Raw-only dates are not model samples: project the verified raw source onto
+        # the adjusted/target grid without compressing or extending that grid.
+        # Never fill an adjusted date missing from raw, as this would synthesize
+        # feature inputs or alter the historical 300-bar window semantics.
+        missing_raw_dates = control_dates.difference(raw_dates)
+        if len(missing_raw_dates):
+            raw_only_dates = raw_dates.difference(control_dates)
+            raise ValueError(
+                f"raw/adjusted DL trading-date membership mismatch: {ticker}; "
+                f"missing_raw={len(missing_raw_dates)} "
+                f"sample={[str(value.date()) for value in missing_raw_dates[:5]]}; "
+                f"raw_only={len(raw_only_dates)} "
+                f"sample={[str(value.date()) for value in raw_only_dates[:5]]}"
+            )
+        alternate = alternate.loc[control_dates].copy()
+        alternate.index = control.index
     # Controlled raw materializer must not alter Volume; only OHLC varies.
     if not np.array_equal(
         alternate["Volume"].to_numpy(dtype=np.float64),

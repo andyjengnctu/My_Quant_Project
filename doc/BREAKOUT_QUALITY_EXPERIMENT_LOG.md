@@ -12607,6 +12607,15 @@ Decision：`CANONICAL_UPSTREAM_REUSE_GUARD / HISTORICAL_CHECKPOINT_REUSE_ONLY_WI
 
 Decision：`ENGINEERING_ONLY / LEGACY_SANITIZER_V1_V2_BRIDGE_REQUIRES_FULL_CSV_PROOF / DATASET_TARGET_SHA_STRICT / HISTORICAL_EVIDENCE_UNCHANGED / REAL_FULL_DATASET_UNVERIFIED / NO_FORMAL_SUITE_RUN`。
 
+## 2026-10-10 — MR-13BW raw / adjusted trading-date alignment correction (engineering-only)
+
+- **Observed failure**：使用者在Research `[1]→[2]` Rolling及`[1]→[1]` Forward執行MR-13BW，均完成Daily target/index建構後於`0052`遇到`ValueError: raw/adjusted DL trading-date membership mismatch`，因此當次無正式BW訓練或績效。`FileNotFoundError` 的缺少model/PIT scores屬新實驗尚未建立工件的正常BUILD狀態，不是這次程式異常原因。使用者提交的source ZIP未含本機Full adjusted／raw CSV，因此不能從這份證據判定0052究竟是raw多出日期或raw缺少必要日期。
+- **Cause and minimal correction**：既有Research raw-price materializer保存的是**未清洗的Full控制組CSV日期格**，而Daily-universal Target/Sample owner會用canonical `sanitize_ohlcv_dataframe()`丟棄無效Adjusted OHLCV行；故raw CSV通過自身清洗後，可能包含Adjusted控制組已捨棄的日期。`filters/breakout_quality/daily_ranker_data.py::load_aligned_alternate_ohlcv_frame`只在raw已覆蓋**所有**Adjusted target日期時，將驗證過的raw OHLCV以Adjusted index精確取樣；raw-only日期不進入300-bar feature grid、Target、樣本、benchmark或Label。凡Adjusted需要的日期在raw清洗後缺少，仍fail-closed（列出缺失／多餘日期數及樣本）；日期相同但Volume不符仍fail-closed，不做補值、forward-fill或raw-to-adjusted fallback。
+- **No science/identity drift**：AO原始Data/Feature/Target及任何已完成model不受影響；BW architecture/profile、provider/CSV SHA、source/fitting/score身份、split、seed、loss、40-bar target與Model SOP不變。此更正只消除原raw-input adapter對不參與Adjusted sample的raw-only行的過度嚴格要求；不新增科學實驗、改寫歷史證據或自動promotion。
+- **Independent checks**：新增raw-only日期、原始Adjusted OHLC無效行、必要raw日期缺少、額外raw日期不得掩蓋Volume差異等合成回歸；BW定向unittest `17/17 PASS`；Daily Full-list `7/7`、PIT Score Builder `32/32`、Fitted Model Lifecycle `41/41`（合計`97/97` checks）；Python compile通過。**本輪未取得Full 0052真實兩側CSV、未執行formal suite或正式DL fitting**，故本機是否已可通過整體資料準備仍待實際執行驗證。
+
+Decision：`ENGINEERING_FIX / ADJUSTED_DATE_GRID_CANONICAL / RAW_ONLY_ROWS_IGNORED / MISSING_RAW_OR_VOLUME_DRIFT_FAIL_CLOSED / MR-13BW_RESULT_PENDING`。
+
 ## 2026-10-10 — MR-13BW controlled raw-price feature input / AO adjusted-target implementation
 
 - **User authorization**：接續「是否加入或改為非還原價？」→「進行」，本輪明確授權隔離實驗，並非修改AO既有Target或Trading Price Basis。
