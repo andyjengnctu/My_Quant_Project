@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import ssl
+from urllib.error import URLError
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
@@ -189,6 +191,128 @@ class OfficialMarginPublicationProbeTests(unittest.TestCase):
             probe._write_exact_capture(output, blob)
             self.assertEqual(output.read_bytes(), blob)
             self.assertEqual(probe.sha256(output.read_bytes()).hexdigest(), probe.sha256(blob).hexdigest())
+
+
+    def test_twse_strict_tls_success_requires_no_compatibility(self):
+        class Response:
+            url = probe._url("2025-01-06")
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def read(self, _limit):
+                return b"valid-response"
+        evidence = {}
+        with patch.object(probe, "urlopen", return_value=Response()) as fetch:
+            raw, target = probe._fetch_official("2025-01-06", tls_evidence=evidence)
+        self.assertEqual(raw, b"valid-response")
+        self.assertEqual(target, probe._url("2025-01-06"))
+        self.assertEqual(evidence["tls_validation_mode"], "DEFAULT_STRICT")
+        self.assertEqual(fetch.call_count, 1)
+        self.assertNotIn("context", fetch.call_args.kwargs)
+
+    def test_twse_missing_ski_compatibility_keeps_ca_and_hostname_validation(self):
+        class Response:
+            url = probe._url("2025-01-06")
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def read(self, _limit):
+                return b"official-bytes"
+        missing_ski = URLError(ssl.SSLCertVerificationError(
+            1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Missing Subject Key Identifier"))
+        self.assertTrue(probe._missing_subject_key_identifier_error(missing_ski))
+        self.assertEqual(probe._source_error_kind(missing_ski),
+                         "TLS_X509_MISSING_SUBJECT_KEY_IDENTIFIER")
+        evidence = {}
+        with patch.object(probe, "urlopen", side_effect=[missing_ski, Response()]) as fetch:
+            raw, _ = probe._fetch_official("2025-01-06", tls_evidence=evidence)
+        self.assertEqual(raw, b"official-bytes")
+        self.assertEqual(fetch.call_count, 2)
+        first, second = fetch.call_args_list
+        self.assertNotIn("context", first.kwargs)
+        context = second.kwargs["context"]
+        self.assertIsInstance(context, ssl.SSLContext)
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
+        self.assertEqual(context.verify_flags & ssl.VERIFY_X509_STRICT, 0)
+        self.assertEqual(evidence["tls_validation_mode"], "CA_CHAIN_AND_HOSTNAME_REQUIRED_X509_FORMAT_COMPAT")
+        # A per-request context must not weaken the Python/global TLS defaults.
+        self.assertTrue(ssl.create_default_context().verify_flags & ssl.VERIFY_X509_STRICT)
+
+    def test_twse_does_not_retry_unrelated_certificate_or_network_failures(self):
+        errors = [URLError(ssl.SSLCertVerificationError(1, "certificate has expired")),
+                  URLError(ssl.SSLCertVerificationError(1, "unable to get local issuer certificate")),
+                  URLError("connection reset")]
+        for exc in errors:
+            with self.subTest(reason=str(exc)), patch.object(probe, "urlopen", side_effect=exc) as fetch:
+                with self.assertRaises(URLError):
+                    probe._fetch_official("2025-01-06")
+                self.assertEqual(fetch.call_count, 1)
+        self.assertEqual(probe._source_error_kind(errors[0]), "TLS_CERTIFICATE_VERIFY_FAILED")
+        self.assertFalse(probe._missing_subject_key_identifier_error(URLError(
+            "Missing Subject Key Identifier text from untrusted generic error")))
+
+    def test_twse_missing_ski_retry_is_bounded_and_still_fails_closed(self):
+        missing_ski = URLError(ssl.SSLCertVerificationError(1, "Missing Subject Key Identifier"))
+        untrusted = URLError(ssl.SSLCertVerificationError(1, "unable to get local issuer certificate"))
+        with patch.object(probe, "urlopen", side_effect=[missing_ski, untrusted]) as fetch:
+            with self.assertRaises(URLError) as raised:
+                probe._fetch_official("2025-01-06")
+            self.assertIs(raised.exception, untrusted)
+            self.assertEqual(fetch.call_count, 2)
+
+    def test_tls_retry_failure_is_audited_and_does_not_authorize(self):
+        from types import SimpleNamespace
+        archive = SimpleNamespace(as_of_date="2026-03-02", snapshot_fingerprint="a" * 64)
+        class FakeVerifiedView:
+            def __init__(self, *args, **kwargs):
+                pass
+            def dataset_artifacts(self, dataset):
+                return [SimpleNamespace(request_id="r", content_sha256="b" * 64, row_count=4)]
+            def iter_verified_frames(self, dataset, columns):
+                yield pd.DataFrame({"date": ["2025-01-02", "2025-01-03", "2025-01-06", "2025-01-07"]})
+        missing_ski = URLError(ssl.SSLCertVerificationError(1, "Missing Subject Key Identifier"))
+        untrusted = URLError(ssl.SSLCertVerificationError(1, "unable to get local issuer certificate"))
+        with TemporaryDirectory(prefix="margin_official_tls_fail_closed_") as tmp:
+            with (patch.object(probe, "load_ready_provider_snapshot_archive", return_value=archive),
+                  patch.object(probe, "ProviderSnapshotView", FakeVerifiedView),
+                  patch.object(probe, "urlopen", side_effect=[missing_ski, untrusted])):
+                result, folder = probe.run_probe(Path(tmp), dates=["2025-01-06"], fetch_public=True)
+            self.assertEqual(result["status"], "NO_OFFICIAL_COMPARISON_EVIDENCE")
+            self.assertEqual(result["sample_success"], 0)
+            self.assertFalse(result["model_input_authorized"])
+            entry = result["samples"][0]
+            self.assertEqual(entry["error_kind"], "TLS_CERTIFICATE_VERIFY_FAILED")
+            self.assertEqual(entry["tls_validation_mode"], "CA_CHAIN_AND_HOSTNAME_REQUIRED_X509_FORMAT_COMPAT")
+            self.assertIn("TLS_CERTIFICATE_VERIFY_FAILED", (folder / "publication_probe.md").read_text(encoding="utf-8"))
+            self.assertFalse((folder / "captured_requeries").exists())
+
+    def test_tls_failure_artifacts_are_immutable_across_distinct_retries(self):
+        from types import SimpleNamespace
+        archive = SimpleNamespace(as_of_date="2026-03-02", snapshot_fingerprint="a" * 64)
+        class FakeVerifiedView:
+            def __init__(self, *args, **kwargs):
+                pass
+            def dataset_artifacts(self, dataset):
+                return [SimpleNamespace(request_id="r", content_sha256="b" * 64, row_count=4)]
+            def iter_verified_frames(self, dataset, columns):
+                yield pd.DataFrame({"date": ["2025-01-02", "2025-01-03", "2025-01-06", "2025-01-07"]})
+        expired = URLError(ssl.SSLCertVerificationError(1, "certificate has expired"))
+        untrusted = URLError(ssl.SSLCertVerificationError(1, "unable to get local issuer certificate"))
+        with TemporaryDirectory(prefix="margin_official_error_identity_") as tmp:
+            with (patch.object(probe, "load_ready_provider_snapshot_archive", return_value=archive),
+                  patch.object(probe, "ProviderSnapshotView", FakeVerifiedView)):
+                with patch.object(probe, "urlopen", side_effect=expired):
+                    first, first_folder = probe.run_probe(Path(tmp), dates=["2025-01-06"], fetch_public=True)
+                original = (first_folder / "publication_probe.json").read_bytes()
+                with patch.object(probe, "urlopen", side_effect=untrusted):
+                    second, second_folder = probe.run_probe(Path(tmp), dates=["2025-01-06"], fetch_public=True)
+            self.assertNotEqual(first["audit_fingerprint"], second["audit_fingerprint"])
+            self.assertNotEqual(first_folder, second_folder)
+            self.assertEqual((first_folder / "publication_probe.json").read_bytes(), original)
+            self.assertTrue((second_folder / "publication_probe.json").exists())
 
     def test_official_url_is_hardcoded_twse_https(self):
         url = probe._url("2025-01-06")

@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 import re
 import os
+import ssl
 import math
 import sys
 import tempfile
@@ -221,11 +222,45 @@ def _url(date: str) -> str:
                                              "selectType": "ALL", "response": "json"})
 
 
-def _fetch_official(date: str) -> tuple[bytes, str]:
+def _missing_subject_key_identifier_error(exc: Exception) -> bool:
+    """Match the specific OpenSSL strict-X.509 format failure, not arbitrary TLS errors."""
+    reason = exc.reason if isinstance(exc, URLError) else exc
+    if not isinstance(reason, ssl.SSLCertVerificationError):
+        return False
+    details = str(reason) + " " + str(getattr(reason, "verify_message", ""))
+    return "missing subject key identifier" in details.casefold()
+
+
+def _fetch_official(date: str, *, tls_evidence: dict[str, str] | None = None) -> tuple[bytes, str]:
+    """Use strict TLS first; allow one TWSE-only, CA-verified X.509 format retry.
+
+    CPython 3.13+ enables VERIFY_X509_STRICT by default. Some validly trusted
+    but older certificate chains lack a Subject Key Identifier extension.
+    For ONLY that exact OpenSSL failure, retry without the additional strict
+    RFC-5280 format checks. CA-chain and hostname verification remain REQUIRED.
+    Never suppress other certificate errors or change the process-wide default.
+    """
     target = _url(date)
     req = Request(target, headers={"User-Agent": "Mozilla/5.0 (Research-PIT-evidence; read-only)",
                                    "Accept": "application/json"})
-    with urlopen(req, timeout=20) as response:
+    if tls_evidence is not None:
+        tls_evidence["tls_validation_mode"] = "DEFAULT_STRICT"
+    try:
+        response = urlopen(req, timeout=20)
+    except URLError as exc:
+        if not _missing_subject_key_identifier_error(exc):
+            raise
+        compat = ssl.create_default_context()
+        strict = getattr(ssl, "VERIFY_X509_STRICT", None)
+        if strict is None or not (compat.verify_flags & strict):
+            raise  # No safe, well-defined format-only compatibility change.
+        compat.verify_flags &= ~strict
+        if compat.verify_mode != ssl.CERT_REQUIRED or not compat.check_hostname:
+            raise ValueError("TWSE相容TLS必須維持CA憑證鏈及主機名稱驗證")
+        if tls_evidence is not None:
+            tls_evidence["tls_validation_mode"] = "CA_CHAIN_AND_HOSTNAME_REQUIRED_X509_FORMAT_COMPAT"
+        response = urlopen(req, timeout=20, context=compat)
+    with response:
         if response.url.split("?")[0] != OFFICIAL_BASE:
             raise ValueError("官方報表非允許的TWSE URL")
         raw = response.read(12_000_001)
@@ -239,6 +274,10 @@ def _source_error_kind(exc: Exception) -> str:
     if isinstance(exc, HTTPError):
         return f"HTTP_{exc.code}"
     if isinstance(exc, URLError):
+        if _missing_subject_key_identifier_error(exc):
+            return "TLS_X509_MISSING_SUBJECT_KEY_IDENTIFIER"
+        if isinstance(exc.reason, ssl.SSLCertVerificationError):
+            return "TLS_CERTIFICATE_VERIFY_FAILED"
         return "NETWORK_OR_TLS_FAILURE"
     if isinstance(exc, (TimeoutError, ConnectionError)):
         return "NETWORK_OR_TLS_FAILURE"
@@ -321,7 +360,8 @@ def markdown_report(result: Mapping[str, object]) -> str:
              "- 方法：T-1官方個股報表的「前日餘額」代表T-2；T日盤前僅可使用已發布報表。",
              "- **歷史查詢於今日取得的JSON，不是當時原始發布版本。** 捕獲時間只證明本次取得時間，不證明歷史首次發布或當時內容。",
              "- 本稽核僅查TWSE上市證券；TPEx上櫃、限額適用日／使用率、完整OOS適用性均未通過本稽核。",
-             "- 官方與FinMind比較採同數字單位假設；一致率非最終單位確認或PIT授權。", "",
+             "- 官方與FinMind比較採同數字單位假設；一致率非最終單位確認或PIT授權。",
+             "- 只有TWSE憑證鏈缺少Subject Key Identifier時，才針對本次官方查詢使用保留CA／hostname驗證的X.509格式相容重試；不是關閉TLS驗證，也不是歷史Vintage證據。", "",
              "## 取樣結果（固定按年份，非依OOS表現選擇）", "",
              "| 官方日期T-1 | 確認餘額日T-2 | 預測日T | TWSE個股 | 可比較 | 融資一致 | 融券一致 | 雙欄一致 | 證據層級 | 失敗原因 |",
              "|---|---|---|---:|---:|---:|---:|---:|---|---|" ]
@@ -330,7 +370,8 @@ def markdown_report(result: Mapping[str, object]) -> str:
             a, match = entry["alignment"], entry["comparison"]
             lines.append(f"| {a['official_report_date']} | {a['confirmed_balance_date']} | {a['prediction_date']} | "
                          f"{match['official_stock_count']} | {match['paired_count']} | {match['margin_equal']} | "
-                         f"{match['short_equal']} | {match['both_equal']} | CURRENT-VINTAGE REQUERY | — |")
+                         f"{match['short_equal']} | {match['both_equal']} | CURRENT-VINTAGE REQUERY | "
+                         f"TLS={_one_line(entry.get('tls_validation_mode', 'NOT_RECORDED'))} |")
         else:
             kind = _one_line(entry.get("error_kind", entry.get("status", "UNKNOWN")), limit=55)
             detail = _one_line(entry.get("error", "來源無詳細錯誤紀錄"), limit=180)
@@ -383,10 +424,12 @@ def run_probe(root: Path, *, snapshot_fingerprint: str | None = None,
         official_items: list[tuple[str, dict[str, tuple[int, int]], dict[str, object]]] = []
         for report_date in selected_dates:
             entry: dict[str, object] = {"report_date": report_date, "status": "NOT_RUN"}
+            tls_evidence: dict[str, str] = {}
             result["samples"].append(entry)
             try:
                 if fetch_public:
-                    raw, url = _fetch_official(report_date)
+                    raw, url = _fetch_official(report_date, tls_evidence=tls_evidence)
+                    entry.update(tls_evidence)
                 elif reports_dir is not None:
                     path = Path(reports_dir) / (pd.Timestamp(report_date).strftime("%Y%m%d") + ".json")
                     raw, url = path.read_bytes(), "local_file_unverified_vintage:" + path.name
@@ -406,6 +449,7 @@ def run_probe(root: Path, *, snapshot_fingerprint: str | None = None,
                 entry.update({"status": "PARSED_PENDING_COMPARE", "official_ticker_count": len(rows)})
                 official_items.append((report_date, rows, entry))
             except (OSError, ValueError, KeyError, TypeError) as exc:
+                entry.update(tls_evidence)  # Include the attempted TLS mode on failure.
                 safe = str(exc).replace(str(root) + "/", "").replace(str(root) + "\\", "")
                 if reports_dir is not None:
                     safe = safe.replace(str(Path(reports_dir).resolve()) + "/", "")
@@ -443,12 +487,20 @@ def run_probe(root: Path, *, snapshot_fingerprint: str | None = None,
     except (FileNotFoundError, OSError, ValueError, KeyError, TypeError) as exc:
         result["status"] = "SOURCE_OR_CONTRACT_BLOCKED"
         result["block_reason"] = f"{type(exc).__name__}: {exc}".replace(str(root) + "/", "")
-    result["audit_fingerprint"] = canonical_json_sha256({
+    audit_identity = {
         "contract": AUDIT_ID, "snapshot": result.get("provider_snapshot_fingerprint"),
         "dates": result.get("sample_dates"),
         "capture": [(r.get("report_date"), r.get("raw_sha256"), r.get("capture_utc"),
                      r.get("status")) for r in result["samples"]],
-    })
+    }
+    # Different failed TLS/network attempts have no successful capture timestamp
+    # or raw SHA. Bind failure evidence so later probes never overwrite an earlier
+    # failed investigation that shared exactly the same report dates.
+    failures = [(r.get("report_date"), r.get("error_kind"), r.get("error"),
+                 r.get("tls_validation_mode")) for r in result["samples"] if r.get("error")]
+    if failures:
+        audit_identity["source_failure_evidence"] = failures
+    result["audit_fingerprint"] = canonical_json_sha256(audit_identity)
     output = root / OUTPUT_ROOT / str(result["audit_fingerprint"])
     parsed_dates = {item["report_date"] for item in result["samples"]
                     if item.get("status") in ("OK", "NO_COMPARABLE_FINMIND_ROWS", "PARSED_PENDING_COMPARE")}
