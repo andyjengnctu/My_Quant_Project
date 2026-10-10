@@ -89,6 +89,18 @@ def _start_case(case_id: str):
     return results, summary, check, check_true
 
 
+def _build_mr13_hmhs_control_frame():
+    """Fresh, shared controlled daily cross-section for MR-13 target tests."""
+    return pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2026-01-02"] * 10 + ["2026-01-05"] * 10),
+            "target_favorable_r": list(range(1, 11)) * 2,
+            "target_adverse_r": [0.9, 0.2, 0.8, 0.3, 0.7, 0.4, 1.0, 0.5, 0.6, 0.1] * 2,
+            "label": [0, 0, 0, 0, 0, 1, 1, 1, 1, 1] * 2,
+        }
+    )
+
+
 def _finish_case(results, summary):
     summary["training_performed"] = False
     return results, summary
@@ -6569,14 +6581,7 @@ def validate_breakout_quality_safety_raw_mfe_duo_contract_case(_base_params):
         ),
     )
 
-    frame = pd.DataFrame(
-        {
-            "date": pd.to_datetime(["2026-01-02"] * 10 + ["2026-01-05"] * 10),
-            "target_favorable_r": list(range(1, 11)) * 2,
-            "target_adverse_r": [0.9, 0.2, 0.8, 0.3, 0.7, 0.4, 1.0, 0.5, 0.6, 0.1] * 2,
-            "label": [0, 0, 0, 0, 0, 1, 1, 1, 1, 1] * 2,
-        }
-    )
+    frame = _build_mr13_hmhs_control_frame()
     targets = build_conditional_mfe_opportunity_targets(
         frame, np.ones(len(frame), dtype=bool)
     )
@@ -7348,14 +7353,7 @@ def validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case(_base_p
         ),
     )
 
-    frame = pd.DataFrame(
-        {
-            "date": pd.to_datetime(["2026-01-02"] * 10 + ["2026-01-05"] * 10),
-            "target_favorable_r": list(range(1, 11)) * 2,
-            "target_adverse_r": [0.9, 0.2, 0.8, 0.3, 0.7, 0.4, 1.0, 0.5, 0.6, 0.1] * 2,
-            "label": [0, 0, 0, 0, 0, 1, 1, 1, 1, 1] * 2,
-        }
-    )
+    frame = _build_mr13_hmhs_control_frame()
     targets = build_conditional_mfe_opportunity_targets(
         frame, np.ones(len(frame), dtype=bool)
     )
@@ -7616,14 +7614,7 @@ def validate_breakout_quality_hmhs_single_head_contract_case(_base_params):
         ),
     )
 
-    frame = pd.DataFrame(
-        {
-            "date": pd.to_datetime(["2026-01-02"] * 10 + ["2026-01-05"] * 10),
-            "target_favorable_r": list(range(1, 11)) * 2,
-            "target_adverse_r": [0.9, 0.2, 0.8, 0.3, 0.7, 0.4, 1.0, 0.5, 0.6, 0.1] * 2,
-            "label": [0, 0, 0, 0, 0, 1, 1, 1, 1, 1] * 2,
-        }
-    )
+    frame = _build_mr13_hmhs_control_frame()
     targets = build_conditional_mfe_opportunity_targets(frame, np.ones(len(frame), dtype=bool))
     expected = np.asarray(
         (targets.low_adverse_safety_percentile >= HMHS_HIGH_PERCENTILE_CUTOFF)
@@ -7888,14 +7879,7 @@ def validate_breakout_quality_joint_min_target_contract_case(_base_params):
         == get_model_spec(profile.model_architecture).as_manifest_payload(),
     )
 
-    frame = pd.DataFrame(
-        {
-            "date": pd.to_datetime(["2026-01-02"] * 10 + ["2026-01-05"] * 10),
-            "target_favorable_r": list(range(1, 11)) * 2,
-            "target_adverse_r": [0.9, 0.2, 0.8, 0.3, 0.7, 0.4, 1.0, 0.5, 0.6, 0.1] * 2,
-            "label": [0, 0, 0, 0, 0, 1, 1, 1, 1, 1] * 2,
-        }
-    )
+    frame = _build_mr13_hmhs_control_frame()
     targets = build_conditional_mfe_opportunity_targets(
         frame, np.ones(len(frame), dtype=bool)
     )

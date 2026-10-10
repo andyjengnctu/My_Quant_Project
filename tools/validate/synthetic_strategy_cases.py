@@ -393,6 +393,35 @@ def _build_dummy_ohlcv_df() -> pd.DataFrame:
     )
 
 
+
+# AI: Shared isolated scanner fixture for behavior, repeatability, and schema
+# validators.  Each call gets a new frame and result mapping; no producer code
+# is reused to calculate an expected scanner result.
+def _build_synthetic_scanner_stubs(*, asset_growth: bool = False):
+    dummy_df = _build_dummy_ohlcv_df()
+    sanitize_stats = {
+        "invalid_row_count": 0,
+        "duplicate_date_count": 0,
+        "dropped_row_count": 0,
+        "negative_volume_corrected_count": 0,
+    }
+    buy_stats = {
+        "is_candidate": True,
+        "is_setup_today": True,
+        "buy_limit": 105.0,
+        "close_last": 103.0,
+        "stop_loss": 99.0,
+        "expected_value": 1.25,
+        "win_rate": 55.0,
+        "trade_count": 12,
+        "max_drawdown": 9.5,
+        "extended_candidate_today": None,
+    }
+    if asset_growth:
+        buy_stats["asset_growth"] = 18.0
+    return dummy_df, sanitize_stats, buy_stats
+
+
 def validate_model_io_schema_case(base_params):
     params = base_params if base_params is not None else V16StrategyParams()
     case_id = "MODEL_IO_SCHEMA"
@@ -484,27 +513,7 @@ def validate_model_io_schema_case(base_params):
     with TemporaryDirectory() as tmp_dir:
         file_path = Path(tmp_dir) / "2330.csv"
         _build_dummy_ohlcv_df().to_csv(file_path, index=False)
-        sanitize_stats = {
-            "invalid_row_count": 0,
-            "duplicate_date_count": 0,
-            "dropped_row_count": 0,
-            "negative_volume_corrected_count": 0,
-        }
-        dummy_df = _build_dummy_ohlcv_df()
-
-        buy_stats = {
-            "is_candidate": True,
-            "is_setup_today": True,
-            "buy_limit": 105.0,
-            "close_last": 103.0,
-            "stop_loss": 99.0,
-            "expected_value": 1.25,
-            "win_rate": 55.0,
-            "trade_count": 12,
-            "asset_growth": 18.0,
-            "max_drawdown": 9.5,
-            "extended_candidate_today": None,
-        }
+        dummy_df, sanitize_stats, buy_stats = _build_synthetic_scanner_stubs(asset_growth=True)
         candidate_stats = {
             "is_candidate": True,
             "is_setup_today": False,
@@ -645,26 +654,7 @@ def validate_ranking_scoring_sanity_case(base_params):
     with TemporaryDirectory() as tmp_dir:
         file_path = Path(tmp_dir) / "2330.csv"
         _build_dummy_ohlcv_df().to_csv(file_path, index=False)
-        sanitize_stats = {
-            "invalid_row_count": 0,
-            "duplicate_date_count": 0,
-            "dropped_row_count": 0,
-            "negative_volume_corrected_count": 0,
-        }
-        dummy_df = _build_dummy_ohlcv_df()
-        buy_stats = {
-            "is_candidate": True,
-            "is_setup_today": True,
-            "buy_limit": 105.0,
-            "close_last": 103.0,
-            "stop_loss": 99.0,
-            "expected_value": 1.25,
-            "win_rate": 55.0,
-            "trade_count": 12,
-            "asset_growth": 18.0,
-            "max_drawdown": 9.5,
-            "extended_candidate_today": None,
-        }
+        dummy_df, sanitize_stats, buy_stats = _build_synthetic_scanner_stubs(asset_growth=True)
         with patch("services.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
             "services.scanner.stock_processor.run_v16_backtest", return_value=buy_stats
         ):
@@ -934,25 +924,7 @@ def validate_strategy_repeatability_case(base_params):
     with TemporaryDirectory() as tmp_dir:
         file_path = Path(tmp_dir) / "2330.csv"
         _build_dummy_ohlcv_df().to_csv(file_path, index=False)
-        sanitize_stats = {
-            "invalid_row_count": 0,
-            "duplicate_date_count": 0,
-            "dropped_row_count": 0,
-            "negative_volume_corrected_count": 0,
-        }
-        dummy_df = _build_dummy_ohlcv_df()
-        buy_stats = {
-            "is_candidate": True,
-            "is_setup_today": True,
-            "buy_limit": 105.0,
-            "close_last": 103.0,
-            "stop_loss": 99.0,
-            "expected_value": 1.25,
-            "win_rate": 55.0,
-            "trade_count": 12,
-            "max_drawdown": 9.5,
-            "extended_candidate_today": None,
-        }
+        dummy_df, sanitize_stats, buy_stats = _build_synthetic_scanner_stubs(asset_growth=False)
         with patch("services.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
             "services.scanner.stock_processor.run_v16_backtest", return_value=buy_stats
         ):
@@ -1018,25 +990,7 @@ def validate_strategy_minimum_viability_case(base_params):
     with TemporaryDirectory() as tmp_dir:
         file_path = Path(tmp_dir) / "2330.csv"
         _build_dummy_ohlcv_df().to_csv(file_path, index=False)
-        sanitize_stats = {
-            "invalid_row_count": 0,
-            "duplicate_date_count": 0,
-            "dropped_row_count": 0,
-            "negative_volume_corrected_count": 0,
-        }
-        dummy_df = _build_dummy_ohlcv_df()
-        buy_stats = {
-            "is_candidate": True,
-            "is_setup_today": True,
-            "buy_limit": 105.0,
-            "close_last": 103.0,
-            "stop_loss": 99.0,
-            "expected_value": 1.25,
-            "win_rate": 55.0,
-            "trade_count": 12,
-            "max_drawdown": 9.5,
-            "extended_candidate_today": None,
-        }
+        dummy_df, sanitize_stats, buy_stats = _build_synthetic_scanner_stubs(asset_growth=False)
         with patch("services.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
             "services.scanner.stock_processor.run_v16_backtest", return_value=buy_stats
         ):
@@ -1157,25 +1111,7 @@ def validate_strategy_reporting_schema_compatibility_case(base_params):
 
         file_path = Path(tmp_dir) / "2330.csv"
         _build_dummy_ohlcv_df().to_csv(file_path, index=False)
-        sanitize_stats = {
-            "invalid_row_count": 0,
-            "duplicate_date_count": 0,
-            "dropped_row_count": 0,
-            "negative_volume_corrected_count": 0,
-        }
-        dummy_df = _build_dummy_ohlcv_df()
-        buy_stats = {
-            "is_candidate": True,
-            "is_setup_today": True,
-            "buy_limit": 105.0,
-            "close_last": 103.0,
-            "stop_loss": 99.0,
-            "expected_value": 1.25,
-            "win_rate": 55.0,
-            "trade_count": 12,
-            "max_drawdown": 9.5,
-            "extended_candidate_today": None,
-        }
+        dummy_df, sanitize_stats, buy_stats = _build_synthetic_scanner_stubs(asset_growth=False)
         with patch("services.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
             "services.scanner.stock_processor.run_v16_backtest", return_value=buy_stats
         ):

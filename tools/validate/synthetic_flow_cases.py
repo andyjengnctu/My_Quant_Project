@@ -24,6 +24,7 @@ from .synthetic_portfolio_common import (
     build_synthetic_rotation_t_plus_one_case,
     build_synthetic_same_day_sell_block_case,
     run_portfolio_core_check_for_dir,
+    run_synthetic_portfolio_case_checks,
 )
 from .tool_adapters import run_portfolio_sim_tool_check_for_dir, run_scanner_tool_check
 
@@ -901,16 +902,9 @@ def validate_synthetic_extended_miss_buy_case(base_params):
     summary = {"ticker": case["case_id"], "synthetic": True}
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        write_synthetic_csv_bundle(temp_dir, case["frames"])
-        core_stats = run_portfolio_core_check_for_dir(
-            temp_dir, case["params"], max_positions=case["max_positions"],
-            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
+        sim_stats = run_synthetic_portfolio_case_checks(
+            temp_dir, case, results, "synthetic_extended_miss_buy", case["case_id"]
         )
-        sim_stats = run_portfolio_sim_tool_check_for_dir(
-            temp_dir, case["params"], max_positions=case["max_positions"],
-            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
-        )
-        add_portfolio_stats_equality_checks(results, "synthetic_extended_miss_buy", case["case_id"], core_stats, sim_stats)
         add_check(results, "synthetic_extended_miss_buy", case["case_id"], "expected_trade_count", 0, sim_stats["trade_count"])
         add_check(results, "synthetic_extended_miss_buy", case["case_id"], "expected_missed_buy_count", 1, sim_stats["total_missed"])
         add_check(results, "synthetic_extended_miss_buy", case["case_id"], "expected_df_trades_missed_buy_rows", 1, sim_stats["portfolio_missed_buy_rows"])
@@ -940,16 +934,9 @@ def validate_synthetic_competing_candidates_case(base_params):
     summary = {"ticker": case["case_id"], "synthetic": True}
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        write_synthetic_csv_bundle(temp_dir, case["frames"])
-        core_stats = run_portfolio_core_check_for_dir(
-            temp_dir, case["params"], max_positions=case["max_positions"],
-            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
+        sim_stats = run_synthetic_portfolio_case_checks(
+            temp_dir, case, results, "synthetic_competing_candidates", case["case_id"]
         )
-        sim_stats = run_portfolio_sim_tool_check_for_dir(
-            temp_dir, case["params"], max_positions=case["max_positions"],
-            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
-        )
-        add_portfolio_stats_equality_checks(results, "synthetic_competing_candidates", case["case_id"], core_stats, sim_stats)
 
         buy_df = sim_stats["df_trades"]
         buy_rows = buy_df[buy_df["Type"].fillna("").str.startswith("買進")].copy() if not buy_df.empty else pd.DataFrame()
@@ -969,16 +956,9 @@ def validate_synthetic_same_day_sell_block_case(base_params):
     summary = {"ticker": case["case_id"], "synthetic": True}
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        write_synthetic_csv_bundle(temp_dir, case["frames"])
-        core_stats = run_portfolio_core_check_for_dir(
-            temp_dir, case["params"], max_positions=case["max_positions"],
-            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
+        sim_stats = run_synthetic_portfolio_case_checks(
+            temp_dir, case, results, "synthetic_same_day_sell_block", case["case_id"]
         )
-        sim_stats = run_portfolio_sim_tool_check_for_dir(
-            temp_dir, case["params"], max_positions=case["max_positions"],
-            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
-        )
-        add_portfolio_stats_equality_checks(results, "synthetic_same_day_sell_block", case["case_id"], core_stats, sim_stats)
 
         df_trades = sim_stats["df_trades"]
         sell_rows = df_trades[(df_trades["Ticker"] == "9501") & (df_trades["Type"].fillna("").isin(["全倉結算(停損)", "全倉結算(指標)"]))].copy() if not df_trades.empty else pd.DataFrame()
@@ -1004,24 +984,9 @@ def validate_synthetic_rotation_t_plus_one_case(base_params):
     full_exit_types = {rotation_sell_type, "全倉結算(停損)", "全倉結算(指標)", "期末強制結算"}
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        write_synthetic_csv_bundle(temp_dir, case["frames"])
-        core_stats = run_portfolio_core_check_for_dir(
-            temp_dir,
-            case["params"],
-            max_positions=case["max_positions"],
-            enable_rotation=case["enable_rotation"],
-            start_year=case["start_year"],
-            benchmark_ticker=case["benchmark_ticker"],
+        sim_stats = run_synthetic_portfolio_case_checks(
+            temp_dir, case, results, "synthetic_rotation_t_plus_one", case["case_id"]
         )
-        sim_stats = run_portfolio_sim_tool_check_for_dir(
-            temp_dir,
-            case["params"],
-            max_positions=case["max_positions"],
-            enable_rotation=case["enable_rotation"],
-            start_year=case["start_year"],
-            benchmark_ticker=case["benchmark_ticker"],
-        )
-        add_portfolio_stats_equality_checks(results, "synthetic_rotation_t_plus_one", case["case_id"], core_stats, sim_stats)
 
         df_trades = sim_stats["df_trades"].copy()
         if df_trades.empty:

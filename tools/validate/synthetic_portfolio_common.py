@@ -1,5 +1,8 @@
 import os
 
+from .synthetic_fixtures import write_synthetic_csv_bundle
+from .tool_adapters import run_portfolio_sim_tool_check_for_dir
+
 import pandas as pd
 
 from core.data_utils import discover_unique_csv_inputs, get_required_min_rows, sanitize_ohlcv_dataframe
@@ -175,3 +178,18 @@ def add_portfolio_stats_equality_checks(results, module_name, ticker, expected_s
         [trade["total_pnl"] for trade in expected_stats["portfolio_completed_trades"]],
         [trade["total_pnl"] for trade in actual_stats["portfolio_completed_trades"]],
     )
+
+
+def run_synthetic_portfolio_case_checks(temp_dir, case, results, module_name, case_id):
+    """Run both canonical portfolio paths on the same disposable case fixture."""
+    write_synthetic_csv_bundle(temp_dir, case["frames"])
+    run_options = {
+        "max_positions": case["max_positions"],
+        "enable_rotation": case["enable_rotation"],
+        "start_year": case["start_year"],
+        "benchmark_ticker": case["benchmark_ticker"],
+    }
+    core_stats = run_portfolio_core_check_for_dir(temp_dir, case["params"], **run_options)
+    sim_stats = run_portfolio_sim_tool_check_for_dir(temp_dir, case["params"], **run_options)
+    add_portfolio_stats_equality_checks(results, module_name, case_id, core_stats, sim_stats)
+    return sim_stats

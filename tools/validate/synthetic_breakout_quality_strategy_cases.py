@@ -67,6 +67,45 @@ from .synthetic_breakout_quality_support import (
     tempfile,
 )
 
+
+# AI: Shared deterministic fixture for optimizer publication/reuse tests.
+# This is intentionally a test-data writer, never a canonical parameter producer.
+_SYNTHETIC_ROOS_SELECTOR_FILENAMES = {
+    "base_finalist_best": "roos_base_best.json",
+    "base_finalists_agree": "roos_base_finalists_agree.json",
+}
+
+
+def _write_synthetic_robustness_active_params(
+    active_dir: Path, *, seed: int, selectors: tuple[str, ...], adaptation: dict | None = None
+) -> dict[str, Path]:
+    """Publish identical small ensemble fixtures across the independent reuse tests."""
+    active_dir.mkdir(parents=True, exist_ok=True)
+    paths = {}
+    for selector in selectors:
+        payload = {
+            "schema_type": "active_param_ensemble",
+            "schema_version": 1,
+            "mode": "rolling",
+            "selector": selector,
+            "params_ensemble_by_effective_date": {
+                "2021-01-01": [{
+                    "member_index": 1,
+                    "seed": seed,
+                    "params": {"high_len": 201, "atr_len": 14},
+                }],
+            },
+        }
+        if adaptation is not None:
+            payload["breakout_quality_param_adaptation"] = dict(adaptation)
+        payload["meta"] = {"last_oos_date": "2026-03-02"}
+        payload["summary"] = {"oos_end_date": "2026-03-02"}
+        target = active_dir / _SYNTHETIC_ROOS_SELECTOR_FILENAMES[selector]
+        target.write_text(json.dumps(payload), encoding="utf-8")
+        paths[selector] = target
+    return paths
+
+
 def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     """Cross-module strategy-compare integration contract.
 
@@ -1889,31 +1928,12 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
 
         def fake_full_benchmark_optimizer(**kwargs):
             optimizer_calls["count"] += 1
-            active_dir = Path(kwargs["output_relative_dir"]) / "active_params"
-            active_dir.mkdir(parents=True, exist_ok=True)
-            for selector, filename in (
-                ("base_finalist_best", "roos_base_best.json"),
-                ("base_finalists_agree", "roos_base_finalists_agree.json"),
-            ):
-                payload = {
-                    "schema_type": "active_param_ensemble",
-                    "schema_version": 1,
-                    "mode": "rolling",
-                    "selector": selector,
-                    "params_ensemble_by_effective_date": {
-                        "2021-01-01": [
-                            {
-                                "member_index": 1,
-                                "seed": benchmark_seed,
-                                "params": {"high_len": 201, "atr_len": 14},
-                            }
-                        ]
-                    },
-                    "meta": {"last_oos_date": "2026-03-02"},
-                    "summary": {"oos_end_date": "2026-03-02"},
-                }
-                (active_dir / filename).write_text(json.dumps(payload), encoding="utf-8")
-            return {"params_path": active_dir / "roos_base_best.json"}
+            paths = _write_synthetic_robustness_active_params(
+                Path(kwargs["output_relative_dir"]) / "active_params",
+                seed=benchmark_seed,
+                selectors=("base_finalist_best", "base_finalists_agree"),
+            )
+            return {"params_path": paths["base_finalist_best"]}
 
         ensure_kwargs = {
             "benchmark_id": str(benchmark["benchmark_id"]),
@@ -1959,35 +1979,12 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
 
         def fake_min_benchmark_optimizer(**kwargs):
             min_optimizer_calls["count"] += 1
-            active_dir = (
-                Path(kwargs["output_relative_dir"])
-                / "p2_dl_off_trained"
-                / "active_params"
+            paths = _write_synthetic_robustness_active_params(
+                Path(kwargs["output_relative_dir"]) / "p2_dl_off_trained" / "active_params",
+                seed=benchmark_seed,
+                selectors=("base_finalist_best", "base_finalists_agree"),
             )
-            active_dir.mkdir(parents=True, exist_ok=True)
-            for selector, filename in (
-                ("base_finalist_best", "roos_base_best.json"),
-                ("base_finalists_agree", "roos_base_finalists_agree.json"),
-            ):
-                payload = {
-                    "schema_type": "active_param_ensemble",
-                    "schema_version": 1,
-                    "mode": "rolling",
-                    "selector": selector,
-                    "params_ensemble_by_effective_date": {
-                        "2021-01-01": [
-                            {
-                                "member_index": 1,
-                                "seed": benchmark_seed,
-                                "params": {"high_len": 201, "atr_len": 14},
-                            }
-                        ]
-                    },
-                    "meta": {"last_oos_date": "2026-03-02"},
-                    "summary": {"oos_end_date": "2026-03-02"},
-                }
-                (active_dir / filename).write_text(json.dumps(payload), encoding="utf-8")
-            return {"params_path": active_dir / "roos_base_best.json"}
+            return {"params_path": paths["base_finalist_best"]}
 
         min_kwargs = {
             "benchmark_id": str(benchmark["benchmark_id"]),
@@ -2032,33 +2029,17 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
 
         def fake_fixed_multiseed_optimizer(**kwargs):
             fixed_calls["count"] += 1
-            active_dir = Path(kwargs["output_relative_dir"]) / "active_params"
-            active_dir.mkdir(parents=True, exist_ok=True)
-            payload = {
-                "schema_type": "active_param_ensemble",
-                "schema_version": 1,
-                "mode": "rolling",
-                "selector": "base_finalists_agree",
-                "params_ensemble_by_effective_date": {
-                    "2021-01-01": [
-                        {
-                            "member_index": 1,
-                            "seed": benchmark_seed,
-                            "params": {"high_len": 201, "atr_len": 14},
-                        }
-                    ]
-                },
-                "breakout_quality_param_adaptation": {
+            paths = _write_synthetic_robustness_active_params(
+                Path(kwargs["output_relative_dir"]) / "active_params",
+                seed=benchmark_seed,
+                selectors=("base_finalists_agree",),
+                adaptation={
                     "parameter_set": "PARAM-P6",
                     "optimizer_search_protocol": "fixed_multiseed_v1",
                     "seed_ensemble_policy": dict(kwargs["seed_ensemble_policy_override"]),
                 },
-                "meta": {"last_oos_date": "2026-03-02"},
-                "summary": {"oos_end_date": "2026-03-02"},
-            }
-            target = active_dir / "roos_base_finalists_agree.json"
-            target.write_text(json.dumps(payload), encoding="utf-8")
-            return {"params_path": target}
+            )
+            return {"params_path": paths["base_finalists_agree"]}
 
         fixed_kwargs = {
             "training_profile_id": "production_multiseed_current",
@@ -2100,32 +2081,16 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
 
         def fake_p5_benchmark_optimizer(**kwargs):
             p5_calls.append(dict(kwargs))
-            active_dir = Path(kwargs["output_relative_dir"]) / "active_params"
-            active_dir.mkdir(parents=True, exist_ok=True)
-            payload = {
-                "schema_type": "active_param_ensemble",
-                "schema_version": 1,
-                "mode": "rolling",
-                "selector": "base_finalists_agree",
-                "params_ensemble_by_effective_date": {
-                    "2021-01-01": [
-                        {
-                            "member_index": 1,
-                            "seed": benchmark_seed,
-                            "params": {"high_len": 201, "atr_len": 14},
-                        }
-                    ]
-                },
-                "breakout_quality_param_adaptation": {
+            paths = _write_synthetic_robustness_active_params(
+                Path(kwargs["output_relative_dir"]) / "active_params",
+                seed=benchmark_seed,
+                selectors=("base_finalists_agree",),
+                adaptation={
                     "parameter_set": "PARAM-P5",
                     "optimizer_search_protocol": "validation_budget_refit_v1",
                 },
-                "meta": {"last_oos_date": "2026-03-02"},
-                "summary": {"oos_end_date": "2026-03-02"},
-            }
-            target = active_dir / "roos_base_finalists_agree.json"
-            target.write_text(json.dumps(payload), encoding="utf-8")
-            return {"params_path": target}
+            )
+            return {"params_path": paths["base_finalists_agree"]}
 
         p5_kwargs = {
             "benchmark_id": str(benchmark["benchmark_id"]),

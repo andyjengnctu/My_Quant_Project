@@ -25,6 +25,7 @@ from .synthetic_portfolio_common import (
     build_synthetic_half_tp_full_year_case,
     build_synthetic_unexecutable_half_tp_case,
     run_portfolio_core_check_for_dir,
+    run_synthetic_portfolio_case_checks,
 )
 from .tool_adapters import run_debug_trade_log_check, run_portfolio_sim_tool_check_for_dir, run_scanner_tool_check
 
@@ -418,16 +419,9 @@ def validate_synthetic_half_tp_full_year_case(base_params):
     summary = {"ticker": case["case_id"], "synthetic": True}
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        write_synthetic_csv_bundle(temp_dir, case["frames"])
-        core_stats = run_portfolio_core_check_for_dir(
-            temp_dir, case["params"], max_positions=case["max_positions"],
-            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
+        sim_stats = run_synthetic_portfolio_case_checks(
+            temp_dir, case, results, "synthetic_half_tp_full_year", case["case_id"]
         )
-        sim_stats = run_portfolio_sim_tool_check_for_dir(
-            temp_dir, case["params"], max_positions=case["max_positions"],
-            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
-        )
-        add_portfolio_stats_equality_checks(results, "synthetic_half_tp_full_year", case["case_id"], core_stats, sim_stats)
         add_check(results, "synthetic_half_tp_full_year", case["case_id"], "expected_half_take_profit_rows", 1, sim_stats["portfolio_half_take_profit_rows"])
         add_check(results, "synthetic_half_tp_full_year", case["case_id"], "has_yearly_return_rows", True, bool(sim_stats["yearly_return_rows"]))
 
@@ -453,16 +447,9 @@ def validate_synthetic_round_trip_pnl_only_on_tail_exit_case(base_params):
     summary = {"ticker": "SYNTH_ROUND_TRIP_PNL_ONLY_ON_TAIL_EXIT", "synthetic": True}
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        write_synthetic_csv_bundle(temp_dir, case["frames"])
-        core_stats = run_portfolio_core_check_for_dir(
-            temp_dir, case["params"], max_positions=case["max_positions"],
-            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
+        sim_stats = run_synthetic_portfolio_case_checks(
+            temp_dir, case, results, "synthetic_round_trip_pnl_only_on_tail_exit", summary["ticker"]
         )
-        sim_stats = run_portfolio_sim_tool_check_for_dir(
-            temp_dir, case["params"], max_positions=case["max_positions"],
-            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
-        )
-        add_portfolio_stats_equality_checks(results, "synthetic_round_trip_pnl_only_on_tail_exit", summary["ticker"], core_stats, sim_stats)
 
         df_trades = sim_stats["df_trades"].copy()
         half_rows = df_trades[df_trades["Type"].fillna("") == "半倉停利"].copy() if not df_trades.empty else pd.DataFrame()
@@ -491,16 +478,9 @@ def validate_synthetic_unexecutable_half_tp_case(base_params):
     summary = {"ticker": case["case_id"], "synthetic": True}
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        write_synthetic_csv_bundle(temp_dir, case["frames"])
-        core_stats = run_portfolio_core_check_for_dir(
-            temp_dir, case["params"], max_positions=case["max_positions"],
-            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
+        sim_stats = run_synthetic_portfolio_case_checks(
+            temp_dir, case, results, "synthetic_unexecutable_half_tp", case["case_id"]
         )
-        sim_stats = run_portfolio_sim_tool_check_for_dir(
-            temp_dir, case["params"], max_positions=case["max_positions"],
-            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
-        )
-        add_portfolio_stats_equality_checks(results, "synthetic_unexecutable_half_tp", case["case_id"], core_stats, sim_stats)
         add_check(results, "synthetic_unexecutable_half_tp", case["case_id"], "expected_half_take_profit_rows", 0, sim_stats["portfolio_half_take_profit_rows"])
 
         primary_ticker = case["primary_ticker"]
