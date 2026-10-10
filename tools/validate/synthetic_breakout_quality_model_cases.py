@@ -1593,10 +1593,17 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         patch.object(experimental_runner, "run_forward_menu", return_value=0) as forward_builder,
         patch.object(experimental_runner, "_comparison_payload") as forward_consumer,
     ):
-        aborted = experimental_runner.run_forward_comparison()
+        # Missing source calls the producer, but a producer that returns without
+        # evidence must NOT be interpreted as a successful comparison.
+        try:
+            experimental_runner.run_forward_comparison()
+        except RuntimeError as exc:
+            missing_producer_result = "Forward producer未產生" in str(exc)
+        else:
+            missing_producer_result = False
     check_true(
-        "missing_exploratory_forward_is_delegated_to_producer_not_blocked",
-        aborted == 0 and forward_builder.call_count == 1 and forward_consumer.call_count == 0,
+        "missing_exploratory_forward_is_delegated_and_unbuilt_dependency_fails",
+        missing_producer_result and forward_builder.call_count == 1 and forward_consumer.call_count == 0,
     )
     daily_ranker_source = (
         project_root / "services" / "breakout_quality" / "train_daily_ranker.py"

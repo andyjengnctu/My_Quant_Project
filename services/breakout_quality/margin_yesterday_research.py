@@ -392,10 +392,6 @@ def run_forward_menu() -> int:
         print("REUSE｜" + str(existing.with_suffix(".md")))
         print("模型身份：" + str(result["scientific_id"]) + "｜Forward OOS：" + str(result["oos_groups"]))
         return 0
-    answer = input("僅允許 current-vintage 探索性擬合，非正式模型；輸入 EXPLORE 確認：").strip()
-    if answer != "EXPLORE":
-        print("已取消探索性訓練。")
-        return 0
     _json_path, md_path = run()
     print("DONE｜" + str(md_path))
     return 0
@@ -445,22 +441,18 @@ def run_forward_comparison() -> int:
     path, result = _read_experimental_report()
     if path is None:
         # Missing evidence is a BUILD dependency, not an authorization BLOCK.
-        # Delegate to the same registered Forward producer; it owns the single
-        # explicit exploration confirmation and the immutable fitting identity.
+        # Delegate to the one canonical experimental fitting producer.
         print("BUILD｜Forward OOS 比較所需模型工件尚未存在，先委派 Forward Producer。")
         code = run_forward_menu()
         if code != 0:
             return int(code)
         path, result = _read_experimental_report()
         if path is None:
-            # The only non-error path here is declining the producer confirmation.
-            print("已取消前置建立；未執行探索性比較。")
-            return 0
+            raise RuntimeError("Forward producer未產生可驗證的BY研究工件")
     _validate_current_exploratory_source(result)
     reference = _resolve_forward_comparison_reference(result)
     if reference is None:
-        print("已取消AO參照建立；未執行探索性比較。")
-        return 0
+        raise RuntimeError("AO Forward參照 Producer失敗；不產生假比較")
     payload = _comparison_payload({**result, "reference_ao_same_oos": reference})
     # Official reference remains a separate canonical artifact; if its bytes
     # changed, the comparison requires a new fixed-source scientific decision.
@@ -796,23 +788,11 @@ def _build_rolling_exploration(*, seed: int) -> tuple[Path, dict]:
     return report_file, result
 
 
-def _confirm_exploratory_work(work_name: str) -> bool:
-    try:
-        return input(
-            f"{work_name} 使用歷史Vintage未驗證資料（只允許探索，正式PIT/Trading=NO）；輸入 EXPLORE 確認："
-        ).strip() == "EXPLORE"
-    except EOFError:
-        return False
-
-
 def run_rolling_menu() -> int:
     """User-facing Rolling action: REUSE or build all missing folds in one entry."""
     path, result = _read_isolated_result(ROOT / EXPERIMENT_RELATIVE_OUTPUT, expected_seed=42, mode="rolling")
     if path is not None:
         print("[REUSE] 探索性Rolling OOS｜" + str(path.with_suffix(".md")))
-        return 0
-    if not _confirm_exploratory_work("Rolling OOS"):
-        print("已取消探索訓練；不產生工件。")
         return 0
     path, result = _build_rolling_exploration(seed=42)
     print("[DONE] 探索性Rolling OOS｜" + str(path.with_suffix(".md")))
@@ -873,7 +853,7 @@ def run_rolling_comparison() -> int:
             return int(code)
         path, result = _read_isolated_result(ROOT / EXPERIMENT_RELATIVE_OUTPUT, expected_seed=42, mode="rolling")
         if path is None:
-            return 0
+            raise RuntimeError("Rolling producer未產生可驗證的BY研究工件")
     from core.breakout_quality_policy import get_breakout_quality_workflow_settings
     from services.research.breakout_quality_application import _run_continuous_rolling_mode_direct
     from filters.breakout_quality.ranking_score_store import load_selection_point_in_time_ranking_contract
@@ -946,10 +926,6 @@ def _run_isolated_robustness(*, rolling: bool) -> int:
     mode = "rolling" if rolling else "forward_robustness"
     output_root = ROOT / EXPERIMENT_RELATIVE_OUTPUT
     found = [_read_isolated_result(output_root, expected_seed=seed, mode=mode) for seed in seeds]
-    if any(path is None for path, _result in found):
-        if not _confirm_exploratory_work(("Rolling" if rolling else "Forward") + " Robustness"):
-            print("已取消Robustness；不會偷用正式AO或其他seed。")
-            return 0
     complete = []
     for index, seed in enumerate(seeds, start=1):
         path, result = found[index-1]

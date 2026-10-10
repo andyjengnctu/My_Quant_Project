@@ -489,7 +489,8 @@ class ExploratoryMenuIntegrationCases(unittest.TestCase):
         with (patch.object(mod, "_read_isolated_result", return_value=(None, None)) as reader,
               patch.object(mod, "run_rolling_menu", return_value=0) as builder,
               patch.object(mod, "_rolling_reference_quality") as comparison):
-            self.assertEqual(mod.run_rolling_comparison(), 0)
+            with self.assertRaisesRegex(RuntimeError, "Rolling producer未產生"):
+                mod.run_rolling_comparison()
         self.assertEqual(reader.call_count, 2)
         builder.assert_called_once_with()
         comparison.assert_not_called()
@@ -638,12 +639,13 @@ class ExploratoryMenuIntegrationCases(unittest.TestCase):
             self.assertTrue((output / "experimental_comparison.md").is_file())
             self.assertEqual(json.loads((output / "experimental_comparison.json").read_text(encoding="utf-8")), comparison)
 
-    def test_compare_cancellation_stops_without_claiming_result(self):
+    def test_compare_missing_producer_artifact_is_explicit_failure(self):
         from services.breakout_quality import margin_yesterday_research as mod
         with (patch.object(mod, "_read_experimental_report", return_value=(None, None)),
               patch.object(mod, "run_forward_menu", return_value=0) as producer,
               patch.object(mod, "_comparison_payload") as consumer):
-            self.assertEqual(mod.run_forward_comparison(), 0)
+            with self.assertRaisesRegex(RuntimeError, "Forward producer未產生"):
+                mod.run_forward_comparison()
         producer.assert_called_once_with()
         consumer.assert_not_called()
 
@@ -735,6 +737,93 @@ class ExploratoryMenuIntegrationCases(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, '已變動'):
                     mod.run_forward_comparison()
 
+
+
+class OneOffAuditEntrypointCases(unittest.TestCase):
+    def test_actions_delegate_registered_producer_without_formal_menu(self):
+        from tools import audit_one_off_model_study as cli
+        from unittest.mock import Mock
+        from types import SimpleNamespace
+        registry_study = SimpleNamespace(service_module="synthetic.one_off_producer")
+        for action, method in cli.ONE_OFF_ACTIONS.items():
+            with self.subTest(action=action):
+                handler = Mock(return_value=0)
+                producer = SimpleNamespace(**{method: handler})
+                with (patch.object(cli, "get_exploratory_model_research_study", return_value=registry_study) as registry,
+                      patch.object(cli, "import_module", return_value=producer) as imported,
+                      patch("builtins.input", side_effect=AssertionError("one-off must not ask for another confirmation"))):
+                    self.assertEqual(cli.execute("MR-13BY", action), 0)
+                registry.assert_called_once_with("MR-13BY")
+                imported.assert_called_once_with(registry_study.service_module)
+                handler.assert_called_once_with()
+
+    def test_one_off_invalid_handler_does_not_fall_back_to_ao(self):
+        from tools import audit_one_off_model_study as cli
+        with (patch.object(cli, "get_exploratory_model_research_study",
+                           return_value=SimpleNamespace(service_module="synthetic.one_off_producer")),
+              patch.object(cli, "import_module", return_value=SimpleNamespace())):
+            with self.assertRaisesRegex(RuntimeError, "缺少.*Producer"):
+                cli.execute("MR-13BY", "forward")
+        with self.assertRaisesRegex(ValueError, "不支援"):
+            cli.execute("MR-13BY", "timing")
+
+    def test_forward_missing_artifact_builds_without_explore_confirmation(self):
+        from services.breakout_quality import margin_yesterday_research as mod
+        expected = Path("/unused/experimental_report.json")
+        with (patch.object(mod, "_read_experimental_report", return_value=(None, None)),
+              patch.object(mod, "run", return_value=(expected, expected.with_suffix(".md"))) as producer,
+              patch("builtins.input", side_effect=AssertionError("unexpected confirmation"))):
+            self.assertEqual(mod.run_forward_menu(), 0)
+        producer.assert_called_once_with()
+
+    def test_rolling_missing_artifact_builds_without_explore_confirmation(self):
+        from services.breakout_quality import margin_yesterday_research as mod
+        expected = Path("/unused/experimental_report.json")
+        with (patch.object(mod, "_read_isolated_result", return_value=(None, None)),
+              patch.object(mod, "_build_rolling_exploration", return_value=(expected, {})) as producer,
+              patch("builtins.input", side_effect=AssertionError("unexpected confirmation"))):
+            self.assertEqual(mod.run_rolling_menu(), 0)
+        producer.assert_called_once_with(seed=42)
+
+
+    def test_forward_and_rolling_robustness_have_no_extra_confirmations(self):
+        from tempfile import TemporaryDirectory
+        from services.breakout_quality import margin_yesterday_research as mod
+        metrics = {
+            "raw_safety": {"mean_daily_spearman": 0.35},
+            "conditional_mfe_true_hs": {"mean_daily_spearman": 0.40},
+            "lexicographic_model_gate": {"predicted_hs_true_ls_pct": 32.},
+        }
+        for rolling in (False, True):
+            with self.subTest(rolling=rolling), TemporaryDirectory() as temp:
+                root = Path(temp)
+                produced = []
+
+                def build_forward(*, seed, benchmark):
+                    self.assertTrue(benchmark)
+                    path = root / ("seed_%d.json" % seed)
+                    path.write_text(__import__("json").dumps({
+                        "fitting_fingerprint": ("%064d" % seed), "metrics": metrics,
+                    }), encoding="utf-8")
+                    produced.append(seed)
+                    return path, path.with_suffix(".md")
+
+                def build_rolling(*, seed):
+                    path = root / ("seed_%d.json" % seed)
+                    produced.append(seed)
+                    return path, {"fitting_fingerprint": ("%064d" % seed), "metrics": metrics}
+
+                with (patch.object(mod, "ROOT", root),
+                      patch("core.training_policy.resolve_robustness_benchmark_seeds", return_value=(42, 43)),
+                      patch.object(mod, "_read_isolated_result", return_value=(None, None)),
+                      patch.object(mod, "run", side_effect=build_forward),
+                      patch.object(mod, "_build_rolling_exploration", side_effect=build_rolling),
+                      patch("builtins.input", side_effect=AssertionError("unexpected confirmation"))):
+                    self.assertEqual(mod._run_isolated_robustness(rolling=rolling), 0)
+                self.assertEqual(produced, [42, 43])
+                output = list((root / mod.EXPERIMENT_RELATIVE_OUTPUT / "robustness").rglob("experimental_report.json"))
+                self.assertEqual(len(output), 1)
+                self.assertFalse(__import__("json").loads(output[0].read_text(encoding="utf-8"))["formal_model_input_authorized"])
 
 
 if __name__ == '__main__':
