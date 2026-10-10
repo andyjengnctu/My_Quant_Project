@@ -10,6 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
+from core.file_integrity import canonical_json_sha256, compute_file_sha256, load_json_strict
+
 from filters.breakout_quality.source_inventory import (
     legacy_source_inventory_semantically_equivalent,
 )
@@ -42,6 +44,77 @@ def canonical_source_dataset_artifacts(summary: Mapping[str, Any]) -> Any:
     return summary.get("source_dataset_artifacts", summary.get("dataset_artifacts"))
 
 
+def recorded_input_price_source_issues(
+    *, published: Any, project_root: str | Path | None,
+) -> tuple[str, ...]:
+    """Validate the exact pinned immutable raw feature bytes, without creating data.
+
+    Current adjusted Dataset and Target remain separately governed by the
+    canonical upstream-readiness checks. A score never silently falls back to
+    adjusted inputs if its raw source cannot be proven.
+    """
+    if project_root is None or not isinstance(published, Mapping):
+        return ("pinned raw input source is missing",)
+    identity = dict(published)
+    relative = identity.get("manifest_relative_path")
+    root = Path(project_root).resolve()
+    if not isinstance(relative, str) or not relative.strip():
+        return ("pinned raw input manifest path missing",)
+    path = (root / relative).resolve()
+    expected_folder = (root / "outputs" / "research" / "raw_price_strategy_dataset").resolve()
+    if not path.is_relative_to(expected_folder) or path.name != "manifest.json":
+        return ("pinned raw input manifest path escapes research source namespace",)
+    try:
+        manifest = load_json_strict(path)
+        if not isinstance(manifest, dict):
+            return ("pinned raw input manifest invalid",)
+        source = dict(manifest.get("source_identity") or {})
+        source_fp = source.pop("source_identity_fingerprint", None)
+        if canonical_json_sha256(source) != source_fp or (
+            manifest.get("source_identity_fingerprint") != source_fp
+            or identity.get("source_identity_fingerprint") != source_fp
+        ):
+            return ("pinned raw input provider lineage mismatch",)
+        data = dict(manifest.get("data_identity") or {})
+        rows = manifest.get("files")
+        if not isinstance(rows, list) or not rows:
+            return ("pinned raw input file evidence missing",)
+        inventory_fp = canonical_json_sha256(rows)
+        materialization_fp = canonical_json_sha256({
+            "source_identity_fingerprint": source_fp,
+            "dataset_inventory_sha256": inventory_fp,
+        })
+        if (
+            identity.get("price_basis") != "raw_unadjusted_ohlc_canonical_volume"
+            or identity.get("target_price_basis") != "canonical_adjusted"
+            or identity.get("source_contract_id") != source.get("contract_id")
+            or identity.get("dataset_inventory_sha256") != inventory_fp
+            or manifest.get("dataset_inventory_sha256") != inventory_fp
+            or data.get("materialization_fingerprint") != materialization_fp
+            or identity.get("materialization_fingerprint") != materialization_fp
+        ):
+            return ("pinned raw input scientific/materialization identity mismatch",)
+        dataset_dir = path.parent / "tw_stock_data_vip"
+        expected_paths: set[str] = set()
+        for row in rows:
+            rel = str(row.get("relative_path") or "")
+            file_path = (dataset_dir / rel).resolve()
+            if (not rel or file_path.parent != dataset_dir.resolve()
+                    or rel in expected_paths):
+                return ("pinned raw input path/duplicate invalid",)
+            expected_paths.add(rel)
+            if (not file_path.is_file()
+                or int(file_path.stat().st_size) != int(row.get("size_bytes") or -1)
+                or compute_file_sha256(file_path) != row.get("content_sha256")):
+                return ("pinned raw input CSV SHA256 mismatch: " + rel,)
+        actual_paths = {file.name for file in dataset_dir.glob("*.csv")}
+        if expected_paths != actual_paths:
+            return ("pinned raw input CSV set mismatch",)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return (f"pinned raw input unavailable: {type(exc).__name__}: {exc}",)
+    return ()
+
+
 def _published_source_provenance_issues(
     *, label: str, source_dataset: Any, source_target: Any,
     dataset_summary: Mapping[str, Any],
@@ -66,6 +139,15 @@ def _published_source_provenance_issues(
         issues.append(f"{label} source dataset profile mismatch")
     if source_dataset.get("policy") != dataset_summary.get("policy"):
         issues.append(f"{label} source dataset policy mismatch")
+    raw_source = source_dataset.get("input_price_source")
+    if dataset_summary.get("requires_input_price_source") and not isinstance(raw_source, Mapping):
+        issues.append(f"{label} required raw input source missing")
+    if raw_source is not None:
+        if dataset_summary.get("input_price_source") is not None and (
+            raw_source != dataset_summary["input_price_source"]
+        ):
+            issues.append(f"{label} input_price_source mismatch")
+        issues.extend(recorded_input_price_source_issues(published=raw_source, project_root=project_root))
     if target_manifest is not None:
         if not isinstance(source_target, Mapping):
             issues.append(f"{label} source target manifest missing")

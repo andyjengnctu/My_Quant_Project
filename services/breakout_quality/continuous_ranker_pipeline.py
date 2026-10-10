@@ -30,6 +30,7 @@ from filters.breakout_quality.contract import LABEL_PASS, LABEL_REJECT
 from filters.breakout_quality.continuous_ranker_data import ContinuousRankerDataBundle
 from filters.breakout_quality.profile_ranker_data import load_profile_continuous_ranker_data
 from services.breakout_quality import ranker_training as ranker_api
+from services.breakout_quality.price_input_source import resolve_feature_price_source
 
 
 
@@ -56,7 +57,12 @@ def load_continuous_ranker_data(
     }
     if project_root is not None:
         kwargs["project_root"] = Path(project_root)
-    return load_profile_continuous_ranker_data(**kwargs)
+    alternate = resolve_feature_price_source(
+        model_architecture=str(model_architecture),
+        project_root=kwargs.get("project_root", Path(__file__).resolve().parents[2]),
+        create=True,
+    )
+    return load_profile_continuous_ranker_data(**kwargs, feature_price_source=alternate)
 
 
 def build_training_scope_mask(bundle: ContinuousRankerDataBundle) -> np.ndarray:

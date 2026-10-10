@@ -101,6 +101,8 @@ class LazyDailyFeatureBank:
         *,
         frames: tuple[pd.DataFrame, ...],
         benchmark: pd.DataFrame,
+        feature_frames: tuple[pd.DataFrame, ...] | None = None,
+        feature_benchmark: pd.DataFrame | None = None,
         ticker_ids: np.ndarray,
         source_positions: np.ndarray,
         benchmark_positions: np.ndarray,
@@ -117,6 +119,22 @@ class LazyDailyFeatureBank:
         # DataFrame index (the source column may originally be ``Date`` or ``Time``).
         # Keep first-passage timing on that same SSOT instead of assuming a physical
         # ``Date`` column still exists after sanitization.
+        if feature_frames is not None:
+            if len(feature_frames) != len(frames):
+                raise ValueError("raw input feature frames與adjusted target ticker count不一致")
+            for baseline, alternate in zip(frames, feature_frames):
+                if not pd.DatetimeIndex(alternate.index).equals(pd.DatetimeIndex(baseline.index)):
+                    raise ValueError("raw input feature frames與adjusted target date grid不一致")
+        if feature_benchmark is not None and not pd.DatetimeIndex(feature_benchmark.index).equals(
+            pd.DatetimeIndex(benchmark.index)
+        ):
+            raise ValueError("raw input benchmark與adjusted benchmark date grid不一致")
+        self._feature_frame_arrays = (
+            tuple(frame[["Open", "High", "Low", "Close", "Volume"]].to_numpy(dtype=np.float64, copy=True)
+                  for frame in feature_frames)
+            if feature_frames is not None else self._frame_arrays
+        )
+        # Future path / target diagnostics intentionally keep _frame_arrays (adjusted).
         self._frame_dates = tuple(
             pd.DatetimeIndex(frame.index).normalize().to_numpy(dtype="datetime64[D]")
             for frame in frames
@@ -124,6 +142,9 @@ class LazyDailyFeatureBank:
         self._benchmark_array = benchmark[
             ["Open", "High", "Low", "Close", "Volume"]
         ].to_numpy(dtype=np.float64, copy=True)
+        self._benchmark_feature_array = (
+            feature_benchmark if feature_benchmark is not None else benchmark
+        )[["Open", "High", "Low", "Close", "Volume"]].to_numpy(dtype=np.float64, copy=True)
         self._ticker_ids = np.asarray(ticker_ids, dtype=np.int32)
         self._source_positions = np.asarray(source_positions, dtype=np.int32)
         self._benchmark_positions = np.asarray(benchmark_positions, dtype=np.int32)
@@ -171,7 +192,7 @@ class LazyDailyFeatureBank:
         cached = self._benchmark_feature_cache.get(position)
         if cached is not None:
             return cached
-        feature = self._normalized_window(self._benchmark_array, position)
+        feature = self._normalized_window(self._benchmark_feature_array, position)
         self._benchmark_feature_cache[position] = feature
         return feature
 
@@ -504,7 +525,7 @@ class LazyDailyFeatureBank:
         for out_index, (ticker_id, source_pos) in enumerate(
             zip(ticker_ids.tolist(), source_positions.tolist())
         ):
-            frame = self._frame_arrays[int(ticker_id)]
+            frame = self._feature_frame_arrays[int(ticker_id)]
             start_pos = int(source_pos) - feature_window + 1
             if start_pos < 0 or int(source_pos) >= len(frame):
                 raise RuntimeError("daily feature source position沒有足夠history")
@@ -880,6 +901,22 @@ def resolve_daily_training_universe_start(
     return pd.Timestamp(normalized[first_pos]).normalize()
 
 
+def load_aligned_alternate_ohlcv_frame(raw_dir: Path, ticker: str, control: pd.DataFrame) -> pd.DataFrame:
+    path = raw_dir / f"{ticker}.csv"
+    if not path.is_file() or path.resolve().parent != raw_dir.resolve():
+        raise FileNotFoundError(f"raw DL feature stock missing: {ticker}")
+    alternate = load_dataset_frame(path, ticker, min_rows=1)
+    if not pd.DatetimeIndex(alternate.index).equals(pd.DatetimeIndex(control.index)):
+        raise ValueError(f"raw/adjusted DL trading-date membership mismatch: {ticker}")
+    # Controlled raw materializer must not alter Volume; only OHLC varies.
+    if not np.array_equal(
+        alternate["Volume"].to_numpy(dtype=np.float64),
+        control["Volume"].to_numpy(dtype=np.float64),
+    ):
+        raise ValueError(f"raw/adjusted DL volume mismatch: {ticker}")
+    return alternate
+
+
 def load_daily_universal_ranker_data(
     *,
     filter_id: str,
@@ -888,6 +925,7 @@ def load_daily_universal_ranker_data(
     preload_feature_bank: bool,
     allow_stale_source: bool,
     extend_score_eligibility_to_source_tail: bool = False,
+    feature_price_source: dict[str, Any] | None = None,
     project_root: str | Path = PROJECT_ROOT,
     progress_callback=None,
 ) -> ContinuousRankerDataBundle:
@@ -926,6 +964,16 @@ def load_daily_universal_ranker_data(
     if bool(model_spec.requires_market_set) or bool(model_spec.derived_context_features):
         raise ValueError("daily universal ranker不支援market-set／derived-context architecture")
     architecture_descriptor = get_architecture_descriptor(model_spec.architecture)
+    needs_raw_feature_source = architecture_descriptor.has_capability("raw_unadjusted_price_input")
+    if needs_raw_feature_source != (feature_price_source is not None):
+        raise ValueError("DL raw input capability與已驗證的feature source不一致")
+    if feature_price_source is not None:
+        identity = feature_price_source.get("identity")
+        data_dir = feature_price_source.get("dataset_dir")
+        if not isinstance(identity, dict) or not identity.get("materialization_fingerprint"):
+            raise ValueError("DL raw input feature source identity無效")
+        if not isinstance(data_dir, Path) or not data_dir.is_dir():
+            raise ValueError("DL raw input feature source dataset dir不可用")
     use_risk_context = architecture_descriptor.has_capability("risk_context")
     architecture_uses_predicted_upside_context = architecture_descriptor.has_capability(
         "predicted_upside_context"
@@ -1478,9 +1526,22 @@ def load_daily_universal_ranker_data(
         training_start = pd.Timestamp(group_table.loc[target_valid, "date"].min()).normalize()
         sample_start = training_start
 
+    raw_feature_frames = None
+    raw_feature_benchmark = None
+    if feature_price_source is not None:
+        # Never use raw OHLC for labels, sample construction, future-path statistics,
+        # MFE/Safety truth or universe. Both stocks and 0050 must align exactly.
+        raw_dir = feature_price_source["dataset_dir"]
+        raw_feature_benchmark = load_aligned_alternate_ohlcv_frame(raw_dir, benchmark_ticker, benchmark)
+        raw_feature_frames = tuple(
+            load_aligned_alternate_ohlcv_frame(raw_dir, ticker, frame) for ticker, frame in zip(tickers, frames)
+        )
+
     feature_bank = LazyDailyFeatureBank(
         frames=tuple(frames),
         benchmark=benchmark,
+        feature_frames=raw_feature_frames,
+        feature_benchmark=raw_feature_benchmark,
         ticker_ids=ticker_ids,
         source_positions=source_positions,
         benchmark_positions=benchmark_positions,
@@ -1569,6 +1630,9 @@ def load_daily_universal_ranker_data(
         "training_universe_start_date": str(pd.Timestamp(sample_start).date()),
         "score_eligibility_end_date": str(pd.Timestamp(sample_end).date()),
     }
+    if feature_price_source is not None:
+        # Conditional extension only; AO historical manifest and fitting SHA unchanged.
+        daily_summary["input_price_source"] = dict(feature_price_source["identity"])
     # ``events`` is retained only for the shared bundle interface; one row now equals one
     # stock-day rather than a breakout event.
     return ContinuousRankerDataBundle(

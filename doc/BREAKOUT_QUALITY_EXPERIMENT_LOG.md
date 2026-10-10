@@ -12606,3 +12606,12 @@ Decision：`CANONICAL_UPSTREAM_REUSE_GUARD / HISTORICAL_CHECKPOINT_REUSE_ONLY_WI
 - **Scientific boundary**：無新MR/ARCH/PROFILE、新DL result或歷史績效變更；MR-13BV已結案狀態不動。僅修復明確的歷史清洗契約版本遷移判斷，**不建立任何general fingerprint bypass**。下一次完整Research本機資料驗證結果才可決定四模型個別REUSE或訓練需求。
 
 Decision：`ENGINEERING_ONLY / LEGACY_SANITIZER_V1_V2_BRIDGE_REQUIRES_FULL_CSV_PROOF / DATASET_TARGET_SHA_STRICT / HISTORICAL_EVIDENCE_UNCHANGED / REAL_FULL_DATASET_UNVERIFIED / NO_FORMAL_SUITE_RUN`。
+
+## 2026-10-10 — MR-13BW controlled raw-price feature input / AO adjusted-target implementation
+
+- **User authorization**：接續「是否加入或改為非還原價？」→「進行」，本輪明確授權隔離實驗，並非修改AO既有Target或Trading Price Basis。
+- **Scientific identity**：`MR-13BW / ARCH-inception_time_shared_safety_mfe_raw_input_v1 / PROFILE-daily_universal_raw_input_adjusted_target_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise`。Baseline=`MR-13AO`（canonical adjusted input/target）。
+- **Only treatment**：個股與0050過去300 bars的OHLC特徵改用FinMind `TaiwanStockPrice` raw/unadjusted；Volume仍沿用Research V1 full調整價控制組CSV。不同價格只能進Feature Bank，不得進Target、future-path、source/sample membership或evaluation truth。Data identity綁定既有raw-price strategy materialization之READY snapshot、control generation、逐檔content SHA；股票日期與Volume必須完全等於canonical adjusted。
+- **Held constant**：300×10 AO InceptionTime shared encoder+Safety/Conditional-MFE雙head、40-bar經濟標籤、full-universe Safety、true-HS=P50 MFE、Delta-NDCG、head loss 1:1、Seed42、split、optimizer、epoch selection、PIT cutoffs、Model Standard SOP。AO checkpoints / adjusted datasets / Trader source不覆寫。
+- **Results**：`IMPLEMENTED / RESULT_PENDING / NOT_PROMOTED`。本ZIP未包含完整617檔正式raw Provider Snapshot與完整Research training artifacts，本輪沒有可宣稱的Seed42 Forward數值、OOS Gate或formal suite PASS。Seed42 Forward Compare通過Safety/MFE聯合Gate後才授權考慮Rolling/Robustness。
+- **Source**：`test-branch-1_20261010_081000_4c235afa.zip`（SHA256=`119598d457e539b4ff0153f52bf2a6c25886a7ec716654c9080fe49305a061f1`）。

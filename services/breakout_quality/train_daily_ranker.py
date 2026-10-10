@@ -67,8 +67,10 @@ from filters.breakout_quality.contract import (
 from filters.breakout_quality.daily_ranker_data import (
     build_daily_ranker_split,
     load_official_breakout_candidate_keys,
-    load_daily_universal_ranker_data,
     select_breakout_candidate_group_ids,
+)
+from services.breakout_quality.price_input_source import (
+    load_daily_universal_ranker_data_with_price_source as load_daily_universal_ranker_data,
 )
 from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets
 from filters.breakout_quality.models.factory import count_trainable_parameters

@@ -3730,6 +3730,16 @@ def _forward_source_provenance_issues(
         target_manifest = load_json_object_or_none(Path(target_nodes[0].path))
         if not isinstance(target_manifest, dict):
             return ("canonical Continuous Target manifest missing or invalid",)
+    from services.breakout_quality.price_input_source import verified_current_price_source_identity
+    try:
+        input_identity = verified_current_price_source_identity(
+            model_architecture=str(settings.model_architecture), project_root=PROJECT_ROOT,
+        )
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError) as exc:
+        return (f"current DL raw price input unavailable: {type(exc).__name__}: {exc}",)
+    if input_identity is not None:
+        dataset_summary["input_price_source"] = input_identity
+        dataset_summary["requires_input_price_source"] = True
     return forward_fitted_source_provenance_issues(
         model_dir=Path(model_dir),
         model_manifest=manifest,

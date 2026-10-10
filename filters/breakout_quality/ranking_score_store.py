@@ -154,6 +154,10 @@ def _load_current_validated_model_source(
         target_manifest = _read_json_object(
             Path(target_nodes[0].path), label="Current Continuous Target", project_root=root
         )
+    from filters.breakout_quality.models.architectures import get_architecture_descriptor
+    current_summary["requires_input_price_source"] = get_architecture_descriptor(
+        model_architecture
+    ).has_capability("raw_unadjusted_price_input")
     return current_summary, target_manifest
 
 

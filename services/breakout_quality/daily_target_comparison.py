@@ -24,7 +24,9 @@ from core.breakout_quality_registry import (
 from core.breakout_quality_policy import (
     get_breakout_quality_model_research_settings,
 )
-from filters.breakout_quality.daily_ranker_data import load_daily_universal_ranker_data
+from services.breakout_quality.price_input_source import (
+    load_daily_universal_ranker_data_with_price_source as load_daily_universal_ranker_data,
+)
 from filters.breakout_quality.continuous_target import (
     DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
     DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,

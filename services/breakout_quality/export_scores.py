@@ -55,7 +55,9 @@ from filters.breakout_quality.contract import (
     RUNTIME_SCOPE_RESEARCH,
 )
 from filters.breakout_quality.dataset_store import IndexedFeatureBank
-from filters.breakout_quality.daily_ranker_data import load_daily_universal_ranker_data
+from services.breakout_quality.price_input_source import (
+    load_daily_universal_ranker_data_with_price_source as load_daily_universal_ranker_data,
+)
 from filters.breakout_quality.ranking_score_store import load_continuous_ranker_oos_contract
 from filters.breakout_quality.features import build_breakout_quality_inference_dataset_for_frame
 from filters.breakout_quality.inference import (

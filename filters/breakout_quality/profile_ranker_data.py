@@ -25,6 +25,7 @@ def load_profile_continuous_ranker_data(
     preload_feature_bank: bool,
     allow_stale_source: bool,
     project_root: str | Path = PROJECT_ROOT,
+    feature_price_source=None,
     progress_callback=None,
 ) -> ContinuousRankerDataBundle:
     """Load the canonical sample provider selected by the experiment profile."""
@@ -48,6 +49,7 @@ def load_profile_continuous_ranker_data(
             allow_stale_source=bool(allow_stale_source),
             project_root=project_root,
             progress_callback=progress_callback,
+            feature_price_source=feature_price_source,
         )
     raise ValueError(
         "不支援的continuous ranker sample scope: "

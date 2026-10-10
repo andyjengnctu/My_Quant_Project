@@ -378,6 +378,9 @@ DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_FULL_HORIZON_OPPORTUNITY_FULL_LIS
 DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_RAW_INPUT_ADJUSTED_TARGET_SHARED_SAFETY_HS_CONDITIONAL_MFE_PROFILE = (
+    "daily_universal_raw_input_adjusted_target_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+)
 DAILY_UNIVERSAL_ADAPTIVE_HORIZON_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_adaptive_horizon_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
@@ -1532,6 +1535,18 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_shared_safety_mfe_v1",
+    ),
+    DAILY_UNIVERSAL_RAW_INPUT_ADJUSTED_TARGET_SHARED_SAFETY_HS_CONDITIONAL_MFE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_RAW_INPUT_ADJUSTED_TARGET_SHARED_SAFETY_HS_CONDITIONAL_MFE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_shared_safety_mfe_raw_input_v1",
     ),
     DAILY_UNIVERSAL_ADAPTIVE_HORIZON_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_ADAPTIVE_HORIZON_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -2832,6 +2847,36 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         secondary_pair_scope_threshold=0.50,
         model_gate_reference_profile_name=(
             DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_RAW_INPUT_ADJUSTED_TARGET_SHARED_SAFETY_HS_CONDITIONAL_MFE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_RAW_INPUT_ADJUSTED_TARGET_SHARED_SAFETY_HS_CONDITIONAL_MFE_PROFILE,
+        model_research_id="MR-13BW",
+        experiment_name="MR-13BW Raw-OHLC Input / Adjusted-Target AO Control",
+        phase="13BW",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "AO unchanged: adjusted-price full-universe 40-bar Safety and true-HS conditional-MFE labels"
+        ),
+        objective_description=(
+            "User-authorized controlled raw-price input experiment. Exactly AO 300x10 Shared InceptionTime, "
+            "same adjusted-price stock-day universe, 40-bar targets, Safety full-list Delta-NDCG, "
+            "true-HS(P50) Conditional-MFE, 1:1 loss, Seed42, optimizer, split and PIT cutoff. "
+            "Only stock and 0050 OHLC feature windows read unadjusted TaiwanStockPrice from one immutable "
+            "READY provider snapshot, aligned on canonical adjusted dates; Volume stays canonical. "
+            "Adjusted target/future-path source must never change. Control=MR-13AO. "
+            "Forward Seed42 first; Rolling/multi-seed only if Safety improves without material MFE loss. "
+            "No strategy promotion or production price-basis change."
+        ),
+        metric_scope="ao_raw_ohlc_input_adjusted_economic_target_control",
+        score_semantic_id="daily_true_hs_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        secondary_pair_scope_threshold=0.50,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
         ),
         selection_pit_authorized=False,
         current_time_validation_authorized=False,
