@@ -1112,10 +1112,8 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
     application_source = (
         project_root / "services/research/breakout_quality_application.py"
     ).read_text(encoding="utf-8")
-    current_docs = "\n".join(
-        (project_root / relative_path).read_text(encoding="utf-8")
-        for relative_path in ("doc/CMD.md", "doc/ARCHITECTURE.md")
-    )
+    # AI: The user's CMD.md notebook is not a formal documentation contract.
+    current_docs = (project_root / "doc/ARCHITECTURE.md").read_text(encoding="utf-8")
     retired_command_tokens = (
         "python -m tools.filters.breakout_quality.strategy_adapt",
         "python -m tools.filters.breakout_quality.strategy_filter_gate",

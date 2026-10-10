@@ -12,10 +12,9 @@ from .source_index import (
     read_source_top_level_function_names,
 )
 
-CMD_SINGLE_ENTRY_TEXT = "正式對外入口為 `apps/run_bundle.py`"
 ARCHITECTURE_SINGLE_ENTRY_TEXT = "`apps/run_bundle.py` 是日常唯一建議使用的本機 double check 與交付打包入口"
 LEGACY_APP_ENTRY_PATHS = ("apps/local_regression.py", "apps/validate_consistency.py")
-LEGACY_DOC_GUIDANCE_FILES = ("doc/CMD.md", "doc/ARCHITECTURE.md")
+LEGACY_DOC_GUIDANCE_FILES = ("doc/ARCHITECTURE.md",)
 SUSPICIOUS_APP_ENTRY_PATTERN = re.compile(r"(?:test|validate|regression|consistency)", re.IGNORECASE)
 
 # Interactive composition roots are intentionally allowed only for explicit
@@ -609,11 +608,45 @@ def summarize_test_suite_registry_contract(project_root: Path, formal_step_order
 def summarize_single_formal_test_entry_contract(project_root: Path) -> Dict[str, Any]:
     app_dir = project_root / "apps"
     app_py_files = sorted(path.name for path in app_dir.glob("*.py"))
-    cmd_text = (project_root / "doc" / "CMD.md").read_text(encoding="utf-8")
     architecture_text = (project_root / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    bundle_path = app_dir / "run_bundle.py"
+
+    # AI: The private CMD.md notebook is not a formal contract. Validate the
+    # actual orchestration calls instead of enforcing wording in user notes.
+    bundle_commands: List[Tuple[int, str]] = []
+    if bundle_path.is_file():
+        bundle_tree = read_source_ast(bundle_path)
+        main = next(
+            (node for node in bundle_tree.body if isinstance(node, ast.FunctionDef) and node.name == "main"),
+            None,
+        )
+        if main is not None:
+            for node in ast.walk(main):
+                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name) or node.func.id != "run_cmd":
+                    continue
+                if not node.args or not isinstance(node.args[0], ast.List):
+                    continue
+                items = node.args[0].elts
+                if (
+                    len(items) >= 2
+                    and isinstance(items[0], ast.Attribute)
+                    and isinstance(items[0].value, ast.Name)
+                    and items[0].value.id == "sys"
+                    and items[0].attr == "executable"
+                    and isinstance(items[1], ast.Constant)
+                    and isinstance(items[1].value, str)
+                ):
+                    bundle_commands.append((node.lineno, items[1].value))
+    package_lines = [line for line, path in bundle_commands if path == "apps/package_zip.py"]
+    test_lines = [line for line, path in bundle_commands if path == "apps/test_suite.py"]
+    bundle_invokes_test_suite = len(test_lines) == 1
+    bundle_packages_before_tests = (
+        bundle_invokes_test_suite
+        and len(package_lines) == 1
+        and package_lines[0] < test_lines[0]
+    )
 
     legacy_entry_paths = [path for path in LEGACY_APP_ENTRY_PATHS if (project_root / path).exists()]
-
     suspicious_app_entries: List[str] = []
     for path in sorted(app_dir.glob("*.py")):
         rel_path = str(path.relative_to(project_root)).replace("\\", "/")
@@ -623,14 +656,15 @@ def summarize_single_formal_test_entry_contract(project_root: Path) -> Dict[str,
             suspicious_app_entries.append(rel_path)
 
     return {
-        "test_suite_exists": (project_root / "apps" / "test_suite.py").exists(),
-        "cmd_declares_single_entry": CMD_SINGLE_ENTRY_TEXT in cmd_text,
+        "test_suite_exists": (app_dir / "test_suite.py").exists(),
+        "run_bundle_exists": bundle_path.is_file(),
+        "bundle_invokes_test_suite": bundle_invokes_test_suite,
+        "bundle_packages_before_tests": bundle_packages_before_tests,
         "architecture_declares_single_entry": ARCHITECTURE_SINGLE_ENTRY_TEXT in architecture_text,
         "legacy_entry_paths": legacy_entry_paths,
         "suspicious_app_entries": suspicious_app_entries,
         "app_py_files": app_py_files,
     }
-
 
 
 def summarize_critical_helper_single_source_contract(project_root: Path) -> Dict[str, Any]:

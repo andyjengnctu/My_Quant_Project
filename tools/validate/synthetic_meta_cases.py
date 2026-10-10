@@ -7,7 +7,6 @@ import inspect
 import json
 import os
 import re
-import shlex
 import shutil
 import tempfile
 from unittest.mock import patch
@@ -24,7 +23,6 @@ from .module_loader import build_project_absolute_path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CHECKLIST_PATH = PROJECT_ROOT / "doc" / "TEST_SUITE_CHECKLIST.md"
-CMD_PATH = PROJECT_ROOT / "doc" / "CMD.md"
 SYNTHETIC_VALIDATE_DIR = PROJECT_ROOT / "tools" / "validate"
 
 from .source_index import read_source_ast, read_source_exception_handlers, read_source_text
@@ -72,20 +70,6 @@ from tools.local_regression.meta_quality_targets import (
     POLICY_CONTRACT_COVERAGE_TARGETS,
     TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS,
 )
-
-
-def _extract_cmd_python_commands():
-    commands = []
-    for raw_line in CMD_PATH.read_text(encoding="utf-8").splitlines():
-        stripped = raw_line.strip()
-        if not stripped or stripped.startswith(("#", "- ", "```")):
-            continue
-        if not stripped.startswith("python "):
-            continue
-        command = stripped.split("#", 1)[0].strip()
-        if command:
-            commands.append(command)
-    return commands
 
 
 def _replace_markdown_table_row(text: str, *, heading: str, row_id: str, id_col_idx: int, update_cols, match_index: int = 0):
@@ -302,62 +286,26 @@ def _run_checklist_row_mutation_guard(
 
 
 def validate_cmd_document_contract_case(_base_params):
-    from tools.local_regression.run_all import STEP_NAMES
     from tools.local_regression.run_quick_gate import HELP_TARGETS
-    from tools.validate.preflight_env import _LOCAL_REGRESSION_STEP_ORDER
 
+    # AI: Legacy case ID is retained for checklist history. Its source of truth
+    # is now the executable formal registry, never the private CMD.md notebook.
     case_id = "META_CMD_DOCUMENT_CONTRACT"
     results, summary = _new_synthetic_case(case_id)
-
-    commands = _extract_cmd_python_commands()
-    unique_commands = list(dict.fromkeys(commands))
-    help_script_paths = {str(cmd[1]).replace("\\", "/") for cmd, _ in HELP_TARGETS if len(cmd) >= 2 and str(cmd[1]).endswith(".py")}
-    project_command_count = 0
-    checked_script_paths = set()
-
-    add_check(results, "meta_cmd_contract", case_id, "cmd_python_commands_nonempty", True, bool(unique_commands))
-
-    for command in unique_commands:
-        command = command.replace("\\", "/")
-        parts = shlex.split(command, posix=True)
-        if len(parts) < 2 or parts[0] != "python":
-            continue
-        if parts[1] == "-m":
-            if parts[2:4] == ["pip", "install"] and "-r" in parts:
-                req_idx = parts.index("-r")
-                req_path = PROJECT_ROOT / parts[req_idx + 1]
-                add_check(results, "meta_cmd_contract", case_id, "cmd_requirements_lock_exists", True, req_path.exists())
-            continue
-        if parts[1] == "-c":
-            continue
-
-        script_rel = parts[1].replace("\\", "/")
-        project_command_count += 1
-        script_path = PROJECT_ROOT / script_rel
-        metric_prefix = script_rel.replace("/", "_").replace(".", "_")
-        if script_rel not in checked_script_paths:
-            checked_script_paths.add(script_rel)
-            add_check(results, "meta_cmd_contract", case_id, f"{metric_prefix}_script_exists", True, script_path.is_file())
-            add_check(results, "meta_cmd_contract", case_id, f"{metric_prefix}_covered_by_help_target", True, script_rel in help_script_paths)
-
-        if "--dataset" in parts:
-            dataset_value = parts[parts.index("--dataset") + 1]
-            add_check(results, "meta_cmd_contract", case_id, f"{metric_prefix}_dataset_value_valid", True, dataset_value in {"full", "reduced"})
-
-        if script_rel == "tools/local_regression/run_all.py" and "--only" in parts:
-            only_value = parts[parts.index("--only") + 1]
-            only_steps = [token.strip() for token in only_value.split(",") if token.strip()]
-            invalid_steps = [step for step in only_steps if step not in STEP_NAMES]
-            add_check(results, "meta_cmd_contract", case_id, f"{metric_prefix}_only_steps_valid", [], invalid_steps)
-
-        if script_rel == "tools/validate/preflight_env.py" and "--steps" in parts:
-            steps_value = parts[parts.index("--steps") + 1]
-            step_names = [token.strip() for token in steps_value.split(",") if token.strip()]
-            invalid_steps = [step for step in step_names if step not in _LOCAL_REGRESSION_STEP_ORDER]
-            add_check(results, "meta_cmd_contract", case_id, f"{metric_prefix}_preflight_steps_valid", [], invalid_steps)
-
-    summary["command_count"] = len(unique_commands)
-    summary["project_command_count"] = project_command_count
+    help_script_paths = {
+        str(command[1]).replace("\\", "/")
+        for command, _ in HELP_TARGETS
+        if len(command) >= 2 and str(command[1]).endswith(".py")
+    }
+    step_names = [spec.name for spec in FORMAL_STEP_SPECS]
+    add_check(results, "meta_entry_contract", case_id, "formal_steps_declared", True, bool(step_names))
+    add_check(results, "meta_entry_contract", case_id, "formal_step_names_unique", len(step_names), len(set(step_names)))
+    for spec in FORMAL_STEP_SPECS:
+        script_rel = spec.command.split()[0].replace("\\", "/")
+        add_check(results, "meta_entry_contract", case_id, f"formal_step_{spec.name}_script_exists", True, (PROJECT_ROOT / script_rel).is_file())
+        add_check(results, "meta_entry_contract", case_id, f"formal_step_{spec.name}_has_help_probe", True, script_rel in help_script_paths)
+    summary["source_paths"] = ["tools/local_regression/formal_pipeline.py", "tools/local_regression/run_quick_gate.py"]
+    summary["formal_steps"] = step_names
     return results, summary
 
 
@@ -365,12 +313,9 @@ def validate_gui_workbench_documentation_sync_case(_base_params):
     case_id = "META_GUI_WORKBENCH_DOCUMENTATION_SYNC"
     results, summary = _new_synthetic_case(case_id)
 
-    cmd_text = (PROJECT_ROOT / "doc" / "CMD.md").read_text(encoding="utf-8")
     architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     inspector_source = (PROJECT_ROOT / "services" / "workbench_ui" / "single_stock_inspector.py").read_text(encoding="utf-8")
 
-    cmd_required_fragment = "交易明細與 Console 為獨立分頁"
-    cmd_forbidden_fragment = "執行摘要、交易明細與 Console 為獨立分頁"
     architecture_apps_required_fragment = "交易明細與 Console 改以獨立分頁承接"
     architecture_ui_required_fragment = "交易明細與 Console 以獨立分頁承接"
     architecture_forbidden_fragment = "執行摘要與交易明細改以獨立分頁承接"
@@ -379,14 +324,11 @@ def validate_gui_workbench_documentation_sync_case(_base_params):
     add_check(results, "meta_cmd_contract", case_id, "inspector_notebook_has_trade_detail_tab", True, 'text="交易明細"' in inspector_source)
     add_check(results, "meta_cmd_contract", case_id, "inspector_notebook_has_console_tab", True, 'text="Console"' in inspector_source)
     add_check(results, "meta_cmd_contract", case_id, "inspector_notebook_omits_summary_tab", False, 'text="執行摘要"' in inspector_source)
-    add_check(results, "meta_cmd_contract", case_id, "cmd_workbench_mentions_trade_detail_console_tabs", True, cmd_required_fragment in cmd_text)
-    add_check(results, "meta_cmd_contract", case_id, "cmd_workbench_omits_summary_tab_description", False, cmd_forbidden_fragment in cmd_text)
     add_check(results, "meta_cmd_contract", case_id, "architecture_apps_workbench_mentions_trade_detail_console_tabs", True, architecture_apps_required_fragment in architecture_text)
     add_check(results, "meta_cmd_contract", case_id, "architecture_ui_workbench_mentions_trade_detail_console_tabs", True, architecture_ui_required_fragment in architecture_text)
     add_check(results, "meta_cmd_contract", case_id, "architecture_workbench_omits_summary_tab_description", False, architecture_forbidden_fragment in architecture_text)
     add_check(results, "meta_cmd_contract", case_id, "architecture_ui_workbench_omits_summary_tab_description", False, architecture_ui_forbidden_fragment in architecture_text)
 
-    summary["cmd_required_fragment"] = cmd_required_fragment
     summary["architecture_required_fragments"] = [architecture_apps_required_fragment, architecture_ui_required_fragment]
     summary["tabs"] = ["K 線圖", "交易明細", "Console"]
     return results, summary
@@ -562,22 +504,12 @@ def validate_trade_analysis_legacy_naming_documentation_contract_case(_base_para
     case_id = "META_TRADE_ANALYSIS_LEGACY_NAMING_DOCUMENTATION_CONTRACT"
     results, summary = _new_synthetic_case(case_id)
 
-    cmd_text = (PROJECT_ROOT / "doc" / "CMD.md").read_text(encoding="utf-8")
     architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     trade_log_text = (PROJECT_ROOT / "services" / "trade_analysis" / "trade_log.py").read_text(encoding="utf-8")
 
-    cmd_has_legacy_debug_labels = all(fragment in cmd_text for fragment in ("legacy `run_debug_*`", "`debug_trade_log`"))
     architecture_has_legacy_debug_labels = all(fragment in architecture_text for fragment in ("legacy `run_debug_*`", "`debug_trade_log`"))
     architecture_marks_legacy_as_compatibility = ("為維持相容性" in architecture_text) or ("以維持相容性" in architecture_text)
     architecture_formal_entry_section = architecture_text.split("## 正式入口", 1)[1].split("## ", 1)[0] if "## 正式入口" in architecture_text else ""
-
-    add_check(results, "meta_cmd_contract", case_id, "cmd_workbench_is_single_user_entry_for_trade_analysis", True, "`apps/workbench.py` 為 GUI 正式入口，也是單股 trade-analysis 的單一使用者入口" in cmd_text)
-    add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_helper_described_as_backend_not_formal_entry", True, "`services/trade_analysis/trade_log.py` 提供單股 trade-analysis 共用 backend / 開發輔助 CLI；正式使用者入口仍為 `apps/workbench.py`" in cmd_text)
-    add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_mentions_legacy_debug_api_labels", True, cmd_has_legacy_debug_labels)
-    add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_output_dir_explicitly_marked_legacy", True, "`outputs/debug_trade_log/`：`trade_analysis` 單股分析輸出；為維持既有工具鏈相容，暫沿用 legacy 目錄名 `debug_trade_log`" in cmd_text)
-    add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_retention_section_marks_legacy_output_dir", True, "`outputs/debug_trade_log/`（trade_analysis legacy output dir）" in cmd_text)
-    add_check(results, "meta_cmd_contract", case_id, "cmd_has_no_trade_log_formal_entry_label", False, "`services/trade_analysis/trade_log.py` 為單股 trade-analysis 正式入口" in cmd_text)
-    add_check(results, "meta_cmd_contract", case_id, "cmd_has_no_stale_debug_formal_entry_label", False, "為 debug 正式入口" in cmd_text)
 
     add_check(results, "meta_architecture_contract", case_id, "architecture_trade_analysis_described_as_subsystem", True, "- `services/trade_analysis/`：單股 trade-analysis 子系統；" in architecture_text)
     add_check(results, "meta_architecture_contract", case_id, "architecture_trade_analysis_bound_to_workbench_entry", True, "由 `apps/workbench.py` 經 `services/workbench_ui/` 觸發" in architecture_text and "提供共用 backend / 開發輔助 CLI" in architecture_text)
@@ -592,7 +524,7 @@ def validate_trade_analysis_legacy_naming_documentation_contract_case(_base_para
     add_check(results, "meta_trade_analysis_cli_contract", case_id, "trade_log_help_marks_workbench_as_formal_user_entry", True, "正式使用者入口為 apps/workbench.py" in trade_log_text)
     add_check(results, "meta_trade_analysis_cli_contract", case_id, "trade_log_has_no_stale_debug_prompt_or_banner", False, ("請輸入要除錯的股票代號" in trade_log_text) or ("交易明細除錯工具" in trade_log_text))
 
-    summary["source_paths"] = ["doc/CMD.md", "doc/ARCHITECTURE.md", "services/trade_analysis/trade_log.py"]
+    summary["source_paths"] = ["doc/ARCHITECTURE.md", "services/trade_analysis/trade_log.py"]
     summary["architecture_has_legacy_debug_labels"] = architecture_has_legacy_debug_labels
     summary["architecture_marks_legacy_as_compatibility"] = architecture_marks_legacy_as_compatibility
     return results, summary
@@ -605,7 +537,6 @@ def validate_validate_runtime_tmp_output_staging_contract_case(_base_params):
     error_cases_text = (PROJECT_ROOT / "tools" / "validate" / "synthetic_error_cases.py").read_text(encoding="utf-8")
     regression_cases_text = (PROJECT_ROOT / "tools" / "validate" / "synthetic_regression_cases.py").read_text(encoding="utf-8")
     architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
-    cmd_text = (PROJECT_ROOT / "doc" / "CMD.md").read_text(encoding="utf-8")
     run_all_text = (PROJECT_ROOT / "tools" / "local_regression" / "run_all.py").read_text(encoding="utf-8")
 
     required_staging_fragment = 'output_dir_path(PROJECT_ROOT, "local_regression") / "_staging" / "validate_runtime"'
@@ -615,14 +546,12 @@ def validate_validate_runtime_tmp_output_staging_contract_case(_base_params):
     add_check(results, "meta_output_contract", case_id, "synthetic_regression_cases_use_local_regression_staging_runtime_root", True, required_staging_fragment in regression_cases_text)
     add_check(results, "meta_output_contract", case_id, "validate_runtime_paths_have_no_outputs_validate_root", False, (stale_root_fragment in error_cases_text) or (stale_root_fragment in regression_cases_text) or ("outputs' / 'validate'" in regression_cases_text))
     add_check(results, "meta_output_contract", case_id, "run_all_retention_keeps_local_regression_staging_cleanup_rule", True, 'name="local_regression_staging"' in run_all_text and 'output_dir_path(PROJECT_ROOT, "local_regression") / "_staging"' in run_all_text)
-    add_check(results, "meta_output_contract", case_id, "cmd_documents_local_regression_staging_runtime_area", True, '`outputs/local_regression/_staging/`：formal / validate 暫存 staging；屬 `local_regression` 內部子目錄，會由 retention 自動清理。' in cmd_text)
     add_check(results, "meta_output_contract", case_id, "architecture_documents_no_outputs_validate_root_category", True, '`outputs/local_regression/_staging/` 為 local regression / validate 共用暫存 staging 子目錄；不新增 `outputs/validate/` 根分類。' in architecture_text)
 
     summary["source_paths"] = [
         "tools/validate/synthetic_error_cases.py",
         "tools/validate/synthetic_regression_cases.py",
         "tools/local_regression/run_all.py",
-        "doc/CMD.md",
         "doc/ARCHITECTURE.md",
     ]
     return results, summary
@@ -805,7 +734,9 @@ def validate_single_formal_test_entry_contract_case(_base_params):
 
     contract = summarize_single_formal_test_entry_contract(PROJECT_ROOT)
     add_check(results, "meta_entry_contract", case_id, "test_suite_entry_file_exists", True, contract["test_suite_exists"])
-    add_check(results, "meta_entry_contract", case_id, "cmd_declares_single_entry", True, contract["cmd_declares_single_entry"])
+    add_check(results, "meta_entry_contract", case_id, "run_bundle_entry_file_exists", True, contract["run_bundle_exists"])
+    add_check(results, "meta_entry_contract", case_id, "run_bundle_invokes_formal_test_suite", True, contract["bundle_invokes_test_suite"])
+    add_check(results, "meta_entry_contract", case_id, "run_bundle_packages_before_tests", True, contract["bundle_packages_before_tests"])
     add_check(results, "meta_entry_contract", case_id, "architecture_declares_single_entry", True, contract["architecture_declares_single_entry"])
     add_check(results, "meta_entry_contract", case_id, "no_legacy_app_test_entries", [], contract["legacy_entry_paths"])
     add_check(results, "meta_entry_contract", case_id, "no_suspicious_alternate_app_test_entries", [], contract["suspicious_app_entries"])
@@ -944,7 +875,7 @@ def validate_no_legacy_app_entry_doc_references_case(_base_params):
     results, summary = _new_synthetic_case(case_id)
 
     contract = summarize_legacy_app_entry_doc_reference_contract(PROJECT_ROOT)
-    add_check(results, "meta_entry_contract", case_id, "cmd_and_architecture_have_no_legacy_app_entry_references", [], contract["legacy_doc_reference_lines"])
+    add_check(results, "meta_entry_contract", case_id, "architecture_has_no_legacy_app_entry_references", [], contract["legacy_doc_reference_lines"])
     add_check(results, "meta_entry_contract", case_id, "docs_have_no_manual_delete_guidance_for_app_entries", [], contract["manual_delete_guidance_lines"])
 
     summary["legacy_doc_reference_lines"] = contract["legacy_doc_reference_lines"]
@@ -1759,6 +1690,16 @@ def validate_quick_gate_synthetic_registry_import_targets_contract_case(_base_pa
     return results, summary
 
 
+def _done_test_validator_name(description: str) -> str:
+    # AI: Canonical T descriptions may have punctuation immediately after the
+    # backticked validator name; never absorb that prose into its Python name.
+    match = re.match(r"^(validate_[A-Za-z0-9_]+)(?![A-Za-z0-9_])", str(description).strip())
+    if match is not None:
+        return match.group(1)
+    parts = str(description).split(maxsplit=1)
+    return parts[0] if parts else ""
+
+
 def validate_registry_checklist_entry_consistency_case(_base_params):
     case_id = "META_REGISTRY_CHECKLIST_ENTRY"
     results, summary = _new_synthetic_case(case_id)
@@ -1786,6 +1727,19 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
     add_check(results, "meta_registry", case_id, "defined_validate_cases_all_registered", [], missing_defined_names)
     add_check(results, "meta_registry", case_id, "registry_has_no_orphan_validate_case_names", [], orphan_registry_names)
 
+    add_check(
+        results, "meta_registry", case_id,
+        "fullwidth_colon_validator_description_is_parsed_without_prose",
+        "validate_breakout_quality_audit_framework_contract_case",
+        _done_test_validator_name("validate_breakout_quality_audit_framework_contract_case：B260 historical evidence"),
+    )
+    add_check(
+        results, "meta_registry", case_id,
+        "unregistered_validator_does_not_resolve_to_registered_prefix",
+        "validate_breakout_quality_audit_framework_contract_case_extra",
+        _done_test_validator_name("validate_breakout_quality_audit_framework_contract_case_extra：invalid"),
+    )
+
     done_test_names = [row["name"] for row in done_test_rows]
     done_test_name_set = set(done_test_names)
     add_check(results, "meta_registry", case_id, "done_test_names_unique", len(done_test_names), len(done_test_name_set))
@@ -1802,9 +1756,9 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
     )
 
     done_test_validate_name_set = {
-        row["name"].split()[0]
+        name
         for row in done_test_rows
-        if row["name"].split() and row["name"].split()[0].startswith("validate_")
+        if (name := _done_test_validator_name(row["name"])).startswith("validate_")
     }
     missing_done_test_validator_names = sorted(validator_name_set - done_test_validate_name_set)
     add_check(
@@ -1818,7 +1772,7 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
 
     for row in done_test_rows:
         test_name = row["name"]
-        first_token = test_name.split()[0] if test_name.split() else test_name
+        first_token = _done_test_validator_name(test_name)
         if first_token.startswith("validate_"):
             add_check(
                 results,

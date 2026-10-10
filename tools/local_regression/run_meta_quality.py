@@ -33,7 +33,6 @@ from tools.local_regression.formal_pipeline import (
 )
 
 CHECKLIST_PATH = PROJECT_ROOT / "doc" / "TEST_SUITE_CHECKLIST.md"
-CMD_PATH = PROJECT_ROOT / "doc" / "CMD.md"
 ARCHITECTURE_PATH = PROJECT_ROOT / "doc" / "ARCHITECTURE.md"
 from tools.local_regression.meta_quality_targets import (
     CORE_TRADING_COVERAGE_TARGETS,
@@ -550,13 +549,14 @@ def _summarize_formal_entry_consistency() -> Dict[str, Any]:
             extra={"app_py_files": single_entry_contract["app_py_files"]},
         )
     )
-    results.append(
-        summarize_result(
-            "formal_entry_cmd_declares_single_entry",
-            single_entry_contract["cmd_declares_single_entry"],
-            detail=f"declared={single_entry_contract['cmd_declares_single_entry']}",
+    for metric, field in (
+        ("formal_entry_run_bundle_file_exists", "run_bundle_exists"),
+        ("formal_entry_run_bundle_invokes_test_suite", "bundle_invokes_test_suite"),
+        ("formal_entry_run_bundle_packages_before_tests", "bundle_packages_before_tests"),
+    ):
+        results.append(
+            summarize_result(metric, single_entry_contract[field], detail=f"verified={single_entry_contract[field]}")
         )
-    )
     results.append(
         summarize_result(
             "formal_entry_architecture_declares_single_entry",
