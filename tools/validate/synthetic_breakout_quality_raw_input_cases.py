@@ -42,16 +42,16 @@ from services.research.raw_price_strategy_dataset import (
 
 class AlternatePriceInputTests(unittest.TestCase):
     def setUp(self):
-        self.raw_profile = BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE[1]
+        # BW remains a blocked, immutable 300x10 direct-raw experiment; not current.
+        self.raw_profile = "daily_universal_raw_input_adjusted_target_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
         self.ao_profile = "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
         self.raw_arch = get_breakout_quality_experiment_profile(self.raw_profile).model_architecture
         self.ao_arch = get_breakout_quality_experiment_profile(self.ao_profile).model_architecture
 
-    def test_current_pair_and_reference(self):
-        self.assertEqual(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE[0], 'MR-13BW')
+    def test_bw_registered_without_repurposing_old_identity(self):
         self.assertEqual(get_continuous_ranker_research_spec(self.raw_profile).model_research_id,'MR-13BW')
         self.assertIn(('MR-13AO',self.ao_profile),BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
-        self.assertIn(('MR-13BW',self.raw_profile),BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
+        self.assertIn(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE,BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
 
     def test_architecture_preserves_ao_topology(self):
         self.assertTrue(get_architecture_descriptor(self.raw_arch).has_capability('raw_unadjusted_price_input'))

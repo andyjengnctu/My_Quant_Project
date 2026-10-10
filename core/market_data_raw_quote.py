@@ -51,6 +51,27 @@ def raw_market_executable_quote_mask(
     )
 
 
+def raw_research_observed_ohlc_mask(frame: pd.DataFrame) -> pd.Series:
+    """Whether a raw OHLC observation can serve as a numerical research feature.
+
+    Independent of turnover/volume and of Trading fill availability. FinMind
+    emerging-market Open can legitimately sit outside intraday High/Low; Close
+    must still lie inside the reported trading range. No synthetic quote is made.
+    A False value is *missing/unusable numerical evidence*, not corruption proof.
+    """
+    prices = np.column_stack([
+        _numeric_series(frame, field).to_numpy(dtype=float)
+        for field in ("Open", "High", "Low", "Close")
+    ])
+    valid = (
+        np.all(np.isfinite(prices) & (prices > 0.0), axis=1)
+        & (prices[:, 1] >= prices[:, 2])
+        & (prices[:, 3] >= prices[:, 2])
+        & (prices[:, 3] <= prices[:, 1])
+    )
+    return pd.Series(valid, index=frame.index)
+
+
 def raw_ohlc_diagnostic_masks(frame: pd.DataFrame) -> dict[str, pd.Series]:
     """Provider observations, NOT a replacement for canonical model sanitization.
 
@@ -80,4 +101,5 @@ __all__ = [
     "raw_market_positive_volume_mask",
     "raw_market_executable_quote_mask",
     "raw_ohlc_diagnostic_masks",
+    "raw_research_observed_ohlc_mask",
 ]

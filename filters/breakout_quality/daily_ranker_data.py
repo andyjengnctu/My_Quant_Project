@@ -14,6 +14,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from core.market_data_raw_quote import raw_research_observed_ohlc_mask
+
 from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT,
     CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT,
@@ -103,6 +105,7 @@ class LazyDailyFeatureBank:
         benchmark: pd.DataFrame,
         feature_frames: tuple[pd.DataFrame, ...] | None = None,
         feature_benchmark: pd.DataFrame | None = None,
+        feature_quote_mask: bool = False,
         ticker_ids: np.ndarray,
         source_positions: np.ndarray,
         benchmark_positions: np.ndarray,
@@ -129,6 +132,22 @@ class LazyDailyFeatureBank:
             pd.DatetimeIndex(benchmark.index)
         ):
             raise ValueError("raw input benchmark與adjusted benchmark date grid不一致")
+        self._feature_quote_mask = bool(feature_quote_mask)
+        if self._feature_quote_mask and (feature_frames is None or feature_benchmark is None):
+            raise ValueError("raw quote mask需要個股與0050兩套完整Raw來源")
+        self._stock_quote_masks = (
+            tuple(raw_research_observed_ohlc_mask(frame).to_numpy(dtype=bool)
+                  for frame in feature_frames)
+            if self._feature_quote_mask and feature_frames is not None else ()
+        )
+        self._benchmark_quote_mask = (
+            raw_research_observed_ohlc_mask(feature_benchmark).to_numpy(dtype=bool)
+            if self._feature_quote_mask and feature_benchmark is not None else None
+        )
+        self.feature_columns = (
+            (*FEATURE_COLUMNS, "Stock_Raw_Quote_Available", "Benchmark_Raw_Quote_Available")
+            if self._feature_quote_mask else FEATURE_COLUMNS
+        )
         self._feature_frame_arrays = (
             tuple(frame[["Open", "High", "Low", "Close", "Volume"]].to_numpy(dtype=np.float64, copy=True)
                   for frame in feature_frames)
@@ -187,12 +206,47 @@ class LazyDailyFeatureBank:
             raise RuntimeError("daily feature window產生non-finite value")
         return normalized
 
+    @staticmethod
+    def _normalized_observed_window(values: np.ndarray, available: np.ndarray) -> np.ndarray:
+        """No-quote features are neutral AFTER normalization, never synthetic prices.
+
+        Anchor = latest observed Close at/before scoring day; never use a later
+        bar. Volume is unchanged and the binary mask identifies every missing bar.
+        """
+        observed = np.asarray(available, dtype=bool)
+        if observed.ndim != 1 or observed.shape[0] != len(values):
+            raise ValueError("raw quote mask window與feature window不一致")
+        if bool(np.any(observed)):
+            anchor = float(values[int(np.flatnonzero(observed)[-1]), 3])
+            if not np.isfinite(anchor) or anchor <= 0.0:
+                raise ValueError("observed raw anchor Close無效")
+        else:
+            anchor = 1.0  # only neutral masked numbers, not an observed price
+        # Replacing invalid numbers here is a mathematical encoding of missingness;
+        # it does NOT modify physical raw CSV or any forward price/target.
+        normalized_input = np.asarray(values, dtype=np.float64).copy()
+        normalized_input[~observed, :4] = anchor
+        result = normalize_ohlcv_array_window(normalized_input, anchor)
+        if not np.isfinite(result).all():
+            raise ValueError("masked observed raw OHLCV產生non-finite feature")
+        return np.concatenate((result, observed[:, None].astype(np.float32)), axis=1)
+
     def _benchmark_feature(self, benchmark_pos: int) -> np.ndarray:
         position = int(benchmark_pos)
         cached = self._benchmark_feature_cache.get(position)
         if cached is not None:
             return cached
-        feature = self._normalized_window(self._benchmark_feature_array, position)
+        if self._feature_quote_mask:
+            length = int(self._policy.feature_window_bars)
+            start = position - length + 1
+            if start < 0 or position >= len(self._benchmark_feature_array):
+                raise RuntimeError("masked benchmark沒有足夠history")
+            feature = self._normalized_observed_window(
+                self._benchmark_feature_array[start:position + 1],
+                self._benchmark_quote_mask[start:position + 1],
+            )
+        else:
+            feature = self._normalized_window(self._benchmark_feature_array, position)
         self._benchmark_feature_cache[position] = feature
         return feature
 
@@ -475,7 +529,7 @@ class LazyDailyFeatureBank:
         return (
             int(len(self._ticker_ids)),
             int(self._policy.feature_window_bars),
-            int(len(FEATURE_COLUMNS)),
+            int(len(self.feature_columns)),
         )
 
     @property
@@ -506,7 +560,7 @@ class LazyDailyFeatureBank:
         ids = np.where(ids < 0, ids + len(self), ids)
         feature_window = int(self._policy.feature_window_bars)
         output = np.empty(
-            (len(ids), feature_window, len(FEATURE_COLUMNS)),
+            (len(ids), feature_window, len(self.feature_columns)),
             dtype=np.float32,
         )
         if len(ids) == 0:
@@ -522,6 +576,7 @@ class LazyDailyFeatureBank:
         # median/percentile calls from every training batch.
         stock_windows = np.empty((len(ids), feature_window, 5), dtype=np.float64)
         anchors = np.empty(len(ids), dtype=np.float64)
+        stock_masks = np.empty((len(ids), feature_window), dtype=bool) if self._feature_quote_mask else None
         for out_index, (ticker_id, source_pos) in enumerate(
             zip(ticker_ids.tolist(), source_positions.tolist())
         ):
@@ -533,19 +588,41 @@ class LazyDailyFeatureBank:
             if len(window) != feature_window:
                 raise RuntimeError("daily feature window長度與policy不一致")
             stock_windows[out_index] = window
-            anchors[out_index] = frame[int(source_pos), 3]
+            if self._feature_quote_mask:
+                stock_masks[out_index] = self._stock_quote_masks[int(ticker_id)][start_pos:int(source_pos) + 1]
+            else:
+                anchors[out_index] = frame[int(source_pos), 3]
 
+        if self._feature_quote_mask:
+            # All anchors use historical observed closes up through decision date.
+            # Vectorize so multi-million daily examples do not add Python-per-row work.
+            latest_valid = np.max(
+                np.where(stock_masks, np.arange(feature_window)[None, :], -1), axis=1,
+            )
+            known = latest_valid >= 0
+            anchors.fill(1.0)  # no observed quote => only neutral, masked numbers
+            if bool(np.any(known)):
+                valid_ids = np.flatnonzero(known)
+                anchors[valid_ids] = stock_windows[valid_ids, latest_valid[valid_ids], 3]
+            # Preserve observed Volume while zeroing unobserved normalized prices.
+            for field in range(4):
+                stock_windows[:, :, field] = np.where(stock_masks, stock_windows[:, :, field], anchors[:, None])
         stock_features = normalize_ohlcv_array_windows(stock_windows, anchors)
         if not bool(np.isfinite(stock_features).all()):
             raise RuntimeError("daily feature window產生non-finite value")
         output[:, :, :5] = stock_features
+        if self._feature_quote_mask:
+            output[:, :, 10] = stock_masks.astype(np.float32)
 
         # Ranking batches are date-coherent, so benchmark positions usually
         # collapse to a single cached feature.  Assign by unique position rather
         # than repeating the Python cache lookup for every stock-day.
         for benchmark_pos in np.unique(benchmark_positions):
             local = np.flatnonzero(benchmark_positions == int(benchmark_pos))
-            output[local, :, 5:] = self._benchmark_feature(int(benchmark_pos))
+            benchmark_feature = self._benchmark_feature(int(benchmark_pos))
+            output[local, :, 5:10] = benchmark_feature[:, :5]
+            if self._feature_quote_mask:
+                output[local, :, 11] = benchmark_feature[:, 5]
         return output[0] if scalar else output
 
 
@@ -979,6 +1056,44 @@ def load_aligned_alternate_ohlcv_frame(raw_dir: Path, ticker: str, control: pd.D
     ):
         raise ValueError(f"raw/adjusted DL volume mismatch: {ticker}")
     return alternate
+
+
+
+def load_aligned_observed_raw_quote_frame(
+    raw_dir: Path, ticker: str, control: pd.DataFrame,
+) -> pd.DataFrame:
+    """Read immutable provider observations without a numeric-price sanitizer.
+
+    Missing quotes remain zeros in the physical source and are explicitly masked
+    only when constructing model features. Exact adjusted sample grid, Volume,
+    unique dates and provider source SHA are still mandatory.
+    """
+    path = raw_dir / f"{ticker}.csv"
+    if not path.is_file() or path.resolve().parent != raw_dir.resolve():
+        raise FileNotFoundError(f"quote-aware raw DL feature source missing: {ticker}")
+    raw = pd.read_csv(path, low_memory=False)
+    required = {"Date", "Open", "High", "Low", "Close", "Volume"}
+    if not required.issubset(raw.columns):
+        raise ValueError(f"quote-aware raw OHLCV缺欄位: {ticker}")
+    raw["Date"] = pd.to_datetime(raw["Date"], errors="raise").dt.normalize()
+    if raw["Date"].duplicated().any():
+        raise ValueError(f"quote-aware raw OHLCV日期重複: {ticker}")
+    raw = raw.set_index("Date").sort_index()
+    target_dates = pd.DatetimeIndex(control.index)
+    missing = target_dates.difference(pd.DatetimeIndex(raw.index))
+    if len(missing):
+        raise ValueError(f"quote-aware raw missing required adjusted dates: {ticker}: "
+                         f"{[str(date.date()) for date in missing[:8]]}")
+    result = raw.loc[target_dates, ["Open", "High", "Low", "Close", "Volume"]].copy()
+    for column in result.columns:
+        result[column] = pd.to_numeric(result[column], errors="raise")
+    if not np.isfinite(result.to_numpy(dtype=np.float64)).all():
+        raise ValueError(f"quote-aware raw contains nonfinite OHLCV: {ticker}")
+    if not np.array_equal(result["Volume"].to_numpy(dtype=np.float64),
+                          control["Volume"].to_numpy(dtype=np.float64)):
+        raise ValueError(f"quote-aware raw/adjusted volume mismatch: {ticker}")
+    result.index = control.index
+    return result
 
 
 def load_daily_universal_ranker_data(
@@ -1592,13 +1707,18 @@ def load_daily_universal_ranker_data(
 
     raw_feature_frames = None
     raw_feature_benchmark = None
+    use_quote_mask = architecture_descriptor.has_capability("raw_observed_quote_mask_input")
     if feature_price_source is not None:
         # Never use raw OHLC for labels, sample construction, future-path statistics,
-        # MFE/Safety truth or universe. Both stocks and 0050 must align exactly.
+        # MFE/Safety truth or universe. Both stocks and 0050 align on adjusted dates.
+        identity = feature_price_source["identity"]
+        if use_quote_mask != (identity.get("input_representation") == "raw_observed_quote_mask_300x12_v1"):
+            raise ValueError("raw input architecture與quote-aware scientific identity不一致")
         raw_dir = feature_price_source["dataset_dir"]
-        raw_feature_benchmark = load_aligned_alternate_ohlcv_frame(raw_dir, benchmark_ticker, benchmark)
+        loader = load_aligned_observed_raw_quote_frame if use_quote_mask else load_aligned_alternate_ohlcv_frame
+        raw_feature_benchmark = loader(raw_dir, benchmark_ticker, benchmark)
         raw_feature_frames = tuple(
-            load_aligned_alternate_ohlcv_frame(raw_dir, ticker, frame) for ticker, frame in zip(tickers, frames)
+            loader(raw_dir, ticker, frame) for ticker, frame in zip(tickers, frames)
         )
 
     feature_bank = LazyDailyFeatureBank(
@@ -1606,6 +1726,7 @@ def load_daily_universal_ranker_data(
         benchmark=benchmark,
         feature_frames=raw_feature_frames,
         feature_benchmark=raw_feature_benchmark,
+        feature_quote_mask=use_quote_mask,
         ticker_ids=ticker_ids,
         source_positions=source_positions,
         benchmark_positions=benchmark_positions,

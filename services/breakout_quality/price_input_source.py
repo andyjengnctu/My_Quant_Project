@@ -15,6 +15,8 @@ from filters.breakout_quality.workflow_io import PROJECT_ROOT
 from services.research.raw_price_strategy_dataset import (
     ensure_raw_price_strategy_dataset,
     inspect_raw_price_strategy_dataset,
+    RAW_PRICE_QUOTE_POLICY_OBSERVED,
+    RAW_PRICE_QUOTE_POLICY_STRICT,
 )
 
 RAW_PRICE_INPUT_CAPABILITY = "raw_unadjusted_price_input"
@@ -35,9 +37,12 @@ def resolve_feature_price_source(
     if not uses_alternate_price_input(model_architecture):
         return None
     root = Path(project_root).resolve()
+    desc = get_architecture_descriptor(model_architecture)
+    masked = desc.has_capability("raw_observed_quote_mask_input")
+    quote_policy = RAW_PRICE_QUOTE_POLICY_OBSERVED if masked else RAW_PRICE_QUOTE_POLICY_STRICT
     result = (
-        ensure_raw_price_strategy_dataset(root)
-        if create else inspect_raw_price_strategy_dataset(root, deep=True)
+        ensure_raw_price_strategy_dataset(root, quote_policy=quote_policy)
+        if create else inspect_raw_price_strategy_dataset(root, deep=True, quote_policy=quote_policy)
     )
     if not bool(result.get("ready")):
         raise ValueError(
@@ -50,9 +55,7 @@ def resolve_feature_price_source(
     source_identity = result.get("source_identity")
     if not isinstance(source_identity, dict):
         raise ValueError("DL raw input provider source identity缺失")
-    return {
-        "dataset_dir": Path(result["dataset_dir"]),
-        "identity": {
+    identity = {
             "price_basis": "raw_unadjusted_ohlc_canonical_volume",
             "target_price_basis": "canonical_adjusted",
             "source_contract_id": str(source_identity["contract_id"]),
@@ -60,8 +63,16 @@ def resolve_feature_price_source(
             "source_identity_fingerprint": str(result["source_identity_fingerprint"]),
             "materialization_fingerprint": str(data_identity["materialization_fingerprint"]),
             "dataset_inventory_sha256": str(data_identity["dataset_inventory_sha256"]),
-        },
     }
+    if masked:
+        identity["input_representation"] = "raw_observed_quote_mask_300x12_v1"
+        identity["quote_policy"] = quote_policy
+    return {
+        "dataset_dir": Path(result["dataset_dir"]),
+        "identity": identity,
+    }
+
+
 
 
 def load_daily_universal_ranker_data_with_price_source(**kwargs):

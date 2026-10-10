@@ -381,6 +381,9 @@ DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
 DAILY_UNIVERSAL_RAW_INPUT_ADJUSTED_TARGET_SHARED_SAFETY_HS_CONDITIONAL_MFE_PROFILE = (
     "daily_universal_raw_input_adjusted_target_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_RAW_MASK_ADJUSTED_TARGET_SHARED_SAFETY_HS_CONDITIONAL_MFE_PROFILE = (
+    "daily_universal_raw_mask_adjusted_target_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+)
 DAILY_UNIVERSAL_ADAPTIVE_HORIZON_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_adaptive_horizon_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
@@ -1547,6 +1550,18 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_shared_safety_mfe_raw_input_v1",
+    ),
+    DAILY_UNIVERSAL_RAW_MASK_ADJUSTED_TARGET_SHARED_SAFETY_HS_CONDITIONAL_MFE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_RAW_MASK_ADJUSTED_TARGET_SHARED_SAFETY_HS_CONDITIONAL_MFE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_shared_safety_mfe_raw_quote_mask_v1",
     ),
     DAILY_UNIVERSAL_ADAPTIVE_HORIZON_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_ADAPTIVE_HORIZON_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -2871,6 +2886,32 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
             "No strategy promotion or production price-basis change."
         ),
         metric_scope="ao_raw_ohlc_input_adjusted_economic_target_control",
+        score_semantic_id="daily_true_hs_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        secondary_pair_scope_threshold=0.50,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_RAW_MASK_ADJUSTED_TARGET_SHARED_SAFETY_HS_CONDITIONAL_MFE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_RAW_MASK_ADJUSTED_TARGET_SHARED_SAFETY_HS_CONDITIONAL_MFE_PROFILE,
+        model_research_id="MR-13BX",
+        experiment_name="MR-13BX Raw-Observed Missing-Quote Mask / Adjusted-Target AO Control",
+        phase="13BX",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="AO unchanged: adjusted-price full-universe 40-bar Safety and true-HS conditional-MFE labels",
+        objective_description=(
+            "Research-authorized missing-quote input representation: canonical adjusted stock-day/volume/targets/splits "
+            "unchanged; raw TaiwanStockPrice OHLC observations on the same 300-day window, two explicit quote-availability "
+            "mask channels (stock/0050). Unavailable raw observations map only to neutral *normalized features* "
+            "with mask=0, never to synthetic market prices. Historical as-of raw Close is used solely as a "
+            "numerical normalization reference, no forward information. New 300x12 model from scratch, "
+            "separate source/scientific identity from AO and blocked BW. Forward Seed42 before Rolling. Not production."
+        ),
+        metric_scope="ao_raw_observed_quote_mask_adjusted_target_control",
         score_semantic_id="daily_true_hs_conditional_mfe_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,

@@ -2128,7 +2128,7 @@ def run(args) -> int:
         "training_semantics": canonical_training_semantics,
         "continuous_target_id": target_id,
         "sequence_length": int(bundle.feature_bank.shape[1]),
-        "feature_columns": list(FEATURE_COLUMNS),
+        "feature_columns": list(bundle.feature_bank.feature_columns),
         "context_columns": list(bundle.target_manifest.get("context_features") or []),
         "feature_storage": "lazy_from_canonical_ohlcv",
         "trainable_parameter_count": int(trainable_parameter_count),

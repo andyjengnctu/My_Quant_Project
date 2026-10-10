@@ -84,6 +84,18 @@ def recorded_input_price_source_issues(
             "source_identity_fingerprint": source_fp,
             "dataset_inventory_sha256": inventory_fp,
         })
+        # A quote-aware model must not silently reuse strict/numeric raw input
+        # evidence or claim a mask absent from the immutable producer contract.
+        observed_policy = source.get("quote_policy")
+        if observed_policy is None:
+            if identity.get("quote_policy") is not None or identity.get("input_representation") is not None:
+                return ("pinned raw input quote representation mismatch",)
+        elif (
+            observed_policy != "observed_with_missing_quote_mask_v1"
+            or identity.get("quote_policy") != observed_policy
+            or identity.get("input_representation") != "raw_observed_quote_mask_300x12_v1"
+        ):
+            return ("pinned raw input quote representation mismatch",)
         if (
             identity.get("price_basis") != "raw_unadjusted_ohlc_canonical_volume"
             or identity.get("target_price_basis") != "canonical_adjusted"

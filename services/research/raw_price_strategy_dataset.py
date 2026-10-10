@@ -41,6 +41,8 @@ from services.research.market_data_v2 import ResearchV2ProviderView
 RAW_PRICE_STRATEGY_DATASET_SCHEMA_VERSION = 2
 RAW_PRICE_STRATEGY_DATASET_CONTRACT_ID = "research_raw_unadjusted_controlled_ohlcv_v2"
 RAW_PRICE_STRATEGY_PRICE_BASIS = "raw_unadjusted"
+RAW_PRICE_QUOTE_POLICY_STRICT = "strict_numeric_v1"
+RAW_PRICE_QUOTE_POLICY_OBSERVED = "observed_with_missing_quote_mask_v1"
 RAW_PRICE_STRATEGY_OUTPUT_COLUMNS = ("Date", "Open", "High", "Low", "Close", "Volume")
 RAW_PRICE_STRATEGY_PRICE_FIELDS = ("open", "max", "min", "close")
 RAW_PRICE_STRATEGY_RELATIVE_ROOT = Path("outputs") / "research" / "raw_price_strategy_dataset"
@@ -74,7 +76,11 @@ def _control_dataset_inventory(root: Path) -> tuple[Path, list[dict[str, object]
     return data_dir, rows, list(duplicate_issues)
 
 
-def _source_identity(project_root: str | Path) -> tuple[dict[str, object], ResearchV2ProviderView, Path]:
+def _source_identity(
+    project_root: str | Path, *, quote_policy: str = RAW_PRICE_QUOTE_POLICY_STRICT,
+) -> tuple[dict[str, object], ResearchV2ProviderView, Path]:
+    if quote_policy not in {RAW_PRICE_QUOTE_POLICY_STRICT, RAW_PRICE_QUOTE_POLICY_OBSERVED}:
+        raise ValueError(f"Unsupported raw source quote policy: {quote_policy}")
     root = Path(project_root).resolve()
     cutoff = str(RESEARCH_MARKET_DATA_CUTOFF)
     control_dir, control_inventory, duplicate_issues = _control_dataset_inventory(root)
@@ -110,6 +116,11 @@ def _source_identity(project_root: str | Path) -> tuple[dict[str, object], Resea
         "control_dataset_file_count": len(control_inventory),
         "control_duplicate_resolution": duplicate_issues,
     }
+    if quote_policy == RAW_PRICE_QUOTE_POLICY_OBSERVED:
+        # New immutable scientific input source. Strict/non-DL source identity is untouched.
+        identity["contract_id"] = "research_raw_observed_quote_mask_v1"
+        identity["generation_id"] = "research_raw_observed_quote_mask_v1"
+        identity["quote_policy"] = quote_policy
     provider_fp = str(identity["provider_snapshot_fingerprint"])
     if len(provider_fp) != 64 or any(ch not in "0123456789abcdef" for ch in provider_fp.lower()):
         raise ValueError("raw-price strategy provider snapshot fingerprint不是合法SHA256")
@@ -437,16 +448,20 @@ def _build_files(
             )
             if frame.empty:
                 continue
-            required = _adjusted_control_required_raw_rows(
-                frame, control_path=control_paths[ticker], ticker=ticker,
-            )
-            invalid_rows, bad_samples = _raw_price_quality_failures(required, ticker=ticker)
-            if invalid_rows:
-                quality_issues.append({
-                    "ticker": ticker, "invalid_rows": invalid_rows, "samples": bad_samples,
-                    "quote_diagnostics": _raw_quote_diagnostics(required),
-                })
-                continue
+            # Only strict numeric consumers require every retained quote to pass
+            # the legacy sanitizer. Quote-aware materialization preserves source
+            # observations and delegates per-bar availability to the shared mask.
+            if source_identity.get("quote_policy", RAW_PRICE_QUOTE_POLICY_STRICT) == RAW_PRICE_QUOTE_POLICY_STRICT:
+                required = _adjusted_control_required_raw_rows(
+                    frame, control_path=control_paths[ticker], ticker=ticker,
+                )
+                invalid_rows, bad_samples = _raw_price_quality_failures(required, ticker=ticker)
+                if invalid_rows:
+                    quality_issues.append({
+                        "ticker": ticker, "invalid_rows": invalid_rows, "samples": bad_samples,
+                        "quote_diagnostics": _raw_quote_diagnostics(required),
+                    })
+                    continue
             volume = pd.to_numeric(frame["Volume"], errors="raise")
             rounded = volume.round()
             if bool((volume == rounded).all()):
@@ -481,10 +496,13 @@ def _load_manifest(path: Path) -> dict[str, object] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def inspect_raw_price_strategy_dataset(project_root: str | Path, *, deep: bool = False) -> dict[str, object]:
+def inspect_raw_price_strategy_dataset(
+    project_root: str | Path, *, deep: bool = False,
+    quote_policy: str = RAW_PRICE_QUOTE_POLICY_STRICT,
+) -> dict[str, object]:
     root = Path(project_root).resolve()
     try:
-        identity, _view, control_dir = _source_identity(root)
+        identity, _view, control_dir = _source_identity(root, quote_policy=quote_policy)
     except FileNotFoundError as exc:
         return {
             "ready": False,
@@ -550,19 +568,20 @@ def inspect_raw_price_strategy_dataset(project_root: str | Path, *, deep: bool =
             control_path = control_paths.get(ticker)
             if control_path is None:
                 raise ValueError(f"raw-price strategy control ticker missing: {ticker}")
-            invalid_rows, bad_samples, quote_diagnostics = _cached_raw_price_quality(
-                str(path.resolve()), str(row["content_sha256"]),
-                int(OHLCV_SANITIZATION_CONTRACT_VERSION), ticker,
-                str(control_path.resolve()),
-                str(identity["control_dataset_inventory_fingerprint"]),
-            )
-            if invalid_rows:
-                quality_issues.append({
-                    "ticker": str(row.get("ticker") or Path(rel).stem),
-                    "invalid_rows": invalid_rows,
-                    "samples": bad_samples,
-                    "quote_diagnostics": quote_diagnostics,
-                })
+            if quote_policy == RAW_PRICE_QUOTE_POLICY_STRICT:
+                invalid_rows, bad_samples, quote_diagnostics = _cached_raw_price_quality(
+                    str(path.resolve()), str(row["content_sha256"]),
+                    int(OHLCV_SANITIZATION_CONTRACT_VERSION), ticker,
+                    str(control_path.resolve()),
+                    str(identity["control_dataset_inventory_fingerprint"]),
+                )
+                if invalid_rows:
+                    quality_issues.append({
+                        "ticker": ticker,
+                        "invalid_rows": invalid_rows,
+                        "samples": bad_samples,
+                        "quote_diagnostics": quote_diagnostics,
+                    })
         _fail_on_raw_price_quality(
             quality_issues, provider=str(identity["provider_snapshot_fingerprint"]),
         )
@@ -586,13 +605,15 @@ def inspect_raw_price_strategy_dataset(project_root: str | Path, *, deep: bool =
     }
 
 
-def ensure_raw_price_strategy_dataset(project_root: str | Path) -> dict[str, object]:
+def ensure_raw_price_strategy_dataset(
+    project_root: str | Path, *, quote_policy: str = RAW_PRICE_QUOTE_POLICY_STRICT,
+) -> dict[str, object]:
     root = Path(project_root).resolve()
-    state = inspect_raw_price_strategy_dataset(root, deep=False)
+    state = inspect_raw_price_strategy_dataset(root, deep=False, quote_policy=quote_policy)
     if bool(state.get("ready")):
-        return inspect_raw_price_strategy_dataset(root, deep=True)
+        return inspect_raw_price_strategy_dataset(root, deep=True, quote_policy=quote_policy)
 
-    identity, view, control_dir = _source_identity(root)
+    identity, view, control_dir = _source_identity(root, quote_policy=quote_policy)
     source_fp = str(identity["source_identity_fingerprint"])
     final_dir = _materialization_dir(root, source_fp)
     if final_dir.exists():
@@ -615,7 +636,7 @@ def ensure_raw_price_strategy_dataset(project_root: str | Path) -> dict[str, obj
         data_identity = {
             "schema_version": RAW_PRICE_STRATEGY_DATASET_SCHEMA_VERSION,
             "dataset_profile": "full",
-            "generation_id": "research_raw_unadjusted_controlled_v2",
+            "generation_id": str(identity["generation_id"]),
             "frozen_cutoff": str(identity["frozen_cutoff"]),
             "price_basis": RAW_PRICE_STRATEGY_PRICE_BASIS,
             "source_dataset": FINMIND_RAW_PRICE_ARCHIVE_DATASET,
@@ -646,12 +667,14 @@ def ensure_raw_price_strategy_dataset(project_root: str | Path) -> dict[str, obj
     except Exception:
         shutil.rmtree(stage_dir, ignore_errors=True)
         raise
-    return inspect_raw_price_strategy_dataset(root, deep=True)
+    return inspect_raw_price_strategy_dataset(root, deep=True, quote_policy=quote_policy)
 
 
 __all__ = [
     "RAW_PRICE_STRATEGY_DATASET_CONTRACT_ID",
     "RAW_PRICE_STRATEGY_PRICE_BASIS",
+    "RAW_PRICE_QUOTE_POLICY_STRICT",
+    "RAW_PRICE_QUOTE_POLICY_OBSERVED",
     "ensure_raw_price_strategy_dataset",
     "inspect_raw_price_strategy_dataset",
     "raw_price_strategy_dataset_source_identity",
