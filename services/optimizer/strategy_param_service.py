@@ -2682,16 +2682,17 @@ def _fixed_multiseed_build_contract(
 
     profile = get_strategy_param_training_profile(training_profile_id)
     seed_protocol = get_strategy_param_fitting_seed_protocol(profile.fitting_seed_protocol)
-    if profile.filter_profile != "full":
-        raise ValueError("fixed multi-seed目前只支援Full strategy parameter training")
-    if profile.parameter_policy != "base-finalists-agree":
-        raise ValueError("fixed multi-seed目前只支援base-finalists-agree")
-    if profile.validation_enabled:
-        raise ValueError("fixed multi-seed baseline不得同時啟用validation")
-    if not seed_protocol.enabled or seed_protocol.seed_count < 2:
-        raise ValueError("fixed multi-seed fitting seed protocol必須啟用且seed_count>=2")
+    if profile.filter_profile not in {"full", "min"}:
+        raise ValueError("registered strategy parameter不支援filter profile")
+    if profile.price_basis != "adjusted" or profile.validation_enabled:
+        raise ValueError("registered strategy parameter必須adjusted且validation關閉")
+    if seed_protocol.enabled:
+        if profile.filter_profile != "full" or profile.parameter_policy != "base-finalists-agree":
+            raise ValueError("fixed multi-seed僅支援Full/base-finalists-agree")
+    elif seed_protocol.seed_count != 1 or profile.parameter_policy != "base-finalist-best":
+        raise ValueError("fixed single-seed僅支援Min/Full base-finalist-best")
     base = _canonical_schedule_build_contract(
-        family="full",
+        family=profile.filter_profile,
         dataset=(profile.dataset if dataset in (None, "") else dataset),
         max_positions=max_positions,
         rotation=rotation,
@@ -2704,7 +2705,9 @@ def _fixed_multiseed_build_contract(
         "optimizer_seed": int(seed_protocol.generator_seed),
         "trials_per_fold": int(seed_protocol.trials_per_seed),
         "parameter_set": str(profile.parameter_set_identity),
-        "optimizer_search_protocol": _FIXED_MULTI_SEED_SEARCH_PROTOCOL,
+        "optimizer_search_protocol": (
+            _FIXED_MULTI_SEED_SEARCH_PROTOCOL if seed_protocol.enabled else "fixed_single_seed_v1"
+        ),
         "training_profile_id": str(profile.profile_id),
         "fitting_seed_protocol": str(seed_protocol.protocol_id),
         "seed_ensemble_policy": seed_policy,
@@ -3005,8 +3008,12 @@ def inspect_fixed_multiseed_strategy_parameter_artifact(
     fixed_risk: float | None = None,
     max_position_cap_pct: float | None = None,
 ) -> dict[str, Any]:
+    from core.strategy_param_policy import get_strategy_param_training_profile
+
     root = Path(project_root).resolve()
     compare_policy = str(policy).strip()
+    if compare_policy != get_strategy_param_training_profile(training_profile_id).parameter_policy:
+        raise ValueError("registered strategy parameter source selector與profile不一致")
     normalized_policy = normalize_strategy_param_policy(compare_policy)
     end_date = str(comparison_end_date or "").strip()
     if not end_date:
@@ -3140,7 +3147,10 @@ def ensure_fixed_multiseed_strategy_parameter_artifact(
     force_rebuild: bool = False,
     resume_parameter_training: bool = True,
 ) -> dict[str, Any]:
-    from services.optimizer.strategy_param_training import prepare_selection_historical_full_roos_params
+    from services.optimizer.strategy_param_training import (
+        prepare_selection_historical_full_roos_params,
+        prepare_selection_historical_p2_params,
+    )
 
     root = Path(project_root).resolve()
     compare_policy = str(policy).strip()
@@ -3181,7 +3191,7 @@ def ensure_fixed_multiseed_strategy_parameter_artifact(
     canonical_work_root = root / _fixed_multiseed_work_relative(training_profile_id)
     work_root = _force_rebuild_attempt_root(canonical_work_root) if force_rebuild else canonical_work_root
     end_date = str(comparison_end_date or "").strip()
-    result = prepare_selection_historical_full_roos_params(
+    common_train = dict(
         project_root=root,
         dataset=str(contract["dataset"]),
         param_policy=compare_policy,
@@ -3198,12 +3208,27 @@ def ensure_fixed_multiseed_strategy_parameter_artifact(
         train_window_months=int(contract["train_window_months"]),
         oos_months=int(contract["oos_horizon_months"]),
         output_relative_dir=work_root,
-        build_context_label=f"{contract['parameter_set']} Fixed Multi-Seed",
+        build_context_label=f"{contract['parameter_set']} Registered Optimizer",
         optimizer_output_title=f"Optimizer {contract['parameter_set']} 工作工件（非production）",
-        optimizer_search_protocol=str(contract["optimizer_search_protocol"]),
-        parameter_set_identity=str(contract["parameter_set"]),
-        seed_ensemble_policy_override=dict(contract["seed_ensemble_policy"]),
     )
+    if str(contract["family"]) == "min":
+        result = prepare_selection_historical_p2_params(
+            **common_train,
+            recover_completed_strategy_compare=False,
+            parameter_set_identity=str(contract["parameter_set"]),
+            seed_ensemble_policy_override=dict(contract["seed_ensemble_policy"]),
+        )
+    else:
+        result = prepare_selection_historical_full_roos_params(
+            **common_train,
+            optimizer_search_protocol=(
+                str(contract["optimizer_search_protocol"])
+                if bool(dict(contract["seed_ensemble_policy"]).get("enabled"))
+                else None
+            ),
+            parameter_set_identity=str(contract["parameter_set"]),
+            seed_ensemble_policy_override=dict(contract["seed_ensemble_policy"]),
+        )
     source = Path(result["params_path"]).resolve()
     _assert_optimizer_work_source(source_path=source, work_root=work_root)
     if not source.is_file():
@@ -3212,6 +3237,19 @@ def ensure_fixed_multiseed_strategy_parameter_artifact(
             + _project_relative(root, source)
         )
     _copy_json_payload(source, target)
+    if not bool(dict(contract["seed_ensemble_policy"]).get("enabled")):
+        single_payload = _load_json_object(target)
+        if single_payload is None:
+            raise RuntimeError("registered single-seed optimizer output JSON invalid")
+        adaptation = dict(single_payload.get("breakout_quality_param_adaptation") or {})
+        adaptation.update({
+            "parameter_set": str(contract["parameter_set"]),
+            "training_dl_enabled": False,
+            "optimizer_search_protocol": str(contract["optimizer_search_protocol"]),
+            "seed_ensemble_policy": dict(contract["seed_ensemble_policy"]),
+        })
+        single_payload["breakout_quality_param_adaptation"] = adaptation
+        _write_json(target, single_payload)
     coverage_end = _canonical_schedule_coverage_end(target)
     if coverage_end is None or str(coverage_end) < end_date:
         raise RuntimeError(
@@ -3234,7 +3272,7 @@ def ensure_fixed_multiseed_strategy_parameter_artifact(
             "producer": "optimizer",
             "training_dl_enabled": False,
             "parameter_set": str(contract["parameter_set"]),
-            "family": "full",
+            "family": str(contract["family"]),
             "policy": compare_policy,
             "optimizer_search_protocol": str(contract["optimizer_search_protocol"]),
             "training_profile_id": str(contract["training_profile_id"]),
@@ -3326,6 +3364,7 @@ def _fixed_multiseed_robustness_build_contract(
 ) -> dict[str, Any]:
     from core.strategy_param_policy import (
         build_replicated_fitting_seed_ensemble_policy,
+        get_strategy_param_fitting_seed_protocol,
         get_strategy_param_training_profile,
     )
 
@@ -3345,16 +3384,28 @@ def _fixed_multiseed_robustness_build_contract(
         fixed_risk=fixed_risk,
         max_position_cap_pct=max_position_cap_pct,
     )
-    replicated_policy = build_replicated_fitting_seed_ensemble_policy(
-        profile.fitting_seed_protocol, replication_seed=replicate
-    )
+    seed_protocol = get_strategy_param_fitting_seed_protocol(profile.fitting_seed_protocol)
+    if seed_protocol.enabled:
+        replicated_policy = build_replicated_fitting_seed_ensemble_policy(
+            profile.fitting_seed_protocol, replication_seed=replicate
+        )
+    else:
+        # The outer robustness seed is the one fitting seed, not an additional
+        # seed bundle.  The base profile remains frozen at Seed42.
+        replicated_policy = seed_protocol.as_seed_ensemble_policy()
+        replicated_policy.update(
+            generator_seed=int(replicate), resolved_seeds=[int(replicate)]
+        )
     return {
         **base,
         "optimizer_seed": int(replicate),
         "seed_ensemble_policy": replicated_policy,
         "benchmark_id": benchmark_name,
         "robustness_replication_seed": int(replicate),
-        "robustness_seed_semantics": "replication_seed_generates_fitting_seed_bundle",
+        "robustness_seed_semantics": (
+            "replication_seed_generates_fitting_seed_bundle" if seed_protocol.enabled
+            else "replication_seed_is_single_fitting_seed"
+        ),
     }
 
 
@@ -3596,7 +3647,10 @@ def ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
         DEFAULT_PORTFOLIO_ROTATION,
     )
     from core.dataset_profiles import DEFAULT_DATASET_PROFILE
-    from services.optimizer.strategy_param_training import prepare_selection_historical_full_roos_params
+    from services.optimizer.strategy_param_training import (
+        prepare_selection_historical_full_roos_params,
+        prepare_selection_historical_p2_params,
+    )
 
     root = Path(project_root).resolve()
     compare_policy = str(policy).strip()
@@ -3666,7 +3720,7 @@ def ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
                 "producer": "optimizer",
                 "training_dl_enabled": False,
                 "parameter_set": str(contract["parameter_set"]),
-                "family": "full",
+                "family": str(contract["family"]),
                 "policy": compare_policy,
                 "optimizer_search_protocol": str(contract["optimizer_search_protocol"]),
                 "training_profile_id": str(contract["training_profile_id"]),
@@ -3703,7 +3757,7 @@ def ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
         / f"replicate_{replicate}"
     )
     work_root = _force_rebuild_attempt_root(canonical_work_root) if force_rebuild else canonical_work_root
-    result = prepare_selection_historical_full_roos_params(
+    common_train = dict(
         project_root=root,
         dataset=str(DEFAULT_DATASET_PROFILE if dataset in (None, "") else dataset),
         param_policy=compare_policy,
@@ -3728,10 +3782,25 @@ def ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
         optimizer_output_title=(
             f"Optimizer {contract['parameter_set']} robustness工作工件（非production）"
         ),
-        optimizer_search_protocol=str(contract["optimizer_search_protocol"]),
-        parameter_set_identity=str(contract["parameter_set"]),
-        seed_ensemble_policy_override=dict(contract["seed_ensemble_policy"]),
     )
+    if str(contract["family"]) == "min":
+        result = prepare_selection_historical_p2_params(
+            **common_train,
+            recover_completed_strategy_compare=False,
+            parameter_set_identity=str(contract["parameter_set"]),
+            seed_ensemble_policy_override=dict(contract["seed_ensemble_policy"]),
+        )
+    else:
+        result = prepare_selection_historical_full_roos_params(
+            **common_train,
+            optimizer_search_protocol=(
+                str(contract["optimizer_search_protocol"])
+                if bool(dict(contract["seed_ensemble_policy"]).get("enabled"))
+                else None
+            ),
+            parameter_set_identity=str(contract["parameter_set"]),
+            seed_ensemble_policy_override=dict(contract["seed_ensemble_policy"]),
+        )
     source = Path(result["params_path"]).resolve()
     _assert_optimizer_work_source(source_path=source, work_root=work_root)
     if not source.is_file():
@@ -3740,6 +3809,19 @@ def ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
             + _project_relative(root, source)
         )
     _copy_json_payload(source, target)
+    if not bool(dict(contract["seed_ensemble_policy"]).get("enabled")):
+        payload = _load_json_object(target)
+        if payload is None:
+            raise RuntimeError("registered single-seed robustness output JSON invalid")
+        adaptation = dict(payload.get("breakout_quality_param_adaptation") or {})
+        adaptation.update({
+            "parameter_set": str(contract["parameter_set"]),
+            "training_dl_enabled": False,
+            "optimizer_search_protocol": str(contract["optimizer_search_protocol"]),
+            "seed_ensemble_policy": dict(contract["seed_ensemble_policy"]),
+        })
+        payload["breakout_quality_param_adaptation"] = adaptation
+        _write_json(target, payload)
     coverage_end = _canonical_schedule_coverage_end(target)
     if coverage_end is None or str(coverage_end) < str(comparison_end_date):
         raise RuntimeError(
@@ -3766,7 +3848,7 @@ def ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
             "producer": "optimizer",
             "training_dl_enabled": False,
             "parameter_set": str(contract["parameter_set"]),
-            "family": "full",
+            "family": str(contract["family"]),
             "policy": compare_policy,
             "optimizer_search_protocol": str(contract["optimizer_search_protocol"]),
             "training_profile_id": str(contract["training_profile_id"]),

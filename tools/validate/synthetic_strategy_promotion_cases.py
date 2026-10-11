@@ -57,18 +57,18 @@ class StrategyPromotionMVPTest(unittest.TestCase):
             [arm["arm_id"] for arm in current_strategy_rules()],
             [arm.arm_id for arm in settings.enabled_arms],
         )
-        self.assertFalse(next(arm for arm in current_strategy_rules() if arm["arm_id"] == "C61")["trading_supported"])
+        self.assertFalse(next(arm for arm in current_strategy_rules() if arm["arm_id"] == "C97")["trading_supported"])
 
     def test_approval_requires_rolling_evidence_and_pins_run(self):
-        approval = approve_current_strategy_rule(self.root, "C95")
+        approval = approve_current_strategy_rule(self.root, "C98")
         self.assertIn("/runs/", approval["evidence_path"])
         self.assertIn("/runs/", approval["manifest_path"])
-        self.assertEqual(get_approved_rule(self.root, "C95")["rule_sha256"], approval["rule_sha256"])
+        self.assertEqual(get_approved_rule(self.root, "C98")["rule_sha256"], approval["rule_sha256"])
         (self.output_root / "latest" / "strategy_comparison.json").write_text("{}", encoding="utf-8")
-        self.assertEqual(get_approved_rule(self.root, "C95")["rule_sha256"], approval["rule_sha256"])
+        self.assertEqual(get_approved_rule(self.root, "C98")["rule_sha256"], approval["rule_sha256"])
         (self.root / approval["evidence_path"]).write_text("{}", encoding="utf-8")
         with self.assertRaises(RuntimeError):
-            get_approved_rule(self.root, "C95")
+            get_approved_rule(self.root, "C98")
 
     def test_research_evidence_rejects_other_arm_manifest_and_tampering(self):
         manifest = self.output_root / "latest" / "manifest.json"
@@ -76,16 +76,16 @@ class StrategyPromotionMVPTest(unittest.TestCase):
         payload["enabled_arms"] = payload["enabled_arms"][:-1]
         manifest.write_text(json.dumps(payload), encoding="utf-8")
         with self.assertRaisesRegex(RuntimeError, "strategy arms differ"):
-            approve_current_strategy_rule(self.root, "C95")
+            approve_current_strategy_rule(self.root, "C98")
         # Restore the exact producer contract before approval.
         settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
         payload["enabled_arms"] = [arm.as_dict() for arm in settings.enabled_arms]
         manifest.write_text(json.dumps(payload), encoding="utf-8")
-        approval = approve_current_strategy_rule(self.root, "C95")
+        approval = approve_current_strategy_rule(self.root, "C98")
         pinned_manifest = self.root / approval["manifest_path"]
         pinned_manifest.write_text("{}", encoding="utf-8")
         with self.assertRaises(RuntimeError):
-            get_approved_rule(self.root, "C95")
+            get_approved_rule(self.root, "C98")
 
     def test_frozen_pending_market_clock_does_not_require_new_scanner(self):
         from services.trading.pending_entry_service import _latest_finalized_date_for_frozen_pending
@@ -95,22 +95,22 @@ class StrategyPromotionMVPTest(unittest.TestCase):
 
     def test_unapproved_and_unsupported_are_not_staged(self):
         with self.assertRaises(RuntimeError):
-            stage_trading_strategy_rule(self.root, "C95")
-        approve_current_strategy_rule(self.root, "C61")
+            stage_trading_strategy_rule(self.root, "C98")
+        approve_current_strategy_rule(self.root, "C97")
         with self.assertRaisesRegex(RuntimeError, "multi-seed"):
-            stage_trading_strategy_rule(self.root, "C61")
+            stage_trading_strategy_rule(self.root, "C97")
         self.assertIsNone(load_trading_release_state(self.root)["pending"])
 
     def test_staged_fitting_is_isolated_until_explicit_activation(self):
-        approve_current_strategy_rule(self.root, "C95")
+        approve_current_strategy_rule(self.root, "C98")
         old_profile = get_trading_strategy_profile(self.root)
         old_path = resolve_trading_selected_strategy_param_path(self.root)
-        staged = stage_trading_strategy_rule(self.root, "C95")
+        staged = stage_trading_strategy_rule(self.root, "C98")
         self.assertEqual(get_trading_strategy_profile(self.root).strategy_param_profile_id, old_profile.strategy_param_profile_id)
         self.assertEqual(resolve_trading_selected_strategy_param_path(self.root), old_path)
         plan = build_trading_strategy_param_training_plan(self.root)
         from core.strategy_promotion import current_strategy_rule
-        selected_arm = current_strategy_rule("C95")
+        selected_arm = current_strategy_rule("C98")
         self.assertEqual(plan["strategy_param_profile_id"], selected_arm["training_profile_id"])
         self.assertEqual(plan["parameter_set_identity"], selected_arm["parameter_set_identity"])
         self.assertEqual(plan["optimizer_seed_mode"], "random_n_each_training_run")
@@ -131,8 +131,8 @@ class StrategyPromotionMVPTest(unittest.TestCase):
         with patch("services.trading.strategy_promotion.load_trading_strategy_param_binding", return_value=binding), \
              patch("services.trading.strategy_promotion.get_trading_strategy_param_binding_sha256", return_value="synthetic-binding-sha"):
             activated = activate_staged_trading_release(self.root)
-            self.assertEqual(activated["arm_id"], "C95")
-            self.assertEqual(get_trading_strategy_profile(self.root).parameter_set_identity, "PARAM-P14")
+            self.assertEqual(activated["arm_id"], "C98")
+            self.assertEqual(get_trading_strategy_profile(self.root).parameter_set_identity, "PARAM-P15")
             self.assertEqual(resolve_trading_selected_strategy_param_path(self.root), str(selected))
             self.assertIsNone(load_trading_release_state(self.root)["pending"])
             self.assertEqual(assert_active_trading_release_ready(self.root)["release_id"], staged["release_id"])
@@ -143,8 +143,8 @@ class StrategyPromotionMVPTest(unittest.TestCase):
     def test_canonical_optimizer_receives_stage_namespace_without_fixed_seed(self):
         """No production optimizer execution; verifies the real producer call boundary."""
         from services.trading.strategy_param_training import run_trading_strategy_param_training
-        approve_current_strategy_rule(self.root, "C95")
-        pending = stage_trading_strategy_rule(self.root, "C95")
+        approve_current_strategy_rule(self.root, "C98")
+        pending = stage_trading_strategy_rule(self.root, "C98")
         plan = build_trading_strategy_param_training_plan(self.root)
         observed = {}
 
@@ -177,15 +177,15 @@ class StrategyPromotionMVPTest(unittest.TestCase):
              patch("services.trading.strategy_param_training.publish_trading_strategy_param_binding", side_effect=binding_publisher):
             result = run_trading_strategy_param_training(project_root=self.root)
         from core.strategy_promotion import current_strategy_rule
-        self.assertEqual(result["strategy_param_profile_id"], current_strategy_rule("C95")["training_profile_id"])
+        self.assertEqual(result["strategy_param_profile_id"], current_strategy_rule("C98")["training_profile_id"])
         self.assertEqual(result["optimizer_resolved_seeds"], [3, 5, 7, 11])
         self.assertIn(pending["release_id"], observed["output_dir"])
         self.assertIsNone(load_trading_release_state(self.root)["active"])
         self.assertEqual(get_trading_strategy_profile(self.root).parameter_set_identity, "PARAM-P6")
 
     def test_no_failed_activation_can_overwrite_active_release(self):
-        approve_current_strategy_rule(self.root, "C95")
-        stage = stage_trading_strategy_rule(self.root, "C95")
+        approve_current_strategy_rule(self.root, "C98")
+        stage = stage_trading_strategy_rule(self.root, "C98")
         with self.assertRaises(RuntimeError):
             activate_staged_trading_release(self.root)
         state = load_trading_release_state(self.root)

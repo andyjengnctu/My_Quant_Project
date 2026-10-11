@@ -3432,9 +3432,12 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         from services.research.strategy_compare_preparation_status import (
             _collect_parameter_artifact_status,
         )
+        historical_p6_compare = get_strategy_comparison_settings(
+            "non_dl_production_multiseed_oos"
+        )
         legacy_source_id = next(
             source_id
-            for source_id, source in current_oos_settings.parameter_sources.items()
+            for source_id, source in historical_p6_compare.parameter_sources.items()
             if source.builder is not None
             and source.builder.builder_type == "optimizer_fixed_multiseed_strategy_params"
             and str(dict(source.builder.options).get("training_profile_id") or "")
@@ -3443,7 +3446,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         legacy_actions = []
         legacy_rows, _legacy_paths, _legacy_arm_paths = _collect_parameter_artifact_status(
             root=legacy_root,
-            settings=current_oos_settings,
+            settings=historical_p6_compare,
             required_param_sources={legacy_source_id},
             comparison_start="2021-01-01",
             comparison_end="2021-12-31",
@@ -4436,7 +4439,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     check(
         "strategy_compare_non_validation_canonical_arms_resolve_registered_profiles",
         True,
-        bool(canonical_profile_rows)
+        bool(canonical_profile_rows or fixed_multiseed_profile_rows)
         and all(
             profile is not None
             and not profile.validation_enabled
@@ -4444,6 +4447,12 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             and profile.filter_profile == str(source.canonical_family)
             and profile.parameter_policy == str(arm.param_policy)
             for arm, source, profile in canonical_profile_rows
+        )
+        and all(
+            profile.registered_scientific_fingerprint_sha256 is not None
+            and not profile.validation_enabled
+            and profile.parameter_policy == str(arm.param_policy)
+            for arm, profile in fixed_multiseed_profile_rows
         ),
     )
     registered_fixed_multiseed_profiles = tuple(
@@ -4519,41 +4528,78 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     # bound to their archived profile and are not silently removed.
     current_arm_ids = tuple(arm.arm_id for arm in current_compare_settings.enabled_arms)
     current_contrast_ids = tuple(contrast.contrast_id for contrast in current_compare_settings.enabled_contrasts)
-    corrected_arm = current_compare_settings.arms["C95"]
-    corrected_source = current_compare_settings.parameter_sources[corrected_arm.param_source]
+    # The historical C95/P14 matrix remains registered and immutable.  The
+    # current broker-cash matrix is a fresh scientific treatment with three
+    # independently registered parameter producers.
+    legacy_oos = get_strategy_comparison_settings("non_dl_c85_same_signal_revalidation_oos")
+    legacy_rolling = get_strategy_comparison_settings("non_dl_c85_same_signal_revalidation_rolling")
+    corrected_arm = legacy_oos.arms["C95"]
+    corrected_source = legacy_oos.parameter_sources[corrected_arm.param_source]
     corrected_profile_id = str(dict(corrected_source.builder.options).get("training_profile_id") or "")
     from core.strategy_param_scientific_contract import build_strategy_param_scientific_contract
     from core.portfolio_ensemble import get_ensemble_candidate_consensus_contract
     corrected_profile = get_strategy_param_training_profile(corrected_profile_id)
     corrected_science = build_strategy_param_scientific_contract(project_root, corrected_profile_id)
     historical_science = build_strategy_param_scientific_contract(project_root, "production_multiseed_current")
+    expected_new = {
+        "C96": ("broker_cash_min_best_seed42_current", "PARAM-P16", "min", "base-finalist-best"),
+        "C97": ("broker_cash_full_best_seed42_current", "PARAM-P17", "full", "base-finalist-best"),
+        "C98": ("c85_same_signal_broker_cash_current", "PARAM-P15", "full", "base-finalists-agree"),
+    }
+    registered_broker_cash_rows = []
+    physical_paths = []
+    from services.optimizer.strategy_param_service import (
+        fixed_multiseed_strategy_param_artifact_path,
+    )
+    for arm_id, (profile_id, param_id, family, policy) in expected_new.items():
+        arm = current_compare_settings.arms[arm_id]
+        source = current_compare_settings.parameter_sources[arm.param_source]
+        profile = get_strategy_param_training_profile(profile_id)
+        identity = build_registered_strategy_param_scientific_identity(project_root, profile_id)
+        oos_source = current_oos_settings.parameter_sources[current_oos_settings.arms[arm_id].param_source]
+        rolling_source = current_rolling_settings.parameter_sources[current_rolling_settings.arms[arm_id].param_source]
+        physical = fixed_multiseed_strategy_param_artifact_path(
+            project_root, training_profile_id=profile_id, policy=policy
+        )
+        physical_paths.append(physical)
+        registered_broker_cash_rows.append(
+            arm.param_policy == policy
+            and source.builder is not None
+            and source.builder.builder_type == "optimizer_fixed_multiseed_strategy_params"
+            and str(dict(source.builder.options).get("training_profile_id")) == profile_id
+            and profile.parameter_set_identity == param_id
+            and profile.filter_profile == family
+            and profile.fee_accounting_policy == "broker_cash_v1"
+            and profile.price_basis == "adjusted"
+            and not profile.validation_enabled
+            and identity["registration_matches"] is True
+            and oos_source.path_template == rolling_source.path_template
+            and oos_source.identity_manifest_path == rolling_source.identity_manifest_path
+            and oos_source.consumption_evaluation_mode == "oos"
+            and rolling_source.consumption_evaluation_mode == "rolling"
+            and profile.artifact_slug in oos_source.path_template
+        )
     check(
-        "strategy_compare_current_suite_is_new_identity_and_excludes_legacy_c85",
+        "strategy_compare_current_suite_is_independent_broker_cash_three_arm_identity",
         True,
-        current_arm_ids == ("C58", "C61", "C95")
-        and set(current_contrast_ids) == {"C95-C61", "C95-C58"}
+        current_arm_ids == ("C96", "C97", "C98")
+        and set(current_contrast_ids) == {"C97-C96", "C98-C97", "C98-C96"}
         and current_oos_settings.suite_id == current_rolling_settings.suite_id
+        and current_oos_settings.suite_id == "non_dl_broker_cash_v1"
         and "C85" not in current_arm_ids
-        and corrected_arm.data_source == "canonical"
-        and corrected_source.builder.builder_type == "optimizer_fixed_multiseed_strategy_params"
-        # The current comparison suite stays frozen at C95/P14; the newly
-        # authorized broker-cash Research fitting has a distinct P15 identity.
-        and corrected_profile_id == "c85_same_signal_revalidation_current"
-        and active_param_profile.profile_id == "c85_same_signal_broker_cash_current"
-        and active_param_profile.fee_accounting_policy == "broker_cash_v1"
-        and active_param_profile.price_basis == "adjusted"
-        and active_param_profile.filter_profile == "full"
-        and active_param_profile.parameter_policy == "base-finalists-agree"
-        and not active_param_profile.validation_enabled
+        and "C95" not in current_arm_ids
+        and len(set(physical_paths)) == 3
+        and all(registered_broker_cash_rows)
         and not current_validation_parameter_sets
-        and current_fixed_multiseed_profiles == {corrected_profile_id}
-        and "optimizer_raw_price_strategy_params" not in current_builder_types
-        and "optimizer_validation_budget_refit_strategy_params" not in current_builder_types,
+        and current_fixed_multiseed_profiles == {value[0] for value in expected_new.values()}
+        and current_builder_types == {"optimizer_fixed_multiseed_strategy_params"},
     )
     check(
-        "strategy_compare_corrected_c85_scientific_identity_is_registered_and_separate_from_p6",
+        "strategy_compare_historical_c95_scientific_identity_remains_immutable",
         True,
-        corrected_profile.parameter_set_identity == "PARAM-P14"
+        tuple(arm.arm_id for arm in legacy_oos.enabled_arms) == ("C58", "C61", "C95")
+        and legacy_oos.suite_id == legacy_rolling.suite_id
+        and corrected_profile.parameter_set_identity == "PARAM-P14"
         and active_param_profile.parameter_set_identity == "PARAM-P15"
         and corrected_science["scientific_fingerprint_sha256"]
             == corrected_profile.registered_scientific_fingerprint_sha256
@@ -4564,14 +4610,10 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and corrected_science["scientific_contract"].get("candidate_consensus")
             == get_ensemble_candidate_consensus_contract(),
     )
-    oos_corrected_source = current_oos_settings.parameter_sources[
-        current_oos_settings.arms["C95"].param_source
-    ]
-    rolling_corrected_source = current_rolling_settings.parameter_sources[
-        current_rolling_settings.arms["C95"].param_source
-    ]
+    oos_corrected_source = legacy_oos.parameter_sources[legacy_oos.arms["C95"].param_source]
+    rolling_corrected_source = legacy_rolling.parameter_sources[legacy_rolling.arms["C95"].param_source]
     check(
-        "strategy_compare_corrected_c85_oos_and_rolling_share_one_physical_param_truth",
+        "strategy_compare_historical_c95_oos_and_rolling_share_original_param_truth",
         True,
         oos_corrected_source.path_template == rolling_corrected_source.path_template
         and oos_corrected_source.identity_manifest_path
@@ -4580,8 +4622,114 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and "param_p6" not in oos_corrected_source.path_template.lower()
         and oos_corrected_source.consumption_evaluation_mode == "oos"
         and rolling_corrected_source.consumption_evaluation_mode == "rolling"
-        and current_oos_settings.output_root != current_rolling_settings.output_root,
+        and legacy_oos.output_root != legacy_rolling.output_root,
     )
+    # Registered broker-cash producer integration: no full market data is used
+    # here.  Stub only the expensive canonical Optimizer, and exercise the real
+    # Min/Full publisher, manifest, required identity and REUSE validator.
+    from services.optimizer import strategy_param_training as registered_training
+    from services.optimizer.strategy_param_service import (
+        ensure_fixed_multiseed_strategy_parameter_artifact,
+        ensure_fixed_multiseed_robustness_strategy_parameter_artifact,
+        inspect_fixed_multiseed_strategy_parameter_artifact,
+        inspect_fixed_multiseed_robustness_strategy_parameter_artifact,
+    )
+    def _stub_registered_optimizer(**kwargs):
+        output = Path(kwargs["output_relative_dir"]) / "active_params" / "synthetic.json"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        seed_policy = dict(kwargs.get("seed_ensemble_policy_override") or {})
+        members = [
+            {"seed": int(seed), "member_index": index + 1,
+             "params": {"high_len": 260, "atr_len": 23}}
+            for index, seed in enumerate(seed_policy.get("resolved_seeds") or [kwargs["optimizer_seed"]])
+        ]
+        output.write_text(json.dumps({
+            "type": "active_param_ensemble", "mode": "rolling",
+            "selector": str(kwargs["param_policy"]).replace("-", "_"),
+            "summary": {"oos_end_date": "2026-03-02"},
+            "params_ensemble_by_effective_date": {"2021-01-01": members},
+            "breakout_quality_param_adaptation": {
+                "parameter_set": str(kwargs["parameter_set_identity"]),
+                "training_dl_enabled": False,
+                "optimizer_search_protocol": str(
+                    kwargs.get("optimizer_search_protocol") or "fixed_single_seed_v1"
+                ),
+                "seed_ensemble_policy": seed_policy,
+            },
+        }), encoding="utf-8")
+        return {"params_path": str(output)}
+
+    with TemporaryDirectory() as broker_tmp:
+        with patch.object(registered_training, "prepare_selection_historical_p2_params",
+                          side_effect=_stub_registered_optimizer) as min_producer, \
+             patch.object(registered_training, "prepare_selection_historical_full_roos_params",
+                          side_effect=_stub_registered_optimizer) as full_producer:
+            for arm_id, (profile_id, _param_id, family, policy) in expected_new.items():
+                kwargs = {
+                    "training_profile_id": profile_id,
+                    "policy": policy,
+                    "comparison_end_date": "2026-03-02",
+                }
+                first = ensure_fixed_multiseed_strategy_parameter_artifact(broker_tmp, **kwargs)
+                ready = inspect_fixed_multiseed_strategy_parameter_artifact(broker_tmp, **kwargs)
+                second = ensure_fixed_multiseed_strategy_parameter_artifact(broker_tmp, **kwargs)
+                check(
+                    f"broker_cash_registered_optimizer_build_then_exact_reuse_{arm_id}",
+                    True,
+                    first["action"] == "BUILD" and ready["ready"]
+                    and second["action"] == "REUSE"
+                    and first["path"] == second["path"]
+                    and Path(first["manifest_path"]).is_file(),
+                )
+                benchmark_kwargs = {
+                    **kwargs, "benchmark_id": str(benchmark_snapshot["benchmark_id"]),
+                    "replication_seed": int(benchmark_snapshot["resolved_seeds"][0]),
+                }
+                benchmark_first = ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
+                    broker_tmp, **benchmark_kwargs,
+                )
+                benchmark_state = inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
+                    broker_tmp, **benchmark_kwargs,
+                )
+                benchmark_second = ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
+                    broker_tmp, **benchmark_kwargs,
+                )
+                seed_contract = dict(benchmark_first["build_contract"]["seed_ensemble_policy"])
+                check(
+                    f"broker_cash_registered_robustness_seed_uses_right_producer_{arm_id}",
+                    True,
+                    benchmark_first["action"] == "BUILD"
+                    and benchmark_state["ready"]
+                    and benchmark_second["action"] == "REUSE"
+                    and len(seed_contract["resolved_seeds"]) == (4 if arm_id == "C98" else 1)
+                    and (family != "min" or "param_p16" in str(benchmark_first["path"])),
+                )
+            check("broker_cash_min_uses_only_min_optimizer", 2, min_producer.call_count)
+            check("broker_cash_full_and_agree_use_only_full_optimizer", 4, full_producer.call_count)
+            # A copied historical-policy artifact must not become a new
+            # broker-cash result merely because the file is in P16's directory.
+            p16_kwargs = {
+                "training_profile_id": expected_new["C96"][0],
+                "policy": expected_new["C96"][3],
+                "comparison_end_date": "2026-03-02",
+            }
+            p16_target = Path(inspect_fixed_multiseed_strategy_parameter_artifact(
+                broker_tmp, **p16_kwargs,
+            )["path"])
+            p16_payload = json.loads(p16_target.read_text(encoding="utf-8"))
+            p16_payload["breakout_quality_param_adaptation"]["parameter_set"] = "PARAM-P2"
+            p16_target.write_text(json.dumps(p16_payload), encoding="utf-8")
+            tampered_p16 = inspect_fixed_multiseed_strategy_parameter_artifact(
+                broker_tmp, **p16_kwargs,
+            )
+            check(
+                "broker_cash_min_rejects_legacy_parameter_set_even_under_new_artifact_path",
+                True,
+                not tampered_p16["ready"]
+                and tampered_p16["action"] != "REUSE"
+                and tampered_p16["status"] == "PARAMETER_SET_MISMATCH",
+            )
+
     # A legacy P6-shaped payload physically copied into the new P14 namespace
     # may exist after a manual migration.  The producer must never REUSE it as
     # corrected C95 params, even if the file exists at the new target path.

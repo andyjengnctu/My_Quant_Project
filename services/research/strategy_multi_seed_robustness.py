@@ -601,7 +601,16 @@ def _robustness_arm_seed_pairing_semantics(
         "" if source.builder is None else str(source.builder.builder_type or "").strip()
     )
     if builder_type == "optimizer_fixed_multiseed_strategy_params":
-        return "outer_replication_seed_with_arm_specific_fitting_seed_bundle"
+        options = {} if source.builder is None else dict(source.builder.options or {})
+        training_profile_id = str(options.get("training_profile_id") or "").strip()
+        if not training_profile_id:
+            raise ValueError(
+                f"registered benchmark source缺少training_profile_id: {arm.arm_id}/{arm.param_source}"
+            )
+        profile = get_strategy_param_training_profile(training_profile_id)
+        protocol = get_strategy_param_fitting_seed_protocol(profile.fitting_seed_protocol)
+        if protocol.enabled:
+            return "outer_replication_seed_with_arm_specific_fitting_seed_bundle"
     if builder_type == "optimizer_raw_price_strategy_params":
         options = {} if source.builder is None else dict(source.builder.options or {})
         training_profile_id = str(options.get("training_profile_id") or "").strip()
@@ -683,7 +692,7 @@ def _benchmark_param_binding(
         fitting_seed_count = 1
         fitting_trials_per_seed = 0
     elif builder_type == "optimizer_fixed_multiseed_strategy_params":
-        family = "full"
+        family = "full"  # Resolved below from the registered training profile.
         mode = str(source.consumption_evaluation_mode or "rolling").strip()
         options = {} if source.builder is None else dict(source.builder.options or {})
         training_profile_id = str(options.get("training_profile_id") or "").strip()
@@ -704,10 +713,13 @@ def _benchmark_param_binding(
             benchmark_id=str(robustness.benchmark_id),
             replication_seed=int(seed),
         )
-        producer_variant = "fixed_multiseed_v1"
         training_profile = get_strategy_param_training_profile(training_profile_id)
         fitting_seed_protocol = get_strategy_param_fitting_seed_protocol(
             training_profile.fitting_seed_protocol
+        )
+        family = str(training_profile.filter_profile)
+        producer_variant = (
+            "fixed_multiseed_v1" if fitting_seed_protocol.enabled else "fixed_single_seed_v1"
         )
         fitting_seed_count = int(fitting_seed_protocol.seed_count)
         fitting_trials_per_seed = int(fitting_seed_protocol.trials_per_seed)
@@ -793,7 +805,7 @@ def _inspect_benchmark_strategy_parameter_binding(
             fixed_risk=float(DEFAULT_FIXED_RISK),
             max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
         )
-    if str(binding["producer_variant"]) == "fixed_multiseed_v1":
+    if str(binding["producer_variant"]) in {"fixed_multiseed_v1", "fixed_single_seed_v1"}:
         return inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
             PROJECT_ROOT,
             training_profile_id=str(binding["training_profile_id"]),
@@ -1039,7 +1051,7 @@ def _ensure_benchmark_strategy_parameter_binding(
             resume_parameter_training=True,
             quiet=False,
         )
-    elif str(binding["producer_variant"]) == "fixed_multiseed_v1":
+    elif str(binding["producer_variant"]) in {"fixed_multiseed_v1", "fixed_single_seed_v1"}:
         result = ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
             PROJECT_ROOT,
             training_profile_id=str(binding["training_profile_id"]),

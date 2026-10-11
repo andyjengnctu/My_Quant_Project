@@ -974,6 +974,10 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
                 timing_mode=False,
                 paramset_models_dir=str(active_param_dir.resolve()),
                 canonical_strategy_param_family=(canonical_family if canonical_current else None),
+                seed_ensemble_policy_override=(
+                    None if getattr(args, "seed_ensemble_policy_override", None) is None
+                    else dict(args.seed_ensemble_policy_override)
+                ),
                 output_files_title=str(
                     getattr(args, "optimizer_output_title", "💾 輸出檔案")
                     or "💾 輸出檔案"
@@ -1245,6 +1249,8 @@ def prepare_selection_historical_p2_params(
     output_relative_dir: str | Path | None = None,
     build_context_label: str = "Selection",
     optimizer_output_title: str = "💾 輸出檔案",
+    parameter_set_identity: str | None = None,
+    seed_ensemble_policy_override: dict | None = None,
 ):
     """Build/reuse Selection Min ROOS with one canonical rolling optimization.
 
@@ -1315,6 +1321,10 @@ def prepare_selection_historical_p2_params(
         resume_parameter_training=bool(resume_parameter_training),
         quiet=bool(quiet),
         optimizer_output_title=str(optimizer_output_title),
+        parameter_set_identity=str(parameter_set_identity or "P2_HISTORY"),
+        seed_ensemble_policy_override=(
+            None if seed_ensemble_policy_override is None else dict(seed_ensemble_policy_override)
+        ),
     )
     settings = SimpleNamespace(seed=int(optimizer_seed))
     if not quiet:
@@ -1339,7 +1349,7 @@ def prepare_selection_historical_p2_params(
         baseline_contract=schedule_contract,
         model_artifact=None,
         output_dir=resolved_output_dir,
-        arm_id="P2_HISTORY",
+        arm_id=(str(parameter_set_identity) if parameter_set_identity else "P2_HISTORY"),
         training_dl_enabled=False,
         binary_pit=None,
     )

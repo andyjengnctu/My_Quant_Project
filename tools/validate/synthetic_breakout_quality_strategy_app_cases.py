@@ -942,6 +942,25 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             str(dict(robust_settings.parameter_sources[str(robust_settings.arms[arm_id].param_source)].builder.options).get("training_profile_id") or "")
             for arm_id in raw_price_arm_ids
         }
+        from core.strategy_param_policy import (
+            get_strategy_param_fitting_seed_protocol,
+            get_strategy_param_training_profile,
+        )
+        fixed_profile_variants = {
+            str(profile_id): (
+                "fixed_multiseed_v1"
+                if get_strategy_param_fitting_seed_protocol(
+                    get_strategy_param_training_profile(str(profile_id)).fitting_seed_protocol
+                ).enabled else "fixed_single_seed_v1"
+            )
+            for arm_id in fixed_multiseed_arm_ids
+            for profile_id in (
+                dict(robust_settings.parameter_sources[
+                    str(robust_settings.arms[arm_id].param_source)
+                ].builder.options).get("training_profile_id"),
+            )
+            if profile_id
+        }
         reusable = {
             (arm_id, int(seed)): {"source_run_root": Path("synthetic_registered_run")}
             for arm_id in canonical_reuse_arm_ids
@@ -981,9 +1000,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             == len(parameter_dependency_rows)
             and all(
                 (
-                    "replicate=" in str(row[1])
-                    and "fixed_multiseed_v1" in str(row[1])
-                    and ":profile=" in str(row[1])
+                    any(
+                        ("replicate=" if variant == "fixed_multiseed_v1" else "seed=")
+                            in str(row[1])
+                        and f":{variant}:" in str(row[1])
+                        and f":profile={profile_id}" in str(row[1])
+                        for profile_id, variant in fixed_profile_variants.items()
+                    )
                 )
                 or (
                     ":seed=" in str(row[1])

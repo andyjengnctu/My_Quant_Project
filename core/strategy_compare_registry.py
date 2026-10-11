@@ -118,6 +118,15 @@ STRATEGY_COMPARE_SUITE_INVARIANTS = {
 }
 
 STRATEGY_COMPARE_SUITES = {
+    "non_dl_broker_cash_v1": {
+        "arm_ids": ("C96", "C97", "C98"),
+        "contrast_ids": ("C97-C96", "C98-C97", "C98-C96"),
+        "display_name_bases": {
+            "C96": "Min Base-Finalist-Best / Broker-Cash",
+            "C97": "Full Base-Finalist-Best / Broker-Cash",
+            "C98": "Full Corrected Same-Signal Agree 4x300 / Broker-Cash",
+        },
+    },
     "non_dl_c85_same_signal_revalidation_v1": {
         "arm_ids": ("C58", "C61", "C95"),
         "contrast_ids": ("C95-C61", "C95-C58"),
@@ -670,6 +679,48 @@ STRATEGY_COMPARE_PROFILES = {
             "C58": "min_rolling",
         },
     },
+    "non_dl_broker_cash_oos": {
+        "label": "No-DL Broker-Cash | OOS Test",
+        "description": "C96/P16, C97/P17, C98/P15 all share broker_cash_v1, adjusted prices and PIT schedule.",
+        "display_alignment_group": "non_dl_broker_cash_v1",
+        "suite_id": "non_dl_broker_cash_v1",
+        "display_suffix": "OOS",
+        "start_date": "2021-01-01", "end_date": "2026-03-02",
+        "point_in_time_score_start_date": _ROLLING_OOS.score_start_date,
+        "point_in_time_score_end_date": _ROLLING_OOS.score_end_date,
+        "point_in_time_fold_months": int(_ROLLING_OOS.fold_months),
+        "point_in_time_fold_anchor_date": _ROLLING_OOS.fold_anchor_date,
+        "point_in_time_single_score_block": bool(_ROLLING_OOS.single_score_block),
+        "point_in_time_dirname": _ROLLING_OOS.point_in_time_dirname,
+        "output_root": "outputs/strategy_compare/non_dl_broker_cash/oos_2021_forward",
+        "reuse_output_roots": (),
+        "arm_param_source_overrides": {
+            "C96": "min_best_broker_cash_oos_experiment",
+            "C97": "full_best_broker_cash_oos_experiment",
+            "C98": "full_agree_broker_cash_oos_experiment",
+        },
+    },
+    "non_dl_broker_cash_rolling": {
+        "label": "No-DL Broker-Cash | Rolling Test",
+        "description": "C96/P16, C97/P17, C98/P15 all share broker_cash_v1, adjusted prices and PIT schedule.",
+        "display_alignment_group": "non_dl_broker_cash_v1",
+        "suite_id": "non_dl_broker_cash_v1",
+        "display_suffix": "Rolling",
+        "start_date": "2021-01-01", "end_date": "2026-03-02",
+        "point_in_time_score_start_date": _ROLLING_ROLLING.score_start_date,
+        "point_in_time_score_end_date": _ROLLING_ROLLING.score_end_date,
+        "point_in_time_fold_months": int(_ROLLING_ROLLING.fold_months),
+        "point_in_time_fold_anchor_date": _ROLLING_ROLLING.fold_anchor_date,
+        "point_in_time_single_score_block": bool(_ROLLING_ROLLING.single_score_block),
+        "point_in_time_dirname": _ROLLING_ROLLING.point_in_time_dirname,
+        "output_root": "outputs/strategy_compare/non_dl_broker_cash/rolling_2021_forward",
+        "reuse_output_roots": (),
+        "arm_param_source_overrides": {
+            "C96": "min_best_broker_cash_rolling_experiment",
+            "C97": "full_best_broker_cash_rolling_experiment",
+            "C98": "full_agree_broker_cash_rolling_experiment",
+        },
+    },
     "non_dl_c85_same_signal_revalidation_oos": {
         "label": "Corrected C85 Revalidation | OOS Test",
         "description": (
@@ -882,6 +933,57 @@ STRATEGY_COMPARE_PROFILES = {
 # Historical robustness profiles保留顯式membership供artifact compatibility；orchestration不得改動
 # 單次Strategy Compare arm identity/fingerprint。
 STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
+    "non_dl_broker_cash_oos": {
+        "label": "No-DL Broker-Cash Robustness | OOS Test",
+        "enabled": True, "profile_id": "non_dl_broker_cash_oos",
+        "suite_id": "non_dl_broker_cash_v1",
+        "benchmark_id": ROBUSTNESS_BENCHMARK_ID,
+        "seed_count": ROBUSTNESS_BENCHMARK_SEED_COUNT,
+        "seed_generator_seed": ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED,
+        "gpu_train_workers": STRATEGY_COMPARE_GPU_TRAIN_WORKERS,
+        "cpu_replay_workers": STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
+        "reuse_completed": STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED,
+        "console_mode": STRATEGY_COMPARE_ROBUSTNESS_CONSOLE_MODE,
+        "progress_interval_seconds": STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS,
+        "yearly_report": STRATEGY_COMPARE_ROBUSTNESS_YEARLY_REPORT,
+        "keep_checkpoints": STRATEGY_COMPARE_ROBUSTNESS_KEEP_CHECKPOINTS,
+        "keep_scores": STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES,
+        "keep_replay_details": STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS,
+        "keep_attribution_source": STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE,
+        "romd_reference_baselines": {
+            "min": {"param_source": "min_best_broker_cash_oos_experiment", "param_policy": "base-finalist-best", "rule_policy": "all_off"},
+            "full": {"param_source": "full_best_broker_cash_oos_experiment", "param_policy": "base-finalist-best", "rule_policy": "formal"},
+        },
+        "output_root": "outputs/strategy_compare/robustness/non_dl_broker_cash/oos_2021_forward",
+        "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/non_dl_broker_cash/oos_2021_forward",
+        "checkpoint_cache_root": STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT,
+    },
+    "non_dl_broker_cash_rolling": {
+        "label": "No-DL Broker-Cash Robustness | Rolling Test",
+        "enabled": True, "profile_id": "non_dl_broker_cash_rolling",
+        "suite_id": "non_dl_broker_cash_v1",
+        "benchmark_id": ROBUSTNESS_BENCHMARK_ID,
+        "seed_count": ROBUSTNESS_BENCHMARK_SEED_COUNT,
+        "seed_generator_seed": ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED,
+        "gpu_train_workers": STRATEGY_COMPARE_GPU_TRAIN_WORKERS,
+        "cpu_replay_workers": STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
+        "reuse_completed": STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED,
+        "console_mode": STRATEGY_COMPARE_ROBUSTNESS_CONSOLE_MODE,
+        "progress_interval_seconds": STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS,
+        "yearly_report": STRATEGY_COMPARE_ROBUSTNESS_YEARLY_REPORT,
+        "keep_checkpoints": STRATEGY_COMPARE_ROBUSTNESS_KEEP_CHECKPOINTS,
+        "keep_scores": STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES,
+        "keep_replay_details": STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS,
+        "keep_attribution_source": STRATEGY_COMPARE_ROBUSTNESS_KEEP_ATTRIBUTION_SOURCE,
+        "romd_reference_baselines": {
+            "min": {"param_source": "min_best_broker_cash_rolling_experiment", "param_policy": "base-finalist-best", "rule_policy": "all_off"},
+            "full": {"param_source": "full_best_broker_cash_rolling_experiment", "param_policy": "base-finalist-best", "rule_policy": "formal"},
+        },
+        "output_root": "outputs/strategy_compare/robustness/non_dl_broker_cash/rolling_2021_forward",
+        "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/non_dl_broker_cash/rolling_2021_forward",
+        "checkpoint_cache_root": STRATEGY_COMPARE_FITTING_CHECKPOINT_CACHE_ROOT,
+    },
+
     "non_dl_validation_budget_oos": {
         "label": "Non-DL Validation-Budget Multi-seed Robustness | OOS Test",
         "enabled": True,
@@ -1252,6 +1354,87 @@ STRATEGY_PARAM_SOURCES = {
 # not expand the production/current menu contract. The resolver merges them for
 # profiles that explicitly opt in.
 STRATEGY_EXPERIMENTAL_PARAM_SOURCES = {
+    # New scientific fee treatment uses one physical parameter truth for OOS/Rolling.
+    # Compatibility builder name also accepts registered single-seed profiles;
+    # the Optimizer is still the sole producer and validates profile capability.
+    "min_best_broker_cash_oos_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p16_min_best_broker_cash/{param_filename}",
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p16_min_best_broker_cash/identity_manifest.json",
+        "description": "PARAM-P16 registered broker-cash parameter truth; oos consumer.",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "oos",
+        "artifact_contract": {"breakout_quality_param_adaptation": {
+            "parameter_set": "PARAM-P16", "training_dl_enabled": False,
+            "optimizer_search_protocol": "fixed_single_seed_v1",
+        }},
+        "builder": {"enabled": True, "builder_type": "optimizer_fixed_multiseed_strategy_params",
+                    "options": {"training_profile_id": "broker_cash_min_best_seed42_current"}},
+    },
+    "min_best_broker_cash_rolling_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p16_min_best_broker_cash/{param_filename}",
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p16_min_best_broker_cash/identity_manifest.json",
+        "description": "PARAM-P16 registered broker-cash parameter truth; rolling consumer.",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "rolling",
+        "artifact_contract": {"breakout_quality_param_adaptation": {
+            "parameter_set": "PARAM-P16", "training_dl_enabled": False,
+            "optimizer_search_protocol": "fixed_single_seed_v1",
+        }},
+        "builder": {"enabled": True, "builder_type": "optimizer_fixed_multiseed_strategy_params",
+                    "options": {"training_profile_id": "broker_cash_min_best_seed42_current"}},
+    },
+    "full_best_broker_cash_oos_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p17_full_best_broker_cash/{param_filename}",
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p17_full_best_broker_cash/identity_manifest.json",
+        "description": "PARAM-P17 registered broker-cash parameter truth; oos consumer.",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "oos",
+        "artifact_contract": {"breakout_quality_param_adaptation": {
+            "parameter_set": "PARAM-P17", "training_dl_enabled": False,
+            "optimizer_search_protocol": "fixed_single_seed_v1",
+        }},
+        "builder": {"enabled": True, "builder_type": "optimizer_fixed_multiseed_strategy_params",
+                    "options": {"training_profile_id": "broker_cash_full_best_seed42_current"}},
+    },
+    "full_best_broker_cash_rolling_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p17_full_best_broker_cash/{param_filename}",
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p17_full_best_broker_cash/identity_manifest.json",
+        "description": "PARAM-P17 registered broker-cash parameter truth; rolling consumer.",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "rolling",
+        "artifact_contract": {"breakout_quality_param_adaptation": {
+            "parameter_set": "PARAM-P17", "training_dl_enabled": False,
+            "optimizer_search_protocol": "fixed_single_seed_v1",
+        }},
+        "builder": {"enabled": True, "builder_type": "optimizer_fixed_multiseed_strategy_params",
+                    "options": {"training_profile_id": "broker_cash_full_best_seed42_current"}},
+    },
+    "full_agree_broker_cash_oos_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p15_c85_same_signal_broker_cash/{param_filename}",
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p15_c85_same_signal_broker_cash/identity_manifest.json",
+        "description": "PARAM-P15 registered broker-cash parameter truth; oos consumer.",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "oos",
+        "artifact_contract": {"breakout_quality_param_adaptation": {
+            "parameter_set": "PARAM-P15", "training_dl_enabled": False,
+            "optimizer_search_protocol": "fixed_multiseed_v1",
+        }},
+        "builder": {"enabled": True, "builder_type": "optimizer_fixed_multiseed_strategy_params",
+                    "options": {"training_profile_id": "c85_same_signal_broker_cash_current"}},
+    },
+    "full_agree_broker_cash_rolling_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p15_c85_same_signal_broker_cash/{param_filename}",
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p15_c85_same_signal_broker_cash/identity_manifest.json",
+        "description": "PARAM-P15 registered broker-cash parameter truth; rolling consumer.",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "rolling",
+        "artifact_contract": {"breakout_quality_param_adaptation": {
+            "parameter_set": "PARAM-P15", "training_dl_enabled": False,
+            "optimizer_search_protocol": "fixed_multiseed_v1",
+        }},
+        "builder": {"enabled": True, "builder_type": "optimizer_fixed_multiseed_strategy_params",
+                    "options": {"training_profile_id": "c85_same_signal_broker_cash_current"}},
+    },
     "raw_price_full_oos_experiment": {
         "path_template": "models/research/breakout_quality/strategy_params/param_raw_p1_full_base_finalist_best/canonical/full_base_best.json",
         "description": (
@@ -1847,6 +2030,30 @@ STRATEGY_DL_SOURCES = {
 # Arm definition本身不保存第二份enabled/mode membership；current matrix不得在profile或robustness重複列出。
 
 STRATEGY_COMPARE_ARMS = {
+    "C96": {
+        "name": "Min Base-Finalist-Best / Broker-Cash",
+        "description": "SR-C96 / PARAM-P16; Min/all-off, fixed Seed42 x300 and broker_cash_v1.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": False, "dl_id": None, "dl_runtime_mode": None,
+        "robustness_role": "off",
+    },
+    "C97": {
+        "name": "Full Base-Finalist-Best / Broker-Cash",
+        "description": "SR-C97 / PARAM-P17; Full/formal, fixed Seed42 x300 and broker_cash_v1.",
+        "param_source": "full_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "formal",
+        "dl_enabled": False, "dl_id": None, "dl_runtime_mode": None,
+        "robustness_role": "off",
+    },
+    "C98": {
+        "name": "Full Corrected Same-Signal Agree 4x300 / Broker-Cash",
+        "description": "SR-C98 / PARAM-P15; Full/formal, fixed 4x300 same-original-signal consensus and broker_cash_v1.",
+        "param_source": "full_agree_broker_cash_rolling_experiment",
+        "param_policy": "base-finalists-agree", "rule_policy": "formal",
+        "dl_enabled": False, "dl_id": None, "dl_runtime_mode": None,
+        "robustness_role": "off",
+    },
     "C95": {
         "name": "Full Adjusted Price Corrected Same-Signal Agree 4x300",
         "description": (
@@ -2239,6 +2446,9 @@ STRATEGY_COMPARE_ARMS = {
 # Contrast 是否啟用只由 STRATEGY_COMPARE_PROFILES[*]["contrast_ids"] 決定。
 
 STRATEGY_COMPARE_CONTRASTS = {
+    "C97-C96": {"left": "C97", "right": "C96", "description": "same-fee broker cash Full vs Min overall policy comparison"},
+    "C98-C97": {"left": "C98", "right": "C97", "description": "same-fee broker cash Full corrected 4x300 agree vs single-seed best"},
+    "C98-C96": {"left": "C98", "right": "C96", "description": "same-fee broker cash corrected Full 4x300 vs Min best full system comparison"},
     "C95-C61": {
         "left": "C95", "right": "C61",
         "description": "corrected C95 Full same-signal consensus 4x300 versus Full base-finalist-best reference; non-isolated selector contrast",
