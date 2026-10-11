@@ -949,6 +949,7 @@
 | T563 | `validate_optimizer_sampler_resume_determinism_case` | B48 |
 | T564 | `validate_shared_raw_market_quote_capability_case`：共享Raw quote有效性／正量／Research診斷與Trading實際成交、掛單日期，以及observed quote mask、PIT window、raw source fingerprint／SHA256的共用契約；整合九個獨立回歸案例。 | B386 |
 | T565 | `validate_trading_strategy_promotion_capability_case`：Strategy Compare核准evidence、Release staging／activation、random multi-seed fitting與Trading dashboard必須維持canonical lineage；重用原有headless promotion回歸案例。 | B360 |
+| T566 | `validate_ssot_regression_guard_case`：跨層反向相依、實驗身分滲漏、architecture family switch、golden 帳務快照與受保護測試契約的 SSOT 回歸及反向故障注入。 | B23 |
 
 ## G. 逐項收斂紀錄
 
@@ -3281,3 +3282,4 @@
 | 2026-10-04 | T563 | Register seeded TPE checkpoint/resume determinism regression under the existing optimizer reproducibility contract. | NEW -> DONE | `validate_optimizer_sampler_resume_determinism_case` |
 | 2026-10-11 | T564 | Integrate existing cross-domain raw market quote capability regression into the canonical synthetic registry. | NEW -> DONE | `tools/validate/synthetic_market_raw_quote_cases.py`, `tools/validate/synthetic_cases.py` |
 | 2026-10-11 | T565 | Integrate existing headless Strategy Promotion and Trading Release tests into the canonical synthetic registry. | NEW -> DONE | `tools/validate/synthetic_strategy_promotion_cases.py`, `tools/validate/synthetic_cases.py` |
+| 2026-10-11 | T566 | 將已註冊的 SSOT regression guard 正式納入測試 DONE 索引，保持既有防倒退驗證強度。 | NEW -> DONE | `validate_ssot_regression_guard_case`；`tools/validate/synthetic_meta_cases.py`、`tools/validate/ssot_regression_guard.py` |

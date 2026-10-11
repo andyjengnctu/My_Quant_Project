@@ -8524,6 +8524,13 @@
       "description": "`validate_trading_strategy_promotion_capability_case`：Strategy Compare核准evidence、Release staging／activation、random multi-seed fitting與Trading dashboard必須維持canonical lineage；重用原有headless promotion回歸案例。",
       "initial_status": "NEW",
       "order": 555
+    },
+    {
+      "id": "T566",
+      "b_id": "B23",
+      "description": "`validate_ssot_regression_guard_case`：跨層反向相依、實驗身分滲漏、architecture family switch、golden 帳務快照與受保護測試契約的 SSOT 回歸及反向故障注入。",
+      "initial_status": "NEW",
+      "order": 556
     }
   ],
   "transitions": [
@@ -27126,6 +27133,14 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`tools/validate/synthetic_strategy_promotion_cases.py`, `tools/validate/synthetic_cases.py`"
+    },
+    {
+      "date": "2026-10-11",
+      "id": "T566",
+      "description": "將已註冊的 SSOT regression guard 正式納入測試 DONE 索引，保持既有防倒退驗證強度。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_ssot_regression_guard_case`；`tools/validate/synthetic_meta_cases.py`、`tools/validate/ssot_regression_guard.py`"
     }
   ]
 }
