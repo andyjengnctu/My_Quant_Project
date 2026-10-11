@@ -12,6 +12,8 @@ from core.capital_policy import resolve_portfolio_sizing_equity
 from core.seed_ensemble_policy import resolve_seed_ensemble_min_agree
 from core.portfolio_day_context import resolve_portfolio_day_context, portfolio_has_day_work
 from core.portfolio_capacity_rows import build_portfolio_capacity_day_row
+from core.portfolio_day_events import rotate_portfolio_day, settle_and_execute_portfolio_day
+from core.portfolio_day_equity import mark_portfolio_day_equity, measure_portfolio_day_exposure
 from core.breakout_reentry import activate_breakout_reentry_signals_for_day
 from core.config import get_ev_calc_method
 from core.portfolio_fast_data import (
@@ -690,20 +692,14 @@ def run_portfolio_timeline(
                         )
 
                 if resource_action_candidates_today:
-                    t0 = time.perf_counter() if profile_timing_enabled else None
-                    cash, normal_trade_count, extended_trade_count = _run_portfolio_replay_phase(
-                        today,
-                        "rotate_weakest_position",
-                        try_rotate_weakest_position,
+                    rotation_result = rotate_portfolio_day(
+                        today=today,
+                        day_context=day_context,
                         portfolio=portfolio,
-                        orderable_candidates_today=resource_action_candidates_today,
+                        resource_action_candidates_today=resource_action_candidates_today,
                         max_positions=max_positions,
                         enable_rotation=enable_rotation,
                         sold_today=sold_today,
-                        all_dfs_fast=day_all_dfs_fast,
-                        today=today,
-                        pit_stats_index=day_pit_stats_index,
-                        params=day_params,
                         cash=cash,
                         closed_trades_stats=closed_trades_stats,
                         trade_history=trade_history,
@@ -712,70 +708,50 @@ def run_portfolio_timeline(
                         extended_trade_count=extended_trade_count,
                         active_level_rows=active_level_rows,
                         fee_rebate_state=fee_rebate_state,
+                        profile_timing_enabled=profile_timing_enabled,
                     )
-                    if profile_timing_enabled:
-                        rotation_sec += time.perf_counter() - t0
+                    cash = rotation_result.cash
+                    normal_trade_count = rotation_result.normal_trade_count
+                    extended_trade_count = rotation_result.extended_trade_count
+                    rotation_sec += rotation_result.elapsed_sec
             else:
                 before_trade_rows = len(trade_history) if replay_counts is not None else -1
 
-            t0 = time.perf_counter() if profile_timing_enabled else None
-            cash, total_missed_sells, normal_trade_count, extended_trade_count = _run_portfolio_replay_phase(
-                today,
-                "settle_positions",
-                settle_portfolio_positions,
+            event_result = settle_and_execute_portfolio_day(
+                today=today,
+                day_context=day_context,
                 portfolio=portfolio,
                 sold_today=sold_today,
-                all_dfs_fast=day_all_dfs_fast,
-                today=today,
-                params=day_params,
                 cash=cash,
                 closed_trades_stats=closed_trades_stats,
                 trade_history=trade_history,
                 is_training=is_training,
                 total_missed_sells=total_missed_sells,
+                total_missed_buys=total_missed_buys,
                 normal_trade_count=normal_trade_count,
                 extended_trade_count=extended_trade_count,
                 active_level_rows=active_level_rows,
-                active_reentry_watchlist=active_reentry_watchlist if not use_param_ensemble else None,
-                active_reentry_watchlists_by_member=active_reentry_watchlists_by_member if use_param_ensemble else None,
+                active_reentry_watchlist=active_reentry_watchlist,
+                active_reentry_watchlists_by_member=active_reentry_watchlists_by_member,
                 fee_rebate_state=fee_rebate_state,
+                no_entry_capacity_today=no_entry_capacity_today,
+                resource_action_candidates_today=resource_action_candidates_today,
+                max_positions=max_positions,
+                active_extended_signals=active_extended_signals,
+                available_cash=available_cash,
+                sizing_equity=sizing_equity,
+                portfolio_entry_stats=portfolio_entry_stats,
+                replay_execution_rows=replay_execution_rows,
+                extended_day_market_cache=extended_day_market_cache,
+                profile_timing_enabled=profile_timing_enabled,
             )
-            if profile_timing_enabled:
-                settle_sec += time.perf_counter() - t0
-
-            can_try_entries_today = (
-                (not no_entry_capacity_today)
-                and bool(resource_action_candidates_today)
-                and (len(portfolio) + len(sold_today)) < int(max_positions)
-            )
-            if can_try_entries_today:
-                t0 = time.perf_counter() if profile_timing_enabled else None
-                cash, total_missed_buys = _run_portfolio_replay_phase(
-                    today,
-                    "execute_reserved_entries",
-                    execute_reserved_entries_for_day,
-                    portfolio=portfolio,
-                    active_extended_signals=active_extended_signals,
-                    orderable_candidates_today=resource_action_candidates_today,
-                    sold_today=sold_today,
-                    all_dfs_fast=day_all_dfs_fast,
-                    today=today,
-                    params=day_params,
-                    cash=cash,
-                    available_cash=available_cash,
-                    sizing_equity=sizing_equity,
-                    max_positions=max_positions,
-                    trade_history=trade_history,
-                    is_training=is_training,
-                    total_missed_buys=total_missed_buys,
-                    entry_stats=portfolio_entry_stats,
-                    replay_execution_rows=replay_execution_rows,
-                    fee_rebate_state=fee_rebate_state,
-                    extended_day_market_cache=extended_day_market_cache,
-                )
-                if profile_timing_enabled:
-                    buy_sec += time.perf_counter() - t0
-
+            cash = event_result.cash
+            total_missed_sells = event_result.total_missed_sells
+            total_missed_buys = event_result.total_missed_buys
+            normal_trade_count = event_result.normal_trade_count
+            extended_trade_count = event_result.extended_trade_count
+            settle_sec += event_result.settle_sec
+            buy_sec += event_result.buy_sec
             t0 = time.perf_counter() if profile_timing_enabled else None
             if use_param_ensemble:
                 _run_portfolio_replay_phase(
@@ -819,21 +795,17 @@ def run_portfolio_timeline(
             before_trade_rows = -1
 
         t0 = time.perf_counter() if profile_timing_enabled else None
-        rebate_receivable_milli = get_fee_rebate_receivable_milli(fee_rebate_state)
-        if portfolio:
-            today_equity = calc_mark_to_market_equity(
-                cash,
-                portfolio,
-                day_all_dfs_fast,
-                today,
-                day_params,
-                fee_rebate_receivable_milli=rebate_receivable_milli,
-                use_cached_last_px=True,
-            )
-        else:
-            today_equity = cash + rebate_receivable_milli
-        today_equity_money = milli_to_money(today_equity)
-        cash_money = milli_to_money(cash)
+        day_mark = mark_portfolio_day_equity(
+            cash=cash,
+            portfolio=portfolio,
+            all_dfs_fast=day_all_dfs_fast,
+            today=today,
+            params=day_params,
+            fee_rebate_state=fee_rebate_state,
+        )
+        today_equity = day_mark.equity_milli
+        today_equity_money = day_mark.equity_money
+        cash_money = day_mark.cash_money
         if profile_timing_enabled:
             equity_mark_sec += time.perf_counter() - t0
 
@@ -862,14 +834,18 @@ def run_portfolio_timeline(
 
         current_equity = today_equity
         current_equity_money = today_equity_money
-        rebate_receivable_money = milli_to_money(get_fee_rebate_receivable_milli(fee_rebate_state))
-        invested_capital = max(0.0, current_equity_money - cash_money - rebate_receivable_money)
-        exposure_pct = (invested_capital / current_equity_money) * 100 if current_equity_money > 0 else 0
+        day_exposure = measure_portfolio_day_exposure(
+            current_equity_money=current_equity_money,
+            cash_money=cash_money,
+            initial_capital=initial_capital,
+            fee_rebate_state=fee_rebate_state,
+        )
+        invested_capital = day_exposure.invested_capital
+        exposure_pct = day_exposure.exposure_pct
         total_exposure += exposure_pct
         if exposure_pct > max_exp:
             max_exp = exposure_pct
-
-        strategy_ret_pct = (current_equity_money - initial_capital) / initial_capital * 100
+        strategy_ret_pct = day_exposure.strategy_ret_pct
 
         if benchmark_loop_enabled and benchmark_start_price is not None and has_fast_date(benchmark_data, today):
             current_bm_px = get_fast_close(benchmark_data, date=today)
