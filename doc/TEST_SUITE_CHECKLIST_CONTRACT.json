@@ -8559,6 +8559,13 @@
       "description": "`validate_portfolio_candidate_replay_owner_contract_case`：Portfolio 候選資格、盤前資源選擇及 Replay 輸出之 canonical owner、PIT cursor、單／多成員行為與時序契約。",
       "initial_status": "NEW",
       "order": 560
+    },
+    {
+      "id": "T571",
+      "b_id": "B200",
+      "description": "`validate_portfolio_signal_lifecycle_owner_contract_case`：Portfolio 日序買訊 Re-entry／延續追蹤／清理的 canonical owner、PIT 時序、單／多成員路由與 replay fast-path 契約。",
+      "initial_status": "NEW",
+      "order": 561
     }
   ],
   "transitions": [
@@ -27201,6 +27208,14 @@
       "to_status": "DONE",
       "description": "將已註冊的 Portfolio Candidate／Replay 單一 owner 合約測試納入 B200 DONE 索引。",
       "note": "`validate_portfolio_candidate_replay_owner_contract_case`；`tools/validate/synthetic_portfolio_candidate_replay_cases.py`"
+    },
+    {
+      "date": "2026-10-11",
+      "id": "T571",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "將已註冊且已驗證的 Portfolio signal lifecycle owner 測試納入 B200 DONE 索引。",
+      "note": "`validate_portfolio_signal_lifecycle_owner_contract_case`；`tools/validate/synthetic_portfolio_signal_lifecycle_cases.py`"
     }
   ]
 }
