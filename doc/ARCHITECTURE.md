@@ -640,3 +640,11 @@ Direct-account BUY provenance is owned by `services/trading/account_trade_entry.
 - **測試契約防弱化**：同一 Golden 保存部分關鍵正式 validator 的 AST（忽略換行及註解）指紋、註冊身分與 guard 核心實作指紋。修改、刪除、移除登記或調低保護內容均須另一次明確核准的 baseline revision；不得在一般 refactor 中順便更新 Golden、指紋或測試期待值。Mutation probes 實際注入反向依賴、identity branch、重複 family 分支、篡改交易結果／Golden 及測試內容，確認檢查可判錯。
 - **不可由 GPT 自我核准**：原始 ZIP 不包含 Git metadata；上述雙重 pin 能阻擋單側誤改，**不能阻止程式與測試／pin 被同時惡意或錯誤修改**。使用者於 Windows 上完成正式測試並核准該 commit 後，應由使用者在受保護的 Git repository／remote 建立不可由本次 GPT patch 移動的 `ssot-contract-approved-v1` tag（指向核准 commit）。當 tag 可用時，Golden 另外必須與該 tag 的版本逐位元一致；未經核准，不可重置 tag。沒有外部保護的本地 tag 仍可被移動，不能替代真正受保護的版本管理。下一次合法 Golden 變更應另開經授權的新版本與新核准錨點，不覆寫舊版歷史 evidence。
 - **誠實揭露 gate 邊界**：定向 PASS 不等於 `apps/run_bundle.py` 的本機正式 PASS；沒有 tag、缺少實際 Parquet／Broker data 或未比較真實 frozen artifact 時，應將未驗證範圍明列，而非聲稱全鏈受保護。固定 Golden 只保護約定的測試案例；其他 PIT／OOS／Research／Trading 路徑仍依既有專屬 contract cases 與本機完整驗證。
+
+
+## 2026-10-11 — Continuous Ranker fitting-stage execution SSOT
+
+- `services/breakout_quality/train_continuous_ranker.py` 的 Inner Validation epoch selection 與 Final Refit 必須共用 `_train_ranker_fitting_epoch()`：僅轉接既有 canonical execution recipe／profile 的 objective、pair weight、batching、numerical policy、seed/epoch 與 adaptive-horizon provider，不自行決定或複製 research identity。
+- 兩個階段的 pretrained encoder 初始化共用 `_initialize_ranker_fitting_stage()`；`inner_train_epoch_selection` 與 `full_selection_final_refit` 的 stage label、fit IDs 與 encoder summary 各自維持原語意。`_train_epoch()` 仍為唯一 optimizer-update／loss execution owner。
+- `tools/validate/synthetic_breakout_quality_model_cases.py` 的既有 continuous ranker capability case 會遍歷 Registry 已宣告 profile，驗證 recipe-to-epoch mapping、各階段 encoder state 路由與不得複製 epoch argument list；純工程重構不修改 scientific profile、模型 artifact fingerprint 或報表。
+- 本輪 GPT 端額外使用基準 ZIP 與修改版的隔離執行比對；無本機正式 checkpoint、Market Data 或 Windows `apps/run_bundle.py` 證據時，不得宣稱真實訓練／OOS 或正式整合驗收完成。

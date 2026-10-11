@@ -797,6 +797,105 @@ def _new_model_and_optimizer(
     return model, optimizer
 
 
+def _initialize_ranker_fitting_stage(
+    torch,
+    feature_bank: np.ndarray,
+    group_context: np.ndarray,
+    fit_ids: np.ndarray,
+    group_table: pd.DataFrame,
+    *,
+    profile,
+    args,
+    plan,
+    stage: str,
+):
+    """Share fitting initialization while keeping the canonical pretrain stage identity."""
+    pretrained_encoder_state = None
+    encoder_pretraining_summary = None
+    if profile.encoder_pretraining_profile is not None:
+        pretrained_encoder_state, encoder_pretraining_summary = pretrain_encoder_state(
+            torch,
+            feature_bank=feature_bank,
+            group_table=group_table,
+            fit_ids=fit_ids,
+            feature_count=int(feature_bank.shape[2]),
+            context_count=int(group_context.shape[1]),
+            model_architecture=str(args.model_architecture),
+            pretraining_profile_name=str(profile.encoder_pretraining_profile),
+            seed=int(args.seed),
+            plan=plan,
+            stage=stage,
+        )
+    model, optimizer = _new_model_and_optimizer(
+        torch,
+        feature_count=int(feature_bank.shape[2]),
+        context_count=int(group_context.shape[1]),
+        args=args,
+        plan=plan,
+        pretrained_encoder_state=pretrained_encoder_state,
+    )
+    grad_scaler = build_grad_scaler(torch, plan)
+    return model, optimizer, grad_scaler, encoder_pretraining_summary
+
+
+def _train_ranker_fitting_epoch(
+    torch,
+    model,
+    optimizer,
+    feature_bank: np.ndarray,
+    group_context: np.ndarray,
+    group_ids: np.ndarray,
+    training_target: np.ndarray,
+    group_dates,
+    *,
+    profile,
+    execution_recipe,
+    args,
+    plan,
+    grad_scaler,
+    epoch: int,
+    raw_r_loss_name,
+    raw_r_delta,
+    adaptive_horizon_target_provider,
+) -> float:
+    """Single profile/recipe-to-epoch mapping for inner selection and final refit.
+
+    The resolved runtime recipe remains the scientific contract owner. This
+    adapter only forwards execution settings; it never derives an objective,
+    changes samples, or recomputes a fitting/artifact identity.
+    """
+    return _train_epoch(
+        torch,
+        model,
+        optimizer,
+        feature_bank,
+        group_context,
+        group_ids,
+        training_target,
+        group_dates,
+        training_objective=profile.training_objective,
+        batch_size=int(args.batch_size),
+        seed=int(args.seed) + epoch,
+        gradient_clip_norm=float(args.gradient_clip_norm),
+        plan=plan,
+        grad_scaler=grad_scaler,
+        prefetch_batches=int(args.train_prefetch_batches),
+        prefetch_workers=int(getattr(args, "train_prefetch_workers", BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS)),
+        pairwise_reduction=(
+            execution_recipe.pairwise_reduction
+            or CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR
+        ),
+        pair_weight_policy=execution_recipe.objective_policy.pair_weight_policy,
+        secondary_pair_scope=execution_recipe.objective_policy.secondary_pair_scope,
+        secondary_pair_scope_threshold=execution_recipe.objective_policy.secondary_pair_scope_threshold,
+        raw_r_loss_name=raw_r_loss_name,
+        raw_r_huber_delta_r=raw_r_delta,
+        numerical_execution_policy=profile.numerical_execution_policy,
+        bf16_backward_retry_scales=profile.bf16_backward_retry_scales,
+        adaptive_horizon_target_provider=adaptive_horizon_target_provider,
+    )
+
+
 def _date_coherent_batches(
     group_ids: np.ndarray,
     group_dates: pd.Series | np.ndarray,
@@ -4025,31 +4124,17 @@ def select_epoch(
         fit_ids=train_ids,
     )
     raw_r_loss_name, raw_r_delta = _raw_r_loss_options(profile, training_policy)
-    pretrained_encoder_state = None
-    encoder_pretraining_summary = None
-    if profile.encoder_pretraining_profile is not None:
-        pretrained_encoder_state, encoder_pretraining_summary = pretrain_encoder_state(
-            torch,
-            feature_bank=feature_bank,
-            group_table=group_table,
-            fit_ids=train_ids,
-            feature_count=int(feature_bank.shape[2]),
-            context_count=int(group_context.shape[1]),
-            model_architecture=str(args.model_architecture),
-            pretraining_profile_name=str(profile.encoder_pretraining_profile),
-            seed=int(args.seed),
-            plan=plan,
-            stage="inner_train_epoch_selection",
-        )
-    model, optimizer = _new_model_and_optimizer(
+    model, optimizer, grad_scaler, encoder_pretraining_summary = _initialize_ranker_fitting_stage(
         torch,
-        feature_count=int(feature_bank.shape[2]),
-        context_count=int(group_context.shape[1]),
+        feature_bank,
+        group_context,
+        train_ids,
+        group_table,
+        profile=profile,
         args=args,
         plan=plan,
-        pretrained_encoder_state=pretrained_encoder_state,
+        stage="inner_train_epoch_selection",
     )
-    grad_scaler = build_grad_scaler(torch, plan)
     best_epoch = 0
     best_daily_spearman = -math.inf
     best_primary_mfe_daily_spearman = -math.inf
@@ -4098,7 +4183,7 @@ def select_epoch(
         if progress_callback is not None:
             progress_callback("select", int(epoch), int(args.epochs))
         started = time.perf_counter()
-        batch_loss = _train_epoch(
+        batch_loss = _train_ranker_fitting_epoch(
             torch,
             model,
             optimizer,
@@ -4107,25 +4192,14 @@ def select_epoch(
             train_ids,
             training_target,
             group_table["date"],
-            training_objective=profile.training_objective,
-            batch_size=int(args.batch_size),
-            seed=int(args.seed) + epoch,
-            gradient_clip_norm=float(args.gradient_clip_norm),
+            profile=profile,
+            execution_recipe=execution_recipe,
+            args=args,
             plan=plan,
             grad_scaler=grad_scaler,
-            prefetch_batches=int(args.train_prefetch_batches),
-            prefetch_workers=int(getattr(args, "train_prefetch_workers", BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS)),
-            pairwise_reduction=(
-                execution_recipe.pairwise_reduction
-                or CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR
-            ),
-            pair_weight_policy=execution_recipe.objective_policy.pair_weight_policy,
-            secondary_pair_scope=execution_recipe.objective_policy.secondary_pair_scope,
-            secondary_pair_scope_threshold=execution_recipe.objective_policy.secondary_pair_scope_threshold,
+            epoch=epoch,
             raw_r_loss_name=raw_r_loss_name,
-            raw_r_huber_delta_r=raw_r_delta,
-            numerical_execution_policy=profile.numerical_execution_policy,
-            bf16_backward_retry_scales=profile.bf16_backward_retry_scales,
+            raw_r_delta=raw_r_delta,
             adaptive_horizon_target_provider=adaptive_horizon_target_provider,
         )
         validation_evaluation = _evaluate_epoch_split(
@@ -4567,31 +4641,17 @@ def fit_final(
         fit_ids=final_ids,
     )
     raw_r_loss_name, raw_r_delta = _raw_r_loss_options(profile, training_policy)
-    pretrained_encoder_state = None
-    encoder_pretraining_summary = None
-    if profile.encoder_pretraining_profile is not None:
-        pretrained_encoder_state, encoder_pretraining_summary = pretrain_encoder_state(
-            torch,
-            feature_bank=feature_bank,
-            group_table=group_table,
-            fit_ids=final_ids,
-            feature_count=int(feature_bank.shape[2]),
-            context_count=int(group_context.shape[1]),
-            model_architecture=str(args.model_architecture),
-            pretraining_profile_name=str(profile.encoder_pretraining_profile),
-            seed=int(args.seed),
-            plan=plan,
-            stage="full_selection_final_refit",
-        )
-    model, optimizer = _new_model_and_optimizer(
+    model, optimizer, grad_scaler, encoder_pretraining_summary = _initialize_ranker_fitting_stage(
         torch,
-        feature_count=int(feature_bank.shape[2]),
-        context_count=int(group_context.shape[1]),
+        feature_bank,
+        group_context,
+        final_ids,
+        group_table,
+        profile=profile,
         args=args,
         plan=plan,
-        pretrained_encoder_state=pretrained_encoder_state,
+        stage="full_selection_final_refit",
     )
-    grad_scaler = build_grad_scaler(torch, plan)
     history: list[dict[str, Any]] = []
     compact_console = compact_console_enabled()
     if not compact_console:
@@ -4601,7 +4661,7 @@ def fit_final(
         if progress_callback is not None:
             progress_callback("refit", int(epoch), int(epochs))
         started = time.perf_counter()
-        loss = _train_epoch(
+        loss = _train_ranker_fitting_epoch(
             torch,
             model,
             optimizer,
@@ -4610,25 +4670,14 @@ def fit_final(
             final_ids,
             training_target,
             group_table["date"],
-            training_objective=profile.training_objective,
-            batch_size=int(args.batch_size),
-            seed=int(args.seed) + epoch,
-            gradient_clip_norm=float(args.gradient_clip_norm),
+            profile=profile,
+            execution_recipe=execution_recipe,
+            args=args,
             plan=plan,
             grad_scaler=grad_scaler,
-            prefetch_batches=int(args.train_prefetch_batches),
-            prefetch_workers=int(getattr(args, "train_prefetch_workers", BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS)),
-            pairwise_reduction=(
-                execution_recipe.pairwise_reduction
-                or CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR
-            ),
-            pair_weight_policy=execution_recipe.objective_policy.pair_weight_policy,
-            secondary_pair_scope=execution_recipe.objective_policy.secondary_pair_scope,
-            secondary_pair_scope_threshold=execution_recipe.objective_policy.secondary_pair_scope_threshold,
+            epoch=epoch,
             raw_r_loss_name=raw_r_loss_name,
-            raw_r_huber_delta_r=raw_r_delta,
-            numerical_execution_policy=profile.numerical_execution_policy,
-            bf16_backward_retry_scales=profile.bf16_backward_retry_scales,
+            raw_r_delta=raw_r_delta,
             adaptive_horizon_target_provider=adaptive_horizon_target_provider,
         )
         elapsed = time.perf_counter() - started

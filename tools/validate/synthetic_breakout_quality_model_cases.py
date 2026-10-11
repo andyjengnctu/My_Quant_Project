@@ -1921,6 +1921,193 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
                 and canonical_ranker._spearman is ranker_training_api.calculate_spearman,
     )
 
+    # An additional research profile may recompose an existing training policy.
+    # Inner epoch selection and final refit must not maintain separate copies of
+    # the profile/recipe -> epoch-optimizer arguments or encoder initialization.
+    from services.breakout_quality import train_continuous_ranker as ranker_stage_owner
+    ranker_functions = {
+        node.name: node
+        for node in ast.parse(ranker_source).body
+        if isinstance(node, ast.FunctionDef)
+    }
+    stage_call_errors = []
+    for stage_name in ("select_epoch", "fit_final"):
+        stage_calls = [
+            node.func.id
+            for node in ast.walk(ranker_functions[stage_name])
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        ]
+        for owner_name in ("_initialize_ranker_fitting_stage", "_train_ranker_fitting_epoch"):
+            if stage_calls.count(owner_name) != 1:
+                stage_call_errors.append((stage_name, owner_name, stage_calls.count(owner_name)))
+        for forbidden_name in ("_train_epoch", "pretrain_encoder_state", "build_grad_scaler"):
+            if forbidden_name in stage_calls:
+                stage_call_errors.append((stage_name, "duplicate_" + forbidden_name, stage_calls.count(forbidden_name)))
+    for stage_name, expected_label, expected_ids in (
+        ("select_epoch", "inner_train_epoch_selection", "train_ids"),
+        ("fit_final", "full_selection_final_refit", "final_ids"),
+    ):
+        stage_nodes = [
+            node for node in ast.walk(ranker_functions[stage_name])
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_initialize_ranker_fitting_stage"
+        ]
+        if len(stage_nodes) == 1:
+            stage_node = stage_nodes[0]
+            stage_kw = next((kw.value for kw in stage_node.keywords if kw.arg == "stage"), None)
+            if not (
+                isinstance(stage_kw, ast.Constant)
+                and stage_kw.value == expected_label
+                and len(stage_node.args) >= 4
+                and isinstance(stage_node.args[3], ast.Name)
+                and stage_node.args[3].id == expected_ids
+            ):
+                stage_call_errors.append((stage_name, "stage_or_fit_ids_mismatch"))
+    common_epoch_calls = [
+        node.func.id
+        for node in ast.walk(ranker_functions["_train_ranker_fitting_epoch"])
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    ]
+    check(
+        "ranker_selection_and_refit_share_one_training_dispatch",
+        ([], 1),
+        (stage_call_errors, common_epoch_calls.count("_train_epoch")),
+    )
+
+    # Capability-driven call-contract test. All currently registered profiles,
+    # including ones not used by the active UI, must inherit the SAME mapping.
+    # No experiment identity, architecture list, or fixed config value is pinned.
+    _previous_epoch_impl = ranker_stage_owner._train_epoch
+    _epoch_calls = []
+    _epoch_provider = object()
+    def _capture_ranker_epoch(*_args, **_kwargs):
+        _epoch_calls.append((_args, _kwargs))
+        return 0.125
+    try:
+        ranker_stage_owner._train_epoch = _capture_ranker_epoch
+        _stage_args = SimpleNamespace(
+            seed=91, batch_size=13, gradient_clip_norm=1.5,
+            train_prefetch_batches=2, train_prefetch_workers=3,
+        )
+        _bank = np.empty((2, 3, 1), dtype=np.float32)
+        _context = np.empty((2, 0), dtype=np.float32)
+        _ids = np.asarray([0, 1], dtype=np.int64)
+        _dates = pd.Series(pd.to_datetime(["2020-01-02", "2020-01-02"]))
+        _recipe_mismatches = []
+        for _profile_name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES:
+            _candidate_profile = get_breakout_quality_experiment_profile(_profile_name)
+            _candidate_recipe = get_continuous_ranker_execution_recipe(_profile_name)
+            _epoch_calls.clear()
+            _loss = ranker_stage_owner._train_ranker_fitting_epoch(
+                None, object(), object(), _bank, _context, _ids, _ids, _dates,
+                profile=_candidate_profile, execution_recipe=_candidate_recipe,
+                args=_stage_args, plan=None, grad_scaler=None, epoch=3,
+                raw_r_loss_name="sentinel_loss", raw_r_delta=0.75,
+                adaptive_horizon_target_provider=_epoch_provider,
+            )
+            _observed = _epoch_calls[0][1] if len(_epoch_calls) == 1 else {}
+            _expected = {
+                "training_objective": _candidate_profile.training_objective,
+                "batch_size": 13,
+                "seed": 94,
+                "gradient_clip_norm": 1.5,
+                "plan": None,
+                "grad_scaler": None,
+                "prefetch_batches": 2,
+                "prefetch_workers": 3,
+                "pairwise_reduction": (
+                    _candidate_recipe.pairwise_reduction
+                    or continuous_ranker_runtime.CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR
+                ),
+                "pair_weight_policy": _candidate_recipe.objective_policy.pair_weight_policy,
+                "secondary_pair_scope": _candidate_recipe.objective_policy.secondary_pair_scope,
+                "secondary_pair_scope_threshold": _candidate_recipe.objective_policy.secondary_pair_scope_threshold,
+                "raw_r_loss_name": "sentinel_loss",
+                "raw_r_huber_delta_r": 0.75,
+                "numerical_execution_policy": _candidate_profile.numerical_execution_policy,
+                "bf16_backward_retry_scales": _candidate_profile.bf16_backward_retry_scales,
+                "adaptive_horizon_target_provider": _epoch_provider,
+            }
+            if (
+                _loss != 0.125
+                or _observed != _expected
+                or not _epoch_calls
+                or _epoch_calls[0][0][5] is not _ids
+                or _epoch_calls[0][0][6] is not _ids
+                or _epoch_calls[0][0][7] is not _dates
+            ):
+                _recipe_mismatches.append(_profile_name)
+        check(
+            "ranker_epoch_dispatch_uses_canonical_recipe_for_registered_capabilities",
+            [], _recipe_mismatches,
+        )
+    finally:
+        ranker_stage_owner._train_epoch = _previous_epoch_impl
+
+    # Encoder pretraining is optional but must receive the same sampling IDs,
+    # model inputs and fixed stage labels in both fitting phases.
+    _saved_pretraining = ranker_stage_owner.pretrain_encoder_state
+    _saved_model = ranker_stage_owner._new_model_and_optimizer
+    _saved_scaler = ranker_stage_owner.build_grad_scaler
+    _pretrain_records = []
+    _stage_init_errors = []
+    def _capture_pretraining(_torch, **kwargs):
+        _pretrain_records.append(kwargs)
+        return object(), {"stage": kwargs["stage"]}
+    class _FittingStageStubModel:
+        def eval(self):
+            return self
+    try:
+        ranker_stage_owner.pretrain_encoder_state = _capture_pretraining
+        ranker_stage_owner._new_model_and_optimizer = (
+            lambda _torch, **kwargs: (_FittingStageStubModel(), object())
+        )
+        ranker_stage_owner.build_grad_scaler = lambda *_args, **_kwargs: object()
+        _registered_profiles = [
+            get_breakout_quality_experiment_profile(name)
+            for name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+        ]
+        _profiles_with_pretraining = [
+            profile for profile in _registered_profiles
+            if profile.encoder_pretraining_profile is not None
+        ]
+        _no_pretrain_profiles = [
+            profile for profile in _registered_profiles
+            if profile.encoder_pretraining_profile is None
+        ]
+        _test_profiles = _profiles_with_pretraining + _no_pretrain_profiles[:1]
+        _sample_ids = np.asarray([0, 1], dtype=np.int64)
+        _feature_bank = np.empty((2, 3, 1), dtype=np.float32)
+        _group_context = np.empty((2, 0), dtype=np.float32)
+        _group_table = pd.DataFrame({"date": pd.to_datetime(["2020-01-02"] * 2)})
+        for _candidate_profile in _test_profiles:
+            for _stage in ("inner_train_epoch_selection", "full_selection_final_refit"):
+                _pretrain_records.clear()
+                _stage_args = SimpleNamespace(seed=42, model_architecture="model_sentinel")
+                _, _, _scaler, _summary = ranker_stage_owner._initialize_ranker_fitting_stage(
+                    None, _feature_bank, _group_context, _sample_ids, _group_table,
+                    profile=_candidate_profile, args=_stage_args, plan=None, stage=_stage,
+                )
+                if _candidate_profile.encoder_pretraining_profile is None:
+                    valid = not _pretrain_records and _summary is None
+                else:
+                    valid = len(_pretrain_records) == 1 and all([
+                        _pretrain_records[0].get("fit_ids") is _sample_ids,
+                        _pretrain_records[0].get("group_table") is _group_table,
+                        _pretrain_records[0].get("stage") == _stage,
+                        _pretrain_records[0].get("pretraining_profile_name") == str(_candidate_profile.encoder_pretraining_profile),
+                        _pretrain_records[0].get("seed") == 42,
+                        _summary == {"stage": _stage},
+                    ])
+                if not valid or _scaler is None:
+                    _stage_init_errors.append((_candidate_profile.name, _stage))
+        check("ranker_pretraining_selection_refit_stage_context_is_shared", [], _stage_init_errors)
+    finally:
+        ranker_stage_owner.pretrain_encoder_state = _saved_pretraining
+        ranker_stage_owner._new_model_and_optimizer = _saved_model
+        ranker_stage_owner.build_grad_scaler = _saved_scaler
+
     summary["profile"] = STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE
     summary["pass_conditional_profile"] = STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
     summary["training_objective"] = profile.training_objective
