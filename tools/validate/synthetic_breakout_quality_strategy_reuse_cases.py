@@ -506,6 +506,12 @@ def append_completed_pair_score_reuse_contract_checks(
                 "comparison_period": selection_period,
             }
         }
+        # A realistic completed run publishes the identical pair payload both
+        # locally and in the aggregated result.  Missing/stale local JSON is not
+        # valid REUSE evidence even when all filenames are present.
+        (pair_dir / "strategy_comparison.json").write_text(
+            json.dumps(pair_payload, ensure_ascii=False), encoding="utf-8"
+        )
         (run_dir / "strategy_comparison.json").write_text(
             json.dumps(
                 {
@@ -540,6 +546,59 @@ def append_completed_pair_score_reuse_contract_checks(
             off_arm=off_arm,
             on_arm=on_arm,
         )
+        # Verify the actually registered cache lookup, including legacy PIT
+        # projection migration, rejects a divergent pair-local result.
+        local_json = pair_dir / "strategy_comparison.json"
+        local_json.write_text("not JSON", encoding="utf-8")
+        corrupt_current_rejected = score_reuse_module._find_reusable_pair(
+            root=projection_root, settings=selection_settings,
+            status=status, off_arm=off_arm, on_arm=on_arm,
+        ) is None
+        divergent_pair = json.loads(json.dumps(pair_payload))
+        divergent_pair["metadata"]["comparison_period"]["end"] = "2099-12-31"
+        local_json.write_text(json.dumps(divergent_pair), encoding="utf-8")
+        identity_conflict_rejected = score_reuse_module._find_reusable_pair(
+            root=projection_root, settings=selection_settings,
+            status=status, off_arm=off_arm, on_arm=on_arm,
+        ) is None
+        divergent_pair = json.loads(json.dumps(pair_payload))
+        divergent_pair["no_filter"] = {"tampered": True}
+        local_json.write_text(json.dumps(divergent_pair), encoding="utf-8")
+        metric_conflict_rejected = score_reuse_module._find_reusable_pair(
+            root=projection_root, settings=selection_settings,
+            status=status, off_arm=off_arm, on_arm=on_arm,
+        ) is None
+        local_json.write_text(
+            json.dumps(pair_payload, ensure_ascii=False, indent=3), encoding="utf-8"
+        )
+        formatting_only_cache_hit = score_reuse_module._find_reusable_pair(
+            root=projection_root, settings=selection_settings,
+            status=status, off_arm=off_arm, on_arm=on_arm,
+        ) is not None
+        archived_status = {
+            "artifact_identities": {},
+            "comparison_period": selection_period,
+            "dl_sources": {str(on_arm.dl_id): {"ready": False}},
+            "resolved_arm_parameter_identities": {
+                on_arm.arm_id: {"sha256": "param-sha"}
+            },
+        }
+        archived_hit = score_reuse_module._find_reusable_pair_with_archived_source(
+            root=projection_root, settings=selection_settings,
+            status=archived_status, off_arm=off_arm, on_arm=on_arm,
+        )
+        (pair_dir / "strategy_comparison.json").write_text(
+            "not JSON", encoding="utf-8"
+        )
+        archived_corrupt_rejected = (
+            score_reuse_module._find_reusable_pair_with_archived_source(
+                root=projection_root, settings=selection_settings,
+                status=archived_status, off_arm=off_arm, on_arm=on_arm,
+            ) is None
+        )
+        (pair_dir / "strategy_comparison.json").write_text(
+            json.dumps(pair_payload, ensure_ascii=False), encoding="utf-8"
+        )
         score_frame.loc[0, "breakout_quality_score"] = 0.91
         score_frame.to_csv(score_path, index=False, encoding="utf-8-sig")
         changed_projection_map = compute_score_projection_sha256s(
@@ -561,6 +620,26 @@ def append_completed_pair_score_reuse_contract_checks(
             off_arm=off_arm,
             on_arm=on_arm,
         )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "completed_pair_cache_rejects_corrupt_identity_or_payload_but_not_json_formatting",
+        True,
+        isinstance(migrated_hit, dict)
+        and corrupt_current_rejected
+        and identity_conflict_rejected
+        and metric_conflict_rejected
+        and formatting_only_cache_hit,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "archived_completed_pair_reuse_requires_readable_matching_local_json",
+        True,
+        isinstance(archived_hit, dict) and archived_corrupt_rejected,
+    )
     add_check(
         results,
         "synthetic_breakout_quality",

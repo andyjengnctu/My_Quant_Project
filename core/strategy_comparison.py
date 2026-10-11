@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
-import hashlib
 import json
 from pathlib import Path
 from typing import Any, Mapping
 
 from core import buy_sort as _buy_sort
+from core.file_integrity import canonical_json_sha256
 
 from core.research_orchestration import (
     StrategyPreparationAction,
@@ -1448,14 +1448,7 @@ def strategy_comparison_fingerprint(
         "settings": effective_settings,
         "artifact_identities": dict(artifact_identities or {}),
     }
-    raw = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    ).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()[:12]
+    return canonical_json_sha256(payload, length=12)
 
 
 __all__ = [

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from core.file_integrity import load_json_object_or_none as _read_json
+from core.file_integrity import (
+    canonical_json_sha256,
+    compute_file_sha256,
+    load_json_object_or_none as _read_json,
+)
 
-import hashlib
-import json
 from pathlib import Path
 from typing import Any
 
@@ -335,14 +337,7 @@ def _pair_cache_fingerprint_from_payload(
     }
     if isinstance(dataset_generation_identity, dict) and dataset_generation_identity:
         payload["research_dataset_generation_identity"] = dict(dataset_generation_identity)
-    raw = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    ).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()[:16]
+    return canonical_json_sha256(payload, length=16)
 
 def _arm_parameter_evaluation_sha256(
     status: dict[str, Any], arm_id: str
@@ -403,6 +398,25 @@ def _pair_cache_required_files(
             pair_dir / "score_ranking_repair_search_certificate.csv",
         ])
     return tuple(required)
+
+
+def _pair_json_matches_recorded_result(
+    pair_dir: Path, recorded_pair: dict[str, Any]
+) -> bool:
+    """Check the actual pair JSON against its completed-run result before REUSE.
+
+    The run-level pair payload is the canonical published result.  Merely finding
+    the pair's required filenames is insufficient: its JSON may be corrupted or
+    edited independently.  Semantic JSON equality tolerates whitespace/key-order
+    changes without introducing a new persisted schema or fingerprint.
+    """
+    actual_pair = _read_json(pair_dir / "strategy_comparison.json")
+    return (
+        isinstance(recorded_pair, dict)
+        and isinstance(actual_pair, dict)
+        and actual_pair == recorded_pair
+    )
+
 
 def _artifact_identity_sha(payload: Any) -> str:
     if not isinstance(payload, dict):
@@ -651,6 +665,8 @@ def _find_reusable_pair_with_archived_source(
             path.is_file()
             for path in _pair_cache_required_files(pair_dir, on_arm=on_arm)
         ):
+            continue
+        if not _pair_json_matches_recorded_result(pair_dir, pair_payload):
             continue
         try:
             stored_fingerprint = _pair_cache_fingerprint_from_payload(
@@ -969,6 +985,8 @@ def _find_reusable_pair(
             ):
                 continue
             source_artifact_mode = "legacy_pair_runtime_score_projection_verified"
+        if not _pair_json_matches_recorded_result(pair_dir, pair_payload):
+            continue
         return {
             "fingerprint": expected,
             "source_run_dir": run_dir,
@@ -1163,11 +1181,8 @@ def _apply_completed_pair_dependency_waivers(
     return status
 
 def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest().lower()
+    """Retain the existing score-reuse test seam; hash bytes via the Core SSOT."""
+    return compute_file_sha256(path)
 
 def _resolve_pair_pinned_score_path(
     *,
