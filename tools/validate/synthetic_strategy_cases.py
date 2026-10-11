@@ -4095,6 +4095,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             "filter_profile": "synthetic_filter",
             "parameter_policy": "synthetic-policy",
             "parameter_set_identity": "SYNTHETIC",
+            "fee_accounting_policy": "broker_cash_v1",
             "dataset": "full",
             "schedule_start_date": "2021-01-01",
             "coverage_end_date": "2021-12-31",

@@ -152,6 +152,10 @@ STRATEGY_PARAM_FITTING_SEED_PROTOCOLS: dict[str, dict] = {
 # Scientific producer profiles.  Min/Full are filter-profile dimensions, not menu
 # work types.  Validation is opt-in per profile and may be disabled for another
 # strategy-parameter target without changing the Research menu or Optimizer engine.
+# Every profile explicitly declares its fitting fee-accounting policy; immutable
+# registered profiles retain the resolved historical policy.  Unregistered
+# profiles retain their existing current resolution, NOT a claim about the fee
+# treatment of any older unverified on-disk artifacts.
 STRATEGY_PARAM_CANONICAL_PROFILE_BY_FAMILY_POLICY: dict[tuple[str, str], str] = {
     ("min", "base-finalist-best"): "canonical_min_base_finalist_best",
     ("full", "base-finalist-best"): "canonical_full_base_finalist_best",
@@ -161,6 +165,7 @@ STRATEGY_PARAM_CANONICAL_PROFILE_BY_FAMILY_POLICY: dict[tuple[str, str], str] = 
 
 STRATEGY_PARAM_PROFILES: dict[str, dict] = {
     "raw_price_full_base_finalist_best_current": {
+        "fee_accounting_policy": "broker_cash_v1",
         "label": "Raw Price Full Base-Finalist-Best",
         "strategy_id": "breakout",
         "filter_profile": "full",
@@ -175,6 +180,7 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
         "artifact_slug": "param_raw_p1_full_base_finalist_best",
     },
     "raw_price_full_base_finalists_agree_4x300_current": {
+        "fee_accounting_policy": "broker_cash_v1",
         "label": "Raw Price Full Base-Finalists-Agree 4x300",
         "strategy_id": "breakout",
         "filter_profile": "full",
@@ -189,6 +195,7 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
         "artifact_slug": "param_raw_p2_full_base_finalists_agree_4x300",
     },
     "canonical_min_base_finalist_best": {
+        "fee_accounting_policy": "frozen_research_rebate_v1",
         "label": "Canonical Min Base-Finalist-Best",
         "strategy_id": "breakout",
         "filter_profile": "min",
@@ -204,6 +211,7 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
         ),
     },
     "canonical_full_base_finalist_best": {
+        "fee_accounting_policy": "frozen_research_rebate_v1",
         "label": "Canonical Full Base-Finalist-Best",
         "strategy_id": "breakout",
         "filter_profile": "full",
@@ -219,6 +227,7 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
         ),
     },
     "canonical_full_base_finalists_agree": {
+        "fee_accounting_policy": "frozen_research_rebate_v1",
         "label": "Canonical Full Base-Finalists-Agree",
         "strategy_id": "breakout",
         "filter_profile": "full",
@@ -234,6 +243,7 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
         ),
     },
     "validation_budget_current": {
+        "fee_accounting_policy": "broker_cash_v1",
         "label": "Validation-Budget Refit",
         "strategy_id": "breakout",
         "filter_profile": "full",
@@ -250,6 +260,7 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
         "artifact_slug": "param_p5_validation_budget_refit",
     },
     "validation_plateau_current": {
+        "fee_accounting_policy": "broker_cash_v1",
         "label": "Adaptive Plateau Validation Refit",
         "strategy_id": "breakout",
         "filter_profile": "full",
@@ -266,6 +277,7 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
         "artifact_slug": "param_p9_validation_plateau_refit",
     },
     "validation_plateau_best_current": {
+        "fee_accounting_policy": "broker_cash_v1",
         "label": "Adaptive Plateau Validation Refit / Finalist Best",
         "strategy_id": "breakout",
         "filter_profile": "full",
@@ -286,6 +298,7 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
         "requires_resume_safe_execution_evidence": True,
     },
     "validation_plateau_best_patience100_current": {
+        "fee_accounting_policy": "broker_cash_v1",
         "label": "Adaptive Plateau Validation Refit / Finalist Best / Patience 100",
         "strategy_id": "breakout",
         "filter_profile": "full",
@@ -302,6 +315,7 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
         "artifact_slug": "param_p11_validation_plateau_best_patience100_refit",
     },
     "validation_plateau_best_quarter_off_current": {
+        "fee_accounting_policy": "broker_cash_v1",
         "label": "Adaptive Plateau Validation Refit / Finalist Best / Quarter Off",
         "strategy_id": "breakout",
         "filter_profile": "full",
@@ -323,6 +337,7 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
         },
     },
     "production_multiseed_current": {
+        "fee_accounting_policy": "frozen_research_rebate_v1",
         "label": "Production-Style Fixed Multi-Seed",
         "strategy_id": "breakout",
         "filter_profile": "full",
@@ -347,6 +362,7 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
         ),
     },
     "c85_same_signal_revalidation_current": {
+        "fee_accounting_policy": "frozen_research_rebate_v1",
         "label": "C85 Corrected Same-Signal Consensus Revalidation",
         "strategy_id": "breakout",
         "filter_profile": "full",
@@ -383,6 +399,7 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
         ),
     },
     "production_multiseed_8x300_compare": {
+        "fee_accounting_policy": "frozen_research_rebate_v1",
         "label": "Fixed Multi-Seed 8x300",
         "strategy_id": "breakout",
         "filter_profile": "full",
@@ -399,6 +416,7 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
         ),
     },
     "production_multiseed_4x1000_compare": {
+        "fee_accounting_policy": "frozen_research_rebate_v1",
         "label": "Fixed Multi-Seed 4x1000",
         "strategy_id": "breakout",
         "filter_profile": "full",
@@ -415,6 +433,7 @@ STRATEGY_PARAM_PROFILES: dict[str, dict] = {
         ),
     },
     "trading_aligned_8x1000_current": {
+        "fee_accounting_policy": "frozen_research_rebate_v1",
         "label": "Trading-Aligned Fixed Multi-Seed 8x1000",
         "strategy_id": "breakout",
         "filter_profile": "full",

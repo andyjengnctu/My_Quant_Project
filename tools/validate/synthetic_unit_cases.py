@@ -1223,6 +1223,117 @@ def validate_research_fee_rebate_cash_timing_case(_base_params):
         None,
         assert_broker_cash_research_build_identity("PARAM-P15"),
     )
+
+    # All scientific fee semantics must come from the explicit profile field.
+    # Registration is independently managed evidence and cannot pick the fee
+    # rate, either when a historical SHA is removed or a new SHA is assigned.
+    from pathlib import Path
+    import core.strategy_param_policy as strategy_param_policy
+    from config.strategy_params import STRATEGY_PARAM_PROFILES
+    from core.strategy_param_scientific_contract import (
+        build_strategy_param_scientific_contract,
+        build_registered_strategy_param_scientific_identity,
+    )
+
+    project_root = Path(__file__).resolve().parents[2]
+    declared_fee_profiles = {
+        name: dict(raw) for name, raw in STRATEGY_PARAM_PROFILES.items()
+    }
+    check(
+        "strategy_fee_policy_all_profiles_explicit_and_supported",
+        True,
+        bool(declared_fee_profiles)
+        and all(
+            raw.get("fee_accounting_policy") in ("broker_cash_v1", "frozen_research_rebate_v1")
+            for raw in declared_fee_profiles.values()
+        ),
+    )
+    for profile_id, raw in declared_fee_profiles.items():
+        profile = strategy_param_policy.get_strategy_param_training_profile(profile_id)
+        check(
+            f"strategy_fee_policy_resolves_declared_{profile_id}",
+            raw["fee_accounting_policy"],
+            profile.fee_accounting_policy,
+        )
+        original = build_registered_strategy_param_scientific_identity(project_root, profile_id)
+        if profile.registered_scientific_fingerprint_sha256:
+            check(
+                f"strategy_fee_policy_registered_identity_retained_{profile_id}",
+                True,
+                original["registration_matches"],
+            )
+        switched_registration = dict(raw)
+        if profile.registered_scientific_fingerprint_sha256:
+            switched_registration.pop("registered_scientific_fingerprint_sha256")
+        else:
+            switched_registration["registered_scientific_fingerprint_sha256"] = "f" * 64
+        with patch.object(
+            strategy_param_policy,
+            "STRATEGY_PARAM_PROFILES",
+            {profile_id: switched_registration},
+        ):
+            switched_profile = strategy_param_policy.get_strategy_param_training_profile(profile_id)
+            switched_contract = build_strategy_param_scientific_contract(project_root, profile_id)
+        check(
+            f"strategy_fee_policy_is_registration_independent_{profile_id}",
+            profile.fee_accounting_policy,
+            switched_profile.fee_accounting_policy,
+        )
+        check(
+            f"strategy_scientific_fingerprint_is_registration_independent_{profile_id}",
+            original["scientific_fingerprint_sha256"],
+            switched_contract["scientific_fingerprint_sha256"],
+        )
+
+    # Synthetic new profiles cannot inherit a fee regime from a registration
+    # field, nor silently fallback after an explicit field is cleared.
+    sample_id, sample_raw = next(iter(declared_fee_profiles.items()))
+    for invalid_label, invalid_value in (
+        ("absent", None),
+        ("blank", ""),
+        ("unknown", "unregistered_fee_policy"),
+    ):
+        broken_profile = dict(sample_raw)
+        if invalid_label == "absent":
+            broken_profile.pop("fee_accounting_policy")
+        else:
+            broken_profile["fee_accounting_policy"] = invalid_value
+        with patch.object(
+            strategy_param_policy,
+            "STRATEGY_PARAM_PROFILES",
+            {sample_id: broken_profile},
+        ):
+            rejected = raises_expected(
+                ValueError,
+                lambda: strategy_param_policy.get_strategy_param_training_profile(sample_id),
+            )
+        check(f"strategy_fee_policy_{invalid_label}_fails_closed", True, rejected)
+
+    # Flipping a declared fee regime is a scientific change.  It must not
+    # accidentally match the registered SHA and must never be auto-accepted.
+    for original_policy in ("broker_cash_v1", "frozen_research_rebate_v1"):
+        sample_id = next(
+            key for key, raw in declared_fee_profiles.items()
+            if raw["fee_accounting_policy"] == original_policy
+            and raw.get("registered_scientific_fingerprint_sha256")
+        )
+        original_science = build_registered_strategy_param_scientific_identity(project_root, sample_id)
+        changed = dict(declared_fee_profiles[sample_id])
+        changed["fee_accounting_policy"] = (
+            "broker_cash_v1" if original_policy == "frozen_research_rebate_v1"
+            else "frozen_research_rebate_v1"
+        )
+        with patch.object(strategy_param_policy, "STRATEGY_PARAM_PROFILES", {sample_id: changed}):
+            modified_science = build_registered_strategy_param_scientific_identity(project_root, sample_id)
+        check(
+            f"strategy_fee_policy_change_creates_new_scientific_fingerprint_{original_policy}",
+            True,
+            original_science["scientific_fingerprint_sha256"]
+            != modified_science["scientific_fingerprint_sha256"]
+            and not modified_science["registration_matches"],
+        )
+
+    summary["strategy_fee_profiles_checked"] = len(declared_fee_profiles)
     summary["rebate_settled_milli"] = settled
     return results, summary
 

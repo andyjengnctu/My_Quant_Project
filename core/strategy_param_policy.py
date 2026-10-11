@@ -385,10 +385,13 @@ def get_strategy_param_training_profile(profile_id: str) -> StrategyParamTrainin
             "registered_scientific_fingerprint_sha256必須是64字元小寫SHA256: "
             f"{key}"
         )
-    fee_accounting_policy = str(
-        raw.get("fee_accounting_policy")
-        or ("frozen_research_rebate_v1" if registered_scientific_fingerprint_sha256 else "broker_cash_v1")
-    )
+    # Fitting economics are declared by this profile, never inferred from
+    # whether an independently managed frozen scientific SHA is registered.
+    # Missing/blank policies fail closed, including synthetic/new profiles.
+    raw_fee_policy = raw.get("fee_accounting_policy")
+    if not isinstance(raw_fee_policy, str) or not raw_fee_policy.strip():
+        raise ValueError(f"strategy parameter profile缺少fee_accounting_policy: {key}")
+    fee_accounting_policy = raw_fee_policy.strip()
     if fee_accounting_policy not in {"frozen_research_rebate_v1", "broker_cash_v1"}:
         raise ValueError(f"不支援的fee_accounting_policy: {key} -> {fee_accounting_policy!r}")
     return StrategyParamTrainingProfile(
