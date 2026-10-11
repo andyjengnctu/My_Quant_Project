@@ -6,6 +6,8 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_compl
 
 import pandas as pd
 
+from filters.breakout_quality import runtime as _breakout_quality_runtime_adapter
+
 from core.active_param_ensemble import ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING, ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE
 from core.portfolio_stats import calc_plain_romd
 from core.raw_universe_contract import (

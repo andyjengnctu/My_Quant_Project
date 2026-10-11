@@ -8,6 +8,8 @@ from multiprocessing import get_context
 
 import pandas as pd
 
+from filters.breakout_quality import runtime as _breakout_quality_runtime_adapter
+
 from core.data_utils import get_required_min_rows
 from core.training_performance import resolve_optimizer_feature_bank_max_items_default
 from core.feature_bank import FeatureBank

@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 
+from filters.breakout_quality import runtime as _breakout_quality_runtime_adapter
+
 from core.backtest_core import run_v16_backtest
 from core.breakout_reentry import create_breakout_reentry_signal_state
 from core.capital_policy import resolve_single_backtest_sizing_capital

@@ -7,6 +7,9 @@ from typing import Iterable
 
 import pandas as pd
 
+# Standalone walk-forward service also composes the original Filter callback port.
+from filters.breakout_quality import runtime as _breakout_quality_runtime_adapter
+
 from core.portfolio_engine import run_portfolio_timeline
 from core.portfolio_run_result import as_portfolio_training_result
 from core.portfolio_stats import calc_plain_romd, calc_portfolio_score

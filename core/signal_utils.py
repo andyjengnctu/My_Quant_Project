@@ -17,7 +17,7 @@ from core.native_optimizer_hotpath import (
     supertrend_direction_into as _native_supertrend_direction_into,
 )
 from core.breakout_false_filter import build_breakout_false_filter_pass_condition
-from filters.breakout_quality.runtime import build_breakout_quality_filter_pass_condition
+from core.breakout_quality_runtime_port import build_breakout_quality_filter_pass_condition
 OPTIMIZER_TRUE_RANGE_ATTR = '_optimizer_true_range'
 
 _NUMBA_SUPERTREND_LOOP = None

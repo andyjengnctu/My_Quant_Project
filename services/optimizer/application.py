@@ -14,6 +14,8 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from filters.breakout_quality import runtime as _breakout_quality_runtime_adapter
+
 from core.dataset_profiles import (
     DEFAULT_DATASET_PROFILE,
     normalize_dataset_profile_key,

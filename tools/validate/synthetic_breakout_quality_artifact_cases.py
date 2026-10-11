@@ -159,6 +159,127 @@ def _validate_signal_runtime_wiring(results, case_id: str) -> None:
         np.asarray(buy_condition, dtype=bool).tolist(),
     )
 
+def _validate_core_filter_dependency_inversion(results, case_id: str) -> None:
+    """Generic SSOT-07 capability invariant (no per-experiment identity matrix)."""
+    import ast
+    from core import breakout_quality_runtime_port as port
+    from core import breakout_quality_ranking_context as core_context
+    from core import portfolio_candidates, signal_utils
+    from filters.breakout_quality import runtime as filter_runtime
+    from filters.breakout_quality import ranking_score_store
+
+    def check(metric, expected, actual):
+        add_check(results, "synthetic_breakout_quality", case_id, metric, expected, actual)
+
+    core_files = Path(__file__).resolve().parents[2] / "core"
+    forbidden = []
+    for path in core_files.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [node.module or ""]
+            else:
+                continue
+            if any(name.split(".", 1)[0] in {"filters", "services", "apps", "tools"} for name in names):
+                forbidden.append(path.name)
+    check("core_has_no_reverse_filter_service_imports", [], sorted(set(forbidden)))
+    check("ranking_score_source_single_core_owner",
+          core_context.SUPPORTED_RANKING_SCORE_SOURCES,
+          ranking_score_store.SUPPORTED_RANKING_SCORE_SOURCES)
+    check("ranking_context_public_alias_is_same_callable", True,
+          filter_runtime.get_breakout_quality_ranking_source_context is core_context.get_breakout_quality_ranking_source_context
+          and filter_runtime.breakout_quality_ranking_source_context is core_context.breakout_quality_ranking_source_context)
+    check("port_is_bound_to_original_filter_runtime", True,
+          port._require_runtime_port().filter_pass_condition is filter_runtime.build_breakout_quality_filter_pass_condition
+          and port._require_runtime_port().candidate_rank_resolver is filter_runtime.resolve_breakout_quality_candidate_rank)
+
+    with patch.object(port, "_RUNTIME_PORT", None):
+        try:
+            signal_utils.build_breakout_quality_filter_pass_condition(
+                pd.DataFrame(), ticker="2330", high_len=260,
+                score_threshold=0.5, candidate_condition=np.array([], dtype=bool),
+            )
+        except RuntimeError as exc:
+            no_provider_fails_closed = "尚未由正式service綁定" in str(exc)
+        else:
+            no_provider_fails_closed = False
+    check("port_without_adapter_fails_closed", True, no_provider_fails_closed)
+
+    # Same provider is harmless to register again; a second provider cannot overwrite it.
+    provider_before = port._require_runtime_port()
+    port.bind_breakout_quality_runtime_port(
+        filter_pass_condition=filter_runtime.build_breakout_quality_filter_pass_condition,
+        candidate_rank_resolver=filter_runtime.resolve_breakout_quality_candidate_rank,
+    )
+    check("port_registration_idempotent", True, provider_before is port._require_runtime_port())
+    try:
+        port.bind_breakout_quality_runtime_port(
+            filter_pass_condition=lambda *args, **kwargs: None,
+            candidate_rank_resolver=filter_runtime.resolve_breakout_quality_candidate_rank,
+        )
+    except RuntimeError:
+        duplicate_registration_rejected = True
+    else:
+        duplicate_registration_rejected = False
+    check("port_rejects_secondary_runtime", True, duplicate_registration_rejected)
+    check("port_rejected_registration_keeps_provider", True, provider_before is port._require_runtime_port())
+
+    original_context = core_context.get_breakout_quality_ranking_source_context()
+    with core_context.breakout_quality_ranking_source_context(
+        score_source=core_context.SCORE_SOURCE_CANONICAL_RUNTIME,
+        ranking_options={"parity": "outer"},
+    ) as outer:
+        with filter_runtime.breakout_quality_ranking_source_context(
+            score_source=core_context.SCORE_SOURCE_CANONICAL_RUNTIME,
+            ranking_options={"parity": "inner"},
+        ) as inner:
+            inner_is_shared = core_context.get_breakout_quality_ranking_source_context() is inner
+        outer_is_restored = filter_runtime.get_breakout_quality_ranking_source_context() is outer
+    check("ranking_context_nested_scope_shared", True, inner_is_shared and outer_is_restored)
+    check("ranking_context_restored_at_scope_exit", original_context, core_context.get_breakout_quality_ranking_source_context())
+
+    with filter_runtime.breakout_quality_ranking_source_context(
+        score_source=core_context.SCORE_SOURCE_CANONICAL_RUNTIME,
+    ), patch(
+        "filters.breakout_quality.runtime.lookup_breakout_quality_candidate_score",
+        return_value={"score": 0.74, "available": True, "score_date": "2026-03-02"},
+    ) as score_lookup:
+        rank = portfolio_candidates.resolve_breakout_quality_candidate_rank(
+            ticker="2330", signal_date="2026-03-02", high_len=260,
+            filter_id="BQ-PORT-TEST", project_root="/test/root",
+        )
+    check("port_rank_preserves_score_and_source", (0.74, "canonical_runtime"),
+          (rank["score"], rank["score_source"]))
+    check("port_rank_passes_original_pit_lookup_identity", ("2330", "2026-03-02", "BQ-PORT-TEST"),
+          (score_lookup.call_args.kwargs["ticker"], score_lookup.call_args.kwargs["signal_date"],
+           score_lookup.call_args.kwargs["filter_id"]))
+
+    frame = pd.DataFrame({"Close": [10.0]}, index=pd.to_datetime(["2026-03-02"]))
+    valid = np.array([True], dtype=bool)
+    with filter_runtime.breakout_quality_filter_source_context(score_source="canonical_runtime"), patch(
+        "filters.breakout_quality.runtime.build_pass_condition_from_score_table",
+        return_value=valid,
+    ) as builder:
+        actual = signal_utils.build_breakout_quality_filter_pass_condition(
+            frame, ticker="2330", high_len=260, score_threshold=0.63,
+            candidate_condition=valid, filter_id="BQ-PORT-TEST", project_root="/test/root",
+        )
+    check("port_filter_forwards_exact_score_gate", [True], actual.tolist())
+    check("port_filter_passes_original_score_threshold", 0.63, builder.call_args.kwargs["score_threshold"])
+
+    with filter_runtime.breakout_quality_filter_source_context(
+        score_source="binary_point_in_time", manifest_path="/test/manifest.json", scores_path="/test/scores.csv",
+    ), patch("filters.breakout_quality.runtime.build_pass_condition_from_binary_point_in_time_scores", return_value=valid) as pit_builder:
+        signal_utils.build_breakout_quality_filter_pass_condition(
+            frame, ticker="2330", high_len=260, score_threshold=0.63,
+            candidate_condition=valid, filter_id="BQ-PORT-TEST", project_root="/test/root",
+        )
+    check("port_binary_pit_keeps_scoped_manifest_and_scores", ("/test/manifest.json", "/test/scores.csv"),
+          (pit_builder.call_args.kwargs["manifest_path"], pit_builder.call_args.kwargs["scores_path"]))
+
+
 def _validate_breakout_quality_report_rendering(results, case_id):
     def _metrics(split_name, *, base, precision, acceptance, recall, false_reject):
         total = 100.0
@@ -923,6 +1044,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
     )
 
     _validate_signal_runtime_wiring(results, case_id)
+    _validate_core_filter_dependency_inversion(results, case_id)
     _validate_breakout_quality_report_rendering(results, case_id)
     summary.update(
         {

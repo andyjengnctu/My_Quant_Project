@@ -35,6 +35,8 @@ from core.active_param_ensemble import (
     resolve_active_param_ensemble_mode,
     ACTIVE_PARAM_ENSEMBLE_MODE_STATIC,
 )
+from filters.breakout_quality import runtime as _breakout_quality_runtime_adapter
+
 from core.portfolio_engine import run_portfolio_timeline
 from core.portfolio_run_result import append_portfolio_replay_profile
 from core.portfolio_fast_data import (

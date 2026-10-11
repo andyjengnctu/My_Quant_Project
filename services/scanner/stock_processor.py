@@ -1,5 +1,7 @@
 import pandas as pd
 
+from filters.breakout_quality import runtime as _breakout_quality_runtime_adapter
+
 from core.backtest_core import run_v16_backtest
 from core.buy_sort import calc_buy_sort_value
 from core.config import get_buy_sort_method

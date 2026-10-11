@@ -51,13 +51,11 @@ from filters.breakout_quality.paths import (
     resolve_selection_point_in_time_score_path,
 )
 
-SCORE_SOURCE_CANONICAL_RUNTIME = "canonical_runtime"
-SCORE_SOURCE_SELECTION_POINT_IN_TIME = "selection_point_in_time"
-SCORE_SOURCE_CONTINUOUS_RANKER_OOS = "continuous_ranker_oos"
-SUPPORTED_RANKING_SCORE_SOURCES = (
+from core.breakout_quality_ranking_context import (
     SCORE_SOURCE_CANONICAL_RUNTIME,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
     SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
+    SUPPORTED_RANKING_SCORE_SOURCES,
 )
 
 CONTINUOUS_RANKER_SCORE_FILENAME = "continuous_ranker_scores.csv"

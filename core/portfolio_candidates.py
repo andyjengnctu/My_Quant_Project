@@ -15,11 +15,11 @@ from core.exact_accounting import (
     milli_to_money,
     price_to_milli,
 )
-from filters.breakout_quality.runtime import (
+from core.breakout_quality_ranking_context import (
     breakout_quality_ranking_uses_daily_information_date,
     get_breakout_quality_ranking_source_context,
-    resolve_breakout_quality_candidate_rank,
 )
+from core.breakout_quality_runtime_port import resolve_breakout_quality_candidate_rank
 
 from core.trade_plans import (
     build_extended_candidate_plan_from_signal,

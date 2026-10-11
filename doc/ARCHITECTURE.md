@@ -153,6 +153,12 @@ project/
 - `services/trading/actual_fill_validation.py` 的成交日期選項與實際成交驗證共用 `raw_market_executable_quote_mask`（正成交量、正且有限的 Low／High、High≥Low）；`services/trading/order_form_constraints.py` 的掛單日期另依既有正量市場日 evidence，不得因缺公告價刪除掛單日期。相同 Raw 市場資料允許「掛單日」不等於允許「實際成交」，實際價格另依合法 tick 與日期內價帶檢查。
 
 
+### Breakout-quality Core / Filter inversion (SSOT-07)
+
+- `core/breakout_quality_ranking_context.py` 持有 ranking score-source identity、ContextVar、daily information-date refresh 決策與來源設定；`filters/breakout_quality/runtime.py` 只 re-export 同一份 context function/object，避免 PIT score date 在 Core／Filter 分叉。`filters/breakout_quality/ranking_score_store.py` 的 score-source 常數保留原名稱與值，改由前者唯一提供。
+- `core/breakout_quality_runtime_port.py` 僅是兩個 callback 的窄介面（Filter pass condition、candidate rank lookup），不載入或推測任何 Filter score，也不自行 import 上層。正式 `filters/breakout_quality/runtime.py` 是唯一 provider，`services/` composition roots 及 Windows spawn workers 匯入後註冊；未載入 provider 卻啟用 Filter / Ranking 時 fail-closed，絕不能無聲略過 PIT gate。
+- 原 `core/signal_utils.py::build_breakout_quality_filter_pass_condition` 與 `core/portfolio_candidates.py::resolve_breakout_quality_candidate_rank` 的 callable patch seams 維持原名；生成 signals、候選延續/日更、PIT manifest/score context、Broker 資金及策略工件 scientific identity 不更動。
+
 ### Portfolio Core
 
 - `core/portfolio_engine.py`只保留`run_portfolio_timeline()`日序 orchestration；benchmark cache、replay diagnostics、active-level rows與seed-ensemble aggregation分別由`portfolio_benchmark.py`、`portfolio_replay_support.py`、`portfolio_levels.py`、`portfolio_ensemble.py`持有canonical implementation。engine只以同function-object import保留歷史private helper相容名稱，不保存第二套實作。

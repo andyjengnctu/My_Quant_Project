@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from filters.breakout_quality import runtime as _breakout_quality_runtime_adapter
+
 from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS
 
 import hashlib
