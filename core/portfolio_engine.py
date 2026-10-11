@@ -9,6 +9,9 @@ from core.fee_rebate import (
     settle_fee_rebate,
 )
 from core.capital_policy import resolve_portfolio_sizing_equity
+from core.seed_ensemble_policy import resolve_seed_ensemble_min_agree
+from core.portfolio_day_context import resolve_portfolio_day_context, portfolio_has_day_work
+from core.portfolio_capacity_rows import build_portfolio_capacity_day_row
 from core.breakout_reentry import activate_breakout_reentry_signals_for_day
 from core.config import get_ev_calc_method
 from core.portfolio_fast_data import (
@@ -46,7 +49,6 @@ from core.portfolio_ops import (
     settle_portfolio_positions,
     try_rotate_weakest_position,
 )
-from core.seed_ensemble_policy import resolve_seed_ensemble_min_agree
 
 # Compatibility re-exports: canonical implementations live in focused portfolio modules.
 from core.portfolio_benchmark import (
@@ -254,34 +256,28 @@ def run_portfolio_timeline(
         elif today_rebate_month_key != rebate_month_key:
             cash += settle_fee_rebate(fee_rebate_state)
             rebate_month_key = today_rebate_month_key
-        day_ensemble_members = list(active_param_ensemble_resolver(today) or []) if active_param_ensemble_resolver is not None else []
-        day_ensemble_contexts = list(active_context_ensemble_resolver(today) or []) if active_context_ensemble_resolver is not None else []
-        day_ensemble_min_agree = resolve_seed_ensemble_min_agree(
-            len(day_ensemble_members),
-            ensemble_min_agree if ensemble_min_agree is not None else "auto",
-        ) if day_ensemble_members else None
-        single_member_identity_replay = bool(
-            len(day_ensemble_members) == 1
-            and int(day_ensemble_min_agree or 1) <= 1
+        day_context = resolve_portfolio_day_context(
+            today,
+            params=params,
+            all_dfs_fast=all_dfs_fast,
+            pit_stats_index=pit_stats_index,
+            normal_setup_index=normal_setup_index,
+            pit_stats_cursor=pit_stats_cursor,
+            active_params_resolver=active_params_resolver,
+            active_context_resolver=active_context_resolver,
+            active_param_ensemble_resolver=active_param_ensemble_resolver,
+            active_context_ensemble_resolver=active_context_ensemble_resolver,
+            ensemble_min_agree=ensemble_min_agree,
         )
-        use_param_ensemble = bool(day_ensemble_members) and not single_member_identity_replay
-        if day_ensemble_members:
-            day_params = day_ensemble_members[0].get("params_obj") or params
-            day_context = day_ensemble_contexts[0] if day_ensemble_contexts else None
-        else:
-            day_params = active_params_resolver(today) if active_params_resolver is not None else params
-            day_context = active_context_resolver(today) if active_context_resolver is not None else None
-        if day_context is None:
-            day_all_dfs_fast = all_dfs_fast
-            day_pit_stats_index = pit_stats_index
-            day_normal_setup_index = normal_setup_index
-            day_pit_stats_cursor = pit_stats_cursor
-        else:
-            day_all_dfs_fast = day_context.get('all_dfs_fast') or all_dfs_fast
-            day_pit_stats_index = day_context.get('all_pit_stats_index') or pit_stats_index
-            day_normal_setup_index = day_context.get('normal_setup_index') or normal_setup_index
-            day_cursor_key = id(day_pit_stats_index)
-            day_pit_stats_cursor = pit_stats_cursor.setdefault(day_cursor_key, {})
+        day_ensemble_members = day_context.ensemble_members
+        day_ensemble_contexts = day_context.ensemble_contexts
+        day_ensemble_min_agree = day_context.ensemble_min_agree
+        use_param_ensemble = day_context.use_param_ensemble
+        day_params = day_context.params
+        day_all_dfs_fast = day_context.all_dfs_fast
+        day_pit_stats_index = day_context.pit_stats_index
+        day_normal_setup_index = day_context.normal_setup_index
+        day_pit_stats_cursor = day_context.pit_stats_cursor
 
         if today.year not in year_start_equity:
             year_start_equity[today.year] = milli_to_money(current_equity)
@@ -296,13 +292,16 @@ def run_portfolio_timeline(
             quarter_first_sim_date[quarter_key] = pd.Timestamp(today)
 
         normal_setup_entries_today = day_normal_setup_index.get(today, [])
-        if use_param_ensemble:
-            has_ensemble_normal_setup = any(bool((ctx.get("normal_setup_index") or {}).get(today, [])) for ctx in day_ensemble_contexts)
-            has_ensemble_extended = any(bool(member_signals) for member_signals in active_extended_signals_by_member.values())
-            has_ensemble_reentry_watch = any(bool(member_watchlist) for member_watchlist in active_reentry_watchlists_by_member.values())
-            has_portfolio_work_today = bool(portfolio) or bool(has_ensemble_extended) or bool(has_ensemble_normal_setup) or bool(has_ensemble_reentry_watch)
-        else:
-            has_portfolio_work_today = bool(portfolio) or bool(active_extended_signals) or bool(active_reentry_watchlist) or bool(normal_setup_entries_today)
+        has_portfolio_work_today = portfolio_has_day_work(
+            today,
+            day_context=day_context,
+            portfolio=portfolio,
+            active_extended_signals=active_extended_signals,
+            active_extended_signals_by_member=active_extended_signals_by_member,
+            active_reentry_watchlist=active_reentry_watchlist,
+            active_reentry_watchlists_by_member=active_reentry_watchlists_by_member,
+            normal_setup_entries_today=normal_setup_entries_today,
+        )
 
         if profile_timing_enabled:
             day_setup_sec += time.perf_counter() - t_day_start
@@ -847,120 +846,19 @@ def run_portfolio_timeline(
                 _append_portfolio_extended_shadow_level_rows(active_level_rows, active_extended_signals, portfolio, today)
 
         if capacity_rows is not None:
-            pre_market_free_slots = max(0, int(max_positions) - int(pre_market_position_count))
-            orderable_candidate_count = int(len(orderable_candidates_today))
-            post_execution_position_count = int(len(portfolio))
-            capacity_rows.append({
-                'Date': today.strftime('%Y-%m-%d') if hasattr(today, 'strftime') else str(today),
-                'Max_Positions': int(max_positions),
-                'Pre_Market_Positions': int(pre_market_position_count),
-                'Pre_Market_Free_Slots': int(pre_market_free_slots),
-                'Candidate_Source_Active': bool(candidate_sources_today),
-                'Orderable_Candidates': orderable_candidate_count,
-                'Candidate_Supply_Gap': max(0, pre_market_free_slots - orderable_candidate_count),
-                'Post_Execution_Positions': post_execution_position_count,
-                'End_Position_Gap': max(0, int(max_positions) - post_execution_position_count),
-                'Filled_Buys_Today': max(0, int(portfolio_entry_stats.get('filled_buy_count', 0) or 0) - daily_filled_buy_count_before),
-                'Missed_Buys_Today': max(0, int(total_missed_buys) - daily_missed_buy_count_before),
-                'Resource_Aware_DL_Enabled': bool(resource_selection_diag.get('enabled', False)),
-                'Resource_Aware_Mode': str(resource_selection_diag.get('mode') or 'inactive'),
-                'Resource_Aware_Changed': bool(resource_selection_diag.get('changed', False)),
-                'Resource_Aware_Baseline_Selected': int(resource_selection_diag.get('baseline_selected_count', 0) or 0),
-                'Resource_Aware_Baseline_PASS': int(resource_selection_diag.get('baseline_pass_count', 0) or 0),
-                'Resource_Aware_Selected': int(resource_selection_diag.get('selected_count', 0) or 0),
-                'Resource_Aware_Selected_PASS': int(resource_selection_diag.get('selected_pass_count', 0) or 0),
-                'Resource_Aware_Promoted_PASS': int(resource_selection_diag.get('promoted_pass_count', 0) or 0),
-                'Resource_Aware_Baseline_Reserved_Milli': int(resource_selection_diag.get('baseline_reserved_cost_milli', 0) or 0),
-                'Resource_Aware_Reserved_Milli': int(resource_selection_diag.get('reserved_cost_milli', 0) or 0),
-                'Resource_Aware_Baseline_PASS_Reserved_Milli': int(resource_selection_diag.get('baseline_pass_reserved_cost_milli', 0) or 0),
-                'Resource_Aware_PASS_Reserved_Milli': int(resource_selection_diag.get('pass_reserved_cost_milli', 0) or 0),
-                'Resource_Aware_Baseline_Scored_Selected': int(resource_selection_diag.get('baseline_scored_selected_count', 0) or 0),
-                'Resource_Aware_Selected_Scored': int(resource_selection_diag.get('selected_scored_count', 0) or 0),
-                'Resource_Aware_Baseline_Score_Sum': float(resource_selection_diag.get('baseline_selected_score_sum', 0.0) or 0.0),
-                'Resource_Aware_Score_Sum': float(resource_selection_diag.get('selected_score_sum', 0.0) or 0.0),
-                'Resource_Aware_Baseline_Score_Mean': resource_selection_diag.get('baseline_selected_score_mean'),
-                'Resource_Aware_Score_Mean': resource_selection_diag.get('selected_score_mean'),
-                'Resource_Aware_Promoted_Score_Orders': int(resource_selection_diag.get('promoted_score_orders', 0) or 0),
-                'Resource_Aware_Direct_Score_Order_Feasible': bool(resource_selection_diag.get('direct_score_order_feasible', False)),
-                'Resource_Aware_Preservation_Required': bool(resource_selection_diag.get('resource_preservation_required', False)),
-                'Resource_Aware_Selected_Count_Preserved': bool(resource_selection_diag.get('selected_count_preserved', True)),
-                'Resource_Aware_Reserved_Capital_Preserved': bool(resource_selection_diag.get('reserved_capital_preserved', True)),
-                'Resource_Aware_Pre_Market_Order_Limit': resource_selection_diag.get('pre_market_order_limit'),
-                'Resource_Aware_Count_Constraint': resource_selection_diag.get('count_constraint'),
-                'Resource_Aware_Baseline_K': resource_selection_diag.get('baseline_k'),
-                'Resource_Aware_Physical_Free_Slots': resource_selection_diag.get('physical_free_slots'),
-                'Resource_Aware_K_Flex_Selected_Count': resource_selection_diag.get('k_flex_selected_count'),
-                'Resource_Aware_K_Flex_Extra_Positions': int(resource_selection_diag.get('k_flex_extra_positions', 0) or 0),
-                'Resource_Aware_K_Flex_R0_Preserved': bool(resource_selection_diag.get('k_flex_r0_preserved', False)),
-                'Resource_Aware_Raw_Safety_Gate_Enabled': bool(resource_selection_diag.get('raw_safety_gate_enabled', False)),
-                'Resource_Aware_Raw_Safety_Gate_Candidate_Count': int(resource_selection_diag.get('raw_safety_gate_candidate_count', 0) or 0),
-                'Resource_Aware_Raw_Safety_Gate_Scored_Count': int(resource_selection_diag.get('raw_safety_gate_scored_count', 0) or 0),
-                'Resource_Aware_Raw_Safety_Gate_Eligible_Count': int(resource_selection_diag.get('raw_safety_gate_eligible_count', 0) or 0),
-                'Resource_Aware_Raw_Safety_Gate_Percentile_Cutoff': resource_selection_diag.get('raw_safety_gate_percentile_cutoff'),
-                'Resource_Aware_Raw_Safety_Gate_Percentile_Transform': resource_selection_diag.get('raw_safety_gate_percentile_transform'),
-                'Resource_Aware_Safety_MFE_Product_Enabled': bool(resource_selection_diag.get('safety_mfe_product_enabled', False)),
-                'Resource_Aware_Safety_MFE_Product_Candidate_Count': int(resource_selection_diag.get('safety_mfe_product_candidate_count', 0) or 0),
-                'Resource_Aware_Safety_MFE_Product_Primary_Scored_Count': int(resource_selection_diag.get('safety_mfe_product_primary_scored_count', 0) or 0),
-                'Resource_Aware_Safety_MFE_Product_Safety_Scored_Count': int(resource_selection_diag.get('safety_mfe_product_safety_scored_count', 0) or 0),
-                'Resource_Aware_Safety_MFE_Product_Joint_Scored_Count': int(resource_selection_diag.get('safety_mfe_product_joint_scored_count', 0) or 0),
-                'Resource_Aware_Safety_MFE_Product_Eligible_Count': int(resource_selection_diag.get('safety_mfe_product_eligible_count', 0) or 0),
-                'Resource_Aware_Safety_MFE_Product_Selected_Score_Mean': resource_selection_diag.get('safety_mfe_product_selected_score_mean'),
-                'Resource_Aware_Safety_MFE_Product_Percentile_Transform': resource_selection_diag.get('safety_mfe_product_percentile_transform'),
-                'Resource_Aware_Safety_MFE_Product_Transform': resource_selection_diag.get('safety_mfe_product_transform'),
-                'Resource_Aware_Max_DL_Eligible': bool(resource_selection_diag.get('max_dl_eligible', False)),
-                'Resource_Aware_Max_DL_Repair_Steps': int(resource_selection_diag.get('max_dl_repair_steps', 0) or 0),
-                'Resource_Aware_Max_DL_Repair_Evaluations': int(resource_selection_diag.get('max_dl_repair_evaluations', 0) or 0),
-                'Resource_Aware_Max_DL_Fallback': bool(resource_selection_diag.get('max_dl_fallback_to_baseline', False)),
-                'Resource_Aware_Max_DL_Seed_Fallback': bool(resource_selection_diag.get('max_dl_seed_fallback', False)),
-                'Resource_Aware_Max_DL_Feasible_Ascent_Steps': int(resource_selection_diag.get('max_dl_feasible_ascent_steps', 0) or 0),
-                'Resource_Aware_Max_DL_Feasible_Ascent_Evaluations': int(resource_selection_diag.get('max_dl_feasible_ascent_evaluations', 0) or 0),
-                'Resource_Aware_Max_DL_Feasible_Ascent_Local_Optimum': bool(resource_selection_diag.get('max_dl_feasible_ascent_local_optimum', False)),
-                'Resource_Aware_Constrained_Optimality_Certified': bool(resource_selection_diag.get('constrained_solver_optimality_certified', False)),
-                'Resource_Aware_Constrained_Search_States': int(resource_selection_diag.get('constrained_solver_search_states', 0) or 0),
-                'Resource_Aware_Constrained_Pruned_States': int(resource_selection_diag.get('constrained_solver_pruned_states', 0) or 0),
-                'Resource_Aware_Constrained_Feasible_Baskets': int(resource_selection_diag.get('constrained_solver_feasible_baskets', 0) or 0),
-                'Resource_Aware_Constrained_Safety_Pruned_States': int(resource_selection_diag.get('constrained_solver_safety_pruned_states', 0) or 0),
-                'Resource_Aware_Safety_Floor_Enabled': bool(resource_selection_diag.get('safety_floor_enabled', False)),
-                'Resource_Aware_Safety_Floor_Contract': resource_selection_diag.get('safety_floor_contract'),
-                'Resource_Aware_Safety_Score_Mode': resource_selection_diag.get('safety_score_mode'),
-                'Resource_Aware_Residual_Safety_Transform': resource_selection_diag.get('residual_safety_transform'),
-                'Resource_Aware_Residual_Safety_Fit_Pair_Count': int(resource_selection_diag.get('residual_safety_fit_pair_count', 0) or 0),
-                'Resource_Aware_Residual_Safety_Fit_Slope': resource_selection_diag.get('residual_safety_fit_slope'),
-                'Resource_Aware_Residual_Safety_Fit_Intercept': resource_selection_diag.get('residual_safety_fit_intercept'),
-                'Resource_Aware_Baseline_Safety_Scored': int(resource_selection_diag.get('baseline_safety_scored_count', 0) or 0),
-                'Resource_Aware_Selected_Safety_Scored': int(resource_selection_diag.get('selected_safety_scored_count', 0) or 0),
-                'Resource_Aware_Baseline_Safety_Score_Sum': float(resource_selection_diag.get('baseline_safety_score_sum', 0.0) or 0.0),
-                'Resource_Aware_Selected_Safety_Score_Sum': float(resource_selection_diag.get('selected_safety_score_sum', 0.0) or 0.0),
-                'Resource_Aware_Baseline_Safety_Score_Mean': resource_selection_diag.get('baseline_safety_score_mean'),
-                'Resource_Aware_Selected_Safety_Score_Mean': resource_selection_diag.get('selected_safety_score_mean'),
-                'Resource_Aware_Safety_Floor_Binding': bool(resource_selection_diag.get('safety_floor_binding', False)),
-                'Resource_Aware_Safety_Floor_Violation': bool(resource_selection_diag.get('safety_floor_violation', False)),
-                'Resource_Aware_Constrained_Seed_Repair_Evaluations': int(resource_selection_diag.get('constrained_solver_seed_repair_evaluations', 0) or 0),
-                'Resource_Aware_Constrained_Seed_Ascent_Evaluations': int(resource_selection_diag.get('constrained_solver_seed_ascent_evaluations', 0) or 0),
-                'Resource_Aware_Pareto_Selection_Method': resource_selection_diag.get('pareto_selection_method'),
-                'Resource_Aware_Pareto_Max_Score_Coverage': resource_selection_diag.get('pareto_max_score_coverage'),
-                'Resource_Aware_Pareto_Quality_Min': resource_selection_diag.get('pareto_quality_min'),
-                'Resource_Aware_Pareto_Quality_Max': resource_selection_diag.get('pareto_quality_max'),
-                'Resource_Aware_Pareto_Capital_Min_Milli': resource_selection_diag.get('pareto_capital_min_milli'),
-                'Resource_Aware_Pareto_Capital_Max_Milli': resource_selection_diag.get('pareto_capital_max_milli'),
-                'Resource_Aware_Pareto_Selected_Quality': resource_selection_diag.get('pareto_selected_quality'),
-                'Resource_Aware_Pareto_Selected_Capital_Milli': resource_selection_diag.get('pareto_selected_capital_milli'),
-                'Resource_Aware_Pareto_Selected_Quality_Norm': resource_selection_diag.get('pareto_selected_quality_norm'),
-                'Resource_Aware_Pareto_Selected_Capital_Norm': resource_selection_diag.get('pareto_selected_capital_norm'),
-                'Resource_Aware_Pareto_Selected_Product': resource_selection_diag.get('pareto_selected_product'),
-                'Resource_Aware_Pareto_Quality_Axis_Degenerate': bool(resource_selection_diag.get('pareto_quality_axis_degenerate', False)),
-                'Resource_Aware_Pareto_Capital_Axis_Degenerate': bool(resource_selection_diag.get('pareto_capital_axis_degenerate', False)),
-                'Resource_Aware_Pareto_Score_Pass_States': int(resource_selection_diag.get('pareto_score_pass_states', 0) or 0),
-                'Resource_Aware_Pareto_Capital_Pass_States': int(resource_selection_diag.get('pareto_capital_pass_states', 0) or 0),
-                'Resource_Aware_Pareto_Product_Pass_States': int(resource_selection_diag.get('pareto_product_pass_states', 0) or 0),
-                'Resource_Aware_Stale_Score_Guard_Enabled': bool(resource_selection_diag.get('stale_score_membership_guard_enabled', False)),
-                'Resource_Aware_Stale_Score_Guard_Max_Age_Days': resource_selection_diag.get('stale_score_membership_guard_max_age_days'),
-                'Resource_Aware_Stale_Score_Candidate_Count': int(resource_selection_diag.get('stale_score_candidate_count', 0) or 0),
-                'Resource_Aware_Stale_Score_Guard_Triggered': bool(resource_selection_diag.get('stale_score_guard_triggered', False)),
-                'Resource_Aware_Stale_Score_Guard_Seed_Blocked': bool(resource_selection_diag.get('stale_score_guard_seed_blocked', False)),
-                'Resource_Aware_Stale_Score_Guard_Blocked_Swaps': int(resource_selection_diag.get('stale_score_guard_blocked_swaps', 0) or 0),
-                'Resource_Aware_Selector_Elapsed_Ns': int(resource_selection_diag.get('selector_elapsed_ns', 0) or 0),
-            })
+            capacity_rows.append(build_portfolio_capacity_day_row(
+                today,
+                max_positions=max_positions,
+                pre_market_position_count=pre_market_position_count,
+                candidate_sources_today=candidate_sources_today,
+                orderable_candidates_today=orderable_candidates_today,
+                portfolio=portfolio,
+                portfolio_entry_stats=portfolio_entry_stats,
+                daily_filled_buy_count_before=daily_filled_buy_count_before,
+                total_missed_buys=total_missed_buys,
+                daily_missed_buy_count_before=daily_missed_buy_count_before,
+                resource_selection_diag=resource_selection_diag,
+            ))
 
         current_equity = today_equity
         current_equity_money = today_equity_money

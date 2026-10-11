@@ -2202,6 +2202,157 @@ def validate_portfolio_core_module_boundary_contract_case(_base_params):
     return results, summary
 
 
+
+def validate_portfolio_daily_phase_owner_contract_case(_base_params):
+    """Guard replay-context precedence, PIT cursor isolation and capacity schema."""
+    from core.portfolio_day_context import resolve_portfolio_day_context, portfolio_has_day_work
+    from core.portfolio_capacity_rows import build_portfolio_capacity_day_row
+    from core import portfolio_engine
+    from pandas import Timestamp
+
+    case_id = "META_PORTFOLIO_DAILY_PHASE_OWNER"
+    results, summary = _new_synthetic_case(case_id)
+    today = Timestamp("2025-01-15")
+    fallback_data, fallback_pit, fallback_setup = {"base": object()}, {"base": []}, {}
+    cursors = {}
+    resolver_calls = []
+
+    base_args = dict(
+        params=_base_params,
+        all_dfs_fast=fallback_data,
+        pit_stats_index=fallback_pit,
+        normal_setup_index=fallback_setup,
+        pit_stats_cursor=cursors,
+        active_params_resolver=None,
+        active_context_resolver=None,
+        active_param_ensemble_resolver=None,
+        active_context_ensemble_resolver=None,
+        ensemble_min_agree=None,
+    )
+    plain = resolve_portfolio_day_context(today, **base_args)
+    add_check(results, "portfolio_daily_phase", case_id, "single_source_owner",
+              True, portfolio_engine.resolve_portfolio_day_context is resolve_portfolio_day_context
+              and portfolio_engine.portfolio_has_day_work is portfolio_has_day_work
+              and portfolio_engine.build_portfolio_capacity_day_row is build_portfolio_capacity_day_row)
+    add_check(results, "portfolio_daily_phase", case_id, "ordinary_replay_no_ensemble", False, plain.use_param_ensemble)
+    add_check(results, "portfolio_daily_phase", case_id, "ordinary_replay_source_identity", True,
+              plain.params is _base_params and plain.all_dfs_fast is fallback_data
+              and plain.pit_stats_index is fallback_pit and plain.normal_setup_index is fallback_setup
+              and plain.pit_stats_cursor is cursors)
+
+    def params_resolver(_):
+        resolver_calls.append("params")
+        return _base_params
+
+    def context_resolver(_):
+        resolver_calls.append("context")
+        return {"all_dfs_fast": {}, "all_pit_stats_index": {}, "normal_setup_index": {}}
+
+    dynamic = resolve_portfolio_day_context(today, **{
+        **base_args, "active_params_resolver": params_resolver,
+        "active_context_resolver": context_resolver,
+    })
+    add_check(results, "portfolio_daily_phase", case_id, "dynamic_resolver_order", ["params", "context"], resolver_calls)
+    add_check(results, "portfolio_daily_phase", case_id, "empty_context_preserves_truthy_fallback", True,
+              dynamic.all_dfs_fast is fallback_data and dynamic.pit_stats_index is fallback_pit
+              and dynamic.normal_setup_index is fallback_setup)
+    add_check(results, "portfolio_daily_phase", case_id, "dynamic_cursor_isolated", True,
+              dynamic.pit_stats_cursor is not cursors and dynamic.pit_stats_cursor is cursors[id(fallback_pit)])
+    dynamic_again = resolve_portfolio_day_context(today, **{
+        **base_args, "active_params_resolver": params_resolver,
+        "active_context_resolver": context_resolver,
+    })
+    add_check(results, "portfolio_daily_phase", case_id, "same_pit_index_reuses_cursor", True,
+              dynamic_again.pit_stats_cursor is dynamic.pit_stats_cursor)
+
+    another_pit = {"other": []}
+    distinct = resolve_portfolio_day_context(today, **{
+        **base_args, "active_context_resolver": lambda _: {"all_pit_stats_index": another_pit},
+    })
+    add_check(results, "portfolio_daily_phase", case_id, "different_pit_index_isolated", True,
+              distinct.pit_stats_index is another_pit
+              and distinct.pit_stats_cursor is not dynamic.pit_stats_cursor)
+
+    # Supplying ensemble members must suppress the single-source resolver even
+    # when the ensemble has only one member (identity replay shortcut).
+    first = [{"seed": 41, "params_obj": _base_params}]
+    members_calls = []
+    def one_member(_):
+        members_calls.append("members")
+        return first
+    def one_context(_):
+        members_calls.append("contexts")
+        return [{"all_pit_stats_index": another_pit}]
+    one = resolve_portfolio_day_context(today, **{
+        **base_args, "active_params_resolver": lambda _: (_ for _ in ()).throw(AssertionError("wrong source")),
+        "active_context_resolver": lambda _: (_ for _ in ()).throw(AssertionError("wrong source")),
+        "active_param_ensemble_resolver": one_member,
+        "active_context_ensemble_resolver": one_context,
+        "ensemble_min_agree": 1,
+    })
+    add_check(results, "portfolio_daily_phase", case_id, "ensemble_callbacks_original_order", ["members", "contexts"], members_calls)
+    add_check(results, "portfolio_daily_phase", case_id, "single_member_identity_uses_regular_path", False, one.use_param_ensemble)
+    add_check(results, "portfolio_daily_phase", case_id, "ensemble_first_member_context_selected", True,
+              one.params is _base_params and one.pit_stats_index is another_pit)
+
+    two_contexts = [{"normal_setup_index": {}}, {"normal_setup_index": {today: ["setup"]}}]
+    multi = resolve_portfolio_day_context(today, **{
+        **base_args,
+        "active_param_ensemble_resolver": lambda _: [{"params_obj": _base_params}, {"params_obj": _base_params}],
+        "active_context_ensemble_resolver": lambda _: two_contexts,
+        "ensemble_min_agree": 2,
+    })
+    add_check(results, "portfolio_daily_phase", case_id, "two_member_consensus", (True, 2),
+              (multi.use_param_ensemble, multi.ensemble_min_agree))
+    add_check(results, "portfolio_daily_phase", case_id, "other_member_setup_prevents_idle", True,
+              portfolio_has_day_work(today, day_context=multi, portfolio={},
+                  active_extended_signals={}, active_extended_signals_by_member={},
+                  active_reentry_watchlist={}, active_reentry_watchlists_by_member={},
+                  normal_setup_entries_today=[]))
+    add_check(results, "portfolio_daily_phase", case_id, "empty_session_enables_idle", False,
+              portfolio_has_day_work(today, day_context=plain, portfolio={},
+                  active_extended_signals={}, active_extended_signals_by_member={},
+                  active_reentry_watchlist={}, active_reentry_watchlists_by_member={},
+                  normal_setup_entries_today=[]))
+    add_check(results, "portfolio_daily_phase", case_id, "held_position_blocks_idle", True,
+              portfolio_has_day_work(today, day_context=plain, portfolio={"held": object()},
+                  active_extended_signals={}, active_extended_signals_by_member={},
+                  active_reentry_watchlist={}, active_reentry_watchlists_by_member={},
+                  normal_setup_entries_today=[]))
+    add_check(results, "portfolio_daily_phase", case_id, "active_normal_setup_blocks_idle", True,
+              portfolio_has_day_work(today, day_context=plain, portfolio={},
+                  active_extended_signals={}, active_extended_signals_by_member={},
+                  active_reentry_watchlist={}, active_reentry_watchlists_by_member={},
+                  normal_setup_entries_today=["setup"]))
+
+    row = build_portfolio_capacity_day_row(
+        today, max_positions=5, pre_market_position_count=2,
+        candidate_sources_today=True, orderable_candidates_today=[{}, {}],
+        portfolio={"held": object(), "new": object(), "other": object()},
+        portfolio_entry_stats={"filled_buy_count": 6}, daily_filled_buy_count_before=5,
+        total_missed_buys=9, daily_missed_buy_count_before=7,
+        resource_selection_diag={"enabled": True, "mode": "diagnostics_only",
+            "selected_count": 1, "reserved_cost_milli": 2300,
+            "selected_score_mean": None, "stale_score_guard_triggered": True},
+    )
+    expected_base = {
+        "Date": "2025-01-15", "Max_Positions": 5, "Pre_Market_Positions": 2,
+        "Pre_Market_Free_Slots": 3, "Candidate_Source_Active": True,
+        "Orderable_Candidates": 2, "Candidate_Supply_Gap": 1,
+        "Post_Execution_Positions": 3, "End_Position_Gap": 2,
+        "Filled_Buys_Today": 1, "Missed_Buys_Today": 2,
+    }
+    add_check(results, "portfolio_daily_phase", case_id, "capacity_core_fields_and_order",
+              list(expected_base.items()), list(row.items())[:len(expected_base)])
+    add_check(results, "portfolio_daily_phase", case_id, "capacity_observation_fields",
+              (True, "diagnostics_only", 1, 2300, None, True),
+              (row["Resource_Aware_DL_Enabled"], row["Resource_Aware_Mode"],
+               row["Resource_Aware_Selected"], row["Resource_Aware_Reserved_Milli"],
+               row["Resource_Aware_Score_Mean"], row["Resource_Aware_Stale_Score_Guard_Triggered"]))
+    summary["scope"] = "daily_context/capacity_projection"
+    return results, summary
+
+
 def validate_core_trading_modules_in_coverage_targets_case(_base_params):
     case_id = "META_CORE_TRADING_MODULES_IN_COVERAGE_TARGETS"
     results, summary = _new_synthetic_case(case_id)
