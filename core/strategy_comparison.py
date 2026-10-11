@@ -751,7 +751,9 @@ def _validate_builder(
                 raise ValueError(f"{field_name}.{option_name}必須是bool")
 
 
-def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) -> None:
+# Validation is staged in original first-error order. Each owner validates one
+# canonical settings section; this module remains the sole validator.
+def _validate_strategy_comparison_base(settings: StrategyComparisonSettings) -> None:
     if settings.schema_version < 2:
         raise ValueError("strategy comparison schema_version必須>=2")
     if not str(settings.profile_id).strip() or not str(settings.profile_label).strip():
@@ -772,6 +774,8 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
         if str(path) == str(settings.output_root):
             raise ValueError("reuse_output_roots不得重複目前output_root")
 
+
+def _validate_strategy_comparison_parameter_sources(settings: StrategyComparisonSettings) -> None:
     if not settings.parameter_sources:
         raise ValueError("至少需要一個parameter source")
     for key, source in settings.parameter_sources.items():
@@ -864,6 +868,8 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                 if source.trained_with_dl_id is not None:
                     raise ValueError(f"parameter source {key}的OOS freeze builder不得設定trained_with_dl_id")
 
+
+def _validate_strategy_comparison_dl_sources(settings: StrategyComparisonSettings) -> None:
     for key, source in settings.dl_sources.items():
         if key != source.dl_id or not key.strip():
             raise ValueError(f"DL source key／dl_id不一致: {key!r}")
@@ -960,369 +966,381 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
             allowed_types={"forward_oos_scores", "selection_pit_from_existing_folds"},
         )
 
+
+def _validate_strategy_comparison_arm(settings: StrategyComparisonSettings, key: str, arm: StrategyComparisonArm) -> None:
+    if key != arm.arm_id or not key.strip():
+        raise ValueError(f"arm key／arm_id不一致: {key!r}")
+    if arm.robustness_role not in {"off", "fixed_baseline", "stochastic"}:
+        raise ValueError(
+            f"arm {key} robustness_role不支援: {arm.robustness_role!r}"
+        )
+    if arm.robustness_role == "fixed_baseline" and arm.dl_enabled:
+        raise ValueError(f"arm {key} fixed_baseline不得啟用DL")
+    if arm.robustness_role == "stochastic" and not arm.dl_enabled:
+        raise ValueError(f"arm {key} stochastic robustness必須是DL-on")
+    if arm.param_source not in settings.parameter_sources:
+        raise ValueError(f"arm {key}引用不存在的param_source: {arm.param_source}")
+    resolve_strategy_comparison_arm_param_policy(settings, arm)
+    if arm.rule_policy not in {"formal", "all_off"}:
+        raise ValueError(f"arm {key} rule_policy不支援: {arm.rule_policy}")
+    parameter_source = settings.parameter_sources[arm.param_source]
+    if arm.enabled and parameter_source.builder is not None:
+        builder_type = str(parameter_source.builder.builder_type or "").strip()
+        if builder_type == "canonical_optimizer_strategy_params":
+            from core.strategy_param_policy import (
+                resolve_canonical_strategy_param_training_profile,
+            )
+
+            canonical_policy = resolve_strategy_comparison_arm_param_policy(
+                settings, arm
+            )
+            canonical_profile = resolve_canonical_strategy_param_training_profile(
+                str(parameter_source.canonical_family or ""),
+                canonical_policy,
+            )
+            if canonical_profile is None:
+                raise ValueError(
+                    "current canonical Strategy Compare arm缺少registered strategy-param profile: "
+                    f"arm={key}, family={parameter_source.canonical_family}, "
+                    f"policy={canonical_policy}"
+                )
+            if canonical_profile.registered_scientific_fingerprint_sha256 is None:
+                raise ValueError(
+                    "current canonical Strategy Compare arm的strategy-param profile尚未註冊: "
+                    f"arm={key}, profile={canonical_profile.profile_id}"
+                )
+        elif builder_type == "optimizer_fixed_multiseed_strategy_params":
+            from core.strategy_param_policy import get_strategy_param_training_profile
+
+            options = dict(parameter_source.builder.options)
+            training_profile_id = str(options.get("training_profile_id") or "").strip()
+            if not training_profile_id:
+                raise ValueError(
+                    f"current fixed multi-seed Strategy Compare arm缺少training_profile_id: arm={key}"
+                )
+            training_profile = get_strategy_param_training_profile(training_profile_id)
+            arm_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
+            if (
+                training_profile.parameter_policy != arm_policy
+                or training_profile.validation_enabled
+                or training_profile.registered_scientific_fingerprint_sha256 is None
+            ):
+                raise ValueError(
+                    "current fixed multi-seed Strategy Compare arm與registered profile不一致: "
+                    f"arm={key}, profile={training_profile.profile_id}, policy={arm_policy}"
+                )
+        elif builder_type == "optimizer_raw_price_strategy_params":
+            from core.strategy_param_policy import get_strategy_param_training_profile
+
+            options = dict(parameter_source.builder.options)
+            training_profile_id = str(options.get("training_profile_id") or "").strip()
+            if not training_profile_id:
+                raise ValueError(
+                    f"current raw-price Strategy Compare arm缺少training_profile_id: arm={key}"
+                )
+            training_profile = get_strategy_param_training_profile(training_profile_id)
+            arm_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
+            if (
+                training_profile.price_basis != "raw_unadjusted"
+                or training_profile.filter_profile != "full"
+                or training_profile.parameter_policy != arm_policy
+                or training_profile.validation_enabled
+                or not training_profile.artifact_slug
+            ):
+                raise ValueError(
+                    "current raw-price Strategy Compare arm與profile capability不一致: "
+                    f"arm={key}, profile={training_profile.profile_id}, policy={arm_policy}"
+                )
+    _validate_strategy_comparison_arm_runtime(settings, key, arm, parameter_source)
+
+
+def _validate_strategy_comparison_arm_runtime(settings: StrategyComparisonSettings, key: str, arm: StrategyComparisonArm, parameter_source: StrategyParameterSource) -> None:
+    if arm.dl_enabled:
+        if not arm.dl_id or arm.dl_id not in settings.dl_sources:
+            raise ValueError(f"arm {key}啟用DL但dl_id無效: {arm.dl_id}")
+        if arm.dl_runtime_mode not in SUPPORTED_STRATEGY_DL_RUNTIME_MODES:
+            raise ValueError(
+                f"arm {key}的dl_runtime_mode不支援: {arm.dl_runtime_mode}; "
+                f"allowed={SUPPORTED_STRATEGY_DL_RUNTIME_MODES}"
+            )
+        options = dict(arm.dl_runtime_options or {})
+        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD:
+            raw_max_age = options.get('stale_score_membership_guard_max_age_days')
+            if isinstance(raw_max_age, bool) or not isinstance(raw_max_age, int) or raw_max_age < 0:
+                raise ValueError(
+                    f"arm {key} stale-score guard必須指定非負整數 stale_score_membership_guard_max_age_days"
+                )
+        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_K_FLEX_R0_FEASIBLE_ASCENT:
+            if options.get("count_constraint") != "baseline_k_to_physical_free_slots_local_v1":
+                raise ValueError(f"arm {key} K-Flex local count_constraint contract不支援")
+            if options.get("preserve_r0") is not True:
+                raise ValueError(f"arm {key} K-Flex local必須preserve_r0=True")
+            if options.get("local_search") != "deterministic_single_add_swap_v1":
+                raise ValueError(f"arm {key} K-Flex local_search contract不支援")
+            if options.get("selection_only") is not True:
+                raise ValueError(f"arm {key} K-Flex local必須selection_only=True")
+        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT:
+            fit_dl_id = str(options.get("expected_r_fit_dl_id") or "").strip()
+            if not fit_dl_id or fit_dl_id not in settings.dl_sources:
+                raise ValueError(f"arm {key} Expected-PnL必須指定合法expected_r_fit_dl_id")
+            if not str(options.get("expected_r_calibration_method") or "").strip():
+                raise ValueError(f"arm {key} Expected-PnL calibration method不可空白")
+            if options.get("preserve_k_r0") is not True:
+                raise ValueError(f"arm {key} 第一階段Expected-PnL必須preserve_k_r0=True")
+            if options.get("negative_expected_r_allowed") is not True:
+                raise ValueError(
+                    f"arm {key} 第一階段Expected-PnL不得以Expected R負值改變K/R0"
+                )
+        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT:
+            fit_dl_id = str(options.get("expected_excess_r_fit_dl_id") or "").strip()
+            if not fit_dl_id or fit_dl_id not in settings.dl_sources:
+                raise ValueError(f"arm {key} Excess-Alpha必須指定合法expected_excess_r_fit_dl_id")
+            if not str(options.get("expected_excess_r_calibration_method") or "").strip():
+                raise ValueError(f"arm {key} Excess-Alpha calibration method不可空白")
+            if options.get("preserve_k_r0") is not True:
+                raise ValueError(f"arm {key} 第一階段Excess-Alpha必須preserve_k_r0=True")
+            if options.get("negative_expected_excess_r_allowed") is not True:
+                raise ValueError(
+                    f"arm {key} 第一階段Excess-Alpha不得以負Expected Excess-R改變K/R0"
+                )
+            if options.get("selection_only") is not True:
+                raise ValueError(f"arm {key} 第一階段Excess-Alpha必須selection_only=True")
+        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT:
+            fit_dl_id = str(options.get("expected_excess_r_fit_dl_id") or "").strip()
+            if not fit_dl_id or fit_dl_id not in settings.dl_sources:
+                raise ValueError(f"arm {key} Excess-Alpha no-R0必須指定合法expected_excess_r_fit_dl_id")
+            if not str(options.get("expected_excess_r_calibration_method") or "").strip():
+                raise ValueError(f"arm {key} Excess-Alpha no-R0 calibration method不可空白")
+            if options.get("preserve_k") is not True:
+                raise ValueError(f"arm {key} Excess-Alpha no-R0必須preserve_k=True")
+            if options.get("preserve_r0") is not False:
+                raise ValueError(f"arm {key} Excess-Alpha no-R0必須preserve_r0=False")
+            if options.get("r0_minimum_repair") is not False:
+                raise ValueError(f"arm {key} Excess-Alpha no-R0必須r0_minimum_repair=False")
+            if options.get("negative_expected_excess_r_allowed") is not True:
+                raise ValueError(
+                    f"arm {key} Excess-Alpha no-R0不得以負Expected Excess-R改變K"
+                )
+            if options.get("selection_only") is not True:
+                raise ValueError(f"arm {key} Excess-Alpha no-R0必須selection_only=True")
+        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL:
+            fit_dl_id = str(options.get("expected_excess_r_fit_dl_id") or "").strip()
+            if not fit_dl_id or fit_dl_id not in settings.dl_sources:
+                raise ValueError(f"arm {key} Excess-Alpha constrained必須指定合法expected_excess_r_fit_dl_id")
+            if not str(options.get("expected_excess_r_calibration_method") or "").strip():
+                raise ValueError(f"arm {key} Excess-Alpha constrained calibration method不可空白")
+            if options.get("preserve_k_r0") is not True:
+                raise ValueError(f"arm {key} Excess-Alpha constrained必須preserve_k_r0=True")
+            if options.get("constrained_solver") != "exact_branch_and_bound_v1":
+                raise ValueError(f"arm {key} constrained_solver必須為exact_branch_and_bound_v1")
+            if options.get("negative_expected_excess_r_allowed") is not True:
+                raise ValueError(
+                    f"arm {key} Excess-Alpha constrained不得以負Expected Excess-R改變K/R0"
+                )
+            if options.get("selection_only") is not True:
+                raise ValueError(f"arm {key} Excess-Alpha constrained必須selection_only=True")
+        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL:
+            if options.get("preserve_k_r0") is not True:
+                raise ValueError(f"arm {key} Score constrained必須preserve_k_r0=True")
+            if options.get("constrained_solver") != "exact_branch_and_bound_v1":
+                raise ValueError(f"arm {key} constrained_solver必須為exact_branch_and_bound_v1")
+        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_K_FLEX_R0_CONSTRAINED_OPTIMAL:
+            if options.get("count_constraint") != "baseline_k_to_physical_free_slots_v1":
+                raise ValueError(
+                    f"arm {key} K-Flex count_constraint必須為baseline_k_to_physical_free_slots_v1"
+                )
+            if options.get("preserve_r0") is not True:
+                raise ValueError(f"arm {key} K-Flex必須preserve_r0=True")
+            if options.get("constrained_solver") != "exact_branch_and_bound_v1":
+                raise ValueError(f"arm {key} K-Flex constrained_solver必須為exact_branch_and_bound_v1")
+            if options.get("selection_only") is not True:
+                raise ValueError(f"arm {key} K-Flex必須selection_only=True")
+        if arm.dl_runtime_mode in {
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL,
+        }:
+            if options.get("preserve_k_r0") is not True:
+                raise ValueError(f"arm {key} Score+Safety constrained必須preserve_k_r0=True")
+            if options.get("constrained_solver") != "exact_branch_and_bound_v1":
+                raise ValueError(f"arm {key} constrained_solver必須為exact_branch_and_bound_v1")
+            expected_constraint = (
+                "baseline_residual_coverage_and_score_sum_floor_v1"
+                if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL
+                else "baseline_coverage_and_score_sum_floor_v1"
+            )
+            if options.get("safety_constraint") != expected_constraint:
+                raise ValueError(f"arm {key} safety_constraint contract不支援")
+            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL:
+                if options.get("safety_residualization") != "same_day_rank_ols_v1":
+                    raise ValueError(f"arm {key} residual safety必須使用same_day_rank_ols_v1")
+            safety_dl_id = str(options.get("safety_dl_id") or "").strip()
+            if not safety_dl_id or safety_dl_id not in settings.dl_sources:
+                raise ValueError(f"arm {key} 必須指定合法safety_dl_id")
+            safety_score_column = str(options.get("safety_score_column") or "").strip()
+            if safety_dl_id == arm.dl_id and not safety_score_column:
+                raise ValueError(
+                    f"arm {key} 同源single-model safety必須明確指定不同的safety_score_column"
+                )
+            if safety_score_column in {"breakout_quality_score", "model_score"}:
+                raise ValueError(f"arm {key} safety_score_column不得指向primary score欄位")
+            primary_source = settings.dl_sources[arm.dl_id]
+            safety_source = settings.dl_sources[safety_dl_id]
+            allowed_safety_sources = {"selection_point_in_time", "continuous_ranker_oos"}
+            if (
+                primary_source.score_source not in allowed_safety_sources
+                or safety_source.score_source != primary_source.score_source
+            ):
+                raise ValueError(
+                    f"arm {key} dual-model safety primary/secondary必須使用同階段PIT或Forward score source"
+                )
+            expected_selection_only = primary_source.score_source == "selection_point_in_time"
+            if options.get("selection_only") is not expected_selection_only:
+                raise ValueError(
+                    f"arm {key} dual-model safety selection_only與score source階段不一致"
+                )
+            if any(
+                str(options.get(name) or '').strip()
+                for name in (
+                    'expected_excess_r_fit_dl_id',
+                    'expected_excess_r_calibration_method',
+                    'expected_r_fit_dl_id',
+                    'expected_r_calibration_method',
+                )
+            ):
+                raise ValueError(f"arm {key} Score+Safety constrained不得依賴Expected-R/Excess-R calibration")
+        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0:
+            if options.get("preserve_k") is not False:
+                raise ValueError(f"arm {key} Score No-K/No-R0必須preserve_k=False")
+            if options.get("preserve_r0") is not False:
+                raise ValueError(f"arm {key} Score No-K/No-R0必須preserve_r0=False")
+            if options.get("selection_order") != "model_score_desc_then_canonical_tie_v1":
+                raise ValueError(f"arm {key} Score No-K/No-R0 selection_order不支援")
+            if options.get("selection_only") is not True:
+                raise ValueError(f"arm {key} Score No-K/No-R0目前只允許Selection PIT score source")
+            source_is_selection_pit = (
+                settings.dl_sources[arm.dl_id].score_source == "selection_point_in_time"
+            )
+            if not source_is_selection_pit:
+                raise ValueError(
+                    f"arm {key} Score No-K/No-R0必須綁Selection PIT score source: "
+                    f"actual={settings.dl_sources[arm.dl_id].score_source!r}"
+                )
+        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE:
+            if options.get("preserve_k") is not False:
+                raise ValueError(f"arm {key} Raw Safety gate必須preserve_k=False")
+            if options.get("preserve_r0") is not False:
+                raise ValueError(f"arm {key} Raw Safety gate必須preserve_r0=False")
+            if options.get("selection_order") != "model_score_desc_then_canonical_tie_v1":
+                raise ValueError(f"arm {key} Raw Safety gate selection_order不支援")
+            if options.get("safety_gate") != "same_day_orderable_percentile_gte_v1":
+                raise ValueError(f"arm {key} Raw Safety gate contract不支援")
+            try:
+                safety_cutoff = float(options.get("safety_percentile_cutoff"))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"arm {key} safety_percentile_cutoff必須為數值") from exc
+            if not 0.0 <= safety_cutoff <= 1.0:
+                raise ValueError(f"arm {key} safety_percentile_cutoff必須介於0與1")
+            if options.get("selection_only") is not True:
+                raise ValueError(f"arm {key} Raw Safety gate目前只允許Selection PIT score source")
+            safety_dl_id = str(options.get("safety_dl_id") or "").strip()
+            if not safety_dl_id or safety_dl_id not in settings.dl_sources:
+                raise ValueError(f"arm {key} Raw Safety gate必須指定合法safety_dl_id")
+            if safety_dl_id != arm.dl_id:
+                raise ValueError(f"arm {key} Raw Safety必須來自同一MR-13R PIT artifact")
+            if str(options.get("safety_score_column") or "").strip() != "raw_safety_score":
+                raise ValueError(f"arm {key} Raw Safety gate必須使用raw_safety_score")
+            primary_source = settings.dl_sources[arm.dl_id]
+            safety_source = settings.dl_sources[safety_dl_id]
+            if primary_source.score_source != "selection_point_in_time" or safety_source.score_source != primary_source.score_source:
+                raise ValueError(f"arm {key} Raw Safety primary/secondary必須使用同一Selection PIT source")
+        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT:
+            if options.get("preserve_k") is not False:
+                raise ValueError(f"arm {key} Safety×MFE product必須preserve_k=False")
+            if options.get("preserve_r0") is not False:
+                raise ValueError(f"arm {key} Safety×MFE product必須preserve_r0=False")
+            if options.get("selection_order") != "same_day_orderable_percentile_product_desc_then_canonical_tie_v1":
+                raise ValueError(f"arm {key} Safety×MFE product selection_order不支援")
+            if options.get("joint_score_transform") != "raw_safety_pct_x_conditional_mfe_pct_v1":
+                raise ValueError(f"arm {key} Safety×MFE product transform不支援")
+            if options.get("selection_only") is not True:
+                raise ValueError(f"arm {key} Safety×MFE product目前只允許Selection PIT score source")
+            safety_dl_id = str(options.get("safety_dl_id") or "").strip()
+            if not safety_dl_id or safety_dl_id not in settings.dl_sources:
+                raise ValueError(f"arm {key} Safety×MFE product必須指定合法safety_dl_id")
+            if safety_dl_id != arm.dl_id:
+                raise ValueError(f"arm {key} Safety×MFE product必須使用同一MR-13R PIT artifact")
+            if str(options.get("safety_score_column") or "").strip() != "raw_safety_score":
+                raise ValueError(f"arm {key} Safety×MFE product必須使用raw_safety_score")
+            primary_source = settings.dl_sources[arm.dl_id]
+            safety_source = settings.dl_sources[safety_dl_id]
+            if primary_source.score_source != "selection_point_in_time" or safety_source.score_source != primary_source.score_source:
+                raise ValueError(f"arm {key} Safety×MFE product primary/secondary必須使用同一Selection PIT source")
+        if arm.dl_runtime_mode in {
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL,
+        }:
+            if options.get("preserve_k") is not True:
+                raise ValueError(f"arm {key} Score no-R0 exact必須preserve_k=True")
+            if options.get("preserve_r0") is not False:
+                raise ValueError(f"arm {key} Score no-R0 exact必須preserve_r0=False")
+            if options.get("r0_minimum_repair") is not False:
+                raise ValueError(f"arm {key} Score no-R0 exact必須r0_minimum_repair=False")
+            if options.get("constrained_solver") != "exact_branch_and_bound_v1":
+                raise ValueError(f"arm {key} constrained_solver必須為exact_branch_and_bound_v1")
+            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL:
+                if options.get("pareto_selection") != "normalized_product_v1":
+                    raise ValueError(f"arm {key} Pareto selection method不支援")
+                if options.get("pareto_quality") != "score_sum_max_coverage_first":
+                    raise ValueError(f"arm {key} Pareto quality contract不支援")
+                if options.get("pareto_capital") != "canonical_reserved_cost_milli":
+                    raise ValueError(f"arm {key} Pareto capital contract不支援")
+            if options.get("selection_only") is not True:
+                raise ValueError(f"arm {key} Score no-R0 exact目前只允許Selection PIT")
+            selection_only = options.get("selection_only")
+            if not isinstance(selection_only, bool):
+                raise ValueError(f"arm {key} Score constrained selection_only必須為bool")
+            source_is_selection_pit = (
+                settings.dl_sources[arm.dl_id].score_source == "selection_point_in_time"
+            )
+            if selection_only is not source_is_selection_pit:
+                raise ValueError(
+                    f"arm {key} Score constrained selection_only必須與DL source stage一致: "
+                    f"score_source={settings.dl_sources[arm.dl_id].score_source!r}"
+                )
+            if any(
+                str(options.get(name) or '').strip()
+                for name in (
+                    'expected_excess_r_fit_dl_id',
+                    'expected_excess_r_calibration_method',
+                    'expected_r_fit_dl_id',
+                    'expected_r_calibration_method',
+                )
+            ):
+                raise ValueError(f"arm {key} Score constrained不得依賴Expected-R/Excess-R calibration")
+        trained_with = parameter_source.trained_with_dl_id
+        if trained_with is not None and arm.dl_id != trained_with:
+            raise ValueError(
+                "DL-aware參數只能搭配訓練時相同的DL runtime: "
+                f"arm={key}, trained_with={trained_with}, runtime={arm.dl_id}"
+            )
+    else:
+        if arm.dl_id is not None:
+            raise ValueError(f"arm {key}關閉DL時dl_id必須為None")
+        if arm.dl_runtime_mode is not None:
+            raise ValueError(f"arm {key}關閉DL時dl_runtime_mode必須為None")
+        if arm.dl_runtime_options not in (None, {}):
+            raise ValueError(f"arm {key}關閉DL時dl_runtime_options必須為空")
+
+
+def _validate_strategy_comparison_arms(settings: StrategyComparisonSettings) -> None:
     if len(settings.enabled_arms) < 2:
         raise ValueError("至少必須啟用兩個策略比較對象")
     for key, arm in settings.arms.items():
-        if key != arm.arm_id or not key.strip():
-            raise ValueError(f"arm key／arm_id不一致: {key!r}")
-        if arm.robustness_role not in {"off", "fixed_baseline", "stochastic"}:
-            raise ValueError(
-                f"arm {key} robustness_role不支援: {arm.robustness_role!r}"
-            )
-        if arm.robustness_role == "fixed_baseline" and arm.dl_enabled:
-            raise ValueError(f"arm {key} fixed_baseline不得啟用DL")
-        if arm.robustness_role == "stochastic" and not arm.dl_enabled:
-            raise ValueError(f"arm {key} stochastic robustness必須是DL-on")
-        if arm.param_source not in settings.parameter_sources:
-            raise ValueError(f"arm {key}引用不存在的param_source: {arm.param_source}")
-        resolve_strategy_comparison_arm_param_policy(settings, arm)
-        if arm.rule_policy not in {"formal", "all_off"}:
-            raise ValueError(f"arm {key} rule_policy不支援: {arm.rule_policy}")
-        parameter_source = settings.parameter_sources[arm.param_source]
-        if arm.enabled and parameter_source.builder is not None:
-            builder_type = str(parameter_source.builder.builder_type or "").strip()
-            if builder_type == "canonical_optimizer_strategy_params":
-                from core.strategy_param_policy import (
-                    resolve_canonical_strategy_param_training_profile,
-                )
+        _validate_strategy_comparison_arm(settings, key, arm)
 
-                canonical_policy = resolve_strategy_comparison_arm_param_policy(
-                    settings, arm
-                )
-                canonical_profile = resolve_canonical_strategy_param_training_profile(
-                    str(parameter_source.canonical_family or ""),
-                    canonical_policy,
-                )
-                if canonical_profile is None:
-                    raise ValueError(
-                        "current canonical Strategy Compare arm缺少registered strategy-param profile: "
-                        f"arm={key}, family={parameter_source.canonical_family}, "
-                        f"policy={canonical_policy}"
-                    )
-                if canonical_profile.registered_scientific_fingerprint_sha256 is None:
-                    raise ValueError(
-                        "current canonical Strategy Compare arm的strategy-param profile尚未註冊: "
-                        f"arm={key}, profile={canonical_profile.profile_id}"
-                    )
-            elif builder_type == "optimizer_fixed_multiseed_strategy_params":
-                from core.strategy_param_policy import get_strategy_param_training_profile
 
-                options = dict(parameter_source.builder.options)
-                training_profile_id = str(options.get("training_profile_id") or "").strip()
-                if not training_profile_id:
-                    raise ValueError(
-                        f"current fixed multi-seed Strategy Compare arm缺少training_profile_id: arm={key}"
-                    )
-                training_profile = get_strategy_param_training_profile(training_profile_id)
-                arm_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
-                if (
-                    training_profile.parameter_policy != arm_policy
-                    or training_profile.validation_enabled
-                    or training_profile.registered_scientific_fingerprint_sha256 is None
-                ):
-                    raise ValueError(
-                        "current fixed multi-seed Strategy Compare arm與registered profile不一致: "
-                        f"arm={key}, profile={training_profile.profile_id}, policy={arm_policy}"
-                    )
-            elif builder_type == "optimizer_raw_price_strategy_params":
-                from core.strategy_param_policy import get_strategy_param_training_profile
-
-                options = dict(parameter_source.builder.options)
-                training_profile_id = str(options.get("training_profile_id") or "").strip()
-                if not training_profile_id:
-                    raise ValueError(
-                        f"current raw-price Strategy Compare arm缺少training_profile_id: arm={key}"
-                    )
-                training_profile = get_strategy_param_training_profile(training_profile_id)
-                arm_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
-                if (
-                    training_profile.price_basis != "raw_unadjusted"
-                    or training_profile.filter_profile != "full"
-                    or training_profile.parameter_policy != arm_policy
-                    or training_profile.validation_enabled
-                    or not training_profile.artifact_slug
-                ):
-                    raise ValueError(
-                        "current raw-price Strategy Compare arm與profile capability不一致: "
-                        f"arm={key}, profile={training_profile.profile_id}, policy={arm_policy}"
-                    )
-        if arm.dl_enabled:
-            if not arm.dl_id or arm.dl_id not in settings.dl_sources:
-                raise ValueError(f"arm {key}啟用DL但dl_id無效: {arm.dl_id}")
-            if arm.dl_runtime_mode not in SUPPORTED_STRATEGY_DL_RUNTIME_MODES:
-                raise ValueError(
-                    f"arm {key}的dl_runtime_mode不支援: {arm.dl_runtime_mode}; "
-                    f"allowed={SUPPORTED_STRATEGY_DL_RUNTIME_MODES}"
-                )
-            options = dict(arm.dl_runtime_options or {})
-            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD:
-                raw_max_age = options.get('stale_score_membership_guard_max_age_days')
-                if isinstance(raw_max_age, bool) or not isinstance(raw_max_age, int) or raw_max_age < 0:
-                    raise ValueError(
-                        f"arm {key} stale-score guard必須指定非負整數 stale_score_membership_guard_max_age_days"
-                    )
-            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_K_FLEX_R0_FEASIBLE_ASCENT:
-                if options.get("count_constraint") != "baseline_k_to_physical_free_slots_local_v1":
-                    raise ValueError(f"arm {key} K-Flex local count_constraint contract不支援")
-                if options.get("preserve_r0") is not True:
-                    raise ValueError(f"arm {key} K-Flex local必須preserve_r0=True")
-                if options.get("local_search") != "deterministic_single_add_swap_v1":
-                    raise ValueError(f"arm {key} K-Flex local_search contract不支援")
-                if options.get("selection_only") is not True:
-                    raise ValueError(f"arm {key} K-Flex local必須selection_only=True")
-            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT:
-                fit_dl_id = str(options.get("expected_r_fit_dl_id") or "").strip()
-                if not fit_dl_id or fit_dl_id not in settings.dl_sources:
-                    raise ValueError(f"arm {key} Expected-PnL必須指定合法expected_r_fit_dl_id")
-                if not str(options.get("expected_r_calibration_method") or "").strip():
-                    raise ValueError(f"arm {key} Expected-PnL calibration method不可空白")
-                if options.get("preserve_k_r0") is not True:
-                    raise ValueError(f"arm {key} 第一階段Expected-PnL必須preserve_k_r0=True")
-                if options.get("negative_expected_r_allowed") is not True:
-                    raise ValueError(
-                        f"arm {key} 第一階段Expected-PnL不得以Expected R負值改變K/R0"
-                    )
-            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT:
-                fit_dl_id = str(options.get("expected_excess_r_fit_dl_id") or "").strip()
-                if not fit_dl_id or fit_dl_id not in settings.dl_sources:
-                    raise ValueError(f"arm {key} Excess-Alpha必須指定合法expected_excess_r_fit_dl_id")
-                if not str(options.get("expected_excess_r_calibration_method") or "").strip():
-                    raise ValueError(f"arm {key} Excess-Alpha calibration method不可空白")
-                if options.get("preserve_k_r0") is not True:
-                    raise ValueError(f"arm {key} 第一階段Excess-Alpha必須preserve_k_r0=True")
-                if options.get("negative_expected_excess_r_allowed") is not True:
-                    raise ValueError(
-                        f"arm {key} 第一階段Excess-Alpha不得以負Expected Excess-R改變K/R0"
-                    )
-                if options.get("selection_only") is not True:
-                    raise ValueError(f"arm {key} 第一階段Excess-Alpha必須selection_only=True")
-            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT:
-                fit_dl_id = str(options.get("expected_excess_r_fit_dl_id") or "").strip()
-                if not fit_dl_id or fit_dl_id not in settings.dl_sources:
-                    raise ValueError(f"arm {key} Excess-Alpha no-R0必須指定合法expected_excess_r_fit_dl_id")
-                if not str(options.get("expected_excess_r_calibration_method") or "").strip():
-                    raise ValueError(f"arm {key} Excess-Alpha no-R0 calibration method不可空白")
-                if options.get("preserve_k") is not True:
-                    raise ValueError(f"arm {key} Excess-Alpha no-R0必須preserve_k=True")
-                if options.get("preserve_r0") is not False:
-                    raise ValueError(f"arm {key} Excess-Alpha no-R0必須preserve_r0=False")
-                if options.get("r0_minimum_repair") is not False:
-                    raise ValueError(f"arm {key} Excess-Alpha no-R0必須r0_minimum_repair=False")
-                if options.get("negative_expected_excess_r_allowed") is not True:
-                    raise ValueError(
-                        f"arm {key} Excess-Alpha no-R0不得以負Expected Excess-R改變K"
-                    )
-                if options.get("selection_only") is not True:
-                    raise ValueError(f"arm {key} Excess-Alpha no-R0必須selection_only=True")
-            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL:
-                fit_dl_id = str(options.get("expected_excess_r_fit_dl_id") or "").strip()
-                if not fit_dl_id or fit_dl_id not in settings.dl_sources:
-                    raise ValueError(f"arm {key} Excess-Alpha constrained必須指定合法expected_excess_r_fit_dl_id")
-                if not str(options.get("expected_excess_r_calibration_method") or "").strip():
-                    raise ValueError(f"arm {key} Excess-Alpha constrained calibration method不可空白")
-                if options.get("preserve_k_r0") is not True:
-                    raise ValueError(f"arm {key} Excess-Alpha constrained必須preserve_k_r0=True")
-                if options.get("constrained_solver") != "exact_branch_and_bound_v1":
-                    raise ValueError(f"arm {key} constrained_solver必須為exact_branch_and_bound_v1")
-                if options.get("negative_expected_excess_r_allowed") is not True:
-                    raise ValueError(
-                        f"arm {key} Excess-Alpha constrained不得以負Expected Excess-R改變K/R0"
-                    )
-                if options.get("selection_only") is not True:
-                    raise ValueError(f"arm {key} Excess-Alpha constrained必須selection_only=True")
-            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL:
-                if options.get("preserve_k_r0") is not True:
-                    raise ValueError(f"arm {key} Score constrained必須preserve_k_r0=True")
-                if options.get("constrained_solver") != "exact_branch_and_bound_v1":
-                    raise ValueError(f"arm {key} constrained_solver必須為exact_branch_and_bound_v1")
-            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_K_FLEX_R0_CONSTRAINED_OPTIMAL:
-                if options.get("count_constraint") != "baseline_k_to_physical_free_slots_v1":
-                    raise ValueError(
-                        f"arm {key} K-Flex count_constraint必須為baseline_k_to_physical_free_slots_v1"
-                    )
-                if options.get("preserve_r0") is not True:
-                    raise ValueError(f"arm {key} K-Flex必須preserve_r0=True")
-                if options.get("constrained_solver") != "exact_branch_and_bound_v1":
-                    raise ValueError(f"arm {key} K-Flex constrained_solver必須為exact_branch_and_bound_v1")
-                if options.get("selection_only") is not True:
-                    raise ValueError(f"arm {key} K-Flex必須selection_only=True")
-            if arm.dl_runtime_mode in {
-                STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
-                STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL,
-            }:
-                if options.get("preserve_k_r0") is not True:
-                    raise ValueError(f"arm {key} Score+Safety constrained必須preserve_k_r0=True")
-                if options.get("constrained_solver") != "exact_branch_and_bound_v1":
-                    raise ValueError(f"arm {key} constrained_solver必須為exact_branch_and_bound_v1")
-                expected_constraint = (
-                    "baseline_residual_coverage_and_score_sum_floor_v1"
-                    if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL
-                    else "baseline_coverage_and_score_sum_floor_v1"
-                )
-                if options.get("safety_constraint") != expected_constraint:
-                    raise ValueError(f"arm {key} safety_constraint contract不支援")
-                if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL:
-                    if options.get("safety_residualization") != "same_day_rank_ols_v1":
-                        raise ValueError(f"arm {key} residual safety必須使用same_day_rank_ols_v1")
-                safety_dl_id = str(options.get("safety_dl_id") or "").strip()
-                if not safety_dl_id or safety_dl_id not in settings.dl_sources:
-                    raise ValueError(f"arm {key} 必須指定合法safety_dl_id")
-                safety_score_column = str(options.get("safety_score_column") or "").strip()
-                if safety_dl_id == arm.dl_id and not safety_score_column:
-                    raise ValueError(
-                        f"arm {key} 同源single-model safety必須明確指定不同的safety_score_column"
-                    )
-                if safety_score_column in {"breakout_quality_score", "model_score"}:
-                    raise ValueError(f"arm {key} safety_score_column不得指向primary score欄位")
-                primary_source = settings.dl_sources[arm.dl_id]
-                safety_source = settings.dl_sources[safety_dl_id]
-                allowed_safety_sources = {"selection_point_in_time", "continuous_ranker_oos"}
-                if (
-                    primary_source.score_source not in allowed_safety_sources
-                    or safety_source.score_source != primary_source.score_source
-                ):
-                    raise ValueError(
-                        f"arm {key} dual-model safety primary/secondary必須使用同階段PIT或Forward score source"
-                    )
-                expected_selection_only = primary_source.score_source == "selection_point_in_time"
-                if options.get("selection_only") is not expected_selection_only:
-                    raise ValueError(
-                        f"arm {key} dual-model safety selection_only與score source階段不一致"
-                    )
-                if any(
-                    str(options.get(name) or '').strip()
-                    for name in (
-                        'expected_excess_r_fit_dl_id',
-                        'expected_excess_r_calibration_method',
-                        'expected_r_fit_dl_id',
-                        'expected_r_calibration_method',
-                    )
-                ):
-                    raise ValueError(f"arm {key} Score+Safety constrained不得依賴Expected-R/Excess-R calibration")
-            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0:
-                if options.get("preserve_k") is not False:
-                    raise ValueError(f"arm {key} Score No-K/No-R0必須preserve_k=False")
-                if options.get("preserve_r0") is not False:
-                    raise ValueError(f"arm {key} Score No-K/No-R0必須preserve_r0=False")
-                if options.get("selection_order") != "model_score_desc_then_canonical_tie_v1":
-                    raise ValueError(f"arm {key} Score No-K/No-R0 selection_order不支援")
-                if options.get("selection_only") is not True:
-                    raise ValueError(f"arm {key} Score No-K/No-R0目前只允許Selection PIT score source")
-                source_is_selection_pit = (
-                    settings.dl_sources[arm.dl_id].score_source == "selection_point_in_time"
-                )
-                if not source_is_selection_pit:
-                    raise ValueError(
-                        f"arm {key} Score No-K/No-R0必須綁Selection PIT score source: "
-                        f"actual={settings.dl_sources[arm.dl_id].score_source!r}"
-                    )
-            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE:
-                if options.get("preserve_k") is not False:
-                    raise ValueError(f"arm {key} Raw Safety gate必須preserve_k=False")
-                if options.get("preserve_r0") is not False:
-                    raise ValueError(f"arm {key} Raw Safety gate必須preserve_r0=False")
-                if options.get("selection_order") != "model_score_desc_then_canonical_tie_v1":
-                    raise ValueError(f"arm {key} Raw Safety gate selection_order不支援")
-                if options.get("safety_gate") != "same_day_orderable_percentile_gte_v1":
-                    raise ValueError(f"arm {key} Raw Safety gate contract不支援")
-                try:
-                    safety_cutoff = float(options.get("safety_percentile_cutoff"))
-                except (TypeError, ValueError) as exc:
-                    raise ValueError(f"arm {key} safety_percentile_cutoff必須為數值") from exc
-                if not 0.0 <= safety_cutoff <= 1.0:
-                    raise ValueError(f"arm {key} safety_percentile_cutoff必須介於0與1")
-                if options.get("selection_only") is not True:
-                    raise ValueError(f"arm {key} Raw Safety gate目前只允許Selection PIT score source")
-                safety_dl_id = str(options.get("safety_dl_id") or "").strip()
-                if not safety_dl_id or safety_dl_id not in settings.dl_sources:
-                    raise ValueError(f"arm {key} Raw Safety gate必須指定合法safety_dl_id")
-                if safety_dl_id != arm.dl_id:
-                    raise ValueError(f"arm {key} Raw Safety必須來自同一MR-13R PIT artifact")
-                if str(options.get("safety_score_column") or "").strip() != "raw_safety_score":
-                    raise ValueError(f"arm {key} Raw Safety gate必須使用raw_safety_score")
-                primary_source = settings.dl_sources[arm.dl_id]
-                safety_source = settings.dl_sources[safety_dl_id]
-                if primary_source.score_source != "selection_point_in_time" or safety_source.score_source != primary_source.score_source:
-                    raise ValueError(f"arm {key} Raw Safety primary/secondary必須使用同一Selection PIT source")
-            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT:
-                if options.get("preserve_k") is not False:
-                    raise ValueError(f"arm {key} Safety×MFE product必須preserve_k=False")
-                if options.get("preserve_r0") is not False:
-                    raise ValueError(f"arm {key} Safety×MFE product必須preserve_r0=False")
-                if options.get("selection_order") != "same_day_orderable_percentile_product_desc_then_canonical_tie_v1":
-                    raise ValueError(f"arm {key} Safety×MFE product selection_order不支援")
-                if options.get("joint_score_transform") != "raw_safety_pct_x_conditional_mfe_pct_v1":
-                    raise ValueError(f"arm {key} Safety×MFE product transform不支援")
-                if options.get("selection_only") is not True:
-                    raise ValueError(f"arm {key} Safety×MFE product目前只允許Selection PIT score source")
-                safety_dl_id = str(options.get("safety_dl_id") or "").strip()
-                if not safety_dl_id or safety_dl_id not in settings.dl_sources:
-                    raise ValueError(f"arm {key} Safety×MFE product必須指定合法safety_dl_id")
-                if safety_dl_id != arm.dl_id:
-                    raise ValueError(f"arm {key} Safety×MFE product必須使用同一MR-13R PIT artifact")
-                if str(options.get("safety_score_column") or "").strip() != "raw_safety_score":
-                    raise ValueError(f"arm {key} Safety×MFE product必須使用raw_safety_score")
-                primary_source = settings.dl_sources[arm.dl_id]
-                safety_source = settings.dl_sources[safety_dl_id]
-                if primary_source.score_source != "selection_point_in_time" or safety_source.score_source != primary_source.score_source:
-                    raise ValueError(f"arm {key} Safety×MFE product primary/secondary必須使用同一Selection PIT source")
-            if arm.dl_runtime_mode in {
-                STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
-                STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,
-                STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL,
-            }:
-                if options.get("preserve_k") is not True:
-                    raise ValueError(f"arm {key} Score no-R0 exact必須preserve_k=True")
-                if options.get("preserve_r0") is not False:
-                    raise ValueError(f"arm {key} Score no-R0 exact必須preserve_r0=False")
-                if options.get("r0_minimum_repair") is not False:
-                    raise ValueError(f"arm {key} Score no-R0 exact必須r0_minimum_repair=False")
-                if options.get("constrained_solver") != "exact_branch_and_bound_v1":
-                    raise ValueError(f"arm {key} constrained_solver必須為exact_branch_and_bound_v1")
-                if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL:
-                    if options.get("pareto_selection") != "normalized_product_v1":
-                        raise ValueError(f"arm {key} Pareto selection method不支援")
-                    if options.get("pareto_quality") != "score_sum_max_coverage_first":
-                        raise ValueError(f"arm {key} Pareto quality contract不支援")
-                    if options.get("pareto_capital") != "canonical_reserved_cost_milli":
-                        raise ValueError(f"arm {key} Pareto capital contract不支援")
-                if options.get("selection_only") is not True:
-                    raise ValueError(f"arm {key} Score no-R0 exact目前只允許Selection PIT")
-                selection_only = options.get("selection_only")
-                if not isinstance(selection_only, bool):
-                    raise ValueError(f"arm {key} Score constrained selection_only必須為bool")
-                source_is_selection_pit = (
-                    settings.dl_sources[arm.dl_id].score_source == "selection_point_in_time"
-                )
-                if selection_only is not source_is_selection_pit:
-                    raise ValueError(
-                        f"arm {key} Score constrained selection_only必須與DL source stage一致: "
-                        f"score_source={settings.dl_sources[arm.dl_id].score_source!r}"
-                    )
-                if any(
-                    str(options.get(name) or '').strip()
-                    for name in (
-                        'expected_excess_r_fit_dl_id',
-                        'expected_excess_r_calibration_method',
-                        'expected_r_fit_dl_id',
-                        'expected_r_calibration_method',
-                    )
-                ):
-                    raise ValueError(f"arm {key} Score constrained不得依賴Expected-R/Excess-R calibration")
-            trained_with = parameter_source.trained_with_dl_id
-            if trained_with is not None and arm.dl_id != trained_with:
-                raise ValueError(
-                    "DL-aware參數只能搭配訓練時相同的DL runtime: "
-                    f"arm={key}, trained_with={trained_with}, runtime={arm.dl_id}"
-                )
-        else:
-            if arm.dl_id is not None:
-                raise ValueError(f"arm {key}關閉DL時dl_id必須為None")
-            if arm.dl_runtime_mode is not None:
-                raise ValueError(f"arm {key}關閉DL時dl_runtime_mode必須為None")
-            if arm.dl_runtime_options not in (None, {}):
-                raise ValueError(f"arm {key}關閉DL時dl_runtime_options必須為空")
-
+def _validate_strategy_comparison_contrasts(settings: StrategyComparisonSettings) -> None:
     enabled_ids = {arm.arm_id for arm in settings.enabled_arms}
     for key, contrast in settings.contrasts.items():
         if key != contrast.contrast_id or not key.strip():
@@ -1337,6 +1355,8 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                 f"{contrast.left}, {contrast.right}"
             )
 
+
+def _validate_strategy_comparison_groups(settings: StrategyComparisonSettings) -> None:
     groups: dict[
         tuple[str, str, str],
         dict[str, StrategyComparisonArm | dict[tuple[str, str, str], StrategyComparisonArm] | None],
@@ -1405,6 +1425,15 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                 f"{group_key}"
             )
 
+
+def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) -> None:
+    """Validate in stable error-precedence order without duplicating rules."""
+    _validate_strategy_comparison_base(settings)
+    _validate_strategy_comparison_parameter_sources(settings)
+    _validate_strategy_comparison_dl_sources(settings)
+    _validate_strategy_comparison_arms(settings)
+    _validate_strategy_comparison_contrasts(settings)
+    _validate_strategy_comparison_groups(settings)
 
 def strategy_comparison_fingerprint(
     settings: StrategyComparisonSettings,

@@ -955,6 +955,7 @@
 | T569 | `validate_portfolio_terminal_owner_contract_case`：Portfolio 期末結算、統計、期間報表、profile sidecar 與 training／reporting tuple 的 canonical owner 與同源口徑。 | B200 |
 | T570 | `validate_portfolio_candidate_replay_owner_contract_case`：Portfolio 候選資格、盤前資源選擇及 Replay 輸出之 canonical owner、PIT cursor、單／多成員行為與時序契約。 | B200 |
 | T571 | `validate_portfolio_signal_lifecycle_owner_contract_case`：Portfolio 日序買訊 Re-entry／延續追蹤／清理的 canonical owner、PIT 時序、單／多成員路由與 replay fast-path 契約。 | B200 |
+| T572 | `validate_strategy_compare_settings_validation_stages_contract_case`：Registry-driven Compare profile、validation first-error precedence、DL runtime capability 與設定 fingerprint schema 防退化。 | B189 |
 
 ## G. 逐項收斂紀錄
 
@@ -3293,3 +3294,4 @@
 | 2026-10-11 | T569 | 將已註冊的 Portfolio 期末 owner 與統計輸出測試納入 B200 DONE 索引。 | NEW -> DONE | `validate_portfolio_terminal_owner_contract_case`；`tools/validate/synthetic_portfolio_terminal_cases.py` |
 | 2026-10-11 | T570 | 將已註冊的 Portfolio Candidate／Replay 單一 owner 合約測試納入 B200 DONE 索引。 | NEW -> DONE | `validate_portfolio_candidate_replay_owner_contract_case`；`tools/validate/synthetic_portfolio_candidate_replay_cases.py` |
 | 2026-10-11 | T571 | 將已註冊且已驗證的 Portfolio signal lifecycle owner 測試納入 B200 DONE 索引。 | NEW -> DONE | `validate_portfolio_signal_lifecycle_owner_contract_case`；`tools/validate/synthetic_portfolio_signal_lifecycle_cases.py` |
+| 2026-10-11 | T572 | 新增 canonical Strategy Compare 設定驗證分段的泛化契約測試，不硬編目前 arms／profile ID。 | NEW -> DONE | `validate_strategy_compare_settings_validation_stages_contract_case`；`tools/validate/synthetic_breakout_quality_strategy_plan_cases.py` |

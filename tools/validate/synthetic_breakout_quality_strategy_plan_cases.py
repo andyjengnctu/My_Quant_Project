@@ -327,3 +327,97 @@ def validate_strategy_compare_resolved_plan_transition_contract_case(_base_param
 
 
 __all__ = ["validate_strategy_compare_resolved_plan_transition_contract_case"]
+
+
+def validate_strategy_compare_settings_validation_stages_contract_case(_base_params):
+    """The canonical validator must preserve stage precedence across owners.
+
+    These are generic schema/graph invariants: never freeze current C-arm IDs,
+    experimental identities, or the current set of active Compare profiles.
+    """
+    from core.strategy_compare_policy import get_strategy_comparison_profiles
+    from core.strategy_comparison import (
+        strategy_comparison_fingerprint,
+        validate_strategy_comparison_settings,
+    )
+
+    results, summary, check, check_true = bind_synthetic_case(
+        "STRATEGY_COMPARE_VALIDATION_STAGES", "synthetic_breakout_quality"
+    )
+
+    def error_message(settings):
+        try:
+            validate_strategy_comparison_settings(settings)
+        except ValueError as exc:
+            return str(exc)
+        return None
+
+    def replace_mapping(settings, name, key, **updates):
+        mapping = dict(getattr(settings, name))
+        mapping[key] = replace(mapping[key], **updates)
+        return replace(settings, **{name: mapping})
+
+    profiles = get_strategy_comparison_profiles()
+    check_true("comparison_has_registered_profiles", bool(profiles))
+    for profile in profiles:
+        settings = get_strategy_comparison_settings(profile["profile_id"])
+        check(
+            f"profile_{settings.profile_id}_validation_accepts_contract",
+            None,
+            error_message(settings),
+        )
+        fingerprint = strategy_comparison_fingerprint(settings)
+        check_true(
+            f"profile_{settings.profile_id}_fingerprint_remains_sha12",
+            len(fingerprint) == 12 and all(char in "0123456789abcdef" for char in fingerprint),
+        )
+
+    if not profiles:
+        return results, summary
+    settings = get_strategy_comparison_settings(profiles[0]["profile_id"])
+    param_key = next(iter(settings.parameter_sources))
+    dl_key = next(iter(settings.dl_sources))
+    arm_key = next(iter(settings.arms))
+    contrast_key = next(iter(settings.contrasts))
+
+    bad_parameter = replace_mapping(
+        settings, "parameter_sources", param_key, source_id="synthetic_mismatched_source"
+    )
+    bad_dl = replace_mapping(settings, "dl_sources", dl_key, dl_id="synthetic_mismatched_dl")
+    bad_arm = replace_mapping(settings, "arms", arm_key, arm_id="synthetic_mismatched_arm")
+    bad_contrast = replace_mapping(
+        settings, "contrasts", contrast_key, contrast_id="synthetic_mismatched_contrast"
+    )
+    off_arm = next(arm for arm in settings.arms.values() if not arm.dl_enabled)
+    duplicate_id = "SYNTHETIC_EXTRA_DL_OFF_BASELINE"
+    bad_group = replace(
+        settings,
+        arms={**dict(settings.arms), duplicate_id: replace(off_arm, arm_id=duplicate_id, enabled=False)},
+    )
+
+    # Two faults together must yield the earlier canonical stage's first error.
+    precedence = (
+        ("schema_over_source", replace(bad_parameter, schema_version=0), "strategy comparison schema_version必須>=2"),
+        ("source_over_dl", replace(bad_parameter, dl_sources=bad_dl.dl_sources), "parameter source key／source_id不一致"),
+        ("dl_over_arm", replace(bad_dl, arms=bad_arm.arms), "DL source key／dl_id不一致"),
+        ("arm_over_contrast", replace(bad_arm, contrasts=bad_contrast.contrasts), "arm key／arm_id不一致"),
+        ("contrast_over_group", replace(bad_group, contrasts=bad_contrast.contrasts), "contrast key／contrast_id不一致"),
+        ("group_duplicate_dl_off", bad_group, "同一param_source／param_policy／rule_policy只能定義一個DL-off基準"),
+    )
+    for name, mutated, expected_fragment in precedence:
+        actual = error_message(mutated)
+        check_true(name, actual is not None and expected_fragment in actual)
+
+    dl_arms = [arm for arm in settings.arms.values() if arm.dl_enabled]
+    check_true("comparison_has_dl_arms", bool(dl_arms))
+    for arm in dl_arms:
+        invalid = replace_mapping(
+            settings, "arms", arm.arm_id, dl_runtime_mode="unsupported_synthetic_runtime"
+        )
+        actual = error_message(invalid)
+        check_true(
+            f"runtime_mode_{arm.arm_id}_rejects_unsupported_capability",
+            actual is not None and "dl_runtime_mode不支援" in actual,
+        )
+
+    return results, summary
