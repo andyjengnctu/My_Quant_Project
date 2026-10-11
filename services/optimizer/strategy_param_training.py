@@ -955,7 +955,11 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
         )
         with _temporary_environment(env_values):
             exit_code = run_outer_rolling_oos(
-                argv=build_outer_rolling_argv(args=args, baseline_contract=baseline_contract),
+                argv=build_outer_rolling_argv(
+                    args=args,
+                    baseline_contract=baseline_contract,
+                    oos_end_cap_date=getattr(args, "oos_end_cap_date", None),
+                ),
                 environ=outer_environ,
                 project_root=str(root),
                 output_dir=str(optimizer_output_dir),
@@ -1251,6 +1255,7 @@ def prepare_selection_historical_p2_params(
     optimizer_output_title: str = "💾 輸出檔案",
     parameter_set_identity: str | None = None,
     seed_ensemble_policy_override: dict | None = None,
+    oos_end_cap_date: str | None = None,
 ):
     """Build/reuse Selection Min ROOS with one canonical rolling optimization.
 
@@ -1322,6 +1327,7 @@ def prepare_selection_historical_p2_params(
         quiet=bool(quiet),
         optimizer_output_title=str(optimizer_output_title),
         parameter_set_identity=str(parameter_set_identity or "P2_HISTORY"),
+        oos_end_cap_date=oos_end_cap_date,
         seed_ensemble_policy_override=(
             None if seed_ensemble_policy_override is None else dict(seed_ensemble_policy_override)
         ),

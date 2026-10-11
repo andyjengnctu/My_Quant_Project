@@ -173,6 +173,72 @@ def estimate_rolling_seed_eta(
     }
 
 
+
+def estimate_rolling_fold_eta(
+    *,
+    tasks: list[dict],
+    fold_progress_by_fold: dict[int, dict],
+    completed_oos_years: set[int],
+    fold_workers: int,
+    now_ts: float | None = None,
+) -> dict:
+    """Presentation-only ETA for ordinary parallel folds (one seed each).
+
+    Trials are concurrent across folds, while per-fold post-search diagnostics
+    run in the same worker.  This must not use the multi-seed parent Replay
+    accounting: single-seed folds do not have an ensemble Replay phase.
+    """
+    now = float(time.time() if now_ts is None else now_ts)
+    done_years = {int(year) for year in completed_oos_years}
+    rates: list[float] = []
+    post_search_samples: list[float] = []
+    states: list[dict] = []
+    for task in tasks:
+        fold_idx = int(task.get("fold_idx", 0) or 0)
+        year = int(task.get("oos_year", 0) or 0)
+        progress = dict(fold_progress_by_fold.get(fold_idx) or {})
+        stage = str(progress.get("stage") or "QUEUED").upper()
+        finished = year in done_years or stage in {"DONE", "FOLD_RESULT"}
+        trial_budget = max(1, int(dict(task.get("config") or {}).get("trials_per_fold", 0) or 1))
+        completed = max(0, min(trial_budget, int(progress.get("completed", 0) or 0)))
+        if finished or stage in {"LOCAL_MIN_REVIEW", "OOS_DIAGNOSTICS"}:
+            completed = trial_budget
+        search_elapsed = _finite_positive(progress.get("search_active_elapsed_sec"))
+        rate = search_elapsed / completed if search_elapsed is not None and completed >= 8 else None
+        if rate is not None:
+            rates.append(rate)
+        if finished:
+            whole_elapsed = _finite_positive(progress.get("elapsed_sec"))
+            if search_elapsed is not None and whole_elapsed is not None and whole_elapsed > search_elapsed:
+                post_search_samples.append(whole_elapsed - search_elapsed)
+        states.append({
+            "finished": finished,
+            "stage": stage,
+            "remaining_trials": max(0, trial_budget - completed),
+            "rate": rate,
+        })
+
+    if not states or all(item["finished"] for item in states):
+        return {"status": "done", "remaining_sec": 0.0, "finish_ts": now, "confidence": "measured"}
+    fallback_rate = _positive_median(rates)
+    if fallback_rate is None:
+        return {"status": "calibrating", "remaining_sec": None, "finish_ts": None, "confidence": "low"}
+
+    measured_overhead = _positive_median(post_search_samples)
+    overhead = measured_overhead if measured_overhead is not None else _POST_SEARCH_REPLAY_FALLBACK_SEC
+    durations = [
+        float(item["remaining_trials"]) * (item["rate"] or fallback_rate) + overhead
+        for item in states if not item["finished"]
+    ]
+    remaining = _fold_parallel_tail(durations, max(1, int(fold_workers)))
+    return {
+        "status": "estimated",
+        "remaining_sec": remaining,
+        "finish_ts": now + remaining,
+        "confidence": "dynamic" if measured_overhead is not None else "initial",
+    }
+
+
 def format_rolling_seed_eta(estimate: dict) -> str:
     """A short, explicitly approximate suffix for the existing progress header."""
     status = str((estimate or {}).get("status") or "calibrating")

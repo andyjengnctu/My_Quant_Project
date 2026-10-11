@@ -3050,6 +3050,26 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         "2026-03-02",
         cutoff_folds[-1]["oos_end_date"],
     )
+    check(
+        "outer_rolling_partial_tail_does_not_change_earlier_years_or_training_window",
+        True,
+        len(cutoff_folds) == 6
+        and all(row["oos_end_date"] == f"{year}-12-31" for year, row in zip(range(2021, 2026), cutoff_folds[:5]))
+        and cutoff_folds[-1]["selection_start_date"] == "2016-01-01"
+        and cutoff_folds[-1]["selection_end_date"] == "2025-12-31"
+        and cutoff_folds[-1]["oos_start_date"] == "2026-01-01",
+    )
+    from services.optimizer.outer_rolling_plan import _print_plan
+    cutoff_plan_text = io.StringIO()
+    with redirect_stdout(cutoff_plan_text):
+        _print_plan(rolling_config)
+    check(
+        "outer_rolling_plan_displays_effective_research_cutoff_not_full_2026",
+        True,
+        "OOS cutoff       : 2026-03-02" in cutoff_plan_text.getvalue()
+        and "2026-01~26-03" in cutoff_plan_text.getvalue()
+        and "2026-01~26-12" not in cutoff_plan_text.getvalue(),
+    )
     from services.optimizer.outer_rolling_oos import _build_validation_progress_period_context
     progress_period_context = _build_validation_progress_period_context(
         selection_start="2011-01-01",
@@ -3868,6 +3888,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     # ETA is display telemetry: search rate, per-fold cap, and remaining
     # parent replay must all contribute, without touching fitting identity.
     from services.optimizer.outer_rolling_eta import (
+        estimate_rolling_fold_eta,
         estimate_rolling_seed_eta,
         format_rolling_seed_eta,
     )
@@ -3966,6 +3987,70 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     )
     # Confirm the real global-scheduler live header consumes the ETA helper.
     from services.optimizer import outer_rolling_live_boards as _eta_board_module
+    # Ordinary 6-fold x 1-seed schedules are independently parallel across
+    # folds, and have OOS diagnostics rather than the ensemble Replay tail.
+    single_tasks = [
+        {"fold_idx": idx, "oos_year": 2020 + idx,
+         "config": {"trials_per_fold": 300}, "fold_workers": 6,
+         "selection_period": f"{2010+idx}-01-01~{2019+idx}-12-31"}
+        for idx in range(1, 7)
+    ]
+    single_progress = {
+        idx: {"stage": "OPTIMIZER_SEARCH", "completed": 50,
+              "search_active_elapsed_sec": 200.0}
+        for idx in range(1, 7)
+    }
+    single_eta = estimate_rolling_fold_eta(
+        tasks=single_tasks, fold_progress_by_fold=single_progress,
+        completed_oos_years=set(), fold_workers=6, now_ts=1000.0,
+    )
+    single_faster = estimate_rolling_fold_eta(
+        tasks=single_tasks,
+        fold_progress_by_fold={i: {**p, "completed": 150,
+                                   "search_active_elapsed_sec": 600.0}
+                               for i, p in single_progress.items()},
+        completed_oos_years=set(), fold_workers=6, now_ts=1000.0,
+    )
+    single_calibrating = estimate_rolling_fold_eta(
+        tasks=single_tasks, fold_progress_by_fold={},
+        completed_oos_years=set(), fold_workers=6, now_ts=1000.0,
+    )
+    single_done = estimate_rolling_fold_eta(
+        tasks=single_tasks, fold_progress_by_fold=single_progress,
+        completed_oos_years=set(range(2021, 2027)), fold_workers=6,
+        now_ts=1000.0,
+    )
+    check(
+        "rolling_single_seed_eta_models_fold_parallelism_and_post_search_tail",
+        True,
+        single_eta["status"] == "estimated"
+        and abs(single_eta["remaining_sec"] - 1030.0) < 1e-8
+        and single_faster["remaining_sec"] < single_eta["remaining_sec"]
+        and single_calibrating["status"] == "calibrating"
+        and single_done["status"] == "done"
+        and "(+08)" in format_rolling_seed_eta(single_eta),
+    )
+    # Exercise the *single-seed live board*, not only the pure ETA helper.
+    with patch.object(
+        _eta_board_module, "_read_latest_parallel_fold_progress",
+        side_effect=lambda path: {
+            "stage": "OPTIMIZER_SEARCH", "completed": 50,
+            "search_active_intervals": [[100.0, 300.0]],
+            "search_started_ts": 100.0, "search_last_done_ts": 300.0,
+        },
+    ), patch.object(
+        _eta_board_module, "_latest_parallel_fold_log_status", return_value="",
+    ):
+        single_board = _eta_board_module._ParallelFoldLiveBoard(single_tasks)
+        single_lines = single_board._build_lines(
+            pending=set(range(6)), future_map={}, completed_rows=[], fold_timing_rows=[],
+        )
+    check(
+        "rolling_single_seed_live_header_shows_eta_and_finish_in_original_progress_line",
+        True,
+        bool(single_lines) and "ETA" in single_lines[0]
+        and "(+08)" in single_lines[0] and "avg_trial" in single_lines[0],
+    )
     eta_board_tasks = [
         {
             **task,
@@ -4840,6 +4925,19 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and rolling_corrected_source.consumption_evaluation_mode == "rolling"
         and legacy_oos.output_root != legacy_rolling.output_root,
     )
+    from services.optimizer.strategy_param_service import _registered_broker_cash_oos_end_cap
+    check(
+        "registered_broker_cash_partial_tail_preserves_forward_and_frozen_history",
+        True,
+        all(
+            _registered_broker_cash_oos_end_cap(profile_id, comparison_end_date="2026-03-02") == "2026-03-02"
+            and _registered_broker_cash_oos_end_cap(profile_id, comparison_end_date="2021-01-01") is None
+            for profile_id, *_ in expected_new.values()
+        )
+        and _registered_broker_cash_oos_end_cap(
+            "production_multiseed_current", comparison_end_date="2026-03-02"
+        ) is None,
+    )
     # Registered broker-cash producer integration: no full market data is used
     # here.  Stub only the expensive canonical Optimizer, and exercise the real
     # Min/Full publisher, manifest, required identity and REUSE validator.
@@ -4897,6 +4995,12 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
                     and first["path"] == second["path"]
                     and Path(first["manifest_path"]).is_file(),
                 )
+                producer = min_producer if family == "min" else full_producer
+                check(
+                    f"registered_broker_cash_producer_passes_exact_cutoff_{arm_id}",
+                    "2026-03-02",
+                    producer.call_args.kwargs.get("oos_end_cap_date"),
+                )
                 benchmark_kwargs = {
                     **kwargs, "benchmark_id": str(benchmark_snapshot["benchmark_id"]),
                     "replication_seed": int(benchmark_snapshot["resolved_seeds"][0]),
@@ -4909,6 +5013,11 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
                 )
                 benchmark_second = ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
                     broker_tmp, **benchmark_kwargs,
+                )
+                check(
+                    f"registered_broker_cash_robustness_passes_exact_cutoff_{arm_id}",
+                    "2026-03-02",
+                    producer.call_args.kwargs.get("oos_end_cap_date"),
                 )
                 seed_contract = dict(benchmark_first["build_contract"]["seed_ensemble_policy"])
                 check(

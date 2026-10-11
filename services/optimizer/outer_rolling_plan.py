@@ -330,6 +330,8 @@ def _print_plan(
     else:
         print(f"oos horizon      : next {int(config.oos_horizon_months)} months")
     print(f"optimizer trials : {config.trials_per_fold} per fold")
+    if str(config.oos_end_cap_date or "").strip():
+        print(f"OOS cutoff       : {config.oos_end_cap_date}")
     if parallel_settings_line:
         print(str(parallel_settings_line))
     print(f"{C_GRAY}{'-' * 100}{C_RESET}")

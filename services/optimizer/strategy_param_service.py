@@ -3133,6 +3133,26 @@ def inspect_fixed_multiseed_strategy_parameter_artifact(
     }
 
 
+
+def _registered_broker_cash_oos_end_cap(
+    training_profile_id: str, *, comparison_end_date: str
+) -> str | None:
+    """Resolve a partial final-fold boundary from the canonical Research profile.
+
+    ``comparison_end_date`` can be the *start* of a requested Forward fold;
+    it must never truncate an earlier 12-month block to its first day.  This
+    cap affects only new broker-cash execution, not frozen legacy fee studies.
+    """
+    from core.strategy_param_policy import get_strategy_param_training_profile
+
+    profile = get_strategy_param_training_profile(training_profile_id)
+    if profile.fee_accounting_policy != "broker_cash_v1":
+        return None
+    coverage = datetime.strptime(str(profile.coverage_end_date), "%Y-%m-%d").date()
+    requested = datetime.strptime(str(comparison_end_date), "%Y-%m-%d").date()
+    return coverage.isoformat() if requested.year >= coverage.year else None
+
+
 def ensure_fixed_multiseed_strategy_parameter_artifact(
     project_root: str | Path,
     *,
@@ -3205,6 +3225,9 @@ def ensure_fixed_multiseed_strategy_parameter_artifact(
         quiet=False,
         first_oos_date=str(contract["schedule_start"]),
         last_oos_date=end_date,
+        oos_end_cap_date=_registered_broker_cash_oos_end_cap(
+            training_profile_id, comparison_end_date=end_date
+        ),
         train_window_months=int(contract["train_window_months"]),
         oos_months=int(contract["oos_horizon_months"]),
         output_relative_dir=work_root,
@@ -3773,6 +3796,9 @@ def ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
         quiet=bool(quiet),
         first_oos_date=str(contract["schedule_start"]),
         last_oos_date=str(comparison_end_date),
+        oos_end_cap_date=_registered_broker_cash_oos_end_cap(
+            training_profile_id, comparison_end_date=str(comparison_end_date)
+        ),
         train_window_months=int(contract["train_window_months"]),
         oos_months=int(contract["oos_horizon_months"]),
         output_relative_dir=work_root,

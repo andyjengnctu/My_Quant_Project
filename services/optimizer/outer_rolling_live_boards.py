@@ -9,7 +9,11 @@ from core.training_performance import (
     resolve_optimizer_random_seed_ensemble_parallel_workers_default,
 )
 from services.optimizer.outer_rolling_artifacts import _build_seed_ensemble_policy_payload
-from services.optimizer.outer_rolling_eta import estimate_rolling_seed_eta, format_rolling_seed_eta
+from services.optimizer.outer_rolling_eta import (
+    estimate_rolling_fold_eta,
+    estimate_rolling_seed_eta,
+    format_rolling_seed_eta,
+)
 from services.optimizer.outer_rolling_fold_context import (
     normalize_optimizer_seed_ensemble_fold_row,
     optimizer_seed_ensemble_row_sort_key,
@@ -506,6 +510,24 @@ class _ParallelFoldLiveBoard:
                 completed_local_min_trials=int(phase_metrics.get("completed_local_min_trials", 0) or 0),
                 local_min_wall_elapsed_sec=phase_metrics.get("local_min_wall_elapsed_sec"),
             )
+            # Single-seed folds run independently; use per-fold search rates,
+            # not the global multi-seed Replay scheduler's ETA assumptions.
+            eta_progress = {}
+            for task in self.tasks:
+                progress = dict(progress_by_task.get(id(task)) or {})
+                intervals = _normalize_progress_active_intervals(
+                    progress.get("search_active_intervals")
+                )
+                if intervals:
+                    progress["search_active_elapsed_sec"] = _progress_active_elapsed_sec(intervals)
+                eta_progress[int(task.get("fold_idx", 0) or 0)] = progress
+            eta = estimate_rolling_fold_eta(
+                tasks=self.tasks,
+                fold_progress_by_fold=eta_progress,
+                completed_oos_years=completed_oos,
+                fold_workers=max((int(task.get("fold_workers", 1) or 1) for task in self.tasks), default=1),
+            )
+            header += " | " + format_rolling_seed_eta(eta)
             lines = [f"{C_CYAN}{header}{C_RESET}"]
             for task in self.tasks:
                 log_path = str(task.get("log_path") or "")
