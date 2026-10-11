@@ -599,6 +599,103 @@ def append_completed_pair_score_reuse_contract_checks(
         (pair_dir / "strategy_comparison.json").write_text(
             json.dumps(pair_payload, ensure_ascii=False), encoding="utf-8"
         )
+
+        # A new completed run pins the final CSV/Markdown bytes, independent
+        # of the scientific pair-cache fingerprint. Test the REAL normal and
+        # archived lookup paths, not only the digest helper in isolation.
+        from services.research.strategy_compare_pair_integrity import (
+            PAIR_FILE_INTEGRITY_FIELD,
+            build_completed_pair_file_integrity,
+            completed_pair_file_integrity_matches,
+        )
+        auxiliary_json = pair_dir / "post_replay_diagnostics.json"
+        auxiliary_json.write_text('{"diagnostics": 1}\n', encoding="utf-8")
+        pinned_integrity = build_completed_pair_file_integrity({group_id: pair_dir})
+        report_path = run_dir / "strategy_comparison.json"
+        report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+        report_payload[PAIR_FILE_INTEGRITY_FIELD] = pinned_integrity
+        report_path.write_text(json.dumps(report_payload), encoding="utf-8")
+        manifest_path = run_dir / "manifest.json"
+        manifest_path.write_text(
+            json.dumps({PAIR_FILE_INTEGRITY_FIELD: pinned_integrity}), encoding="utf-8"
+        )
+        required_pair_files = score_reuse_module._pair_cache_required_files(
+            pair_dir, on_arm=on_arm
+        )
+        pinned_current_hit = score_reuse_module._find_reusable_pair(
+            root=projection_root, settings=selection_settings,
+            status=status, off_arm=off_arm, on_arm=on_arm,
+        )
+        pinned_archived_hit = score_reuse_module._find_reusable_pair_with_archived_source(
+            root=projection_root, settings=selection_settings,
+            status=archived_status, off_arm=off_arm, on_arm=on_arm,
+        )
+        csv_path = pair_dir / "no_filter_trades.csv"
+        saved_csv = csv_path.read_bytes()
+        csv_path.write_bytes(saved_csv + b"\nmodified\n")
+        changed_csv_current_rejected = score_reuse_module._find_reusable_pair(
+            root=projection_root, settings=selection_settings,
+            status=status, off_arm=off_arm, on_arm=on_arm,
+        ) is None
+        changed_csv_archived_rejected = score_reuse_module._find_reusable_pair_with_archived_source(
+            root=projection_root, settings=selection_settings,
+            status=archived_status, off_arm=off_arm, on_arm=on_arm,
+        ) is None
+        csv_path.write_bytes(saved_csv)
+
+        markdown_path = pair_dir / "strategy_comparison.md"
+        saved_markdown = markdown_path.read_bytes()
+        markdown_path.write_bytes(saved_markdown + b"\nmodified\n")
+        changed_markdown_rejected = score_reuse_module._find_reusable_pair(
+            root=projection_root, settings=selection_settings,
+            status=status, off_arm=off_arm, on_arm=on_arm,
+        ) is None
+        markdown_path.write_bytes(saved_markdown)
+        auxiliary_json.write_text('{"diagnostics": 2}\n', encoding="utf-8")
+        changed_auxiliary_json_rejected = score_reuse_module._find_reusable_pair(
+            root=projection_root, settings=selection_settings,
+            status=status, off_arm=off_arm, on_arm=on_arm,
+        ) is None
+        auxiliary_json.write_text('{"diagnostics": 1}\n', encoding="utf-8")
+
+        manifest_path.unlink()
+        missing_manifest_rejected = score_reuse_module._find_reusable_pair(
+            root=projection_root, settings=selection_settings,
+            status=status, off_arm=off_arm, on_arm=on_arm,
+        ) is None
+        archived_missing_manifest_rejected = score_reuse_module._find_reusable_pair_with_archived_source(
+            root=projection_root, settings=selection_settings,
+            status=archived_status, off_arm=off_arm, on_arm=on_arm,
+        ) is None
+        manifest_path.write_text(
+            json.dumps({PAIR_FILE_INTEGRITY_FIELD: pinned_integrity}), encoding="utf-8"
+        )
+        truncated_integrity = json.loads(json.dumps(pinned_integrity))
+        del truncated_integrity["pairs"][group_id]["no_filter_trades.csv"]
+        manifest_path.write_text(
+            json.dumps({PAIR_FILE_INTEGRITY_FIELD: truncated_integrity}), encoding="utf-8"
+        )
+        truncated_manifest_rejected = score_reuse_module._find_reusable_pair(
+            root=projection_root, settings=selection_settings,
+            status=status, off_arm=off_arm, on_arm=on_arm,
+        ) is None
+        manifest_path.write_text(
+            json.dumps({PAIR_FILE_INTEGRITY_FIELD: pinned_integrity}), encoding="utf-8"
+        )
+
+        # Formatting the already semantically verified pair JSON is intentionally
+        # harmless; its content equality was protected in the previous SSOT batch.
+        local_json = pair_dir / "strategy_comparison.json"
+        local_json.write_text(json.dumps(pair_payload, indent=4), encoding="utf-8")
+        formatted_pair_json_still_reusable = score_reuse_module._find_reusable_pair(
+            root=projection_root, settings=selection_settings,
+            status=status, off_arm=off_arm, on_arm=on_arm,
+        ) is not None
+        pinned_low_level_valid = completed_pair_file_integrity_matches(
+            run_dir=run_dir, run_payload=report_payload,
+            pair_id=group_id, pair_dir=pair_dir,
+            required_paths=required_pair_files,
+        )
         score_frame.loc[0, "breakout_quality_score"] = 0.91
         score_frame.to_csv(score_path, index=False, encoding="utf-8-sig")
         changed_projection_map = compute_score_projection_sha256s(
@@ -639,6 +736,31 @@ def append_completed_pair_score_reuse_contract_checks(
         "archived_completed_pair_reuse_requires_readable_matching_local_json",
         True,
         isinstance(archived_hit, dict) and archived_corrupt_rejected,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "completed_pair_integrity_pins_csv_and_markdown_for_normal_and_archived_reuse",
+        True,
+        isinstance(pinned_current_hit, dict)
+        and isinstance(pinned_archived_hit, dict)
+        and pinned_low_level_valid
+        and changed_csv_current_rejected
+        and changed_csv_archived_rejected
+        and changed_markdown_rejected
+        and changed_auxiliary_json_rejected,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "completed_pair_integrity_rejects_missing_or_truncated_manifest_but_allows_pair_json_reformatting",
+        True,
+        missing_manifest_rejected
+        and archived_missing_manifest_rejected
+        and truncated_manifest_rejected
+        and formatted_pair_json_still_reusable,
     )
     add_check(
         results,
@@ -1004,3 +1126,134 @@ __all__ = [
     "append_completed_pair_cache_contract_checks",
     "append_completed_pair_score_reuse_contract_checks",
 ]
+
+
+def append_completed_pair_baseline_integrity_contract_checks(
+    *, results, case_id: str
+) -> None:
+    """Exercise the shared-baseline cache selector with pinned and legacy runs."""
+
+    from core.strategy_compare_policy import get_strategy_comparison_settings
+    from core.strategy_comparison import (
+        resolve_strategy_comparison_arm_param_policy,
+        resolve_strategy_parameter_consumption_mode,
+    )
+    from services.research import strategy_compare_reuse as reuse
+    from services.research.strategy_compare_pair_integrity import (
+        PAIR_FILE_INTEGRITY_FIELD,
+        build_completed_pair_file_integrity,
+    )
+    from filters.breakout_quality.strategy_compare_sources import (
+        OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
+        OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
+    )
+    from filters.breakout_quality.strategy_rule_policies import ALL_RULE_FILTERS_OFF_OVERRIDES
+
+    settings = get_strategy_comparison_settings("forward_oos")
+    off_arm = next(arm for arm in settings.arms.values() if not arm.dl_enabled)
+    period = {"start": "2021-01-01", "end": "2022-12-31"}
+    status = {
+        "comparison_period": period,
+        "resolved_arm_parameter_identities": {
+            off_arm.arm_id: {"sha256": "synthetic-param-sha"}
+        },
+    }
+    all_off = off_arm.rule_policy == "all_off"
+    metadata = {
+        "dataset": settings.dataset,
+        "params_file_sha256": "synthetic-param-sha",
+        "requested_param_policy": resolve_strategy_comparison_arm_param_policy(
+            settings, off_arm
+        ),
+        "param_evaluation_mode": resolve_strategy_parameter_consumption_mode(
+            settings.parameter_sources[off_arm.param_source]
+        ),
+        "optional_entry_filter_policy": (
+            OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF
+            if all_off else OPTIONAL_ENTRY_FILTER_POLICY_CURRENT
+        ),
+        "shared_param_overrides": (
+            dict(ALL_RULE_FILTERS_OFF_OVERRIDES) if all_off else {}
+        ),
+        "max_positions": int(settings.max_positions),
+        "enable_rotation": settings.rotation == "on",
+        "comparison_period": period,
+    }
+    required_names = (
+        "strategy_comparison.json", "strategy_comparison.md",
+        "yearly_returns_comparison.csv", "no_filter_equity.csv",
+        "no_filter_trades.csv", "no_filter_daily_capacity.csv",
+        "no_filter_orderable_candidates.csv",
+    )
+    with tempfile.TemporaryDirectory(prefix="ssot_pair_baseline_") as tmp:
+        root = Path(tmp)
+        runs_root = reuse._comparison_runs_roots(root=root, settings=settings)[0]
+        run_dir = runs_root / "20990101_000000_integrity_synthetic"
+        pair_id = "baseline_synthetic"
+        pair_dir = run_dir / "pairs" / pair_id
+        pair_dir.mkdir(parents=True)
+        pair_payload = {"metadata": metadata, "no_filter": {"total_return_pct": 1.0}}
+        for name in required_names:
+            (pair_dir / name).write_text(
+                json.dumps(pair_payload) if name.endswith(".json") else "baseline\n",
+                encoding="utf-8",
+            )
+        run_payload = {
+            "status": "COMPLETED",
+            "pairs": {pair_id: pair_payload},
+        }
+        # Old completed runs retain historical REUSE eligibility.
+        (run_dir / "strategy_comparison.json").write_text(
+            json.dumps(run_payload), encoding="utf-8"
+        )
+        legacy_hit = reuse._find_reusable_baseline_source(
+            root=root, settings=settings, status=status, off_arm=off_arm
+        ) == pair_dir
+
+        integrity = build_completed_pair_file_integrity({pair_id: pair_dir})
+        run_payload[PAIR_FILE_INTEGRITY_FIELD] = integrity
+        run_report = run_dir / "strategy_comparison.json"
+        run_report.write_text(json.dumps(run_payload), encoding="utf-8")
+        manifest_path = run_dir / "manifest.json"
+        manifest_path.write_text(
+            json.dumps({PAIR_FILE_INTEGRITY_FIELD: integrity}), encoding="utf-8"
+        )
+        pinned_hit = reuse._find_reusable_baseline_source(
+            root=root, settings=settings, status=status, off_arm=off_arm
+        ) == pair_dir
+        trades = pair_dir / "no_filter_trades.csv"
+        trades.write_text("corrupted\n", encoding="utf-8")
+        corrupted_miss = reuse._find_reusable_baseline_source(
+            root=root, settings=settings, status=status, off_arm=off_arm
+        ) is None
+        from services.research.strategy_compare_replay import _load_reusable_no_filter_baseline
+        try:
+            _load_reusable_no_filter_baseline(
+                pair_dir, comparison_mode="score-ranking",
+                expected_dataset=metadata["dataset"],
+                expected_params_sha256=metadata["params_file_sha256"],
+                expected_param_policy=metadata["requested_param_policy"],
+                expected_param_evaluation_mode=metadata["param_evaluation_mode"],
+                expected_optional_entry_filter_policy=metadata["optional_entry_filter_policy"],
+                expected_shared_param_overrides=metadata["shared_param_overrides"],
+                expected_max_positions=metadata["max_positions"],
+                expected_enable_rotation=metadata["enable_rotation"],
+                expected_start_date=period["start"],
+                expected_end_date=period["end"],
+            )
+        except ValueError as exc:
+            read_boundary_rejected_corrupt_csv = "完整性" in str(exc)
+        else:
+            read_boundary_rejected_corrupt_csv = False
+        trades.write_text("baseline\n", encoding="utf-8")
+        manifest_path.unlink()
+        missing_manifest_miss = reuse._find_reusable_baseline_source(
+            root=root, settings=settings, status=status, off_arm=off_arm
+        ) is None
+
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "shared_baseline_cache_pins_csv_content_but_preserves_legacy_compatibility",
+        True, legacy_hit and pinned_hit and corrupted_miss
+        and read_boundary_rejected_corrupt_csv and missing_manifest_miss,
+    )

@@ -1643,6 +1643,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         project_root=project_root,
     )
 
+    from .synthetic_breakout_quality_strategy_reuse_cases import (
+        append_completed_pair_baseline_integrity_contract_checks,
+    )
+    append_completed_pair_baseline_integrity_contract_checks(
+        results=results, case_id=case_id
+    )
+
     from core.training_scheduler import pop_next_seed_diverse_unit
     from services.research import breakout_quality_application as model_application
     from services.research import strategy_compare_training as training_runtime

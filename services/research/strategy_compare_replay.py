@@ -15,6 +15,8 @@ from config.breakout_quality import (
 )
 from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS
 from core.active_param_ensemble import get_active_param_ensemble_date_range
+from core.file_integrity import load_json_object_or_none
+from services.research.strategy_compare_pair_integrity import completed_pair_file_integrity_matches
 from core.console_report import (
     print_artifact_paths,
     project_relative_display_path,
@@ -203,6 +205,32 @@ def _load_reusable_no_filter_baseline(
     if comparison_mode != COMPARISON_MODE_SCORE_RANKING:
         raise ValueError("shared baseline reuse目前只支援score-ranking比較")
     source_dir = Path(source_dir).resolve()
+    # A shared baseline from a previously COMPLETED run can change after
+    # preparation/planning. Verify its bytes again at the actual read boundary.
+    # A baseline created earlier in the CURRENT run has no completed run result
+    # yet; that path retains the existing intra-run behavior.
+    if source_dir.parent.name == "pairs":
+        run_dir = source_dir.parent.parent
+        run_report = run_dir / "strategy_comparison.json"
+        if run_report.is_file():
+            completed_run = load_json_object_or_none(run_report)
+            if not isinstance(completed_run, dict):
+                raise ValueError("共用 baseline 來源 run JSON 無法讀取")
+            if str(completed_run.get("status") or "") == "COMPLETED":
+                required_paths = tuple(
+                    source_dir / name for name in (
+                        "strategy_comparison.json", "strategy_comparison.md",
+                        "yearly_returns_comparison.csv", "no_filter_equity.csv",
+                        "no_filter_trades.csv", "no_filter_daily_capacity.csv",
+                        "no_filter_orderable_candidates.csv",
+                    )
+                )
+                if not completed_pair_file_integrity_matches(
+                    run_dir=run_dir, run_payload=completed_run,
+                    pair_id=source_dir.name, pair_dir=source_dir,
+                    required_paths=required_paths,
+                ):
+                    raise ValueError("共用 baseline 來源 CSV／Markdown 完整性驗證失敗")
     payload = _load_existing_comparison_payload(source_dir)
     metadata = dict(payload.get("metadata") or {})
     baseline_summary = dict(payload.get("no_filter") or {})

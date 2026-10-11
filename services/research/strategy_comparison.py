@@ -91,6 +91,11 @@ from filters.breakout_quality.strategy_compare_reporting import (
     materialize_strategy_pair_readable_report,
     render_strategy_pair_simple_report,
 )
+from services.research.strategy_compare_pair_integrity import (
+    PAIR_FILE_INTEGRITY_FIELD,
+    build_completed_pair_file_integrity,
+    completed_pair_file_integrity_matches,
+)
 from services.research.strategy_compare_execution import (
     run_strategy_compare_active_arm,
     run_strategy_compare_baseline_arm,
@@ -1346,6 +1351,33 @@ def run_strategy_comparison(
             if pair_dir.exists():
                 shutil.rmtree(pair_dir)
             shutil.copytree(source_pair_dir, pair_dir)
+            # Between planning and copy the cache may have been replaced or
+            # damaged. Recheck the COPIED bytes before any diagnostic backfill
+            # or performance read; a stale REUSE decision must not publish them.
+            source_run_payload = _read_json(
+                source_pair_dir.parent.parent / "strategy_comparison.json"
+            )
+            source_group_id = str(cache_entry.get("source_group_id") or "")
+            source_pair_payload = (
+                dict(source_run_payload.get("pairs") or {}).get(source_group_id)
+                if isinstance(source_run_payload, dict) else None
+            )
+            if (
+                not source_group_id
+                or source_pair_dir.name != source_group_id
+                or not isinstance(source_pair_payload, dict)
+                or _read_json(pair_dir / "strategy_comparison.json") != source_pair_payload
+                or not completed_pair_file_integrity_matches(
+                    run_dir=source_pair_dir.parent.parent,
+                    run_payload=source_run_payload,
+                    pair_id=source_group_id,
+                    pair_dir=pair_dir,
+                    required_paths=_pair_cache_required_files(pair_dir, on_arm=on_arm),
+                )
+            ):
+                raise RuntimeError(
+                    "Strategy Compare cache copy與已驗證 completed pair 不一致，拒絕 REUSE"
+                )
             pair_payload = _read_json(pair_dir / "strategy_comparison.json")
             if not isinstance(pair_payload, dict):
                 raise RuntimeError(
@@ -1674,9 +1706,13 @@ def run_strategy_comparison(
     diagnostics_path.write_text(
         render_strategy_diagnostics_markdown(diagnostics), encoding="utf-8"
     )
+    pair_file_integrity = build_completed_pair_file_integrity({
+        group_id: run_dir / "pairs" / group_id for group_id in pair_payloads
+    })
     payload = {
         "schema_version": RESULT_SCHEMA_VERSION,
         "status": "COMPLETED",
+        PAIR_FILE_INTEGRITY_FIELD: pair_file_integrity,
         "created_at": get_taipei_now().isoformat(),
         "config_fingerprint": status["config_fingerprint"],
         "requested_config_fingerprint": requested_fingerprint,
@@ -1721,6 +1757,7 @@ def run_strategy_comparison(
         manifest_path,
         {
             "schema_version": RESULT_SCHEMA_VERSION,
+            PAIR_FILE_INTEGRITY_FIELD: pair_file_integrity,
             "created_at": payload["created_at"],
             "config_path": "config/strategy_compare.py",
             "config_fingerprint": status["config_fingerprint"],

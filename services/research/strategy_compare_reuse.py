@@ -52,6 +52,7 @@ from filters.breakout_quality.strategy_score_projection import (
     runtime_score_projection_requirements,
 )
 from filters.breakout_quality.strategy_result_state import resolve_strategy_result_state
+from services.research.strategy_compare_pair_integrity import completed_pair_file_integrity_matches
 from services.research.strategy_compare_preparation import resolve_comparison_period
 from filters.breakout_quality.strategy_compare_runtime import (
     _arm_runtime_spec,
@@ -668,6 +669,12 @@ def _find_reusable_pair_with_archived_source(
             continue
         if not _pair_json_matches_recorded_result(pair_dir, pair_payload):
             continue
+        if not completed_pair_file_integrity_matches(
+            run_dir=run_dir, run_payload=run_payload,
+            pair_id=stored_group_id, pair_dir=pair_dir,
+            required_paths=_pair_cache_required_files(pair_dir, on_arm=on_arm),
+        ):
+            continue
         try:
             stored_fingerprint = _pair_cache_fingerprint_from_payload(
                 settings_payload=stored_settings,
@@ -986,6 +993,12 @@ def _find_reusable_pair(
                 continue
             source_artifact_mode = "legacy_pair_runtime_score_projection_verified"
         if not _pair_json_matches_recorded_result(pair_dir, pair_payload):
+            continue
+        if not completed_pair_file_integrity_matches(
+            run_dir=run_dir, run_payload=run_payload,
+            pair_id=stored_group_id, pair_dir=pair_dir,
+            required_paths=_pair_cache_required_files(pair_dir, on_arm=on_arm),
+        ):
             continue
         return {
             "fingerprint": expected,
@@ -1853,6 +1866,11 @@ def _find_reusable_baseline_source(
             }
             if actual != expected:
                 continue
-            if all((pair_dir / name).is_file() for name in required_names):
+            required_paths = tuple(pair_dir / name for name in required_names)
+            if all(path.is_file() for path in required_paths) and completed_pair_file_integrity_matches(
+                run_dir=run_dir, run_payload=run_payload,
+                pair_id=pair_dir.name, pair_dir=pair_dir,
+                required_paths=required_paths,
+            ):
                 return pair_dir
     return None
