@@ -581,6 +581,25 @@ def _summarize_formal_entry_consistency() -> Dict[str, Any]:
         )
     )
 
+    # Independent meta-quality registration: removing the synthetic SSOT case
+    # from the suite must not make its entire regression gate disappear.
+    from tools.validate.ssot_regression_guard import summarize_ssot_regression_guard
+    try:
+        guard = summarize_ssot_regression_guard(PROJECT_ROOT)
+        guard_failures = [
+            *guard["test_contract_violations"],
+            *guard["behavior_differences"],
+            *(entry for violations in guard["structural"].values() for entry in violations),
+        ]
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+        guard_failures = [f"{type(exc).__name__}:{exc}"]
+    results.append(summarize_result(
+        "formal_entry_ssot_regression_guard_intact",
+        not guard_failures,
+        detail=f"violations={guard_failures[:12]}",
+        extra={"violations": guard_failures[:50]},
+    ))
+
     ok = all(item["status"] == "PASS" for item in results)
     return {
         "ok": ok,

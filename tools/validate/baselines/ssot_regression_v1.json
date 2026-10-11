@@ -1,0 +1,218 @@
+{
+  "expected": {
+    "accounting": {
+      "buy": {
+        "broker_buy_fee_milli": 1000,
+        "buy_fee_milli": 1000,
+        "buy_fee_rebate_receivable_milli": 0,
+        "cash_buy_total_milli": 1001000,
+        "fill_price_milli": 100000,
+        "gross_buy_milli": 1000000,
+        "net_buy_total_milli": 1001000,
+        "qty": 10
+      },
+      "sell": {
+        "broker_sell_fee_milli": 1000,
+        "cash_sell_total_milli": 947000,
+        "exec_price_milli": 95000,
+        "gross_sell_milli": 950000,
+        "net_sell_total_milli": 947000,
+        "qty": 10,
+        "sell_fee_milli": 1000,
+        "sell_fee_rebate_receivable_milli": 0,
+        "tax_milli": 2000
+      }
+    },
+    "portfolio": {
+      "half_take_profit": {
+        "completed_trades": [
+          {
+            "buy_date": "2025-01-14",
+            "exit_date": "2025-03-21",
+            "full_exit_action": "期末強制結算",
+            "half_exit_count": 1,
+            "total_pnl": 4758.0
+          }
+        ],
+        "final_eq": 1004758.0,
+        "mdd": 0.1216,
+        "portfolio_buy_rows": 1,
+        "portfolio_full_exit_rows": 1,
+        "portfolio_half_take_profit_rows": 1,
+        "portfolio_missed_buy_rows": 0,
+        "total_missed": 0,
+        "total_return": 0.4758,
+        "trade_count": 1
+      },
+      "same_day_no_reallocation": {
+        "completed_trades": [
+          {
+            "buy_date": "2024-03-19",
+            "exit_date": "2024-03-20",
+            "full_exit_action": "全倉結算(停損)",
+            "half_exit_count": 0,
+            "total_pnl": -7189.0
+          },
+          {
+            "buy_date": "2024-03-21",
+            "exit_date": "2024-03-22",
+            "full_exit_action": "期末強制結算",
+            "half_exit_count": 0,
+            "total_pnl": -2211.0
+          }
+        ],
+        "final_eq": 990600.0,
+        "mdd": 0.94,
+        "portfolio_buy_rows": 2,
+        "portfolio_full_exit_rows": 2,
+        "portfolio_half_take_profit_rows": 0,
+        "portfolio_missed_buy_rows": 0,
+        "total_missed": 0,
+        "total_return": -0.94,
+        "trade_count": 2
+      }
+    }
+  },
+  "fixed_params": {
+    "atr_buy_tol": 1.5,
+    "atr_len": 14,
+    "atr_times_init": 2.0,
+    "atr_times_trail": 3.5,
+    "bb_len": 20,
+    "bb_mult": 2.0,
+    "breakout_ema_len": 240,
+    "breakout_false_filter_atr_pct_min": 0.045,
+    "breakout_quality_filter_id": "breakout_quality_v1",
+    "breakout_quality_score_threshold": 0.5,
+    "breakout_reclaim_confirm_atr": 0.8,
+    "breakout_reclaim_window_bars": 20,
+    "breakout_return_min": 0.0,
+    "buy_fee": 0.001425,
+    "fixed_risk": 0.01,
+    "high_len": 201,
+    "initial_capital": 1000000.0,
+    "kc_len": 20,
+    "kc_mult": 2.0,
+    "max_position_cap_pct": 0.3,
+    "min_entry_notional": 50126.0,
+    "min_fee": 20.0,
+    "min_history_ev": -1.0,
+    "min_history_trades": 0,
+    "min_history_win_rate": 0.3,
+    "sell_fee": 0.001425,
+    "tax_rate": 0.003,
+    "tp_percent": 0.5,
+    "use_bb": true,
+    "use_breakout_buy": true,
+    "use_breakout_ema_filter": true,
+    "use_breakout_false_filter": false,
+    "use_breakout_quality_filter": false,
+    "use_breakout_quality_ranking": false,
+    "use_breakout_reclaim_reentry": false,
+    "use_breakout_return_filter": false,
+    "use_compounding": true,
+    "use_history_threshold": true,
+    "use_kc": false,
+    "use_vol": true,
+    "vol_breakout_mult": 1.5,
+    "vol_long_len": 20,
+    "vol_short_len": 5
+  },
+  "protected_guards": [
+    {
+      "ast_sha256": "ea714681584cffb9110658c420127f07f239db58d5809a4616e26bd1f97577bd",
+      "function": "frozen_test_function_hash",
+      "path": "tools/validate/ssot_regression_guard.py"
+    },
+    {
+      "ast_sha256": "bd695529c14dab7b31f2e968b0f9c636f61c0f75093942c17951eb85441fd558",
+      "function": "snapshot_structural_violations",
+      "path": "tools/validate/ssot_regression_guard.py"
+    },
+    {
+      "ast_sha256": "32e98b7c734b5f3bee2b9231703a5bc2775ea4b5fd099f545a199b0a3dbd8259",
+      "function": "read_approved_baseline",
+      "path": "tools/validate/ssot_regression_guard.py"
+    },
+    {
+      "ast_sha256": "fcdcd9a685ba3a668489e15663c00d5e3c121da88bc2b26d60cccbe3ef23b4fc",
+      "function": "test_contract_violations",
+      "path": "tools/validate/ssot_regression_guard.py"
+    },
+    {
+      "ast_sha256": "37eb5110ccf93439008b45e65573816d1718497cae65a77b6e01fa8be9603a25",
+      "function": "compute_isolated_behavior_snapshot",
+      "path": "tools/validate/ssot_regression_guard.py"
+    },
+    {
+      "ast_sha256": "b6a5573d73252591be006f4614bfeb5460971c21e48ad8e34181cd717f59907a",
+      "function": "behavior_snapshot_differences",
+      "path": "tools/validate/ssot_regression_guard.py"
+    },
+    {
+      "ast_sha256": "aa6f64ae3edc9fdf388a52c8d1941c46dd449973876ec44b3fd20ff97344c94d",
+      "function": "summarize_ssot_regression_guard",
+      "path": "tools/validate/ssot_regression_guard.py"
+    }
+  ],
+  "protected_tests": [
+    {
+      "ast_sha256": "1a9a20f6559dda5f4904cd37b664bfc977209e1a661983ddf9f24fac750b3a89",
+      "function": "validate_independent_oracle_golden_case",
+      "path": "tools/validate/synthetic_unit_cases.py"
+    },
+    {
+      "ast_sha256": "bd206b5808d94ad4e8b3d564749fa7d1e7ca1b06ee9483ae93a88ee365cc57b2",
+      "function": "validate_research_fee_rebate_cash_timing_case",
+      "path": "tools/validate/synthetic_unit_cases.py"
+    },
+    {
+      "ast_sha256": "e39b8ae1fd6cf4f99166826d145ea47377c9c534ccf5e67287eb8c4d81abc48b",
+      "function": "validate_synthetic_same_day_buy_sell_forbidden_case",
+      "path": "tools/validate/synthetic_flow_cases.py"
+    },
+    {
+      "ast_sha256": "d9ad1012c4692cec357bb734c3ea35ff623db76f47df63e2de3844087104d71e",
+      "function": "validate_trading_account_state_contract_case",
+      "path": "tools/validate/synthetic_trading_cases.py"
+    },
+    {
+      "ast_sha256": "6096f8152f9b63c07ee7cb6ce7fbc8bd42fb3e799bb3bd3f02c094ca594e8e2c",
+      "function": "validate_no_reverse_app_layer_dependencies_case",
+      "path": "tools/validate/synthetic_meta_cases.py"
+    },
+    {
+      "ast_sha256": "10645964fd25de8801cd69d42a7dc812939f481f3d8df8f02ae8a6f743d3f262",
+      "function": "validate_known_bad_fault_injection_case",
+      "path": "tools/validate/synthetic_meta_cases.py"
+    },
+    {
+      "ast_sha256": "9906e15f12bca6e291c022c4bcfb0c701a1259c3caafa754be506d746c05d7e9",
+      "function": "validate_research_report_contract_freeze_case",
+      "path": "tools/validate/synthetic_meta_cases.py"
+    },
+    {
+      "ast_sha256": "6c8a3aed59eb0555cf8b877a25a6e66203a78ba2a54cd08efa8371d4d2232895",
+      "function": "validate_ssot_regression_guard_case",
+      "path": "tools/validate/synthetic_meta_cases.py"
+    },
+    {
+      "ast_sha256": "2b7ef10c9df969c0aba2f9c5dd12325a9968b832d8ecd0afe21cc876645052c4",
+      "function": "validate_synthetic_pit_same_day_exit_excluded_case",
+      "path": "tools/validate/synthetic_history_cases.py"
+    },
+    {
+      "ast_sha256": "fdd0455f67555bf35cd8874b3ce27a3a446a679404876adea0f86bd6198e34a7",
+      "function": "validate_market_data_v2_research_required_cutoff_isolation_contract_case",
+      "path": "tools/validate/synthetic_market_data_cases.py"
+    },
+    {
+      "ast_sha256": "4808ca8f2a8b805d11b92dc742ad4d278a3ed1f5e390bb55a24928f6e2e004a3",
+      "function": "validate_synthetic_no_intraday_switch_after_failed_fill_case",
+      "path": "tools/validate/synthetic_flow_cases.py"
+    }
+  ],
+  "purpose": "Approved engineering fixture; not a model/parameter/scientific identity, and not an OOS benchmark",
+  "schema_version": 1,
+  "source_zip_sha256": "2af0e1ebf26f3d412430c61fa7c9c00b312b82213258d3e6d67499eb932319ac"
+}

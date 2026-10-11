@@ -5938,3 +5938,133 @@ def validate_model_extension_architecture_contract_case(_base_params):
     )
 
     return results, {"ticker": case_id, "synthetic": True, "training_performed": False}
+
+
+def validate_ssot_regression_guard_case(_base_params):
+    """A permanent, mutation-tested guard against silent SSOT regressions."""
+    from dataclasses import replace
+    from filters.breakout_quality.models.architectures import PATCH_TRANSFORMER_V1
+    from filters.breakout_quality.models.spec import validate_model_sequence_length
+    from filters.breakout_quality.models.spec_registry import get_model_spec
+    from .ssot_regression_guard import (
+        GENERIC_CONSUMER_PATHS, GOLDEN_RELATIVE_PATH,
+        behavior_snapshot_differences, frozen_test_function_hash,
+        read_approved_baseline, snapshot_structural_violations,
+        summarize_ssot_regression_guard, test_contract_violations,
+    )
+
+    case_id = "META_SSOT_REGRESSION_GUARD"
+    results, summary = _new_synthetic_case(case_id)
+    guard = summarize_ssot_regression_guard(PROJECT_ROOT)
+    add_check(results, "meta_ssot_regression", case_id, "reverse_dependencies_remain_absent", [], guard["structural"]["reverse_dependencies"])
+    add_check(results, "meta_ssot_regression", case_id, "architecture_validator_has_no_second_family_switch", [], guard["structural"]["architecture_family_switch"])
+    add_check(results, "meta_ssot_regression", case_id, "generic_consumers_do_not_branch_on_research_identity", [], guard["structural"]["scientific_identity_in_generic_consumer"])
+    add_check(results, "meta_ssot_regression", case_id, "approved_golden_portfolio_accounting_stable", [], guard["behavior_differences"])
+    add_check(results, "meta_ssot_regression", case_id, "critical_test_assertions_remain_frozen", [], guard["test_contract_violations"])
+
+    # New declarative architecture family: no second hand-maintained family list
+    # may allow an invalid sequence length to bypass patch validation.
+    future_patch = replace(get_model_spec(PATCH_TRANSFORMER_V1), family="future_patch_family")
+    detected_bad_length = False
+    try:
+        validate_model_sequence_length(future_patch, 13)
+    except ValueError as exc:
+        detected_bad_length = "patch size" in str(exc)
+    add_check(results, "meta_ssot_regression", case_id, "new_patch_family_invalid_length_detected", True, detected_bad_length)
+
+    fixture_bytes = (PROJECT_ROOT / GOLDEN_RELATIVE_PATH).read_bytes()
+    tampering_rejected = False
+    try:
+        read_approved_baseline(PROJECT_ROOT, raw_bytes=fixture_bytes + b" ")
+    except ValueError:
+        tampering_rejected = True
+    add_check(results, "meta_ssot_regression", case_id, "golden_fixture_modification_rejected", True, tampering_rejected)
+    # Changing both the fixture and its local pin must still conflict with an
+    # independently user-approved Git tag once that external anchor exists.
+    from hashlib import sha256
+    mutated_fixture = fixture_bytes + b" "
+    with patch("tools.validate.ssot_regression_guard.APPROVED_GOLDEN_SHA256", sha256(mutated_fixture).hexdigest()), \
+         patch("tools.validate.ssot_regression_guard._tagged_file_bytes", return_value=fixture_bytes):
+        tag_rejected = False
+        try:
+            read_approved_baseline(PROJECT_ROOT, raw_bytes=mutated_fixture)
+        except ValueError:
+            tag_rejected = True
+    add_check(results, "meta_ssot_regression", case_id, "external_tag_rejects_reanchored_tamper", True, tag_rejected)
+    add_check(
+        results, "meta_ssot_regression", case_id, "oracle_detects_modified_trade_pnl",
+        ["portfolio.case.completed_trades[0].total_pnl:mismatch"],
+        behavior_snapshot_differences(
+            {"portfolio": {"case": {"completed_trades": [{"total_pnl": -2}]}}},
+            {"portfolio": {"case": {"completed_trades": [{"total_pnl": 1}]}}},
+        ),
+    )
+
+    # Inject independent faults into a temporary source tree; these checks
+    # demonstrate the scanner fails closed instead of merely reporting PASS.
+    with tempfile.TemporaryDirectory(prefix="ssot_guard_fault_") as temp_dir:
+        fixture_root = Path(temp_dir)
+        for relative in ("filters/breakout_quality/models/spec.py", *GENERIC_CONSUMER_PATHS):
+            target = fixture_root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(
+                (PROJECT_ROOT / relative).read_text(encoding="utf-8")
+                if relative.endswith("models/spec.py") else "VALUE = 1\n",
+                encoding="utf-8",
+            )
+        bad_core = fixture_root / "core" / "broken.py"
+        bad_core.parent.mkdir(parents=True, exist_ok=True)
+        bad_core.write_text("from filters.breakout_quality.models.spec import get_model_spec\n", encoding="utf-8")
+        invalid_tree = snapshot_structural_violations(fixture_root)
+        add_check(results, "meta_ssot_regression", case_id, "reverse_core_filter_import_fault_detected", True,
+                  any("core/broken.py" in item for item in invalid_tree["reverse_dependencies"]))
+
+        bad_core.write_text('import importlib\nimportlib.import_module("filters.breakout_quality.models.spec")\n', encoding="utf-8")
+        dynamic_tree = snapshot_structural_violations(fixture_root)
+        add_check(results, "meta_ssot_regression", case_id, "literal_dynamic_reverse_import_fault_detected", True,
+                  any("core/broken.py" in item for item in dynamic_tree["reverse_dependencies"]))
+
+        bad_core.write_text("VALUE = 1\n", encoding="utf-8")
+        spec_path = fixture_root / "filters/breakout_quality/models/spec.py"
+        spec_source = spec_path.read_text(encoding="utf-8")
+        spec_path.write_text(spec_source.replace(
+            "if model_spec.patch_transformer_patch_size is None and model_spec.patch_transformer_patch_stride is None:",
+            'if model_spec.family in {"old_patch_family"}:',
+        ), encoding="utf-8")
+        consumer_path = fixture_root / GENERIC_CONSUMER_PATHS[0]
+        consumer_path.write_text('if identity == "MR-FUTURE":\n    run_new_branch()\n', encoding="utf-8")
+        injected = snapshot_structural_violations(fixture_root)
+        add_check(results, "meta_ssot_regression", case_id, "duplicate_family_switch_fault_detected", True,
+                  bool(injected["architecture_family_switch"]))
+        add_check(results, "meta_ssot_regression", case_id, "generic_identity_branch_fault_detected", True,
+                  bool(injected["scientific_identity_in_generic_consumer"]))
+
+        # A test-body edit must differ from the approved AST fingerprint.
+        approved = read_approved_baseline(PROJECT_ROOT)
+        test_entry = approved["protected_tests"][0]
+        source_path = fixture_root / test_entry["path"]
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        original_source = (PROJECT_ROOT / test_entry["path"]).read_text(encoding="utf-8")
+        source_tree = ast.parse(original_source)
+        target_function = next(
+            node for node in source_tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == test_entry["function"]
+        )
+        target_function.body.insert(0, ast.Pass())
+        source_path.write_text(ast.unparse(target_function) + "\n", encoding="utf-8")
+        changed = frozen_test_function_hash(fixture_root, test_entry["path"], test_entry["function"])
+        add_check(results, "meta_ssot_regression", case_id, "test_contract_weakening_fault_detected", True,
+                  changed != test_entry["ast_sha256"])
+
+        # De-registering the protection test must fail the independent meta
+        # quality check, even if synthetic execution no longer invokes it.
+        with patch("tools.validate.ssot_regression_guard.load_synthetic_registry_entries_from_source", return_value=[]):
+            deregistered = test_contract_violations(PROJECT_ROOT, approved)
+        add_check(results, "meta_ssot_regression", case_id, "protected_test_registry_removal_fault_detected", True,
+                  any("registration_count=0" in item for item in deregistered))
+
+    summary["golden_sha256"] = guard["golden_sha256"]
+    summary["approved_local_git_tag_available"] = guard["git_tag_available"]
+    summary["portfolio_fixture_count"] = guard["scenario_count"]
+    summary["mutation_probes"] = 10
+    return results, summary

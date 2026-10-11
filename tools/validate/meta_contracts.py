@@ -302,12 +302,47 @@ def summarize_no_reverse_app_import_contract(project_root: Path) -> Dict[str, An
                 elif isinstance(node, ast.Import):
                     modules = [alias.name for alias in node.names]
                 for module_name in modules:
-                    if module_name == "apps" or module_name.startswith("apps.") or module_name == "tools" or module_name.startswith("tools."):
+                    is_app_or_tool = module_name in {"apps", "tools"} or module_name.startswith(("apps.", "tools."))
+                    is_core_reverse_filter = rel_dir == "core" and (module_name == "filters" or module_name.startswith("filters."))
+                    is_config_reverse_runtime = rel_dir == "config" and (
+                        module_name in {"filters", "services"} or module_name.startswith(("filters.", "services."))
+                    )
+                    if is_app_or_tool or is_core_reverse_filter or is_config_reverse_runtime:
                         violations.append({
                             "path": str(path.relative_to(project_root)).replace("\\", "/"),
                             "lineno": getattr(node, "lineno", 0),
                             "module": module_name,
                         })
+            # Literal dynamic imports must not bypass the same dependency
+            # direction boundary. Computed module strings cannot be proven
+            # statically and remain covered by import/runtime tests.
+            for node in ast.walk(_read_python_ast(path)):
+                if not isinstance(node, ast.Call) or not node.args:
+                    continue
+                func = node.func
+                is_dynamic_import = (
+                    isinstance(func, ast.Name) and func.id in {"__import__", "import_module"}
+                ) or (
+                    isinstance(func, ast.Attribute) and func.attr == "import_module"
+                )
+                if not is_dynamic_import:
+                    continue
+                arg = node.args[0]
+                if not isinstance(arg, ast.Constant) or not isinstance(arg.value, str):
+                    continue
+                module_name = arg.value
+                if module_name in {"apps", "tools"} or module_name.startswith(("apps.", "tools.")) or (
+                    rel_dir == "core" and (module_name == "filters" or module_name.startswith("filters."))
+                ) or (
+                    rel_dir == "config" and (
+                        module_name in {"filters", "services"} or module_name.startswith(("filters.", "services."))
+                    )
+                ):
+                    violations.append({
+                        "path": str(path.relative_to(project_root)).replace("\\", "/"),
+                        "lineno": getattr(node, "lineno", 0),
+                        "module": module_name,
+                    })
     return {"violations": violations}
 
 

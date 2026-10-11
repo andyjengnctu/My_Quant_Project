@@ -32,12 +32,9 @@ def validate_model_sequence_length(
                 "Market Set 第一版要求 candidate sequence_length 與 market history 一致: "
                 f"candidate={normalized_length}, market={market_history}"
             )
-    if model_spec.family not in {
-        "patch_transformer",
-        "patch_token_transformer_ranker",
-        "patch_token_transformer_safety_raw_mfe_joint_attn_mlp",
-        "patch_transformer_safety_inception_mfe",
-    }:
+    # Patch geometry is declared by the model spec built from the canonical
+    # architecture descriptor.  Do not replicate an architecture-family list.
+    if model_spec.patch_transformer_patch_size is None and model_spec.patch_transformer_patch_stride is None:
         return
     patch_size = int(model_spec.patch_transformer_patch_size or 0)
     patch_stride = int(model_spec.patch_transformer_patch_stride or 0)
