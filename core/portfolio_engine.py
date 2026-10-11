@@ -14,6 +14,13 @@ from core.portfolio_day_context import resolve_portfolio_day_context, portfolio_
 from core.portfolio_capacity_rows import build_portfolio_capacity_day_row
 from core.portfolio_day_events import rotate_portfolio_day, settle_and_execute_portfolio_day
 from core.portfolio_day_equity import mark_portfolio_day_equity, measure_portfolio_day_exposure
+from core.portfolio_terminal_equity import reconcile_portfolio_terminal_equity
+from core.portfolio_terminal_statistics import (
+    build_portfolio_period_reports, summarize_portfolio_terminal_metrics,
+)
+from core.portfolio_terminal_reporting import (
+    assemble_portfolio_timeline_result, publish_portfolio_profile_stats,
+)
 from core.breakout_reentry import activate_breakout_reentry_signals_for_day
 from core.config import get_ev_calc_method
 from core.portfolio_fast_data import (
@@ -931,37 +938,29 @@ def run_portfolio_timeline(
     if profile_timing_enabled:
         closeout_sec = time.perf_counter() - t0
 
-    final_cash = today_equity
-    today_equity = int(today_equity) + get_fee_rebate_receivable_milli(fee_rebate_state)
-    if last_date is not None and last_date.year in year_end_equity:
-        year_end_equity[last_date.year] = milli_to_money(today_equity)
-        last_month_key = (int(last_date.year), int(last_date.month))
-        if last_month_key in month_end_equity:
-            month_end_equity[last_month_key] = milli_to_money(today_equity)
-        last_quarter_key = (int(last_date.year), int((last_date.month - 1) // 3 + 1))
-        if last_quarter_key in quarter_end_equity:
-            quarter_end_equity[last_quarter_key] = milli_to_money(today_equity)
-
-    # # (AI註: 期末強制結算後補做一次 peak / drawdown 更新，避免 final closeout 對 MDD 漏算)
-    if today_equity > peak_equity:
-        peak_equity = today_equity
-    drawdown = (peak_equity - today_equity) / peak_equity * 100 if peak_equity > 0 else 0.0
-    if drawdown > max_drawdown:
-        max_drawdown = drawdown
-
-    if len(sorted_dates) > start_idx:
-        monthly_equities.append(milli_to_money(today_equity))
-        if benchmark_loop_enabled and current_bm_px is not None:
-            bm_monthly_equities.append(current_bm_px)
-
-    final_equity_money = milli_to_money(today_equity)
-    total_return = (final_equity_money - initial_capital) / initial_capital * 100
-
-    if ((not is_training) or capture_equity_curve) and len(equity_curve) > 0:
-        equity_curve[-1]['Equity'] = final_equity_money
-        equity_curve[-1]['Strategy_Return_Pct'] = total_return
-        equity_curve[-1]['Invested_Amount'] = 0.0
-        equity_curve[-1]['Exposure_Pct'] = 0.0
+    terminal_equity = reconcile_portfolio_terminal_equity(
+        closeout_equity_milli=today_equity,
+        fee_rebate_state=fee_rebate_state,
+        last_date=last_date,
+        year_end_equity=year_end_equity,
+        month_end_equity=month_end_equity,
+        quarter_end_equity=quarter_end_equity,
+        peak_equity=peak_equity,
+        max_drawdown=max_drawdown,
+        sorted_dates=sorted_dates,
+        start_idx=start_idx,
+        monthly_equities=monthly_equities,
+        benchmark_loop_enabled=benchmark_loop_enabled,
+        current_bm_px=current_bm_px,
+        bm_monthly_equities=bm_monthly_equities,
+        initial_capital=initial_capital,
+        equity_curve=equity_curve,
+        is_training=is_training,
+        capture_equity_curve=capture_equity_curve,
+    )
+    final_equity_money = terminal_equity.final_equity_money
+    total_return = terminal_equity.total_return
+    max_drawdown = terminal_equity.max_drawdown
 
     t0 = time.perf_counter() if profile_timing_enabled else None
     r_squared, monthly_win_rate = calc_curve_stats(monthly_equities)
@@ -972,212 +971,96 @@ def run_portfolio_timeline(
         bm_r_squared, bm_monthly_win_rate = calc_curve_stats(bm_monthly_equities)
     curve_stats_sec = (time.perf_counter() - t0) if profile_timing_enabled else 0.0
 
-    trade_count = len(closed_trades_stats)
-    portfolio_r_stats = summarize_closed_trade_r_stats(closed_trades_stats)
-    entry_type_counts = summarize_closed_trade_entry_type_counts(closed_trades_stats)
-    normal_trade_count = int(entry_type_counts.get('normal_trades', 0))
-    extended_trade_count = int(entry_type_counts.get('extended_trades', 0))
-    breakout_trade_count = int(entry_type_counts.get('breakout_trades', normal_trade_count))
-    reentry_trade_count = int(entry_type_counts.get('reentry_trades', 0))
-    score_single_stock_trade_stats = {}
-    if profile_stats is not None and active_context_resolver is None and active_context_ensemble_resolver is None:
-        score_single_stock_trade_stats = summarize_single_stock_trade_stats_from_pit_index(
-            pit_stats_index,
-            sorted_dates[start_idx:],
-        )
-    if trade_count > 0:
-        wins = [t for t in closed_trades_stats if t['pnl'] > 0]
-        losses = [t for t in closed_trades_stats if t['pnl'] <= 0]
-
-        win_count = len(wins)
-        loss_count = len(losses)
-        win_rate = (win_count / trade_count) * 100
-        avg_win_amount = sum(t['pnl'] for t in wins) / win_count if win_count > 0 else 0.0
-        avg_loss_amount = abs(sum(t['pnl'] for t in losses) / loss_count) if loss_count > 0 else 0.0
-        pf_payoff = (avg_win_amount / avg_loss_amount) if avg_loss_amount > 0 else (99.9 if avg_win_amount > 0 else 0.0)
-
-        avg_win_r = sum(t['r_mult'] for t in wins) / win_count if win_count > 0 else 0.0
-        avg_loss_r = abs(sum(t['r_mult'] for t in losses) / loss_count) if loss_count > 0 else 0.0
-        if get_ev_calc_method() == 'B':
-            payoff_for_ev = min(10.0, (avg_win_r / avg_loss_r)) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0.0)
-            pf_ev = (win_rate / 100.0 * payoff_for_ev) - (1 - win_rate / 100.0)
-        else:
-            pf_ev = sum(t['r_mult'] for t in closed_trades_stats) / trade_count
-    else:
-        win_rate, pf_ev, pf_payoff = 0.0, 0.0, 0.0
-
-    avg_exp = total_exposure / sim_days if sim_days > 0 else 0.0
-    sim_years = calc_sim_years(sorted_dates, start_idx)
-    annual_trades = (trade_count / sim_years) if sim_years > 0 else 0.0
-    filled_buy_count = int(portfolio_entry_stats.get('filled_buy_count', 0) or 0)
-    reserved_buy_fill_rate = (filled_buy_count / (filled_buy_count + total_missed_buys) * 100.0) if (filled_buy_count + total_missed_buys) > 0 else 0.0
-    annual_return_pct = calc_annual_return_pct(initial_capital, final_equity_money, sim_years)
-
-    bm_start_value = float(benchmark_start_price) if benchmark_start_price is not None else 0.0
-    bm_end_value = bm_start_value * (1.0 + bm_ret_pct / 100.0) if bm_start_value > 0 else 0.0
-    if benchmark_period_stats is not None:
-        bm_annual_return_pct = float(benchmark_period_stats.get('bm_annual_return_pct', 0.0))
-    else:
-        bm_annual_return_pct = calc_annual_return_pct(bm_start_value, bm_end_value, sim_years)
-
-    yearly_stats = build_full_year_return_stats(
+    terminal_metrics = summarize_portfolio_terminal_metrics(
+        closed_trades_stats=closed_trades_stats,
+        pit_stats_index=pit_stats_index,
+        sorted_dates=sorted_dates,
+        start_idx=start_idx,
+        profile_requested=profile_stats is not None,
+        active_context_resolver=active_context_resolver,
+        active_context_ensemble_resolver=active_context_ensemble_resolver,
+        ev_calc_method_getter=get_ev_calc_method,
+        total_exposure=total_exposure,
+        sim_days=sim_days,
+        portfolio_entry_stats=portfolio_entry_stats,
+        total_missed_buys=total_missed_buys,
+        initial_capital=initial_capital,
+        final_equity_money=final_equity_money,
+        benchmark_start_price=benchmark_start_price,
+        bm_ret_pct=bm_ret_pct,
+        benchmark_period_stats=benchmark_period_stats,
+    )
+    period_reports = build_portfolio_period_reports(
         sorted_dates=sorted_dates,
         year_start_equity=year_start_equity,
         year_end_equity=year_end_equity,
         year_first_sim_date=year_first_sim_date,
         year_last_sim_date=year_last_sim_date,
-    )
-    monthly_stats = build_full_month_return_stats(
-        sorted_dates=sorted_dates,
         month_start_equity=month_start_equity,
         month_end_equity=month_end_equity,
         month_first_sim_date=month_first_sim_date,
         month_last_sim_date=month_last_sim_date,
-    )
-    quarterly_stats = build_full_quarter_return_stats(
-        sorted_dates=sorted_dates,
         quarter_start_equity=quarter_start_equity,
         quarter_end_equity=quarter_end_equity,
         quarter_first_sim_date=quarter_first_sim_date,
         quarter_last_sim_date=quarter_last_sim_date,
+        benchmark_period_stats=benchmark_period_stats,
+        benchmark_data=benchmark_data,
     )
-    if benchmark_period_stats is not None:
-        full_years = {int(row['year']) for row in yearly_stats['yearly_return_rows'] if row.get('is_full_year')}
-        bm_yearly_rows = [
-            row for row in benchmark_period_stats.get('bm_yearly_return_rows', [])
-            if int(row.get('year', -1)) in full_years
-        ]
-        bm_yearly_stats = {
-            'bm_full_year_count': int(len(bm_yearly_rows)),
-            'bm_min_full_year_return_pct': float(min((row['year_return_pct'] for row in bm_yearly_rows), default=0.0)),
-            'bm_yearly_return_rows': bm_yearly_rows,
-        }
-        full_months = {(int(row['year']), int(row['month'])) for row in monthly_stats['monthly_return_rows'] if row.get('is_full_month')}
-        bm_monthly_rows = [
-            row for row in benchmark_period_stats.get('bm_monthly_return_rows', [])
-            if (int(row.get('year', -1)), int(row.get('month', -1))) in full_months
-        ]
-        bm_monthly_stats = {
-            'bm_full_month_count': int(len(bm_monthly_rows)),
-            'bm_min_month_return_pct': float(min((row['month_return_pct'] for row in bm_monthly_rows), default=0.0)),
-            'bm_monthly_return_rows': bm_monthly_rows,
-        }
-        full_quarters = {(int(row['year']), int(row['quarter'])) for row in quarterly_stats['quarterly_return_rows'] if row.get('is_full_quarter')}
-        bm_quarterly_rows = [
-            row for row in benchmark_period_stats.get('bm_quarterly_return_rows', [])
-            if (int(row.get('year', -1)), int(row.get('quarter', -1))) in full_quarters
-        ]
-        bm_quarterly_stats = {
-            'bm_full_quarter_count': int(len(bm_quarterly_rows)),
-            'bm_min_quarter_return_pct': float(min((row['quarter_return_pct'] for row in bm_quarterly_rows), default=0.0)),
-            'bm_quarterly_return_rows': bm_quarterly_rows,
-        }
-    else:
-        bm_yearly_stats = build_benchmark_full_year_return_stats(
-            sorted_dates=sorted_dates,
-            benchmark_data=benchmark_data,
-            yearly_return_rows=yearly_stats['yearly_return_rows'],
-        )
-        bm_monthly_stats = build_benchmark_full_month_return_stats(
-            sorted_dates=sorted_dates,
-            benchmark_data=benchmark_data,
-            monthly_return_rows=monthly_stats['monthly_return_rows'],
-        )
-        bm_quarterly_stats = build_benchmark_full_quarter_return_stats(
-            sorted_dates=sorted_dates,
-            benchmark_data=benchmark_data,
-            quarterly_return_rows=quarterly_stats['quarterly_return_rows'],
-        )
 
     if profile_stats is not None:
-        profile_stats['fee_rebate_settled'] = milli_to_money(get_fee_rebate_settled_milli(fee_rebate_state))
-        profile_stats['fee_rebate_receivable_end'] = milli_to_money(get_fee_rebate_receivable_milli(fee_rebate_state))
-        profile_stats['portfolio_wall_sec'] = (time.perf_counter() - t_portfolio_start) if profile_timing_enabled else 0.0
-        profile_stats['portfolio_ticker_dates_sec'] = ticker_dates_sec
-        profile_stats['portfolio_build_trade_index_sec'] = build_trade_index_sec
-        profile_stats['portfolio_day_loop_sec'] = day_loop_sec
-        profile_stats['portfolio_candidate_scan_sec'] = candidate_scan_sec
-        candidate_operation_keys = (
-            'portfolio_candidate_pit_stats_sec',
-            'portfolio_candidate_plan_sec',
-            'portfolio_candidate_quality_rank_sec',
-            'portfolio_candidate_row_sec',
-            'portfolio_candidate_sort_sec',
+        # Per-run instrumentation is sidecar-only; no timing enters scientific identity.
+        profile_timings = {
+            'ticker_dates_sec': ticker_dates_sec,
+            'build_trade_index_sec': build_trade_index_sec,
+            'day_loop_sec': day_loop_sec,
+            'candidate_scan_sec': candidate_scan_sec,
+            'day_setup_sec': day_setup_sec,
+            'reentry_sec': reentry_sec,
+            'resource_select_sec': resource_select_sec,
+            'cleanup_sec': cleanup_sec,
+            'bookkeeping_sec': bookkeeping_sec,
+            'rotation_sec': rotation_sec,
+            'settle_sec': settle_sec,
+            'buy_sec': buy_sec,
+            'equity_mark_sec': equity_mark_sec,
+            'closeout_sec': closeout_sec,
+            'curve_stats_sec': curve_stats_sec,
+        }
+        publish_portfolio_profile_stats(
+            profile_stats=profile_stats,
+            fee_rebate_state=fee_rebate_state,
+            timing_enabled=profile_timing_enabled,
+            portfolio_start=t_portfolio_start,
+            timings=profile_timings,
+            candidate_subprofile=candidate_subprofile,
+            idle_fast_path_days=idle_fast_path_days,
+            closed_trades_stats=closed_trades_stats,
+            terminal_metrics=terminal_metrics,
+            period_reports=period_reports,
+            is_training=is_training,
+            active_level_rows=active_level_rows,
+            capacity_rows=capacity_rows,
+            capture_equity_curve=capture_equity_curve,
+            equity_curve=equity_curve,
         )
-        candidate_profile_keys = (
-            'portfolio_candidate_normal_sec',
-            'portfolio_candidate_extended_sec',
-            *candidate_operation_keys,
-        )
-        for key in candidate_profile_keys:
-            profile_stats[key] = float((candidate_subprofile or {}).get(key, 0.0))
-        candidate_operation_sec = sum(float(profile_stats[key]) for key in candidate_operation_keys)
-        profile_stats['portfolio_candidate_other_sec'] = (
-            max(0.0, float(candidate_scan_sec) - candidate_operation_sec)
-            if candidate_subprofile is not None
-            else 0.0
-        )
-        profile_stats['portfolio_day_setup_sec'] = day_setup_sec
-        profile_stats['portfolio_reentry_sec'] = reentry_sec
-        profile_stats['portfolio_resource_select_sec'] = resource_select_sec
-        profile_stats['portfolio_cleanup_sec'] = cleanup_sec
-        profile_stats['portfolio_bookkeeping_sec'] = bookkeeping_sec
-        profile_stats['portfolio_rotation_sec'] = rotation_sec
-        profile_stats['portfolio_settle_sec'] = settle_sec
-        profile_stats['portfolio_buy_sec'] = buy_sec
-        profile_stats['portfolio_equity_mark_sec'] = equity_mark_sec
-        day_accounted_sec = (
-            float(candidate_scan_sec)
-            + float(day_setup_sec)
-            + float(reentry_sec)
-            + float(resource_select_sec)
-            + float(rotation_sec)
-            + float(settle_sec)
-            + float(buy_sec)
-            + float(cleanup_sec)
-            + float(equity_mark_sec)
-            + float(bookkeeping_sec)
-        )
-        profile_stats['portfolio_day_other_sec'] = max(0.0, float(day_loop_sec) - day_accounted_sec)
-        profile_stats['portfolio_closeout_sec'] = closeout_sec
-        profile_stats['curve_stats_sec'] = curve_stats_sec
-        profile_stats['idle_fast_path_days'] = int(idle_fast_path_days)
-        profile_stats['dominant_year_dependency_diagnostics'] = build_dominant_year_dependency_diagnostics(closed_trades_stats)
-        profile_stats['sim_years'] = sim_years
-        profile_stats['annual_return_pct'] = annual_return_pct
-        profile_stats['bm_annual_return_pct'] = bm_annual_return_pct
-        profile_stats['reserved_buy_fill_rate'] = reserved_buy_fill_rate
-        profile_stats['portfolio_total_r'] = float(portfolio_r_stats.get('total_r', 0.0))
-        profile_stats['portfolio_median_r'] = float(portfolio_r_stats.get('median_r', 0.0))
-        profile_stats['portfolio_avg_r'] = float(portfolio_r_stats.get('avg_r', 0.0))
-        if not is_training:
-            # # (AI註: 一筆一列的扣費後 round-trip 稽核資料；只供報表歸因，不改交易或統計口徑。)
-            profile_stats['closed_trade_rows'] = [dict(row) for row in closed_trades_stats]
-        profile_stats['breakout_trades'] = int(breakout_trade_count)
-        profile_stats['reentry_trades'] = int(reentry_trade_count)
-        profile_stats['normal_trades'] = int(normal_trade_count)
-        profile_stats['extended_trades'] = int(extended_trade_count)
-        if score_single_stock_trade_stats:
-            profile_stats.update(build_score_single_stock_profile_fields(score_single_stock_trade_stats))
-        profile_stats['filled_buy_count'] = filled_buy_count
-        if active_level_rows is not None:
-            profile_stats['portfolio_active_level_rows'] = list(active_level_rows)
-        if capacity_rows is not None:
-            profile_stats['portfolio_capacity_rows'] = list(capacity_rows)
-        if capture_equity_curve:
-            profile_stats['equity_curve'] = list(equity_curve)
-        profile_stats.update(yearly_stats)
-        profile_stats.update(monthly_stats)
-        profile_stats.update(quarterly_stats)
-        profile_stats.update(bm_yearly_stats)
-        profile_stats.update(bm_monthly_stats)
-        profile_stats.update(bm_quarterly_stats)
 
-    if is_training:
-        return total_return, max_drawdown, trade_count, final_equity_money, avg_exp, max_exp, bm_ret_pct, bm_max_drawdown, win_rate, pf_ev, pf_payoff, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate, normal_trade_count, extended_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct
-
-    df_equity = pd.DataFrame(equity_curve)
-    df_trades = pd.DataFrame(trade_history)
-    final_bm_return = df_equity.iloc[-1][f"Benchmark_{benchmark_ticker}_Pct"] if not df_equity.empty else 0.0
-    return df_equity, df_trades, total_return, max_drawdown, trade_count, win_rate, pf_ev, pf_payoff, final_equity_money, avg_exp, max_exp, final_bm_return, bm_max_drawdown, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate, normal_trade_count, extended_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct
-
+    return assemble_portfolio_timeline_result(
+        is_training=is_training,
+        equity_curve=equity_curve,
+        trade_history=trade_history,
+        benchmark_ticker=benchmark_ticker,
+        terminal_metrics=terminal_metrics,
+        total_return=total_return,
+        max_drawdown=max_drawdown,
+        final_equity_money=final_equity_money,
+        max_exp=max_exp,
+        bm_ret_pct=bm_ret_pct,
+        bm_max_drawdown=bm_max_drawdown,
+        total_missed_buys=total_missed_buys,
+        total_missed_sells=total_missed_sells,
+        r_squared=r_squared,
+        monthly_win_rate=monthly_win_rate,
+        bm_r_squared=bm_r_squared,
+        bm_monthly_win_rate=bm_monthly_win_rate,
+    )
