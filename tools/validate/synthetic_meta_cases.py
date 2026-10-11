@@ -985,37 +985,29 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
         location_coupled_keywords,
     )
 
-    breakout_quality_case_modules = (
-        "synthetic_breakout_quality_policy_cases",
-        "synthetic_breakout_quality_artifact_cases",
-        "synthetic_breakout_quality_model_cases",
-        "synthetic_breakout_quality_audit_cases",
-        "synthetic_breakout_quality_pit_cases",
-        "synthetic_breakout_quality_strategy_cases",
-        "synthetic_breakout_quality_strategy_app_cases",
-        "synthetic_breakout_quality_strategy_plan_cases",
-    )
-    breakout_quality_module_paths = [
-        SYNTHETIC_VALIDATE_DIR / f"{module_name}.py"
-        for module_name in breakout_quality_case_modules
-    ]
-    missing_breakout_quality_case_modules = [
-        path.name
-        for path in breakout_quality_module_paths
-        if not path.exists()
-    ]
-
-    declared_breakout_quality_validators = []
-    for path in breakout_quality_module_paths:
-        if not path.exists():
-            continue
-        module_tree = read_source_ast(path)
-        declared_breakout_quality_validators.extend(
-            node.name
-            for node in module_tree.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    # Discover capability owners from exported validators. Auxiliary fixture/helper
+    # modules (without validate_* implementations) are not registry owners; no
+    # second hard-coded experiment/module matrix may define membership here.
+    breakout_quality_module_paths = sorted(
+        path
+        for path in SYNTHETIC_VALIDATE_DIR.glob("synthetic_breakout_quality_*_cases.py")
+        if any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
             and node.name.startswith("validate_")
+            for node in read_source_ast(path).body
         )
+    )
+    breakout_quality_case_modules = tuple(path.stem for path in breakout_quality_module_paths)
+    # Direct imports still must cover all discovered owners; a missing owner is
+    # also caught by the generic registry-versus-defined-name audit below.
+    missing_breakout_quality_case_modules = []
+    declared_breakout_quality_validators = [
+        node.name
+        for path in breakout_quality_module_paths
+        for node in read_source_ast(path).body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("validate_")
+    ]
     duplicate_breakout_quality_validator_owners = sorted(
         name
         for name in set(declared_breakout_quality_validators)

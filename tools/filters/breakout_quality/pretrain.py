@@ -56,8 +56,7 @@ from filters.breakout_quality.pretraining_store import (
 )
 from filters.breakout_quality.splits import resolve_breakout_quality_outer_policy
 from filters.breakout_quality.torch_runtime import (
-    SUPPORTED_MIXED_PRECISION_DTYPES,
-    SUPPORTED_TORCH_DEVICES,
+    add_torch_execution_cli_arguments,
     autocast_context,
     build_grad_scaler,
     resolve_torch_execution_plan,
@@ -106,26 +105,13 @@ def parse_args(argv=None):
         default=resolve_breakout_quality_random_seed(),
         help="亂數種子；省略時使用config的BREAKOUT_QUALITY_RANDOM_SEED",
     )
-    parser.add_argument("--device", choices=SUPPORTED_TORCH_DEVICES, default=BREAKOUT_QUALITY_TORCH_DEVICE)
-    parser.add_argument(
-        "--mixed-precision",
-        action=argparse.BooleanOptionalAction,
-        default=BREAKOUT_QUALITY_USE_MIXED_PRECISION,
-    )
-    parser.add_argument(
-        "--mixed-precision-dtype",
-        choices=SUPPORTED_MIXED_PRECISION_DTYPES,
-        default=BREAKOUT_QUALITY_MIXED_PRECISION_DTYPE,
-    )
-    parser.add_argument(
-        "--deterministic-algorithms",
-        action=argparse.BooleanOptionalAction,
-        default=BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS,
-    )
-    parser.add_argument(
-        "--allow-tf32",
-        action=argparse.BooleanOptionalAction,
-        default=BREAKOUT_QUALITY_ALLOW_TF32,
+    add_torch_execution_cli_arguments(
+        parser,
+        device=BREAKOUT_QUALITY_TORCH_DEVICE,
+        mixed_precision=BREAKOUT_QUALITY_USE_MIXED_PRECISION,
+        mixed_precision_dtype=BREAKOUT_QUALITY_MIXED_PRECISION_DTYPE,
+        deterministic_algorithms=BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS,
+        allow_tf32=BREAKOUT_QUALITY_ALLOW_TF32,
     )
     args = parser.parse_args(argv)
     if int(args.seed) < 0:

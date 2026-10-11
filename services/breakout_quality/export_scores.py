@@ -72,8 +72,7 @@ from filters.breakout_quality.models.spec import (
     validate_model_sequence_length,
 )
 from filters.breakout_quality.torch_runtime import (
-    SUPPORTED_MIXED_PRECISION_DTYPES,
-    SUPPORTED_TORCH_DEVICES,
+    add_torch_execution_cli_arguments,
     resolve_torch_execution_plan,
 )
 from filters.breakout_quality.paths import (
@@ -131,31 +130,14 @@ def parse_args(argv=None):
         default=BREAKOUT_QUALITY_EVALUATION_WORKERS,
         help="分數匯出的平行 read-only inference workers",
     )
-    parser.add_argument(
-        "--device",
-        choices=SUPPORTED_TORCH_DEVICES,
-        default=BREAKOUT_QUALITY_TORCH_DEVICE,
-        help="推論裝置；auto 優先 CUDA",
-    )
-    parser.add_argument(
-        "--mixed-precision",
-        action=argparse.BooleanOptionalAction,
-        default=BREAKOUT_QUALITY_USE_MIXED_PRECISION,
-    )
-    parser.add_argument(
-        "--mixed-precision-dtype",
-        choices=SUPPORTED_MIXED_PRECISION_DTYPES,
-        default=BREAKOUT_QUALITY_MIXED_PRECISION_DTYPE,
-    )
-    parser.add_argument(
-        "--deterministic-algorithms",
-        action=argparse.BooleanOptionalAction,
-        default=BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS,
-    )
-    parser.add_argument(
-        "--allow-tf32",
-        action=argparse.BooleanOptionalAction,
-        default=BREAKOUT_QUALITY_ALLOW_TF32,
+    add_torch_execution_cli_arguments(
+        parser,
+        device=BREAKOUT_QUALITY_TORCH_DEVICE,
+        mixed_precision=BREAKOUT_QUALITY_USE_MIXED_PRECISION,
+        mixed_precision_dtype=BREAKOUT_QUALITY_MIXED_PRECISION_DTYPE,
+        deterministic_algorithms=BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS,
+        allow_tf32=BREAKOUT_QUALITY_ALLOW_TF32,
+        help_by_option={"--device": "推論裝置；auto 優先 CUDA"},
     )
     parser.add_argument(
         "--preload-feature-bank",

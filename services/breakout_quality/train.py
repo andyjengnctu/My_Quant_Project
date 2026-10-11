@@ -130,6 +130,7 @@ from filters.breakout_quality.paths import (
     resolve_filter_research_score_path,
 )
 from filters.breakout_quality.torch_runtime import (
+    add_torch_execution_cli_arguments,
     SUPPORTED_MIXED_PRECISION_DTYPES,
     SUPPORTED_TORCH_DEVICES,
     TorchExecutionPlan,
@@ -310,35 +311,20 @@ def parse_args(argv=None):
         default=BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA,
         help="validation loss 至少改善多少才算新最佳",
     )
-    parser.add_argument(
-        "--device",
-        choices=SUPPORTED_TORCH_DEVICES,
-        default=BREAKOUT_QUALITY_TORCH_DEVICE,
-        help="訓練裝置；auto 優先 CUDA，否則 CPU",
-    )
-    parser.add_argument(
-        "--mixed-precision",
-        action=argparse.BooleanOptionalAction,
-        default=BREAKOUT_QUALITY_USE_MIXED_PRECISION,
-        help="CUDA 上是否使用 autocast mixed precision",
-    )
-    parser.add_argument(
-        "--mixed-precision-dtype",
-        choices=SUPPORTED_MIXED_PRECISION_DTYPES,
-        default=BREAKOUT_QUALITY_MIXED_PRECISION_DTYPE,
-        help="auto 優先 bfloat16，裝置不支援時使用 float16",
-    )
-    parser.add_argument(
-        "--deterministic-algorithms",
-        action=argparse.BooleanOptionalAction,
-        default=BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS,
-        help="是否要求 PyTorch deterministic algorithms",
-    )
-    parser.add_argument(
-        "--allow-tf32",
-        action=argparse.BooleanOptionalAction,
-        default=BREAKOUT_QUALITY_ALLOW_TF32,
-        help="是否允許 CUDA TF32；預設關閉以維持數值契約",
+    add_torch_execution_cli_arguments(
+        parser,
+        device=BREAKOUT_QUALITY_TORCH_DEVICE,
+        mixed_precision=BREAKOUT_QUALITY_USE_MIXED_PRECISION,
+        mixed_precision_dtype=BREAKOUT_QUALITY_MIXED_PRECISION_DTYPE,
+        deterministic_algorithms=BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS,
+        allow_tf32=BREAKOUT_QUALITY_ALLOW_TF32,
+        help_by_option={
+            "--device": "訓練裝置；auto 優先 CUDA，否則 CPU",
+            "--mixed-precision": "CUDA 上是否使用 autocast mixed precision",
+            "--mixed-precision-dtype": "auto 優先 bfloat16，裝置不支援時使用 float16",
+            "--deterministic-algorithms": "是否要求 PyTorch deterministic algorithms",
+            "--allow-tf32": "是否允許 CUDA TF32；預設關閉以維持數值契約",
+        },
     )
     parser.add_argument("--min-train-samples", type=int, default=BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES)
     parser.add_argument(

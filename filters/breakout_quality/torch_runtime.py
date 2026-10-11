@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping
 
 SUPPORTED_TORCH_DEVICES = ("auto", "cpu", "cuda")
 SUPPORTED_MIXED_PRECISION_DTYPES = ("auto", "float16", "bfloat16")
@@ -13,21 +13,32 @@ SUPPORTED_MIXED_PRECISION_DTYPES = ("auto", "float16", "bfloat16")
 def add_torch_execution_cli_arguments(
     parser, *, device: str, mixed_precision: bool, mixed_precision_dtype: str,
     deterministic_algorithms: bool, allow_tf32: bool,
+    help_by_option: Mapping[str, str] | None = None,
 ) -> None:
-    """Common CLI contract; defaults remain owned by the selected config/profile."""
+    """Shared flags/choices; config owns defaults and caller owns existing help text."""
     import argparse
 
-    parser.add_argument("--device", choices=SUPPORTED_TORCH_DEVICES, default=device)
-    parser.add_argument("--mixed-precision", action=argparse.BooleanOptionalAction, default=mixed_precision)
+    help_text = help_by_option or {}
+    unknown_help = set(help_text).difference({
+        "--device", "--mixed-precision", "--mixed-precision-dtype",
+        "--deterministic-algorithms", "--allow-tf32",
+    })
+    if unknown_help:
+        raise ValueError(f"Unknown Torch CLI help options: {sorted(unknown_help)}")
+    parser.add_argument("--device", choices=SUPPORTED_TORCH_DEVICES, default=device,
+                        help=help_text.get("--device"))
+    parser.add_argument("--mixed-precision", action=argparse.BooleanOptionalAction,
+                        default=mixed_precision, help=help_text.get("--mixed-precision"))
     parser.add_argument(
         "--mixed-precision-dtype", choices=SUPPORTED_MIXED_PRECISION_DTYPES,
-        default=mixed_precision_dtype,
+        default=mixed_precision_dtype, help=help_text.get("--mixed-precision-dtype"),
     )
     parser.add_argument(
         "--deterministic-algorithms", action=argparse.BooleanOptionalAction,
-        default=deterministic_algorithms,
+        default=deterministic_algorithms, help=help_text.get("--deterministic-algorithms"),
     )
-    parser.add_argument("--allow-tf32", action=argparse.BooleanOptionalAction, default=allow_tf32)
+    parser.add_argument("--allow-tf32", action=argparse.BooleanOptionalAction,
+                        default=allow_tf32, help=help_text.get("--allow-tf32"))
 
 
 @dataclass(frozen=True)

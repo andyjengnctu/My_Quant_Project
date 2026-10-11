@@ -26,6 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from config.breakout_quality import (
     BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL,
 )
+from filters.breakout_quality.torch_runtime import add_torch_execution_cli_arguments
 from core.breakout_quality_registry import (
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
@@ -2527,27 +2528,14 @@ def _parse_workflow_args(argv=None, *, program_name: str = "apps/research.py mod
         default=bool(defaults.preload_feature_bank),
         help="是否在訓練前將去重 feature bank 與事件小型陣列載入 RAM",
     )
-    parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default=str(defaults.device))
-    parser.add_argument(
-        "--mixed-precision",
-        action=argparse.BooleanOptionalAction,
-        default=bool(defaults.mixed_precision),
-        help="CUDA 上是否啟用 mixed precision",
-    )
-    parser.add_argument(
-        "--mixed-precision-dtype",
-        choices=("auto", "float16", "bfloat16"),
-        default=str(defaults.mixed_precision_dtype),
-    )
-    parser.add_argument(
-        "--deterministic-algorithms",
-        action=argparse.BooleanOptionalAction,
-        default=bool(defaults.deterministic_algorithms),
-    )
-    parser.add_argument(
-        "--allow-tf32",
-        action=argparse.BooleanOptionalAction,
-        default=bool(defaults.allow_tf32),
+    add_torch_execution_cli_arguments(
+        parser,
+        device=str(defaults.device),
+        mixed_precision=bool(defaults.mixed_precision),
+        mixed_precision_dtype=str(defaults.mixed_precision_dtype),
+        deterministic_algorithms=bool(defaults.deterministic_algorithms),
+        allow_tf32=bool(defaults.allow_tf32),
+        help_by_option={"--mixed-precision": "CUDA 上是否啟用 mixed precision"},
     )
     parser.add_argument(
         "--experiment-profile",

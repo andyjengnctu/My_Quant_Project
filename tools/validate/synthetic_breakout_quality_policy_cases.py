@@ -298,10 +298,33 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         return (arguments.device, arguments.mixed_precision, arguments.mixed_precision_dtype,
                 arguments.deterministic_algorithms, arguments.allow_tf32)
 
-    for name, parser in (("train", parse_ranker_args), ("pit", parse_pit_args)):
+    from services.breakout_quality.train import parse_args as parse_binary_train_args
+    from services.breakout_quality.export_scores import parse_args as parse_export_args
+    from services.breakout_quality.binary_point_in_time_scores import _parse_args as parse_binary_pit_args
+    from tools.filters.breakout_quality.pretrain import parse_args as parse_pretrain_args
+    from services.research.breakout_quality_application import (
+        _parse_workflow_args, _train_defaults,
+    )
+    workflow_defaults = _train_defaults()
+    workflow_torch_defaults = (
+        str(workflow_defaults.device), bool(workflow_defaults.mixed_precision),
+        str(workflow_defaults.mixed_precision_dtype),
+        bool(workflow_defaults.deterministic_algorithms), bool(workflow_defaults.allow_tf32),
+    )
+    # Both legacy Binary and continuous/PIT producers must consume exactly the
+    # same CLI primitive; the Research wrapper retains its own configured defaults.
+    for name, parser, defaults in (
+        ("train", parse_ranker_args, expected_torch_defaults),
+        ("pit", parse_pit_args, expected_torch_defaults),
+        ("binary_train", parse_binary_train_args, expected_torch_defaults),
+        ("export_scores", parse_export_args, expected_torch_defaults),
+        ("binary_pit", parse_binary_pit_args, expected_torch_defaults),
+        ("pretrain", parse_pretrain_args, expected_torch_defaults),
+        ("research_workflow", _parse_workflow_args, workflow_torch_defaults),
+    ):
         check(
             f"{name}_torch_cli_uses_config_defaults",
-            expected_torch_defaults, torch_fields(parser([])),
+            defaults, torch_fields(parser([])),
         )
         check(
             f"{name}_torch_cli_override_preserves_boolean_optional_semantics",
