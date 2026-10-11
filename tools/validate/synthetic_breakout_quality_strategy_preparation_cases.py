@@ -953,6 +953,209 @@ def append_strategy_compare_preparation_contract_checks(
         partial_period_rejected,
     )
 
+    append_optimizer_rolling_seed_provenance_checks(results=results, case_id=case_id)
+
+
+
+
+
+def append_optimizer_rolling_seed_provenance_checks(*, results: list[dict[str, Any]], case_id: str) -> None:
+    """Regression: a finished single-seed schedule must never inherit global N.
+
+    Test the producer serializer and evidence-gated recovery with synthetic
+    work artifacts; no FinMind data, Optuna fitting, or formal suite execution.
+    """
+    import copy
+
+    from config.training_policy import OPTIMIZER_FIXED_TP_PERCENT
+    from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot
+    from core.strategy_param_policy import get_strategy_param_fitting_seed_protocol
+    from services.optimizer.outer_rolling_active_replay import (
+        _build_active_param_replay_payload_from_rows,
+    )
+    from services.optimizer.outer_rolling_artifacts import (
+        _build_policy_paramset_payload,
+        _requested_seed_ensemble_policy_from_rows,
+    )
+    from services.optimizer.strategy_param_training import (
+        _validate_min_roos_params,
+        _validate_selection_full_roos_params,
+    )
+
+    single = get_strategy_param_fitting_seed_protocol("single_seed_42").as_seed_ensemble_policy()
+    seed = int(single["resolved_seeds"][0])
+    multi = get_strategy_param_fitting_seed_protocol("research_fixed_multiseed_v1").as_seed_ensemble_policy()
+    legacy_default = build_seed_ensemble_policy_snapshot(
+        enabled=False, seed_count=int(single["seed_count"]) + 3, min_agree="auto"
+    )
+    price_params = {
+        "high_len": 260, "atr_len": 23, "atr_buy_tol": 1.5,
+        "atr_times_init": 2.0, "atr_times_trail": 3.0,
+        "tp_percent": float(OPTIMIZER_FIXED_TP_PERCENT),
+        "use_breakout_quality_filter": False,
+        "use_breakout_quality_ranking": False,
+        "use_history_threshold": False,
+    }
+    row = {
+        "fold": "1/1", "oos_year": 2021,
+        "selection_period": "2011-01-01~2020-12-31",
+        "selection_start_date": "2011-01-01", "selection_end_date": "2020-12-31",
+        "oos_period": "2021-01-01~2021-12-31",
+        "oos_start_date": "2021-01-01", "oos_end_date": "2021-12-31",
+        "random_seed_ensemble": single,
+        "policy_schedules": {
+            "base_finalist_best": {
+                "effective_start": "2021-01-01", "effective_end": "2021-12-31",
+                "optimizer_seed": seed, "selected_trial": 2,
+                "params": dict(price_params),
+            },
+        },
+    }
+    config = SimpleNamespace(
+        window_mode="fixed", train_window_years=10,
+        first_oos_date="2021-01-01", last_oos_date="2021-12-31",
+        train_window_months=120, oos_horizon_months=12,
+        training_start_year=2011, first_oos_year=2021, last_oos_year=2021,
+        raw_universe_required_min_rows=200,
+        trials_per_fold=int(get_strategy_param_fitting_seed_protocol("single_seed_42").trials_per_seed),
+    )
+    summary = {
+        "folds": 1, "selection_period": row["selection_period"],
+        "oos_period": row["oos_period"], "chained_oos": {},
+    }
+    published = _build_policy_paramset_payload(
+        policy_name="base_finalist_best", rows=[row], config=config, summary=summary,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "rolling_optimizer_artifact_uses_resolved_fitting_seed_policy_not_global_capacity",
+        True,
+        dict(published["meta"]["requested_random_seed_ensemble"]) == single
+        and int(published["meta"]["random_seed_ensemble"]["seed_count"]) == int(single["seed_count"])
+        and not bool(published["meta"]["random_seed_ensemble"]["member_count_mismatch"]),
+    )
+    old_single_row = copy.deepcopy(row)
+    old_single_row.pop("random_seed_ensemble")
+    newly_published = _build_policy_paramset_payload(
+        policy_name="base_finalist_best", rows=[old_single_row],
+        config=config, summary=summary, requested_seed_ensemble_policy=single,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "registered_rolling_producer_injects_seed_policy_even_without_legacy_fold_field",
+        True,
+        newly_published["meta"]["requested_random_seed_ensemble"] == single,
+    )
+    agree_row = copy.deepcopy(row)
+    agree_row["policy_schedules"]["base_finalists_agree"] = {
+        "effective_start": "2021-01-01", "effective_end": "2021-12-31",
+        "params": dict(price_params), "optimizer_seed": seed,
+        "params_ensemble": [
+            {"params": dict(price_params), "seed": seed, "optimizer_seed": seed},
+            {"params": dict(price_params), "seed": seed, "optimizer_seed": seed},
+        ],
+    }
+    chain = _build_active_param_replay_payload_from_rows(
+        [agree_row], policy_name="base_finalists_agree"
+    )
+    chain_policy = dict(chain.get("random_seed_ensemble") or {})
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "rolling_active_replay_preserves_single_seed_provenance_with_multiple_finalists",
+        True,
+        dict(chain_policy.get("requested_random_seed_ensemble") or {}) == single,
+    )
+    multi_row = copy.deepcopy(row)
+    multi_row["random_seed_ensemble"] = multi
+    multi_row["policy_schedules"]["base_finalist_best"]["params_ensemble"] = [
+        {"params": dict(price_params), "seed": int(current_seed), "optimizer_seed": int(current_seed)}
+        for current_seed in multi["resolved_seeds"]
+    ]
+    multi_result = _build_policy_paramset_payload(
+        policy_name="base_finalist_best", rows=[multi_row], config=config, summary=summary,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "rolling_optimizer_multiseed_artifact_keeps_registered_bundle_count",
+        True,
+        int(multi_result["meta"]["requested_random_seed_ensemble"]["seed_count"]) == int(multi["seed_count"])
+        and int(multi_result["meta"]["random_seed_ensemble"]["seed_count"]) == int(multi["seed_count"]),
+    )
+    drift_blocked = False
+    try:
+        _requested_seed_ensemble_policy_from_rows([row, multi_row])
+    except ValueError:
+        drift_blocked = True
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "rolling_optimizer_rejects_mixed_fitting_policies_across_folds",
+        True, drift_blocked,
+    )
+
+    schedule = {"meta": {
+        "first_oos_date": "2021-01-01", "last_oos_date": "2021-12-31",
+        "train_window_months": 120, "oos_horizon_months": 12,
+    }}
+    args = SimpleNamespace(
+        trials_per_fold=config.trials_per_fold,
+        optimizer_search_protocol="", parameter_set_identity="synthetic_single_seed",
+        seed_ensemble_policy_override=single,
+    )
+    legacy_payload = copy.deepcopy(published)
+    legacy_payload["meta"]["requested_random_seed_ensemble"] = legacy_default
+    with tempfile.TemporaryDirectory() as raw_tmp:
+        path = Path(raw_tmp) / "single_seed_roos.json"
+        path.write_text(json.dumps(legacy_payload), encoding="utf-8")
+        with redirect_stdout(io.StringIO()):
+            recovered = _validate_selection_full_roos_params(
+                path=path, schedule_contract=schedule, args=args,
+            )
+        preserved = (
+            recovered["params_ensemble_by_effective_date"]
+            == legacy_payload["params_ensemble_by_effective_date"]
+            and recovered["params_by_effective_date"]
+            == legacy_payload["params_by_effective_date"]
+            and recovered["summary"] == legacy_payload["summary"]
+        )
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "registered_full_single_seed_recovery_repairs_metadata_without_new_fitting",
+            True,
+            preserved
+            and recovered["meta"]["requested_random_seed_ensemble"] == single,
+        )
+        path.write_text(json.dumps(legacy_payload), encoding="utf-8")
+        with redirect_stdout(io.StringIO()):
+            min_recovered = _validate_min_roos_params(
+                path=path, baseline_contract=schedule,
+                fold_overrides={"2021-01-01": {}}, args=args,
+                training_dl_enabled=False, arm_id="synthetic_min",
+            )
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "registered_min_single_seed_recovery_uses_same_provenance_guard",
+            True,
+            min_recovered["meta"]["requested_random_seed_ensemble"] == single
+            and min_recovered["params_ensemble_by_effective_date"]
+                == legacy_payload["params_ensemble_by_effective_date"],
+        )
+        unsafe = copy.deepcopy(legacy_payload)
+        unsafe["params_ensemble_by_effective_date"]["2021-01-01"][0]["seed"] = seed + 1
+        before = json.dumps(unsafe, sort_keys=True)
+        path.write_text(json.dumps(unsafe), encoding="utf-8")
+        seed_mismatch_blocked = False
+        try:
+            _validate_selection_full_roos_params(
+                path=path, schedule_contract=schedule, args=args,
+            )
+        except ValueError:
+            seed_mismatch_blocked = True
+        after = json.dumps(json.loads(path.read_text(encoding="utf-8")), sort_keys=True)
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "registered_single_seed_metadata_repair_rejects_conflicting_actual_seed",
+            True, seed_mismatch_blocked and before == after,
+        )
 
 
 

@@ -716,6 +716,25 @@ def _validate_min_roos_params(*, path, baseline_contract, fold_overrides, args, 
             for field_name in MIN_ROOS_SEARCH_FIELDS:
                 if field_name not in params:
                     raise ValueError(f"{arm_id}缺少Min ROOS搜尋欄位: {effective_date}/{field_name}")
+    seed_ensemble_policy = dict(getattr(args, "seed_ensemble_policy_override", None) or {})
+    if seed_ensemble_policy:
+        payload = _recover_selection_full_roos_single_seed_metadata(
+            path=Path(path),
+            payload=payload,
+            expected_policy=seed_ensemble_policy,
+        )
+        requested = dict((payload.get("meta") or {}).get("requested_random_seed_ensemble") or {})
+        for key in ("enabled", "seed_count", "min_agree", "seed_mode", "resolved_seeds"):
+            expected = seed_ensemble_policy.get(key)
+            actual = requested.get(key)
+            if key == "resolved_seeds":
+                expected = list(expected or [])
+                actual = list(actual or [])
+            if actual != expected:
+                raise ValueError(
+                    f"{arm_id} Min ROOS seed ensemble contract不一致: "
+                    f"field={key}, expected={expected!r}, actual={actual!r}"
+                )
     existing_adaptation = dict(
         payload.get("breakout_quality_param_adaptation") or {}
     )
@@ -2004,6 +2023,84 @@ def _selection_full_roos_optimizer_runtime_cache_identity(
     return _canonical_hash(payload)
 
 
+def _recover_selection_full_roos_single_seed_metadata(
+    *,
+    path: Path,
+    payload: dict[str, Any],
+    expected_policy: dict[str, Any],
+) -> dict[str, Any]:
+    """Recover only the old global-N metadata bug, never a conflicting fitting.
+
+    A matching preflight identity is checked by the caller before reusing an
+    existing work artifact. Independent persisted fold and member seed evidence
+    must also establish single-seed fitting; no OOS scores or params are changed.
+    """
+    from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot
+    from services.optimizer.outer_rolling_artifacts import (
+        _build_effective_seed_ensemble_policy_payload,
+    )
+
+    meta = dict(payload.get("meta") or {})
+    recorded = dict(meta.get("requested_random_seed_ensemble") or {})
+    if recorded == expected_policy:
+        return payload
+    expected_seeds = list(expected_policy.get("resolved_seeds") or [])
+    if (bool(expected_policy.get("enabled"))
+        or int(expected_policy.get("seed_count", 0) or 0) != 1
+        or len(expected_seeds) != 1
+        or int(expected_policy.get("generator_seed", 0) or 0) != int(expected_seeds[0])
+    ):
+        return payload
+    if (not recorded or bool(recorded.get("enabled", True))
+        or int(recorded.get("seed_count", 0) or 0) <= 1
+    ):
+        return payload
+    # The previous serializer took its metadata from the legacy global
+    # random-ensemble capacity, even though the resolved producer used one seed.
+    try:
+        legacy_snapshot = build_seed_ensemble_policy_snapshot(
+            enabled=False,
+            seed_count=recorded.get("seed_count"),
+            min_agree=recorded.get("min_agree_requested"),
+        )
+    except (TypeError, ValueError):
+        return payload
+    if recorded != legacy_snapshot:
+        return payload
+    expected_seed = int(expected_seeds[0])
+    members_by_date = dict(payload.get("params_ensemble_by_effective_date") or {})
+    folds = list(payload.get("folds") or [])
+    if not folds or len(folds) != len(members_by_date):
+        return payload
+    for fold in folds:
+        effective_start = str((fold or {}).get("effective_start") or "")
+        members = list(members_by_date.get(effective_start) or [])
+        if (not effective_start
+            or len(members) != 1
+            or int((fold or {}).get("optimizer_seed") or 0) != expected_seed
+            or int((members[0] or {}).get("seed") or 0) != expected_seed
+            or int((members[0] or {}).get("optimizer_seed", expected_seed) or 0) != expected_seed
+            or (fold or {}).get("member_count") not in (None, 1)
+        ):
+            return payload
+    policy_name = str(payload.get("selector") or "")
+    effective = _build_effective_seed_ensemble_policy_payload(
+        members_by_date,
+        policy_name=policy_name,
+        requested_policy=expected_policy,
+    )
+    repaired = dict(payload)
+    meta["requested_random_seed_ensemble"] = dict(expected_policy)
+    meta["random_seed_ensemble"] = effective
+    repaired["meta"] = meta
+    repaired["random_seed_ensemble"] = effective
+    print(
+        "[Optimizer] 已驗證原始fold及member seeds；"
+        "只修正既有rolling工件的seed metadata，不重新訓練或改動策略參數。"
+    )
+    return _write_strategy_param_json(path, repaired)
+
+
 def _validate_selection_full_roos_params(*, path: Path, schedule_contract, args) -> dict[str, Any]:
     payload = _load_json(path)
     if payload is None:
@@ -2125,6 +2222,12 @@ def _validate_selection_full_roos_params(*, path: Path, schedule_contract, args)
         getattr(args, "seed_ensemble_policy_override", None) or {}
     )
     if seed_ensemble_policy:
+        payload = _recover_selection_full_roos_single_seed_metadata(
+            path=path,
+            payload=payload,
+            expected_policy=seed_ensemble_policy,
+        )
+        meta = dict(payload.get("meta") or {})
         requested = dict(meta.get("requested_random_seed_ensemble") or {})
         for key in ("enabled", "seed_count", "min_agree", "seed_mode", "resolved_seeds"):
             expected = seed_ensemble_policy.get(key)

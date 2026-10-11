@@ -56,8 +56,34 @@ _build_random_seed_ensemble_policy_payload = _build_seed_ensemble_policy_payload
 
 
 
-def _build_effective_seed_ensemble_policy_payload(params_ensemble_by_effective_date: dict, *, policy_name: str | None = None) -> dict:
-    requested_policy = _build_random_seed_ensemble_policy_payload()
+def _requested_seed_ensemble_policy_from_rows(rows: list[dict]) -> dict:
+    """Use one per-fold fitting policy; retain global fallback only for legacy direct runs.
+
+    Registered Research producers pass the resolved policy explicitly from
+    run_outer_rolling_oos, even when historical single-seed rows lacked it.
+    """
+    policies = [
+        dict(row.get("random_seed_ensemble"))
+        for row in rows
+        if isinstance(row.get("random_seed_ensemble"), dict)
+        and row["random_seed_ensemble"]
+    ]
+    if policies and any(policy != policies[0] for policy in policies[1:]):
+        raise ValueError("Rolling fold的fitting seed policy不一致，禁止混合發布")
+    return dict(policies[0]) if policies else _build_random_seed_ensemble_policy_payload()
+
+
+def _build_effective_seed_ensemble_policy_payload(
+    params_ensemble_by_effective_date: dict,
+    *,
+    policy_name: str | None = None,
+    requested_policy: dict | None = None,
+) -> dict:
+    requested_policy = (
+        dict(requested_policy)
+        if requested_policy is not None
+        else _build_random_seed_ensemble_policy_payload()
+    )
     member_counts = [
         len(normalize_seed_ensemble_members(members))
         for members in (params_ensemble_by_effective_date or {}).values()
@@ -117,18 +143,22 @@ def _build_params_ensemble_members_for_schedule(schedule: dict) -> list[dict]:
     return [member]
 
 
-def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config: OuterRollingConfig, summary: dict) -> dict:
+def _build_policy_paramset_payload(
+    *,
+    policy_name: str,
+    rows: list[dict],
+    config: OuterRollingConfig,
+    summary: dict,
+    requested_seed_ensemble_policy: dict | None = None,
+) -> dict:
     rows = normalize_optimizer_seed_ensemble_fold_rows(list(rows or []))
     params_by_oos_year = {}
     params_by_effective_date = {}
     params_ensemble_by_effective_date = {}
-    requested_seed_ensemble_policy = next(
-        (
-            dict(row.get("random_seed_ensemble") or {})
-            for row in rows
-            if dict(row.get("random_seed_ensemble") or {})
-        ),
-        _build_random_seed_ensemble_policy_payload(),
+    resolved_requested_seed_policy = (
+        dict(requested_seed_ensemble_policy)
+        if requested_seed_ensemble_policy is not None
+        else _requested_seed_ensemble_policy_from_rows(rows)
     )
     fold_entries = []
     for row in rows:
@@ -194,7 +224,11 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
             "best_finalist_oos_score": row.get("best_finalist_oos_score"),
             "training_protocol": dict(row.get("training_protocol") or {}),
         })
-    seed_ensemble_policy = _build_effective_seed_ensemble_policy_payload(params_ensemble_by_effective_date, policy_name=policy_name)
+    seed_ensemble_policy = _build_effective_seed_ensemble_policy_payload(
+        params_ensemble_by_effective_date,
+        policy_name=policy_name,
+        requested_policy=resolved_requested_seed_policy,
+    )
     chain_all = dict(summary.get("chained_oos") or {})
     chain_policy = dict(chain_all.get(policy_name) or {})
     chain_policy_available = _policy_is_available(chain_policy)
@@ -250,7 +284,7 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
             "active_param_policy_note": "驗證 replay 時，每個交易日所有決策都使用該日期已生效的 active-param ensemble；實盤同理使用當下正式 promote 的最新 ensemble param.json。",
             "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
             "random_seed_ensemble": seed_ensemble_policy,
-            "requested_random_seed_ensemble": requested_seed_ensemble_policy,
+            "requested_random_seed_ensemble": resolved_requested_seed_policy,
         },
         "summary": {
             "folds": int(summary.get("folds", 0)),
@@ -312,6 +346,7 @@ def _write_policy_paramset_files(
     config: OuterRollingConfig,
     summary: dict,
     canonical_strategy_param_family: str | None = None,
+    requested_seed_ensemble_policy: dict | None = None,
 ) -> dict:
     os.makedirs(models_dir, exist_ok=True)
     _remove_stale_policy_paramset_files(models_dir)
@@ -327,7 +362,8 @@ def _write_policy_paramset_files(
         path = os.path.join(models_dir, filename)
         payload = normalize_strategy_param_payload_for_persistence(
             _build_policy_paramset_payload(
-                policy_name=policy_name, rows=rows, config=config, summary=summary
+                policy_name=policy_name, rows=rows, config=config, summary=summary,
+                requested_seed_ensemble_policy=requested_seed_ensemble_policy,
             )
         )
         atomic_write_json(path, payload)
@@ -345,6 +381,7 @@ def _write_reports(
     chained_override: dict | None = None,
     models_dir: str | None = None,
     canonical_strategy_param_family: str | None = None,
+    requested_seed_ensemble_policy: dict | None = None,
 ) -> dict:
     _ = (output_dir, session_ts)
     resolved_models_dir = str(models_dir or resolve_models_dir(project_root))
@@ -376,6 +413,7 @@ def _write_reports(
         config=config,
         summary=summary,
         canonical_strategy_param_family=(str(canonical_family) if canonical_current_output else None),
+        requested_seed_ensemble_policy=requested_seed_ensemble_policy,
     )
     if canonical_current_output:
         from services.optimizer.strategy_param_repository import refresh_strategy_parameter_manifest

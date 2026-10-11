@@ -29,6 +29,7 @@ from core.training_policy import is_optimizer_local_min_review_enabled
 from services.optimizer.outer_rolling_artifacts import (
     _build_effective_seed_ensemble_policy_payload,
     _build_params_ensemble_members_for_schedule,
+    _requested_seed_ensemble_policy_from_rows,
 )
 from services.optimizer.outer_rolling_fold_context import (
     normalize_optimizer_seed_ensemble_fold_row,
@@ -82,7 +83,11 @@ def _build_active_param_replay_payload_from_rows(rows: list[dict], *, policy_nam
             "mode": ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING,
             "type": "outer_rolling_oos_param_set",
             "active_param_policy": "daily_active_param_ensemble",
-            "random_seed_ensemble": _build_effective_seed_ensemble_policy_payload(params_ensemble_by_effective_date, policy_name=policy_name),
+            "random_seed_ensemble": _build_effective_seed_ensemble_policy_payload(
+                params_ensemble_by_effective_date,
+                policy_name=policy_name,
+                requested_policy=_requested_seed_ensemble_policy_from_rows(rows),
+            ),
             "params_ensemble_by_effective_date": params_ensemble_by_effective_date,
             "params_by_oos_year": params_by_oos_year,
             "params_by_effective_date": params_by_effective_date,

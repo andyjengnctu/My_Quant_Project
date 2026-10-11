@@ -3125,6 +3125,14 @@ def run_outer_rolling_oos(
 
     _shutdown_rolling_shared_prep_executor_holder(rolling_shared_prep_executor_holder)
 
+    # One resolved fitting policy must reach OOS_CHAIN and every published paramset.
+    # A single-seed fold has no ensemble policy field in its historical row shape.
+    for row in rows:
+        recorded_policy = row.get("random_seed_ensemble")
+        if isinstance(recorded_policy, dict) and recorded_policy and dict(recorded_policy) != runtime_seed_policy:
+            raise ValueError("Optimizer fold seed policy與本次runtime scientific contract不一致")
+        row["random_seed_ensemble"] = dict(runtime_seed_policy)
+
     resolved_chain_max_positions = int(chain_max_positions if chain_max_positions is not None else DEFAULT_PORTFOLIO_MAX_POSITIONS)
     resolved_chain_enable_rotation = bool(chain_enable_rotation if chain_enable_rotation is not None else False)
     active_replay_started = time.perf_counter()
@@ -3170,6 +3178,7 @@ def run_outer_rolling_oos(
                 else resolve_models_dir(project_root, environ=environ)
             ),
             canonical_strategy_param_family=canonical_strategy_param_family,
+            requested_seed_ensemble_policy=runtime_seed_policy,
         )
     report_write_sec = max(0.0, time.perf_counter() - report_write_started)
     resource_sampler.stop()
