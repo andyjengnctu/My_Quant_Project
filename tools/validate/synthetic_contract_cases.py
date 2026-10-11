@@ -2864,7 +2864,41 @@ def validate_gui_trade_count_and_sidebar_sync_contract_case(base_params):
     check("portfolio_active_level_rows_are_engine_output_not_gui_replay", True, "execute_bar_step" not in portfolio_inspector_source and "portfolio_active_level_rows" in portfolio_engine_source and "_record_portfolio_active_level_rows" in portfolio_inspector_source)
     check("single_stock_exit_day_active_levels_are_recorded", True, "_record_exit_day_active_levels(" in exit_flow_source and "fallback_qty=prev_qty" in exit_flow_source and "stop_price=_resolve_exit_day_stop_line" in exit_flow_source)
     check("portfolio_exit_day_active_level_rows_are_engine_output", True, "active_level_rows=active_level_rows" in portfolio_engine_source and "append_portfolio_position_active_level_row(" in portfolio_exits_source and "require_open_qty=False" in portfolio_exits_source)
-    check("portfolio_reserved_fill_rate_uses_filled_buy_count", True, "entry_stats['filled_buy_count']" in portfolio_entries_source and "filled_buy_count / (filled_buy_count + total_missed_buys)" in portfolio_engine_source and "profile_stats['filled_buy_count']" in portfolio_engine_source)
+    # AI: Probe the canonical terminal owner instead of requiring a formula to
+    # remain inline in portfolio_engine after responsibility-preserving splits.
+    from core import portfolio_engine, portfolio_terminal_statistics, portfolio_terminal_reporting
+    from core.portfolio_run_result import PortfolioTrainingResult
+    terminal_probe = portfolio_engine.summarize_portfolio_terminal_metrics(
+        closed_trades_stats=[], pit_stats_index={}, sorted_dates=[pd.Timestamp("2025-01-02")],
+        start_idx=0, profile_requested=False, active_context_resolver=None,
+        active_context_ensemble_resolver=None,
+        ev_calc_method_getter=lambda: (_ for _ in ()).throw(AssertionError("no closed trades")),
+        total_exposure=0.0, sim_days=1,
+        portfolio_entry_stats={"filled_buy_count": 3}, total_missed_buys=1,
+        initial_capital=1000.0, final_equity_money=1000.0,
+        benchmark_start_price=100.0, bm_ret_pct=0.0, benchmark_period_stats=None,
+    )
+    check("portfolio_reserved_fill_rate_owner_is_canonical", True,
+          portfolio_engine.summarize_portfolio_terminal_metrics
+          is portfolio_terminal_statistics.summarize_portfolio_terminal_metrics
+          and portfolio_engine.publish_portfolio_profile_stats
+          is portfolio_terminal_reporting.publish_portfolio_profile_stats)
+    # No closed round trips: fill-rate MUST follow actual filled buys (3/4),
+    # never the closed-trade count (0) or the number of cash reservations.
+    check("portfolio_reserved_fill_rate_uses_filled_buy_count", (0, 3, 75.0),
+          (terminal_probe.trade_count, terminal_probe.filled_buy_count,
+           terminal_probe.reserved_buy_fill_rate))
+    training_output = portfolio_engine.assemble_portfolio_timeline_result(
+        is_training=True, equity_curve=[], trade_history=[], benchmark_ticker="0050",
+        terminal_metrics=terminal_probe, total_return=0.0, max_drawdown=0.0,
+        final_equity_money=1000.0, max_exp=0.0, bm_ret_pct=0.0,
+        bm_max_drawdown=0.0, total_missed_buys=1, total_missed_sells=0,
+        r_squared=0.0, monthly_win_rate=0.0,
+        bm_r_squared=0.0, bm_monthly_win_rate=0.0,
+    )
+    check("portfolio_training_result_keeps_canonical_fill_rate", 75.0,
+          PortfolioTrainingResult(*training_output).reserved_buy_fill_rate)
+
     check("portfolio_buy_rows_keep_reserved_and_actual_capital_separate", True, "'預留總金額': milli_to_money(reserved_cost_milli)" in portfolio_entries_source and '"reserved_capital": None if pd.isna(reserved_capital) else float(reserved_capital)' in portfolio_inspector_source and '"reserved_capital": reserved_capital' in charting_source and '"預留總金額", "投入總金額"' in portfolio_reporting_source)
     check("portfolio_missed_buy_rows_keep_qty_reserved_and_zero_actual_spend", True, "'股數': chosen_entry_plan['qty']" in portfolio_entries_source and "'預留總金額': milli_to_money(reserved_cost_milli)" in portfolio_entries_source and "'投入總金額': 0.0" in portfolio_entries_source)
     check("portfolio_missed_sell_rows_keep_reference_fields", True, "'停損價': pos.get('trailing_stop', pos.get('initial_stop'))" in portfolio_exits_source and "'參考收盤價': get_fast_close(fast_df, pos=t_pos)" in portfolio_exits_source and "'股數': pos.get('qty')" in portfolio_exits_source)
