@@ -439,6 +439,74 @@ def _make_candidate_row(
     return row
 
 
+
+def _resolve_qualified_normal_setup(
+    *, ticker, y_pos, portfolio, sold_today, all_dfs_fast,
+    active_extended_signals, pit_stats_index, pit_stats_cursor,
+    today, params, profile_stats,
+):
+    """One PIT/old-continuation gate for both orderable and full-capacity paths.
+
+    Supersession is intentionally first, even if the ticker cannot be bought
+    today or its PIT history rejects the new setup.  This is stateful and must
+    not be moved behind a candidate sizing or capacity check.
+    """
+    # # (AI註: 新 normal setup 必須先覆蓋舊延續訊號；即使已持有、當日賣出或
+    # #        history filter 不合格，也不可讓舊 setup 的續掛狀態跨日殘留。)
+    active_extended_signals.pop(ticker, None)
+    if ticker in portfolio or ticker in sold_today:
+        return None
+
+    fast_df = all_dfs_fast[ticker]
+    y_buy_limit, y_atr, y_close, signal_date = get_fast_normal_signal_values(
+        fast_df, y_pos
+    )
+    security_profile = get_fast_security_profile(fast_df)
+
+    pit_started = time.perf_counter() if profile_stats is not None else None
+    is_candidate, ev, win_rate, trade_count, asset_growth_pct = get_pit_stats_from_index(
+        pit_stats_index[ticker], today, params,
+        cursor_state=pit_stats_cursor, ticker=ticker,
+    )
+    if profile_stats is not None:
+        _candidate_profile_add(profile_stats, "portfolio_candidate_pit_stats_sec", pit_started)
+    if not is_candidate:
+        return None
+    return (
+        y_buy_limit, y_atr, y_close, signal_date, security_profile,
+        ev, win_rate, trade_count, asset_growth_pct,
+    )
+
+
+def _record_normal_setup_tracking_state(
+    *, ticker, y_buy_limit, y_atr, signal_date, security_profile,
+    params, active_extended_signals, profile_stats,
+):
+    """Share the exact PIT ranking and continuation-state transition.
+
+    The full candidate path calls this only after its plan is admissible;
+    full-capacity tracking calls it directly after the PIT history gate.
+    """
+    if bool(getattr(params, "use_breakout_quality_ranking", False)):
+        quality_started = time.perf_counter() if profile_stats is not None else None
+        quality_rank = _resolve_candidate_quality_ranking(
+            params=params, ticker=ticker, signal_date=signal_date,
+            information_date=signal_date,
+        )
+        if profile_stats is not None:
+            _candidate_profile_add(profile_stats, "portfolio_candidate_quality_rank_sec", quality_started)
+    else:
+        quality_rank = None
+    signal_state = create_signal_tracking_state(
+        y_buy_limit, y_atr, params, ticker=ticker,
+        security_profile=security_profile, signal_date=signal_date,
+    )
+    if signal_state is not None:
+        attach_breakout_quality_rank(signal_state, quality_rank)
+        active_extended_signals[ticker] = signal_state
+    return quality_rank
+
+
 def _collect_normal_candidates(
     *,
     normal_setup_entries,
@@ -468,27 +536,19 @@ def _collect_normal_candidates(
     for ticker, y_pos, t_pos in normal_setup_entries:
         normal_setup_tickers_today.add(ticker)
 
-        # # (AI註: 新的 normal setup 必須先覆蓋舊延續訊號；即使當日因已持有/剛賣出而不能下單，
-        # #        也不能讓舊 setup 的延續訊號跨日殘留。若 history filter 不合格，禁止沿用舊 setup 續掛)
-        active_extended_signals.pop(ticker, None)
-
-        if ticker in portfolio or ticker in sold_today:
-            continue
-
-        fast_df = all_dfs_fast[ticker]
-        y_buy_limit, y_atr, y_close, signal_date = get_fast_normal_signal_values(
-            fast_df, y_pos
+        qualified_setup = _resolve_qualified_normal_setup(
+            ticker=ticker, y_pos=y_pos, portfolio=portfolio,
+            sold_today=sold_today, all_dfs_fast=all_dfs_fast,
+            active_extended_signals=active_extended_signals,
+            pit_stats_index=pit_stats_index, pit_stats_cursor=pit_stats_cursor,
+            today=today, params=params, profile_stats=profile_stats,
         )
-        security_profile = get_fast_security_profile(fast_df)
-
-        pit_started = time.perf_counter() if profile_enabled else None
-        is_candidate, ev, win_rate, trade_count, asset_growth_pct = get_pit_stats_from_index(
-            pit_stats_index[ticker], today, params, cursor_state=pit_stats_cursor, ticker=ticker
-        )
-        if profile_enabled:
-            _candidate_profile_add(profile_stats, "portfolio_candidate_pit_stats_sec", pit_started)
-        if not is_candidate:
+        if qualified_setup is None:
             continue
+        (
+            y_buy_limit, y_atr, y_close, signal_date, security_profile,
+            ev, win_rate, trade_count, asset_growth_pct,
+        ) = qualified_setup
 
         sizing_fee_context = _resolve_candidate_sizing_fee_context(
             sizing_fee_context_cache, params=params, ticker=ticker,
@@ -539,23 +599,12 @@ def _collect_normal_candidates(
         if profile_enabled:
             _candidate_profile_add(profile_stats, "portfolio_candidate_plan_sec", plan_started)
 
-        if bool(getattr(params, "use_breakout_quality_ranking", False)):
-            quality_started = time.perf_counter() if profile_enabled else None
-            quality_rank = _resolve_candidate_quality_ranking(
-                params=params, ticker=ticker, signal_date=signal_date,
-                information_date=signal_date,
-            )
-            if profile_enabled:
-                _candidate_profile_add(profile_stats, "portfolio_candidate_quality_rank_sec", quality_started)
-        else:
-            quality_rank = None
-        signal_state = create_signal_tracking_state(
-            y_buy_limit, y_atr, params, ticker=ticker,
-            security_profile=security_profile, signal_date=signal_date,
+        quality_rank = _record_normal_setup_tracking_state(
+            ticker=ticker, y_buy_limit=y_buy_limit, y_atr=y_atr,
+            signal_date=signal_date, security_profile=security_profile,
+            params=params, active_extended_signals=active_extended_signals,
+            profile_stats=profile_stats,
         )
-        if signal_state is not None:
-            attach_breakout_quality_rank(signal_state, quality_rank)
-            active_extended_signals[ticker] = signal_state
 
         if (not collect_all_candidates) and (not is_orderable):
             continue
@@ -605,49 +654,25 @@ def track_normal_setup_signals_for_day(
     for ticker, y_pos, _t_pos in normal_setup_entries:
         normal_setup_tickers_today.add(ticker)
 
-        # # (AI註: 與完整候選路徑一致：新的 normal setup 先覆蓋舊延續訊號；即使當日因已持有/剛賣出而不能下單，
-        # #        也不能讓舊 setup 的延續訊號跨日殘留。若 history filter 不合格則不續掛)
-        active_extended_signals.pop(ticker, None)
-
-        if ticker in portfolio or ticker in sold_today:
+        qualified_setup = _resolve_qualified_normal_setup(
+            ticker=ticker, y_pos=y_pos, portfolio=portfolio,
+            sold_today=sold_today, all_dfs_fast=all_dfs_fast,
+            active_extended_signals=active_extended_signals,
+            pit_stats_index=pit_stats_index, pit_stats_cursor=pit_stats_cursor,
+            today=today, params=params, profile_stats=profile_stats,
+        )
+        if qualified_setup is None:
             continue
-
-        fast_df = all_dfs_fast[ticker]
-        y_buy_limit, y_atr, _y_close, signal_date = get_fast_normal_signal_values(
-            fast_df, y_pos
+        (
+            y_buy_limit, y_atr, _y_close, signal_date, security_profile,
+            _ev, _win_rate, _trade_count, _asset_growth_pct,
+        ) = qualified_setup
+        _record_normal_setup_tracking_state(
+            ticker=ticker, y_buy_limit=y_buy_limit, y_atr=y_atr,
+            signal_date=signal_date, security_profile=security_profile,
+            params=params, active_extended_signals=active_extended_signals,
+            profile_stats=profile_stats,
         )
-        security_profile = get_fast_security_profile(fast_df)
-
-        pit_started = time.perf_counter() if profile_enabled else None
-        is_candidate, _ev, _win_rate, _trade_count, _asset_growth_pct = get_pit_stats_from_index(
-            pit_stats_index[ticker], today, params, cursor_state=pit_stats_cursor, ticker=ticker
-        )
-        if profile_enabled:
-            _candidate_profile_add(profile_stats, "portfolio_candidate_pit_stats_sec", pit_started)
-        if not is_candidate:
-            continue
-
-        if bool(getattr(params, "use_breakout_quality_ranking", False)):
-            quality_started = time.perf_counter() if profile_enabled else None
-            quality_rank = _resolve_candidate_quality_ranking(
-                params=params, ticker=ticker, signal_date=signal_date,
-                information_date=signal_date,
-            )
-            if profile_enabled:
-                _candidate_profile_add(profile_stats, "portfolio_candidate_quality_rank_sec", quality_started)
-        else:
-            quality_rank = None
-        signal_state = create_signal_tracking_state(
-            y_buy_limit,
-            y_atr,
-            params,
-            ticker=ticker,
-            security_profile=security_profile,
-            signal_date=signal_date,
-        )
-        if signal_state is not None:
-            attach_breakout_quality_rank(signal_state, quality_rank)
-            active_extended_signals[ticker] = signal_state
     if profile_enabled:
         _candidate_profile_add(profile_stats, "portfolio_candidate_normal_sec", total_started)
     return normal_setup_tickers_today

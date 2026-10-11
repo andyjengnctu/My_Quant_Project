@@ -7,6 +7,7 @@ strategy identity or a second portfolio simulator.
 import ast
 import inspect
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from pandas import Timestamp
 
@@ -295,5 +296,199 @@ def validate_portfolio_candidate_replay_owner_contract_case(_base_params):
     )
     check('disabled_replay_keeps_trade_list_unmodified', 3, len(trades))
 
+    _check_normal_setup_state_single_owner(check, _base_params)
     summary['contract_assertions'] = len(results)
     return results, summary
+
+
+def _check_normal_setup_state_single_owner(check, _base_params):
+    """The full-capacity tracking path and candidate path share PIT/state ownership."""
+    from core import portfolio_candidates as candidates
+
+    # Regression on *real* exported producers with isolated data providers.
+    # Never replace the decision routines themselves or derive expected states
+    # from today's engine output.
+    today = Timestamp('2025-01-15')
+    entries = [
+        ('GOOD', 1, 2), ('HELD', 1, 2), ('SOLD', 1, 2),
+        ('PIT_REJECT', 1, 2), ('NO_PLAN', 1, 2),
+    ]
+    all_fast = {ticker: ticker for ticker, _, _ in entries}
+    pit_index = {ticker: ticker for ticker, _, _ in entries}
+    cursor = {'known_as_of': '2025-01-14'}
+    params = SimpleNamespace(
+        use_breakout_quality_ranking=True,
+        breakout_quality_filter_id='isolated-filter',
+        high_len=260,
+    )
+    events = []
+
+    def signal_values(ticker, y_pos):
+        events.append(('signal', ticker))
+        return (100.0, 2.0, 99.0, Timestamp('2025-01-14'))
+
+    def security_profile(ticker):
+        events.append(('security', ticker))
+        return {'family': 'stock', 'ticker': ticker}
+
+    def pit_stats(index, trade_date, params_obj, *, cursor_state, ticker):
+        events.append(('pit', ticker))
+        if trade_date != today or cursor_state is not cursor or ticker != index:
+            raise AssertionError('normal setup PIT inputs were changed')
+        return (ticker != 'PIT_REJECT', 2.0, 0.6, 10, 4.0)
+
+    def quality_rank(*, params, ticker, signal_date, information_date):
+        events.append(('rank', ticker))
+        if signal_date != information_date:
+            raise AssertionError('normal setup ranking information date drift')
+        return {'ticker': ticker}
+
+    def create_state(limit, atr, params_obj, *, ticker, security_profile, signal_date):
+        events.append(('state', ticker))
+        return {'source': 'normal', 'ticker': ticker, 'signal_date': signal_date}
+
+    def attach(state, quality):
+        events.append(('attach', state['ticker']))
+        state['quality'] = quality
+
+    def normal_plan(limit, atr, equity, params_obj, *, ticker, **kwargs):
+        events.append(('plan', ticker))
+        if ticker == 'NO_PLAN':
+            return None
+        return {
+            'limit_price': 100.0, 'init_sl': 95.0, 'init_trail': 96.0,
+            'target_price': 110.0, 'entry_atr': 2.0, 'qty': 10,
+            'is_orderable': True, 'sizing_capital': equity,
+        }
+
+    def row_builder(**kwargs):
+        events.append(('row', kwargs['ticker']))
+        return {'ticker': kwargs['ticker'], 'is_orderable': kwargs['is_orderable']}
+
+    stubs = {
+        'get_fast_normal_signal_values': signal_values,
+        'get_fast_security_profile': security_profile,
+        'get_pit_stats_from_index': pit_stats,
+        '_resolve_candidate_quality_ranking': quality_rank,
+        'create_signal_tracking_state': create_state,
+        'attach_breakout_quality_rank': attach,
+        'build_normal_candidate_plan': normal_plan,
+        '_resolve_candidate_sizing_fee_context': lambda *a, **kw: ('fee',),
+        '_make_candidate_row': row_builder,
+    }
+    with patch.multiple(candidates, **stubs):
+        common = dict(
+            normal_setup_entries=entries, portfolio={'HELD': {}},
+            sold_today={'SOLD'}, all_dfs_fast=all_fast,
+            pit_stats_index=pit_index, pit_stats_cursor=cursor,
+            today=today, params=params, profile_stats={},
+        )
+        initial = {ticker: {'source': 'old'} for ticker in all_fast}
+        initial['PREVIOUS'] = {'source': 'keep'}
+        full_active = {ticker: dict(value) for ticker, value in initial.items()}
+        all_rows, orderable, setup_tickers = candidates._collect_normal_candidates(
+            **{**common, 'active_extended_signals': full_active},
+            buy_sort_method='ev', sizing_equity=10000.0,
+            sizing_capital_context=('capital',), sizing_fee_context_cache={},
+            collect_all_candidates=True, ranking_context=None,
+        )
+        full_events = events[:]
+        events.clear()
+        track_active = {ticker: dict(value) for ticker, value in initial.items()}
+        tracked_tickers = candidates.track_normal_setup_signals_for_day(
+            **{**common, 'active_extended_signals': track_active},
+        )
+        track_events = events[:]
+
+        expected_tickers = {ticker for ticker, _, _ in entries}
+        check('normal_setup_full_ticker_coverage', expected_tickers, setup_tickers)
+        check('normal_setup_track_ticker_coverage', expected_tickers, tracked_tickers)
+        check('normal_setup_full_only_orderable_good', ['GOOD'], [r['ticker'] for r in orderable])
+        check('normal_setup_full_nonorderable_state_not_created', ['GOOD'], [r['ticker'] for r in all_rows])
+        check('normal_setup_full_state_only_after_plan', ['GOOD'], sorted(k for k in full_active if k != 'PREVIOUS'))
+        check('normal_setup_track_keeps_pit_qualified_unorderable', ['GOOD', 'NO_PLAN'],
+              sorted(k for k in track_active if k != 'PREVIOUS'))
+        check('normal_setup_prior_unrelated_state_full', {'source': 'keep'}, full_active['PREVIOUS'])
+        check('normal_setup_prior_unrelated_state_track', {'source': 'keep'}, track_active['PREVIOUS'])
+        check('normal_setup_full_and_track_good_state_same', full_active['GOOD'], track_active['GOOD'])
+        check('normal_setup_full_and_track_source_rank', {'ticker': 'GOOD'}, full_active['GOOD']['quality'])
+        check('normal_setup_full_pit_validity_before_plan',
+              [('pit', 'GOOD'), ('plan', 'GOOD'), ('rank', 'GOOD'), ('state', 'GOOD')],
+              [event for event in full_events if event[1] == 'GOOD' and event[0] in {'pit', 'plan', 'rank', 'state'}])
+        check('normal_setup_track_pit_before_rank_state',
+              [('pit', 'GOOD'), ('rank', 'GOOD'), ('state', 'GOOD')],
+              [event for event in track_events if event[1] == 'GOOD' and event[0] in {'pit', 'rank', 'state'}])
+        check('normal_setup_rejected_never_ranked_full', False, ('rank', 'PIT_REJECT') in full_events)
+        check('normal_setup_rejected_never_ranked_track', False, ('rank', 'PIT_REJECT') in track_events)
+        check('normal_setup_held_no_pit_full', False, ('pit', 'HELD') in full_events)
+        check('normal_setup_sold_no_pit_track', False, ('pit', 'SOLD') in track_events)
+        check('normal_setup_track_never_sizes_any_plan', False, any(event[0] == 'plan' for event in track_events))
+        check('normal_setup_unorderable_plan_has_no_new_rank_full', False, ('rank', 'NO_PLAN') in full_events)
+        check('normal_setup_unorderable_pit_allows_rank_track', True, ('rank', 'NO_PLAN') in track_events)
+        check('normal_setup_pit_lookup_once_per_qualified_ticker_full', 1,
+              sum(event == ('pit', 'GOOD') for event in full_events))
+        check('normal_setup_pit_lookup_once_per_qualified_ticker_track', 1,
+              sum(event == ('pit', 'GOOD') for event in track_events))
+        check('normal_setup_full_pit_profile_event', True,
+              'portfolio_candidate_pit_stats_sec' in common['profile_stats'])
+
+        def one_qualified_setup(*, full, signals):
+            args = {**common, 'normal_setup_entries': [('GOOD', 1, 2)],
+                    'active_extended_signals': signals}
+            if full:
+                return candidates._collect_normal_candidates(
+                    **args, buy_sort_method='ev', sizing_equity=10000.0,
+                    sizing_capital_context=('capital',), sizing_fee_context_cache={},
+                    collect_all_candidates=True, ranking_context=None,
+                )
+            return candidates.track_normal_setup_signals_for_day(**args)
+
+        # A missing ranking provider is never silently treated as an accepted
+        # signal, and an old extended setup must already have been superseded.
+        with patch.object(candidates, '_resolve_candidate_quality_ranking',
+                          side_effect=ValueError('PIT score unavailable')):
+            for label, full in (('full', True), ('tracking', False)):
+                signals = {'GOOD': {'source': 'stale'}, 'PREVIOUS': {'source': 'keep'}}
+                caught = None
+                try:
+                    one_qualified_setup(full=full, signals=signals)
+                except ValueError as exc:
+                    caught = str(exc)
+                check(f'normal_setup_{label}_ranking_provider_fail_closed',
+                      'PIT score unavailable', caught)
+                check(f'normal_setup_{label}_ranking_failure_removes_old_state',
+                      {'PREVIOUS': {'source': 'keep'}}, signals)
+
+        # A rejected or absent new tracking state must not resurrect a previous
+        # continuation.  The full and full-capacity branches are equivalent.
+        with patch.object(candidates, 'create_signal_tracking_state', return_value=None):
+            for label, full in (('full', True), ('tracking', False)):
+                signals = {'GOOD': {'source': 'stale'}}
+                events.clear()
+                one_qualified_setup(full=full, signals=signals)
+                check(f'normal_setup_{label}_empty_state_clears_stale', {}, signals)
+                check(f'normal_setup_{label}_empty_state_never_attaches_rank', False,
+                      any(name == 'attach' for name, *_ in events))
+
+        # Ranking-disabled mode cannot invoke a provider or retain old score
+        # metadata simply because tracking is called instead of candidate build.
+        params.use_breakout_quality_ranking = False
+        with patch.object(candidates, '_resolve_candidate_quality_ranking',
+                          side_effect=AssertionError('ranking must be disabled')):
+            for label, full in (('full', True), ('tracking', False)):
+                signals = {'GOOD': {'source': 'stale'}}
+                one_qualified_setup(full=full, signals=signals)
+                check(f'normal_setup_{label}_ranking_disabled_state', None,
+                      signals['GOOD']['quality'])
+
+    # No independent PIT/continuation branches can silently grow in either
+    # caller: their only seam is the shared same-module helper.
+    source = ast.parse(inspect.getsource(candidates))
+    functions = {n.name: n for n in source.body if isinstance(n, ast.FunctionDef)}
+    for name in ('_collect_normal_candidates', 'track_normal_setup_signals_for_day'):
+        calls = [node.func.id for node in ast.walk(functions[name])
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
+        check(f'{name}_single_qualified_setup_owner', 1, calls.count('_resolve_qualified_normal_setup'))
+        check(f'{name}_single_signal_state_owner', 1, calls.count('_record_normal_setup_tracking_state'))
+        check(f'{name}_no_duplicate_pit_lookup', False, 'get_pit_stats_from_index' in calls)
+        check(f'{name}_no_duplicate_tracking_state', False, 'create_signal_tracking_state' in calls)
