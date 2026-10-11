@@ -123,6 +123,7 @@ from .synthetic_market_data_cases import (
 )
 from .synthetic_portfolio_day_phase_cases import validate_portfolio_day_event_equity_owner_contract_case
 from .synthetic_portfolio_terminal_cases import validate_portfolio_terminal_owner_contract_case
+from .synthetic_portfolio_candidate_replay_cases import validate_portfolio_candidate_replay_owner_contract_case
 from .synthetic_meta_cases import (
     validate_checklist_generated_view_ssot_contract_case,
     validate_checklist_t_formal_command_single_entry_case,
@@ -563,6 +564,7 @@ def get_synthetic_validator_entries():
         _entry(validate_portfolio_daily_phase_owner_contract_case, layer="meta_contract", cost_class="fast"),
         _entry(validate_portfolio_day_event_equity_owner_contract_case, layer="meta_contract", cost_class="fast"),
         _entry(validate_portfolio_terminal_owner_contract_case, layer="meta_contract", cost_class="fast"),
+        _entry(validate_portfolio_candidate_replay_owner_contract_case, layer="meta_contract", cost_class="fast"),
         _entry(validate_synthetic_registry_metadata_contract_case, layer="meta_contract", cost_class="fast"),
         _entry(validate_core_trading_modules_in_coverage_targets_case, layer="meta_contract", cost_class="fast"),
         _entry(validate_critical_helper_single_source_contract_case, layer="meta_contract", cost_class="fast"),

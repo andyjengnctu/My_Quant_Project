@@ -11,6 +11,18 @@ from core.fee_rebate import (
 from core.capital_policy import resolve_portfolio_sizing_equity
 from core.seed_ensemble_policy import resolve_seed_ensemble_min_agree
 from core.portfolio_day_context import resolve_portfolio_day_context, portfolio_has_day_work
+from core.portfolio_day_candidates import (
+    resolve_portfolio_candidate_gate,
+    build_portfolio_day_candidate_rows,
+    resolve_cleanup_candidate_rows,
+    select_portfolio_candidate_orders,
+)
+from core.portfolio_replay_diagnostics import (
+    append_portfolio_selector_trace,
+    record_portfolio_candidate_replay,
+    initialize_portfolio_replay_counts,
+    append_portfolio_trade_replay,
+)
 from core.portfolio_capacity_rows import build_portfolio_capacity_day_row
 from core.portfolio_day_events import rotate_portfolio_day, settle_and_execute_portfolio_day
 from core.portfolio_day_equity import mark_portfolio_day_equity, measure_portfolio_day_exposure
@@ -231,16 +243,7 @@ def run_portfolio_timeline(
 
     pit_stats_cursor = {}
 
-    if replay_counts is not None:
-        for ticker, bucket in replay_counts.items():
-            if not isinstance(bucket, dict):
-                replay_counts[ticker] = {}
-                bucket = replay_counts[ticker]
-            bucket.setdefault("candidate_dates", [])
-            bucket.setdefault("orderable_dates", [])
-            bucket.setdefault("candidate_rows", [])
-            bucket.setdefault("orderable_rows", [])
-            bucket.setdefault("trade_rows", [])
+    initialize_portfolio_replay_counts(replay_counts)
 
     training_idle_fast_path_enabled = bool(
         is_training
@@ -401,17 +404,22 @@ def run_portfolio_timeline(
                 )
             if profile_timing_enabled:
                 reentry_sec += time.perf_counter() - t0
-            pre_market_occupied = len(portfolio) + len(sold_today)
-            if use_param_ensemble:
-                candidate_sources_today = any(bool((ctx.get("normal_setup_index") or {}).get(today, [])) for ctx in day_ensemble_contexts) or any(bool(member_signals) for member_signals in active_extended_signals_by_member.values())
-            else:
-                candidate_sources_today = bool(normal_setup_entries_today) or bool(active_extended_signals)
-            no_entry_capacity_today = (
-                bool(is_training)
-                and replay_counts is None
-                and (not bool(enable_rotation))
-                and pre_market_occupied >= int(max_positions)
+            gate = resolve_portfolio_candidate_gate(
+                today=today,
+                day_context=day_context,
+                portfolio=portfolio,
+                sold_today=sold_today,
+                normal_setup_entries_today=normal_setup_entries_today,
+                active_extended_signals=active_extended_signals,
+                active_extended_signals_by_member=active_extended_signals_by_member,
+                is_training=is_training,
+                replay_counts=replay_counts,
+                enable_rotation=enable_rotation,
+                max_positions=max_positions,
             )
+            pre_market_occupied = gate.pre_market_occupied
+            candidate_sources_today = gate.has_candidates
+            no_entry_capacity_today = gate.no_entry_capacity
 
             if no_entry_capacity_today:
                 if use_param_ensemble:
@@ -454,249 +462,87 @@ def run_portfolio_timeline(
                 before_trade_rows = -1
             elif candidate_sources_today:
                 t0 = time.perf_counter() if profile_timing_enabled else None
-                if use_param_ensemble:
-                    candidates_today, orderable_candidates_today, normal_setup_tickers_today = _run_portfolio_replay_phase(
-                        today,
-                        "build_daily_ensemble_candidates",
-                        _build_daily_ensemble_candidates,
-                        ensemble_members=day_ensemble_members,
-                        ensemble_contexts=day_ensemble_contexts,
-                        active_extended_signals_by_member=active_extended_signals_by_member,
-                        portfolio=portfolio,
-                        sold_today=sold_today,
-                        today=today,
-                        current_equity_money=current_equity_money,
-                        initial_capital=initial_capital,
-                        collect_all_candidates=replay_counts is not None,
-                        min_agree=int(day_ensemble_min_agree or 1),
-                        verbose=bool(verbose and (not is_training)),
-                        profile_stats=candidate_subprofile,
-                    )
-                else:
-                    candidates_today, orderable_candidates_today, normal_setup_tickers_today = _run_portfolio_replay_phase(
-                        today,
-                        "build_daily_candidates",
-                        build_daily_candidates,
-                        normal_setup_index=day_normal_setup_index,
-                        active_extended_signals=active_extended_signals,
-                        portfolio=portfolio,
-                        sold_today=sold_today,
-                        all_dfs_fast=day_all_dfs_fast,
-                        pit_stats_index=day_pit_stats_index,
-                        pit_stats_cursor=day_pit_stats_cursor,
-                        today=today,
-                        sizing_equity=sizing_equity,
-                        params=day_params,
-                        collect_all_candidates=replay_counts is not None,
-                        extended_day_market_cache=extended_day_market_cache,
-                        compact_training_rows=bool(
-                            is_training
-                            and replay_counts is None
-                            and replay_execution_rows is None
-                            and replay_selector_trace_rows is None
-                            and not bool(enable_rotation)
-                            and not bool(getattr(day_params, "use_breakout_quality_ranking", False))
-                        ),
-                        persistent_sizing_fee_context_cache=candidate_sizing_fee_context_cache,
-                        persistent_sizing_qty_cache=candidate_sizing_qty_cache,
-                        profile_stats=candidate_subprofile,
-                    )
+                candidates_today, orderable_candidates_today, normal_setup_tickers_today = build_portfolio_day_candidate_rows(
+                    today=today,
+                    day_context=day_context,
+                    portfolio=portfolio,
+                    sold_today=sold_today,
+                    active_extended_signals=active_extended_signals,
+                    active_extended_signals_by_member=active_extended_signals_by_member,
+                    current_equity_money=current_equity_money,
+                    initial_capital=initial_capital,
+                    sizing_equity=sizing_equity,
+                    replay_counts=replay_counts,
+                    replay_execution_rows=replay_execution_rows,
+                    replay_selector_trace_rows=replay_selector_trace_rows,
+                    enable_rotation=enable_rotation,
+                    is_training=is_training,
+                    verbose=verbose,
+                    extended_day_market_cache=extended_day_market_cache,
+                    persistent_sizing_fee_context_cache=candidate_sizing_fee_context_cache,
+                    persistent_sizing_qty_cache=candidate_sizing_qty_cache,
+                    candidate_subprofile=candidate_subprofile,
+                    replay_phase=_run_portfolio_replay_phase,
+                    single_candidate_builder=build_daily_candidates,
+                    ensemble_candidate_builder=_build_daily_ensemble_candidates,
+                )
                 if profile_timing_enabled:
                     candidate_scan_sec += time.perf_counter() - t0
 
-                if (not use_param_ensemble) and orderable_candidates_today:
-                    cleanup_candidate_rows_by_ticker = (
-                        None if extended_day_market_cache is None
-                        else extended_day_market_cache.get(
-                            ("__meta__", "orderable_candidate_rows_by_ticker")
-                        )
-                    )
-                    if cleanup_candidate_rows_by_ticker is None:
-                        cleanup_candidate_rows_by_ticker = {
-                            row.get("ticker"): row
-                            for row in orderable_candidates_today
-                            if row.get("ticker") is not None
-                        }
+                cleanup_candidate_rows_by_ticker = resolve_cleanup_candidate_rows(
+                    orderable_candidates_today,
+                    is_ensemble=use_param_ensemble,
+                    extended_day_market_cache=extended_day_market_cache,
+                )
 
                 t0 = time.perf_counter() if profile_timing_enabled else None
-                resource_selection_input_rows = (
-                    list(orderable_candidates_today)
-                    if replay_selector_trace_rows is not None
-                    else None
+                selected = select_portfolio_candidate_orders(
+                    today=today,
+                    orderable_rows=orderable_candidates_today,
+                    replay_selector_trace_rows=replay_selector_trace_rows,
+                    replay_execution_rows=replay_execution_rows,
+                    replay_counts=replay_counts,
+                    is_training=is_training,
+                    params=day_params,
+                    available_cash=available_cash,
+                    sizing_equity=sizing_equity,
+                    pre_market_occupied=pre_market_occupied,
+                    max_positions=max_positions,
+                    replay_phase=_run_portfolio_replay_phase,
+                    reorder_callback=reorder_candidates_for_resource_aware_quality,
+                    select_action_callback=select_resource_aware_action_candidates,
                 )
-                skip_noop_resource_selector = bool(
-                    is_training
-                    and replay_counts is None
-                    and replay_execution_rows is None
-                    and replay_selector_trace_rows is None
-                    and not bool(getattr(day_params, "use_breakout_quality_ranking", False))
-                )
-                if skip_noop_resource_selector:
-                    # With DL/ranking disabled the selector is mathematically the
-                    # identity.  Avoid two list copies plus diagnostic allocation on
-                    # every candidate day; preserve the exact sorted candidate list.
-                    resource_action_candidates_today = orderable_candidates_today
-                else:
-                    orderable_candidates_today, resource_selection_diag = _run_portfolio_replay_phase(
-                        today,
-                        "resource_aware_binary_order",
-                        reorder_candidates_for_resource_aware_quality,
-                        orderable_candidates_today,
-                        available_cash=available_cash,
-                        sizing_equity=sizing_equity,
-                        pre_market_occupied=pre_market_occupied,
-                        max_positions=max_positions,
-                        params=day_params,
-                    )
-                    resource_action_candidates_today = select_resource_aware_action_candidates(
-                        orderable_candidates_today,
-                        resource_selection_diag,
-                    )
+                orderable_candidates_today = selected.orderable_rows
+                resource_action_candidates_today = selected.action_rows
+                resource_selection_diag = selected.diagnostic
+                resource_selection_input_rows = selected.trace_input_rows
                 if profile_timing_enabled:
                     resource_select_sec += time.perf_counter() - t0
 
-                if replay_selector_trace_rows is not None:
-                    repair_mechanism = build_max_dl_repair_mechanism_diagnostic(
-                        resource_selection_input_rows,
-                        available_cash=available_cash,
-                        sizing_equity=sizing_equity,
-                        params=day_params,
-                        resource_selection_diag=resource_selection_diag,
-                    )
-                    if repair_mechanism is not None:
-                        summary = {
-                            'trace_kind': 'repair_summary',
-                            'stage': '',
-                            'stage_rank': 0,
-                            'ticker': '',
-                            'trade_date': today.strftime('%Y-%m-%d') if hasattr(today, 'strftime') else str(today),
-                            'candidate_date': '',
-                            'signal_date': '',
-                            'candidate_type': '',
-                            'entry_source': '',
-                            'breakout_quality_score': None,
-                            'breakout_quality_score_date': '',
-                            'breakout_quality_score_available': False,
-                            'pre_market_order_limit': resource_selection_diag.get('pre_market_order_limit'),
-                            'direct_score_order_feasible': bool(resource_selection_diag.get('direct_score_order_feasible', False)),
-                            'repair_steps': int(resource_selection_diag.get('max_dl_repair_steps', 0) or 0),
-                            'ascent_steps': int(resource_selection_diag.get('max_dl_feasible_ascent_steps', 0) or 0),
-                            **{
-                                key: value
-                                for key, value in dict(repair_mechanism).items()
-                                if key != 'repair_steps_trace'
-                            },
-                        }
-                        replay_selector_trace_rows.append(summary)
+                append_portfolio_selector_trace(
+                    today=today,
+                    replay_selector_trace_rows=replay_selector_trace_rows,
+                    resource_selection_input_rows=resource_selection_input_rows,
+                    resource_selection_diag=resource_selection_diag,
+                    available_cash=available_cash,
+                    sizing_equity=sizing_equity,
+                    params=day_params,
+                    repair_mechanism_builder=build_max_dl_repair_mechanism_diagnostic,
+                    candidate_snapshot=_candidate_replay_snapshot,
+                )
 
-                        for step in list(repair_mechanism.get('repair_steps_trace') or []):
-                            for role, candidate_key in (('out', 'out_row'), ('in', 'in_row')):
-                                candidate = step.get(candidate_key)
-                                if candidate is None:
-                                    continue
-                                snapshot = _candidate_replay_snapshot(
-                                    candidate,
-                                    fallback_trade_date=today,
-                                    is_orderable=True,
-                                )
-                                snapshot.update({
-                                    'trace_kind': 'repair_swap',
-                                    'repair_role': role,
-                                    'repair_step': int(step.get('step', 0) or 0),
-                                    'stage': '',
-                                    'stage_rank': 0,
-                                    'pre_market_order_limit': resource_selection_diag.get('pre_market_order_limit'),
-                                    'direct_score_order_feasible': bool(resource_selection_diag.get('direct_score_order_feasible', False)),
-                                    'repair_steps': int(resource_selection_diag.get('max_dl_repair_steps', 0) or 0),
-                                    'ascent_steps': int(resource_selection_diag.get('max_dl_feasible_ascent_steps', 0) or 0),
-                                    'before_selected_count': step.get('before_selected_count'),
-                                    'after_selected_count': step.get('after_selected_count'),
-                                    'before_reserved_cost_milli': step.get('before_reserved_cost_milli'),
-                                    'after_reserved_cost_milli': step.get('after_reserved_cost_milli'),
-                                    'before_count_deficit': step.get('before_count_deficit'),
-                                    'after_count_deficit': step.get('after_count_deficit'),
-                                    'before_reserve_deficit_milli': step.get('before_reserve_deficit_milli'),
-                                    'after_reserve_deficit_milli': step.get('after_reserve_deficit_milli'),
-                                    'after_feasible': bool(step.get('after_feasible', False)),
-                                    'evaluated_swap_count': step.get('evaluated_swap_count'),
-                                    'progress_swap_count': step.get('progress_swap_count'),
-                                    'feasible_swap_count': step.get('feasible_swap_count'),
-                                })
-                                replay_selector_trace_rows.append(snapshot)
-
-                    trace_baskets = dict(resource_selection_diag.get('_selector_trace_baskets') or {})
-                    for stage_name in ('raw_top_n', 'minimum_repair_seed', 'feasible_ascent_final'):
-                        stage_rows = list(trace_baskets.get(stage_name) or [])
-                        for stage_rank, candidate in enumerate(stage_rows, start=1):
-                            snapshot = _candidate_replay_snapshot(
-                                candidate,
-                                fallback_trade_date=today,
-                                is_orderable=True,
-                            )
-                            snapshot.update({
-                                'trace_kind': 'basket_stage',
-                                'stage': stage_name,
-                                'stage_rank': int(stage_rank),
-                                'pre_market_order_limit': resource_selection_diag.get('pre_market_order_limit'),
-                                'direct_score_order_feasible': bool(resource_selection_diag.get('direct_score_order_feasible', False)),
-                                'repair_steps': int(resource_selection_diag.get('max_dl_repair_steps', 0) or 0),
-                                'ascent_steps': int(resource_selection_diag.get('max_dl_feasible_ascent_steps', 0) or 0),
-                            })
-                            replay_selector_trace_rows.append(snapshot)
-
-                if replay_counts is not None:
-                    for candidate in candidates_today:
-                        snapshot = _candidate_replay_snapshot(
-                            candidate,
-                            fallback_trade_date=today,
-                            is_orderable=False,
-                        )
-                        ticker = str(snapshot.get("ticker", ""))
-                        bucket = replay_counts.setdefault(
-                            ticker,
-                            {
-                                "candidate_dates": [],
-                                "orderable_dates": [],
-                                "candidate_rows": [],
-                                "orderable_rows": [],
-                                "trade_rows": [],
-                            },
-                        )
-                        bucket.setdefault("candidate_dates", []).append(today)
-                        bucket.setdefault("candidate_rows", []).append(snapshot)
-                    for candidate in orderable_candidates_today:
-                        snapshot = _candidate_replay_snapshot(
-                            candidate,
-                            fallback_trade_date=today,
-                            is_orderable=True,
-                        )
-                        ticker = str(snapshot.get("ticker", ""))
-                        bucket = replay_counts.setdefault(
-                            ticker,
-                            {
-                                "candidate_dates": [],
-                                "orderable_dates": [],
-                                "candidate_rows": [],
-                                "orderable_rows": [],
-                                "trade_rows": [],
-                            },
-                        )
-                        bucket.setdefault("orderable_dates", []).append(today)
-                        bucket.setdefault("orderable_rows", []).append(snapshot)
-                    before_trade_rows = len(trade_history)
-                else:
-                    before_trade_rows = -1
-
-                if replay_execution_rows is not None:
-                    for candidate in orderable_candidates_today:
-                        replay_execution_rows.append(
-                            _candidate_execution_replay_snapshot(
-                                candidate,
-                                fallback_trade_date=today,
-                                all_dfs_fast=day_all_dfs_fast,
-                                sizing_equity=sizing_equity,
-                            )
-                        )
+                before_trade_rows = record_portfolio_candidate_replay(
+                    today=today,
+                    replay_counts=replay_counts,
+                    candidates_today=candidates_today,
+                    orderable_candidates_today=orderable_candidates_today,
+                    replay_execution_rows=replay_execution_rows,
+                    trade_history=trade_history,
+                    all_dfs_fast=day_all_dfs_fast,
+                    sizing_equity=sizing_equity,
+                    candidate_snapshot=_candidate_replay_snapshot,
+                    execution_snapshot=_candidate_execution_replay_snapshot,
+                )
 
                 if resource_action_candidates_today:
                     rotation_result = rotate_portfolio_day(
@@ -897,20 +743,11 @@ def run_portfolio_timeline(
         if drawdown > max_drawdown:
             max_drawdown = drawdown
 
-        if replay_counts is not None and before_trade_rows >= 0:
-            for row in trade_history[before_trade_rows:]:
-                ticker = str(row.get("Ticker", "")).strip()
-                bucket = replay_counts.setdefault(
-                    ticker,
-                    {
-                        "candidate_dates": [],
-                        "orderable_dates": [],
-                        "candidate_rows": [],
-                        "orderable_rows": [],
-                        "trade_rows": [],
-                    },
-                )
-                bucket.setdefault("trade_rows", []).append(row)
+        append_portfolio_trade_replay(
+            replay_counts=replay_counts,
+            before_trade_rows=before_trade_rows,
+            trade_history=trade_history,
+        )
 
         if profile_timing_enabled:
             bookkeeping_sec += time.perf_counter() - t0

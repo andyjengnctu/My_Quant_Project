@@ -4,6 +4,8 @@ CORE_TRADING_COVERAGE_TARGETS = [
     "core/backtest_core.py",
     "core/backtest_finalize.py",
     "core/portfolio_engine.py",
+    "core/portfolio_day_candidates.py",
+    "core/portfolio_replay_diagnostics.py",
     "core/portfolio_terminal_equity.py",
     "core/portfolio_terminal_statistics.py",
     "core/portfolio_terminal_reporting.py",
