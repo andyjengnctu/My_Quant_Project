@@ -648,3 +648,11 @@ Direct-account BUY provenance is owned by `services/trading/account_trade_entry.
 - 兩個階段的 pretrained encoder 初始化共用 `_initialize_ranker_fitting_stage()`；`inner_train_epoch_selection` 與 `full_selection_final_refit` 的 stage label、fit IDs 與 encoder summary 各自維持原語意。`_train_epoch()` 仍為唯一 optimizer-update／loss execution owner。
 - `tools/validate/synthetic_breakout_quality_model_cases.py` 的既有 continuous ranker capability case 會遍歷 Registry 已宣告 profile，驗證 recipe-to-epoch mapping、各階段 encoder state 路由與不得複製 epoch argument list；純工程重構不修改 scientific profile、模型 artifact fingerprint 或報表。
 - 本輪 GPT 端額外使用基準 ZIP 與修改版的隔離執行比對；無本機正式 checkpoint、Market Data 或 Windows `apps/run_bundle.py` 證據時，不得宣稱真實訓練／OOS 或正式整合驗收完成。
+
+## 2026-10-11 — Continuous Ranker Loss／Epoch Metrics capability SSOT
+
+- `core/breakout_quality_runtime.py` 的 `ContinuousRankerTrainingPolicy` 是 loss composition 與 epoch metric family 的唯一宣告 owner：`uses_shared_scoped_head_loss` 自 canonical head composition 派生，`epoch_selection_rule` 自既有 objective／pairwise／target-builder policy 派生；均為非持久化 property，不加入 scientific payload、fingerprint 或 artifact schema。
+- `services/breakout_quality/train_continuous_ranker.py` 的 `_train_epoch()`、同批 BF16 retry 與 dynamic backward scaling 消費相同的 shared-head capability，不得再維護 trainer-local `loss_handler` 清單；原有數值執行、梯度更新、loss 加總順序與 fallback 機制保持不變。
+- `select_epoch()` 的四種既有 primary／secondary metric 家族統一由 `_epoch_metric_improved()` 比較；保留 strict `min_delta`、`math.isclose(abs_tol=1e-12, rel_tol=0)` 與原本的錯誤優先順序。每 epoch 的輕量選擇指標與完整 Validation／OOS／報表指標刻意維持不同計算量，但共享既有 metric 原始計算 contract，不得為 renderer 重算同名指標。
+- 永久 Synthetic capability 測試遍歷目前註冊的 objective／profile，檢查 shared-head dispatch、數值 guard、方向比較、tie-break 與 metric family；修改前後的真實 CPU loss／梯度權重、epoch 選擇結果及所有 canonical recipe／semantics 都需維持一致。本輪沒有 Windows／CUDA／真實 OOS 的正式驗收證據。
+

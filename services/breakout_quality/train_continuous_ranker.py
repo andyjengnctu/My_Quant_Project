@@ -768,6 +768,41 @@ def epoch_selection_metrics(
     }
 
 
+def _epoch_metric_improved(
+    *,
+    primary: float,
+    best_primary: float,
+    secondary: float,
+    best_secondary: float,
+    min_delta: float,
+    primary_direction: str,
+    secondary_direction: str,
+) -> bool:
+    """Canonical directional improvement and exact historical tie-break.
+
+    All four selection families use the same strict min-delta / 1e-12 tie
+    semantics. This helper only compares already computed canonical metrics.
+    """
+    if primary_direction == "max":
+        improved = primary > best_primary + min_delta
+    elif primary_direction == "min":
+        improved = primary < best_primary - min_delta
+    else:
+        raise ValueError(f"不支援的epoch primary direction: {primary_direction!r}")
+    if improved:
+        return True
+    if secondary_direction == "max":
+        tie_improved = secondary > best_secondary
+    elif secondary_direction == "min":
+        tie_improved = secondary < best_secondary
+    else:
+        raise ValueError(f"不支援的epoch secondary direction: {secondary_direction!r}")
+    return bool(
+        math.isclose(primary, best_primary, rel_tol=0.0, abs_tol=1e-12)
+        and tie_improved
+    )
+
+
 def _new_model_and_optimizer(
     torch,
     *,
@@ -1727,16 +1762,6 @@ def _combine_pairwise_head_supervision(
 
 
 
-_SHARED_SAFETY_SCOPED_MFE_LOSS_HANDLERS = frozenset({
-    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
-    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_ADAPTIVE_HORIZON_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
-    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_HS_QUALIFICATION_SCOPED_MFE_DUO_PAIRWISE,
-    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_DUAL_SUPERVISED_HS_SCOPED_MFE_DUO_PAIRWISE,
-    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_TOP_HS_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
-    CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE,
-})
-
-
 def _compute_independent_head_pairwise_loss(
     torch,
     model,
@@ -1989,11 +2014,11 @@ def _record_same_batch_fp32_retry(model, *, reason: str) -> None:
     print(f"  BF16 Guarded Retry #{count} | {reason} -> same batch FP32 recompute")
 
 
-def _guarded_retry_enabled(model, plan, grad_scaler, loss_handler: str) -> bool:
+def _guarded_retry_enabled(model, plan, grad_scaler, training_policy) -> bool:
     enabled = bool(getattr(model, "same_batch_fp32_nonfinite_retry", False))
     if not enabled:
         return False
-    if str(loss_handler) not in _SHARED_SAFETY_SCOPED_MFE_LOSS_HANDLERS:
+    if not training_policy.uses_shared_scoped_head_loss:
         raise ValueError("same-batch FP32 retry目前只支援shared Safety scoped Conditional-MFE loss capability")
     return bool(
         plan.mixed_precision_enabled
@@ -2062,12 +2087,12 @@ def _bf16_dynamic_backward_scaling_enabled(
     model,
     plan,
     grad_scaler,
-    loss_handler: str,
+    training_policy,
     numerical_execution_policy: str,
 ) -> bool:
     if str(numerical_execution_policy) != NUMERICAL_EXECUTION_POLICY_BF16_DYNAMIC_BACKWARD_SCALING:
         return False
-    if str(loss_handler) not in _SHARED_SAFETY_SCOPED_MFE_LOSS_HANDLERS:
+    if not training_policy.uses_shared_scoped_head_loss:
         raise ValueError(
             "BF16 dynamic backward scaling目前只支援shared Safety scoped Conditional-MFE loss capability"
         )
@@ -2204,11 +2229,11 @@ def _train_epoch(
     loss_handler = str(training_policy.loss_handler)
     numerical_policy = str(numerical_execution_policy).strip().lower()
     dynamic_bf16_backward_scaling = _bf16_dynamic_backward_scaling_enabled(
-        model, plan, grad_scaler, loss_handler, numerical_policy
+        model, plan, grad_scaler, training_policy, numerical_policy
     )
     architecture_guarded_retry = bool(
         numerical_policy == NUMERICAL_EXECUTION_POLICY_ARCHITECTURE_DEFAULT
-        and _guarded_retry_enabled(model, plan, grad_scaler, loss_handler)
+        and _guarded_retry_enabled(model, plan, grad_scaler, training_policy)
     )
     ids_all = np.asarray(group_ids, dtype=np.int64)
     rng = np.random.default_rng(int(seed))
@@ -2289,7 +2314,7 @@ def _train_epoch(
                 )
                 if loss is None:
                     continue
-            elif loss_handler in _SHARED_SAFETY_SCOPED_MFE_LOSS_HANDLERS:
+            elif training_policy.uses_shared_scoped_head_loss:
                 batch_dates = group_dates_series.iloc[ids].to_numpy()
                 guarded_batch_dates = batch_dates
                 try:
@@ -4280,7 +4305,8 @@ def select_epoch(
             if pareto_global is None or not math.isfinite(float(pareto_global)):
                 raise ValueError("Pareto validation global pair concordance不可用")
 
-        if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R:
+        selection_rule = training_policy.epoch_selection_rule
+        if selection_rule == "regression_loss_then_spearman":
             regression = dict(validation_metrics.get("raw_r_regression") or {})
             validation_huber = regression.get("huber_loss_raw_r")
             validation_mse_raw_r = regression.get("mse_raw_r")
@@ -4299,60 +4325,41 @@ def select_epoch(
                 best_primary_metric = best_validation_mse_raw_r
             else:
                 raise ValueError(f"不支援的direct R epoch-selection loss: {raw_r_loss_name!r}")
-            improved = (
-                primary_metric < best_primary_metric - float(args.early_stopping_min_delta)
-                or (
-                    math.isclose(primary_metric, best_primary_metric, rel_tol=0.0, abs_tol=1e-12)
-                    and float(daily_spearman) > best_daily_spearman
-                )
-            )
+            comparison = (primary_metric, best_primary_metric, float(daily_spearman), best_daily_spearman, "min", "max")
         else:
             validation_huber = None
             validation_mse_raw_r = None
             validation_mae = None
-            if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS:
+            if selection_rule == "hmhs_pair_then_pr_auc":
                 hmhs_pair = validation_direct_hmhs_metrics.get("pairwise_concordance")
                 hmhs_ap = validation_direct_hmhs_metrics.get("global_average_precision")
                 if hmhs_pair is None or not math.isfinite(float(hmhs_pair)):
                     raise ValueError("Direct HM/HS validation Pair concordance不可用")
                 if hmhs_ap is None or not math.isfinite(float(hmhs_ap)):
                     raise ValueError("Direct HM/HS validation PR-AUC不可用")
-                improved = (
-                    float(hmhs_pair)
-                    > best_hmhs_pairwise_concordance + float(args.early_stopping_min_delta)
-                    or (
-                        math.isclose(
-                            float(hmhs_pair), best_hmhs_pairwise_concordance,
-                            rel_tol=0.0, abs_tol=1e-12,
-                        )
-                        and float(hmhs_ap) > best_hmhs_global_average_precision
-                    )
-                )
-            elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_PARETO_COMPONENTS:
+                comparison = (float(hmhs_pair), best_hmhs_pairwise_concordance, float(hmhs_ap), best_hmhs_global_average_precision, "max", "max")
+            elif selection_rule == "pareto_daily_then_global":
                 pareto_daily = float(
                     validation_pareto_metrics["mean_daily_pareto_pair_concordance"]
                 )
                 pareto_global = float(
                     validation_pareto_metrics["global_pareto_pair_concordance"]
                 )
-                improved = (
-                    pareto_daily
-                    > best_pareto_concordance + float(args.early_stopping_min_delta)
-                    or (
-                        math.isclose(
-                            pareto_daily, best_pareto_concordance, rel_tol=0.0, abs_tol=1e-12
-                        )
-                        and pareto_global > best_global_pareto_concordance
-                    )
-                )
+                comparison = (pareto_daily, best_pareto_concordance, pareto_global, best_global_pareto_concordance, "max", "max")
+            elif selection_rule == "daily_spearman_then_percentile_mse":
+                comparison = (float(daily_spearman), best_daily_spearman, validation_mse, best_validation_mse, "max", "min")
             else:
-                improved = (
-                    float(daily_spearman) > best_daily_spearman + float(args.early_stopping_min_delta)
-                    or (
-                        math.isclose(float(daily_spearman), best_daily_spearman, rel_tol=0.0, abs_tol=1e-12)
-                        and validation_mse < best_validation_mse
-                    )
-                )
+                raise ValueError(f"不支援的epoch selection capability: {selection_rule!r}")
+
+        improved = _epoch_metric_improved(
+            primary=comparison[0],
+            best_primary=comparison[1],
+            secondary=comparison[2],
+            best_secondary=comparison[3],
+            primary_direction=comparison[4],
+            secondary_direction=comparison[5],
+            min_delta=float(args.early_stopping_min_delta),
+        )
 
         if improved:
             best_epoch = int(epoch)

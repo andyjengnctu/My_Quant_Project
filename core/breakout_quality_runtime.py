@@ -780,6 +780,36 @@ class ContinuousRankerTrainingPolicy:
             f"{self.head_loss_component_count}"
         )
 
+    @property
+    def uses_shared_scoped_head_loss(self) -> bool:
+        """Derive executable shared-head capability from canonical composition.
+
+        Do not keep a parallel loss-handler allowlist in the trainer: a newly
+        declared equal-available scoped composition must receive the same
+        numerical retry and multi-head dispatch semantics automatically.
+        """
+        return bool(
+            self.independent_head_composition is None
+            and self.head_loss_combination == CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE
+            and int(self.head_loss_component_count) == 2
+            and self.pairwise_kind == CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR
+        )
+
+    @property
+    def epoch_selection_rule(self) -> str:
+        """Non-persisted comparator capability for the declared metric family.
+
+        These labels affect only execution dispatch. Historical profile
+        ``epoch_selection_metric`` and all scientific identity fields stay as-is.
+        """
+        if self.loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R:
+            return "regression_loss_then_spearman"
+        if self.target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS:
+            return "hmhs_pair_then_pr_auc"
+        if self.target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_PARETO_COMPONENTS:
+            return "pareto_daily_then_global"
+        return "daily_spearman_then_percentile_mse"
+
     def expected_epoch_metric(self, loss_name: str) -> str:
         mapping = dict(self.profile_loss_metrics)
         if not mapping:

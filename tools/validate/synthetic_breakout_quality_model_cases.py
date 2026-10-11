@@ -2108,6 +2108,160 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         ranker_stage_owner._new_model_and_optimizer = _saved_model
         ranker_stage_owner.build_grad_scaler = _saved_scaler
 
+    # Shared multi-head numerical guards and epoch selection consume the same
+    # canonical training composition.  A new experiment which recomposes an
+    # existing capability must not require another trainer-side handler list.
+    import inspect as _ranker_inspect
+    from services.breakout_quality.train_continuous_ranker import (
+        _epoch_metric_improved as _compare_epoch_metrics,
+        _guarded_retry_enabled as _guard_retry,
+        _bf16_dynamic_backward_scaling_enabled as _bf16_guard,
+    )
+    from core.breakout_quality_registry import (
+        NUMERICAL_EXECUTION_POLICY_BF16_DYNAMIC_BACKWARD_SCALING,
+    )
+    from core.breakout_quality_runtime import (
+        get_continuous_ranker_training_policy,
+        CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE as _available_heads,
+        CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR as _scalar_pairwise,
+    )
+    _ranker_policies = {
+        name: get_continuous_ranker_training_policy(name)
+        for name in sorted({
+            get_breakout_quality_experiment_profile(name).training_objective
+            for name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+        })
+    }
+    _execution_plan_stub = SimpleNamespace(
+        mixed_precision_enabled=True, autocast_dtype_name="bfloat16"
+    )
+    _model_stub = SimpleNamespace(
+        same_batch_fp32_nonfinite_retry=True, recurrent_outer_autocast=True
+    )
+    _shared_errors = []
+    for _objective, _policy in _ranker_policies.items():
+        _expected_shared = bool(
+            _policy.independent_head_composition is None
+            and _policy.head_loss_combination == _available_heads
+            and int(_policy.head_loss_component_count) == 2
+            and _policy.pairwise_kind == _scalar_pairwise
+        )
+        _guard_allowed = False
+        _bf16_allowed = False
+        try:
+            _guard_allowed = _guard_retry(
+                _model_stub, _execution_plan_stub, None, _policy
+            )
+        except ValueError:
+            pass
+        try:
+            _bf16_allowed = _bf16_guard(
+                _model_stub, _execution_plan_stub, None, _policy,
+                NUMERICAL_EXECUTION_POLICY_BF16_DYNAMIC_BACKWARD_SCALING,
+            )
+        except ValueError:
+            pass
+        if (_policy.uses_shared_scoped_head_loss != _expected_shared
+                or _guard_allowed != _expected_shared
+                or _bf16_allowed != _expected_shared):
+            _shared_errors.append(_objective)
+    check("registered_head_compositions_share_one_guard_and_loss_dispatch", [], _shared_errors)
+    _epoch_source = _ranker_inspect.getsource(ranker_stage_owner._train_epoch)
+    check_true(
+        "trainer_uses_declared_shared_head_capability_not_second_handler_allowlist",
+        "training_policy.uses_shared_scoped_head_loss" in _epoch_source
+        and "_SHARED_SAFETY_SCOPED_MFE_LOSS_HANDLERS" not in _epoch_source,
+    )
+
+    # Assert decision boundaries independently: strict min_delta and exact
+    # 1e-12 tie-break must be unchanged for all four metric families.
+    _epoch_errors = []
+    for _primary_dir, _secondary_dir in (("max", "min"), ("min", "max"), ("max", "max")):
+        for _primary, _best, _delta in (
+            (0.60, 0.50, 0.02), (0.40, 0.50, 0.02),
+            (0.50, 0.50, 0.02), (0.5000000000005, 0.50, 0.02),
+            (0.50, 0.50, 0.0), (0.52, 0.50, 0.02),
+        ):
+            for _secondary, _best_secondary in ((0.3, 0.2), (0.2, 0.3), (0.2, 0.2)):
+                _primary_improved = (
+                    _primary > _best + _delta
+                    if _primary_dir == "max"
+                    else _primary < _best - _delta
+                )
+                _secondary_improved = (
+                    _secondary > _best_secondary
+                    if _secondary_dir == "max"
+                    else _secondary < _best_secondary
+                )
+                _expected_improved = _primary_improved or (
+                    math.isclose(_primary, _best, rel_tol=0.0, abs_tol=1e-12)
+                    and _secondary_improved
+                )
+                _actual_improved = _compare_epoch_metrics(
+                    primary=_primary, best_primary=_best,
+                    secondary=_secondary, best_secondary=_best_secondary,
+                    min_delta=_delta, primary_direction=_primary_dir,
+                    secondary_direction=_secondary_dir,
+                )
+                if _actual_improved != _expected_improved:
+                    _epoch_errors.append((_primary_dir, _secondary_dir, _primary, _best, _delta))
+    check("epoch_selection_comparator_strict_delta_and_ties_preserved", [], _epoch_errors)
+    check_true(
+        "epoch_selection_rejects_undeclared_comparator_direction",
+        raises_expected(
+            ValueError,
+            lambda: _compare_epoch_metrics(
+                primary=1.0, best_primary=0.0, secondary=0.0,
+                best_secondary=0.0, min_delta=0.0,
+                primary_direction="unknown", secondary_direction="max",
+            ),
+        ),
+    )
+    _allowed_rules = {
+        "regression_loss_then_spearman",
+        "pareto_daily_then_global",
+        "hmhs_pair_then_pr_auc",
+        "daily_spearman_then_percentile_mse",
+    }
+    check(
+        "registered_profiles_use_declared_epoch_selection_capabilities",
+        [],
+        [name for name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+         if get_continuous_ranker_training_policy(
+             get_breakout_quality_experiment_profile(name).training_objective
+         ).epoch_selection_rule not in _allowed_rules],
+    )
+    # Independent oracle: the previous selection precedence was RAW_R loss,
+    # then DIRECT_HMHS builder, then PARETO_COMPONENTS builder, then daily rho.
+    # A pairwise-kind change alone must not silently change the metric family.
+    from core.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R as _raw_r_handler,
+        CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS as _direct_hmhs_builder,
+        CONTINUOUS_RANKER_TARGET_BUILDER_PARETO_COMPONENTS as _pareto_builder,
+    )
+    _epoch_family_errors = []
+    for _name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES:
+        _policy = get_continuous_ranker_training_policy(
+            get_breakout_quality_experiment_profile(_name).training_objective
+        )
+        if _policy.loss_handler == _raw_r_handler:
+            _expected_family = "regression_loss_then_spearman"
+        elif _policy.target_builder == _direct_hmhs_builder:
+            _expected_family = "hmhs_pair_then_pr_auc"
+        elif _policy.target_builder == _pareto_builder:
+            _expected_family = "pareto_daily_then_global"
+        else:
+            _expected_family = "daily_spearman_then_percentile_mse"
+        if _policy.epoch_selection_rule != _expected_family:
+            _epoch_family_errors.append(_name)
+    check("epoch_selection_family_matches_original_target_builder_precedence", [], _epoch_family_errors)
+    _select_source = _ranker_inspect.getsource(ranker_stage_owner.select_epoch)
+    check_true(
+        "epoch_selector_calls_one_shared_numeric_comparator",
+        _select_source.count("_epoch_metric_improved(") == 1
+        and "training_policy.epoch_selection_rule" in _select_source,
+    )
+
     summary["profile"] = STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE
     summary["pass_conditional_profile"] = STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
     summary["training_objective"] = profile.training_objective
