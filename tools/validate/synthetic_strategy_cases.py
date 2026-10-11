@@ -3782,6 +3782,222 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and progress_filter.isatty()
         and progress_filter.fileno() == 123,
     )
+    # Global scheduler aggregates a finished fold in its parent process.
+    # Its replay progress MUST enter the same fold-log reader as worker events;
+    # only ordinary human-readable output may reach the live console.
+    from services.optimizer import outer_rolling_oos as _outer_rolling_oos_module
+    from services.optimizer.outer_rolling_parallel_progress import (
+        _read_latest_parallel_fold_progress as _read_parent_fold_progress,
+        _read_parallel_fold_replay_phase_metrics as _read_parent_replay_metrics,
+    )
+    with TemporaryDirectory() as parent_replay_dir:
+        parent_log_path = Path(parent_replay_dir) / "fold_05_oos_2025.log"
+        parent_fold_task = {"log_path": str(parent_log_path), "fold_idx": 5}
+        parent_seed_rows = [{"seed": 41}, {"seed": 42}, {"seed": 43}, {"seed": 44}]
+
+        def _fake_completed_fold_aggregate(*, task, seed_results):
+            check(
+                "global_seed_parent_replay_keeps_four_complete_member_results",
+                4,
+                len(seed_results),
+            )
+            from services.optimizer.outer_rolling_progress import _write_parallel_fold_progress_event
+            for status, done in (("RUN", 0), ("DONE", 1)):
+                _write_parallel_fold_progress_event(
+                    stage="ENSEMBLE_REPLAY", fold_idx=5, fold_count=6,
+                    oos_year=2025, selection_start="2015-01-01",
+                    selection_end="2024-12-31", policy="base_finalists_agree",
+                    status=status, replay_done=done, replay_total=3,
+                    replay_started_ts=100.0,
+                    replay_last_done_ts=105.0 if done else None,
+                )
+            print("replay human diagnostic")
+            return {"row": {"oos_year": 2025}}
+
+        parent_console = io.StringIO()
+        replay_snapshots = []
+
+        def _fake_replay_board_refresh():
+            replay_snapshots.append(_read_parent_fold_progress(str(parent_log_path)).get("replay_done"))
+            print("fold replay board redraw")
+
+        with patch.object(
+            _outer_rolling_oos_module, "_aggregate_seed_ensemble_fold_results",
+            side_effect=_fake_completed_fold_aggregate,
+        ), redirect_stdout(parent_console):
+            parent_result = _outer_rolling_oos_module._aggregate_seed_ensemble_fold_results_logged(
+                task=parent_fold_task, seed_results=parent_seed_rows,
+                on_progress=_fake_replay_board_refresh,
+            )
+        parent_log_text = parent_log_path.read_text(encoding="utf-8")
+        parent_events = [
+            line for line in parent_log_text.splitlines()
+            if line.startswith(PARALLEL_FOLD_PROGRESS_PREFIX)
+        ]
+        latest_replay_event = _read_parent_fold_progress(str(parent_log_path))
+        parent_replay_metrics = _read_parent_replay_metrics(str(parent_log_path))
+        check(
+            "global_seed_parent_replay_machine_events_persist_in_fold_log_not_console",
+            True,
+            len(parent_events) == 2
+            and "ENSEMBLE_REPLAY" in parent_log_text
+            and PARALLEL_FOLD_PROGRESS_PREFIX not in parent_console.getvalue()
+            and "replay human diagnostic" in parent_console.getvalue()
+            and parent_console.getvalue().count("fold replay board redraw") == 2
+            and "fold replay board redraw" not in parent_log_text
+            and replay_snapshots == [0, 1],
+        )
+        check(
+            "global_seed_parent_replay_fails_fast_without_fold_log",
+            True,
+            raises_expected(
+                ValueError,
+                lambda: _outer_rolling_oos_module._aggregate_seed_ensemble_fold_results_logged(
+                    task={"fold_idx": 5}, seed_results=parent_seed_rows,
+                ),
+            ),
+        )
+        check(
+            "global_seed_parent_replay_progress_is_readable_and_result_unchanged",
+            True,
+            parent_result == {"row": {"oos_year": 2025}}
+            and latest_replay_event.get("stage") == "ENSEMBLE_REPLAY"
+            and int(latest_replay_event.get("replay_done", -1)) == 1
+            and int(parent_replay_metrics.get("completed_replays", -1)) == 1,
+        )
+    # ETA is display telemetry: search rate, per-fold cap, and remaining
+    # parent replay must all contribute, without touching fitting identity.
+    from services.optimizer.outer_rolling_eta import (
+        estimate_rolling_seed_eta,
+        format_rolling_seed_eta,
+    )
+    eta_tasks = [
+        {
+            "fold_idx": idx, "oos_year": 2020 + idx,
+            "config": {"trials_per_fold": 100},
+            "seed_ensemble_policy": {"seed_count": 2},
+        }
+        for idx in (1, 2)
+    ]
+    eta_calibrating = estimate_rolling_seed_eta(
+        tasks=eta_tasks, seed_progress_by_fold={}, fold_progress_by_fold={},
+        completed_oos_years=set(), global_workers=4, per_fold_cap=2,
+        replay_policy_slots=2, now_ts=1000.0,
+    )
+    check(
+        "rolling_eta_waits_for_real_trial_rate_before_numeric_estimate",
+        True,
+        eta_calibrating.get("status") == "calibrating"
+        and eta_calibrating.get("remaining_sec") is None
+        and "ETA" in format_rolling_seed_eta(eta_calibrating),
+    )
+    eta_progress = {
+        2: {
+            1: {"stage": "DONE", "completed": 100,
+                "search_active_elapsed_sec": 100.0, "elapsed_sec": 100.0},
+            2: {"stage": "OPTIMIZER_SEARCH", "completed": 50,
+                "search_active_elapsed_sec": 50.0},
+        },
+    }
+    eta_replay = {2: {"stage": "ENSEMBLE_REPLAY", "replay_done": 1,
+                       "replay_total": 2, "replay_started_ts": 100.0,
+                       "replay_last_done_ts": 105.0}}
+    eta_kwargs = dict(
+        tasks=eta_tasks, seed_progress_by_fold=eta_progress,
+        fold_progress_by_fold=eta_replay, completed_oos_years={2021},
+        global_workers=4, per_fold_cap=2, replay_policy_slots=2,
+        now_ts=1000.0,
+    )
+    eta_estimate = estimate_rolling_seed_eta(**eta_kwargs)
+    check(
+        "rolling_eta_accounts_for_incomplete_trial_and_remaining_replay",
+        True,
+        eta_estimate.get("status") == "estimated"
+        and abs(float(eta_estimate["search_remaining_sec"]) - 50.0) < 1e-8
+        and abs(float(eta_estimate["replay_remaining_sec"]) - 5.0) < 1e-8
+        and abs(float(eta_estimate["remaining_sec"]) - 55.0) < 1e-8
+        and eta_estimate["confidence"] == "dynamic"
+        and "ETA" in format_rolling_seed_eta(eta_estimate)
+        and "(+08)" in format_rolling_seed_eta(eta_estimate),
+    )
+    eta_faster_progress = {
+        2: {**eta_progress[2], 2: {
+            "stage": "OPTIMIZER_SEARCH", "completed": 80,
+            "search_active_elapsed_sec": 80.0,
+        }},
+    }
+    eta_updated = estimate_rolling_seed_eta(
+        **{**eta_kwargs, "seed_progress_by_fold": eta_faster_progress}
+    )
+    check(
+        "rolling_eta_reduces_remaining_time_as_same_rate_trials_finish",
+        True,
+        float(eta_updated["remaining_sec"]) < float(eta_estimate["remaining_sec"]),
+    )
+    eta_queued = {
+        2: {
+            1: {"stage": "OPTIMIZER_SEARCH", "completed": 50,
+                "search_active_elapsed_sec": 50.0},
+            2: {"stage": "QUEUED"},
+        },
+    }
+    eta_parallel_1 = estimate_rolling_seed_eta(
+        **{**eta_kwargs, "seed_progress_by_fold": eta_queued,
+           "fold_progress_by_fold": {}, "per_fold_cap": 1}
+    )
+    eta_parallel_2 = estimate_rolling_seed_eta(
+        **{**eta_kwargs, "seed_progress_by_fold": eta_queued,
+           "fold_progress_by_fold": {}, "per_fold_cap": 2}
+    )
+    check(
+        "rolling_eta_respects_fold_seed_concurrency_and_queued_seed_work",
+        True,
+        eta_parallel_1["confidence"] == "initial"
+        and eta_parallel_1["search_remaining_sec"] > eta_parallel_2["search_remaining_sec"],
+    )
+    eta_done = estimate_rolling_seed_eta(
+        **{**eta_kwargs, "completed_oos_years": {2021, 2022}}
+    )
+    check(
+        "rolling_eta_finishes_only_after_all_fold_results_are_complete",
+        True,
+        eta_done.get("status") == "done"
+        and float(eta_done.get("remaining_sec")) == 0.0,
+    )
+    # Confirm the real global-scheduler live header consumes the ETA helper.
+    from services.optimizer import outer_rolling_live_boards as _eta_board_module
+    eta_board_tasks = [
+        {
+            **task,
+            "seed_scheduler_global_workers": 4,
+            "selection_start_date": "2011-01-01",
+            "selection_end_date": "2020-12-31",
+            "seed_ensemble_policy": {"enabled": True, "seed_count": 2},
+        }
+        for task in eta_tasks
+    ]
+    with patch.object(
+        _eta_board_module, "_read_latest_parallel_fold_seed_progresses_for_task",
+        side_effect=lambda task: dict(eta_progress.get(int(task["fold_idx"])) or {}),
+    ), patch.object(
+        _eta_board_module, "_read_latest_parallel_fold_progress",
+        side_effect=lambda path: dict(eta_replay.get(2) or {}),
+    ), patch.object(
+        _eta_board_module, "_collect_parallel_fold_replay_phase_metrics",
+        return_value={"completed_replays": 1, "replay_wall_elapsed_sec": 5.0},
+    ):
+        board = _eta_board_module._ParallelFoldLiveBoard(eta_board_tasks, per_fold_cap=2)
+        eta_board_lines = board._build_lines(
+            pending={1, 2}, future_map={}, completed_rows=[], fold_timing_rows=[]
+        )
+    check(
+        "global_rolling_live_header_includes_remaining_eta_and_finish_time",
+        True,
+        bool(eta_board_lines)
+        and "ETA" in eta_board_lines[0]
+        and "(+08)" in eta_board_lines[0]
+        and "total=" in eta_board_lines[0],
+    )
     from services.optimizer.outer_rolling_live_boards import OptimizerSeedEnsembleProgressBoard
     tty_log_handle = io.StringIO()
     tty_live_handle = _SyntheticTTYMirror()

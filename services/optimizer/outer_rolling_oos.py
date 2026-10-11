@@ -1194,6 +1194,39 @@ def _build_outer_rolling_seed_member_task(
     return member_task
 
 
+
+def _aggregate_seed_ensemble_fold_results_logged(*, task: dict, seed_results: list[dict], on_progress=None) -> dict:
+    """Route global-scheduler parent replay telemetry to its fold log.
+
+    Only the parent-side aggregation lacked the worker's progress log wrapper.
+    Keep the original aggregate call and human output, but persist JSON events
+    in the fold log and refresh the existing live board for each replay event.
+    """
+    log_path = str((task or {}).get("log_path") or "")
+    if not log_path:
+        raise ValueError("rolling fold×seed aggregation 缺少 fold log_path")
+    os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
+    live_stdout = sys.stdout
+
+    def _notify_live_board() -> None:
+        if callable(on_progress):
+            # The live board must write to the real console, not back into
+            # the progress log wrapper that is currently intercepting stdout.
+            with redirect_stdout(live_stdout):
+                on_progress()
+
+    with open(log_path, "a", encoding="utf-8") as log_handle:
+        progress_log = _ParallelFoldProgressLogFilter(
+            log_handle, mirror_handle=live_stdout,
+            on_progress_event=_notify_live_board,
+        )
+        with redirect_stdout(progress_log):
+            try:
+                return _aggregate_seed_ensemble_fold_results(task=task, seed_results=seed_results)
+            finally:
+                progress_log.flush()
+
+
 def _run_parallel_fold_seed_ensemble_futures(
     *,
     tasks: list[dict],
@@ -1226,6 +1259,7 @@ def _run_parallel_fold_seed_ensemble_futures(
         task_items,
         overall_start=overall_start,
         raw_data_load_sec=raw_data_load_sec,
+        per_fold_cap=per_fold_cap,
     )
     scheduler_started = time.perf_counter()
     executor_kwargs, _start_method = get_process_pool_executor_kwargs()
@@ -1348,9 +1382,16 @@ def _run_parallel_fold_seed_ensemble_futures(
                     ordered_results = [
                         result_map[idx] for idx in range(1, seed_count + 1)
                     ]
-                    fold_result = _aggregate_seed_ensemble_fold_results(
+                    fold_result = _aggregate_seed_ensemble_fold_results_logged(
                         task=dict(state.get("task") or {}),
                         seed_results=ordered_results,
+                        on_progress=lambda: live_board.render(
+                            pending=_seed_scheduler_pending_fold_ids(states),
+                            future_map={},
+                            completed_rows=rows,
+                            fold_timing_rows=fold_timing_rows,
+                            force=True,
+                        ),
                     )
                     _consume_parallel_fold_result(
                         result=fold_result,

@@ -25,9 +25,10 @@ PARALLEL_FOLD_LOG_STATUS_MAX_CHARS = 140
 
 
 class _ParallelFoldProgressLogFilter:
-    def __init__(self, handle, *, mirror_handle=None):
+    def __init__(self, handle, *, mirror_handle=None, on_progress_event=None):
         self.handle = handle
         self.mirror_handle = mirror_handle
+        self.on_progress_event = on_progress_event
         self._buffer = ""
 
     def isatty(self):
@@ -53,6 +54,8 @@ class _ParallelFoldProgressLogFilter:
         if line.startswith(PARALLEL_FOLD_PROGRESS_PREFIX):
             self.handle.write(line + suffix)
             self.handle.flush()
+            if callable(self.on_progress_event) and newline:
+                self.on_progress_event()
             return
         if self.mirror_handle is not None:
             self.mirror_handle.write(line + suffix)

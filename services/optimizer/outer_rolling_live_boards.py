@@ -9,6 +9,7 @@ from core.training_performance import (
     resolve_optimizer_random_seed_ensemble_parallel_workers_default,
 )
 from services.optimizer.outer_rolling_artifacts import _build_seed_ensemble_policy_payload
+from services.optimizer.outer_rolling_eta import estimate_rolling_seed_eta, format_rolling_seed_eta
 from services.optimizer.outer_rolling_fold_context import (
     normalize_optimizer_seed_ensemble_fold_row,
     optimizer_seed_ensemble_row_sort_key,
@@ -23,6 +24,7 @@ from services.optimizer.outer_rolling_parallel_progress import (
 from services.optimizer.outer_rolling_policy import (
     _active_optimizer_table_titles,
     _is_rolling_random_seed_ensemble_enabled,
+    CHAIN_POLICY_NAMES,
 )
 from services.optimizer.outer_rolling_progress import (
     _collect_optimizer_progress_phase_metrics,
@@ -312,8 +314,9 @@ class OptimizerSeedEnsembleProgressBoard:
 class _ParallelFoldLiveBoard:
     """Render parallel-fold progress and completed results as one refresh block."""
 
-    def __init__(self, tasks: list[dict], *, overall_start: float | None = None, raw_data_load_sec: float = 0.0):
+    def __init__(self, tasks: list[dict], *, overall_start: float | None = None, raw_data_load_sec: float = 0.0, per_fold_cap: int = 1):
         self.tasks = sorted(list(tasks or []), key=lambda item: int(item.get("fold_idx", 0) or 0))
+        self.per_fold_cap = max(1, int(per_fold_cap))
         self.progress_block = FixedProgressBlock()
         self.inline = self.progress_block.inline
         self.started_at = time.perf_counter()
@@ -373,6 +376,10 @@ class _ParallelFoldLiveBoard:
             )
             completed_trials = int(phase_metrics.get("completed_trials", 0) or 0)
             replay_metrics = _collect_parallel_fold_replay_phase_metrics(self.tasks)
+            fold_progress_by_idx = {
+                int(task.get("fold_idx", 0) or 0): _read_latest_parallel_fold_progress(str(task.get("log_path") or ""))
+                for task in self.tasks
+            }
             total_elapsed = _effective_resume_total_elapsed(
                 total_elapsed,
                 search_wall_elapsed_sec=phase_metrics.get("search_wall_elapsed_sec"),
@@ -418,6 +425,22 @@ class _ParallelFoldLiveBoard:
                 completed_replays=int(replay_metrics.get("completed_replays", 0) or 0),
                 replay_wall_elapsed_sec=replay_metrics.get("replay_wall_elapsed_sec"),
             )
+            eta = estimate_rolling_seed_eta(
+                tasks=self.tasks,
+                seed_progress_by_fold={
+                    int(task.get("fold_idx", 0) or 0): dict(seed_progress_maps.get(id(task)) or {})
+                    for task in self.tasks
+                },
+                fold_progress_by_fold=fold_progress_by_idx,
+                completed_oos_years=completed_oos,
+                global_workers=(
+                    int(scheduler_workers) if scheduler_workers > 0
+                    else resolve_optimizer_random_seed_ensemble_parallel_workers_default(seed_count)
+                ),
+                per_fold_cap=self.per_fold_cap,
+                replay_policy_slots=len(CHAIN_POLICY_NAMES),
+            )
+            header += " | " + format_rolling_seed_eta(eta)
             seed_contexts: list[dict] = []
             seed_progress_by_key: dict[tuple[int, int], dict] = {}
             fold_progress_lines: list[str] = []
@@ -443,7 +466,7 @@ class _ParallelFoldLiveBoard:
                     }
                     seed_contexts.append(context)
                     seed_progress_by_key[_seed_progress_context_key(context)] = progress
-                fold_progress = _read_latest_parallel_fold_progress(str(task.get("log_path") or ""))
+                fold_progress = dict(fold_progress_by_idx.get(int(task.get("fold_idx", 0) or 0)) or {})
                 fold_stage = str(fold_progress.get("stage") or "").upper()
                 if fold_progress and fold_stage in {"ENSEMBLE_REPLAY", "FOLD_RESULT"}:
                     fold_progress_lines.append(_format_parallel_fold_progress_line(task, fold_progress))
