@@ -953,6 +953,7 @@
 | T567 | `validate_portfolio_daily_phase_owner_contract_case`：Portfolio 日序 phase canonical owner、PIT cursor 隔離、單／多成員 replay context、每日容量與 idle 判定之跨模組直接契約。 | B200 |
 | T568 | `validate_portfolio_day_event_equity_owner_contract_case`：Portfolio 每日 rotation／settlement／entry 事件與權益標記的 canonical owner、盤前資源鎖定、回饋應收與 PIT 時序契約。 | B200 |
 | T569 | `validate_portfolio_terminal_owner_contract_case`：Portfolio 期末結算、統計、期間報表、profile sidecar 與 training／reporting tuple 的 canonical owner 與同源口徑。 | B200 |
+| T570 | `validate_portfolio_candidate_replay_owner_contract_case`：Portfolio 候選資格、盤前資源選擇及 Replay 輸出之 canonical owner、PIT cursor、單／多成員行為與時序契約。 | B200 |
 
 ## G. 逐項收斂紀錄
 
@@ -3289,3 +3290,4 @@
 | 2026-10-11 | T567 | 將已註冊的 Portfolio daily phase owner synthetic 正式納入 B200 DONE 測試索引。 | NEW -> DONE | `validate_portfolio_daily_phase_owner_contract_case`；`tools/validate/synthetic_meta_cases.py`、`tools/validate/synthetic_cases.py` |
 | 2026-10-11 | T568 | 將已註冊的 Portfolio 每日事件／權益單一 owner 測試納入 B200 DONE 索引。 | NEW -> DONE | `validate_portfolio_day_event_equity_owner_contract_case`；`tools/validate/synthetic_portfolio_day_phase_cases.py` |
 | 2026-10-11 | T569 | 將已註冊的 Portfolio 期末 owner 與統計輸出測試納入 B200 DONE 索引。 | NEW -> DONE | `validate_portfolio_terminal_owner_contract_case`；`tools/validate/synthetic_portfolio_terminal_cases.py` |
+| 2026-10-11 | T570 | 將已註冊的 Portfolio Candidate／Replay 單一 owner 合約測試納入 B200 DONE 索引。 | NEW -> DONE | `validate_portfolio_candidate_replay_owner_contract_case`；`tools/validate/synthetic_portfolio_candidate_replay_cases.py` |
