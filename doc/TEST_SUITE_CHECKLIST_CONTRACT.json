@@ -8531,6 +8531,13 @@
       "description": "`validate_ssot_regression_guard_case`：跨層反向相依、實驗身分滲漏、architecture family switch、golden 帳務快照與受保護測試契約的 SSOT 回歸及反向故障注入。",
       "initial_status": "NEW",
       "order": 556
+    },
+    {
+      "id": "T567",
+      "b_id": "B200",
+      "description": "`validate_portfolio_daily_phase_owner_contract_case`：Portfolio 日序 phase canonical owner、PIT cursor 隔離、單／多成員 replay context、每日容量與 idle 判定之跨模組直接契約。",
+      "initial_status": "NEW",
+      "order": 557
     }
   ],
   "transitions": [
@@ -27141,6 +27148,14 @@
       "from_status": "NEW",
       "to_status": "DONE",
       "note": "`validate_ssot_regression_guard_case`；`tools/validate/synthetic_meta_cases.py`、`tools/validate/ssot_regression_guard.py`"
+    },
+    {
+      "date": "2026-10-11",
+      "id": "T567",
+      "description": "將已註冊的 Portfolio daily phase owner synthetic 正式納入 B200 DONE 測試索引。",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "note": "`validate_portfolio_daily_phase_owner_contract_case`；`tools/validate/synthetic_meta_cases.py`、`tools/validate/synthetic_cases.py`"
     }
   ]
 }
