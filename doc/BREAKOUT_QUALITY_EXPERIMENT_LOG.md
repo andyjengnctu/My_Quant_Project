@@ -12852,3 +12852,11 @@ Decision：`RAW_PROVIDER_ZERO_OHLC_CONFIRMED / SOURCE_QUALITY_BLOCKED / READY_VA
 - **新科學身分**：`PARAM-P15`，沿用 P14 的Adjusted／同原始訊號共識／120M/12M／fixed4×300／validation-off架構，只切換費用經濟語意。新的registered scientific fingerprint與獨立artifact namespace請以Registry及`config/strategy_params.py`為準。`ACTIVE_STRATEGY_PARAM_PROFILE`切至P15，**本輪未完成任何P15正式訓練、Rolling、Compare或PIT真實資料回測**；不得沿用P14結果宣稱P15績效。
 - **歷史保護**：八個已註冊Strategy Parameter profile的原scientific SHA維持不變；只有這些凍結身分的歷史解讀保留原72% Research經濟費率與舊回饋邏輯。舊模型與Compare工件不重新標記，不回填新費用結果；後續新訓練／評估須以P15或另行合法分配的新身分執行。此為結果敏感的研究政策更動，非等價工程重構。
 - **本輪證據界線**：完成程式及synthetic費稅／工件科學身分測試，但沒有使用者Windows正式double check，也未取得元大實際退款個別交易對應資料，因此Trading手動現金調整僅用於帳戶餘額對帳，不由系統把該款重新分攤到每一筆交易損益。
+
+## 2026-10-11 — 使用者研究排序決策：No-DL 新券商費率重訓優先；DL 策略歷史結果標記過時
+
+- **本次授權**：短期繼續 `MR-13H／AH／AK／AO` **DL 模型本身**的 Target／輸入／模型與模型預測能力研究；暫緩 DL→策略重新最佳化。先處理 Research `[3]` 既有 No-DL 比較對象 `SR-C58／C61／C95` 對應的 Min Base-Finalist-Best、Full Base-Finalist-Best、Full Corrected Same-Original-Signal Agree 4×300，在相同 `broker_cash_v1` 券商現金費稅下以新策略科學身分重新訓練、回測並比較。
+- **DL 經濟結果效力**：過往 `SR-C77`（H）、`SR-C80/C81`（AH）之 Return／MDD／RoMD／EV(A) 等屬歷史費稅語意，**對現行 broker-cash 決策已過時**；`SR-C82/C83`（AK）原本就是 `RESULT_PENDING`，不得寫成已取得正式策略結果；AO 尚無可據以宣稱完成的策略轉換績效。未來 DL 對應策略必須使用新 `SR-C*`／必要時新 `PARAM-*` identity，經 canonical Optimizer／Portfolio producer 重訓／重算 OOS、Rolling，不能覆寫舊經濟結果。
+- **不受此次決策否定的證據**：H／AH／AK／AO 的原模型 checkpoint、預測分數、Spearman／Pair／Target 等，在各自原 scientific fitting/PIT 契約有效的前提下仍可用於模型研究；若後續使用同一 fitting identity，可驗證後 REUSE 模型工件，不能以券商費率變更為理由自動宣告需重新訓練 DL 權重。舊策略 `RESULT_AVAILABLE`、`RESULT_PENDING`、實驗決策及 original fingerprints 一律保持歷史原貌。
+- **No-DL 執行限制／實際狀態**：`PARAM-P15` 是已登記的新券商口徑 Full Agree producer，但 `RESULT_PENDING`；舊 `C58/C61` 的單 seed canonical producer 仍綁定 frozen rebate 身分，不可直接換費率重建。新的 Min Best／Full Best 需要先完成獨立 scientific registration、合法單 seed canonical producer、physical artifact isolation 與新 Compare Suite，才可經既有 Research `[2]/[3]` 合法執行；**本輪沒有取得真實訓練工件、沒有執行正式 No-DL retraining/OOS/Rolling，也沒有產生新的策略績效或分配尚未實作的新 ID**。對應現行身分狀態以 Registry 為準。
+- **研究治理**：這是經濟口徑變更與研究優先順序決策，非模型品質倒退的 evidence；舊 C58/C61/C95 及 DL Strategy conversion historical result 不得被新 execution 靜默覆寫，亦不得用修改報表數字代替以新費率重算完整交易路徑與現金時點。

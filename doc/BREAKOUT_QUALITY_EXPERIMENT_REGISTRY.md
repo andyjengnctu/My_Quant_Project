@@ -384,6 +384,17 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用�
 | `SR-C92` | Full Base-Finalists-Agree 8×1000 Trading-Aligned non-DL treatment | Round 10停止validation線後建立的Trading-aligned Research treatment。Full/formal/`base-finalists-agree`、120M selection + 12M annual PIT、validation off、8個固定Research fitting seeds × 1000 trials/seed、`min_agree=auto→5`。Seed count、trials/seed、selector與training window對齊**2026-10-06升格C85/P6之前**的Trading production；Research為controlled comparison固定generator seed=`42`。2026-10-06後此「Trading-aligned」名稱只代表歷史對照，不再描述current Trading contract。 | **IMPLEMENTED / RESULT_AVAILABLE / RESEARCH_ONLY / REMOVED_FROM_CURRENT_COMPARE / TRADING_BUDGET_ALIGNED / FIXED_RESEARCH_SEEDS / SCIENTIFIC_CONTRACT_BOUND / NOT_PROMOTED**。Identity=`PARAM-P13`。Rolling Return/MDD/RoMD=`144.33%/14.22%/10.15`，低於C85=`190.64%/11.59%/16.45`；2026-10-05使用者明確要求從current Compare移除C92。Historical `C92-C85/C61/C58` contrasts、profile與工件保留可重現，不改寫Round-10 evidence；current single-run Compare改為`C58/C61/C85`。 |
 | `SR-C95` | Corrected C85 same-original-signal consensus 4×300 non-DL Research revalidation | **IMPLEMENTED / RESULT_PENDING / RESEARCH_ONLY / NEW_SCIENTIFIC_IDENTITY / NOT_PROMOTED**。Original `SR-C85 / PARAM-P6`是修正前immutable historical evidence，仍保留其原報表／fingerprint，但不得由修正版canonical engine將歷史C85重新BUILD為舊口徑。C95僅更改Research同股票候選共識定義：先按`(ticker, original signal_date)`獨立計票；相同ticker多條合格lineage由canonical candidate ordering選唯一一條。其他Full/adjusted/formal、120M/12M PIT、Research固定generator seed42、4 fitting seeds×300 trials/seed、validation-off、Max positions10皆對齊C85。新增PARAM-P14獨立physical truth；OOS/Rolling共用P14。Current Compare Suite以C58/C61/C95計算新口徑，舊C85僅供historical evidence對照（非相同runtime replay）。不改Trading P6 random-seed production。 |
 
+
+### 2026-10-11 策略經濟口徑有效性註記（使用者研究決策）
+
+以下註記是**現行策略決策適用性**的註記，不改寫上方各 `SR-C*` 登記列的歷史 `RESULT_AVAILABLE`／`RESULT_PENDING`、當時費率、證據或科學身分。
+
+- **DL 模型研究本身繼續有效**：`MR-13H`、`MR-13AH`、`MR-13AK`、`MR-13AO` 的既有 checkpoint／Score／Spearman／Pair 等模型研究證據，依各自原有 fitting identity 與 PIT／OOS 契約解讀；更改策略券商費率本身不等於模型 target、loss 或權重變更。短期只研究模型本身，不重訓這些模型的策略轉換。
+- **既有 DL→策略經濟結果已過時**：`SR-C77`（H）、`SR-C80/C81`（AH），以及已登記但 **`RESULT_PENDING`** 的 `SR-C82/C83`（AK），均屬舊 Research 券商費稅／現金語意下的策略轉換身分；已完成的結果僅作 **HISTORICAL_ECONOMICS_ONLY／NOT_CURRENT_BROKER_CASH_DECISION_EVIDENCE**。不能把舊 Return／MDD／RoMD／EV(A) 或舊參數直接宣稱為 `broker_cash_v1` 現行績效。`MR-13AO` 目前沒有可據以宣稱完成的對應正式策略轉換績效；不得憑模型結果推定 AO 策略已通過。
+- **後續 DL 策略重做規則**：真正恢復 DL→策略研究時，先正式授權並分配**新的 `SR-C*`／必要時新的 `PARAM-*` scientific identity**；以當時適用的 `broker_cash_v1`、同一合法 PIT/OOS 與 canonical Optimizer／Portfolio producer 重新最佳化、重跑策略回測與比較。舊 arm、model checkpoint、原始研究結果和其 fingerprint 均不可覆寫或借作新的經濟證據；同 fitting identity 的 DL checkpoint 可經完整 identity 驗證後 REUSE，不應無條件重訓模型權重。
+- **No-DL 第一優先**：Research `[3]` 原比較對象 `SR-C58`（Min Best）、`SR-C61`（Full Best）、`SR-C95`（Full 同原始訊號 Agree 4×300）是**舊經濟口徑比較身分**；本輪使用者要求先為其建立同樣三臂的新券商費稅對照，再合法訓練。`PARAM-P15` 已是 `broker_cash_v1` Full Agree 的**已登記、尚未取得正式結果**之獨立科學身分；Min／Full Best 仍需各自合法分配新的參數與策略身分、隔離 Optimizer physical truth，完成相同券商費稅下的 Train／OOS／Rolling 才能形成新比較結論。不得直接改舊 C58／C61 的 canonical mapping，不能以舊工件 `REUSE` 冒充新費率訓練。
+- **現況／不得誤述**：截至本次紀錄，原 Research `[3]` current config 仍指向舊 `C58/C61/C95`；只修改文件決策**不等於完成新 Compare Suite、正式訓練、REUSE 或報表**。新 Suite 經完整 producer、獨立 identity 與正式驗證後才能切換 current selector；不改既有 Research 選單、固定報表及歷史比較矩陣。
+
 ### `SR-C13` identity boundary
 
 `SR-C13`曾正式規劃為candidate-day re-score，依Registry「已使用ID永久保留」規則不得改名重用。2026-08-07在實作前取消：`DL-A9`是以breakout-event snapshot訓練的classifier，而extended candidate-day通常不是breakout線型；把非breakout state直接餵回同一模型會改變輸入分布與score語意，因此不把這條路徑當成既有DL的乾淨策略使用方式。Candidate validity仍由原策略唯一負責。
