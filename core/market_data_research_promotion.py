@@ -12,7 +12,10 @@ from pathlib import Path
 from typing import Mapping
 
 from config.market_data import RESEARCH_DATA_GENERATION_V2, RESEARCH_REQUIRED_CUTOFF
-from core.file_integrity import canonical_json_sha256, compute_file_sha256, load_json_strict
+from core.file_integrity import (
+    canonical_json_sha256, compute_file_sha256, is_sha256_hex,
+    load_json_strict, require_sha256_hex,
+)
 from core.market_data_contract import (
     RESEARCH_STATUS_ACTIVE_FROZEN,
     ResearchDataGenerationContract,
@@ -82,10 +85,9 @@ class ActiveResearchV2Promotion:
 
 
 def _require_hex64(value: object, *, field: str) -> str:
-    text = str(value or "").strip().lower()
-    if len(text) != 64 or any(ch not in "0123456789abcdef" for ch in text):
-        raise ValueError(f"{field} 必須是 64-char SHA256")
-    return text
+    return require_sha256_hex(
+        value, field=field, error_message=f"{field} 必須是 64-char SHA256"
+    )
 
 
 def promotion_identity_from_payload(payload: Mapping[str, object]) -> dict[str, object]:
@@ -184,7 +186,7 @@ def discover_published_research_v2_promotion_fingerprints(project_root) -> tuple
         if not child.is_dir():
             continue
         name = child.name.strip().lower()
-        if len(name) == 64 and all(ch in "0123456789abcdef" for ch in name):
+        if is_sha256_hex(name):
             rows.append(name)
     return tuple(sorted(set(rows)))
 

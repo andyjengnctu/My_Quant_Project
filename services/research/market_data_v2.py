@@ -22,7 +22,10 @@ import pandas as pd
 
 from config.market_data import RESEARCH_DATA_GENERATION_V1, RESEARCH_DATA_GENERATION_V2
 from core.console_report import project_relative_display_path
-from core.file_integrity import atomic_replace_with_retry, atomic_write_json, canonical_json_sha256, compute_file_sha256, load_json_strict
+from core.file_integrity import (
+    atomic_replace_with_retry, atomic_write_json, canonical_json_sha256,
+    compute_file_sha256, is_sha256_hex, load_json_strict,
+)
 from core.market_data_contract import (
     RESEARCH_STATUS_AUTHORIZED_NOT_READY,
     get_research_data_generation,
@@ -1177,7 +1180,7 @@ def load_research_v2_candidate(
     if int(payload.get("schema_version") or 0) != RESEARCH_V2_CANDIDATE_SCHEMA_VERSION:
         raise ValueError("Research V2 candidate schema version drift；請重建 candidate")
     guard_fp = str(payload.get("historical_market_state_guard_fingerprint") or "").strip().lower()
-    if str(payload.get("historical_market_state_guard_dataset") or "") != RESEARCH_V2_MARKET_STATE_GUARD_DATASET or len(guard_fp) != 64:
+    if str(payload.get("historical_market_state_guard_dataset") or "") != RESEARCH_V2_MARKET_STATE_GUARD_DATASET or not is_sha256_hex(guard_fp):
         raise ValueError("Research V2 candidate historical market-state guard identity 不完整")
     identity_keys = RESEARCH_V2_CANDIDATE_IDENTITY_FIELDS
     # Reconstruct identity directly from persisted identity fields.  Detailed
@@ -1219,7 +1222,7 @@ def load_research_v2_candidate(
     if canonical_json_sha256(projection) != str(payload.get("required_source_projection_fingerprint") or ""):
         raise ValueError("Research V2 candidate required source projection fingerprint drift")
     proof_fp = str(payload.get("adjusted_price_revision_proof_fingerprint") or "").strip().lower()
-    if len(proof_fp) != 64:
+    if not is_sha256_hex(proof_fp):
         raise ValueError("Research V2 candidate adjusted-price revision proof fingerprint invalid")
     proof = load_adjusted_price_revision_proof(root, proof_fingerprint=proof_fp, required=True)
     if str(proof.get("status") or "") != str(payload.get("adjusted_price_revision_proof_status") or ""):
@@ -1268,7 +1271,7 @@ def load_research_v2_candidate(
     if payload.get("research_common_complete_cutoff") not in {None, expected_required_cutoff}:
         raise ValueError("Research V2 candidate research_common_complete_cutoff 必須為 null 或 fixed required cutoff")
     scope_coverage_fp = str(payload.get("required_scope_coverage_fingerprint") or "")
-    if len(scope_coverage_fp) != 64 or int(payload.get("required_scope_coverage_row_count") or 0) <= 0:
+    if not is_sha256_hex(scope_coverage_fp) or int(payload.get("required_scope_coverage_row_count") or 0) <= 0:
         raise ValueError("Research V2 candidate required-scope field completeness evidence 不完整")
     mechanical = payload.get("mechanical_common_complete")
     if not isinstance(mechanical, dict):
@@ -1285,7 +1288,7 @@ def load_research_v2_candidate(
     if not universe_path.is_file():
         raise FileNotFoundError("Research V2 daily universe artifact 不存在")
     expected_universe_hash = str(payload.get("daily_universe_file_sha256") or "").strip().lower()
-    if len(expected_universe_hash) != 64 or compute_file_sha256(universe_path) != expected_universe_hash:
+    if not is_sha256_hex(expected_universe_hash) or compute_file_sha256(universe_path) != expected_universe_hash:
         raise ValueError("Research V2 daily universe artifact SHA256 drift")
     if payload.get("frozen_cutoff") is not None or bool(payload.get("promotion_authorized")):
         raise ValueError("Research V2 candidate layer 不得自行 promotion/freeze")

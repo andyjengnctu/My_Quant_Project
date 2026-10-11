@@ -13,7 +13,7 @@ import threading
 from typing import Any
 
 from config.market_data import MARKET_DATA_V2_PROVIDER_ARCHIVE_READ_CACHE_ENTRIES
-from core.file_integrity import canonical_json_sha256, load_json_strict
+from core.file_integrity import canonical_json_sha256, is_sha256_hex, load_json_strict
 from core.market_data_bootstrap_requests import BootstrapRequestManifest
 from core.market_data_provider_snapshot import (
     ProviderArtifactEvidence,
@@ -118,7 +118,7 @@ def find_ready_provider_snapshot_by_fingerprint(
     snapshot_fingerprint: str,
 ) -> tuple[Path, dict[str, Any]] | None:
     wanted = str(snapshot_fingerprint or "").strip()
-    if len(wanted) != 64:
+    if not is_sha256_hex(wanted):
         raise ValueError("provider snapshot fingerprint 不合法")
     root = Path(project_root).resolve()
     base = root / MARKET_DATA_BOOTSTRAP_RELATIVE_ROOT

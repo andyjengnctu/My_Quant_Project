@@ -570,6 +570,7 @@ Final Closure 另把 execution-only raw/prepared cache 與 Research generation �
 
 ### Market Data V2 semantic integrity evidence boundary
 
+- `core/file_integrity.py::{is_sha256_hex,require_sha256_hex}` uniquely owns complete ASCII SHA256 digest validation and lowercase/whitespace canonicalization. Research freeze/materialization/promotion/path discovery, neutral bootstrap storage and Trading batch storage consume that primitive; domain wrappers preserve existing error text. Valid artifact fingerprints, canonical JSON hashes, manifest identity and physical path layouts are unchanged. Incomplete/non-hex 64-character values must never be treated as SHA256 evidence.
 - Full Database Integrity Audit separates local physical/request corruption from provider-semantic evidence limits.
 - Stock-session density uses `TaiwanStockTradingDate` corroborated by independent market-activity anchors; exceptional closures are not treated as sessions merely because the schedule feed contains the date.
 - Historical weekend sessions are an evidence-limited scope: an observed Saturday/Sunday row is accepted, but absence is not labeled a provider gap without authoritative dataset-specific weekend row-presence guarantees. Such cases are `PARTIAL`, not `ATTENTION`/`FAIL`.

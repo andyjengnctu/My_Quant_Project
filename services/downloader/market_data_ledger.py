@@ -8,6 +8,7 @@ from pathlib import Path
 import sqlite3
 from typing import Iterable
 
+from core.file_integrity import require_sha256_hex
 from core.market_data_bootstrap_requests import BootstrapHttpRequest, BootstrapRequestManifest
 
 JOB_PENDING = "PENDING"
@@ -609,9 +610,10 @@ class MarketDataJobLedger:
         return None if row is None else row["next_retry"]
 
     def find_unique_workload_id_by_manifest_fingerprint(self, manifest_fingerprint: str) -> str | None:
-        fingerprint = str(manifest_fingerprint or "").strip().lower()
-        if len(fingerprint) != 64 or any(ch not in "0123456789abcdef" for ch in fingerprint):
-            raise ValueError("Market Data manifest_fingerprint 必須是 SHA256 hex")
+        fingerprint = require_sha256_hex(
+            manifest_fingerprint, field="manifest_fingerprint",
+            error_message="Market Data manifest_fingerprint 必須是 SHA256 hex",
+        )
         with self._connection() as conn:
             rows = conn.execute(
                 "SELECT workload_id FROM workloads WHERE manifest_fingerprint = ? ORDER BY workload_id",
@@ -662,9 +664,10 @@ class MarketDataJobLedger:
         for row in rows:
             if row["row_count"] is None:
                 raise ValueError(f"DONE Market Data job 缺少 row_count: {row['request_id']}")
-            content_sha256 = str(row["content_sha256"] or "").strip().lower()
-            if len(content_sha256) != 64 or any(ch not in "0123456789abcdef" for ch in content_sha256):
-                raise ValueError(f"DONE Market Data job 缺少合法 content_sha256: {row['request_id']}")
+            content_sha256 = require_sha256_hex(
+                row["content_sha256"], field="content_sha256",
+                error_message=f"DONE Market Data job 缺少合法 content_sha256: {row['request_id']}",
+            )
             artifacts.append(
                 LedgerCommittedArtifact(
                     workload_id=str(row["workload_id"]),

@@ -31,7 +31,7 @@ from core.data_utils import (
     sanitize_ohlcv_dataframe,
 )
 from core.dataset_profiles import build_dataset_generation_identity, get_dataset_dir
-from core.file_integrity import canonical_json_sha256, compute_file_sha256, load_json_strict
+from core.file_integrity import canonical_json_sha256, compute_file_sha256, is_sha256_hex, load_json_strict
 from core.market_data_contract import FINMIND_RAW_PRICE_ARCHIVE_DATASET
 from core.market_data_raw_quote import raw_ohlc_diagnostic_masks
 from core.market_data_research_materialization import deterministic_compatibility_file_mtime_ns
@@ -122,7 +122,7 @@ def _source_identity(
         identity["generation_id"] = "research_raw_observed_quote_mask_v1"
         identity["quote_policy"] = quote_policy
     provider_fp = str(identity["provider_snapshot_fingerprint"])
-    if len(provider_fp) != 64 or any(ch not in "0123456789abcdef" for ch in provider_fp.lower()):
+    if not is_sha256_hex(provider_fp):
         raise ValueError("raw-price strategy provider snapshot fingerprint不是合法SHA256")
     identity["source_identity_fingerprint"] = canonical_json_sha256(identity)
     return identity, view, control_dir

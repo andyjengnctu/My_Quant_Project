@@ -11,7 +11,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
-from core.file_integrity import canonical_json_sha256, compute_file_sha256
+from core.file_integrity import canonical_json_sha256, compute_file_sha256, require_sha256_hex
 from core.market_data_research_scope import (
     RESEARCH_V2_ADJUSTED_PRICE_DATASET,
     RESEARCH_V2_RAW_VOLUME_DATASET,
@@ -55,10 +55,9 @@ RESEARCH_V2_COMPAT_MATERIALIZATION_IDENTITY_FIELDS = (
 
 
 def _require_hex64(value: object, *, field: str) -> str:
-    text = str(value or "").strip().lower()
-    if len(text) != 64 or any(ch not in "0123456789abcdef" for ch in text):
-        raise ValueError(f"{field} 必須是 64-char SHA256")
-    return text
+    return require_sha256_hex(
+        value, field=field, error_message=f"{field} 必須是 64-char SHA256"
+    )
 
 
 def build_research_v2_compatibility_materialization_identity_payload(

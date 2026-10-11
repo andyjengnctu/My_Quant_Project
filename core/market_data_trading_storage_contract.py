@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
-from core.file_integrity import canonical_json_sha256
+from core.file_integrity import canonical_json_sha256, is_sha256_hex, require_sha256_hex
 from core.market_data_bootstrap_requests import BootstrapHttpRequest
 from core.market_data_trading_sync import (
     TRADING_SYNC_VALIDATION_CONTRACT_VERSION,
@@ -20,15 +20,13 @@ TRADING_MARKET_DATA_V2_LEDGER_RELATIVE_ROOT = Path("state") / "trading" / "marke
 TRADING_MARKET_DATA_V2_BATCH_MANIFEST_FILENAME = "batch_manifest.json"
 TRADING_MARKET_DATA_V2_SCHEMA_VERSION = 1
 TRADING_MARKET_DATA_V2_MIN_READ_VALIDATION_CONTRACT_VERSION = 1
-_HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 _DATASET_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
 def _hex64(value: str, *, field: str) -> str:
-    text = str(value or "").strip().lower()
-    if not _HEX64_RE.fullmatch(text):
-        raise ValueError(f"{field} 必須是 SHA256 hex")
-    return text
+    return require_sha256_hex(
+        value, field=field, error_message=f"{field} 必須是 SHA256 hex"
+    )
 
 
 def _dataset(value: str) -> str:
@@ -119,7 +117,7 @@ def _validate_trading_sync_batch_manifest_payload(
     _hex64(str(payload.get("base_provider_manifest_fingerprint") or ""), field="base_provider_manifest_fingerprint")
     _hex64(str(payload.get("registry_fingerprint") or ""), field="registry_fingerprint")
     request_ids = [str(value or "").strip().lower() for value in list(payload.get("request_ids") or [])]
-    if any(not _HEX64_RE.fullmatch(value) for value in request_ids):
+    if any(not is_sha256_hex(value) for value in request_ids):
         raise ValueError("Trading V2 batch manifest 含不合法 request_id")
     if len(set(request_ids)) != len(request_ids):
         raise ValueError("Trading V2 batch manifest request_id 重複")

@@ -5782,7 +5782,19 @@ def validate_market_data_rounds_1_16_repair3_lifecycle_integrity_contract_case(_
     from tempfile import TemporaryDirectory
 
     from config.market_data import RESEARCH_DATA_GENERATION_V1
-    from core.file_integrity import canonical_json_sha256, compute_file_sha256
+    from core.file_integrity import (
+        canonical_json_sha256, compute_file_sha256, is_sha256_hex, require_sha256_hex,
+    )
+    from core.market_data_storage_contract import resolve_market_data_bootstrap_archive_dir
+    from core.market_data_trading_storage_contract import resolve_trading_market_data_v2_batch_dir
+    from core.market_data_research_storage_contract import resolve_research_v2_candidate_dir
+    from core.market_data_research_freeze import build_research_v2_required_common_complete
+    from core.market_data_research_materialization import _require_hex64 as require_materialization_sha
+    from core.market_data_research_promotion import _require_hex64 as require_promotion_sha
+    from services.market_data.provider_snapshot_repository import find_ready_provider_snapshot_by_fingerprint
+    from core.market_data_provider_snapshot import ProviderArtifactEvidence, build_provider_snapshot_payload
+    from services.downloader.market_data_ledger import MarketDataJobLedger
+    from types import SimpleNamespace
     from core.market_data_research_materialization import validate_research_v2_materialization_file_integrity
     from core.market_data_research_promotion import (
         discover_published_research_v2_promotion_fingerprints,
@@ -5798,6 +5810,42 @@ def validate_market_data_rounds_1_16_repair3_lifecycle_integrity_contract_case(_
     case_id = "MARKET_DATA_ROUNDS_1_16_REPAIR3"
     results, summary, check, check_true = bind_synthetic_case(case_id, 'market_data', training_performed=False)
 
+    # Market Data SHA256 validity is owned once by file_integrity. Existing
+    # domain entrypoints preserve their paths and diagnostic wording.
+    valid_upper = "ABCDEF09" * 8
+    valid_lower = valid_upper.lower()
+    check("shared_sha256_normalizes_case_whitespace", valid_lower,
+          require_sha256_hex(f" {valid_upper} ", field="snapshot"))
+    malformed_tokens = (
+        ("empty", ""),
+        ("short", "0" * 63),
+        ("long", "0" * 65),
+        ("non_hex_ascii", "g" * 64),
+        ("non_hex_fullwidth", "０" * 64),
+        ("path_separator", "0" * 63 + "/"),
+    )
+    for label, bad in malformed_tokens:
+        check(f"shared_sha256_rejects_invalid_{label}", False, is_sha256_hex(bad))
+        check(f"shared_sha256_validation_fails_closed_{label}", True,
+              raises_expected(ValueError, lambda value=bad: require_sha256_hex(value, field="snapshot")))
+    check("shared_sha256_accepts_lower_digest", True, is_sha256_hex(valid_lower))
+    check("materialization_sha_uses_shared_canonical_digest", valid_lower,
+          require_materialization_sha(f" {valid_upper} ", field="freeze_candidate_fingerprint"))
+    check("promotion_sha_uses_shared_canonical_digest", valid_lower,
+          require_promotion_sha(f" {valid_upper} ", field="freeze_candidate_fingerprint"))
+
+    def _error_text(probe):
+        try:
+            probe()
+        except ValueError as exc:
+            return str(exc)
+        return "(not rejected)"
+
+    check("materialization_sha_preserves_domain_error", "freeze_candidate_fingerprint 必須是 64-char SHA256",
+          _error_text(lambda: require_materialization_sha("x" * 64, field="freeze_candidate_fingerprint")))
+    check("promotion_sha_preserves_domain_error", "freeze_candidate_fingerprint 必須是 64-char SHA256",
+          _error_text(lambda: require_promotion_sha("x" * 64, field="freeze_candidate_fingerprint")))
+
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
         legacy_full = root / "data" / "tw_stock_data_vip"
@@ -5806,6 +5854,71 @@ def validate_market_data_rounds_1_16_repair3_lifecycle_integrity_contract_case(_
         trading_root = root / "data" / "trading" / "tw_stock_data_vip"
         for path in (legacy_full, legacy_reduced, v2_root, trading_root):
             path.mkdir(parents=True, exist_ok=True)
+
+        check("bootstrap_path_uses_lower_canonical_digest", root / "data" / "market_data_v2" / "bootstrap" / valid_lower,
+              resolve_market_data_bootstrap_archive_dir(root, valid_upper))
+        check("trading_batch_path_uses_lower_canonical_digest", root / "data" / "trading" / "market_data_v2" / "batches" / valid_lower,
+              resolve_trading_market_data_v2_batch_dir(root, valid_upper))
+        check("research_candidate_path_uses_lower_canonical_digest", v2_root / "candidates" / valid_lower,
+              resolve_research_v2_candidate_dir(root, valid_upper))
+        check("bootstrap_rejects_nonhex_digest", True,
+              raises_expected(ValueError, lambda: resolve_market_data_bootstrap_archive_dir(root, "z" * 64)))
+        check("trading_batch_rejects_nonhex_digest", True,
+              raises_expected(ValueError, lambda: resolve_trading_market_data_v2_batch_dir(root, "z" * 64)))
+        check("research_candidate_rejects_nonhex_digest", True,
+              raises_expected(ValueError, lambda: resolve_research_v2_candidate_dir(root, "z" * 64)))
+        check("research_freeze_rejects_nonhex_scope_digest", True,
+              raises_expected(ValueError, lambda: build_research_v2_required_common_complete(
+                  trading_dates=("2026-03-02",), complete_dates_by_dataset={},
+                  required_cutoff="2026-03-02", research_scope_contract_fingerprint="z" * 64,
+              )))
+        check("provider_snapshot_lookup_rejects_nonhex_digest", True,
+              raises_expected(ValueError, lambda: find_ready_provider_snapshot_by_fingerprint(root, "z" * 64)))
+
+        request_id = "a" * 64
+        snapshot_manifest = SimpleNamespace(
+            requests=(SimpleNamespace(request_id=request_id),), total_requests=1,
+            as_of_date="2026-03-02", registry_fingerprint="b" * 64,
+            manifest_fingerprint="c" * 64, historical_instrument_count=1,
+        )
+        valid_artifact = ProviderArtifactEvidence(
+            request_id=request_id, dataset="TaiwanStockTradingDate", row_count=1,
+            content_sha256=valid_lower,
+        )
+        snapshot = build_provider_snapshot_payload(
+            manifest=snapshot_manifest, artifacts=(valid_artifact,), finalized_at="2026-03-02T00:00:00+00:00",
+        )
+        check("provider_snapshot_canonical_identity_matches_unchanged_hash",
+              canonical_json_sha256({key: value for key, value in snapshot.items()
+                                     if key not in {"snapshot_fingerprint", "finalized_at"}}),
+              snapshot["snapshot_fingerprint"])
+        check("provider_snapshot_rejects_nonhex_content_digest", True,
+              raises_expected(ValueError, lambda: build_provider_snapshot_payload(
+                  manifest=snapshot_manifest,
+                  artifacts=(ProviderArtifactEvidence(
+                      request_id=request_id, dataset="TaiwanStockTradingDate", row_count=1,
+                      content_sha256="z" * 64,
+                  ),),
+                  finalized_at="2026-03-02T00:00:00+00:00",
+              )))
+
+        ledger = MarketDataJobLedger(root / "state" / "synthetic_sha256.sqlite3")
+        check("market_data_ledger_accepts_valid_unregistered_fingerprint", None,
+              ledger.find_unique_workload_id_by_manifest_fingerprint(valid_upper))
+        check("market_data_ledger_rejects_nonhex_manifest_fingerprint", True,
+              raises_expected(ValueError, lambda: ledger.find_unique_workload_id_by_manifest_fingerprint("z" * 64)))
+        ledger_artifact_row = {
+            "workload_id": "synthetic", "request_id": request_id, "ordinal": 0,
+            "dataset": "TaiwanStockTradingDate", "bootstrap_mode": "single_full_range",
+            "data_id": None, "start_date": None, "end_date": None,
+            "row_count": 1, "content_sha256": valid_upper, "completed_at": None,
+        }
+        check("market_data_ledger_content_sha_normalization", valid_lower,
+              MarketDataJobLedger._committed_artifacts_from_rows((ledger_artifact_row,))[0].content_sha256)
+        check("market_data_ledger_rejects_nonhex_content_digest", True,
+              raises_expected(ValueError, lambda: MarketDataJobLedger._committed_artifacts_from_rows((
+                  {**ledger_artifact_row, "content_sha256": "z" * 64},
+              ))))
 
         blocked = []
         for path in (legacy_full / "x.csv", legacy_reduced / "x.csv", v2_root / "x.bin"):

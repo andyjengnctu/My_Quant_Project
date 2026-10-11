@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-import re
+
+from core.file_integrity import require_sha256_hex
 
 RESEARCH_MARKET_DATA_V2_RELATIVE_ROOT = Path("data") / "research" / "market_data_v2"
 RESEARCH_MARKET_DATA_V2_CANDIDATES_DIRNAME = "candidates"
@@ -20,14 +21,12 @@ RESEARCH_V2_ADJUSTED_PRICE_PROOF_MANIFEST_FILENAME = "adjusted_price_revision_pr
 RESEARCH_ACTIVE_GENERATION_FILENAME = "active_research_generation.json"
 RESEARCH_V2_COMPATIBILITY_DATASET_DIRNAME = "tw_stock_data_vip"
 RESEARCH_V2_DAILY_UNIVERSE_FILENAME = "daily_universe.sqlite3"
-_HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _require_fingerprint(value: str) -> str:
-    text = str(value or "").strip().lower()
-    if not _HEX64_RE.fullmatch(text):
-        raise ValueError("Research V2 artifact fingerprint 不合法")
-    return text
+    return require_sha256_hex(
+        value, field="fingerprint", error_message="Research V2 artifact fingerprint 不合法"
+    )
 
 
 def resolve_research_v2_candidate_dir(project_root, provider_snapshot_fingerprint: str) -> Path:

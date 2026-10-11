@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 
-from core.file_integrity import canonical_json_sha256
+from core.file_integrity import canonical_json_sha256, require_sha256_hex
 from core.market_data_bootstrap_requests import BootstrapHttpRequest, BootstrapRequestManifest
 from core.market_data_storage_policy import MarketDataStoragePolicy
 
@@ -20,7 +20,6 @@ MARKET_DATA_DAILY_PIT_UNIVERSE_FILENAME = "daily_universe.sqlite3"
 MARKET_DATA_DAILY_PIT_UNIVERSE_MANIFEST_FILENAME = "daily_pit_universe_manifest.json"
 MARKET_DATA_DATASET_SCHEMA_FILENAME = "dataset_schema.json"
 MARKET_DATA_PARQUET_METADATA_KEY = "my_quant_market_data_v2"
-_HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 _DATASET_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
@@ -36,10 +35,9 @@ class MarketDataCommitError(RuntimeError):
 
 
 def _require_hex64(value: str, *, field: str) -> str:
-    text = str(value or "").strip().lower()
-    if not _HEX64_RE.fullmatch(text):
-        raise ValueError(f"{field} 必須是 64-byte hex SHA256 identity")
-    return text
+    return require_sha256_hex(
+        value, field=field, error_message=f"{field} 必須是 64-byte hex SHA256 identity"
+    )
 
 
 def _require_dataset_name(value: str) -> str:

@@ -5,7 +5,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass
 from typing import Iterable
 
-from core.file_integrity import canonical_json_sha256
+from core.file_integrity import canonical_json_sha256, is_sha256_hex
 from core.market_data_bootstrap_requests import BootstrapRequestManifest
 
 MARKET_DATA_PROVIDER_SNAPSHOT_SCHEMA_VERSION = 1
@@ -46,7 +46,7 @@ def _normalize_artifacts(
         if int(item.row_count) < 0:
             raise ValueError(f"Provider snapshot row_count 不得為負數: {item.request_id}")
         digest = str(item.content_sha256 or "").strip().lower()
-        if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+        if not is_sha256_hex(digest):
             raise ValueError(f"Provider snapshot content_sha256 不合法: {item.request_id}")
     return ordered
 

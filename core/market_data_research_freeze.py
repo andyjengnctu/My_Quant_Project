@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Iterable, Mapping
 
-from core.file_integrity import canonical_json_sha256
+from core.file_integrity import canonical_json_sha256, is_sha256_hex
 from core.market_data_research_scope import (
     RESEARCH_V2_COMMON_COMPLETE_DATASETS,
     RESEARCH_V2_REQUIRED_DATASETS,
@@ -71,7 +71,7 @@ def build_research_v2_required_common_complete(
     scope_fp = str(research_scope_contract_fingerprint or "").strip().lower()
     if not cutoff:
         raise ValueError("Research V2 required common-complete cutoff 不可空白")
-    if len(scope_fp) != 64:
+    if not is_sha256_hex(scope_fp):
         raise ValueError("Research V2 required common-complete scope fingerprint 不合法")
 
     participants = tuple(participating_datasets or RESEARCH_V2_COMMON_COMPLETE_DATASETS)

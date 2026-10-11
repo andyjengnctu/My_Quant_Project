@@ -25,6 +25,7 @@ from core.file_integrity import (
     atomic_write_json,
     canonical_json_sha256,
     compute_file_sha256,
+    is_sha256_hex,
     load_json_strict,
 )
 from core.market_data_adjusted_price_revision_proof import (
@@ -486,7 +487,7 @@ def discover_research_v2_freeze_candidates(project_root) -> tuple[dict[str, obje
     if not base.is_dir():
         return ()
     for child in sorted(base.iterdir(), key=lambda path: path.name):
-        if not child.is_dir() or len(child.name) != 64:
+        if not child.is_dir() or not is_sha256_hex(child.name):
             continue
         try:
             payload = load_research_v2_freeze_candidate(

@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Iterable
 
-from core.file_integrity import canonical_json_sha256
+from core.file_integrity import canonical_json_sha256, is_sha256_hex
 from core.market_data_adjusted_price_invariance import (
     adjusted_price_representation_contract_fingerprint,
 )
@@ -146,7 +146,7 @@ def validate_adjusted_price_revision_proof_payload(payload: dict[str, object]) -
         "daily_universe_file_sha256",
     ):
         digest = str(payload.get(key) or "").strip().lower()
-        if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+        if not is_sha256_hex(digest):
             raise ValueError(f"adjusted-price revision proof {key} invalid")
     status = str(payload.get("status") or "")
     if status not in {ADJUSTED_PRICE_REVISION_STATUS_READY, ADJUSTED_PRICE_REVISION_STATUS_BLOCKED}:

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Iterable, Mapping
 
-from core.file_integrity import canonical_json_sha256
+from core.file_integrity import canonical_json_sha256, is_sha256_hex
 from core.market_data_bootstrap_requests import BootstrapHttpRequest, build_registry_fingerprint
 from core.market_data_dataset_registry import (
     DAILY_EVENT_REPAIR,
@@ -279,7 +279,7 @@ def build_trading_sync_request_manifest(
     provider_fp = str(provider_snapshot.get("snapshot_fingerprint") or "").strip()
     provider_manifest_fp = str(provider_snapshot.get("manifest_fingerprint") or "").strip()
     provider_registry_fp = str(provider_snapshot.get("registry_fingerprint") or "").strip()
-    if len(provider_fp) != 64 or len(provider_manifest_fp) != 64 or len(provider_registry_fp) != 64:
+    if any(not is_sha256_hex(value) for value in (provider_fp, provider_manifest_fp, provider_registry_fp)):
         raise ValueError("provider snapshot identity fingerprint 不合法")
     registry_fp = build_registry_fingerprint(included)
     if registry_fp != provider_registry_fp:

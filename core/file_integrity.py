@@ -3,10 +3,32 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
+
+
+# SHA256 digests are canonical lowercase ASCII hex (never a numeric/date token).
+# Both the Research and Trading Market Data artifact paths consume this owner;
+# do not accept arbitrary 64-character values as valid digest identities.
+_SHA256_HEX_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def is_sha256_hex(value: object) -> bool:
+    """Whether a value is a complete SHA256 hex digest after legacy normalization."""
+    return _SHA256_HEX_RE.fullmatch(str(value or "").strip().lower()) is not None
+
+
+def require_sha256_hex(
+    value: object, *, field: str, error_message: str | None = None
+) -> str:
+    """Return canonical SHA256 digest; let each domain retain its error wording."""
+    text = str(value or "").strip().lower()
+    if not _SHA256_HEX_RE.fullmatch(text):
+        raise ValueError(error_message if error_message is not None else f"{field} 必須是 SHA256 hex")
+    return text
 
 
 def compute_file_sha256(path: str | Path, *, chunk_size: int = 1024 * 1024) -> str:
@@ -150,4 +172,6 @@ __all__ = [
     "compute_file_sha256",
     "load_json_object_or_none",
     "load_json_strict",
+    "is_sha256_hex",
+    "require_sha256_hex",
 ]
