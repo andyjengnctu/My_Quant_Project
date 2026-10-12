@@ -379,6 +379,12 @@ DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_FULL_HORIZON_OPPORTUNITY_FULL_LIS
 DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_PIT_TRADE_COUNT_PROFILE = (
+    "daily_universal_shared_safety_hs_conditional_mfe_pit_trade_count_full_list_ndcg_pairwise"
+)
+DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_PIT_TRADE_COUNT_PLACEBO_PROFILE = (
+    "daily_universal_shared_safety_hs_conditional_mfe_pit_trade_count_placebo_full_list_ndcg_pairwise"
+)
 DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_QUANTILE_AUX_PROFILE = (
     "daily_universal_shared_safety_hs_conditional_mfe_adverse_quantile_aux_full_list_ndcg_pairwise"
 )
@@ -1542,6 +1548,30 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_shared_safety_mfe_v1",
+    ),
+    DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_PIT_TRADE_COUNT_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_PIT_TRADE_COUNT_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_shared_safety_mfe_pit_trade_count_v1",
+    ),
+    DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_PIT_TRADE_COUNT_PLACEBO_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_PIT_TRADE_COUNT_PLACEBO_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_shared_safety_mfe_pit_trade_count_placebo_v1",
     ),
     DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_QUANTILE_AUX_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_QUANTILE_AUX_PROFILE,
@@ -2878,6 +2908,50 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         secondary_pair_scope_threshold=0.50,
         model_gate_reference_profile_name=(
             DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_PIT_TRADE_COUNT_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_PIT_TRADE_COUNT_PROFILE,
+        model_research_id="MR-13CA",
+        experiment_name="MR-13CA AO T-minus-one PIT Transaction Count Input",
+        phase="13CA",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "head1=same_date_low_adverse_safety_percentile_over_full_universe; "
+            "head2=same_date_pure_mfe_percentile_within_true_hs_only"
+        ),
+        objective_description='MR-13CA shares AO adjusted 300x10, 40-bar mature Safety/Conditional-MFE targets, original full-list/true-HS sublist ranking losses, optimizer/seed/split/epoch-selection, but adds stock+0050 certified provider historical T-minus-one transaction count, window log-IQR normalized signal and availability masks, 300x14. Kind=Real; Placebo neutralizes only numeric transaction count while preserving mask, capacity and source checks. Zero-initialized residual adapter preserves AO logits before training. The current-vintage-only archive is NOT sufficient historical PIT evidence; fail-closed. No promotion/strategy authorization; do not change Standard SOP.',
+        metric_scope="full_universe_safety_plus_true_hs_conditional_mfe",
+        score_semantic_id="daily_true_hs_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        secondary_pair_scope_threshold=0.50,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_PIT_TRADE_COUNT_PLACEBO_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_PIT_TRADE_COUNT_PLACEBO_PROFILE,
+        model_research_id="MR-13CB",
+        experiment_name="MR-13CB AO Matched Transaction-Count Mask Placebo",
+        phase="13CB",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "head1=same_date_low_adverse_safety_percentile_over_full_universe; "
+            "head2=same_date_pure_mfe_percentile_within_true_hs_only"
+        ),
+        objective_description='MR-13CB shares AO adjusted 300x10, 40-bar mature Safety/Conditional-MFE targets, original full-list/true-HS sublist ranking losses, optimizer/seed/split/epoch-selection, but adds stock+0050 certified provider historical T-minus-one transaction count, window log-IQR normalized signal and availability masks, 300x14. Kind=Placebo; Placebo neutralizes only numeric transaction count while preserving mask, capacity and source checks. Zero-initialized residual adapter preserves AO logits before training. The current-vintage-only archive is NOT sufficient historical PIT evidence; fail-closed. No promotion/strategy authorization; do not change Standard SOP.',
+        metric_scope="full_universe_safety_plus_true_hs_conditional_mfe",
+        score_semantic_id="daily_true_hs_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        secondary_pair_scope_threshold=0.50,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
         ),
         selection_pit_authorized=False,
         current_time_validation_authorized=False,

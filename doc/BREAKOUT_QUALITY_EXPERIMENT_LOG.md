@@ -12890,3 +12890,14 @@ Decision：`NEW_NO_DL_BROKER_CASH_SUITE_C96_C97_C98 / PARAM_P16_P17_REGISTERED /
 - **修改與身份邊界**：本輪僅收錄已提供的新 evidence 於canonical Registry/Experiment Log，不改AO/BZ model code、訓練／資料科學identity、已訓練checkpoint、strategy、report contract、正式七工作選單或current model config；BZ目前仍由`config/breakout_quality.py`選為研究訓練對象，是未切換的配置事實，不代表被接受。下個研究方向需新的明確實驗決策，優先檢查可證明PIT的獨立新增資訊，而非BZ損失權重微調。
 
 Decision：`MR13BZ_USER_REPORTED_ROLLING_RESULT_AVAILABLE / AO_PAIRED_SAFETY_AND_MFE_GATE_FAIL / NO_MATERIAL_BOUNDARY_GAIN / CLOSED / NO_ROBUSTNESS / NO_QUANTILE_SWEEP / NOT_PROMOTED / CURRENT_CONFIG_UNCHANGED`。
+
+
+## 2026-10-12 — MR-13CA／MR-13CB Priority A A1 PIT Trade-count Input 實作（真實結果待驗）
+
+- **使用者授權／基底**：2026-10-12 使用者要求依「優先A」已核准的AO+個股交易活動 input 設計實作。唯一最新ZIP=`test-branch-1_20261012_111725_27cef6c7.zip`，SHA256=`e3bf1bc4c72fc51c41eec7a6726a49dc2f9c895b6ac8b8c921d29f115c17c3ef`。已先讀 `doc/PROJECT_SETTINGS.md`、Experiment Registry／Log，不修改其他與實驗無關之broker-cash、No-DL與Trading配置。
+- **新獨立身分**：Real=`MR-13CA` / `ARCH-inception_time_shared_safety_mfe_pit_trade_count_v1` / `PROFILE-daily_universal_shared_safety_hs_conditional_mfe_pit_trade_count_full_list_ndcg_pairwise`；matched mask/capacity placebo=`MR-13CB` / `ARCH-inception_time_shared_safety_mfe_pit_trade_count_placebo_v1` / `PROFILE-daily_universal_shared_safety_hs_conditional_mfe_pit_trade_count_placebo_full_list_ndcg_pairwise`。原 AO frozen head/loss/target/validation/split、H/AH/AK/BZ identities與historical evidence維持。原Compare List新增CB及保留BZ，current訓練指向CA，Formal [1]～[7]選單與Standard SOP不變。
+- **唯一實驗變因**：AO原300×10 Adjusted stock+0050 OHLCV完全不改，另新增stock與0050的T−1成交**筆數**(`TaiwanStockPriceAdj.Trading_turnover`)、每個窗口log1p/median/IQR正規化和獨立availability mask，合計300×14；missing numeric=0/mask=0，絕不carry-forward或合成交易筆數。Placebo保留同樣source/masks/adapter，僅numeric計數歸零。新1×1 Conv(4→10)零初始化的 residual adapter接在原InceptionTime encoder入口，不更換原78項參數初始化或dual-head logits；保留Adam、canonical雙頭full-list/true-HS sublist ranking與HS-MFE Daily Spearman選模，非DFL。
+- **資料來源PIT與fail-closed**：只讀可由Market Data V2 READY archive/ledger/parquet SHA 驗證的Provider Snapshots；依台北時間`finalized_at`取得來源真正capture日、使用每股票／原交易日最早被證明已知之數值；由官方`TaiwanStockTradingDate`精確取T−1 session，要求source capture早於signal日。最新snapshot載有很久以前的歷史列仍**不代表那些舊交易日具PIT合法性**。若最早Verified capture不早於目前Research OOS起點，或Selection缺少歷史股票及0050可合法觀測數值，即 BLOCKED。輸入來源fingerprint加入fit/score lineage並隔離CA／CB artifact；不能將未通過之回顧性資料當真實PIT OOS或升格證據。
+- **實際完成與限制**：程式實作、manifest lineage、新arch/Profile與獨立source reader、300×14 feature bank、零初始化殘差Adapter及定向合成source/normalization/特徵一致/梯度/頭輸出測試。此ZIP沒有歷史各時點的Provider archive及per-row得知時點的證據，不能進行真實FinMind Forward/Rolling、Model Compare／Robustness；也不執行使用者Windows正式`apps/run_bundle.py`/`apps/test_suite.py`。沒有任何新模型預測品質成績。後續以正式PIT source為前置條件，再paired AO／CB／CA Seed42 Forward→Rolling→必要時Robustness，不以同OOS調參。
+
+Decision：`MR13CA_MR13CB_IMPLEMENTED / A1_PIT_HISTORICAL_SOURCE_GATE_PENDING_OR_BLOCKED / AO_FROZEN / REAL_VS_MATCHED_PLACEBO / NO_FORWARD_RESULT / NOT_PROMOTED`。

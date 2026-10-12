@@ -748,6 +748,7 @@ def _fold_contract_payload(args, bundle, fold, ids: dict[str, Any]) -> dict[str,
             ),
             "source_data_inventory": bundle.summary.get("source_data_inventory"),
             **({"input_price_source": bundle.summary["input_price_source"]} if "input_price_source" in bundle.summary else {}),
+            **({"input_trade_count_source": bundle.summary["input_trade_count_source"]} if "input_trade_count_source" in bundle.summary else {}),
             "dataset_artifacts": bundle.summary.get(
                 "source_dataset_artifacts", bundle.summary.get("dataset_artifacts")
             ),
@@ -1143,6 +1144,7 @@ def _forward_checkpoint_import_issues(
         ("dataset_storage_schema_version", source_dataset.get("dataset_storage_schema_version")),
         ("source_data_inventory", source_dataset.get("source_data_inventory")),
         ("input_price_source", source_dataset.get("input_price_source")),
+        ("input_trade_count_source", source_dataset.get("input_trade_count_source")),
         ("dataset_artifacts", source_dataset.get("source_dataset_artifacts", source_dataset.get("dataset_artifacts"))),
         ("target_schema_version", source_target.get("schema_version")),
         ("target_contract", source_target.get("target_contract")),

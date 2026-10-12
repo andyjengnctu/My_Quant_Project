@@ -5352,7 +5352,7 @@ def run(args) -> int:
         "training_semantics": canonical_training_semantics,
         "continuous_target_id": profile.continuous_target_id,
         "sequence_length": int(feature_bank.shape[1]),
-        "feature_columns": list(FEATURE_COLUMNS),
+        "feature_columns": list(getattr(feature_bank, "manifest_feature_columns", FEATURE_COLUMNS)),
         "context_columns": list(CONTEXT_COLUMNS),
         "model_filename": DEFAULT_MODEL_FILENAME,
         "manifest_filename": DEFAULT_MANIFEST_FILENAME,

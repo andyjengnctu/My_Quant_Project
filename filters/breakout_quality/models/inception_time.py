@@ -16,6 +16,9 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
     use_conditional_mfe_safety = descriptor.has_capability("conditional_mfe_safety")
     use_safety_conditional_mfe = descriptor.has_capability("safety_conditional_mfe")
     use_shared_safety_mfe = descriptor.has_capability("shared_safety_mfe")
+    use_trade_count_adapter = descriptor.has_capability("lagged_trade_count_input")
+    if use_trade_count_adapter and int(feature_count) != 14:
+        raise ValueError("PIT trade-count architecture requires 300x14 AO-plus-activity input")
     use_adverse_quantile_auxiliary = descriptor.has_capability("adverse_quantile_auxiliary")
     if use_adverse_quantile_auxiliary and not use_shared_safety_mfe:
         raise ValueError("Adverse quantile auxiliary需要shared Safety/MFE encoder")
@@ -179,7 +182,7 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
 
             modules = []
             shortcuts = []
-            in_channels = int(feature_count)
+            in_channels = int(feature_count) - (4 if use_trade_count_adapter else 0)
             residual_channels = in_channels
             for module_index in range(shared_depth):
                 modules.append(
@@ -443,6 +446,14 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 nn.Linear(module_output_channels, 3)
                 if use_adverse_quantile_auxiliary else None
             )
+            # Zero-init residual adapter is appended AFTER every AO parameter.
+            # Under an identical seed all AO-common weights and initial logits
+            # remain identical. The extra four inputs do not expand any AO layer.
+            if use_trade_count_adapter:
+                self.trade_count_adapter = nn.Conv1d(4, 10, kernel_size=1, bias=False)
+                nn.init.zeros_(self.trade_count_adapter.weight)
+            else:
+                self.trade_count_adapter = None
 
         def _adverse_quantiles_from_shared(self, shared_encoded):
             if self.adverse_quantile_classifier is None:
@@ -466,8 +477,13 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             return z
 
         def encode_feature_map(self, x):
+            z = x.transpose(1, 2)
+            if self.trade_count_adapter is not None:
+                if z.ndim != 3 or z.shape[1] != 14:
+                    raise ValueError("trade-count encoder received incorrect input width")
+                z = z[:, :10] + self.trade_count_adapter(z[:, 10:14])
             return self._run_residual_stack(
-                x.transpose(1, 2), self.inception_modules, self.residual_projections
+                z, self.inception_modules, self.residual_projections
             )
 
         def encode_task_specific_feature_maps(self, x):

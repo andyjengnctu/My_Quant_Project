@@ -31,6 +31,7 @@ from filters.breakout_quality.continuous_ranker_data import ContinuousRankerData
 from filters.breakout_quality.profile_ranker_data import load_profile_continuous_ranker_data
 from services.breakout_quality import ranker_training as ranker_api
 from services.breakout_quality.price_input_source import resolve_feature_price_source
+from services.breakout_quality.trade_count_source import resolve_trade_count_feature_source
 
 
 
@@ -62,7 +63,13 @@ def load_continuous_ranker_data(
         project_root=kwargs.get("project_root", Path(__file__).resolve().parents[2]),
         create=True,
     )
-    return load_profile_continuous_ranker_data(**kwargs, feature_price_source=alternate)
+    activity = resolve_trade_count_feature_source(
+        model_architecture=str(model_architecture),
+        project_root=kwargs.get("project_root", Path(__file__).resolve().parents[2]),
+    )
+    return load_profile_continuous_ranker_data(
+        **kwargs, feature_price_source=alternate, feature_trade_count_source=activity,
+    )
 
 
 def build_training_scope_mask(bundle: ContinuousRankerDataBundle) -> np.ndarray:

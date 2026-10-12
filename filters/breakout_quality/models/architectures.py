@@ -33,6 +33,8 @@ INCEPTION_TIME_SHARED_SAFETY_MFE_V1 = "inception_time_shared_safety_mfe_v1"
 INCEPTION_TIME_SHARED_SAFETY_MFE_ADVERSE_QUANTILE_AUX_V1 = (
     "inception_time_shared_safety_mfe_adverse_quantile_aux_v1"
 )
+INCEPTION_TIME_SHARED_SAFETY_MFE_TRADE_COUNT_REAL_V1 = "inception_time_shared_safety_mfe_pit_trade_count_v1"
+INCEPTION_TIME_SHARED_SAFETY_MFE_TRADE_COUNT_PLACEBO_V1 = "inception_time_shared_safety_mfe_pit_trade_count_placebo_v1"
 INCEPTION_TIME_SHARED_SAFETY_MFE_RAW_INPUT_V1 = "inception_time_shared_safety_mfe_raw_input_v1"
 INCEPTION_TIME_SHARED_SAFETY_MFE_RAW_MASK_V1 = "inception_time_shared_safety_mfe_raw_quote_mask_v1"
 INCEPTION_TIME_SHARED_SAFETY_DYNAMIC_HYPERGRAPH_MFE_V1 = (
@@ -166,6 +168,28 @@ _ARCHITECTURE_DESCRIPTORS = (
         pooling=("global_average", "raw_safety_head", "raw_mfe_head", "adverse_quantiles_head"),
         use_dataset_context=False,
         sequence_input_paths=("raw_level",),
+        head_width=None,
+    ),
+    _descriptor(
+        INCEPTION_TIME_SHARED_SAFETY_MFE_TRADE_COUNT_REAL_V1,
+        active=True, active_order=41,
+        spec_builder="inception_variant", runtime_builder="inception_time",
+        capabilities=("shared_safety_mfe", "lagged_trade_count_input"),
+        family="inception_time_shared_safety_mfe",
+        pooling=("global_average", "raw_safety_head", "raw_mfe_head"),
+        use_dataset_context=False,
+        sequence_input_paths=("raw_level", "pit_t_minus_1_trade_count_and_mask_300x14"),
+        head_width=None,
+    ),
+    _descriptor(
+        INCEPTION_TIME_SHARED_SAFETY_MFE_TRADE_COUNT_PLACEBO_V1,
+        active=True, active_order=42,
+        spec_builder="inception_variant", runtime_builder="inception_time",
+        capabilities=("shared_safety_mfe", "lagged_trade_count_input", "lagged_trade_count_placebo"),
+        family="inception_time_shared_safety_mfe",
+        pooling=("global_average", "raw_safety_head", "raw_mfe_head"),
+        use_dataset_context=False,
+        sequence_input_paths=("raw_level", "pit_t_minus_1_trade_count_mask_only_placebo_300x14"),
         head_width=None,
     ),
     _descriptor(INCEPTION_TIME_SHARED_SAFETY_MFE_RAW_INPUT_V1, active=True, active_order=38, spec_builder="inception_variant", runtime_builder="inception_time", capabilities=("shared_safety_mfe", "raw_unadjusted_price_input"), family="inception_time_shared_safety_mfe", pooling=("global_average", "raw_safety_head", "raw_mfe_head"), use_dataset_context=False, sequence_input_paths=("raw_level",), head_width=None),

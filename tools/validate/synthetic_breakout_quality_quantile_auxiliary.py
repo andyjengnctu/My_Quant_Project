@@ -56,7 +56,8 @@ def main() -> None:
     assert ao_spec.model_research_id == "MR-13AO"
     assert bz_spec.model_research_id == "MR-13BZ"
     assert BZ != AO and bz_spec.model_gate_reference_profile_name == AO
-    assert BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE == ("MR-13BZ", BZ)
+    # Dedicated historical BZ test must not require BZ to remain the current model.
+    assert BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
     assert ("MR-13AO", AO) in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
     assert ("MR-13BZ", BZ) in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
     assert bz_profile.continuous_target_id == ao_profile.continuous_target_id

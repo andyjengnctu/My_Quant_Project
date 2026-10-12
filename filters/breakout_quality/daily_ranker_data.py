@@ -85,6 +85,11 @@ from filters.breakout_quality.features import (
     normalize_ohlcv_array_windows,
 )
 from filters.breakout_quality.models.spec import get_model_spec, validate_model_sequence_length
+from filters.breakout_quality.trade_activity_features import (
+    TRADE_COUNT_FEATURE_NAMES,
+    normalized_trade_count_windows,
+)
+from services.breakout_quality.trade_count_source import previous_session_trade_count
 from filters.breakout_quality.models.architectures import get_architecture_descriptor
 from filters.breakout_quality.splits import resolve_breakout_quality_outer_policy
 from filters.breakout_quality.workflow_io import (
@@ -106,6 +111,8 @@ class LazyDailyFeatureBank:
         feature_frames: tuple[pd.DataFrame, ...] | None = None,
         feature_benchmark: pd.DataFrame | None = None,
         feature_quote_mask: bool = False,
+        trade_count_source: dict[str, Any] | None = None,
+        trade_count_placebo: bool = False,
         ticker_ids: np.ndarray,
         source_positions: np.ndarray,
         benchmark_positions: np.ndarray,
@@ -144,10 +151,46 @@ class LazyDailyFeatureBank:
             raw_research_observed_ohlc_mask(feature_benchmark).to_numpy(dtype=bool)
             if self._feature_quote_mask and feature_benchmark is not None else None
         )
+        if self._feature_quote_mask and trade_count_source is not None:
+            raise ValueError("trade-count input cannot combine with raw quote mask input")
+        self._trade_count_placebo = bool(trade_count_placebo)
+        self._trade_count_enabled = trade_count_source is not None
+        if self._trade_count_placebo and not self._trade_count_enabled:
+            raise ValueError("trade-count placebo requires the same certified source and mask")
         self.feature_columns = (
             (*FEATURE_COLUMNS, "Stock_Raw_Quote_Available", "Benchmark_Raw_Quote_Available")
-            if self._feature_quote_mask else FEATURE_COLUMNS
+            if self._feature_quote_mask else
+            (*FEATURE_COLUMNS, *TRADE_COUNT_FEATURE_NAMES)
+            if self._trade_count_enabled else FEATURE_COLUMNS
         )
+        # Preserve legacy manifest byte semantics for existing AO/BX artifacts;
+        # only the new data capability publishes its additional feature schema.
+        self.manifest_feature_columns = (
+            self.feature_columns if self._trade_count_enabled else FEATURE_COLUMNS
+        )
+        self._stock_trade_counts: tuple[np.ndarray, ...] = ()
+        self._stock_trade_masks: tuple[np.ndarray, ...] = ()
+        self._benchmark_trade_counts = None
+        self._benchmark_trade_mask = None
+        if trade_count_source is not None:
+            observations = trade_count_source["rows"]
+            calendar = pd.DatetimeIndex(trade_count_source["calendar"])
+            identities = trade_count_source["ticker_names"]
+            if len(identities) != len(frames):
+                raise ValueError("trade-count ticker ids do not match canonical AO frames")
+            pairs = [previous_session_trade_count(
+                pd.DatetimeIndex(frame.index), ticker=ticker, calendar=calendar,
+                observations=observations,
+            ) for ticker, frame in zip(identities, frames)]
+            self._stock_trade_counts = tuple(item[0] for item in pairs)
+            self._stock_trade_masks = tuple(item[1] for item in pairs)
+            self._benchmark_trade_counts, self._benchmark_trade_mask = (
+                previous_session_trade_count(
+                    pd.DatetimeIndex(benchmark.index),
+                    ticker=trade_count_source["benchmark_ticker"], calendar=calendar,
+                    observations=observations,
+                )
+            )
         self._feature_frame_arrays = (
             tuple(frame[["Open", "High", "Low", "Close", "Volume"]].to_numpy(dtype=np.float64, copy=True)
                   for frame in feature_frames)
@@ -247,6 +290,15 @@ class LazyDailyFeatureBank:
             )
         else:
             feature = self._normalized_window(self._benchmark_feature_array, position)
+        if self._trade_count_enabled:
+            length = int(self._policy.feature_window_bars)
+            start = position - length + 1
+            counts = self._benchmark_trade_counts[start:position + 1]
+            masks = self._benchmark_trade_mask[start:position + 1]
+            z = normalized_trade_count_windows(
+                counts[None, :], masks[None, :], placebo=self._trade_count_placebo,
+            )[0]
+            feature = np.column_stack((feature, z, masks.astype(np.float32)))
         self._benchmark_feature_cache[position] = feature
         return feature
 
@@ -577,6 +629,8 @@ class LazyDailyFeatureBank:
         stock_windows = np.empty((len(ids), feature_window, 5), dtype=np.float64)
         anchors = np.empty(len(ids), dtype=np.float64)
         stock_masks = np.empty((len(ids), feature_window), dtype=bool) if self._feature_quote_mask else None
+        activity_counts = np.zeros((len(ids), feature_window), dtype=np.float64) if self._trade_count_enabled else None
+        activity_masks = np.zeros((len(ids), feature_window), dtype=bool) if self._trade_count_enabled else None
         for out_index, (ticker_id, source_pos) in enumerate(
             zip(ticker_ids.tolist(), source_positions.tolist())
         ):
@@ -588,6 +642,9 @@ class LazyDailyFeatureBank:
             if len(window) != feature_window:
                 raise RuntimeError("daily feature window長度與policy不一致")
             stock_windows[out_index] = window
+            if self._trade_count_enabled:
+                activity_counts[out_index] = self._stock_trade_counts[int(ticker_id)][start_pos:int(source_pos) + 1]
+                activity_masks[out_index] = self._stock_trade_masks[int(ticker_id)][start_pos:int(source_pos) + 1]
             if self._feature_quote_mask:
                 stock_masks[out_index] = self._stock_quote_masks[int(ticker_id)][start_pos:int(source_pos) + 1]
             else:
@@ -613,6 +670,11 @@ class LazyDailyFeatureBank:
         output[:, :, :5] = stock_features
         if self._feature_quote_mask:
             output[:, :, 10] = stock_masks.astype(np.float32)
+        if self._trade_count_enabled:
+            output[:, :, 10] = normalized_trade_count_windows(
+                activity_counts, activity_masks, placebo=self._trade_count_placebo,
+            )
+            output[:, :, 12] = activity_masks.astype(np.float32)
 
         # Ranking batches are date-coherent, so benchmark positions usually
         # collapse to a single cached feature.  Assign by unique position rather
@@ -623,6 +685,9 @@ class LazyDailyFeatureBank:
             output[local, :, 5:10] = benchmark_feature[:, :5]
             if self._feature_quote_mask:
                 output[local, :, 11] = benchmark_feature[:, 5]
+            if self._trade_count_enabled:
+                output[local, :, 11] = benchmark_feature[:, 5]
+                output[local, :, 13] = benchmark_feature[:, 6]
         return output[0] if scalar else output
 
 
@@ -1105,6 +1170,7 @@ def load_daily_universal_ranker_data(
     allow_stale_source: bool,
     extend_score_eligibility_to_source_tail: bool = False,
     feature_price_source: dict[str, Any] | None = None,
+    feature_trade_count_source: dict[str, Any] | None = None,
     project_root: str | Path = PROJECT_ROOT,
     progress_callback=None,
 ) -> ContinuousRankerDataBundle:
@@ -1144,6 +1210,9 @@ def load_daily_universal_ranker_data(
         raise ValueError("daily universal ranker不支援market-set／derived-context architecture")
     architecture_descriptor = get_architecture_descriptor(model_spec.architecture)
     needs_raw_feature_source = architecture_descriptor.has_capability("raw_unadjusted_price_input")
+    needs_trade_count_source = architecture_descriptor.has_capability("lagged_trade_count_input")
+    if needs_trade_count_source != (feature_trade_count_source is not None):
+        raise ValueError("trade-count feature capability與verified PIT source不一致")
     if needs_raw_feature_source != (feature_price_source is not None):
         raise ValueError("DL raw input capability與已驗證的feature source不一致")
     if feature_price_source is not None:
@@ -1721,12 +1790,44 @@ def load_daily_universal_ranker_data(
             loader(raw_dir, ticker, frame) for ticker, frame in zip(tickers, frames)
         )
 
+    trade_count_input = None
+    if feature_trade_count_source is not None:
+        trade_count_input = dict(feature_trade_count_source)
+        trade_count_input["ticker_names"] = tuple(tickers)
+        trade_count_input["benchmark_ticker"] = benchmark_ticker
+        # A genuinely historical, independently timestamped source is mandatory.
+        # Mask=0 is valid for occasional missing data; it is not permission to
+        # backfill an entire 2021-2026 research history from a 2026 snapshot.
+        cutoff = pd.Timestamp(str(outer_policy["oos_start_date"]))
+        eligible = [
+            int(np.count_nonzero(previous_session_trade_count(
+                pd.DatetimeIndex(frame.index)[pd.DatetimeIndex(frame.index) < cutoff],
+                ticker=ticker, calendar=trade_count_input["calendar"],
+                observations=trade_count_input["rows"],
+            )[1])) for ticker, frame in zip(tickers, frames)
+        ]
+        if sum(eligible) == 0:
+            raise ValueError(
+                "A1 PIT Data Gate BLOCKED: no transaction counts were actually archived "
+                "before historical Selection stock-days; current-vintage rows cannot be backfilled"
+            )
+        benchmark_prior_dates = pd.DatetimeIndex(benchmark.index)
+        benchmark_prior_dates = benchmark_prior_dates[benchmark_prior_dates < cutoff]
+        benchmark_valid = previous_session_trade_count(
+            benchmark_prior_dates, ticker=benchmark_ticker,
+            calendar=trade_count_input["calendar"], observations=trade_count_input["rows"],
+        )[1]
+        if not bool(benchmark_valid.any()):
+            raise ValueError("A1 PIT Data Gate BLOCKED: no contemporaneous 0050 transaction count in Selection")
+
     feature_bank = LazyDailyFeatureBank(
         frames=tuple(frames),
         benchmark=benchmark,
         feature_frames=raw_feature_frames,
         feature_benchmark=raw_feature_benchmark,
         feature_quote_mask=use_quote_mask,
+        trade_count_source=trade_count_input,
+        trade_count_placebo=architecture_descriptor.has_capability("lagged_trade_count_placebo"),
         ticker_ids=ticker_ids,
         source_positions=source_positions,
         benchmark_positions=benchmark_positions,
@@ -1818,6 +1919,8 @@ def load_daily_universal_ranker_data(
     if feature_price_source is not None:
         # Conditional extension only; AO historical manifest and fitting SHA unchanged.
         daily_summary["input_price_source"] = dict(feature_price_source["identity"])
+    if feature_trade_count_source is not None:
+        daily_summary["input_trade_count_source"] = dict(feature_trade_count_source["identity"])
     # ``events`` is retained only for the shared bundle interface; one row now equals one
     # stock-day rather than a breakout event.
     return ContinuousRankerDataBundle(

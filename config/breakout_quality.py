@@ -103,11 +103,14 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 # MR-13BX completed Forward and six-fold Rolling OOS on 2026-10-10;
 # its quote-aware Raw+mask representation did not clear the AO-relative Safety/MFE
 # joint gate. Preserve the registered BX identity and artifacts as historical evidence.
-# AO remains the frozen comparison reference; MR-13BZ is a research-only
-# auxiliary-supervision contrast (not a promotion or strategy-source change).
+# MR-13BZ is a closed negative control; AO remains the frozen comparison.
+# MR-13CA is the single-variable PIT trade-count input experiment. Its matching
+# capacity/mask placebo MR-13CB is included in the existing canonical compare list.
+# Both require contemporaneous historical Provider Snapshot evidence; missing
+# evidence BLOCKS data fitting instead of silently backfilling future revisions.
 BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE = (
-    "MR-13BZ",
-    "daily_universal_shared_safety_hs_conditional_mfe_adverse_quantile_aux_full_list_ndcg_pairwise",
+    "MR-13CA",
+    "daily_universal_shared_safety_hs_conditional_mfe_pit_trade_count_full_list_ndcg_pairwise",
 )
 # Compatibility alias for call sites that only need the executable profile slug.
 BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = (
@@ -368,6 +371,8 @@ BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES = (
     ("MR-13AH", "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise"),
     ("MR-13AK", "daily_universal_shared_safety_weighted_pure_mfe_full_list_ndcg_pairwise"),
     ("MR-13AO", "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
+    ("MR-13BZ", "daily_universal_shared_safety_hs_conditional_mfe_adverse_quantile_aux_full_list_ndcg_pairwise"),
+    ("MR-13CB", "daily_universal_shared_safety_hs_conditional_mfe_pit_trade_count_placebo_full_list_ndcg_pairwise"),
 )
 
 

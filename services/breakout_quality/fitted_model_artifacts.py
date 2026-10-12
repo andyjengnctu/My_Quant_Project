@@ -395,6 +395,7 @@ def source_training_identity(bundle) -> dict[str, Any]:
         "training_universe_start_date": summary.get("training_universe_start_date"),
         "source_data_inventory": summary.get("source_data_inventory"),
         **({"input_price_source": summary["input_price_source"]} if "input_price_source" in summary else {}),
+        **({"input_trade_count_source": summary["input_trade_count_source"]} if "input_trade_count_source" in summary else {}),
         "source_dataset_artifacts": canonical_source_dataset_artifacts(summary),
         "source_target_artifacts": target.get("artifacts"),
         "target_id": target.get("target_id"),
@@ -511,12 +512,13 @@ def forward_fitted_source_provenance_issues(
                     matches = fitted_source.get(key) == expected
                 if key in fitted_source and not matches:
                     issues.append(f"fitted-model {key} mismatch")
-            if dataset_summary.get("input_price_source") is not None and (
-                fitted_source.get("input_price_source") != dataset_summary["input_price_source"]
-            ):
-                issues.append("fitted-model input_price_source mismatch")
-    if dataset_summary.get("input_price_source") is not None and not sidecar_path.exists():
-        issues.append("fitted-model pinned raw input sidecar missing")
+            for source_key in ("input_price_source", "input_trade_count_source"):
+                if dataset_summary.get(source_key) is not None and (
+                    fitted_source.get(source_key) != dataset_summary[source_key]
+                ):
+                    issues.append(f"fitted-model {source_key} mismatch")
+    if any(dataset_summary.get(key) is not None for key in ("input_price_source", "input_trade_count_source")) and not sidecar_path.exists():
+        issues.append("fitted-model pinned supplemental input sidecar missing")
     return tuple(dict.fromkeys(issues))
 
 

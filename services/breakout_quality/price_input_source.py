@@ -12,6 +12,7 @@ from typing import Any
 from filters.breakout_quality.models.architectures import get_architecture_descriptor
 from filters.breakout_quality.daily_ranker_data import load_daily_universal_ranker_data
 from filters.breakout_quality.workflow_io import PROJECT_ROOT
+from services.breakout_quality.trade_count_source import resolve_trade_count_feature_source
 from services.research.raw_price_strategy_dataset import (
     ensure_raw_price_strategy_dataset,
     inspect_raw_price_strategy_dataset,
@@ -83,7 +84,12 @@ def load_daily_universal_ranker_data_with_price_source(**kwargs):
         project_root=root,
         create=True,
     )
-    return load_daily_universal_ranker_data(**kwargs, feature_price_source=alternate)
+    activity = resolve_trade_count_feature_source(
+        model_architecture=kwargs["model_architecture"], project_root=root,
+    )
+    return load_daily_universal_ranker_data(
+        **kwargs, feature_price_source=alternate, feature_trade_count_source=activity,
+    )
 
 
 def verified_current_price_source_identity(
