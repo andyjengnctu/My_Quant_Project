@@ -1846,8 +1846,13 @@ def _compute_shared_safety_scoped_mfe_duo_loss(
     silently changing target/scope/weighting semantics.
     """
 
-    if target.ndim != 2 or int(target.shape[1]) != 2:
-        raise ValueError("Shared Safety independent-secondary duo-head target必須為[N,2]")
+    quantile_auxiliary = training_policy.quantile_auxiliary
+    expected_target_columns = 2 + int(quantile_auxiliary is not None)
+    if target.ndim != 2 or int(target.shape[1]) != expected_target_columns:
+        raise ValueError(
+            "Shared Safety/MFE target shape不符合training composition: "
+            f"expected=[N,{expected_target_columns}], actual={tuple(target.shape)}"
+        )
     if not hasattr(model, "forward_safety_mfe_heads"):
         raise ValueError("Shared Safety independent-secondary objective需要independent duo-head model architecture")
 
@@ -1888,6 +1893,16 @@ def _compute_shared_safety_scoped_mfe_duo_loss(
             horizon_margin,
             adaptive_horizon_targets.float(),
             reduction="mean",
+        )
+    elif quantile_auxiliary is not None:
+        if relation_history_x is not None:
+            raise ValueError("AO quantile auxiliary不應使用relation-history tensor")
+        if int(quantile_auxiliary.target_column_index) != 2:
+            raise ValueError("quantile auxiliary target mapping不符合既有兩個ranking targets")
+        (
+            safety_logits, conditional_mfe_logits, adverse_quantiles,
+        ) = model.forward_safety_mfe_heads(
+            xb, cb, include_adverse_quantiles=True
         )
     elif relation_history_x is None:
         safety_logits, conditional_mfe_logits = model.forward_safety_mfe_heads(xb, cb)
@@ -1959,6 +1974,19 @@ def _compute_shared_safety_scoped_mfe_duo_loss(
             pair_truth_weight_policy=primary_truth_weight_policy,
             ndcg_top_k_threshold=top_hs_ndcg_threshold,
         )
+
+    if quantile_auxiliary is not None and safety_loss is not None:
+        from services.breakout_quality.quantile_auxiliary import date_balanced_pinball_loss
+
+        aux_loss = date_balanced_pinball_loss(
+            torch,
+            adverse_quantiles,
+            target[:, int(quantile_auxiliary.target_column_index)],
+            batch_dates,
+            quantile_levels=quantile_auxiliary.quantile_levels,
+        )
+        aux_weight = float(quantile_auxiliary.weight_within_safety)
+        safety_loss = (1.0 - aux_weight) * safety_loss + aux_weight * aux_loss
 
     if horizon_trajectory_loss is not None:
         safety_loss = _combine_training_head_losses(
@@ -3813,11 +3841,30 @@ def _training_target_for_profile(
     if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY:
         return build_conditional_targets(group_table, percentile_target).training_target
     if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE:
-        return build_hs_conditional_mfe_targets(
+        ao_targets = build_hs_conditional_mfe_targets(
             group_table,
             np.isfinite(np.asarray(raw_target, dtype=np.float32)),
             true_hs_percentile_cutoff=float(recipe.objective_policy.secondary_pair_scope_threshold),
         ).training_target
+        quantile_auxiliary = recipe.training_policy.quantile_auxiliary
+        if quantile_auxiliary is None:
+            return ao_targets
+        if int(quantile_auxiliary.target_column_index) != int(ao_targets.shape[1]):
+            raise ValueError("quantile auxiliary target mapping必須緊接原始AO targets")
+        column = str(quantile_auxiliary.target_column)
+        if column not in group_table.columns:
+            raise ValueError(f"Quantile auxiliary缺少canonical target: {column}")
+        adverse = pd.to_numeric(group_table[column], errors="coerce").to_numpy(dtype=np.float32)
+        if int(len(adverse)) != int(len(ao_targets)):
+            raise ValueError("Quantile auxiliary target與AO group membership不一致")
+        valid = np.isfinite(np.asarray(raw_target, dtype=np.float32))
+        if np.any(~np.isfinite(adverse[valid])) or np.any(adverse[valid] < 0):
+            raise ValueError("Quantile auxiliary的合法且已成熟target不可為空或負數")
+        # Even if an incomplete row has a partially populated component, the
+        # auxiliary may not extend AO's maturity/membership mask.
+        adverse = adverse.copy()
+        adverse[~valid] = np.nan
+        return np.column_stack((ao_targets, adverse)).astype(np.float32, copy=False)
     if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_HS_PRIORITY_MFE:
         return build_hs_priority_mfe_targets(
             group_table, np.isfinite(np.asarray(raw_target, dtype=np.float32))

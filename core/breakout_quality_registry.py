@@ -37,6 +37,7 @@ from core.breakout_quality_runtime import (
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_QUANTILE_AUX_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_ADAPTIVE_HORIZON_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_SHARED_HS_BOUNDARY_WEIGHTED_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
@@ -377,6 +378,9 @@ DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_FULL_HORIZON_OPPORTUNITY_FULL_LIS
 )
 DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+)
+DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_QUANTILE_AUX_PROFILE = (
+    "daily_universal_shared_safety_hs_conditional_mfe_adverse_quantile_aux_full_list_ndcg_pairwise"
 )
 DAILY_UNIVERSAL_RAW_INPUT_ADJUSTED_TARGET_SHARED_SAFETY_HS_CONDITIONAL_MFE_PROFILE = (
     "daily_universal_raw_input_adjusted_target_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
@@ -1538,6 +1542,18 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_shared_safety_mfe_v1",
+    ),
+    DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_QUANTILE_AUX_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_QUANTILE_AUX_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_QUANTILE_AUX_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_plus_adverse_quantile_aux",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_shared_safety_mfe_adverse_quantile_aux_v1",
     ),
     DAILY_UNIVERSAL_RAW_INPUT_ADJUSTED_TARGET_SHARED_SAFETY_HS_CONDITIONAL_MFE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_RAW_INPUT_ADJUSTED_TARGET_SHARED_SAFETY_HS_CONDITIONAL_MFE_PROFILE,
@@ -2862,6 +2878,40 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         secondary_pair_scope_threshold=0.50,
         model_gate_reference_profile_name=(
             DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_QUANTILE_AUX_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_QUANTILE_AUX_PROFILE,
+        model_research_id="MR-13BZ",
+        experiment_name="MR-13BZ AO Adverse-R Distributional Safety Auxiliary",
+        phase="13BZ",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "head1=AO same_date_low_adverse_safety_percentile_over_full_universe; "
+            "head2=AO same_date_pure_mfe_percentile_within_true_hs_only; "
+            "aux=original_40bar_target_adverse_r_conditional_quantiles_Q20_Q50_Q80"
+        ),
+        objective_description=(
+            "MR-13AO同一Adjusted 300x10/40-bar target/shared InceptionTime/" 
+            "Safety full-list Delta-NDCG/true-HS Conditional-MFE sublist/Seed42/split/Adam/" 
+            "Validation HS-MFE Daily Spearman；僅從shared latent新增獨立non-crossing "
+            "Adverse-R Q20/Q50/Q80 auxiliary head，對已成熟原始target_adverse_r計算完整交易日" 
+            "Pinball(mean_dates(mean_stocks(mean_quantiles)))。" 
+            "Safety branch = 0.75 rank+0.25 quantile；外層=0.5 Safety+0.5 MFE，" 
+            "保留Raw Safety/Conditional-MFE原分數與既有Standard SOP。" 
+            "唯一研究問題為分布式Safety輔助監督能否改善AO連續排序。" 
+            "只先進Seed42 Forward paired AO，不授權PIT/strategy/promotion；" 
+            "OOS結果屬迭代研究證據，未取得時不得冒稱通過Gate。"
+        ),
+        metric_scope="full_universe_safety_plus_true_hs_conditional_mfe",
+        score_semantic_id="daily_true_hs_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        secondary_pair_scope_threshold=0.50,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
         ),
         selection_pit_authorized=False,
         current_time_validation_authorized=False,

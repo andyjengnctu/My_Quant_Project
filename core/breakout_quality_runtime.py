@@ -13,6 +13,7 @@ target/training/context/objective capabilities and is selected declaratively.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from functools import lru_cache
 from typing import Any, Callable
 
@@ -65,6 +66,9 @@ TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_WEIGHTED_PRIMARY_PAIRWISE_RANKING = (
 )
 TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING = (
     "daily_shared_safety_hs_conditional_mfe_pairwise_ranking"
+)
+TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_QUANTILE_AUX_RANKING = (
+    "daily_shared_safety_hs_conditional_mfe_adverse_quantile_aux_pairwise_ranking"
 )
 TRAINING_OBJECTIVE_DAILY_SHARED_ADAPTIVE_HORIZON_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING = (
     "daily_shared_adaptive_horizon_safety_hs_conditional_mfe_pairwise_ranking"
@@ -618,6 +622,33 @@ PAIRWISE_SAFETY_MFE_TRI_HEADS = ContinuousRankerIndependentHeadComposition(
 
 
 @dataclass(frozen=True)
+class ContinuousRankerQuantileAuxiliary:
+    """Reusable conditional-quantile supervision nested inside the Safety loss branch.
+
+    The target is an existing matured future-path column.  This descriptor is
+    scientific fitting metadata; only the first two heads remain production scores.
+    """
+
+    target_column: str
+    quantile_levels: tuple[float, ...]
+    target_column_index: int
+    weight_within_safety: float
+
+    def __post_init__(self) -> None:
+        if not self.target_column or not str(self.target_column).strip():
+            raise ValueError("Quantile auxiliary target column不可為空")
+        levels = tuple(float(level) for level in self.quantile_levels)
+        if not levels or any(not math.isfinite(q) or not 0 < q < 1 for q in levels):
+            raise ValueError("Quantile levels必須在(0,1)")
+        if levels != tuple(sorted(set(levels))):
+            raise ValueError("Quantile levels必須唯一且嚴格遞增")
+        if int(self.target_column_index) < 2:
+            raise ValueError("Quantile target必須接在既有Safety/MFE columns之後")
+        if not math.isfinite(self.weight_within_safety) or not 0 < self.weight_within_safety < 1:
+            raise ValueError("Quantile Safety-block weight必須在(0,1)")
+
+
+@dataclass(frozen=True)
 class ContinuousRankerTrainingPolicy:
     """Canonical objective/composition capability, independent of MR/profile identity.
 
@@ -640,6 +671,7 @@ class ContinuousRankerTrainingPolicy:
     primary_pair_weight_policy: str = CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE
     head_loss_combination: str = CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_SINGLE
     head_loss_component_count: int = 1
+    quantile_auxiliary: ContinuousRankerQuantileAuxiliary | None = None
     # Only non-persisted execution wiring; legacy loss_handler/manifest identity is unchanged.
     independent_head_composition: ContinuousRankerIndependentHeadComposition | None = field(
         default=None, compare=False, repr=False
@@ -737,6 +769,18 @@ class ContinuousRankerTrainingPolicy:
             CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE,
         }:
             raise ValueError(f"不支援的head loss combination: {self.head_loss_combination!r}")
+        if self.quantile_auxiliary is not None:
+            if not isinstance(self.quantile_auxiliary, ContinuousRankerQuantileAuxiliary):
+                raise TypeError("quantile_auxiliary必須是ContinuousRankerQuantileAuxiliary")
+            if self.target_builder != CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE:
+                raise ValueError("Quantile auxiliary目前只支援既有full-list Safety/true-HS MFE target")
+            if (
+                self.head_loss_combination != CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE
+                or self.head_loss_component_count != 2
+                or self.independent_head_composition is not None
+                or self.pairwise_kind != CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR
+            ):
+                raise ValueError("Quantile auxiliary需要兩個AO-style scoped ranking heads")
         if self.independent_head_composition is not None:
             if self.pairwise_kind != CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR:
                 raise ValueError("independent multi-head composition必須使用scalar pairwise kind")
@@ -764,6 +808,12 @@ class ContinuousRankerTrainingPolicy:
 
         if self.head_loss_combination == CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_SINGLE:
             return None
+        if self.quantile_auxiliary is not None:
+            q = self.quantile_auxiliary
+            return (
+                f"mfe_0.5_safety_0.5_nested_pairwise_{1.0 - q.weight_within_safety:g}"
+                f"_quantile_{q.weight_within_safety:g}_levels_{'-'.join(f'{v:g}' for v in q.quantile_levels)}"
+            )
         if self.primary_supervision_mode == CONTINUOUS_RANKER_PRIMARY_SUPERVISION_DUAL_HS:
             if int(self.head_loss_component_count) != 2:
                 raise ValueError("dual-HS composition預期兩個outer head losses")
@@ -963,6 +1013,7 @@ BREAKOUT_QUALITY_OUTPUT_SCHEMA = BreakoutQualityOutputSchema(
         ("tri_head", 6),
         ("safety_raw_mfe_hmhs", 6),
         ("all_three", 6),
+        ("adverse_quantiles", 3),
     )
 )
 
@@ -1343,6 +1394,31 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             ),
             head_loss_combination=CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE,
             head_loss_component_count=2,
+            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_CONDITIONAL_MFE,
+            epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+            score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
+            report_evidence_families=("multi_head_learnability", "hs_conditional_mfe"),
+            uses_pairwise_loss=True,
+        ),
+        TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_QUANTILE_AUX_RANKING: ContinuousRankerTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
+            profile_loss_metrics=(("dual_head_pairwise_plus_adverse_quantile_aux", "hs_conditional_mfe_mean_daily_spearman"),),
+            pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
+            allows_context_pair_weight=True,
+            allowed_secondary_pair_scopes=(
+                CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL,
+                CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+            ),
+            head_loss_combination=CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE,
+            head_loss_component_count=2,
+            quantile_auxiliary=ContinuousRankerQuantileAuxiliary(
+                target_column="target_adverse_r",
+                target_column_index=2,
+                quantile_levels=(0.2, 0.5, 0.8),
+                weight_within_safety=0.25,
+            ),
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_CONDITIONAL_MFE,
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
             score_output_policy=SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE,
@@ -1830,6 +1906,7 @@ __all__ = (
     "CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE",
     "ContinuousRankerTargetPolicy",
     "ContinuousRankerTrainingPolicy",
+    "ContinuousRankerQuantileAuxiliary",
     "ContinuousRankerScoreOutputPolicy",
     "SCORE_OUTPUT_POLICY_CONDITIONAL_MFE_SAFETY",
     "SCORE_OUTPUT_POLICY_SAFETY_CONDITIONAL_MFE",

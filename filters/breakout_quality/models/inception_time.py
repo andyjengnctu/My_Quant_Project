@@ -16,6 +16,9 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
     use_conditional_mfe_safety = descriptor.has_capability("conditional_mfe_safety")
     use_safety_conditional_mfe = descriptor.has_capability("safety_conditional_mfe")
     use_shared_safety_mfe = descriptor.has_capability("shared_safety_mfe")
+    use_adverse_quantile_auxiliary = descriptor.has_capability("adverse_quantile_auxiliary")
+    if use_adverse_quantile_auxiliary and not use_shared_safety_mfe:
+        raise ValueError("Adverse quantile auxiliary需要shared Safety/MFE encoder")
     use_adaptive_horizon_safety = descriptor.has_capability("adaptive_horizon_safety")
     use_adaptive_input_context_safety = descriptor.has_capability("adaptive_input_context_safety")
     use_same_date_dynamic_hypergraph_safety = descriptor.has_capability(
@@ -434,6 +437,20 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 self.same_date_relation_history_steps == 1
             ):
                 raise ValueError("relation-change hypergraph capability與history-step contract不一致")
+            # Allocate after all AO parameters so matching seeds preserve the
+            # pre-training initialization and inference semantics of both rank heads.
+            self.adverse_quantile_classifier = (
+                nn.Linear(module_output_channels, 3)
+                if use_adverse_quantile_auxiliary else None
+            )
+
+        def _adverse_quantiles_from_shared(self, shared_encoded):
+            if self.adverse_quantile_classifier is None:
+                raise ValueError("architecture未宣告adverse-quantile auxiliary head")
+            import torch.nn.functional as F
+
+            increments = F.softplus(self.adverse_quantile_classifier(shared_encoded).float())
+            return torch.cumsum(increments, dim=1)
 
         def _run_residual_stack(self, z, modules, projections):
             residual = z
@@ -646,7 +663,9 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             mfe_logits = self.raw_mfe_classifier(shared_encoded)
             return safety_logits, mfe_logits, gate_logits, context_weights
 
-        def forward_safety_mfe_heads(self, x, context, *, relation_history_x=None):
+        def forward_safety_mfe_heads(
+            self, x, context, *, relation_history_x=None, include_adverse_quantiles=False
+        ):
             """Return the canonical Raw-Safety + final-MFE pair for duo-head training.
 
             The final MFE topology is owned by the model spec: an independent raw-MFE
@@ -656,6 +675,8 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             """
             if self.raw_safety_classifier is None:
                 raise ValueError("目前architecture沒有Raw Safety head")
+            if include_adverse_quantiles and self.adverse_quantile_classifier is None:
+                raise ValueError("目前architecture沒有Adverse Quantiles head")
             if self.adaptive_horizon_safety_branch is not None:
                 if relation_history_x is not None:
                     raise ValueError("adaptive-horizon Safety architecture不得收到relation-history tensor")
@@ -789,6 +810,11 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 )
             else:
                 raise ValueError("目前architecture沒有可用的final MFE head")
+            if include_adverse_quantiles:
+                return (
+                    safety_logits, mfe_logits,
+                    self._adverse_quantiles_from_shared(shared_encoded),
+                )
             return safety_logits, mfe_logits
 
         def forward_safety_conditional_mfe_heads(self, x, context):
@@ -828,6 +854,9 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
 
         def forward_output_head(self, x, context, output_head: str, *, relation_history_x=None):
             head = str(output_head).strip().lower()
+            if head == "adverse_quantiles":
+                _primary, shared_encoded = self._encoded_for_heads(x, context)
+                return self._adverse_quantiles_from_shared(shared_encoded)
             if head in {"primary", "mfe", "primary_mfe"}:
                 if self.conditional_safety_classifier is not None:
                     return self.forward_conditional_heads(x, context)[0]

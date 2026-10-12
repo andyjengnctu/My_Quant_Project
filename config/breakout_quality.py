@@ -103,10 +103,11 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 # MR-13BX completed Forward and six-fold Rolling OOS on 2026-10-10;
 # its quote-aware Raw+mask representation did not clear the AO-relative Safety/MFE
 # joint gate. Preserve the registered BX identity and artifacts as historical evidence.
-# AO remains the model-research reference; no historical model is promoted.
+# AO remains the frozen comparison reference; MR-13BZ is a research-only
+# auxiliary-supervision contrast (not a promotion or strategy-source change).
 BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE = (
-    "MR-13AO",
-    "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise",
+    "MR-13BZ",
+    "daily_universal_shared_safety_hs_conditional_mfe_adverse_quantile_aux_full_list_ndcg_pairwise",
 )
 # Compatibility alias for call sites that only need the executable profile slug.
 BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = (
