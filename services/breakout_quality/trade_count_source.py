@@ -19,6 +19,7 @@ from core.market_data_storage_contract import (
     MARKET_DATA_BOOTSTRAP_RELATIVE_ROOT,
     MARKET_DATA_PROVIDER_SNAPSHOT_FILENAME,
 )
+from filters.breakout_quality.trade_activity_features import previous_session_trade_count
 from services.market_data.provider_snapshot_repository import (
     load_ready_provider_snapshot_archive,
     validate_provider_snapshot_payload,
@@ -147,39 +148,6 @@ def load_verified_trade_count_observations(project_root: Path) -> dict[str, Any]
     }
     identity["fingerprint"] = canonical_json_sha256(identity)
     return {"identity": identity, "rows": rows}
-
-
-def previous_session_trade_count(
-    index: pd.DatetimeIndex,
-    *,
-    ticker: str,
-    calendar: pd.DatetimeIndex,
-    observations: dict[str, dict[pd.Timestamp, tuple[float, pd.Timestamp]]],
-) -> tuple[np.ndarray, np.ndarray]:
-    """Strict T−1 exchange-date join, with no carry-forward of missing stock dates."""
-    ordered = pd.DatetimeIndex(calendar).normalize()
-    if ordered.has_duplicates or not ordered.is_monotonic_increasing:
-        raise ValueError("官方交易日曆需要唯一、嚴格遞增")
-    signal_dates = pd.DatetimeIndex(index).normalize()
-    result = np.zeros(len(signal_dates), dtype=np.float64)
-    valid = np.zeros(len(signal_dates), dtype=bool)
-    lookup = observations.get(str(ticker), {})
-    positions = ordered.get_indexer(signal_dates)
-    for i, (signal, pos) in enumerate(zip(signal_dates, positions)):
-        if pos <= 0:
-            continue
-        prev = ordered[pos - 1]
-        observation = lookup.get(prev)
-        if observation is None:
-            continue
-        count, captured = observation
-        if not np.isfinite(count) or count < 0 or pd.isna(captured):
-            continue
-        if pd.Timestamp(captured) >= signal:
-            continue
-        result[i] = float(count)
-        valid[i] = True
-    return result, valid
 
 
 def load_verified_exchange_calendar(project_root: Path, snapshot_fingerprint: str) -> pd.DatetimeIndex:

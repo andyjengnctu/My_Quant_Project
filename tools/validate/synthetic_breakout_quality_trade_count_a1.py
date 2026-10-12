@@ -18,13 +18,18 @@ from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY
 from filters.breakout_quality.daily_ranker_data import LazyDailyFeatureBank
 from filters.breakout_quality.models.architectures import get_architecture_descriptor
 from filters.breakout_quality.models.factory import build_model
-from filters.breakout_quality.trade_activity_features import TRADE_COUNT_FEATURE_NAMES, normalized_trade_count_windows
+from filters.breakout_quality.trade_activity_features import (
+    TRADE_COUNT_FEATURE_NAMES, normalized_trade_count_windows, previous_session_trade_count,
+)
 from services.breakout_quality.trade_count_source import (
-    load_verified_trade_count_observations, previous_session_trade_count,
+    load_verified_trade_count_observations,
+    previous_session_trade_count as legacy_previous_session_trade_count,
 )
 
 
 def test_trade_count_source() -> None:
+    # Compatibility path reuses the exact canonical feature-level PIT alignment.
+    assert legacy_previous_session_trade_count is previous_session_trade_count
     calendar = pd.bdate_range("2020-12-28", periods=6)
     source = {
         "2330": {

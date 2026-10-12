@@ -88,8 +88,8 @@ from filters.breakout_quality.models.spec import get_model_spec, validate_model_
 from filters.breakout_quality.trade_activity_features import (
     TRADE_COUNT_FEATURE_NAMES,
     normalized_trade_count_windows,
+    previous_session_trade_count,
 )
-from services.breakout_quality.trade_count_source import previous_session_trade_count
 from filters.breakout_quality.models.architectures import get_architecture_descriptor
 from filters.breakout_quality.splits import resolve_breakout_quality_outer_policy
 from filters.breakout_quality.workflow_io import (
