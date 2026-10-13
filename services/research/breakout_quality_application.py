@@ -4943,6 +4943,7 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
     rolling_mode = get_breakout_quality_rolling_test_mode("rolling") if rolling else None
     planned = []
     display_rows = []
+    blocked_model_ids = []
     for model_id, profile_name in model_list:
         settings = get_breakout_quality_workflow_settings(experiment_profile=str(profile_name))
         if rolling:
@@ -4963,12 +4964,32 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
                 if _has_continuous_forward_fitted_candidate(settings)
                 else "BUILD"
             )
+        if not ready:
+            # Comparison is an atomic, config-defined model suite: resolve all
+            # non-rebuildable source blockers before building *any* model. This
+            # prevents old checkpoints being needlessly refitted ahead of a
+            # later profile that can never pass the canonical data gate.
+            upstream_plan = _collect_continuous_research_input_plan(settings)
+            if upstream_plan.blocked:
+                blocked_model_ids.append(str(model_id))
+                action = "BLOCKED"
+                reason = "；".join(
+                    item.description for item in upstream_plan.actions
+                    if item.action == "BLOCKED"
+                )
         display_rows.append((str(model_id), str(profile_name), action, reason or "READY"))
         planned.append((str(model_id), settings, contract, payload, reason))
 
     mode_label = "Rolling OOS" if rolling else "Forward OOS"
     print("\n" + render_title(f"{mode_label} 模型比較"))
     _print_model_action_status(display_rows)
+    if blocked_model_ids:
+        print(
+            "此比較包含不可自動補建的Research資料依賴："
+            + "、".join(blocked_model_ids)
+            + "；尚未開始補建任何模型或更新比較報表。"
+        )
+        return 2
 
     completed = []
     for model_id, settings, contract, payload, _reason in planned:

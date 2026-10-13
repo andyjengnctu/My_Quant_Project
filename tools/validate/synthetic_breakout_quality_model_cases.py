@@ -730,8 +730,10 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     from filters.breakout_quality.artifact_dependency_registry import (
         ARTIFACT_CONTINUOUS_TARGET,
         ARTIFACT_DATASET_CORE,
+        ARTIFACT_TRADE_COUNT_SOURCE,
         required_upstream_artifact_types,
     )
+    from filters.breakout_quality.models.architectures import get_architecture_descriptor
     from filters.breakout_quality.predicted_context_artifact import (
         maybe_predicted_context_artifact_spec,
     )
@@ -1112,6 +1114,11 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         )
         if context_artifact_spec is not None:
             expected_dependencies.append(context_artifact_spec.artifact_type)
+        if (
+            registered_profile.model_architecture is not None
+            and get_architecture_descriptor(registered_profile.model_architecture).has_capability("lagged_trade_count_input")
+        ):
+            expected_dependencies.append(ARTIFACT_TRADE_COUNT_SOURCE)
         actual_dependencies = list(required_upstream_artifact_types(registered_profile_name))
         if actual_dependencies != expected_dependencies:
             reasons.append(

@@ -12901,3 +12901,12 @@ Decision：`MR13BZ_USER_REPORTED_ROLLING_RESULT_AVAILABLE / AO_PAIRED_SAFETY_AND
 - **實際完成與限制**：程式實作、manifest lineage、新arch/Profile與獨立source reader、300×14 feature bank、零初始化殘差Adapter及定向合成source/normalization/特徵一致/梯度/頭輸出測試。此ZIP沒有歷史各時點的Provider archive及per-row得知時點的證據，不能進行真實FinMind Forward/Rolling、Model Compare／Robustness；也不執行使用者Windows正式`apps/run_bundle.py`/`apps/test_suite.py`。沒有任何新模型預測品質成績。後續以正式PIT source為前置條件，再paired AO／CB／CA Seed42 Forward→Rolling→必要時Robustness，不以同OOS調參。
 
 Decision：`MR13CA_MR13CB_IMPLEMENTED / A1_PIT_HISTORICAL_SOURCE_GATE_PENDING_OR_BLOCKED / AO_FROZEN / REAL_VS_MATCHED_PLACEBO / NO_FORWARD_RESULT / NOT_PROMOTED`。
+
+
+## 2026-10-13 — MR-13CA／CB Forward 比較資料閘門 BLOCKED（使用者執行證據；前置規劃修正）
+
+- **本輪基準**：`test-branch-1_20261013_073007_0e3e5bfe.zip`，SHA256=`f6f293fbad490421097fc830517c2e2a7445f3fb1d9442a3361fd2172dff9e1b`。使用者從既有 Research `[1] → [3]` 執行 Forward OOS 模型比較，H/AH/AK/AO/BZ 均 `REUSE READY`，CB/CA 尚無 Forward model。正式流程在 CB 的 source load 被 `A1 PIT Data Gate BLOCKED: no contemporaneous Provider Snapshot finalized by frozen Research cutoff 2026-03-02` 阻擋，並未提供 CB/CA 的新訓練或 OOS 成績。
+- **工程問題與修正**：原 upstream 計畫只驗 `dataset_core`，因此對缺少不可重建的歷史成交筆數來源仍顯示 `READY`，直到建構 Daily 40D index 才顯示資料錯誤。現在將 trade-count capture-time preflight 納入 capability-driven upstream dependency，缺少證據時在模型 fit/index 前標示 `BLOCKED`；Forward／Rolling Model Compare 在開工前一次檢查所有待建模型，若有不可補建來源，直接顯示對應模型 `BLOCKED`、停止整批自動補建，不會先重訓比較清單前面的舊模型。不影響其他 AO／舊 profile；metadata preflight 通過仍須於 canonical loader 驗證原本 ledger、parquet SHA、每個 observation 的歷史可用時間。沒有新增 workaround、改寫 Snapshot 時間、將 current-vintage 當 PIT、變更 CA/CB 科學契約或研究選單。
+- **結果界線／下一步**：本輪沒有任何新增 CA／CB 真實績效；`RESULT_PENDING / HISTORICAL_PIT_DATA_BLOCKED / NOT_PROMOTED` 維持。若要改以歷史證交所盤後公告為證據鏈或改為 current-vintage retrospective study，須另行建立可稽核來源合法性與新的 scientific decision，不能暗中放寬 CA/CB 的既有 PIT 規則。
+
+Decision：`MR13CA_CB_FORWARD_COMPARISON_PIT_SOURCE_BLOCKED / PREFLIGHT_DEPENDENCY_PLAN_FIXED / NO_TRAINING_RESULT / NO_PROMOTION`。

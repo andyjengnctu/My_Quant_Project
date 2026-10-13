@@ -64,6 +64,39 @@ def _snapshot_refs(root: Path):
     return sorted(set(refs))
 
 
+def preflight_trade_count_capture_evidence(project_root: Path) -> dict[str, Any]:
+    """Check the non-rebuildable historical capture-time prerequisite early.
+
+    This is intentionally a *metadata-only preflight*: an eligible finalized
+    date is necessary, never sufficient, for PIT acceptance. The canonical
+    loader still verifies ledger, parquet SHA, source rows and observation dates.
+    """
+    root = Path(project_root).resolve()
+    snapshots = _snapshot_refs(root)
+    from config.market_data import RESEARCH_REQUIRED_CUTOFF
+    from config.breakout_quality import BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE
+
+    research_end = pd.Timestamp(RESEARCH_REQUIRED_CUTOFF)
+    eligible = [(capture, fp) for capture, fp in snapshots if capture <= research_end]
+    if not eligible:
+        raise ValueError(
+            "A1 PIT Data Gate BLOCKED: no contemporaneous Provider Snapshot "
+            f"finalized by frozen Research cutoff {research_end.date()}"
+        )
+    first_oos = pd.Timestamp(BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE)
+    if eligible[0][0] >= first_oos:
+        raise ValueError(
+            "A1 PIT Data Gate BLOCKED: oldest verified Provider Snapshot capture "
+            f"{eligible[0][0].date()} is not earlier than OOS start {first_oos.date()}; "
+            "historical Trading_turnover rows in a later archive are not PIT proof"
+        )
+    return {
+        "eligible_snapshots": eligible,
+        "earliest_capture_day": eligible[0][0].date().isoformat(),
+        "verified_manifest_count": len(eligible),
+    }
+
+
 def load_verified_trade_count_observations(project_root: Path) -> dict[str, Any]:
     """Return earliest actually observed trade counts and their verified source identity.
 
@@ -72,31 +105,7 @@ def load_verified_trade_count_observations(project_root: Path) -> dict[str, Any]
     observations into 2021 simply because it contains rows labelled 2021.
     """
     root = Path(project_root).resolve()
-    snapshots = _snapshot_refs(root)
-    # The frozen Research V2 cutoff, not the day this experiment happens to run,
-    # defines the last admissible capture. Subsequent daily Trading updates
-    # must not invalidate a Research fitting identity or inject post-OOS input.
-    from config.market_data import RESEARCH_REQUIRED_CUTOFF
-
-    research_end = pd.Timestamp(RESEARCH_REQUIRED_CUTOFF)
-    snapshots = [(capture, fp) for capture, fp in snapshots if capture <= research_end]
-    if not snapshots:
-        raise ValueError(
-            "A1 PIT Data Gate BLOCKED: no contemporaneous Provider Snapshot "
-            f"finalized by frozen Research cutoff {research_end.date()}"
-        )
-    # The production Rolling/Forward OOS start is a canonical config setting.
-    # Reject a repository whose earliest archived capture begins after that
-    # boundary, rather than reading a multi-year current-vintage archive.
-    from config.breakout_quality import BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE
-
-    first_oos = pd.Timestamp(BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE)
-    if snapshots[0][0] >= first_oos:
-        raise ValueError(
-            "A1 PIT Data Gate BLOCKED: oldest verified Provider Snapshot capture "
-            f"{snapshots[0][0].date()} is not earlier than OOS start {first_oos.date()}; "
-            "historical Trading_turnover rows in a later archive are not PIT proof"
-        )
+    snapshots = preflight_trade_count_capture_evidence(root)["eligible_snapshots"]
     rows: dict[str, dict[pd.Timestamp, tuple[float, pd.Timestamp]]] = {}
     participating: list[tuple[str, str]] = []
     for captured, fingerprint in snapshots:
@@ -164,6 +173,7 @@ def load_verified_exchange_calendar(project_root: Path, snapshot_fingerprint: st
 
 __all__ = [
     "TRADE_COUNT_PIT_CONTRACT",
+    "preflight_trade_count_capture_evidence",
     "load_verified_trade_count_observations",
     "load_verified_exchange_calendar",
     "previous_session_trade_count",

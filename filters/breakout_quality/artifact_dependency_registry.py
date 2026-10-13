@@ -35,6 +35,9 @@ from filters.breakout_quality.continuous_target import (
     resolve_continuous_target_dir,
 )
 from filters.breakout_quality.dataset_readiness import collect_dataset_readiness
+from filters.breakout_quality.models.architectures import get_architecture_descriptor
+from core.market_data_storage_contract import MARKET_DATA_BOOTSTRAP_RELATIVE_ROOT
+from services.breakout_quality.trade_count_source import preflight_trade_count_capture_evidence
 from filters.breakout_quality.predicted_context_artifact import (
     get_predicted_context_artifact_spec,
     load_validated_predicted_context,
@@ -45,6 +48,7 @@ from filters.breakout_quality.predicted_context_artifact import (
 
 ARTIFACT_DATASET_CORE = "dataset_core"
 ARTIFACT_CONTINUOUS_TARGET = "continuous_target"
+ARTIFACT_TRADE_COUNT_SOURCE = "trade_count_input_source"
 ARTIFACT_PREDICTED_UPSIDE_CONTEXT = get_predicted_context_artifact_spec(
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE
 ).artifact_type
@@ -75,6 +79,11 @@ ARTIFACT_DEPENDENCY_REGISTRY: dict[str, ArtifactDependencySpec] = {
         dependencies=(),
         producer_work_type=PRODUCER_MODEL_TRAINING,
     ),
+    ARTIFACT_TRADE_COUNT_SOURCE: ArtifactDependencySpec(
+        artifact_type=ARTIFACT_TRADE_COUNT_SOURCE,
+        dependencies=(),
+        producer_work_type=PRODUCER_EXISTING_ARTIFACT,
+    ),
     ARTIFACT_CONTINUOUS_TARGET: ArtifactDependencySpec(
         artifact_type=ARTIFACT_CONTINUOUS_TARGET,
         dependencies=(ARTIFACT_DATASET_CORE,),
@@ -82,7 +91,7 @@ ARTIFACT_DEPENDENCY_REGISTRY: dict[str, ArtifactDependencySpec] = {
     ),
     ARTIFACT_MODEL_CHECKPOINT: ArtifactDependencySpec(
         artifact_type=ARTIFACT_MODEL_CHECKPOINT,
-        dependencies=(ARTIFACT_DATASET_CORE, ARTIFACT_CONTINUOUS_TARGET),
+        dependencies=(ARTIFACT_DATASET_CORE, ARTIFACT_CONTINUOUS_TARGET, ARTIFACT_TRADE_COUNT_SOURCE),
         producer_work_type=PRODUCER_MODEL_TRAINING,
     ),
     ARTIFACT_FORWARD_SCORE: ArtifactDependencySpec(
@@ -92,7 +101,7 @@ ARTIFACT_DEPENDENCY_REGISTRY: dict[str, ArtifactDependencySpec] = {
     ),
     ARTIFACT_SELECTION_PIT_SCORE: ArtifactDependencySpec(
         artifact_type=ARTIFACT_SELECTION_PIT_SCORE,
-        dependencies=(ARTIFACT_DATASET_CORE, ARTIFACT_CONTINUOUS_TARGET),
+        dependencies=(ARTIFACT_DATASET_CORE, ARTIFACT_CONTINUOUS_TARGET, ARTIFACT_TRADE_COUNT_SOURCE),
         producer_work_type=PRODUCER_STRATEGY_COMPARE_CHECKPOINT,
     ),
     ARTIFACT_SELECTION_PIT_AUDIT: ArtifactDependencySpec(
@@ -153,6 +162,12 @@ def required_upstream_artifact_types(experiment_profile: str) -> tuple[str, ...]
     )
     if context_spec is not None:
         required.append(context_spec.artifact_type)
+    profile = get_breakout_quality_experiment_profile(str(experiment_profile))
+    if (
+        profile.model_architecture is not None
+        and get_architecture_descriptor(profile.model_architecture).has_capability("lagged_trade_count_input")
+    ):
+        required.append(ARTIFACT_TRADE_COUNT_SOURCE)
     return tuple(required)
 
 
@@ -168,8 +183,8 @@ def dependency_types_for(
     return tuple(
         dependency
         for dependency in spec.dependencies
-        if dependency != ARTIFACT_CONTINUOUS_TARGET
-        or ARTIFACT_CONTINUOUS_TARGET in required_upstream
+        if dependency not in (ARTIFACT_CONTINUOUS_TARGET, ARTIFACT_TRADE_COUNT_SOURCE)
+        or dependency in required_upstream
     )
 
 
@@ -323,6 +338,31 @@ def collect_model_upstream_readiness(
     if context_spec is not None:
         append_context_readiness(context_spec)
 
+    if get_architecture_descriptor(model_architecture).has_capability("lagged_trade_count_input"):
+        # Non-rebuildable source contract. Missing historical evidence must be
+        # BLOCKED *before* constructing the 40-bar index or starting any fit.
+        source_error = None
+        try:
+            evidence = preflight_trade_count_capture_evidence(root)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            source_error = exc
+        source_ready = source_error is None
+        rows.append(
+            ArtifactReadiness(
+                artifact_type=ARTIFACT_TRADE_COUNT_SOURCE,
+                ready=source_ready,
+                status="CAPTURE_TIME_PREFLIGHT_PASS" if source_ready else "PIT_SOURCE_BLOCKED",
+                path=root / MARKET_DATA_BOOTSTRAP_RELATIVE_ROOT,
+                dependencies=(),
+                producer_work_type=PRODUCER_EXISTING_ARTIFACT,
+                description=(
+                    "歷史成交筆數capture日期預檢通過；實際讀取仍須驗證ledger／parquet SHA與逐筆可用時點"
+                    if source_ready
+                    else f"成交筆數PIT來源無法自動補建：{type(source_error).__name__}: {source_error}"
+                ),
+            )
+        )
+
     return tuple(rows)
 
 
@@ -428,6 +468,7 @@ def model_upstream_prerequisite_blockers(
 __all__ = [
     "ARTIFACT_CONTINUOUS_TARGET",
     "ARTIFACT_DATASET_CORE",
+    "ARTIFACT_TRADE_COUNT_SOURCE",
     "ARTIFACT_DEPENDENCY_REGISTRY",
     "ARTIFACT_FORWARD_SCORE",
     "ARTIFACT_MODEL_CHECKPOINT",

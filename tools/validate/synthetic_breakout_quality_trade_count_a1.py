@@ -72,6 +72,114 @@ def test_trade_count_source() -> None:
                 raise AssertionError("post-OOS snapshot must never authorize historical OOS")
 
 
+def test_upstream_pit_preflight() -> None:
+    """The canonical plan blocks a missing non-rebuildable source before fit."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from filters.breakout_quality.artifact_dependency_registry import (
+        ARTIFACT_TRADE_COUNT_SOURCE,
+        collect_model_upstream_preparation_plan,
+        dependency_types_for,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        status = SimpleNamespace(
+            ready=True, summary_path=root / "dataset_summary.json",
+            summary={"policy": {}, "dataset_artifacts": {}},
+            refresh_mode="none", reasons=(),
+        )
+        profiles = {
+            "MR-13AO": "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise",
+            "MR-13CB": "daily_universal_shared_safety_hs_conditional_mfe_pit_trade_count_placebo_full_list_ndcg_pairwise",
+            "MR-13CA": "daily_universal_shared_safety_hs_conditional_mfe_pit_trade_count_full_list_ndcg_pairwise",
+        }
+        with patch(
+            "filters.breakout_quality.artifact_dependency_registry.collect_dataset_readiness",
+            return_value=status,
+        ), patch(
+            "services.breakout_quality.trade_count_source._snapshot_refs",
+            return_value=[(pd.Timestamp("2026-09-15"), "a" * 64)],
+        ):
+            for model_id, slug in profiles.items():
+                profile = get_breakout_quality_experiment_profile(slug)
+                plan = collect_model_upstream_preparation_plan(
+                    root, filter_id="breakout_quality_v1",
+                    model_architecture=profile.model_architecture,
+                    experiment_profile=slug, dataset="full", max_tickers=0,
+                )
+                if model_id == "MR-13AO":
+                    assert plan.overall_status == "READY", plan
+                    assert all(row.artifact_key != f"model-upstream:{ARTIFACT_TRADE_COUNT_SOURCE}" for row in plan.actions)
+                    assert ARTIFACT_TRADE_COUNT_SOURCE not in dependency_types_for(
+                        "model_checkpoint", experiment_profile=slug,
+                    )
+                    assert dependency_types_for("forward_score", experiment_profile=slug) == ("model_checkpoint",)
+                else:
+                    assert plan.overall_status == "BLOCKED", plan
+                    blocked = [row for row in plan.actions if row.action == "BLOCKED"]
+                    assert len(blocked) == 1 and blocked[0].artifact_key == f"model-upstream:{ARTIFACT_TRADE_COUNT_SOURCE}"
+                    assert "Research cutoff" in blocked[0].description
+                    assert ARTIFACT_TRADE_COUNT_SOURCE in dependency_types_for(
+                        "model_checkpoint", experiment_profile=slug,
+                    )
+        with patch(
+            "filters.breakout_quality.artifact_dependency_registry.collect_dataset_readiness",
+            return_value=status,
+        ), patch(
+            "services.breakout_quality.trade_count_source._snapshot_refs",
+            return_value=[(pd.Timestamp("2020-12-29"), "b" * 64)],
+        ):
+            slug = profiles["MR-13CA"]
+            plan = collect_model_upstream_preparation_plan(
+                root, filter_id="breakout_quality_v1",
+                model_architecture=get_breakout_quality_experiment_profile(slug).model_architecture,
+                experiment_profile=slug, dataset="full", max_tickers=0,
+            )
+            assert plan.overall_status == "READY", plan
+            source = [row for row in plan.actions if row.artifact_key == f"model-upstream:{ARTIFACT_TRADE_COUNT_SOURCE}"][0]
+            assert source.action == "REUSE" and "實際讀取仍須驗證" in source.description
+
+
+def test_comparison_blocks_before_fit() -> None:
+    """A later unavailable profile must not trigger earlier model rebuilds."""
+    from io import StringIO
+    from contextlib import redirect_stdout
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from services.research import breakout_quality_application as app
+
+    models = (
+        ("MR-13AO", "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
+        ("MR-13CB", "daily_universal_shared_safety_hs_conditional_mfe_pit_trade_count_placebo_full_list_ndcg_pairwise"),
+    )
+    class ModelContract:
+        report = {}
+    statuses = []
+    ready = SimpleNamespace(blocked=False, actions=())
+    blocked = SimpleNamespace(blocked=True, actions=(SimpleNamespace(
+        action="BLOCKED", description="A1 PIT Data Gate BLOCKED: Research cutoff",
+    ),))
+    with (
+        patch.object(app, "get_breakout_quality_model_test_settings", return_value=SimpleNamespace(model_profiles=models)),
+        patch.object(app, "get_breakout_quality_workflow_settings", side_effect=lambda experiment_profile: SimpleNamespace(experiment_profile=experiment_profile)),
+        patch.object(app, "_load_reusable_continuous_forward_contract", side_effect=((ModelContract(), None), (None, "model.pt missing"))),
+        patch.object(app, "_has_continuous_forward_fitted_candidate", return_value=False),
+        patch.object(app, "_collect_continuous_research_input_plan", side_effect=(blocked,)),
+        patch.object(app, "_print_model_action_status", side_effect=lambda rows: statuses.extend(rows)),
+        patch.object(app, "_ensure_continuous_forward_model_report") as fit,
+        patch.object(app, "_write_standard_model_comparison_report") as report,
+        redirect_stdout(StringIO()) as output,
+    ):
+        code = app._run_configured_model_comparison("synthetic", rolling=False)
+    assert code == 2
+    assert statuses[0][2] == "REUSE" and statuses[1][2] == "BLOCKED"
+    assert "A1 PIT Data Gate" in statuses[1][3]
+    assert "尚未開始補建任何模型" in output.getvalue()
+    fit.assert_not_called()
+    report.assert_not_called()
+
+
 def test_normalization() -> None:
     x=np.array([[0, 10, 20, 100, 5], [0, 0, 0, 0, 0]], dtype=float)
     m=np.array([[0, 1, 1, 1, 1], [0, 0, 0, 0, 0]], dtype=bool)
@@ -219,6 +327,6 @@ def test_train_epoch() -> None:
 
 
 if __name__ == "__main__":
-    for name in ("trade_count_source","normalization","lazy_feature_bank","model_seed_and_gradients","profile_contract","source_lineage","train_epoch"):
+    for name in ("trade_count_source","upstream_pit_preflight","comparison_blocks_before_fit","normalization","lazy_feature_bank","model_seed_and_gradients","profile_contract","source_lineage","train_epoch"):
         globals()[f"test_{name}"]()
         print(f"PASS trade count A1: {name}")
