@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import asdict, dataclass
-from typing import Iterable
+from typing import Any, Iterable
 
 from core.file_integrity import canonical_json_sha256, is_sha256_hex
 from core.market_data_bootstrap_requests import BootstrapRequestManifest
@@ -152,6 +152,16 @@ def provider_snapshot_identity_from_payload(payload: dict[str, object]) -> dict[
     }
 
 
+def validate_provider_snapshot_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Check READY status and the canonical immutable snapshot fingerprint."""
+    if not isinstance(payload, dict) or str(payload.get("status") or "") != "READY":
+        raise ValueError("Market Data V2 provider snapshot 尚未 READY")
+    identity = provider_snapshot_identity_from_payload(payload)
+    if str(payload.get("snapshot_fingerprint") or "") != canonical_json_sha256(identity):
+        raise ValueError("Market Data V2 provider snapshot fingerprint 不一致")
+    return payload
+
+
 __all__ = [
     "MARKET_DATA_PROVIDER_SNAPSHOT_SCHEMA_VERSION",
     "MARKET_DATA_PROVIDER_NAME",
@@ -162,4 +172,5 @@ __all__ = [
     "build_provider_snapshot_identity_payload",
     "build_provider_snapshot_payload",
     "provider_snapshot_identity_from_payload",
+    "validate_provider_snapshot_payload",
 ]

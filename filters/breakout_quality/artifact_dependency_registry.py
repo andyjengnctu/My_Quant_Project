@@ -37,7 +37,7 @@ from filters.breakout_quality.continuous_target import (
 from filters.breakout_quality.dataset_readiness import collect_dataset_readiness
 from filters.breakout_quality.models.architectures import get_architecture_descriptor
 from core.market_data_storage_contract import MARKET_DATA_BOOTSTRAP_RELATIVE_ROOT
-from services.breakout_quality.trade_count_source import preflight_trade_count_capture_evidence
+from filters.breakout_quality.trade_count_capture_preflight import preflight_trade_count_capture_evidence
 from filters.breakout_quality.predicted_context_artifact import (
     get_predicted_context_artifact_spec,
     load_validated_predicted_context,

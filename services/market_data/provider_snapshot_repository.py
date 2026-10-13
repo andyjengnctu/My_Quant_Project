@@ -13,12 +13,13 @@ import threading
 from typing import Any
 
 from config.market_data import MARKET_DATA_V2_PROVIDER_ARCHIVE_READ_CACHE_ENTRIES
-from core.file_integrity import canonical_json_sha256, is_sha256_hex, load_json_strict
+from core.file_integrity import is_sha256_hex, load_json_strict
 from core.market_data_bootstrap_requests import BootstrapRequestManifest
 from core.market_data_provider_snapshot import (
     ProviderArtifactEvidence,
     build_provider_snapshot_identity_payload,
     provider_snapshot_identity_from_payload,
+    validate_provider_snapshot_payload,
 )
 from core.market_data_storage_contract import (
     MARKET_DATA_BOOTSTRAP_RELATIVE_ROOT,
@@ -76,15 +77,6 @@ def _ready_archive_stat_signature(snapshot_path: Path, ledger_path: Path) -> tup
     else:
         signature.extend((0, 0))
     return tuple(signature)
-
-
-def validate_provider_snapshot_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(payload, dict) or str(payload.get("status") or "") != "READY":
-        raise ValueError("Market Data V2 provider snapshot 尚未 READY")
-    identity = provider_snapshot_identity_from_payload(payload)
-    if str(payload.get("snapshot_fingerprint") or "") != canonical_json_sha256(identity):
-        raise ValueError("Market Data V2 provider snapshot fingerprint 不一致")
-    return payload
 
 
 def find_latest_ready_provider_snapshot(project_root) -> tuple[Path, dict[str, Any]] | None:

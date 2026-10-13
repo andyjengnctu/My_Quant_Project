@@ -24,12 +24,17 @@ from filters.breakout_quality.trade_activity_features import (
 from services.breakout_quality.trade_count_source import (
     load_verified_trade_count_observations,
     previous_session_trade_count as legacy_previous_session_trade_count,
+    preflight_trade_count_capture_evidence as legacy_trade_count_capture_preflight,
+)
+from filters.breakout_quality.trade_count_capture_preflight import (
+    preflight_trade_count_capture_evidence,
 )
 
 
 def test_trade_count_source() -> None:
     # Compatibility path reuses the exact canonical feature-level PIT alignment.
     assert legacy_previous_session_trade_count is previous_session_trade_count
+    assert legacy_trade_count_capture_preflight is preflight_trade_count_capture_evidence
     calendar = pd.bdate_range("2020-12-28", periods=6)
     source = {
         "2330": {
@@ -51,7 +56,7 @@ def test_trade_count_source() -> None:
             raise AssertionError("missing archive must fail closed")
         from unittest.mock import patch
         with patch(
-            "services.breakout_quality.trade_count_source._snapshot_refs",
+            "filters.breakout_quality.trade_count_capture_preflight._snapshot_refs",
             return_value=[(pd.Timestamp("2026-10-12"), "a" * 64)],
         ):
             try:
@@ -61,7 +66,7 @@ def test_trade_count_source() -> None:
             else:
                 raise AssertionError("post-Research snapshot must never authorize historical OOS")
         with patch(
-            "services.breakout_quality.trade_count_source._snapshot_refs",
+            "filters.breakout_quality.trade_count_capture_preflight._snapshot_refs",
             return_value=[(pd.Timestamp("2022-01-01"), "b" * 64)],
         ):
             try:
@@ -70,6 +75,83 @@ def test_trade_count_source() -> None:
                 assert "historical Trading_turnover rows" in str(exc)
             else:
                 raise AssertionError("post-OOS snapshot must never authorize historical OOS")
+
+
+def test_capture_metadata_contract() -> None:
+    """READY, fingerprint and capture-day checks survive the layer move."""
+    import json
+    from core.file_integrity import canonical_json_sha256
+    from core.market_data_provider_snapshot import validate_provider_snapshot_payload
+    from core.market_data_storage_contract import (
+        MARKET_DATA_BOOTSTRAP_RELATIVE_ROOT,
+        MARKET_DATA_PROVIDER_SNAPSHOT_FILENAME,
+    )
+    from services.market_data.provider_snapshot_repository import (
+        validate_provider_snapshot_payload as legacy_validate_provider_snapshot_payload,
+    )
+
+    assert legacy_validate_provider_snapshot_payload is validate_provider_snapshot_payload
+    identity = {
+        "schema_version": 1, "provider": "FinMind",
+        "snapshot_role": "neutral_provider_bootstrap", "status": "READY",
+        "as_of_date": "2020-12-28", "registry_fingerprint": "1" * 64,
+        "manifest_fingerprint": "2" * 64,
+        "historical_instrument_count": 0, "total_requests": 0,
+        "total_rows": 0, "artifacts_fingerprint": canonical_json_sha256([]),
+        "datasets": [],
+    }
+    snapshot = {
+        **identity, "snapshot_fingerprint": canonical_json_sha256(identity),
+        "finalized_at": "2020-12-28T08:00:00Z",
+    }
+    assert validate_provider_snapshot_payload(snapshot) is snapshot
+    for bad in ({**snapshot, "status": "DUE"}, {**snapshot, "snapshot_fingerprint": "bad"}):
+        try:
+            validate_provider_snapshot_payload(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Invalid Provider Snapshot metadata was accepted")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        base = root / MARKET_DATA_BOOTSTRAP_RELATIVE_ROOT
+        first = base / "snapshot_a" / MARKET_DATA_PROVIDER_SNAPSHOT_FILENAME
+        first.parent.mkdir(parents=True)
+        first.write_text(json.dumps(snapshot), encoding="utf-8")
+        evidence = preflight_trade_count_capture_evidence(root)
+        assert evidence["earliest_capture_day"] == "2020-12-28"
+        assert evidence["verified_manifest_count"] == 1
+        assert evidence["eligible_snapshots"][0][1] == snapshot["snapshot_fingerprint"]
+
+        # The metadata-only preflight accepts the capture date, not ledger/parquet
+        # provenance. The provider service is still the required full-data gate.
+        from services.breakout_quality.trade_count_source import load_verified_trade_count_observations
+        try:
+            load_verified_trade_count_observations(root)
+        except (OSError, ValueError):
+            pass
+        else:
+            raise AssertionError("Metadata-only readiness bypassed full provider proof")
+
+        first.write_text(json.dumps({**snapshot, "snapshot_fingerprint": "bad"}), encoding="utf-8")
+        try:
+            preflight_trade_count_capture_evidence(root)
+        except FileNotFoundError:
+            pass
+        else:
+            raise AssertionError("Tampered snapshot fingerprint was accepted by preflight")
+        first.write_text(json.dumps(snapshot), encoding="utf-8")
+
+        second = base / "snapshot_b" / MARKET_DATA_PROVIDER_SNAPSHOT_FILENAME
+        second.parent.mkdir(parents=True)
+        second.write_text(json.dumps({**snapshot, "finalized_at": "2020-12-29T08:00:00Z"}), encoding="utf-8")
+        try:
+            preflight_trade_count_capture_evidence(root)
+        except ValueError as exc:
+            assert "不同capture日" in str(exc)
+        else:
+            raise AssertionError("Identical snapshot fingerprint accepted multiple capture dates")
 
 
 def test_upstream_pit_preflight() -> None:
@@ -98,7 +180,7 @@ def test_upstream_pit_preflight() -> None:
             "filters.breakout_quality.artifact_dependency_registry.collect_dataset_readiness",
             return_value=status,
         ), patch(
-            "services.breakout_quality.trade_count_source._snapshot_refs",
+            "filters.breakout_quality.trade_count_capture_preflight._snapshot_refs",
             return_value=[(pd.Timestamp("2026-09-15"), "a" * 64)],
         ):
             for model_id, slug in profiles.items():
@@ -127,7 +209,7 @@ def test_upstream_pit_preflight() -> None:
             "filters.breakout_quality.artifact_dependency_registry.collect_dataset_readiness",
             return_value=status,
         ), patch(
-            "services.breakout_quality.trade_count_source._snapshot_refs",
+            "filters.breakout_quality.trade_count_capture_preflight._snapshot_refs",
             return_value=[(pd.Timestamp("2020-12-29"), "b" * 64)],
         ):
             slug = profiles["MR-13CA"]
@@ -327,6 +409,6 @@ def test_train_epoch() -> None:
 
 
 if __name__ == "__main__":
-    for name in ("trade_count_source","upstream_pit_preflight","comparison_blocks_before_fit","normalization","lazy_feature_bank","model_seed_and_gradients","profile_contract","source_lineage","train_epoch"):
+    for name in ("trade_count_source","capture_metadata_contract","upstream_pit_preflight","comparison_blocks_before_fit","normalization","lazy_feature_bank","model_seed_and_gradients","profile_contract","source_lineage","train_epoch"):
         globals()[f"test_{name}"]()
         print(f"PASS trade count A1: {name}")
