@@ -4969,8 +4969,8 @@ def validate_research_report_contract_freeze_case(_base_params):
     # Frozen to the user's 2026-09-04 standard comparison presentation.  These
     # are UI invariants, not assertions about a particular experimental model.
     check_true(
-        "standard_multi_model_comparison_20260904_v11_retains_six_sections_and_transition_tables",
-        int(MODEL_STANDARD_COMPARISON.version) == 11
+        "standard_multi_model_comparison_20260904_v12_retains_six_sections_and_transition_tables",
+        int(MODEL_STANDARD_COMPARISON.version) == 12
         and not hasattr(MODEL_STANDARD_COMPARISON, "model_specific_extension_ids")
         and comparison_extension_ids() == tuple(MODEL_COMPARISON_EXTENSION_SCHEMAS)
         and comparison_sections == [(item.number, item.title) for item in MODEL_STANDARD_SOP.sections]

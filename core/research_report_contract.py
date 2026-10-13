@@ -247,7 +247,7 @@ def _model_comparison_sections() -> tuple[ReportSectionContract, ...]:
 
 MODEL_STANDARD_COMPARISON = PersistentReportContract(
     report_id="model.standard_comparison",
-    version=11,
+    version=12,
     role="persistent_multi_model_comparison_all_evaluation_modes",
     menu_path=("Research", "模型訓練／驗證"),
     sections=_model_comparison_sections(),
@@ -292,6 +292,26 @@ MODEL_MODE_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
 
 
 MODEL_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
+    "full_horizon_mae_common_truth": ModelExtensionContract(
+        "full_horizon_mae_common_truth", "Full-Horizon MAE / Paired Common Truth",
+        "post_fit_mature_full_horizon_mae_and_raw_safety_scores",
+        (T("full_horizon_mae_common_truth", (
+            C("split", "Split", alignment="left"),
+            C("paired_stock_days", "Common stock-days", alignment="right"),
+            C("paired_dates", "Common dates", alignment="right"),
+            C("d40_daily_rho", "D40 Daily rho", 4, preference="higher", format_kind="number"),
+            C("d40_pair", "D40 Pair", 2, "%", "higher", "fraction_pct"),
+            C("top10_mean_d40_r", "Top10 D40", 3, "R", "lower", "number"),
+            C("pred_p50_true_low_mae_precision_pct", "Pred-P50 low-MAE hit", 2, "%", "higher", "pct"),
+            C("ao_vs_d40_hs_p50_agreement_pct", "Old/new HS agreement", 2, "%", "neutral", "pct"),
+            C("d40_strictly_worse_than_peak_pct", "Post-peak worse", 2, "%", "neutral", "pct"),
+            C("median_extra_adverse_r", "Extra adverse median", 3, "R", "neutral", "number"),
+        )),),
+        comparison_mode="row_tables",
+        comparison_row_keys=(("full_horizon_mae_common_truth", "rows"),),
+        comparison_scope_key="split",
+        robustness_aggregation="single_seed_only",
+    ),
     "multi_head_learnability": ModelExtensionContract(
         "multi_head_learnability", "Multi-head Learnability",
         "multi_head_rank_output",
@@ -810,7 +830,7 @@ APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
     "audit.opportunity_selection": "fcdc3c51c70f74db",
     "audit.portfolio_drawdown": "b30ce69159e1f31a",
     "audit.trade_outcome_path": "c50943f97734da39",
-    "model.standard_comparison": "0626f6512f145d23",
+    "model.standard_comparison": "19de0496b55ce1e9",
     "model.standard_sop": "56e5fb1173404d7f",
     "strategy.oos_rolling_consistency": "deb471377e80ff80",
     "strategy.standard_sop": "c4e92dcc1e1c731e",

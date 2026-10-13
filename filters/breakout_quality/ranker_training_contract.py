@@ -32,6 +32,8 @@ from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_WEIGHTED_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_CONDITIONAL_MFE,
+    CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE,
+    CONTINUOUS_RANKER_SAFETY_SUPERVISION_ADVERSE_TO_PEAK,
     CONTINUOUS_RANKER_SEMANTICS_SHARED_ADAPTIVE_HORIZON_SAFETY_HS_CONDITIONAL_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE,
     CONTINUOUS_RANKER_SEMANTICS_SHARED_DUAL_SUPERVISED_HS_CONDITIONAL_MFE,
@@ -592,6 +594,24 @@ def training_semantics(profile) -> dict[str, Any]:
                     "Safety + true-HS Conditional-MFE semantics需要canonical topology contract"
                 )
             contract.update(topology_contract)
+        # Preserve all historical manifest semantics. Only the new declarative
+        # Safety source overrides the original shared-HS template's label truth.
+        if (semantics_key == CONTINUOUS_RANKER_SEMANTICS_SHARED_SAFETY_HS_CONDITIONAL_MFE
+                and recipe.objective_policy.safety_supervision_source !=
+                CONTINUOUS_RANKER_SAFETY_SUPERVISION_ADVERSE_TO_PEAK):
+            if (recipe.objective_policy.safety_supervision_source !=
+                    CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE):
+                raise ValueError("unsupported shared-HS Safety supervision semantics")
+            contract["safety_target"] = (
+                "same_date_percentile_of_negative_full_40bar_anchor_max_adverse_over_canonical_r"
+            )
+            contract["true_hs_definition"] = (
+                "original_adverse_to_earliest_peak_safety_percentile_gte_0.50_frozen"
+            )
+            contract["conditional_mfe_supervision_scope"] = (
+                "finite_secondary_target_original_ao_true_hs_items_only_sublist_"
+                "before_rank_positions_idcg_and_delta_ndcg"
+            )
         return _extended_semantics(
             batching=contract["batching"],
             pairwise_contract=pairwise_contract,

@@ -68,6 +68,7 @@ from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TARGET_BUILDER_HS_PRIORITY_MFE,
     CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL,
     CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+    CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_FINITE_SECONDARY_TARGET,
     CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_ALL,
     CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_CROSS,
     CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_WITHIN_POSITIVE,
@@ -1864,6 +1865,11 @@ def _compute_shared_safety_scoped_mfe_duo_loss(
         if not math.isfinite(threshold) or not 0.0 < threshold < 1.0:
             raise ValueError("secondary pair scope threshold必須在(0,1)")
         secondary_item_eligibility = target[:, 0] >= threshold
+    elif str(secondary_pair_scope) == CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_FINITE_SECONDARY_TARGET:
+        # The secondary label itself is NaN outside the independently frozen
+        # training cohort. In A1 this preserves AO's old true-HS membership
+        # even when the Safety head is supervised on full-horizon MAE.
+        secondary_item_eligibility = torch.isfinite(target[:, 1])
     elif str(secondary_pair_scope) != CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL:
         raise ValueError(f"unsupported secondary pair scope: {secondary_pair_scope!r}")
 
@@ -3845,6 +3851,7 @@ def _training_target_for_profile(
             group_table,
             np.isfinite(np.asarray(raw_target, dtype=np.float32)),
             true_hs_percentile_cutoff=float(recipe.objective_policy.secondary_pair_scope_threshold),
+            safety_supervision_source=recipe.objective_policy.safety_supervision_source,
         ).training_target
         quantile_auxiliary = recipe.training_policy.quantile_auxiliary
         if quantile_auxiliary is None:
@@ -4173,6 +4180,7 @@ def select_epoch(
             group_table,
             np.isfinite(np.asarray(raw_target, dtype=np.float32)),
             true_hs_percentile_cutoff=float(execution_recipe.objective_policy.secondary_pair_scope_threshold),
+            safety_supervision_source=execution_recipe.objective_policy.safety_supervision_source,
         )
         if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE
         else None

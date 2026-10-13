@@ -63,12 +63,16 @@ from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM,
     CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT,
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE,
+    CONTINUOUS_RANKER_SAFETY_SUPERVISION_ADVERSE_TO_PEAK,
+    CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE,
+    SUPPORTED_CONTINUOUS_RANKER_SAFETY_SUPERVISION_SOURCES,
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY,
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY,
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_PRODUCT_PREDICTED_SAFETY,
     CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_CONFLICT_UNSAFE_WINNER_PREDICTED_SAFETY,
     CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL,
     CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+    CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_FINITE_SECONDARY_TARGET,
     SUPPORTED_CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPES,
     SUPPORTED_CONTINUOUS_RANKER_PAIR_WEIGHT_POLICIES,
     get_continuous_ranker_pair_weight_policy,
@@ -378,6 +382,9 @@ DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_FULL_HORIZON_OPPORTUNITY_FULL_LIS
 )
 DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE = (
     "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+)
+DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_HORIZON_MAE_PROFILE = (
+    "daily_universal_shared_safety_hs_conditional_mfe_full_horizon_mae_full_list_ndcg_pairwise"
 )
 DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_PIT_TRADE_COUNT_PROFILE = (
     "daily_universal_shared_safety_hs_conditional_mfe_pit_trade_count_full_list_ndcg_pairwise"
@@ -1549,6 +1556,18 @@ _EXPERIMENT_PROFILES = {
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_shared_safety_mfe_v1",
     ),
+    DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_HORIZON_MAE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_HORIZON_MAE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_shared_safety_mfe_v1",
+    ),
     DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_PIT_TRADE_COUNT_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_PIT_TRADE_COUNT_PROFILE,
         optimizer_name="adam",
@@ -2151,6 +2170,7 @@ class ContinuousRankerResearchSpec:
     pair_weight_policy: str | None = None
     secondary_pair_scope: str = CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL
     secondary_pair_scope_threshold: float | None = None
+    safety_supervision_source: str = CONTINUOUS_RANKER_SAFETY_SUPERVISION_ADVERSE_TO_PEAK
     reference_profile_name: str | None = None
     evaluation_reference_profile_name: str | None = None
     model_gate_reference_profile_name: str | None = None
@@ -2161,6 +2181,8 @@ class ContinuousRankerResearchSpec:
     current_time_validation_authorized: bool = False
 
     def __post_init__(self) -> None:
+        if self.safety_supervision_source not in SUPPORTED_CONTINUOUS_RANKER_SAFETY_SUPERVISION_SOURCES:
+            raise ValueError(f"unsupported safety supervision source: {self.safety_supervision_source!r}")
         if self.profile_name not in _EXPERIMENT_PROFILES:
             raise ValueError(f"continuous ranker research spec引用未知profile: {self.profile_name}")
         profile = _EXPERIMENT_PROFILES[self.profile_name]
@@ -2248,6 +2270,8 @@ class ContinuousRankerResearchSpec:
             payload["secondary_pair_scope_threshold"] = float(self.secondary_pair_scope_threshold)
         if self.model_gate_reference_profile_name is not None:
             payload["model_gate_reference_profile_name"] = self.model_gate_reference_profile_name
+        if self.safety_supervision_source != CONTINUOUS_RANKER_SAFETY_SUPERVISION_ADVERSE_TO_PEAK:
+            payload["safety_supervision_source"] = self.safety_supervision_source
         return payload
 
 
@@ -2908,6 +2932,37 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         secondary_pair_scope_threshold=0.50,
         model_gate_reference_profile_name=(
             DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_HORIZON_MAE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_HORIZON_MAE_PROFILE,
+        model_research_id="MR-13CC",
+        experiment_name="MR-13CC AO Full-Horizon MAE Safety Supervision",
+        phase="13CC",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "head1=same_date_percentile(-full_40bar_max_adverse_from_anchor/R); "
+            "head2=AO unchanged MFE percentile restricted to original adverse-to-peak true-HS"
+        ),
+        objective_description=(
+            "A1 single-variable label control vs frozen MR-13AO: Safety full-universe "
+            "supervision uses complete 40-bar min(low) relative to signal-date close / "
+            "canonical fixed initial risk budget. True-HS cohort, conditional-MFE truth, "
+            "AO adjusted 300x10, dual-head topology, loss weights, selection metric, "
+            "split and seed remain unchanged. No new Provider source, no Trading/PIT "
+            "promotion. Cross-model Safety rho on different truths is NOT comparable; "
+            "use common D40 truth paired analysis before making a relative claim."
+        ),
+        metric_scope="full_universe_full_horizon_mae_safety_plus_original_true_hs_conditional_mfe",
+        score_semantic_id="daily_true_hs_conditional_mfe_full_horizon_mae_safety_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_FINITE_SECONDARY_TARGET,
+        secondary_pair_scope_threshold=0.50,
+        safety_supervision_source=CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
         ),
         selection_pit_authorized=False,
         current_time_validation_authorized=False,

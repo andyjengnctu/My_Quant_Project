@@ -103,6 +103,9 @@ from services.breakout_quality.standard_model_sop import (
     aggregate_standard_model_sop_robustness,
     migrate_legacy_forward_standard_model_sop,
 )
+from services.breakout_quality.full_horizon_mae_comparison import (
+    attach_full_horizon_mae_common_truth_extension,
+)
 from services.breakout_quality.model_report_extensions import (
     build_core_model_report_extensions,
     extension_missing_evidence,
@@ -5019,6 +5022,12 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
             "payload": payload,
             "artifact_action": action,
         })
+
+    completed = attach_full_horizon_mae_common_truth_extension(
+        completed,
+        evaluation_mode="rolling_oos" if rolling else "forward_oos",
+        project_root=PROJECT_ROOT,
+    )
 
     console = _render_standard_model_comparison(completed, target="console")
     print("\n" + render_title(f"{mode_label} Standard Model SOP Comparison"))

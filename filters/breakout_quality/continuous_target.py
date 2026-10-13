@@ -26,6 +26,30 @@ from core.breakout_quality_runtime import (
 
 CONTINUOUS_TARGET_SCHEMA_VERSION = 1
 
+
+def full_horizon_mae_safety_r_from_minimum_low_return(
+    minimum_low_return: np.ndarray,
+    *,
+    risk_budget_return: float,
+) -> np.ndarray:
+    """Full fixed-horizon worst low versus signal-date close, not peak-to-trough MDD.
+
+    Input is the canonical mature future-path minimum low / anchor close - 1.
+    Invalid/incomplete rows stay NaN. A constant positive risk budget preserves
+    the exact same cross-sectional ordering as negative D40 in percent returns.
+    """
+    r = float(risk_budget_return)
+    if not math.isfinite(r) or not (0.0 < r < 1.0):
+        raise ValueError("full-horizon MAE risk budget must be finite in (0,1)")
+    minimum = np.asarray(minimum_low_return, dtype=np.float64)
+    if minimum.ndim != 1:
+        raise ValueError("full-horizon minimum low return must be a 1-D vector")
+    if bool(np.any(np.isinf(minimum))):
+        raise ValueError("minimum low return contains infinite values")
+    if bool(np.any(np.isfinite(minimum) & (minimum <= -1.0))):
+        raise ValueError("minimum low return implies a nonpositive future low")
+    return np.minimum(minimum, 0.0) / r
+
 TARGET_RAW_FILENAME = "group_target_raw_r.npy"
 TARGET_FAVORABLE_RETURN_FILENAME = "group_favorable_return.npy"
 TARGET_ADVERSE_RETURN_FILENAME = "group_adverse_return_to_peak.npy"

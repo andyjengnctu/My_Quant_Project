@@ -1375,6 +1375,7 @@ def run(args) -> int:
             true_hs_percentile_cutoff=float(
                 execution_recipe.objective_policy.secondary_pair_scope_threshold
             ),
+            safety_supervision_source=execution_recipe.objective_policy.safety_supervision_source,
         )
         if hs_conditional_mfe_duo
         else None

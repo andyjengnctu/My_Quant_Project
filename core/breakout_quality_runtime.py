@@ -118,6 +118,13 @@ CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE = "coverage"
 CONTINUOUS_RANKER_CONTEXT_ROLE_MODEL_INPUT = "model_input"
 CONTINUOUS_RANKER_CONTEXT_ROLE_TARGET_TRANSFORM = "target_transform"
 CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT = "pair_weight"
+CONTINUOUS_RANKER_SAFETY_SUPERVISION_ADVERSE_TO_PEAK = "adverse_to_peak"
+CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE = "full_horizon_mae"
+SUPPORTED_CONTINUOUS_RANKER_SAFETY_SUPERVISION_SOURCES = frozenset({
+    CONTINUOUS_RANKER_SAFETY_SUPERVISION_ADVERSE_TO_PEAK,
+    CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE,
+})
+
 CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE = "none"
 CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MIN_PREDICTED_SAFETY = "min_predicted_safety"
 CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_MFE_WINNER_PREDICTED_SAFETY = "mfe_winner_predicted_safety"
@@ -131,6 +138,7 @@ SUPPORTED_CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICIES = {
 }
 CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL = "all_items"
 CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN = "primary_target_min"
+CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_FINITE_SECONDARY_TARGET = "finite_secondary_target"
 CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_ALL = "all"
 CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_CROSS = "cross"
 CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_WITHIN_POSITIVE = "within_positive"
@@ -142,6 +150,7 @@ SUPPORTED_CONTINUOUS_RANKER_PAIR_PARTITION_RELATIONS = {
 SUPPORTED_CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPES = (
     CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL,
     CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+    CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_FINITE_SECONDARY_TARGET,
 )
 
 
@@ -936,8 +945,11 @@ class ContinuousRankerObjectivePolicy:
     pair_target_schema: str = CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR
     secondary_pair_scope: str = CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL
     secondary_pair_scope_threshold: float | None = None
+    safety_supervision_source: str = CONTINUOUS_RANKER_SAFETY_SUPERVISION_ADVERSE_TO_PEAK
 
     def __post_init__(self) -> None:
+        if self.safety_supervision_source not in SUPPORTED_CONTINUOUS_RANKER_SAFETY_SUPERVISION_SOURCES:
+            raise ValueError(f"unsupported safety supervision source: {self.safety_supervision_source!r}")
         if self.pairwise_reduction is not None and self.pairwise_reduction not in SUPPORTED_CONTINUOUS_RANKER_PAIRWISE_REDUCTIONS:
             raise ValueError(f"不支援的continuous-ranker pairwise reduction: {self.pairwise_reduction!r}")
         get_continuous_ranker_pair_weight_policy(self.pair_weight_policy)
@@ -1391,6 +1403,7 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             allowed_secondary_pair_scopes=(
                 CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL,
                 CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+                CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_FINITE_SECONDARY_TARGET,
             ),
             head_loss_combination=CONTINUOUS_RANKER_HEAD_LOSS_COMBINATION_EQUAL_MEAN_AVAILABLE,
             head_loss_component_count=2,
@@ -1705,6 +1718,9 @@ def _resolve_continuous_ranker_objective_policy(spec: Any) -> ContinuousRankerOb
         or CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL
     )
     secondary_pair_scope_threshold = getattr(spec, "secondary_pair_scope_threshold", None)
+    safety_supervision_source = str(getattr(
+        spec, "safety_supervision_source", CONTINUOUS_RANKER_SAFETY_SUPERVISION_ADVERSE_TO_PEAK
+    ))
     declared_pair_weight_policy = getattr(spec, "pair_weight_policy", None)
     pair_weight_policy = (
         CONTINUOUS_RANKER_PAIR_WEIGHT_POLICY_NONE
@@ -1724,6 +1740,7 @@ def _resolve_continuous_ranker_objective_policy(spec: Any) -> ContinuousRankerOb
             pair_target_schema=CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS,
             secondary_pair_scope=secondary_pair_scope,
             secondary_pair_scope_threshold=secondary_pair_scope_threshold,
+            safety_supervision_source=safety_supervision_source,
         )
     if resolved_pair_weight_policy.weighted:
         return ContinuousRankerObjectivePolicy(
@@ -1732,11 +1749,13 @@ def _resolve_continuous_ranker_objective_policy(spec: Any) -> ContinuousRankerOb
             pair_target_schema=CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR_WITH_CONTEXT_WEIGHT,
             secondary_pair_scope=secondary_pair_scope,
             secondary_pair_scope_threshold=secondary_pair_scope_threshold,
+            safety_supervision_source=safety_supervision_source,
         )
     return ContinuousRankerObjectivePolicy(
         pairwise_reduction=reduction,
         secondary_pair_scope=secondary_pair_scope,
         secondary_pair_scope_threshold=secondary_pair_scope_threshold,
+        safety_supervision_source=safety_supervision_source,
     )
 
 
@@ -1813,6 +1832,10 @@ __all__ = (
     "SUPPORTED_CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICIES",
     "CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL",
     "CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN",
+    "CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_FINITE_SECONDARY_TARGET",
+    "CONTINUOUS_RANKER_SAFETY_SUPERVISION_ADVERSE_TO_PEAK",
+    "CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE",
+    "SUPPORTED_CONTINUOUS_RANKER_SAFETY_SUPERVISION_SOURCES",
     "SUPPORTED_CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPES",
     "CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_ALL",
     "CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_CROSS",

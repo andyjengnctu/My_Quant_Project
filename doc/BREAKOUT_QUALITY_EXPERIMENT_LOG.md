@@ -12910,3 +12910,25 @@ Decision：`MR13CA_MR13CB_IMPLEMENTED / A1_PIT_HISTORICAL_SOURCE_GATE_PENDING_OR
 - **結果界線／下一步**：本輪沒有任何新增 CA／CB 真實績效；`RESULT_PENDING / HISTORICAL_PIT_DATA_BLOCKED / NOT_PROMOTED` 維持。若要改以歷史證交所盤後公告為證據鏈或改為 current-vintage retrospective study，須另行建立可稽核來源合法性與新的 scientific decision，不能暗中放寬 CA/CB 的既有 PIT 規則。
 
 Decision：`MR13CA_CB_FORWARD_COMPARISON_PIT_SOURCE_BLOCKED / PREFLIGHT_DEPENDENCY_PLAN_FIXED / NO_TRAINING_RESULT / NO_PROMOTION`。
+
+## 2026-10-13 — MR-13CC | AO full-horizon MAE Safety：A0/A1 受控研究實作（真實結果未產生）
+
+- **使用者授權／基準**：使用者於本輪要求繼續A0免重訓診斷及A1完整40D MAE Safety監督。唯一來源ZIP=`test-branch-1_20261013_230618_fdf5fa51.zip`，SHA256=`3417519c46c45bceda6f64c0de03efd343d2af8ba6145cc7c634c810473160f1`；已先讀PROJECT_SETTINGS，再依序檢視Experiment Registry及Log、當前model config、runtime/canonical label builders。
+- **新身份**：`MR-13CC` / `ARCH-inception_time_shared_safety_mfe_v1`（AO原架構重用） / `PROFILE-daily_universal_shared_safety_hs_conditional_mfe_full_horizon_mae_full_list_ndcg_pairwise`，獨立模型checkpoint/score identity。AO與BZ、CA、CB歷史身份與結果完整保留。A0為唯讀one-off diagnostic，不預占另一個scientific MR身份。
+- **唯一標籤treatment及必要scope修正**：使用既有成熟adjusted 40日`target_minimum_low_return`及canonical risk budget，D40=max(0,-minimum low return)，新Safety真值=`-D40/R`，同日percentile；不新增Provider資料、Raw-price或input欄位。AO原 `target_adverse_r` 保留供 original True-HS P50決定membership；Conditional-MFE within-true-HS label必須與AO bit-level相同，不能由新的D40 Safety percentile決定MFE入選名單。共用pairwise loss新增可重用 `finite_secondary_target` eligibility scope，利用原第二頭NaN遮罩，以防另一個head的Safety target改變MFE訓練股票。Model輸入300×10、shared InceptionTime、Seed42、雙頭full-list／sublist ΔNDCG、fixed 1:1 loss、Validation epoch selection及原研究split一律固定。這是必要的scientific isolation，不是新增MFE研究變因。
+- **A0診斷介面**：`tools/audit/breakout_quality/label_safety_a0.py`只經canonical AO daily loader及matured labels作 read-only的新舊Safety rank、HS族群更替、post-peak額外風險、高MFE P70條件診斷，依現行 Research cutoff及標籤成熟日隔離Selection／iterative OOS。若日後提供AO/CC兩個已核實分數CSV，才選擇性計算相同ticker/date與相同D40 truth的paired rho；不以新舊不同label的rho直接比大小，不以OOS結果回填模型fit/calibration。輸出僅落工具專屬`outputs/audit/full_horizon_mae_a0/`，不更動正式Standard SOP/reports/menu。
+- **Current／參考選擇**：`config/breakout_quality.py` current model指向CC，正式[1]～[7]仍由原menu執行，[3]～[6]由canonical active+reference組裝；保留H/AH/AK/AO/BZ reference，暫不把尚缺historical成交筆數PIT證據的CA/CB拉入這輪自動比較計畫。CA/CB仍可在原registry重現，不宣稱其原科學否定或資料已補齊。
+- **未完成事項與結果邊界**：此次上傳ZIP缺完整FinMind本地資料、既有checkpoint及每股OOS score artifact；程式可做靜態／獨立合成檢查，但不能據此提供A0母體統計、Seed42 Forward／Rolling、paired Model Gate或交易績效。待使用者本機資料就位，先A0讀診斷，再[1] Forward CC及[3] AO/CC配對正式比較；若必要再[2]/[4] Rolling。避免調整A2 HS群組或九格聯合分布，本輪未授權實作。
+
+Decision：`MR13CC_A0_A1_IMPLEMENTED / FULL_40D_MAE_SAFETY_PRIMITIVE / ORIGINAL_AO_TRUE_HS_CONDITIONAL_MFE_FROZEN / SOURCE_DATA_AND_REAL_MODEL_RESULTS_PENDING / NO_PRODUCTION_PROMOTION`。
+
+
+## 2026-10-13 — MR-13CC | A0／A1 正式比較整合：Research [1] Model-specific Extension（後續授權覆寫先前 Audit 操作建議）
+
+- **授權與基準**：使用者明確要求取消獨立 Audit 作為必要操作，直接在 Research `[1]` 的 `[3] Forward OOS 模型比較`、`[4] Rolling OOS 模型比較` 產出同真值評估，且要求提供 Model-specific Extension。最新原始ZIP=`test-branch-1_20261013_230618_fdf5fa51(1).zip`，SHA256=`3417519c46c45bceda6f64c0de03efd343d2af8ba6145cc7c634c810473160f1`。本段為前一段 A0 Audit 操作建議的**後續修正**，保留歷史記錄不重寫舊決策。
+- **正式 Research 整合**：承接 MR-13CC 的 A1 身分、AO 凍結的 MFE 真實 HS 子集與全部既有模型訓練契約。只擴充 canonical Standard Model Comparison 的 Model-specific Extension `full_horizon_mae_common_truth`，採 `[1] → [3]`、`[1] → [4]` 既有 BUILD／REUSE plan，沒有新增選單、專用比較命令、獨立 Audit 前置依賴或修改標準 SOP 六章節；一次性 A0 Audit 腳本不列入本版交付。
+- **共同證據定義**：僅當新 Safety supervision 與對照模型具有相同 double-head objective、同 filter、同 continuous target 才啟用；按模型各自已驗證的 OOS score 文件讀取 Raw Safety，在相同 `ticker/date`、canonical `group_index` 與成熟 40D future-low 真值內取 AO／CC 配對交集。真實 D40=`max(0,-target_minimum_low_return)/R`，完整日群組先決定真實 P50，再映射至共同 OOS 樣本，避免比對交集改寫母體真值。列出共同 stock-days/dates、D40 Daily rho、Pair、Pred-P50 low-MAE 命中、Top10 實際 D40/R、原 Safety 與 D40 真實 HS P50 一致率、peak 後額外逆行比例／中位數。原 AO 主目標與 CC 主目標不同，**不得跨真值直接比較個別舊 rho**。
+- **RUN／REUSE 與 PIT／SSOT**：Forward 另核對 report 已登錄之 score sidecar SHA；Rolling 使用既有經認可的 OOS score contract 並逐筆驗證 `prediction_date > model_information_cutoff`；所有結果僅在報表組裝時產生 ephemeral extension，不覆寫舊 AO report／checkpoint／validation 或 Trading source。JSON／Markdown／console 由同一 comparison extension contract 渲染，`model.standard_comparison` 授權新版本 v12，批准 fingerprint=`19de0496b55ce1e9`，原 Standard SOP fingerprint=`56e5fb1173404d7f` 完全不變。
+- **驗證與現實限制**：原 Full-Horizon MAE primitive、AO 凍結 MFE 子集、雙 Head Loss，以及新 Extension 的 Forward、Rolling、score hash、identity join、截止日、報表 renderer 做非正式獨立合成檢查。此 ZIP 無完整 FinMind 歷史資料、真實 OOS scores 或 CC checkpoint，因此沒有新實證或 Gate 結論；正式 Windows `apps/run_bundle.py`／`apps/test_suite.py` 留待使用者本機執行。
+
+Decision：`MR13CC_RESEARCH_1_FORWARD_ROLLING_MODEL_SPECIFIC_EXTENSION_IMPLEMENTED / A0_INCLUDED_IN_PAIRED_EVIDENCE / AO_FROZEN / REAL_OOS_RESULT_PENDING / NOT_PROMOTED`。

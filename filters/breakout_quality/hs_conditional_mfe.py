@@ -13,6 +13,16 @@ import numpy as np
 import pandas as pd
 
 from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets
+from filters.breakout_quality.continuous_target import (
+    StrategyAlignedContinuousTargetSpec,
+    full_horizon_mae_safety_r_from_minimum_low_return,
+)
+from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY
+from core.breakout_quality_runtime import (
+    CONTINUOUS_RANKER_SAFETY_SUPERVISION_ADVERSE_TO_PEAK,
+    CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE,
+    SUPPORTED_CONTINUOUS_RANKER_SAFETY_SUPERVISION_SOURCES,
+)
 
 DEFAULT_TRUE_HS_PERCENTILE_CUTOFF = 0.50
 
@@ -65,8 +75,13 @@ def build_hs_conditional_mfe_targets(
     valid_mask: np.ndarray,
     *,
     true_hs_percentile_cutoff: float = DEFAULT_TRUE_HS_PERCENTILE_CUTOFF,
+    safety_supervision_source: str = CONTINUOUS_RANKER_SAFETY_SUPERVISION_ADVERSE_TO_PEAK,
 ) -> HsConditionalMfeTargets:
+    if safety_supervision_source not in SUPPORTED_CONTINUOUS_RANKER_SAFETY_SUPERVISION_SOURCES:
+        raise ValueError(f"unsupported safety supervision source: {safety_supervision_source!r}")
     required = {"date", "target_favorable_r", "target_adverse_r"}
+    if safety_supervision_source == CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE:
+        required.add("target_minimum_low_return")
     missing = sorted(required - set(group_table.columns))
     if missing:
         raise ValueError(f"HS-Conditional MFE target缺少canonical欄位: {missing}")
@@ -86,9 +101,26 @@ def build_hs_conditional_mfe_targets(
     if not np.array_equal(component_valid, valid):
         raise ValueError("HS-Conditional MFE valid rows必須同時具有finite favorable/adverse target")
 
-    safety = build_same_date_percentile_targets(-adverse, valid, dates)
+    # A1 changes only the Safety head's supervised outcome.  True-HS membership
+    # and conditional MFE targets stay on AO's adverse-to-peak definition.
+    ao_safety = build_same_date_percentile_targets(-adverse, valid, dates)
+    true_hs = valid & (np.asarray(ao_safety, dtype=np.float64) >= cutoff)
+    if safety_supervision_source == CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE:
+        minimum = pd.to_numeric(
+            group_table["target_minimum_low_return"], errors="coerce"
+        ).to_numpy(dtype=np.float64)
+        if bool(np.any(valid & ~np.isfinite(minimum))):
+            raise ValueError("full-horizon MAE valid rows require complete future low path")
+        risk_budget = StrategyAlignedContinuousTargetSpec.from_label_policy(
+            DEFAULT_LABEL_POLICY
+        ).risk_budget_return
+        safety_raw_r = full_horizon_mae_safety_r_from_minimum_low_return(
+            minimum, risk_budget_return=risk_budget
+        )
+        safety = build_same_date_percentile_targets(safety_raw_r, valid, dates)
+    else:
+        safety = ao_safety
     primary_mfe = build_same_date_percentile_targets(favorable, valid, dates)
-    true_hs = valid & (np.asarray(safety, dtype=np.float64) >= cutoff)
     conditional_mfe = build_same_date_percentile_targets(favorable, true_hs, dates)
 
     if not bool(np.any(true_hs)):
