@@ -12932,3 +12932,10 @@ Decision：`MR13CC_A0_A1_IMPLEMENTED / FULL_40D_MAE_SAFETY_PRIMITIVE / ORIGINAL_
 - **驗證與現實限制**：原 Full-Horizon MAE primitive、AO 凍結 MFE 子集、雙 Head Loss，以及新 Extension 的 Forward、Rolling、score hash、identity join、截止日、報表 renderer 做非正式獨立合成檢查。此 ZIP 無完整 FinMind 歷史資料、真實 OOS scores 或 CC checkpoint，因此沒有新實證或 Gate 結論；正式 Windows `apps/run_bundle.py`／`apps/test_suite.py` 留待使用者本機執行。
 
 Decision：`MR13CC_RESEARCH_1_FORWARD_ROLLING_MODEL_SPECIFIC_EXTENSION_IMPLEMENTED / A0_INCLUDED_IN_PAIRED_EVIDENCE / AO_FROZEN / REAL_OOS_RESULT_PENDING / NOT_PROMOTED`。
+
+## 2026-10-14 — MR-13CC | D40 Model-specific Extension 的 Daily Universal 資料讀取修正（工程事故；未新增研究身分）
+
+- **使用者回報／基準**：Research `[1]` 的 MR-13CC `Standard SOP JSON`／Markdown 已建立，但後續比較在 `daily_full_horizon_pure_mfe_r_v1/manifest.json` 缺失時中止。基準 ZIP=`test-branch-1_20261014_013436_38f0eef9.zip`，SHA256=`b1b75dbeb1f0ff7e7f3172422a085bb7634aeda7b6c0b68c3fbb535383a0634a`。使用者未提供執行 traceback／完整資料，此處以程式呼叫鏈重建根因；不得宣稱真實 OOS 已通過。
+- **根因**：Model-specific Extension `full_horizon_mae_common_truth` 在既有 OOS score 選定後呼叫事件型 `load_continuous_ranker_data()`。AO／CC 均為 `daily_eligible_stock_days`，40 日 Pure-MFE 與最低價 truth 直接存在 Daily Universal bundle，並無獨立 `continuous_targets/<target_id>/manifest.json` producer。標準工作 upstream planner 正確不要求此 manifest，但 Extension 使用錯誤 loader 強迫產生一個不屬於該 scope 的上游依賴；錯誤發生在後處理，與 FinMind 新資料及模型 fitting 無關。
+- **修正**：只把 Extension 的 source bundle 改由既有 `load_daily_universal_ranker_data()` 讀取，同一 adjusted dataset／日級索引／40 日成熟 future-low 真值。保留 AO／CC score sidecar 的身分、hash／cutoff、配對交集與 Model-specific Extension contract；不建立假的 Continuous Target manifest、不增加 Audit／選單、不更動 Standard SOP／正式 report fingerprint，也不修改 target、Loss、optimizer、Seed、模型／策略工件。
+- **驗證邊界**：獨立 synthetic case 使用沒有任何 Continuous Target manifest 的 temporary root，注入合法 Daily Universal bundle，分別檢查 Forward／Rolling Extension、共同 D40 truth、配對 group identity、information cutoff、原始 RUN／REUSE payload 不變，並確認 loader 使用 CC profile。此為工程修正，不是 MR-13CC 相對 AO 的實證結果；本機正式 `apps/run_bundle.py`／`apps/test_suite.py` 仍須由使用者執行。

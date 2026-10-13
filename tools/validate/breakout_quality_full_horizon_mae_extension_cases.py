@@ -97,10 +97,19 @@ def case() -> None:
         }))
         models = [{"model_id": mid, "settings": settings, "contract": contract, "payload": {}}
                   for mid, settings, contract in paths]
-        with patch.object(svc, "load_continuous_ranker_data", return_value=bundle):
+        # Regression: the daily AO/CC comparison must not load the event-group
+        # Continuous Target manifest.  This temp root deliberately has no such
+        # manifest, while the canonical daily loader supplies its embedded truth.
+        with patch.object(svc, "load_daily_universal_ranker_data", return_value=bundle) as daily_loader:
             result = attach_full_horizon_mae_common_truth_extension(
                 models, evaluation_mode="forward_oos", project_root=Path(tmp)
             )
+            daily_loader.assert_called_once()
+            kwargs = daily_loader.call_args.kwargs
+            assert kwargs["experiment_profile"] == cc[1]
+            assert kwargs["project_root"] == Path(tmp)
+            assert kwargs["preload_feature_bank"] is False
+            assert kwargs["allow_stale_source"] is False
         assert all(len(item["payload"].get("comparison_extensions", [])) == 1 for item in result)
         assert all(not item["payload"] for item in models), "source reports were mutated"
         # Same persisted rows render identically after RUN and REUSE.
@@ -123,7 +132,7 @@ def case() -> None:
                 "contract": SimpleNamespace(score_path=rolling_path, continuous_target_id="same_target"),
                 "payload": {},
             })
-        with patch.object(svc, "load_continuous_ranker_data", return_value=bundle):
+        with patch.object(svc, "load_daily_universal_ranker_data", return_value=bundle):
             rolling = attach_full_horizon_mae_common_truth_extension(
                 rolling_items, evaluation_mode="rolling_oos", project_root=Path(tmp)
             )
@@ -133,7 +142,7 @@ def case() -> None:
         unsafe_frame.loc[unsafe_frame.index[0], "model_information_cutoff"] = "2023-01-10"
         unsafe_frame.to_csv(unsafe_path, index=False)
         try:
-            with patch.object(svc, "load_continuous_ranker_data", return_value=bundle):
+            with patch.object(svc, "load_daily_universal_ranker_data", return_value=bundle):
                 attach_full_horizon_mae_common_truth_extension(
                     rolling_items, evaluation_mode="rolling_oos", project_root=Path(tmp)
                 )

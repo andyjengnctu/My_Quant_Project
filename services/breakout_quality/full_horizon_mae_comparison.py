@@ -20,10 +20,8 @@ from core.breakout_quality_runtime import (
 )
 from core.breakout_quality_registry import get_continuous_ranker_research_spec
 from filters.breakout_quality.artifacts import build_file_manifest
-from filters.breakout_quality.continuous_ranker_data import (
-    build_same_date_percentile_targets,
-    load_continuous_ranker_data,
-)
+from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets
+from filters.breakout_quality.daily_ranker_data import load_daily_universal_ranker_data
 from filters.breakout_quality.continuous_target import (
     StrategyAlignedContinuousTargetSpec,
     full_horizon_mae_safety_r_from_minimum_low_return,
@@ -270,7 +268,11 @@ def attach_full_horizon_mae_common_truth_extension(
                 raise ValueError("D40 paired model comparison混入不同continuous target id")
             if str(item["settings"].filter_id) != str(reference.filter_id):
                 raise ValueError("D40 paired model comparison混入不同filter id")
-    bundle = load_continuous_ranker_data(
+    # The AO/CC full-horizon target is embedded in the canonical daily stock-day
+    # bundle.  Event-group Continuous Target manifests are neither required nor
+    # produced for this sample scope; loading the event-group bundle here would
+    # wrongly require an unrelated physical target artifact after OOS reports exist.
+    bundle = load_daily_universal_ranker_data(
         filter_id=str(reference.filter_id),
         model_architecture=str(reference.model_architecture),
         experiment_profile=str(reference.experiment_profile),
