@@ -95,6 +95,18 @@ class ModelExtensionContract:
     robustness_aggregation: str = "single_seed_only"
 
 
+@dataclass(frozen=True)
+class IndependentlyFrozenModelExtensionContract(ModelExtensionContract):
+    """Versioned, fingerprinted Model-specific evidence outside the frozen Standard schema.
+
+    Existing comparison extensions remain part of their approved parent-report
+    fingerprint. New independently authorized evidence cannot silently change
+    the Standard Comparison's approved version or its historical identity.
+    """
+
+    contract_version: int = 1
+
+
 # Generic alias for non-model mode extensions.  The underlying schema shape is
 # identical; strategy/model ownership stays separated by the registries below.
 ReportExtensionContract = ModelExtensionContract
@@ -247,7 +259,7 @@ def _model_comparison_sections() -> tuple[ReportSectionContract, ...]:
 
 MODEL_STANDARD_COMPARISON = PersistentReportContract(
     report_id="model.standard_comparison",
-    version=12,
+    version=11,
     role="persistent_multi_model_comparison_all_evaluation_modes",
     menu_path=("Research", "模型訓練／驗證"),
     sections=_model_comparison_sections(),
@@ -291,8 +303,11 @@ MODEL_MODE_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
 }
 
 
-MODEL_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
-    "full_horizon_mae_common_truth": ModelExtensionContract(
+# This evidence exists only after a cross-model OOS paired comparison, so it is
+# not a per-model head/fit evidence capability (and cannot be emitted by the
+# canonical per-model extension payload producer).
+MODEL_COMPARISON_ONLY_EXTENSION_SCHEMAS: Mapping[str, IndependentlyFrozenModelExtensionContract] = {
+    "full_horizon_mae_common_truth": IndependentlyFrozenModelExtensionContract(
         "full_horizon_mae_common_truth", "Full-Horizon MAE / Paired Common Truth",
         "post_fit_mature_full_horizon_mae_and_raw_safety_scores",
         (T("full_horizon_mae_common_truth", (
@@ -312,6 +327,9 @@ MODEL_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
         comparison_scope_key="split",
         robustness_aggregation="single_seed_only",
     ),
+}
+
+MODEL_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
     "multi_head_learnability": ModelExtensionContract(
         "multi_head_learnability", "Multi-head Learnability",
         "multi_head_rank_output",
@@ -684,13 +702,9 @@ def visible_extension_table(
 
 
 def comparison_extension_ids() -> tuple[str, ...]:
-    """Cross-model evidence capabilities, derived from the single extension registry."""
+    """All cross-model extensions from their canonical per-model/comparison-only owners."""
 
-    return tuple(
-        extension_id
-        for extension_id, extension in MODEL_EXTENSION_SCHEMAS.items()
-        if extension.comparison_mode is not None
-    )
+    return tuple(MODEL_COMPARISON_EXTENSION_SCHEMAS)
 
 
 def comparison_extension_ids_for_evidence_families(
@@ -766,18 +780,29 @@ def aggregate_robustness_row_extension(
     return result
 
 
+if set(MODEL_COMPARISON_ONLY_EXTENSION_SCHEMAS) & set(MODEL_EXTENSION_SCHEMAS):
+    raise ValueError("Model comparison-only extension 與 per-model extension ID 重複")
+
 MODEL_COMPARISON_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
-    extension_id: _derive_comparison_extension_contract(extension)
-    for extension_id, extension in MODEL_EXTENSION_SCHEMAS.items()
-    if extension.comparison_mode is not None
+    **{
+        extension_id: _derive_comparison_extension_contract(extension)
+        for extension_id, extension in MODEL_COMPARISON_ONLY_EXTENSION_SCHEMAS.items()
+    },
+    **{
+        extension_id: _derive_comparison_extension_contract(extension)
+        for extension_id, extension in MODEL_EXTENSION_SCHEMAS.items()
+        if extension.comparison_mode is not None
+    },
 }
 
 
 def extension_contract(extension_id: str) -> ModelExtensionContract:
-    try:
-        return MODEL_EXTENSION_SCHEMAS[str(extension_id)]
-    except KeyError as exc:
-        raise KeyError(f"未知Model-specific extension: {extension_id}") from exc
+    key = str(extension_id)
+    if key in MODEL_EXTENSION_SCHEMAS:
+        return MODEL_EXTENSION_SCHEMAS[key]
+    if key in MODEL_COMPARISON_ONLY_EXTENSION_SCHEMAS:
+        return MODEL_COMPARISON_ONLY_EXTENSION_SCHEMAS[key]
+    raise KeyError(f"未知Model-specific extension: {extension_id}")
 
 
 def comparison_extension_contract(extension_id: str) -> ModelExtensionContract:
@@ -802,6 +827,7 @@ def _persistent_schema_payload(contract: PersistentReportContract) -> dict:
         payload["model_specific_extensions"] = [
             asdict(comparison_extension_contract(extension_id))
             for extension_id in comparison_extension_ids()
+            if not isinstance(extension_contract(extension_id), IndependentlyFrozenModelExtensionContract)
         ]
     return payload
 
@@ -830,7 +856,7 @@ APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
     "audit.opportunity_selection": "fcdc3c51c70f74db",
     "audit.portfolio_drawdown": "b30ce69159e1f31a",
     "audit.trade_outcome_path": "c50943f97734da39",
-    "model.standard_comparison": "19de0496b55ce1e9",
+    "model.standard_comparison": "0626f6512f145d23",
     "model.standard_sop": "56e5fb1173404d7f",
     "strategy.oos_rolling_consistency": "deb471377e80ff80",
     "strategy.standard_sop": "c4e92dcc1e1c731e",
@@ -853,6 +879,28 @@ APPROVED_STRATEGY_MODE_EXTENSION_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
 }
 
 
+def independently_frozen_model_extension_contract_fingerprints() -> dict[str, str]:
+    """Freeze independently authorized model evidence, including comparison display schema."""
+    result: dict[str, str] = {}
+    for extension_id, extension in MODEL_COMPARISON_ONLY_EXTENSION_SCHEMAS.items():
+        if not isinstance(extension, IndependentlyFrozenModelExtensionContract):
+            raise TypeError(f"Comparison-only extension未宣告獨立版本契約: {extension_id}")
+        payload = {
+            "source": asdict(extension),
+            "comparison": asdict(comparison_extension_contract(extension_id)),
+        }
+        content = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        result[extension_id] = hashlib.sha256(content).hexdigest()[:16]
+    return result
+
+
+# Model-specific, user-authorized research evidence is frozen separately so its
+# introduction does not rewrite the 2026-09-04 Standard Comparison identity.
+APPROVED_INDEPENDENT_MODEL_EXTENSION_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
+    "full_horizon_mae_common_truth": "94ccca56a41ca540",
+}
+
+
 def validate_approved_persistent_report_contracts() -> tuple[str, ...]:
     current = persistent_report_contract_fingerprints()
     reasons: list[str] = []
@@ -866,6 +914,20 @@ def validate_approved_persistent_report_contracts() -> tuple[str, ...]:
         if approved != fingerprint:
             reasons.append(
                 f"UNAUTHORIZED_PERSISTENT_REPORT_CONTRACT_CHANGE: {report_id} "
+                f"current={fingerprint} approved={approved or '-'}"
+            )
+    independent_extensions = independently_frozen_model_extension_contract_fingerprints()
+    if set(independent_extensions) != set(APPROVED_INDEPENDENT_MODEL_EXTENSION_CONTRACT_FINGERPRINTS):
+        reasons.append(
+            "approved independent Model-specific extension set mismatch: "
+            f"current={sorted(independent_extensions)}, "
+            f"approved={sorted(APPROVED_INDEPENDENT_MODEL_EXTENSION_CONTRACT_FINGERPRINTS)}"
+        )
+    for extension_id, fingerprint in independent_extensions.items():
+        approved = APPROVED_INDEPENDENT_MODEL_EXTENSION_CONTRACT_FINGERPRINTS.get(extension_id)
+        if approved != fingerprint:
+            reasons.append(
+                f"UNAUTHORIZED_MODEL_SPECIFIC_EXTENSION_CHANGE: {extension_id} "
                 f"current={fingerprint} approved={approved or '-'}"
             )
     current_strategy_extensions = {
@@ -890,8 +952,10 @@ def validate_approved_persistent_report_contracts() -> tuple[str, ...]:
 
 __all__ = [
     "APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS",
+    "APPROVED_INDEPENDENT_MODEL_EXTENSION_CONTRACT_FINGERPRINTS",
+    "independently_frozen_model_extension_contract_fingerprints",
     "APPROVED_STRATEGY_MODE_EXTENSION_CONTRACT_FINGERPRINTS",
-    "MODEL_EXTENSION_SCHEMAS", "MODEL_MODE_EXTENSION_SCHEMAS", "MODEL_STANDARD_SOP",
+    "MODEL_EXTENSION_SCHEMAS", "MODEL_COMPARISON_ONLY_EXTENSION_SCHEMAS", "MODEL_MODE_EXTENSION_SCHEMAS", "MODEL_STANDARD_SOP",
     "OPPORTUNITY_SELECTION_REPORT", "PORTFOLIO_DRAWDOWN_REPORT",
     "MODEL_STANDARD_COMPARISON", "PERSISTENT_REPORT_CONTRACTS", "STRATEGY_CONSISTENCY_METRIC_KEYS",
     "STRATEGY_MODE_EXTENSION_SCHEMAS",

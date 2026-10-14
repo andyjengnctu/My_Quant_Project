@@ -1,6 +1,7 @@
 """Independent capability-focused synthetic contract checks (not formal suite)."""
 from __future__ import annotations
 
+from dataclasses import replace
 import sys
 import tempfile
 from pathlib import Path
@@ -15,7 +16,9 @@ import numpy as np
 import pandas as pd
 
 from core.research_report_contract import (
+    MODEL_COMPARISON_ONLY_EXTENSION_SCHEMAS,
     comparison_extension_contract, extension_contract,
+    independently_frozen_model_extension_contract_fingerprints,
     persistent_report_contract_fingerprints,
     validate_approved_persistent_report_contracts,
 )
@@ -28,7 +31,18 @@ from services.research.breakout_quality_application import _render_model_compari
 def case() -> None:
     assert validate_approved_persistent_report_contracts() == ()
     assert persistent_report_contract_fingerprints()["model.standard_sop"] == "56e5fb1173404d7f"
+    # The approved v11 Standard Comparison is immutable; newly authorized
+    # model-specific evidence has its own schema-version/fingerprint guard.
+    assert persistent_report_contract_fingerprints()["model.standard_comparison"] == "0626f6512f145d23"
+    assert independently_frozen_model_extension_contract_fingerprints() == {
+        "full_horizon_mae_common_truth": "94ccca56a41ca540",
+    }
     ext = extension_contract("full_horizon_mae_common_truth")
+    assert ext.contract_version == 1
+    with patch.dict(MODEL_COMPARISON_ONLY_EXTENSION_SCHEMAS, {ext.extension_id: replace(ext, title=ext.title + " tampered")}):
+        assert any("UNAUTHORIZED_MODEL_SPECIFIC_EXTENSION_CHANGE" in reason
+                   for reason in validate_approved_persistent_report_contracts())
+    assert validate_approved_persistent_report_contracts() == ()
     assert ext.comparison_scope_key == "split"
     assert "model" == comparison_extension_contract(ext.extension_id).tables[0].columns[0].key
     base = pd.DataFrame({
