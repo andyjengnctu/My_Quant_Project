@@ -34,10 +34,14 @@ def case() -> None:
     # The approved v11 Standard Comparison is immutable; newly authorized
     # model-specific evidence has its own schema-version/fingerprint guard.
     assert persistent_report_contract_fingerprints()["model.standard_comparison"] == "0626f6512f145d23"
-    assert independently_frozen_model_extension_contract_fingerprints() == {
+    # Each existing extension retains its own approved fingerprint. Additional
+    # independently approved extensions must not invalidate this D40-only test.
+    frozen = independently_frozen_model_extension_contract_fingerprints()
+    for extension_id, expected in {
         "ao_safety_p45_p55_shared_cohort": "549709f23944be8f",
         "full_horizon_mae_common_truth": "94ccca56a41ca540",
-    }
+    }.items():
+        assert frozen.get(extension_id) == expected
     ext = extension_contract("full_horizon_mae_common_truth")
     assert ext.contract_version == 1
     with patch.dict(MODEL_COMPARISON_ONLY_EXTENSION_SCHEMAS, {ext.extension_id: replace(ext, title=ext.title + " tampered")}):
