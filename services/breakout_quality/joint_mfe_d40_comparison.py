@@ -19,6 +19,10 @@ from filters.breakout_quality.joint_mfe_d40 import (
     build_joint_mfe_d40_quadrants, JOINT_FAVORABLE_AND_LOW_MAE_CLASS,
 )
 
+from services.breakout_quality.joint_event_incremental_evidence import (
+    build_joint_event_incremental_extensions,
+)
+
 EXTENSION_ID = "joint_mfe_d40_quadrant_proper_scores"
 
 
@@ -58,7 +62,7 @@ def _proper_scores(frame: pd.DataFrame, *, split: str, columns: tuple[str, ...])
     }
 
 
-def _validated_rows(item: Mapping[str, Any], *, mode: str, project_root: Path) -> list[dict[str, Any]]:
+def _validated_rows(item: Mapping[str, Any], *, mode: str, project_root: Path) -> tuple[list[dict[str, Any]], pd.DataFrame, Any, set]:
     settings = item["settings"]
     policy = get_continuous_ranker_training_policy(str(settings.training_objective))
     if policy.categorical_class_count is None:
@@ -128,7 +132,7 @@ def _validated_rows(item: Mapping[str, Any], *, mode: str, project_root: Path) -
     breakout = score[eligible.to_numpy(dtype=bool)]
     if not breakout.empty:
         rows.append(_proper_scores(breakout, split="Breakout slice", columns=columns))
-    return rows
+    return rows, score, bundle, membership, truth
 
 
 def attach_joint_mfe_d40_extension(
@@ -139,9 +143,26 @@ def attach_joint_mfe_d40_extension(
     if evaluation_mode not in {"forward_oos", "rolling_oos"}:
         return output
     for item in output:
-        rows = _validated_rows(item, mode=evaluation_mode, project_root=Path(project_root))
+        policy = get_continuous_ranker_training_policy(str(item["settings"].training_objective))
+        if policy.categorical_class_count is None:
+            continue
+        rows, scored, bundle, membership, truth = _validated_rows(
+            item, mode=evaluation_mode, project_root=Path(project_root),
+        )
         if rows:
             old = [dict(ext) for ext in (item["payload"].get("comparison_extensions") or [])
                    if str(dict(ext).get("id")) != EXTENSION_ID]
             item["payload"]["comparison_extensions"] = [*old, {"id": EXTENSION_ID, "rows": rows}]
+            incremental = build_joint_event_incremental_extensions(
+                models=output, categorical_item=item, scored=scored, bundle=bundle,
+                candidate_keys=membership, mode=evaluation_mode, full_truth=truth,
+                categorical_columns=tuple(policy.categorical_score_columns),
+            )
+            for model in output:
+                evidence = incremental.get(str(model["model_id"]))
+                if evidence is None:
+                    continue
+                extensions = [dict(ext) for ext in model["payload"].get("comparison_extensions", [])
+                              if str(ext.get("id")) != evidence["id"]]
+                model["payload"]["comparison_extensions"] = [*extensions, evidence]
     return output
