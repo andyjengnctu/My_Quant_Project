@@ -7276,10 +7276,11 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
         patch.object(research_app, "_load_reusable_continuous_forward_contract", return_value=(report_stub, None)),
         patch.object(research_app, "_load_reusable_rolling_standard_report", return_value=(report_stub, {}, None)),
         patch.object(research_app, "_print_model_action_status") as comparison_status,
-        # This case checks model-list routing, not post-fit score-artifact parsing.
-        # The D40 and joint-quadrant extensions have independent evidence tests.
+        # [AI] Model-list routing is isolated from post-fit score-artifact parsing.
+        # D40, joint-quadrant and direct-U40 extensions have independent evidence tests.
         patch.object(research_app, "attach_full_horizon_mae_common_truth_extension", side_effect=lambda models, **_: models) as paired_extension,
         patch.object(research_app, "attach_joint_mfe_d40_extension", side_effect=lambda models, **_: models) as joint_extension,
+        patch.object(research_app, "attach_paired_u40_extension", side_effect=lambda models, **_: models) as u40_extension,
         patch.object(research_app, "_render_standard_model_comparison", return_value="SYNTHETIC"),
         patch.object(research_app, "_write_standard_model_comparison_report", return_value=outputs),
         patch.object(research_app, "render_status_paths", return_value=""),
@@ -7297,6 +7298,8 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
         and [call.kwargs.get("evaluation_mode") for call in paired_extension.call_args_list]
         == ["forward_oos", "rolling_oos"]
         and [call.kwargs.get("evaluation_mode") for call in joint_extension.call_args_list]
+        == ["forward_oos", "rolling_oos"]
+        and [call.kwargs.get("evaluation_mode") for call in u40_extension.call_args_list]
         == ["forward_oos", "rolling_oos"],
     )
 
