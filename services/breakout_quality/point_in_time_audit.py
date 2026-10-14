@@ -46,6 +46,7 @@ from filters.breakout_quality.paths import (
 from filters.breakout_quality.ranking_score_store import (
     clear_selection_point_in_time_ranking_contract_cache,
     derive_point_in_time_model_validation_gate,
+    validate_continuous_ranker_score_values,
 )
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
 from services.breakout_quality.standard_model_sop import build_standard_model_sop
@@ -282,15 +283,11 @@ def _validate_score_artifacts(args) -> tuple[pd.DataFrame, dict[str, Any]]:
         raise ValueError("Rolling PIT score group_index重複")
     if bool(frame.duplicated(["ticker", "date"]).any()):
         raise ValueError("Rolling PIT score ticker/date重複")
-    if not np.isfinite(frame["breakout_quality_score"]).all():
-        raise ValueError("Rolling PIT score含非有限值")
-    if bool(
-        (
-            (frame["breakout_quality_score"] < 0.0)
-            | (frame["breakout_quality_score"] > 1.0)
-        ).any()
-    ):
-        raise ValueError("Rolling PIT score超出[0,1]")
+    validate_continuous_ranker_score_values(
+        frame["breakout_quality_score"].to_numpy(dtype=np.float64, copy=False),
+        experiment_profile=str(args.experiment_profile),
+        column="breakout_quality_score", label="Rolling PIT score",
+    )
     if bool((frame["model_information_cutoff"] >= frame["date"]).any()):
         raise ValueError("Rolling PIT score存在information cutoff未早於score date")
 

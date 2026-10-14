@@ -24,8 +24,10 @@ from core.breakout_quality_registry import (
     get_breakout_quality_experiment_profile,
 )
 from core.breakout_quality_runtime import (
+    CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R,
     get_continuous_ranker_persisted_score_columns,
     get_continuous_ranker_score_output_columns,
+    get_continuous_ranker_training_policy,
 )
 
 from filters.breakout_quality.artifacts import compute_file_sha256
@@ -95,6 +97,36 @@ PIT_REQUIRED_SCORE_COLUMNS = (
     "model_information_cutoff",
 )
 PIT_OPTIONAL_SCORE_COLUMNS = get_continuous_ranker_persisted_score_columns()
+
+
+def validate_continuous_ranker_score_values(
+    values,
+    *,
+    experiment_profile: str | None,
+    column: str,
+    label: str,
+) -> None:
+    """Check the model-score domain declared by the canonical training policy.
+
+    The primary score can be a signed R-unit regression margin. All auxiliary
+    outputs and probability-primary models remain bounded in [0,1]. Without a
+    profile/manifest the conservative probability bound is retained.
+    """
+
+    scores = np.asarray(values, dtype=np.float64)
+    if not np.isfinite(scores).all():
+        raise ValueError(f"{label}含非有限值")
+    is_signed_primary = False
+    if str(column) in {"model_score", "breakout_quality_score"} and experiment_profile:
+        profile = get_breakout_quality_experiment_profile(str(experiment_profile))
+        training_policy = get_continuous_ranker_training_policy(
+            str(profile.training_objective)
+        )
+        is_signed_primary = (
+            training_policy.score_transform == CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R
+        )
+    if not is_signed_primary and bool(((scores < 0.0) | (scores > 1.0)).any()):
+        raise ValueError(f"{label}超出[0,1]")
 
 
 def _load_current_validated_model_source(
@@ -615,6 +647,7 @@ def _load_selection_point_in_time_score_table_from_path_cached(
     manifest_path: str | None,
     score_signature: tuple[int, int],
     manifest_signature: tuple[int, int] | None,
+    experiment_profile: str | None = None,
 ) -> pd.DataFrame:
     # Signatures are part of the cache key so an in-place rebuilt artifact cannot
     # reuse a stale DataFrame.  The values themselves are intentionally unused.
@@ -633,6 +666,9 @@ def _load_selection_point_in_time_score_table_from_path_cached(
         manifest = _read_json_object(
             manifest_file, label="Selection PIT manifest", project_root=manifest_file.parent
         )
+        manifest_profile = str(manifest.get("experiment_profile") or "")
+        if experiment_profile and manifest_profile and manifest_profile != str(experiment_profile):
+            raise ValueError("Selection PIT score table與指定實驗profile不一致")
         period = dict(manifest.get("score_period") or {})
         available_from = pd.Timestamp(period.get("start")).strftime("%Y-%m-%d")
         available_through = pd.Timestamp(period.get("end")).strftime("%Y-%m-%d")
@@ -658,8 +694,12 @@ def _load_selection_point_in_time_score_table_from_path_cached(
     if bool((table["ticker"] == "").any()) or bool((table["fold_id"] == "").any()):
         raise ValueError("Selection PIT score table含空白ticker或fold_id")
     values = table["breakout_quality_score"].to_numpy(dtype=np.float64, copy=False)
-    if not np.isfinite(values).all() or bool(((values < 0.0) | (values > 1.0)).any()):
-        raise ValueError("Selection PIT score必須全部為0到1的有限值")
+    validate_continuous_ranker_score_values(
+        values,
+        experiment_profile=(experiment_profile if experiment_profile else
+                            None if manifest is None else manifest.get("experiment_profile")),
+        column="breakout_quality_score", label="Selection PIT score",
+    )
     for score_column in PIT_OPTIONAL_SCORE_COLUMNS:
         if score_column not in table.columns:
             continue
@@ -689,6 +729,7 @@ def load_selection_point_in_time_score_table_from_path(
     score_path: str,
     *,
     manifest_path: str | None = None,
+    experiment_profile: str | None = None,
 ) -> pd.DataFrame:
     """Load one PIT score table once per immutable file revision.
 
@@ -710,6 +751,7 @@ def load_selection_point_in_time_score_table_from_path(
         None if manifest is None else str(manifest),
         _selection_pit_file_cache_signature(score),
         None if manifest is None else _selection_pit_file_cache_signature(manifest),
+        experiment_profile,
     )
 
 
@@ -724,7 +766,8 @@ def load_selection_point_in_time_score_table(
         project_root, filter_id, model_architecture, experiment_profile
     )
     return load_selection_point_in_time_score_table_from_path(
-        str(contract.score_path), manifest_path=str(contract.manifest_path)
+        str(contract.score_path), manifest_path=str(contract.manifest_path),
+        experiment_profile=str(experiment_profile),
     )
 
 
@@ -1054,8 +1097,10 @@ def load_continuous_ranker_oos_score_table_from_path(
     frame["group_index"] = pd.to_numeric(frame["group_index"], errors="raise").astype(int)
     frame["model_score"] = pd.to_numeric(frame["model_score"], errors="raise").astype(float)
     scores = frame["model_score"].to_numpy(dtype=np.float64, copy=False)
-    if not np.isfinite(scores).all() or ((scores < 0.0) | (scores > 1.0)).any():
-        raise ValueError("Continuous ranker OOS model_score必須為0~1有限數值")
+    validate_continuous_ranker_score_values(
+        scores, experiment_profile=str(experiment_profile),
+        column="model_score", label="Continuous ranker OOS model_score",
+    )
     for score_column in PIT_OPTIONAL_SCORE_COLUMNS:
         if score_column not in frame.columns:
             continue
@@ -1152,10 +1197,11 @@ def lookup_continuous_ranker_oos_candidate_score(
                     f"Continuous ranker OOS score缺少指定欄位: {resolved_score_column}"
                 )
             score = float(row[resolved_score_column])
-            if not np.isfinite(score) or not 0.0 <= score <= 1.0:
-                raise ValueError(
-                    f"Continuous ranker OOS {resolved_score_column}必須為0~1有限值"
-                )
+            validate_continuous_ranker_score_values(
+                [score], experiment_profile=str(experiment_profile),
+                column=resolved_score_column,
+                label=f"Continuous ranker OOS {resolved_score_column}",
+            )
             group_index = int(row["group_index"])
     profile = get_breakout_quality_experiment_profile(str(experiment_profile))
     return {
@@ -1199,7 +1245,8 @@ def lookup_selection_point_in_time_candidate_score(
     )
     table = (
         load_selection_point_in_time_score_table_from_path(
-            str(score_path_override), manifest_path=manifest_path_override
+            str(score_path_override), manifest_path=manifest_path_override,
+            experiment_profile=str(experiment_profile),
         )
         if score_path_override is not None
         else load_selection_point_in_time_score_table(
@@ -1233,10 +1280,11 @@ def lookup_selection_point_in_time_candidate_score(
                     f"Selection PIT score缺少指定欄位: {resolved_score_column}"
                 )
             score = float(row[resolved_score_column])
-            if not np.isfinite(score) or not 0.0 <= score <= 1.0:
-                raise ValueError(
-                    f"Selection PIT {resolved_score_column}必須為0~1有限值"
-                )
+            validate_continuous_ranker_score_values(
+                [score], experiment_profile=str(experiment_profile),
+                column=resolved_score_column,
+                label=f"Selection PIT {resolved_score_column}",
+            )
             fold_id = str(row["fold_id"])
             information_cutoff = str(row["model_information_cutoff"])
             group_index = int(row["group_index"])

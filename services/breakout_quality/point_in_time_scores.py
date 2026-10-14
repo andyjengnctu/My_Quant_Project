@@ -58,7 +58,10 @@ from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.model_source_provenance import source_inventory_matches_current
 from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME
 from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
-from filters.breakout_quality.ranking_score_store import clear_selection_point_in_time_ranking_contract_cache
+from filters.breakout_quality.ranking_score_store import (
+    clear_selection_point_in_time_ranking_contract_cache,
+    validate_continuous_ranker_score_values,
+)
 from filters.breakout_quality.models.factory import build_model
 from filters.breakout_quality.point_in_time_schedule import (
     FOLD_CALENDAR_ANCHOR,
@@ -808,10 +811,11 @@ def _validate_score_frame(frame: pd.DataFrame, *, fold_contract: dict[str, Any])
     work["breakout_quality_score"] = pd.to_numeric(
         work["breakout_quality_score"], errors="raise"
     ).astype(np.float64)
-    if not np.isfinite(work["breakout_quality_score"]).all():
-        raise ValueError("point-in-time fold score含非有限值")
-    if bool(((work["breakout_quality_score"] < 0.0) | (work["breakout_quality_score"] > 1.0)).any()):
-        raise ValueError("point-in-time fold score超出[0,1]")
+    validate_continuous_ranker_score_values(
+        work["breakout_quality_score"].to_numpy(dtype=np.float64, copy=False),
+        experiment_profile=fold_contract.get("experiment_profile"),
+        column="breakout_quality_score", label="point-in-time fold score",
+    )
     for score_column in OPTIONAL_SCORE_COLUMNS:
         if score_column not in work.columns:
             continue

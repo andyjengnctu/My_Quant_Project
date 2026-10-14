@@ -950,6 +950,14 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         ),
     )
 
+    # Registered score-transform capability: signed Raw-R primary scores must
+    # survive PIT/Forward reader and audit; probability outputs stay bounded.
+    from tools.validate.breakout_quality_signed_primary_score_cases import (
+        case as validate_signed_primary_score_domain,
+    )
+    validate_signed_primary_score_domain()
+    check_true("pit_primary_margin_domain_preserves_probability_checks", True)
+
     summary.update({
         "profile": settings.experiment_profile,
         "oos_fold_count": len(oos),
