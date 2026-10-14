@@ -640,6 +640,10 @@ def training_semantics(profile) -> dict[str, Any]:
 
     if semantics_key == CONTINUOUS_RANKER_SEMANTICS_RAW_R:
         contract = dict(RAW_R_REGRESSION_TRAINING_CONTRACT)
+        # Bind the semantic target to the resolved scientific identity, not to
+        # MR-13F's historical template. For F/G this produces the exact same
+        # stored value, preserving their frozen checkpoint manifests.
+        contract["target"] = f"{recipe.continuous_target_id}_raw_r"
         contract["loss"] = str(profile.loss_name)
         contract["huber_delta_r"] = (
             None

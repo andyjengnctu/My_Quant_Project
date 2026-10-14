@@ -42,6 +42,7 @@ from filters.breakout_quality.continuous_ranker_data import (
 from filters.breakout_quality.continuous_target import (
     DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
     DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+    DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID,
     DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
     DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
     DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
@@ -49,6 +50,8 @@ from filters.breakout_quality.continuous_target import (
     StrategyAlignedContinuousTargetSpec,
     build_daily_full_horizon_opportunity_contract,
     build_daily_full_horizon_pure_mfe_contract,
+    build_daily_full_horizon_mfe_minus_d40_contract,
+    full_horizon_mae_safety_r_from_minimum_low_return,
     build_daily_first_risk_breach_pure_mfe_contract,
     build_daily_full_horizon_low_adverse_contract,
     build_daily_full_horizon_equal_rank_mfe_low_adverse_contract,
@@ -736,6 +739,8 @@ def compute_daily_opportunity_target_batch(
     selection but likewise removes the adverse-to-peak deduction.
     ``daily_full_horizon_low_adverse_r_v1`` keeps that same selected peak but
     ranks only negative adverse-to-peak R, so higher means a safer path.
+    ``daily_full_horizon_mfe_minus_d40_r_v1`` instead deducts the *complete*
+    40-bar nonnegative adverse low from the complete 40-bar MFE, in the same R.
     """
 
     source_positions = np.asarray(positions, dtype=np.int64)
@@ -756,6 +761,7 @@ def compute_daily_opportunity_target_batch(
         DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
         DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
         DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+        DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID,
         DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
         DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
     }:
@@ -836,7 +842,13 @@ def compute_daily_opportunity_target_batch(
         )
         selected_opportunity = best_zero + 1
 
-    if target_id in {DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID, DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID}:
+    if target_id == DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID:
+        # Canonical full-horizon Safety helper = -D40/R; no peak-time deduction.
+        # Signed U40 may be negative.  Do not clip the prediction target.
+        selected_target = (selected_favorable / risk_budget
+                           + full_horizon_mae_safety_r_from_minimum_low_return(
+                               minimum_low_return_valid, risk_budget_return=risk_budget))
+    elif target_id in {DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID, DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID}:
         selected_target = selected_favorable / risk_budget
     elif target_id == DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID:
         selected_target = -selected_adverse / risk_budget
@@ -979,6 +991,7 @@ def _build_daily_target_contract(
         "daily_opportunity_no_time": build_daily_opportunity_no_time_contract,
         "daily_full_horizon_opportunity": build_daily_full_horizon_opportunity_contract,
         "daily_full_horizon_pure_mfe": build_daily_full_horizon_pure_mfe_contract,
+        "daily_full_horizon_mfe_minus_d40": build_daily_full_horizon_mfe_minus_d40_contract,
         "daily_first_risk_breach_pure_mfe": build_daily_first_risk_breach_pure_mfe_contract,
         "daily_full_horizon_low_adverse": build_daily_full_horizon_low_adverse_contract,
         "daily_full_horizon_equal_rank_mfe_low_adverse": (

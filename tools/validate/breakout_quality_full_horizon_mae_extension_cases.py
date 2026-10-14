@@ -139,10 +139,20 @@ def case() -> None:
 
     # Synthetic integration without any formal Test Suite, market download or retraining.
     import services.breakout_quality.full_horizon_mae_comparison as svc
-    from config.breakout_quality import BREAKOUT_QUALITY_MODEL_TEST_PROFILES
+    from core.breakout_quality_registry import (
+        DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_HORIZON_MAE_PROFILE,
+        get_continuous_ranker_research_spec,
+    )
     from core.breakout_quality_policy import get_breakout_quality_workflow_settings
-    ao = next((m, p) for m, p in BREAKOUT_QUALITY_MODEL_TEST_PROFILES if m == "MR-13AO")
-    cc = next((m, p) for m, p in BREAKOUT_QUALITY_MODEL_TEST_PROFILES if m == "MR-13CC")
+    # Historical AO/CC paired evidence is independent of the current menu's
+    # selected comparison subset.  The scientific registry retains both arms.
+    ao_profile = "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+    cc_profile = DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_HORIZON_MAE_PROFILE
+    ao_spec = get_continuous_ranker_research_spec(ao_profile)
+    cc_spec = get_continuous_ranker_research_spec(cc_profile)
+    ao = (ao_spec.model_research_id, ao_profile)
+    cc = (cc_spec.model_research_id, cc_profile)
+    assert ao[0] == "MR-13AO" and cc[0] == "MR-13CC"
     with tempfile.TemporaryDirectory() as tmp:
         paths = []
         reports = []

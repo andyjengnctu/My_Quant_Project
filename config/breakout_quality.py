@@ -106,11 +106,11 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 # MR-13BZ is a closed negative control; AO remains the frozen comparison.
 # MR-13CA/CB remain archived, unmodified research profiles blocked on proven
 # historical trade-count vintage; they do not gate this new label-only experiment.
-# MR-13CD tests four-class joint MFE40 x D40 probabilities with frozen P50 boundaries.
-# MR-13AO and MR-13CC remain immutable comparison controls.
+# Direct continuous U40 = mature MFE40/R - full-horizon D40/R; no quadrants.
+# MR-13AO and other historical studies remain immutable, not overwritten.
 BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE = (
-    "MR-13CD",
-    "daily_universal_joint_mfe_d40_quadrant_cross_entropy",
+    "MR-13CE",
+    "daily_universal_full_horizon_mfe_minus_d40_huber",
 )
 # Compatibility alias for call sites that only need the executable profile slug.
 BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = (
@@ -371,10 +371,8 @@ BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES = (
     ("MR-13AH", "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise"),
     ("MR-13AK", "daily_universal_shared_safety_weighted_pure_mfe_full_list_ndcg_pairwise"),
     ("MR-13AO", "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
-    ("MR-13BZ", "daily_universal_shared_safety_hs_conditional_mfe_adverse_quantile_aux_full_list_ndcg_pairwise"),
-    ("MR-13CC", "daily_universal_shared_safety_hs_conditional_mfe_full_horizon_mae_full_list_ndcg_pairwise"),
-    # MR-13CB remains registered for historical reproduction but currently
-    # cannot pass its old-source PIT evidence gate; exclude from this A1 comparison.
+    # Retired from the current compare list at user request: BZ/CC/CD remain
+    # historical research identities and their checkpoints are untouched.
 )
 
 

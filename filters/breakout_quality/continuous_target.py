@@ -19,6 +19,7 @@ from core.breakout_quality_runtime import (
     DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
     DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
     DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+    DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID,
     DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
     DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
     DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
@@ -593,6 +594,46 @@ def build_daily_full_horizon_pure_mfe_contract(
         "time_penalty_included": False,
         "normalization": "fixed canonical risk-budget return used only as R scale",
         "clipping": "none",
+        "split_derived_parameters": False,
+        "oos_fitted_parameters": False,
+    }
+
+
+def build_daily_full_horizon_mfe_minus_d40_contract(
+    policy: BreakoutQualityLabelPolicy,
+) -> dict[str, object]:
+    """Direct, signed continuous U40 target using all 40 mature future bars.
+
+    D40 is the worst *nonnegative* adverse low measured from signal-date
+    close, not the worst low observed before the future MFE peak.  Every
+    component is scaled by the same fixed canonical R; no quantiles, classes,
+    timing rule or model-fitted transformations enter the target.
+    """
+    spec = StrategyAlignedContinuousTargetSpec.from_label_policy(policy)
+    return {
+        "schema_version": CONTINUOUS_TARGET_SCHEMA_VERSION,
+        "target_id": DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID,
+        "objective_family": "daily_cross_sectional_signed_full_horizon_mfe_minus_d40",
+        "information_source": "fixed_future_high_low_path",
+        "sample_scope": "daily_eligible_stock_days",
+        "horizon_bars": int(spec.horizon_bars),
+        "risk_budget_return": float(spec.risk_budget_return),
+        "formula": (
+            "(max(high_of_next_40_bars)/anchor_close-1) / risk_budget_return "
+            "- max(0, 1-min(low_of_next_40_bars)/anchor_close) / risk_budget_return"
+        ),
+        "peak_rule": "maximum high within full horizon; temporal order is ignored",
+        "risk_rule": "risk-barrier crossing does not truncate either component",
+        "adverse_scope": "minimum low over all 40 future bars versus signal-date close",
+        "minimum_adverse_r": 0.0,
+        "no_safe_bar_rule": "not_applicable",
+        "requires_breakout_event": False,
+        "requires_high_len": False,
+        "requires_breakout_level": False,
+        "requires_strategy_candidate_membership": False,
+        "time_penalty_included": False,
+        "normalization": "single fixed canonical risk-budget return, R; no per-day re-ranking",
+        "clipping": "none_on_signed_u40; D40_nonnegative_by_definition",
         "split_derived_parameters": False,
         "oos_fitted_parameters": False,
     }

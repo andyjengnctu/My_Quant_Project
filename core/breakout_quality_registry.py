@@ -388,6 +388,7 @@ DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_HORIZON_MAE_PROFILE = (
     "daily_universal_shared_safety_hs_conditional_mfe_full_horizon_mae_full_list_ndcg_pairwise"
 )
 DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE = "daily_universal_joint_mfe_d40_quadrant_cross_entropy"
+DAILY_UNIVERSAL_DIRECT_U40_HUBER_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_huber"
 DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_PIT_TRADE_COUNT_PROFILE = (
     "daily_universal_shared_safety_hs_conditional_mfe_pit_trade_count_full_list_ndcg_pairwise"
 )
@@ -1569,6 +1570,19 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_shared_safety_mfe_v1",
+    ),
+    DAILY_UNIVERSAL_DIRECT_U40_HUBER_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_DIRECT_U40_HUBER_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
+        continuous_target_id="daily_full_horizon_mfe_minus_d40_r_v1",
+        loss_name="huber_raw_r",
+        epoch_selection_metric="validation_huber_raw_r",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        raw_r_huber_delta_r=1.0,
+        model_architecture="inception_time_v1",
     ),
     DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE,
@@ -2975,6 +2989,32 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_FINITE_SECONDARY_TARGET,
         secondary_pair_scope_threshold=0.50,
         safety_supervision_source=CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_DIRECT_U40_HUBER_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_DIRECT_U40_HUBER_PROFILE,
+        model_research_id="MR-13CE",
+        experiment_name="MR-13CE Direct Continuous U40 (MFE40 - D40) Huber",
+        phase="13CE",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "signed raw U40/R = entire 40D maximum-high favorable R "
+            "minus entire 40D maximum-adverse-low R; complete mature path; no P50"
+        ),
+        objective_description=(
+            "Reuse direct continuous-R Huber capability (delta=1R), two-logit margin "
+            "as signed predicted U40/R. Full 40 mature days, same canonical risk R "
+            "and adjusted 300x10 InceptionTime features as historical controls; "
+            "train on all legal daily stock-days, Validation Huber selects epoch. "
+            "No percentile/classification/four quadrants, no AO peak-before adverse, "
+            "no candidate/trading state, no OOS-fitted transform, no promotion."
+        ),
+        metric_scope="daily_full_horizon_signed_u40_continuous_regression",
+        score_semantic_id="daily_predicted_signed_u40_r",
         model_gate_reference_profile_name=(
             DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
         ),

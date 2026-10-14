@@ -59,7 +59,8 @@ def main() -> None:
     # Dedicated historical BZ test must not require BZ to remain the current model.
     assert BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
     assert ("MR-13AO", AO) in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
-    assert ("MR-13BZ", BZ) in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
+    # BZ remains registered for historical reproducibility even when the user
+    # explicitly excludes it from the *current* Model Compare/Test list.
     assert bz_profile.continuous_target_id == ao_profile.continuous_target_id
     assert bz_profile.epoch_selection_metric == ao_profile.epoch_selection_metric
     ao_policy = get_continuous_ranker_execution_recipe(AO).training_policy
