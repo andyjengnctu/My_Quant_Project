@@ -1438,14 +1438,50 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
                 and ".pin_memory()" in ranker_source,
     )
 
+    # Validate the frozen 2-logit classifier with a real forward pass.  A new
+    # declarative multi-class model may widen its own head without changing the
+    # historical 2-logit architecture or its pass-probability interpretation.
+    from filters.breakout_quality.models.architectures import (
+        INCEPTION_TIME_V1, INCEPTION_TIME_JOINT_QUADRANT_V1,
+    )
+    from filters.breakout_quality.models.factory import build_model
+    from filters.breakout_quality.models.spec import get_model_spec
+    from filters.breakout_quality.models.runtime import require_torch
+
+    _torch, _nn = require_torch()
+    _old_spec = get_model_spec(INCEPTION_TIME_V1)
+    _joint_spec = get_model_spec(INCEPTION_TIME_JOINT_QUADRANT_V1)
+    # Keep model initialization from advancing later synthetic cases' RNG state.
+    with _torch.random.fork_rng(devices=[]):
+        _old_model = build_model(10, 0, architecture=INCEPTION_TIME_V1).eval()
+        _joint_model = build_model(10, 0, architecture=INCEPTION_TIME_JOINT_QUADRANT_V1).eval()
+        with _torch.inference_mode():
+            _feature_probe = _torch.zeros(2, 300, 10)
+            _old_logits = _old_model(_feature_probe, None)
+            _joint_logits = _joint_model(_feature_probe, None)
+            _old_probability = _torch.softmax(_old_logits.float(), dim=1)[:, LABEL_PASS]
+            _joint_probabilities = _torch.softmax(_joint_logits.float(), dim=1)
     check(
         "continuous_ranker_reuses_active_two_logit_head_and_pass_probability",
         (True, True, True),
         (
-                    "self.classifier = nn.Linear(classifier_input, 2)" in inception_source,
-                    "torch.softmax(logits.float(), dim=1)[:, LABEL_PASS]" in ranker_source,
-                    '"model_state_dict"' in ranker_source and "torch.save(" in ranker_source,
-                ),
+            _old_spec.classifier_output_classes is None
+            and _old_model.classifier.out_features == 2
+            and tuple(_old_logits.shape) == (2, 2)
+            and bool(_torch.all((_old_probability >= 0) & (_old_probability <= 1)).item()),
+            "torch.softmax(logits.float(), dim=1)[:, LABEL_PASS]" in ranker_source,
+            '"model_state_dict"' in ranker_source and "torch.save(" in ranker_source,
+        ),
+    )
+    check_true(
+        "continuous_ranker_categorical_output_width_and_normalized_probabilities",
+        _joint_spec.classifier_output_classes == 4
+        and _joint_model.classifier.out_features == _joint_spec.classifier_output_classes
+        and tuple(_joint_logits.shape) == (2, 4)
+        and bool(_torch.isfinite(_joint_probabilities).all().item())
+        and bool(_torch.allclose(
+            _joint_probabilities.sum(dim=1), _torch.ones(2), atol=1e-6,
+        )),
     )
     train_source = (
         project_root
@@ -2225,6 +2261,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         ),
     )
     _allowed_rules = {
+        "categorical_cross_entropy_then_event_brier",
         "regression_loss_then_spearman",
         "pareto_daily_then_global",
         "hmhs_pair_then_pr_auc",
@@ -2238,10 +2275,11 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
              get_breakout_quality_experiment_profile(name).training_objective
          ).epoch_selection_rule not in _allowed_rules],
     )
-    # Independent oracle: the previous selection precedence was RAW_R loss,
-    # then DIRECT_HMHS builder, then PARETO_COMPONENTS builder, then daily rho.
-    # A pairwise-kind change alone must not silently change the metric family.
+    # Independent oracle: categorical CE is the newly declared proper-score
+    # family; historical precedence still follows RAW_R, DIRECT_HMHS, PARETO,
+    # then daily rho. A pairwise-kind change cannot change the metric family.
     from core.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_LOSS_HANDLER_CATEGORICAL_CE as _categorical_handler,
         CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R as _raw_r_handler,
         CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS as _direct_hmhs_builder,
         CONTINUOUS_RANKER_TARGET_BUILDER_PARETO_COMPONENTS as _pareto_builder,
@@ -2251,7 +2289,9 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         _policy = get_continuous_ranker_training_policy(
             get_breakout_quality_experiment_profile(_name).training_objective
         )
-        if _policy.loss_handler == _raw_r_handler:
+        if _policy.loss_handler == _categorical_handler:
+            _expected_family = "categorical_cross_entropy_then_event_brier"
+        elif _policy.loss_handler == _raw_r_handler:
             _expected_family = "regression_loss_then_spearman"
         elif _policy.target_builder == _direct_hmhs_builder:
             _expected_family = "hmhs_pair_then_pr_auc"

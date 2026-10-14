@@ -483,8 +483,16 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         for training_policy in (
             get_continuous_ranker_training_policy(training_objective),
         )
-        if training_policy.score_output_policy is not None
-        for _head_name, column in training_policy.score_output_policy.persisted_columns
+        for column in (
+            training_policy.categorical_score_columns
+            + tuple(
+                column
+                for _head_name, column in (
+                    training_policy.score_output_policy.persisted_columns
+                    if training_policy.score_output_policy is not None else ()
+                )
+            )
+        )
         if str(column) != "breakout_quality_score"
     }
     runtime_optional_score_columns = get_continuous_ranker_persisted_score_columns()
