@@ -76,19 +76,11 @@ def test_mae_primitive_and_mask_contract():
         np.array([-0.05, 0.02, np.nan]), risk_budget_return=0.10)
     assert np.allclose(risk[:2], [-0.5, 0.0]); assert np.isnan(risk[2])
     for bad in (np.array([np.inf]), np.array([-1.0])):
-        try:
+        with np.testing.assert_raises(ValueError):
             full_horizon_mae_safety_r_from_minimum_low_return(bad, risk_budget_return=0.10)
-        except ValueError:
-            pass
-        else:
-            raise AssertionError('invalid future low accepted')
-    try:
+    with np.testing.assert_raises(ValueError):
         build_hs_conditional_mfe_targets(source.drop(columns=['target_minimum_low_return']), valid,
             safety_supervision_source=CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE)
-    except ValueError:
-        pass
-    else:
-        raise AssertionError('missing matured full-horizon low accepted')
     return source, ao, cc
 
 
