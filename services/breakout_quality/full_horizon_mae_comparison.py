@@ -8,6 +8,7 @@ applicability comes from training/output capability and Safety supervision polic
 from __future__ import annotations
 
 import math
+import hashlib
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -21,15 +22,19 @@ from core.breakout_quality_runtime import (
 from core.breakout_quality_registry import get_continuous_ranker_research_spec
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets
+from filters.breakout_quality.daily_ranker_data import load_official_breakout_candidate_keys
 from filters.breakout_quality.daily_ranker_data import load_daily_universal_ranker_data
 from filters.breakout_quality.continuous_target import (
     StrategyAlignedContinuousTargetSpec,
     full_horizon_mae_safety_r_from_minimum_low_return,
 )
 from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY
-from services.breakout_quality.train_continuous_ranker import daily_rank_metrics
+from services.breakout_quality.train_continuous_ranker import (
+    HS_QUALIFICATION_P45_P55_BAND, daily_rank_metrics,
+)
 
 EXTENSION_ID = "full_horizon_mae_common_truth"
+SHARED_BOUNDARY_EXTENSION_ID = "ao_safety_p45_p55_shared_cohort"
 
 
 def _score_frame(item: Mapping[str, Any], *, evaluation_mode: str) -> pd.DataFrame | None:
@@ -133,11 +138,59 @@ def _daily_top_half_precision_and_top_decile_mae(frame: pd.DataFrame) -> tuple[f
     )
 
 
+def _shared_ao_boundary_rows(
+    common: pd.DataFrame,
+    *,
+    model_ids: Sequence[str],
+    split_label: str,
+    breakout_candidate_keys: set[tuple[str, pd.Timestamp]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Compare Raw Safety scores within exactly the same original-AO truth band.
+
+    The AO adverse-to-peak percentile is constructed on the *full* mature
+    daily universe, before intersecting model OOS scores and before filtering
+    breakout membership. Neither D40 truth nor the model score selects rows.
+    """
+    low, high = HS_QUALIFICATION_P45_P55_BAND
+    boundary = common["ao_safety_percentile"].between(low, high).to_numpy(dtype=bool)
+    candidate_mask = np.fromiter(
+        (
+            (str(ticker), pd.Timestamp(date).normalize()) in breakout_candidate_keys
+            for ticker, date in zip(common["ticker"], common["date"])
+        ),
+        dtype=bool, count=len(common),
+    )
+    by_model: dict[str, list[dict[str, Any]]] = {model_id: [] for model_id in model_ids}
+    for scope, scope_mask in ((split_label, boundary), ("Breakout slice", boundary & candidate_mask)):
+        cohort = common.loc[scope_mask].copy()
+        ordered_keys = (
+            f"{date:%Y-%m-%d}|{ticker}"
+            for ticker, date in zip(cohort["ticker"], cohort["date"])
+        )
+        digest = hashlib.sha256("\n".join(ordered_keys).encode("utf-8")).hexdigest()
+        dates = cohort["date"].to_numpy()
+        truth = cohort["old_true_hs"].to_numpy(dtype=np.float32)
+        for model_id in model_ids:
+            scores = cohort[f"prediction_{model_id}"].to_numpy(dtype=np.float64)
+            metrics = daily_rank_metrics(dates, scores, truth)
+            by_model[model_id].append({
+                "split": scope,
+                "ao_boundary_stock_days": int(len(cohort)),
+                "ao_boundary_dates": int(cohort["date"].nunique()),
+                "rankable_dates": int(metrics["rankable_date_count"]),
+                "comparable_pairs": int(metrics["comparable_pair_count"]),
+                "ao_boundary_p45_p55_pair": metrics["pairwise_concordance"],
+                "cohort_sha256": digest,
+            })
+    return by_model
+
+
 def build_paired_full_horizon_mae_rows(
     *,
     truth: pd.DataFrame,
     predictions_by_model: Mapping[str, pd.DataFrame],
     split_label: str,
+    breakout_candidate_keys: set[tuple[str, pd.Timestamp]] | None = None,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
     """Paired intersection, common truth and canonical rank metrics across models."""
     if len(predictions_by_model) < 2:
@@ -152,9 +205,10 @@ def build_paired_full_horizon_mae_rows(
     common["d40_true_hs"] = build_same_date_percentile_targets(
         -common["d40_r"].to_numpy(dtype=np.float64), full_mask, common["date"]
     ) >= 0.5
-    common["old_true_hs"] = build_same_date_percentile_targets(
+    common["ao_safety_percentile"] = build_same_date_percentile_targets(
         common["old_safety_r"].to_numpy(dtype=np.float64), full_mask, common["date"]
-    ) >= 0.5
+    )
+    common["old_true_hs"] = common["ao_safety_percentile"] >= 0.5
     for model_id, raw_frame in predictions_by_model.items():
         score = raw_frame.copy()
         score["date"] = pd.to_datetime(score["date"], errors="raise").dt.normalize()
@@ -216,6 +270,14 @@ def build_paired_full_horizon_mae_rows(
             "d40_strictly_worse_than_peak_pct": sample["d40_strictly_worse_than_peak_pct"],
             "median_extra_adverse_r": sample["median_extra_adverse_r"],
         }
+    if breakout_candidate_keys is not None:
+        # Private transient handoff: the permanent D40 Extension sample payload
+        # remains byte/schema compatible with all earlier model reports.
+        sample["_shared_ao_boundary_rows"] = _shared_ao_boundary_rows(
+            common, model_ids=tuple(predictions_by_model),
+            split_label=split_label,
+            breakout_candidate_keys=breakout_candidate_keys,
+        )
     return result, sample
 
 
@@ -282,9 +344,16 @@ def attach_full_horizon_mae_common_truth_extension(
     )
     truth = _canonical_truth(bundle)
     label = "Rolling OOS" if evaluation_mode == "rolling_oos" else "Forward OOS"
-    rows, sample = build_paired_full_horizon_mae_rows(
-        truth=truth, predictions_by_model=participants, split_label=label
+    # Same official breakout event membership as the per-model SOP, filtering
+    # the daily-universal cohort only; never re-rank Safety within the slice.
+    candidate_keys = load_official_breakout_candidate_keys(
+        str(reference.filter_id), allow_stale_source=False
     )
+    rows, sample = build_paired_full_horizon_mae_rows(
+        truth=truth, predictions_by_model=participants, split_label=label,
+        breakout_candidate_keys=candidate_keys,
+    )
+    boundary_rows = sample.pop("_shared_ao_boundary_rows")
     for item in copied:
         model_id = str(item["model_id"])
         if model_id not in rows:
@@ -292,14 +361,20 @@ def attach_full_horizon_mae_common_truth_extension(
         payload = item["payload"]
         persisted = [
             dict(ext) for ext in list(payload.get("comparison_extensions") or [])
-            if str(dict(ext).get("id") or "") != EXTENSION_ID
+            if str(dict(ext).get("id") or "") not in {EXTENSION_ID, SHARED_BOUNDARY_EXTENSION_ID}
         ]
         persisted.append({"id": EXTENSION_ID, "rows": [rows[model_id]], "paired_truth": sample})
+        persisted.append({
+            "id": SHARED_BOUNDARY_EXTENSION_ID,
+            "rows": boundary_rows[model_id],
+            "cohort_semantic": "AO original adverse-to-peak P45-P55 from full mature daily universe; "
+                "same joined OOS ticker/date and original AO True-HS; breakout membership filter only",
+        })
         payload["comparison_extensions"] = persisted
     return copied
 
 
 __all__ = [
-    "EXTENSION_ID", "build_paired_full_horizon_mae_rows",
+    "EXTENSION_ID", "SHARED_BOUNDARY_EXTENSION_ID", "build_paired_full_horizon_mae_rows",
     "attach_full_horizon_mae_common_truth_extension",
 ]

@@ -242,6 +242,8 @@ RANKER_REPORT_JSON_FILENAME = "continuous_ranker_report.json"
 RANKER_REPORT_MARKDOWN_FILENAME = "continuous_ranker_report.md"
 RANKER_TARGET_FILENAME = "group_target_daily_percentile.npy"
 EPOCH_PROGRESS_MARKER_ENV = "BREAKOUT_QUALITY_EPOCH_PROGRESS_MARKERS"
+# Canonical original-AO Safety boundary for HS qualification evidence.
+HS_QUALIFICATION_P45_P55_BAND = (0.45, 0.55)
 
 
 def _emit_epoch_progress_marker(phase: str, epoch: int, total_epochs: int) -> None:
@@ -2891,7 +2893,7 @@ def hs_conditional_mfe_metrics(
 
     hs_qualification_boundary = {
         "p40_p60": qualification_band_metrics(0.40, 0.60),
-        "p45_p55": qualification_band_metrics(0.45, 0.55),
+        "p45_p55": qualification_band_metrics(*HS_QUALIFICATION_P45_P55_BAND),
     }
 
     if predicted_safety_percentile is None:

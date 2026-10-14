@@ -307,6 +307,22 @@ MODEL_MODE_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
 # not a per-model head/fit evidence capability (and cannot be emitted by the
 # canonical per-model extension payload producer).
 MODEL_COMPARISON_ONLY_EXTENSION_SCHEMAS: Mapping[str, IndependentlyFrozenModelExtensionContract] = {
+    "ao_safety_p45_p55_shared_cohort": IndependentlyFrozenModelExtensionContract(
+        "ao_safety_p45_p55_shared_cohort", "AO Safety P45-P55 / Paired Common Cohort",
+        "post_fit_original_ao_boundary_and_validated_raw_safety_oos_scores",
+        (T("ao_safety_p45_p55_shared_cohort", (
+            C("split", "Split", alignment="left"),
+            C("ao_boundary_stock_days", "AO band stock-days", alignment="right"),
+            C("ao_boundary_dates", "AO band dates", alignment="right"),
+            C("rankable_dates", "Rankable dates", alignment="right"),
+            C("comparable_pairs", "Comparable pairs", alignment="right"),
+            C("ao_boundary_p45_p55_pair", "Shared P45-P55 Pair", 2, "%", "higher", "fraction_pct"),
+        )),),
+        comparison_mode="row_tables",
+        comparison_row_keys=(("ao_safety_p45_p55_shared_cohort", "rows"),),
+        comparison_scope_key="split",
+        robustness_aggregation="single_seed_only",
+    ),
     "full_horizon_mae_common_truth": IndependentlyFrozenModelExtensionContract(
         "full_horizon_mae_common_truth", "Full-Horizon MAE / Paired Common Truth",
         "post_fit_mature_full_horizon_mae_and_raw_safety_scores",
@@ -897,6 +913,7 @@ def independently_frozen_model_extension_contract_fingerprints() -> dict[str, st
 # Model-specific, user-authorized research evidence is frozen separately so its
 # introduction does not rewrite the 2026-09-04 Standard Comparison identity.
 APPROVED_INDEPENDENT_MODEL_EXTENSION_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
+    "ao_safety_p45_p55_shared_cohort": "549709f23944be8f",
     "full_horizon_mae_common_truth": "94ccca56a41ca540",
 }
 

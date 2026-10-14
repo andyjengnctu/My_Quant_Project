@@ -35,6 +35,7 @@ def case() -> None:
     # model-specific evidence has its own schema-version/fingerprint guard.
     assert persistent_report_contract_fingerprints()["model.standard_comparison"] == "0626f6512f145d23"
     assert independently_frozen_model_extension_contract_fingerprints() == {
+        "ao_safety_p45_p55_shared_cohort": "549709f23944be8f",
         "full_horizon_mae_common_truth": "94ccca56a41ca540",
     }
     ext = extension_contract("full_horizon_mae_common_truth")
@@ -44,6 +45,15 @@ def case() -> None:
                    for reason in validate_approved_persistent_report_contracts())
     assert validate_approved_persistent_report_contracts() == ()
     assert ext.comparison_scope_key == "split"
+    boundary_contract = extension_contract("ao_safety_p45_p55_shared_cohort")
+    assert boundary_contract.contract_version == 1
+    assert boundary_contract.comparison_scope_key == "split"
+    with patch.dict(MODEL_COMPARISON_ONLY_EXTENSION_SCHEMAS, {
+        boundary_contract.extension_id: replace(boundary_contract, title=boundary_contract.title + " altered")
+    }):
+        assert any("UNAUTHORIZED_MODEL_SPECIFIC_EXTENSION_CHANGE" in reason
+                   for reason in validate_approved_persistent_report_contracts())
+    assert validate_approved_persistent_report_contracts() == ()
     assert "model" == comparison_extension_contract(ext.extension_id).tables[0].columns[0].key
     base = pd.DataFrame({
         "date": list(pd.to_datetime(["2023-01-10"] * 6 + ["2023-01-11"] * 6)),
@@ -81,6 +91,48 @@ def case() -> None:
     else:
         raise AssertionError("mismatched group ID was accepted")
 
+    # Compare on AO's FULL mature daily-universal boundary, not the
+    # matched-score subset or CC's different D40 band.  21 rows/day makes
+    # P45-P55 contain both original True-HS and True-LS labels.
+    indices = list(range(21))
+    cohort_truth = pd.DataFrame({
+        "date": list(pd.to_datetime(["2023-01-10"] * 21 + ["2023-01-11"] * 21)),
+        "ticker": [f"{i:04d}" for i in indices] * 2,
+        "group_index": list(range(42)),
+        "old_safety_r": [-float(i) / 100.0 for i in indices] * 2,
+        # Deliberately different ordering from AO adverse-to-peak.
+        "d40_r": [1.0 + float((i * 7) % 21) / 100.0 for i in indices] * 2,
+    })
+    matched_a = cohort_truth[["ticker", "date", "group_index"]].copy()
+    matched_a["safety_prediction"] = [-float(i) / 30.0 + 0.99 for i in indices] * 2
+    matched_b = cohort_truth[["ticker", "date", "group_index"]].copy()
+    matched_b["safety_prediction"] = [float(i) / 30.0 for i in indices] * 2
+    # Missing a scored out-of-band row cannot re-rank original AO P45-P55.
+    matched_a = matched_a[matched_a["ticker"] != "0000"].copy()
+    candidate_keys = {
+        (f"{i:04d}", pd.Timestamp(day))
+        for day in ("2023-01-10", "2023-01-11") for i in (9, 10, 11, 12)
+    }
+    subrows, audit = build_paired_full_horizon_mae_rows(
+        truth=cohort_truth,
+        predictions_by_model={"MR-13AO": matched_a, "MR-13CC": matched_b},
+        split_label="Rolling OOS", breakout_candidate_keys=candidate_keys,
+    )
+    evidence = audit.pop("_shared_ao_boundary_rows")
+    assert subrows["MR-13AO"]["paired_stock_days"] == 40
+    for mode in ("Rolling OOS", "Breakout slice"):
+        ao_row = next(row for row in evidence["MR-13AO"] if row["split"] == mode)
+        cc_row = next(row for row in evidence["MR-13CC"] if row["split"] == mode)
+        assert ao_row["cohort_sha256"] == cc_row["cohort_sha256"]
+        assert ao_row["ao_boundary_stock_days"] == cc_row["ao_boundary_stock_days"]
+        assert ao_row["rankable_dates"] == cc_row["rankable_dates"] == 2
+        assert ao_row["ao_boundary_p45_p55_pair"] == 1.0
+        assert cc_row["ao_boundary_p45_p55_pair"] == 0.0
+        assert ao_row["comparable_pairs"] == cc_row["comparable_pairs"] == 4
+        assert ao_row["ao_boundary_stock_days"] == 6
+    # Historical per-model P45 figures remain separate and unmodified.
+    assert "_shared_ao_boundary_rows" not in audit
+
     # Synthetic integration without any formal Test Suite, market download or retraining.
     import services.breakout_quality.full_horizon_mae_comparison as svc
     from config.breakout_quality import BREAKOUT_QUALITY_MODEL_TEST_PROFILES
@@ -114,17 +166,29 @@ def case() -> None:
         # Regression: the daily AO/CC comparison must not load the event-group
         # Continuous Target manifest.  This temp root deliberately has no such
         # manifest, while the canonical daily loader supplies its embedded truth.
-        with patch.object(svc, "load_daily_universal_ranker_data", return_value=bundle) as daily_loader:
+        canonical_candidate_keys = {
+            (str(forward_b.iloc[i]["ticker"]), pd.Timestamp(forward_b.iloc[i]["date"]))
+            for i in (2, 3, 8, 9)
+        }
+        with patch.object(svc, "load_daily_universal_ranker_data", return_value=bundle) as daily_loader, \
+                patch.object(svc, "load_official_breakout_candidate_keys", return_value=canonical_candidate_keys) as candidates_loader:
             result = attach_full_horizon_mae_common_truth_extension(
                 models, evaluation_mode="forward_oos", project_root=Path(tmp)
             )
             daily_loader.assert_called_once()
+            candidates_loader.assert_called_once()
+            assert candidates_loader.call_args.kwargs["allow_stale_source"] is False
             kwargs = daily_loader.call_args.kwargs
             assert kwargs["experiment_profile"] == cc[1]
             assert kwargs["project_root"] == Path(tmp)
             assert kwargs["preload_feature_bank"] is False
             assert kwargs["allow_stale_source"] is False
-        assert all(len(item["payload"].get("comparison_extensions", [])) == 1 for item in result)
+        assert all(len(item["payload"].get("comparison_extensions", [])) == 2 for item in result)
+        boundary_ext = [next(ext for ext in item["payload"]["comparison_extensions"]
+                             if ext["id"] == "ao_safety_p45_p55_shared_cohort") for item in result]
+        assert all(len(ext["rows"]) == 2 for ext in boundary_ext)
+        assert boundary_ext[0]["rows"][0]["cohort_sha256"] == boundary_ext[1]["rows"][0]["cohort_sha256"]
+        assert boundary_ext[0]["rows"][1]["cohort_sha256"] == boundary_ext[1]["rows"][1]["cohort_sha256"]
         assert all(not item["payload"] for item in models), "source reports were mutated"
         # Same persisted rows render identically after RUN and REUSE.
         views = [{"model_id": item["model_id"], "view": {"extensions": item["payload"]["comparison_extensions"]}}
@@ -132,6 +196,7 @@ def case() -> None:
         text_a = _render_model_comparison_specific_extensions(views, target="markdown")
         text_b = _render_model_comparison_specific_extensions(views, target="markdown")
         assert text_a == text_b and "D40 Daily rho" in str(text_a)
+        assert "Shared P45-P55 Pair" in str(text_a) and "Breakout slice" in str(text_a)
         # Rolling OOS must retain the same evidence/split semantics on PIT scores.
         rolling_items = []
         for mid, settings, old_contract in paths:
@@ -146,7 +211,8 @@ def case() -> None:
                 "contract": SimpleNamespace(score_path=rolling_path, continuous_target_id="same_target"),
                 "payload": {},
             })
-        with patch.object(svc, "load_daily_universal_ranker_data", return_value=bundle):
+        with patch.object(svc, "load_daily_universal_ranker_data", return_value=bundle), \
+                patch.object(svc, "load_official_breakout_candidate_keys", return_value=canonical_candidate_keys):
             rolling = attach_full_horizon_mae_common_truth_extension(
                 rolling_items, evaluation_mode="rolling_oos", project_root=Path(tmp)
             )
@@ -156,7 +222,8 @@ def case() -> None:
         unsafe_frame.loc[unsafe_frame.index[0], "model_information_cutoff"] = "2023-01-10"
         unsafe_frame.to_csv(unsafe_path, index=False)
         try:
-            with patch.object(svc, "load_daily_universal_ranker_data", return_value=bundle):
+            with patch.object(svc, "load_daily_universal_ranker_data", return_value=bundle), \
+                    patch.object(svc, "load_official_breakout_candidate_keys", return_value=canonical_candidate_keys):
                 attach_full_horizon_mae_common_truth_extension(
                     rolling_items, evaluation_mode="rolling_oos", project_root=Path(tmp)
                 )
