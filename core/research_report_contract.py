@@ -323,6 +323,25 @@ MODEL_COMPARISON_ONLY_EXTENSION_SCHEMAS: Mapping[str, IndependentlyFrozenModelEx
         comparison_scope_key="split",
         robustness_aggregation="single_seed_only",
     ),
+    "joint_mfe_d40_quadrant_proper_scores": IndependentlyFrozenModelExtensionContract(
+        "joint_mfe_d40_quadrant_proper_scores", "Joint MFE-D40 Quadrant / Proper Scores",
+        "post_fit_validated_joint_class_probabilities_and_mature_daily_truth",
+        (T("joint_mfe_d40_quadrant_proper_scores", (
+            C("split", "Split", alignment="left"),
+            C("stock_days", "Stock-days", alignment="right"),
+            C("dates", "Dates", alignment="right"),
+            C("multiclass_logloss", "4-class CE", 4, preference="lower", format_kind="number"),
+            C("joint_brier", "Joint Brier", 4, preference="lower", format_kind="number"),
+            C("independent_brier", "Indep-proj Brier", 4, preference="lower", format_kind="number"),
+            C("joint_base_rate_pct", "Event base rate", 2, "%", "neutral", "pct"),
+            C("joint_predicted_pct", "Predicted event", 2, "%", "neutral", "pct"),
+            C("top10_joint_hit_pct", "Top10 event hit", 2, "%", "higher", "pct"),
+        )),),
+        comparison_mode="row_tables",
+        comparison_row_keys=(("joint_mfe_d40_quadrant_proper_scores", "rows"),),
+        comparison_scope_key="split",
+        robustness_aggregation="single_seed_only",
+    ),
     "full_horizon_mae_common_truth": IndependentlyFrozenModelExtensionContract(
         "full_horizon_mae_common_truth", "Full-Horizon MAE / Paired Common Truth",
         "post_fit_mature_full_horizon_mae_and_raw_safety_scores",
@@ -914,6 +933,7 @@ def independently_frozen_model_extension_contract_fingerprints() -> dict[str, st
 # introduction does not rewrite the 2026-09-04 Standard Comparison identity.
 APPROVED_INDEPENDENT_MODEL_EXTENSION_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
     "ao_safety_p45_p55_shared_cohort": "549709f23944be8f",
+    "joint_mfe_d40_quadrant_proper_scores": "bdcb099c84b573eb",
     "full_horizon_mae_common_truth": "94ccca56a41ca540",
 }
 

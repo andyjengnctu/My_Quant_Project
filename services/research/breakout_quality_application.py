@@ -106,6 +106,7 @@ from services.breakout_quality.standard_model_sop import (
 from services.breakout_quality.full_horizon_mae_comparison import (
     attach_full_horizon_mae_common_truth_extension,
 )
+from services.breakout_quality.joint_mfe_d40_comparison import attach_joint_mfe_d40_extension
 from services.breakout_quality.model_report_extensions import (
     build_core_model_report_extensions,
     extension_missing_evidence,
@@ -5024,6 +5025,11 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
         })
 
     completed = attach_full_horizon_mae_common_truth_extension(
+        completed,
+        evaluation_mode="rolling_oos" if rolling else "forward_oos",
+        project_root=PROJECT_ROOT,
+    )
+    completed = attach_joint_mfe_d40_extension(
         completed,
         evaluation_mode="rolling_oos" if rolling else "forward_oos",
         project_root=PROJECT_ROOT,

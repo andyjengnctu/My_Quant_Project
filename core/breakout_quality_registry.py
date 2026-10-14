@@ -47,6 +47,7 @@ from core.breakout_quality_runtime import (
     TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_JOINT_MFE_D40_QUADRANT,
     CONTINUOUS_RANKER_TRAINER_EVENT,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
@@ -386,6 +387,7 @@ DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
 DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_HORIZON_MAE_PROFILE = (
     "daily_universal_shared_safety_hs_conditional_mfe_full_horizon_mae_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE = "daily_universal_joint_mfe_d40_quadrant_cross_entropy"
 DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_PIT_TRADE_COUNT_PROFILE = (
     "daily_universal_shared_safety_hs_conditional_mfe_pit_trade_count_full_list_ndcg_pairwise"
 )
@@ -1567,6 +1569,18 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_shared_safety_mfe_v1",
+    ),
+    DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_JOINT_MFE_D40_QUADRANT,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="joint_quadrant_cross_entropy",
+        epoch_selection_metric="joint_validation_cross_entropy",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_joint_quadrant_v1",
     ),
     DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_PIT_TRADE_COUNT_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_PIT_TRADE_COUNT_PROFILE,
@@ -2964,6 +2978,31 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         model_gate_reference_profile_name=(
             DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
         ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE,
+        model_research_id="MR-13CD",
+        experiment_name="MR-13CD Daily Universal Joint MFE40 and D40 Quadrant Distribution",
+        phase="13CD",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "Same-date P50 of canonical full-horizon pure MFE/R and -full-40bar MAE/R; "
+            "quadrants 0=lowMFE/highMAE, 1=lowMFE/lowMAE, "
+            "2=highMFE/highMAE, 3=highMFE/lowMAE"
+        ),
+        objective_description=(
+            "Four-class joint outcome softmax distribution, categorical cross-entropy, "
+            "Validation proper scoring (multiclass CE and class-3 Brier), "
+            "class-3 joint-event probability for cross-sectional score. "
+            "Adjusted 300x10, 40D, same-day percentile P50 fixed without OOS tuning. "
+            "All four mutually exclusive class probabilities are persisted; "
+            "no Trading promotion or PIT authorization, no existing SOP alteration."
+        ),
+        metric_scope="joint_mfe_d40_four_quadrant_proper_scoring_and_mfe_control",
+        score_semantic_id="daily_p_high_mfe_and_low_40d_mae",
+        model_gate_reference_profile_name=DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         selection_pit_authorized=False,
         current_time_validation_authorized=False,
     ),

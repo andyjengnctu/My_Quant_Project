@@ -569,6 +569,11 @@ def build_inception_variant_spec(architecture: str) -> BreakoutQualityModelSpec:
         sequence_input_paths=tuple(options["sequence_input_paths"]),
         head_width=options.get("head_width"),
     )
+    output_classes = options.get("classifier_output_classes")
+    if output_classes is not None:
+        if int(output_classes) < 2:
+            raise ValueError("categorical classifier width must be at least 2")
+        spec = replace(spec, classifier_output_classes=int(output_classes))
     adaptive_safety_horizon_bars = options.get("adaptive_safety_horizon_bars")
     if adaptive_safety_horizon_bars is not None:
         horizon_bars = int(adaptive_safety_horizon_bars)

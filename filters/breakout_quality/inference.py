@@ -126,7 +126,13 @@ def strict_parallel_batched_logits(
     else:
         idx = np.asarray(indices, dtype=np.int64)
         row_count = int(idx.size)
-    output_width = _resolve_output_width(output_head)
+    output_width = (
+        int(getattr(model, "default_output_width", _resolve_output_width(None)))
+        if output_head is None
+        else _resolve_output_width(output_head)
+    )
+    if output_width < 2:
+        raise ValueError("invalid declared model inference output width")
     if row_count == 0:
         return np.empty((0, output_width), dtype=np.float32)
     explicit_market_groups = (

@@ -9,6 +9,7 @@ its private helpers or inject the trainer module as an implementation object.
 from __future__ import annotations
 
 from filters.breakout_quality.safety_primary_target import build_safety_primary_targets
+from filters.breakout_quality.joint_mfe_d40 import build_joint_mfe_d40_quadrants, joint_probabilistic_metrics
 
 from services.breakout_quality.train_continuous_ranker import (
     CONDITIONAL_MFE_SAFETY_TRAINING_CONTRACT,
@@ -63,6 +64,8 @@ __all__ = [
     "RANKER_SCORE_FILENAME",
     "RANKER_TARGET_FILENAME",
     "build_safety_primary_targets",
+    "build_joint_mfe_d40_quadrants",
+    "joint_probabilistic_metrics",
     "build_conditional_targets",
     "build_conditional_mfe_opportunity_targets_for_training",
     "build_hs_conditional_mfe_targets",

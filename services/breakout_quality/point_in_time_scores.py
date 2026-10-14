@@ -51,6 +51,7 @@ from core.breakout_quality_policy import (
 )
 from core.breakout_quality_runtime import (
     get_continuous_ranker_persisted_score_columns,
+    get_continuous_ranker_score_output_columns,
     get_continuous_ranker_training_policy,
 )
 from filters.breakout_quality.artifacts import build_file_manifest
@@ -656,11 +657,8 @@ def _score_output_capability(bundle) -> dict[str, Any] | None:
 
 
 def _score_output_columns(bundle) -> dict[str, str]:
-    policy = _score_output_policy(bundle)
-    return (
-        {"primary": "breakout_quality_score"}
-        if policy is None
-        else policy.manifest_columns()
+    return get_continuous_ranker_score_output_columns(
+        str(bundle.profile.training_objective)
     )
 
 

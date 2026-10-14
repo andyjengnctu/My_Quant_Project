@@ -1483,18 +1483,28 @@ def run(args) -> int:
             forward_components["predicted_adverse_r"][oos_component_positions],
         )
     else:
-        common = {
-            "batch_size": int(args.evaluation_batch_size),
-            "plan": plan,
-            "training_objective": bundle.profile.training_objective,
-            "group_dates": bundle.group_table["date"],
-        }
-        validation_scores = ranker_api.predict_scores(
-            torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids, **common
-        )
-        forward_scores = ranker_api.predict_scores(
-            torch, model, bundle.feature_bank, bundle.group_context, forward_score_ids, **common
-        )
+        if training_policy.categorical_class_count is not None:
+            validation_scores, validation_sidecars = predict_score_output_payload(
+                torch, model, bundle, split.validation_ids,
+                batch_size=int(args.evaluation_batch_size), plan=plan,
+            )
+            forward_scores, forward_sidecars = predict_score_output_payload(
+                torch, model, bundle, forward_score_ids,
+                batch_size=int(args.evaluation_batch_size), plan=plan,
+            )
+        else:
+            common = {
+                "batch_size": int(args.evaluation_batch_size),
+                "plan": plan,
+                "training_objective": bundle.profile.training_objective,
+                "group_dates": bundle.group_table["date"],
+            }
+            validation_scores = ranker_api.predict_scores(
+                torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids, **common
+            )
+            forward_scores = ranker_api.predict_scores(
+                torch, model, bundle.feature_bank, bundle.group_context, forward_score_ids, **common
+            )
     score_by_group = np.full(len(bundle.group_table), np.nan, dtype=np.float32)
     score_by_group[forward_score_ids] = forward_scores
     oos_scores = score_by_group[split.oos_ids]
@@ -1961,6 +1971,13 @@ def run(args) -> int:
             forward_score_ids[evaluable_forward_mask]
         ]
     oos_frame["model_score"] = forward_scores
+    if training_policy.categorical_class_count is not None:
+        for column, values in forward_sidecars.items():
+            oos_frame[str(column)] = np.asarray(values, dtype=np.float32)
+        joint_labels = ranker_api.build_joint_mfe_d40_quadrants(
+            bundle.group_table, np.isfinite(np.asarray(bundle.raw_target, dtype=np.float32))
+        )
+        oos_frame["target_joint_quadrant_class"] = joint_labels[forward_score_ids]
     if forward_heads is not None:
         if safety_primary_duo:
             oos_frame["raw_safety_score"] = forward_heads["raw_safety"]
@@ -2021,7 +2038,9 @@ def run(args) -> int:
             "training_label_scope": bundle.profile.training_label_scope,
             "target": target_id,
             "model_score": (
-                "predicted_r_two_logit_margin"
+                "p_high_mfe_and_low_full_horizon_mae"
+                if training_policy.categorical_class_count is not None
+                else "predicted_r_two_logit_margin"
                 if training_policy.score_transform == CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R
                 and loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R
                 else "predicted_favorable_mfe_r_minus_predicted_adverse_to_peak_r"

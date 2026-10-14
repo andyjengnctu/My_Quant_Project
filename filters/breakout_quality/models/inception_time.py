@@ -238,7 +238,8 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             else:
                 self.context_network = None
                 classifier_input = module_output_channels
-            self.classifier = nn.Linear(classifier_input, 2)
+            self.default_output_width = int(spec.classifier_output_classes or 2)
+            self.classifier = nn.Linear(classifier_input, self.default_output_width)
             self.conditional_safety_classifier = (
                 nn.Linear(module_output_channels + 1, 2)
                 if use_conditional_mfe_safety

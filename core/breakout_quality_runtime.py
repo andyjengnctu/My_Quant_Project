@@ -99,6 +99,7 @@ TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING = (
 )
 TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING = "daily_hmhs_pairwise_ranking"
 TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING = "daily_listwise_ranking"
+TRAINING_OBJECTIVE_DAILY_JOINT_MFE_D40_QUADRANT = "daily_joint_mfe_d40_quadrant_cross_entropy"
 
 CONTINUOUS_RANKER_TRAINER_EVENT = "event"
 CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL = "daily_universal"
@@ -404,6 +405,7 @@ CONTINUOUS_RANKER_TARGET_BUILDER_HS_PRIORITY_MFE = "hs_priority_mfe"
 CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS = "safety_raw_mfe_hmhs"
 CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN = "safety_raw_mfe_joint_min"
 CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS = "direct_hmhs"
+CONTINUOUS_RANKER_TARGET_BUILDER_JOINT_MFE_D40 = "joint_mfe_d40_quadrants"
 CONTINUOUS_RANKER_LOSS_HANDLER_PERCENTILE_MSE = "percentile_mse"
 CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R = "raw_r_regression"
 CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R = "dual_component_r_regression"
@@ -433,6 +435,7 @@ CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE = (
 )
 CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE = "safety_mfe_joint_tri_pairwise"
 CONTINUOUS_RANKER_LOSS_HANDLER_LISTWISE = "listwise"
+CONTINUOUS_RANKER_LOSS_HANDLER_CATEGORICAL_CE = "categorical_cross_entropy"
 CONTINUOUS_RANKER_AUX_TARGET_NONE = "none"
 CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_SAFETY = "conditional_mfe_safety"
 CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY = "conditional_mfe_opportunity"
@@ -695,8 +698,22 @@ class ContinuousRankerTrainingPolicy:
     # composition, not a workflow/model-ID whitelist.  Consumers discover
     # applicable Model-specific Extensions through these stable family IDs.
     report_evidence_families: tuple[str, ...] = ()
+    categorical_class_count: int | None = None
+    categorical_primary_class: int | None = None
+    categorical_score_columns: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        if self.categorical_class_count is not None:
+            count = int(self.categorical_class_count)
+            primary = self.categorical_primary_class
+            if (count < 2 or primary is None or not 0 <= int(primary) < count
+                    or len(self.categorical_score_columns) != count
+                    or len(set(self.categorical_score_columns)) != count):
+                raise ValueError("invalid categorical class count/primary/score column mapping")
+            if self.score_output_policy is not None or self.loss_handler != CONTINUOUS_RANKER_LOSS_HANDLER_CATEGORICAL_CE:
+                raise ValueError("categorical probabilities require categorical cross-entropy policy")
+        elif self.categorical_primary_class is not None or self.categorical_score_columns:
+            raise ValueError("categorical primary/columns require class count")
         if self.batch_mode not in {
             CONTINUOUS_RANKER_BATCH_MODE_SHUFFLED,
             CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
@@ -861,6 +878,8 @@ class ContinuousRankerTrainingPolicy:
         These labels affect only execution dispatch. Historical profile
         ``epoch_selection_metric`` and all scientific identity fields stay as-is.
         """
+        if self.loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_CATEGORICAL_CE:
+            return "categorical_cross_entropy_then_event_brier"
         if self.loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R:
             return "regression_loss_then_spearman"
         if self.target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS:
@@ -1595,6 +1614,19 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_DIRECT_HMHS,
             uses_pairwise_loss=True,
         ),
+        TRAINING_OBJECTIVE_DAILY_JOINT_MFE_D40_QUADRANT: ContinuousRankerTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_JOINT_MFE_D40,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_CATEGORICAL_CE,
+            profile_loss_metrics=(("joint_quadrant_cross_entropy", "joint_validation_cross_entropy"),),
+            categorical_class_count=4,
+            categorical_primary_class=3,
+            categorical_score_columns=(
+                "joint_p_low_mfe_high_mae", "joint_p_low_mfe_low_mae",
+                "joint_p_high_mfe_high_mae", "joint_p_high_mfe_low_mae",
+            ),
+            epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+        ),
         TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_PERCENTILE,
@@ -1645,6 +1677,10 @@ def get_continuous_ranker_score_output_columns(training_objective: str) -> dict[
 
     policy = get_continuous_ranker_training_policy(str(training_objective))
     output_policy = policy.score_output_policy
+    if policy.categorical_class_count is not None:
+        return {"primary": "breakout_quality_score", **{
+            f"class_{i}": column for i, column in enumerate(policy.categorical_score_columns)
+        }}
     return (
         {"primary": "breakout_quality_score"}
         if output_policy is None
@@ -1657,6 +1693,9 @@ def get_continuous_ranker_persisted_score_columns() -> tuple[str, ...]:
 
     columns: list[str] = []
     for training_policy in _continuous_ranker_training_policies().values():
+        for column in training_policy.categorical_score_columns:
+            if column not in columns:
+                columns.append(str(column))
         output_policy = training_policy.score_output_policy
         if output_policy is None:
             continue

@@ -651,6 +651,25 @@ def training_semantics(profile) -> dict[str, Any]:
             raw_r_regression_contract=contract,
         )
 
+    if recipe.training_policy.categorical_class_count is not None:
+        # The new categorical capability must describe its actual supervision and
+        # date-coherent batching, not inherit the historical shuffled MSE label.
+        # Only these new semantics are added; old profile payloads are unchanged.
+        policy = recipe.training_policy
+        return _extended_semantics(
+            batching=str(policy.batch_mode),
+            joint_categorical_contract={
+                "target_builder": str(policy.target_builder),
+                "target_class_count": int(policy.categorical_class_count),
+                "class_score_columns": list(policy.categorical_score_columns),
+                "joint_event_class": int(policy.categorical_primary_class),
+                "loss": str(policy.loss_handler),
+                "epoch_selection": str(policy.epoch_selection_rule),
+                "model_score": "probability_of_joint_event_class",
+                "target_source": "same_date_mature_daily_universal_future_path_no_inference_future_features",
+            },
+        )
+
     if semantics_key != CONTINUOUS_RANKER_SEMANTICS_DEFAULT:
         raise ValueError(f"unsupported continuous-ranker semantics capability: {semantics_key}")
     # Preserve the historical compact payload for percentile regression profiles.

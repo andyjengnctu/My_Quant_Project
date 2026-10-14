@@ -24,6 +24,7 @@ MULTISCALE_CNN_REGIME_CONTEXT_V1 = "multiscale_cnn_regime_context_v1"
 MULTISCALE_CNN_SEQUENCE_ONLY_V1 = "multiscale_cnn_sequence_only_v1"
 MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1 = "multiscale_cnn_sequence_only_dual_path_v1"
 INCEPTION_TIME_V1 = "inception_time_v1"
+INCEPTION_TIME_JOINT_QUADRANT_V1 = "inception_time_joint_quadrant_v1"
 INCEPTION_TIME_RISK_CONTEXT_V1 = "inception_time_risk_context_v1"
 INCEPTION_TIME_PREDICTED_UPSIDE_CONTEXT_V1 = "inception_time_predicted_upside_context_v1"
 INCEPTION_TIME_PREDICTED_SAFETY_CONTEXT_V1 = "inception_time_predicted_safety_context_v1"
@@ -151,6 +152,7 @@ _ARCHITECTURE_DESCRIPTORS = (
     _descriptor(MULTISCALE_CNN_SEQUENCE_ONLY_V1, active=True, active_order=14, spec_builder="multiscale_cnn", runtime_builder="multiscale_cnn", use_dataset_context=False),
     _descriptor(MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1, active=False, spec_builder="multiscale_cnn", runtime_builder="multiscale_cnn", use_dataset_context=False, sequence_input_paths=("raw_level", "window_zscore"), window_normalization_epsilon=1e-5),
     _descriptor(INCEPTION_TIME_V1, active=True, active_order=0, spec_builder="inception_variant", runtime_builder="inception_time", family="inception_time", pooling=("global_average",), use_dataset_context=False, sequence_input_paths=("raw_level",), head_width=None),
+    _descriptor(INCEPTION_TIME_JOINT_QUADRANT_V1, active=True, active_order=43, spec_builder="inception_variant", runtime_builder="inception_time", family="inception_time", pooling=("global_average",), use_dataset_context=False, sequence_input_paths=("raw_level",), classifier_output_classes=4),
     _descriptor(INCEPTION_TIME_RISK_CONTEXT_V1, active=True, active_order=1, spec_builder="inception_variant", runtime_builder="inception_time", capabilities=("risk_context",), family="inception_time_risk_context", pooling=("global_average", "risk_context_mlp_concat"), use_dataset_context=True, sequence_input_paths=("raw_level", "universal_risk_economic_context"), head_width=16),
     _descriptor(INCEPTION_TIME_PREDICTED_UPSIDE_CONTEXT_V1, active=True, active_order=2, spec_builder="inception_variant", runtime_builder="inception_time", capabilities=("predicted_upside_context",), family="inception_time_predicted_upside_context", pooling=("global_average", "predicted_upside_percentile_concat"), use_dataset_context=True, sequence_input_paths=("raw_level", "pit_safe_predicted_upside_percentile"), head_width=None),
     _descriptor(INCEPTION_TIME_PREDICTED_SAFETY_CONTEXT_V1, active=True, active_order=3, spec_builder="inception_variant", runtime_builder="inception_time", capabilities=("predicted_safety_context",), family="inception_time_predicted_safety_context", pooling=("global_average", "predicted_safety_percentile_concat"), use_dataset_context=True, sequence_input_paths=("raw_level", "pit_safe_predicted_safety_percentile"), head_width=None),

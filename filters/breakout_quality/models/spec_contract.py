@@ -20,6 +20,7 @@ class BreakoutQualityModelSpec:
     normalization: str | None = None
     normalization_groups: int | None = None
     head_width: int | None = None
+    classifier_output_classes: int | None = None
     branch_downsample_factors: tuple[int, ...] = ()
     branch_kernel_sizes: tuple[tuple[int, ...], ...] = ()
     branch_summary_windows_bars: tuple[tuple[int, ...], ...] = ()
@@ -250,6 +251,7 @@ class BreakoutQualityModelSpec:
             "normalization": self.normalization,
             "normalization_groups": self.normalization_groups,
             "head_width": self.head_width,
+            "classifier_output_classes": self.classifier_output_classes,
             "price_volume_structure_time_bins": self.price_volume_structure_time_bins,
             "price_volume_structure_price_bins": self.price_volume_structure_price_bins,
             "price_volume_structure_price_span_atr": self.price_volume_structure_price_span_atr,

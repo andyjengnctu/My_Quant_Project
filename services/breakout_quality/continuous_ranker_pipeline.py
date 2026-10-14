@@ -279,6 +279,21 @@ def predict_score_output_payload(
         str(bundle.profile.training_objective)
     )
     output_policy = training_policy.score_output_policy
+    if training_policy.categorical_class_count is not None:
+        ids = np.asarray(group_ids, dtype=np.int64)
+        logits = strict_parallel_batched_logits(
+            torch, model, bundle.feature_bank, bundle.group_context,
+            indices=ids, batch_size=int(batch_size), workers=1, execution_plan=plan,
+        ).astype(np.float64)
+        if logits.ndim != 2 or logits.shape[1] != int(training_policy.categorical_class_count):
+            raise ValueError("categorical score payload width mismatch")
+        shifted = logits - np.max(logits, axis=1, keepdims=True)
+        exp = np.exp(shifted)
+        probs = (exp / exp.sum(axis=1, keepdims=True)).astype(np.float32)
+        return (
+            probs[:, int(training_policy.categorical_primary_class)].copy(),
+            {column: probs[:, i].copy() for i, column in enumerate(training_policy.categorical_score_columns)},
+        )
     if output_policy is None:
         return (
             predict_scores(

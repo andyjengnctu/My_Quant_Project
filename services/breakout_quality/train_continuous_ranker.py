@@ -42,6 +42,8 @@ from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_SAFETY,
     CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R,
     CONTINUOUS_RANKER_LOSS_HANDLER_LISTWISE,
+    CONTINUOUS_RANKER_LOSS_HANDLER_CATEGORICAL_CE,
+    CONTINUOUS_RANKER_TARGET_BUILDER_JOINT_MFE_D40,
     CONTINUOUS_RANKER_LOSS_HANDLER_PERCENTILE_MSE,
     CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
@@ -76,6 +78,9 @@ from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_TRAINER_EVENT,
     get_continuous_ranker_training_policy,
+)
+from filters.breakout_quality.joint_mfe_d40 import (
+    build_joint_mfe_d40_quadrants, joint_probabilistic_metrics,
 )
 from core.breakout_quality_runtime_resolver import (
     get_continuous_ranker_execution_recipe,
@@ -2393,7 +2398,17 @@ def _train_epoch(
                     continue
             else:
                 logits = model(xb, cb)
-                if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_PERCENTILE_MSE:
+                if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_CATEGORICAL_CE:
+                    classes = int(training_policy.categorical_class_count or 0)
+                    if logits.ndim != 2 or int(logits.shape[1]) != classes:
+                        raise ValueError("categorical logits width differs from training contract")
+                    if target.ndim != 1 or torch.any(~torch.isfinite(target)) or torch.any(target != target.long()):
+                        raise ValueError("categorical targets must be finite integer classes")
+                    if torch.any((target < 0) | (target >= classes)):
+                        raise ValueError("categorical target is outside class range")
+                    loss = F.cross_entropy(logits.float(), target.long(), reduction="mean")
+                    loss_weight = int(len(ids))
+                elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_PERCENTILE_MSE:
                     score = torch.softmax(logits.float(), dim=1)[:, LABEL_PASS]
                     loss = F.mse_loss(score, target, reduction="mean")
                     loss_weight = int(len(ids))
@@ -2726,6 +2741,12 @@ def predict_scores(
         batch_size=int(batch_size), plan=plan, group_dates=group_dates, relational=True,
     )
     training_policy = get_continuous_ranker_training_policy(training_objective)
+    if training_policy.categorical_class_count is not None:
+        if logits.ndim != 2 or int(logits.shape[1]) != int(training_policy.categorical_class_count):
+            raise ValueError("categorical inference logits width differs from training contract")
+        shifted = logits.astype(np.float64) - np.max(logits, axis=1, keepdims=True)
+        probs = np.exp(shifted)
+        return (probs[:, int(training_policy.categorical_primary_class)] / probs.sum(axis=1)).astype(np.float32)
     if training_policy.score_transform == CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R:
         return (logits[:, LABEL_PASS] - logits[:, LABEL_REJECT]).astype(np.float32)
     return _pass_probability(logits)
@@ -3841,6 +3862,10 @@ def _training_target_for_profile(
         CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN: "safety_raw_mfe_joint_min_training_target",
         CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS: "direct_hmhs_target",
     }
+    if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_JOINT_MFE_D40:
+        return build_joint_mfe_d40_quadrants(
+            group_table, np.isfinite(np.asarray(raw_target, dtype=np.float32))
+        )
     if target_builder in opportunity_target_attrs:
         targets = build_conditional_mfe_opportunity_targets_for_training(
             group_table, percentile_target
@@ -3991,13 +4016,27 @@ def _evaluate_epoch_split(
         "safety_raw_mfe_joint_min_metrics": None,
         "direct_hmhs_metrics": None,
         "pareto_metrics": None,
+        "joint_quadrant_metrics": None,
         "selection_only": False,
     }
     predict_common = dict(batch_size=int(args.evaluation_batch_size), plan=plan)
     metric_family = None
     family_keys = None
 
-    if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS:
+    if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_JOINT_MFE_D40:
+        logits = _predict_logits(
+            torch, model, feature_bank, group_context, ids, **predict_common
+        )
+        labels = build_joint_mfe_d40_quadrants(
+            group_table, np.isfinite(np.asarray(raw_target, dtype=np.float32))
+        )
+        details["joint_quadrant_metrics"] = joint_probabilistic_metrics(logits, labels[ids])
+        scores = predict_scores(
+            torch, model, feature_bank, group_context, ids,
+            training_objective=profile.training_objective, **predict_common,
+        )
+        metrics = split_metrics(ids, group_table, raw_target, percentile_target, scores)
+    elif target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS:
         scores = predict_scores(
             torch, model, feature_bank, group_context, ids,
             training_objective=profile.training_objective, **predict_common,
@@ -4221,6 +4260,8 @@ def select_epoch(
     best_daily_spearman = -math.inf
     best_primary_mfe_daily_spearman = -math.inf
     best_validation_mse = math.inf
+    best_joint_ce = math.inf
+    best_joint_brier = math.inf
     best_validation_huber = math.inf
     best_validation_mse_raw_r = math.inf
     best_validation_mae = math.inf
@@ -4233,7 +4274,9 @@ def select_epoch(
     compact_console = compact_console_enabled()
     if not compact_console:
         label = (
-            "Validation Huber raw R"
+            "Validation joint categorical cross-entropy"
+            if training_policy.categorical_class_count is not None
+            else "Validation Huber raw R"
             if raw_r_loss_name == "huber_raw_r"
             else "Validation MSE raw R"
             if raw_r_loss_name == "mse_raw_r"
@@ -4318,6 +4361,7 @@ def select_epoch(
         validation_safety_raw_mfe_joint_min_metrics = validation_evaluation["safety_raw_mfe_joint_min_metrics"]
         validation_direct_hmhs_metrics = validation_evaluation["direct_hmhs_metrics"]
         validation_pareto_metrics = validation_evaluation["pareto_metrics"]
+        validation_joint_metrics = validation_evaluation["joint_quadrant_metrics"]
         validation_used_selection_only_metrics = bool(validation_evaluation["selection_only"])
         primary_daily_spearman = validation_evaluation["primary_daily_spearman"]
         daily_spearman = validation_evaluation["daily_spearman"]
@@ -4363,7 +4407,18 @@ def select_epoch(
                 raise ValueError("Pareto validation global pair concordance不可用")
 
         selection_rule = training_policy.epoch_selection_rule
-        if selection_rule == "regression_loss_then_spearman":
+        if selection_rule == "categorical_cross_entropy_then_event_brier":
+            if not validation_joint_metrics:
+                raise ValueError("categorical validation proper-scoring evidence missing")
+            joint_ce = float(validation_joint_metrics["cross_entropy"])
+            joint_brier = float(validation_joint_metrics["joint_event_brier"])
+            if not math.isfinite(joint_ce) or not math.isfinite(joint_brier):
+                raise ValueError("categorical validation proper scoring metrics non-finite")
+            comparison = (joint_ce, best_joint_ce, joint_brier, best_joint_brier, "min", "min")
+            validation_huber = None
+            validation_mse_raw_r = None
+            validation_mae = None
+        elif selection_rule == "regression_loss_then_spearman":
             regression = dict(validation_metrics.get("raw_r_regression") or {})
             validation_huber = regression.get("huber_loss_raw_r")
             validation_mse_raw_r = regression.get("mse_raw_r")
@@ -4424,6 +4479,9 @@ def select_epoch(
             if primary_daily_spearman is not None and math.isfinite(float(primary_daily_spearman)):
                 best_primary_mfe_daily_spearman = float(primary_daily_spearman)
             best_validation_mse = validation_mse
+            if validation_joint_metrics is not None:
+                best_joint_ce = float(validation_joint_metrics["cross_entropy"])
+                best_joint_brier = float(validation_joint_metrics["joint_event_brier"])
             if validation_direct_hmhs_metrics is not None:
                 best_hmhs_pairwise_concordance = float(
                     validation_direct_hmhs_metrics["pairwise_concordance"]
@@ -4461,6 +4519,7 @@ def select_epoch(
             "inner_validation_safety_raw_mfe_joint_min_metrics": validation_safety_raw_mfe_joint_min_metrics,
             "inner_validation_direct_hmhs_metrics": validation_direct_hmhs_metrics,
             "inner_validation_pareto_metrics": validation_pareto_metrics,
+            "inner_validation_joint_quadrant_metrics": validation_joint_metrics,
             "validation_metric_detail": (
                 "selection_only"
                 if validation_used_selection_only_metrics
@@ -4471,7 +4530,15 @@ def select_epoch(
         })
         if not compact_console:
             marker = " ★新最佳" if improved else ""
-            if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R:
+            if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_CATEGORICAL_CE:
+                print(
+                    f"  Epoch {epoch:>3}/{int(args.epochs)} | Train 4-class CE {batch_loss:.6f} "
+                    f"| Val CE {float(validation_joint_metrics['cross_entropy']):.6f} "
+                    f"| Val Event Brier {float(validation_joint_metrics['joint_event_brier']):.6f} "
+                    f"| Val MFE rho {float(daily_spearman):.4f} "
+                    f"| {elapsed:.1f}s{marker}"
+                )
+            elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R:
                 if raw_r_loss_name == "huber_raw_r":
                     loss_text = f"Train Huber {batch_loss:.6f} | Val Huber {float(validation_huber):.6f}"
                 else:
@@ -4657,6 +4724,12 @@ def select_epoch(
             None if not math.isfinite(best_global_pareto_concordance) else float(best_global_pareto_concordance)
         ),
         "best_validation_mse": float(best_validation_mse),
+        "best_validation_joint_cross_entropy": (
+            None if not math.isfinite(best_joint_ce) else float(best_joint_ce)
+        ),
+        "best_validation_joint_event_brier": (
+            None if not math.isfinite(best_joint_brier) else float(best_joint_brier)
+        ),
         "selection_metrics_only": bool(selection_metrics_only),
         "best_validation_huber_raw_r": (
             None if not math.isfinite(best_validation_huber) else float(best_validation_huber)
