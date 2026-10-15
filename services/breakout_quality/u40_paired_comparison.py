@@ -19,6 +19,7 @@ import pandas as pd
 from core.breakout_quality_runtime import (
     DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID,
     DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+    DAILY_20BAR_FULL_HORIZON_PURE_MFE_TARGET_ID,
     CONTINUOUS_RANKER_SAFETY_SUPERVISION_ADVERSE_TO_PEAK,
     CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE,
     CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
@@ -38,6 +39,7 @@ from filters.breakout_quality.daily_ranker_data import (
 from filters.breakout_quality.ranking_score_store import validate_continuous_ranker_score_values
 
 EXTENSION_ID = "paired_mfe_d40_direct_utility_v1"
+SHORT_EXTENSION_ID = "paired_mfe_d20_short_horizon_utility_v1"
 TOP_DECILE = 0.1
 MIN_RANKABLE_PER_DATE = 10
 REFERENCE_EVIDENCE_FAMILY = "hs_conditional_mfe"
@@ -131,15 +133,23 @@ def _read_validated_score(item: Mapping[str, Any], *, mode: str) -> pd.DataFrame
                  (["fold_id", "model_information_cutoff"] if mode == "rolling_oos" else [])].copy()
 
 
-def _canonical_u40_truth(
-    bundle, *, source_target_id: str = DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID,
+def _canonical_horizon_utility_truth(
+    bundle, *, source_target_id: str, horizon_bars: int,
 ) -> pd.DataFrame:
-    """Verify mature MFE/D40/R truth against the producer's own raw target."""
-    if source_target_id not in {
-        DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID,
-        DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
-    }:
+    """Verify one mature same-horizon MFE/D/R utility against its own target."""
+    allowed = ({DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID,
+                DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID}
+               if horizon_bars == 40 else
+               {DAILY_20BAR_FULL_HORIZON_PURE_MFE_TARGET_ID}
+               if horizon_bars == 20 else set())
+    if source_target_id not in allowed:
         raise ValueError("U40 common truth requires a canonical mature U40 or Pure-MFE target")
+    manifest = getattr(bundle, "target_manifest", None)
+    if manifest is not None:
+        contract = dict(manifest.get("target_contract") or {})
+        if (int(contract.get("horizon_bars", -1)) != horizon_bars
+                or str(contract.get("target_id")) != source_target_id):
+            raise ValueError("common utility target contract horizon or identity mismatch")
     group = bundle.group_table
     required = {"ticker", "date", "group_index", "label_eval_end_date",
                 "target_favorable_r", "target_minimum_low_return"}
@@ -177,10 +187,20 @@ def _canonical_u40_truth(
     )
     if not np.allclose(expected_raw, published, atol=5e-5, rtol=1e-5):
         raise ValueError("U40 common truth is inconsistent with the canonical target Producer")
-    table["mfe40_r"] = mfe
-    table["d40_r"] = d40
-    table["u40_r"] = utility
-    return table[["ticker", "date", "group_index", "mfe40_r", "d40_r", "u40_r"]].copy()
+    names = (f"mfe{horizon_bars}_r", f"d{horizon_bars}_r", f"u{horizon_bars}_r")
+    table[names[0]] = mfe
+    table[names[1]] = d40
+    table[names[2]] = utility
+    return table[["ticker", "date", "group_index", *names]].copy()
+
+
+def _canonical_u40_truth(
+    bundle, *, source_target_id: str = DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID,
+) -> pd.DataFrame:
+    """Historical 40-bar mature utility interface; unchanged source contract."""
+    return _canonical_horizon_utility_truth(
+        bundle, source_target_id=source_target_id, horizon_bars=40,
+    )
 
 
 def _matched_rows(*, truth: pd.DataFrame, reference: pd.DataFrame,
@@ -229,8 +249,12 @@ def _matched_rows(*, truth: pd.DataFrame, reference: pd.DataFrame,
     return cohort.reset_index(drop=True)
 
 
-def _top_decile_metrics(cohort: pd.DataFrame, score_column: str) -> dict[str, Any]:
+def _top_decile_metrics(cohort: pd.DataFrame, score_column: str, *, horizon_bars: int = 40) -> dict[str, Any]:
     """Identical date inclusion and Top10 slots for every model in a cohort."""
+    if horizon_bars not in {20, 40}:
+        raise ValueError("unsupported paired-utility evaluation horizon")
+    suffix = str(horizon_bars)
+    truth_columns = [f"u{suffix}_r", f"mfe{suffix}_r", f"d{suffix}_r"]
     totals = np.zeros(3, dtype=np.float64)
     selected = 0
     dates = 0
@@ -239,16 +263,16 @@ def _top_decile_metrics(cohort: pd.DataFrame, score_column: str) -> dict[str, An
             continue
         count = max(1, math.ceil(len(day) * TOP_DECILE))
         top = day.sort_values([score_column, "ticker"], ascending=[False, True], kind="mergesort").head(count)
-        totals += top[["u40_r", "mfe40_r", "d40_r"]].to_numpy(dtype=np.float64).sum(axis=0)
+        totals += top[truth_columns].to_numpy(dtype=np.float64).sum(axis=0)
         selected += len(top)
         dates += 1
     if selected == 0:
         raise ValueError("U40 paired model score has no Top10 rankable common dates")
     return {
         "top10_n": int(selected), "rankable_dates": dates,
-        "top10_u40_r": float(totals[0] / selected),
-        "top10_mfe40_r": float(totals[1] / selected),
-        "top10_d40_r": float(totals[2] / selected),
+        f"top10_u{suffix}_r": float(totals[0] / selected),
+        f"top10_mfe{suffix}_r": float(totals[1] / selected),
+        f"top10_d{suffix}_r": float(totals[2] / selected),
     }
 
 
@@ -256,6 +280,8 @@ def _paired_report_rows(
     *, common: pd.DataFrame, reference_id: str, treatment_id: str | None, mode: str,
     breakout_candidate_keys: set[tuple[str, pd.Timestamp]],
     treatment_score_columns: Mapping[str, str] | None = None,
+    horizon_bars: int = 40,
+    extension_id: str = EXTENSION_ID,
 ) -> dict[str, dict[str, Any]]:
     """Report original and one/many U40 rankers on a strictly shared cohort."""
     label = "Rolling OOS" if mode == "rolling_oos" else "Forward OOS"
@@ -271,7 +297,7 @@ def _paired_report_rows(
     arms = {str(reference_id): "score_reference", **compared}
     if len(arms) != len(compared) + 1:
         raise ValueError("U40 paired report contains duplicate arm identities")
-    result = {model: {"id": EXTENSION_ID, "rows": [], "year_rows": []} for model in arms}
+    result = {model: {"id": extension_id, "rows": [], "year_rows": []} for model in arms}
     for scope, subset in ((label, common), ("Breakout slice", common.loc[membership])):
         if subset.empty or not bool((subset.groupby("date").size() > MIN_RANKABLE_PER_DATE).any()):
             continue
@@ -281,9 +307,10 @@ def _paired_report_rows(
             .encode("utf-8")
         ).hexdigest()
         def records(part: pd.DataFrame, *, year: int | None) -> None:
-            controls = _top_decile_metrics(part, "score_reference")
+            controls = _top_decile_metrics(part, "score_reference", horizon_bars=horizon_bars)
             for model_id, score_column in arms.items():
-                metric = controls if model_id == reference_id else _top_decile_metrics(part, score_column)
+                metric = (controls if model_id == reference_id else
+                          _top_decile_metrics(part, score_column, horizon_bars=horizon_bars))
                 if (controls["top10_n"], controls["rankable_dates"]) != (
                     metric["top10_n"], metric["rankable_dates"]
                 ):
@@ -291,7 +318,9 @@ def _paired_report_rows(
                 row = {
                     "split": scope, "stock_days": int(len(part)),
                     "dates": int(part["date"].nunique()), **metric,
-                    "delta_u40_vs_reference_r": metric["top10_u40_r"] - controls["top10_u40_r"],
+                    f"delta_u{horizon_bars}_vs_reference_r": (
+                        metric[f"top10_u{horizon_bars}_r"] - controls[f"top10_u{horizon_bars}_r"]
+                    ),
                 }
                 if year is not None:
                     row["year"] = int(year)
@@ -351,7 +380,55 @@ def attach_paired_u40_extension(
         existing = [dict(ext) for ext in (item["payload"].get("comparison_extensions") or [])
                     if str(ext.get("id")) != EXTENSION_ID]
         item["payload"]["comparison_extensions"] = [*existing, extension]
+
+    # A short-horizon treatment carries its own mature 20-bar truth Producer.
+    # Identical AO/CG/CH scores are evaluated on an exact common OOS cohort;
+    # no short-horizon truth is ever used to fit or select any of these models.
+    short_models = [item for item in treatment_models if str(
+        item["settings"].continuous_target_id
+    ) == DAILY_20BAR_FULL_HORIZON_PURE_MFE_TARGET_ID]
+    if short_models:
+        if len(short_models) != 1:
+            raise ValueError("20-bar utility comparison needs one canonical truth producer")
+        settings20 = short_models[0]["settings"]
+        bundle20 = load_daily_universal_ranker_data(
+            filter_id=str(settings20.filter_id),
+            model_architecture=str(settings20.model_architecture),
+            experiment_profile=str(settings20.experiment_profile),
+            preload_feature_bank=False, allow_stale_source=False,
+            project_root=project_root,
+        )
+        truth20 = _canonical_horizon_utility_truth(
+            bundle20, source_target_id=str(settings20.continuous_target_id),
+            horizon_bars=20,
+        )
+        matched20 = _matched_rows(
+            truth=truth20, reference=ref_scores,
+            treatments=treatment_scores, mode=evaluation_mode,
+        )
+        # Compare on exactly the same 40-bar-mature stock-days. The frozen
+        # 40-bar cohort is the common baseline, never an input to training.
+        if not matched20[["ticker", "date", "group_index"]].equals(
+            matched[["ticker", "date", "group_index"]]
+        ):
+            raise ValueError("20/40 utility comparison cohorts differ")
+        entries20 = _paired_report_rows(
+            common=matched20,
+            reference_id=str(reference["model_id"]), treatment_id=None,
+            treatment_score_columns={
+                str(item["model_id"]): f"score_direct_{index}"
+                for index, item in enumerate(treatment_models)
+            }, mode=evaluation_mode,
+            breakout_candidate_keys=candidates,
+            horizon_bars=20, extension_id=SHORT_EXTENSION_ID,
+        )
+        for item in output:
+            extension = entries20.get(str(item["model_id"]))
+            if extension is not None:
+                old = [dict(ext) for ext in (item["payload"].get("comparison_extensions") or [])
+                       if str(ext.get("id")) != SHORT_EXTENSION_ID]
+                item["payload"]["comparison_extensions"] = [*old, extension]
     return output
 
 
-__all__ = ["EXTENSION_ID", "attach_paired_u40_extension"]
+__all__ = ["EXTENSION_ID", "SHORT_EXTENSION_ID", "attach_paired_u40_extension"]

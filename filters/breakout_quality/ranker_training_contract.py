@@ -602,15 +602,19 @@ def training_semantics(profile) -> dict[str, Any]:
             if (recipe.objective_policy.safety_supervision_source !=
                     CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE):
                 raise ValueError("unsupported shared-HS Safety supervision semantics")
+            # Resolve label horizon from the canonical TargetPolicy.  Historical
+            # 40D recipes omit the override and retain their byte-identical
+            # persisted semantics; short-horizon research records its true D20.
+            target_horizon = int(recipe.target_policy.horizon_bars or 40)
             contract["safety_target"] = (
-                "same_date_percentile_of_negative_full_40bar_anchor_max_adverse_over_canonical_r"
+                f"same_date_percentile_of_negative_full_{target_horizon}bar_anchor_max_adverse_over_canonical_r"
             )
             if recipe.objective_policy.true_hs_from_supervised_safety:
                 contract["true_hs_definition"] = (
-                    "full_40bar_anchor_max_adverse_safety_percentile_gte_0.50"
+                    f"full_{target_horizon}bar_anchor_max_adverse_safety_percentile_gte_0.50"
                 )
                 contract["conditional_mfe_supervision_scope"] = (
-                    "primary_target_min_full_d40_true_hs_items_only_sublist_"
+                    f"primary_target_min_full_d{target_horizon}_true_hs_items_only_sublist_"
                     "before_rank_positions_idcg_and_delta_ndcg"
                 )
             else:

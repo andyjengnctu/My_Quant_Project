@@ -1000,7 +1000,7 @@ def _build_daily_target_contract(
     }
     builder = simple_builders.get(str(contract_kind))
     if builder is not None:
-        return builder(DEFAULT_LABEL_POLICY)
+        return builder(replace(DEFAULT_LABEL_POLICY, label_horizon_bars=int(spec.horizon_bars)))
     for context_spec in predicted_context_artifact_specs():
         if contract_kind == context_spec.target_contract_kind:
             return context_spec.contract()
@@ -1310,7 +1310,20 @@ def load_daily_universal_ranker_data(
         if source_tail > sample_end:
             sample_end = source_tail
 
-    spec = StrategyAlignedContinuousTargetSpec.from_label_policy(DEFAULT_LABEL_POLICY)
+    spec = StrategyAlignedContinuousTargetSpec.from_label_policy(
+        replace(
+            DEFAULT_LABEL_POLICY,
+            label_horizon_bars=(
+                int(target_policy.horizon_bars) if target_policy.horizon_bars is not None
+                else int(DEFAULT_LABEL_POLICY.label_horizon_bars)
+            ),
+        )
+    )
+    sample_universe_horizon = int(
+        target_policy.sample_universe_horizon_bars
+        if target_policy.sample_universe_horizon_bars is not None
+        else spec.horizon_bars
+    )
     risk_schedule = None
     risk_param_policy = None
     if (
@@ -1411,7 +1424,7 @@ def load_daily_universal_ranker_data(
         ):
             local_targets = np.full(len(local_positions), np.nan, dtype=np.float32)
             local_target_valid = np.zeros(len(local_positions), dtype=bool)
-            target_complete = local_positions + int(spec.horizon_bars) < len(frame)
+            target_complete = local_positions + sample_universe_horizon < len(frame)
             if bool(target_complete.any()):
                 completed_batch = compute_daily_opportunity_target_batch(
                     frame,
@@ -1420,8 +1433,20 @@ def load_daily_universal_ranker_data(
                     target_id=str(target_policy.component_target_id),
                 )
                 completed_indexes = np.flatnonzero(target_complete)
+                cohort_valid = completed_batch.valid_mask
+                if sample_universe_horizon != int(spec.horizon_bars):
+                    # Matched-horizon research deliberately freezes the longer
+                    # 40-bar complete-path universe. Both the finite-path filter
+                    # and its publication/maturity date must be 40-bar PIT legal.
+                    cohort_batch = compute_daily_opportunity_target_batch(
+                        frame,
+                        local_positions[target_complete],
+                        spec=replace(spec, horizon_bars=sample_universe_horizon),
+                        target_id=str(target_policy.component_target_id),
+                    )
+                    cohort_valid = cohort_valid & cohort_batch.valid_mask
                 local_targets[completed_indexes] = completed_batch.target_raw_r
-                local_target_valid[completed_indexes] = completed_batch.valid_mask
+                local_target_valid[completed_indexes] = cohort_valid
                 local_favorable[completed_indexes] = completed_batch.favorable_return
                 local_adverse[completed_indexes] = completed_batch.adverse_return_to_peak
                 local_opportunity_bar[completed_indexes] = completed_batch.opportunity_bar
@@ -1489,7 +1514,7 @@ def load_daily_universal_ranker_data(
                 frame_dates.take(valid_positions).to_numpy(dtype="datetime64[D]")
             )
             valid_label_end_chunks.append(
-                frame_dates.take(valid_positions + int(spec.horizon_bars)).to_numpy(
+                frame_dates.take(valid_positions + sample_universe_horizon).to_numpy(
                     dtype="datetime64[D]"
                 )
             )
@@ -1852,9 +1877,15 @@ def load_daily_universal_ranker_data(
         spec=spec,
         risk_param_policy=risk_param_policy,
     )
+    if target_policy.horizon_bars is not None:
+        # The declarative target identity includes horizon; do not persist a
+        # 40-bar ID with a 20-bar contract. Historical contracts are untouched.
+        target_contract = {**target_contract, "target_id": target_id}
     target_manifest = {
         "target_id": target_id,
         "target_contract": target_contract,
+        **({"sample_universe_horizon_bars": sample_universe_horizon}
+           if target_policy.sample_universe_horizon_bars is not None else {}),
         "sample_scope": "daily_eligible_stock_days",
         "sample_count": target_valid_count,
         "target_valid_sample_count": target_valid_count,

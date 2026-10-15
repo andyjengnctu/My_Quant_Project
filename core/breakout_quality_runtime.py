@@ -24,6 +24,7 @@ STRATEGY_ALIGNED_NO_TIME_TARGET_ID = "strategy_aligned_opportunity_no_time_r_v1"
 DAILY_OPPORTUNITY_NO_TIME_TARGET_ID = "daily_opportunity_no_time_r_v1"
 DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID = "daily_full_horizon_opportunity_r_v1"
 DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID = "daily_full_horizon_pure_mfe_r_v1"
+DAILY_20BAR_FULL_HORIZON_PURE_MFE_TARGET_ID = "daily_20bar_full_horizon_pure_mfe_r_v1"
 DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID = "daily_full_horizon_mfe_minus_d40_r_v1"
 DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID = "daily_first_risk_breach_pure_mfe_r_v1"
 DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID = "daily_full_horizon_low_adverse_r_v1"
@@ -500,8 +501,17 @@ class ContinuousRankerTargetPolicy:
     context_roles: tuple[str, ...] = ()
     context_transform: str = CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_NONE
     contract_kind: str = "external"
+    horizon_bars: int | None = None
+    sample_universe_horizon_bars: int | None = None
 
     def __post_init__(self) -> None:
+        if self.horizon_bars is not None and int(self.horizon_bars) < 2:
+            raise ValueError("daily target horizon_bars must be >= 2")
+        if self.sample_universe_horizon_bars is not None and (
+            self.horizon_bars is None
+            or int(self.sample_universe_horizon_bars) < int(self.horizon_bars)
+        ):
+            raise ValueError("sample universe horizon must be >= target horizon")
         if self.materialization_mode not in {
             CONTINUOUS_RANKER_TARGET_MATERIALIZATION_EXTERNAL,
             CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
@@ -1221,6 +1231,13 @@ def _continuous_ranker_target_policies() -> dict[str, ContinuousRankerTargetPoli
             materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
             component_target_id="daily_full_horizon_pure_mfe_r_v1",
             contract_kind="daily_full_horizon_pure_mfe",
+        ),
+        DAILY_20BAR_FULL_HORIZON_PURE_MFE_TARGET_ID: ContinuousRankerTargetPolicy(
+            materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+            component_target_id=DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+            contract_kind="daily_full_horizon_pure_mfe",
+            horizon_bars=20,
+            sample_universe_horizon_bars=40,
         ),
         DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID: ContinuousRankerTargetPolicy(
             materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,

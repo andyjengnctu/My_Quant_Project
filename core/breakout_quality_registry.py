@@ -390,6 +390,9 @@ DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_HORIZON_MAE_PROFILE = (
 DAILY_UNIVERSAL_SHARED_FULL_D40_SAFETY_HS_CONDITIONAL_MFE_PROFILE = (
     "daily_universal_shared_full_d40_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_SHARED_FULL_D20_SAFETY_HS_CONDITIONAL_MFE_PROFILE = (
+    "daily_universal_shared_full_d20_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+)
 DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE = "daily_universal_joint_mfe_d40_quadrant_cross_entropy"
 DAILY_UNIVERSAL_DIRECT_U40_HUBER_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_huber"
 DAILY_UNIVERSAL_DIRECT_U40_PAIRWISE_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_full_list_ndcg_pairwise"
@@ -1581,6 +1584,18 @@ _EXPERIMENT_PROFILES = {
         training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
         training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
         continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_shared_safety_mfe_v1",
+    ),
+    DAILY_UNIVERSAL_SHARED_FULL_D20_SAFETY_HS_CONDITIONAL_MFE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_SHARED_FULL_D20_SAFETY_HS_CONDITIONAL_MFE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_20bar_full_horizon_pure_mfe_r_v1",
         loss_name="dual_head_pairwise_logistic",
         epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
@@ -3052,6 +3067,41 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         safety_supervision_source=CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE,
         model_gate_reference_profile_name=(
             DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_SHARED_FULL_D20_SAFETY_HS_CONDITIONAL_MFE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_SHARED_FULL_D20_SAFETY_HS_CONDITIONAL_MFE_PROFILE,
+        model_research_id="MR-13CH",
+        experiment_name="MR-13CH CG Fixed 20-bar MFE20 / D20 / True-HS Contrast",
+        phase="13CH",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "head1=same_date_percentile(-full_20bar_max_adverse_from_anchor/R); "
+            "head2=pure_MFE20_percentile_within_same_date_D20_low_adverse_true_hs_only"
+        ),
+        objective_description=(
+            "Only label horizon changes from CG's 40 trading bars to 20: "
+            "MFE20, full-path D20, D20 P50 True-HS and HS-scoped conditional MFE20. "
+            "Preserve CG's adjusted 300x10 stock+0050 inputs, shared InceptionTime two-head "
+            "topology, identical losses/optimizer/seed/cutoff/fold cadence and MFE-head inference. "
+            "For strict paired AO/CG U40 comparison, retain the same conservative "
+            "40-bar complete stock-day training/evaluation universe and conservative "
+            "40-bar information-availability maturity for PIT fitting, even though "
+            "MFE20/D20 extrema use strictly the first 20 future bars. This prevents "
+            "unavailable post-20-bar path eligibility from entering the 20-bar fit. "
+            "U20/U40 metrics are read-only evaluation. "
+            "No candidate conditioning, OOS fitting, or Trading promotion."
+        ),
+        metric_scope="daily_full_d20_safety_plus_d20_true_hs_conditional_mfe",
+        score_semantic_id="daily_d20_true_hs_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
+        secondary_pair_scope_threshold=0.50,
+        safety_supervision_source=CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_SHARED_FULL_D40_SAFETY_HS_CONDITIONAL_MFE_PROFILE
         ),
         selection_pit_authorized=False,
         current_time_validation_authorized=False,

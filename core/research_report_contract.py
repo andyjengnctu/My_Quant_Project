@@ -431,6 +431,39 @@ MODEL_COMPARISON_ONLY_EXTENSION_SCHEMAS: Mapping[str, IndependentlyFrozenModelEx
         comparison_scope_key="split",
         robustness_aggregation="single_seed_only",
     ),
+    "paired_mfe_d20_short_horizon_utility_v1": IndependentlyFrozenModelExtensionContract(
+        "paired_mfe_d20_short_horizon_utility_v1", "MFE20 - D20 / Same 40D-mature Cohort",
+        "post_fit_same_40bar_mature_universe_true_u20_and_pit_matched_top_decile",
+        (
+            T("paired_u20_top_decile", (
+                C("split", "Split", alignment="left"),
+                C("stock_days", "Common stock-days", alignment="right"),
+                C("dates", "Common dates", alignment="right"),
+                C("rankable_dates", "Rankable dates", alignment="right"),
+                C("top10_n", "Top10 N", alignment="right"),
+                C("top10_u20_r", "Top10 U20", 4, "R", "higher", "number"),
+                C("top10_mfe20_r", "Top10 MFE20", 4, "R", "higher", "number"),
+                C("top10_d20_r", "Top10 D20", 4, "R", "lower", "number"),
+                C("delta_u20_vs_reference_r", "vs original U20", 4, "R", "higher", "number"),
+            )),
+            T("paired_u20_annual_top_decile", (
+                C("split", "Split", alignment="left"),
+                C("year", "Year", 0, format_kind="int"),
+                C("top10_n", "Top10 N", alignment="right"),
+                C("top10_u20_r", "Top10 U20", 4, "R", "higher", "number"),
+                C("top10_mfe20_r", "Top10 MFE20", 4, "R", "higher", "number"),
+                C("top10_d20_r", "Top10 D20", 4, "R", "lower", "number"),
+                C("delta_u20_vs_reference_r", "vs original U20", 4, "R", "higher", "number"),
+            )),
+        ),
+        comparison_mode="row_tables",
+        comparison_row_keys=(
+            ("paired_u20_top_decile", "rows"),
+            ("paired_u20_annual_top_decile", "year_rows"),
+        ),
+        comparison_scope_key="split",
+        robustness_aggregation="single_seed_only",
+    ),
     "full_horizon_mae_common_truth": IndependentlyFrozenModelExtensionContract(
         "full_horizon_mae_common_truth", "Full-Horizon MAE / Paired Common Truth",
         "post_fit_mature_full_horizon_mae_and_raw_safety_scores",
@@ -1026,6 +1059,7 @@ APPROVED_INDEPENDENT_MODEL_EXTENSION_CONTRACT_FINGERPRINTS: Mapping[str, str] = 
     "joint_mfe_d40_incremental_skill_v1": "aa1e12a622881fe1",
     "full_horizon_mae_common_truth": "94ccca56a41ca540",
     "paired_mfe_d40_direct_utility_v1": "71e613ca25f1d764",
+    "paired_mfe_d20_short_horizon_utility_v1": "9ba804fc4e3bfc17",
 }
 
 

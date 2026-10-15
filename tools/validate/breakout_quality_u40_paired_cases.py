@@ -21,6 +21,7 @@ AO_PROFILE = "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pa
 CE_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_huber"
 CF_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_full_list_ndcg_pairwise"
 CG_PROFILE = "daily_universal_shared_full_d40_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+CH_PROFILE = "daily_universal_shared_full_d20_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 
 
 def _fixture():
@@ -58,7 +59,8 @@ def _fixture():
 
 
 def _items(tmp: Path, bundle, *, mode, include_ranker: bool = False,
-           include_full_d40: bool = False, include_direct: bool = True):
+           include_full_d40: bool = False, include_direct: bool = True,
+           include_short_horizon: bool = False):
     scores = bundle.group_table.iloc[:-1][list(service.PRIMARY_COLUMNS)].copy()
     profiles = (("AO", AO_PROFILE),)
     if include_direct:
@@ -67,6 +69,8 @@ def _items(tmp: Path, bundle, *, mode, include_ranker: bool = False,
         profiles += (("CF", CF_PROFILE),)
     if include_full_d40:
         profiles += (("CG", CG_PROFILE),)
+    if include_short_horizon:
+        profiles += (("CH", CH_PROFILE),)
     items=[]
     for name, slug in profiles:
         settings = get_breakout_quality_workflow_settings(experiment_profile=slug)
@@ -372,9 +376,211 @@ def ao_cg_without_direct_u40_case() -> None:
                 with np.testing.assert_raises_regex(ValueError, "SHA/file manifest"):
                     service._read_validated_score(items[1], mode=mode)
 
+
+
+def fixed_20bar_loader_cohort_case() -> None:
+    """Verify the real data-provider's 20D target and 40D PIT maturity on one stock universe."""
+    from filters.breakout_quality import daily_ranker_data as loader
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+    from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+
+    cg_semantics = training_semantics(get_breakout_quality_experiment_profile(CG_PROFILE))[
+        "shared_safety_hs_conditional_mfe_duo_head_contract"]
+    ch_semantics = training_semantics(get_breakout_quality_experiment_profile(CH_PROFILE))[
+        "shared_safety_hs_conditional_mfe_duo_head_contract"]
+    assert "full_40bar" in cg_semantics["safety_target"]
+    assert "full_d40" in cg_semantics["conditional_mfe_supervision_scope"]
+    assert "full_20bar" in ch_semantics["safety_target"]
+    assert "full_d20" in ch_semantics["conditional_mfe_supervision_scope"]
+
+    n = 380
+    calendar = pd.bdate_range("2020-01-01", periods=n)
+    benchmark_ticker = str(DEFAULT_LABEL_POLICY.benchmark_ticker)
+    tickers = (benchmark_ticker, "2330", "2317")
+    frames = {}
+    for ticker in tickers:
+        positions = np.arange(n)
+        high = (np.where(positions % 43 > 20, 111., 108.) if ticker == "2330"
+                else np.where(positions % 47 > 23, 103., 107.))
+        low = (np.where(positions % 43 > 20, 89., 98.) if ticker == "2330"
+               else np.where(positions % 47 > 23, 86., 94.))
+        frames[ticker] = pd.DataFrame({
+            "Open": 100., "High": high, "Low": low, "Close": 100., "Volume": 1e6,
+        }, index=calendar)
+    summary = {"dataset": "full", "source_data_date_range": {
+        "start": str(calendar[0].date()), "end": str(calendar[-1].date()),
+    }}
+    outer = {"effective_oos_end_date": str(calendar[-1].date()),
+             "oos_start_date": str(calendar[0].date())}
+    with patch.object(loader, "load_validated_dataset_bundle",
+                      return_value=(summary, None, None, None, None)), \
+         patch.object(loader, "resolve_breakout_quality_outer_policy", return_value=outer), \
+         patch.object(loader, "discover_dataset_csv_inputs", return_value=(
+             [(ticker, Path(ticker)) for ticker in tickers], None)), \
+         patch.object(loader, "load_dataset_frame",
+                      side_effect=lambda path, ticker, *, min_rows: frames[ticker]):
+        kwargs = dict(filter_id="breakout_quality_v1",
+                      model_architecture="inception_time_shared_safety_mfe_v1",
+                      preload_feature_bank=False, allow_stale_source=False)
+        cg = loader.load_daily_universal_ranker_data(experiment_profile=CG_PROFILE, **kwargs)
+        ch = loader.load_daily_universal_ranker_data(experiment_profile=CH_PROFILE, **kwargs)
+    cols = ["ticker", "date", "group_index"]
+    assert cg.group_table[cols].astype(str).equals(ch.group_table[cols].astype(str))
+    assert np.array_equal(cg.target_valid, ch.target_valid)
+    assert cg.group_table["label_eval_end_date"].equals(ch.group_table["label_eval_end_date"])
+    assert ch.target_manifest["target_contract"]["horizon_bars"] == 20
+    assert ch.target_manifest["target_contract"]["target_id"] == (
+        "daily_20bar_full_horizon_pure_mfe_r_v1")
+    assert ch.target_manifest["sample_universe_horizon_bars"] == 40
+    assert bool(np.any(cg.target_valid))
+    assert not np.allclose(cg.raw_target[cg.target_valid], ch.raw_target[ch.target_valid])
+    matured = ch.group_table.loc[ch.target_valid, ["date", "label_eval_end_date"]]
+    assert bool((matured["label_eval_end_date"] > matured["date"]).all())
+
+
+def fixed_20bar_utility_case() -> None:
+    """20D CH truth is independently materialized; 40D AO/CG truth is frozen."""
+    from dataclasses import replace
+    from filters.breakout_quality.daily_ranker_data import compute_daily_opportunity_target_batch
+    from filters.breakout_quality.continuous_target import StrategyAlignedContinuousTargetSpec
+    from filters.breakout_quality.hs_conditional_mfe import build_hs_conditional_mfe_targets
+    from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+    from core.breakout_quality_runtime import (
+        DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+        DAILY_20BAR_FULL_HORIZON_PURE_MFE_TARGET_ID,
+        CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE,
+    )
+
+    cg = get_continuous_ranker_execution_recipe(CG_PROFILE)
+    ch = get_continuous_ranker_execution_recipe(CH_PROFILE)
+    assert cg.model_architecture == ch.model_architecture
+    assert cg.training_objective == ch.training_objective
+    assert cg.loss_name == ch.loss_name
+    assert cg.objective_policy == ch.objective_policy
+    assert cg.target_policy.horizon_bars is None
+    assert ch.target_policy.horizon_bars == 20
+    assert ch.target_policy.sample_universe_horizon_bars == 40
+    assert ch.continuous_target_id == DAILY_20BAR_FULL_HORIZON_PURE_MFE_TARGET_ID
+
+    # Same signal-day close but a larger rally and a deep post-20-bar loss.
+    # The 20-day target MUST exclude both post-20 values.
+    frame = pd.DataFrame({
+        "Close": np.full(41, 100.0),
+        "High": np.r_[100.0, np.full(20, 105.0), np.full(20, 125.0)],
+        "Low": np.r_[100.0, np.full(20, 99.0), np.full(20, 72.0)],
+    })
+    spec40 = StrategyAlignedContinuousTargetSpec.from_label_policy(DEFAULT_LABEL_POLICY)
+    spec20 = replace(spec40, horizon_bars=20)
+    a = compute_daily_opportunity_target_batch(
+        frame, np.array([0]), spec=spec40,
+        target_id=DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+    )
+    b = compute_daily_opportunity_target_batch(
+        frame, np.array([0]), spec=spec20,
+        target_id=DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+    )
+    budget = spec40.risk_budget_return
+    assert bool(a.valid_mask[0]) and bool(b.valid_mask[0])
+    assert np.isclose(float(a.target_raw_r[0]), .25/budget)
+    assert np.isclose(float(b.target_raw_r[0]), .05/budget)
+    assert np.isclose(float(a.minimum_low_return[0]), -.28)
+    assert np.isclose(float(b.minimum_low_return[0]), -.01)
+    assert np.isclose(float(b.adverse_return_to_peak[0]), .01)
+
+    full, candidates = _fixture()
+    short_group = full.group_table.copy()
+    # Distinct 20D path on exact same comparison cohort; published 20D target
+    # must match its own MFE20 and the 40D target must remain unchanged.
+    short_group["target_favorable_r"] = np.where(
+        short_group["ticker"].str[-1].str.isdigit().fillna(False),
+        np.nan_to_num(full.group_table["target_favorable_r"], nan=0.) * .52,
+        0.,
+    )
+    short_group["target_minimum_low_return"] = (
+        np.nan_to_num(full.group_table["target_minimum_low_return"], nan=0.) * .48
+    )
+    short_group.loc[~full.target_valid, ["target_favorable_r", "target_minimum_low_return"]] = np.nan
+    short_mfe = short_group["target_favorable_r"].to_numpy(dtype=np.float64)
+    short_bundle = SimpleNamespace(
+        group_table=short_group, target_valid=full.target_valid,
+        raw_target=short_mfe,
+        target_manifest={"target_contract": {"target_id": DAILY_20BAR_FULL_HORIZON_PURE_MFE_TARGET_ID,
+                                             "horizon_bars": 20}},
+    )
+    truth20 = service._canonical_horizon_utility_truth(
+        short_bundle, source_target_id=DAILY_20BAR_FULL_HORIZON_PURE_MFE_TARGET_ID,
+        horizon_bars=20,
+    )
+    truth40 = service._canonical_u40_truth(full)
+    assert len(truth20) == len(truth40) == 80
+    assert not np.allclose(truth20["u20_r"], truth40["u40_r"])
+    assert np.allclose(truth20["u20_r"], truth20["mfe20_r"] - truth20["d20_r"])
+    broken = SimpleNamespace(group_table=short_group, target_valid=full.target_valid,
+                              raw_target=short_mfe, target_manifest={"target_contract": {
+                                  "target_id": DAILY_20BAR_FULL_HORIZON_PURE_MFE_TARGET_ID,
+                                  "horizon_bars": 40}})
+    with np.testing.assert_raises_regex(ValueError, "horizon or identity mismatch"):
+        service._canonical_horizon_utility_truth(
+            broken, source_target_id=DAILY_20BAR_FULL_HORIZON_PURE_MFE_TARGET_ID,
+            horizon_bars=20,
+        )
+    pure_group = full.group_table.copy()
+    ao_bundle = SimpleNamespace(group_table=pure_group, target_valid=full.target_valid,
+        raw_target=pure_group["target_favorable_r"].to_numpy(dtype=np.float64))
+
+    with tempfile.TemporaryDirectory(prefix="ch_20bar_utility_") as temp:
+        root = Path(temp)
+        for mode in ("rolling_oos", "forward_oos"):
+            items = _items(root, full, mode=mode, include_direct=False,
+                include_full_d40=True, include_short_horizon=True)
+            assert [i["model_id"] for i in items] == ["AO", "CG", "CH"]
+            def producer(**kwargs):
+                profile = kwargs["experiment_profile"]
+                if profile == AO_PROFILE:
+                    return ao_bundle
+                if profile == CH_PROFILE:
+                    return short_bundle
+                raise AssertionError(profile)
+            with patch.object(service, "load_daily_universal_ranker_data", side_effect=producer) as loader, \
+                 patch.object(service, "load_official_breakout_candidate_keys", return_value=candidates):
+                output = service.attach_paired_u40_extension(
+                    items, evaluation_mode=mode, project_root=root)
+            assert loader.call_count == 2
+            ext = {i["model_id"]: {e["id"]: e for e in i["payload"]["comparison_extensions"]}
+                   for i in output}
+            for horizon, key in ((20, service.SHORT_EXTENSION_ID), (40, service.EXTENSION_ID)):
+                for model in ("AO", "CG", "CH"):
+                    entry = ext[model][key]
+                    assert len(entry["rows"]) == 2
+                    assert len(entry["year_rows"]) == 4
+                    assert entry["cohort_sha256"] == ext["AO"][key]["cohort_sha256"]
+                    for row in entry["rows"] + entry["year_rows"]:
+                        assert np.isclose(row[f"top10_u{horizon}_r"],
+                                          row[f"top10_mfe{horizon}_r"] - row[f"top10_d{horizon}_r"])
+            assert ext["CH"][service.SHORT_EXTENSION_ID]["rows"][0]["top10_u20_r"] != (
+                ext["CH"][service.EXTENSION_ID]["rows"][0]["top10_u40_r"])
+            rendered = "\n".join(_render_model_comparison_specific_extensions(
+                [{"model_id": item["model_id"], "view": {
+                    "extensions": item["payload"]["comparison_extensions"]}}
+                 for item in output], target="markdown"))
+            assert all(token in rendered for token in
+                       ("MFE20 - D20", "Top10 U20", "Top10 D20", "Top10 U40", "AO", "CG", "CH"))
+            # Neither the canonical CH20 source nor the AO40 source may be
+            # silently replaced with an unrelated truth contract.
+            bad20 = SimpleNamespace(group_table=short_group,
+                target_valid=full.target_valid, raw_target=short_mfe + 1.,
+                target_manifest=short_bundle.target_manifest)
+            with np.testing.assert_raises_regex(ValueError, "inconsistent with the canonical"):
+                service._canonical_horizon_utility_truth(
+                    bad20, source_target_id=DAILY_20BAR_FULL_HORIZON_PURE_MFE_TARGET_ID,
+                    horizon_bars=20)
+
+
 if __name__ == "__main__":
     case()
     three_way_case()
     full_d40_four_way_case()
     ao_cg_without_direct_u40_case()
+    fixed_20bar_utility_case()
+    fixed_20bar_loader_cohort_case()
     print("U40 AO/CG and historical AO/CE/CF/CG same mature truth, Forward/Rolling and fail-closed checks PASS")
