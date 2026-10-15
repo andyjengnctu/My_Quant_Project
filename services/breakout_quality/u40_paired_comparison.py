@@ -1,9 +1,10 @@
 """Read-only common-truth MFE40/D40/U40 contrast of existing continuous models.
 
 No model fitting, label redesign, strategy replay or threshold selection.  The
-canonical mature 40-bar U40 target is loaded through the same Daily-Universal
-Producer that owns MR-13CE; the original AO score is evaluated against that
-truth rather than its historical MFE-centric Standard-SOP target.
+canonical mature 40-bar MFE/D40 outcomes are loaded from the same Daily-Universal
+Producer used by the selected reference. A pure-MFE reference may supply the
+matured path components directly; previously fitted direct-U40 models are not
+required to participate in the active comparison.
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ import pandas as pd
 
 from core.breakout_quality_runtime import (
     DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID,
+    DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
     CONTINUOUS_RANKER_SAFETY_SUPERVISION_ADVERSE_TO_PEAK,
     CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE,
     CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
@@ -63,7 +65,7 @@ def _participants(models: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, Any
                 references.append(item)
             elif supervised_source == CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE:
                 treatments.append(item)
-    if not direct or not references:
+    if not references or not treatments:
         return None
     if len(references) != 1 or any(item is references[0] for item in treatments):
         raise ValueError("U40 paired comparison requires one original-Safety Conditional-MFE reference")
@@ -77,7 +79,9 @@ def _participants(models: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, Any
         contract = item.get("contract")
         if contract is None or str(contract.continuous_target_id) != str(item["settings"].continuous_target_id):
             raise ValueError("U40 paired comparison scientific target contract mismatch")
-    return reference, tuple(treatments), direct[0]
+    # Historical direct-U40 controls can still supply the identical canonical
+    # target. With only AO/CG active, AO supplies the original mature 40D path.
+    return reference, tuple(treatments), direct[0] if direct else reference
 
 
 def _read_validated_score(item: Mapping[str, Any], *, mode: str) -> pd.DataFrame:
@@ -127,8 +131,15 @@ def _read_validated_score(item: Mapping[str, Any], *, mode: str) -> pd.DataFrame
                  (["fold_id", "model_information_cutoff"] if mode == "rolling_oos" else [])].copy()
 
 
-def _canonical_u40_truth(bundle) -> pd.DataFrame:
-    """Use only fully mature producer labels. Verify all three R-unit components."""
+def _canonical_u40_truth(
+    bundle, *, source_target_id: str = DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID,
+) -> pd.DataFrame:
+    """Verify mature MFE/D40/R truth against the producer's own raw target."""
+    if source_target_id not in {
+        DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID,
+        DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+    }:
+        raise ValueError("U40 common truth requires a canonical mature U40 or Pure-MFE target")
     group = bundle.group_table
     required = {"ticker", "date", "group_index", "label_eval_end_date",
                 "target_favorable_r", "target_minimum_low_return"}
@@ -160,11 +171,15 @@ def _canonical_u40_truth(bundle) -> pd.DataFrame:
     if (not np.isfinite(mfe).all() or not np.isfinite(d40).all()
             or not np.isfinite(published).all() or (d40 < 0.0).any()):
         raise ValueError("U40 canonical truth contains invalid MFE/D40/R components")
-    if not np.allclose(utility, published, atol=5e-5, rtol=1e-5):
-        raise ValueError("U40 common truth is inconsistent with the canonical direct target Producer")
+    expected_raw = (
+        utility if source_target_id == DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID
+        else mfe
+    )
+    if not np.allclose(expected_raw, published, atol=5e-5, rtol=1e-5):
+        raise ValueError("U40 common truth is inconsistent with the canonical target Producer")
     table["mfe40_r"] = mfe
     table["d40_r"] = d40
-    table["u40_r"] = published
+    table["u40_r"] = utility
     return table[["ticker", "date", "group_index", "mfe40_r", "d40_r", "u40_r"]].copy()
 
 
@@ -174,8 +189,8 @@ def _matched_rows(*, truth: pd.DataFrame, reference: pd.DataFrame,
                   mode: str) -> pd.DataFrame:
     """Intersect all evaluated U40 arms with identical keys, folds and PIT cutoffs.
 
-    The original single-treatment signature remains valid for historical AO/CE
-    evidence. New ranking controls share ONE common cohort with AO and CE.
+    The original single-treatment signature remains valid for historical
+    evidence. Every active treatment shares ONE common cohort with AO.
     """
     if (treatment is None) == (treatments is None):
         raise ValueError("U40 matched comparison requires either one or many treatment frames")
@@ -315,7 +330,9 @@ def attach_paired_u40_extension(
         experiment_profile=str(settings.experiment_profile), preload_feature_bank=False,
         allow_stale_source=False, project_root=project_root,
     )
-    truth = _canonical_u40_truth(bundle)
+    truth = _canonical_u40_truth(
+        bundle, source_target_id=str(settings.continuous_target_id),
+    )
     matched = _matched_rows(truth=truth, reference=ref_scores,
                             treatments=treatment_scores, mode=evaluation_mode)
     candidates = load_official_breakout_candidate_keys(

@@ -58,9 +58,11 @@ def _fixture():
 
 
 def _items(tmp: Path, bundle, *, mode, include_ranker: bool = False,
-           include_full_d40: bool = False):
+           include_full_d40: bool = False, include_direct: bool = True):
     scores = bundle.group_table.iloc[:-1][list(service.PRIMARY_COLUMNS)].copy()
-    profiles = (("AO", AO_PROFILE), ("CE", CE_PROFILE))
+    profiles = (("AO", AO_PROFILE),)
+    if include_direct:
+        profiles += (("CE", CE_PROFILE),)
     if include_ranker:
         profiles += (("CF", CF_PROFILE),)
     if include_full_d40:
@@ -287,8 +289,92 @@ def full_d40_four_way_case() -> None:
                     service._read_validated_score(items[-1],mode=mode)
 
 
+
+def ao_cg_without_direct_u40_case() -> None:
+    """Active AO/CG must retain paired U40 evidence without CE/CF score artifacts."""
+    bundle, candidates = _fixture()
+    pure_mfe = bundle.group_table["target_favorable_r"].to_numpy(dtype=np.float64)
+    ao_bundle = SimpleNamespace(
+        group_table=bundle.group_table,
+        target_valid=bundle.target_valid,
+        raw_target=pure_mfe,
+    )
+    truth = service._canonical_u40_truth(
+        ao_bundle, source_target_id=service.DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+    )
+    assert np.allclose(truth["u40_r"], truth["mfe40_r"] - truth["d40_r"], atol=1e-5)
+    assert (truth["u40_r"] < truth["mfe40_r"]).any()
+    assert len(truth) == 80
+
+    with tempfile.TemporaryDirectory(prefix="u40_aocg_without_cecf_") as temp:
+        root = Path(temp)
+        for mode in ("rolling_oos", "forward_oos"):
+            items = _items(root, bundle, mode=mode, include_direct=False, include_full_d40=True)
+            assert [i["model_id"] for i in items] == ["AO", "CG"]
+            with patch.object(service, "load_daily_universal_ranker_data", return_value=ao_bundle) as producer, \
+                 patch.object(service, "load_official_breakout_candidate_keys", return_value=candidates):
+                output = service.attach_paired_u40_extension(
+                    items, evaluation_mode=mode, project_root=root,
+                )
+            assert producer.call_count == 1
+            assert producer.call_args.kwargs["experiment_profile"] == AO_PROFILE
+            ext = {
+                i["model_id"]: next(
+                    x for x in i["payload"]["comparison_extensions"]
+                    if x["id"] == service.EXTENSION_ID
+                ) for i in output
+            }
+            assert set(ext) == {"AO", "CG"}
+            assert ext["AO"]["cohort_sha256"] == ext["CG"]["cohort_sha256"]
+            assert len(ext["AO"]["rows"]) == len(ext["CG"]["rows"]) == 2
+            assert len(ext["AO"]["year_rows"]) == len(ext["CG"]["year_rows"]) == 4
+            for a, c in zip(ext["AO"]["rows"], ext["CG"]["rows"]):
+                assert a["stock_days"] == c["stock_days"]
+                assert a["top10_n"] == c["top10_n"]
+                assert abs(c["top10_u40_r"] - c["top10_mfe40_r"] + c["top10_d40_r"]) < 1e-5
+            rendered = "\n".join(_render_model_comparison_specific_extensions(
+                [{"model_id": i["model_id"], "view": {
+                    "extensions": i["payload"]["comparison_extensions"]}}
+                 for i in output], target="markdown",
+            ))
+            assert all(token in rendered for token in ("AO", "CG", "Top10 U40", "Top10 D40"))
+            assert "CE" not in [item["model_id"] for item in output]
+            assert "CF" not in [item["model_id"] for item in output]
+            # The AO Producer's raw target must match the Pure-MFE raw-R contract;
+            # a mismatched target cannot silently be treated as U40 truth.
+            altered = SimpleNamespace(
+                group_table=bundle.group_table, target_valid=bundle.target_valid,
+                raw_target=pure_mfe.copy(),
+            )
+            altered.raw_target[0] += 0.2
+            with np.testing.assert_raises_regex(ValueError, "inconsistent with the canonical"):
+                service._canonical_u40_truth(
+                    altered, source_target_id=service.DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+                )
+            with np.testing.assert_raises_regex(ValueError, "requires a canonical mature"):
+                service._canonical_u40_truth(ao_bundle, source_target_id="unsupported")
+            ref = service._read_validated_score(items[0], mode=mode)
+            cg = service._read_validated_score(items[1], mode=mode)
+            corrupt = cg.copy()
+            corrupt.loc[0, "group_index"] = -13
+            with np.testing.assert_raises_regex(ValueError, "group index mismatch"):
+                service._matched_rows(truth=truth, reference=ref, treatment=corrupt, mode=mode)
+            if mode == "rolling_oos":
+                corrupt = cg.copy()
+                corrupt.loc[0, "fold_id"] = "wrong_fold"
+                with np.testing.assert_raises_regex(ValueError, "fold or information cutoff"):
+                    service._matched_rows(truth=truth, reference=ref, treatment=corrupt, mode=mode)
+            else:
+                path = items[1]["contract"].score_path
+                frame = pd.read_csv(path, encoding="utf-8-sig")
+                frame.loc[0, "model_score"] = 0.8
+                frame.to_csv(path, index=False, encoding="utf-8-sig", compression="infer")
+                with np.testing.assert_raises_regex(ValueError, "SHA/file manifest"):
+                    service._read_validated_score(items[1], mode=mode)
+
 if __name__ == "__main__":
     case()
     three_way_case()
     full_d40_four_way_case()
-    print("U40 AO/CE/CF/CG same mature truth, Forward/Rolling and fail-closed checks PASS")
+    ao_cg_without_direct_u40_case()
+    print("U40 AO/CG and historical AO/CE/CF/CG same mature truth, Forward/Rolling and fail-closed checks PASS")

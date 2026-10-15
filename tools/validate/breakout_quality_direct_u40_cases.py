@@ -147,13 +147,14 @@ def case() -> None:
     )
     np.testing.assert_allclose(pure.target_raw_r[0], 0.4 / risk, atol=1e-5)
 
-    # The registered CE identity is immutable; current model is config-owned,
-    # and both continuous U40 loss variants are visible in the official list.
-    ids = dict(BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
-    assert ids["MR-13CE"] == profile.name
-    assert "MR-13CF" in ids
+    # CE/CF remain registered historical loss controls regardless of which
+    # experiments the mutable official comparison configuration currently selects.
+    assert get_continuous_ranker_research_spec(profile.name).model_research_id == "MR-13CE"
+    cf_profile = get_breakout_quality_experiment_profile(
+        "daily_universal_full_horizon_mfe_minus_d40_full_list_ndcg_pairwise"
+    )
+    assert get_continuous_ranker_research_spec(cf_profile.name).model_research_id == "MR-13CF"
     assert BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE in BREAKOUT_QUALITY_MODEL_TEST_PROFILES
-    assert not {"MR-13BZ", "MR-13CC", "MR-13CD"}.intersection(ids)
 
 
 def cpu_train_case() -> None:
