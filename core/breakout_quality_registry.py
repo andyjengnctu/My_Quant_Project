@@ -389,6 +389,7 @@ DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_HORIZON_MAE_PROFILE = (
 )
 DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE = "daily_universal_joint_mfe_d40_quadrant_cross_entropy"
 DAILY_UNIVERSAL_DIRECT_U40_HUBER_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_huber"
+DAILY_UNIVERSAL_DIRECT_U40_PAIRWISE_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_PIT_TRADE_COUNT_PROFILE = (
     "daily_universal_shared_safety_hs_conditional_mfe_pit_trade_count_full_list_ndcg_pairwise"
 )
@@ -1582,6 +1583,18 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         raw_r_huber_delta_r=1.0,
+        model_architecture="inception_time_v1",
+    ),
+    DAILY_UNIVERSAL_DIRECT_U40_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_DIRECT_U40_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_mfe_minus_d40_r_v1",
+        loss_name="pairwise_logistic",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_v1",
     ),
     DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE: BreakoutQualityExperimentProfile(
@@ -3015,6 +3028,35 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         ),
         metric_scope="daily_full_horizon_signed_u40_continuous_regression",
         score_semantic_id="daily_predicted_signed_u40_r",
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_DIRECT_U40_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_DIRECT_U40_PAIRWISE_PROFILE,
+        model_research_id="MR-13CF",
+        experiment_name="MR-13CF Daily Universal U40 Full-list Delta-NDCG Pairwise Ranker",
+        phase="13CF",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "Same canonical signed full-horizon U40/R = MFE40/R - D40/R as MR-13CE; "
+            "train relevance = within-date percentile rank of matured signed U40, "
+            "not a fitted value, class or probability target"
+        ),
+        objective_description=(
+            "Controlled CE contrast: identical 40-bar mature U40 truth, adjusted 300x10 "
+            "input, InceptionTime v1 two-logit head, seed, PIT folds and universal "
+            "stock-day eligibility. Replace numerical Huber with existing full-list "
+            "Delta-NDCG weighted RankNet on each day's U40 order; select epoch "
+            "by independent Validation mean daily Spearman. No new model head, "
+            "future target, calendar percentile leakage or OOS-fitted parameter. "
+            "Both raw U40 in R and MFE/D40 components are unchanged for evaluation."
+        ),
+        metric_scope="daily_full_horizon_signed_u40_rank_vs_ao_ce",
+        score_semantic_id="daily_u40_cross_sectional_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         model_gate_reference_profile_name=(
             DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
         ),

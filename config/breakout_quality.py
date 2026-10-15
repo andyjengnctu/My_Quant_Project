@@ -106,11 +106,12 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 # MR-13BZ is a closed negative control; AO remains the frozen comparison.
 # MR-13CA/CB remain archived, unmodified research profiles blocked on proven
 # historical trade-count vintage; they do not gate this new label-only experiment.
-# Direct continuous U40 = mature MFE40/R - full-horizon D40/R; no quadrants.
-# MR-13AO and other historical studies remain immutable, not overwritten.
+# MR-13CF: same mature signed U40 and CE InceptionTime; train daily U40 ranks
+# with existing Full-list Delta-NDCG Pairwise loss instead of Huber value regression.
+# MR-13CE remains an explicit historical controlled reference; no artifact overwrite.
 BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE = (
-    "MR-13CE",
-    "daily_universal_full_horizon_mfe_minus_d40_huber",
+    "MR-13CF",
+    "daily_universal_full_horizon_mfe_minus_d40_full_list_ndcg_pairwise",
 )
 # Compatibility alias for call sites that only need the executable profile slug.
 BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = (
@@ -371,6 +372,7 @@ BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES = (
     ("MR-13AH", "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise"),
     ("MR-13AK", "daily_universal_shared_safety_weighted_pure_mfe_full_list_ndcg_pairwise"),
     ("MR-13AO", "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
+    ("MR-13CE", "daily_universal_full_horizon_mfe_minus_d40_huber"),
     # Retired from the current compare list at user request: BZ/CC/CD remain
     # historical research identities and their checkpoints are untouched.
 )

@@ -19,6 +19,7 @@ from services.research.breakout_quality_application import _render_model_compari
 
 AO_PROFILE = "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 CE_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_huber"
+CF_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_full_list_ndcg_pairwise"
 
 
 def _fixture():
@@ -55,17 +56,20 @@ def _fixture():
     return bundle, candidates
 
 
-def _items(tmp: Path, bundle, *, mode):
+def _items(tmp: Path, bundle, *, mode, include_ranker: bool = False):
     scores = bundle.group_table.iloc[:-1][list(service.PRIMARY_COLUMNS)].copy()
-    role_settings = (get_breakout_quality_workflow_settings(experiment_profile=AO_PROFILE),
-                     get_breakout_quality_workflow_settings(experiment_profile=CE_PROFILE))
+    profiles = (("AO", AO_PROFILE), ("CE", CE_PROFILE)) + (
+        (("CF", CF_PROFILE),) if include_ranker else ()
+    )
     items=[]
-    for name, settings in zip(("AO", "CE"), role_settings):
+    for name, slug in profiles:
+        settings = get_breakout_quality_workflow_settings(experiment_profile=slug)
         frame = scores.copy()
         is_even = frame["ticker"].str[-1].astype(int) % 2 == 0
         col = "model_score" if mode == "forward_oos" else "breakout_quality_score"
         frame[col] = (np.where(is_even, 0.2, 0.9) if name == "AO"
-                      else np.where(is_even, 2.35, -0.55))
+                      else np.where(is_even, 2.35, -0.55) if name == "CE"
+                      else np.where(is_even, 0.85, 0.10))
         if mode == "rolling_oos":
             frame["fold_id"] = np.where(frame["date"].dt.year == 2021, "fold_2021", "fold_2022")
             frame["model_information_cutoff"] = np.where(frame["date"].dt.year == 2021, "2020-12-31", "2021-12-31")
@@ -162,6 +166,72 @@ def case():
                 service._canonical_u40_truth(corrupted)
 
 
+
+
+def three_way_case() -> None:
+    bundle, candidates = _fixture()
+    with tempfile.TemporaryDirectory(prefix="u40_aocf_three_way_") as temp:
+        root = Path(temp)
+        for mode in ("rolling_oos", "forward_oos"):
+            items = _items(root, bundle, mode=mode, include_ranker=True)
+            with patch.object(service, "load_daily_universal_ranker_data", return_value=bundle), patch.object(
+                service, "load_official_breakout_candidate_keys", return_value=candidates
+            ):
+                output = service.attach_paired_u40_extension(
+                    items, evaluation_mode=mode, project_root=root
+                )
+            ext = {i["model_id"]: next(x for x in i["payload"]["comparison_extensions"]
+                          if x["id"] == service.EXTENSION_ID) for i in output}
+            assert set(ext) == {"AO", "CE", "CF"}
+            assert {len(ex["rows"]) for ex in ext.values()} == {2}
+            assert {len(ex["year_rows"]) for ex in ext.values()} == {4}
+            assert all(ex["cohort_sha256"] == ext["AO"]["cohort_sha256"] for ex in ext.values())
+            rendered = "\n".join(_render_model_comparison_specific_extensions(
+                [{"model_id": item["model_id"],
+                  "view": {"extensions": item["payload"]["comparison_extensions"]}}
+                 for item in output], target="markdown"
+            ))
+            for token in ("MFE40 - D40", "AO", "CE", "CF", "Top10 U40", "Top10 D40"):
+                assert token in rendered, token
+            for split_index in (0, 1):
+                metrics = [ext[k]["rows"][split_index] for k in ("AO", "CE", "CF")]
+                assert len({r["top10_n"] for r in metrics}) == 1
+                assert len({r["stock_days"] for r in metrics}) == 1
+                assert metrics[1]["top10_u40_r"] > metrics[0]["top10_u40_r"]
+                assert metrics[2]["top10_u40_r"] > metrics[0]["top10_u40_r"]
+                assert metrics[2]["delta_u40_vs_reference_r"] > 0
+                assert all(abs(r["top10_mfe40_r"] - r["top10_d40_r"]
+                               - r["top10_u40_r"]) < 1e-5 for r in metrics)
+            ref = service._read_validated_score(items[0], mode=mode)
+            ce = service._read_validated_score(items[1], mode=mode)
+            cf = service._read_validated_score(items[2], mode=mode)
+            bad = cf.copy()
+            bad.loc[0, "group_index"] = -999
+            with np.testing.assert_raises_regex(ValueError, "group index mismatch"):
+                service._matched_rows(truth=service._canonical_u40_truth(bundle),
+                    reference=ref, treatments={"direct_0": ce, "direct_1": bad}, mode=mode)
+            if mode == "rolling_oos":
+                bad = cf.copy()
+                bad.loc[0, "fold_id"] = "fold_wrong"
+                with np.testing.assert_raises_regex(ValueError, "fold or information cutoff"):
+                    service._matched_rows(truth=service._canonical_u40_truth(bundle),
+                        reference=ref, treatments={"direct_0": ce, "direct_1": bad}, mode=mode)
+                # Pairwise score is a bounded ranking probability, unlike CE's signed margin.
+                path = items[2]["contract"].score_path
+                frame = pd.read_csv(path, encoding="utf-8-sig")
+                frame.loc[0, "breakout_quality_score"] = 1.1
+                frame.to_csv(path, index=False, encoding="utf-8-sig", compression="infer")
+                with np.testing.assert_raises_regex(ValueError, "\\[0,1\\]"):
+                    service._read_validated_score(items[2], mode=mode)
+            else:
+                path = items[2]["contract"].score_path
+                frame = pd.read_csv(path, encoding="utf-8-sig")
+                frame.loc[0, "model_score"] = 0.4
+                frame.to_csv(path, index=False, encoding="utf-8-sig", compression="infer")
+                with np.testing.assert_raises_regex(ValueError, "SHA/file manifest"):
+                    service._read_validated_score(items[2], mode=mode)
+
 if __name__ == "__main__":
     case()
-    print("U40 AO/direct same mature truth, Forward/Rolling report, contract failure checks PASS")
+    three_way_case()
+    print("U40 AO/CE/CF same mature truth, Forward/Rolling and fail-closed checks PASS")

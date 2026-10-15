@@ -38,8 +38,8 @@ REFERENCE_EVIDENCE_FAMILY = "hs_conditional_mfe"
 PRIMARY_COLUMNS = ("ticker", "date", "group_index")
 
 
-def _participants(models: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, Any], Mapping[str, Any]] | None:
-    """Resolve registered capability and target rather than hardcoding MR IDs."""
+def _participants(models: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, Any], tuple[Mapping[str, Any], ...]] | None:
+    """Find the registered reference and all U40-target treatments, regardless of Loss."""
     references, direct = [], []
     for item in models:
         settings = item["settings"]
@@ -50,16 +50,19 @@ def _participants(models: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, Any
             references.append(item)
     if not direct or not references:
         return None
-    if len(direct) != 1 or len(references) != 1 or direct[0] is references[0]:
-        raise ValueError("U40 paired comparison requires exactly one direct target and one Conditional-MFE reference")
-    reference, treatment = references[0], direct[0]
-    if str(reference["settings"].filter_id) != str(treatment["settings"].filter_id):
+    if len(references) != 1 or any(item is references[0] for item in direct):
+        raise ValueError("U40 paired comparison requires one Conditional-MFE reference and distinct U40 treatments")
+    reference = references[0]
+    all_items = (reference, *direct)
+    if len({str(item["model_id"]) for item in all_items}) != len(all_items):
+        raise ValueError("U40 comparison contains duplicate model identity")
+    if len({str(item["settings"].filter_id) for item in all_items}) != 1:
         raise ValueError("U40 paired comparison mixed incompatible filter universes")
-    for item in (reference, treatment):
+    for item in all_items:
         contract = item.get("contract")
         if contract is None or str(contract.continuous_target_id) != str(item["settings"].continuous_target_id):
             raise ValueError("U40 paired comparison scientific target contract mismatch")
-    return reference, treatment
+    return reference, tuple(direct)
 
 
 def _read_validated_score(item: Mapping[str, Any], *, mode: str) -> pd.DataFrame:
@@ -151,10 +154,27 @@ def _canonical_u40_truth(bundle) -> pd.DataFrame:
 
 
 def _matched_rows(*, truth: pd.DataFrame, reference: pd.DataFrame,
-                  treatment: pd.DataFrame, mode: str) -> pd.DataFrame:
-    """Never let an inner join silently paper over mismatched group/fold identity."""
+                  treatment: pd.DataFrame | None = None,
+                  treatments: Mapping[str, pd.DataFrame] | None = None,
+                  mode: str) -> pd.DataFrame:
+    """Intersect all evaluated U40 arms with identical keys, folds and PIT cutoffs.
+
+    The original single-treatment signature remains valid for historical AO/CE
+    evidence. New ranking controls share ONE common cohort with AO and CE.
+    """
+    if (treatment is None) == (treatments is None):
+        raise ValueError("U40 matched comparison requires either one or many treatment frames")
+    if treatments is not None and (not treatments or "reference" in treatments):
+        raise ValueError("U40 matched comparison cannot override the reference arm")
+    arms = {"reference": reference, **(
+        {"direct": treatment} if treatments is None else dict(treatments)
+    )}
+    if "reference" not in arms or len(arms) < 2:
+        raise ValueError("U40 matched comparison requires distinct score roles")
     cohort = truth.copy()
-    for role, frame in (("reference", reference), ("direct", treatment)):
+    for role, frame in arms.items():
+        if role != "reference" and (not role.startswith("direct") or not role.replace("_", "").isalnum()):
+            raise ValueError("U40 treatment score role must be a validated direct role")
         src = frame.rename(columns={"score": f"score_{role}",
                                     "group_index": f"group_index_{role}",
                                     "fold_id": f"fold_{role}",
@@ -163,15 +183,16 @@ def _matched_rows(*, truth: pd.DataFrame, reference: pd.DataFrame,
         if (cohort[f"group_index_{role}"] != cohort["group_index"]).any():
             raise ValueError(f"U40 common stock-day group index mismatch: {role}")
         cohort.drop(columns=[f"group_index_{role}"], inplace=True)
+        if mode == "rolling_oos" and role != "reference":
+            if (cohort[f"fold_{role}"] != cohort["fold_reference"]).any() or (
+                cohort[f"cutoff_{role}"] != cohort["cutoff_reference"]
+            ).any():
+                raise ValueError("U40 common cohort has mismatched Rolling fold or information cutoff")
     if cohort.empty:
-        raise ValueError("U40 AO/direct paired common mature OOS cohort is empty")
+        raise ValueError("U40 paired common mature OOS cohort is empty")
     if mode == "rolling_oos":
-        if (cohort["fold_reference"] != cohort["fold_direct"]).any() or (
-            cohort["cutoff_reference"] != cohort["cutoff_direct"]
-        ).any():
-            raise ValueError("U40 common cohort has mismatched Rolling fold or information cutoff")
-        # Protect against accidental overlap: one canonical fold per year.
-        per_year = cohort.groupby(cohort["date"].dt.year)["fold_direct"].nunique(dropna=False)
+        # Prevent a mixed fold/year cohort from hiding a validity regression.
+        per_year = cohort.groupby(cohort["date"].dt.year)["fold_reference"].nunique(dropna=False)
         if (per_year != 1).any():
             raise ValueError("U40 paired Rolling year contains mixed fold identities")
     cohort.sort_values(["date", "ticker"], inplace=True, kind="mergesort")
@@ -202,18 +223,25 @@ def _top_decile_metrics(cohort: pd.DataFrame, score_column: str) -> dict[str, An
 
 
 def _paired_report_rows(
-    *, common: pd.DataFrame, reference_id: str, treatment_id: str, mode: str,
+    *, common: pd.DataFrame, reference_id: str, treatment_id: str | None, mode: str,
     breakout_candidate_keys: set[tuple[str, pd.Timestamp]],
+    treatment_score_columns: Mapping[str, str] | None = None,
 ) -> dict[str, dict[str, Any]]:
+    """Report original and one/many U40 rankers on a strictly shared cohort."""
     label = "Rolling OOS" if mode == "rolling_oos" else "Forward OOS"
     membership = np.fromiter(
         ((str(t), pd.Timestamp(d).normalize()) in breakout_candidate_keys
          for t, d in zip(common["ticker"], common["date"])),
         dtype=bool, count=len(common),
     )
-    result = {model: {"id": EXTENSION_ID, "rows": [], "year_rows": []}
-              for model in (reference_id, treatment_id)}
-    identities = (reference_id, treatment_id)
+    compared = ({str(treatment_id): "score_direct"} if treatment_score_columns is None
+                else dict(treatment_score_columns))
+    if not compared or reference_id in compared:
+        raise ValueError("U40 paired report requires distinct treatment models")
+    arms = {str(reference_id): "score_reference", **compared}
+    if len(arms) != len(compared) + 1:
+        raise ValueError("U40 paired report contains duplicate arm identities")
+    result = {model: {"id": EXTENSION_ID, "rows": [], "year_rows": []} for model in arms}
     for scope, subset in ((label, common), ("Breakout slice", common.loc[membership])):
         if subset.empty or not bool((subset.groupby("date").size() > MIN_RANKABLE_PER_DATE).any()):
             continue
@@ -224,17 +252,15 @@ def _paired_report_rows(
         ).hexdigest()
         def records(part: pd.DataFrame, *, year: int | None) -> None:
             controls = _top_decile_metrics(part, "score_reference")
-            treatments = _top_decile_metrics(part, "score_direct")
-            if (controls["top10_n"], controls["rankable_dates"]) != (
-                treatments["top10_n"], treatments["rankable_dates"]
-            ):
-                raise ValueError("U40 matched arms differ in Top10 selection slots")
-            for role, model_id, metric in (("reference", identities[0], controls),
-                                           ("direct", identities[1], treatments)):
+            for model_id, score_column in arms.items():
+                metric = controls if model_id == reference_id else _top_decile_metrics(part, score_column)
+                if (controls["top10_n"], controls["rankable_dates"]) != (
+                    metric["top10_n"], metric["rankable_dates"]
+                ):
+                    raise ValueError("U40 matched arms differ in Top10 selection slots")
                 row = {
                     "split": scope, "stock_days": int(len(part)),
-                    "dates": int(part["date"].nunique()),
-                    **metric,
+                    "dates": int(part["date"].nunique()), **metric,
                     "delta_u40_vs_reference_r": metric["top10_u40_r"] - controls["top10_u40_r"],
                 }
                 if year is not None:
@@ -253,17 +279,22 @@ def _paired_report_rows(
 def attach_paired_u40_extension(
     models: Sequence[Mapping[str, Any]], *, evaluation_mode: str, project_root: Path,
 ) -> list[dict[str, Any]]:
-    """Add post-fit same-U40 evidence to Model-specific Extension only."""
+    """Add post-fit same-U40 evidence to the existing Model-specific Extension."""
     output = [{**item, "payload": dict(item.get("payload") or {})} for item in models]
     if evaluation_mode not in {"forward_oos", "rolling_oos"}:
         return output
     participants = _participants(output)
     if participants is None:
         return output
-    reference, direct = participants
+    reference, direct_models = participants
     ref_scores = _read_validated_score(reference, mode=evaluation_mode)
-    direct_scores = _read_validated_score(direct, mode=evaluation_mode)
-    settings = direct["settings"]
+    direct_scores = {
+        f"direct_{index}": _read_validated_score(item, mode=evaluation_mode)
+        for index, item in enumerate(direct_models)
+    }
+    # A single U40 Producer owns the shared mature MFE/D40 truth. No score,
+    # classification or historical OOS outcome is allowed into model fitting.
+    settings = direct_models[0]["settings"]
     bundle = load_daily_universal_ranker_data(
         filter_id=str(settings.filter_id), model_architecture=str(settings.model_architecture),
         experiment_profile=str(settings.experiment_profile), preload_feature_bank=False,
@@ -271,14 +302,15 @@ def attach_paired_u40_extension(
     )
     truth = _canonical_u40_truth(bundle)
     matched = _matched_rows(truth=truth, reference=ref_scores,
-                            treatment=direct_scores, mode=evaluation_mode)
+                            treatments=direct_scores, mode=evaluation_mode)
     candidates = load_official_breakout_candidate_keys(
         str(settings.filter_id), allow_stale_source=False,
     )
     entries = _paired_report_rows(
-        common=matched, reference_id=str(reference["model_id"]),
-        treatment_id=str(direct["model_id"]), mode=evaluation_mode,
-        breakout_candidate_keys=candidates,
+        common=matched, reference_id=str(reference["model_id"]), treatment_id=None,
+        treatment_score_columns={str(item["model_id"]): f"score_direct_{index}"
+                                 for index, item in enumerate(direct_models)},
+        mode=evaluation_mode, breakout_candidate_keys=candidates,
     )
     for item in output:
         extension = entries.get(str(item["model_id"]))
