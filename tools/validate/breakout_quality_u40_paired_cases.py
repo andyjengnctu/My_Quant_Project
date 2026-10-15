@@ -20,6 +20,7 @@ from services.research.breakout_quality_application import _render_model_compari
 AO_PROFILE = "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 CE_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_huber"
 CF_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_full_list_ndcg_pairwise"
+CG_PROFILE = "daily_universal_shared_full_d40_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 
 
 def _fixture():
@@ -56,11 +57,14 @@ def _fixture():
     return bundle, candidates
 
 
-def _items(tmp: Path, bundle, *, mode, include_ranker: bool = False):
+def _items(tmp: Path, bundle, *, mode, include_ranker: bool = False,
+           include_full_d40: bool = False):
     scores = bundle.group_table.iloc[:-1][list(service.PRIMARY_COLUMNS)].copy()
-    profiles = (("AO", AO_PROFILE), ("CE", CE_PROFILE)) + (
-        (("CF", CF_PROFILE),) if include_ranker else ()
-    )
+    profiles = (("AO", AO_PROFILE), ("CE", CE_PROFILE))
+    if include_ranker:
+        profiles += (("CF", CF_PROFILE),)
+    if include_full_d40:
+        profiles += (("CG", CG_PROFILE),)
     items=[]
     for name, slug in profiles:
         settings = get_breakout_quality_workflow_settings(experiment_profile=slug)
@@ -69,7 +73,8 @@ def _items(tmp: Path, bundle, *, mode, include_ranker: bool = False):
         col = "model_score" if mode == "forward_oos" else "breakout_quality_score"
         frame[col] = (np.where(is_even, 0.2, 0.9) if name == "AO"
                       else np.where(is_even, 2.35, -0.55) if name == "CE"
-                      else np.where(is_even, 0.85, 0.10))
+                      else np.where(is_even, 0.85, 0.10) if name == "CF"
+                      else np.where(is_even, 0.25, 0.75))
         if mode == "rolling_oos":
             frame["fold_id"] = np.where(frame["date"].dt.year == 2021, "fold_2021", "fold_2022")
             frame["model_information_cutoff"] = np.where(frame["date"].dt.year == 2021, "2020-12-31", "2021-12-31")
@@ -231,7 +236,59 @@ def three_way_case() -> None:
                 with np.testing.assert_raises_regex(ValueError, "SHA/file manifest"):
                     service._read_validated_score(items[2], mode=mode)
 
+def full_d40_four_way_case() -> None:
+    bundle,candidates=_fixture()
+    with tempfile.TemporaryDirectory(prefix="u40_aocfcg_four_way_") as temp:
+        root=Path(temp)
+        for mode in ("rolling_oos","forward_oos"):
+            items=_items(root,bundle,mode=mode,include_ranker=True,include_full_d40=True)
+            with patch.object(service,"load_daily_universal_ranker_data",return_value=bundle), patch.object(
+                service,"load_official_breakout_candidate_keys",return_value=candidates
+            ):
+                output=service.attach_paired_u40_extension(items,evaluation_mode=mode,project_root=root)
+            ext={item["model_id"]:next(x for x in item["payload"]["comparison_extensions"]
+                  if x["id"] == service.EXTENSION_ID) for item in output}
+            assert set(ext)=={"AO","CE","CF","CG"}
+            assert all(len(value["rows"])==2 and len(value["year_rows"])==4
+                       for value in ext.values())
+            assert len({value["cohort_sha256"]["Rolling OOS" if mode=="rolling_oos" else "Forward OOS"]
+                        for value in ext.values()})==1
+            assert all(ext[name]["rows"][0]["top10_n"]==ext["AO"]["rows"][0]["top10_n"]
+                       for name in ext)
+            assert all(abs(row["top10_u40_r"]-row["top10_mfe40_r"]+row["top10_d40_r"])<1e-5
+                       for value in ext.values() for row in value["rows"])
+            rendered="\n".join(_render_model_comparison_specific_extensions(
+                [{"model_id":item["model_id"],"view":{"extensions":item["payload"]["comparison_extensions"]}}
+                 for item in output],target="markdown"))
+            assert all(token in rendered for token in ("AO","CE","CF","CG","Top10 U40","Top10 D40"))
+            ref=service._read_validated_score(items[0],mode=mode)
+            valid={name:service._read_validated_score(item,mode=mode)
+                   for name,item in zip(("CE","CF","CG"),items[1:])}
+            corrupted=valid["CG"].copy()
+            corrupted.loc[0,"group_index"]=-7
+            with np.testing.assert_raises_regex(ValueError,"group index mismatch"):
+                service._matched_rows(truth=service._canonical_u40_truth(bundle),reference=ref,
+                    treatments={"direct_0":valid["CE"],"direct_1":valid["CF"],"direct_2":corrupted},mode=mode)
+            if mode=="rolling_oos":
+                corrupted=valid["CG"].copy();corrupted.loc[0,"fold_id"]="other_fold"
+                with np.testing.assert_raises_regex(ValueError,"fold or information cutoff"):
+                    service._matched_rows(truth=service._canonical_u40_truth(bundle),reference=ref,
+                        treatments={"direct_0":valid["CE"],"direct_1":valid["CF"],"direct_2":corrupted},mode=mode)
+                file=items[-1]["contract"].score_path
+                frame=pd.read_csv(file,encoding="utf-8-sig");frame.loc[0,"breakout_quality_score"]=1.5
+                frame.to_csv(file,index=False,encoding="utf-8-sig",compression="infer")
+                with np.testing.assert_raises_regex(ValueError,r"\[0,1\]"):
+                    service._read_validated_score(items[-1],mode=mode)
+            else:
+                file=items[-1]["contract"].score_path
+                frame=pd.read_csv(file,encoding="utf-8-sig");frame.loc[0,"model_score"]=0.1
+                frame.to_csv(file,index=False,encoding="utf-8-sig",compression="infer")
+                with np.testing.assert_raises_regex(ValueError,"SHA/file manifest"):
+                    service._read_validated_score(items[-1],mode=mode)
+
+
 if __name__ == "__main__":
     case()
     three_way_case()
-    print("U40 AO/CE/CF same mature truth, Forward/Rolling and fail-closed checks PASS")
+    full_d40_four_way_case()
+    print("U40 AO/CE/CF/CG same mature truth, Forward/Rolling and fail-closed checks PASS")

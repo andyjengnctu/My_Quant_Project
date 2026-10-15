@@ -967,6 +967,15 @@ class ContinuousRankerObjectivePolicy:
     secondary_pair_scope_threshold: float | None = None
     safety_supervision_source: str = CONTINUOUS_RANKER_SAFETY_SUPERVISION_ADVERSE_TO_PEAK
 
+    @property
+    def true_hs_from_supervised_safety(self) -> bool:
+        """Primary-target scoped MFE uses the same Safety truth as its first head.
+
+        Finite-secondary-target instead retains the independent historical
+        true-HS cohort. Derived, never a second persisted identity knob.
+        """
+        return self.secondary_pair_scope == CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN
+
     def __post_init__(self) -> None:
         if self.safety_supervision_source not in SUPPORTED_CONTINUOUS_RANKER_SAFETY_SUPERVISION_SOURCES:
             raise ValueError(f"unsupported safety supervision source: {self.safety_supervision_source!r}")

@@ -387,6 +387,9 @@ DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
 DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_HORIZON_MAE_PROFILE = (
     "daily_universal_shared_safety_hs_conditional_mfe_full_horizon_mae_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_SHARED_FULL_D40_SAFETY_HS_CONDITIONAL_MFE_PROFILE = (
+    "daily_universal_shared_full_d40_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+)
 DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE = "daily_universal_joint_mfe_d40_quadrant_cross_entropy"
 DAILY_UNIVERSAL_DIRECT_U40_HUBER_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_huber"
 DAILY_UNIVERSAL_DIRECT_U40_PAIRWISE_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_full_list_ndcg_pairwise"
@@ -1562,6 +1565,18 @@ _EXPERIMENT_PROFILES = {
     ),
     DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_HORIZON_MAE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_HORIZON_MAE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
+        continuous_target_id="daily_full_horizon_pure_mfe_r_v1",
+        loss_name="dual_head_pairwise_logistic",
+        epoch_selection_metric="hs_conditional_mfe_mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_shared_safety_mfe_v1",
+    ),
+    DAILY_UNIVERSAL_SHARED_FULL_D40_SAFETY_HS_CONDITIONAL_MFE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_SHARED_FULL_D40_SAFETY_HS_CONDITIONAL_MFE_PROFILE,
         optimizer_name="adam",
         training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
         training_objective=TRAINING_OBJECTIVE_DAILY_SHARED_SAFETY_HS_CONDITIONAL_MFE_PAIRWISE_RANKING,
@@ -3000,6 +3015,39 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         score_semantic_id="daily_true_hs_conditional_mfe_full_horizon_mae_safety_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_FINITE_SECONDARY_TARGET,
+        secondary_pair_scope_threshold=0.50,
+        safety_supervision_source=CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE,
+        model_gate_reference_profile_name=(
+            DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        ),
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_SHARED_FULL_D40_SAFETY_HS_CONDITIONAL_MFE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_SHARED_FULL_D40_SAFETY_HS_CONDITIONAL_MFE_PROFILE,
+        model_research_id="MR-13CG",
+        experiment_name="MR-13CG AO Full D40 Safety and True-HS Cohort Control",
+        phase="13CG",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "head1=same_date_percentile(-full_40bar_max_adverse_from_anchor/R); "
+            "head2=pure_mfe_percentile_within_same_date_D40_low_adverse_true_hs_only"
+        ),
+        objective_description=(
+            "Strict AO control with Safety truth consistently defined by the full 40-bar "
+            "anchor-relative maximum adverse decline D40: the Safety head uses same-date "
+            "percentile(-D40/R), and true-HS is THAT same percentile>=0.50. "
+            "Conditional-MFE is ranked strictly within this D40 true-HS sublist. "
+            "Keep AO adjusted 300x10 input, shared two-head InceptionTime, full-date cohort, "
+            "Delta-NDCG RankNet losses 1:1, optimizer, Seed42, folds, validation, "
+            "and predicted Safety P50 then Conditional-MFE inference unchanged. "
+            "Scientific contrast vs CC: CC froze original adverse-to-peak true-HS; "
+            "CG changes its membership. No score mixing, thresholds, strategy or Trading promotion."
+        ),
+        metric_scope="full_universe_full_d40_safety_plus_d40_true_hs_conditional_mfe",
+        score_semantic_id="daily_d40_true_hs_conditional_mfe_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        secondary_pair_scope=CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
         secondary_pair_scope_threshold=0.50,
         safety_supervision_source=CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE,
         model_gate_reference_profile_name=(

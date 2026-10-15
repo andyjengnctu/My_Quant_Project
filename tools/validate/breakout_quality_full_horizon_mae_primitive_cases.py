@@ -20,6 +20,7 @@ import torch
 
 from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_FINITE_SECONDARY_TARGET,
+    CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
     CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
 )
@@ -27,6 +28,7 @@ from core.breakout_quality_runtime_resolver import get_continuous_ranker_executi
 from core.breakout_quality_registry import (
     DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
     DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_HORIZON_MAE_PROFILE,
+    DAILY_UNIVERSAL_SHARED_FULL_D40_SAFETY_HS_CONDITIONAL_MFE_PROFILE,
 )
 from filters.breakout_quality.hs_conditional_mfe import build_hs_conditional_mfe_targets
 from filters.breakout_quality.ranker_training_contract import training_semantics
@@ -146,6 +148,126 @@ def test_ao_mfe_loss_eligibility_unchanged(ao, cc):
     assert np.array_equal(observed[0], ao.true_hs_mask)
 
 
+def test_cg_full_d40_true_hs_cohort(source, ao, cc):
+    """AO/CC frozen, CG D40 P50 replaces the actual Conditional-MFE sublist."""
+    valid = np.ones(len(source), dtype=bool)
+    profile_name = DAILY_UNIVERSAL_SHARED_FULL_D40_SAFETY_HS_CONDITIONAL_MFE_PROFILE
+    cg_recipe = get_continuous_ranker_execution_recipe(profile_name)
+    cc_recipe = get_continuous_ranker_execution_recipe(
+        DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_HORIZON_MAE_PROFILE
+    )
+    ao_recipe = get_continuous_ranker_execution_recipe(
+        DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+    )
+    assert cg_recipe.objective_policy.secondary_pair_scope == CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN
+    assert cg_recipe.objective_policy.true_hs_from_supervised_safety
+    assert not cc_recipe.objective_policy.true_hs_from_supervised_safety
+    assert ao_recipe.objective_policy.true_hs_from_supervised_safety
+    assert cg_recipe.model_architecture == cc_recipe.model_architecture == ao_recipe.model_architecture
+    assert cg_recipe.training_objective == cc_recipe.training_objective == ao_recipe.training_objective
+    assert cg_recipe.loss_name == cc_recipe.loss_name == ao_recipe.loss_name
+    assert cg_recipe.training_policy is cc_recipe.training_policy is ao_recipe.training_policy
+    assert cg_recipe.objective_policy.secondary_pair_scope_threshold == cc_recipe.objective_policy.secondary_pair_scope_threshold == 0.5
+    assert cg_recipe.objective_policy.safety_supervision_source == cc_recipe.objective_policy.safety_supervision_source
+    assert not cg_recipe.historical_pit_authorized and not cg_recipe.current_time_validation_authorized
+
+    cg = build_hs_conditional_mfe_targets(
+        source, valid, true_hs_percentile_cutoff=0.50,
+        safety_supervision_source=cg_recipe.objective_policy.safety_supervision_source,
+        true_hs_from_supervised_safety=cg_recipe.objective_policy.true_hs_from_supervised_safety,
+    )
+    assert np.array_equal(cg.low_adverse_safety_percentile, cc.low_adverse_safety_percentile)
+    assert np.array_equal(cg.primary_mfe_percentile, cc.primary_mfe_percentile)
+    assert np.array_equal(cg.true_hs_mask[:4], np.array([True, False, True, False]))
+    assert np.array_equal(cg.true_hs_mask, cc.low_adverse_safety_percentile >= 0.5)
+    assert not np.array_equal(cg.true_hs_mask, cc.true_hs_mask)
+    assert np.array_equal(cc.true_hs_mask, ao.true_hs_mask)
+    assert np.isnan(cg.conditional_mfe_percentile[~cg.true_hs_mask]).all()
+    assert np.isfinite(cg.conditional_mfe_percentile[cg.true_hs_mask]).all()
+    assert np.array_equal(cg.true_hs_mask, np.isfinite(cg.training_target[:, 1]))
+    assert np.array_equal(cg.conditional_mfe_percentile[:4][cg.true_hs_mask[:4]],
+                          np.array([0.0, 1.0],dtype=np.float32))
+
+    cg_contract = training_semantics(get_breakout_quality_experiment_profile(profile_name))[
+        'shared_safety_hs_conditional_mfe_duo_head_contract'
+    ]
+    assert 'full_40bar_anchor_max_adverse' in cg_contract['safety_target']
+    assert 'full_40bar_anchor_max_adverse' in cg_contract['true_hs_definition']
+    assert 'primary_target_min_full_d40_true_hs' in cg_contract['conditional_mfe_supervision_scope']
+    assert 'original_adverse_to_earliest_peak' in training_semantics(
+        get_breakout_quality_experiment_profile(
+            DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_HORIZON_MAE_PROFILE
+        ))['shared_safety_hs_conditional_mfe_duo_head_contract']['true_hs_definition']
+
+    profile=get_breakout_quality_experiment_profile(profile_name)
+    actual_train=ranker._training_target_for_profile(
+        profile, np.ones(len(source),dtype=np.float32),
+        np.ones(len(source),dtype=np.float32), source
+    )
+    assert np.array_equal(actual_train, cg.training_target, equal_nan=True)
+    x = torch.tensor([[0.7],[0.2],[0.4],[0.1],[0.6],[0.5],[0.8],[0.3]],dtype=torch.float32)
+    dates=np.asarray(['2020-01-02']*4+['2020-01-03']*4,dtype=object)
+    seen=[]
+    original=ranker._pairwise_logistic_loss
+    def observe(*args,**kwargs):
+        if kwargs.get('item_eligibility') is not None:
+            seen.append(kwargs['item_eligibility'].detach().cpu().numpy().astype(bool))
+        return original(*args,**kwargs)
+    with patch.object(ranker,'_pairwise_logistic_loss',side_effect=observe):
+        loss,count=ranker._compute_shared_safety_scoped_mfe_duo_loss(
+            torch,_SyntheticDuoHead(),x,None,torch.from_numpy(cg.training_target.copy()),dates,
+            training_policy=cg_recipe.training_policy,
+            secondary_pair_scope=cg_recipe.objective_policy.secondary_pair_scope,
+            secondary_pair_scope_threshold=cg_recipe.objective_policy.secondary_pair_scope_threshold,
+            pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        )
+    assert loss is not None and torch.isfinite(loss) and count > 0
+    assert len(seen)==1 and np.array_equal(seen[0],cg.true_hs_mask)
+
+    # Incomplete 40D D40 must be rejected rather than fallback to original AO Safety.
+    partial=source.copy()
+    partial.loc[0,'target_minimum_low_return']=np.nan
+    with np.testing.assert_raises_regex(ValueError,'complete future low path'):
+        build_hs_conditional_mfe_targets(
+            partial,valid,safety_supervision_source=CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE,
+            true_hs_from_supervised_safety=True,
+        )
+
+
+def test_cg_rolling_audit_true_hs_cohort(source):
+    """PIT audit must evaluate with exactly the training-time True-HS cohort."""
+    from types import SimpleNamespace
+    from services.breakout_quality import point_in_time_audit as pit_audit
+
+    bundle=SimpleNamespace(
+        group_table=source,
+        raw_target=source['target_favorable_r'].to_numpy(dtype=np.float64),
+    )
+    merged=pd.DataFrame({
+        'group_index':np.arange(len(source),dtype=np.int64),
+        'date':source['date'],
+        'raw_safety_score':np.tile([0.75,0.65,0.25,0.15],2),
+        'breakout_quality_score':np.tile([0.15,0.35,0.75,0.65],2),
+        'target_available':np.ones(len(source),dtype=bool),
+    })
+    expected={
+        DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE:np.array([True,True,False,False]*2),
+        DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_HORIZON_MAE_PROFILE:np.array([True,True,False,False]*2),
+        DAILY_UNIVERSAL_SHARED_FULL_D40_SAFETY_HS_CONDITIONAL_MFE_PROFILE:np.array([True,False,True,False]*2),
+    }
+    for profile,cohort in expected.items():
+        observed=[]
+        def capture_metrics(ids, group, targets, scores, **kwargs):
+            observed.append(targets.true_hs_mask.copy())
+            return {'audit_test_only': True}
+        with patch.object(pit_audit.ranker_api, 'hs_conditional_mfe_metrics',side_effect=capture_metrics):
+            result=pit_audit._build_hs_conditional_mfe_evaluation(
+                bundle,merged,np.empty(0,dtype=np.int64),experiment_profile=profile,
+            )
+        assert result['oos']=={'audit_test_only':True}
+        assert len(observed)==1 and np.array_equal(observed[0],cohort), profile
+
+
 def test_paired_common_truth_extension(source):
     sample = source.copy()
     sample["group_index"] = np.arange(len(sample), dtype=np.int64)
@@ -174,8 +296,10 @@ def test_paired_common_truth_extension(source):
 def main():
     source, ao, cc = test_mae_primitive_and_mask_contract()
     test_ao_mfe_loss_eligibility_unchanged(ao, cc)
+    test_cg_full_d40_true_hs_cohort(source, ao, cc)
+    test_cg_rolling_audit_true_hs_cohort(source)
     test_paired_common_truth_extension(source)
-    print('PASS: full 40D MAE primitive, AO frozen MFE cohort, generic scoped loss, Research [1] paired truth extension')
+    print('PASS: AO/CC frozen, CG full-D40 true-HS cohort and scoped MFE loss, common truth')
 
 
 if __name__ == '__main__':

@@ -17,8 +17,12 @@ import pandas as pd
 
 from core.breakout_quality_runtime import (
     DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID,
+    CONTINUOUS_RANKER_SAFETY_SUPERVISION_ADVERSE_TO_PEAK,
+    CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE,
+    CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN,
     get_continuous_ranker_training_policy,
 )
+from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.continuous_target import (
     StrategyAlignedContinuousTargetSpec,
@@ -38,22 +42,33 @@ REFERENCE_EVIDENCE_FAMILY = "hs_conditional_mfe"
 PRIMARY_COLUMNS = ("ticker", "date", "group_index")
 
 
-def _participants(models: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, Any], tuple[Mapping[str, Any], ...]] | None:
-    """Find the registered reference and all U40-target treatments, regardless of Loss."""
-    references, direct = [], []
+def _participants(models: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, Any], tuple[Mapping[str, Any], ...], Mapping[str, Any]] | None:
+    """Find one original-Safety reference, matched U40 outcomes, and their truth Producer."""
+    references, treatments, direct = [], [], []
     for item in models:
         settings = item["settings"]
         policy = get_continuous_ranker_training_policy(str(settings.training_objective))
+        recipe = get_continuous_ranker_execution_recipe(str(settings.experiment_profile))
+        is_conditional = REFERENCE_EVIDENCE_FAMILY in policy.report_evidence_families
+        supervised_source = recipe.objective_policy.safety_supervision_source
+        is_primary_scoped = (
+            recipe.objective_policy.secondary_pair_scope
+            == CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_PRIMARY_TARGET_MIN
+        )
         if str(settings.continuous_target_id) == DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID:
             direct.append(item)
-        if REFERENCE_EVIDENCE_FAMILY in policy.report_evidence_families:
-            references.append(item)
+            treatments.append(item)
+        elif is_conditional and is_primary_scoped:
+            if supervised_source == CONTINUOUS_RANKER_SAFETY_SUPERVISION_ADVERSE_TO_PEAK:
+                references.append(item)
+            elif supervised_source == CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE:
+                treatments.append(item)
     if not direct or not references:
         return None
-    if len(references) != 1 or any(item is references[0] for item in direct):
-        raise ValueError("U40 paired comparison requires one Conditional-MFE reference and distinct U40 treatments")
+    if len(references) != 1 or any(item is references[0] for item in treatments):
+        raise ValueError("U40 paired comparison requires one original-Safety Conditional-MFE reference")
     reference = references[0]
-    all_items = (reference, *direct)
+    all_items = (reference, *treatments)
     if len({str(item["model_id"]) for item in all_items}) != len(all_items):
         raise ValueError("U40 comparison contains duplicate model identity")
     if len({str(item["settings"].filter_id) for item in all_items}) != 1:
@@ -62,7 +77,7 @@ def _participants(models: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, Any
         contract = item.get("contract")
         if contract is None or str(contract.continuous_target_id) != str(item["settings"].continuous_target_id):
             raise ValueError("U40 paired comparison scientific target contract mismatch")
-    return reference, tuple(direct)
+    return reference, tuple(treatments), direct[0]
 
 
 def _read_validated_score(item: Mapping[str, Any], *, mode: str) -> pd.DataFrame:
@@ -286,15 +301,15 @@ def attach_paired_u40_extension(
     participants = _participants(output)
     if participants is None:
         return output
-    reference, direct_models = participants
+    reference, treatment_models, canonical_u40_source = participants
     ref_scores = _read_validated_score(reference, mode=evaluation_mode)
-    direct_scores = {
+    treatment_scores = {
         f"direct_{index}": _read_validated_score(item, mode=evaluation_mode)
-        for index, item in enumerate(direct_models)
+        for index, item in enumerate(treatment_models)
     }
     # A single U40 Producer owns the shared mature MFE/D40 truth. No score,
     # classification or historical OOS outcome is allowed into model fitting.
-    settings = direct_models[0]["settings"]
+    settings = canonical_u40_source["settings"]
     bundle = load_daily_universal_ranker_data(
         filter_id=str(settings.filter_id), model_architecture=str(settings.model_architecture),
         experiment_profile=str(settings.experiment_profile), preload_feature_bank=False,
@@ -302,14 +317,14 @@ def attach_paired_u40_extension(
     )
     truth = _canonical_u40_truth(bundle)
     matched = _matched_rows(truth=truth, reference=ref_scores,
-                            treatments=direct_scores, mode=evaluation_mode)
+                            treatments=treatment_scores, mode=evaluation_mode)
     candidates = load_official_breakout_candidate_keys(
         str(settings.filter_id), allow_stale_source=False,
     )
     entries = _paired_report_rows(
         common=matched, reference_id=str(reference["model_id"]), treatment_id=None,
         treatment_score_columns={str(item["model_id"]): f"score_direct_{index}"
-                                 for index, item in enumerate(direct_models)},
+                                 for index, item in enumerate(treatment_models)},
         mode=evaluation_mode, breakout_candidate_keys=candidates,
     )
     for item in output:

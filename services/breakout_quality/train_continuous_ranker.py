@@ -3879,6 +3879,7 @@ def _training_target_for_profile(
             np.isfinite(np.asarray(raw_target, dtype=np.float32)),
             true_hs_percentile_cutoff=float(recipe.objective_policy.secondary_pair_scope_threshold),
             safety_supervision_source=recipe.objective_policy.safety_supervision_source,
+            true_hs_from_supervised_safety=recipe.objective_policy.true_hs_from_supervised_safety,
         ).training_target
         quantile_auxiliary = recipe.training_policy.quantile_auxiliary
         if quantile_auxiliary is None:
@@ -4222,6 +4223,7 @@ def select_epoch(
             np.isfinite(np.asarray(raw_target, dtype=np.float32)),
             true_hs_percentile_cutoff=float(execution_recipe.objective_policy.secondary_pair_scope_threshold),
             safety_supervision_source=execution_recipe.objective_policy.safety_supervision_source,
+            true_hs_from_supervised_safety=execution_recipe.objective_policy.true_hs_from_supervised_safety,
         )
         if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_HS_CONDITIONAL_MFE
         else None

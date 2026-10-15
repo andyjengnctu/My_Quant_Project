@@ -605,13 +605,22 @@ def training_semantics(profile) -> dict[str, Any]:
             contract["safety_target"] = (
                 "same_date_percentile_of_negative_full_40bar_anchor_max_adverse_over_canonical_r"
             )
-            contract["true_hs_definition"] = (
-                "original_adverse_to_earliest_peak_safety_percentile_gte_0.50_frozen"
-            )
-            contract["conditional_mfe_supervision_scope"] = (
-                "finite_secondary_target_original_ao_true_hs_items_only_sublist_"
-                "before_rank_positions_idcg_and_delta_ndcg"
-            )
+            if recipe.objective_policy.true_hs_from_supervised_safety:
+                contract["true_hs_definition"] = (
+                    "full_40bar_anchor_max_adverse_safety_percentile_gte_0.50"
+                )
+                contract["conditional_mfe_supervision_scope"] = (
+                    "primary_target_min_full_d40_true_hs_items_only_sublist_"
+                    "before_rank_positions_idcg_and_delta_ndcg"
+                )
+            else:
+                contract["true_hs_definition"] = (
+                    "original_adverse_to_earliest_peak_safety_percentile_gte_0.50_frozen"
+                )
+                contract["conditional_mfe_supervision_scope"] = (
+                    "finite_secondary_target_original_ao_true_hs_items_only_sublist_"
+                    "before_rank_positions_idcg_and_delta_ndcg"
+                )
         return _extended_semantics(
             batching=contract["batching"],
             pairwise_contract=pairwise_contract,

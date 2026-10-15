@@ -1376,6 +1376,7 @@ def run(args) -> int:
                 execution_recipe.objective_policy.secondary_pair_scope_threshold
             ),
             safety_supervision_source=execution_recipe.objective_policy.safety_supervision_source,
+            true_hs_from_supervised_safety=execution_recipe.objective_policy.true_hs_from_supervised_safety,
         )
         if hs_conditional_mfe_duo
         else None

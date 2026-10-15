@@ -546,6 +546,7 @@ def _build_hs_conditional_mfe_evaluation(
         np.isfinite(np.asarray(bundle.raw_target, dtype=np.float32)),
         true_hs_percentile_cutoff=float(threshold),
         safety_supervision_source=recipe.objective_policy.safety_supervision_source,
+        true_hs_from_supervised_safety=recipe.objective_policy.true_hs_from_supervised_safety,
     )
     safety_pct = ranker_api.build_daily_percentile_targets(
         work["raw_safety_score"].to_numpy(dtype=np.float32),

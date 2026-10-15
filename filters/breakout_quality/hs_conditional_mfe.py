@@ -76,6 +76,7 @@ def build_hs_conditional_mfe_targets(
     *,
     true_hs_percentile_cutoff: float = DEFAULT_TRUE_HS_PERCENTILE_CUTOFF,
     safety_supervision_source: str = CONTINUOUS_RANKER_SAFETY_SUPERVISION_ADVERSE_TO_PEAK,
+    true_hs_from_supervised_safety: bool = False,
 ) -> HsConditionalMfeTargets:
     if safety_supervision_source not in SUPPORTED_CONTINUOUS_RANKER_SAFETY_SUPERVISION_SOURCES:
         raise ValueError(f"unsupported safety supervision source: {safety_supervision_source!r}")
@@ -101,10 +102,10 @@ def build_hs_conditional_mfe_targets(
     if not np.array_equal(component_valid, valid):
         raise ValueError("HS-Conditional MFE valid rows必須同時具有finite favorable/adverse target")
 
-    # A1 changes only the Safety head's supervised outcome.  True-HS membership
-    # and conditional MFE targets stay on AO's adverse-to-peak definition.
+    # By default, preserve the original adverse-to-peak membership even if the
+    # supervised Safety source changes. A primary-target scoped policy instead
+    # derives the True-HS membership from the supervised Safety itself.
     ao_safety = build_same_date_percentile_targets(-adverse, valid, dates)
-    true_hs = valid & (np.asarray(ao_safety, dtype=np.float64) >= cutoff)
     if safety_supervision_source == CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE:
         minimum = pd.to_numeric(
             group_table["target_minimum_low_return"], errors="coerce"
@@ -120,6 +121,8 @@ def build_hs_conditional_mfe_targets(
         safety = build_same_date_percentile_targets(safety_raw_r, valid, dates)
     else:
         safety = ao_safety
+    cohort_safety = safety if true_hs_from_supervised_safety else ao_safety
+    true_hs = valid & (np.asarray(cohort_safety, dtype=np.float64) >= cutoff)
     primary_mfe = build_same_date_percentile_targets(favorable, valid, dates)
     conditional_mfe = build_same_date_percentile_targets(favorable, true_hs, dates)
 
