@@ -162,12 +162,12 @@ def case() -> None:
             score["target_raw_r"] = 1.0
             score.to_csv(path, compression="gzip", index=False)
             from filters.breakout_quality.artifacts import build_file_manifest
+            settings = get_breakout_quality_workflow_settings(experiment_profile=name)
             contract = SimpleNamespace(
                 score_path=path,
-                continuous_target_id="same_target",
+                continuous_target_id=settings.continuous_target_id,
                 report={"artifacts": {"oos_scores_gzip": build_file_manifest(path)}},
             )
-            settings = get_breakout_quality_workflow_settings(experiment_profile=name)
             paths.append((mid, settings, contract))
         bundle = SimpleNamespace(target_valid=np.ones(len(base), dtype=bool), group_table=pd.DataFrame({
             **base.to_dict("list"),
@@ -211,6 +211,74 @@ def case() -> None:
         text_b = _render_model_comparison_specific_extensions(views, target="markdown")
         assert text_a == text_b and "D40 Daily rho" in str(text_a)
         assert "Shared P45-P55 Pair" in str(text_a) and "Breakout slice" in str(text_a)
+        # Regression for the fixed 20D experiment: CG's Raw Safety is D40,
+        # CH's Raw Safety is D20.  CH must remain available to the independent
+        # U20/U40 same-truth comparison but cannot enter this D40-only report.
+        from core.breakout_quality_registry import (
+            DAILY_UNIVERSAL_SHARED_FULL_D40_SAFETY_HS_CONDITIONAL_MFE_PROFILE,
+            DAILY_UNIVERSAL_SHARED_FULL_D20_SAFETY_HS_CONDITIONAL_MFE_PROFILE,
+        )
+        cg_profile = DAILY_UNIVERSAL_SHARED_FULL_D40_SAFETY_HS_CONDITIONAL_MFE_PROFILE
+        ch_profile = DAILY_UNIVERSAL_SHARED_FULL_D20_SAFETY_HS_CONDITIONAL_MFE_PROFILE
+        cg_settings = get_breakout_quality_workflow_settings(experiment_profile=cg_profile)
+        ch_settings = get_breakout_quality_workflow_settings(experiment_profile=ch_profile)
+        assert cg_settings.continuous_target_id == paths[0][2].continuous_target_id
+        assert ch_settings.continuous_target_id != cg_settings.continuous_target_id
+        for mode in ("forward_oos", "rolling_oos"):
+            mixed = []
+            for model_id, settings, frame in (
+                ("MR-13AO", paths[0][1], forward_a),
+                ("MR-13CG", cg_settings, forward_b),
+                ("MR-13CH", ch_settings, forward_b),
+            ):
+                score = frame.rename(columns={"safety_prediction": "raw_safety_score"}).copy()
+                if mode == "forward_oos":
+                    score["target_raw_r"] = 1.0
+                else:
+                    score["fold_id"] = "fold_2023"
+                    score["model_information_cutoff"] = "2022-12-31"
+                score_path = Path(tmp) / f"{model_id}_{mode}_mixed.csv.gz"
+                score.to_csv(score_path, index=False, compression="gzip")
+                mixed.append({
+                    "model_id": model_id, "settings": settings,
+                    "contract": SimpleNamespace(
+                        score_path=score_path,
+                        continuous_target_id=settings.continuous_target_id,
+                        report={"artifacts": {"oos_scores_gzip": build_file_manifest(score_path)}},
+                    ),
+                    "payload": {},
+                })
+            with patch.object(svc, "load_daily_universal_ranker_data", return_value=bundle) as loader, \
+                    patch.object(svc, "load_official_breakout_candidate_keys", return_value=canonical_candidate_keys):
+                paired = attach_full_horizon_mae_common_truth_extension(
+                    mixed, evaluation_mode=mode, project_root=Path(tmp)
+                )
+            loader.assert_called_once()
+            assert loader.call_args.kwargs["experiment_profile"] == cg_profile
+            assert all(len(item["payload"].get("comparison_extensions", [])) == 2 for item in paired[:2])
+            assert not paired[2]["payload"], "D20 Safety was evaluated as a D40 prediction"
+            assert paired[0]["payload"]["comparison_extensions"][0]["paired_truth"]["paired_stock_days"] == 11
+            assert paired[1]["payload"]["comparison_extensions"][0]["paired_truth"]["paired_stock_days"] == 11
+            # No 40D Safety treatment: do not repurpose CH as a D40 anchor.
+            with patch.object(svc, "load_daily_universal_ranker_data") as no_loader:
+                untouched = attach_full_horizon_mae_common_truth_extension(
+                    [mixed[0], mixed[2]], evaluation_mode=mode, project_root=Path(tmp)
+                )
+            no_loader.assert_not_called()
+            assert all(not item["payload"] for item in untouched)
+            # Scientific identity mismatch must remain a hard error, even when
+            # that 20D model is not part of the D40 evidence population.
+            bad = [{**item, "contract": SimpleNamespace(**vars(item["contract"]))} for item in mixed]
+            bad[2]["contract"].continuous_target_id = cg_settings.continuous_target_id
+            try:
+                attach_full_horizon_mae_common_truth_extension(
+                    bad, evaluation_mode=mode, project_root=Path(tmp)
+                )
+            except ValueError as exc:
+                assert "identity mismatch" in str(exc)
+            else:
+                raise AssertionError("incompatible D20 contract was accepted")
+
         # Rolling OOS must retain the same evidence/split semantics on PIT scores.
         rolling_items = []
         for mid, settings, old_contract in paths:
@@ -222,7 +290,7 @@ def case() -> None:
             rolling_frame.to_csv(rolling_path, index=False)
             rolling_items.append({
                 "model_id": mid, "settings": settings,
-                "contract": SimpleNamespace(score_path=rolling_path, continuous_target_id="same_target"),
+                "contract": SimpleNamespace(score_path=rolling_path, continuous_target_id=settings.continuous_target_id),
                 "payload": {},
             })
         with patch.object(svc, "load_daily_universal_ranker_data", return_value=bundle), \

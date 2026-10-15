@@ -17,6 +17,7 @@ import pandas as pd
 
 from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE,
+    DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
     get_continuous_ranker_score_output_columns,
 )
 from core.breakout_quality_registry import get_continuous_ranker_research_spec
@@ -299,10 +300,15 @@ def attach_full_horizon_mae_common_truth_extension(
     # A1 is a single-variable control: identical training objective / score-head
     # recipe. Do not silently shrink AO/CC's paired sample to AK/BZ or unrelated
     # auxiliary-loss models just because they also persist a Raw Safety head.
+    # A 20-bar Full-Horizon Safety model uses the same dual-head objective but
+    # predicts D20.  Its Raw Safety head must NEVER be evaluated as a D40
+    # prediction in this D40-only extension; U20/U40 economic comparisons have
+    # separate canonical truth producers and report contracts.
     full_horizon_model = next(
         (
             item for item in copied
-            if str(get_continuous_ranker_research_spec(
+            if str(item["settings"].continuous_target_id) == DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID
+            and str(get_continuous_ranker_research_spec(
                 str(item["settings"].experiment_profile)
             ).safety_supervision_source) == CONTINUOUS_RANKER_SAFETY_SUPERVISION_FULL_HORIZON_MAE
         ),
@@ -310,26 +316,28 @@ def attach_full_horizon_mae_common_truth_extension(
     )
     if full_horizon_model is None:
         return copied
-    control_objective = str(full_horizon_model["settings"].training_objective)
+    reference = full_horizon_model["settings"]
+    control_objective = str(reference.training_objective)
+    comparable_target_id = str(reference.continuous_target_id)
     for item in copied:
         settings = item["settings"]
         if str(settings.training_objective) != control_objective:
             continue
         if "raw_safety" not in get_continuous_ranker_score_output_columns(control_objective):
             continue
+        # Keep scientific identity fail-closed, even for non-D40 models.
+        contract = item.get("contract")
+        if contract is None or str(contract.continuous_target_id) != str(settings.continuous_target_id):
+            raise ValueError("D40 paired model comparison score/target identity mismatch")
+        if str(settings.continuous_target_id) != comparable_target_id:
+            continue
+        if str(settings.filter_id) != str(reference.filter_id):
+            raise ValueError("D40 paired model comparison混入不同filter id")
         frame = _score_frame(item, evaluation_mode=evaluation_mode)
         if frame is not None:
             participants[str(item["model_id"])] = frame
-    if full_horizon_model is None or len(participants) < 2:
+    if len(participants) < 2:
         return copied
-    reference = full_horizon_model["settings"]
-    comparable_target_id = str(full_horizon_model["contract"].continuous_target_id)
-    for item in copied:
-        if str(item["model_id"]) in participants:
-            if str(item["contract"].continuous_target_id) != comparable_target_id:
-                raise ValueError("D40 paired model comparison混入不同continuous target id")
-            if str(item["settings"].filter_id) != str(reference.filter_id):
-                raise ValueError("D40 paired model comparison混入不同filter id")
     # The AO/CC full-horizon target is embedded in the canonical daily stock-day
     # bundle.  Event-group Continuous Target manifests are neither required nor
     # produced for this sample scope; loading the event-group bundle here would
