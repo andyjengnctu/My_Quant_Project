@@ -1307,6 +1307,30 @@ def append_completed_pair_baseline_integrity_contract_checks(
             root=root, settings=settings, status=status, off_arm=off_arm
         ) == pair_dir
 
+        # A newer interrupted run may have complete-looking pair-local files,
+        # but no valid completed run-level JSON. It must never crash planning,
+        # nor shadow an older eligible C96 baseline.
+        interrupted_run = runs_root / "20990102_000000_interrupted_synthetic"
+        interrupted_pair = interrupted_run / "pairs" / pair_id
+        interrupted_pair.mkdir(parents=True)
+        for name in required_names:
+            (interrupted_pair / name).write_text(
+                json.dumps(pair_payload) if name.endswith(".json") else "baseline\n",
+                encoding="utf-8",
+            )
+        interrupted_report = interrupted_run / "strategy_comparison.json"
+        interrupted_candidates_skipped = True
+        for invalid_publication in (None, "broken json", "null", "[]", '{"status": "RUNNING"}'):
+            if invalid_publication is None:
+                interrupted_report.unlink(missing_ok=True)
+            else:
+                interrupted_report.write_text(invalid_publication, encoding="utf-8")
+            interrupted_candidates_skipped &= (
+                reuse._find_reusable_baseline_source(
+                    root=root, settings=settings, status=status, off_arm=off_arm
+                ) == pair_dir
+            )
+
         integrity = build_completed_pair_file_integrity({pair_id: pair_dir})
         run_payload[PAIR_FILE_INTEGRITY_FIELD] = integrity
         run_report = run_dir / "strategy_comparison.json"
@@ -1353,4 +1377,9 @@ def append_completed_pair_baseline_integrity_contract_checks(
         "shared_baseline_cache_pins_csv_content_but_preserves_legacy_compatibility",
         True, legacy_hit and pinned_hit and corrupted_miss
         and read_boundary_rejected_corrupt_csv and missing_manifest_miss,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "shared_baseline_skips_missing_malformed_or_incomplete_run_publications",
+        True, interrupted_candidates_skipped,
     )

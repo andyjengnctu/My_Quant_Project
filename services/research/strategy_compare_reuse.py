@@ -1840,9 +1840,13 @@ def _find_reusable_baseline_source(
     )
     for run_dir in run_dirs:
         run_payload = _read_json(run_dir / "strategy_comparison.json")
+        # Archived roots may contain interrupted runs with pair-local files but
+        # no completed run-level publication.  Never treat those as reusable.
+        if not isinstance(run_payload, dict) or str(run_payload.get("status") or "") != "COMPLETED":
+            continue
         if not _research_dataset_generation_identity_matches_current(
             status=status,
-            run_payload=run_payload if isinstance(run_payload, dict) else None,
+            run_payload=run_payload,
         ):
             continue
         pairs_root = run_dir / "pairs"
