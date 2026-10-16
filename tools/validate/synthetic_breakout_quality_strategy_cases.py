@@ -2771,24 +2771,25 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         "def render_strategy_execution_plan_surface(" in comparison_source
                 and "return render_strategy_execution_plan_surface(" in comparison_source
                 and "render_strategy_execution_plan_surface(" in multi_seed_source
-                and "str(item)" in comparison_source
-                and "str(description)" in comparison_source
-                and "max_column_widths=(" in comparison_source
+                and "_single_line_execution_plan_cell(item)" in comparison_source
+                and "_single_line_execution_plan_cell(description)" in comparison_source
+                and "_single_line_execution_plan_cell(" in comparison_source
+                and "max_column_widths=(" not in comparison_source
                 and "_compact_execution_plan_item(" not in comparison_source
                 and "_compact_execution_plan_description(" not in comparison_source
-                and "_EXECUTION_PLAN_ITEM_WIDTH = 36" in comparison_source
-                and "_EXECUTION_PLAN_DESCRIPTION_WIDTH = 44" in comparison_source
+                and "_EXECUTION_PLAN_ITEM_WIDTH" not in comparison_source
+                and "_EXECUTION_PLAN_DESCRIPTION_WIDTH" not in comparison_source
                 and "action_colors =" not in multi_seed_source
                 and "def signal_for_workflow_status(" in report_style_source
                 and "def styled_workflow_status(" in report_style_source
                 and "styled_workflow_status" in comparison_source,
     )
 
-    # A column-width cap may wrap a long identity/description but must never
-    # abbreviate it or replace part of it with an ellipsis.  This behavior is
-    # shared by single-seed Strategy Compare and multi-seed Robustness plans.
-    from core.console_report import _wrap_display_cell, render_table
-    from core.display_common import _display_width
+    # User-approved execution-plan display: one output row per action, with
+    # full-width item and description cells. Neither ellipsis nor wrapping is
+    # permitted; the shared renderer covers single-seed and robustness plans.
+    from core.console_report import render_table
+    from core.display_common import _display_width, _strip_ansi
     from services.research.strategy_comparison import render_strategy_execution_plan_surface
 
     full_item = "C99 Min MR-13AO Exact K/R0 / Broker-Cash Rolling 完整項目"
@@ -2797,15 +2798,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         "同一個P16參數來源必須合法REUSE；正式測試比較不得加入額外模型校準"
     )
     long_identity = "param-benchmark:seed=693545351:profile=full-horizon:" + "z" * 80
-    samples = ((full_item, 36), (full_reason, 44), (long_identity, 36), ("中文完整文字" * 14, 44))
-    check_true(
-        "strategy_execution_plan_wrap_preserves_complete_unicode_and_long_artifact_text",
-        all(
-            "".join(parts := _wrap_display_cell(value, width)) == value
-            and all(_display_width(part) <= width for part in parts)
-            for value, width in samples
-        ),
-    )
+    very_long_reason = "中文完整文字" * 24
     with patch(
         "services.research.strategy_comparison.render_table",
         wraps=render_table,
@@ -2813,17 +2806,39 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         complete_plan = render_strategy_execution_plan_surface(
             title="本次執行計畫",
             metadata_rows=(("整體狀態", "PREPARABLE"),),
-            action_rows=[("RUN", full_item, full_reason)],
+            action_rows=[
+                ("RUN", full_item, full_reason),
+                ("REUSE", long_identity, very_long_reason),
+                ("REPORT", "跨\n行項目", "跨\r\n行說明"),
+            ],
         )
     render_args = render_spy.call_args
+    table_lines = complete_plan.splitlines()[-5:]
+    expected_rows = (
+        ("RUN", full_item, full_reason),
+        ("REUSE", long_identity, very_long_reason),
+        ("REPORT", "跨 行項目", "跨 行說明"),
+    )
     check_true(
-        "strategy_execution_plan_renders_full_item_and_description_not_compacted_ellipsis",
+        "strategy_execution_plan_full_text_single_line_without_truncation_or_wrapping",
         render_args is not None
         and render_args.args[0] == ("動作", "項目", "說明")
-        and render_args.args[1][0][1:] == (full_item, full_reason)
-        and render_args.kwargs.get("max_column_widths") == (None, 36, 44)
+        and tuple(
+            (_strip_ansi(str(action)), item, desc)
+            for action, item, desc in render_args.args[1]
+        ) == expected_rows
+        and "max_column_widths" not in render_args.kwargs
+        and len(table_lines) == len(expected_rows) + 2
         and "…" not in complete_plan
+        and all("\n" not in cell and "\r" not in cell for row in render_args.args[1] for cell in row[1:])
+        and all(item in line and desc in line for line, (_action, item, desc) in zip(table_lines[2:], expected_rows))
         and "本次執行計畫" in complete_plan,
+    )
+    check_true(
+        "strategy_execution_plan_columns_use_natural_full_display_width",
+        render_args is not None
+        and _display_width(table_lines[0]) == _display_width(table_lines[1])
+        and all(_display_width(line) == _display_width(table_lines[0]) for line in table_lines[2:]),
     )
 
 

@@ -384,8 +384,10 @@ def render_status(
 
 
 
-_EXECUTION_PLAN_ITEM_WIDTH = 36
-_EXECUTION_PLAN_DESCRIPTION_WIDTH = 44
+def _single_line_execution_plan_cell(value: object) -> str:
+    """Keep all visible cell content on one output line, without abbreviation."""
+
+    return " ".join(str(value).splitlines())
 
 
 def render_strategy_execution_plan_surface(
@@ -394,7 +396,7 @@ def render_strategy_execution_plan_surface(
     metadata_rows: tuple[tuple[object, object], ...],
     action_rows: list[tuple[object, object, object]],
 ) -> str:
-    """Render full execution-plan labels and reasons with lossless cell wrapping."""
+    """Render full execution-plan labels/reasons in one physical line per action."""
 
     styled_metadata = []
     for label, value in metadata_rows:
@@ -405,8 +407,8 @@ def render_strategy_execution_plan_surface(
     styled_actions = [
         (
             styled_workflow_status(action),
-            str(item),
-            str(description),
+            _single_line_execution_plan_cell(item),
+            _single_line_execution_plan_cell(description),
         )
         for action, item, description in action_rows
     ]
@@ -417,9 +419,6 @@ def render_strategy_execution_plan_surface(
             render_table(
                 ("動作", "項目", "說明"),
                 styled_actions,
-                max_column_widths=(
-                    None, _EXECUTION_PLAN_ITEM_WIDTH, _EXECUTION_PLAN_DESCRIPTION_WIDTH,
-                ),
             ),
         )
     )
