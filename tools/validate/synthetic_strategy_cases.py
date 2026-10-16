@@ -4805,33 +4805,32 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             for profile_id in fixed_profile_ids
         ),
     )
-    current_builder_types = {
-        str(current_compare_settings.parameter_sources[arm.param_source].builder.builder_type)
-        for arm in current_compare_settings.enabled_arms
-        if current_compare_settings.parameter_sources[arm.param_source].builder is not None
+    # The original three-arm broker-cash comparison is an immutable historical
+    # suite, not necessarily the currently selected Compare Suite.  Resolve its
+    # own profiles when checking its registered parameter identities.
+    broker_cash_oos = get_strategy_comparison_settings("non_dl_broker_cash_oos")
+    broker_cash_rolling = get_strategy_comparison_settings("non_dl_broker_cash_rolling")
+    broker_cash_builder_types = {
+        str(broker_cash_oos.parameter_sources[arm.param_source].builder.builder_type)
+        for arm in broker_cash_oos.enabled_arms
+        if broker_cash_oos.parameter_sources[arm.param_source].builder is not None
     }
-    current_validation_parameter_sets = {
-        str(dict(current_compare_settings.parameter_sources[arm.param_source].builder.options).get("parameter_set") or "")
-        for arm in current_compare_settings.enabled_arms
-        if current_compare_settings.parameter_sources[arm.param_source].builder is not None
-        and current_compare_settings.parameter_sources[arm.param_source].builder.builder_type
+    broker_cash_validation_parameter_sets = {
+        str(dict(broker_cash_oos.parameter_sources[arm.param_source].builder.options).get("parameter_set") or "")
+        for arm in broker_cash_oos.enabled_arms
+        if broker_cash_oos.parameter_sources[arm.param_source].builder is not None
+        and broker_cash_oos.parameter_sources[arm.param_source].builder.builder_type
             == "optimizer_validation_budget_refit_strategy_params"
     }
-    current_fixed_multiseed_profiles = {
-        str(dict(current_compare_settings.parameter_sources[arm.param_source].builder.options).get("training_profile_id") or "")
-        for arm in current_compare_settings.enabled_arms
-        if current_compare_settings.parameter_sources[arm.param_source].builder is not None
-        and current_compare_settings.parameter_sources[arm.param_source].builder.builder_type
+    broker_cash_fixed_multiseed_profiles = {
+        str(dict(broker_cash_oos.parameter_sources[arm.param_source].builder.options).get("training_profile_id") or "")
+        for arm in broker_cash_oos.enabled_arms
+        if broker_cash_oos.parameter_sources[arm.param_source].builder is not None
+        and broker_cash_oos.parameter_sources[arm.param_source].builder.builder_type
             == "optimizer_fixed_multiseed_strategy_params"
     }
-    # The new current matrix must not execute old C85/P6 as if it were the
-    # corrected scientific treatment.  Historical raw-price tests remain
-    # bound to their archived profile and are not silently removed.
-    current_arm_ids = tuple(arm.arm_id for arm in current_compare_settings.enabled_arms)
-    current_contrast_ids = tuple(contrast.contrast_id for contrast in current_compare_settings.enabled_contrasts)
-    # The historical C95/P14 matrix remains registered and immutable.  The
-    # current broker-cash matrix is a fresh scientific treatment with three
-    # independently registered parameter producers.
+    # The historical C95/P14 and C96-C98/P15-P17 matrices remain immutable.
+    # A later suite may add new arms that consume these parameter truths.
     legacy_oos = get_strategy_comparison_settings("non_dl_c85_same_signal_revalidation_oos")
     legacy_rolling = get_strategy_comparison_settings("non_dl_c85_same_signal_revalidation_rolling")
     corrected_arm = legacy_oos.arms["C95"]
@@ -4853,12 +4852,12 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         fixed_multiseed_strategy_param_artifact_path,
     )
     for arm_id, (profile_id, param_id, family, policy) in expected_new.items():
-        arm = current_compare_settings.arms[arm_id]
-        source = current_compare_settings.parameter_sources[arm.param_source]
+        arm = broker_cash_oos.arms[arm_id]
+        source = broker_cash_oos.parameter_sources[arm.param_source]
         profile = get_strategy_param_training_profile(profile_id)
         identity = build_registered_strategy_param_scientific_identity(project_root, profile_id)
-        oos_source = current_oos_settings.parameter_sources[current_oos_settings.arms[arm_id].param_source]
-        rolling_source = current_rolling_settings.parameter_sources[current_rolling_settings.arms[arm_id].param_source]
+        oos_source = broker_cash_oos.parameter_sources[broker_cash_oos.arms[arm_id].param_source]
+        rolling_source = broker_cash_rolling.parameter_sources[broker_cash_rolling.arms[arm_id].param_source]
         physical = fixed_multiseed_strategy_param_artifact_path(
             project_root, training_profile_id=profile_id, policy=policy
         )
@@ -4881,19 +4880,21 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             and profile.artifact_slug in oos_source.path_template
         )
     check(
-        "strategy_compare_current_suite_is_independent_broker_cash_three_arm_identity",
+        "strategy_compare_historical_broker_cash_three_arm_identity_is_immutable",
         True,
-        current_arm_ids == ("C96", "C97", "C98")
-        and set(current_contrast_ids) == {"C97-C96", "C98-C97", "C98-C96"}
-        and current_oos_settings.suite_id == current_rolling_settings.suite_id
-        and current_oos_settings.suite_id == "non_dl_broker_cash_v1"
-        and "C85" not in current_arm_ids
-        and "C95" not in current_arm_ids
-        and len(set(physical_paths)) == 3
+        tuple(arm.arm_id for arm in broker_cash_oos.enabled_arms) == tuple(expected_new)
+        and tuple(arm.arm_id for arm in broker_cash_rolling.enabled_arms) == tuple(expected_new)
+        and {contrast.contrast_id for contrast in broker_cash_oos.enabled_contrasts}
+            == {"C97-C96", "C98-C97", "C98-C96"}
+        and {contrast.contrast_id for contrast in broker_cash_rolling.enabled_contrasts}
+            == {"C97-C96", "C98-C97", "C98-C96"}
+        and broker_cash_oos.suite_id == broker_cash_rolling.suite_id
+        and broker_cash_oos.suite_id == "non_dl_broker_cash_v1"
+        and len(set(physical_paths)) == len(expected_new)
         and all(registered_broker_cash_rows)
-        and not current_validation_parameter_sets
-        and current_fixed_multiseed_profiles == {value[0] for value in expected_new.values()}
-        and current_builder_types == {"optimizer_fixed_multiseed_strategy_params"},
+        and not broker_cash_validation_parameter_sets
+        and broker_cash_fixed_multiseed_profiles == {value[0] for value in expected_new.values()}
+        and broker_cash_builder_types == {"optimizer_fixed_multiseed_strategy_params"},
     )
     check(
         "strategy_compare_historical_c95_scientific_identity_remains_immutable",
