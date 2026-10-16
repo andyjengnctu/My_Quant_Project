@@ -111,6 +111,103 @@ def append_completed_pair_score_reuse_contract_checks(
         ),
     )
 
+    # Regression: adding DL arms to a previously completed No-DL suite must
+    # not make its shared C96 scientific observation appear as a new RUN.  The
+    # baseline search must examine paired as well as standalone DL-off arms.
+    broker_settings = strategy_config.get_strategy_comparison_settings(
+        "broker_cash_dl_conversion_rolling"
+    )
+    broker_plan = reuse_owner_module.StrategyPreparationPlan.from_actions(
+        reuse_owner_module.StrategyPreparationAction(
+            action_id=f"param:{source}",
+            artifact_key=f"param:{source}",
+            action="REUSE",
+            builder_type=None,
+            description="synthetic identity-compatible parameters",
+            path=f"models/strategy_params/{source}.json",
+            producer_work_type="existing_artifact",
+        )
+        for source in dict.fromkeys(
+            arm.param_source for arm in broker_settings.enabled_arms
+        )
+    )
+    c96_baseline = project_root / "synthetic_c96_completed_baseline"
+
+    def find_broker_baseline(**kwargs):
+        arm = kwargs["off_arm"]
+        return c96_baseline if arm.arm_id == "C96" else None
+
+    with patch.object(
+        reuse_owner_module, "_find_reusable_pair", return_value=None
+    ), patch.object(
+        reuse_owner_module,
+        "_find_reusable_baseline_source",
+        side_effect=find_broker_baseline,
+    ) as baseline_lookup:
+        broker_cache = reuse_owner_module._collect_replay_cache_status(
+            root=project_root,
+            settings=broker_settings,
+            status={
+                **replay_status_base,
+                "preparation_plan": broker_plan,
+            },
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "paired_c96_reference_reuses_verified_old_baseline_without_dl_pair_cache",
+        True,
+        (
+            broker_cache["arm_states"]["C96"]["action"] == "REUSE"
+            and broker_cache["arm_states"]["C96"]["source_dir"]
+            == c96_baseline.resolve()
+            and all(
+                broker_cache["arm_states"][arm.arm_id]["action"] == "RUN"
+                for arm in broker_settings.enabled_arms
+                if arm.dl_enabled
+            )
+            and any(
+                call.kwargs["off_arm"].arm_id == "C96"
+                for call in baseline_lookup.call_args_list
+            )
+        ),
+    )
+
+    # Execution plan has only one aggregate reporting step.  Contrast metadata
+    # remains enabled for the unchanged canonical result/report contract.
+    with patch.object(
+        score_reuse_module,
+        "render_strategy_execution_plan_surface",
+        side_effect=lambda **kwargs: kwargs["action_rows"],
+    ):
+        broker_plan_rows = score_reuse_module.render_execution_plan(
+            settings=broker_settings,
+            status={
+                "preparation_plan": broker_plan,
+                "replay_cache": broker_cache,
+                "config_fingerprint": "synthetic-broker-cash",
+            },
+        )
+    report_steps = [row for row in broker_plan_rows if row[0] == "REPORT"]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "compare_execution_plan_has_one_aggregate_report_not_pairwise_report_jobs",
+        True,
+        (
+            len(report_steps) == 1
+            and "綜合報表" in str(report_steps[0][1])
+            and len(broker_settings.enabled_contrasts) > 1
+            and all(
+                str(contrast.contrast_id)
+                not in str(report_steps[0][1])
+                for contrast in broker_settings.enabled_contrasts
+            )
+        ),
+    )
+
     add_check(
         results,
         "synthetic_breakout_quality",

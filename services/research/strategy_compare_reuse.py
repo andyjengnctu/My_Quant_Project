@@ -57,7 +57,6 @@ from services.research.strategy_compare_preparation import resolve_comparison_pe
 from filters.breakout_quality.strategy_compare_runtime import (
     _arm_runtime_spec,
     _execution_pairs,
-    _standalone_baseline_arms,
 )
 from filters.breakout_quality.strategy_compare_sources import (
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
@@ -1042,7 +1041,13 @@ def _collect_replay_cache_status(
                         "source_pair_dir": entry["source_pair_dir"],
                     },
                 )
-        for off_arm in _standalone_baseline_arms(settings):
+        # A DL-off arm can be both a displayed scientific result and the
+        # baseline context of one or more DL-on arms.  Pair-cache misses must
+        # never hide an already completed DL-off observation (e.g. C96 after
+        # adding a new DL conversion suite).  Search every enabled DL-off arm;
+        # the canonical baseline finder still validates full evaluation identity
+        # and completed-run file integrity before returning evidence.
+        for off_arm in (arm for arm in settings.enabled_arms if not arm.dl_enabled):
             source_pair_dir = _find_reusable_baseline_source(
                 root=root, settings=settings, status=status, off_arm=off_arm
             )

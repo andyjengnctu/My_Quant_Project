@@ -895,6 +895,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     from core.strategy_compare_policy import resolve_strategy_robustness_result_search_roots
     from services.research.strategy_multi_seed_robustness import (
+        _benchmark_param_binding,
         _benchmark_parameter_plan_rows,
     )
     for robustness in current_robustness:
@@ -980,11 +981,22 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             row for row in rows
             if row[0] == "REUSE" and str(row[1]).startswith("result:")
         ]
-        # A reusable parameter artifact is still a parameter dependency row; only
-        # ``result:`` rows mean the whole scientific observation can be pruned.
+        # One physical parameter truth may serve multiple DL arms with different
+        # PIT scores and allocators.  Each seed×physical truth must be scheduled
+        # only once even though arm×seed replay observations stay independent.
         parameter_dependency_rows = [
             row for row in rows if str(row[1]).startswith("param-benchmark:")
         ]
+        reused_keys = {
+            (arm_id, int(seed))
+            for arm_id in canonical_reuse_arm_ids
+            for seed in robustness.resolved_seeds
+        }
+        distinct_param_truth_paths = {
+            (str(binding["path"]), str(binding["manifest_path"]))
+            for arm_seed, binding in _bindings.items()
+            if arm_seed not in reused_keys
+        }
         check_true(
             f"robustness_reused_scientific_units_prune_param_dependencies:{robustness.robustness_id}",
             not blockers
@@ -994,8 +1006,23 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 for arm_id in canonical_reuse_arm_ids
                 for seed in robustness.resolved_seeds
             )
-            and len(parameter_dependency_rows)
-            == (len(fixed_multiseed_arm_ids) + len(raw_price_arm_ids)) * len(robustness.resolved_seeds)
+            and len(parameter_dependency_rows) == len(distinct_param_truth_paths)
+            and all(
+                str(binding.get("plan_action") or "")
+                in {"REUSE", "BUILD", "REBUILD", "REPAIR", "CHECK"}
+                for arm_seed, binding in _bindings.items()
+                if arm_seed not in reused_keys
+            )
+            and all(
+                len({
+                    str(binding.get("plan_action") or "")
+                    for arm_seed, binding in _bindings.items()
+                    if arm_seed not in reused_keys
+                    and str(binding["path"]) == path
+                    and str(binding["manifest_path"]) == manifest
+                }) == 1
+                for path, manifest in distinct_param_truth_paths
+            )
             and len({str(row[1]) for row in parameter_dependency_rows})
             == len(parameter_dependency_rows)
             and all(
@@ -1103,14 +1130,30 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             )
         )
     expected_reuse_units = len(rolling_canonical_reuse_arm_ids) * len(rolling_robustness.resolved_seeds)
-    expected_pending_search_units = (len(rolling_fixed_multiseed_arm_ids) + len(rolling_raw_price_arm_ids)) * len(rolling_robustness.resolved_seeds)
+    rolling_pending_param_truth_paths = {
+        (str(binding["path"]), str(binding["manifest_path"]))
+        for arm_id in (*rolling_fixed_multiseed_arm_ids, *rolling_raw_price_arm_ids)
+        for seed in rolling_robustness.resolved_seeds
+        for binding in (
+            _benchmark_param_binding(
+                settings=rolling_robust_settings,
+                robustness=rolling_robustness,
+                arm=rolling_robust_settings.arms[arm_id],
+                seed=int(seed),
+            ),
+        )
+    }
+    expected_pending_search_units = len(rolling_pending_param_truth_paths)
     expected_total_units = len(rolling_robustness.stochastic_arm_ids) * len(rolling_robustness.resolved_seeds)
     check_true(
         "robustness_plan_surfaces_cross_profile_seed_reuse_before_pending_fixed_multiseed_work",
         len(rendered_robustness_payload.get("registered_scientific_reuse_units") or ()) == expected_reuse_units
         and f"{expected_pending_search_units} pending search units" in rendered_robustness_plan
         and f"scientific result REUSE={expected_reuse_units}/{expected_total_units} arm×replicate" in rendered_robustness_plan
-        and rendered_robustness_plan.count("PARAM+REPLAY") == (len(rolling_fixed_multiseed_arm_ids) + len(rolling_raw_price_arm_ids))
+        and rendered_robustness_plan.count("PARAM+REPLAY") == sum(
+            1 for arm in rolling_stochastic
+            if not arm.dl_enabled and arm.arm_id not in rolling_canonical_reuse_arm_ids
+        )
         and rendered_robustness_plan.count(" seed scientific results identity一致") == len(rolling_canonical_reuse_arm_ids)
         and "Strategy fitting budgets" in rendered_robustness_plan
         and "4 seeds x 300 trials" in rendered_robustness_plan
@@ -1534,9 +1577,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         extending_arm_ids == derived_arm_ids
         and extending_contrast_ids == derived_contrast_ids
         and all(
-            set(row["strategy_arm_ids"]).issubset(derived_arm_set)
+            all(
+                bool(strategy_config.STRATEGY_COMPARE_ARMS[arm_id].get("dl_enabled"))
+                and str(strategy_config.STRATEGY_DL_SOURCES[
+                    strategy_config.STRATEGY_COMPARE_ARMS[arm_id]["dl_id"]
+                ].get("experiment_profile") or "") == str(row["experiment_profile"])
+                for arm_id in row["strategy_arm_ids"]
+            )
             for row in model_bindings
-            if row["strategy_arm_ids"]
         ),
     )
 

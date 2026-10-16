@@ -610,12 +610,12 @@ def get_strategy_compare_suite(suite_id: str) -> dict[str, object]:
         if str(spec.get("left") or "") not in arm_ids or str(spec.get("right") or "") not in arm_ids:
             raise ValueError(f"Strategy Compare suite contrast端點不在suite: {selected}/{cid}")
 
-    # Current Extending matrix consumes the same model-level SSOT as [1][3]～[1][6].
+    # Model-list-gated suites consume the same model-level SSOT as [1][3]～[1][6].
     # Baselines remain enabled. DL arms are enabled only when their source profile is
     # selected in BREAKOUT_QUALITY_MODEL_TEST_PROFILES and a formal arm already exists.
     # A selected model without an authorized strategy arm remains MODEL-ONLY; no binding
     # is synthesized here. Historical/non-current suites keep their stored membership.
-    if selected == "extending_current":
+    if bool(raw.get("filter_by_current_model_list", False)):
         selected_profiles = {
             str(profile)
             for _model_id, profile in get_breakout_quality_model_test_settings().model_profiles

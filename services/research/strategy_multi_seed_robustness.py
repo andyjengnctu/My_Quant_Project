@@ -865,7 +865,10 @@ def _benchmark_parameter_plan_rows(
     blockers: list[str] = []
     bindings: dict[tuple[str, int], dict[str, Any]] = {}
     reusable_units = set(dict(reusable_observations or {}).keys())
-    seen_units: set[tuple[int, str, str, str, str, str]] = set()
+    # Several strategy arms may consume the same physical optimizer truth for
+    # one replicate. Plan/build it only once and propagate its verified action
+    # to each consuming arm; arm-level scientific results remain independent.
+    seen_units: dict[tuple[int, str, str, str, str, str], dict[str, Any]] = {}
     for seed in robustness.resolved_seeds:
         for arm in benchmark_arms:
             binding = _benchmark_param_binding(
@@ -891,8 +894,19 @@ def _benchmark_parameter_plan_rows(
                 str(binding["param_policy"]),
             )
             if unit in seen_units:
+                canonical = seen_units[unit]
+                if (
+                    Path(binding["path"]) != Path(canonical["path"])
+                    or Path(binding["manifest_path"]) != Path(canonical["manifest_path"])
+                ):
+                    raise ValueError(
+                        "相同benchmark strategy-parameter fitting identity不得對應不同physical truth: "
+                        f"seed={seed}, arm={arm.arm_id}, unit={unit}"
+                    )
+                binding["plan_action"] = canonical.get("plan_action")
+                binding["plan_status"] = canonical.get("plan_status", "")
                 continue
-            seen_units.add(unit)
+            seen_units[unit] = binding
             path = Path(binding["path"])
             manifest_path = Path(binding["manifest_path"])
             variant_suffix = (
@@ -931,7 +945,14 @@ def _benchmark_parameter_plan_rows(
                 comparison_end=comparison_end,
             )
             if state is None:
-                if path.is_file() or manifest_path.is_file():
+                # The evaluation period is not yet bound, so a file's presence
+                # cannot establish scientific reuse.  Still expose the actual
+                # work action (including to all arms sharing this fitting unit).
+                binding["plan_action"] = (
+                    "CHECK" if path.is_file() or manifest_path.is_file() else "BUILD"
+                )
+                binding["plan_status"] = "PERIOD_PENDING"
+                if binding["plan_action"] == "CHECK":
                     rows.append((
                         "CHECK", label,
                         "共同策略期間解析後由canonical Optimizer service驗證manifest／coverage／build contract；"

@@ -2771,14 +2771,59 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         "def render_strategy_execution_plan_surface(" in comparison_source
                 and "return render_strategy_execution_plan_surface(" in comparison_source
                 and "render_strategy_execution_plan_surface(" in multi_seed_source
-                and "def _compact_execution_plan_item(" in comparison_source
-                and "def _compact_execution_plan_description(" in comparison_source
+                and "str(item)" in comparison_source
+                and "str(description)" in comparison_source
+                and "max_column_widths=(" in comparison_source
+                and "_compact_execution_plan_item(" not in comparison_source
+                and "_compact_execution_plan_description(" not in comparison_source
                 and "_EXECUTION_PLAN_ITEM_WIDTH = 36" in comparison_source
                 and "_EXECUTION_PLAN_DESCRIPTION_WIDTH = 44" in comparison_source
                 and "action_colors =" not in multi_seed_source
                 and "def signal_for_workflow_status(" in report_style_source
                 and "def styled_workflow_status(" in report_style_source
                 and "styled_workflow_status" in comparison_source,
+    )
+
+    # A column-width cap may wrap a long identity/description but must never
+    # abbreviate it or replace part of it with an ellipsis.  This behavior is
+    # shared by single-seed Strategy Compare and multi-seed Robustness plans.
+    from core.console_report import _wrap_display_cell, render_table
+    from core.display_common import _display_width
+    from services.research.strategy_comparison import render_strategy_execution_plan_surface
+
+    full_item = "C99 Min MR-13AO Exact K/R0 / Broker-Cash Rolling 完整項目"
+    full_reason = (
+        "由canonical Optimizer parameter service解析／建立／接續策略參數工件；"
+        "同一個P16參數來源必須合法REUSE；正式測試比較不得加入額外模型校準"
+    )
+    long_identity = "param-benchmark:seed=693545351:profile=full-horizon:" + "z" * 80
+    samples = ((full_item, 36), (full_reason, 44), (long_identity, 36), ("中文完整文字" * 14, 44))
+    check_true(
+        "strategy_execution_plan_wrap_preserves_complete_unicode_and_long_artifact_text",
+        all(
+            "".join(parts := _wrap_display_cell(value, width)) == value
+            and all(_display_width(part) <= width for part in parts)
+            for value, width in samples
+        ),
+    )
+    with patch(
+        "services.research.strategy_comparison.render_table",
+        wraps=render_table,
+    ) as render_spy:
+        complete_plan = render_strategy_execution_plan_surface(
+            title="本次執行計畫",
+            metadata_rows=(("整體狀態", "PREPARABLE"),),
+            action_rows=[("RUN", full_item, full_reason)],
+        )
+    render_args = render_spy.call_args
+    check_true(
+        "strategy_execution_plan_renders_full_item_and_description_not_compacted_ellipsis",
+        render_args is not None
+        and render_args.args[0] == ("動作", "項目", "說明")
+        and render_args.args[1][0][1:] == (full_item, full_reason)
+        and render_args.kwargs.get("max_column_widths") == (None, 36, 44)
+        and "…" not in complete_plan
+        and "本次執行計畫" in complete_plan,
     )
 
 

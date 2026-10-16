@@ -127,6 +127,33 @@ STRATEGY_COMPARE_SUITES = {
             "C98": "Full Corrected Same-Signal Agree 4x300 / Broker-Cash",
         },
     },
+    "broker_cash_dl_conversion_v1": {
+        "filter_by_current_model_list": True,
+        # Single scientific matrix shared by OOS/Rolling and multi-seed robustness.
+        # All DL arms reuse C96/P16; only DL score source and allocator differ.
+        "arm_ids": (
+            "C96", "C97", "C98", "C99", "C100", "C101", "C102", "C103", "C104",
+        ),
+        # A compact connected contrast graph supports all six-vs-C96, AO/CG/CH,
+        # and Exact-vs-Direct differences without generating redundant reports.
+        "contrast_ids": (
+            "C97-C96", "C98-C97", "C98-C96",
+            "C99-C96", "C101-C96",
+            "C100-C99", "C103-C99", "C102-C101", "C104-C101",
+            "C99-C101", "C100-C102", "C103-C104",
+        ),
+        "display_name_bases": {
+            "C96": "Min Base-Finalist-Best / Broker-Cash",
+            "C97": "Full Base-Finalist-Best / Broker-Cash",
+            "C98": "Full Corrected Same-Signal Agree 4x300 / Broker-Cash",
+            "C99": "Min MR-13AO Exact K/R0 / Broker-Cash",
+            "C100": "Min MR-13CH Exact K/R0 / Broker-Cash",
+            "C101": "Min MR-13AO No-K No-R0 / Broker-Cash",
+            "C102": "Min MR-13CH No-K No-R0 / Broker-Cash",
+            "C103": "Min MR-13CG Exact K/R0 / Broker-Cash",
+            "C104": "Min MR-13CG No-K No-R0 / Broker-Cash",
+        },
+    },
     "non_dl_c85_same_signal_revalidation_v1": {
         "arm_ids": ("C58", "C61", "C95"),
         "contrast_ids": ("C95-C61", "C95-C58"),
@@ -238,6 +265,7 @@ STRATEGY_COMPARE_SUITES = {
         },
     },
     "extending_current": {
+        "filter_by_current_model_list": True,
         "arm_ids": ("C62", "C61", "C58", "C59", "C77", "C78", "C79", "C80", "C81", "C82", "C83"),
         "contrast_ids": (
             "C62-C61", "C62-C58",
@@ -927,6 +955,38 @@ STRATEGY_COMPARE_PROFILES = {
     },
 }
 
+# Canonical broker-cash DL strategy conversion work stage.  Reuse the registered
+# No-DL parameter truth and PIT timing; the six DL arms have no new optimizer stage.
+# These are new profile identities, not in-place mutations of historical No-DL runs.
+_BROKER_CASH_DL_ARM_IDS = tuple(
+    arm_id for arm_id in STRATEGY_COMPARE_SUITES["broker_cash_dl_conversion_v1"]["arm_ids"]
+    if arm_id not in STRATEGY_COMPARE_SUITES["non_dl_broker_cash_v1"]["arm_ids"]
+)
+for _mode in ("oos", "rolling"):
+    _baseline_profile = STRATEGY_COMPARE_PROFILES[f"non_dl_broker_cash_{_mode}"]
+    _namespace = f"outputs/strategy_compare/broker_cash_dl_conversion/{_mode}_2021_forward"
+    STRATEGY_COMPARE_PROFILES[f"broker_cash_dl_conversion_{_mode}"] = {
+        **_baseline_profile,
+        "label": f"Broker-Cash DL Conversion | {_mode.upper() if _mode == 'oos' else 'Rolling'} Test",
+        "description": (
+            "C96/P16 broker-cash adjusted-price Min control plus AO/CG/CH "
+            "Exact K/R0 and No-K/No-R0; C97/P17 and C98/P15 remain reference arms."
+        ),
+        "display_alignment_group": "broker_cash_dl_conversion_v1",
+        "suite_id": "broker_cash_dl_conversion_v1",
+        "output_root": _namespace,
+        # Registered result roots are discovered by the generic identity-gated resolver.
+        # Do not wire cross-profile reuse paths into a specific research stage.
+        "arm_param_source_overrides": {
+            **_baseline_profile["arm_param_source_overrides"],
+            **{
+                arm_id: f"min_best_broker_cash_{_mode}_experiment"
+                for arm_id in _BROKER_CASH_DL_ARM_IDS
+            },
+        },
+    }
+
+
 # Multiple-seed robustness各研究階段以獨立config profile呈現於正式選單。
 # Current OOS／Rolling robustness只引用Compare Suite；所有suite arms與contrasts都逐seed重複，
 # 僅model-seed-sensitive子集由arm的DL dependency推導，不得再於profile重複維護比較矩陣。
@@ -1293,6 +1353,27 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness",
     }
 }
+
+
+# The four formal modes resolve the SAME scientific suite.  No per-mode arm,
+# model, seed or contrast lists are maintained by the robustness configuration.
+for _mode in ("oos", "rolling"):
+    _baseline_robustness = STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES[
+        f"non_dl_broker_cash_{_mode}"
+    ]
+    STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES[
+        f"broker_cash_dl_conversion_{_mode}"
+    ] = {
+        **_baseline_robustness,
+        "label": f"Broker-Cash DL Conversion Robustness | {_mode.upper() if _mode == 'oos' else 'Rolling'} Test",
+        "profile_id": f"broker_cash_dl_conversion_{_mode}",
+        "suite_id": "broker_cash_dl_conversion_v1",
+        "output_root": f"outputs/strategy_compare/robustness/broker_cash_dl_conversion/{_mode}_2021_forward",
+        "model_work_root": (
+            "models/research/breakout_quality/strategy_compare/"
+            f"multi_seed_robustness/broker_cash_dl_conversion/{_mode}_2021_forward"
+        ),
+    }
 
 
 # =============================================================================
@@ -2021,6 +2102,51 @@ STRATEGY_DL_SOURCES = {
             "options": {"resume": True, "allow_stale_source": False},
         },
     },
+    # Research-only strategy conversion sources.  These register no new model
+    # fitting identity, do not grant Trading promotion, and use the canonical
+    # model-list PIT workflow (including the 40D-mature CH stock-day cohort).
+    "CONT13AO_ROLL": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_shared_safety_mfe_v1",
+        "experiment_profile": "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "single_seed_strategy_conversion_authorized": True,
+        "description": "MR-13AO frozen 40D true-HS conditional-MFE score; controlled broker-cash Strategy Compare only, no Trading.",
+        "forward_scores_builder": {
+            "enabled": True,
+            "builder_type": "selection_pit_from_existing_folds",
+            "options": {"resume": True, "allow_stale_source": False},
+        },
+    },
+    "CONT13CG_ROLL": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_shared_safety_mfe_v1",
+        "experiment_profile": "daily_universal_shared_full_d40_safety_hs_conditional_mfe_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "single_seed_strategy_conversion_authorized": True,
+        "description": "MR-13CG full D40 Safety/true-HS conditional-MFE score; controlled broker-cash Strategy Compare only, no Trading.",
+        "forward_scores_builder": {
+            "enabled": True,
+            "builder_type": "selection_pit_from_existing_folds",
+            "options": {"resume": True, "allow_stale_source": False},
+        },
+    },
+    "CONT13CH_ROLL": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_shared_safety_mfe_v1",
+        "experiment_profile": "daily_universal_shared_full_d20_safety_hs_conditional_mfe_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "single_seed_strategy_conversion_authorized": True,
+        "description": "MR-13CH MFE20/D20 score with 40D eligibility/maturity; controlled broker-cash Strategy Compare only, no Trading.",
+        "forward_scores_builder": {
+            "enabled": True,
+            "builder_type": "selection_pit_from_existing_folds",
+            "options": {"resume": True, "allow_stale_source": False},
+        },
+    },
 }
 
 # =============================================================================
@@ -2052,6 +2178,92 @@ STRATEGY_COMPARE_ARMS = {
         "param_source": "full_agree_broker_cash_rolling_experiment",
         "param_policy": "base-finalists-agree", "rule_policy": "formal",
         "dl_enabled": False, "dl_id": None, "dl_runtime_mode": None,
+        "robustness_role": "off",
+    },
+    # P16 single truth and identical Min/all-off broker-cash economics across six
+    # arms.  Score identity and Exact-vs-Direct are the only treatment dimensions.
+    "C99": {
+        "name": "Min MR-13AO Exact K/R0 / Broker-Cash",
+        "description": "SR-C99: AO 40D score, P16 Min broker-cash; exact K/R0 controlled conversion.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13AO_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C100": {
+        "name": "Min MR-13CH Exact K/R0 / Broker-Cash",
+        "description": "SR-C100: CH MFE20/D20 score (40D maturity), P16 Min broker-cash; exact K/R0.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CH_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C101": {
+        "name": "Min MR-13AO No-K No-R0 / Broker-Cash",
+        "description": "SR-C101: AO 40D score, P16 Min broker-cash; direct allocation without K/R0.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13AO_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False, "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C102": {
+        "name": "Min MR-13CH No-K No-R0 / Broker-Cash",
+        "description": "SR-C102: CH MFE20/D20 score (40D maturity), P16 Min broker-cash; direct allocation.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CH_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False, "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C103": {
+        "name": "Min MR-13CG Exact K/R0 / Broker-Cash",
+        "description": "SR-C103: CG full-D40 score, P16 Min broker-cash; exact K/R0 controlled conversion.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CG_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C104": {
+        "name": "Min MR-13CG No-K No-R0 / Broker-Cash",
+        "description": "SR-C104: CG full-D40 score, P16 Min broker-cash; direct allocation without K/R0.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CG_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False, "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1",
+            "selection_only": True,
+        },
         "robustness_role": "off",
     },
     "C95": {
@@ -2449,6 +2661,18 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C97-C96": {"left": "C97", "right": "C96", "description": "same-fee broker cash Full vs Min overall policy comparison"},
     "C98-C97": {"left": "C98", "right": "C97", "description": "same-fee broker cash Full corrected 4x300 agree vs single-seed best"},
     "C98-C96": {"left": "C98", "right": "C96", "description": "same-fee broker cash corrected Full 4x300 vs Min best full system comparison"},
+    # Broker-cash DL conversion: a non-redundant contrast graph.  Every
+    # unlisted six-arm pair remains derivable from the one common main report.
+    "C99-C96": {"left": "C99", "right": "C96", "description": "AO exact K/R0 vs same-P16 broker-cash DL-off control"},
+    "C101-C96": {"left": "C101", "right": "C96", "description": "AO No-K/No-R0 vs same-P16 broker-cash DL-off control"},
+    "C100-C99": {"left": "C100", "right": "C99", "description": "CH vs AO under identical P16/Exact K/R0 and broker-cash economics"},
+    "C103-C99": {"left": "C103", "right": "C99", "description": "CG vs AO under identical P16/Exact K/R0 and broker-cash economics"},
+    "C102-C101": {"left": "C102", "right": "C101", "description": "CH vs AO under identical P16/No-K/No-R0 and broker-cash economics"},
+    "C104-C101": {"left": "C104", "right": "C101", "description": "CG vs AO under identical P16/No-K/No-R0 and broker-cash economics"},
+    "C99-C101": {"left": "C99", "right": "C101", "description": "AO Exact K/R0 vs AO No-K/No-R0 with the same PIT score"},
+    "C100-C102": {"left": "C100", "right": "C102", "description": "CH Exact K/R0 vs CH No-K/No-R0 with the same PIT score"},
+    "C103-C104": {"left": "C103", "right": "C104", "description": "CG Exact K/R0 vs CG No-K/No-R0 with the same PIT score"},
+
     "C95-C61": {
         "left": "C95", "right": "C61",
         "description": "corrected C95 Full same-signal consensus 4x300 versus Full base-finalist-best reference; non-isolated selector contrast",

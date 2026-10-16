@@ -96,11 +96,44 @@ def render_key_values(
     )
 
 
+def _wrap_display_cell(text: str, max_width: int) -> list[str]:
+    """Wrap one plain-text cell by display width without discarding characters."""
+
+    limit = int(max_width)
+    if limit < 2:
+        raise ValueError("wrapped table欄寬不得小於2")
+    lines = []
+    for source_line in str(text).split("\n"):
+        remaining = source_line
+        while _display_width(remaining) > limit:
+            prefix_width = 0
+            cut = 0
+            last_space_cut = 0
+            last_space_width = 0
+            for index, char in enumerate(remaining):
+                char_width = _display_width(char)
+                if prefix_width + char_width > limit:
+                    break
+                prefix_width += char_width
+                cut = index + 1
+                if char.isspace():
+                    last_space_cut = cut
+                    last_space_width = prefix_width
+            # Prefer word boundaries, but also support long unbroken identities.
+            if last_space_cut and last_space_width >= limit // 2:
+                cut = last_space_cut
+            lines.append(remaining[:cut])
+            remaining = remaining[cut:]
+        lines.append(remaining)
+    return lines
+
+
 def render_table(
     headers: Sequence[object],
     rows: Iterable[Sequence[object]],
     *,
     alignments: Sequence[str] | None = None,
+    max_column_widths: Sequence[int | None] | None = None,
 ) -> str:
     header_text = [str(value) for value in headers]
     body = [[str(value) for value in row] for row in rows]
@@ -110,26 +143,43 @@ def render_table(
     aligns = list(alignments or ("left",) * column_count)
     if len(aligns) != column_count:
         raise ValueError("console table alignments欄數必須與header一致")
+    if max_column_widths is not None and len(max_column_widths) != column_count:
+        raise ValueError("console table max_column_widths欄數必須與header一致")
     widths = []
     for index in range(column_count):
-        widths.append(
-            max(
-                [_display_width(header_text[index])]
-                + [_display_width(row[index]) for row in body]
-            )
+        natural_width = max(
+            [_display_width(header_text[index])]
+            + [_display_width(row[index]) for row in body]
         )
+        max_width = None if max_column_widths is None else max_column_widths[index]
+        widths.append(min(natural_width, int(max_width)) if max_width is not None else natural_width)
     header_line = "  ".join(
         _pad(value, widths[index], align="left")
         for index, value in enumerate(header_text)
     )
     separator_line = "  ".join("-" * width for width in widths)
-    body_lines = [
-        "  ".join(
-            _pad(value, widths[index], align=aligns[index])
+    body_lines = []
+    for row in body:
+        if max_column_widths is None:
+            body_lines.append("  ".join(
+                _pad(value, widths[index], align=aligns[index])
+                for index, value in enumerate(row)
+            ))
+            continue
+        wrapped_cells = [
+            _wrap_display_cell(value, widths[index])
+            if max_column_widths[index] is not None else [value]
             for index, value in enumerate(row)
-        )
-        for row in body
-    ]
+        ]
+        for line_index in range(max(map(len, wrapped_cells))):
+            body_lines.append("  ".join(
+                _pad(
+                    cell_lines[line_index] if line_index < len(cell_lines) else "",
+                    widths[index],
+                    align=aligns[index],
+                )
+                for index, cell_lines in enumerate(wrapped_cells)
+            ))
     return "\n".join([header_line, separator_line, *body_lines])
 
 

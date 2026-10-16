@@ -388,134 +388,13 @@ _EXECUTION_PLAN_ITEM_WIDTH = 36
 _EXECUTION_PLAN_DESCRIPTION_WIDTH = 44
 
 
-def _compact_execution_plan_text(value: object, *, max_width: int) -> str:
-    """Normalize one execution-plan cell and cap its visible width."""
-
-    text = " ".join(str(value).split())
-    if not text:
-        return "-"
-    width = 0
-    out: list[str] = []
-    ellipsis = "…"
-    ellipsis_width = 1
-    if _display_width(text) <= int(max_width):
-        return text
-    limit = max(1, int(max_width) - ellipsis_width)
-    for char in text:
-        char_width = _display_width(char)
-        if width + char_width > limit:
-            break
-        out.append(char)
-        width += char_width
-    return "".join(out).rstrip() + ellipsis
-
-
-def _compact_execution_plan_item(value: object) -> str:
-    """Convert verbose artifact identities to stable human-readable labels."""
-
-    text = " ".join(str(value).split())
-    if text.startswith("param-benchmark:"):
-        parts = text.split(":")
-        seed_part = next(
-            (part for part in parts if part.startswith("seed=") or part.startswith("replicate=")),
-            "",
-        )
-        seed = seed_part.split("=", 1)[1] if "=" in seed_part else "?"
-        seed_label = f"rep={seed}" if seed_part.startswith("replicate=") else seed
-        family = next((part for part in parts if part in {"full", "min"}), "params")
-        policy = next(
-            (part for part in parts if part in {"base-finalist-best", "base-finalists-agree"}),
-            "",
-        )
-        policy_label = {
-            "base-finalist-best": "Best",
-            "base-finalists-agree": "Agree",
-        }.get(policy, policy)
-        budget = next(
-            (part.split("=", 1)[1] for part in parts if part.startswith("budget=")),
-            "",
-        )
-        budget_label = f" {budget}" if budget else ""
-        price_label = "Raw " if "raw_price_isolated_v1" in parts else ""
-        text = f"Bench {price_label}{family.title()} {policy_label}{budget_label} | {seed_label}".replace("  ", " ")
-    elif text.startswith("param:"):
-        source = text.split(":", 1)[1]
-        source = source.replace("_oos", "").replace("_rolling", "")
-        source = source.replace("_", " ")
-        text = f"Params | {source.title()}"
-    elif text.startswith("model-upstream:"):
-        parts = text.split(":")
-        profile = next((part for part in parts if "daily_universal" in part), parts[-1])
-        profile = profile.replace("daily_universal_", "")
-        profile = profile.replace("full_list_ndcg_pairwise", "")
-        profile = profile.replace("full_horizon_", "")
-        profile = profile.strip("_") or "canonical"
-        text = f"Dataset | {profile.replace('_', '-')}"
-    elif text.startswith("dl:"):
-        parts = text.split(":")
-        if len(parts) >= 3:
-            text = f"{parts[1]} | {parts[-1]}"
-    elif text.endswith(" Rolling"):
-        text = text[:-8]
-    elif text.endswith(" OOS"):
-        text = text[:-4]
-    return _compact_execution_plan_text(text, max_width=_EXECUTION_PLAN_ITEM_WIDTH)
-
-
-def _compact_execution_plan_description(value: object) -> str:
-    """Keep decision-relevant plan detail while removing repetitive producer prose."""
-
-    text = " ".join(str(value).split())
-    if "由canonical Optimizer parameter service解析／建立／接續策略參數工件" in text:
-        policies = text.split("policies=", 1)[1] if "policies=" in text else ""
-        policy_count = len([item for item in policies.split(",") if item.strip()])
-        text = "canonical params" + (f" | {policy_count} policies" if policy_count else "")
-    elif "由raw-price isolated Optimizer以相同benchmark seed" in text:
-        text = "same-seed RAW selector | isolated search"
-    elif "由canonical Optimizer以相同benchmark seed與統一trials/fold自動建立" in text:
-        text = "same-seed selector | shared search"
-    elif text.startswith("canonical Dataset需更新："):
-        missing_count = None
-        marker = "dataset 工件缺少:"
-        if marker in text:
-            missing = text.split(marker, 1)[1].split("；", 1)[0]
-            missing_count = len([item for item in missing.split(",") if item.strip()])
-        summary_bad = "dataset_summary.json 缺少、損壞或不是 JSON object" in text
-        parts = [f"Dataset缺件{missing_count}項" if missing_count is not None else "Dataset需更新"]
-        if summary_bad:
-            parts.append("summary無效")
-        if "補建" in text:
-            parts.append("自動補建")
-        text = " | ".join(parts)
-    elif text.startswith("重用canonical Dataset／source OHLCV truth"):
-        text = "REUSE canonical Dataset/OHLCV"
-    elif "Production finalists-agree consensus reference" in text:
-        text = "Production consensus reference"
-    elif "同seed strategy optimizer params + DL-off replay" in text:
-        seed_prefix = text.split("個固定benchmark seeds", 1)[0]
-        text = f"{seed_prefix} seeds | same-seed params | DL off"
-    elif "同seed strategy params + canonical DL trainer + replay" in text:
-        seed_prefix = text.split("個固定benchmark seeds", 1)[0]
-        text = f"{seed_prefix} seeds | same-seed params + DL + replay"
-    elif "重用已完成且identity一致的正式pair結果" in text:
-        text = "REUSE completed pair"
-    elif "重用既有正式shared baseline" in text:
-        text = "REUSE shared baseline"
-    return _compact_execution_plan_text(text, max_width=_EXECUTION_PLAN_DESCRIPTION_WIDTH)
-
-
 def render_strategy_execution_plan_surface(
     *,
     title: str,
     metadata_rows: tuple[tuple[object, object], ...],
     action_rows: list[tuple[object, object, object]],
 ) -> str:
-    """Render the shared compact Strategy Compare execution-plan surface.
-
-    Full preparation reasons remain in the canonical plan/status payload.  The
-    interactive surface intentionally keeps only decision-relevant text so a
-    normal 100-column terminal does not wrap every action row.
-    """
+    """Render full execution-plan labels and reasons with lossless cell wrapping."""
 
     styled_metadata = []
     for label, value in metadata_rows:
@@ -526,8 +405,8 @@ def render_strategy_execution_plan_surface(
     styled_actions = [
         (
             styled_workflow_status(action),
-            _compact_execution_plan_item(item),
-            _compact_execution_plan_description(description),
+            str(item),
+            str(description),
         )
         for action, item, description in action_rows
     ]
@@ -535,7 +414,13 @@ def render_strategy_execution_plan_surface(
         (
             render_title(title),
             render_key_values(tuple(styled_metadata)),
-            render_table(("動作", "項目", "說明"), styled_actions),
+            render_table(
+                ("動作", "項目", "說明"),
+                styled_actions,
+                max_column_widths=(
+                    None, _EXECUTION_PLAN_ITEM_WIDTH, _EXECUTION_PLAN_DESCRIPTION_WIDTH,
+                ),
+            ),
         )
     )
 
@@ -596,15 +481,18 @@ def render_execution_plan(
             "既有pair replay保持REUSE；只回填path-conversion診斷與重產報表："
             + ",".join(stale_diagnostic_arms),
         ))
-    rows.extend(
+    # The canonical Strategy Compare produces one aggregate human report, not
+    # a separate execution job for each declarative scientific contrast.
+    # Keep enabled_contrasts in the report/result contract for traceability;
+    # they must not flood the normal RUN/REUSE execution plan.
+    rows.append((
+        "NOT_RUN" if blocked else "REPORT",
+        "策略績效比較（綜合報表）",
         (
-            "NOT_RUN" if blocked else "REPORT",
-            _contrast_display_name(settings, item),
-            (f"{item.description}｜internal_id={item.contrast_id}｜上游前置工件BLOCKED，本次不產生報表"
-             if blocked else f"{item.description}｜internal_id={item.contrast_id}"),
-        )
-        for item in settings.enabled_contrasts
-    )
+            "前置工件BLOCKED，本次不產生報表"
+            if blocked else "共用正式績效報表；差異比較只保存為研究工件"
+        ),
+    ))
     return render_strategy_execution_plan_surface(
         title="本次執行計畫",
         metadata_rows=(
