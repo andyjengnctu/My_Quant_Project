@@ -363,14 +363,14 @@ def _model_sop_section_title(section_id: str, *, suffix: str = "") -> str:
     return base + (f"｜{suffix}" if suffix else "")
 
 
-def _model_extension_title(payload: dict, extension_id: str) -> str:
-    model_id = str(payload.get("model_research_id") or "MODEL")
-    extension = extension_contract(extension_id)
-    return f"Model-specific Extension｜{model_id}｜{extension.title}"
+def _model_sop_view(payload: dict, *, include_legacy_extension_evidence: bool = False) -> dict:
+    """Project the canonical M1-M4 SOP. Build legacy diagnostics only for explicit consumers.
 
-
-def _model_sop_view(payload: dict) -> dict:
-    """Build the one Standard-SOP view from the canonical nested machine payload."""
+    The v8/v12 archived machine payload still includes separately versioned
+    diagnostic evidence for backwards compatibility; the public renderer and
+    its completeness checks must not compute or require that evidence.
+    Removing those historical machine fields requires a new report contract.
+    """
 
     source_payload = dict(payload or {})
     standard = dict(source_payload.get("standard_model_sop") or {})
@@ -449,7 +449,12 @@ def _model_sop_view(payload: dict) -> dict:
         or {}
     )
 
-    sample = dict((metrics.get("oos") or {}).get("top_k_quality") or {})
+    # Pre-v8 ranking/boundary diagnostics are retained only for historical
+    # machine readers and explicitly requested read-only Audit evidence.
+    sample = (
+        dict((metrics.get("oos") or {}).get("top_k_quality") or {})
+        if include_legacy_extension_evidence else {}
+    )
     ranking = None
     if sample:
         ranking = {
@@ -514,106 +519,109 @@ def _model_sop_view(payload: dict) -> dict:
         ("Ranking / Boundary", "AVAILABLE" if sample else "N/A"),
     ]
 
-    extensions = build_core_model_report_extensions(
-        source_payload, oos_scope_label=oos_scope_label
-    )
-    if direct_hmhs_only:
-        ext_rows = []
-        for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
-            row = dict(metrics.get(key) or {})
-            if not row:
-                continue
-            top10 = dict(row.get("top_10pct") or {})
-            top20 = dict(row.get("top_20pct") or {})
-            ext_rows.append({
-                "split": label,
-                "population_hmhs_pct": row.get("population_hmhs_pct"),
-                "pairwise_concordance": row.get("pairwise_concordance"),
-                "global_average_precision": row.get("global_average_precision"),
-                "mean_daily_average_precision": row.get("mean_daily_average_precision"),
-                "top10": f"{_fmt_simple_metric(None if top10.get('hmhs_pct') is None else float(top10['hmhs_pct']) / 100.0, percent=True)} / {_fmt_simple_metric(top10.get('hmhs_enrichment'))}×",
-                "top20": f"{_fmt_simple_metric(None if top20.get('hmhs_pct') is None else float(top20['hmhs_pct']) / 100.0, percent=True)} / {_fmt_simple_metric(top20.get('hmhs_enrichment'))}×",
-            })
-        def enrich(row: dict) -> float | None:
-            return dict(row.get("top_10pct") or {}).get("hmhs_enrichment")
-        ext_gen = []
-        if val and oos:
-            ext_gen.append({
-                "comparison": "Validation → Forward OOS",
-                "delta_pair": None if delta(val.get("pairwise_concordance"), oos.get("pairwise_concordance")) is None else delta(val.get("pairwise_concordance"), oos.get("pairwise_concordance")) * 100.0,
-                "delta_pr_auc": delta(val.get("global_average_precision"), oos.get("global_average_precision")),
-                "delta_top10_enrichment": delta(enrich(val), enrich(oos)),
-            })
-            if breakout:
-                ext_gen.append({
-                    "comparison": "Forward OOS → Breakout slice",
-                    "delta_pair": None if delta(oos.get("pairwise_concordance"), breakout.get("pairwise_concordance")) is None else delta(oos.get("pairwise_concordance"), breakout.get("pairwise_concordance")) * 100.0,
-                    "delta_pr_auc": delta(oos.get("global_average_precision"), breakout.get("global_average_precision")),
-                    "delta_top10_enrichment": delta(enrich(oos), enrich(breakout)),
+    # Historical head/label diagnostics are not M1-M4 completeness obligations.
+    extensions: list[dict] = []
+    if include_legacy_extension_evidence:
+        extensions = build_core_model_report_extensions(
+            source_payload, oos_scope_label=oos_scope_label
+        )
+        if direct_hmhs_only:
+            ext_rows = []
+            for label, key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
+                row = dict(metrics.get(key) or {})
+                if not row:
+                    continue
+                top10 = dict(row.get("top_10pct") or {})
+                top20 = dict(row.get("top_20pct") or {})
+                ext_rows.append({
+                    "split": label,
+                    "population_hmhs_pct": row.get("population_hmhs_pct"),
+                    "pairwise_concordance": row.get("pairwise_concordance"),
+                    "global_average_precision": row.get("global_average_precision"),
+                    "mean_daily_average_precision": row.get("mean_daily_average_precision"),
+                    "top10": f"{_fmt_simple_metric(None if top10.get('hmhs_pct') is None else float(top10['hmhs_pct']) / 100.0, percent=True)} / {_fmt_simple_metric(top10.get('hmhs_enrichment'))}×",
+                    "top20": f"{_fmt_simple_metric(None if top20.get('hmhs_pct') is None else float(top20['hmhs_pct']) / 100.0, percent=True)} / {_fmt_simple_metric(top20.get('hmhs_enrichment'))}×",
                 })
-        extensions.append({"id": "direct_hmhs_h_only", "rows": ext_rows, "generalization": ext_gen})
+            def enrich(row: dict) -> float | None:
+                return dict(row.get("top_10pct") or {}).get("hmhs_enrichment")
+            ext_gen = []
+            if val and oos:
+                ext_gen.append({
+                    "comparison": "Validation → Forward OOS",
+                    "delta_pair": None if delta(val.get("pairwise_concordance"), oos.get("pairwise_concordance")) is None else delta(val.get("pairwise_concordance"), oos.get("pairwise_concordance")) * 100.0,
+                    "delta_pr_auc": delta(val.get("global_average_precision"), oos.get("global_average_precision")),
+                    "delta_top10_enrichment": delta(enrich(val), enrich(oos)),
+                })
+                if breakout:
+                    ext_gen.append({
+                        "comparison": "Forward OOS → Breakout slice",
+                        "delta_pair": None if delta(oos.get("pairwise_concordance"), breakout.get("pairwise_concordance")) is None else delta(oos.get("pairwise_concordance"), breakout.get("pairwise_concordance")) * 100.0,
+                        "delta_pr_auc": delta(oos.get("global_average_precision"), breakout.get("global_average_precision")),
+                        "delta_top10_enrichment": delta(enrich(oos), enrich(breakout)),
+                    })
+            extensions.append({"id": "direct_hmhs_h_only", "rows": ext_rows, "generalization": ext_gen})
 
-    joint_rows = []
-    for scope_label, scope_key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
-        scope = dict(raw_eval.get(scope_key) or {})
-        joint = dict(scope.get("joint_hmhs") or {})
-        product = dict(scope.get("joint_product_control") or {})
-        if not joint:
-            continue
-        top10 = dict(joint.get("top_10pct") or {})
-        product10 = dict(product.get("top_10pct") or {})
-        joint_rows.append({
-            "split": scope_label,
-            "population_hmhs_pct": joint.get("population_hmhs_pct"),
-            "direct_pair": joint.get("pairwise_concordance"),
-            "product_pair": product.get("pairwise_concordance"),
-            "direct_pr_auc": joint.get("global_average_precision"),
-            "product_pr_auc": product.get("global_average_precision"),
-            "direct_top10_pct": top10.get("hmhs_pct"),
-            "direct_top10_enrichment": top10.get("hmhs_enrichment"),
-            "product_top10_pct": product10.get("hmhs_pct"),
-            "product_top10_enrichment": product10.get("hmhs_enrichment"),
-        })
-    if joint_rows:
-        extensions.append({"id": "direct_hmhs_joint_retrieval", "rows": joint_rows})
+        joint_rows = []
+        for scope_label, scope_key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
+            scope = dict(raw_eval.get(scope_key) or {})
+            joint = dict(scope.get("joint_hmhs") or {})
+            product = dict(scope.get("joint_product_control") or {})
+            if not joint:
+                continue
+            top10 = dict(joint.get("top_10pct") or {})
+            product10 = dict(product.get("top_10pct") or {})
+            joint_rows.append({
+                "split": scope_label,
+                "population_hmhs_pct": joint.get("population_hmhs_pct"),
+                "direct_pair": joint.get("pairwise_concordance"),
+                "product_pair": product.get("pairwise_concordance"),
+                "direct_pr_auc": joint.get("global_average_precision"),
+                "product_pr_auc": product.get("global_average_precision"),
+                "direct_top10_pct": top10.get("hmhs_pct"),
+                "direct_top10_enrichment": top10.get("hmhs_enrichment"),
+                "product_top10_pct": product10.get("hmhs_pct"),
+                "product_top10_enrichment": product10.get("hmhs_enrichment"),
+            })
+        if joint_rows:
+            extensions.append({"id": "direct_hmhs_joint_retrieval", "rows": joint_rows})
 
-    joint_min_rows = []
-    for scope_label, scope_key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
-        scope = dict(joint_min_eval.get(scope_key) or {})
-        joint = dict(scope.get("joint_min") or {})
-        if not joint:
-            continue
-        top10 = dict(joint.get("top_10pct") or {})
-        top20 = dict(joint.get("top_20pct") or {})
-        joint_min_rows.append({
-            "split": scope_label,
-            "population_joint_min_mean": joint.get("population_joint_min_mean"),
-            "joint_min_daily_rho": joint.get("mean_daily_spearman"),
-            "joint_min_pair": joint.get("pairwise_concordance"),
-            "top10_joint_min": top10.get("mean_joint_min"),
-            "top10_safety": top10.get("mean_safety"),
-            "top10_mfe": top10.get("mean_mfe"),
-            "top10_hmhs_pct": top10.get("hmhs_pct"),
-            "top10_hmhs_enrichment": top10.get("hmhs_enrichment"),
-            "top20_joint_min": top20.get("mean_joint_min"),
-            "top20_hmhs_enrichment": top20.get("hmhs_enrichment"),
-        })
-    if joint_min_rows:
-        extensions.append({"id": "joint_min_retrieval", "rows": joint_min_rows})
+        joint_min_rows = []
+        for scope_label, scope_key in (("Validation", "validation"), ("Forward OOS", "oos"), ("Breakout slice", "breakout_candidate_oos")):
+            scope = dict(joint_min_eval.get(scope_key) or {})
+            joint = dict(scope.get("joint_min") or {})
+            if not joint:
+                continue
+            top10 = dict(joint.get("top_10pct") or {})
+            top20 = dict(joint.get("top_20pct") or {})
+            joint_min_rows.append({
+                "split": scope_label,
+                "population_joint_min_mean": joint.get("population_joint_min_mean"),
+                "joint_min_daily_rho": joint.get("mean_daily_spearman"),
+                "joint_min_pair": joint.get("pairwise_concordance"),
+                "top10_joint_min": top10.get("mean_joint_min"),
+                "top10_safety": top10.get("mean_safety"),
+                "top10_mfe": top10.get("mean_mfe"),
+                "top10_hmhs_pct": top10.get("hmhs_pct"),
+                "top10_hmhs_enrichment": top10.get("hmhs_enrichment"),
+                "top20_joint_min": top20.get("mean_joint_min"),
+                "top20_hmhs_enrichment": top20.get("hmhs_enrichment"),
+            })
+        if joint_min_rows:
+            extensions.append({"id": "joint_min_retrieval", "rows": joint_min_rows})
 
-    # Robustness aggregation may provide normalized comparison extensions directly.
-    # Merge by extension ID so the same renderer consumes single-seed and multi-seed
-    # evidence without a workflow-specific schema branch.
-    for raw_extension in list(source_payload.get("comparison_extensions") or []):
-        normalized_extension = dict(raw_extension or {})
-        extension_id = str(normalized_extension.get("id") or "").strip()
-        if not extension_id or extension_id == "truth_prediction_geometry":
-            continue
-        extensions = [
-            extension for extension in extensions
-            if str(dict(extension).get("id") or "") != extension_id
-        ]
-        extensions.append(normalized_extension)
+        # Robustness aggregation may provide normalized comparison extensions directly.
+        # Merge by extension ID so the same renderer consumes single-seed and multi-seed
+        # evidence without a workflow-specific schema branch.
+        for raw_extension in list(source_payload.get("comparison_extensions") or []):
+            normalized_extension = dict(raw_extension or {})
+            extension_id = str(normalized_extension.get("id") or "").strip()
+            if not extension_id or extension_id == "truth_prediction_geometry":
+                continue
+            extensions = [
+                extension for extension in extensions
+                if str(dict(extension).get("id") or "") != extension_id
+            ]
+            extensions.append(normalized_extension)
 
     return {
         "split_names": split_names,
@@ -828,107 +836,6 @@ def _render_model_comparison_specific_extensions(views: list[dict], *, target: s
     return parts
 
 
-def _render_single_model_core_extensions(view: dict, *, target: str) -> list[str]:
-    """Render canonical comparison-capable model extensions for one model.
-
-    The extension contract owns scope splitting and visible metric groups; this
-    renderer only formats rows.  Scientific applicability is resolved upstream.
-    """
-
-    color = console_color_enabled()
-
-    def extension_heading(extension_id: str) -> str:
-        title = f"Model-specific Extension｜{extension_contract(extension_id).title}"
-        if target == "console":
-            return render_section(paint(title, "cyan", enabled=color, bold=True))
-        return f"## {markdown_tone(title, 'blue', bold=True)}"
-
-    def scope_heading(value: str) -> str:
-        if target == "console":
-            return paint(str(value), "light_yellow", enabled=color, bold=True)
-        return f"### {markdown_tone(value, 'light_yellow', bold=True)}"
-
-    def ordered_scopes(values: list[str]) -> list[str]:
-        unique = list(dict.fromkeys(str(value) for value in values if str(value).strip()))
-        preferred = ("Validation", "Forward OOS", "Rolling OOS", "Breakout slice")
-        return [value for value in preferred if value in unique] + [
-            value for value in unique if value not in preferred
-        ]
-
-    by_id = {
-        str(ext.get("id") or ""): dict(ext)
-        for ext in list(view.get("extensions") or [])
-    }
-    parts: list[str] = []
-    for extension_id in comparison_extension_ids():
-        ext = by_id.get(extension_id)
-        if not ext:
-            continue
-        spec = extension_contract(extension_id)
-        extension_parts: list[str] = []
-        if spec.comparison_mode == "row_tables":
-            scope_key = str(spec.comparison_scope_key or "")
-            tables = {table.table_id: table for table in spec.tables}
-            for table_id, row_key in spec.comparison_row_keys:
-                table = tables[table_id]
-                rows = [dict(row) for row in list(ext.get(row_key) or [])]
-                if not rows:
-                    continue
-                if scope_key:
-                    scopes = ordered_scopes([str(row.get(scope_key) or "") for row in rows])
-                    projected = type(table)(
-                        table.table_id,
-                        tuple(column for column in table.columns if column.key != scope_key),
-                    )
-                    for scope in scopes:
-                        scope_rows = [row for row in rows if str(row.get(scope_key) or "") == scope]
-                        visible_table = visible_extension_table(extension_id, projected, scope_rows)
-                        if not visible_table.columns:
-                            continue
-                        extension_parts.append(scope_heading(scope))
-                        extension_parts.append(_render_model_contract_table(
-                            visible_table, scope_rows, target=target, best_worst_style=False,
-                        ))
-                else:
-                    visible_table = visible_extension_table(extension_id, table, rows)
-                    extension_parts.append(_render_model_contract_table(
-                        visible_table, rows, target=target, best_worst_style=False,
-                    ))
-        if extension_parts:
-            parts.append(extension_heading(extension_id))
-            parts.extend(extension_parts)
-    return parts
-
-
-def _rolling_specific_extension_rows(view: dict) -> list[dict]:
-    rolling = dict(view.get("rolling_specific") or {})
-    if not rolling:
-        return []
-    direction = dict(rolling.get("direction_summary") or {})
-    drift = dict(rolling.get("fold_drift") or {})
-    return [
-        {"metric": "Fold count", "value": rolling.get("fold_count", "-")},
-        {"metric": "Fold cadence", "value": f"{rolling.get('fold_months', '-')}M"},
-        {"metric": "Valid years", "value": direction.get("valid_year_count", "-")},
-        {
-            "metric": "Positive-rho years",
-            "value": f"{direction.get('positive_spearman_year_count', '-')} / {direction.get('valid_year_count', '-')}",
-        },
-        {
-            "metric": "Positive Top-Bottom years",
-            "value": f"{direction.get('positive_spread_year_count', '-')} / {direction.get('valid_year_count', '-')}",
-        },
-        {
-            "metric": "Max adjacent score-mean drift",
-            "value": (
-                "-" if drift.get("max_adjacent_mean_shift_in_pooled_std") is None
-                else f"{float(drift['max_adjacent_mean_shift_in_pooled_std']):.4f} pooled σ"
-            ),
-        },
-        {"metric": "Drift flag", "value": "YES" if bool(drift.get("drift_flag")) else "NO"},
-    ]
-
-
 def _render_continuous_ranker_simple_console(payload: dict) -> str:
     """Single model and comparison share one canonical four-section renderer."""
     return _render_standard_model_comparison(
@@ -982,7 +889,7 @@ def _comparison_evidence_issues(payload: dict, settings) -> tuple[str, ...]:
     expected = _expected_comparison_extension_ids(settings)
     if not expected:
         return ()
-    view = _model_sop_view(dict(payload or {}))
+    view = _model_sop_view(dict(payload or {}), include_legacy_extension_evidence=True)
     available = {
         str(dict(extension).get("id") or ""): dict(extension)
         for extension in list(view.get("extensions") or [])
@@ -1365,7 +1272,7 @@ def _write_standard_model_comparison_report(
                 "benchmark_seeds": [int(seed) for seed in item.get("benchmark_seeds", ())],
                 "artifact_action": str(item.get("artifact_action") or "REUSE"),
                 "source_reports": source_reports(item),
-                "sop_view": _model_sop_view(dict(item["payload"])),
+                "sop_view": _model_sop_view(dict(item["payload"]), include_legacy_extension_evidence=True),
             }
             for item in models
         ],
@@ -3738,7 +3645,7 @@ def _write_standard_model_sop_report(
         "model_research_id": str(payload.get("model_research_id") or ""),
         "source_artifact": project_relative_display_path(source_path, project_root=PROJECT_ROOT),
         "standard_model_sop": standard,
-        "sop_view": _model_sop_view(payload),
+        "sop_view": _model_sop_view(payload, include_legacy_extension_evidence=True),
     }
     json_path.write_text(json.dumps(machine, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     markdown_path.write_text(
@@ -5031,7 +4938,7 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
                     + f" | {mode_label} Standard SOP READY"
                 )
             seed_payloads.append(dict(payload["standard_model_sop"]))
-            seed_views.append(_model_sop_view(dict(payload)))
+            seed_views.append(_model_sop_view(dict(payload), include_legacy_extension_evidence=True))
             source_reports.append(Path(path))
         aggregated = aggregate_standard_model_sop_robustness(seed_payloads, seeds=seeds)
         aggregated_extensions = []
