@@ -51,7 +51,10 @@ from core.strategy_comparison import (
     resolve_strategy_parameter_consumption_mode,
     strategy_comparison_fingerprint,
 )
-from core.research_report_contract import require_approved_report_contract, section_contract
+from core.research_report_contract import (
+    require_approved_report_contract, section_contract,
+    persistent_report_contract_fingerprint,
+)
 from core.report_metrics import (
     EXECUTION_STRATEGY_RESULT_METRICS,
     CORE_STRATEGY_RESULT_METRICS,
@@ -946,6 +949,122 @@ def render_strategy_run_execution_table(
     return render_table(("編號", "比較對象", "動作", "本次耗時", "累計時間"), rows)
 
 
+def _required_numeric(value: Any, *, context: str) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Strategy SOP v2 INCOMPLETE: {context} missing numeric evidence") from exc
+    if isinstance(value, bool) or not math.isfinite(result):
+        raise ValueError(f"Strategy SOP v2 INCOMPLETE: {context} non-finite evidence")
+    return result
+
+
+def _contract_strategy_metric_table(
+    section_id: str, scenarios: dict[str, dict[str, Any]], *,
+    settings: StrategyComparisonSettings, target: str = "plain",
+) -> str:
+    from core.research_report_contract import table_contract
+    table = table_contract("strategy.standard_sop", section_id, section_id)
+    display_arms = _display_ordered_strategy_arms(settings)
+    metric_columns = [c for c in table.columns if c.key not in {"arm_id", "arm_name"}]
+    strengths = {
+        c.key: best_worst_signals(
+            {a.arm_id: _required_numeric(dict(scenarios.get(a.arm_id) or {}).get(c.key),
+                                         context=f"{a.arm_id}.{c.key}") for a in display_arms},
+            preference=c.preference,
+        ) for c in metric_columns
+    }
+    rows = []
+    for arm in display_arms:
+        scenario = dict(scenarios.get(arm.arm_id) or {})
+        cells = []
+        for column in metric_columns:
+            numeric = _required_numeric(scenario.get(column.key), context=f"{arm.arm_id}.{column.key}")
+            value = _fmt(numeric, digits=column.digits or 0, unit=column.unit)
+            if column.format_kind.startswith("signed") and numeric > 0:
+                value = "+" + value
+            signal = strengths[column.key].get(arm.arm_id)
+            cells.append(_value_with_signal(value, signal, target=target) if signal else value)
+        rows.append((arm.arm_id, arm.name, *cells))
+    return render_table(table.headers, rows, alignments=table.alignments)
+
+
+def _contract_strategy_yearly_table(
+    yearly_by_id: dict[str, dict[int, Any]], *,
+    benchmark_yearly: list[dict[str, Any]] | None,
+    year_is_complete: dict[int, bool] | None,
+    settings: StrategyComparisonSettings, target: str = "plain",
+) -> str:
+    """S4 uses existing canonical portfolio 0050 rows; renderer never derives prices."""
+    from core.research_report_contract import table_contract
+    if not benchmark_yearly or not year_is_complete:
+        raise ValueError("Strategy SOP v2 INCOMPLETE: 0050/year completeness evidence absent")
+    table = table_contract("strategy.standard_sop", "yearly_results", "yearly_results")
+    arms = _display_ordered_strategy_arms(settings)
+    years = sorted({int(y) for values in yearly_by_id.values() for y in values})
+    if not years or set(years) != {int(y) for y in year_is_complete}:
+        raise ValueError("Strategy SOP v2 INCOMPLETE: yearly cohort/complete years mismatch")
+    lookup = {}
+    for raw in benchmark_yearly:
+        row = dict(raw)
+        year = int(row["year"])
+        if year in lookup:
+            raise ValueError(f"Strategy SOP v2 duplicate 0050 year: {year}")
+        if not row.get("start_date") or not row.get("end_date"):
+            raise ValueError(f"Strategy SOP v2 INCOMPLETE: 0050/{year} missing interval evidence")
+        lookup[year] = row
+    if set(lookup) != set(years):
+        raise ValueError("Strategy SOP v2 INCOMPLETE: 0050/strategy yearly years mismatch")
+    # The common benchmark is a reference price return; broker-cash PnL remains
+    # in S1-S3. Different fee semantics are disclosed in immutable v2 definition.
+    rows = []
+    for year in years:
+        _required_numeric(lookup[year].get("year_return_pct"), context=f"0050.{year}")
+        values = []
+        comparisons = {}
+        for arm in arms:
+            if year not in yearly_by_id.get(arm.arm_id, {}):
+                raise ValueError(f"Strategy SOP v2 INCOMPLETE: {arm.arm_id}/{year} missing")
+            comparisons[arm.arm_id] = _required_numeric(yearly_by_id[arm.arm_id][year], context=f"{arm.arm_id}.{year}")
+        signals = best_worst_signals(comparisons, preference="higher")
+        for arm in arms:
+            value = comparisons[arm.arm_id]
+            rendered = f"{value:+.2f}%"
+            signal = signals.get(arm.arm_id)
+            values.append(_value_with_signal(rendered, signal, target=target) if signal else rendered)
+        rows.append((str(year) + ("" if year_is_complete[year] else "*"),
+                     f"{float(lookup[year]['year_return_pct']):+.2f}%", *values))
+    return render_table((table.columns[0].label, table.columns[1].label,
+                         *(arm.arm_id for arm in arms)), rows)
+
+
+def _strategy_year_completeness(pair_payloads: dict[str, dict[str, Any]]) -> dict[int, bool]:
+    by_year: dict[int, bool] = {}
+    for pair in pair_payloads.values():
+        for row in pair["payload"].get("yearly") or ():
+            year = int(row["year"])
+            if "is_full_year" not in row:
+                raise ValueError(f"Strategy SOP v2 INCOMPLETE: missing is_full_year for {year}")
+            complete = bool(row["is_full_year"])
+            if year in by_year and by_year[year] != complete:
+                raise ValueError(f"Strategy SOP v2 complete-year flag inconsistent: {year}")
+            by_year[year] = complete
+    return by_year
+
+
+def _strategy_benchmark_yearly(pair_payloads: dict[str, dict[str, Any]]) -> list[dict]:
+    evidence = None
+    for pair in pair_payloads.values():
+        payload = dict(pair["payload"])
+        rows = list(payload.get("benchmark_yearly") or [])
+        if not rows:
+            raise ValueError("Strategy SOP v2 INCOMPLETE: source missing canonical 0050 yearly evidence")
+        if evidence is not None and rows != evidence:
+            raise ValueError("Strategy SOP v2 INCOMPLETE: baseline 0050 source disagreement")
+        evidence = rows
+    return list(evidence or [])
+
+
 def render_strategy_aggregate_report(
     *,
     settings: StrategyComparisonSettings,
@@ -954,6 +1073,8 @@ def render_strategy_aggregate_report(
     scenarios: dict[str, dict[str, Any]],
     diagnostics: dict[str, Any],
     yearly_by_id: dict[str, dict[int, Any]],
+    benchmark_yearly: list[dict[str, Any]] | None = None,
+    year_is_complete: dict[int, bool] | None = None,
     target: str = "plain",
     title: str = "策略績效比較",
     fingerprint_label: str = "Config fingerprint",
@@ -987,37 +1108,25 @@ def render_strategy_aggregate_report(
         ("比較設定", "config/strategy_compare.py"),
         *tuple(extra_metadata),
     )
-    sections = [
-        render_title(title),
-        render_key_values(metadata_rows),
-        render_section(section_contract("strategy.standard_sop", "core_performance").display_title),
-        render_strategy_core_result_table(
-            scenarios, settings=settings, target=target
-        ),
-        render_section(section_contract("strategy.standard_sop", "trade_quality").display_title),
-        render_mfe_safety_geometry_table(diagnostics, target=target),
-        render_section(section_contract("strategy.standard_sop", "selection_quality").display_title),
-        render_strategy_selection_quality_table(diagnostics, target=target),
-        render_section(section_contract("strategy.standard_sop", "upside_survival").display_title),
-        render_upside_survival_summary_table(diagnostics, target=target),
-        render_section(section_contract("strategy.standard_sop", "capital_execution").display_title),
-        render_strategy_execution_table(
-            scenarios, settings=settings, target=target
-        ),
+    if not scenarios:
+        raise ValueError("Strategy SOP v2 INCOMPLETE: no scenarios")
+    if not any(bool(value) for value in (year_is_complete or {}).values()):
+        raise ValueError("Strategy SOP v2 INCOMPLETE: Worst Full Year has no complete year")
+    sections = [render_title(title), render_key_values(metadata_rows)]
+    for section_id in ("core_performance", "trade_quality", "capital_execution"):
+        sections.extend((
+            render_section(section_contract("strategy.standard_sop", section_id).display_title),
+            _contract_strategy_metric_table(section_id, scenarios, settings=settings, target=target),
+        ))
+    sections.extend((
         render_section(section_contract("strategy.standard_sop", "yearly_results").display_title),
-        render_strategy_yearly_values_table(
-            yearly_by_id, settings=settings, target=target
+        _contract_strategy_yearly_table(
+            yearly_by_id, benchmark_yearly=benchmark_yearly,
+            year_is_complete=year_is_complete, settings=settings, target=target,
         ),
-    ]
-    if execution_summary is not None:
-        sections.extend(
-            (
-                render_section(section_contract("strategy.standard_sop", "execution_summary").display_title),
-                render_strategy_run_execution_table(
-                    execution_summary, settings=settings, target=target
-                ),
-            )
-        )
+        "* = Partial calendar year; 0050 is the canonical adjusted-price reference (price return, not strategy broker-cash equity).",
+    ))
+    # Runtime duration is displayed by execution progress, not a scientific chapter.
     return "\n\n".join(sections).rstrip() + "\n"
 
 
@@ -1038,6 +1147,8 @@ def _render_report(
         scenarios=scenarios,
         diagnostics=diagnostics,
         yearly_by_id=_yearly_values_by_id(pair_payloads, settings=settings),
+        benchmark_yearly=_strategy_benchmark_yearly(pair_payloads),
+        year_is_complete=_strategy_year_completeness(pair_payloads),
         execution_summary=execution_summary,
         target=target,
     )
@@ -1536,15 +1647,9 @@ def run_strategy_comparison(
 
     post_processing_started = time.perf_counter()
     scenarios = _scenario_payloads(pair_payloads, direct_r, settings=settings)
-    reference_arm_id = _report_reference_arm_id(settings)
-    diagnostics = build_strategy_diagnostics(
-        project_root=root,
-        settings=settings,
-        status=status,
-        scenarios=scenarios,
-        pair_payloads=pair_payloads,
-        reference_arm_id=reference_arm_id,
-    )
+    # Hypothesis-specific dashboards belong to explicit read-only Audit only.
+    # Persist core Strategy SOP v2 without a permanent diagnostic sidecar.
+    diagnostics: dict[str, Any] = {}
     execution_summary = {
         "arms": arm_execution_timing,
         "post_processing_elapsed_sec": time.perf_counter() - post_processing_started,
@@ -1591,18 +1696,17 @@ def run_strategy_comparison(
         target="console",
     )
     report_path = run_dir / "strategy_comparison.md"
-    diagnostics_path = run_dir / "strategy_diagnostics.md"
     json_path = run_dir / "strategy_comparison.json"
     manifest_path = run_dir / "manifest.json"
     report_path.write_text(report, encoding="utf-8")
-    diagnostics_path.write_text(
-        render_strategy_diagnostics_markdown(diagnostics), encoding="utf-8"
-    )
     pair_file_integrity = build_completed_pair_file_integrity({
         group_id: run_dir / "pairs" / group_id for group_id in pair_payloads
     })
     payload = {
         "schema_version": RESULT_SCHEMA_VERSION,
+        "report_id": "strategy.standard_sop",
+        "report_version": int(require_approved_report_contract("strategy.standard_sop").version),
+        "report_contract_fingerprint": persistent_report_contract_fingerprint("strategy.standard_sop"),
         "status": "COMPLETED",
         PAIR_FILE_INTEGRITY_FIELD: pair_file_integrity,
         "created_at": get_taipei_now().isoformat(),
@@ -1621,7 +1725,6 @@ def run_strategy_comparison(
         "requested_preparation_plan": requested_plan.as_dict(),
         "final_preparation_plan": status["preparation_plan"].as_dict(),
         "scenarios": scenarios,
-        "diagnostics": diagnostics,
         "contrasts": {
             item.contrast_id: {
                 "left": item.left,
@@ -1649,6 +1752,9 @@ def run_strategy_comparison(
         manifest_path,
         {
             "schema_version": RESULT_SCHEMA_VERSION,
+            "report_id": payload["report_id"],
+            "report_version": payload["report_version"],
+            "report_contract_fingerprint": payload["report_contract_fingerprint"],
             PAIR_FILE_INTEGRITY_FIELD: pair_file_integrity,
             "created_at": payload["created_at"],
             "config_path": "config/strategy_compare.py",
@@ -1676,7 +1782,6 @@ def run_strategy_comparison(
     latest_dir.mkdir(parents=True, exist_ok=True)
     for source, filename in (
         (report_path, "strategy_comparison.md"),
-        (diagnostics_path, "strategy_diagnostics.md"),
         (json_path, "strategy_comparison.json"),
         (manifest_path, "manifest.json"),
     ):
@@ -1686,7 +1791,6 @@ def run_strategy_comparison(
     print_artifact_paths(
         (
             ("策略比較Markdown", report_path),
-            ("間接指標Markdown", diagnostics_path),
             ("策略比較JSON", json_path),
             ("執行Manifest", manifest_path),
             ("最新結果", latest_dir),

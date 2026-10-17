@@ -1,0 +1,280 @@
+{
+  "menu_path": [
+    "Research",
+    "策略組合比較",
+    "Extending-Window OOS / Rolling"
+  ],
+  "report_id": "strategy.standard_sop",
+  "role": "persistent_standard",
+  "sections": [
+    {
+      "applicability": "all",
+      "number": 1,
+      "section_id": "core_performance",
+      "tables": [
+        {
+          "columns": [
+            {
+              "alignment": "left",
+              "digits": null,
+              "format_kind": "text",
+              "key": "arm_id",
+              "label": "Arm",
+              "preference": "neutral",
+              "unit": ""
+            },
+            {
+              "alignment": "left",
+              "digits": null,
+              "format_kind": "text",
+              "key": "arm_name",
+              "label": "Strategy",
+              "preference": "neutral",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 2,
+              "format_kind": "signed_pct",
+              "key": "total_return_pct",
+              "label": "Total Return",
+              "preference": "higher",
+              "unit": "%"
+            },
+            {
+              "alignment": "right",
+              "digits": 2,
+              "format_kind": "signed_pct",
+              "key": "annual_return_pct",
+              "label": "Annualized Return",
+              "preference": "higher",
+              "unit": "%"
+            },
+            {
+              "alignment": "right",
+              "digits": 2,
+              "format_kind": "pct",
+              "key": "max_drawdown_pct",
+              "label": "MDD",
+              "preference": "lower",
+              "unit": "%"
+            },
+            {
+              "alignment": "right",
+              "digits": 2,
+              "format_kind": "number",
+              "key": "return_over_max_drawdown",
+              "label": "RoMD",
+              "preference": "higher",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 2,
+              "format_kind": "signed_pct",
+              "key": "min_full_year_return_pct",
+              "label": "Worst Full Year",
+              "preference": "higher",
+              "unit": "%"
+            }
+          ],
+          "table_id": "core_performance"
+        }
+      ],
+      "title": "Core Performance"
+    },
+    {
+      "applicability": "all",
+      "number": 2,
+      "section_id": "trade_quality",
+      "tables": [
+        {
+          "columns": [
+            {
+              "alignment": "left",
+              "digits": null,
+              "format_kind": "text",
+              "key": "arm_id",
+              "label": "Arm",
+              "preference": "neutral",
+              "unit": ""
+            },
+            {
+              "alignment": "left",
+              "digits": null,
+              "format_kind": "text",
+              "key": "arm_name",
+              "label": "Strategy",
+              "preference": "neutral",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 0,
+              "format_kind": "int",
+              "key": "trade_count",
+              "label": "Trades",
+              "preference": "neutral",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 2,
+              "format_kind": "pct",
+              "key": "win_rate_pct",
+              "label": "Win Rate",
+              "preference": "higher",
+              "unit": "%"
+            },
+            {
+              "alignment": "right",
+              "digits": 2,
+              "format_kind": "number",
+              "key": "payoff_ratio",
+              "label": "Payoff",
+              "preference": "higher",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 2,
+              "format_kind": "signed_number",
+              "key": "expected_value_r",
+              "label": "EV",
+              "preference": "higher",
+              "unit": " R"
+            }
+          ],
+          "table_id": "trade_quality"
+        }
+      ],
+      "title": "Trade Quality"
+    },
+    {
+      "applicability": "all",
+      "number": 3,
+      "section_id": "capital_execution",
+      "tables": [
+        {
+          "columns": [
+            {
+              "alignment": "left",
+              "digits": null,
+              "format_kind": "text",
+              "key": "arm_id",
+              "label": "Arm",
+              "preference": "neutral",
+              "unit": ""
+            },
+            {
+              "alignment": "left",
+              "digits": null,
+              "format_kind": "text",
+              "key": "arm_name",
+              "label": "Strategy",
+              "preference": "neutral",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 2,
+              "format_kind": "pct",
+              "key": "avg_exposure_pct",
+              "label": "Avg Exposure",
+              "preference": "neutral",
+              "unit": "%"
+            },
+            {
+              "alignment": "right",
+              "digits": 2,
+              "format_kind": "pct",
+              "key": "reserved_buy_fill_rate_pct",
+              "label": "Fill Rate",
+              "preference": "higher",
+              "unit": "%"
+            },
+            {
+              "alignment": "right",
+              "digits": 2,
+              "format_kind": "number",
+              "key": "avg_orderable_candidates",
+              "label": "Avg Orderable",
+              "preference": "neutral",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 0,
+              "format_kind": "int",
+              "key": "candidate_supply_gap_days",
+              "label": "Supply Gap Days",
+              "preference": "lower",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 0,
+              "format_kind": "int",
+              "key": "underfilled_end_days",
+              "label": "Underfilled Days",
+              "preference": "lower",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 0,
+              "format_kind": "int",
+              "key": "end_position_gap_slot_days",
+              "label": "Position Gap",
+              "preference": "lower",
+              "unit": ""
+            }
+          ],
+          "table_id": "capital_execution"
+        }
+      ],
+      "title": "Capital / Execution"
+    },
+    {
+      "applicability": "all",
+      "number": 4,
+      "section_id": "yearly_results",
+      "tables": [
+        {
+          "columns": [
+            {
+              "alignment": "left",
+              "digits": 0,
+              "format_kind": "year",
+              "key": "year",
+              "label": "Year",
+              "preference": "neutral",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 2,
+              "format_kind": "signed_pct",
+              "key": "benchmark_0050_return_pct",
+              "label": "0050",
+              "preference": "neutral",
+              "unit": "%"
+            },
+            {
+              "alignment": "right",
+              "digits": 2,
+              "format_kind": "signed_pct",
+              "key": "arm_return_pct",
+              "label": "Strategy Arms",
+              "preference": "higher",
+              "unit": "%"
+            }
+          ],
+          "table_id": "yearly_results"
+        }
+      ],
+      "title": "Yearly Results"
+    }
+  ],
+  "version": 2
+}

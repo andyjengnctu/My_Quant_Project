@@ -4933,9 +4933,9 @@ def validate_research_report_contract_freeze_case(_base_params):
         for extension_id in sorted(STRATEGY_MODE_EXTENSION_SCHEMAS)
     }
     check_true(
-        "strategy_standard_sop_remains_v1_and_robustness_extension_has_independent_freeze",
-        int(STRATEGY_STANDARD_SOP.version) == 1
-        and persistent_report_contract_fingerprints().get("strategy.standard_sop") == "c4e92dcc1e1c731e"
+        "strategy_standard_sop_v2_and_robustness_extension_has_independent_freeze",
+        int(STRATEGY_STANDARD_SOP.version) == 2
+        and persistent_report_contract_fingerprints().get("strategy.standard_sop") == "20d78fad3fccccb6"
         and current_strategy_extensions == dict(APPROVED_STRATEGY_MODE_EXTENSION_CONTRACT_FINGERPRINTS),
         detail=str(current_strategy_extensions),
     )
@@ -4950,8 +4950,8 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
 
     check_true(
-        "model_sop_v8_authorized_four_section_contract_not_historical_v7",
-        int(MODEL_STANDARD_SOP.version) == 8
+        "model_sop_v9_authorized_four_section_contract_not_historical_v7",
+        int(MODEL_STANDARD_SOP.version) == 9
         and [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
         == [(1,"Learnability"),(2,"Generalization"),
             (3,"Upside / Downside Validation"),(4,"Joint MFE / Adverse Quality")],
@@ -4963,8 +4963,8 @@ def validate_research_report_contract_freeze_case(_base_params):
     # Frozen to the user's 2026-09-04 standard comparison presentation.  These
     # are UI invariants, not assertions about a particular experimental model.
     check_true(
-        "model_comparison_v12_matches_approved_sop_v8_and_preserves_generalization_tables",
-        int(MODEL_STANDARD_COMPARISON.version) == 12
+        "model_comparison_v13_matches_approved_sop_v9_and_preserves_generalization_tables",
+        int(MODEL_STANDARD_COMPARISON.version) == 13
         and not hasattr(MODEL_STANDARD_COMPARISON, "model_specific_extension_ids")
         and comparison_extension_ids() == tuple(MODEL_COMPARISON_EXTENSION_SCHEMAS)
         and comparison_sections == [(item.number, item.title) for item in MODEL_STANDARD_SOP.sections]
@@ -5068,15 +5068,14 @@ def validate_research_report_contract_freeze_case(_base_params):
             == "Rolling-specific Extension｜Fold / Year Stability"
         and mode_extension_contract("robustness_stability").title
             == "Robustness-specific Extension｜Across-seed Stability"
-        and len(mode_extension_contract("robustness_stability").tables) == 2
-        and mode_extension_contract("robustness_stability").tables[1].headers
-            == ("Model Extension", "Across-seed aggregation", "Status")
+        and len(mode_extension_contract("robustness_stability").tables) == 1
+        and "joint_quality_std" in {c.key for c in mode_extension_contract("robustness_stability").tables[0].columns}
         and "model.rolling_standard_sop" not in current
         and "model.rolling_standard_comparison" not in current,
     )
 
-    # Version 8 retains every shared M1/M2 metric and M3 four-correlation
-    # contract; version 12 derives the multi-model headers from the same owner.
+    # Version 9 retains every shared M1/M2 metric and M3 four-correlation
+    # contract; version 13 derives the multi-model headers from the same owner.
     # The numerical four-section producer is tested below against independent
     # stock-day ground truth, not merely renderer string matches.
     from services.breakout_quality.standard_model_sop import (
@@ -5097,7 +5096,7 @@ def validate_research_report_contract_freeze_case(_base_params):
                                        "Top 10% Adverse", "Top 10% Joint Quality")),
     )
     check_true(
-        "model_sop_v8_user_authorized_exact_four_chapter_titles_and_metric_sets",
+        "model_sop_v9_user_authorized_exact_four_chapter_titles_and_metric_sets",
         [(s.number, s.section_id, s.title) for s in MODEL_STANDARD_SOP.sections] == [
             (1, "learnability", "Learnability"),
             (2, "generalization", "Generalization"),
@@ -5220,7 +5219,7 @@ def validate_research_report_contract_freeze_case(_base_params):
         elif defect == "cohort_missing":ss["evaluation_truth"]["cohort_identity"].pop("oos")
         else:ss["evaluation_truth"].pop("horizon_bars")
         check_true(
-            f"standard_sop_v8_rejects_{defect}_instead_of_rendering_unsupported_values",
+            f"standard_sop_v9_rejects_{defect}_instead_of_rendering_unsupported_values",
             bool(app._standard_model_sop_completeness_issues(bad)),
         )
     single_console = app._render_continuous_ranker_simple_console(control_payload)

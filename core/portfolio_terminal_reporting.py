@@ -20,10 +20,18 @@ def publish_portfolio_profile_stats(
     timings, candidate_subprofile, idle_fast_path_days, closed_trades_stats,
     terminal_metrics, period_reports, is_training, active_level_rows,
     capacity_rows, capture_equity_curve, equity_curve,
+    benchmark_report_yearly_rows=None,
 ):
     """Mutate only the existing optional profile sidecar, preserving field order."""
     if profile_stats is None:
         return
+    # Read-only reference rows from the existing canonical benchmark producer.
+    # Do not alter bm_yearly_return_rows, which historically contains only
+    # complete-calendar-year statistics used elsewhere in portfolio research.
+    if not is_training:
+        profile_stats['bm_report_yearly_return_rows'] = [
+            dict(row) for row in (benchmark_report_yearly_rows or ())
+        ]
     profile_stats['fee_rebate_settled'] = milli_to_money(get_fee_rebate_settled_milli(fee_rebate_state))
     profile_stats['fee_rebate_receivable_end'] = milli_to_money(get_fee_rebate_receivable_milli(fee_rebate_state))
     profile_stats['portfolio_wall_sec'] = (time.perf_counter() - portfolio_start) if timing_enabled else 0.0

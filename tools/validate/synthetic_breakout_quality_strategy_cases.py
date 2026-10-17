@@ -1363,18 +1363,20 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     ]
     research_report_contract_source = (project_root / "core/research_report_contract.py").read_text(encoding="utf-8")
     check_true(
-        "strategy_compare_main_report_is_fixed_sop_without_hypothesis_specific_safety_curve",
-        '"strategy_diagnostics.md"' in comparison_source
+        "strategy_compare_main_report_v2_has_four_contract_sections_and_audit_is_isolated",
+        '"strategy_diagnostics.md"' not in comparison_source
                 and "Core Performance" in research_report_contract_source
-                and "Trade Quality / MFE × Safety" in research_report_contract_source
-                and "Selection Quality" in research_report_contract_source
+                and "Trade Quality" in research_report_contract_source
+                and "Yearly Results" in research_report_contract_source
                 and "Capital / Execution" in research_report_contract_source
-                and "Execution Summary" in research_report_contract_source
+                and '"upside_survival"' not in render_report_source
+                and '"selection_quality"' not in render_report_source
+                and '"execution_summary"' not in render_report_source
                 and "Raw Safety Gate Sensitivity" not in render_report_source
                 and "render_safety_gate_sensitivity_table" not in render_report_source
-                and "render_strategy_run_execution_table" in render_report_source
+                and "render_strategy_run_execution_table" not in render_report_source
                 and "報表分工" not in render_report_source
-                and "render_strategy_selection_quality_table" in render_report_source
+                and "render_strategy_selection_quality_table" not in render_report_source
                 and "metrics=CORE_STRATEGY_RESULT_METRICS" in comparison_source
                 and "_contrast_table(" not in render_report_source
                 and "_resource_aware_table(" not in render_report_source
@@ -1406,14 +1408,14 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                 and "DL選擇R" in report_metrics_source,
     )
     check_true(
-        "strategy_compare_progress_and_final_report_share_high_level_wall_time_summary",
+        "strategy_compare_progress_tracks_execution_without_fifth_sop_chapter",
         "arm_execution_timing" in comparison_source
                 and '"execution_summary": execution_summary' in comparison_source
                 and 'f"[RUN] {on_arm.arm_id} {on_arm.name} "' in comparison_source
                 and 'f"[DONE] {on_arm.arm_id} {on_arm.name} "' in comparison_source
                 and 'elapsed={format_elapsed(' in comparison_source
                 and 'total={format_elapsed(' in comparison_source
-                and 'section_contract("strategy.standard_sop", "execution_summary").display_title' in comparison_source
+                and 'section_contract("strategy.standard_sop", "execution_summary").display_title' not in comparison_source
                 and "render_strategy_run_execution_table" in comparison_source
                 and "_selector_timing_table(" not in render_report_source,
     )
@@ -3129,7 +3131,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and "pair_upside_realization_refresh_required" in comparison_source
         and '"REFRESH"' in comparison_source
         and '"Diagnostics | Upside Realization"' in comparison_source
-        and 'section_contract("strategy.standard_sop", "upside_survival").display_title' in comparison_source
+        and 'section_contract("strategy.standard_sop", "upside_survival").display_title' not in comparison_source
         and "render_upside_survival_summary_table" in comparison_source
         and "STRATEGY_COMPARE_UPSIDE_REALIZATION_R_THRESHOLDS" in strategy_compare_config_source,
     )
@@ -3450,6 +3452,66 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and all(replay_members[0].get(key) == metadata_schedule[key] for key in replay_keys)
         and not ({"member_selection", "intra_seed_agree"} & set(replay_members[0])),
     )
+
+    # Scientific Contract Strategy v2: independent executable four-section
+    # evidence and fail-closed tests. No live OOS inputs or model fitting.
+    from core.research_report_contract import STRATEGY_STANDARD_SOP, table_contract as strategy_table
+    from services.research.strategy_comparison import render_strategy_aggregate_report
+    from core.strategy_compare_policy import get_strategy_comparison_settings as strategy_settings
+    v2_settings = strategy_settings()
+    v2_scenarios = {}
+    v2_yearly = {}
+    for index, v2_arm in enumerate(v2_settings.enabled_arms):
+        values = {}
+        for v2_section in ("core_performance", "trade_quality", "capital_execution"):
+            for v2_col in strategy_table("strategy.standard_sop", v2_section, v2_section).columns:
+                if v2_col.key not in {"arm_id", "arm_name"}:
+                    values[v2_col.key] = float(index + 1)
+        v2_scenarios[v2_arm.arm_id] = values
+        v2_yearly[v2_arm.arm_id] = {2023: float(8 + index), 2024: float(-2 + index), 2025: float(index)}
+    v2_0050 = [
+        {"year": year, "year_return_pct": ret,
+         "start_date": f"{year}-01-02", "end_date": f"{year}-12-30"}
+        for year,ret in ((2023,10.0),(2024,-3.0),(2025,2.0))
+    ]
+    v2_options = dict(settings=v2_settings, comparison_period="2023-2025",
+                      fingerprint="synthetic-contract", scenarios=v2_scenarios,
+                      diagnostics={}, yearly_by_id=v2_yearly,
+                      benchmark_yearly=v2_0050,
+                      year_is_complete={2023:True, 2024:True, 2025:False})
+    v2_plain = render_strategy_aggregate_report(**v2_options, target="plain")
+    check_true(
+        "strategy_v2_exact_four_approved_sop_sections_without_main_report_audit",
+        STRATEGY_STANDARD_SOP.version == 2
+        and [(sec.number,sec.title) for sec in STRATEGY_STANDARD_SOP.sections] == [
+            (1,"Core Performance"),(2,"Trade Quality"),
+            (3,"Capital / Execution"),(4,"Yearly Results")]
+        and all(title in v2_plain for title in
+                ("Core Performance","Trade Quality","Capital / Execution","Yearly Results"))
+        and not any(label in v2_plain for label in
+                    ("Selection Quality","Upside Survival","MFE × Safety","First-Passage")),
+    )
+    check_true(
+        "strategy_v2_0050_yearly_reference_and_partial_year_are_explicit",
+        "0050" in v2_plain and "2025*" in v2_plain
+        and "+10.00%" in v2_plain and "-3.00%" in v2_plain
+        and "price return, not strategy broker-cash equity" in v2_plain,
+    )
+    for bad_name,mutation in (
+        ("missing_0050",{"benchmark_yearly":[]}),
+        ("missing_full_year",{"year_is_complete":{2023:False,2024:False,2025:False}}),
+        ("missing_trade_ev",{"scenarios":{
+            arm_id: ({key:value for key,value in row.items() if key != "expected_value_r"}
+                     if arm_id==v2_settings.enabled_arms[0].arm_id else dict(row))
+            for arm_id,row in v2_scenarios.items()}}),
+    ):
+        try:
+            render_strategy_aggregate_report(**{**v2_options,**mutation})
+        except ValueError as exc:
+            blocked = "Strategy SOP v2 INCOMPLETE" in str(exc)
+        else:
+            blocked = False
+        check_true(f"strategy_v2_{bad_name}_blocks_instead_of_fabricating_value",blocked)
 
     summary["strategy_output_contracts"] = [row[0] for row in contract_rows]
     return results, summary

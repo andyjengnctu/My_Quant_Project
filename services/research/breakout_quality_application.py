@@ -639,6 +639,23 @@ def _model_sop_view(payload: dict, *, include_legacy_extension_evidence: bool = 
     }
 
 
+# Machine Standard SOP v9/v13 contains only the approved M1-M4 and mode evidence.
+# No historical Audit extension or convenience ranking fields may leak into publication.
+_MODEL_STANDARD_MACHINE_VIEW_KEYS = (
+    "learnability", "generalization", "upside_downside_alignment",
+    "joint_mfe_adverse_quality", "evaluation_mode", "rolling_specific", "robustness_specific",
+)
+
+
+def _standard_model_machine_view(payload: dict) -> dict:
+    view = _model_sop_view(payload, include_legacy_extension_evidence=False)
+    if not view:
+        raise ValueError("Model Standard SOP v9 missing canonical view")
+    if any(key not in view for key in _MODEL_STANDARD_MACHINE_VIEW_KEYS):
+        raise ValueError("Model Standard SOP v9 missing approved view fields")
+    return {key: view[key] for key in _MODEL_STANDARD_MACHINE_VIEW_KEYS}
+
+
 def _render_model_contract_table(
     table,
     rows,
@@ -1261,7 +1278,6 @@ def _write_standard_model_comparison_report(
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "evaluation_mode": mode,
         "robustness": bool(robustness),
-        "model_specific_extension_ids": list(comparison_extension_ids()),
         "models": [
             {
                 "model_id": str(item["model_id"]),
@@ -1272,7 +1288,7 @@ def _write_standard_model_comparison_report(
                 "benchmark_seeds": [int(seed) for seed in item.get("benchmark_seeds", ())],
                 "artifact_action": str(item.get("artifact_action") or "REUSE"),
                 "source_reports": source_reports(item),
-                "sop_view": _model_sop_view(dict(item["payload"]), include_legacy_extension_evidence=True),
+                "sop_view": _standard_model_machine_view(dict(item["payload"])),
             }
             for item in models
         ],
@@ -3645,7 +3661,7 @@ def _write_standard_model_sop_report(
         "model_research_id": str(payload.get("model_research_id") or ""),
         "source_artifact": project_relative_display_path(source_path, project_root=PROJECT_ROOT),
         "standard_model_sop": standard,
-        "sop_view": _model_sop_view(payload, include_legacy_extension_evidence=True),
+        "sop_view": _standard_model_machine_view(payload),
     }
     json_path.write_text(json.dumps(machine, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     markdown_path.write_text(
@@ -4893,7 +4909,6 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
             if code != 0:
                 return int(code)
         seed_payloads = []
-        seed_views = []
         source_reports = []
         built = False
         for seed_index, (seed, payload, path, reason) in enumerate(seed_states, start=1):
@@ -4938,39 +4953,14 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
                     + f" | {mode_label} Standard SOP READY"
                 )
             seed_payloads.append(dict(payload["standard_model_sop"]))
-            seed_views.append(_model_sop_view(dict(payload), include_legacy_extension_evidence=True))
             source_reports.append(Path(path))
         aggregated = aggregate_standard_model_sop_robustness(seed_payloads, seeds=seeds)
-        aggregated_extensions = []
-        aggregation_status = {}
-        for extension_id in _expected_comparison_extension_ids(settings):
-            spec = extension_contract(extension_id)
-            per_seed_extensions = []
-            for seed_view in seed_views:
-                extensions_by_id = {
-                    str(dict(ext).get("id") or ""): dict(ext)
-                    for ext in list(seed_view.get("extensions") or [])
-                }
-                if extension_id not in extensions_by_id:
-                    raise RuntimeError(
-                        f"{model_id} robustness缺少{extension_id} seed evidence"
-                    )
-                per_seed_extensions.append(extensions_by_id[extension_id])
-            if spec.robustness_aggregation == "row_mean":
-                aggregated_extensions.append(
-                    aggregate_robustness_row_extension(extension_id, per_seed_extensions)
-                )
-                aggregation_status[extension_id] = "AGGREGATED_ROW_MEAN"
-            else:
-                aggregation_status[extension_id] = "SINGLE_SEED_ONLY_NOT_AGGREGATED"
         completed.append({
             "model_id": str(model_id),
             "settings": settings,
             "payload": {
                 "model_research_id": str(model_id),
                 "standard_model_sop": aggregated,
-                "comparison_extensions": aggregated_extensions,
-                "comparison_extension_aggregation": aggregation_status,
             },
             "artifact_action": ("FORCE_REBUILD" if force_rebuild else ("BUILD/REFRESH" if built else "REUSE")),
             "benchmark_seeds": seeds,

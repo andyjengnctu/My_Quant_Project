@@ -162,7 +162,7 @@ S = ReportSectionContract
 
 MODEL_STANDARD_SOP = PersistentReportContract(
     report_id="model.standard_sop",
-    version=8,
+    version=9,
     role="persistent_standard_model_sop_all_evaluation_modes",
     menu_path=("Research", "模型訓練／驗證"),
     sections=(
@@ -240,7 +240,7 @@ def _model_comparison_sections() -> tuple[ReportSectionContract, ...]:
 
 MODEL_STANDARD_COMPARISON = PersistentReportContract(
     report_id="model.standard_comparison",
-    version=12,
+    version=13,
     role="persistent_multi_model_comparison_all_evaluation_modes",
     menu_path=("Research", "模型訓練／驗證"),
     sections=_model_comparison_sections(),
@@ -276,12 +276,7 @@ MODEL_MODE_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
             C("top_bottom_std", "OOS Top-Bottom σ", 4, preference="lower", format_kind="number"),
             C("joint_quality_mean", "Top10 Joint Quality mean", 2, preference="higher", format_kind="number"),
             C("joint_quality_std", "Top10 Joint Quality σ", 2, preference="lower", format_kind="number"),
-        )),
-         T("robustness_extension_capabilities", (
-            C("extension", "Model Extension", alignment="left"),
-            C("aggregation", "Across-seed aggregation", alignment="left"),
-            C("status", "Status", alignment="left"),
-        ))),
+        )),),
     ),
 }
 
@@ -550,17 +545,48 @@ MODEL_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
 }
 
 STRATEGY_STANDARD_SOP = PersistentReportContract(
-    report_id="strategy.standard_sop", version=1, role="persistent_standard",
+    report_id="strategy.standard_sop", version=2, role="persistent_standard",
     menu_path=("Research", "策略組合比較", "Extending-Window OOS / Rolling"),
-    sections=tuple(S(key, i, title) for i, (key, title) in enumerate((
-        ("core_performance", "Core Performance"),
-        ("trade_quality", "Trade Quality / MFE × Safety（Filled buys）"),
-        ("selection_quality", "Selection Quality"),
-        ("upside_survival", "Upside Survival / First-Passage"),
-        ("capital_execution", "Capital / Execution"),
-        ("yearly_results", "Yearly Results"),
-        ("execution_summary", "Execution Summary"),
-    ), start=1)),
+    sections=(
+        S("core_performance", 1, "Core Performance", tables=(
+            T("core_performance", (
+                C("arm_id", "Arm", alignment="left"), C("arm_name", "Strategy", alignment="left"),
+                C("total_return_pct", "Total Return", 2, "%", "higher", "signed_pct"),
+                C("annual_return_pct", "Annualized Return", 2, "%", "higher", "signed_pct"),
+                C("max_drawdown_pct", "MDD", 2, "%", "lower", "pct"),
+                C("return_over_max_drawdown", "RoMD", 2, preference="higher", format_kind="number"),
+                C("min_full_year_return_pct", "Worst Full Year", 2, "%", "higher", "signed_pct"),
+            )),
+        )),
+        S("trade_quality", 2, "Trade Quality", tables=(
+            T("trade_quality", (
+                C("arm_id", "Arm", alignment="left"), C("arm_name", "Strategy", alignment="left"),
+                C("trade_count", "Trades", 0, preference="neutral", format_kind="int"),
+                C("win_rate_pct", "Win Rate", 2, "%", "higher", "pct"),
+                C("payoff_ratio", "Payoff", 2, preference="higher", format_kind="number"),
+                C("expected_value_r", "EV", 2, " R", "higher", "signed_number"),
+            )),
+        )),
+        S("capital_execution", 3, "Capital / Execution", tables=(
+            T("capital_execution", (
+                C("arm_id", "Arm", alignment="left"), C("arm_name", "Strategy", alignment="left"),
+                C("avg_exposure_pct", "Avg Exposure", 2, "%", "neutral", "pct"),
+                C("reserved_buy_fill_rate_pct", "Fill Rate", 2, "%", "higher", "pct"),
+                C("avg_orderable_candidates", "Avg Orderable", 2, preference="neutral", format_kind="number"),
+                C("candidate_supply_gap_days", "Supply Gap Days", 0, preference="lower", format_kind="int"),
+                C("underfilled_end_days", "Underfilled Days", 0, preference="lower", format_kind="int"),
+                C("end_position_gap_slot_days", "Position Gap", 0, preference="lower", format_kind="int"),
+            )),
+        )),
+        S("yearly_results", 4, "Yearly Results", tables=(
+            # Arm return columns are expanded in canonical Compare Suite order.
+            T("yearly_results", (
+                C("year", "Year", 0, format_kind="year", alignment="left"),
+                C("benchmark_0050_return_pct", "0050", 2, "%", "neutral", "signed_pct"),
+                C("arm_return_pct", "Strategy Arms", 2, "%", "higher", "signed_pct"),
+            )),
+        )),
+    ),
 )
 
 STRATEGY_MODE_EXTENSION_SCHEMAS: Mapping[str, ReportExtensionContract] = {
@@ -984,14 +1010,8 @@ def mode_extension_contract(extension_id: str) -> ModelExtensionContract:
 
 def _persistent_schema_payload(contract: PersistentReportContract) -> dict:
     payload = asdict(contract)
-    if contract.report_id == "model.standard_comparison":
-        # Comparison extensions are discovered from evidence capability metadata;
-        # there is deliberately no second persistent-report extension allow-list.
-        payload["model_specific_extensions"] = [
-            asdict(comparison_extension_contract(extension_id))
-            for extension_id in comparison_extension_ids()
-            if not isinstance(extension_contract(extension_id), IndependentlyFrozenModelExtensionContract)
-        ]
+    # Starting at v13, model-specific comparisons belong solely to read-only Audit.
+    # The historical v11/v12 schema snapshots remain in versioned definition files.
     return payload
 
 

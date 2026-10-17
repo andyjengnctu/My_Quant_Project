@@ -1,0 +1,261 @@
+{
+  "menu_path": [
+    "Research",
+    "模型訓練／驗證"
+  ],
+  "report_id": "model.standard_comparison",
+  "role": "persistent_multi_model_comparison_all_evaluation_modes",
+  "sections": [
+    {
+      "applicability": "all_continuous_dl",
+      "number": 1,
+      "section_id": "learnability",
+      "tables": [
+        {
+          "columns": [
+            {
+              "alignment": "left",
+              "digits": null,
+              "format_kind": "text",
+              "key": "model",
+              "label": "Model",
+              "preference": "neutral",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 0,
+              "format_kind": "int",
+              "key": "group_count",
+              "label": "Groups",
+              "preference": "neutral",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 4,
+              "format_kind": "number",
+              "key": "mean_daily_spearman",
+              "label": "Daily rho",
+              "preference": "higher",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 4,
+              "format_kind": "number",
+              "key": "global_spearman_vs_raw_target",
+              "label": "Global rho",
+              "preference": "higher",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 2,
+              "format_kind": "fraction_pct",
+              "key": "pairwise_concordance",
+              "label": "Pair",
+              "preference": "higher",
+              "unit": "%"
+            },
+            {
+              "alignment": "right",
+              "digits": 4,
+              "format_kind": "number",
+              "key": "top_score_decile_raw_target_mean",
+              "label": "Top 10% Target",
+              "preference": "higher",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 4,
+              "format_kind": "number",
+              "key": "bottom_score_decile_raw_target_mean",
+              "label": "Bottom 10% Target",
+              "preference": "lower",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 4,
+              "format_kind": "number",
+              "key": "top_bottom_raw_target_gap",
+              "label": "Top-Bottom Target",
+              "preference": "higher",
+              "unit": ""
+            }
+          ],
+          "table_id": "learnability"
+        }
+      ],
+      "title": "Learnability"
+    },
+    {
+      "applicability": "validation_and_oos",
+      "number": 2,
+      "section_id": "generalization",
+      "tables": [
+        {
+          "columns": [
+            {
+              "alignment": "left",
+              "digits": null,
+              "format_kind": "text",
+              "key": "model",
+              "label": "Model",
+              "preference": "neutral",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 4,
+              "format_kind": "signed_number",
+              "key": "delta_daily_rho",
+              "label": "Δ Daily rho",
+              "preference": "higher",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 2,
+              "format_kind": "signed_pp",
+              "key": "delta_pair",
+              "label": "Δ Pair",
+              "preference": "higher",
+              "unit": "pp"
+            },
+            {
+              "alignment": "right",
+              "digits": 4,
+              "format_kind": "signed_number",
+              "key": "delta_top_bottom",
+              "label": "Δ Top-Bottom",
+              "preference": "higher",
+              "unit": ""
+            }
+          ],
+          "table_id": "generalization"
+        }
+      ],
+      "title": "Generalization"
+    },
+    {
+      "applicability": "daily_universal_mfe_adverse_truth",
+      "number": 3,
+      "section_id": "upside_downside_alignment",
+      "tables": [
+        {
+          "columns": [
+            {
+              "alignment": "left",
+              "digits": null,
+              "format_kind": "text",
+              "key": "model",
+              "label": "Model",
+              "preference": "neutral",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 4,
+              "format_kind": "number",
+              "key": "target_to_full_mfe_daily_spearman",
+              "label": "Target→MFE rho",
+              "preference": "higher",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 4,
+              "format_kind": "number",
+              "key": "target_to_safety_daily_spearman",
+              "label": "Target→Safety rho",
+              "preference": "higher",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 4,
+              "format_kind": "number",
+              "key": "score_to_full_mfe_daily_spearman",
+              "label": "Score→MFE rho",
+              "preference": "higher",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 4,
+              "format_kind": "number",
+              "key": "score_to_safety_daily_spearman",
+              "label": "Score→Safety rho",
+              "preference": "higher",
+              "unit": ""
+            }
+          ],
+          "table_id": "upside_downside_alignment"
+        }
+      ],
+      "title": "Upside / Downside Validation"
+    },
+    {
+      "applicability": "daily_universal_mfe_adverse_truth",
+      "number": 4,
+      "section_id": "joint_mfe_adverse_quality",
+      "tables": [
+        {
+          "columns": [
+            {
+              "alignment": "left",
+              "digits": null,
+              "format_kind": "text",
+              "key": "model",
+              "label": "Model",
+              "preference": "neutral",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 0,
+              "format_kind": "int",
+              "key": "top10_n",
+              "label": "Top 10% N",
+              "preference": "neutral",
+              "unit": ""
+            },
+            {
+              "alignment": "right",
+              "digits": 2,
+              "format_kind": "pct",
+              "key": "top10_mfe_pct",
+              "label": "Top 10% MFE",
+              "preference": "higher",
+              "unit": "%"
+            },
+            {
+              "alignment": "right",
+              "digits": 2,
+              "format_kind": "pct",
+              "key": "top10_adverse_pct",
+              "label": "Top 10% Adverse",
+              "preference": "lower",
+              "unit": "%"
+            },
+            {
+              "alignment": "right",
+              "digits": 2,
+              "format_kind": "number",
+              "key": "top10_joint_quality",
+              "label": "Top 10% Joint Quality",
+              "preference": "higher",
+              "unit": ""
+            }
+          ],
+          "table_id": "joint_mfe_adverse_quality"
+        }
+      ],
+      "title": "Joint MFE / Adverse Quality"
+    }
+  ],
+  "version": 13
+}

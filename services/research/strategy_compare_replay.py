@@ -306,6 +306,7 @@ def _load_reusable_no_filter_baseline(
         "trade_history": trades,
         "profile": {
             "yearly_return_rows": yearly_rows,
+            "bm_report_yearly_return_rows": list(dict(load_json_object_or_none(source_dir / "strategy_comparison.json") or {}).get("benchmark_yearly") or []),
             "portfolio_capacity_rows": capacity.to_dict("records"),
         },
     }

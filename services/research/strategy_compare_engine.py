@@ -937,8 +937,12 @@ def run_comparison(
         "trade_attribution_schema_version": ATTRIBUTION_SCHEMA_VERSION,
         **score_artifact_metadata,
     }
+    # The portfolio benchmark producer already calculated these date-bounded
+    # 0050 rows; preserve the source values for Strategy SOP v2 S4.
+    benchmark_yearly = list(dict(baseline_payload.get("profile") or {}).get("bm_report_yearly_return_rows") or [])
     json_payload = _to_json_native({
         "metadata": metadata,
+        "benchmark_yearly": benchmark_yearly,
         "no_filter": baseline,
         labels["active_name"]: quality,
         f"{labels['active_name']}_minus_no_filter": deltas,

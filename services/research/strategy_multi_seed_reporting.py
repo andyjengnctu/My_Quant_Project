@@ -123,6 +123,8 @@ def render_multi_seed_robustness_report(
         scenarios=scenarios,
         diagnostics={"r_analysis": r_analysis},
         yearly_by_id=yearly_by_id,
+        benchmark_yearly=list(summary.get("benchmark_yearly") or []),
+        year_is_complete={int(year): bool(value) for year, value in dict(common.get("year_is_complete") or {}).items()},
         target=target,
         title="策略績效比較",
         fingerprint_label="Scientific fingerprint",

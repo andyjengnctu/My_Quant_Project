@@ -819,8 +819,22 @@ def run_portfolio_timeline(
             'closeout_sec': closeout_sec,
             'curve_stats_sec': curve_stats_sec,
         }
+        # Keep the legacy full-year benchmark fields untouched.  S4 needs the
+        # source-producer's year-bounded price returns also for partial years.
+        report_benchmark_stats = (
+            benchmark_period_stats
+            if benchmark_period_stats is not None
+            else _get_benchmark_period_stats(
+                benchmark_data=benchmark_data,
+                sorted_dates=sorted_dates,
+                start_idx=start_idx,
+            )
+        )
         publish_portfolio_profile_stats(
             profile_stats=profile_stats,
+            benchmark_report_yearly_rows=list(
+                dict(report_benchmark_stats or {}).get('bm_yearly_return_rows') or []
+            ),
             fee_rebate_state=fee_rebate_state,
             timing_enabled=profile_timing_enabled,
             portfolio_start=t_portfolio_start,

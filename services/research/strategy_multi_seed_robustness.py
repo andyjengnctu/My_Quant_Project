@@ -54,7 +54,7 @@ from config.breakout_quality import (
 from core.breakout_quality_registry import (
     get_breakout_quality_experiment_profile,
 )
-from core.research_report_contract import require_approved_report_contract
+from core.research_report_contract import require_approved_report_contract, persistent_report_contract_fingerprint
 from core.breakout_quality_policy import (
     get_breakout_quality_workflow_settings,
 )
@@ -527,10 +527,18 @@ def _build_common_report_payload(
                     values[int(row["year"])] = _finite_or_none(row.get("mean"))
         yearly_by_id[arm.arm_id] = values
 
+    complete_by_year = {}
+    for yearly_row in yearly_stats:
+        year = int(yearly_row["year"])
+        complete = bool(yearly_row.get("is_complete_year", False))
+        if year in complete_by_year and complete_by_year[year] != complete:
+            raise ValueError(f"Strategy SOP v2 conflicting complete-year evidence: {year}")
+        complete_by_year[year] = complete
     return {
         "scenarios": scenarios,
         "r_analysis": r_rows,
         "yearly_by_id": yearly_by_id,
+        "year_is_complete": complete_by_year,
         "seed_common_metric_coverage": {
             key: int(pd.to_numeric(enriched.get(key), errors="coerce").notna().sum())
             for key in COMMON_STRATEGY_REPORT_METRIC_KEYS
@@ -3889,6 +3897,7 @@ def _run_fixed_baselines(*, settings, status, run_root: Path, fixed_arms) -> dic
                 "arm_id": arm.arm_id,
                 "name": arm.name,
                 "metrics": dict(payload.get("no_filter") or {}),
+                "benchmark_yearly": list(payload.get("benchmark_yearly") or []),
                 "yearly": _normalize_yearly_rows(
                     payload.get("yearly"), arm_id=arm.arm_id, name=arm.name,
                     seed=None, seed_order=None, arm_order=list(fixed_arms).index(arm) + 1,
@@ -3923,6 +3932,7 @@ def _run_fixed_baselines(*, settings, status, run_root: Path, fixed_arms) -> dic
             "arm_id": arm.arm_id,
             "name": arm.name,
             "metrics": dict(payload.get("no_filter") or {}),
+            "benchmark_yearly": list(payload.get("benchmark_yearly") or []),
             "yearly": _normalize_yearly_rows(
                 payload.get("yearly"), arm_id=arm.arm_id, name=arm.name,
                 seed=None, seed_order=None, arm_order=list(fixed_arms).index(arm) + 1,
@@ -4462,6 +4472,9 @@ def _robustness_summary(
     ]
     payload = {
         "schema_version": ROBUSTNESS_SCHEMA_VERSION,
+        "report_id": "strategy.standard_sop",
+        "report_version": int(require_approved_report_contract("strategy.standard_sop").version),
+        "report_contract_fingerprint": persistent_report_contract_fingerprint("strategy.standard_sop"),
         "status": "RESULT_AVAILABLE", "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "contract": contract, "mean_strategy_metrics": mean_rows,
         "romd_statistics": romd_rows,
@@ -4473,6 +4486,12 @@ def _robustness_summary(
         "yearly_statistics": yearly_statistics,
         "yearly_same_seed_comparison": flattened_yearly,
     }
+    benchmark_sources = [list(item.get("benchmark_yearly") or []) for item in fixed_results.values()]
+    if not benchmark_sources or not all(benchmark_sources):
+        raise ValueError("Strategy SOP v2 INCOMPLETE: fixed baseline missing canonical 0050 yearly evidence")
+    if any(source != benchmark_sources[0] for source in benchmark_sources[1:]):
+        raise ValueError("Strategy SOP v2 INCOMPLETE: fixed 0050 benchmark sources inconsistent")
+    payload["benchmark_yearly"] = benchmark_sources[0]
     payload["common_strategy_report"] = _build_common_report_payload(
         summary=payload,
         seed_frame=seed_frame,
@@ -4835,6 +4854,7 @@ def run_multi_seed_robustness(
                 int(summary.get("schema_version") or 0) < ROBUSTNESS_SCHEMA_VERSION
                 or "paired_comparisons" not in summary
                 or "common_strategy_report" not in summary
+                or not summary.get("benchmark_yearly")
             )
             if needs_upgrade:
                 summary = _upgrade_derived_report_summary(
