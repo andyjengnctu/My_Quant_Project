@@ -610,6 +610,9 @@ def run_standalone_baseline(
     }
     json_payload = _to_json_native({
         "metadata": metadata,
+        "benchmark_yearly": list(
+            baseline_payload["profile"].get("bm_report_yearly_return_rows") or []
+        ),
         "no_filter": baseline,
         "yearly": yearly.to_dict("records"),
     })

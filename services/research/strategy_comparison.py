@@ -94,6 +94,9 @@ from filters.breakout_quality.strategy_compare_reporting import (
     materialize_strategy_pair_readable_report,
     render_strategy_pair_simple_report,
 )
+from services.research.strategy_compare_benchmark import (
+    resolve_strategy_compare_benchmark_yearly,
+)
 from services.research.strategy_compare_pair_integrity import (
     PAIR_FILE_INTEGRITY_FIELD,
     build_completed_pair_file_integrity,
@@ -1644,6 +1647,25 @@ def run_strategy_comparison(
                 f"| elapsed={format_elapsed(arm_elapsed)} "
                 f"| total={format_elapsed(arm_finished - replay_started)}"
             )
+
+    # Report-only v2 evidence refresh. Historical completed pairs were already
+    # integrity-validated and copied into this run; never mutate their source.
+    # A missing 0050 yearly sidecar does not invalidate a completed scientific
+    # replay or justify re-running it.
+    for group_id, pair in pair_payloads.items():
+        pair_payload = pair["payload"]
+        if pair_payload.get("benchmark_yearly"):
+            continue
+        pair_dir = run_dir / "pairs" / group_id
+        pair_payload["benchmark_yearly"] = resolve_strategy_compare_benchmark_yearly(
+            pair_payload=pair_payload,
+            pair_dir=pair_dir,
+            project_root=root,
+            dataset=settings.dataset,
+            comparison_start=comparison_start,
+            comparison_end=comparison_end,
+        )
+        _write_json(pair_dir / "strategy_comparison.json", pair_payload)
 
     post_processing_started = time.perf_counter()
     scenarios = _scenario_payloads(pair_payloads, direct_r, settings=settings)

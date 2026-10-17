@@ -55,6 +55,9 @@ from core.breakout_quality_registry import (
     get_breakout_quality_experiment_profile,
 )
 from core.research_report_contract import require_approved_report_contract, persistent_report_contract_fingerprint
+from services.research.strategy_compare_benchmark import (
+    resolve_strategy_compare_benchmark_yearly,
+)
 from core.breakout_quality_policy import (
     get_breakout_quality_workflow_settings,
 )
@@ -3874,7 +3877,10 @@ def _load_local_fixed_baseline_if_compatible(
         return None
 
 
-def _run_fixed_baselines(*, settings, status, run_root: Path, fixed_arms) -> dict[str, dict[str, Any]]:
+
+def _run_fixed_baselines(
+    *, settings, status, run_root: Path, fixed_arms, allow_replay: bool = True,
+) -> dict[str, dict[str, Any]]:
     start, end = _resolved_period(settings, status)
     results: dict[str, dict[str, Any]] = {}
     for arm in fixed_arms:
@@ -3893,11 +3899,21 @@ def _run_fixed_baselines(*, settings, status, run_root: Path, fixed_arms) -> dic
         if reusable_dir is not None:
             if payload is None:
                 payload = _read_json(reusable_dir / "strategy_comparison.json")
+            # Restore only optional v2 reporting evidence from the same adjusted
+            # benchmark truth. The completed baseline source stays immutable.
+            benchmark_yearly = resolve_strategy_compare_benchmark_yearly(
+                pair_payload=payload,
+                pair_dir=reusable_dir,
+                project_root=PROJECT_ROOT,
+                dataset=settings.dataset,
+                comparison_start=start,
+                comparison_end=end,
+            )
             results[arm.arm_id] = {
                 "arm_id": arm.arm_id,
                 "name": arm.name,
                 "metrics": dict(payload.get("no_filter") or {}),
-                "benchmark_yearly": list(payload.get("benchmark_yearly") or []),
+                "benchmark_yearly": benchmark_yearly,
                 "yearly": _normalize_yearly_rows(
                     payload.get("yearly"), arm_id=arm.arm_id, name=arm.name,
                     seed=None, seed_order=None, arm_order=list(fixed_arms).index(arm) + 1,
@@ -3912,6 +3928,11 @@ def _run_fixed_baselines(*, settings, status, run_root: Path, fixed_arms) -> dic
                 + f" {arm.name} | {project_relative_display_path(reusable_dir, project_root=PROJECT_ROOT)}"
             )
             continue
+        if not allow_replay:
+            raise ValueError(
+                "Strategy SOP v2 INCOMPLETE: missing verified reusable 0050 baseline; "
+                "report-only refresh may not execute strategy replay"
+            )
         if output_dir.exists():
             shutil.rmtree(output_dir)
         param_evaluation_mode = str(
@@ -3942,6 +3963,15 @@ def _run_fixed_baselines(*, settings, status, run_root: Path, fixed_arms) -> dic
             "source": "RUN",
         }
     return results
+
+
+def _common_fixed_benchmark_yearly(fixed_results: dict[str, dict[str, Any]]) -> list[dict]:
+    sources = [list(item.get("benchmark_yearly") or []) for item in fixed_results.values()]
+    if not sources or not all(sources):
+        raise ValueError("Strategy SOP v2 INCOMPLETE: fixed baseline missing canonical 0050 yearly evidence")
+    if any(source != sources[0] for source in sources[1:]):
+        raise ValueError("Strategy SOP v2 INCOMPLETE: fixed 0050 benchmark sources inconsistent")
+    return sources[0]
 
 
 def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
@@ -4486,12 +4516,7 @@ def _robustness_summary(
         "yearly_statistics": yearly_statistics,
         "yearly_same_seed_comparison": flattened_yearly,
     }
-    benchmark_sources = [list(item.get("benchmark_yearly") or []) for item in fixed_results.values()]
-    if not benchmark_sources or not all(benchmark_sources):
-        raise ValueError("Strategy SOP v2 INCOMPLETE: fixed baseline missing canonical 0050 yearly evidence")
-    if any(source != benchmark_sources[0] for source in benchmark_sources[1:]):
-        raise ValueError("Strategy SOP v2 INCOMPLETE: fixed 0050 benchmark sources inconsistent")
-    payload["benchmark_yearly"] = benchmark_sources[0]
+    payload["benchmark_yearly"] = _common_fixed_benchmark_yearly(fixed_results)
     payload["common_strategy_report"] = _build_common_report_payload(
         summary=payload,
         seed_frame=seed_frame,
@@ -4857,6 +4882,15 @@ def run_multi_seed_robustness(
                 or not summary.get("benchmark_yearly")
             )
             if needs_upgrade:
+                if not summary.get("benchmark_yearly"):
+                    # Old completed robustness scientific runs can lack only
+                    # the v2 0050 presentation sidecar. Reuse their canonical
+                    # fixed baseline artifacts; do not replay seeds or arms.
+                    fixed_evidence = _run_fixed_baselines(
+                        settings=settings, status=status, run_root=run_root,
+                        fixed_arms=fixed_arms, allow_replay=False,
+                    )
+                    summary["benchmark_yearly"] = _common_fixed_benchmark_yearly(fixed_evidence)
                 summary = _upgrade_derived_report_summary(
                     summary, seed_frame=seed_frame,
                     seed_yearly_frame=seed_yearly_frame, run_root=run_root,
