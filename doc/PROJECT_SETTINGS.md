@@ -1,7 +1,7 @@
 # 專案設定
 
 1. 每輪開始專案修改或檢查前，必須先讀取並遵守 `doc/PROJECT_SETTINGS.md`。本文件為全專案最高層治理原則；除 E 章明確列出的專案例外外，只保存長期穩定、跨模組且可泛化的專案級規則。可變設定、current identity、實驗狀態、工件實作細節與歷史結果，應由各自的 `config/`、Registry、Architecture 或 Experiment Log 持有，不得在本文件建立第二份真理來源。
-2. 使用者明確要求「完整檢查」時，GPT 必須進入全專案檢查模式，以表格逐項檢查：(1) 本文件 A 至 E 的全部適用條款；(2) 雖未列於本文件但依本輪基準與架構應檢查的其他項目。各項必須有獨立檢查結論，不得以 formal suite PASS 或其他項目結果代替；所有適用項目完成前不得宣稱完整檢查完成。
+2. 使用者明確要求「完整檢查」時，GPT 必須進入全專案檢查模式，以表格逐項檢查：(1) 本文件 A 至 F 的全部適用條款；(2) 雖未列於本文件但依本輪基準與架構應檢查的其他項目。各項必須有獨立檢查結論，不得以 formal suite PASS 或其他項目結果代替；所有適用項目完成前不得宣稱完整檢查完成。
 
 
 ## A. 標準測試流程
@@ -29,12 +29,12 @@
 11. 對研究、改善與除錯問題，應優先提出可立即執行且無前視的分析、實驗或修正；除非使用者明確要求，不得把等待未來資料或暫停研究作為主要下一步。
 12. 所有使用者可見的檔案／資料夾路徑，預設以專案根目錄為基準顯示穩定相對路徑，並統一使用 `/` 分隔；一般 console、摘要或工件清單不得輸出本機絕對路徑。Manifest、hash identity、runtime 讀取與外部明確指定路徑可保留 canonical path，但不得改變使用者可見顯示規則。
 13. 正式互動流程應以既有正式選單為主要操作入口，不得要求使用者先執行可由程式確定完成的零散 CLI；只有尚未納入正式流程的臨時診斷／研究操作才提供直接 CLI。**Continuous DL 模型研究的七個工作類型 [1]～[7]、文案、順序與選號是跨正式研究模型設定的固定 UI 契約，隔離實驗不可另生選單或scope切換，不得由當前演算法、Registry 可執行清單、rolling_authorized、是否已有工件或實驗狀態決定隱藏、改號或改操作流程。** Registry／config 只決定模型與研究執行契約，**標準 Research 服務**須具備七項既定工作且不能向實驗 Producer 查詢選單能力；缺少可確定建置的依賴由原入口自動委派。標準工作缺失是整合錯誤，應由通用契約測試 fail-fast，**不得改測試期待隱藏選項使之 PASS**。**研究選單及工作流程依 2026-09-04 已有介面維持原樣**：不得因某一 MR identity 加入額外 scope 切換、[8] 工作鍵、模型專用說明、確認選單或不同 dispatch；正式比較對象只能取自既有 Model Compare/Test config，不能被特定實驗臨時改寫。模型特有診斷只能隔離為一次性專題 Audit，不得替換常駐模型比較及 Standard SOP。其他選單只可硬編穩定工作類型，current 實驗、model、arm、reference、ID 與前置政策仍由設定／Registry／current state 驅動，validator 不得把目前 scientific identity 當成唯一合法值。
-14. 所有正式持久研究／策略結果都必須提供可直接閱讀的人讀摘要；RUN／REUSE／cache 必須重用同一 canonical result，不得因執行或重用方式不同而改變報表口徑。JSON／CSV／manifest 等詳細工件僅作補充。
-15. 所有人讀報表必須共用 canonical metric/report contract：metric 定義、label、單位、precision、方向性、欄位集合／順序與色彩語意由共用 registry／`core/report_metrics.py`／`core/report_style.py` 持有；renderer 只負責組裝與顯示，不得從 raw rows 重算第二套同名指標、直接以數值正負取代 metric direction，或以 emoji／燈號建立第二套判讀規則。
-16. RCE 等診斷 metric 的 trade partition、Target join、coverage、numerator／denominator 與合法性條件必須由 canonical diagnostics contract 唯一定義；不同診斷 metric 不得以 proxy 互相替代。既有模型驗證 metric 必須直接重用 canonical validation artifact，不得為報表另算第二套。
-17. 長流程互動執行預設只顯示必要的 RUN／REUSE／DONE 進度與最終核心摘要；pair-level 詳細報表、solver states、repair/ascent、stale guard、timing 等過程資訊應保存於工件供追查，不得在 aggregate 執行時重複洗版。
-18. 所有正式 Research 報表必須遵守既有、經使用者同意的 canonical 報表架構、格式與使用規則（歷史 2026-09-04 六章節為 v7；2026-10-17 使用者已授權新版 Model SOP v8 四章節：Learnability、Generalization、Upside / Downside Validation、Joint MFE / Adverse Quality；Generalization 仍使用兩張轉換表。Evidence Coverage 改由發布前契約驗證，不作人讀章節。歷史 v7 結果與定義均不得覆寫），包含報表分工、章節／欄位集合與順序、metric／label／precision、色彩語意、輸出位置、正式 menu 入口與操作方式；不得因單次研究、除錯、重構或 GPT 偏好自行建立第二套常駐格式。凡屬**常駐／標準／可重複使用**的 Research 報表或其正式操作流程，如需新增、刪除、合併、拆分、重新排序章節／欄位，改變報表分工、格式、色彩語意、輸出位置或 menu／使用方式，必須先取得使用者明確授權後才可修改。**一次性／專題 Audit 報表**不需為其自身版型或內容調整事先取得使用者授權，但仍須遵守既有 SSOT、metric/report contract、PIT／read-only／scientific legality 與歷史 evidence 規則，且不得藉一次性報表修改、取代或隱性重定義任何常駐報表契約。
-19. B18 所稱常駐／標準／可重複使用 Research 報表必須另有 machine-readable canonical report contract，固定其 report identity、menu/use role、section identity／順序、table columns、label、precision、unit、direction 與適用條件；console／Markdown／RUN／REUSE renderers只能消費此 contract，不得各自持有第二套 schema。**Model-specific 的專題診斷改由一次性 Audit 負責**；歷史已核准 Extension 的原始 evidence 與研究身分保留，不再插入 Model SOP v8 的四章人讀報表。Rolling／Robustness 所需的 fold、seed 穩健性證據仍屬正式必測，不得因畫面精簡省略。所有常駐 contract 必須保存使用者已授權的 fingerprint/version；formal/meta validation須在未同步取得使用者授權時對 fingerprint drift fail-fast，並驗證不同 model/profile 的 Standard SOP schema invariance。常駐 contract與其 approved fingerprint只有在使用者明確授權後才能同輪更新；一次性／專題 Audit 不納入 persistent-report fingerprint freeze，但仍不得修改常駐 contract。
+14. 〔歷史引用索引〕原 B14 正式人讀報表與 RUN／REUSE 一致性規則，統一以 F2 為準。
+15. 〔歷史引用索引〕原 B15 指標／顯示 SSOT 規則，統一以 F3、F4 為準。
+16. 〔歷史引用索引〕原 B16 診斷指標來源與口徑規則，統一以 F3 為準。
+17. 〔歷史引用索引〕原 B17 長流程進度／摘要規則，統一以 F9 為準。
+18. 〔歷史引用索引〕原 B18 正式報表改版授權／版本保護規則，統一以 F4～F7 為準。
+19. 〔歷史引用索引〕原 B19 Machine-readable Contract、Mode 與 Audit 規則，統一以 F4、F8 為準。
 
 
 ## C. Coding 與架構原則
@@ -100,9 +100,16 @@
 
 12. **Research／Trading EV(R) 特例（使用者明確授權維持）**：Research 策略層 EV(A)／初始風險 R，與 Trading 帳務中心「實績 EV(R)」（平均單筆淨損益 ÷ 平均實際虧損金額）是兩個有意不同的統計口徑。各自原有公式、欄位名稱、標籤、畫面、報表與計算方式必須維持不變；不得因一般 SSOT 收斂而合併、互相替代、重新命名、新增並列 EV 欄位或回推缺少的初始風險資料。未經使用者另行授權，不得將此項列為需要修正的 SSOT-05。
 
-## F. Scientific Contract／Model SOP 治理（2026-10-17 使用者決策）
+## F. Scientific Contract／SOP／指標與報表治理
 
-1. 先核准 Model／Strategy 的共同評估內容，再實施研究。**模型預測 Target、評估指標、Strategy Replay 必須分層**；M1、M2 原欄位保留，M3 驗證漲跌關聯，M4 檢驗同股高 MFE／低 Adverse 的連續 Joint Quality。Global 與 Breakout 是兩個評估範圍，原則上共用同一計算方法。
-2. 永久性 Standard SOP／報表每次改動 metric、章節、公式、格式／欄位等正式契約語意，都必須經使用者明確授權、建立新的 `report_id@vN` Scientific Report Contract；`doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json` 是 append-only 版本／指紋真理，已存在的版本與對應定義文件禁止原地改寫。Runtime、RUN、REUSE、正式人讀輸出與驗證須一致使用目前核准版本；沒有對應新版本就不得發布。**不要求新增本機 Git tag 或其他零散 Git 操作。** 版本 registry 與 pinned guard 可偵測非授權漂移，但因程式與檔案同在可修改專案中，仍不等同不可被同時篡改的獨立簽章授權；每次新版本由使用者審核交付差異後才算正式核准。
-3. Evidence／PIT／sample／seed／fold／replay 是否完整由契約強制驗證，不作 SOP 人讀章節；不完整時拒絕正式發布，不能以 `N/A`、`-` 或平均值冒充實際真值。
-4. DL 訓練架構／head 的專屬指標不持續新增到 Standard SOP；一次性 Audit 可分析，但必須保留可稽核結果。**先使用 Model SOP v8 作為第一版；之後由策略結果做一次性 DL 指標對 RoMD 的 OOS/seed-aware 受控關聯 Audit，取得研究結果後另行授權改版。**禁止在本次 SOP 修改中擅自以 RoMD 回調模型訓練或選模。
+1. **研究設計與報表職責分離**：先核准 Model／Strategy 的共通 SOP 科學評估目的、必要指標、算法與適用範圍，才允許發布正式報表。模型自己的 Target／Score、獨立的共同 Outcome 評估、策略 Replay 的實際成交與現金績效不可混為一談；模型特定 Target、Head、策略特定 K／風控等不得暗中重定義共通 SOP。Global／Breakout 等應用範圍是否適用，由已核准的 evaluation contract 決定；相同範圍使用相同計算規則。
+2. **正式人讀報表必備且唯一來源**：所有持久 Research／Strategy 結果均必須提供可直接閱讀的人讀摘要；RUN／REUSE／cache 共用同一 canonical result、metric 定義與 renderer，JSON／CSV／manifest 僅作詳細 evidence；不得因 work mode、model/profile、是否已產生工件而另建第二套同名報表或以缺值宣稱完成。
+3. **指標單一 owner**：key、公式、來源、numerator／denominator、cohort、trade partition、Target join、時間／PIT、單位、精度、標籤、偏好方向與顏色語意由 canonical metric／diagnostics owner（包括 `core/report_metrics.py`、`core/report_style.py`）定義；報表 renderer 只消費 canonical result，不得重算 raw rows、偷用 proxy 替換 RCE 等診斷指標，或以正負號／emoji／燈號再定義好壞。模型驗證值須直接 REUSE 原 canonical validation evidence。
+4. **Machine-readable Standard SOP Contract**：所有常駐／標準／可重複使用報表必須由一份 machine-readable report contract 固定 report ID、使用入口、正式章節／表格／欄位身分及順序、label、precision、unit、direction、適用範圍與必要 evidence；Console／Markdown／RUN／REUSE 等 renderer 只能讀它。單模型／多模型、Forward／Rolling／Robustness 的共通指標 schema 必須同源；各 mode 要求的必要 fold／seed 等完整性不可因精簡人讀版面而免除。
+5. **正式改版需先授權且不可原地改寫**：新增、刪除、合併、拆分或重排任何常駐章節／欄位，或更改公式、metric semantics、報表分工、正式操作入口、格式、顏色、輸出位置，均須先取得使用者明確授權並發行新的 `report_id@vN`；既有版本與歷史 evidence 永久保留，不得用新 schema 或改寫舊 fingerprint 冒充舊版結果。純顯示改版亦走報表版本治理，但不得無故更動 fitted-model identity 或強迫重訓。
+6. **版本紀錄與事前發布檢查**：`doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json` 為 append-only report version／fingerprint 真理，經批准的獨立版本定義文件及其 Hash 同步記錄；每次執行與正式發布前，比對指定 report ID、版本、目前 schema、相應定義文件及完整 evaluation/scientific identity，禁止只有測試完才發現未授權 drift。禁止藉修改程式 schema、Golden Hash、validator 使新版本自我核准；跨版本修改必須由使用者審查明確差異。**不要求新增本機 Git tag、第二套私人 CLI 或額外 Git 操作。** 同一可修改專案內的 ledger／Hash 僅能偵測正常流程漂移，不能宣稱提供獨立防篡改的密碼學授權。
+7. **SOP 必測與發佈資格**：完整報表必須證明所有已核准必測指標、合法 PIT／maturity／score／price／seed／fold／replay／fee／accounting 證據齊備；合法評估因資料缺少／未成熟／樣本不相容無法完成時，必須 `INCOMPLETE/BLOCKED`，不得以 `N/A`、`-`、0、其他指標、歷史平均或 Extension 偽裝成已完成。品質差或 negative result 與證據未完成須分開狀態，不能因模型表現不佳將 SOP 本身標為不適用。模式間不同的必要證據由事前核准的 evaluation contract 規定，不能臨時修改。
+8. **Audit 與 mode-specific evidence 分層**：模型／策略特定假說、Head、Label、K／Gate、First-Passage、Selection Quality 等深入比較，除非已正式核准為跨同類研究共通的必測 SOP，不得常駐加入 Standard SOP；一次性專題 Audit 自身版型／內容變更不需事前授權，但不得重定義正式 SOP 的 metric、流程、選單或 historical truth，且必須遵守 read-only／PIT／SSOT。結案後檢查依賴再退役專屬 implementation／registration／tests，保留 Registry、Log、完整成果與可重現歷史 evidence。**Rolling／Robustness 必要的跨 Fold／跨 Seed 分布及 same-seed 對照仍是正式必測，不是可刪的模型專屬 Extension。**
+9. **報表輸出與執行進度分離**：長流程預設只顯示必要的 RUN／REUSE／DONE 進度及核心結果；pair-level、solver／repair、stale guard、timing 等詳細資訊保留在工件。Execution Summary 的耗時不視為科學績效指標，也不得決定策略比較名次。
+10. **尊重既有共通與例外口徑**：正式選單／使用方式遵守 B13，research artifact／fitting identity 遵守 C9～C12，Trading／Research 交易與統計口徑遵守 D 章；Research EV(A) 與 Trading EV(R) 的有意不同定義依 E12 保留，不得因共通報表收斂而修改。已授權的 Model／Strategy SOP 現行與歷史章節、Golden Fingerprint 與具體指標由各版本 contract／Registry 持有，不在 PROJECT_SETTINGS 建立另一份 current identity。
+11. **正式 SOP 只能依獨立研究證據改版**：先使用已核准 SOP，再以事前定義、OOS／seed／fold-aware、受控條件一致的 Read-only Audit 評估候選新指標與下游策略表現的穩健關係；需控制多重比較與迭代 OOS 限制，不得將這些 Audit 結果直接回饋訓練／選模，亦不得未經使用者授權就把相關性最高的指標加為永久 SOP。
