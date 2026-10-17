@@ -556,6 +556,7 @@ def _dual_component_metrics(
 from services.breakout_quality.standard_model_sop import (
     calculate_upside_downside_alignment_metrics,
     build_standard_model_sop,
+    resolve_standard_evaluation_truth_table,
 )
 from services.breakout_quality.model_report_extensions import build_core_model_report_extensions
 
@@ -2007,6 +2008,14 @@ def run(args) -> int:
         "oos": oos_metrics,
         "breakout_candidate_oos": candidate_metrics,
     }
+    shared_evaluation_table, shared_evaluation_horizon = resolve_standard_evaluation_truth_table(
+        bundle,
+        filter_id=str(args.filter_id),
+        model_architecture=str(args.model_architecture),
+        experiment_profile=str(args.experiment_profile),
+        project_root=PROJECT_ROOT,
+        allow_stale_source=bool(args.allow_stale_source),
+    )
     payload = {
         "schema_version": ranker_api.RANKER_SCHEMA_VERSION + 1,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -2075,7 +2084,8 @@ def run(args) -> int:
                 "breakout_quality_score": score_by_group[candidate_ids],
             }),
             evaluation_mode="forward_oos",
-        evaluation_horizon_bars=int(bundle.target_manifest["target_contract"]["horizon_bars"]),
+            evaluation_horizon_bars=shared_evaluation_horizon,
+            evaluation_group_table=shared_evaluation_table,
         ),
         "split_metrics": split_metrics,
         "all_group_split_metrics": split_metrics,

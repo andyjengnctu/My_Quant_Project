@@ -9,6 +9,7 @@ changes the common four-section metric payload.
 from __future__ import annotations
 
 from typing import Any, Mapping
+from pathlib import Path
 
 import hashlib
 
@@ -16,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets
+from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY
 from services.breakout_quality import ranker_training as ranker_api
 
 STANDARD_SPLIT_KEYS = ("validation", "oos", "breakout_candidate_oos")
@@ -23,6 +25,104 @@ STANDARD_SPLIT_KEYS = ("validation", "oos", "breakout_candidate_oos")
 # Read-only evaluation metric, never a model Target or fitting/selection input.
 JOINT_QUALITY_EVALUATION_ID = "same_day_min_mfe_safety_percentile_v1"
 STANDARD_SOP_SCHEMA = "standard_model_sop_v10"
+
+# Standard M3/M4 always evaluate the same canonical 40-bar price outcome.
+# This is NOT the model's fitting target: shorter-label models keep their own
+# 20-bar target, but are judged on the common 40-bar MFE/Adverse outcome.
+STANDARD_EVALUATION_HORIZON_BARS = int(DEFAULT_LABEL_POLICY.label_horizon_bars)
+
+
+def resolve_standard_evaluation_truth_table(
+    bundle,
+    *,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    project_root: Path,
+    allow_stale_source: bool = False,
+) -> tuple[pd.DataFrame, int]:
+    """Resolve canonical *evaluation* prices independently of each fitted label.
+
+    Reuse the original bundle when its target spans the common evaluation horizon.
+    For a 20-bar fitted label constrained to the same 40-bar mature universe,
+    load a declared 40-bar pure-MFE target through the existing canonical data
+    producer.  Never reconstitute prices from a 20-bar label, adjust score rows,
+    retrain, or infer an evaluation horizon from the model identity.
+    """
+    from core.breakout_quality_runtime import DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID
+    from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+    from core.breakout_quality_policy import get_breakout_quality_model_test_settings
+    from services.breakout_quality.continuous_ranker_pipeline import load_continuous_ranker_data
+
+    common_horizon = STANDARD_EVALUATION_HORIZON_BARS
+    manifest = dict(bundle.target_manifest or {})
+    source_horizon = int(dict(manifest.get("target_contract") or {}).get("horizon_bars", 0))
+    if source_horizon == common_horizon:
+        return bundle.group_table, common_horizon
+    if int(manifest.get("sample_universe_horizon_bars") or 0) != common_horizon:
+        raise ValueError(
+            "Standard Model SOP cross-horizon evaluation requires exactly the "
+            "canonical 40-bar mature universe, not a shortened 20-bar cohort"
+        )
+    source_recipe = get_continuous_ranker_execution_recipe(str(experiment_profile))
+    references = []
+    for _model_id, profile in get_breakout_quality_model_test_settings().model_profiles:
+        recipe = get_continuous_ranker_execution_recipe(str(profile))
+        if (str(recipe.continuous_target_id) == DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID
+                and recipe.context_policy.source == source_recipe.context_policy.source):
+            references.append(str(profile))
+    if not references:
+        raise ValueError("Standard Model SOP missing compatible canonical 40-bar evaluation producer")
+    reference = load_continuous_ranker_data(
+        filter_id=str(filter_id),
+        model_architecture=str(model_architecture),
+        experiment_profile=references[0],
+        preload_feature_bank=False,
+        allow_stale_source=bool(allow_stale_source),
+        project_root=Path(project_root),
+    )
+    reference_manifest = dict(reference.target_manifest or {})
+    reference_contract = dict(reference_manifest.get("target_contract") or {})
+    if (str(reference_contract.get("target_id")) != DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID
+            or int(reference_contract.get("horizon_bars", 0)) != common_horizon):
+        raise ValueError("Standard Model SOP canonical evaluation source target/horizon mismatch")
+
+    source = bundle.group_table
+    target = reference.group_table
+    if len(source) != len(target):
+        raise ValueError("Standard Model SOP 20/40 evaluation stock-day cohort size mismatch")
+    # Checking group_index alone is NOT enough: the same integer could point to
+    # another stock or date in independently materialized target bundles.
+    for key in ("group_index", "ticker", "date"):
+        if key not in source.columns or key not in target.columns:
+            raise ValueError(f"Standard Model SOP evaluation key missing: {key}")
+        if key == "date":
+            match = pd.to_datetime(source[key]).reset_index(drop=True).equals(
+                pd.to_datetime(target[key]).reset_index(drop=True)
+            )
+        else:
+            match = source[key].astype(str).reset_index(drop=True).equals(
+                target[key].astype(str).reset_index(drop=True)
+            )
+        if not match:
+            raise ValueError(f"Standard Model SOP 20/40 evaluation {key} cohort mismatch")
+    mature_source = np.asarray(bundle.target_valid, dtype=bool)
+    if not np.array_equal(mature_source, np.asarray(reference.target_valid, dtype=bool)):
+        raise ValueError("Standard Model SOP 20/40 evaluation mature cohort mismatch")
+    # A 20-bar label does not grant earlier 20-bar publication. The matched
+    # comparison cohort is explicitly mature at the 40th future trading bar.
+    if ("label_eval_end_date" not in source.columns
+            or "label_eval_end_date" not in target.columns):
+        raise ValueError("Standard Model SOP shared evaluation maturity evidence missing")
+    maturity_ids = np.flatnonzero(mature_source)
+    source_end = pd.to_datetime(source.iloc[maturity_ids]["label_eval_end_date"], errors="raise")
+    target_end = pd.to_datetime(target.iloc[maturity_ids]["label_eval_end_date"], errors="raise")
+    source_start = pd.to_datetime(source.iloc[maturity_ids]["date"], errors="raise")
+    if (source_end.isna().any() or target_end.isna().any()
+            or not source_end.reset_index(drop=True).equals(target_end.reset_index(drop=True))
+            or bool((source_end.to_numpy() <= source_start.to_numpy()).any())):
+        raise ValueError("Standard Model SOP 20/40 evaluation maturity date mismatch")
+    return target, common_horizon
 
 
 def _ranking_dates(frame: pd.DataFrame) -> np.ndarray:
@@ -207,6 +307,7 @@ def _split_metrics(
     group_table: pd.DataFrame,
     raw_target: np.ndarray,
     percentile_target: np.ndarray,
+    evaluation_group_table: pd.DataFrame,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if frame.empty:
         raise ValueError("Standard SOP split score frame不得為空")
@@ -231,7 +332,7 @@ def _split_metrics(
     )
     alignment = calculate_upside_downside_alignment_metrics(
         ids,
-        group_table,
+        evaluation_group_table,
         raw_target,
         scores,
         ranking_dates=rank_dates,
@@ -264,12 +365,16 @@ def build_standard_model_sop(
     breakout_scores: pd.DataFrame,
     evaluation_mode: str,
     evaluation_horizon_bars: int,
+    evaluation_group_table: pd.DataFrame | None = None,
     mode_extensions: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the sole machine payload consumed by all Standard Model SOP renderers."""
 
     if int(evaluation_horizon_bars) < 2:
         raise ValueError("Standard SOP evaluation horizon must have at least two bars")
+    shared_truth = group_table if evaluation_group_table is None else evaluation_group_table
+    if len(shared_truth) != len(group_table):
+        raise ValueError("Standard SOP evaluation stock-day population size mismatch")
     percentile_target = _canonical_percentile_target(group_table, raw_target)
     cohort_identity = {
         key: _score_cohort_digest(frame, group_table)
@@ -291,6 +396,7 @@ def build_standard_model_sop(
             group_table=group_table,
             raw_target=raw_target,
             percentile_target=percentile_target,
+            evaluation_group_table=shared_truth,
         )
     return {
         "schema": STANDARD_SOP_SCHEMA,

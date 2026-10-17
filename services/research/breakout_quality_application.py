@@ -939,8 +939,11 @@ def _standard_model_sop_completeness_issues(payload: dict) -> tuple[str, ...]:
         horizon = int(truth.get("horizon_bars"))
     except (TypeError, ValueError, OverflowError):
         horizon = 0
-    if horizon < 2:
-        issues.append("evaluation_truth:horizon_bars missing")
+    if horizon != int(DEFAULT_LABEL_POLICY.label_horizon_bars):
+        issues.append(
+            "evaluation truth mismatch: horizon_bars must match the canonical common 40-bar "
+            "MFE/Adverse evaluation (refresh audit from validated scores)"
+        )
     for key, expected in (
         ("mfe_source", "target_favorable_return"),
         ("adverse_source", "target_adverse_return_to_peak"),
@@ -1004,9 +1007,21 @@ def _standard_model_comparison_views(models: list[dict]) -> list[dict]:
         if common_truth is None:
             common_truth = truth
         elif truth != common_truth:
+            scalar_keys = ("horizon_bars", "mfe_source", "adverse_source", "joint_quality_id")
+            differing = [key for key in scalar_keys if truth.get(key) != common_truth.get(key)]
+            observed = dict(truth.get("cohort_identity") or {})
+            expected = dict(common_truth.get("cohort_identity") or {})
+            differing.extend(
+                f"{split}:stock-day/fold cohort"
+                for split in ("validation", "oos", "breakout_candidate_oos")
+                if observed.get(split) != expected.get(split)
+            )
+            if not differing:
+                differing.append("unexpected evaluation truth identity")
             raise ValueError(
-                f"MODEL SOP cross-model evaluation truth mismatch: {item.get('model_id')}; "
-                "horizon, truth definition and all stock-day/fold cohorts must match"
+                f"MODEL SOP cross-model evaluation truth mismatch: {item.get('model_id')} "
+                f"| {', '.join(differing)}; common horizon, price truth and "
+                "stock-day/fold cohorts are mandatory"
             )
         view = _model_sop_view(payload)
         views.append({**item, "view": view})

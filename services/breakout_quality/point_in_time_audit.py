@@ -49,7 +49,10 @@ from filters.breakout_quality.ranking_score_store import (
     validate_continuous_ranker_score_values,
 )
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
-from services.breakout_quality.standard_model_sop import build_standard_model_sop
+from services.breakout_quality.standard_model_sop import (
+    build_standard_model_sop,
+    resolve_standard_evaluation_truth_table,
+)
 from services.breakout_quality import ranker_training as ranker_api
 from services.breakout_quality.point_in_time_scores import (
     FOLD_MANIFEST_FILENAME,
@@ -1661,6 +1664,14 @@ def _run_point_in_time_scores_audit(
             "path": str(target_manifest_path),
             **build_file_manifest(target_manifest_path),
         }
+    shared_evaluation_table, shared_evaluation_horizon = resolve_standard_evaluation_truth_table(
+        bundle,
+        filter_id=str(args.filter_id),
+        model_architecture=str(args.model_architecture),
+        experiment_profile=str(args.experiment_profile),
+        project_root=PROJECT_ROOT,
+        allow_stale_source=bool(args.allow_stale_source),
+    )
     standard_model_sop = build_standard_model_sop(
         group_table=bundle.group_table,
         raw_target=bundle.raw_target,
@@ -1669,7 +1680,8 @@ def _run_point_in_time_scores_audit(
         oos_scores=standard_oos_frame,
         breakout_scores=standard_breakout_frame,
         evaluation_mode="rolling_oos",
-        evaluation_horizon_bars=int(bundle.target_manifest["target_contract"]["horizon_bars"]),
+        evaluation_horizon_bars=shared_evaluation_horizon,
+        evaluation_group_table=shared_evaluation_table,
         mode_extensions={
             "rolling": {
                 "fold_count": int(manifest.get("fold_count", 0) or 0),
