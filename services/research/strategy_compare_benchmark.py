@@ -16,6 +16,7 @@ import pandas as pd
 from core.data_utils import resolve_unique_csv_path, sanitize_ohlcv_dataframe
 from core.dataset_profiles import get_dataset_dir
 from core.portfolio_benchmark import _build_benchmark_period_stats
+from filters.breakout_quality.source_inventory import build_source_data_inventory
 from services.portfolio_replay import PORTFOLIO_DEFAULT_BENCHMARK_TICKER
 
 
@@ -121,3 +122,96 @@ def resolve_strategy_compare_benchmark_yearly(
         ):
             raise ValueError(f"Strategy SOP v2 INCOMPLETE: 0050/{year} replay interval mismatch")
     return restored
+
+
+def resolve_strategy_compare_robustness_benchmark_yearly(
+    *, project_root: Path, contract: dict[str, Any], seed_yearly_frame: pd.DataFrame,
+) -> list[dict[str, Any]]:
+    """Restore S4 from the canonical 0050 producer for an all-per-seed suite.
+
+    End-to-end robustness has NO fixed arms: its DL-off references are themselves
+    seed-sensitive (e.g. C96/C97/C98). Their durable seed/year observations
+    survive retention cleanup, but replay-equity CSVs do not. The shared 0050
+    reference is independent of strategy fitting seeds; read the contract-pinned
+    adjusted-price dataset and delegate returns to the portfolio benchmark owner.
+    Never infer 0050 from strategy returns or trigger replay.
+    """
+    period = dict(contract.get("comparison_period") or {})
+    dataset = str(contract.get("dataset") or "")
+    if not dataset or not period.get("start") or not period.get("end"):
+        raise ValueError("Strategy SOP v2 INCOMPLETE: robustness 0050 evaluation identity absent")
+    start = pd.Timestamp(period["start"])
+    end = pd.Timestamp(period["end"])
+    if pd.isna(start) or pd.isna(end) or start > end:
+        raise ValueError("Strategy SOP v2 INCOMPLETE: robustness 0050 period invalid")
+
+    evidence = pd.DataFrame(seed_yearly_frame)
+    required = {"arm_id", "seed", "year", "is_complete_year"}
+    if evidence.empty or not required.issubset(evidence.columns):
+        raise ValueError("Strategy SOP v2 INCOMPLETE: robustness seed yearly cohort absent")
+    expected_years = set(range(int(start.year), int(end.year) + 1))
+    if set(evidence["year"].astype(int)) != expected_years:
+        raise ValueError("Strategy SOP v2 INCOMPLETE: robustness 0050 yearly cohort mismatch")
+    # All arm/seed results must refer to precisely the same year set and
+    # full-year status. Row counts alone could hide duplicated/missing units.
+    if evidence["is_complete_year"].isna().any() or not pd.api.types.is_bool_dtype(evidence["is_complete_year"]):
+        raise ValueError("Strategy SOP v2 INCOMPLETE: robustness yearly completeness invalid")
+    observed_keys = list(zip(
+        evidence["arm_id"].astype(str), evidence["seed"].astype(int),
+        evidence["year"].astype(int),
+    ))
+    units = {(arm, seed) for arm, seed, _year in observed_keys}
+    declared_arms = {str(item["arm_id"]) for item in contract.get("stochastic_arms") or ()}
+    declared_seeds = {int(seed) for seed in contract.get("resolved_seeds") or ()}
+    if declared_arms or declared_seeds:
+        if not declared_arms or not declared_seeds or units != {
+            (arm, seed) for arm in declared_arms for seed in declared_seeds
+        }:
+            raise ValueError("Strategy SOP v2 INCOMPLETE: robustness benchmark units not complete")
+    expected_keys = {(arm, seed, year) for arm, seed in units for year in expected_years}
+    if (
+        len(observed_keys) != len(expected_keys)
+        or set(observed_keys) != expected_keys
+        or evidence.groupby("year")["is_complete_year"].nunique(dropna=False).ne(1).any()
+    ):
+        raise ValueError("Strategy SOP v2 INCOMPLETE: robustness yearly seed coverage differs")
+    full_years = {
+        int(year) for year, group in evidence.groupby("year")
+        if bool(group["is_complete_year"].iloc[0])
+    }
+
+    # The contract's scientific data inventory pins the adjusted-price
+    # generation. A changed source is a blocker, not permission to silently
+    # backfill a new 0050 vintage into an old completed robustness run.
+    pinned = dict(contract.get("dataset_identity") or {})
+    if not pinned or pinned.get("status") == "SOURCE_DATA_UNAVAILABLE":
+        raise ValueError("Strategy SOP v2 INCOMPLETE: trusted dataset identity absent")
+    current = build_source_data_inventory(project_root, dataset)
+    if current != pinned:
+        raise ValueError("Strategy SOP v2 INCOMPLETE: 0050 adjusted-price dataset identity drift")
+
+    ticker = str(PORTFOLIO_DEFAULT_BENCHMARK_TICKER)
+    data_dir = Path(get_dataset_dir(str(project_root), dataset)).resolve()
+    path, _duplicates = resolve_unique_csv_path(data_dir, ticker)
+    frame, _sanitation = sanitize_ohlcv_dataframe(pd.read_csv(path), ticker)
+    days = pd.DatetimeIndex(frame.index)
+    days = days[(days >= start) & (days <= end)]
+    if days.empty or {int(y) for y in days.year} != expected_years:
+        raise ValueError("Strategy SOP v2 INCOMPLETE: 0050 adjusted-price cohort missing years")
+    # A complete strategy year cannot be paired with only a partial price year.
+    for year in full_years:
+        year_days = days[days.year == year]
+        if not len(year_days) or year_days[0].month != 1 or year_days[-1].month != 12:
+            raise ValueError(f"Strategy SOP v2 INCOMPLETE: 0050/{year} complete-year coverage absent")
+    price_data = {dt: {"Close": float(close)} for dt, close in frame["Close"].items()}
+    produced = _build_benchmark_period_stats(
+        benchmark_data=price_data, sorted_dates=tuple(days), start_idx=0,
+    )
+    yearly = [dict(row) for row in produced.get("bm_yearly_return_rows") or ()]
+    if (
+        {int(row["year"]) for row in yearly} != expected_years
+        or len(yearly) != len(expected_years)
+        or not all(np.isfinite(float(row["year_return_pct"])) for row in yearly)
+    ):
+        raise ValueError("Strategy SOP v2 INCOMPLETE: canonical 0050 yearly result incomplete")
+    return yearly
