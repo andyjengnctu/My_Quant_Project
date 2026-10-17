@@ -2749,11 +2749,10 @@ def _print_workflow_status(settings=None) -> None:
     )
     if settings.rolling_authorized:
         mode = get_breakout_quality_rolling_test_mode("rolling")
-        base = _rolling_mode_point_in_time_dir(settings, mode)
-        if base is None:
-            base = resolve_filter_model_output_dir(
-                PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
-            ) / "point_in_time"
+        # PIT fold/score truth lives under the canonical model artifact store,
+        # not the research Markdown/JSON report output directory.  Reuse the
+        # exact same owner used by the execution/readiness path.
+        base = _rolling_publication_dir(settings, mode)
         grouped_status.extend((
             (
                 "Rolling OOS Scores",
@@ -3446,6 +3445,26 @@ def _has_continuous_forward_fitted_candidate(settings) -> bool:
     )
 
 
+def _has_rolling_first_fold_fit_candidate(settings) -> bool:
+    """Display-only existence probe; exact reuse is verified by the PIT owner."""
+
+    mode = get_breakout_quality_rolling_test_mode("rolling")
+    score_start = str(mode.score_start_date or "")
+    if len(score_start) != 10 or score_start[4] != "-" or score_start[7] != "-":
+        return False
+    pit_root = _rolling_mode_point_in_time_dir(settings, mode)
+    if pit_root is None:
+        pit_root = resolve_filter_point_in_time_dir(
+            PROJECT_ROOT, str(settings.filter_id),
+            str(settings.model_architecture), str(settings.experiment_profile),
+        )
+    folds_root = pit_root / "folds"
+    if not folds_root.is_dir():
+        return False
+    pattern = f"fold_{score_start.replace('-', '')}_*"
+    return any((path / "model.pt").is_file() for path in folds_root.glob(pattern))
+
+
 @contextmanager
 def _force_rebuild_publication_guard(*paths: Path):
     """Keep current canonical publication until a fresh producer run succeeds."""
@@ -3565,15 +3584,24 @@ def _run_continuous_forward_model_gate(program_name: str, settings) -> int:
     _print_workflow_status(settings)
     research_spec = get_continuous_ranker_research_spec(settings.experiment_profile)
     reusable_contract, reuse_reason = _load_reusable_continuous_forward_contract(settings)
+    forward_fit_candidate = (
+        reusable_contract is None and _has_continuous_forward_fitted_candidate(settings)
+    )
+    rolling_fit_candidate = (
+        reusable_contract is None
+        and not forward_fit_candidate
+        and _has_rolling_first_fold_fit_candidate(settings)
+    )
     _print_model_action_status(((
         str(research_spec.model_research_id),
         str(settings.experiment_profile),
-        "REUSE"
-        if reusable_contract is not None
-        else "REFRESH/VERIFY"
-        if _has_continuous_forward_fitted_candidate(settings)
+        "REUSE" if reusable_contract is not None
+        else "REFRESH/VERIFY" if forward_fit_candidate
+        else "VERIFY FIT" if rolling_fit_candidate
         else "BUILD",
-        "READY" if reusable_contract is not None else str(reuse_reason or "missing"),
+        "READY" if reusable_contract is not None
+        else "Rolling first-fold fitted checkpoint候選；待核對exact fitting identity"
+        if rolling_fit_candidate else str(reuse_reason or "missing"),
     ),))
     code, contract, action = _ensure_continuous_forward_model_report(
         program_name,

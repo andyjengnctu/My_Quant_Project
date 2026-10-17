@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import shutil
 from pathlib import Path
 import time
 
@@ -1233,6 +1234,7 @@ def run(args) -> int:
         plan=plan,
     )
     existing_fitted_contract = None
+    rolling_reused_model = None
     fitted_reuse_reason = None
     if bool(getattr(args, "reuse_fitted_model", False)):
         existing_fitted_contract, fitted_reuse_reason = load_reusable_fitted_model_contract(
@@ -1243,9 +1245,58 @@ def run(args) -> int:
             project_root=PROJECT_ROOT,
         )
 
+    # Rolling and Forward can share a fitting checkpoint ONLY when their actual
+    # stock-day training/validation membership and every weight-affecting setting
+    # match.  Forward scores and evaluation reports remain mode-local artifacts.
+    if (
+        existing_fitted_contract is None
+        and bool(getattr(args, "reuse_fitted_model", False))
+        and not artifact_paths.model_path.exists()
+    ):
+        from services.breakout_quality.point_in_time_scores import (
+            load_forward_compatible_rolling_checkpoint,
+        )
+        rolling_contract, rolling_reason = load_forward_compatible_rolling_checkpoint(
+            bundle=bundle,
+            forward_split=split,
+            forward_args=args,
+            forward_plan=plan,
+            torch_module=torch,
+            project_root=PROJECT_ROOT,
+        )
+        if rolling_contract is not None:
+            # Validate and load the verified weights before publishing a Forward
+            # checkpoint; never mutate the historical Rolling fold.
+            rolling_reused_model = load_model_from_fitted_checkpoint(
+                torch, contract=rolling_contract, bundle=bundle, plan=plan
+            )
+            artifact_paths.model_dir.mkdir(parents=True, exist_ok=True)
+            staged = artifact_paths.model_path.with_name(
+                artifact_paths.model_path.name + f".rolling_fit_import_{time.time_ns()}.tmp"
+            )
+            try:
+                shutil.copy2(rolling_contract.model_path, staged)
+                if artifact_paths.model_path.exists():
+                    raise RuntimeError("Forward model appeared during Rolling checkpoint import")
+                staged.replace(artifact_paths.model_path)
+            finally:
+                if staged.exists():
+                    staged.unlink()
+            existing_fitted_contract = rolling_contract
+            print(
+                "[REUSE FIT] Rolling first-fold checkpoint -> Forward OOS | "
+                f"selected_epoch={rolling_contract.selected_epoch}; "
+                "Forward scores/report will be evaluated independently"
+            )
+        else:
+            print(f"[FIT CHECK] Rolling checkpoint cannot be reused for Forward: {rolling_reason}")
+
     if existing_fitted_contract is not None:
-        model = load_model_from_fitted_checkpoint(
-            torch, contract=existing_fitted_contract, bundle=bundle, plan=plan
+        model = (
+            rolling_reused_model if rolling_reused_model is not None
+            else load_model_from_fitted_checkpoint(
+                torch, contract=existing_fitted_contract, bundle=bundle, plan=plan
+            )
         )
         selected_epoch = int(existing_fitted_contract.selected_epoch)
         epoch_selection = dict(existing_fitted_contract.epoch_selection or {})

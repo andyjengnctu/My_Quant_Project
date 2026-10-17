@@ -48,6 +48,7 @@ from core.breakout_quality_registry import (
 )
 from core.breakout_quality_policy import (
     get_breakout_quality_workflow_settings,
+    get_breakout_quality_rolling_test_mode,
 )
 from core.breakout_quality_runtime import (
     get_continuous_ranker_persisted_score_columns,
@@ -73,6 +74,7 @@ from filters.breakout_quality.paths import (
     SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
     SELECTION_POINT_IN_TIME_SCORE_FILENAME,
     resolve_filter_point_in_time_dir,
+    resolve_filter_model_output_dir,
 )
 from filters.breakout_quality.torch_runtime import (
     add_torch_execution_cli_arguments,
@@ -90,6 +92,7 @@ from core.console_report import (
     render_table,
 )
 from services.breakout_quality.fitted_model_artifacts import (
+    FittedModelContract,
     load_fitted_model_training_evidence,
     scientific_torch_execution,
 )
@@ -1198,6 +1201,190 @@ def _forward_checkpoint_import_issues(
     if report_model_manifest is not None and report_model_manifest != checkpoint_manifest:
         issues.append("source report checkpoint hash/size mismatch")
     return tuple(dict.fromkeys(issues))
+
+
+
+def load_forward_compatible_rolling_checkpoint(
+    *,
+    bundle,
+    forward_split,
+    forward_args,
+    forward_plan,
+    torch_module,
+    project_root: Path,
+) -> tuple[FittedModelContract | None, str]:
+    """Validate an existing Rolling first-fold FIT for Forward OOS, without using its scores.
+
+    This is the reverse bridge of Forward -> Rolling fitting-identity reuse.  The
+    PIT owner recomputes its native training membership and complete fold contract
+    using the current canonical bundle; matching filenames or a READY report alone
+    can never authorize a cross-mode checkpoint.
+    """
+
+    if str(bundle.profile.training_sample_scope) != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+        return None, "cross-mode reuse supports daily-universal fitting only"
+    if not bool(getattr(forward_args, "use_inner_validation", False)):
+        return None, "Forward inner validation differs from Rolling fitting"
+
+    score_start = str(forward_split.report.get("oos_start_date") or "")
+    if not score_start:
+        return None, "Forward split has no OOS start"
+
+    pit_args = parse_args([
+        "--filter-id", str(forward_args.filter_id),
+        "--model-architecture", str(forward_args.model_architecture),
+        "--experiment-profile", str(forward_args.experiment_profile),
+        "--seed", str(int(forward_args.seed)),
+        "--score-start-date", score_start,
+        "--inner-validation-months", str(int(forward_args.inner_validation_months)),
+    ])
+    if pit_args.train_window_months is not None:
+        return None, "Rolling has fixed training window, Forward uses expanding history"
+
+    # All settings capable of changing the fitted weights or selected epoch must
+    # agree.  Score/evaluation throughput knobs are deliberately not compared.
+    settings_pairs = (
+        ("epochs", "epochs"), ("batch_size", "batch_size"),
+        ("lr", "lr"), ("weight_decay", "weight_decay"),
+        ("gradient_clip_norm", "gradient_clip_norm"),
+        ("early_stopping_patience", "early_stopping_patience"),
+        ("early_stopping_min_delta", "early_stopping_min_delta"),
+    )
+    mismatched = [
+        left for left, right in settings_pairs
+        if getattr(forward_args, left, None) != getattr(pit_args, right, None)
+    ]
+    if mismatched:
+        return None, "Forward/Rolling fitting settings differ: " + ", ".join(mismatched)
+
+    rolling_mode = get_breakout_quality_rolling_test_mode("rolling")
+    if rolling_mode.point_in_time_dirname not in (None, ""):
+        pit_root = resolve_filter_model_output_dir(
+            Path(project_root), str(forward_args.filter_id),
+            str(forward_args.model_architecture), str(forward_args.experiment_profile),
+        ) / str(rolling_mode.point_in_time_dirname)
+    else:
+        pit_root = resolve_filter_point_in_time_dir(
+            Path(project_root), str(forward_args.filter_id),
+            str(forward_args.model_architecture), str(forward_args.experiment_profile),
+        )
+    folds_root = pit_root / "folds"
+    if not folds_root.is_dir():
+        return None, "canonical Rolling folds directory missing"
+
+    # A published first-fold model without a readable manifest is corruption,
+    # not permission to silently train a different model under the same lineage.
+    first_fold_prefix = "fold_" + score_start.replace("-", "") + "_"
+    for candidate_dir in folds_root.glob(first_fold_prefix + "*"):
+        if (candidate_dir / DEFAULT_MODEL_FILENAME).is_file() and not (
+            candidate_dir / FOLD_MANIFEST_FILENAME
+        ).is_file():
+            raise RuntimeError(
+                f"Rolling first-fold checkpoint is missing its fitting manifest: {candidate_dir.name}"
+            )
+
+    candidates: list[tuple[Path, dict[str, Any]]] = []
+    for manifest_path in sorted(folds_root.glob("*/manifest.json")):
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            if manifest_path.parent.name.startswith(first_fold_prefix):
+                raise RuntimeError(
+                    f"Rolling first-fold fitting manifest is invalid: {manifest_path.parent.name}"
+                ) from exc
+            # An unrelated/obsolete fold must not suppress a valid first-fold fit.
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if str(dict(payload.get("planned_periods") or {}).get("score_start") or "") == score_start:
+            candidates.append((manifest_path, payload))
+    if not candidates:
+        return None, "no Rolling fold begins at the Forward OOS cutoff"
+
+    verified: list[FittedModelContract] = []
+    ineligible: list[str] = []
+    for manifest_path, manifest in candidates:
+        periods = dict(manifest.get("planned_periods") or {})
+        try:
+            score_end = pd.Timestamp(str(periods["score_end"]))
+            score_begin = pd.Timestamp(score_start)
+        except (KeyError, ValueError, TypeError):
+            ineligible.append(f"{manifest_path.parent.name}: invalid period")
+            continue
+        fold = {
+            "fold_id": str(manifest.get("fold_id") or ""),
+            "score_start": score_begin,
+            "score_end": score_end,
+        }
+        if not fold["fold_id"] or manifest_path.parent.name != fold["fold_id"]:
+            ineligible.append(f"{manifest_path.parent.name}: fold identity mismatch")
+            continue
+        ids = _fold_group_ids(
+            bundle, fold,
+            validation_months=int(pit_args.inner_validation_months),
+            train_window_months=None,
+        )
+        if not all(np.array_equal(left, right) for left, right in (
+            (ids["train_ids"], forward_split.inner_train_ids),
+            (ids["validation_ids"], forward_split.validation_ids),
+            (ids["final_ids"], forward_split.selection_ids),
+        )):
+            ineligible.append(f"{fold['fold_id']}: different fitted sample membership")
+            continue
+        expected = _fold_contract_payload(pit_args, bundle, fold, ids)
+        if not _fold_training_contract_is_compatible(manifest, expected_contract=expected):
+            ineligible.append(f"{fold['fold_id']}: fitting identity mismatch")
+            continue
+        actual_execution = dict(manifest.get("torch_execution") or {})
+        actual_execution.pop("requested_device", None)
+        if actual_execution != scientific_torch_execution(forward_plan):
+            ineligible.append(f"{fold['fold_id']}: torch execution mismatch")
+            continue
+
+        checkpoint_path = manifest_path.parent / DEFAULT_MODEL_FILENAME
+        expected_checkpoint = dict(dict(manifest.get("artifacts") or {}).get("checkpoint") or {})
+        if not expected_checkpoint or not checkpoint_path.is_file():
+            raise RuntimeError(f"Rolling fitted checkpoint missing: {fold['fold_id']}")
+        if build_file_manifest(checkpoint_path) != expected_checkpoint:
+            raise RuntimeError(f"Rolling fitted checkpoint hash mismatch: {fold['fold_id']}")
+        selected_epoch = int(manifest.get("selected_epoch", 0) or 0)
+        if selected_epoch < 1 or not isinstance(manifest.get("epoch_selection"), dict):
+            raise RuntimeError(f"Rolling fitted checkpoint has invalid epoch evidence: {fold['fold_id']}")
+        checkpoint = torch_module.load(checkpoint_path, map_location="cpu", weights_only=True)
+        if not isinstance(checkpoint, dict):
+            raise RuntimeError(f"Rolling fitted checkpoint has invalid content: {fold['fold_id']}")
+        if checkpoint.get("model_spec") != bundle.model_spec.as_manifest_payload() or (
+            checkpoint.get("experiment_settings") != bundle.profile.as_manifest_payload()
+        ) or int(checkpoint.get("selected_epoch", 0) or 0) != selected_epoch:
+            raise RuntimeError(f"Rolling fitted checkpoint embedded identity mismatch: {fold['fold_id']}")
+        embedded_contract = checkpoint.get("fold_contract")
+        migration = dict(manifest.get("migration") or {})
+        if isinstance(embedded_contract, dict):
+            if not _fold_training_contract_is_compatible(embedded_contract, expected_contract=expected):
+                raise RuntimeError(f"Rolling checkpoint embedded fitting contract mismatch: {fold['fold_id']}")
+        elif not (
+            migration.get("kind") == "forward_model_fitting_identity_import"
+            and migration.get("training_contract_unchanged") is True
+            and migration.get("source_checkpoint_sha_preserved") is True
+        ):
+            raise RuntimeError(f"Rolling checkpoint missing native fitting contract: {fold['fold_id']}")
+        verified.append(FittedModelContract(
+            manifest_path=manifest_path,
+            model_path=checkpoint_path,
+            manifest=manifest,
+            fitting_identity=expected,
+            selected_epoch=selected_epoch,
+            epoch_selection=dict(manifest["epoch_selection"]),
+            final_refit_history=list(manifest.get("final_refit_history") or []),
+            source="rolling_first_fold_verified",
+        ))
+
+    if not verified:
+        return None, "; ".join(ineligible[:5]) or "no matching Rolling fitted identity"
+    hashes = {build_file_manifest(item.model_path)["sha256"] for item in verified}
+    if len(hashes) != 1 or len({item.selected_epoch for item in verified}) != 1:
+        raise RuntimeError("one Forward fitting identity has conflicting Rolling checkpoints")
+    return verified[0], "verified same fitting identity with Rolling first fold"
 
 
 def _import_forward_checkpoint_to_fitting_cache(
