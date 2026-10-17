@@ -275,6 +275,36 @@ def resolve_filter_model_output_dir(
     )
 
 
+def resolve_model_research_robustness_seed_dirs(
+    project_root: str | os.PathLike[str],
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    *,
+    seed: int,
+    rolling: bool,
+) -> tuple[Path, Path]:
+    """Canonical Research [1] model-robustness publication paths (not a strategy cache).
+
+    Both the model producer and read-only Strategy Compare consumers must resolve
+    this single namespace owner; neither may infer an artifact from model ID alone.
+    """
+
+    profile = resolve_experiment_profile(experiment_profile)
+    mode = "rolling_oos" if rolling else "forward_oos"
+    root = Path(project_root).resolve()
+    model_dir = (
+        root / "models" / "research" / "breakout_quality" / "model_robustness"
+        / mode / profile / f"seed_{int(seed)}"
+    ).resolve()
+    research_dir = (
+        resolve_filter_model_output_dir(
+            root, filter_id, model_architecture, profile
+        ) / "model_robustness" / mode / f"seed_{int(seed)}"
+    ).resolve()
+    return model_dir, research_dir
+
+
 def resolve_filter_research_score_path(
     project_root: str | os.PathLike[str],
     filter_id: str,

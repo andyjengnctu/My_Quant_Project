@@ -83,7 +83,7 @@ def signal_for_workflow_status(value: Any) -> str:
         "CHECK", "WARN", "WARNING", "PARTIAL",
     }
     negative = {"BLOCKED", "NOT_RUN", "FAIL", "FAILED", "ERROR"}
-    neutral_actions = {"RUN", "REPORT", "RUN/REUSE", "PARAM+REPLAY", "TRAIN+REPLAY"}
+    neutral_actions = {"RUN", "REPORT", "RUN/REUSE", "PARAM+REPLAY", "TRAIN+REPLAY", "REUSE+REPLAY"}
     if status in neutral_actions:
         return SIGNAL_NEUTRAL
     if status in positive:

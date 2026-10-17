@@ -148,6 +148,7 @@ from filters.breakout_quality.strategy_compare_dl_artifacts import (
 )
 from filters.breakout_quality.strategy_rule_policies import ALL_RULE_FILTERS_OFF_OVERRIDES
 from services.research.strategy_compare_training import (
+    inspect_reusable_model_research_rolling_score,
     run_strategy_compare_training_unit,
     validate_strategy_compare_training_artifacts,
 )
@@ -1729,6 +1730,28 @@ def _render_robustness_execution_plan(
             overall = "BLOCKED"
             robustness_unit_states = {}
             robustness_contract = None
+    # Research [1] model Rolling Robustness is a separate canonical producer.
+    # Validate its score and fitted evidence before declaring a *model* REUSE;
+    # this never means the new strategy replay itself is already completed.
+    model_source_reuse: dict[tuple[str, int], bool] = {}
+    if bool(cfg.reuse_completed) and start is not None and end is not None:
+        for dl_id, arm_entries in _training_source_groups(tuple(model_arms), settings=settings):
+            source = settings.dl_sources[str(dl_id)]
+            workflow = get_breakout_quality_workflow_settings(
+                experiment_profile=str(source.experiment_profile)
+            )
+            for seed in cfg.resolved_seeds:
+                if all(
+                    robustness_unit_states.get((arm.arm_id, int(seed)), {}).get("action") == RESULT_ACTION_REUSE
+                    for _order, arm in arm_entries
+                ):
+                    continue
+                evidence, _reason = inspect_reusable_model_research_rolling_score(
+                    project_root=PROJECT_ROOT, source=source, workflow=workflow,
+                    seed=int(seed), comparison_start=str(start), comparison_end=str(end),
+                )
+                model_source_reuse[(str(dl_id), int(seed))] = evidence is not None
+
     for arm in fixed_arms:
         rows.append((
             "RUN/REUSE",
@@ -1754,10 +1777,33 @@ def _render_robustness_execution_plan(
                 f"{reuse_count}/{len(arm_states)} seed結果REUSE；只執行其餘缺失單元"
             )
         elif arm.arm_id in model_ids:
-            description = (
-                f"{cfg.seed_count}個固定benchmark seeds；同seed strategy params + canonical DL trainer + replay"
+            source_ids = resolve_arm_runtime_dl_source_ids(settings, arm)
+            pending_seeds = tuple(
+                int(seed) for seed, state in zip(cfg.resolved_seeds, arm_states)
+                if not (isinstance(state, dict) and state.get("action") == RESULT_ACTION_REUSE)
             )
-            action = "TRAIN+REPLAY"
+            model_reuse_count = sum(
+                all(model_source_reuse.get((str(dl_id), seed), False) for dl_id in source_ids)
+                for seed in pending_seeds
+            )
+            if model_reuse_count == len(pending_seeds):
+                action = "REUSE+REPLAY"
+                description = (
+                    f"{model_reuse_count}/{len(pending_seeds)} seed Research Rolling模型PIT分數已驗證REUSE；"
+                    "沿用同seed P16，只需新策略回放"
+                )
+            elif model_reuse_count:
+                action = "RESUME"
+                description = (
+                    f"{model_reuse_count}/{len(pending_seeds)} seed Research模型REUSE；"
+                    "其餘依fitting identity驗證後訓練／回放"
+                )
+            else:
+                action = "TRAIN+REPLAY"
+                description = (
+                    f"{len(pending_seeds)}個seed目前無合格Research模型PIT score；"
+                    "依共用fitting checkpoint先REUSE、缺失才TRAIN，再作策略回放"
+                )
         else:
             arm_bindings = [
                 benchmark_bindings.get((arm.arm_id, int(seed)))
@@ -1807,6 +1853,22 @@ def _render_robustness_execution_plan(
             action = "PARAM+REPLAY"
         rows.append((action, arm.name, description))
     training_sources = _training_source_groups(tuple(model_arms), settings=settings)
+    model_source_units = tuple(
+        (str(dl_id), int(seed), entries)
+        for dl_id, entries in training_sources
+        for seed in cfg.resolved_seeds
+    )
+    model_source_strategy_reused_count = sum(
+        all(
+            robustness_unit_states.get((arm.arm_id, seed), {}).get("action") == RESULT_ACTION_REUSE
+            for _order, arm in entries
+        )
+        for _dl_id, seed, entries in model_source_units
+    )
+    model_source_reuse_count = sum(bool(value) for value in model_source_reuse.values())
+    model_source_pending_count = (
+        len(model_source_units) - model_source_strategy_reused_count - model_source_reuse_count
+    )
     pending_optimizer_search_groups: set[tuple[int, str, str, str, str, str]] = set()
     if cfg.benchmark_id is not None:
         for seed in cfg.resolved_seeds:
@@ -1917,7 +1979,12 @@ def _render_robustness_execution_plan(
         ),
         (
             "模型訓練單元",
-            f"{cfg.seed_count * len(training_sources)}（{len(training_sources)} unique DL sources × {cfg.seed_count} robustness replicates）",
+            (
+                f"{model_source_pending_count} 待PIT／checkpoint確認"
+                f"（Research模型score REUSE={model_source_reuse_count}，"
+                f"策略結果REUSE略過={model_source_strategy_reused_count}，"
+                f"來源總數={len(model_source_units)}）"
+            ),
         ),
         *tuple(pit_workload_rows),
     )
@@ -3524,6 +3591,17 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
             )
         except (FileNotFoundError, ValueError):
             artifacts = None
+    if artifacts is None and bool(job.get("reuse_completed")) and is_selection_pit:
+        artifacts, reuse_reason = inspect_reusable_model_research_rolling_score(
+            project_root=PROJECT_ROOT,
+            source=dl,
+            workflow=workflow,
+            seed=seed,
+            comparison_start=str(job["comparison_start"]),
+            comparison_end=str(job["comparison_end"]),
+        )
+        if artifacts is None:
+            job["model_reuse_miss_reason"] = reuse_reason
     if artifacts is not None:
         artifacts["model_prediction_metrics"] = (
             _model_prediction_metrics_from_training_artifacts(artifacts)
@@ -3613,15 +3691,13 @@ def _training_units(
                 continue
             representative_arm = arm_entries[0][1]
             source_unit = _unit_key(dl_id, int(seed))
+            # Model Research [1] publishes fitted checkpoints into this *exact*
+            # canonical root, indexed there by the fold fitting-identity SHA.
+            # Appending benchmark/model/seed here makes the shared cache invisible.
             checkpoint_cache_dir = (
                 None
-                if checkpoint_cache_root in (None, "") or benchmark_id in (None, "")
-                else (
-                    PROJECT_ROOT
-                    / str(checkpoint_cache_root)
-                    / str(benchmark_id)
-                    / _unit_key(str(dl_id), int(seed))
-                ).resolve()
+                if checkpoint_cache_root in (None, "")
+                else (PROJECT_ROOT / str(checkpoint_cache_root)).resolve()
             )
             units.append({
                 "arm": representative_arm,
@@ -4979,7 +5055,7 @@ def run_multi_seed_robustness(
     print("\n" + render_title("Multiple-seed robustness 執行"))
     print(
         f"Seeds={len(seeds)} | stochastic arms={len(stochastic_arms)} | replay units={total_units} | "
-        f"unique DL sources={len(training_sources)} | train units={training_unit_count}"
+        f"unique DL sources={len(training_sources)} | model source units={training_unit_count}"
     )
     print(f"GPU train workers={cfg.gpu_train_workers} | CPU replay workers={cfg.cpu_replay_workers}")
     if cfg.keep_attribution_source:
@@ -5320,7 +5396,11 @@ def run_multi_seed_robustness(
             fold_reuse = dict(artifacts.get("fold_reuse_summary") or {})
             built_folds = int(fold_reuse.get("built", 0) or 0)
             if trained["reused"]:
-                tag = "[TRAIN ARTIFACT REUSE]"
+                tag = (
+                    "[MODEL ROBUSTNESS REUSE]"
+                    if artifacts.get("model_artifact_origin") == "model_research_rolling_robustness"
+                    else "[TRAIN ARTIFACT REUSE]"
+                )
             elif fold_reuse and built_folds == 0:
                 tag = "[PIT RECOVER]"
             else:

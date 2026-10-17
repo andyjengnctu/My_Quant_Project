@@ -1713,6 +1713,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         case_id=case_id,
         project_root=project_root,
     )
+    from .synthetic_breakout_quality_strategy_reuse_cases import (
+        append_model_robustness_pit_strategy_reuse_contract_checks,
+    )
+    append_model_robustness_pit_strategy_reuse_contract_checks(
+        results=results, case_id=case_id,
+    )
 
     from .synthetic_breakout_quality_strategy_reuse_cases import (
         append_completed_pair_baseline_integrity_contract_checks,

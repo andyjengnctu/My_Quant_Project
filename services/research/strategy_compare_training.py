@@ -22,7 +22,16 @@ from core.breakout_quality_policy import (
 )
 from core.console_report import COMPACT_CONSOLE_ENV
 from filters.breakout_quality.artifacts import compute_file_sha256
-from filters.breakout_quality.paths import build_filter_artifact_paths_from_dir
+from filters.breakout_quality.paths import (
+    SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME,
+    SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
+    SELECTION_POINT_IN_TIME_SCORE_FILENAME,
+    build_filter_artifact_paths_from_dir,
+    resolve_model_research_robustness_seed_dirs,
+)
+from services.breakout_quality.fitted_model_artifacts import (
+    pit_fold_fitting_settings_issues,
+)
 from filters.breakout_quality.ranking_score_store import (
     CONTINUOUS_RANKER_REPORT_FILENAME,
     DAILY_RANKER_OOS_SCORE_FILENAME,
@@ -173,6 +182,71 @@ def build_strategy_compare_trainer_command(
             "fold_months": fold_months,
         },
     )
+
+
+def inspect_reusable_model_research_rolling_score(
+    *,
+    project_root: str | Path,
+    source: Any,
+    workflow: Any,
+    seed: int,
+    comparison_start: str | None,
+    comparison_end: str | None,
+) -> tuple[dict[str, Any] | None, str]:
+    """Reuse Research [1] Rolling Robustness PIT evidence, never copy or alter it.
+
+    A completed model robustness *report* alone is not enough: the exact seed,
+    profile, PIT interval, audit, source lineage, score SHA and fitted settings
+    must satisfy the shared Strategy Compare contract before strategy replay.
+    """
+
+    if str(source.score_source) != SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+        return None, "not a selection-PIT model source"
+    if not is_breakout_quality_model_test_profile(str(source.experiment_profile)):
+        return None, "model profile is not authorized in the formal Model Compare/Test list"
+    model_dir, research_dir = resolve_model_research_robustness_seed_dirs(
+        project_root,
+        str(source.filter_id),
+        str(source.model_architecture),
+        str(source.experiment_profile),
+        seed=int(seed),
+        rolling=True,
+    )
+    required = (
+        model_dir / SELECTION_POINT_IN_TIME_SCORE_FILENAME,
+        model_dir / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
+        model_dir / SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME,
+    )
+    if not all(path.is_file() for path in required):
+        return None, "Research Rolling Robustness PIT score/manifest/audit missing"
+    try:
+        artifacts = validate_strategy_compare_training_artifacts(
+            project_root=project_root,
+            source=source,
+            workflow=workflow,
+            seed=int(seed),
+            model_dir=model_dir,
+            research_dir=research_dir,
+            comparison_start=comparison_start,
+            comparison_end=comparison_end,
+            point_in_time_dir_override=model_dir,
+        )
+        manifest = _read_json(model_dir / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME)
+        expected_anchor = str(source.point_in_time_fold_anchor_date or "").strip() or None
+        actual_anchor = str(manifest.get("fold_anchor_date") or "").strip() or None
+        # Exact score-universe reuse requires an exact fold schedule, including
+        # the distinction between anchored and naturally aligned folds.
+        if actual_anchor != expected_anchor:
+            return None, "Research Rolling Robustness PIT fold_anchor_date mismatch"
+        fitting_issues = pit_fold_fitting_settings_issues(
+            point_in_time_dir=model_dir,
+            manifest=manifest,
+        )
+        if fitting_issues:
+            return None, "Research Rolling Robustness fitting settings stale: " + "; ".join(fitting_issues[:4])
+    except (FileNotFoundError, ValueError, OSError, TypeError, KeyError) as exc:
+        return None, f"Research Rolling Robustness validation: {type(exc).__name__}: {exc}"
+    return {**artifacts, "model_artifact_origin": "model_research_rolling_robustness"}, "READY"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -460,4 +534,5 @@ __all__ = [
     "build_strategy_compare_trainer_command",
     "run_strategy_compare_training_unit",
     "validate_strategy_compare_training_artifacts",
+    "inspect_reusable_model_research_rolling_score",
 ]

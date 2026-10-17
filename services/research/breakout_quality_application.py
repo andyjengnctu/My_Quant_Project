@@ -161,6 +161,7 @@ from filters.breakout_quality.paths import (
     build_filter_artifact_paths_from_dir,
     resolve_filter_artifact_paths,
     resolve_filter_model_output_dir,
+    resolve_model_research_robustness_seed_dirs,
     resolve_filter_output_dir,
     resolve_filter_point_in_time_dir,
     resolve_filter_report_json_path,
@@ -5056,28 +5057,16 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
 
 
 def _model_robustness_dirs(settings, *, seed: int, rolling: bool) -> tuple[Path, Path]:
-    """Return isolated model/evaluation dirs for one benchmark seed.
+    """Read Research [1] model-robustness paths from the canonical path owner."""
 
-    Robustness shares the same model-list SSOT and Standard-SOP producers as the
-    single-seed workflows. Isolation is only an artifact namespace concern.
-    """
-
-    mode = "rolling_oos" if rolling else "forward_oos"
-    model_dir = (
-        PROJECT_ROOT
-        / "models" / "research" / "breakout_quality" / "model_robustness"
-        / mode / str(settings.experiment_profile) / f"seed_{int(seed)}"
-    ).resolve()
-    research_dir = (
-        resolve_filter_model_output_dir(
-            PROJECT_ROOT,
-            str(settings.filter_id),
-            str(settings.model_architecture),
-            str(settings.experiment_profile),
-        )
-        / "model_robustness" / mode / f"seed_{int(seed)}"
-    ).resolve()
-    return model_dir, research_dir
+    return resolve_model_research_robustness_seed_dirs(
+        PROJECT_ROOT,
+        str(settings.filter_id),
+        str(settings.model_architecture),
+        str(settings.experiment_profile),
+        seed=int(seed),
+        rolling=bool(rolling),
+    )
 
 
 def _validate_robustness_standard_payload(

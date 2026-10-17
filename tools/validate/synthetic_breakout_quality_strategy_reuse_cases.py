@@ -1383,3 +1383,216 @@ def append_completed_pair_baseline_integrity_contract_checks(
         "shared_baseline_skips_missing_malformed_or_incomplete_run_publications",
         True, interrupted_candidates_skipped,
     )
+
+
+def append_model_robustness_pit_strategy_reuse_contract_checks(*, results, case_id: str) -> None:
+    """A model-robustness score may be reused, but strategy results remain separate."""
+
+    from types import SimpleNamespace
+    from core.breakout_quality_policy import get_breakout_quality_workflow_settings
+    from core.strategy_compare_policy import (
+        get_strategy_comparison_settings,
+        get_strategy_multi_seed_robustness_settings,
+    )
+    from filters.breakout_quality.paths import resolve_model_research_robustness_seed_dirs
+    from services.research import breakout_quality_application as model_app
+    from services.research import strategy_compare_training as training
+    from services.research import strategy_multi_seed_robustness as robust
+
+    settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
+    source = settings.dl_sources["CONT13AO_ROLL"]
+    workflow = get_breakout_quality_workflow_settings(
+        experiment_profile=str(source.experiment_profile)
+    )
+    seed = 693545351
+    with tempfile.TemporaryDirectory(prefix="model_robustness_reuse_") as temporary:
+        root = Path(temporary)
+        expected_dirs = resolve_model_research_robustness_seed_dirs(
+            root, source.filter_id, source.model_architecture,
+            source.experiment_profile, seed=seed, rolling=True,
+        )
+        with patch.object(model_app, "PROJECT_ROOT", root):
+            producer_dirs = model_app._model_robustness_dirs(
+                SimpleNamespace(
+                    filter_id=source.filter_id,
+                    model_architecture=source.model_architecture,
+                    experiment_profile=source.experiment_profile,
+                ), seed=seed, rolling=True,
+            )
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "model_and_strategy_resolve_one_canonical_robustness_seed_namespace",
+            True, producer_dirs == expected_dirs,
+        )
+        model_dir, research_dir = expected_dirs
+        model_dir.mkdir(parents=True)
+        for filename, content in (
+            (training.SELECTION_POINT_IN_TIME_SCORE_FILENAME, "synthetic-score"),
+            (training.SELECTION_POINT_IN_TIME_MANIFEST_FILENAME, '{"folds": []}'),
+            (training.SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME, "synthetic-audit"),
+        ):
+            (model_dir / filename).write_text(content, encoding="utf-8")
+        saved_bytes = {
+            path.name: path.read_bytes() for path in model_dir.iterdir()
+            if path.is_file()
+        }
+        identity = {
+            "score": str(model_dir / training.SELECTION_POINT_IN_TIME_SCORE_FILENAME),
+            "score_sha256": "synthetic-validated-score-hash",
+            "selected_epoch": 7, "fold_count": 6,
+            "score_execution_start": "2021-01-01",
+            "score_available_from": "2021-01-01",
+            "score_available_through": "2026-03-02",
+        }
+        with patch.object(training, "validate_strategy_compare_training_artifacts", return_value=dict(identity)) as validation, patch.object(
+            training, "pit_fold_fitting_settings_issues", return_value=()
+        ) as fitting:
+            evidence, reason = training.inspect_reusable_model_research_rolling_score(
+                project_root=root, source=source, workflow=workflow, seed=seed,
+                comparison_start="2021-01-01", comparison_end="2026-03-02",
+            )
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "strategy_reuses_readonly_research_robustness_pit_score_after_strict_validation",
+            True, evidence is not None and reason == "READY"
+            and evidence.get("model_artifact_origin") == "model_research_rolling_robustness"
+            and validation.call_args.kwargs["seed"] == seed
+            and validation.call_args.kwargs["point_in_time_dir_override"] == model_dir
+            and validation.call_args.kwargs["comparison_end"] == "2026-03-02"
+            and fitting.called
+            and all((model_dir / name).read_bytes() == payload for name, payload in saved_bytes.items()),
+        )
+        with patch.object(
+            training, "validate_strategy_compare_training_artifacts",
+            side_effect=ValueError("PIT score SHA256 mismatch")
+        ):
+            invalid, invalid_reason = training.inspect_reusable_model_research_rolling_score(
+                project_root=root, source=source, workflow=workflow, seed=seed,
+                comparison_start="2021-01-01", comparison_end="2026-03-02",
+            )
+        with patch.object(training, "validate_strategy_compare_training_artifacts", return_value=dict(identity)), patch.object(
+            training, "pit_fold_fitting_settings_issues", return_value=("epochs stale",)
+        ):
+            stale, stale_reason = training.inspect_reusable_model_research_rolling_score(
+                project_root=root, source=source, workflow=workflow, seed=seed,
+                comparison_start="2021-01-01", comparison_end="2026-03-02",
+            )
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "model_robustness_sha_or_fitting_contract_mismatch_is_never_reused",
+            True, invalid is None and "SHA256" in invalid_reason
+            and stale is None and "epochs stale" in stale_reason,
+        )
+        # An anchored Research score is not the same score-universe identity
+        # as a non-anchored Strategy Compare source, even if its date coverage fits.
+        manifest_path = model_dir / training.SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
+        manifest_path.write_text('{"folds": [], "fold_anchor_date": "2020-12-01"}', encoding="utf-8")
+        with patch.object(
+            training, "validate_strategy_compare_training_artifacts", return_value=dict(identity)
+        ), patch.object(training, "pit_fold_fitting_settings_issues", return_value=()):
+            anchored, anchored_reason = training.inspect_reusable_model_research_rolling_score(
+                project_root=root, source=source, workflow=workflow, seed=seed,
+                comparison_start="2021-01-01", comparison_end="2026-03-02",
+            )
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "research_rolling_score_reuse_requires_exact_fold_anchor_identity",
+            True, anchored is None and "fold_anchor_date mismatch" in anchored_reason,
+        )
+        manifest_path.write_text('{"folds": []}', encoding="utf-8")
+        (model_dir / training.SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME).unlink()
+        missing, missing_reason = training.inspect_reusable_model_research_rolling_score(
+            project_root=root, source=source, workflow=workflow, seed=seed,
+            comparison_start="2021-01-01", comparison_end="2026-03-02",
+        )
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "model_robustness_missing_audit_cannot_claim_reuse",
+            True, missing is None and "missing" in missing_reason,
+        )
+
+        # A preexisting Research score must bypass subprocess fitting, without
+        # changing any Research [1] file or falsely completing strategy replay.
+        job = {
+            "settings": settings, "dl_id": "CONT13AO_ROLL", "seed": seed,
+            "model_dir": str(root / "strategy_local_model_absent"),
+            "research_dir": str(root / "strategy_local_research_absent"),
+            "comparison_start": "2021-01-01",
+            "comparison_end": "2026-03-02", "reuse_completed": True,
+        }
+        with patch.object(
+            robust, "inspect_reusable_model_research_rolling_score",
+            return_value=(dict(identity, model_artifact_origin="model_research_rolling_robustness"), "READY"),
+        ), patch.object(
+            robust, "run_strategy_compare_training_unit",
+            side_effect=AssertionError("must not refit completed research model"),
+        ) as trainer:
+            reused = robust._train_one_unit(job)
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "robustness_training_unit_short_circuits_to_existing_research_model_score",
+            True, reused["reused"] is True and not trainer.called
+            and reused["artifacts"].get("model_artifact_origin") == "model_research_rolling_robustness"
+            and not Path(job["model_dir"]).exists(),
+        )
+
+        cfg = get_strategy_multi_seed_robustness_settings("broker_cash_dl_conversion_rolling")
+        shared_root = Path(robust.PROJECT_ROOT / str(cfg.checkpoint_cache_root)).resolve()
+        units = robust._training_units(
+            seeds=(seed,), stochastic_arms=(settings.arms["C99"], settings.arms["C101"]),
+            settings=settings, completed=set(), model_root=root / "strategy_model",
+            run_root=root / "strategy_run", comparison_start="2021-01-01",
+            comparison_end="2026-03-02", reuse_completed=True,
+            benchmark_id=cfg.benchmark_id, checkpoint_cache_root=cfg.checkpoint_cache_root,
+        )
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "strategy_checkpoint_cache_uses_research_shared_fitting_identity_root_not_seed_silo",
+            True, len(units) == 1 and len(units[0]["replay_arms"]) == 2
+            and Path(units[0]["checkpoint_cache_root"]) == shared_root,
+        )
+
+        # Execution-plan terminology must distinguish reused model evidence
+        # from still-pending scientific strategy observations for all six arms.
+        status = {
+            "preparation_plan": SimpleNamespace(actions=()),
+            "comparison_period": {"start": "2021-01-01", "end": "2026-03-02"},
+            "artifact_identities": {},
+        }
+        fixed_arms, strategy_arms = robust._robustness_arms(settings, cfg)
+        ready_contract = {"fingerprint": "synthetic", "resolved_seeds": cfg.resolved_seeds}
+        with patch.object(
+            robust, "_discover_registered_strategy_only_scientific_reuse", return_value={}
+        ), patch.object(
+            robust, "_benchmark_parameter_plan_rows", return_value=([], [], {})
+        ), patch.object(
+            robust, "build_multi_seed_robustness_contract", return_value=ready_contract
+        ), patch.object(
+            robust, "_resolve_existing_scientific_unit_states", return_value=(None, None, {})
+        ), patch.object(robust, "_run_root", return_value=root / "empty_results"):
+            with patch.object(
+                robust, "inspect_reusable_model_research_rolling_score",
+                return_value=({"score": "valid"}, "READY"),
+            ):
+                reused_plan, reused_state = robust._render_robustness_execution_plan(
+                    cfg=cfg, settings=settings, status=status,
+                    fixed_arms=fixed_arms, stochastic_arms=strategy_arms,
+                )
+            with patch.object(
+                robust, "inspect_reusable_model_research_rolling_score",
+                return_value=(None, "score/manifest missing"),
+            ):
+                missing_plan, _missing_state = robust._render_robustness_execution_plan(
+                    cfg=cfg, settings=settings, status=status,
+                    fixed_arms=fixed_arms, stochastic_arms=strategy_arms,
+                )
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "six_arm_plan_reports_model_reuse_and_only_replays_new_strategy_scientific_units",
+            True, reused_state["overall_status"] == "READY"
+            and reused_plan.count("REUSE+REPLAY") == 6
+            and "0 待PIT／checkpoint確認" in reused_plan
+            and "Research模型score REUSE=12" in reused_plan
+            and missing_plan.count("TRAIN+REPLAY") == 6
+            and "Research模型score REUSE=0" in missing_plan,
+        )
