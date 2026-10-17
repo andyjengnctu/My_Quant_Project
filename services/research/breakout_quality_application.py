@@ -78,7 +78,7 @@ from core.research_report_contract import (
     mode_extension_contract,
     format_contract_value,
     persistent_report_contract_fingerprint,
-    report_contract,
+    require_approved_report_contract,
     section_contract,
     table_contract,
     visible_extension_table,
@@ -1327,6 +1327,7 @@ def _write_standard_model_comparison_report(
         raise ValueError(f"Standard Model SOP comparison evaluation_mode不支援: {evaluation_mode!r}")
     filter_id = next(iter(filter_ids))
     scope_name = mode + ("_robustness" if robustness else "")
+    contract = require_approved_report_contract("model.standard_comparison")
     output_dir = (
         resolve_filter_output_dir(PROJECT_ROOT, filter_id=filter_id)
         / "standard_model_comparison"
@@ -1335,7 +1336,6 @@ def _write_standard_model_comparison_report(
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / "standard_model_comparison.json"
     markdown_path = output_dir / "standard_model_comparison.md"
-    contract = report_contract("model.standard_comparison")
 
     def source_reports(item: dict) -> list[str]:
         explicit = [Path(path) for path in list(item.get("source_reports") or [])]
@@ -3725,7 +3725,7 @@ def _write_standard_model_sop_report(
     base = Path(source_path).resolve().parent
     json_path = base / "standard_model_report.json"
     markdown_path = base / "standard_model_report.md"
-    report = report_contract("model.standard_sop")
+    report = require_approved_report_contract("model.standard_sop")
     machine = {
         "report_id": report.report_id,
         "report_version": int(report.version),

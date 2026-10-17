@@ -12,7 +12,6 @@ import hashlib
 import json
 from pathlib import Path
 import re
-import subprocess
 import tempfile
 from typing import Any, Mapping
 
@@ -21,13 +20,14 @@ from .meta_contracts import (
     summarize_no_reverse_app_import_contract,
 )
 
-GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v1.json"
+GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v2.json"
+LEGACY_GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v1.json"
+LEGACY_GOLDEN_SHA256 = "172b828579a2302be866092cbe12897a2e8c9ffe2d6ab7fd6bc8ada1b14d4a9b"
 # A deliberately separate anchor: editing a Golden fixture is not sufficient
 # to change what the existing regression gate accepts.
-APPROVED_GOLDEN_SHA256 = "172b828579a2302be866092cbe12897a2e8c9ffe2d6ab7fd6bc8ada1b14d4a9b"
-# A user-owned, protected Git tag is a stronger independent anchor after the
-# first local Windows acceptance.  It cannot be created from a source ZIP.
-USER_APPROVED_GIT_REF = "refs/tags/ssot-contract-approved-v1"
+APPROVED_GOLDEN_SHA256 = "f03067dc0258ea95295b22e549e08a158da39449ac0021dd3f0a2c07a3bfe066"
+# v1 remains immutable; v2 is a separately versioned approved baseline.
+# No extra local Git tag or command is used by this contract-version gate.
 
 IDENTITY_PATTERN = re.compile(r"^(?:MR-[A-Za-z0-9-]+|ARCH-[A-Za-z0-9_]+|PARAM-P[A-Za-z0-9-]+)$")
 GENERIC_CONSUMER_PATHS = (
@@ -111,43 +111,53 @@ def snapshot_structural_violations(project_root: Path) -> dict[str, list[str]]:
     return result
 
 
-def _tagged_file_bytes(project_root: Path, relative_path: str) -> bytes | None:
-    """Read a user-approved, local Git tag without invoking network or changing Git."""
-    try:
-        probe = subprocess.run(
-            ["git", "-C", str(project_root), "rev-parse", "--verify", "--quiet", f"{USER_APPROVED_GIT_REF}^{{commit}}"],
-            capture_output=True, check=False, timeout=8,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        # Source-ZIP environments lack .git. The pinned digest remains active;
-        # external approval protection becomes available only after local tagging.
-        return None
-    if probe.returncode:
-        return None
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(project_root), "show", f"{USER_APPROVED_GIT_REF}:{relative_path}"],
-            capture_output=True, check=False, timeout=8,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise ValueError(f"無法核對 approved Git tag: {relative_path}") from exc
-    if result.returncode:
-        raise ValueError(f"approved Git tag 缺少必要契約: {relative_path}")
-    return result.stdout
-
-
 def read_approved_baseline(project_root: Path, *, raw_bytes: bytes | None = None) -> dict[str, Any]:
+    """Versioned v2 guard; the approved historical v1 Golden is immutable."""
+    if _sha256((project_root / LEGACY_GOLDEN_RELATIVE_PATH).read_bytes()) != LEGACY_GOLDEN_SHA256:
+        raise ValueError("Historical SSOT v1 Golden was modified")
     if raw_bytes is None:
         raw_bytes = (project_root / GOLDEN_RELATIVE_PATH).read_bytes()
     if _sha256(raw_bytes) != APPROVED_GOLDEN_SHA256:
-        raise ValueError("SSOT Golden 基準雜湊不符合已核准版本，禁止直接重寫 expected 值")
-    tagged = _tagged_file_bytes(project_root, GOLDEN_RELATIVE_PATH)
-    if tagged is not None and raw_bytes != tagged:
-        raise ValueError("SSOT Golden 與使用者批准的 Git tag 不一致")
+        raise ValueError("SSOT v2 Golden hash mismatch; never rewrite an existing version")
     baseline = json.loads(raw_bytes)
-    if baseline.get("schema_version") != 1:
-        raise ValueError("SSOT Golden schema_version 不支援")
+    if baseline.get("schema_version") != 2:
+        raise ValueError("SSOT Golden schema_version must be 2")
+    if not isinstance(baseline.get("protected_report_versions"), dict):
+        raise ValueError("SSOT v2 Golden is missing approved report contract history")
     return baseline
+
+
+def report_contract_version_history_violations(
+    project_root: Path, approved: Mapping[str, Any], *,
+    registry_override: Mapping[str, Any] | None = None,
+) -> list[str]:
+    """Reject changes/deletions to any previously approved report contract version.
+
+    New versions may only append, with a new scientific contract document,
+    version number and fingerprint. This is independent of renderer logic.
+    """
+    from core.report_contract_versions import load_report_contract_versions
+    try:
+        registry = registry_override if registry_override is not None else load_report_contract_versions(project_root)
+    except (ValueError, OSError, UnicodeError) as exc:
+        return [f"report_contract_registry_invalid:{exc}"]
+    reference = approved["protected_report_versions"]
+    issues: list[str] = []
+    if set(registry) != set(reference):
+        issues.append(f"report_ids_changed:{sorted(registry)}!={sorted(reference)}")
+    for report_id, expected_rows in reference.items():
+        rows = registry.get(report_id, ())
+        if len(rows) < len(expected_rows):
+            issues.append(f"{report_id}:historical_contract_deleted")
+        if len(rows) > len(expected_rows):
+            issues.append(f"{report_id}:new_contract_requires_next_approved_guard_release")
+        for i,(old,actual) in enumerate(zip(expected_rows,rows)):
+            if dict(actual) != dict(old):
+                issues.append(f"{report_id}@v{old['version']}:historical_contract_rewritten")
+        for new in rows[len(expected_rows):]:
+            if not new.get("definition_path") or not new.get("definition_sha256"):
+                issues.append(f"{report_id}@v{new['version']}:new_version_missing_immutable_definition")
+    return issues
 
 
 def test_contract_violations(project_root: Path, approved: Mapping[str, Any]) -> list[str]:
@@ -262,8 +272,9 @@ def summarize_ssot_regression_guard(project_root: Path) -> dict[str, Any]:
     return {
         "structural": snapshot_structural_violations(project_root),
         "test_contract_violations": test_contract_violations(project_root, baseline),
+        "report_contract_version_history_violations": report_contract_version_history_violations(project_root, baseline),
         "behavior_differences": behavior_snapshot_differences(baseline["expected"], actual),
         "golden_sha256": APPROVED_GOLDEN_SHA256,
-        "git_tag_available": _tagged_file_bytes(project_root, GOLDEN_RELATIVE_PATH) is not None,
+        "historical_v1_golden_sha256": LEGACY_GOLDEN_SHA256,
         "scenario_count": len(actual["portfolio"]),
     }

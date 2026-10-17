@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "purpose": "Append-only persistent report scientific contract version registry; append a new version for any revised schema or semantics; never rewrite past records.",
+  "reports": [
+    {
+      "report_id": "audit.opportunity_selection",
+      "versions": [
+        {
+          "contract_id": "audit.opportunity_selection@v1",
+          "version": 1,
+          "fingerprint": "fcdc3c51c70f74db"
+        }
+      ]
+    },
+    {
+      "report_id": "audit.portfolio_drawdown",
+      "versions": [
+        {
+          "contract_id": "audit.portfolio_drawdown@v1",
+          "version": 1,
+          "fingerprint": "b30ce69159e1f31a"
+        }
+      ]
+    },
+    {
+      "report_id": "audit.trade_outcome_path",
+      "versions": [
+        {
+          "contract_id": "audit.trade_outcome_path@v1",
+          "version": 1,
+          "fingerprint": "c50943f97734da39"
+        }
+      ]
+    },
+    {
+      "report_id": "model.standard_comparison",
+      "versions": [
+        {
+          "contract_id": "model.standard_comparison@v11",
+          "version": 11,
+          "fingerprint": "0626f6512f145d23",
+          "definition_path": "doc/scientific_contracts/MODEL_STANDARD_COMPARISON_v11.json",
+          "definition_sha256": "bcc291e2a28207d43200af235529c168d1216a0bea58ccd559c3f79ee03cd450"
+        },
+        {
+          "contract_id": "model.standard_comparison@v12",
+          "version": 12,
+          "fingerprint": "f64c192d57961e76",
+          "definition_path": "doc/scientific_contracts/MODEL_STANDARD_COMPARISON_v12.md",
+          "definition_sha256": "5dc40af0931c62d73474ced6904eb4e8aa6cc475a068383146e13096199228bf"
+        }
+      ]
+    },
+    {
+      "report_id": "model.standard_sop",
+      "versions": [
+        {
+          "contract_id": "model.standard_sop@v7",
+          "version": 7,
+          "fingerprint": "56e5fb1173404d7f",
+          "definition_path": "doc/scientific_contracts/MODEL_STANDARD_SOP_v7.json",
+          "definition_sha256": "5cef142e57debd810d2165f8464b644eb0ed61e6f1b16c0e8737439b88791ae0"
+        },
+        {
+          "contract_id": "model.standard_sop@v8",
+          "version": 8,
+          "fingerprint": "0daefa4ac6e22ca4",
+          "definition_path": "doc/scientific_contracts/MODEL_STANDARD_SOP_v8.md",
+          "definition_sha256": "564974fe8566228a6456c4052d5d8e8e806593be1e0bc7f847b0b03513a0886a"
+        }
+      ]
+    },
+    {
+      "report_id": "strategy.oos_rolling_consistency",
+      "versions": [
+        {
+          "contract_id": "strategy.oos_rolling_consistency@v1",
+          "version": 1,
+          "fingerprint": "deb471377e80ff80"
+        }
+      ]
+    },
+    {
+      "report_id": "strategy.standard_sop",
+      "versions": [
+        {
+          "contract_id": "strategy.standard_sop@v1",
+          "version": 1,
+          "fingerprint": "c4e92dcc1e1c731e"
+        }
+      ]
+    }
+  ]
+}

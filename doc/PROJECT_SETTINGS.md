@@ -103,6 +103,6 @@
 ## F. Scientific Contract／Model SOP 治理（2026-10-17 使用者決策）
 
 1. 先核准 Model／Strategy 的共同評估內容，再實施研究。**模型預測 Target、評估指標、Strategy Replay 必須分層**；M1、M2 原欄位保留，M3 驗證漲跌關聯，M4 檢驗同股高 MFE／低 Adverse 的連續 Joint Quality。Global 與 Breakout 是兩個評估範圍，原則上共用同一計算方法。
-2. 永久性 Standard SOP 必須使用不可原地修改的版本編號、計算定義及核准指紋；變更 scientific semantics 必須建立新版本，不能改寫歷史研究真理。程式內的 fingerprint 與 validator **不等於獨立授權**：使用者控制、獨立於 GPT 修補 ZIP 的保護核准來源仍是完整防越權的必要條件。
+2. 永久性 Standard SOP／報表每次改動 metric、章節、公式、格式／欄位等正式契約語意，都必須經使用者明確授權、建立新的 `report_id@vN` Scientific Report Contract；`doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json` 是 append-only 版本／指紋真理，已存在的版本與對應定義文件禁止原地改寫。Runtime、RUN、REUSE、正式人讀輸出與驗證須一致使用目前核准版本；沒有對應新版本就不得發布。**不要求新增本機 Git tag 或其他零散 Git 操作。** 版本 registry 與 pinned guard 可偵測非授權漂移，但因程式與檔案同在可修改專案中，仍不等同不可被同時篡改的獨立簽章授權；每次新版本由使用者審核交付差異後才算正式核准。
 3. Evidence／PIT／sample／seed／fold／replay 是否完整由契約強制驗證，不作 SOP 人讀章節；不完整時拒絕正式發布，不能以 `N/A`、`-` 或平均值冒充實際真值。
 4. DL 訓練架構／head 的專屬指標不持續新增到 Standard SOP；一次性 Audit 可分析，但必須保留可稽核結果。**先使用 Model SOP v8 作為第一版；之後由策略結果做一次性 DL 指標對 RoMD 的 OOS/seed-aware 受控關聯 Audit，取得研究結果後另行授權改版。**禁止在本次 SOP 修改中擅自以 RoMD 回調模型訓練或選模。

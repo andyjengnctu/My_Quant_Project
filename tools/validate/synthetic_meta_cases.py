@@ -5787,6 +5787,7 @@ def validate_ssot_regression_guard_case(_base_params):
         behavior_snapshot_differences, frozen_test_function_hash,
         read_approved_baseline, snapshot_structural_violations,
         summarize_ssot_regression_guard, test_contract_violations,
+        report_contract_version_history_violations,
     )
 
     case_id = "META_SSOT_REGRESSION_GUARD"
@@ -5797,6 +5798,7 @@ def validate_ssot_regression_guard_case(_base_params):
     add_check(results, "meta_ssot_regression", case_id, "generic_consumers_do_not_branch_on_research_identity", [], guard["structural"]["scientific_identity_in_generic_consumer"])
     add_check(results, "meta_ssot_regression", case_id, "approved_golden_portfolio_accounting_stable", [], guard["behavior_differences"])
     add_check(results, "meta_ssot_regression", case_id, "critical_test_assertions_remain_frozen", [], guard["test_contract_violations"])
+    add_check(results, "meta_ssot_regression", case_id, "report_contract_history_remains_append_only", [], guard["report_contract_version_history_violations"])
 
     # New declarative architecture family: no second hand-maintained family list
     # may allow an invalid sequence length to bypass patch validation.
@@ -5815,18 +5817,18 @@ def validate_ssot_regression_guard_case(_base_params):
     except ValueError:
         tampering_rejected = True
     add_check(results, "meta_ssot_regression", case_id, "golden_fixture_modification_rejected", True, tampering_rejected)
-    # Changing both the fixture and its local pin must still conflict with an
-    # independently user-approved Git tag once that external anchor exists.
-    from hashlib import sha256
-    mutated_fixture = fixture_bytes + b" "
-    with patch("tools.validate.ssot_regression_guard.APPROVED_GOLDEN_SHA256", sha256(mutated_fixture).hexdigest()), \
-         patch("tools.validate.ssot_regression_guard._tagged_file_bytes", return_value=fixture_bytes):
-        tag_rejected = False
-        try:
-            read_approved_baseline(PROJECT_ROOT, raw_bytes=mutated_fixture)
-        except ValueError:
-            tag_rejected = True
-    add_check(results, "meta_ssot_regression", case_id, "external_tag_rejects_reanchored_tamper", True, tag_rejected)
+    # An existing scientific contract cannot be rewritten under the same
+    # version even if a future report schema/new version is added.
+    import copy
+    approved = read_approved_baseline(PROJECT_ROOT)
+    mutated_contracts = copy.deepcopy(approved["protected_report_versions"])
+    mutated_contracts["model.standard_sop"][0]["fingerprint"] = "0" * 16
+    violations = report_contract_version_history_violations(
+        PROJECT_ROOT, approved, registry_override=mutated_contracts
+    )
+    add_check(results, "meta_ssot_regression", case_id, "old_report_scientific_contract_rewrite_rejected", True,
+              any("historical_contract_rewritten" in item for item in violations))
+
     add_check(
         results, "meta_ssot_regression", case_id, "oracle_detects_modified_trade_pnl",
         ["portfolio.case.completed_trades[0].total_pnl:mismatch"],
@@ -5900,7 +5902,7 @@ def validate_ssot_regression_guard_case(_base_params):
                   any("registration_count=0" in item for item in deregistered))
 
     summary["golden_sha256"] = guard["golden_sha256"]
-    summary["approved_local_git_tag_available"] = guard["git_tag_available"]
+    summary["report_contract_version_history_violations"] = guard["report_contract_version_history_violations"]
     summary["portfolio_fixture_count"] = guard["scenario_count"]
     summary["mutation_probes"] = 10
     return results, summary

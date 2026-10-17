@@ -15,6 +15,8 @@ import json
 from statistics import fmean
 from typing import Any, Mapping, Sequence
 
+from core.report_contract_versions import active_report_contract_versions, validate_active_report_contract_versions
+
 
 @dataclass(frozen=True)
 class ReportColumnContract:
@@ -728,6 +730,29 @@ def report_contract(report_id: str) -> PersistentReportContract:
         raise KeyError(f"未知persistent Research report contract: {report_id}") from exc
 
 
+def require_approved_report_contract(report_id: str) -> PersistentReportContract:
+    """Fail before formal report publication when the current contract drifts.
+
+    This gate is independent of the synthetic-test runner. Historical versions
+    remain immutable, and a new report release must have a new approved version.
+    """
+    contract = report_contract(report_id)
+    registry = active_report_contract_versions()
+    approved = registry.get(contract.report_id)
+    if approved is None:
+        raise ValueError(f'UNAUTHORIZED_REPORT_CONTRACT: {contract.report_id}')
+    fingerprint = hashlib.sha256(json.dumps(
+        _persistent_schema_payload(contract), ensure_ascii=False, sort_keys=True,
+        separators=(',', ':'),
+    ).encode('utf-8')).hexdigest()[:16]
+    if (int(contract.version), fingerprint) != (approved['version'], approved['fingerprint']):
+        raise ValueError(
+            f'UNAUTHORIZED_REPORT_CONTRACT_CHANGE: {contract.report_id}@v{contract.version} '
+            f'current={fingerprint} approved={approved["contract_id"]}/{approved["fingerprint"]}'
+        )
+    return contract
+
+
 def section_contract(report_id: str, section_id: str) -> ReportSectionContract:
     for section in report_contract(report_id).sections:
         if section.section_id == str(section_id):
@@ -987,19 +1012,12 @@ def persistent_report_contract_fingerprints() -> dict[str, str]:
     }
 
 
-# User-approved persistent-report freeze.  This map is deliberately separate
-# from schema construction.  Updating a persistent schema and this approval map
-# is only legal after explicit user authorization under PROJECT_SETTINGS B.18.
+# This map is a read-only compatibility view of the append-only scientific
+# report contract registry; it must not become a second approval truth.
+# Any schema change needs a new versioned record and a reviewed SSOT release.
 APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
-    "audit.opportunity_selection": "fcdc3c51c70f74db",
-    "audit.portfolio_drawdown": "b30ce69159e1f31a",
-    "audit.trade_outcome_path": "c50943f97734da39",
-    # User-authorized 2026-10-17 four-section report revision. Previous v11/v7
-    # hashes are retained in the versioned Scientific Contract record.
-    "model.standard_comparison": "f64c192d57961e76",
-    "model.standard_sop": "0daefa4ac6e22ca4",
-    "strategy.oos_rolling_consistency": "deb471377e80ff80",
-    "strategy.standard_sop": "c4e92dcc1e1c731e",
+    report_id: str(record["fingerprint"])
+    for report_id, record in active_report_contract_versions().items()
 }
 
 
@@ -1048,7 +1066,10 @@ APPROVED_INDEPENDENT_MODEL_EXTENSION_CONTRACT_FINGERPRINTS: Mapping[str, str] = 
 
 def validate_approved_persistent_report_contracts() -> tuple[str, ...]:
     current = persistent_report_contract_fingerprints()
-    reasons: list[str] = []
+    reasons: list[str] = list(validate_active_report_contract_versions({
+        report_id: (int(contract.version), current[report_id])
+        for report_id, contract in PERSISTENT_REPORT_CONTRACTS.items()
+    }))
     if set(current) != set(APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS):
         reasons.append(
             "approved persistent report set mismatch: "
@@ -1110,5 +1131,5 @@ __all__ = [
     "ReportTableContract", "ReportExtensionContract", "HeadLearnabilitySemanticContract", "MODEL_HEAD_LEARNABILITY_SEMANTICS",
     "aggregate_robustness_row_extension", "column_contract", "comparison_extension_contract", "comparison_extension_ids", "comparison_extension_ids_for_evidence_families", "extension_contract", "mode_extension_contract", "strategy_mode_extension_contract", "strategy_mode_extension_contract_fingerprint", "visible_extension_table", "format_contract_value", "persistent_report_contract_fingerprint",
     "persistent_report_contract_fingerprints", "report_contract", "section_contract",
-    "table_contract", "validate_approved_persistent_report_contracts",
+    "table_contract", "validate_approved_persistent_report_contracts", "require_approved_report_contract",
 ]

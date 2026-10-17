@@ -1,0 +1,413 @@
+{
+  "report_id": "model.standard_sop",
+  "version": 7,
+  "role": "persistent_standard_model_sop_all_evaluation_modes",
+  "menu_path": [
+    "Research",
+    "模型訓練／驗證"
+  ],
+  "sections": [
+    {
+      "section_id": "learnability",
+      "number": 1,
+      "title": "Learnability",
+      "applicability": "all_continuous_dl",
+      "tables": [
+        {
+          "table_id": "learnability",
+          "columns": [
+            {
+              "key": "split",
+              "label": "Split",
+              "digits": null,
+              "unit": "",
+              "preference": "neutral",
+              "format_kind": "text",
+              "alignment": "left"
+            },
+            {
+              "key": "group_count",
+              "label": "Groups",
+              "digits": 0,
+              "unit": "",
+              "preference": "neutral",
+              "format_kind": "int",
+              "alignment": "right"
+            },
+            {
+              "key": "mean_daily_spearman",
+              "label": "Daily rho",
+              "digits": 4,
+              "unit": "",
+              "preference": "higher",
+              "format_kind": "number",
+              "alignment": "right"
+            },
+            {
+              "key": "global_spearman_vs_raw_target",
+              "label": "Global rho",
+              "digits": 4,
+              "unit": "",
+              "preference": "higher",
+              "format_kind": "number",
+              "alignment": "right"
+            },
+            {
+              "key": "pairwise_concordance",
+              "label": "Pair",
+              "digits": 2,
+              "unit": "%",
+              "preference": "higher",
+              "format_kind": "fraction_pct",
+              "alignment": "right"
+            },
+            {
+              "key": "top_score_decile_raw_target_mean",
+              "label": "Top 10% Target",
+              "digits": 4,
+              "unit": "",
+              "preference": "higher",
+              "format_kind": "number",
+              "alignment": "right"
+            },
+            {
+              "key": "bottom_score_decile_raw_target_mean",
+              "label": "Bottom 10% Target",
+              "digits": 4,
+              "unit": "",
+              "preference": "lower",
+              "format_kind": "number",
+              "alignment": "right"
+            },
+            {
+              "key": "top_bottom_raw_target_gap",
+              "label": "Top-Bottom Target",
+              "digits": 4,
+              "unit": "",
+              "preference": "higher",
+              "format_kind": "number",
+              "alignment": "right"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "section_id": "generalization",
+      "number": 2,
+      "title": "Generalization",
+      "applicability": "validation_and_oos",
+      "tables": [
+        {
+          "table_id": "generalization",
+          "columns": [
+            {
+              "key": "comparison",
+              "label": "Comparison",
+              "digits": null,
+              "unit": "",
+              "preference": "neutral",
+              "format_kind": "text",
+              "alignment": "left"
+            },
+            {
+              "key": "delta_daily_rho",
+              "label": "Δ Daily rho",
+              "digits": 4,
+              "unit": "",
+              "preference": "higher",
+              "format_kind": "signed_number",
+              "alignment": "right"
+            },
+            {
+              "key": "delta_pair",
+              "label": "Δ Pair",
+              "digits": 2,
+              "unit": "pp",
+              "preference": "higher",
+              "format_kind": "signed_pp",
+              "alignment": "right"
+            },
+            {
+              "key": "delta_top_bottom",
+              "label": "Δ Top-Bottom",
+              "digits": 4,
+              "unit": "",
+              "preference": "higher",
+              "format_kind": "signed_number",
+              "alignment": "right"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "section_id": "upside_downside_alignment",
+      "number": 3,
+      "title": "Upside / Downside Alignment",
+      "applicability": "daily_universal_mfe_adverse_truth",
+      "tables": [
+        {
+          "table_id": "upside_downside_alignment",
+          "columns": [
+            {
+              "key": "split",
+              "label": "Split",
+              "digits": null,
+              "unit": "",
+              "preference": "neutral",
+              "format_kind": "text",
+              "alignment": "left"
+            },
+            {
+              "key": "target_to_full_mfe_daily_spearman",
+              "label": "Target→MFE rho",
+              "digits": 4,
+              "unit": "",
+              "preference": "higher",
+              "format_kind": "number",
+              "alignment": "right"
+            },
+            {
+              "key": "target_to_safety_daily_spearman",
+              "label": "Target→Safety rho",
+              "digits": 4,
+              "unit": "",
+              "preference": "higher",
+              "format_kind": "number",
+              "alignment": "right"
+            },
+            {
+              "key": "score_to_full_mfe_daily_spearman",
+              "label": "Score→MFE rho",
+              "digits": 4,
+              "unit": "",
+              "preference": "higher",
+              "format_kind": "number",
+              "alignment": "right"
+            },
+            {
+              "key": "score_to_safety_daily_spearman",
+              "label": "Score→Safety rho",
+              "digits": 4,
+              "unit": "",
+              "preference": "higher",
+              "format_kind": "number",
+              "alignment": "right"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "section_id": "top_tail_economic_quality",
+      "number": 4,
+      "title": "Top-tail Economic Quality",
+      "applicability": "daily_universal_mfe_adverse_truth",
+      "tables": [
+        {
+          "table_id": "top_tail_economic_quality",
+          "columns": [
+            {
+              "key": "split",
+              "label": "Split",
+              "digits": null,
+              "unit": "",
+              "preference": "neutral",
+              "format_kind": "text",
+              "alignment": "left"
+            },
+            {
+              "key": "top10_n",
+              "label": "Top10 N",
+              "digits": 0,
+              "unit": "",
+              "preference": "neutral",
+              "format_kind": "int",
+              "alignment": "right"
+            },
+            {
+              "key": "top10_full_mfe_r_mean",
+              "label": "Top10 MFE",
+              "digits": 4,
+              "unit": "R",
+              "preference": "higher",
+              "format_kind": "number",
+              "alignment": "right"
+            },
+            {
+              "key": "top10_low_adverse_r_mean",
+              "label": "Top10 Low-Adverse",
+              "digits": 4,
+              "unit": "R",
+              "preference": "higher",
+              "format_kind": "number",
+              "alignment": "right"
+            },
+            {
+              "key": "top10_high_mfe_pct",
+              "label": "High-MFE",
+              "digits": 2,
+              "unit": "%",
+              "preference": "higher",
+              "format_kind": "pct",
+              "alignment": "right"
+            },
+            {
+              "key": "top10_high_safety_pct",
+              "label": "High-Safety",
+              "digits": 2,
+              "unit": "%",
+              "preference": "higher",
+              "format_kind": "pct",
+              "alignment": "right"
+            },
+            {
+              "key": "top10_hmhs",
+              "label": "HM/HS",
+              "digits": null,
+              "unit": "",
+              "preference": "higher",
+              "format_kind": "text",
+              "alignment": "right"
+            },
+            {
+              "key": "top10_hmls",
+              "label": "HM/LS",
+              "digits": null,
+              "unit": "",
+              "preference": "lower",
+              "format_kind": "text",
+              "alignment": "right"
+            },
+            {
+              "key": "top10_lmhs",
+              "label": "LM/HS",
+              "digits": null,
+              "unit": "",
+              "preference": "lower",
+              "format_kind": "text",
+              "alignment": "right"
+            },
+            {
+              "key": "top10_lmls",
+              "label": "LM/LS",
+              "digits": null,
+              "unit": "",
+              "preference": "lower",
+              "format_kind": "text",
+              "alignment": "right"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "section_id": "ranking_boundary",
+      "number": 5,
+      "title": "Ranking / Boundary",
+      "applicability": "ranking_quality_available",
+      "tables": [
+        {
+          "table_id": "ranking_boundary",
+          "columns": [
+            {
+              "key": "split",
+              "label": "Split",
+              "digits": null,
+              "unit": "",
+              "preference": "neutral",
+              "format_kind": "text",
+              "alignment": "left"
+            },
+            {
+              "key": "ndcg_at_k",
+              "label": "NDCG@K",
+              "digits": 4,
+              "unit": "",
+              "preference": "higher",
+              "format_kind": "number",
+              "alignment": "right"
+            },
+            {
+              "key": "top_k_raw_target_lift",
+              "label": "Top-K Lift",
+              "digits": 4,
+              "unit": "",
+              "preference": "higher",
+              "format_kind": "number",
+              "alignment": "right"
+            },
+            {
+              "key": "oracle_top_k_overlap",
+              "label": "Oracle overlap",
+              "digits": 2,
+              "unit": "%",
+              "preference": "higher",
+              "format_kind": "fraction_pct",
+              "alignment": "right"
+            },
+            {
+              "key": "boundary_concordance",
+              "label": "Boundary",
+              "digits": 2,
+              "unit": "%",
+              "preference": "higher",
+              "format_kind": "fraction_pct",
+              "alignment": "right"
+            },
+            {
+              "key": "boundary_raw_target_gap",
+              "label": "Boundary gap",
+              "digits": 4,
+              "unit": "",
+              "preference": "higher",
+              "format_kind": "number",
+              "alignment": "right"
+            },
+            {
+              "key": "competition_date_pool",
+              "label": "競爭日 / Pool日",
+              "digits": null,
+              "unit": "",
+              "preference": "neutral",
+              "format_kind": "text",
+              "alignment": "right"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "section_id": "evidence_coverage",
+      "number": 6,
+      "title": "Evidence Coverage",
+      "applicability": "all_continuous_dl",
+      "tables": [
+        {
+          "table_id": "evidence_coverage",
+          "columns": [
+            {
+              "key": "evidence",
+              "label": "Evidence",
+              "digits": null,
+              "unit": "",
+              "preference": "neutral",
+              "format_kind": "text",
+              "alignment": "left"
+            },
+            {
+              "key": "status",
+              "label": "Status",
+              "digits": null,
+              "unit": "",
+              "preference": "neutral",
+              "format_kind": "text",
+              "alignment": "left"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
