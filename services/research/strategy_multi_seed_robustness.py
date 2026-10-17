@@ -54,6 +54,7 @@ from config.breakout_quality import (
 from core.breakout_quality_registry import (
     get_breakout_quality_experiment_profile,
 )
+from core.research_report_contract import require_approved_report_contract
 from core.breakout_quality_policy import (
     get_breakout_quality_workflow_settings,
 )
@@ -4712,6 +4713,9 @@ def run_multi_seed_robustness(
     cfg = get_strategy_multi_seed_robustness_settings(robustness_id)
     if not cfg.enabled:
         raise RuntimeError("Multiple-seed robustness目前由config關閉")
+    # Reuse the same approved Standard SOP used by single-seed comparisons.
+    # Check before preparing parameters, fitting models or replaying portfolios.
+    require_approved_report_contract("strategy.standard_sop")
     settings = get_strategy_comparison_settings(cfg.profile_id)
     # Current robustness authorization is owned by the shared Compare Suite plus
     # the parameter-source builder capability contract.  Runtime entrypoints must

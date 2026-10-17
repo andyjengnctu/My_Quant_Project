@@ -51,7 +51,7 @@ from core.strategy_comparison import (
     resolve_strategy_parameter_consumption_mode,
     strategy_comparison_fingerprint,
 )
-from core.research_report_contract import section_contract
+from core.research_report_contract import require_approved_report_contract, section_contract
 from core.report_metrics import (
     EXECUTION_STRATEGY_RESULT_METRICS,
     CORE_STRATEGY_RESULT_METRICS,
@@ -968,6 +968,9 @@ def render_strategy_aggregate_report(
     method-specific sections after the shared performance surface.
     """
 
+    # Reject unapproved report drift before rendering any persistent SOP surface.
+    require_approved_report_contract("strategy.standard_sop")
+
     metadata_rows = (
         ("期間", comparison_period),
         ("Dataset", settings.dataset),
@@ -1067,6 +1070,8 @@ def run_strategy_comparison(
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
     settings = settings or get_strategy_comparison_settings()
+    # Authorization precedes dependency preparation and strategy replay.
+    require_approved_report_contract("strategy.standard_sop")
     if status is not None and resolved_plan is not None:
         raise ValueError("status與resolved_plan不可同時提供")
     if resolved_plan is None:
