@@ -1669,6 +1669,7 @@ def _run_point_in_time_scores_audit(
         oos_scores=standard_oos_frame,
         breakout_scores=standard_breakout_frame,
         evaluation_mode="rolling_oos",
+        evaluation_horizon_bars=int(bundle.target_manifest["target_contract"]["horizon_bars"]),
         mode_extensions={
             "rolling": {
                 "fold_count": int(manifest.get("fold_count", 0) or 0),

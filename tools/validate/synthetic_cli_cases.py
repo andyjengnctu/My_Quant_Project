@@ -658,12 +658,41 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
                 },
             },
         }
+        # Current v8 human SOP requires complete, source-identified M3/M4 truth.
+        # These are isolated synthetic UI fixture values, not historical MR-13P
+        # results; the numerical producer is tested separately in meta checks.
+        from hashlib import sha256
         conditional_payload["standard_model_sop"] = {
-            "schema": "standard_model_sop_v9",
+            "schema": "standard_model_sop_v10",
             "evaluation_mode": "forward_oos",
             "training": {"objective": "daily_pairwise_ranking"},
             "split_metrics": dict(conditional_payload["split_metrics"]),
-            "upside_downside_alignment_evaluation": {},
+            "evaluation_truth": {
+                "horizon_bars": 40,
+                "mfe_source": "target_favorable_return",
+                "adverse_source": "target_adverse_return_to_peak",
+                "joint_quality_id": "same_day_min_mfe_safety_percentile_v1",
+                "cohort_identity": {
+                    scope: sha256(f"synthetic-cli-test::{scope}".encode()).hexdigest()
+                    for scope in ("validation", "oos", "breakout_candidate_oos")
+                },
+            },
+            "upside_downside_alignment_evaluation": {
+                scope: {
+                    "target_to_full_mfe_daily_spearman": 0.25,
+                    "target_to_low_adverse_daily_spearman": 0.10,
+                    "score_to_full_mfe_daily_spearman": 0.22,
+                    "score_to_low_adverse_daily_spearman": 0.09,
+                    "joint_quality_evaluation_id": "same_day_min_mfe_safety_percentile_v1",
+                    "top_10pct": {
+                        "n": 100 if scope == "validation" else (200 if scope == "oos" else 20),
+                        "mfe_pct_mean": 13.40,
+                        "adverse_pct_mean": 3.60,
+                        "joint_quality_pct": 57.30,
+                    },
+                }
+                for scope in ("validation", "oos", "breakout_candidate_oos")
+            },
             "mode_extensions": {},
         }
         (conditional_output_dir / app_breakout_quality.CONTINUOUS_RANKER_REPORT_FILENAME).write_text(
@@ -684,25 +713,22 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
             )
         conditional_markdown = conditional_report_path.read_text(encoding="utf-8")
         check_true(
-            "breakout_quality_mr13p_simple_report_uses_standard_model_sop_with_conditional_head_evidence",
-            "標準模型 SOP｜1. Learnability" in conditional_console
-            and "標準模型 SOP｜2. Generalization" in conditional_console
-            and "Model-specific Extension｜Multi-head Learnability" in conditional_console
-            and "Primary MFE Daily" in conditional_console
-            and "Conditional Safety Daily" in conditional_console
-            and "標準模型 SOP｜3. Multi-head Learnability" not in conditional_console
-            and "Forward OOS" in conditional_console
-            and "Conditional Safety" in conditional_console
-            and "0.2876" in conditional_console
-            and "59.88%" in conditional_console
-            and "標準模型 SOP｜1. Learnability" in conditional_markdown
-            and "Model-specific Extension｜Multi-head Learnability" in conditional_markdown
-            and "Primary MFE Daily" in conditional_markdown
-            and "Conditional Safety Daily" in conditional_markdown
-            and "標準模型 SOP｜3. Multi-head Learnability" not in conditional_markdown
-            and "0.2876" in conditional_markdown
-            and "59.88%" in conditional_markdown
-            and "Actual Round-trip R" not in conditional_markdown,
+            "breakout_quality_model_sop_v8_keeps_full_common_sections_but_isolates_conditional_head_audit_evidence",
+            all(f"MODEL SOP | {i}. " in conditional_console for i in range(1,5))
+            and "Global" in conditional_console
+            and "Breakout" in conditional_console
+            and "Top 10% Target" in conditional_console
+            and "Target→Safety rho" in conditional_console
+            and "Top 10% Joint Quality" in conditional_console
+            and "57.30" in conditional_console
+            and "Model-specific Extension" not in conditional_console
+            and "Conditional Safety Daily" not in conditional_console
+            and "Evidence Coverage" not in conditional_console
+            and all(f"MODEL SOP | {i}. " in conditional_markdown for i in range(1,5))
+            and "Model-specific Extension" not in conditional_markdown
+            and "Top 10% Joint Quality" in conditional_markdown
+            and "Actual Round-trip R" not in conditional_markdown
+            and "conditional_safety" in conditional_payload["conditional_mfe_safety_evaluation"]["oos"],
         )
         with patch.object(app_breakout_quality, "console_color_enabled", return_value=True):
             colored_model_console = app_breakout_quality._render_continuous_ranker_simple_console(
@@ -711,8 +737,13 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
         run_bound_checks(
             check_true,
             (
-                ('breakout_quality_model_sop_uses_shared_color_palette_for_sections_generalization_and_evidence', '\x1b[96m' in colored_model_console and '\x1b[91m' in colored_model_console and ('\x1b[92m' in colored_model_console) and ('標準模型 SOP｜1. Learnability' in colored_model_console) and ('標準模型 SOP｜2. Generalization' in colored_model_console),),
-                ('breakout_quality_model_sop_markdown_uses_shared_blue_and_semantic_colors', '#42A5F5' in conditional_markdown and '標準模型 SOP｜1. Learnability' in conditional_markdown,),
+                ('breakout_quality_model_sop_uses_existing_shared_colors_without_secondary_section_schema',
+                 '\x1b[96m' in colored_model_console
+                 and "MODEL SOP | 1. Learnability" in colored_model_console
+                 and "MODEL SOP | 2. Generalization" in colored_model_console),
+                ('breakout_quality_model_sop_markdown_uses_contract_blue_heading',
+                 '#42A5F5' in conditional_markdown
+                 and "MODEL SOP | 1. Learnability" in conditional_markdown),
             ),
         )
 

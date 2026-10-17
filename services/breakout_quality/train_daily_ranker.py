@@ -745,20 +745,12 @@ def _render_markdown(payload: dict) -> str:
         )
     alignment_eval = dict(payload.get("upside_downside_alignment_evaluation") or {})
     if alignment_eval:
-        def qdisplay(top: dict, key: str) -> str:
-            item = dict((top.get("quadrants") or {}).get(key) or {})
-            pct = item.get("pct")
-            enrich = item.get("enrichment")
-            if pct is None:
-                return "-"
-            return f"{float(pct):.2f}% ({'-' if enrich is None else f'{float(enrich):.2f}×'})"
-
         alignment_rows = []
-        top_tail_rows = []
+        quality_rows = []
         for label, key in (
             ("Validation", "validation"),
-            ("Forward OOS", "oos"),
-            ("Breakout candidate slice", "breakout_candidate_oos"),
+            ("Global OOS", "oos"),
+            ("Breakout OOS", "breakout_candidate_oos"),
         ):
             row = dict(alignment_eval.get(key) or {})
             top = dict(row.get("top_10pct") or {})
@@ -769,29 +761,24 @@ def _render_markdown(payload: dict) -> str:
                 "score_to_full_mfe_daily_spearman": row.get("score_to_full_mfe_daily_spearman"),
                 "score_to_safety_daily_spearman": row.get("score_to_low_adverse_daily_spearman"),
             })
-            top_tail_rows.append({
+            quality_rows.append({
                 "split": label,
                 "top10_n": top.get("n"),
-                "top10_full_mfe_r_mean": top.get("full_mfe_r_mean"),
-                "top10_low_adverse_r_mean": top.get("low_adverse_r_mean"),
-                "top10_high_mfe_pct": top.get("high_mfe_pct"),
-                "top10_high_safety_pct": top.get("high_safety_pct"),
-                "top10_hmhs": qdisplay(top, "hmhs"),
-                "top10_hmls": qdisplay(top, "hmls"),
-                "top10_lmhs": qdisplay(top, "lmhs"),
-                "top10_lmls": qdisplay(top, "lmls"),
+                "top10_mfe_pct": top.get("mfe_pct_mean"),
+                "top10_adverse_pct": top.get("adverse_pct_mean"),
+                "top10_joint_quality": top.get("joint_quality_pct"),
             })
         lines.extend([
             "",
             standard_section("upside_downside_alignment"),
             "",
-            "- Safety固定為actual Low-Adverse（`-Adverse`）方向；數值越高越安全。",
+            "- Safety = -Adverse-to-MFE. Target and score ranks are evaluated against the same matured truth.",
             *contract_markdown(table_contract("model.standard_sop", "upside_downside_alignment", "upside_downside_alignment"), alignment_rows),
             "",
-            standard_section("top_tail_economic_quality"),
+            standard_section("joint_mfe_adverse_quality"),
             "",
-            "- High-MFE / High-Safety使用Daily-universal同日actual percentile；Breakout只filter，不在subset內重新排名truth。",
-            *contract_markdown(table_contract("model.standard_sop", "top_tail_economic_quality", "top_tail_economic_quality"), top_tail_rows),
+            "- Joint Quality = 100 x mean(min(daily MFE percentile, daily -Adverse percentile)) for Score Top 10%.",
+            *contract_markdown(table_contract("model.standard_sop", "joint_mfe_adverse_quality", "joint_mfe_adverse_quality"), quality_rows),
         ])
 
     for core_extension in build_core_model_report_extensions(payload, oos_scope_label="Forward OOS"):
@@ -2088,6 +2075,7 @@ def run(args) -> int:
                 "breakout_quality_score": score_by_group[candidate_ids],
             }),
             evaluation_mode="forward_oos",
+        evaluation_horizon_bars=int(bundle.target_manifest["target_contract"]["horizon_bars"]),
         ),
         "split_metrics": split_metrics,
         "all_group_split_metrics": split_metrics,

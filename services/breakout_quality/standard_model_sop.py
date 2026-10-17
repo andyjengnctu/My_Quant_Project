@@ -3,12 +3,14 @@
 Forward, Rolling, and robustness consumers must provide evaluation score frames to this
 module instead of reimplementing Standard SOP metrics.  Mode-specific evidence (for
 example Rolling fold/year stability) is carried as Standard Mode Evidence and never
-changes the common six-section metric payload.
+changes the common four-section metric payload.
 """
 
 from __future__ import annotations
 
 from typing import Any, Mapping
+
+import hashlib
 
 import numpy as np
 import pandas as pd
@@ -17,6 +19,10 @@ from filters.breakout_quality.continuous_ranker_data import build_same_date_perc
 from services.breakout_quality import ranker_training as ranker_api
 
 STANDARD_SPLIT_KEYS = ("validation", "oos", "breakout_candidate_oos")
+
+# Read-only evaluation metric, never a model Target or fitting/selection input.
+JOINT_QUALITY_EVALUATION_ID = "same_day_min_mfe_safety_percentile_v1"
+STANDARD_SOP_SCHEMA = "standard_model_sop_v10"
 
 
 def _ranking_dates(frame: pd.DataFrame) -> np.ndarray:
@@ -51,13 +57,21 @@ def calculate_upside_downside_alignment_metrics(
 
     favorable_all = pd.to_numeric(group_table["target_favorable_r"], errors="coerce").to_numpy(dtype=np.float64)
     adverse_all = pd.to_numeric(group_table["target_adverse_r"], errors="coerce").to_numpy(dtype=np.float64)
+    mfe_return_all = pd.to_numeric(group_table["target_favorable_return"], errors="coerce").to_numpy(dtype=np.float64)
+    adverse_return_all = pd.to_numeric(group_table["target_adverse_return_to_peak"], errors="coerce").to_numpy(dtype=np.float64)
     actual_dates_all = pd.to_datetime(group_table["date"], errors="raise").to_numpy()
-    actual_valid_all = np.isfinite(favorable_all) & np.isfinite(adverse_all)
+    actual_valid_all = (
+        np.isfinite(favorable_all) & np.isfinite(adverse_all)
+        & np.isfinite(mfe_return_all) & np.isfinite(adverse_return_all)
+    )
+    # Joint Quality must measure the same price-return MFE / Adverse shown in
+    # the M4 cells, not an R-normalized target whose cross-stock risk scale may
+    # reorder the absolute opportunity or adverse excursion.
     mfe_pct_all = build_same_date_percentile_targets(
-        favorable_all, actual_valid_all, actual_dates_all
+        mfe_return_all, actual_valid_all, actual_dates_all
     ).astype(np.float64)
     safety_pct_all = build_same_date_percentile_targets(
-        -adverse_all, actual_valid_all, actual_dates_all
+        -adverse_return_all, actual_valid_all, actual_dates_all
     ).astype(np.float64)
 
     actual_dates = actual_dates_all[ids]
@@ -71,6 +85,8 @@ def calculate_upside_downside_alignment_metrics(
     target = target_all[ids]
     favorable = favorable_all[ids]
     adverse = adverse_all[ids]
+    mfe_return = mfe_return_all[ids]
+    adverse_return = adverse_return_all[ids]
     mfe_pct = mfe_pct_all[ids]
     safety_pct = safety_pct_all[ids]
 
@@ -87,6 +103,8 @@ def calculate_upside_downside_alignment_metrics(
         & np.isfinite(target)
         & np.isfinite(favorable)
         & np.isfinite(adverse)
+        & np.isfinite(mfe_return)
+        & np.isfinite(adverse_return)
         & np.isfinite(mfe_pct)
         & np.isfinite(safety_pct)
     )
@@ -98,10 +116,22 @@ def calculate_upside_downside_alignment_metrics(
         }
 
     valid_ids = np.flatnonzero(base_valid)
-    score_pct = build_same_date_percentile_targets(
-        score, base_valid, rank_dates
-    ).astype(np.float64)
-    top = np.flatnonzero(base_valid & (score_pct >= 0.90))
+    # Exact per-rank-group top decile (ceil(10% N)), with deterministic ticker
+    # tie-breaking.  Never apply a global multi-date score cutoff.
+    rank_frame = pd.DataFrame({
+        "index": np.flatnonzero(base_valid),
+        "rank_group": pd.Series(rank_dates[base_valid]).astype(str).to_numpy(),
+        "score": score[base_valid],
+        "ticker": group_table.iloc[ids[base_valid]]["ticker"].astype(str).to_numpy(),
+    })
+    rank_frame = rank_frame.sort_values(
+        ["rank_group", "score", "ticker", "index"],
+        ascending=[True, False, True, True], kind="mergesort",
+    )
+    top = np.sort(np.concatenate([
+        day.iloc[:max(1, int(np.ceil(len(day) * 0.10)))]["index"].to_numpy(dtype=np.int64)
+        for _key, day in rank_frame.groupby("rank_group", sort=True)
+    ]))
     if len(top) == 0:
         return {
             "available": False,
@@ -134,6 +164,7 @@ def calculate_upside_downside_alignment_metrics(
     return {
         "available": True,
         "group_count": int(base_valid.sum()),
+        "joint_quality_evaluation_id": JOINT_QUALITY_EVALUATION_ID,
         "target_to_full_mfe_daily_spearman": daily_rho(target, favorable),
         "target_to_low_adverse_daily_spearman": daily_rho(target, -adverse),
         "score_to_full_mfe_daily_spearman": daily_rho(score, favorable),
@@ -148,6 +179,9 @@ def calculate_upside_downside_alignment_metrics(
         },
         "top_10pct": {
             "n": int(len(top)),
+            "mfe_pct_mean": float(np.mean(mfe_return[top]) * 100.0),
+            "adverse_pct_mean": float(np.mean(adverse_return[top]) * 100.0),
+            "joint_quality_pct": float(np.mean(np.minimum(mfe_pct[top], safety_pct[top])) * 100.0),
             "full_mfe_r_mean": float(np.mean(favorable[top])),
             "adverse_r_mean": float(np.mean(adverse[top])),
             "low_adverse_r_mean": float(np.mean(-adverse[top])),
@@ -178,6 +212,13 @@ def _split_metrics(
         raise ValueError("Standard SOP split score frame不得為空")
     ids = pd.to_numeric(frame["group_index"], errors="raise").to_numpy(dtype=np.int64)
     scores = pd.to_numeric(frame["breakout_quality_score"], errors="raise").to_numpy(dtype=np.float64)
+    if np.any((ids < 0) | (ids >= len(group_table))) or not np.isfinite(scores).all():
+        raise ValueError("Standard SOP scored stock-day有非法group_index或非有限score")
+    for truth_column in ("target_favorable_r", "target_adverse_r", "target_favorable_return",
+                         "target_adverse_return_to_peak"):
+        truth = pd.to_numeric(group_table.iloc[ids][truth_column], errors="coerce").to_numpy(dtype=np.float64)
+        if not np.isfinite(truth).all():
+            raise ValueError(f"Standard SOP尚未成熟或缺少actual truth: {truth_column}")
     rank_dates = _ranking_dates(frame)
     metrics = ranker_api.split_metrics(
         ids,
@@ -198,6 +239,21 @@ def _split_metrics(
     return metrics, alignment
 
 
+def _score_cohort_digest(frame: pd.DataFrame, group_table: pd.DataFrame) -> str:
+    """Stable stock-day/fold identity across independently trained model score tables."""
+    ids = pd.to_numeric(frame["group_index"], errors="raise").to_numpy(dtype=np.int64)
+    source = group_table.iloc[ids]
+    date = pd.to_datetime(source["date"], errors="raise").dt.strftime("%Y-%m-%d")
+    fold = (frame["rank_group"].astype(str).to_numpy()
+            if "rank_group" in frame.columns else np.full(len(ids), "", dtype=object))
+    stock = source["ticker"].astype(str).to_numpy()
+    keys = sorted(f"{d}|{t}|{g}" for d,t,g in zip(date.to_numpy(),stock,fold))
+    digest = hashlib.sha256()
+    for key in keys:
+        digest.update(key.encode("utf-8") + b"\n")
+    return digest.hexdigest()
+
+
 def build_standard_model_sop(
     *,
     group_table: pd.DataFrame,
@@ -207,11 +263,22 @@ def build_standard_model_sop(
     oos_scores: pd.DataFrame,
     breakout_scores: pd.DataFrame,
     evaluation_mode: str,
+    evaluation_horizon_bars: int,
     mode_extensions: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the sole machine payload consumed by all Standard Model SOP renderers."""
 
+    if int(evaluation_horizon_bars) < 2:
+        raise ValueError("Standard SOP evaluation horizon must have at least two bars")
     percentile_target = _canonical_percentile_target(group_table, raw_target)
+    cohort_identity = {
+        key: _score_cohort_digest(frame, group_table)
+        for key, frame in (
+            ("validation", validation_scores),
+            ("oos", oos_scores),
+            ("breakout_candidate_oos", breakout_scores),
+        )
+    }
     split_metrics: dict[str, Any] = {}
     alignment: dict[str, Any] = {}
     for key, frame in (
@@ -226,9 +293,16 @@ def build_standard_model_sop(
             percentile_target=percentile_target,
         )
     return {
-        "schema": "standard_model_sop_v9",
+        "schema": STANDARD_SOP_SCHEMA,
         "evaluation_mode": str(evaluation_mode),
         "training": {"objective": str(training_objective)},
+        "evaluation_truth": {
+            "horizon_bars": int(evaluation_horizon_bars),
+            "mfe_source": "target_favorable_return",
+            "adverse_source": "target_adverse_return_to_peak",
+            "joint_quality_id": JOINT_QUALITY_EVALUATION_ID,
+            "cohort_identity": cohort_identity,
+        },
         "split_metrics": split_metrics,
         "upside_downside_alignment_evaluation": alignment,
         "mode_extensions": dict(mode_extensions or {}),
@@ -391,7 +465,7 @@ def aggregate_standard_model_sop_robustness(
 ) -> dict[str, Any]:
     """Aggregate identical Standard-SOP schemas across benchmark seeds.
 
-    The six Standard sections remain the exact same schema used by single-seed
+    The four Standard sections remain the exact same schema used by single-seed
     Forward/Rolling reports.  Only the mode extension adds across-seed dispersion.
     """
 
@@ -409,6 +483,9 @@ def aggregate_standard_model_sop_robustness(
     if len(objectives) != 1:
         raise ValueError("Robustness Standard SOP training objective跨seed不一致")
 
+    truths = [dict(payload.get("evaluation_truth") or {}) for payload in normalized]
+    if not truths[0] or any(truth != truths[0] for truth in truths[1:]):
+        raise ValueError("Robustness Standard SOP score/true outcome cohort identity differs across seeds")
     split_payloads = [dict(payload.get("split_metrics") or {}) for payload in normalized]
     alignment_payloads = [dict(payload.get("upside_downside_alignment_evaluation") or {}) for payload in normalized]
     if any(set(payload) != set(STANDARD_SPLIT_KEYS) for payload in split_payloads):
@@ -420,6 +497,19 @@ def aggregate_standard_model_sop_robustness(
         key: _aggregate_mapping_values([dict(payload[key]) for payload in split_payloads])
         for key in STANDARD_SPLIT_KEYS
     }
+    # Same evaluated stock-day cohort is a necessary but not sufficient seed
+    # identity: reject missing score/target rows rather than silently averaging
+    # differing Top10 sample sizes and truncating an artificial fractional N.
+    for split in STANDARD_SPLIT_KEYS:
+        counts = []
+        for seed_alignment in alignment_payloads:
+            raw = dict(dict(seed_alignment[split]).get("top_10pct") or {}).get("n")
+            if (not isinstance(raw, (int, float, np.integer, np.floating))
+                    or not np.isfinite(raw) or int(raw) < 1 or int(raw) != float(raw)):
+                raise ValueError(f"Robustness Standard SOP {split} Top10 N invalid")
+            counts.append(int(raw))
+        if len(set(counts)) != 1:
+            raise ValueError(f"Robustness Standard SOP {split} Top10 N differs across seeds")
     alignment = {
         key: _aggregate_mapping_values([dict(payload[key]) for payload in alignment_payloads])
         for key in STANDARD_SPLIT_KEYS
@@ -429,6 +519,12 @@ def aggregate_standard_model_sop_robustness(
     daily = np.asarray([float(row["mean_daily_spearman"]) for row in oos_rows], dtype=np.float64)
     pair = np.asarray([float(row["pairwise_concordance"]) for row in oos_rows], dtype=np.float64)
     gaps = np.asarray([float(_top_bottom_gap(row)) for row in oos_rows], dtype=np.float64)
+    joint_qualities = np.asarray([
+        float(dict(dict(payload["oos"]).get("top_10pct") or {})["joint_quality_pct"])
+        for payload in alignment_payloads
+    ], dtype=np.float64)
+    if not np.isfinite(joint_qualities).all() or ((joint_qualities < 0) | (joint_qualities > 100)).any():
+        raise ValueError("Robustness Standard SOP Joint Quality evidence非法")
     robustness = {
         "seed_count": int(len(seeds)),
         "seeds": [int(seed) for seed in seeds],
@@ -436,6 +532,7 @@ def aggregate_standard_model_sop_robustness(
         "oos_daily_rho_std": float(np.std(daily, ddof=0)),
         "oos_pair_std": float(np.std(pair, ddof=0)),
         "oos_top_bottom_std": float(np.std(gaps, ddof=0)),
+        "oos_top10_joint_quality_std": float(np.std(joint_qualities, ddof=0)),
     }
 
     mode_extensions: dict[str, Any] = {"robustness": robustness}
@@ -445,10 +542,13 @@ def aggregate_standard_model_sop_robustness(
             raise ValueError("Rolling robustness Standard SOP缺少rolling extension")
         mode_extensions["rolling"] = _aggregate_rolling_extension(rolling_payloads)
 
+    if any(str(payload.get("schema")) != STANDARD_SOP_SCHEMA for payload in normalized):
+        raise ValueError("Robustness Standard SOP包含舊版evaluation schema，需由合法score重算")
     return {
-        "schema": "standard_model_sop_v9_robustness_mean",
+        "schema": "standard_model_sop_v10_robustness_mean",
         "evaluation_mode": str(next(iter(modes))),
         "training": {"objective": str(next(iter(objectives)))},
+        "evaluation_truth": dict(truths[0]),
         "split_metrics": split_metrics,
         "upside_downside_alignment_evaluation": alignment,
         "mode_extensions": mode_extensions,

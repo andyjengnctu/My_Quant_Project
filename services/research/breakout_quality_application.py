@@ -359,7 +359,7 @@ def _continuous_ranker_simple_report_payload(
 
 def _model_sop_section_title(section_id: str, *, suffix: str = "") -> str:
     section = section_contract("model.standard_sop", section_id)
-    base = f"標準模型 SOP｜{section.number}. {section.title}"
+    base = f"MODEL SOP | {section.number}. {section.title}"
     return base + (f"｜{suffix}" if suffix else "")
 
 
@@ -435,7 +435,7 @@ def _model_sop_view(payload: dict) -> dict:
         })
     if oos and daily_universal and breakout:
         generalization_rows.append({
-            "comparison": "OOS → Breakout slice",
+            "comparison": "Global OOS → Breakout OOS",
             "delta_daily_rho": delta(oos.get("mean_daily_spearman"), breakout.get("mean_daily_spearman")),
             "delta_pair": None if delta(oos.get("pairwise_concordance"), breakout.get("pairwise_concordance")) is None else delta(oos.get("pairwise_concordance"), breakout.get("pairwise_concordance")) * 100.0,
             "delta_top_bottom": delta(top_bottom(oos), top_bottom(breakout)),
@@ -477,57 +477,14 @@ def _model_sop_view(payload: dict) -> dict:
     alignment_rows = []
     top_tail_rows = []
 
-    def quadrant_metrics(row: dict, top: dict, key: str) -> tuple[float | None, float | None]:
-        top_quadrants = dict(top.get("quadrants") or {})
-        explicit = dict(top_quadrants.get(key) or {})
-        if explicit:
-            return explicit.get("pct"), explicit.get("enrichment")
-
-        # Historical Standard-SOP-v2 reports can be upgraded read-only from the
-        # already persisted marginals; no model retraining is required.
-        pop = dict(row.get("population") or {})
-        top_hm = top.get("high_mfe_pct")
-        top_hs = top.get("high_safety_pct")
-        top_hmhs = top.get("hmhs_pct")
-        pop_hm = pop.get("high_mfe_pct")
-        pop_hs = pop.get("high_safety_pct")
-        pop_hmhs = None
-        pop_quadrants = dict(pop.get("quadrants") or {})
-        if pop_quadrants:
-            pop_hmhs = pop_quadrants.get("hmhs")
-        if pop_hmhs is None:
-            # v2 stored the HM/HS population implicitly through top HM/HS enrichment.
-            top_enrich = top.get("hmhs_enrichment")
-            if top_hmhs is not None and top_enrich not in (None, 0, 0.0):
-                pop_hmhs = float(top_hmhs) / float(top_enrich)
-        required = (top_hm, top_hs, top_hmhs, pop_hm, pop_hs, pop_hmhs)
-        if any(value is None for value in required):
-            return None, None
-        top_hm = float(top_hm); top_hs = float(top_hs); top_hmhs = float(top_hmhs)
-        pop_hm = float(pop_hm); pop_hs = float(pop_hs); pop_hmhs = float(pop_hmhs)
-        top_values = {
-            "hmhs": top_hmhs,
-            "hmls": top_hm - top_hmhs,
-            "lmhs": top_hs - top_hmhs,
-            "lmls": 100.0 - top_hm - top_hs + top_hmhs,
-        }
-        pop_values = {
-            "hmhs": pop_hmhs,
-            "hmls": pop_hm - pop_hmhs,
-            "lmhs": pop_hs - pop_hmhs,
-            "lmls": 100.0 - pop_hm - pop_hs + pop_hmhs,
-        }
-        pct = top_values[key]
-        population_pct = pop_values[key]
-        return pct, (None if population_pct <= 0.0 else pct / population_pct)
-
-    def quadrant_display(row: dict, top: dict, key: str) -> str:
-        pct, enrichment = quadrant_metrics(row, top, key)
-        if pct is None:
-            return "-"
-        return f"{float(pct):.2f}% ({'-' if enrichment is None else f'{float(enrichment):.2f}×'})"
-
-    alignment_scopes = (("Validation", "validation"), (oos_scope_label, "oos"), ("Breakout slice", "breakout_candidate_oos"))
+    # The Standard report consumes the canonical stored per-stock outcome evidence.
+    # Its two scopes are explicit: Global OOS and Breakout OOS. Validation remains
+    # required for M1/M2 completeness but is not a model-comparison result row.
+    alignment_scopes = (
+        ("Validation", "validation"),
+        (oos_scope_label, "oos"),
+        ("Breakout OOS", "breakout_candidate_oos"),
+    )
     for scope_label, scope_key in alignment_scopes:
         row = dict(alignment_eval.get(scope_key) or {})
         if not row:
@@ -540,37 +497,19 @@ def _model_sop_view(payload: dict) -> dict:
             "score_to_full_mfe_daily_spearman": row.get("score_to_full_mfe_daily_spearman"),
             "score_to_safety_daily_spearman": row.get("score_to_low_adverse_daily_spearman"),
         })
-        adverse = top.get("adverse_r_mean")
-        quadrant_values = {
-            key: quadrant_metrics(row, top, key)[0]
-            for key in ("hmhs", "hmls", "lmhs", "lmls")
-        }
         top_tail_rows.append({
             "split": scope_label,
             "top10_n": top.get("n"),
-            "top10_full_mfe_r_mean": top.get("full_mfe_r_mean"),
-            "top10_low_adverse_r_mean": (
-                top.get("low_adverse_r_mean")
-                if top.get("low_adverse_r_mean") is not None
-                else None if adverse is None else -float(adverse)
-            ),
-            "top10_high_mfe_pct": top.get("high_mfe_pct"),
-            "top10_high_safety_pct": top.get("high_safety_pct"),
-            "top10_hmhs": quadrant_display(row, top, "hmhs"),
-            "top10_hmls": quadrant_display(row, top, "hmls"),
-            "top10_lmhs": quadrant_display(row, top, "lmhs"),
-            "top10_lmls": quadrant_display(row, top, "lmls"),
-            "__compare__top10_hmhs": quadrant_values["hmhs"],
-            "__compare__top10_hmls": quadrant_values["hmls"],
-            "__compare__top10_lmhs": quadrant_values["lmhs"],
-            "__compare__top10_lmls": quadrant_values["lmls"],
+            "top10_mfe_pct": top.get("mfe_pct_mean"),
+            "top10_adverse_pct": top.get("adverse_pct_mean"),
+            "top10_joint_quality": top.get("joint_quality_pct"),
         })
 
     evidence = [
         ("Learnability", "AVAILABLE" if metrics.get("oos") else "N/A"),
         ("Generalization", "AVAILABLE" if (metrics.get("validation") and metrics.get("oos") and metrics.get("breakout_candidate_oos")) else "N/A"),
         ("Upside / Downside Alignment", "AVAILABLE" if alignment_rows else "N/A"),
-        ("Top-tail Economic Quality", "AVAILABLE" if top_tail_rows else "N/A"),
+        ("Joint MFE / Adverse Quality", "AVAILABLE" if top_tail_rows else "N/A"),
         ("Breakout application slice", "AVAILABLE" if metrics.get("breakout_candidate_oos") else "N/A"),
         ("Ranking / Boundary", "AVAILABLE" if sample else "N/A"),
     ]
@@ -683,7 +622,7 @@ def _model_sop_view(payload: dict) -> dict:
         "ranking": ranking,
         "evidence": evidence,
         "upside_downside_alignment": alignment_rows,
-        "top_tail_economic_quality": top_tail_rows,
+        "joint_mfe_adverse_quality": top_tail_rows,
         "extensions": extensions,
         "evaluation_mode": evaluation_mode,
         "rolling_specific": dict((standard.get("mode_extensions") or {}).get("rolling") or {}),
@@ -991,225 +930,25 @@ def _rolling_specific_extension_rows(view: dict) -> list[dict]:
 
 
 def _render_continuous_ranker_simple_console(payload: dict) -> str:
-    view = _model_sop_view(payload)
-    if not view:
-        return ""
-    color = console_color_enabled()
-
-    def section(section_id: str, *, suffix: str = "") -> str:
-        return render_section(paint(_model_sop_section_title(section_id, suffix=suffix), "cyan", enabled=color, bold=True))
-
-    def extension(title: str) -> str:
-        return render_section(paint(title, "cyan", enabled=color, bold=True))
-
-    def scope_text(value: str) -> str:
-        tone = "gray" if str(value).lower() == "validation" else "cyan"
-        return paint(str(value), tone, enabled=color, bold=str(value).lower() != "validation")
-
-    lines = []
-    lines.extend([
-        section("learnability"),
-        _render_model_contract_table(
-            table_contract("model.standard_sop", "learnability", "learnability"),
-            view["learnability"], target="console", scope_styler=scope_text,
-        ),
-    ])
-    if view["generalization"]:
-        lines.extend([
-            section("generalization"),
-            _render_model_contract_table(
-                table_contract("model.standard_sop", "generalization", "generalization"),
-                view["generalization"], target="console", delta_style=True,
-            ),
-        ])
-    if view.get("upside_downside_alignment"):
-        lines.extend([
-            section("upside_downside_alignment"),
-            _render_model_contract_table(
-                table_contract("model.standard_sop", "upside_downside_alignment", "upside_downside_alignment"),
-                view["upside_downside_alignment"], target="console", scope_styler=scope_text,
-            ),
-        ])
-    if view.get("top_tail_economic_quality"):
-        lines.extend([
-            section("top_tail_economic_quality"),
-            _render_model_contract_table(
-                table_contract("model.standard_sop", "top_tail_economic_quality", "top_tail_economic_quality"),
-                view["top_tail_economic_quality"], target="console", scope_styler=scope_text,
-            ),
-        ])
-
-    ranking = view.get("ranking")
-    if ranking:
-        suffix = f"K={ranking['top_k']}，boundary={ranking['boundary_width']}；{ranking['competition_scope']}"
-        lines.extend([
-            section("ranking_boundary", suffix=suffix),
-            _render_model_contract_table(
-                table_contract("model.standard_sop", "ranking_boundary", "ranking_boundary"),
-                ranking["rows"], target="console", scope_styler=scope_text,
-            ),
-        ])
-
-    evidence_rows = []
-    evidence_items = list(view["evidence"])
-    available_count = sum(str(status).upper() in {"AVAILABLE", "READY"} for _label, status in evidence_items)
-    if evidence_items and available_count == len(evidence_items):
-        evidence_rows.append({
-            "evidence": "Coverage",
-            "status": styled_signal(f"{available_count}/{len(evidence_items)} AVAILABLE", SIGNAL_POSITIVE, target="console", enabled=color, bold=True),
-        })
-    else:
-        for label, status in evidence_items:
-            normalized = str(status).upper()
-            signal = {"AVAILABLE": SIGNAL_POSITIVE, "READY": SIGNAL_POSITIVE, "PARTIAL": SIGNAL_WARNING, "BLOCKED": SIGNAL_NEGATIVE, "MISSING": SIGNAL_NEGATIVE}.get(normalized, SIGNAL_NEUTRAL)
-            evidence_rows.append({"evidence": label, "status": styled_signal(status, signal, target="console", enabled=color, bold=True)})
-    lines.extend([
-        section("evidence_coverage"),
-        _render_model_contract_table(
-            table_contract("model.standard_sop", "evidence_coverage", "evidence_coverage"),
-            evidence_rows, target="console",
-        ),
-    ])
-
-    lines.extend(_render_single_model_core_extensions(view, target="console"))
-
-    core_extension_ids = set(comparison_extension_ids())
-    for ext in view["extensions"]:
-        ext_id = str(ext["id"])
-        if ext_id in core_extension_ids:
-            continue
-        lines.append(extension(_model_extension_title(payload, ext_id)))
-        if ext_id == "direct_hmhs_h_only":
-            if ext.get("generalization"):
-                lines.append("Generalization")
-                lines.append(_render_model_contract_table(
-                    extension_contract(ext_id).tables[1], ext["generalization"], target="console", delta_style=True,
-                ))
-            lines.append("Learnability")
-            lines.append(_render_model_contract_table(
-                extension_contract(ext_id).tables[0], ext["rows"], target="console", scope_styler=scope_text,
-            ))
-        elif ext_id == "direct_hmhs_joint_retrieval":
-            lines.append(_render_model_contract_table(
-                extension_contract(ext_id).tables[0], ext["rows"], target="console", scope_styler=scope_text,
-            ))
-        elif ext_id == "joint_min_retrieval":
-            lines.append(_render_model_contract_table(
-                extension_contract(ext_id).tables[0], ext["rows"], target="console", scope_styler=scope_text,
-            ))
-
-    rolling_rows = _rolling_specific_extension_rows(view)
-    if rolling_rows:
-        lines.append(extension(mode_extension_contract("rolling_stability").title))
-        lines.append(_render_model_contract_table(
-            mode_extension_contract("rolling_stability").tables[0],
-            rolling_rows,
-            target="console",
-        ))
-    return "\n".join(line for line in lines if line)
+    """Single model and comparison share one canonical four-section renderer."""
+    return _render_standard_model_comparison(
+        [{"model_id": str(payload.get("model_research_id") or "MODEL"), "payload": payload}],
+        target="console",
+    )
 
 
 def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
-    view = _model_sop_view(payload)
-    if not view:
-        return []
-
-    def section(section_id: str, *, suffix: str = "") -> str:
-        return f"## {markdown_tone(_model_sop_section_title(section_id, suffix=suffix), 'blue', bold=True)}"
-
-    def extension(title: str) -> str:
-        return f"## {markdown_tone(title, 'blue', bold=True)}"
-
-    def scope_text(value: str) -> str:
-        tone = "gray" if str(value).lower() == "validation" else "blue"
-        return markdown_tone(value, tone, bold=str(value).lower() != "validation")
-
-    lines = ["", section("learnability"), "", _render_model_contract_table(
-        table_contract("model.standard_sop", "learnability", "learnability"), view["learnability"], target="markdown", scope_styler=scope_text,
+    """Markdown and console are identical report-contract projections."""
+    return [_render_standard_model_comparison(
+        [{"model_id": str(payload.get("model_research_id") or "MODEL"), "payload": payload}],
+        target="markdown",
     )]
-    if view["generalization"]:
-        lines.extend(["", section("generalization"), "", _render_model_contract_table(
-            table_contract("model.standard_sop", "generalization", "generalization"), view["generalization"], target="markdown", delta_style=True,
-        )])
-    if view.get("upside_downside_alignment"):
-        lines.extend(["", section("upside_downside_alignment"), "", _render_model_contract_table(
-            table_contract("model.standard_sop", "upside_downside_alignment", "upside_downside_alignment"),
-            view["upside_downside_alignment"], target="markdown", scope_styler=scope_text,
-        )])
-    if view.get("top_tail_economic_quality"):
-        lines.extend(["", section("top_tail_economic_quality"), "", _render_model_contract_table(
-            table_contract("model.standard_sop", "top_tail_economic_quality", "top_tail_economic_quality"),
-            view["top_tail_economic_quality"], target="markdown", scope_styler=scope_text,
-        )])
-
-    ranking = view.get("ranking")
-    if ranking:
-        suffix = f"K={ranking['top_k']}，boundary={ranking['boundary_width']}；{ranking['competition_scope']}"
-        lines.extend(["", section("ranking_boundary", suffix=suffix), "", _render_model_contract_table(
-            table_contract("model.standard_sop", "ranking_boundary", "ranking_boundary"), ranking["rows"], target="markdown", scope_styler=scope_text,
-        )])
-
-    evidence_rows = []
-    evidence_items = list(view["evidence"])
-    available_count = sum(str(status).upper() in {"AVAILABLE", "READY"} for _label, status in evidence_items)
-    if evidence_items and available_count == len(evidence_items):
-        evidence_rows.append({
-            "evidence": "Coverage",
-            "status": styled_signal(f"{available_count}/{len(evidence_items)} AVAILABLE", SIGNAL_POSITIVE, target="markdown", bold=True),
-        })
-    else:
-        for label, status in evidence_items:
-            normalized = str(status).upper()
-            signal = {"AVAILABLE": SIGNAL_POSITIVE, "READY": SIGNAL_POSITIVE, "PARTIAL": SIGNAL_WARNING, "BLOCKED": SIGNAL_NEGATIVE, "MISSING": SIGNAL_NEGATIVE}.get(normalized, SIGNAL_NEUTRAL)
-            evidence_rows.append({"evidence": label, "status": styled_signal(status, signal, target="markdown", bold=True)})
-    lines.extend(["", section("evidence_coverage"), "", _render_model_contract_table(
-        table_contract("model.standard_sop", "evidence_coverage", "evidence_coverage"), evidence_rows, target="markdown",
-    )])
-
-    core_parts = _render_single_model_core_extensions(view, target="markdown")
-    for part in core_parts:
-        lines.extend(["", part])
-
-    core_extension_ids = set(comparison_extension_ids())
-    for ext in view["extensions"]:
-        ext_id = str(ext["id"])
-        if ext_id in core_extension_ids:
-            continue
-        lines.extend(["", extension(_model_extension_title(payload, ext_id)), ""])
-        if ext_id == "direct_hmhs_h_only":
-            if ext.get("generalization"):
-                lines.extend(["### Generalization", "", _render_model_contract_table(
-                    extension_contract(ext_id).tables[1], ext["generalization"], target="markdown", delta_style=True,
-                ), ""])
-            lines.extend(["### Learnability", "", _render_model_contract_table(
-                extension_contract(ext_id).tables[0], ext["rows"], target="markdown", scope_styler=scope_text,
-            )])
-        elif ext_id == "direct_hmhs_joint_retrieval":
-            lines.append(_render_model_contract_table(
-                extension_contract(ext_id).tables[0], ext["rows"], target="markdown", scope_styler=scope_text,
-            ))
-        elif ext_id == "joint_min_retrieval":
-            lines.append(_render_model_contract_table(
-                extension_contract(ext_id).tables[0], ext["rows"], target="markdown", scope_styler=scope_text,
-            ))
-
-    rolling_rows = _rolling_specific_extension_rows(view)
-    if rolling_rows:
-        lines.extend([
-            "", extension(mode_extension_contract("rolling_stability").title), "",
-            _render_model_contract_table(
-                mode_extension_contract("rolling_stability").tables[0],
-                rolling_rows,
-                target="markdown",
-            ),
-        ])
-    return lines
 
 
 def _model_comparison_section_title(section_id: str, *, suffix: str = "") -> str:
     section = section_contract("model.standard_comparison", section_id)
-    base = f"模型比較 SOP｜{section.number}. {section.title}"
-    return base + (f"｜{suffix}" if suffix else "")
+    base = f"MODEL SOP | {section.number}. {section.title}"
+    return base + (f" | {suffix}" if suffix else "")
 
 
 def _render_model_comparison_contract_table(
@@ -1262,93 +1001,72 @@ def _comparison_evidence_issues(payload: dict, settings) -> tuple[str, ...]:
 
 
 def _standard_model_sop_completeness_issues(payload: dict) -> tuple[str, ...]:
-    """Return missing common Standard-SOP evidence required by [1][1]/[1][4].
-
-    A reusable model/report must contain the current common evidence itself.
-    Renderers may upgrade presentation from persisted values, but they must not
-    silently omit a model or substitute ``-`` for missing common evidence.
-    """
-
-    view = _model_sop_view(dict(payload or {}))
-    if not view:
-        return ("Standard SOP payload缺失",)
-
-    issues: list[str] = []
-
-    def missing_value(value) -> bool:
-        return value is None or (isinstance(value, str) and value.strip() in {"", "-"})
-
-    def check_rows(
-        section_id: str,
-        table_id: str,
-        rows: list[dict],
-        *,
-        structural_key: str,
-        expected_values: tuple[str, ...],
-    ) -> None:
-        indexed = {str(row.get(structural_key) or "").strip(): dict(row) for row in rows}
-        table = table_contract("model.standard_sop", section_id, table_id)
-        metric_columns = tuple(
-            column for column in table.columns if column.key != structural_key
-        )
-        for expected in expected_values:
-            row = indexed.get(expected)
-            if row is None:
-                issues.append(f"{section_id}:{expected} row缺失")
-                continue
-            for column in metric_columns:
-                if missing_value(row.get(column.key)):
-                    issues.append(f"{section_id}:{expected}:{column.key}缺失")
-
-    rolling_oos = str(view.get("evaluation_mode") or "forward_oos") == "rolling_oos"
-    expected_raw_splits = ("validation", "oos", "breakout_candidate_oos")
-    expected_display_splits = (
-        "Validation", "Rolling OOS" if rolling_oos else "Forward OOS", "Breakout slice"
-    )
-    expected_generalization = ("Validation → OOS", "OOS → Breakout slice")
-
-    check_rows(
-        "learnability", "learnability", list(view.get("learnability") or []),
-        structural_key="split", expected_values=expected_raw_splits,
-    )
-    check_rows(
-        "generalization", "generalization", list(view.get("generalization") or []),
-        structural_key="comparison", expected_values=expected_generalization,
-    )
-    check_rows(
-        "upside_downside_alignment", "upside_downside_alignment",
-        list(view.get("upside_downside_alignment") or []),
-        structural_key="split", expected_values=expected_display_splits,
-    )
-    check_rows(
-        "top_tail_economic_quality", "top_tail_economic_quality",
-        list(view.get("top_tail_economic_quality") or []),
-        structural_key="split", expected_values=expected_display_splits,
-    )
-
-    ranking = dict(view.get("ranking") or {})
-    check_rows(
-        "ranking_boundary", "ranking_boundary", list(ranking.get("rows") or []),
-        structural_key="split", expected_values=expected_raw_splits,
-    )
-
-    evidence = {str(label): str(status).upper() for label, status in list(view.get("evidence") or [])}
-    for label in (
-        "Learnability",
-        "Generalization",
-        "Upside / Downside Alignment",
-        "Top-tail Economic Quality",
-        "Breakout application slice",
-        "Ranking / Boundary",
+    """Block publication of missing/legacy truth; never backfill Joint Quality from averages."""
+    source = dict(payload or {})
+    standard = dict(source.get("standard_model_sop") or {})
+    if not standard and str(source.get("schema") or "").startswith("standard_model_sop_v"):
+        standard = source
+    issues = []
+    expected_schema = {"standard_model_sop_v10", "standard_model_sop_v10_robustness_mean"}
+    if str(standard.get("schema") or "") not in expected_schema:
+        issues.append("Standard SOP evaluation truth version v10 missing: refresh from scored stock-day evidence (do not relabel averages)")
+    truth = dict(standard.get("evaluation_truth") or {})
+    try:
+        horizon = int(truth.get("horizon_bars"))
+    except (TypeError, ValueError, OverflowError):
+        horizon = 0
+    if horizon < 2:
+        issues.append("evaluation_truth:horizon_bars missing")
+    for key, expected in (
+        ("mfe_source", "target_favorable_return"),
+        ("adverse_source", "target_adverse_return_to_peak"),
+        ("joint_quality_id", "same_day_min_mfe_safety_percentile_v1"),
     ):
-        if evidence.get(label) != "AVAILABLE":
-            issues.append(f"evidence:{label}={evidence.get(label, 'MISSING')}")
-
+        if truth.get(key) != expected:
+            issues.append(f"evaluation_truth:{key} mismatch")
+    cohorts = dict(truth.get("cohort_identity") or {})
+    for split in ("validation", "oos", "breakout_candidate_oos"):
+        if not isinstance(cohorts.get(split), str) or len(cohorts[split]) != 64:
+            issues.append(f"evaluation_truth:{split}:cohort SHA256 missing")
+        learn = dict((standard.get("split_metrics") or {}).get(split) or {})
+        alignment = dict((standard.get("upside_downside_alignment_evaluation") or {}).get(split) or {})
+        top = dict(alignment.get("top_10pct") or {})
+        for key in ("group_count", "mean_daily_spearman", "global_spearman_vs_raw_target",
+                    "pairwise_concordance", "top_score_decile_raw_target_mean", "bottom_score_decile_raw_target_mean"):
+            value = learn.get(key)
+            if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                    or not math.isfinite(float(value))
+                    or (key == "group_count" and int(value) < 1)):
+                issues.append(f"M1:{split}:{key} invalid or missing")
+        for key in ("target_to_full_mfe_daily_spearman", "target_to_low_adverse_daily_spearman",
+                    "score_to_full_mfe_daily_spearman", "score_to_low_adverse_daily_spearman"):
+            value = alignment.get(key)
+            if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                    or not math.isfinite(float(value))):
+                issues.append(f"M3:{split}:{key} invalid or missing")
+        if alignment.get("joint_quality_evaluation_id") != "same_day_min_mfe_safety_percentile_v1":
+            issues.append(f"M4:{split}:joint_quality_evaluation_id mismatch")
+        for key in ("n", "mfe_pct_mean", "adverse_pct_mean", "joint_quality_pct"):
+            value = top.get(key)
+            if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                    or not math.isfinite(float(value))):
+                issues.append(f"M4:{split}:{key} invalid or missing")
+        if isinstance(top.get("n"), (int, float)) and math.isfinite(float(top["n"])):
+            if float(top["n"]) < 1:
+                issues.append(f"M4:{split}:top10 sample empty")
+        joint_quality = top.get("joint_quality_pct")
+        if isinstance(joint_quality, (int, float)) and math.isfinite(float(joint_quality)):
+            if not (0 <= float(joint_quality) <= 100):
+                issues.append(f"M4:{split}:Joint Quality out of range")
+    view = _model_sop_view(source)
+    if not view or len(view.get("generalization") or []) != 2:
+        issues.append("M2:both transitions missing")
     return tuple(dict.fromkeys(issues))
 
 
 def _standard_model_comparison_views(models: list[dict]) -> list[dict]:
     views = []
+    common_truth = None
     for item in models:
         payload = dict(item.get("payload") or {})
         issues = _standard_model_sop_completeness_issues(payload)
@@ -1357,59 +1075,31 @@ def _standard_model_comparison_views(models: list[dict]) -> list[dict]:
                 f"模型比較Standard SOP evidence不完整: {item.get('model_id')} | "
                 + "; ".join(issues)
             )
+        standard = dict(payload.get("standard_model_sop") or {})
+        truth = dict(standard.get("evaluation_truth") or {})
+        if common_truth is None:
+            common_truth = truth
+        elif truth != common_truth:
+            raise ValueError(
+                f"MODEL SOP cross-model evaluation truth mismatch: {item.get('model_id')}; "
+                "horizon, truth definition and all stock-day/fold cohorts must match"
+            )
         view = _model_sop_view(payload)
         views.append({**item, "view": view})
     return views
 
 
 def _standard_model_comparison_rows(views: list[dict]) -> dict[str, object]:
-    """Collect only Standard-SOP common rows for [1][4].
-
-    Model-specific extensions are intentionally excluded from the cross-model
-    scorecard. They remain available in each model's [1][1] report.
-    """
-
-    result: dict[str, object] = {
-        "learnability": [],
-        "generalization": [],
-        "upside_downside_alignment": [],
-        "top_tail_economic_quality": [],
-        "ranking_boundary": [],
-        "evidence_coverage": [],
-        "ranking_settings": [],
-    }
+    """Return only four user-approved model SOP sections from canonical source."""
+    keys = ("learnability", "generalization", "upside_downside_alignment", "joint_mfe_adverse_quality")
+    rows: dict[str, object] = {key: [] for key in keys}
     for item in views:
-        model = str(item["model_id"])
-        view = dict(item["view"])
-        for key in (
-            "learnability",
-            "generalization",
-            "upside_downside_alignment",
-            "top_tail_economic_quality",
-        ):
-            result[key].extend(
-                {"model": model, **dict(row)} for row in list(view.get(key) or [])
+        for key in keys:
+            rows[key].extend(
+                {"model": str(item["model_id"]), **dict(row)}
+                for row in list(dict(item["view"]).get(key) or [])
             )
-
-        ranking = dict(view.get("ranking") or {})
-        if ranking:
-            result["ranking_settings"].append(
-                (
-                    int(ranking.get("top_k", 0) or 0),
-                    int(ranking.get("boundary_width", 0) or 0),
-                    str(ranking.get("competition_scope") or ""),
-                )
-            )
-            result["ranking_boundary"].extend(
-                {"model": model, **dict(row)}
-                for row in list(ranking.get("rows") or [])
-            )
-
-        for evidence, status in list(view.get("evidence") or []):
-            result["evidence_coverage"].append(
-                {"model": model, "evidence": evidence, "status": status}
-            )
-    return result
+    return rows
 
 
 def _rolling_specific_comparison_rows(views: list[dict]) -> list[dict]:
@@ -1450,6 +1140,11 @@ def _robustness_specific_comparison_rows(views: list[dict]) -> list[dict]:
             (dict(row) for row in list(view.get("learnability") or []) if str(row.get("split")) == "oos"),
             {},
         )
+        joint = next(
+            (dict(row) for row in list(view.get("joint_mfe_adverse_quality") or [])
+             if str(row.get("split")) == "oos"),
+            {},
+        )
         rows.append({
             "model": model,
             "seed_count": int(robustness.get("seed_count", 0) or 0),
@@ -1459,6 +1154,8 @@ def _robustness_specific_comparison_rows(views: list[dict]) -> list[dict]:
             "pair_std": robustness.get("oos_pair_std"),
             "top_bottom_mean": oos.get("top_bottom_raw_target_gap"),
             "top_bottom_std": robustness.get("oos_top_bottom_std"),
+            "joint_quality_mean": joint.get("top10_joint_quality"),
+            "joint_quality_std": robustness.get("oos_top10_joint_quality_std"),
         })
     return rows
 
@@ -1485,8 +1182,7 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
     Standard section, one numbered section title is followed by Forward OOS and
     Breakout slice tables. Generalization uses two independent transition tables:
     Validation → OOS and OOS → Breakout slice. The common scorecard remains
-    invariant; authorized capability-driven Model-specific extensions are appended
-    after Standard SOP section 6 and before evaluation-mode extensions.
+    invariant. Model-specific analyses remain in separate read-only Audits.
     """
 
     views = _standard_model_comparison_views(models)
@@ -1516,8 +1212,8 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
         return normalized in {alias.strip().lower() for alias in aliases}
 
     scope_specs = (
-        (("Rolling OOS" if rolling_oos else "Forward OOS"), {"oos", "forward oos", "rolling oos"}),
-        ("Breakout slice", {"breakout_candidate_oos", "breakout slice"}),
+        ("Global", {"oos", "forward oos", "rolling oos"}),
+        ("Breakout", {"breakout_candidate_oos", "breakout slice", "breakout oos"}),
     )
     parts: list[str] = []
 
@@ -1537,7 +1233,7 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
                 table_id,
                 table_rows,
                 target=target,
-                best_worst_style=True,
+                best_worst_style=(section_id == "joint_mfe_adverse_quality"),
             ))
 
     # 1. Learnability
@@ -1545,7 +1241,7 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
 
     # 2. Generalization. One section title, then two independent transition tables.
     generalization_rows = [dict(row) for row in list(rows.get("generalization") or [])]
-    transition_specs = ("Validation → OOS", "OOS → Breakout slice")
+    transition_specs = ("Validation → OOS", "Global OOS → Breakout OOS")
     scoped_generalization = []
     for transition_label in transition_specs:
         table_rows = [
@@ -1563,7 +1259,7 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
                 "generalization",
                 table_rows,
                 target=target,
-                best_worst_style=True,
+                best_worst_style=False,
             ))
 
     # 3. Upside / Downside Alignment
@@ -1573,81 +1269,19 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
         list(rows.get("upside_downside_alignment") or []),
     )
 
-    # 4. Top-tail Economic Quality
+    # 4. Joint MFE / Adverse Quality, with the same OOS scopes for every DL.
     append_scoped_section(
-        "top_tail_economic_quality",
-        "top_tail_economic_quality",
-        list(rows.get("top_tail_economic_quality") or []),
+        "joint_mfe_adverse_quality", "joint_mfe_adverse_quality",
+        list(rows.get("joint_mfe_adverse_quality") or []),
     )
+    # Model-specific comparisons belong to a separate, hypothesis-bound Audit.
+    # Never append temporary extension tables to the persistent SOP.
 
-    # 5. Ranking / Boundary. One section title, two scope tables.
-    ranking_rows = list(rows.get("ranking_boundary") or [])
-    scoped_ranking = []
-    for scope_label, aliases in scope_specs:
-        table_rows = [dict(row) for row in ranking_rows if split_matches(dict(row), aliases)]
-        if table_rows:
-            scoped_ranking.append((scope_label, table_rows))
-    if scoped_ranking:
-        parts.append(section("ranking_boundary"))
-        settings_set = {tuple(value) for value in list(rows.get("ranking_settings") or [])}
-        for scope_label, table_rows in scoped_ranking:
-            label = scope_label
-            if len(settings_set) == 1:
-                k, boundary, scope = next(iter(settings_set))
-                label += f"；K={k}，boundary={boundary}；{scope}"
-            elif settings_set:
-                label += "；各模型依自身canonical K/boundary"
-            parts.append(scope_heading(label))
-            parts.append(_render_model_comparison_contract_table(
-                "ranking_boundary",
-                "ranking_boundary",
-                table_rows,
-                target=target,
-                best_worst_style=True,
-            ))
-
-    # 6. Evidence Coverage is always last and retains status-color semantics.
-    evidence_rows = []
-    for raw_row in list(rows.get("evidence_coverage") or []):
-        row = dict(raw_row)
-        normalized = str(row.get("status") or "").upper()
-        signal = {
-            "AVAILABLE": SIGNAL_POSITIVE,
-            "READY": SIGNAL_POSITIVE,
-            "PARTIAL": SIGNAL_WARNING,
-            "BLOCKED": SIGNAL_NEGATIVE,
-            "MISSING": SIGNAL_NEGATIVE,
-        }.get(normalized, SIGNAL_NEUTRAL)
-        row["status"] = styled_signal(
-            row.get("status"),
-            signal,
-            target=target,
-            enabled=color if target == "console" else None,
-            bold=True,
-        )
-        evidence_rows.append(row)
-    if evidence_rows:
-        parts.extend([
-            section("evidence_coverage"),
-            _render_model_comparison_contract_table(
-                "evidence_coverage",
-                "evidence_coverage",
-                evidence_rows,
-                target=target,
-            ),
-        ])
-
-    # Model-specific evidence is appended outside the numbered Standard SOP and
-    # is capability-driven from each model payload. The persistent comparison
-    # contract authorizes which extension namespaces may appear here.
-    parts.extend(_render_model_comparison_specific_extensions(views, target=target))
-
-    # Rolling keeps the exact same Standard SOP 1～6, then adds one mode-specific
-    # stability extension. It is deliberately outside the numbered common SOP.
+    # Rolling / robustness evidence remains available without changing M1-M4.
     if rolling_oos:
         rolling_rows = _rolling_specific_comparison_rows(views)
         if rolling_rows:
-            extension_title = "Rolling-specific Extension｜Fold / Year Stability"
+            extension_title = "Rolling Stability | Fold / Year"
             if target == "console":
                 parts.append(render_section(paint(extension_title, "cyan", enabled=color, bold=True)))
             else:
@@ -1659,7 +1293,7 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
 
     robustness_rows = _robustness_specific_comparison_rows(views)
     if robustness_rows:
-        extension_title = mode_extension_contract("robustness_stability").title
+        extension_title = "Across-seed Stability"
         if target == "console":
             parts.append(render_section(paint(extension_title, "cyan", enabled=color, bold=True)))
         else:
@@ -1669,11 +1303,7 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
             robustness_contract.tables[0],
             robustness_rows, target=target, best_worst_style=True,
         ))
-        capability_rows = _robustness_extension_capability_rows()
-        if capability_rows and len(robustness_contract.tables) > 1:
-            parts.append(_render_model_contract_table(
-                robustness_contract.tables[1], capability_rows, target=target
-            ))
+
 
     separator = "\n" if target == "console" else "\n\n"
     return separator.join(part for part in parts if part)
@@ -3775,20 +3405,8 @@ def _load_reusable_continuous_forward_contract(settings):
     )
     if provenance_issues:
         return None, "Forward fitted source lineage stale: " + "; ".join(provenance_issues[:8])
-    report_payload = dict(contract.report or {})
-    if not isinstance(report_payload.get("standard_model_sop"), dict):
-        migrated = migrate_legacy_forward_standard_model_sop(report_payload)
-        if migrated is not None:
-            report_payload["standard_model_sop"] = migrated
-            Path(contract.report_path).write_text(
-                json.dumps(report_payload, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            _clear_continuous_forward_reuse_caches()
-            contract = load_continuous_ranker_oos_contract(
-                str(PROJECT_ROOT), str(settings.filter_id), str(settings.model_architecture),
-                str(settings.experiment_profile), require_scores=False,
-            )
+    # Never mutate a historical report in-place merely to satisfy a new
+    # presentation/evaluation contract. A legacy artifact is not v10 evidence.
     report_payload = dict(contract.report or {})
     completeness_issues = _standard_model_sop_completeness_issues(report_payload)
     if completeness_issues:
@@ -3796,12 +3414,8 @@ def _load_reusable_continuous_forward_contract(settings):
             "Standard SOP共通evidence不完整，需由canonical producer補建: "
             + "; ".join(completeness_issues[:8])
         )
-    extension_issues = _comparison_evidence_issues(report_payload, settings)
-    if extension_issues:
-        return None, (
-            "Comparison model-extension evidence不完整，需由canonical producer補建: "
-            + "; ".join(extension_issues[:8])
-        )
+    # Model-specific head evidence is no longer a permanent Standard SOP
+    # readiness obligation. It remains available to separately authorized Audit.
     return contract, None
 
 
@@ -4082,9 +3696,7 @@ def _load_reusable_rolling_standard_report(settings, mode):
     issues = _standard_model_sop_completeness_issues(payload)
     if issues:
         return contract, None, "Standard SOP evidence不完整: " + "; ".join(issues)
-    extension_issues = _comparison_evidence_issues(payload, settings)
-    if extension_issues:
-        return contract, None, "Comparison model-extension evidence不完整: " + "; ".join(extension_issues)
+    # Optional, head-specific evidence belongs to a separate one-time Audit.
     return contract, payload, None
 
 
@@ -5100,7 +4712,7 @@ def _validate_robustness_standard_payload(
             f"expected={evaluation_mode!r}"
         )
     issues.extend(_standard_model_sop_completeness_issues(payload))
-    issues.extend(_comparison_evidence_issues(payload, settings))
+    # Do not turn head-specific Audit data into a permanent seed obligation.
     return tuple(dict.fromkeys(issues))
 
 

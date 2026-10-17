@@ -1,29 +1,17 @@
-- restreucture
-    - 重新編號目前的research arm編號系統
 
 
 - imrove DL learnability
-    - 0050 only DL
-    - ajd/raw整合交易策略 
-    - 還是應該廣義成圖形辦識的多層結構，而不是人為克意去分層
-    - input with 還原/非還原價
+    - aduit DL target vs. ROMD Correlation to improve DL 績效轉換率
     - input with 漲/跌家數
-    - input with lowerbound k style
-    - more epoch to avoid fast convergence
+    - input with 還原/非還原價
+    - input with 三大法人籌碼資訊
+    - input with EPS財報/ 基本面 
     - attention (temperal / cross-secction)
-    - self-learned history and L lengths
-    - simply label
-        - the 40t day's R
-        - self learn the label days and input days
 
-- improve DL Transferability
-    - capital-aware DL with risk%, cap, stop input
-    - retrain min parameters
-    - sell using score    
+- DL Branch Research
+    - sell using DL
+    - 0050 only DL
     - non breakout strategy
-    - 三大法人籌碼資訊/ EPS財報/ 基本面 
-
-
 
 
 ## To do

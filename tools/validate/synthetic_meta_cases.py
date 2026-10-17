@@ -4950,17 +4950,11 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
 
     check_true(
-        "standard_model_sop_20260904_v7_common_sections_unchanged",
-        int(MODEL_STANDARD_SOP.version) == 7
+        "model_sop_v8_authorized_four_section_contract_not_historical_v7",
+        int(MODEL_STANDARD_SOP.version) == 8
         and [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
-        == [
-            (1, "Learnability"),
-            (2, "Generalization"),
-            (3, "Upside / Downside Alignment"),
-            (4, "Top-tail Economic Quality"),
-            (5, "Ranking / Boundary"),
-            (6, "Evidence Coverage"),
-        ],
+        == [(1,"Learnability"),(2,"Generalization"),
+            (3,"Upside / Downside Validation"),(4,"Joint MFE / Adverse Quality")],
     )
     comparison_sections = [(section.number, section.title) for section in MODEL_STANDARD_COMPARISON.sections]
     comparison_generalization = table_contract(
@@ -4969,8 +4963,8 @@ def validate_research_report_contract_freeze_case(_base_params):
     # Frozen to the user's 2026-09-04 standard comparison presentation.  These
     # are UI invariants, not assertions about a particular experimental model.
     check_true(
-        "standard_multi_model_comparison_20260904_v11_retains_six_sections_and_transition_tables",
-        int(MODEL_STANDARD_COMPARISON.version) == 11
+        "model_comparison_v12_matches_approved_sop_v8_and_preserves_generalization_tables",
+        int(MODEL_STANDARD_COMPARISON.version) == 12
         and not hasattr(MODEL_STANDARD_COMPARISON, "model_specific_extension_ids")
         and comparison_extension_ids() == tuple(MODEL_COMPARISON_EXTENSION_SCHEMAS)
         and comparison_sections == [(item.number, item.title) for item in MODEL_STANDARD_SOP.sections]
@@ -5081,637 +5075,300 @@ def validate_research_report_contract_freeze_case(_base_params):
         and "model.rolling_standard_comparison" not in current,
     )
 
-    learn_headers = table_contract("model.standard_sop", "learnability", "learnability").headers
-    alignment_headers = table_contract(
-        "model.standard_sop", "upside_downside_alignment", "upside_downside_alignment"
-    ).headers
-    tail_headers = table_contract(
-        "model.standard_sop", "top_tail_economic_quality", "top_tail_economic_quality"
-    ).headers
-    ranking_headers = table_contract(
-        "model.standard_sop", "ranking_boundary", "ranking_boundary"
-    ).headers
+    # Version 8 retains every shared M1/M2 metric and M3 four-correlation
+    # contract; version 12 derives the multi-model headers from the same owner.
+    # The numerical four-section producer is tested below against independent
+    # stock-day ground truth, not merely renderer string matches.
+    from services.breakout_quality.standard_model_sop import (
+        JOINT_QUALITY_EVALUATION_ID,
+        build_standard_model_sop,
+        aggregate_standard_model_sop_robustness,
+    )
+    import numpy as np
+    import pandas as pd
+
+    expected_columns = (
+        ("learnability", ("Split", "Groups", "Daily rho", "Global rho", "Pair",
+                            "Top 10% Target", "Bottom 10% Target", "Top-Bottom Target")),
+        ("generalization", ("Comparison", "Δ Daily rho", "Δ Pair", "Δ Top-Bottom")),
+        ("upside_downside_alignment", ("Split", "Target→MFE rho", "Target→Safety rho",
+                                       "Score→MFE rho", "Score→Safety rho")),
+        ("joint_mfe_adverse_quality", ("Split", "Top 10% N", "Top 10% MFE",
+                                       "Top 10% Adverse", "Top 10% Joint Quality")),
+    )
     check_true(
-        "standard_sop_v5_common_columns_match_user_approved_semantics",
-        "Top-Bottom Target" in learn_headers
-        and alignment_headers == (
-            "Split", "Target→MFE rho", "Target→Safety rho", "Score→MFE rho", "Score→Safety rho"
+        "model_sop_v8_user_authorized_exact_four_chapter_titles_and_metric_sets",
+        [(s.number, s.section_id, s.title) for s in MODEL_STANDARD_SOP.sections] == [
+            (1, "learnability", "Learnability"),
+            (2, "generalization", "Generalization"),
+            (3, "upside_downside_alignment", "Upside / Downside Validation"),
+            (4, "joint_mfe_adverse_quality", "Joint MFE / Adverse Quality"),
+        ]
+        and all(
+            table_contract("model.standard_sop", section_id, section_id).headers == headers
+            for section_id, headers in expected_columns
         )
-        and "Pred-Safety→Target rho" not in alignment_headers
-        and "Pred-Safety→Score rho" not in alignment_headers
-        and "Top10 Low-Adverse" in tail_headers
-        and "HM/HS" in tail_headers and "HM/LS" in tail_headers
-        and "LM/HS" in tail_headers and "LM/LS" in tail_headers
-        and "HM/HS ×" not in tail_headers
-        and "Top-K Target" not in ranking_headers
-        and "Top-K Lift" in ranking_headers
-        and "競爭日 / Pool日" in ranking_headers,
-        detail=(
-            f"learn={learn_headers}; alignment={alignment_headers}; "
-            f"tail={tail_headers}; ranking={ranking_headers}"
+        and "Evidence Coverage" not in {s.title for s in MODEL_STANDARD_SOP.sections}
+        and not {"ranking_boundary", "top_tail_economic_quality"} &
+                {s.section_id for s in MODEL_STANDARD_SOP.sections},
+    )
+    check_true(
+        "multi_model_comparison_reuses_identical_canonical_four_section_metric_semantics",
+        [(s.number, s.section_id, s.title) for s in MODEL_STANDARD_COMPARISON.sections]
+        == [(s.number, s.section_id, s.title) for s in MODEL_STANDARD_SOP.sections]
+        and all(
+            table_contract("model.standard_comparison", section_id, section_id).headers
+            == ("Model", *[key for key in headers if key not in ("Split", "Comparison")])
+            for section_id, headers in expected_columns
         ),
     )
-
-    base_metrics = {
-        "validation": {
-            "group_count": 10,
-            "mean_daily_spearman": 0.30,
-            "global_spearman_vs_raw_target": 0.31,
-            "pairwise_concordance": 0.60,
-            "top_score_decile_raw_target_mean": 1.2,
-            "bottom_score_decile_raw_target_mean": 0.3,
-            "top_k_quality": {
-                "top_k": 10, "boundary_width": 3, "ndcg_at_k": 0.70,
-                "top_k_raw_target_lift": 0.50, "oracle_top_k_overlap": 0.10,
-                "boundary_concordance": 0.53, "boundary_raw_target_gap": 0.10,
-                "competition_date_count": 4, "all_date_count": 6,
-            },
-        },
-        "oos": {
-            "group_count": 10,
-            "mean_daily_spearman": 0.28,
-            "global_spearman_vs_raw_target": 0.29,
-            "pairwise_concordance": 0.58,
-            "top_score_decile_raw_target_mean": 1.1,
-            "bottom_score_decile_raw_target_mean": 0.35,
-            "top_k_quality": {
-                "top_k": 10, "boundary_width": 3, "ndcg_at_k": 0.68,
-                "top_k_raw_target_lift": 0.45, "oracle_top_k_overlap": 0.09,
-                "boundary_concordance": 0.52, "boundary_raw_target_gap": 0.08,
-                "competition_date_count": 5, "all_date_count": 7,
-            },
-        },
-        "breakout_candidate_oos": {
-            "group_count": 5,
-            "mean_daily_spearman": 0.25,
-            "global_spearman_vs_raw_target": 0.26,
-            "pairwise_concordance": 0.56,
-            "top_score_decile_raw_target_mean": 1.0,
-            "bottom_score_decile_raw_target_mean": 0.4,
-            "top_k_quality": {
-                "top_k": 10, "boundary_width": 3, "ndcg_at_k": 0.75,
-                "top_k_raw_target_lift": 0.40, "oracle_top_k_overlap": 0.50,
-                "boundary_concordance": 0.54, "boundary_raw_target_gap": 0.12,
-                "competition_date_count": 3, "all_date_count": 5,
-            },
-        },
-    }
-
-    def alignment_scope(*, target_mfe, target_safety, score_mfe, score_safety, top_n):
-        return {
-            "target_to_full_mfe_daily_spearman": target_mfe,
-            "target_to_low_adverse_daily_spearman": target_safety,
-            "score_to_full_mfe_daily_spearman": score_mfe,
-            "score_to_low_adverse_daily_spearman": score_safety,
-            "population": {
-                "full_mfe_r_mean": 1.0,
-                "adverse_r_mean": 0.50,
-                "low_adverse_r_mean": -0.50,
-                "high_mfe_pct": 50.0,
-                "high_safety_pct": 50.0,
-                "quadrants": {"hmhs": 25.0, "hmls": 25.0, "lmhs": 25.0, "lmls": 25.0},
-            },
-            "top_10pct": {
-                "n": top_n,
-                "full_mfe_r_mean": 2.0,
-                "adverse_r_mean": 0.40,
-                "low_adverse_r_mean": -0.40,
-                "high_mfe_pct": 80.0,
-                "high_safety_pct": 70.0,
-                "hmhs_pct": 60.0,
-                "hmhs_enrichment": 2.40,
-                "quadrants": {
-                    "hmhs": {"pct": 60.0, "population_pct": 25.0, "enrichment": 2.40},
-                    "hmls": {"pct": 20.0, "population_pct": 25.0, "enrichment": 0.80},
-                    "lmhs": {"pct": 10.0, "population_pct": 25.0, "enrichment": 0.40},
-                    "lmls": {"pct": 10.0, "population_pct": 25.0, "enrichment": 0.40},
-                },
-            },
-        }
-
-    def payload(model_id, objective):
-        standard = {
-            "schema": "standard_model_sop_v9",
-            "evaluation_mode": "forward_oos",
-            "training": {"objective": objective},
-            "split_metrics": json.loads(json.dumps(base_metrics)),
-            "upside_downside_alignment_evaluation": {
-                "validation": alignment_scope(
-                    target_mfe=0.30, target_safety=0.20, score_mfe=0.28, score_safety=0.18, top_n=2
-                ),
-                "oos": alignment_scope(
-                    target_mfe=0.27, target_safety=0.19, score_mfe=0.25, score_safety=0.17, top_n=2
-                ),
-                "breakout_candidate_oos": alignment_scope(
-                    target_mfe=0.24, target_safety=0.18, score_mfe=0.22, score_safety=0.16, top_n=1
-                ),
-            },
-            "mode_extensions": {},
-        }
-        return {
-            "model_research_id": model_id,
-            "training": {"objective": objective},
-            "standard_model_sop": standard,
-        }
-
-    control_payload = payload("MODEL-CONTROL", TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING)
-    joint_payload = payload("MODEL-JOINT", TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING)
-    h_only_payload = payload("MODEL-HONLY", TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING)
-    joint_min_payload = payload(
-        "MODEL-JOINT-MIN",
-        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
-    )
-    control_payload["safety_raw_mfe_evaluation"] = {
-        "validation": {
-            "raw_safety": dict(base_metrics["validation"]),
-            "raw_mfe": dict(base_metrics["validation"]),
-        },
-        "oos": {
-            "raw_safety": dict(base_metrics["oos"]),
-            "raw_mfe": dict(base_metrics["oos"]),
-            "model_gate": {
-                "predicted_safety_to_raw_mfe_mean_daily_spearman": -0.80,
-                "joint_product_to_actual_hmhs_mean_daily_spearman": 0.03,
-                "upper_right_s5_m5": {"n": 0},
-                "actual_truth_geometry": {
-                    "safety_to_mfe_mean_daily_spearman": -0.12,
-                    "s5_m5": {"n": 4, "population_pct": 4.0, "independence_enrichment": 0.9},
-                    "s4plus_m4plus": {"n": 15, "population_pct": 15.0, "independence_enrichment": 0.95},
-                    "actual_joint_geometry": [
-                        [
-                            {"n": 1 + s + m, "population_pct": 4.0, "independence_enrichment": 1.0}
-                            for m in range(5)
-                        ]
-                        for s in range(5)
-                    ],
-                },
-                "predicted_joint_geometry": [
-                    [
-                        {"n": 10 + s + m, "actual_hmhs_pct": 20.0 + s + m}
-                        for m in range(5)
-                    ]
-                    for s in range(5)
-                ],
-                "safety_cohorts": [
-                    {
-                        "predicted_safety_quintile": s,
-                        "n": 100 + s,
-                        "raw_mfe_to_actual_mfe_mean_daily_spearman": 0.10 + s * 0.01,
-                        "high_mfe_pct": 70.0 - s * 10.0,
-                        "hmhs_pct": 20.0 + s,
-                    }
-                    for s in range(1, 6)
-                ],
-            },
-        },
-        "breakout_candidate_oos": {
-            "raw_safety": dict(base_metrics["breakout_candidate_oos"]),
-            "raw_mfe": dict(base_metrics["breakout_candidate_oos"]),
-        },
-    }
-    joint_payload["safety_raw_mfe_hmhs_evaluation"] = {
-        "validation": {
-            "joint_hmhs": {
-                "population_hmhs_pct": 22.0,
-                "pairwise_concordance": 0.57,
-                "global_average_precision": 0.25,
-                "top_10pct": {"hmhs_pct": 26.0, "hmhs_enrichment": 1.18},
-            },
-            "joint_product_control": {
-                "pairwise_concordance": 0.56,
-                "global_average_precision": 0.24,
-                "top_10pct": {"hmhs_pct": 25.0, "hmhs_enrichment": 1.12},
-            },
-        }
-    }
-    for key, pct, pair, ap, daily_ap, top10, top20 in (
-        ("validation", 22.0, 0.57, 0.25, 0.24, 1.17, 1.10),
-        ("oos", 22.0, 0.54, 0.23, 0.22, 1.11, 1.08),
-        ("breakout_candidate_oos", 24.0, 0.50, 0.24, 0.23, 1.03, 1.02),
-    ):
-        h_only_payload["standard_model_sop"]["split_metrics"][key].update({
-            "population_hmhs_pct": pct,
-            "global_average_precision": ap,
-            "mean_daily_average_precision": daily_ap,
-            "top_10pct": {"hmhs_pct": pct + 1.0, "hmhs_enrichment": top10},
-            "top_20pct": {"hmhs_pct": pct + 0.5, "hmhs_enrichment": top20},
-            "pairwise_concordance": pair,
+    # Construct a dated daily-universal pool with both MFE and adverse truth.
+    # A separate late-date breakout cohort has the same tickers, reducing N but
+    # never changing the targets or the model's fitting score source.
+    dates = list(pd.date_range("2024-05-02", periods=10, freq="B"))
+    stock_count = 36
+    records = []
+    for d, date in enumerate(dates):
+        for stock in range(stock_count):
+            mfe = 0.02 + 0.0037*stock + 0.0012*d
+            adverse = 0.11 - 0.0016*stock + 0.003*(stock % 4) + 0.0005*d
+            records.append({
+                "date": date,
+                "ticker": f"{stock:04d}",
+                "group_index": len(records),
+                "label": int(mfe >= 0.10),
+                "target_favorable_r": mfe / (0.05+0.003*(stock % 5)),
+                "target_adverse_r": adverse / (0.05+0.003*(stock % 5)),
+                "target_favorable_return": mfe,
+                "target_adverse_return_to_peak": adverse,
+            })
+    group_table = pd.DataFrame(records)
+    raw_target = (group_table.target_favorable_r.to_numpy()
+                  -0.35*group_table.target_adverse_r.to_numpy())
+    def scores(day_ids, stock_limit=stock_count, offset=0):
+        ids = np.asarray([d*stock_count+stock for d in day_ids for stock in range(stock_limit)], dtype=np.int64)
+        values = raw_target[ids] + 0.09*np.sin(ids*0.91+offset)
+        return pd.DataFrame({
+            "group_index": ids,
+            "date": group_table.iloc[ids].date.to_numpy(),
+            "breakout_quality_score": values,
         })
-    joint_min_payload["safety_raw_mfe_joint_min_evaluation"] = {
-        "validation": {
-            "raw_safety": dict(base_metrics["validation"]),
-            "raw_mfe": dict(base_metrics["validation"]),
-            "joint_min": {
-                "population_joint_min_mean": 0.33,
-                "mean_daily_spearman": 0.41,
-                "pairwise_concordance": 0.63,
-                "top_10pct": {
-                    "mean_joint_min": 0.61,
-                    "mean_safety": 0.72,
-                    "mean_mfe": 0.74,
-                    "hmhs_pct": 62.0,
-                    "hmhs_enrichment": 2.7,
-                },
-                "top_20pct": {"mean_joint_min": 0.55, "hmhs_enrichment": 2.1},
-            },
-        }
-    }
 
-    conditional_payload = payload("MODEL-HS-COND", TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING)
-    conditional_payload["hs_conditional_mfe_evaluation"] = {}
-    for scope_key, rho, pair, qual_pair, p40, p45, contam, recall, hmhs, hmls, oracle_hmhs in (
-        ("validation", 0.42, 0.65, 0.67, 0.60, 0.56, 36.0, 64.0, 27.0, 30.0, 45.0),
-        ("oos", 0.38, 0.63, 0.66, 0.58, 0.54, 37.0, 63.0, 25.0, 33.0, 44.0),
-        ("breakout_candidate_oos", 0.41, 0.66, 0.69, 0.61, 0.57, 36.5, 62.0, 24.0, 16.0, 42.0),
-    ):
-        conditional_payload["hs_conditional_mfe_evaluation"][scope_key] = {
-            "raw_safety": {
-                "mean_daily_spearman": rho - 0.05,
-                "global_spearman_vs_raw_target": rho - 0.07,
-                "pairwise_concordance": pair - 0.02,
-            },
-            "conditional_mfe_true_hs": {
-                "mean_daily_spearman": rho,
-                "global_spearman_vs_raw_target": rho - 0.03,
-                "pairwise_concordance": pair,
-            },
-            "hs_qualification": {"pairwise_concordance": qual_pair},
-            "hs_qualification_boundary": {
-                "p40_p60": {"pairwise_concordance": p40},
-                "p45_p55": {"pairwise_concordance": p45},
-            },
-            "true_hs_oracle_gate": {
-                "selected_hmhs_pct": oracle_hmhs,
-                "selected_hmls_pct": 0.0,
-                "selected_high_mfe_pct": oracle_hmhs,
-                "selected_mean_favorable_r": 2.1,
-                "selected_mean_adverse_r": 0.2,
-            },
-            "lexicographic_model_gate": {
-                "predicted_hs_true_ls_pct": contam,
-                "true_hs_recall_pct": recall,
-                "selected_high_mfe_pct": hmhs + hmls,
-                "selected_high_safety_pct": 100.0 - hmls,
-                "selected_hmhs_pct": hmhs,
-                "selected_hmls_pct": hmls,
-                "true_ls_contamination_lift_vs_predicted_hs": 1.4,
-                "true_ls_conditional_rank_percentile_p50": 0.61,
-                "true_ls_conditional_rank_percentile_p90": 0.93,
-                "true_ls_conditional_rank_percentile_p99": 0.996,
-                "hmhs_enrichment_vs_predicted_hs": 1.2,
-                "selected_mean_favorable_r": 1.6,
-                "selected_mean_adverse_r": 0.36,
-                "hmhs_gap_vs_true_hs_oracle_pp": hmhs - oracle_hmhs,
-                "high_mfe_gap_vs_true_hs_oracle_pp": (hmhs + hmls) - oracle_hmhs,
-                "mean_favorable_r_gap_vs_true_hs_oracle": -0.5,
-            },
-        }
-    conditional_payload["hs_conditional_mfe_evaluation"]["lexicographic_reference_control"] = {
-        "available": True,
-        "reference_model_id": "MODEL-HS-COND-REF",
-        "oos": {"lexicographic_model_gate": {
-            "selected_high_mfe_pct": 58.0, "selected_high_safety_pct": 44.0,
-            "selected_hmhs_pct": 25.0, "selected_hmls_pct": 33.0,
-            "predicted_hs_true_ls_pct": 36.8,
-        }},
-        "breakout_candidate_oos": {"lexicographic_model_gate": {
-            "selected_high_mfe_pct": 40.0, "selected_high_safety_pct": 60.0,
-            "selected_hmhs_pct": 24.0, "selected_hmls_pct": 16.0,
-            "predicted_hs_true_ls_pct": 36.9,
-        }},
-    }
-
-    rendered = {
-        "control": app._render_continuous_ranker_simple_console(control_payload),
-        "joint": app._render_continuous_ranker_simple_console(joint_payload),
-        "h_only": app._render_continuous_ranker_simple_console(h_only_payload),
-        "joint_min": app._render_continuous_ranker_simple_console(joint_min_payload),
-        "hs_conditional": app._render_continuous_ranker_simple_console(conditional_payload),
-    }
-    standard_lines = {
-        key: "\n".join(line for line in text.splitlines() if line.startswith("標準模型 SOP｜"))
-        for key, text in rendered.items()
-    }
-    extension_expectations = {
-        "multi_head_learnability": ("control", "Model-specific Extension｜Multi-head Learnability"),
-        "direct_hmhs_joint_retrieval": ("joint", "Model-specific Extension｜MODEL-JOINT｜Direct HM/HS Joint Retrieval"),
-        "direct_hmhs_h_only": ("h_only", "Model-specific Extension｜MODEL-HONLY｜Direct HM/HS H-only Learnability"),
-        "joint_min_retrieval": ("joint_min", "Model-specific Extension｜MODEL-JOINT-MIN｜Continuous Joint-Min Retrieval"),
-        "hs_conditional_mfe_gate": ("hs_conditional", "Model-specific Extension｜HS Qualification / Conditional-MFE Quality"),
-    }
+    def make_standard(offset=0):
+        return build_standard_model_sop(
+            group_table=group_table,
+            raw_target=raw_target,
+            training_objective="synthetic_objective",
+            validation_scores=scores((0,1,2), offset=offset),
+            oos_scores=scores((3,4,5,6,7,8,9), offset=offset),
+            breakout_scores=scores((3,4,5,6,7,8,9),stock_limit=18,offset=offset),
+            evaluation_mode="forward_oos",
+            evaluation_horizon_bars=40,
+        )
+    standard = make_standard()
+    base_metrics = standard["split_metrics"]
+    control_payload = {"model_research_id":"MODEL-CONTROL", "standard_model_sop": standard}
+    other_payload = {"model_research_id":"MODEL-OTHER", "standard_model_sop": make_standard(offset=3)}
     check_true(
-        "model_extension_registry_is_fully_covered_by_capability_payloads",
-        set(extension_expectations) == set(MODEL_EXTENSION_SCHEMAS),
-        detail=f"covered={sorted(extension_expectations)}, registered={sorted(MODEL_EXTENSION_SCHEMAS)}",
+        "joint_sop_producer_is_v10_and_freezes_horizon_truth_definitions_and_stock_day_cohorts",
+        standard.get("schema") == "standard_model_sop_v10"
+        and standard["evaluation_truth"]["horizon_bars"] == 40
+        and standard["evaluation_truth"]["mfe_source"] == "target_favorable_return"
+        and standard["evaluation_truth"]["adverse_source"] == "target_adverse_return_to_peak"
+        and standard["evaluation_truth"]["joint_quality_id"] == JOINT_QUALITY_EVALUATION_ID
+        and all(len(x)==64 for x in standard["evaluation_truth"]["cohort_identity"].values()),
     )
-    conditional_markdown = "\n".join(app._render_continuous_ranker_simple_markdown(conditional_payload))
-    run_bound_checks(
-        check_true,
-        (
-            ('hs_conditional_extension_renders_compact_qualification_and_oracle_gap_surface', 'P45–P55 Pair' in rendered['hs_conditional'] and 'Pred-HS true-LS' in rendered['hs_conditional'] and ('True-HS recall' in rendered['hs_conditional']) and ('Pred-HS HM/HS' in rendered['hs_conditional']) and ('Δ MFE vs Oracle' in rendered['hs_conditional']) and ('HS-only rho' not in rendered['hs_conditional']) and ('True-HS Oracle HM/HS' not in rendered['hs_conditional']) and ('P45–P55 Pair' in conditional_markdown) and ('Δ MFE vs Oracle' in conditional_markdown),),
-            ('model_extensions_cannot_mutate_standard_model_sop_namespace', all((extension_contract(extension_id).title not in standard_lines[render_key] and expected_heading in rendered[render_key] for extension_id, (render_key, expected_heading) in extension_expectations.items())) and 'Δ HM/HS Pair' not in standard_lines['h_only'],),
-        ),
+    def top(scope):
+        return standard["upside_downside_alignment_evaluation"][scope]["top_10pct"]
+    check_true(
+        "top10_requires_exact_ceil_10pct_with_same_stock_days_and_truth_for_global_breakout",
+        top("oos")["n"] == 7*4
+        and top("breakout_candidate_oos")["n"] == 7*2
+        and 0 <= top("oos")["joint_quality_pct"] <= 100
+        and 0 <= top("breakout_candidate_oos")["joint_quality_pct"] <= 100
+        and all(0 <= standard["upside_downside_alignment_evaluation"][scope]["top_10pct"]["joint_quality_pct"] <= 100
+                for scope in ("validation", "oos", "breakout_candidate_oos")),
+    )
+    # Independent truth validation: reconstruct expected daily percentile ranks
+    # directly from the dataset and compare selected Top10 to the producer.
+    check_values = []
+    for d in range(3,10):
+        day = group_table.iloc[d*stock_count:(d+1)*stock_count]
+        ranked = scores((d,)).sort_values(["breakout_quality_score","group_index"],ascending=[False,True]).head(4)
+        mfe_pct = day.target_favorable_return.rank(method="average",pct=False).to_numpy()
+        safety_pct = (-day.target_adverse_return_to_peak).rank(method="average",pct=False).to_numpy()
+        quality = 100*np.minimum((mfe_pct-1)/(stock_count-1),(safety_pct-1)/(stock_count-1))
+        check_values.extend(quality[ranked.group_index.to_numpy()-d*stock_count])
+    expected_joint = float(np.mean(check_values))
+    check_true(
+        "joint_quality_matches_independent_same_day_minimum_percentile_on_actual_selected_stocks",
+        abs(expected_joint - float(top("oos")["joint_quality_pct"])) < 1e-4,
+        detail=f"expected={expected_joint:.6f} producer={top('oos')['joint_quality_pct']:.6f}",
     )
     check_true(
-        "cross_profile_standard_v6_common_headers_and_section_order_are_invariant",
-        all(
-            "Top-Bottom Target" in text
-            and "Validation → OOS" in text
-            and "Primary score" not in text
-            and "標準模型 SOP｜3. Upside / Downside Alignment" in text
-            and "標準模型 SOP｜4. Top-tail Economic Quality" in text
-            and "標準模型 SOP｜5. Ranking / Boundary" in text
-            and "標準模型 SOP｜6. Evidence Coverage" in text
-            and "標準模型 SOP｜3. Multi-head Learnability" not in text
-            and "標準模型 SOP｜6. Truth / Prediction Geometry" not in text
-            and "Target→Safety rho" in text
-            and "Score→Safety rho" in text
-            and "Pred-Safety→Target rho" not in text
-            and "Pred-Safety→Score rho" not in text
-            and "Top10 Low-Adverse" in text
-            and "60.00% (2.40×)" in text
-            and "HM/LS" in text and "LM/HS" in text and "LM/LS" in text
-            and "Top-K Target" not in text
-            and "Top-K Lift" in text
-            and "競爭日 / Pool日" in text
-            and text.find("標準模型 SOP｜6. Evidence Coverage")
-                > text.find("標準模型 SOP｜5. Ranking / Boundary")
-            for text in rendered.values()
-        ),
+        "standard_sop_evidence_gate_is_complete_only_for_finite_legitimate_v10_evidence",
+        app._standard_model_sop_completeness_issues(control_payload) == ()
+        and app._standard_model_sop_completeness_issues(other_payload) == (),
     )
-
-    comparison_text = app._render_standard_model_comparison(
-        [
-            {"model_id": "MODEL-A", "payload": control_payload},
-            {"model_id": "MODEL-B", "payload": control_payload},
-            {"model_id": "MODEL-C", "payload": control_payload},
-        ],
+    for defect in ("schema", "mfe_missing", "joint_nan", "rho_nan", "cohort_missing", "horizon_missing"):
+        bad = json.loads(json.dumps(control_payload))
+        ss = bad["standard_model_sop"]
+        if defect == "schema":ss["schema"]="standard_model_sop_v9"
+        elif defect == "mfe_missing":ss["upside_downside_alignment_evaluation"]["oos"]["top_10pct"].pop("mfe_pct_mean")
+        elif defect == "joint_nan":ss["upside_downside_alignment_evaluation"]["oos"]["top_10pct"]["joint_quality_pct"]=float("nan")
+        elif defect == "rho_nan":ss["split_metrics"]["oos"]["mean_daily_spearman"]=float("nan")
+        elif defect == "cohort_missing":ss["evaluation_truth"]["cohort_identity"].pop("oos")
+        else:ss["evaluation_truth"].pop("horizon_bars")
+        check_true(
+            f"standard_sop_v8_rejects_{defect}_instead_of_rendering_unsupported_values",
+            bool(app._standard_model_sop_completeness_issues(bad)),
+        )
+    single_console = app._render_continuous_ranker_simple_console(control_payload)
+    comparison = app._render_standard_model_comparison(
+        [{"model_id":"MODEL-CONTROL","payload":control_payload},
+         {"model_id":"MODEL-OTHER","payload":other_payload}], target="console")
+    single_markdown = "\n".join(app._render_continuous_ranker_simple_markdown(control_payload))
+    check_true(
+        "single_model_and_multi_model_share_exact_four_chapter_global_breakout_renderers",
+        all(single_console.count(f"MODEL SOP | {i}. ") == 1 for i in range(1,5))
+        and all(comparison.count(f"MODEL SOP | {i}. ") == 1 for i in range(1,5))
+        and "Global" in single_console and "Breakout" in single_console
+        and "Global" in comparison and "Breakout" in comparison
+        and "Joint Quality" in single_console and "Joint Quality" in comparison
+        and "Top 10% Target" in single_console and "Top-Bottom Target" in comparison
+        and "Validation → OOS" in comparison
+        and "Global OOS → Breakout OOS" in comparison
+        and "| Model |" in single_markdown,
+    )
+    forbidden = ("Evidence Coverage", "Ranking / Boundary", "Top-tail Economic Quality",
+                 "Model-specific Extension", "HM/LS", "HM/HS", "Joint Success", "MFE-MAE")
+    check_true(
+        "four_chapter_standard_surface_does_not_leak_experiment_specific_or_legacy_metrics",
+        not any(keyword in single_console or keyword in comparison for keyword in forbidden),
+    )
+    # An extension is still available to a read-only Audit producer but must
+    # never be injected into persistent M1-M4.  Registry ownership is preserved.
+    check_true(
+        "historical_model_extensions_are_retained_as_audit_capabilities_not_removed_from_registry",
+        "multi_head_learnability" in MODEL_EXTENSION_SCHEMAS
+        and comparison_extension_ids_for_evidence_families(("multi_head_learnability",))
+            == ("multi_head_learnability",)
+        and "_render_model_comparison_specific_extensions" in app_source
+        and "parts.extend(_render_model_comparison_specific_extensions" not in app_source,
+    )
+    bad_truth = json.loads(json.dumps(other_payload))
+    bad_truth["standard_model_sop"]["evaluation_truth"]["horizon_bars"] = 20
+    for kind, broken in (("horizon",bad_truth),):
+        try:
+            app._render_standard_model_comparison(
+                [{"model_id":"MODEL-CONTROL","payload":control_payload},
+                 {"model_id":"MODEL-OTHER","payload":broken}],target="console")
+        except ValueError as exc:
+            check_true(f"multi_model_comparison_rejects_unmatched_{kind}_truth", "truth mismatch" in str(exc))
+        else:
+            check_true(f"multi_model_comparison_rejects_unmatched_{kind}_truth", False)
+    bad_cohort = json.loads(json.dumps(other_payload))
+    bad_cohort["standard_model_sop"]["evaluation_truth"]["cohort_identity"]["oos"] = "a"*64
+    try:
+        app._render_standard_model_comparison(
+            [{"model_id":"MODEL-CONTROL","payload":control_payload},
+             {"model_id":"MODEL-OTHER","payload":bad_cohort}],target="console")
+    except ValueError as exc:
+        check_true("multi_model_comparison_rejects_unmatched_stock_day_cohort", "truth mismatch" in str(exc))
+    else:
+        check_true("multi_model_comparison_rejects_unmatched_stock_day_cohort", False)
+    first_seed,second_seed = standard,other_payload["standard_model_sop"]
+    aggregated = aggregate_standard_model_sop_robustness([first_seed,second_seed],seeds=(11,22))
+    joint_oos = aggregated["upside_downside_alignment_evaluation"]["oos"]["top_10pct"]["joint_quality_pct"]
+    separate = [seed["upside_downside_alignment_evaluation"]["oos"]["top_10pct"]["joint_quality_pct"]
+                for seed in (first_seed,second_seed)]
+    std = float(np.std(separate,ddof=0))
+    check_true(
+        "multi_seed_joint_quality_is_seed_wise_mean_with_explicit_correct_standard_deviation",
+        aggregated["schema"] == "standard_model_sop_v10_robustness_mean"
+        and abs(joint_oos-float(np.mean(separate)))<1e-8
+        and abs(aggregated["mode_extensions"]["robustness"]["oos_top10_joint_quality_std"]-std)<1e-8
+        and app._standard_model_sop_completeness_issues({"standard_model_sop":aggregated}) == (),
+    )
+    robust_output = app._render_standard_model_comparison(
+        [{"model_id":"ROBUST-A","payload":{"standard_model_sop":aggregated}},
+         {"model_id":"ROBUST-B","payload":{"standard_model_sop":aggregated}}],
         target="console",
     )
     check_true(
-        "multi_model_comparison_uses_single_section_title_with_oos_then_breakout_tables",
-        all(model in comparison_text for model in ("MODEL-A", "MODEL-B", "MODEL-C"))
-        and comparison_text.count("模型比較 SOP｜1. Learnability") == 1
-        and "模型比較 SOP｜1. Learnability｜Forward OOS" not in comparison_text
-        and "模型比較 SOP｜1. Learnability｜Breakout slice" not in comparison_text
-        and comparison_text.count("模型比較 SOP｜3. Upside / Downside Alignment") == 1
-        and comparison_text.count("模型比較 SOP｜4. Top-tail Economic Quality") == 1
-        and comparison_text.count("模型比較 SOP｜5. Ranking / Boundary") == 1
-        and "Forward OOS" in comparison_text
-        and "Breakout slice" in comparison_text
-        and "Δ Daily rho" in comparison_text
-        and "Validation → OOS" in comparison_text
-        and "OOS → Breakout slice" in comparison_text
-        and "Target→Safety rho" in comparison_text
-        and "Top10 Low-Adverse" in comparison_text
-        and "Top-K Lift" in comparison_text
-        and "競爭日 / Pool日" in comparison_text
-        and "模型比較 SOP｜6. Evidence Coverage" in comparison_text
-        and comparison_text.find("模型比較 SOP｜1. Learnability")
-            < comparison_text.find("模型比較 SOP｜2. Generalization")
-            < comparison_text.find("模型比較 SOP｜3. Upside / Downside Alignment")
-            < comparison_text.find("模型比較 SOP｜4. Top-tail Economic Quality")
-            < comparison_text.find("模型比較 SOP｜5. Ranking / Boundary"),
+        "robustness_report_keeps_four_core_chapters_and_displays_joint_quality_variance",
+        "MODEL SOP | 4. Joint MFE / Adverse Quality" in robust_output
+        and "Across-seed Stability" in robust_output
+        and "Top10 Joint Quality σ" in robust_output
+        and "Top10 Joint Quality mean" in robust_output,
     )
+    try:
+        broken_aggregate_seed=json.loads(json.dumps(second_seed))
+        broken_aggregate_seed["evaluation_truth"]["cohort_identity"]["oos"]="b"*64
+        aggregate_standard_model_sop_robustness([first_seed,broken_aggregate_seed],seeds=(11,22))
+    except ValueError as exc:
+        check_true("robustness_refuses_different_seed_outcome_cohorts", "cohort" in str(exc))
+    else:
+        check_true("robustness_refuses_different_seed_outcome_cohorts", False)
 
-    check_true(
-        "multi_model_comparison_keeps_semantic_head_learnability_in_scoped_model_extension",
-        comparison_text.count("Model-specific Extension｜Multi-head Learnability") == 1
-        and "Forward OOS" in comparison_text
-        and "Breakout slice" in comparison_text
-        and "Raw Safety Daily" in comparison_text
-        and "Raw MFE Daily" in comparison_text
-        and "Conditional MFE Daily" not in comparison_text
-        and "Model-specific Extension｜Truth / Prediction Geometry" not in comparison_text
-        and all(model_id in comparison_text for model_id in ("MODEL-A", "MODEL-B", "MODEL-C"))
-        and "模型比較 SOP｜3. Multi-head Learnability" not in comparison_text,
-        detail=comparison_text,
-    )
+    # Scientific legality: malformed scores must BLOCK rather than reducing
+    # the denominator and presenting a deceptively comparable model ranking.
+    invalid_scores = scores((3,4,5)).copy()
+    invalid_scores.loc[0, "breakout_quality_score"] = float("nan")
+    try:
+        build_standard_model_sop(
+            group_table=group_table, raw_target=raw_target,
+            training_objective="synthetic_objective",
+            validation_scores=scores((0,1,2)),
+            oos_scores=invalid_scores,
+            breakout_scores=scores((3,4,5),stock_limit=18),
+            evaluation_mode="forward_oos", evaluation_horizon_bars=40,
+        )
+    except ValueError as exc:
+        check_true("nan_score_blocks_joint_sop_instead_of_shrinking_top10_sample", "非有限score" in str(exc))
+    else:
+        check_true("nan_score_blocks_joint_sop_instead_of_shrinking_top10_sample", False)
 
-    conditional_comparison = app._render_standard_model_comparison(
-        [
-            {"model_id": "MODEL-HS-A", "payload": conditional_payload},
-            {"model_id": "MODEL-HS-B", "payload": json.loads(json.dumps(conditional_payload))},
-        ],
-        target="console",
-    )
-    check_true(
-        "hs_conditional_mfe_evidence_capability_auto_merges_compact_scoped_cross_model_extension",
-        conditional_comparison.count(
-            "Model-specific Extension｜HS Qualification / Conditional-MFE Quality"
-        ) == 1
-        and "MODEL-HS-A" in conditional_comparison
-        and "MODEL-HS-B" in conditional_comparison
-        and "Pred-HS true-LS" in conditional_comparison
-        and "P45–P55 Pair" in conditional_comparison
-        and "Pred-HS HM/HS" in conditional_comparison
-        and "Δ MFE vs Oracle" in conditional_comparison
-        and "HS-only rho" not in conditional_comparison
-        and "Source Model" not in conditional_comparison,
-        detail=conditional_comparison,
-    )
-    check_true(
-        "comparison_extension_does_not_render_heading_for_empty_capability_payload",
-        app._render_model_comparison_specific_extensions(
-            [{"model_id": "EMPTY", "view": {"extensions": [{"id": "hs_conditional_mfe_gate"}]}}],
-            target="console",
-        ) == [],
-    )
+    corrupted_count = json.loads(json.dumps(second_seed))
+    corrupted_count["upside_downside_alignment_evaluation"]["oos"]["top_10pct"]["n"] -= 1
+    try:
+        aggregate_standard_model_sop_robustness([first_seed,corrupted_count],seeds=(11,22))
+    except ValueError as exc:
+        check_true("robustness_rejects_different_top10_denominators_across_seeds", "Top10 N differs" in str(exc))
+    else:
+        check_true("robustness_rejects_different_top10_denominators_across_seeds", False)
 
-    non_multi_comparison = app._render_standard_model_comparison(
-        [
-            {"model_id": "MODEL-MULTI", "payload": control_payload},
-            {"model_id": "MODEL-NONMULTI", "payload": h_only_payload},
-        ],
-        target="console",
-    )
-    head_scope = non_multi_comparison.split("Model-specific Extension｜Multi-head Learnability", 1)[1].split("Standard Mode Evidence", 1)[0]
+    rolling_seed = json.loads(json.dumps(first_seed))
+    rolling_seed["evaluation_mode"] = "rolling_oos"
+    rolling_seed["mode_extensions"] = {"rolling": {
+        "fold_count": 3, "fold_months": 12,
+        "direction_summary": {
+            "valid_year_count": 3, "positive_spearman_year_count": 2,
+            "positive_spread_year_count": 2,
+        },
+        "fold_drift": {
+            "criterion": "adjacent fold score mean shift >= 1.0 pooled score standard deviation",
+            "max_adjacent_mean_shift_in_pooled_std": 0.2,
+            "drift_flag": False, "flagged_folds": [],
+        },
+    }}
+    rolling_payload = {"model_research_id":"ROLL-SYNTHETIC","standard_model_sop":rolling_seed}
+    rolling_report = app._render_continuous_ranker_simple_console(rolling_payload)
     check_true(
-        "multi_head_extension_is_capability_driven_and_keeps_nonapplicable_models_as_dash",
-        "Model-specific Extension｜Truth / Prediction Geometry" not in non_multi_comparison
-        and "MODEL-MULTI" in head_scope
-        and "MODEL-NONMULTI" in head_scope
-        and "Raw Safety Daily" in head_scope
-        and "Raw MFE Daily" in head_scope
-        and "Direct HM/HS H-only Learnability" not in non_multi_comparison,
-        detail=non_multi_comparison,
+        "rolling_reuses_same_four_sop_sections_with_required_fold_year_evidence",
+        all(f"MODEL SOP | {i}. " in rolling_report for i in range(1,5))
+        and "Rolling Stability | Fold / Year" in rolling_report
+        and app._standard_model_sop_completeness_issues(rolling_payload) == (),
     )
-
-    section3 = comparison_text.split("模型比較 SOP｜3. Upside / Downside Alignment", 1)[1].split("模型比較 SOP｜4. Top-tail Economic Quality", 1)[0]
-    section4 = comparison_text.split("模型比較 SOP｜4. Top-tail Economic Quality", 1)[1].split("模型比較 SOP｜5. Ranking / Boundary", 1)[0]
+    rolling_second = json.loads(json.dumps(rolling_seed))
+    rolling_second["mode_extensions"]["rolling"]["fold_drift"]["drift_flag"] = True
+    rolling_second["mode_extensions"]["rolling"]["fold_drift"]["flagged_folds"] = ["fold-2"]
+    rolled = aggregate_standard_model_sop_robustness([rolling_seed,rolling_second],seeds=(11,22))
     check_true(
-        "multi_model_comparison_never_silently_drops_a_configured_model_from_common_sections",
-        all(section3.count(model) == 2 for model in ("MODEL-A", "MODEL-B", "MODEL-C"))
-        and all(section4.count(model) == 2 for model in ("MODEL-A", "MODEL-B", "MODEL-C")),
-        detail=f"section3={section3}; section4={section4}",
-    )
-
-    comparison_payloads = []
-    for idx, model_id in enumerate(("MODEL-LOW", "MODEL-MID", "MODEL-HIGH")):
-        candidate = json.loads(json.dumps(control_payload))
-        bump = idx * 0.01
-        for split_key in ("oos", "breakout_candidate_oos"):
-            candidate["standard_model_sop"]["split_metrics"][split_key]["mean_daily_spearman"] += bump
-            candidate["standard_model_sop"]["split_metrics"][split_key]["global_spearman_vs_raw_target"] += bump
-        comparison_payloads.append({"model_id": model_id, "payload": candidate})
-    comparison_markdown = app._render_standard_model_comparison(
-        comparison_payloads,
-        target="markdown",
-    )
-    check_true(
-        "multi_model_comparison_uses_best_green_worst_red_blue_titles_light_yellow_subtitles_and_existing_status_palette",
-        "#42A5F5" in comparison_markdown
-        and "#188038" in comparison_markdown
-        and "#C62828" in comparison_markdown
-        and "#D6B53A" in comparison_markdown
-        and "### <span" in comparison_markdown
-        and "Forward OOS</span>" in comparison_markdown
-        and "Breakout slice</span>" in comparison_markdown
-        and "Validation → OOS</span>" in comparison_markdown
-        and "OOS → Breakout slice</span>" in comparison_markdown
-        and "| Model | Groups | Daily rho |" in comparison_markdown
-        and "| Model | Δ Daily rho | Δ Pair | Δ Top-Bottom |" in comparison_markdown
-        and "Evidence Coverage" in comparison_markdown,
-    )
-
-    head_low = json.loads(json.dumps(control_payload))
-    head_high = json.loads(json.dumps(control_payload))
-    head_low["safety_raw_mfe_evaluation"]["oos"]["raw_safety"]["mean_daily_spearman"] = 0.20
-    head_high["safety_raw_mfe_evaluation"]["oos"]["raw_safety"]["mean_daily_spearman"] = 0.40
-    head_markdown = app._render_standard_model_comparison(
-        [
-            {"model_id": "HEAD-A", "payload": head_low},
-            {"model_id": "HEAD-B", "payload": head_high},
-        ],
-        target="markdown",
-    )
-    head_section = head_markdown.split("Model-specific Extension｜Multi-head Learnability", 1)[1].split("Breakout slice", 1)[0]
-    head_a = next(line for line in head_section.splitlines() if "HEAD-A" in line)
-    head_b = next(line for line in head_section.splitlines() if "HEAD-B" in line)
-    check_true(
-        "multi_head_extension_reuses_contract_best_worst_colors_by_semantic_metric",
-        "#C62828" in head_a and "#188038" in head_b,
-        detail="\n".join((head_a, head_b)),
-    )
-
-    rolling_payload = json.loads(json.dumps(control_payload))
-    rolling_payload.pop("safety_raw_mfe_evaluation", None)
-    rolling_standard = rolling_payload["standard_model_sop"]
-    rolling_standard["evaluation_mode"] = "rolling_oos"
-    rolling_standard["mode_extensions"] = {
-        "rolling": {
-            "fold_count": 5,
-            "fold_months": 12,
-            "direction_summary": {
-                "valid_year_count": 5,
-                "positive_spearman_year_count": 4,
-                "positive_spread_year_count": 3,
-            },
-            "fold_drift": {
-                "max_adjacent_mean_shift_in_pooled_std": 0.42,
-                "drift_flag": False,
-            },
-        }
-    }
-    rolling_simple = app._render_continuous_ranker_simple_console(rolling_payload)
-    rolling_comparison = app._render_standard_model_comparison(
-        [
-            {"model_id": "ROLL-A", "payload": rolling_payload},
-            {"model_id": "ROLL-B", "payload": rolling_payload},
-        ],
-        target="console",
-    )
-    check_true(
-        "rolling_reports_use_same_common_sop_and_append_only_fold_year_stability_extension",
-        "標準模型 SOP｜1. Learnability" in rolling_simple
-        and "標準模型 SOP｜6. Evidence Coverage" in rolling_simple
-        and "validation" in rolling_simple.lower()
-        and "Validation → OOS" in rolling_simple
-        and "OOS → Breakout slice" in rolling_simple
-        and "Rolling-specific Extension｜Fold / Year Stability" in rolling_simple
-        and rolling_comparison.count("模型比較 SOP｜1. Learnability") == 1
-        and "Rolling OOS" in rolling_comparison
-        and "Breakout slice" in rolling_comparison
-        and "Validation → OOS" in rolling_comparison
-        and "OOS → Breakout slice" in rolling_comparison
-        and "模型比較 SOP｜6. Evidence Coverage" in rolling_comparison
-        and "Rolling-specific Extension｜Fold / Year Stability" in rolling_comparison
-        and "Fold count" in rolling_comparison
-        and all(model in rolling_comparison for model in ("ROLL-A", "ROLL-B")),
-        detail=rolling_comparison,
-    )
-
-    rolling_multi_payload = json.loads(json.dumps(control_payload))
-    rolling_multi_payload["standard_model_sop"] = json.loads(json.dumps(rolling_standard))
-    rolling_multi_comparison = app._render_standard_model_comparison(
-        [{"model_id": "ROLL-MULTI", "payload": rolling_multi_payload}],
-        target="console",
-    )
-    check_true(
-        "rolling_comparison_places_scoped_multi_head_extension_after_standard_sop_before_mode_evidence",
-        "Model-specific Extension｜Multi-head Learnability" in rolling_multi_comparison
-        and "Model-specific Extension｜Truth / Prediction Geometry" not in rolling_multi_comparison
-        and "ROLL-MULTI" in rolling_multi_comparison
-        and "Rolling OOS" in rolling_multi_comparison
-        and "模型比較 SOP｜6. Evidence Coverage" in rolling_multi_comparison
-        and rolling_multi_comparison.find("模型比較 SOP｜6. Evidence Coverage")
-            < rolling_multi_comparison.find("Model-specific Extension｜Multi-head Learnability")
-            < rolling_multi_comparison.find("Rolling-specific Extension｜Fold / Year Stability"),
-        detail=rolling_multi_comparison,
-    )
-
-    from services.breakout_quality.standard_model_sop import aggregate_standard_model_sop_robustness
-    seed_a = json.loads(json.dumps(control_payload["standard_model_sop"]))
-    seed_b = json.loads(json.dumps(control_payload["standard_model_sop"]))
-    seed_b["split_metrics"]["oos"]["mean_daily_spearman"] = 0.32
-    seed_b["split_metrics"]["oos"]["pairwise_concordance"] = 0.62
-    rolling_seed_a = json.loads(json.dumps(rolling_standard))
-    rolling_seed_b = json.loads(json.dumps(rolling_standard))
-    rolling_seed_a["mode_extensions"]["rolling"]["fold_drift"].update({
-        "criterion": "adjacent fold score mean shift >= 1.0 pooled score standard deviation",
-        "drift_flag": False,
-        "flagged_folds": [],
-    })
-    rolling_seed_b["mode_extensions"]["rolling"]["fold_drift"].update({
-        "criterion": "adjacent fold score mean shift >= 1.0 pooled score standard deviation",
-        "max_adjacent_mean_shift_in_pooled_std": 0.84,
-        "drift_flag": True,
-        "flagged_folds": ["fold_20240101_20241231", "fold_20220101_20221231"],
-    })
-    rolling_robust = aggregate_standard_model_sop_robustness(
-        [rolling_seed_a, rolling_seed_b], seeds=(11, 22)
-    )
-    rolling_drift = dict((rolling_robust.get("mode_extensions") or {}).get("rolling", {}).get("fold_drift") or {})
-    check_true(
-        "rolling_robustness_aggregates_seed_dependent_flagged_folds_without_contract_drift",
-        rolling_drift.get("flagged_folds")
-        == ["fold_20220101_20221231", "fold_20240101_20241231"]
-        and rolling_drift.get("drift_flag") is True
-        and abs(float(rolling_drift.get("max_adjacent_mean_shift_in_pooled_std")) - 0.63) < 1e-12
-        and rolling_drift.get("criterion")
-        == "adjacent fold score mean shift >= 1.0 pooled score standard deviation",
-        detail=str(rolling_drift),
-    )
-
-    aggregated = aggregate_standard_model_sop_robustness([seed_a, seed_b], seeds=(11, 22))
-    robust_payload = {"model_research_id": "ROBUST-A", "standard_model_sop": aggregated}
-    robust_comparison = app._render_standard_model_comparison(
-        [
-            {"model_id": "ROBUST-A", "payload": robust_payload},
-            {"model_id": "ROBUST-B", "payload": robust_payload},
-        ],
-        target="console",
-    )
-    check_true(
-        "robustness_reports_keep_same_common_sop_and_append_only_across_seed_extension",
-        "模型比較 SOP｜1. Learnability" in robust_comparison
-        and "模型比較 SOP｜6. Evidence Coverage" in robust_comparison
-        and "Validation → OOS" in robust_comparison
-        and "OOS → Breakout slice" in robust_comparison
-        and "Robustness-specific Extension｜Across-seed Stability" in robust_comparison
-        and "OOS Daily rho σ" in robust_comparison
-        and all(model in robust_comparison for model in ("ROBUST-A", "ROBUST-B")),
-        detail=robust_comparison,
+        "rolling_robustness_preserves_union_of_seed_dependent_fold_flags",
+        rolled["mode_extensions"]["rolling"]["fold_drift"]["drift_flag"] is True
+        and rolled["mode_extensions"]["rolling"]["fold_drift"]["flagged_folds"] == ["fold-2"]
+        and rolled["mode_extensions"]["robustness"]["seed_count"] == 2,
     )
 
     from services.breakout_quality.train_daily_ranker import _render_markdown as _render_detailed_model_markdown
@@ -5780,6 +5437,11 @@ def validate_research_report_contract_freeze_case(_base_params):
         experiment_profile=DAILY_UNIVERSAL_SAFETY_RAW_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         seed=42,
     )
+    check_true(
+        "old_optional_multihead_extension_is_not_a_permanent_sop_v8_evidence_obligation",
+        bool(app._comparison_evidence_issues(control_payload, settings))
+        and app._standard_model_sop_completeness_issues(control_payload) == (),
+    )
     with patch.object(
         app, "load_continuous_ranker_oos_contract", return_value=reusable_contract
     ) as report_loader, patch.object(
@@ -5846,8 +5508,31 @@ def validate_research_report_contract_freeze_case(_base_params):
         "standard_sop_missing_common_evidence_is_not_reusable_and_requires_canonical_rebuild",
         loaded is None
         and "Standard SOP共通evidence不完整" in str(reason)
-        and "upside_downside_alignment" in str(reason),
+        and "M3:" in str(reason),
         detail=str(reason),
+    )
+
+    # Upgrading the human SOP must never overwrite the bytes or scientific
+    # identity of a historical Forward report in-place. A v9 report is a legal
+    # historical record, not proof of the new Joint Quality requirement.
+    obsolete_payload = json.loads(json.dumps(control_payload))
+    obsolete_payload["standard_model_sop"]["schema"] = "standard_model_sop_v9"
+    obsolete_contract = SimpleNamespace(
+        seed=42, manifest=synthetic_source_manifest,
+        report=obsolete_payload, report_path=synthetic_report_path,
+    )
+    with patch.object(
+        app, "load_continuous_ranker_oos_contract", return_value=obsolete_contract
+    ), patch.object(app, "resolve_filter_artifact_paths", return_value=synthetic_model_paths), \
+         patch.object(app, "fitted_model_settings_issues", return_value=()), \
+         patch.object(app, "_forward_source_provenance_issues", return_value=()), \
+         patch.object(Path, "write_text", side_effect=AssertionError("historical report must not mutate")):
+        old_loaded, old_reason = app._load_reusable_continuous_forward_contract(settings)
+    check_true(
+        "historical_v9_report_is_blocked_for_v8_sop_without_in_place_file_mutation",
+        old_loaded is None
+        and "version v10 missing" in str(old_reason)
+        and obsolete_payload["standard_model_sop"]["schema"] == "standard_model_sop_v9",
     )
 
     # Source drift must reject even a complete Standard SOP/report artifact.

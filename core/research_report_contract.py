@@ -160,7 +160,7 @@ S = ReportSectionContract
 
 MODEL_STANDARD_SOP = PersistentReportContract(
     report_id="model.standard_sop",
-    version=7,
+    version=8,
     role="persistent_standard_model_sop_all_evaluation_modes",
     menu_path=("Research", "模型訓練／驗證"),
     sections=(
@@ -183,7 +183,7 @@ MODEL_STANDARD_SOP = PersistentReportContract(
                 C("delta_top_bottom", "Δ Top-Bottom", 4, preference="higher", format_kind="signed_number"),
             )),
         )),
-        S("upside_downside_alignment", 3, "Upside / Downside Alignment", "daily_universal_mfe_adverse_truth", (
+        S("upside_downside_alignment", 3, "Upside / Downside Validation", "daily_universal_mfe_adverse_truth", (
             T("upside_downside_alignment", (
                 C("split", "Split", alignment="left"),
                 C("target_to_full_mfe_daily_spearman", "Target→MFE rho", 4, preference="higher", format_kind="number"),
@@ -192,34 +192,13 @@ MODEL_STANDARD_SOP = PersistentReportContract(
                 C("score_to_safety_daily_spearman", "Score→Safety rho", 4, preference="higher", format_kind="number"),
             )),
         )),
-        S("top_tail_economic_quality", 4, "Top-tail Economic Quality", "daily_universal_mfe_adverse_truth", (
-            T("top_tail_economic_quality", (
+        S("joint_mfe_adverse_quality", 4, "Joint MFE / Adverse Quality", "daily_universal_mfe_adverse_truth", (
+            T("joint_mfe_adverse_quality", (
                 C("split", "Split", alignment="left"),
-                C("top10_n", "Top10 N", 0, format_kind="int"),
-                C("top10_full_mfe_r_mean", "Top10 MFE", 4, "R", "higher", "number"),
-                C("top10_low_adverse_r_mean", "Top10 Low-Adverse", 4, "R", "higher", "number"),
-                C("top10_high_mfe_pct", "High-MFE", 2, "%", "higher", "pct"),
-                C("top10_high_safety_pct", "High-Safety", 2, "%", "higher", "pct"),
-                C("top10_hmhs", "HM/HS", preference="higher", alignment="right"),
-                C("top10_hmls", "HM/LS", preference="lower", alignment="right"),
-                C("top10_lmhs", "LM/HS", preference="lower", alignment="right"),
-                C("top10_lmls", "LM/LS", preference="lower", alignment="right"),
-            )),
-        )),
-        S("ranking_boundary", 5, "Ranking / Boundary", "ranking_quality_available", (
-            T("ranking_boundary", (
-                C("split", "Split", alignment="left"),
-                C("ndcg_at_k", "NDCG@K", 4, preference="higher", format_kind="number"),
-                C("top_k_raw_target_lift", "Top-K Lift", 4, preference="higher", format_kind="number"),
-                C("oracle_top_k_overlap", "Oracle overlap", 2, "%", "higher", "fraction_pct"),
-                C("boundary_concordance", "Boundary", 2, "%", "higher", "fraction_pct"),
-                C("boundary_raw_target_gap", "Boundary gap", 4, preference="higher", format_kind="number"),
-                C("competition_date_pool", "競爭日 / Pool日", alignment="right"),
-            )),
-        )),
-        S("evidence_coverage", 6, "Evidence Coverage", "all_continuous_dl", (
-            T("evidence_coverage", (
-                C("evidence", "Evidence", alignment="left"), C("status", "Status", alignment="left"),
+                C("top10_n", "Top 10% N", 0, format_kind="int"),
+                C("top10_mfe_pct", "Top 10% MFE", 2, "%", "higher", "pct"),
+                C("top10_adverse_pct", "Top 10% Adverse", 2, "%", "lower", "pct"),
+                C("top10_joint_quality", "Top 10% Joint Quality", 2, preference="higher", format_kind="number"),
             )),
         )),
     ),
@@ -259,7 +238,7 @@ def _model_comparison_sections() -> tuple[ReportSectionContract, ...]:
 
 MODEL_STANDARD_COMPARISON = PersistentReportContract(
     report_id="model.standard_comparison",
-    version=11,
+    version=12,
     role="persistent_multi_model_comparison_all_evaluation_modes",
     menu_path=("Research", "模型訓練／驗證"),
     sections=_model_comparison_sections(),
@@ -293,6 +272,8 @@ MODEL_MODE_EXTENSION_SCHEMAS: Mapping[str, ModelExtensionContract] = {
             C("pair_std", "OOS Pair σ", 2, "%", "lower", "fraction_pct"),
             C("top_bottom_mean", "OOS Top-Bottom mean", 4, preference="higher", format_kind="number"),
             C("top_bottom_std", "OOS Top-Bottom σ", 4, preference="lower", format_kind="number"),
+            C("joint_quality_mean", "Top10 Joint Quality mean", 2, preference="higher", format_kind="number"),
+            C("joint_quality_std", "Top10 Joint Quality σ", 2, preference="lower", format_kind="number"),
         )),
          T("robustness_extension_capabilities", (
             C("extension", "Model Extension", alignment="left"),
@@ -1013,8 +994,10 @@ APPROVED_PERSISTENT_REPORT_CONTRACT_FINGERPRINTS: Mapping[str, str] = {
     "audit.opportunity_selection": "fcdc3c51c70f74db",
     "audit.portfolio_drawdown": "b30ce69159e1f31a",
     "audit.trade_outcome_path": "c50943f97734da39",
-    "model.standard_comparison": "0626f6512f145d23",
-    "model.standard_sop": "56e5fb1173404d7f",
+    # User-authorized 2026-10-17 four-section report revision. Previous v11/v7
+    # hashes are retained in the versioned Scientific Contract record.
+    "model.standard_comparison": "f64c192d57961e76",
+    "model.standard_sop": "0daefa4ac6e22ca4",
     "strategy.oos_rolling_consistency": "deb471377e80ff80",
     "strategy.standard_sop": "c4e92dcc1e1c731e",
 }
