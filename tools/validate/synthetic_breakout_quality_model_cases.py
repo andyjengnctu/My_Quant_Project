@@ -10202,8 +10202,15 @@ def validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_
     metric_table = pd.DataFrame(
         {
             "date": pd.to_datetime(["2026-01-05"] * 10),
+            "ticker": [f"SYNTH-{index:02d}" for index in range(10)],
             "target_favorable_r": np.arange(1.0, 11.0),
             "target_adverse_r": np.arange(10.0, 0.0, -1.0),
+            # Same complete, matured price-return truth required by SOP v8.
+            # One fixed decision-time risk scale makes R and percentage ranks
+            # agree; the assertion below still verifies the original
+            # independent MR-13AE target/context semantics.
+            "target_favorable_return": np.arange(1.0, 11.0) * 0.025,
+            "target_adverse_return_to_peak": np.arange(10.0, 0.0, -1.0) * 0.025,
             "target_low_adverse_daily_percentile": np.linspace(0.0, 1.0, 10),
             "target_mfe_daily_percentile": np.linspace(0.0, 1.0, 10),
             "predicted_safety_percentile": np.linspace(0.0, 1.0, 10),
@@ -10235,6 +10242,14 @@ def validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_
         and float((quadrants.get("hmhs") or {}).get("pct")) == 100.0
         and "predicted_safety_to_target_daily_spearman" not in metric_payload
         and "predicted_safety_to_model_score_mean_daily_spearman" not in metric_payload,
+    )
+    check_true(
+        "mr13ae_sop_v8_joint_quality_uses_matured_mfe_and_adverse_price_truth",
+        metric_payload.get("joint_quality_evaluation_id")
+        == "same_day_min_mfe_safety_percentile_v1"
+        and abs(float(top.get("mfe_pct_mean")) - 25.0) < 1e-12
+        and abs(float(top.get("adverse_pct_mean")) - 2.5) < 1e-12
+        and abs(float(top.get("joint_quality_pct")) - 100.0) < 1e-12,
     )
     return _finish_case(results, summary)
 
