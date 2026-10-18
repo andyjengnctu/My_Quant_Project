@@ -19,6 +19,7 @@ from .meta_contracts import (
     load_synthetic_registry_entries_from_source,
     summarize_no_reverse_app_import_contract,
 )
+from .source_index import read_source_ast
 
 GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v3.json"
 V2_GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v2.json"
@@ -49,7 +50,9 @@ def _json_canonical(obj: Any) -> bytes:
 
 
 def _file_ast(project_root: Path, relative_path: str) -> ast.Module:
-    return ast.parse((project_root / relative_path).read_text(encoding="utf-8"), filename=relative_path)
+    # Content signature is checked on every read; mutated synthetic files
+    # cannot accidentally reuse the AST of an earlier snapshot.
+    return read_source_ast(project_root / relative_path)
 
 
 def _named_function(tree: ast.Module, name: str) -> ast.FunctionDef | None:

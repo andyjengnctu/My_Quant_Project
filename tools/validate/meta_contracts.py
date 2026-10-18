@@ -314,8 +314,14 @@ def summarize_no_reverse_app_import_contract(project_root: Path) -> Dict[str, An
                             "module": module_name,
                         })
             # Literal dynamic imports must not bypass the same dependency
-            # direction boundary. Computed module strings cannot be proven
-            # statically and remain covered by import/runtime tests.
+            # direction boundary. Most modules have no dynamic import call:
+            # check the source for the exact Python identifiers first to avoid
+            # walking hundreds of unrelated ASTs in every structural audit.
+            # The prefilter has no false negatives for a Python Call whose
+            # function identifier/attribute is import_module or __import__.
+            source_text = read_source_text(path)
+            if "import_module" not in source_text and "__import__" not in source_text:
+                continue
             for node in ast.walk(_read_python_ast(path)):
                 if not isinstance(node, ast.Call) or not node.args:
                     continue

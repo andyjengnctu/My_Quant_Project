@@ -29,11 +29,8 @@ def _signature(path: Path) -> _FileSignature:
     return _FileSignature(mtime_ns=int(stat.st_mtime_ns), size=int(stat.st_size))
 
 
-def read_source_text(path: Path | str, *, encoding: str = "utf-8") -> str:
-    """Read source text once per unchanged file within the current process."""
-
-    normalized = _normalize_path(path)
-    signature = _signature(normalized)
+def _source_text_at_signature(normalized: Path, signature: _FileSignature, *, encoding: str) -> str:
+    """Internal fast path: the caller already resolved and stat-ed the file."""
     cached = _TEXT_CACHE.get(normalized)
     if cached is not None and cached[0] == signature:
         return cached[1]
@@ -47,19 +44,27 @@ def read_source_text(path: Path | str, *, encoding: str = "utf-8") -> str:
     return text
 
 
-def read_source_ast(path: Path | str, *, encoding: str = "utf-8") -> ast.AST:
-    """Return a cached immutable-by-contract AST for an unchanged Python file."""
-
+def read_source_text(path: Path | str, *, encoding: str = "utf-8") -> str:
+    """Read source text once per unchanged file within the current process."""
     normalized = _normalize_path(path)
-    signature = _signature(normalized)
+    return _source_text_at_signature(normalized, _signature(normalized), encoding=encoding)
+
+
+def _source_ast_at_signature(normalized: Path, signature: _FileSignature, *, encoding: str) -> ast.AST:
     cached = _AST_CACHE.get(normalized)
     if cached is not None and cached[0] == signature:
         return cached[1]
 
-    text = read_source_text(normalized, encoding=encoding)
+    text = _source_text_at_signature(normalized, signature, encoding=encoding)
     tree = ast.parse(text, filename=str(normalized))
     _AST_CACHE[normalized] = (signature, tree)
     return tree
+
+
+def read_source_ast(path: Path | str, *, encoding: str = "utf-8") -> ast.AST:
+    """Return a cached immutable-by-contract AST for an unchanged Python file."""
+    normalized = _normalize_path(path)
+    return _source_ast_at_signature(normalized, _signature(normalized), encoding=encoding)
 
 
 def _populate_source_structure(path: Path | str, *, encoding: str = "utf-8") -> tuple[
@@ -88,7 +93,7 @@ def _populate_source_structure(path: Path | str, *, encoding: str = "utf-8") -> 
             cached_exception_handlers[1],
         )
 
-    tree = read_source_ast(normalized, encoding=encoding)
+    tree = _source_ast_at_signature(normalized, signature, encoding=encoding)
     import_nodes = []
     exception_handlers = []
 

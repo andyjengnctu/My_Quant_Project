@@ -2,6 +2,10 @@
 
 本文件僅說明目前可由程式驗證的架構、唯一 owner、正式入口與依賴邊界，不作歷史工程流水帳或研究待辦。`doc/CMD.md` 為使用者自行維護的常用指令筆記，非正式操作／設定真理；formal test contract 以 `doc/TEST_SUITE_CHECKLIST_CONTRACT.json` 為 owner，其 Markdown 清單為生成視圖。
 
+## 驗證執行與來源快取邊界
+
+`tools/validate/source_index.py` 對檔案來源提供依修改時間與大小辨識的共用 AST／import／結構摘要，`research_lifecycle_architecture.py` 對合成故障注入採**檔名與原始碼內容**作為 AST／函式結構摘要快取鍵。`meta_contracts.py` 仍對每個模組完整檢查靜態 import；只有原始碼不包含 `import_module`／`__import__` 識別字時，才跳過不可能出現 literal dynamic import 的第二輪 AST 走訪。所有原有驗證項目、違規判斷、SSOT 凍結測試及 coverage 門檻維持不變；檔案或注入內容變更必須重新驗證，不得用上次快取結果授權 PASS。
+
 ## 穩定檔案樹
 
 ```text

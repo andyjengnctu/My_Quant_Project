@@ -8,6 +8,8 @@ Its behavioral counterpart exercises the canonical owner with mutation cases.
 from __future__ import annotations
 
 import ast
+from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Mapping
 
@@ -39,11 +41,93 @@ STRATEGY_SINGLE = "services/research/strategy_comparison.py"
 STRATEGY_MULTI = "services/research/strategy_multi_seed_robustness.py"
 
 
+@lru_cache(maxsize=32)
+def _parse_snapshot_source(filename: str, source: str) -> ast.Module:
+    """Read-only AST cache keyed by actual source content, including mutations.
+
+    The architecture tests inject modified source strings without touching disk.
+    A path-only or mtime-only cache would hide regressions; source-keyed entries
+    cannot mistake an injected variant for the original snapshot.
+    """
+    return ast.parse(source, filename=filename)
+
+
+@dataclass(frozen=True)
+class _FunctionFacts:
+    calls: frozenset[str]
+    tokens: frozenset[str]
+    attributes: frozenset[str]
+    attribute_calls: frozenset[str]
+    path_probe: bool
+    value_return: bool
+
+
+@lru_cache(maxsize=24)
+def _top_level_function_facts(filename: str, source: str) -> dict[str, _FunctionFacts]:
+    """Scan each top-level function once for all independent owner guards."""
+    facts = {}
+    tree = _parse_snapshot_source(filename, source)
+    for name, fn in _defs(tree).items():
+        calls: set[str] = set()
+        tokens: set[str] = set()
+        attributes: set[str] = set()
+        attribute_calls: set[str] = set()
+        path_probe = False
+        value_return = False
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name):
+                    calls.add(node.func.id)
+                elif isinstance(node.func, ast.Attribute):
+                    attribute_calls.add(node.func.attr)
+                    if node.func.attr in {"is_file", "exists", "glob"}:
+                        path_probe = True
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                tokens.add(node.value)
+            elif isinstance(node, ast.Attribute):
+                attributes.add(node.attr)
+            elif isinstance(node, ast.Return) and node.value is not None:
+                value_return = True
+        facts[name] = _FunctionFacts(
+            frozenset(calls), frozenset(tokens), frozenset(attributes),
+            frozenset(attribute_calls), path_probe, value_return,
+        )
+    return facts
+
+
+@dataclass(frozen=True)
+class _ModuleFacts:
+    calls: frozenset[str]
+    imports: dict[str, frozenset[str]]
+    absolute_imports: frozenset[str]
+
+
+@lru_cache(maxsize=24)
+def _module_facts(tree: ast.AST) -> _ModuleFacts:
+    """Scan unchanged snapshot AST imports/calls once across mutation checks."""
+    calls: set[str] = set()
+    imports: dict[str, set[str]] = {}
+    absolute_imports: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module:
+                imports.setdefault(node.module, set()).update(a.name for a in node.names)
+        elif isinstance(node, ast.Import):
+            absolute_imports.update(a.name for a in node.names)
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            calls.add(node.func.id)
+    return _ModuleFacts(
+        frozenset(calls),
+        {name: frozenset(symbols) for name, symbols in imports.items()},
+        frozenset(absolute_imports),
+    )
+
+
 def check_strategy_benchmark_architecture_sources(
     sources: Mapping[str, str],
 ) -> tuple[str, ...]:
     """Disallow parallel Single/Multi 0050 decisions outside the canonical owner."""
-    trees = {name: ast.parse(sources[name], filename=name)
+    trees = {name: _parse_snapshot_source(name, sources[name])
              for name in (BENCHMARK_OWNER, STRATEGY_SINGLE, STRATEGY_MULTI)}
     issues: list[str] = []
     expected = {
@@ -60,18 +144,13 @@ def check_strategy_benchmark_architecture_sources(
         (STRATEGY_SINGLE, "collect_strategy_pair_benchmark_yearly"),
         (STRATEGY_MULTI, "resolve_strategy_robustness_report_benchmark_yearly"),
     ):
-        imports = {
-            alias.name for node in ast.walk(trees[module])
-            if isinstance(node, ast.ImportFrom) and node.module == (
-                "services.research.strategy_compare_benchmark"
-            ) for alias in node.names
-        }
+        facts = _module_facts(trees[module])
+        imports = facts.imports.get("services.research.strategy_compare_benchmark", frozenset())
         if required not in imports:
             issues.append(f"{module} bypasses canonical 0050 evidence owner: {required}")
-        if not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                   and node.func.id == required for node in ast.walk(trees[module])):
+        if required not in facts.calls:
             issues.append(f"{module} never consumes canonical 0050 evidence owner: {required}")
-        for name, fn in _defs(trees[module]).items():
+        for name, function_facts in _top_level_function_facts(module, sources[module]).items():
             if name in expected or name in {
                 "_common_fixed_benchmark_yearly", "_robustness_benchmark_yearly",
                 "_strategy_benchmark_yearly",
@@ -79,11 +158,9 @@ def check_strategy_benchmark_architecture_sources(
                 issues.append(f"duplicate non-owner 0050 evidence decision: {module}::{name}")
             # The canonical portfolio benchmark producer is callable only from
             # the benchmark adapter, never from either strategy orchestration.
-            for node in ast.walk(fn):
-                if (isinstance(node, ast.Call) and
-                    (isinstance(node.func, ast.Name) and node.func.id == "_build_benchmark_period_stats"
-                    or isinstance(node.func, ast.Attribute) and node.func.attr == "_build_benchmark_period_stats")):
-                    issues.append(f"{module} computes 0050 independently: {name}")
+            if ("_build_benchmark_period_stats" in function_facts.calls
+                    or "_build_benchmark_period_stats" in function_facts.attribute_calls):
+                issues.append(f"{module} computes 0050 independently: {name}")
     return tuple(dict.fromkeys(issues))
 
 
@@ -95,14 +172,10 @@ def _defs(tree: ast.AST) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
     }
 
 
-def _owner_imports(tree: ast.AST) -> set[str]:
-    result: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == (
-            "services.breakout_quality.fitted_model_artifacts"
-        ):
-            result.update(alias.name for alias in node.names)
-    return result
+def _owner_imports(tree: ast.AST) -> frozenset[str]:
+    return _module_facts(tree).imports.get(
+        "services.breakout_quality.fitted_model_artifacts", frozenset()
+    )
 
 
 def check_research_fit_architecture_sources(
@@ -113,28 +186,20 @@ def check_research_fit_architecture_sources(
     Accepting injected in-memory source text allows independent fault injection
     without editing the checked code or its validator at runtime.
     """
-    trees = {path: ast.parse(sources[path], filename=path)
+    trees = {path: _parse_snapshot_source(path, sources[path])
              for path in (FIT_OWNER, PIT_PRODUCER, FORWARD_PRODUCER, RESEARCH_APPLICATION)}
     issues: list[str] = []
     owner_defs = set(_defs(trees[FIT_OWNER]))
     # Owner -> PIT is always a forbidden reverse dependency, including lazy
     # imports in nested functions. The dependency must be inverted via the
     # PIT-provided cohort proof port; do not exempt it from the cycle guard.
-    for node in ast.walk(trees[FIT_OWNER]):
-        if isinstance(node, ast.ImportFrom) and node.module == (
-            "services.breakout_quality.point_in_time_scores"
-        ):
-            issues.append("FIT owner imports PIT producer (reverse dependency)")
-        if isinstance(node, ast.Import):
-            if any(alias.name == "services.breakout_quality.point_in_time_scores"
-                   for alias in node.names):
-                issues.append("FIT owner imports PIT producer (reverse dependency)")
-    if "build_rolling_first_fold_fit_proof" not in {
-        alias.name for node in ast.walk(trees[FORWARD_PRODUCER])
-        if isinstance(node, ast.ImportFrom) and node.module == (
-            "services.breakout_quality.point_in_time_scores"
-        ) for alias in node.names
-    }:
+    owner_facts = _module_facts(trees[FIT_OWNER])
+    if ("services.breakout_quality.point_in_time_scores" in owner_facts.imports
+            or "services.breakout_quality.point_in_time_scores" in owner_facts.absolute_imports):
+        issues.append("FIT owner imports PIT producer (reverse dependency)")
+    if "build_rolling_first_fold_fit_proof" not in _module_facts(
+        trees[FORWARD_PRODUCER]
+    ).imports.get("services.breakout_quality.point_in_time_scores", frozenset()):
         issues.append("Forward producer does not bind PIT-native fold evidence port")
     for name in OWNED_FIT_BEHAVIORS:
         if name not in owner_defs:
@@ -172,26 +237,18 @@ def check_research_fit_architecture_sources(
         for node in ast.walk(forward_defs.get("run", ast.Pass()))
     ):
         issues.append("Forward trainer bypasses native PIT fold proof binding")
-    for node in ast.walk(trees[FORWARD_PRODUCER]):
-        if isinstance(node, ast.ImportFrom) and node.module in {
-            "services.breakout_quality.fitted_model_artifacts",
-            "services.breakout_quality.point_in_time_scores",
-        }:
-            for alias in node.names:
-                if alias.name in {
-                    "load_reusable_fitted_model_contract",
-                    "load_forward_compatible_rolling_checkpoint",
-                    "import_verified_rolling_forward_checkpoint",
-                }:
-                    issues.append(
-                        f"Forward trainer imports a forbidden FIT decision API: {alias.name}"
-                    )
-    for node in ast.walk(trees[FORWARD_PRODUCER]):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {
-            "load_reusable_fitted_model_contract", "load_forward_compatible_rolling_checkpoint",
-            "import_verified_rolling_forward_checkpoint",
-        }:
-            issues.append("Forward trainer independently selects/verifies FIT checkpoint")
+    forward_facts = _module_facts(trees[FORWARD_PRODUCER])
+    forbidden_fit_decisions = {
+        "load_reusable_fitted_model_contract",
+        "load_forward_compatible_rolling_checkpoint",
+        "import_verified_rolling_forward_checkpoint",
+    }
+    for module in ("services.breakout_quality.fitted_model_artifacts",
+                   "services.breakout_quality.point_in_time_scores"):
+        for name in sorted(forward_facts.imports.get(module, frozenset()) & forbidden_fit_decisions):
+            issues.append(f"Forward trainer imports a forbidden FIT decision API: {name}")
+    if forward_facts.calls & forbidden_fit_decisions:
+        issues.append("Forward trainer independently selects/verifies FIT checkpoint")
 
     app_defs = _defs(trees[RESEARCH_APPLICATION])
     for name in ("_has_continuous_forward_fitted_candidate", "_has_rolling_first_fold_fit_candidate"):
@@ -217,25 +274,13 @@ def check_research_fit_architecture_sources(
 
     # Semantic gate, independent of exact function names: no new application
     # helper may decide fitted readiness from a model file existence check.
-    for fn_name, fn in app_defs.items():
+    for fn_name, facts in _top_level_function_facts(
+        RESEARCH_APPLICATION, sources[RESEARCH_APPLICATION]
+    ).items():
         if fn_name in {"_load_forward_robustness_seed", "_probe_continuous_fitted_candidates"}:
             continue  # Legacy robustness report-file completeness, not FIT suitability.
-        calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)]
-        has_path_probe = any(
-            isinstance(n.func, ast.Attribute) and n.func.attr in {"is_file", "exists", "glob"}
-            for n in calls
-        )
-        checks_model = any(
-            isinstance(n, ast.Constant) and n.value == "model.pt"
-            for n in ast.walk(fn)
-        ) or any(
-            isinstance(n, ast.Attribute) and n.attr == "model_path"
-            for n in ast.walk(fn)
-        )
-        emits_decision = any(
-            isinstance(n, ast.Return) and n.value is not None for n in ast.walk(fn)
-        )
-        if has_path_probe and checks_model and emits_decision:
+        if (facts.path_probe and facts.value_return
+                and ("model.pt" in facts.tokens or "model_path" in facts.attributes)):
             issues.append(f"Application duplicate file-based FIT readiness: {fn_name}")
     return tuple(dict.fromkeys(issues))
 
@@ -257,7 +302,7 @@ def check_model_stage_readiness_architecture_sources(
     """
     paths = (MODEL_EVIDENCE_OWNER, MODEL_STAGE_OWNER, RESEARCH_APPLICATION,
              FORWARD_PRODUCER, PIT_PRODUCER)
-    trees = {path: ast.parse(sources[path], filename=path) for path in paths}
+    trees = {path: _parse_snapshot_source(path, sources[path]) for path in paths}
     issues: list[str] = []
     evidence_defs = _defs(trees[MODEL_EVIDENCE_OWNER])
     stage_defs = _defs(trees[MODEL_STAGE_OWNER])
@@ -361,11 +406,10 @@ def check_model_stage_readiness_architecture_sources(
         issues.append("Model Robustness publication bypasses fresh source/plan snapshot")
     # Semantic duplicate: another application helper evaluating truth-schema
     # identity and M4 numeric completeness must never become a new owner.
-    for name, fn in app_defs.items():
-        tokens = {
-            n.value for n in ast.walk(fn)
-            if isinstance(n, ast.Constant) and isinstance(n.value, str)
-        }
+    for name, facts in _top_level_function_facts(
+        RESEARCH_APPLICATION, sources[RESEARCH_APPLICATION]
+    ).items():
+        tokens = facts.tokens
         if "joint_quality_evaluation_id" in tokens and "mfe_pct_mean" in tokens:
             issues.append(f"Application independently validates M4 evidence: {name}")
         if "standard_model_report.json" in tokens and "report_contract_fingerprint" in tokens:
@@ -384,7 +428,7 @@ def check_model_score_owner_architecture_sources(
     computes hash/lineage/schema validity. Audit may consume SCORE, but
     Score readiness must never require an Audit JSON.
     """
-    trees = {path: ast.parse(sources[path], filename=path)
+    trees = {path: _parse_snapshot_source(path, sources[path])
              for path in (MODEL_SCORE_OWNER, ROLLING_MODEL_SOURCE_OWNER,
                           RESEARCH_APPLICATION)}
     owner_defs = _defs(trees[MODEL_SCORE_OWNER])
@@ -454,13 +498,11 @@ def check_model_score_owner_architecture_sources(
             issues.append(f"{fn_name} implements duplicate score checksum policy")
     # Semantic rejection independent of helper name. A newly added source
     # checker may not infer Score READY by checking score file presence/hash.
-    for fn_name, fn in app_defs.items():
-        calls = {n.func.id for n in ast.walk(fn)
-                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
-        tokens = {n.value for n in ast.walk(fn)
-                  if isinstance(n, ast.Constant) and isinstance(n.value, str)}
-        if (calls & {"build_file_manifest", "compute_file_sha256"}
-            and ("score_columns" in tokens or "scores" in tokens)):
+    for fn_name, facts in _top_level_function_facts(
+        RESEARCH_APPLICATION, sources[RESEARCH_APPLICATION]
+    ).items():
+        if (facts.calls & {"build_file_manifest", "compute_file_sha256"}
+            and ("score_columns" in facts.tokens or "scores" in facts.tokens)):
             issues.append(f"Application independently validates PIT SCORE: {fn_name}")
     return tuple(dict.fromkeys(issues))
 
@@ -471,7 +513,7 @@ def check_model_forward_source_architecture_sources(
 ) -> tuple[str, ...]:
     """Single and robustness Forward must share one full contract validator."""
     paths = (MODEL_SCORE_OWNER, FORWARD_MODEL_SOURCE_OWNER, RESEARCH_APPLICATION)
-    trees = {path: ast.parse(sources[path], filename=path) for path in paths}
+    trees = {path: _parse_snapshot_source(path, sources[path]) for path in paths}
     owner_defs = _defs(trees[FORWARD_MODEL_SOURCE_OWNER])
     store_defs = _defs(trees[MODEL_SCORE_OWNER])
     app_defs = _defs(trees[RESEARCH_APPLICATION])
@@ -530,7 +572,7 @@ def check_model_standard_comparison_audit_boundary_sources(
     This structural gate checks the canonical Research Application entry, not
     the historical Audit libraries or their separately maintained tests.
     """
-    tree = ast.parse(sources[RESEARCH_APPLICATION], filename=RESEARCH_APPLICATION)
+    tree = _parse_snapshot_source(RESEARCH_APPLICATION, sources[RESEARCH_APPLICATION])
     issues: list[str] = []
     entry = _defs(tree).get("_run_configured_model_comparison")
     if entry is None:

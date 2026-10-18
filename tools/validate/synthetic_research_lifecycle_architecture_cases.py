@@ -495,6 +495,25 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
             check_true("migrated_fit_owner_blocks_corrupt_first_fold",
                        missing_manifest_blocked)
 
+    # Snapshot caches must observe in-memory fault-injection source changes.
+    # Their keys cannot be only a module filename, or tests would miss a
+    # newly introduced forbidden readiness helper with the same path.
+    from .research_lifecycle_architecture import (
+        _parse_snapshot_source, _top_level_function_facts,
+    )
+    cache_file = "synthetic/research_snapshot_cache_guard.py"
+    healthy_source = "def probe(path):\n    return path.name\n"
+    mutated_source = "def probe(path):\n    return (path / 'model.pt').exists()\n"
+    check_true("snapshot_ast_cache_reparses_mutated_source",
+               _parse_snapshot_source(cache_file, healthy_source)
+               is not _parse_snapshot_source(cache_file, mutated_source))
+    healthy_facts = _top_level_function_facts(cache_file, healthy_source)["probe"]
+    mutated_facts = _top_level_function_facts(cache_file, mutated_source)["probe"]
+    check_true("snapshot_function_fact_cache_recomputes_mutated_source",
+               "model.pt" not in healthy_facts.tokens
+               and "model.pt" in mutated_facts.tokens
+               and not healthy_facts.path_probe and mutated_facts.path_probe)
+
     # No approved science/report identity may change merely because this is a
     # code-organization refactor; those fingerprints live in the report registry.
     return results, summary
