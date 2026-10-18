@@ -236,6 +236,21 @@ class ModelRobustnessReadiness:
     def evidence_ready(self) -> bool:
         return all(item.readiness.evidence_ready for item in self.seeds)
 
+    @property
+    def score_build_required(self) -> bool:
+        """Only the canonical stage plan can require a new per-seed SCORE.
+
+        EVIDENCE-only Rolling refresh must not run Dataset/Target producers.
+        """
+        return any(
+            item.readiness.plan.action_by_key["SCORE"].action != "REUSE"
+            for item in self.seeds
+        )
+
+    @property
+    def evidence_refresh_required(self) -> bool:
+        return not self.evidence_ready
+
 
 def resolve_model_robustness_seed_readiness(
     *, mode: str, source: ModelRobustnessSeedSource,

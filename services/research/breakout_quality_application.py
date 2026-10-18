@@ -4782,6 +4782,23 @@ def _observe_model_robustness_sources(settings, *, seeds: tuple[int, ...], rolli
     return states, sources
 
 
+def _plan_model_robustness_snapshot(settings, *, seeds: tuple[int, ...], rolling: bool):
+    """Couple one canonical source observation with its immutable stage plan.
+
+    A caller must never reuse a plan with a different source observation after
+    an upstream or seed Producer; both are refreshed together by this seam.
+    """
+    seed_states, verified_sources = _observe_model_robustness_sources(
+        settings, seeds=seeds, rolling=rolling,
+    )
+    readiness = resolve_model_robustness_readiness(
+        mode="rolling" if rolling else "forward", sources=verified_sources,
+    )
+    if tuple(item.seed for item in readiness.seeds) != seeds:
+        raise RuntimeError("Model robustness plan seed order/identity differs from benchmark spec")
+    return seed_states, readiness
+
+
 def _require_model_robustness_report_sources(
     settings, *, model_id: str, seeds: tuple[int, ...], rolling: bool, after: str,
 ) -> tuple[list[dict], list[Path]]:
@@ -4790,11 +4807,8 @@ def _require_model_robustness_report_sources(
     Used by the per-model and cross-model publication boundaries. The shared
     stage owner, not this consumer, determines whether EVIDENCE is reusable.
     """
-    states, sources = _observe_model_robustness_sources(
+    states, readiness = _plan_model_robustness_snapshot(
         settings, seeds=seeds, rolling=rolling,
-    )
-    readiness = resolve_model_robustness_readiness(
-        mode="rolling" if rolling else "forward", sources=sources,
     )
     if not readiness.evidence_ready:
         failed = (
@@ -4836,11 +4850,8 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
     rows = []
     for model_id, profile_name in model_list:
         settings = get_breakout_quality_workflow_settings(experiment_profile=str(profile_name))
-        seed_states, verified_sources = _observe_model_robustness_sources(
+        seed_states, readiness = _plan_model_robustness_snapshot(
             settings, seeds=seeds, rolling=rolling,
-        )
-        readiness = resolve_model_robustness_readiness(
-            mode="rolling" if rolling else "forward", sources=verified_sources,
         )
         rows.append((str(model_id), str(profile_name), readiness.display_action,
                      readiness.display_reason))
@@ -4858,22 +4869,15 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
     affected_completed_models: set[int] = set()
     for model_id, settings, seed_states, readiness in plans:
         if preceding_model_mutation:
-            seed_states, verified_sources = _observe_model_robustness_sources(
+            seed_states, readiness = _plan_model_robustness_snapshot(
                 settings, seeds=seeds, rolling=rolling,
-            )
-            readiness = resolve_model_robustness_readiness(
-                mode="rolling" if rolling else "forward", sources=verified_sources,
             )
         # A missing Rolling Audit is an EVIDENCE-only refresh: no upstream
         # preparation is permitted unless the canonical stage plan requires
         # a new SCORE. Unexpected execution-time SCORE invalidation is handled
         # within the seed producer and re-enters the normal input gate.
-        score_build_required = any(
-            seed_stage.readiness.plan.action_by_key["SCORE"].action != "REUSE"
-            for seed_stage in readiness.seeds
-        )
-        inputs_prepared = bool(force_rebuild or not rolling or score_build_required)
-        if inputs_prepared and (force_rebuild or not readiness.evidence_ready):
+        inputs_prepared = bool(force_rebuild or not rolling or readiness.score_build_required)
+        if inputs_prepared and (force_rebuild or readiness.evidence_refresh_required):
             code = _prepare_continuous_research_inputs(program_name, settings)
             if code != 0:
                 return int(code)
@@ -4885,11 +4889,8 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
             # Do not execute a seed plan or reuse its evidence from *before*
             # that publication; re-observe only when upstream ran. Fully READY
             # models never pay for this second full validation pass.
-            seed_states, verified_sources = _observe_model_robustness_sources(
+            seed_states, readiness = _plan_model_robustness_snapshot(
                 settings, seeds=seeds, rolling=rolling,
-            )
-            readiness = resolve_model_robustness_readiness(
-                mode="rolling" if rolling else "forward", sources=verified_sources,
             )
         seed_payloads = []
         source_reports = []
@@ -4912,7 +4913,7 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
                     mode="rolling" if rolling else "forward", source=current,
                 )
             seed_text = _seed_progress_text(seed, seed_index, len(seeds))
-            if force_rebuild or seed_stage.readiness.plan.action_by_key["EVIDENCE"].action != "REUSE":
+            if force_rebuild or not seed_stage.readiness.evidence_ready:
                 print(
                     styled_workflow_status("[FORCE_REBUILD]" if force_rebuild else "[BUILD/REFRESH]")
                     + " " + _model_identity_text(model_id)

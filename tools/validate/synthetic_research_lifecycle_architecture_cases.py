@@ -579,9 +579,9 @@ def validate_research_model_readiness_architecture_case(_base_params):
                bool(check_model_stage_readiness_architecture_sources(edited)))
     edited = dict(sources)
     edited[RESEARCH_APPLICATION] = edited[RESEARCH_APPLICATION].replace(
-        "        seed_states, verified_sources = _observe_model_robustness_sources(",
-        "        ghost_score = object()\n"
-        "        seed_states, verified_sources = _observe_model_robustness_sources(", 1,
+        "    seed_states, verified_sources = _observe_model_robustness_sources(",
+        "    ghost_score = object()\n"
+        "    seed_states, verified_sources = _observe_model_robustness_sources(", 1,
     )
     check_true("application_multiseed_fake_source_blocked",
                bool(check_model_stage_readiness_architecture_sources(edited)))
@@ -957,6 +957,12 @@ def validate_research_model_readiness_architecture_case(_base_params):
             ModelRobustnessSeedSource(202, None, Path("audits/202.json"),
                                       "Audit missing", score_contract=SimpleNamespace(seed=202)),
         ))
+        check_true("robustness_stage_owner_distinguishes_audit_only_and_score_build",
+            not forward.score_build_required
+            and not rolling.score_build_required
+            and not forward.evidence_refresh_required
+            and audit_only.evidence_refresh_required
+            and not audit_only.score_build_required)
         check_true("robustness_one_missing_audit_preserves_score_and_fit",
             audit_only.display_action == "REFRESH EVIDENCE"
             and audit_only.plan.action_by_key["seed:202:FIT"].action == "NOT_REQUIRED"
@@ -968,6 +974,8 @@ def validate_research_model_readiness_architecture_case(_base_params):
             ModelRobustnessSeedSource(202, None, Path("audits/202.json"),
                                       "SCORE hash mismatch"),
         ))
+        check_true("robustness_invalid_score_requires_canonical_score_build",
+            stale.score_build_required and stale.evidence_refresh_required)
         check_true("robustness_score_invalid_cannot_be_evidence_only_refresh",
             stale.display_action == "BUILD/REFRESH"
             and stale.plan.action_by_key["seed:202:SCORE"].action == "BUILD"
@@ -990,6 +998,27 @@ def validate_research_model_readiness_architecture_case(_base_params):
         else:
             duplicate_rejected = False
         check_true("robustness_duplicate_seed_never_merges_provenance", duplicate_rejected)
+    # A source snapshot and its dependency plan must agree before any Producer
+    # can run. Source order alone is not sufficient if a stage owner is bypassed
+    # or accidentally returns another benchmark's seed plan.
+    from services.research import breakout_quality_application as snapshot_app
+    with (
+        patch.object(snapshot_app, "_observe_model_robustness_seed", side_effect=lambda _settings, *, seed, rolling:
+                     ModelRobustnessSeedSource(int(seed), good, Path(f"synthetic/{seed}.json"), None)),
+        patch.object(snapshot_app, "resolve_model_robustness_readiness", return_value=SimpleNamespace(
+            seeds=(SimpleNamespace(seed=202), SimpleNamespace(seed=101)),
+        )),
+    ):
+        try:
+            snapshot_app._plan_model_robustness_snapshot(
+                SimpleNamespace(), seeds=(101, 202), rolling=False,
+            )
+        except RuntimeError as exc:
+            mismatch_rejected = "plan seed order/identity" in str(exc)
+        else:
+            mismatch_rejected = False
+    check_true("source_plan_snapshot_rejects_cross_seed_plan_pairing", mismatch_rejected)
+
     # Exercise the actual menu-owned multi-seed dispatch with isolated
     # synthetic producer ports. Do not fit, score or publish real artifacts.
     from contextlib import redirect_stdout

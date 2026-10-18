@@ -327,19 +327,38 @@ def check_model_stage_readiness_architecture_sources(
     # REPORT. A future Application-local tally or fake SCORE proof can silently
     # diverge between Forward and Rolling robustness.
     robustness = app_defs.get("_run_configured_model_robustness")
+    snapshot = app_defs.get("_plan_model_robustness_snapshot")
+    report_gate = app_defs.get("_require_model_robustness_report_sources")
     if "resolve_model_robustness_readiness" not in stage_defs:
         issues.append("canonical Model Robustness stage resolver is missing")
     if robustness is None:
         issues.append("Application Model Robustness entry is missing")
+    if snapshot is None:
+        issues.append("Application Model Robustness source/plan snapshot seam is missing")
     else:
+        snapshot_calls = {
+            node.func.id for node in ast.walk(snapshot)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        if not {"_observe_model_robustness_sources", "resolve_model_robustness_readiness"}.issubset(snapshot_calls):
+            issues.append("Model Robustness snapshot bypasses source observer or canonical stage owner")
+        if "resolve_model_artifact_readiness" in snapshot_calls or "object" in snapshot_calls:
+            issues.append("Model Robustness snapshot uses a local stage or placeholder SCORE source")
+    if robustness is not None:
         robust_calls = {
             node.func.id for node in ast.walk(robustness)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
         }
-        if "resolve_model_robustness_readiness" not in robust_calls:
-            issues.append("Model Robustness bypasses canonical multi-seed stage resolver")
+        if "_plan_model_robustness_snapshot" not in robust_calls:
+            issues.append("Model Robustness execution bypasses canonical source/plan snapshot")
         if "resolve_model_artifact_readiness" in robust_calls or "object" in robust_calls:
             issues.append("Model Robustness recreates local stage or placeholder SCORE source")
+    if report_gate is None or not any(
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id == "_plan_model_robustness_snapshot"
+        for node in ast.walk(report_gate)
+    ):
+        issues.append("Model Robustness publication bypasses fresh source/plan snapshot")
     # Semantic duplicate: another application helper evaluating truth-schema
     # identity and M4 numeric completeness must never become a new owner.
     for name, fn in app_defs.items():
