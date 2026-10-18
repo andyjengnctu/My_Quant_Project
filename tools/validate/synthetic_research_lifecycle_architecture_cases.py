@@ -532,12 +532,47 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                            "source_contract.dataset_artifacts mismatch" in
                            owner._first_fold_fit_identity_issues(
                                missing_dataset, new_daily, project_root=root_dir))
+                # AI: The actual Windows checkpoint is not packaged with
+                # source ZIPs. Report a field-level *blocker* when the bridge
+                # refuses historical FIT evidence, rather than guessing a
+                # scientific-compatible source format from synthetic fixtures.
+                missing_dataset_issues = owner._first_fold_fit_identity_issues(
+                    missing_dataset, new_daily, project_root=root_dir,
+                )
+                check_true("reverse_bridge_missing_event_key_diagnostic",
+                           "dataset_artifacts proof blocked: historical event Dataset key set differs: "
+                           "missing=events_csv, unexpected_count=0, record_count=9"
+                           in missing_dataset_issues)
+                check_true("reverse_bridge_no_raw_hash_exposed_by_event_diagnostic",
+                           all("sha-old" not in str(issue) and
+                               event_records["feature_bank"]["sha256"] not in str(issue)
+                               for issue in missing_dataset_issues))
+                missing_current_records = deepcopy(new_daily)
+                missing_current_records["source_contract"]["dataset_artifacts"] = None
+                check_true("reverse_bridge_missing_current_event_records_explained",
+                           "dataset_artifacts proof blocked: current event Dataset records "
+                           "absent or not a mapping" in
+                           owner._first_fold_fit_identity_issues(
+                               old_daily, missing_current_records, project_root=root_dir,
+                           ))
+                unsafe_context_issues = owner._first_fold_fit_identity_issues(
+                    unsafe_context_old, unsafe_context_new, project_root=root_dir,
+                )
+                check_true("reverse_bridge_external_context_exemption_blocker_explained",
+                           "dataset_artifacts proof blocked: external context requires "
+                           "exact Dataset source identity" in unsafe_context_issues)
                 bad_dataset = deepcopy(new_daily)
                 bad_dataset["source_contract"]["dataset_artifacts"]["feature_bank"]["sha256"] = "not-a-sha"
                 check_true("reverse_bridge_unverifiable_dataset_sha_rejected",
                            "source_contract.dataset_artifacts mismatch" in
                            owner._first_fold_fit_identity_issues(
                                old_daily, bad_dataset, project_root=root_dir))
+                bad_dataset_issues = owner._first_fold_fit_identity_issues(
+                    old_daily, bad_dataset, project_root=root_dir,
+                )
+                check_true("reverse_bridge_invalid_event_sha_diagnostic",
+                           "dataset_artifacts proof blocked: current feature_bank SHA256 "
+                           "metadata invalid" in bad_dataset_issues)
                 missing_inventory_proof = deepcopy(old_daily)
                 missing_inventory_proof["source_contract"]["source_data_inventory"] = None
                 matching_missing_inventory = deepcopy(new_daily)

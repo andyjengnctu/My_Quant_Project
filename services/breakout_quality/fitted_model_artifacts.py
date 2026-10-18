@@ -228,55 +228,98 @@ _FIRST_FOLD_NON_FITTING_SETTINGS = frozenset({
 })
 
 
-def _daily_lazy_fit_ignores_event_dataset_artifacts(
+def _daily_lazy_event_dataset_artifact_blocker(
     candidate: Mapping[str, Any], expected: Mapping[str, Any],
     published: Any, current: Any,
-) -> bool:
-    """Prove that the changed *event* Dataset files are not DL fitting inputs.
+) -> str | None:
+    """Explain why event-only Dataset artifact drift cannot yet be exempted.
 
-    Daily-universal lazy features, daily labels and stock-day membership come
-    from the canonical OHLCV CSV, not the breakout event feature-bank/label cache.
-    The complete event Dataset itself is still SHA-validated by the canonical
-    daily data loader. Here we only recognize complete historical/current file
-    records, never a missing, partial or unverifiable source snapshot.
-
-    Models with external predicted contexts or a non-daily target materializer
-    cannot use this bridge: their fitting inputs might depend on older artifacts
-    not recorded in the native first-fold source contract.
+    An explanation is not an authorization: a failed proof leaves the original
+    scientific FIT identity and checkpoint untouched.  Only field names, record
+    counts and validation categories are emitted, never local paths or hashes.
     """
     if (
         candidate.get("training_sample_scope") != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
         or expected.get("training_sample_scope") != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
-        or candidate.get("experiment_profile") != expected.get("experiment_profile")
     ):
-        return False
+        return "training sample scope is not daily-universal"
+    if candidate.get("experiment_profile") != expected.get("experiment_profile"):
+        return "experiment profile differs"
     try:
         recipe = get_continuous_ranker_execution_recipe(str(expected.get("experiment_profile") or ""))
     except (KeyError, TypeError, ValueError):
-        return False
+        return "experiment profile has no verified execution recipe"
+    if recipe.context_policy.source != CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE:
+        return "external context requires exact Dataset source identity"
     if (
-        recipe.context_policy.source != CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE
-        or recipe.target_policy.materialization_mode
+        recipe.target_policy.materialization_mode
         != CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT
     ):
-        return False
+        return "target materialization is not daily-component"
     files = resolve_dataset_paths(Path(".")).artifact_paths()
-    for records in (published, current):
-        if not isinstance(records, Mapping) or set(records) != set(files):
-            return False
+    expected_keys = set(files)
+    for label, records in (("historical", published), ("current", current)):
+        if not isinstance(records, Mapping):
+            return f"{label} event Dataset records absent or not a mapping"
+        actual_keys = set(records)
+        if actual_keys != expected_keys:
+            missing = sorted(expected_keys - actual_keys)
+            return (
+                f"{label} event Dataset key set differs: "
+                f"missing={','.join(missing) or '-'}, "
+                f"unexpected_count={len(actual_keys - expected_keys)}, "
+                f"record_count={len(actual_keys)}"
+            )
         for name, file_path in files.items():
             row = records.get(name)
-            if not isinstance(row, Mapping) or row.get("filename") != file_path.name:
-                return False
+            if not isinstance(row, Mapping):
+                return f"{label} {name} record is not a mapping"
+            if row.get("filename") != file_path.name:
+                return f"{label} {name} filename differs from canonical Dataset contract"
             sha = row.get("sha256")
-            size = row.get("size_bytes")
             if (
                 not isinstance(sha, str) or len(sha) != 64
                 or any(char not in "0123456789abcdef" for char in sha.lower())
-                or type(size) is not int or size < 0
             ):
-                return False
-    return True
+                return f"{label} {name} SHA256 metadata invalid"
+            size = row.get("size_bytes")
+            if type(size) is not int or size < 0:
+                return f"{label} {name} file-size metadata invalid"
+    return None
+
+
+def _daily_lazy_dataset_artifact_reuse_blocker(
+    candidate: Mapping[str, Any], expected: Mapping[str, Any],
+    old_source: Mapping[str, Any], new_source: Mapping[str, Any],
+    *, project_root: str | Path | None, inventory_verified: bool,
+) -> str | None:
+    """One fail-closed owner for cross-mode event Dataset artifact exemptions."""
+    if project_root is None:
+        return "canonical project root missing"
+    if not inventory_verified:
+        return "source CSV inventory equivalence not verified"
+    for label, source in (("historical", old_source), ("current", new_source)):
+        if not isinstance(source.get("source_data_inventory"), Mapping) or not source["source_data_inventory"]:
+            return f"{label} source CSV inventory evidence absent"
+    old_target = old_source.get("target_contract")
+    new_target = new_source.get("target_contract")
+    if not isinstance(old_target, Mapping) or not old_target:
+        return "historical target contract missing or empty"
+    if old_target != new_target:
+        return "target contract differs"
+    if "target_artifacts" not in old_source or "target_artifacts" not in new_source:
+        return "target artifact field absent"
+    target_artifacts = old_source["target_artifacts"]
+    if target_artifacts is not None and (
+        not isinstance(target_artifacts, Mapping) or not target_artifacts
+    ):
+        return "historical target artifact record invalid"
+    if target_artifacts != new_source["target_artifacts"]:
+        return "target artifact lineage differs"
+    return _daily_lazy_event_dataset_artifact_blocker(
+        candidate, expected,
+        old_source.get("dataset_artifacts"), new_source.get("dataset_artifacts"),
+    )
 
 
 def _first_fold_fit_identity_issues(
@@ -320,38 +363,20 @@ def _first_fold_fit_identity_issues(
                 if not inventory_verified:
                     issues.append("source_contract.source_data_inventory mismatch")
             elif left_source[field] != right_source[field]:
-                # AI: Event-indexed Dataset artifacts are validated upstream, but
-                # they are not daily-universal lazy FIT inputs. Other sources,
-                # the checkpoint and the original Fold FitKey stay unchanged.
-                if not (
-                    field == "dataset_artifacts"
-                    and project_root is not None
-                    and inventory_verified
-                    and isinstance(left_source.get("source_data_inventory"), Mapping)
-                    and bool(left_source["source_data_inventory"])
-                    and isinstance(right_source.get("source_data_inventory"), Mapping)
-                    and bool(right_source["source_data_inventory"])
-                    and isinstance(left_source.get("target_contract"), Mapping)
-                    and bool(left_source["target_contract"])
-                    and left_source["target_contract"] == right_source.get("target_contract")
-                    # AI: Daily-component targets are derived from the pinned CSV;
-                    # their native target_manifest has no physical artifacts.
-                    # Explicit None on BOTH sides is valid only behind the
-                    # daily-lazy/no-external-context capability guard below.
-                    and "target_artifacts" in left_source
-                    and "target_artifacts" in right_source
-                    and (
-                        left_source["target_artifacts"] is None
-                        or (
-                            isinstance(left_source["target_artifacts"], Mapping)
-                            and bool(left_source["target_artifacts"])
-                        )
+                # AI: The lazy daily loader consumes the pinned CSV and native
+                # daily target, not event-indexed feature-bank/label caches.
+                # A failed exemption reports the precise missing proof but never
+                # silently converts an incompatible checkpoint into REUSE.
+                if field == "dataset_artifacts":
+                    proof_blocker = _daily_lazy_dataset_artifact_reuse_blocker(
+                        candidate, expected, left_source, right_source,
+                        project_root=project_root,
+                        inventory_verified=inventory_verified,
                     )
-                    and left_source["target_artifacts"] == right_source["target_artifacts"]
-                    and _daily_lazy_fit_ignores_event_dataset_artifacts(
-                        candidate, expected, left_source[field], right_source[field],
-                    )
-                ):
+                    if proof_blocker is not None:
+                        issues.append("source_contract.dataset_artifacts mismatch")
+                        issues.append(f"dataset_artifacts proof blocked: {proof_blocker}")
+                else:
                     issues.append(f"source_contract.{field} mismatch")
     left_settings = candidate.get("training_settings")
     right_settings = expected.get("training_settings")
