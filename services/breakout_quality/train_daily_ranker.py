@@ -1245,18 +1245,16 @@ def run(args) -> int:
             project_root=PROJECT_ROOT,
         )
 
-    # Rolling and Forward can share a fitting checkpoint ONLY when their actual
-    # stock-day training/validation membership and every weight-affecting setting
-    # match.  Forward scores and evaluation reports remain mode-local artifacts.
-    if (
-        existing_fitted_contract is None
-        and bool(getattr(args, "reuse_fitted_model", False))
-        and not artifact_paths.model_path.exists()
-    ):
+    # A stale Forward publication must not suppress a valid Rolling first-fold
+    # fit. Its old bytes are archived before a different verified fit is imported.
+    # If no legitimate current fit exists, explain the mismatch rather than
+    # silently refitting through a comparison/report-refresh workflow.
+    rolling_reuse_reason = None
+    if existing_fitted_contract is None and bool(getattr(args, "reuse_fitted_model", False)):
         from services.breakout_quality.point_in_time_scores import (
             load_forward_compatible_rolling_checkpoint,
         )
-        rolling_contract, rolling_reason = load_forward_compatible_rolling_checkpoint(
+        rolling_contract, rolling_reuse_reason = load_forward_compatible_rolling_checkpoint(
             bundle=bundle,
             forward_split=split,
             forward_args=args,
@@ -1265,31 +1263,37 @@ def run(args) -> int:
             project_root=PROJECT_ROOT,
         )
         if rolling_contract is not None:
-            # Validate and load the verified weights before publishing a Forward
-            # checkpoint; never mutate the historical Rolling fold.
+            # Ensure the checkpoint's embedded architecture, tensor shapes and
+            # weights are loadable before modifying any published artifact.
             rolling_reused_model = load_model_from_fitted_checkpoint(
-                torch, contract=rolling_contract, bundle=bundle, plan=plan
+                torch, contract=rolling_contract, bundle=bundle, plan=plan,
             )
-            artifact_paths.model_dir.mkdir(parents=True, exist_ok=True)
-            staged = artifact_paths.model_path.with_name(
-                artifact_paths.model_path.name + f".rolling_fit_import_{time.time_ns()}.tmp"
+            from services.breakout_quality.fitted_model_artifacts import (
+                import_verified_rolling_forward_checkpoint,
             )
-            try:
-                shutil.copy2(rolling_contract.model_path, staged)
-                if artifact_paths.model_path.exists():
-                    raise RuntimeError("Forward model appeared during Rolling checkpoint import")
-                staged.replace(artifact_paths.model_path)
-            finally:
-                if staged.exists():
-                    staged.unlink()
+            archive, _copied = import_verified_rolling_forward_checkpoint(
+                model_dir=artifact_paths.model_dir,
+                output_dir=output_dir,
+                rolling_contract=rolling_contract,
+            )
             existing_fitted_contract = rolling_contract
             print(
                 "[REUSE FIT] Rolling first-fold checkpoint -> Forward OOS | "
                 f"selected_epoch={rolling_contract.selected_epoch}; "
                 "Forward scores/report will be evaluated independently"
             )
+            if archive is not None:
+                print("[HISTORICAL FIT] old Forward publication preserved under model/historical_forward_fits")
         else:
-            print(f"[FIT CHECK] Rolling checkpoint cannot be reused for Forward: {rolling_reason}")
+            print(f"[FIT CHECK] Rolling first-fold checkpoint unavailable: {rolling_reuse_reason}")
+            if artifact_paths.model_path.is_file():
+                raise RuntimeError(
+                    "Existing Forward checkpoint is not reusable and no verified Rolling FIT "
+                    "can replace it. The legacy model has NOT been overwritten; "
+                    "automatic retraining during report refresh is blocked. "
+                    f"Forward identity: {fitted_reuse_reason or 'unverified'}; "
+                    f"Rolling identity: {rolling_reuse_reason or 'unverified'}"
+                )
 
     if existing_fitted_contract is not None:
         model = (

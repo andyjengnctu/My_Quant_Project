@@ -3589,15 +3589,14 @@ def _run_continuous_forward_model_gate(program_name: str, settings) -> int:
     )
     rolling_fit_candidate = (
         reusable_contract is None
-        and not forward_fit_candidate
         and _has_rolling_first_fold_fit_candidate(settings)
     )
     _print_model_action_status(((
         str(research_spec.model_research_id),
         str(settings.experiment_profile),
         "REUSE" if reusable_contract is not None
-        else "REFRESH/VERIFY" if forward_fit_candidate
         else "VERIFY FIT" if rolling_fit_candidate
+        else "REFRESH/VERIFY" if forward_fit_candidate
         else "BUILD",
         "READY" if reusable_contract is not None
         else "Rolling first-fold fitted checkpoint候選；待核對exact fitting identity"
@@ -4544,8 +4543,9 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
             action = (
                 "REUSE"
                 if ready
-                else "REFRESH/VERIFY"
-                if _has_continuous_forward_fitted_candidate(settings)
+                else "VERIFY FIT"
+                if _has_rolling_first_fold_fit_candidate(settings)
+                else "REFRESH/VERIFY" if _has_continuous_forward_fitted_candidate(settings)
                 else "BUILD"
             )
         if not ready:

@@ -1204,6 +1204,66 @@ def _forward_checkpoint_import_issues(
 
 
 
+
+# These values control routing / throughput, not optimizer samples, gradients,
+# loss, step order, or selected epochs.  The *resolved* torch execution is
+# independently required to match before any weight reuse is approved.
+_FIRST_FOLD_NON_FITTING_SETTINGS = frozenset({
+    "evaluation_batch_size", "train_prefetch_batches", "train_prefetch_workers",
+    "device", "mixed_precision", "mixed_precision_dtype",
+    "deterministic_algorithms", "allow_tf32",
+})
+
+
+def _first_fold_fit_identity_issues(
+    candidate: dict[str, Any], expected: dict[str, Any],
+) -> tuple[str, ...]:
+    """Explain a cross-mode fitting mismatch without weakening PIT's native reuse.
+
+    Forward and Rolling can use different score throughput settings.  Only those
+    enumerated options are ignored here; all other candidate fields, including
+    optimizer settings and actual training cohorts, remain exact requirements.
+    """
+    fields = (
+        "filter_id", "model_architecture", "experiment_profile",
+        "continuous_target_id", "training_label_scope", "training_sample_scope",
+        "seed", "model_information_cutoff", "model_spec", "experiment_settings",
+        "source_contract", "lookahead_contract",
+    )
+    issues = [f"{field} mismatch" for field in fields
+              if candidate.get(field) != expected.get(field)]
+    left_settings = candidate.get("training_settings")
+    right_settings = expected.get("training_settings")
+    if not isinstance(left_settings, dict) or not isinstance(right_settings, dict):
+        issues.append("training_settings missing")
+    else:
+        for field in sorted(set(left_settings) | set(right_settings)):
+            if field not in _FIRST_FOLD_NON_FITTING_SETTINGS and (
+                field not in left_settings or field not in right_settings
+                or left_settings[field] != right_settings[field]
+            ):
+                issues.append(f"training_settings.{field} mismatch")
+    left_planned = candidate.get("planned_periods")
+    right_planned = expected.get("planned_periods")
+    if not isinstance(left_planned, dict) or not isinstance(right_planned, dict):
+        issues.append("planned_periods missing")
+    else:
+        for field in ("validation_start", "validation_end", "score_start", "history_start"):
+            if left_planned.get(field) != right_planned.get(field):
+                issues.append(f"planned_periods.{field} mismatch")
+    for family in ("observed_periods", "group_counts", "event_row_counts"):
+        left = candidate.get(family)
+        right = expected.get(family)
+        if not isinstance(left, dict) or not isinstance(right, dict):
+            issues.append(f"{family} missing")
+        else:
+            for stage in ("inner_train", "validation", "final_refit"):
+                if left.get(stage) != right.get(stage):
+                    issues.append(f"{family}.{stage} mismatch")
+    return tuple(issues)
+
+
+
 def load_forward_compatible_rolling_checkpoint(
     *,
     bundle,
@@ -1332,8 +1392,9 @@ def load_forward_compatible_rolling_checkpoint(
             ineligible.append(f"{fold['fold_id']}: different fitted sample membership")
             continue
         expected = _fold_contract_payload(pit_args, bundle, fold, ids)
-        if not _fold_training_contract_is_compatible(manifest, expected_contract=expected):
-            ineligible.append(f"{fold['fold_id']}: fitting identity mismatch")
+        fitting_issues = _first_fold_fit_identity_issues(manifest, expected)
+        if fitting_issues:
+            ineligible.append(f"{fold['fold_id']}: " + "; ".join(fitting_issues[:7]))
             continue
         actual_execution = dict(manifest.get("torch_execution") or {})
         actual_execution.pop("requested_device", None)
@@ -1360,8 +1421,12 @@ def load_forward_compatible_rolling_checkpoint(
         embedded_contract = checkpoint.get("fold_contract")
         migration = dict(manifest.get("migration") or {})
         if isinstance(embedded_contract, dict):
-            if not _fold_training_contract_is_compatible(embedded_contract, expected_contract=expected):
-                raise RuntimeError(f"Rolling checkpoint embedded fitting contract mismatch: {fold['fold_id']}")
+            embedded_issues = _first_fold_fit_identity_issues(embedded_contract, expected)
+            if embedded_issues:
+                raise RuntimeError(
+                    f"Rolling checkpoint embedded fitting contract mismatch: {fold['fold_id']}: "
+                    + "; ".join(embedded_issues[:7])
+                )
         elif not (
             migration.get("kind") == "forward_model_fitting_identity_import"
             and migration.get("training_contract_unchanged") is True

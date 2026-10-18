@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import shutil
+import time
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -805,6 +807,104 @@ def write_fitted_model_contract(
     return path
 
 
+
+def import_verified_rolling_forward_checkpoint(
+    *, model_dir: Path, output_dir: Path, rolling_contract: FittedModelContract,
+) -> tuple[Path | None, bool]:
+    """Publish an independently verified Rolling FIT under the Forward location.
+
+    If the existing Forward model differs, preserve the complete *published* local
+    evidence byte-for-byte in a deterministic hash-addressed historical snapshot
+    before replacing any bytes. Never rewrite an existing historical snapshot.
+    This routine must be called only after the PIT fitting-identity verifier and
+    model loader have both accepted the candidate.
+    """
+    model_dir = Path(model_dir).resolve()
+    output_dir = Path(output_dir).resolve()
+    destination = model_dir / "model.pt"
+    source = Path(rolling_contract.model_path).resolve()
+    verified_record = build_file_manifest(source)
+    original_record = dict(dict(rolling_contract.manifest.get("artifacts") or {}).get("checkpoint") or {})
+    if not original_record or verified_record != original_record:
+        raise FittedModelConflictError(
+            "Rolling checkpoint changed after PIT fitting-identity verification"
+        )
+    def identical_bytes(first: Mapping[str, Any], second: Mapping[str, Any]) -> bool:
+        # Manifest.filename denotes the storage location, not tensor content.
+        # Staged files intentionally have a different basename.
+        return (
+            first.get("sha256") == second.get("sha256")
+            and first.get("size_bytes") == second.get("size_bytes")
+        )
+
+    historical_dir = None
+    if destination.is_file():
+        current_record = build_file_manifest(destination)
+        if identical_bytes(current_record, verified_record):
+            return None, False
+        legacy_sha = str(current_record["sha256"])
+        archive = model_dir / "historical_forward_fits" / legacy_sha
+        if archive.exists():
+            evidence = _read_json(archive / "archive_manifest.json")
+            if (evidence is None or evidence.get("original_model") != current_record
+                    or evidence.get("replacement_rolling_model") != verified_record
+                    or not (archive / "model" / "model.pt").is_file()
+                    or build_file_manifest(archive / "model" / "model.pt") != current_record):
+                raise FittedModelConflictError("historical Forward archive conflict: " + legacy_sha)
+        else:
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            stage = archive.parent / ("." + legacy_sha + f".stage_{time.time_ns()}")
+            stage.mkdir(parents=True, exist_ok=False)
+            try:
+                preserved = []
+                # Restrict to already published files; never traverse another
+                # profile's directory, include a private dataset, or copy secrets.
+                for bucket, origin in (("model", model_dir), ("report", output_dir)):
+                    if not origin.is_dir():
+                        continue
+                    for candidate in sorted(origin.iterdir()):
+                        if not candidate.is_file() or candidate.name.startswith("."):
+                            continue
+                        relative = Path(bucket) / candidate.name
+                        target = stage / relative
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        original = build_file_manifest(candidate)
+                        shutil.copy2(candidate, target)
+                        if build_file_manifest(target) != original:
+                            raise RuntimeError("historical Forward archive copy verification failed")
+                        preserved.append({"path": relative.as_posix(), "manifest": original})
+                if not (stage / "model" / "model.pt").is_file():
+                    raise RuntimeError("historical Forward checkpoint missing during archive")
+                (stage / "archive_manifest.json").write_text(
+                    json.dumps({
+                        "archive_version": 1,
+                        "original_model": current_record,
+                        "replacement_rolling_model": verified_record,
+                        "preserved_files": preserved,
+                    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+                )
+                stage.replace(archive)
+            finally:
+                if stage.exists():
+                    shutil.rmtree(stage)
+        historical_dir = archive
+    if destination.is_file() and identical_bytes(build_file_manifest(destination), verified_record):
+        return historical_dir, False
+    staged = destination.with_name("." + destination.name + f".rolling_import_{time.time_ns()}")
+    try:
+        shutil.copy2(source, staged)
+        if not identical_bytes(build_file_manifest(staged), verified_record):
+            raise RuntimeError("Rolling checkpoint changed during verified Forward import")
+        staged.replace(destination)
+    finally:
+        if staged.exists():
+            staged.unlink()
+    if not identical_bytes(build_file_manifest(destination), verified_record):
+        raise RuntimeError("Forward checkpoint import verification failed")
+    return historical_dir, True
+
+
+
 def load_model_from_fitted_checkpoint(torch, *, contract: FittedModelContract, bundle, plan):
     checkpoint = torch.load(contract.model_path, map_location="cpu", weights_only=True)
     if not isinstance(checkpoint, dict):
@@ -854,6 +954,7 @@ __all__ = [
     "canonical_fitting_settings",
     "current_default_fitting_settings",
     "fitted_model_settings_issues",
+    "import_verified_rolling_forward_checkpoint",
     "forward_fitted_source_provenance_issues",
     "fitting_settings_issues",
     "legacy_default_fitting_settings",
