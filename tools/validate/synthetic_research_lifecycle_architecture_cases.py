@@ -374,12 +374,12 @@ def validate_research_model_readiness_architecture_case(_base_params):
     # Phase 3 SCORE source must remain independent of Audit. Structural
     # mutations simulate future consumer-side copies under unrelated names.
     from .research_lifecycle_architecture import (
-        MODEL_SCORE_OWNER, check_model_score_owner_architecture_sources,
+        MODEL_SCORE_OWNER, ROLLING_MODEL_SOURCE_OWNER,
+        check_model_score_owner_architecture_sources,
     )
     score_sources = dict(sources)
-    score_sources[MODEL_SCORE_OWNER] = (
-        root / MODEL_SCORE_OWNER
-    ).read_text(encoding="utf-8")
+    for path in (MODEL_SCORE_OWNER, ROLLING_MODEL_SOURCE_OWNER):
+        score_sources[path] = (root / path).read_text(encoding="utf-8")
     check("canonical_pit_score_source_without_audit_dependency", (),
           check_model_score_owner_architecture_sources(score_sources))
     for index, (path, mutation) in enumerate((
@@ -399,6 +399,67 @@ def validate_research_model_readiness_architecture_case(_base_params):
             )
         check_true(f"second_score_lifecycle_mutation_{index}_blocked",
                    bool(check_model_score_owner_architecture_sources(edited)))
+
+    edited = dict(score_sources)
+    edited[ROLLING_MODEL_SOURCE_OWNER] = edited[ROLLING_MODEL_SOURCE_OWNER].replace(
+        "        score = load_selection_point_in_time_score_source_contract(",
+        "        score = hidden_second_score_owner(", 1,
+    )
+    check_true("rolling_fallback_cannot_bypass_score_owner",
+               bool(check_model_score_owner_architecture_sources(edited)))
+    edited = dict(score_sources)
+    edited[RESEARCH_APPLICATION] = edited[RESEARCH_APPLICATION].replace(
+        "    resolved = load_rolling_model_source(",
+        "    resolved = hidden_application_selector(", 1,
+    )
+    check_true("rolling_model_consumer_cannot_bypass_shared_selector",
+               bool(check_model_score_owner_architecture_sources(edited)))
+
+    # Both consumers must use one source selector without invalidating SCORE
+    # when the downstream audit is missing, or reading SCORE twice when healthy.
+    from services.breakout_quality import rolling_model_source as source_adapter
+    synthetic_kwargs = {
+        "project_root": root,
+        "filter_id": "synthetic_filter",
+        "model_architecture": "synthetic_architecture",
+        "experiment_profile": "synthetic_profile",
+        "point_in_time_dir_override": Path("synthetic_pit"),
+        "expected_seed": 101,
+    }
+    complete_proof = SimpleNamespace(seed=101, audit={"status": "RESULT_AVAILABLE"})
+    with patch.object(source_adapter, "load_selection_point_in_time_ranking_contract",
+                      return_value=complete_proof), patch.object(
+        source_adapter, "load_selection_point_in_time_score_source_contract",
+        side_effect=AssertionError("complete Audit must not re-validate SCORE"),
+    ):
+        complete_source = source_adapter.load_rolling_model_source(**synthetic_kwargs)
+    check_true("healthy_rolling_audit_uses_one_complete_source",
+               complete_source.source_contract is complete_proof
+               and complete_source.complete_contract is complete_proof
+               and complete_source.audit_error is None)
+    score_proof = SimpleNamespace(seed=101, manifest={"seed": 101})
+    with patch.object(source_adapter, "load_selection_point_in_time_ranking_contract",
+                      side_effect=FileNotFoundError("audit missing")), patch.object(
+        source_adapter, "load_selection_point_in_time_score_source_contract",
+        return_value=score_proof,
+    ) as score_loader:
+        score_only = source_adapter.load_rolling_model_source(**synthetic_kwargs)
+    check_true("rolling_missing_audit_reuses_only_verified_score",
+               score_only.source_contract is score_proof
+               and score_only.complete_contract is None
+               and "audit missing" in str(score_only.audit_error)
+               and score_only.score_error is None)
+    check("rolling_score_only_seed_is_from_requested_robustness_seed", 101,
+          score_loader.call_args.kwargs.get("expected_seed"))
+    with patch.object(source_adapter, "load_selection_point_in_time_ranking_contract",
+                      side_effect=FileNotFoundError("audit missing")), patch.object(
+        source_adapter, "load_selection_point_in_time_score_source_contract",
+        side_effect=ValueError("score SHA invalid"),
+    ):
+        invalid = source_adapter.load_rolling_model_source(**synthetic_kwargs)
+    check_true("invalid_rolling_score_never_infers_evidence_readiness",
+               invalid.source_contract is None and invalid.complete_contract is None
+               and "score SHA invalid" in str(invalid.score_error))
 
     # SCORE is a legitimate Research artifact with no Audit file. Complete
     # strategy Ranking still requires a source-hash-bound Audit and its gate.

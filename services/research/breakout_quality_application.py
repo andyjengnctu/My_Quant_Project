@@ -103,6 +103,7 @@ from services.breakout_quality.model_artifact_readiness import (
     resolve_model_artifact_readiness,
     standard_model_report_matches_source,
 )
+from services.breakout_quality.rolling_model_source import load_rolling_model_source
 from services.breakout_quality.standard_model_sop import (
     aggregate_standard_model_sop_robustness,
     migrate_legacy_forward_standard_model_sop,
@@ -182,7 +183,6 @@ from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
     derive_point_in_time_model_validation_gate,
-    load_selection_point_in_time_ranking_contract,
     load_selection_point_in_time_score_source_contract,
     load_continuous_ranker_oos_contract,
     load_continuous_ranker_oos_score_table,
@@ -3513,34 +3513,22 @@ def _rolling_pit_dir_for_loader(settings, mode) -> Path | None:
 
 
 def _load_reusable_rolling_standard_report(settings, mode):
-    """Verify complete Audit or reuse independently verified SCORE-only evidence.
+    """Use the shared SCORE/Audit source selector, then validate Standard SOP.
 
-    Valid complete bundles take the normal strategy-grade loader. If the Audit
-    is missing or stale, ask the same canonical SCORE owner for an Audit-free
-    score contract. Score defects cannot be repaired by Audit alone.
+    Audit failures alone never invalidate a verified PIT SCORE source or
+    authorize refitting; fitting settings and model metrics keep their own owners.
     """
     override = _rolling_pit_dir_for_loader(settings, mode)
-    try:
-        contract = load_selection_point_in_time_ranking_contract(
-            str(PROJECT_ROOT), str(settings.filter_id),
-            str(settings.model_architecture), str(settings.experiment_profile),
-            require_model_validation_pass=False,
-            point_in_time_dir_override=override,
-        )
-        audit_problem = None
-    except (FileNotFoundError, RuntimeError, ValueError, KeyError, TypeError, OSError) as exc:
-        contract = None
-        audit_problem = f"{type(exc).__name__}: {exc}"
+    resolved = load_rolling_model_source(
+        project_root=PROJECT_ROOT,
+        filter_id=str(settings.filter_id),
+        model_architecture=str(settings.model_architecture),
+        experiment_profile=str(settings.experiment_profile),
+        point_in_time_dir_override=override,
+    )
+    contract = resolved.source_contract
     if contract is None:
-        try:
-            score_source = load_selection_point_in_time_score_source_contract(
-                str(PROJECT_ROOT), str(settings.filter_id),
-                str(settings.model_architecture), str(settings.experiment_profile),
-                point_in_time_dir_override=override,
-            )
-        except (FileNotFoundError, RuntimeError, ValueError, KeyError, TypeError, OSError) as exc:
-            return None, None, f"SCORE invalid: {type(exc).__name__}: {exc}; Audit: {audit_problem}"
-        contract = score_source
+        return None, None, f"SCORE invalid: {resolved.score_error}; Audit: {resolved.audit_error}"
     fit_issues = pit_fold_fitting_settings_issues(
         point_in_time_dir=Path(contract.manifest_path).resolve().parent,
         manifest=contract.manifest,
@@ -3550,8 +3538,8 @@ def _load_reusable_rolling_standard_report(settings, mode):
         return None, None, (
             "Rolling fitted-model training settings stale: " + "; ".join(fit_issues[:8])
         )
-    if audit_problem:
-        return contract, None, f"Rolling evaluation/Audit refresh required: {audit_problem}"
+    if resolved.audit_error is not None:
+        return contract, None, f"Rolling evaluation/Audit refresh required: {resolved.audit_error}"
     payload = dict(contract.audit or {})
     standard = dict(payload.get("standard_model_sop") or {})
     if not standard:
@@ -4668,36 +4656,40 @@ def _rolling_robustness_score_core_contract(settings, *, seed: int):
 
 
 def _load_rolling_robustness_seed(settings, *, seed: int):
-    """Validate complete seed evidence, with SCORE-only fallback on Audit failure.
+    """Validate seed evidence via the same audited/SCORE-only source selector.
 
-    The complete Ranking Contract already consumes the canonical SCORE owner.
-    Rechecking that same score hash before every healthy seed would duplicate
-    expensive file I/O; SCORE-only is needed only to classify failed evidence.
+    A valid full Ranking contract already verified its SCORE.  On an Audit
+    failure only, the owner verifies SCORE independently and we classify an
+    EVIDENCE-only refresh without checking that score twice.
     """
     pit_dir, _unused = _model_robustness_dirs(settings, seed=seed, rolling=True)
     audit_path = pit_dir / SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME
-    try:
-        contract = load_selection_point_in_time_ranking_contract(
-            str(PROJECT_ROOT), str(settings.filter_id),
-            str(settings.model_architecture), str(settings.experiment_profile),
-            point_in_time_dir_override=pit_dir,
-            require_model_validation_pass=False,
-        )
-    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
-        source, reason = _rolling_robustness_score_core_contract(settings, seed=seed)
-        if source is None:
-            return None, audit_path, reason
-        return None, audit_path, f"Rolling robustness EVIDENCE refresh required: {type(exc).__name__}: {exc}"
-    if int(contract.seed) != int(seed):
+    resolved = load_rolling_model_source(
+        project_root=PROJECT_ROOT,
+        filter_id=str(settings.filter_id),
+        model_architecture=str(settings.model_architecture),
+        experiment_profile=str(settings.experiment_profile),
+        point_in_time_dir_override=pit_dir,
+        expected_seed=int(seed),
+    )
+    source = resolved.source_contract
+    if source is None:
+        return None, audit_path, f"Rolling robustness SCORE not reusable: {resolved.score_error}"
+    contract = resolved.complete_contract
+    if contract is not None and int(contract.seed) != int(seed):
         return None, audit_path, "Rolling robustness SCORE not reusable: manifest seed mismatch"
     fit_issues = pit_fold_fitting_settings_issues(
-        point_in_time_dir=pit_dir, manifest=contract.manifest,
+        point_in_time_dir=pit_dir, manifest=source.manifest,
         expected=current_default_fitting_settings(),
     )
     if fit_issues:
         return None, audit_path, (
             "Rolling robustness fitted-model training settings stale: "
             + "; ".join(fit_issues[:8])
+        )
+    if contract is None:
+        return None, audit_path, (
+            f"Rolling robustness EVIDENCE refresh required: {resolved.audit_error}"
         )
     audit = dict(contract.audit or {})
     issues = _validate_robustness_standard_payload(

@@ -241,6 +241,7 @@ def check_research_fit_architecture_sources(
 
 
 MODEL_SCORE_OWNER = "filters/breakout_quality/ranking_score_store.py"
+ROLLING_MODEL_SOURCE_OWNER = "services/breakout_quality/rolling_model_source.py"
 MODEL_EVIDENCE_OWNER = "services/breakout_quality/standard_model_sop.py"
 MODEL_STAGE_OWNER = "services/breakout_quality/model_artifact_readiness.py"
 
@@ -347,8 +348,10 @@ def check_model_score_owner_architecture_sources(
     Score readiness must never require an Audit JSON.
     """
     trees = {path: ast.parse(sources[path], filename=path)
-             for path in (MODEL_SCORE_OWNER, RESEARCH_APPLICATION)}
+             for path in (MODEL_SCORE_OWNER, ROLLING_MODEL_SOURCE_OWNER,
+                          RESEARCH_APPLICATION)}
     owner_defs = _defs(trees[MODEL_SCORE_OWNER])
+    selector_defs = _defs(trees[ROLLING_MODEL_SOURCE_OWNER])
     app_defs = _defs(trees[RESEARCH_APPLICATION])
     issues: list[str] = []
     source_name = "load_selection_point_in_time_score_source_contract"
@@ -374,11 +377,27 @@ def check_model_score_owner_architecture_sources(
                   if isinstance(n, ast.Constant) and isinstance(n.value, str)}
         if "Selection PIT audit" in tokens:
             issues.append("SCORE source directly validates Audit")
+    # The producer validates both scientific sources.  The *single* shared
+    # selector owns complete-Audit versus verified-SCORE fallback.  Standard
+    # and Robustness must not independently build their own fallback policy.
+    selector = selector_defs.get("load_rolling_model_source")
+    if selector is None:
+        issues.append("canonical Rolling SCORE/Audit source selector missing")
+    else:
+        selector_calls = {n.func.id for n in ast.walk(selector)
+                          if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        for callee in (complete_name, source_name):
+            if callee not in selector_calls:
+                issues.append(f"shared Rolling source selector bypasses canonical owner: {callee}")
+        for node in ast.walk(selector):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id in {"build_file_manifest", "compute_file_sha256"}):
+                issues.append("shared Rolling source selector duplicates SCORE hash validation")
     required_calls = {
-        "_load_reusable_rolling_standard_report": (source_name, complete_name),
+        "_load_reusable_rolling_standard_report": ("load_rolling_model_source",),
         "_rolling_robustness_score_core_contract": (source_name,),
         "_rolling_robustness_score_core_ready": ("_rolling_robustness_score_core_contract",),
-        "_load_rolling_robustness_seed": ("_rolling_robustness_score_core_contract", complete_name),
+        "_load_rolling_robustness_seed": ("load_rolling_model_source",),
     }
     for fn_name, called in required_calls.items():
         fn = app_defs.get(fn_name)
@@ -390,6 +409,9 @@ def check_model_score_owner_architecture_sources(
         for callee in called:
             if callee not in observed:
                 issues.append(f"{fn_name} bypasses canonical SCORE lifecycle: {callee}")
+        if fn_name in {"_load_reusable_rolling_standard_report", "_load_rolling_robustness_seed"}:
+            if observed & {source_name, complete_name}:
+                issues.append(f"{fn_name} reintroduces a consumer-owned SCORE/Audit fallback")
         if any(n in observed for n in ("build_file_manifest", "compute_file_sha256")):
             issues.append(f"{fn_name} implements duplicate score checksum policy")
     # Semantic rejection independent of helper name. A newly added source
@@ -459,7 +481,8 @@ def check_research_fit_architecture(project_root: Path) -> tuple[str, ...]:
     }
     model_sources = {
         path: (root / path).read_text(encoding="utf-8")
-        for path in (MODEL_EVIDENCE_OWNER, MODEL_STAGE_OWNER, MODEL_SCORE_OWNER)
+        for path in (MODEL_EVIDENCE_OWNER, MODEL_STAGE_OWNER, MODEL_SCORE_OWNER,
+                     ROLLING_MODEL_SOURCE_OWNER)
     }
     return (
         *check_research_fit_architecture_sources(sources),
