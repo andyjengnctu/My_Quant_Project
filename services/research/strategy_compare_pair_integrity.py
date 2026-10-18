@@ -9,6 +9,7 @@ integrity record are accepted through the explicitly legacy-unpinned path.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -27,13 +28,18 @@ _PRIMARY_PAIR_JSON = "strategy_comparison.json"
 def _tracked_pair_files(pair_dir: Path) -> dict[str, Path]:
     """Only direct, independently published pair files may enter the digest set."""
     files: dict[str, Path] = {}
-    for path in pair_dir.iterdir():
-        if path.suffix.lower() not in _INTEGRITY_SUFFIXES or path.name == _PRIMARY_PAIR_JSON:
-            continue
-        if path.is_symlink():
-            raise ValueError(f"pair integrity 不允許符號連結: {path.name}")
-        if path.is_file():
-            files[path.name] = path
+    # scandir preserves Path.is_symlink/is_file semantics but avoids separate
+    # per-file stat requests on platforms where directory entries carry type
+    # metadata.  A fresh listing is taken for every integrity decision.
+    with os.scandir(pair_dir) as entries:
+        for entry in entries:
+            name = entry.name
+            if Path(name).suffix.lower() not in _INTEGRITY_SUFFIXES or name == _PRIMARY_PAIR_JSON:
+                continue
+            if entry.is_symlink():
+                raise ValueError(f"pair integrity 不允許符號連結: {name}")
+            if entry.is_file():
+                files[name] = pair_dir / name
     return dict(sorted(files.items()))
 
 

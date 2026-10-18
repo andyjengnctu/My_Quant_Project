@@ -860,6 +860,51 @@ def append_completed_pair_score_reuse_contract_checks(
             pair_id=group_id, pair_dir=pair_dir,
             required_paths=required_pair_files,
         )
+        # AI: Completed-pair inventory must use fresh directory-entry metadata.
+        # Rechecking each already-listed file with Path.is_file() is avoidable
+        # Windows I/O, but symlinks must still fail closed.
+        from contextlib import nullcontext
+        from services.research import strategy_compare_pair_integrity as pair_integrity_owner
+        with patch.object(
+            Path, "is_file", side_effect=AssertionError("redundant pair-file stat")
+        ):
+            inventory = pair_integrity_owner._tracked_pair_files(pair_dir)
+        inventory_uses_dir_entries = (
+            "strategy_comparison.md" in inventory
+            and "no_filter_trades.csv" in inventory
+            and "post_replay_diagnostics.json" in inventory
+            and "strategy_comparison.json" not in inventory
+        )
+
+        newly_published = pair_dir / "new_post_replay_auxiliary.csv"
+        newly_published.write_text("fresh\n", encoding="utf-8")
+        published_discovered = newly_published.name in pair_integrity_owner._tracked_pair_files(pair_dir)
+        newly_published.unlink()
+        removed_disappears = newly_published.name not in pair_integrity_owner._tracked_pair_files(pair_dir)
+        non_file_path = pair_dir / "directory_named_csv.csv"
+        non_file_path.mkdir()
+        directory_not_tracked = non_file_path.name not in pair_integrity_owner._tracked_pair_files(pair_dir)
+        non_file_path.rmdir()
+
+        class _SymlinkEntry:
+            name = "unsafe.csv"
+
+            def is_symlink(self):
+                return True
+
+            def is_file(self):
+                raise AssertionError("symlink type must not be followed")
+
+        with patch.object(
+            pair_integrity_owner.os, "scandir",
+            return_value=nullcontext((_SymlinkEntry(),)),
+        ):
+            try:
+                pair_integrity_owner._tracked_pair_files(pair_dir)
+            except ValueError as exc:
+                symlink_inventory_rejected = "符號連結" in str(exc)
+            else:
+                symlink_inventory_rejected = False
         score_frame.loc[0, "breakout_quality_score"] = 0.91
         score_frame.to_csv(score_path, index=False, encoding="utf-8-sig")
         changed_projection_map = compute_score_projection_sha256s(
@@ -914,6 +959,12 @@ def append_completed_pair_score_reuse_contract_checks(
         and changed_csv_archived_rejected
         and changed_markdown_rejected
         and changed_auxiliary_json_rejected,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "completed_pair_inventory_uses_fresh_scandir_metadata_without_extra_stat_and_rejects_symlink",
+        True, inventory_uses_dir_entries and symlink_inventory_rejected
+        and published_discovered and removed_disappears and directory_not_tracked,
     )
     add_check(
         results,
