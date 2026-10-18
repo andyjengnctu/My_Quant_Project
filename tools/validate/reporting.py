@@ -190,6 +190,8 @@ def write_local_regression_summary(*, dataset_profile_key, dataset_source, data_
                 "layer": str(row.get("layer", "")),
                 "cost_class": str(row.get("cost_class", "")),
                 "duration_sec": round(float(row.get("duration_sec", 0.0) or 0.0), 6),
+                **({"section_durations_sec": dict(row["section_durations_sec"])}
+                   if isinstance(row.get("section_durations_sec"), dict) else {}),
             }
             for row in timed_synthetic
         ),

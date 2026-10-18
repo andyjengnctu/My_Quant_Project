@@ -2334,6 +2334,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         }
     )
     _mark_section("summary")
+    # Include the same non-scientific timing breakdown in the machine-readable
+    # consistency summary.  The minimal PASS bundle does not include
+    # consistency.log, so console-only timing could not diagnose Windows cases.
+    summary["section_durations_sec"] = {
+        name: round(seconds, 6) for name, seconds in _section_durations
+    }
     print(
         "[STRATEGY_COMPARE_CASE_TIMING] "
         + " ".join(f"{name}={seconds:.3f}s" for name, seconds in _section_durations)

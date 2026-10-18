@@ -172,13 +172,21 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
     )
 
     missing_done_entry_paths: List[Dict[str, str]] = []
+    # A large checklist repeats the same source file across many DONE entries.
+    # Inspect each exact path once within this invocation only; the next
+    # invocation must re-check the filesystem so a newly removed/restored file
+    # cannot inherit an earlier PASS.  Preserve one failure for every referencing
+    # entry, including repeated references and their original order.
+    path_is_file: Dict[str, bool] = {}
     for table_name, status_idx, entry_idx in (("B1", 3, 5), ("B2", 4, 6), ("B3", 4, 6)):
         for row in tables.get(table_name, []):
             if len(row) <= max(status_idx, entry_idx) or row[status_idx].strip() != "DONE":
                 continue
             item_id = row[0].strip()
             for relative_path in _extract_checklist_exact_project_python_paths(row[entry_idx]):
-                if not (PROJECT_ROOT / relative_path).is_file():
+                if relative_path not in path_is_file:
+                    path_is_file[relative_path] = (PROJECT_ROOT / relative_path).is_file()
+                if not path_is_file[relative_path]:
                     missing_done_entry_paths.append({"id": item_id, "path": relative_path})
     results.append(
         summarize_result(
