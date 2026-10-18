@@ -478,6 +478,46 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                 check_true("reverse_bridge_original_fitkey_not_rewritten_by_event_relabel",
                            owner.fold_training_identity(old_daily) != owner.fold_training_identity(new_daily))
 
+                # AI: Native Daily-component target_manifest has no 'artifacts':
+                # PIT persists target_artifacts=None. A synthetic SHA fixture
+                # falsely passed while the actual native contract was rejected.
+                lazy_target_old = deepcopy(old_daily)
+                lazy_target_new = deepcopy(new_daily)
+                lazy_target_old["source_contract"]["target_artifacts"] = None
+                lazy_target_new["source_contract"]["target_artifacts"] = None
+                check("reverse_bridge_real_daily_lazy_target_has_no_artifact_files", (),
+                      owner._first_fold_fit_identity_issues(
+                          lazy_target_old, lazy_target_new, project_root=root_dir,
+                      ))
+                missing_target_field = deepcopy(lazy_target_old)
+                missing_target_field["source_contract"].pop("target_artifacts")
+                check_true("reverse_bridge_unrecorded_target_artifact_contract_rejected",
+                           "source_contract.target_artifacts missing" in
+                           owner._first_fold_fit_identity_issues(
+                               missing_target_field, lazy_target_new,
+                               project_root=root_dir,
+                           ))
+                substituted_target = deepcopy(lazy_target_new)
+                substituted_target["source_contract"]["target_artifacts"] = {
+                    "target_file": {"sha256": hashlib.sha256(b"changed").hexdigest()}
+                }
+                check_true("reverse_bridge_lazy_target_new_physical_lineage_rejected",
+                           "source_contract.target_artifacts mismatch" in
+                           owner._first_fold_fit_identity_issues(
+                               lazy_target_old, substituted_target,
+                               project_root=root_dir,
+                           ))
+                changed_lazy_target_contract = deepcopy(lazy_target_new)
+                changed_lazy_target_contract["source_contract"]["target_contract"] = {
+                    "source": "different_daily_target",
+                }
+                check_true("reverse_bridge_lazy_target_contract_change_rejected",
+                           "source_contract.target_contract mismatch" in
+                           owner._first_fold_fit_identity_issues(
+                               lazy_target_old, changed_lazy_target_contract,
+                               project_root=root_dir,
+                           ))
+
                 unsafe_context_old = deepcopy(old_daily)
                 unsafe_context_new = deepcopy(new_daily)
                 unsafe_context_old["experiment_profile"] = external_context
@@ -601,6 +641,20 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                 })
                 check_true("reverse_bridge_complete_fold_checkpoint_allows_proven_event_artifact_refresh",
                            verified_daily is not None and verified_reason is None)
+                # AI: Exercise both outer native manifest and checkpoint-embedded
+                # contract with actual lazy-target None, not a fabricated SHA.
+                verified_lazy_manifest = {**manifest, **lazy_target_old}
+                verified_lazy_checkpoint = {
+                    **checkpoint, "fold_contract": lazy_target_old,
+                    "experiment_settings": lazy_target_old["experiment_settings"],
+                    "model_spec": lazy_target_old["model_spec"],
+                }
+                verified_lazy, verified_lazy_reason = owner.validate_rolling_fold_fitted_checkpoint(**{
+                    **verify_args, "manifest": verified_lazy_manifest, "expected": lazy_target_new,
+                    "torch_module": SimpleNamespace(load=lambda *_args, **_kwargs: verified_lazy_checkpoint),
+                })
+                check_true("reverse_bridge_native_lazy_target_fold_and_checkpoint_reuse",
+                           verified_lazy is not None and verified_lazy_reason is None)
             wrong_execution = owner.validate_rolling_fold_fitted_checkpoint(
                 **{**verify_args, "expected_execution": {"device_type": "cuda"}},
             )

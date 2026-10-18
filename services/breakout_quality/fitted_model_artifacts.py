@@ -334,9 +334,20 @@ def _first_fold_fit_identity_issues(
                     and isinstance(left_source.get("target_contract"), Mapping)
                     and bool(left_source["target_contract"])
                     and left_source["target_contract"] == right_source.get("target_contract")
-                    and isinstance(left_source.get("target_artifacts"), Mapping)
-                    and bool(left_source["target_artifacts"])
-                    and left_source["target_artifacts"] == right_source.get("target_artifacts")
+                    # AI: Daily-component targets are derived from the pinned CSV;
+                    # their native target_manifest has no physical artifacts.
+                    # Explicit None on BOTH sides is valid only behind the
+                    # daily-lazy/no-external-context capability guard below.
+                    and "target_artifacts" in left_source
+                    and "target_artifacts" in right_source
+                    and (
+                        left_source["target_artifacts"] is None
+                        or (
+                            isinstance(left_source["target_artifacts"], Mapping)
+                            and bool(left_source["target_artifacts"])
+                        )
+                    )
+                    and left_source["target_artifacts"] == right_source["target_artifacts"]
                     and _daily_lazy_fit_ignores_event_dataset_artifacts(
                         candidate, expected, left_source[field], right_source[field],
                     )
