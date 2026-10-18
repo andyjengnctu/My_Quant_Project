@@ -327,6 +327,27 @@ def validate_research_model_readiness_architecture_case(_base_params):
     sources = {path: (root / path).read_text(encoding="utf-8") for path in files}
     check("shared_model_readiness_architecture", (),
           check_model_stage_readiness_architecture_sources(sources))
+    from .research_lifecycle_architecture import (
+        check_model_standard_comparison_audit_boundary_sources,
+    )
+    check("standard_model_comparison_excludes_one_off_audits", (),
+          check_model_standard_comparison_audit_boundary_sources(sources))
+    illegal = dict(sources)
+    illegal[RESEARCH_APPLICATION] = illegal[RESEARCH_APPLICATION].replace(
+        '    console = _render_standard_model_comparison(completed, target="console")',
+        "    completed = attach_joint_mfe_d40_extension(completed)\n"
+        '    console = _render_standard_model_comparison(completed, target="console")',
+        1,
+    )
+    check_true("standard_comparison_cannot_reintroduce_one_off_audit_call",
+               bool(check_model_standard_comparison_audit_boundary_sources(illegal)))
+    illegal_import = dict(sources)
+    illegal_import[RESEARCH_APPLICATION] += (
+        "\nfrom services.breakout_quality.u40_paired_comparison "
+        "import attach_paired_u40_extension as hidden_audit\n"
+    )
+    check_true("one_off_audit_import_cannot_reenter_research_application",
+               bool(check_model_standard_comparison_audit_boundary_sources(illegal_import)))
     mutations = (
         (RESEARCH_APPLICATION,
          "\ndef _standard_model_sop_completeness_issues(payload):\n    return ()\n"),

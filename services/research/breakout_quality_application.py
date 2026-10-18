@@ -107,11 +107,6 @@ from services.breakout_quality.standard_model_sop import (
     aggregate_standard_model_sop_robustness,
     migrate_legacy_forward_standard_model_sop,
 )
-from services.breakout_quality.full_horizon_mae_comparison import (
-    attach_full_horizon_mae_common_truth_extension,
-)
-from services.breakout_quality.joint_mfe_d40_comparison import attach_joint_mfe_d40_extension
-from services.breakout_quality.u40_paired_comparison import attach_paired_u40_extension
 from services.breakout_quality.model_report_extensions import (
     build_core_model_report_extensions,
     extension_missing_evidence,
@@ -4544,21 +4539,9 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
             "artifact_action": action,
         })
 
-    completed = attach_full_horizon_mae_common_truth_extension(
-        completed,
-        evaluation_mode="rolling_oos" if rolling else "forward_oos",
-        project_root=PROJECT_ROOT,
-    )
-    completed = attach_joint_mfe_d40_extension(
-        completed,
-        evaluation_mode="rolling_oos" if rolling else "forward_oos",
-        project_root=PROJECT_ROOT,
-    )
-    completed = attach_paired_u40_extension(
-        completed,
-        evaluation_mode="rolling_oos" if rolling else "forward_oos",
-        project_root=PROJECT_ROOT,
-    )
+    # Model-specific D40/joint/U40 hypotheses are independent one-off Audits.
+    # Standard Comparison consumes approved M1-M4 only: never materialize
+    # optional Audit truth or score matrices in this lifecycle.
 
     console = _render_standard_model_comparison(completed, target="console")
     print("\n" + render_title(f"{mode_label} Standard Model SOP Comparison"))

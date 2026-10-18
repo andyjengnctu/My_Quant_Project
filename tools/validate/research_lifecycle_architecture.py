@@ -405,6 +405,48 @@ def check_model_score_owner_architecture_sources(
     return tuple(dict.fromkeys(issues))
 
 
+
+def check_model_standard_comparison_audit_boundary_sources(
+    sources: Mapping[str, str],
+) -> tuple[str, ...]:
+    """Standard M1-M4 must not execute hypothesis-specific Audit producers.
+
+    The report contract and one-off Audit implementations are independent.
+    This structural gate checks the canonical Research Application entry, not
+    the historical Audit libraries or their separately maintained tests.
+    """
+    tree = ast.parse(sources[RESEARCH_APPLICATION], filename=RESEARCH_APPLICATION)
+    issues: list[str] = []
+    entry = _defs(tree).get("_run_configured_model_comparison")
+    if entry is None:
+        return ("canonical Standard Model Comparison entry missing",)
+    # No model-specific comparison library should be imported into the main
+    # Research Application merely to enrich a Standard SOP. Explicit Audit
+    # entrypoints remain free to import these same libraries independently.
+    def is_one_off_comparison_module(module: str | None) -> bool:
+        # Recognize a class of producer modules, not a fixed roster of models
+        # or study identities. Future one-off hypotheses get the same boundary.
+        return bool(module and module.startswith("services.breakout_quality.")
+                    and module.endswith("_comparison"))
+
+    imported_symbols: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and is_one_off_comparison_module(node.module):
+            imported_symbols.update(alias.asname or alias.name for alias in node.names)
+            issues.append("Standard Research Application imports a one-off Model Audit producer")
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if is_one_off_comparison_module(alias.name):
+                    imported_symbols.add(alias.asname or alias.name)
+                    issues.append("Standard Research Application imports a one-off Model Audit module")
+    for call in (node for node in ast.walk(entry) if isinstance(node, ast.Call)):
+        name = call.func.id if isinstance(call.func, ast.Name) else (
+            call.func.attr if isinstance(call.func, ast.Attribute) else ""
+        )
+        if name in imported_symbols or (name.startswith("attach_") and name.endswith("_extension")):
+            issues.append(f"Standard Model Comparison invokes one-off Audit: {name}")
+    return tuple(dict.fromkeys(issues))
+
 def check_research_fit_architecture(project_root: Path) -> tuple[str, ...]:
     root = Path(project_root)
     sources = {
@@ -424,4 +466,5 @@ def check_research_fit_architecture(project_root: Path) -> tuple[str, ...]:
         *check_strategy_benchmark_architecture_sources(strategy_sources),
         *check_model_stage_readiness_architecture_sources({**sources, **model_sources}),
         *check_model_score_owner_architecture_sources({**sources, **model_sources}),
+        *check_model_standard_comparison_audit_boundary_sources(sources),
     )

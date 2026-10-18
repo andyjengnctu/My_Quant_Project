@@ -7299,11 +7299,13 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
         patch.object(research_app, "get_breakout_quality_rolling_test_mode", return_value=object()),
         patch.object(research_app, "_resolve_continuous_model_readiness", return_value=route_ready) as routed_readiness,
         patch.object(research_app, "_print_model_action_status") as comparison_status,
-        # [AI] Model-list routing is isolated from post-fit score-artifact parsing.
-        # D40, joint-quadrant and direct-U40 extensions have independent evidence tests.
-        patch.object(research_app, "attach_full_horizon_mae_common_truth_extension", side_effect=lambda models, **_: models) as paired_extension,
-        patch.object(research_app, "attach_joint_mfe_d40_extension", side_effect=lambda models, **_: models) as joint_extension,
-        patch.object(research_app, "attach_paired_u40_extension", side_effect=lambda models, **_: models) as u40_extension,
+        # [AI] Model comparison must never invoke model-specific Audit producers.
+        # Historical D40, joint-quadrant, U40 Audits retain their independent tests.
+        # create=True makes an accidental regression observable without reinstating
+        # these names as permanent Application entrypoints.
+        patch.object(research_app, "attach_full_horizon_mae_common_truth_extension", create=True) as paired_extension,
+        patch.object(research_app, "attach_joint_mfe_d40_extension", create=True) as joint_extension,
+        patch.object(research_app, "attach_paired_u40_extension", create=True) as u40_extension,
         patch.object(research_app, "_render_standard_model_comparison", return_value="SYNTHETIC"),
         patch.object(research_app, "_write_standard_model_comparison_report", return_value=outputs),
         patch.object(research_app, "render_status_paths", return_value=""),
@@ -7322,12 +7324,9 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
             (call.args[0].experiment_profile, bool(call.kwargs["rolling"]))
             for call in routed_readiness.call_args_list
         ) == tuple((profile, rolling) for rolling in (False, True) for _model_id, profile in configured_models)
-        and [call.kwargs.get("evaluation_mode") for call in paired_extension.call_args_list]
-        == ["forward_oos", "rolling_oos"]
-        and [call.kwargs.get("evaluation_mode") for call in joint_extension.call_args_list]
-        == ["forward_oos", "rolling_oos"]
-        and [call.kwargs.get("evaluation_mode") for call in u40_extension.call_args_list]
-        == ["forward_oos", "rolling_oos"],
+        and paired_extension.call_count == 0
+        and joint_extension.call_count == 0
+        and u40_extension.call_count == 0,
     )
 
     with (
