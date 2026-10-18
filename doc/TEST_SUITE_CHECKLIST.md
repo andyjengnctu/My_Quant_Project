@@ -956,6 +956,8 @@
 | T570 | `validate_portfolio_candidate_replay_owner_contract_case`：Portfolio 候選資格、盤前資源選擇及 Replay 輸出之 canonical owner、PIT cursor、單／多成員行為與時序契約。 | B200 |
 | T571 | `validate_portfolio_signal_lifecycle_owner_contract_case`：Portfolio 日序買訊 Re-entry／延續追蹤／清理的 canonical owner、PIT 時序、單／多成員路由與 replay fast-path 契約。 | B200 |
 | T572 | `validate_strategy_compare_settings_validation_stages_contract_case`：Registry-driven Compare profile、validation first-error precedence、DL runtime capability 與設定 fingerprint schema 防退化。 | B189 |
+| T573 | `validate_research_fit_lifecycle_architecture_case`：FIT Owner / PIT Fold proof dependency direction, cross-mode fitting identity / SHA conflict and retired fallback mutations | B350 |
+| T574 | `validate_research_model_readiness_architecture_case`：FIT/SCORE/EVALUATION/REPORT shared readiness; Audit-independent score reuse and owner anti-divergence mutations | B351 |
 
 ## G. 逐項收斂紀錄
 
@@ -3295,3 +3297,5 @@
 | 2026-10-11 | T570 | 將已註冊的 Portfolio Candidate／Replay 單一 owner 合約測試納入 B200 DONE 索引。 | NEW -> DONE | `validate_portfolio_candidate_replay_owner_contract_case`；`tools/validate/synthetic_portfolio_candidate_replay_cases.py` |
 | 2026-10-11 | T571 | 將已註冊且已驗證的 Portfolio signal lifecycle owner 測試納入 B200 DONE 索引。 | NEW -> DONE | `validate_portfolio_signal_lifecycle_owner_contract_case`；`tools/validate/synthetic_portfolio_signal_lifecycle_cases.py` |
 | 2026-10-11 | T572 | 新增 canonical Strategy Compare 設定驗證分段的泛化契約測試，不硬編目前 arms／profile ID。 | NEW -> DONE | `validate_strategy_compare_settings_validation_stages_contract_case`；`tools/validate/synthetic_breakout_quality_strategy_plan_cases.py` |
+| 2026-10-18 | T573 | 正式 Synthetic Registry 的 Architecture Guard 已具備泛化防分岔檢查，補入 Checklist 的 DONE 測試索引。 | NEW -> DONE | `validate_research_fit_lifecycle_architecture_case`；`tools/validate/synthetic_research_lifecycle_architecture_cases.py` |
+| 2026-10-18 | T574 | 正式 Synthetic Registry 的 Architecture Guard 已具備泛化防分岔檢查，補入 Checklist 的 DONE 測試索引。 | NEW -> DONE | `validate_research_model_readiness_architecture_case`；`tools/validate/synthetic_research_lifecycle_architecture_cases.py` |

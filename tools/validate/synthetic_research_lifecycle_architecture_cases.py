@@ -29,6 +29,23 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
     }
     check("canonical_source_owner_and_dependency_boundary", (),
           check_research_fit_architecture_sources(sources))
+    reversed_dependency = dict(sources)
+    reversed_dependency[FIT_OWNER] += (
+        "\ndef shadow_pit_loader():\n"
+        "    from services.breakout_quality.point_in_time_scores import parse_args\n"
+        "    return parse_args([])\n"
+    )
+    check_true("lazy_fit_owner_to_pit_import_blocked",
+               any("reverse dependency" in issue for issue in
+                   check_research_fit_architecture_sources(reversed_dependency)))
+    missing_proof_binding = dict(sources)
+    missing_proof_binding[FORWARD_PRODUCER] = missing_proof_binding[FORWARD_PRODUCER].replace(
+        "rolling_fold_proof_factory=build_rolling_first_fold_fit_proof,",
+        "rolling_fold_proof_factory=lambda **kwargs: (None, None),", 1,
+    )
+    check_true("forward_cannot_inject_unverified_fold_proof",
+               any("PIT fold proof binding" in issue for issue in
+                   check_research_fit_architecture_sources(missing_proof_binding)))
 
     # Mutation tests deliberately introduce new business logic under *different*
     # names to catch drift not detected by a list of old legacy function labels.
@@ -187,6 +204,7 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
             bundle=SimpleNamespace(), forward_split=SimpleNamespace(),
             forward_args=SimpleNamespace(), forward_plan=SimpleNamespace(),
             torch_module=SimpleNamespace(),
+            rolling_fold_proof_factory=pit.build_rolling_first_fold_fit_proof,
         )
         with patch.object(owner, "load_reusable_fitted_model_contract", return_value=(None, "local missing")), patch.object(
             owner, "resolve_compatible_rolling_first_fold", return_value=(None, "rolling missing"),
@@ -257,7 +275,8 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                   "final_ids": np.array([1, 2, 3])}
         call = dict(bundle=bundle, forward_split=split, forward_args=args,
                     forward_plan=SimpleNamespace(), torch_module=SimpleNamespace(),
-                    project_root=Path(td))
+                    project_root=Path(td),
+                    rolling_fold_proof_factory=pit.build_rolling_first_fold_fit_proof)
         with patch.object(owner, "resolve_rolling_fitted_folds_root", return_value=folds_dir), \
              patch.object(pit, "parse_args", return_value=pit_args), \
              patch.object(pit, "_fold_group_ids", return_value=cohort) as fold_ids, \

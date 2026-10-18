@@ -306,6 +306,35 @@ def parse_args(argv=None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+
+def build_rolling_first_fold_fit_proof(*, bundle, forward_args, score_start: str):
+    """Supply PIT-native fold facts to the FIT owner without a reverse import.
+
+    This is a proof provider, not a checkpoint locator or REUSE authorization.
+    Capturing one PIT argument contract also avoids recomputing mode defaults
+    for each candidate. The original fold ID/membership/manifest formulas remain
+    unchanged and are shared with the ordinary Rolling producer.
+    """
+    pit_args = parse_args([
+        "--filter-id", str(forward_args.filter_id),
+        "--model-architecture", str(forward_args.model_architecture),
+        "--experiment-profile", str(forward_args.experiment_profile),
+        "--seed", str(int(forward_args.seed)),
+        "--score-start-date", str(score_start),
+        "--inner-validation-months", str(int(forward_args.inner_validation_months)),
+    ])
+
+    def native_fold_proof(fold):
+        ids = _fold_group_ids(
+            bundle, fold,
+            validation_months=int(pit_args.inner_validation_months),
+            train_window_months=None,
+        )
+        return ids, _fold_contract_payload(pit_args, bundle, fold, ids)
+
+    return pit_args, native_fold_proof
+
+
 def _validate_args(args: argparse.Namespace) -> None:
     # Explicit CLI overrides are supported for reproducible research.  The loaded experiment
     # profile and model spec are validated by the shared continuous-ranker pipeline.
@@ -2684,6 +2713,7 @@ __all__ = [
     "POINT_IN_TIME_SCHEMA_VERSION",
     "build_cross_fitted_context_scores",
     "build_selection_point_in_time_scores",
+    "build_rolling_first_fold_fit_proof",
     "fold_training_identity",
     "main",
     "parse_args",

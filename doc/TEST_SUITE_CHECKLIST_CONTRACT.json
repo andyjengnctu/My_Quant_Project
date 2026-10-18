@@ -8573,6 +8573,20 @@
       "description": "`validate_strategy_compare_settings_validation_stages_contract_case`：Registry-driven Compare profile、validation first-error precedence、DL runtime capability 與設定 fingerprint schema 防退化。",
       "initial_status": "NEW",
       "order": 562
+    },
+    {
+      "id": "T573",
+      "description": "`validate_research_fit_lifecycle_architecture_case`：FIT Owner / PIT Fold proof dependency direction, cross-mode fitting identity / SHA conflict and retired fallback mutations",
+      "b_id": "B350",
+      "initial_status": "NEW",
+      "order": 563
+    },
+    {
+      "id": "T574",
+      "description": "`validate_research_model_readiness_architecture_case`：FIT/SCORE/EVALUATION/REPORT shared readiness; Audit-independent score reuse and owner anti-divergence mutations",
+      "b_id": "B351",
+      "initial_status": "NEW",
+      "order": 564
     }
   ],
   "transitions": [
@@ -27231,6 +27245,22 @@
       "to_status": "DONE",
       "description": "新增 canonical Strategy Compare 設定驗證分段的泛化契約測試，不硬編目前 arms／profile ID。",
       "note": "`validate_strategy_compare_settings_validation_stages_contract_case`；`tools/validate/synthetic_breakout_quality_strategy_plan_cases.py`"
+    },
+    {
+      "date": "2026-10-18",
+      "id": "T573",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "正式 Synthetic Registry 的 Architecture Guard 已具備泛化防分岔檢查，補入 Checklist 的 DONE 測試索引。",
+      "note": "`validate_research_fit_lifecycle_architecture_case`；`tools/validate/synthetic_research_lifecycle_architecture_cases.py`"
+    },
+    {
+      "date": "2026-10-18",
+      "id": "T574",
+      "from_status": "NEW",
+      "to_status": "DONE",
+      "description": "正式 Synthetic Registry 的 Architecture Guard 已具備泛化防分岔檢查，補入 Checklist 的 DONE 測試索引。",
+      "note": "`validate_research_model_readiness_architecture_case`；`tools/validate/synthetic_research_lifecycle_architecture_cases.py`"
     }
   ]
 }

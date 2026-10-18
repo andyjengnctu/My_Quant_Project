@@ -1475,22 +1475,20 @@ def resolve_compatible_rolling_first_fold(
     forward_plan,
     torch_module,
     project_root: Path,
+    rolling_fold_proof_factory,
 ) -> tuple[FittedModelContract | None, str]:
     """Validate an existing Rolling first-fold FIT for Forward OOS, without using its scores.
 
     This is the reverse bridge of Forward -> Rolling fitting-identity reuse.  The
-    PIT owner recomputes its native training membership and complete fold contract
-    using the current canonical bundle; matching filenames or a READY report alone
+    The PIT owner supplies native fitting membership and the exact fold contract
+    through the caller-bound proof factory; matching filenames or READY reports alone
     can never authorize a cross-mode checkpoint.
     """
 
-    # PIT owns the fold sample/cohort construction, not checkpoint authorization.
-    # Delay the import to keep the production modules free of import cycles.
+    # PIT supplies only native fitting/cohort evidence through a caller-bound
+    # factory.  FIT owns all checkpoint decisions and never imports its consumer.
     import numpy as np
     import pandas as pd
-    from services.breakout_quality.point_in_time_scores import (
-        FOLD_MANIFEST_FILENAME, parse_args, _fold_group_ids, _fold_contract_payload,
-    )
 
     if str(bundle.profile.training_sample_scope) != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
         return None, "cross-mode reuse supports daily-universal fitting only"
@@ -1501,14 +1499,9 @@ def resolve_compatible_rolling_first_fold(
     if not score_start:
         return None, "Forward split has no OOS start"
 
-    pit_args = parse_args([
-        "--filter-id", str(forward_args.filter_id),
-        "--model-architecture", str(forward_args.model_architecture),
-        "--experiment-profile", str(forward_args.experiment_profile),
-        "--seed", str(int(forward_args.seed)),
-        "--score-start-date", score_start,
-        "--inner-validation-months", str(int(forward_args.inner_validation_months)),
-    ])
+    pit_args, build_native_fold_proof = rolling_fold_proof_factory(
+        bundle=bundle, forward_args=forward_args, score_start=score_start,
+    )
     if pit_args.train_window_months is not None:
         return None, "Rolling has fixed training window, Forward uses expanding history"
 
@@ -1541,7 +1534,7 @@ def resolve_compatible_rolling_first_fold(
     first_fold_prefix = "fold_" + score_start.replace("-", "") + "_"
     for candidate_dir in folds_root.glob(first_fold_prefix + "*"):
         if (candidate_dir / DEFAULT_MODEL_FILENAME).is_file() and not (
-            candidate_dir / FOLD_MANIFEST_FILENAME
+            candidate_dir / "manifest.json"
         ).is_file():
             raise RuntimeError(
                 f"Rolling first-fold checkpoint is missing its fitting manifest: {candidate_dir.name}"
@@ -1583,11 +1576,7 @@ def resolve_compatible_rolling_first_fold(
         if not fold["fold_id"] or manifest_path.parent.name != fold["fold_id"]:
             ineligible.append(f"{manifest_path.parent.name}: fold identity mismatch")
             continue
-        ids = _fold_group_ids(
-            bundle, fold,
-            validation_months=int(pit_args.inner_validation_months),
-            train_window_months=None,
-        )
+        ids, expected = build_native_fold_proof(fold)
         if not all(np.array_equal(left, right) for left, right in (
             (ids["train_ids"], forward_split.inner_train_ids),
             (ids["validation_ids"], forward_split.validation_ids),
@@ -1595,7 +1584,6 @@ def resolve_compatible_rolling_first_fold(
         )):
             ineligible.append(f"{fold['fold_id']}: different fitted sample membership")
             continue
-        expected = _fold_contract_payload(pit_args, bundle, fold, ids)
         contract, reason = validate_rolling_fold_fitted_checkpoint(
             manifest_path=manifest_path, manifest=manifest, expected=expected,
             expected_execution=scientific_torch_execution(forward_plan),
@@ -1626,11 +1614,12 @@ def resolve_forward_fitted_checkpoint(
     final_manifest_path: Path, report_path: Path,
     expected_identity: Mapping[str, Any], project_root: Path,
     bundle, forward_split, forward_args, forward_plan, torch_module,
+    rolling_fold_proof_factory,
 ) -> ForwardFittedResolution:
     """FIT owner resolves all legitimate sources before any Forward trainer can build.
 
-    The PIT producer is used only to reconstruct a first-fold *sample/cohort proof*;
-    identity validation, checkpoint integrity, candidate conflicts and import are
+    The PIT producer supplies a first-fold *sample/cohort proof* through the
+    caller; identity validation, checkpoint integrity, candidate conflicts and import are
     owned by this module. Forward never reuses the Rolling scores themselves.
     """
     if not reuse_fitted:
@@ -1648,6 +1637,7 @@ def resolve_forward_fitted_checkpoint(
         bundle=bundle, forward_split=forward_split,
         forward_args=forward_args, forward_plan=forward_plan,
         torch_module=torch_module, project_root=project_root,
+        rolling_fold_proof_factory=rolling_fold_proof_factory,
     )
     if rolling is None:
         reason = (

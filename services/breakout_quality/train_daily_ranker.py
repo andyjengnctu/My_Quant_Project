@@ -95,6 +95,9 @@ from services.breakout_quality.continuous_ranker_pipeline import (
     predict_score_output_payload,
     resolve_ranker_execution_plan,
 )
+from services.breakout_quality.point_in_time_scores import (
+    build_rolling_first_fold_fit_proof,
+)
 from services.breakout_quality.fitted_model_artifacts import (
     build_daily_forward_fitting_identity,
     load_model_from_fitted_checkpoint,
@@ -1243,6 +1246,7 @@ def run(args) -> int:
         expected_identity=expected_fitting_identity, project_root=PROJECT_ROOT,
         bundle=bundle, forward_split=split, forward_args=args,
         forward_plan=plan, torch_module=torch,
+        rolling_fold_proof_factory=build_rolling_first_fold_fit_proof,
     )
     existing_fitted_contract = resolved_fit.contract
     rolling_reused_model = resolved_fit.preloaded_model

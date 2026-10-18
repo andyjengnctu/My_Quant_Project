@@ -117,6 +117,25 @@ def check_research_fit_architecture_sources(
              for path in (FIT_OWNER, PIT_PRODUCER, FORWARD_PRODUCER, RESEARCH_APPLICATION)}
     issues: list[str] = []
     owner_defs = set(_defs(trees[FIT_OWNER]))
+    # Owner -> PIT is always a forbidden reverse dependency, including lazy
+    # imports in nested functions. The dependency must be inverted via the
+    # PIT-provided cohort proof port; do not exempt it from the cycle guard.
+    for node in ast.walk(trees[FIT_OWNER]):
+        if isinstance(node, ast.ImportFrom) and node.module == (
+            "services.breakout_quality.point_in_time_scores"
+        ):
+            issues.append("FIT owner imports PIT producer (reverse dependency)")
+        if isinstance(node, ast.Import):
+            if any(alias.name == "services.breakout_quality.point_in_time_scores"
+                   for alias in node.names):
+                issues.append("FIT owner imports PIT producer (reverse dependency)")
+    if "build_rolling_first_fold_fit_proof" not in {
+        alias.name for node in ast.walk(trees[FORWARD_PRODUCER])
+        if isinstance(node, ast.ImportFrom) and node.module == (
+            "services.breakout_quality.point_in_time_scores"
+        ) for alias in node.names
+    }:
+        issues.append("Forward producer does not bind PIT-native fold evidence port")
     for name in OWNED_FIT_BEHAVIORS:
         if name not in owner_defs:
             issues.append(f"FIT owner missing canonical capability: {name}")
@@ -143,6 +162,16 @@ def check_research_fit_architecture_sources(
         for node in ast.walk(forward_defs.get("run", ast.Pass()))
     ):
         issues.append("Forward trainer does not invoke canonical FIT resolution")
+    if not any(
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id == "resolve_forward_fitted_checkpoint"
+        and any(keyword.arg == "rolling_fold_proof_factory"
+                and isinstance(keyword.value, ast.Name)
+                and keyword.value.id == "build_rolling_first_fold_fit_proof"
+                for keyword in node.keywords)
+        for node in ast.walk(forward_defs.get("run", ast.Pass()))
+    ):
+        issues.append("Forward trainer bypasses native PIT fold proof binding")
     for node in ast.walk(trees[FORWARD_PRODUCER]):
         if isinstance(node, ast.ImportFrom) and node.module in {
             "services.breakout_quality.fitted_model_artifacts",
