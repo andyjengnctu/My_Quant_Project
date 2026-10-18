@@ -1882,7 +1882,8 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and "def load_selection_point_in_time_score_source_contract(" in score_owner_source
         and "def _rolling_robustness_score_core_contract" in app_source
         and "get_continuous_ranker_score_output_columns" in score_owner_source
-        and "if force_core or not core_ready:" in app_source
+        and "if core_ready:" in app_source
+        and "if not inputs_prepared:" in app_source
         and '"audit-point-in-time-scores"' in app_source
         and "aggregate_robustness_row_extension" in app_source
         and "comparison_extension_aggregation" in app_source,

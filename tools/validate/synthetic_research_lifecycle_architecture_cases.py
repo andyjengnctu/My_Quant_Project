@@ -1068,8 +1068,9 @@ def validate_research_model_readiness_architecture_case(_base_params):
         status_action = print_status.call_args.args[0][0][2]
     check_true("missing_one_seed_audit_refreshes_only_that_seed_then_aggregates",
         code == 0 and status_action == "REFRESH EVIDENCE"
-        and score_only.call_count == 1 and prep.call_count == 1
+        and score_only.call_count == 1 and prep.call_count == 0
         and audit_build.call_count == 1 and audit_build.call_args.kwargs["seed"] == 202
+        and audit_build.call_args.kwargs["inputs_prepared"] is False
         and calls[202] == 2 and forward_build.call_count == 0
         and final_report.call_count == 1)
 
@@ -1097,6 +1098,124 @@ def validate_research_model_readiness_architecture_case(_base_params):
         failed_code == 71 and failed_producer.call_count == 1
         and failed_producer.call_args.kwargs["seed"] == 101
         and no_aggregate.call_count == no_report.call_count == 0)
+
+    # Phase 8: test the actual producer routing, not only the preview plan.
+    # No real Dataset/Target, FIT, SCORE or Audit artifacts are modified.
+    producer_settings = SimpleNamespace(
+        filter_id="synthetic", model_architecture="synthetic_arch",
+        experiment_profile="synthetic_profile", point_in_time_resume=True,
+        point_in_time_inner_validation_months=6,
+        point_in_time_train_window_months=None,
+    )
+    producer_mode = SimpleNamespace(
+        score_start_date="2021-01-01", fold_months=12,
+        fold_anchor_date=None, single_score_block=False, score_end_date=None,
+    )
+    with TemporaryDirectory() as td:
+        test_dir = Path(td)
+        def seed_dirs(_settings, *, seed, rolling):
+            directory = test_dir / ("rolling" if rolling else "forward") / str(seed)
+            return directory, directory
+
+        calls = []
+        def record_producer(command, argv, **_kwargs):
+            calls.append((command, tuple(argv)))
+            return 0
+
+        with (
+            patch.object(model_app, "get_breakout_quality_rolling_test_mode", return_value=producer_mode),
+            patch.object(model_app, "_model_robustness_dirs", side_effect=seed_dirs),
+            patch.object(model_app, "_rolling_robustness_score_core_ready", return_value=(True, None)) as score_probe,
+            patch.object(model_app, "_load_forward_robustness_seed",
+                         side_effect=AssertionError("audit-only must not discover Forward")) as forward_probe,
+            patch.object(model_app, "_prepare_continuous_research_inputs",
+                         side_effect=AssertionError("audit-only must not prepare inputs")) as prep,
+            patch.object(model_app, "_run_command", side_effect=record_producer),
+        ):
+            audit_code = model_app._build_rolling_robustness_seed(
+                "synthetic", producer_settings, seed=101,
+            )
+        check_true("producer_valid_score_executes_audit_only_without_upstream_or_forward",
+            audit_code == 0 and [c[0] for c in calls] == ["audit-point-in-time-scores"]
+            and score_probe.call_count == 1 and prep.call_count == 0 and forward_probe.call_count == 0)
+
+        calls.clear()
+        with (
+            patch.object(model_app, "get_breakout_quality_rolling_test_mode", return_value=producer_mode),
+            patch.object(model_app, "_model_robustness_dirs", side_effect=seed_dirs),
+            patch.object(model_app, "_rolling_robustness_score_core_ready", return_value=(False, "SHA changed")) as score_probe,
+            patch.object(model_app, "_prepare_continuous_research_inputs", return_value=0) as prep,
+            patch.object(model_app, "_load_forward_robustness_seed", return_value=(None, None, "absent")) as forward_probe,
+            patch.object(model_app, "_append_pit_forward_checkpoint_import_args") as import_proof,
+            patch.object(model_app, "_run_command", side_effect=record_producer),
+        ):
+            stale_code = model_app._build_rolling_robustness_seed(
+                "synthetic", producer_settings, seed=101, inputs_prepared=False,
+            )
+        check_true("producer_score_becomes_stale_after_preview_prepares_before_score_and_audit",
+            stale_code == 0 and [c[0] for c in calls] == [
+                "build-point-in-time-scores", "audit-point-in-time-scores"]
+            and score_probe.call_count == 1 and prep.call_count == 1
+            and forward_probe.call_count == 1 and import_proof.call_count == 1
+            and "--seed" in calls[0][1] and "101" in calls[0][1])
+
+        calls.clear()
+        with (
+            patch.object(model_app, "get_breakout_quality_rolling_test_mode", return_value=producer_mode),
+            patch.object(model_app, "_model_robustness_dirs", side_effect=seed_dirs),
+            patch.object(model_app, "_rolling_robustness_score_core_ready", return_value=(False, "stale")),
+            patch.object(model_app, "_prepare_continuous_research_inputs",
+                         side_effect=AssertionError("planned SCORE build already prepared")) as redundant_prep,
+            patch.object(model_app, "_load_forward_robustness_seed", return_value=(None, None, None)),
+            patch.object(model_app, "_append_pit_forward_checkpoint_import_args"),
+            patch.object(model_app, "_run_command", side_effect=record_producer),
+        ):
+            prepared_code = model_app._build_rolling_robustness_seed(
+                "synthetic", producer_settings, seed=202, inputs_prepared=True,
+            )
+        check_true("producer_prepared_score_build_does_not_repeat_upstream",
+            prepared_code == 0 and redundant_prep.call_count == 0
+            and [c[0] for c in calls] == ["build-point-in-time-scores", "audit-point-in-time-scores"])
+
+        calls.clear()
+        with (
+            patch.object(model_app, "get_breakout_quality_rolling_test_mode", return_value=producer_mode),
+            patch.object(model_app, "_model_robustness_dirs", side_effect=seed_dirs),
+            patch.object(model_app, "_rolling_robustness_score_core_ready", return_value=(False, "stale")),
+            patch.object(model_app, "_prepare_continuous_research_inputs", return_value=73) as upstream_fail,
+            patch.object(model_app, "_load_forward_robustness_seed",
+                         side_effect=AssertionError("blocked should not probe Forward")) as forbidden_probe,
+            patch.object(model_app, "_run_command", side_effect=record_producer),
+        ):
+            blocked_code = model_app._build_rolling_robustness_seed(
+                "synthetic", producer_settings, seed=202,
+            )
+        check_true("producer_upstream_gate_failure_stops_before_checkpoint_and_score",
+            blocked_code == 73 and upstream_fail.call_count == 1
+            and forbidden_probe.call_count == 0 and not calls)
+
+        calls.clear()
+        with (
+            patch.object(model_app, "get_breakout_quality_rolling_test_mode", return_value=producer_mode),
+            patch.object(model_app, "_model_robustness_dirs", side_effect=seed_dirs),
+            patch.object(model_app, "_rolling_robustness_score_core_ready",
+                         side_effect=AssertionError("Force Rebuild must not REUSE SCORE")) as no_reuse,
+            patch.object(model_app, "_prepare_continuous_research_inputs",
+                         side_effect=AssertionError("already prepared")) as no_extra_prep,
+            patch.object(model_app, "_load_forward_robustness_seed",
+                         side_effect=AssertionError("Force Rebuild must not import old FIT")) as no_forward,
+            patch.object(model_app, "_run_command", side_effect=record_producer),
+        ):
+            forced_code = model_app._build_rolling_robustness_seed(
+                "synthetic", producer_settings, seed=101, force_rebuild=True,
+                inputs_prepared=True,
+            )
+        check_true("producer_force_rebuild_stays_isolated_and_rebuilds_score_audit",
+            forced_code == 0 and [c[0] for c in calls] == [
+                "build-point-in-time-scores", "audit-point-in-time-scores"]
+            and no_reuse.call_count == no_extra_prep.call_count == no_forward.call_count == 0
+            and "--no-resume" in calls[0][1]
+            and calls[0][1].count("--checkpoint-cache-root") == 1)
 
     # Normal Single resolver does not infer source readiness from unattested
     # payload, even though the Robustness adapter can pass validated evidence.

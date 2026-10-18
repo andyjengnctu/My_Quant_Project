@@ -4631,17 +4631,51 @@ def _rolling_robustness_score_core_ready(settings, *, seed: int) -> tuple[bool, 
 
 
 def _build_rolling_robustness_seed(
-    program_name: str, settings, *, seed: int, force_rebuild: bool = False
+    program_name: str, settings, *, seed: int, force_rebuild: bool = False,
+    inputs_prepared: bool = False,
 ) -> int:
+    """Execute the canonical producer for the *current* verified SCORE state.
+
+    The preview plan is never an authorization to skip execution-time SCORE
+    inspection. Valid SCORE enters only the Audit producer; neither Dataset /
+    Target preparation nor Forward checkpoint discovery belongs on that path.
+    If SCORE becomes stale after preview, prepare deterministic inputs before
+    handing off to the existing PIT producer (no Application FIT decisions).
+    """
     mode = get_breakout_quality_rolling_test_mode("rolling")
     pit_dir, _unused = _model_robustness_dirs(settings, seed=seed, rolling=True)
+    audit_args = [
+        "--filter-id", str(settings.filter_id),
+        "--model-architecture", str(settings.model_architecture),
+        "--experiment-profile", str(settings.experiment_profile),
+        "--point-in-time-dir-override", str(pit_dir),
+    ]
+    # This inspection is deliberately repeated at execution time: the
+    # preview's readiness snapshot may no longer describe these files.
+    if not force_rebuild:
+        core_ready, _core_reason = _rolling_robustness_score_core_ready(settings, seed=seed)
+        if core_ready:
+            with _compact_console_scope():
+                return int(_run_command(
+                    "audit-point-in-time-scores", audit_args, program_name=program_name,
+                    emit_simple_report=False,
+                ))
+
+    if not inputs_prepared:
+        code = _prepare_continuous_research_inputs(program_name, settings)
+        if code != 0:
+            return int(code)
+
+    # Only an invalid SCORE (or explicit Force Rebuild) requires the fitting
+    # source probe and canonical PIT SCORE producer arguments.
     pit_dir.mkdir(parents=True, exist_ok=True)
-    forward_payload, forward_report_path, _forward_reason = _load_forward_robustness_seed(
-        settings, seed=seed
-    )
-    forward_model_dir, _forward_research_dir = _model_robustness_dirs(
-        settings, seed=seed, rolling=False
-    )
+    if not force_rebuild:
+        forward_payload, forward_report_path, _forward_reason = _load_forward_robustness_seed(
+            settings, seed=seed
+        )
+        forward_model_dir, _forward_research_dir = _model_robustness_dirs(
+            settings, seed=seed, rolling=False
+        )
     build_args = [
         "--filter-id", str(settings.filter_id),
         "--model-architecture", str(settings.model_architecture),
@@ -4671,23 +4705,15 @@ def _build_rolling_robustness_seed(
         build_args.extend(["--score-end-date", str(mode.score_end_date)])
     if settings.point_in_time_train_window_months is not None:
         build_args.extend(["--train-window-months", str(int(settings.point_in_time_train_window_months))])
-    audit_args = [
-        "--filter-id", str(settings.filter_id),
-        "--model-architecture", str(settings.model_architecture),
-        "--experiment-profile", str(settings.experiment_profile),
-        "--point-in-time-dir-override", str(pit_dir),
-    ]
-    core_ready, _core_reason = _rolling_robustness_score_core_ready(settings, seed=seed)
 
-    def _run(effective_args: list[str], *, force_core: bool) -> int:
+    def _run(effective_args: list[str]) -> int:
         with _compact_console_scope():
-            if force_core or not core_ready:
-                code = _run_command(
-                    "build-point-in-time-scores", effective_args, program_name=program_name,
-                    emit_simple_report=False,
-                )
-                if code != 0:
-                    return int(code)
+            code = _run_command(
+                "build-point-in-time-scores", effective_args, program_name=program_name,
+                emit_simple_report=False,
+            )
+            if code != 0:
+                return int(code)
             return int(_run_command(
                 "audit-point-in-time-scores", audit_args, program_name=program_name,
                 emit_simple_report=False,
@@ -4698,13 +4724,13 @@ def _build_rolling_robustness_seed(
             forced_args = list(build_args)
             forced_args.extend(["--checkpoint-cache-root", str(Path(cache_dir).resolve())])
             with _force_rebuild_publication_guard(pit_dir):
-                result = _run(forced_args, force_core=True)
+                result = _run(forced_args)
                 if int(result) != 0:
                     raise RuntimeError(
                         f"Rolling robustness seed={int(seed)} Force Rebuild失敗: returncode={int(result)}"
                     )
                 return int(result)
-    return _run(build_args, force_core=False)
+    return _run(build_args)
 
 
 def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int:
@@ -4762,7 +4788,16 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
 
     completed = []
     for model_id, settings, seed_states, readiness in plans:
-        if force_rebuild or not readiness.evidence_ready:
+        # A missing Rolling Audit is an EVIDENCE-only refresh: no upstream
+        # preparation is permitted unless the canonical stage plan requires
+        # a new SCORE. Unexpected execution-time SCORE invalidation is handled
+        # within the seed producer and re-enters the normal input gate.
+        score_build_required = any(
+            seed_stage.readiness.plan.action_by_key["SCORE"].action != "REUSE"
+            for seed_stage in readiness.seeds
+        )
+        inputs_prepared = bool(force_rebuild or not rolling or score_build_required)
+        if inputs_prepared and (force_rebuild or not readiness.evidence_ready):
             code = _prepare_continuous_research_inputs(program_name, settings)
             if code != 0:
                 return int(code)
@@ -4782,7 +4817,8 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
                 )
                 code = (
                     _build_rolling_robustness_seed(
-                        program_name, settings, seed=seed, force_rebuild=force_rebuild
+                        program_name, settings, seed=seed, force_rebuild=force_rebuild,
+                        inputs_prepared=inputs_prepared,
                     )
                     if rolling else _build_forward_robustness_seed(
                         program_name, settings, seed=seed, force_rebuild=force_rebuild
