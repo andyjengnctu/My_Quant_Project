@@ -883,11 +883,25 @@ def _benchmark_parameter_plan_rows(
     # one replicate. Plan/build it only once and propagate its verified action
     # to each consuming arm; arm-level scientific results remain independent.
     seen_units: dict[tuple[int, str, str, str, str, str], dict[str, Any]] = {}
+    # AI: A parameter source with the same resolved policy and benchmark seed
+    # has exactly one binding contract regardless of how many strategy arms use
+    # it. Resolve its paths/profile once per plan; retain per-arm binding copies
+    # so the consumer cannot accidentally mutate another arm's plan status.
+    source_binding_templates: dict[tuple[int, str, str], dict[str, Any]] = {}
     for seed in robustness.resolved_seeds:
         for arm in benchmark_arms:
-            binding = _benchmark_param_binding(
-                settings=settings, robustness=robustness, arm=arm, seed=int(seed)
+            source_key = (
+                int(seed),
+                str(arm.param_source),
+                str(resolve_strategy_comparison_arm_param_policy(settings, arm)),
             )
+            template = source_binding_templates.get(source_key)
+            if template is None:
+                template = _benchmark_param_binding(
+                    settings=settings, robustness=robustness, arm=arm, seed=int(seed)
+                )
+                source_binding_templates[source_key] = template
+            binding = {**template, "arm_id": arm.arm_id}
             unit_key = (arm.arm_id, int(seed))
             bindings[unit_key] = binding
             if unit_key in reusable_units:

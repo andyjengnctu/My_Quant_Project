@@ -304,6 +304,37 @@ def main(argv=None, environ=None):
         else:
             scan_stats = {"total_tickers": 0, "worker_count": 1}
 
+        # AI: Real-ticker checks are independent of synthetic coverage and are
+        # already isolated in their own worker processes. Start the unchanged
+        # scanner in a separate parent process so its data checks overlap with
+        # synthetic contract checks; collect and publish both in the original
+        # synthetic-then-real order. No real-data lines enter synthetic coverage.
+        real_scan_executor = None
+        real_scan_future = None
+        if total_tickers > 0 and suite_run_dir:
+            from concurrent.futures import ProcessPoolExecutor
+            from multiprocessing import get_context
+            from tools.validate.real_case_runners import run_real_ticker_scan_background
+
+            try:
+                real_scan_executor = ProcessPoolExecutor(
+                    max_workers=1, mp_context=get_context("spawn")
+                )
+                real_scan_future = real_scan_executor.submit(
+                    run_real_ticker_scan_background,
+                    selected_tickers, base_params, PROJECT_ROOT, DATA_DIR,
+                    get_data_dir_csv_map(),
+                )
+            except (OSError, RuntimeError, ValueError) as exc:
+                if real_scan_executor is not None:
+                    real_scan_executor.shutdown(wait=True, cancel_futures=True)
+                    real_scan_executor = None
+                print(
+                    "⚠️ real-ticker parallel launch unavailable; "
+                    f"using original sequential phase: {type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
+
         print("開始執行 synthetic coverage suite...")
         synthetic_summaries = []
         try:
@@ -332,18 +363,48 @@ def main(argv=None, environ=None):
             })
 
         if total_tickers > 0:
-            real_results, real_summaries, scan_stats = run_real_ticker_scan(
-                selected_tickers,
-                base_params,
-                project_root=PROJECT_ROOT,
-                data_dir=DATA_DIR,
-                csv_map_getter=get_data_dir_csv_map,
-                add_fail_result=add_fail_result,
-                add_skip_result=add_skip_result,
-                format_exception_summary=format_exception_summary,
-                is_insufficient_data_error=is_insufficient_data_error,
-                progress_printer=None,
-            )
+            try:
+                if real_scan_future is not None:
+                    real_results, real_summaries, scan_stats = real_scan_future.result()
+                else:
+                    # Worker startup can fail on locked-down Windows hosts.
+                    # Fall back without skipping even one real ticker.
+                    real_results, real_summaries, scan_stats = run_real_ticker_scan(
+                        selected_tickers,
+                        base_params,
+                        project_root=PROJECT_ROOT,
+                        data_dir=DATA_DIR,
+                        csv_map_getter=get_data_dir_csv_map,
+                        add_fail_result=add_fail_result,
+                        add_skip_result=add_skip_result,
+                        format_exception_summary=format_exception_summary,
+                        is_insufficient_data_error=is_insufficient_data_error,
+                        progress_printer=None,
+                    )
+            except Exception as exc:
+                # A child failure must never produce a synthetic-only PASS.
+                # Retry the canonical scanner for all tickers and retain the
+                # diagnostic as a warning if the retry succeeds.
+                print(
+                    "⚠️ real-ticker parallel worker failed; rerunning unchanged "
+                    f"scanner: {type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
+                real_results, real_summaries, scan_stats = run_real_ticker_scan(
+                    selected_tickers,
+                    base_params,
+                    project_root=PROJECT_ROOT,
+                    data_dir=DATA_DIR,
+                    csv_map_getter=get_data_dir_csv_map,
+                    add_fail_result=add_fail_result,
+                    add_skip_result=add_skip_result,
+                    format_exception_summary=format_exception_summary,
+                    is_insufficient_data_error=is_insufficient_data_error,
+                    progress_printer=None,
+                )
+            finally:
+                if real_scan_executor is not None:
+                    real_scan_executor.shutdown(wait=True, cancel_futures=False)
             all_results.extend(real_results)
             summaries.extend(real_summaries)
 

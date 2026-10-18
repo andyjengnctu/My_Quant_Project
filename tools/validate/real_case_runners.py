@@ -413,3 +413,29 @@ def run_real_ticker_scan(
         "fail_count": ticker_fail_count,
         "worker_count": worker_count,
     }
+
+
+def run_real_ticker_scan_background(
+    selected_tickers, base_params, project_root, data_dir, csv_map,
+):
+    """Run the unchanged real-ticker validator outside synthetic coverage.
+
+    This process boundary preserves the original ticker ordering, error handling,
+    and worker-count policy while allowing real data and synthetic checks to
+    execute independently.  Only the parent combines their results.
+    """
+    from core.log_utils import format_exception_summary
+    from core.runtime_utils import is_insufficient_data_error
+
+    return run_real_ticker_scan(
+        selected_tickers,
+        base_params,
+        project_root=project_root,
+        data_dir=data_dir,
+        csv_map_getter=lambda: csv_map,
+        add_fail_result=add_fail_result,
+        add_skip_result=add_skip_result,
+        format_exception_summary=format_exception_summary,
+        is_insufficient_data_error=is_insufficient_data_error,
+        progress_printer=None,
+    )

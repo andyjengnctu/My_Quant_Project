@@ -4599,6 +4599,35 @@ def validate_formal_step_implementation_coverage_targets_case(_base_params):
     add_check(results, "meta_coverage", case_id, "formal_step_implementation_modules_importable_for_coverage_probe", [], module_import_failures)
     add_check(results, "meta_coverage", case_id, "formal_step_implementation_modules_expose_expected_symbols", [], module_symbol_failures)
 
+    # AI: The parallel consistency path must delegate real tickers to the same
+    # validator with the same callbacks and without replacing the synthetic
+    # coverage pass.  Exercise delegation with an isolated fake (no real I/O).
+    from tools.validate import real_case_runners as real_runners
+    synthetic_scan_result = ([{"ticker": "0050", "status": "PASS"}], [{"ticker": "0050"}], {"total_tickers": 1})
+    with patch.object(real_runners, "run_real_ticker_scan", return_value=synthetic_scan_result) as scan:
+        parallel_result = real_runners.run_real_ticker_scan_background(
+            ["0050"], _base_params, PROJECT_ROOT, "synthetic_data", {"0050": "fixture.csv"}
+        )
+    forwarded = scan.call_args
+    add_check(results, "meta_coverage", case_id, "parallel_real_scan_keeps_original_validator_results",
+              synthetic_scan_result, parallel_result)
+    add_check(results, "meta_coverage", case_id, "parallel_real_scan_keeps_original_inputs",
+              True, bool(forwarded and forwarded.args[:2] == (["0050"], _base_params)
+                         and forwarded.kwargs["project_root"] == PROJECT_ROOT
+                         and forwarded.kwargs["data_dir"] == "synthetic_data"
+                         and forwarded.kwargs["csv_map_getter"]() == {"0050": "fixture.csv"}
+                         and forwarded.kwargs["progress_printer"] is None))
+    launcher_source = read_source_text(PROJECT_ROOT / "tools/validate/main.py")
+    add_check(results, "meta_coverage", case_id, "parallel_real_scan_preserves_synthetic_coverage_and_result_order",
+              True, all(fragment in launcher_source for fragment in (
+                  "real_scan_executor.submit(",
+                  "_run_synthetic_suite_with_optional_coverage(",
+                  "real_scan_future.result()",
+                  "all_results.extend(synthetic_results)",
+                  "all_results.extend(real_results)",
+                  "get_context(\"spawn\")",
+              )))
+
     summary["expected_target_count"] = len(expected_targets)
     summary["missing_targets"] = missing_targets
     summary["reloaded_modules"] = reloaded_modules

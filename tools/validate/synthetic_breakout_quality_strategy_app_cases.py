@@ -967,15 +967,32 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             for arm_id in canonical_reuse_arm_ids
             for seed in robustness.resolved_seeds
         }
-        rows, blockers, _bindings = _benchmark_parameter_plan_rows(
-            settings=robust_settings,
-            robustness=robustness,
-            benchmark_arms=tuple(
-                robust_settings.arms[arm_id] for arm_id in robustness.stochastic_arm_ids
-            ),
-            comparison_start="2021-01-01",
-            comparison_end="2026-03-02",
-            reusable_observations=reusable,
+        benchmark_arms = tuple(
+            robust_settings.arms[arm_id] for arm_id in robustness.stochastic_arm_ids
+        )
+        from services.research import strategy_multi_seed_robustness as robustness_owner
+        with patch.object(
+            robustness_owner, "_benchmark_param_binding",
+            wraps=robustness_owner._benchmark_param_binding,
+        ) as binding_resolver:
+            rows, blockers, _bindings = _benchmark_parameter_plan_rows(
+                settings=robust_settings,
+                robustness=robustness,
+                benchmark_arms=benchmark_arms,
+                comparison_start="2021-01-01",
+                comparison_end="2026-03-02",
+                reusable_observations=reusable,
+            )
+        unique_source_bindings = {
+            (int(seed), str(arm.param_source), str(
+                resolve_strategy_comparison_arm_param_policy(robust_settings, arm)
+            ))
+            for seed in robustness.resolved_seeds
+            for arm in benchmark_arms
+        }
+        check_true(
+            f"robustness_param_binding_is_resolved_once_per_shared_source:{robustness.robustness_id}",
+            binding_resolver.call_count == len(unique_source_bindings),
         )
         reused_result_rows = [
             row for row in rows
