@@ -181,6 +181,19 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     project_root = Path(__file__).resolve().parents[2]
 
+    # Engineering timing diagnostics only: retain every test and every coverage
+    # branch. This records which subsection is slow on Windows without profiling
+    # all Python calls or changing the 15-second acceptance budget.
+    from time import perf_counter
+    _section_started = perf_counter()
+    _section_durations: list[tuple[str, float]] = []
+
+    def _mark_section(label: str) -> None:
+        nonlocal _section_started
+        now = perf_counter()
+        _section_durations.append((label, now - _section_started))
+        _section_started = now
+
     from core import strategy_compare_policy as strategy_config
     from core.breakout_quality_registry import (
         get_continuous_ranker_research_spec,
@@ -381,6 +394,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 reusable == expected_dirs[arm_id],
             )
 
+    _mark_section("runtime_and_archived_baseline")
     from config.compatibility import strategy_compare_history as strategy_history
 
     shared_models = get_breakout_quality_model_test_settings().model_profiles
@@ -695,6 +709,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 and len(orchestrator_calls) == 1,
             )
 
+    _mark_section("mode_config_and_p5")
     arm_ids = [arm.arm_id for arm in oos_settings.enabled_arms]
     contrasts = {
         item.contrast_id: {
@@ -1277,6 +1292,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         ),
     )
 
+    _mark_section("benchmark_plan")
     # Regression: current suite capability already resolved C93/raw-price into the
     # same-seed benchmark matrix, but a stale runtime-entry allowlist once rejected
     # every non-canonical data_source before the shared planner was even reached.
@@ -1705,6 +1721,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "MR-13" not in app_source,
     )
 
+    _mark_section("comparison_contract")
     settings = next(iter(settings_by_mode.values()))
     from .synthetic_breakout_quality_strategy_preparation_cases import (
         append_strategy_compare_preparation_contract_checks,
@@ -1722,6 +1739,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         ),
     )
 
+    _mark_section("preparation_contracts")
     from .synthetic_breakout_quality_strategy_reuse_cases import (
         append_completed_pair_score_reuse_contract_checks,
     )
@@ -1730,6 +1748,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         case_id=case_id,
         project_root=project_root,
     )
+    _mark_section("pair_score_reuse")
     from .synthetic_breakout_quality_strategy_reuse_cases import (
         append_model_robustness_pit_strategy_reuse_contract_checks,
     )
@@ -1737,6 +1756,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results=results, case_id=case_id,
     )
 
+    _mark_section("model_robustness_contracts")
     from .synthetic_breakout_quality_strategy_reuse_cases import (
         append_completed_pair_baseline_integrity_contract_checks,
     )
@@ -1744,6 +1764,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results=results, case_id=case_id
     )
 
+    _mark_section("baseline_integrity")
     from core.training_scheduler import pop_next_seed_diverse_unit
     from services.research import breakout_quality_application as model_application
     from services.research import strategy_compare_training as training_runtime
@@ -2301,6 +2322,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             ),
         )
 
+    _mark_section("runtime_and_progress")
     summary.update(
         {
             "suite_id": suite_id,
@@ -2310,6 +2332,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             "current_dl_profiles": sorted({str(source.experiment_profile) for _profile_id, _dl_id, source in enabled_dl_sources}),
             "runtime_entry_failures": runtime_entry_failures,
         }
+    )
+    _mark_section("summary")
+    print(
+        "[STRATEGY_COMPARE_CASE_TIMING] "
+        + " ".join(f"{name}={seconds:.3f}s" for name, seconds in _section_durations)
     )
     return results, summary
 

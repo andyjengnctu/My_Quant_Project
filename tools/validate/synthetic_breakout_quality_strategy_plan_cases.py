@@ -320,6 +320,59 @@ def validate_strategy_compare_resolved_plan_transition_contract_case(_base_param
                 and app_result == {"status": "COMPLETED"},
     )
 
+    # A discovery snapshot is shared within exactly one readiness-plan call.
+    # A later call must discover newly published/removed folders rather than
+    # inheriting a previous plan's candidate directories.
+    from services.research import strategy_compare_reuse as reuse_owner
+    with tempfile.TemporaryDirectory(prefix="compare_plan_discovery_snapshot_") as temp_root:
+        scan_root = Path(temp_root)
+        runs_path = (
+            scan_root
+            / reuse_owner.resolve_strategy_comparison_result_search_roots(base)[0]
+            / "runs"
+        )
+        report_path = runs_path / "synthetic_unpublished"
+        observed_per_call: list[tuple[Path, ...]] = []
+        status = {
+            "comparison_period": {"start": "2021-01-01", "end": "2026-03-02"},
+            "preparation_plan": StrategyPreparationPlan.from_actions(()),
+        }
+        # Spy on all consumers, but never authorize REUSE from this incomplete
+        # synthetic publication. Dedicated cache tests cover the real validators.
+        def reject_and_observe(**kwargs):
+            observed_per_call.append(kwargs["run_dirs"])
+            return None
+
+        with (
+            patch.object(
+                reuse_owner, "_completed_reuse_run_dirs",
+                wraps=reuse_owner._completed_reuse_run_dirs,
+            ) as discovered,
+            patch.object(reuse_owner, "_find_reusable_pair", side_effect=reject_and_observe),
+            patch.object(reuse_owner, "_find_reusable_baseline_source", side_effect=reject_and_observe),
+        ):
+            call_counts = []
+            observations = []
+            for operation in ("absent", "publish", "remove"):
+                if operation == "publish":
+                    report_path.mkdir(parents=True)
+                elif operation == "remove":
+                    report_path.rmdir()
+                before = len(observed_per_call)
+                reuse_owner._collect_replay_cache_status(
+                    root=scan_root, settings=base, status=status
+                )
+                observations.append(observed_per_call[before:])
+                call_counts.append(discovered.call_count)
+        check_true(
+            "completed_run_discovery_single_snapshot_per_plan_and_fresh_between_plans",
+            call_counts == [1, 2, 3]
+            and all(values and len(set(values)) == 1 for values in observations)
+            and observations[0][0] == ()
+            and report_path in observations[1][0]
+            and observations[2][0] == (),
+        )
+
     summary["profile_id"] = base.profile_id
     summary["current_dl_arm"] = current_arm.arm_id
     summary["retired_same_source_arm"] = retired_same_source.arm_id

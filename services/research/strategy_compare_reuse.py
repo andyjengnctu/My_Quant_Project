@@ -529,6 +529,25 @@ def _comparison_runs_roots(*, root: Path, settings: StrategyComparisonSettings, 
             runs_roots.append(candidate)
     return tuple(runs_roots)
 
+def _completed_reuse_run_dirs(*, root: Path, settings: StrategyComparisonSettings) -> tuple[Path, ...]:
+    """Snapshot directory *candidates* for one comparison-planning decision.
+
+    This is not a REUSE cache: no payload, manifest, hash or validity is memoized.
+    Each new plan independently enumerates run folders; all candidate artifacts
+    are validated against the current source bytes when consumed.
+    """
+    return tuple(sorted(
+        (
+            path
+            for runs_root in _comparison_runs_roots(root=root, settings=settings, existing_only=True)
+            if runs_root.is_dir()
+            for path in runs_root.iterdir()
+            if path.is_dir()
+        ),
+        key=lambda path: path.name,
+        reverse=True,
+    ))
+
 
 def _research_dataset_generation_identity_matches_current(
     *, status: dict[str, Any], run_payload: dict[str, Any] | None
@@ -560,6 +579,7 @@ def _find_reusable_pair_with_archived_source(
     status: dict[str, Any],
     off_arm: StrategyComparisonArm,
     on_arm: StrategyComparisonArm,
+    run_dirs: tuple[Path, ...] | None = None,
 ) -> dict[str, Any] | None:
     """Reuse a completed pair when its old PIT source no longer exists locally.
 
@@ -591,11 +611,9 @@ def _find_reusable_pair_with_archived_source(
     comparison_period = dict(status.get("comparison_period") or {})
     if not comparison_period:
         return None
-    runs_roots = tuple(
-        path for path in _comparison_runs_roots(root=root, settings=settings, existing_only=True)
-        if path.is_dir()
-    )
-    if not runs_roots:
+    if run_dirs is None:
+        run_dirs = _completed_reuse_run_dirs(root=root, settings=settings)
+    if not run_dirs:
         return None
     current_group_id = _pair_group_id(
         param_source=on_arm.param_source,
@@ -607,16 +625,6 @@ def _find_reusable_pair_with_archived_source(
     expected_off = _replay_arm_contract(off_arm.as_dict())
     expected_on = _replay_arm_contract(on_arm.as_dict())
 
-    run_dirs = sorted(
-        (
-            path
-            for runs_root in runs_roots
-            for path in runs_root.iterdir()
-            if path.is_dir()
-        ),
-        key=lambda path: path.name,
-        reverse=True,
-    )
     for run_dir in run_dirs:
         run_payload = _read_json(run_dir / "strategy_comparison.json")
         if not isinstance(run_payload, dict) or str(run_payload.get("status") or "") != "COMPLETED":
@@ -916,14 +924,13 @@ def _find_reusable_pair(
     status: dict[str, Any],
     off_arm: StrategyComparisonArm,
     on_arm: StrategyComparisonArm,
+    run_dirs: tuple[Path, ...] | None = None,
 ) -> dict[str, Any] | None:
     if not settings.preparation.reuse_completed_results:
         return None
-    runs_roots = tuple(
-        path for path in _comparison_runs_roots(root=root, settings=settings, existing_only=True)
-        if path.is_dir()
-    )
-    if not runs_roots:
+    if run_dirs is None:
+        run_dirs = _completed_reuse_run_dirs(root=root, settings=settings)
+    if not run_dirs:
         return None
     expected = _current_pair_cache_fingerprint(
         settings=settings,
@@ -937,16 +944,6 @@ def _find_reusable_pair(
         dl_id=str(on_arm.dl_id or ""),
         dl_runtime_mode=str(on_arm.dl_runtime_mode or ""),
         arm_id=on_arm.arm_id,
-    )
-    run_dirs = sorted(
-        (
-            path
-            for runs_root in runs_roots
-            for path in runs_root.iterdir()
-            if path.is_dir()
-        ),
-        key=lambda path: path.name,
-        reverse=True,
     )
     for run_dir in run_dirs:
         run_payload = _read_json(run_dir / "strategy_comparison.json")
@@ -1044,6 +1041,7 @@ def _find_reusable_pair(
         status=status,
         off_arm=off_arm,
         on_arm=on_arm,
+        run_dirs=run_dirs,
     )
 
 def _collect_replay_cache_status(
@@ -1055,6 +1053,13 @@ def _collect_replay_cache_status(
     pairs: dict[str, Any] = {}
     baseline_groups: dict[str, Any] = {}
     if status.get("comparison_period"):
+        # One snapshot per planning call, not a process-wide cache.  Source
+        # contract, pair files, hashes and manifest are still checked per arm.
+        run_dirs = (
+            _completed_reuse_run_dirs(root=root, settings=settings)
+            if settings.preparation.reuse_completed_results
+            else ()
+        )
         for param_source, rule_policy, off_arm, on_arm in _execution_pairs(settings):
             entry = _find_reusable_pair(
                 root=root,
@@ -1062,6 +1067,7 @@ def _collect_replay_cache_status(
                 status=status,
                 off_arm=off_arm,
                 on_arm=on_arm,
+                run_dirs=run_dirs,
             )
             pairs[on_arm.arm_id] = entry
             if entry is not None:
@@ -1080,7 +1086,8 @@ def _collect_replay_cache_status(
         # and completed-run file integrity before returning evidence.
         for off_arm in (arm for arm in settings.enabled_arms if not arm.dl_enabled):
             source_pair_dir = _find_reusable_baseline_source(
-                root=root, settings=settings, status=status, off_arm=off_arm
+                root=root, settings=settings, status=status, off_arm=off_arm,
+                run_dirs=run_dirs,
             )
             if source_pair_dir is not None:
                 baseline_groups.setdefault(
@@ -1820,6 +1827,7 @@ def _find_reusable_baseline_source(
     settings: StrategyComparisonSettings,
     status: dict[str, Any],
     off_arm: StrategyComparisonArm,
+    run_dirs: tuple[Path, ...] | None = None,
 ) -> Path | None:
     if not settings.preparation.reuse_completed_results:
         return None
@@ -1849,17 +1857,8 @@ def _find_reusable_baseline_source(
         "enable_rotation": settings.rotation == "on",
         "comparison_period": comparison_period,
     }
-    run_dirs = sorted(
-        (
-            path
-            for runs_root in _comparison_runs_roots(root=root, settings=settings, existing_only=True)
-            if runs_root.is_dir()
-            for path in runs_root.iterdir()
-            if path.is_dir()
-        ),
-        key=lambda path: path.name,
-        reverse=True,
-    )
+    if run_dirs is None:
+        run_dirs = _completed_reuse_run_dirs(root=root, settings=settings)
     required_names = (
         "strategy_comparison.json",
         "strategy_comparison.md",
