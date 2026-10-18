@@ -14,6 +14,8 @@ from .research_lifecycle_architecture import (
     check_research_fit_architecture_sources,
     BENCHMARK_OWNER, STRATEGY_SINGLE, STRATEGY_MULTI,
     check_strategy_benchmark_architecture_sources, check_research_fit_architecture,
+    MODEL_SCORE_OWNER, FORWARD_MODEL_SOURCE_OWNER,
+    check_model_forward_source_architecture_sources,
 )
 
 
@@ -29,6 +31,196 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
     }
     check("canonical_source_owner_and_dependency_boundary", (),
           check_research_fit_architecture_sources(sources))
+    forward_sources = {
+        **sources,
+        MODEL_SCORE_OWNER: (root / MODEL_SCORE_OWNER).read_text(encoding="utf-8"),
+        FORWARD_MODEL_SOURCE_OWNER: (root / FORWARD_MODEL_SOURCE_OWNER).read_text(encoding="utf-8"),
+    }
+    check("forward_single_multiseed_canonical_owner_boundary", (),
+          check_model_forward_source_architecture_sources(forward_sources))
+    shadow = dict(forward_sources)
+    shadow[RESEARCH_APPLICATION] = shadow[RESEARCH_APPLICATION].replace(
+        "contract, reason = load_forward_model_source(",
+        "contract, reason = load_continuous_ranker_oos_contract(", 1,
+    )
+    check_true("forward_robustness_cannot_bypass_source_owner",
+               bool(check_model_forward_source_architecture_sources(shadow)))
+    shadow = dict(forward_sources)
+    shadow[FORWARD_MODEL_SOURCE_OWNER] = shadow[FORWARD_MODEL_SOURCE_OWNER].replace(
+        "contract = load_continuous_ranker_oos_contract_at_paths(",
+        "contract = load_continuous_ranker_oos_contract(", 1,
+    )
+    check_true("forward_isolated_seed_must_use_canonical_path_aware_validator",
+               bool(check_model_forward_source_architecture_sources(shadow)))
+    shadow = dict(forward_sources)
+    shadow[RESEARCH_APPLICATION] += (
+        "\ndef shadow_forward_ready(model_path):\n"
+        "    return (model_path / 'model.pt').is_file()\n"
+    )
+    # Duplicate readiness must be in a required adapter, not an unrelated helper:
+    # the existing FIT architecture guard checks renamed generic file-based helpers.
+    check_true("forward_app_cannot_recreate_presence_check",
+               bool(check_research_fit_architecture_sources(shadow)))
+
+    # Byte-backed Forward fixture: seed paths must be parsed by the *real*
+    # complete Forward manifest/report validator. Only external current-upstream
+    # availability and scientific SOP metric calculations are isolated.
+    import json
+    from core.breakout_quality_policy import get_breakout_quality_model_research_settings
+    from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+    from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+    from filters.breakout_quality import ranking_score_store as forward_store
+    from filters.breakout_quality.artifacts import build_file_manifest
+    from filters.breakout_quality.paths import build_filter_artifact_paths_from_dir
+    from filters.breakout_quality.ranker_training_contract import training_semantics
+    from services.breakout_quality import forward_model_source as forward_source
+
+    model_settings = get_breakout_quality_model_research_settings()
+    profile = get_breakout_quality_experiment_profile(str(model_settings.experiment_profile))
+    semantic = training_semantics(profile)
+    recipe = get_continuous_ranker_execution_recipe(profile.name)
+    with TemporaryDirectory() as td:
+        project = Path(td)
+        isolated_model_dir = project / "model_seed_101"
+        isolated_report_dir = project / "reports_seed_101"
+        isolated_model_dir.mkdir()
+        isolated_report_dir.mkdir()
+        paths = build_filter_artifact_paths_from_dir(
+            filter_id=model_settings.filter_id,
+            model_architecture=model_settings.model_architecture,
+            experiment_profile=profile.name, model_dir=isolated_model_dir,
+        )
+        paths.model_path.write_bytes(b"synthetic_forward_101")
+        report_path = isolated_report_dir / forward_store.CONTINUOUS_RANKER_REPORT_FILENAME
+        coverage = {
+            "inference_eligible_groups": 12,
+            "target_evaluable_groups": 8,
+            "future_target_required_for_score": False,
+        }
+        eligibility = forward_store.build_score_eligibility_contract(profile)
+        manifest = {
+            "filter_id": str(model_settings.filter_id),
+            "model_architecture": str(model_settings.model_architecture),
+            "experiment_profile": profile.name,
+            "training_objective": profile.training_objective,
+            "training_sample_scope": profile.training_sample_scope,
+            "training_label_scope": profile.training_label_scope,
+            "training_semantics": semantic,
+            "continuous_target_id": profile.continuous_target_id,
+            "score_eligibility_contract": eligibility,
+            "forward_score_coverage": coverage,
+            "model": build_file_manifest(paths.model_path),
+            "outer_oos_policy": {"oos_start_date": "2021-01-01", "configured_oos_end_date": "2021-12-31"},
+            "model_information_cutoff": "2020-12-31",
+        }
+        report = {
+            "filter_id": str(model_settings.filter_id),
+            "model_architecture": str(model_settings.model_architecture),
+            "experiment_profile": profile.name,
+            "experiment_settings": profile.as_manifest_payload(),
+            "training": {
+                "objective": profile.training_objective,
+                "loss": profile.loss_name,
+                "sample_scope": profile.training_sample_scope,
+                "training_label_scope": profile.training_label_scope,
+                **semantic,
+                "pairwise_reduction": recipe.pairwise_reduction,
+                "pair_weight_policy": recipe.objective_policy.pair_weight_policy,
+                "epoch_selection_metric": profile.epoch_selection_metric,
+                "seed": 101,
+            },
+            "score_eligibility_contract": eligibility,
+            "forward_score_coverage": coverage,
+            "status": "RESULT_AVAILABLE",
+            "standard_model_sop": {"evaluation_mode": "forward_oos"},
+        }
+        def publish():
+            paths.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+        def isolated_source(seed=101, **overrides):
+            return forward_source.load_forward_model_source(
+                project_root=project, filter_id=str(model_settings.filter_id),
+                model_architecture=str(model_settings.model_architecture),
+                experiment_profile=profile.name, expected_seed=seed,
+                dataset="full", max_tickers=0,
+                model_dir_override=isolated_model_dir,
+                research_output_dir_override=isolated_report_dir,
+                **overrides,
+            )
+
+        publish()
+        with patch.object(forward_source, "fitted_model_settings_issues", return_value=()), \
+             patch.object(forward_source, "_forward_source_provenance_issues", return_value=()), \
+             patch.object(forward_source, "standard_model_sop_completeness_issues", return_value=()):
+            source, reason = isolated_source()
+            check_true("forward_isolated_full_canonical_contract_accepts_verified_seed_without_csv",
+                       source is not None and reason is None and source.seed == 101
+                       and source.report_path == report_path)
+            check_true("forward_isolated_source_path_is_not_canonical_publication",
+                       source.manifest_path == paths.manifest_path)
+            wrong, wrong_reason = isolated_source(seed=202)
+            check_true("forward_robustness_wrong_seed_cannot_reuse",
+                       wrong is None and "seed" in str(wrong_reason))
+            check_true("forward_isolated_requires_atomic_model_report_path_pair",
+                       forward_source.load_forward_model_source(
+                           project_root=project, filter_id=str(model_settings.filter_id),
+                           model_architecture=str(model_settings.model_architecture),
+                           experiment_profile=profile.name, expected_seed=101,
+                           dataset="full", max_tickers=0, model_dir_override=isolated_model_dir,
+                       )[0] is None)
+            # There is no lru-cache for seed-isolated artifacts: a post-check
+            # model mutation must invalidate the immediately following reuse.
+            paths.model_path.write_bytes(b"tampered-forward-model")
+            corrupt, corrupt_reason = isolated_source()
+            check_true("forward_robustness_checkpoint_sha_changed_blocks_reuse",
+                       corrupt is None and "SHA256" in str(corrupt_reason))
+            paths.model_path.write_bytes(b"synthetic_forward_101")
+            manifest["forward_score_coverage"] = dict(coverage, target_evaluable_groups=99)
+            publish()
+            invalid_coverage, coverage_reason = isolated_source()
+            check_true("forward_robustness_malformed_score_coverage_fails_closed",
+                       invalid_coverage is None and "coverage" in str(coverage_reason))
+            manifest["forward_score_coverage"] = coverage
+            manifest["training_semantics"] = {"batching": "illegally_changed"}
+            publish()
+            invalid_semantics, semantic_reason = isolated_source()
+            check_true("forward_robustness_training_semantics_drift_fails_closed",
+                       invalid_semantics is None and "training semantics" in str(semantic_reason))
+            manifest["training_semantics"] = semantic
+            report["training"]["seed"] = 202
+            publish()
+            wrong_report_seed, report_seed_reason = isolated_source()
+            check_true("forward_robustness_report_seed_mismatch_fails_closed",
+                       wrong_report_seed is None and "seed" in str(report_seed_reason))
+            report["training"]["seed"] = 101
+            report["standard_model_sop"]["evaluation_mode"] = "rolling_oos"
+            publish()
+            incorrect_mode, mode_reason = isolated_source()
+            check_true("forward_robustness_wrong_evaluation_mode_fails_closed",
+                       incorrect_mode is None and "evaluation_mode" in str(mode_reason))
+            report["standard_model_sop"]["evaluation_mode"] = "forward_oos"
+            report["training"].pop("seed")
+            publish()
+            missing_seed, missing_seed_reason = isolated_source()
+            check_true("forward_robustness_missing_training_seed_fails_closed",
+                       missing_seed is None and "seed" in str(missing_seed_reason))
+            report["training"]["seed"] = 101
+            publish()
+            with patch.object(forward_source, "standard_model_sop_completeness_issues",
+                              return_value=("M3:oos:missing evidence",)):
+                missing_sop, sop_reason = isolated_source()
+            check_true("forward_robustness_missing_standard_sop_cannot_reuse",
+                       missing_sop is None and "SOP" in str(sop_reason))
+            with patch.object(forward_source, "_forward_source_provenance_issues",
+                              return_value=("Dataset: source lineage stale",)):
+                stale_source, source_reason = isolated_source()
+            check_true("forward_robustness_stale_source_lineage_cannot_reuse",
+                       stale_source is None and "lineage" in str(source_reason))
+            valid_again, reason_again = isolated_source()
+            check_true("forward_robustness_valid_source_recovers_without_refit",
+                       valid_again is not None and reason_again is None)
+
     reversed_dependency = dict(sources)
     reversed_dependency[FIT_OWNER] += (
         "\ndef shadow_pit_loader():\n"
@@ -370,6 +562,27 @@ def validate_research_model_readiness_architecture_case(_base_params):
     )
     check_true("missing_stage_owner_blocked",
                bool(check_model_stage_readiness_architecture_sources(edited)))
+    edited = dict(sources)
+    edited[MODEL_STAGE_OWNER] = edited[MODEL_STAGE_OWNER].replace(
+        "def resolve_model_robustness_readiness(",
+        "def disabled_model_robustness_readiness(", 1,
+    )
+    check_true("missing_multiseed_stage_owner_blocked",
+               bool(check_model_stage_readiness_architecture_sources(edited)))
+    edited = dict(sources)
+    edited[RESEARCH_APPLICATION] = edited[RESEARCH_APPLICATION].replace(
+        "        readiness = resolve_model_robustness_readiness(",
+        "        readiness = hidden_robustness_plan(", 1,
+    )
+    check_true("application_multiseed_owner_bypass_blocked",
+               bool(check_model_stage_readiness_architecture_sources(edited)))
+    edited = dict(sources)
+    edited[RESEARCH_APPLICATION] = edited[RESEARCH_APPLICATION].replace(
+        "        verified_sources = []",
+        "        verified_sources = []\n        ghost_score = object()", 1,
+    )
+    check_true("application_multiseed_fake_source_blocked",
+               bool(check_model_stage_readiness_architecture_sources(edited)))
 
     # Phase 3 SCORE source must remain independent of Audit. Structural
     # mutations simulate future consumer-side copies under unrelated names.
@@ -708,6 +921,193 @@ def validate_research_model_readiness_architecture_case(_base_params):
                    missing.display_action == "VERIFY FIT"
                    and missing.plan.action_by_key["FIT"].action == "RESUME"
                    and missing.plan.action_by_key["SCORE"].action == "BUILD")
+    # Phase 7: all four Model routes must consume the same canonical FIT ->
+    # SCORE -> EVIDENCE stages. Robustness alone aggregates verified seed
+    # evidence into the final REPORT; a missing Audit cannot trigger refitting.
+    from services.breakout_quality.model_artifact_readiness import (
+        ModelRobustnessSeedSource, resolve_model_robustness_readiness,
+    )
+    with patch("services.breakout_quality.model_artifact_readiness.standard_model_sop_completeness_issues", return_value=()):
+        good = {"standard_model_sop": {"schema": "synthetic_complete"}}
+        forward_seeds = (
+            ModelRobustnessSeedSource(101, good, Path("reports/101.json"), None),
+            ModelRobustnessSeedSource(202, good, Path("reports/202.json"), None),
+        )
+        forward = resolve_model_robustness_readiness(mode="forward", sources=forward_seeds)
+        rolling = resolve_model_robustness_readiness(mode="rolling", sources=forward_seeds)
+        check_true("forward_robustness_complete_seeds_reuse_fit_score_evidence",
+            forward.display_action == "REUSE"
+            and forward.evidence_ready
+            and tuple(forward.plan.action_by_key[f"seed:{seed}:{stage}"].action
+                      for seed in (101, 202) for stage in ("FIT", "SCORE", "EVIDENCE"))
+            == ("REUSE", "REUSE", "REUSE") * 2)
+        check_true("rolling_robustness_complete_seeds_do_not_assert_checkpoint_reuse",
+            rolling.display_action == "REUSE"
+            and tuple(rolling.plan.action_by_key[f"seed:{seed}:FIT"].action
+                      for seed in (101, 202)) == ("NOT_REQUIRED", "NOT_REQUIRED"))
+        check_true("robustness_report_has_exact_cross_seed_evidence_dependencies",
+            forward.plan.action_by_key["REPORT"].action == "DERIVE"
+            and forward.plan.action_by_key["REPORT"].dependencies
+                == ("seed:101:EVIDENCE", "seed:202:EVIDENCE")
+            and tuple(stage.seed for stage in forward.seeds) == (101, 202))
+        audit_only = resolve_model_robustness_readiness(mode="rolling", sources=(
+            forward_seeds[0],
+            ModelRobustnessSeedSource(202, None, Path("audits/202.json"),
+                                      "Audit missing", score_contract=SimpleNamespace(seed=202)),
+        ))
+        check_true("robustness_one_missing_audit_preserves_score_and_fit",
+            audit_only.display_action == "REFRESH EVIDENCE"
+            and audit_only.plan.action_by_key["seed:202:FIT"].action == "NOT_REQUIRED"
+            and audit_only.plan.action_by_key["seed:202:SCORE"].action == "REUSE"
+            and audit_only.plan.action_by_key["seed:202:EVIDENCE"].action == "DERIVE"
+            and audit_only.plan.action_by_key["seed:101:EVIDENCE"].action == "REUSE")
+        stale = resolve_model_robustness_readiness(mode="rolling", sources=(
+            forward_seeds[0],
+            ModelRobustnessSeedSource(202, None, Path("audits/202.json"),
+                                      "SCORE hash mismatch"),
+        ))
+        check_true("robustness_score_invalid_cannot_be_evidence_only_refresh",
+            stale.display_action == "BUILD/REFRESH"
+            and stale.plan.action_by_key["seed:202:SCORE"].action == "BUILD"
+            and stale.plan.action_by_key["seed:202:EVIDENCE"].action == "DERIVE")
+        forward_stale = resolve_model_robustness_readiness(mode="forward", sources=(
+            forward_seeds[0],
+            ModelRobustnessSeedSource(202, None, Path("reports/202.json"),
+                                      "fitting identity stale"),
+        ))
+        check_true("forward_missing_validated_source_never_claims_reuse",
+            forward_stale.display_action == "BUILD/REFRESH"
+            and forward_stale.plan.action_by_key["seed:202:FIT"].action == "BUILD"
+            and forward_stale.plan.action_by_key["seed:202:SCORE"].action == "BUILD")
+        try:
+            resolve_model_robustness_readiness(mode="rolling", sources=(
+                forward_seeds[0], forward_seeds[0],
+            ))
+        except ValueError as exc:
+            duplicate_rejected = "unique" in str(exc)
+        else:
+            duplicate_rejected = False
+        check_true("robustness_duplicate_seed_never_merges_provenance", duplicate_rejected)
+    # Exercise the actual menu-owned multi-seed dispatch with isolated
+    # synthetic producer ports. Do not fit, score or publish real artifacts.
+    from contextlib import redirect_stdout
+    from io import StringIO
+    from services.research import breakout_quality_application as model_app
+    workflow = SimpleNamespace(
+        filter_id="synthetic", model_architecture="synthetic_arch",
+        experiment_profile="synthetic_profile",
+    )
+    synthetic_report = {"standard_model_sop": {"schema": "synthetic_complete"}}
+    def complete_seed(_settings, *, seed):
+        return synthetic_report, Path(f"synthetic/{int(seed)}.json"), None
+    with (
+        patch("services.breakout_quality.model_artifact_readiness.standard_model_sop_completeness_issues", return_value=()),
+        patch.object(model_app, "get_breakout_quality_model_test_settings",
+                     return_value=SimpleNamespace(model_profiles=(("MR-SYN", "synthetic_profile"),))),
+        patch.object(model_app, "get_breakout_quality_workflow_settings", return_value=workflow),
+        patch.object(model_app, "resolve_robustness_benchmark_seeds", return_value=(101, 202)),
+        patch.object(model_app, "_load_forward_robustness_seed", side_effect=complete_seed),
+        patch.object(model_app, "_load_rolling_robustness_seed", side_effect=complete_seed),
+        patch.object(model_app, "_rolling_robustness_score_core_contract",
+                     side_effect=AssertionError("complete seed must not rescore")) as no_rescore,
+        patch.object(model_app, "_prepare_continuous_research_inputs",
+                     side_effect=AssertionError("complete seeds must not prepare")) as no_prepare,
+        patch.object(model_app, "_build_forward_robustness_seed",
+                     side_effect=AssertionError("complete seed must not fit")) as no_forward_build,
+        patch.object(model_app, "_build_rolling_robustness_seed",
+                     side_effect=AssertionError("complete seed must not build scores")) as no_rolling_build,
+        patch.object(model_app, "aggregate_standard_model_sop_robustness", return_value={"schema": "synthetic"}),
+        patch.object(model_app, "_render_standard_model_comparison", return_value="SYNTHETIC"),
+        patch.object(model_app, "_write_standard_model_comparison_report",
+                     return_value=(Path("synthetic.json"), Path("synthetic.md"))) as write_report,
+        patch.object(model_app, "render_status_paths", return_value=""),
+        patch.object(model_app, "_print_model_action_status") as print_status,
+        redirect_stdout(StringIO()),
+    ):
+        forward_code = model_app._run_configured_model_robustness("synthetic", rolling=False)
+        forward_action = print_status.call_args.args[0][0][2]
+        rolling_code = model_app._run_configured_model_robustness("synthetic", rolling=True)
+        rolling_action = print_status.call_args.args[0][0][2]
+    check_true("complete_forward_rolling_robustness_dispatch_reuses_only_and_renders_once_per_mode",
+        forward_code == rolling_code == 0
+        and forward_action == rolling_action == "REUSE"
+        and write_report.call_count == 2 and no_rescore.call_count == 0
+        and no_prepare.call_count == no_forward_build.call_count == no_rolling_build.call_count == 0)
+
+    # When exactly one Rolling seed loses Audit while retaining validated SCORE,
+    # dispatch the canonical Audit refresh for that seed alone.
+    calls = {202: 0}
+    def interrupted_seed(_settings, *, seed):
+        if seed == 202:
+            calls[202] += 1
+            if calls[202] == 1:
+                return None, Path("synthetic/202.json"), "Audit missing"
+        return synthetic_report, Path(f"synthetic/{seed}.json"), None
+    with (
+        patch("services.breakout_quality.model_artifact_readiness.standard_model_sop_completeness_issues", return_value=()),
+        patch.object(model_app, "get_breakout_quality_model_test_settings",
+                     return_value=SimpleNamespace(model_profiles=(("MR-SYN", "synthetic_profile"),))),
+        patch.object(model_app, "get_breakout_quality_workflow_settings", return_value=workflow),
+        patch.object(model_app, "resolve_robustness_benchmark_seeds", return_value=(101, 202)),
+        patch.object(model_app, "_load_rolling_robustness_seed", side_effect=interrupted_seed),
+        patch.object(model_app, "_rolling_robustness_score_core_contract",
+                     return_value=(SimpleNamespace(seed=202), None)) as score_only,
+        patch.object(model_app, "_prepare_continuous_research_inputs", return_value=0) as prep,
+        patch.object(model_app, "_build_rolling_robustness_seed", return_value=0) as audit_build,
+        patch.object(model_app, "_build_forward_robustness_seed",
+                     side_effect=AssertionError("never build Forward in Rolling")) as forward_build,
+        patch.object(model_app, "aggregate_standard_model_sop_robustness", return_value={"schema": "synthetic"}),
+        patch.object(model_app, "_render_standard_model_comparison", return_value="SYNTHETIC"),
+        patch.object(model_app, "_write_standard_model_comparison_report",
+                     return_value=(Path("synthetic.json"), Path("synthetic.md"))) as final_report,
+        patch.object(model_app, "render_status_paths", return_value=""),
+        patch.object(model_app, "_print_model_action_status") as print_status,
+        redirect_stdout(StringIO()),
+    ):
+        code = model_app._run_configured_model_robustness("synthetic", rolling=True)
+        status_action = print_status.call_args.args[0][0][2]
+    check_true("missing_one_seed_audit_refreshes_only_that_seed_then_aggregates",
+        code == 0 and status_action == "REFRESH EVIDENCE"
+        and score_only.call_count == 1 and prep.call_count == 1
+        and audit_build.call_count == 1 and audit_build.call_args.kwargs["seed"] == 202
+        and calls[202] == 2 and forward_build.call_count == 0
+        and final_report.call_count == 1)
+
+    # Producer failure must stop before the cross-seed REPORT can be emitted.
+    with (
+        patch.object(model_app, "get_breakout_quality_model_test_settings",
+                     return_value=SimpleNamespace(model_profiles=(("MR-SYN", "synthetic_profile"),))),
+        patch.object(model_app, "get_breakout_quality_workflow_settings", return_value=workflow),
+        patch.object(model_app, "resolve_robustness_benchmark_seeds", return_value=(101, 202)),
+        patch.object(model_app, "_load_rolling_robustness_seed",
+                     return_value=(None, Path("synthetic/audit.json"), "SCORE missing")),
+        patch.object(model_app, "_rolling_robustness_score_core_contract",
+                     return_value=(None, "SCORE hash mismatch")),
+        patch.object(model_app, "_prepare_continuous_research_inputs", return_value=0),
+        patch.object(model_app, "_build_rolling_robustness_seed", return_value=71) as failed_producer,
+        patch.object(model_app, "aggregate_standard_model_sop_robustness",
+                     side_effect=AssertionError("failed seed cannot aggregate")) as no_aggregate,
+        patch.object(model_app, "_write_standard_model_comparison_report",
+                     side_effect=AssertionError("failed seed cannot publish")) as no_report,
+        patch.object(model_app, "_print_model_action_status"),
+        redirect_stdout(StringIO()),
+    ):
+        failed_code = model_app._run_configured_model_robustness("synthetic", rolling=True)
+    check_true("failed_seed_score_build_stops_aggregate_report_and_next_seed",
+        failed_code == 71 and failed_producer.call_count == 1
+        and failed_producer.call_args.kwargs["seed"] == 101
+        and no_aggregate.call_count == no_report.call_count == 0)
+
+    # Normal Single resolver does not infer source readiness from unattested
+    # payload, even though the Robustness adapter can pass validated evidence.
+    bare = resolve_model_artifact_readiness(
+        mode="forward", source_contract=None,
+        evidence_payload={"standard_model_sop": {"schema": "synthetic_complete"}},
+        source_reason="no canonical source", source_path=None,
+    )
+    check_true("single_missing_source_cannot_infer_reuse_from_payload",
+               not bare.source_ready and not bare.evidence_ready)
+
     # Report publication is the last, independent dependency.  Tampering or
     # removing the renderer output must not invalidate FIT/SCORE/EVIDENCE.
     from services.breakout_quality.standard_model_sop import standard_model_sop_completeness_issues

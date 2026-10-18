@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import partial
+
 import argparse
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -100,10 +102,16 @@ from core.runtime_utils import (
 )
 from services.breakout_quality.standard_model_sop import standard_model_sop_completeness_issues as _standard_model_sop_completeness_issues
 from services.breakout_quality.model_artifact_readiness import (
+    ModelRobustnessSeedSource,
     resolve_model_artifact_readiness,
+    resolve_model_robustness_readiness,
     standard_model_report_matches_source,
 )
 from services.breakout_quality.rolling_model_source import load_rolling_model_source
+from services.breakout_quality.forward_model_source import (
+    load_forward_model_source,
+    _forward_source_provenance_issues as _forward_provenance_owner,
+)
 from services.breakout_quality.standard_model_sop import (
     aggregate_standard_model_sop_robustness,
     migrate_legacy_forward_standard_model_sop,
@@ -115,7 +123,6 @@ from services.breakout_quality.model_report_extensions import (
 from services.breakout_quality.fitted_model_artifacts import (
     current_default_fitting_settings,
     fitted_model_settings_issues,
-    forward_fitted_source_provenance_issues,
     pit_fold_fitting_settings_issues,
 )
 from services.research.strategy_compare_training import (
@@ -127,9 +134,6 @@ from services.research.training_process import (
 )
 from core.training_policy import resolve_robustness_benchmark_seeds
 from filters.breakout_quality.artifact_dependency_registry import (
-    ARTIFACT_DATASET_CORE,
-    ARTIFACT_CONTINUOUS_TARGET,
-    collect_model_upstream_readiness,
     collect_model_upstream_preparation_plan,
 )
 from filters.breakout_quality.dataset_readiness import collect_dataset_readiness
@@ -157,7 +161,6 @@ from filters.breakout_quality.paths import (
     resolve_existing_filter_artifact_paths,
     resolve_existing_filter_research_manifest_path,
     resolve_existing_filter_research_score_path,
-    build_filter_artifact_paths_from_dir,
     resolve_filter_artifact_paths,
     resolve_filter_model_output_dir,
     resolve_model_research_robustness_seed_dirs,
@@ -234,6 +237,12 @@ COMMAND_MODULES.update(
 
 INTERACTIVE_DATASET_PROFILE = "full"
 INTERACTIVE_MAX_TICKERS = 0
+# Historical test injection port: the callable only delegates to the canonical
+# Forward provenance owner; no second source/lineage policy is defined here.
+_forward_source_provenance_issues = partial(
+    _forward_provenance_owner, project_root=PROJECT_ROOT,
+    dataset=INTERACTIVE_DATASET_PROFILE, max_tickers=INTERACTIVE_MAX_TICKERS,
+)
 INTERACTIVE_EVALUATE_OOS = True
 
 
@@ -3175,116 +3184,20 @@ def _interactive_continuous_rolling_test(program_name: str, settings) -> int:
 
 
 
-def _forward_source_provenance_issues(
-    settings, *, model_dir: Path, manifest, report
-) -> tuple[str, ...]:
-    """Canonical current-upstream + Forward FIT/SCORE source readiness gate.
-
-    Called for full Forward REUSE and per-seed robustness REUSE. It uses the
-    upstream owner rather than re-implementing Dataset / Target freshness policy.
-    Missing or unverifiable history fails closed; no implicit data rebuild here.
-    """
-
-    try:
-        upstream = collect_model_upstream_readiness(
-            PROJECT_ROOT,
-            filter_id=str(settings.filter_id),
-            model_architecture=str(settings.model_architecture),
-            experiment_profile=str(settings.experiment_profile),
-            dataset=str(INTERACTIVE_DATASET_PROFILE),
-            max_tickers=int(INTERACTIVE_MAX_TICKERS),
-        )
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        return (f"upstream readiness unavailable: {type(exc).__name__}: {exc}",)
-    stale = tuple(
-        f"{item.artifact_type}: {item.description}"
-        for item in upstream if not item.ready
-    )
-    if stale:
-        return stale
-    dataset_nodes = [item for item in upstream if item.artifact_type == ARTIFACT_DATASET_CORE]
-    if len(dataset_nodes) != 1:
-        return ("canonical Dataset readiness record missing or duplicate",)
-    dataset_summary = load_json_object_or_none(Path(dataset_nodes[0].path))
-    if not isinstance(dataset_summary, dict):
-        return ("canonical Dataset summary missing or invalid",)
-    target_nodes = [item for item in upstream if item.artifact_type == ARTIFACT_CONTINUOUS_TARGET]
-    if len(target_nodes) > 1:
-        return ("canonical Continuous Target readiness record duplicate",)
-    target_manifest = None
-    if target_nodes:
-        target_manifest = load_json_object_or_none(Path(target_nodes[0].path))
-        if not isinstance(target_manifest, dict):
-            return ("canonical Continuous Target manifest missing or invalid",)
-    from services.breakout_quality.price_input_source import verified_current_price_source_identity
-    try:
-        input_identity = verified_current_price_source_identity(
-            model_architecture=str(settings.model_architecture), project_root=PROJECT_ROOT,
-        )
-    except (OSError, RuntimeError, ValueError, TypeError, KeyError) as exc:
-        return (f"current DL raw price input unavailable: {type(exc).__name__}: {exc}",)
-    if input_identity is not None:
-        dataset_summary["input_price_source"] = input_identity
-        dataset_summary["requires_input_price_source"] = True
-    return forward_fitted_source_provenance_issues(
-        model_dir=Path(model_dir),
-        model_manifest=manifest,
-        report=report,
-        dataset_summary=dataset_summary,
-        target_manifest=target_manifest,
-        project_root=PROJECT_ROOT,
-    )
-
-
 def _load_reusable_continuous_forward_contract(settings):
-    """Return the validated canonical Forward-OOS model contract, if reusable."""
-
-    try:
-        contract = load_continuous_ranker_oos_contract(
-            str(PROJECT_ROOT),
-            str(settings.filter_id),
-            str(settings.model_architecture),
-            str(settings.experiment_profile),
-            require_scores=False,
-        )
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        return None, f"{type(exc).__name__}: {exc}"
-    if int(contract.seed) != int(settings.seed):
-        return None, (
-            "training seed不一致: "
-            f"artifact={int(contract.seed)}, configured={int(settings.seed)}"
-        )
-    model_paths = resolve_filter_artifact_paths(
-        PROJECT_ROOT,
-        str(settings.filter_id),
-        str(settings.model_architecture),
-        str(settings.experiment_profile),
+    """Single Forward uses the same complete source owner as Robustness."""
+    return load_forward_model_source(
+        project_root=PROJECT_ROOT, filter_id=str(settings.filter_id),
+        model_architecture=str(settings.model_architecture),
+        experiment_profile=str(settings.experiment_profile),
+        expected_seed=int(settings.seed), dataset=INTERACTIVE_DATASET_PROFILE,
+        max_tickers=INTERACTIVE_MAX_TICKERS,
+        settings=settings,
+        canonical_loader=load_continuous_ranker_oos_contract,
+        canonical_path_resolver=resolve_filter_artifact_paths,
+        fitting_validator=fitted_model_settings_issues,
+        source_validator=_forward_source_provenance_issues,
     )
-    fit_issues = fitted_model_settings_issues(
-        model_dir=model_paths.model_dir,
-        report_path=Path(contract.report_path),
-        expected=current_default_fitting_settings(),
-    )
-    if fit_issues:
-        return None, "Fitted model training settings stale: " + "; ".join(fit_issues[:8])
-    provenance_issues = _forward_source_provenance_issues(
-        settings, model_dir=model_paths.model_dir,
-        manifest=contract.manifest, report=contract.report,
-    )
-    if provenance_issues:
-        return None, "Forward fitted source lineage stale: " + "; ".join(provenance_issues[:8])
-    # Never mutate a historical report in-place merely to satisfy a new
-    # presentation/evaluation contract. A legacy artifact is not v10 evidence.
-    report_payload = dict(contract.report or {})
-    completeness_issues = _standard_model_sop_completeness_issues(report_payload)
-    if completeness_issues:
-        return None, (
-            "Standard SOP共通evidence不完整，需由canonical producer補建: "
-            + "; ".join(completeness_issues[:8])
-        )
-    # Model-specific head evidence is no longer a permanent Standard SOP
-    # readiness obligation. It remains available to separately authorized Audit.
-    return contract, None
 
 
 def _clear_continuous_forward_reuse_caches() -> None:
@@ -4594,45 +4507,18 @@ def _validate_robustness_standard_payload(
 
 
 def _load_forward_robustness_seed(settings, *, seed: int):
+    """Validate one isolated seed through the same complete Forward owner."""
     model_dir, research_dir = _model_robustness_dirs(settings, seed=seed, rolling=False)
-    paths = build_filter_artifact_paths_from_dir(
-        filter_id=str(settings.filter_id),
+    report_path = research_dir / CONTINUOUS_RANKER_REPORT_FILENAME
+    contract, reason = load_forward_model_source(
+        project_root=PROJECT_ROOT, filter_id=str(settings.filter_id),
         model_architecture=str(settings.model_architecture),
         experiment_profile=str(settings.experiment_profile),
-        model_dir=model_dir,
+        expected_seed=int(seed), dataset=INTERACTIVE_DATASET_PROFILE,
+        max_tickers=INTERACTIVE_MAX_TICKERS,
+        model_dir_override=model_dir, research_output_dir_override=research_dir,
     )
-    report_path = research_dir / "continuous_ranker_report.json"
-    if not paths.model_path.is_file() or not paths.manifest_path.is_file() or not report_path.is_file():
-        return None, report_path, "model/manifest/report missing"
-    manifest = load_json_object_or_none(paths.manifest_path)
-    report = load_json_object_or_none(report_path)
-    if not isinstance(manifest, dict) or not isinstance(report, dict):
-        return None, report_path, "model manifest or report invalid"
-    for key, expected in (
-        ("filter_id", settings.filter_id),
-        ("model_architecture", settings.model_architecture),
-        ("experiment_profile", settings.experiment_profile),
-    ):
-        if str(manifest.get(key) or "") != str(expected):
-            return None, report_path, f"manifest {key} mismatch"
-    fit_issues = fitted_model_settings_issues(
-        model_dir=model_dir,
-        report_path=report_path,
-        expected=current_default_fitting_settings(),
-    )
-    if fit_issues:
-        return None, report_path, "Forward robustness fitted-model training settings stale: " + "; ".join(fit_issues[:8])
-    provenance_issues = _forward_source_provenance_issues(
-        settings, model_dir=model_dir, manifest=manifest, report=report,
-    )
-    if provenance_issues:
-        return None, report_path, "Forward robustness fitted source lineage stale: " + "; ".join(provenance_issues[:8])
-    issues = _validate_robustness_standard_payload(
-        report, settings=settings, seed=seed, evaluation_mode="forward_oos"
-    )
-    if issues:
-        return None, report_path, "; ".join(issues[:8])
-    return report, report_path, None
+    return (dict(contract.report or {}) if contract is not None else None), report_path, reason
 
 
 def _rolling_robustness_score_core_contract(settings, *, seed: int):
@@ -4843,63 +4729,51 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
     for model_id, profile_name in model_list:
         settings = get_breakout_quality_workflow_settings(experiment_profile=str(profile_name))
         seed_states = []
+        verified_sources = []
         for seed in seeds:
             payload, path, reason = (
                 _load_rolling_robustness_seed(settings, seed=seed)
                 if rolling else _load_forward_robustness_seed(settings, seed=seed)
             )
+            # Full evidence already implies that the canonical source owner
+            # verified SCORE. Only an incomplete Rolling seed needs the
+            # independent SCORE-only fallback to classify EVIDENCE refresh.
+            score_contract, score_reason = (None, None)
+            if rolling and payload is None:
+                score_contract, score_reason = _rolling_robustness_score_core_contract(
+                    settings, seed=seed,
+                )
             seed_states.append((seed, payload, path, reason))
-        ready_count = sum(payload is not None for _seed, payload, _path, _reason in seed_states)
-        if rolling:
-            # Multi-seed reports consume exactly the same lifecycle stage owner
-            # as single-model Rolling. A missing Audit is EVIDENCE refresh, not
-            # an implicit FIT/SCORE rebuild. A validated seed source is not a
-            # checkpoint REUSE authorization.
-            stage_plans = []
-            for seed, payload, path, seed_reason in seed_states:
-                if payload is not None:
-                    source_contract, score_reason = object(), None
-                else:
-                    source_contract, score_reason = _rolling_robustness_score_core_contract(
-                        settings, seed=seed,
-                    )
-                stage_plans.append(resolve_model_artifact_readiness(
-                    mode="rolling", source_contract=source_contract,
-                    evidence_payload=payload,
-                    source_reason=seed_reason or score_reason,
-                    source_path=path if payload is not None else None,
-                ))
-            score_count = sum(stage.source_ready for stage in stage_plans)
-            if ready_count == len(seeds):
-                action, reason = "REUSE", "READY"
-            elif score_count == len(seeds):
-                action = "REFRESH EVIDENCE"
-                reason = f"{ready_count}/{len(seeds)} seeds EVIDENCE READY; all SCORE sources valid"
-            else:
-                action = "BUILD/REFRESH"
-                reason = f"{ready_count}/{len(seeds)} seeds EVIDENCE READY; {score_count}/{len(seeds)} SCORE READY"
-        else:
-            action = "REUSE" if ready_count == len(seeds) else "BUILD/REFRESH"
-            reason = "READY" if ready_count == len(seeds) else f"{ready_count}/{len(seeds)} seeds READY"
-        rows.append((str(model_id), str(profile_name), action, reason))
-        plans.append((str(model_id), settings, seed_states))
+            verified_sources.append(ModelRobustnessSeedSource(
+                seed=seed, verified_evidence=payload,
+                evidence_path=path, reason=reason or score_reason,
+                score_contract=score_contract,
+            ))
+        readiness = resolve_model_robustness_readiness(
+            mode="rolling" if rolling else "forward", sources=verified_sources,
+        )
+        rows.append((str(model_id), str(profile_name), readiness.display_action,
+                     readiness.display_reason))
+        plans.append((str(model_id), settings, seed_states, readiness))
 
     _print_model_action_status(rows)
     # Keep the historical direct-run menu semantics; REUSE is decided by the canonical producer.
     force_rebuild = False
 
     completed = []
-    for model_id, settings, seed_states in plans:
-        if force_rebuild or any(payload is None for _seed, payload, _path, _reason in seed_states):
+    for model_id, settings, seed_states, readiness in plans:
+        if force_rebuild or not readiness.evidence_ready:
             code = _prepare_continuous_research_inputs(program_name, settings)
             if code != 0:
                 return int(code)
         seed_payloads = []
         source_reports = []
         built = False
-        for seed_index, (seed, payload, path, reason) in enumerate(seed_states, start=1):
+        for seed_index, ((seed, payload, path, reason), seed_stage) in enumerate(
+            zip(seed_states, readiness.seeds, strict=True), start=1,
+        ):
             seed_text = _seed_progress_text(seed, seed_index, len(seeds))
-            if force_rebuild or payload is None:
+            if force_rebuild or seed_stage.readiness.plan.action_by_key["EVIDENCE"].action != "REUSE":
                 print(
                     styled_workflow_status("[FORCE_REBUILD]" if force_rebuild else "[BUILD/REFRESH]")
                     + " " + _model_identity_text(model_id)

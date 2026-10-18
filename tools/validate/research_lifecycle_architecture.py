@@ -242,6 +242,7 @@ def check_research_fit_architecture_sources(
 
 MODEL_SCORE_OWNER = "filters/breakout_quality/ranking_score_store.py"
 ROLLING_MODEL_SOURCE_OWNER = "services/breakout_quality/rolling_model_source.py"
+FORWARD_MODEL_SOURCE_OWNER = "services/breakout_quality/forward_model_source.py"
 MODEL_EVIDENCE_OWNER = "services/breakout_quality/standard_model_sop.py"
 MODEL_STAGE_OWNER = "services/breakout_quality/model_artifact_readiness.py"
 
@@ -322,6 +323,23 @@ def check_model_stage_readiness_architecture_sources(
         ):
             issues.append(f"{entry} does not consume shared Model stage plan")
 
+    # The canonical stage owner plans every benchmark seed and its aggregate
+    # REPORT. A future Application-local tally or fake SCORE proof can silently
+    # diverge between Forward and Rolling robustness.
+    robustness = app_defs.get("_run_configured_model_robustness")
+    if "resolve_model_robustness_readiness" not in stage_defs:
+        issues.append("canonical Model Robustness stage resolver is missing")
+    if robustness is None:
+        issues.append("Application Model Robustness entry is missing")
+    else:
+        robust_calls = {
+            node.func.id for node in ast.walk(robustness)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        if "resolve_model_robustness_readiness" not in robust_calls:
+            issues.append("Model Robustness bypasses canonical multi-seed stage resolver")
+        if "resolve_model_artifact_readiness" in robust_calls or "object" in robust_calls:
+            issues.append("Model Robustness recreates local stage or placeholder SCORE source")
     # Semantic duplicate: another application helper evaluating truth-schema
     # identity and M4 numeric completeness must never become a new owner.
     for name, fn in app_defs.items():
@@ -428,6 +446,61 @@ def check_model_score_owner_architecture_sources(
 
 
 
+def check_model_forward_source_architecture_sources(
+    sources: Mapping[str, str],
+) -> tuple[str, ...]:
+    """Single and robustness Forward must share one full contract validator."""
+    paths = (MODEL_SCORE_OWNER, FORWARD_MODEL_SOURCE_OWNER, RESEARCH_APPLICATION)
+    trees = {path: ast.parse(sources[path], filename=path) for path in paths}
+    owner_defs = _defs(trees[FORWARD_MODEL_SOURCE_OWNER])
+    store_defs = _defs(trees[MODEL_SCORE_OWNER])
+    app_defs = _defs(trees[RESEARCH_APPLICATION])
+    issues: list[str] = []
+    canonical = "load_continuous_ranker_oos_contract"
+    isolated = "load_continuous_ranker_oos_contract_at_paths"
+    shared = "load_forward_model_source"
+    if not all(name in store_defs for name in (canonical, isolated)):
+        issues.append("canonical Forward SCORE owner missing source/path capability")
+    elif "_load_continuous_ranker_oos_contract_uncached" not in {
+        node.func.id for node in ast.walk(store_defs[isolated])
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }:
+        issues.append("isolated Forward loader bypasses canonical validation")
+    forward_source = owner_defs.get(shared)
+    if forward_source is None:
+        issues.append("canonical Forward model source owner missing")
+    else:
+        calls = {node.func.id for node in ast.walk(forward_source)
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+        for required in (
+            canonical, isolated, "fitted_model_settings_issues",
+            "_forward_source_provenance_issues", "standard_model_sop_completeness_issues",
+        ):
+            if required not in calls:
+                issues.append(f"Forward source owner skips required gate: {required}")
+    for fn_name in ("_load_reusable_continuous_forward_contract", "_load_forward_robustness_seed"):
+        fn = app_defs.get(fn_name)
+        if fn is None:
+            issues.append(f"Forward Application source adapter missing: {fn_name}")
+            continue
+        calls = {node.func.id for node in ast.walk(fn)
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+        if shared not in calls:
+            issues.append(f"Forward Application bypasses canonical owner: {fn_name}")
+        if calls & {
+            canonical, isolated, "fitted_model_settings_issues",
+            "forward_fitted_source_provenance_issues", "_forward_source_provenance_issues",
+            "load_json_object_or_none", "compute_file_sha256",
+        }:
+            issues.append(f"Forward Application independently validates source: {fn_name}")
+        if any(isinstance(node, ast.Attribute) and node.attr in {"is_file", "exists"}
+               for node in ast.walk(fn)):
+            issues.append(f"Forward Application reintroduces file-presence REUSE: {fn_name}")
+    if "_forward_source_provenance_issues" in app_defs:
+        issues.append("Application recreates canonical Forward lineage owner")
+    return tuple(dict.fromkeys(issues))
+
+
 def check_model_standard_comparison_audit_boundary_sources(
     sources: Mapping[str, str],
 ) -> tuple[str, ...]:
@@ -482,12 +555,13 @@ def check_research_fit_architecture(project_root: Path) -> tuple[str, ...]:
     model_sources = {
         path: (root / path).read_text(encoding="utf-8")
         for path in (MODEL_EVIDENCE_OWNER, MODEL_STAGE_OWNER, MODEL_SCORE_OWNER,
-                     ROLLING_MODEL_SOURCE_OWNER)
+                     ROLLING_MODEL_SOURCE_OWNER, FORWARD_MODEL_SOURCE_OWNER)
     }
     return (
         *check_research_fit_architecture_sources(sources),
         *check_strategy_benchmark_architecture_sources(strategy_sources),
         *check_model_stage_readiness_architecture_sources({**sources, **model_sources}),
         *check_model_score_owner_architecture_sources({**sources, **model_sources}),
+        *check_model_forward_source_architecture_sources({**sources, **model_sources}),
         *check_model_standard_comparison_audit_boundary_sources(sources),
     )

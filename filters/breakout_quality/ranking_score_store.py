@@ -46,6 +46,7 @@ from filters.breakout_quality.paths import (
     SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
     SELECTION_POINT_IN_TIME_SCORE_FILENAME,
     resolve_filter_artifact_paths,
+    build_filter_artifact_paths_from_dir,
     resolve_filter_model_output_dir,
     resolve_selection_point_in_time_audit_json_path,
     resolve_selection_point_in_time_coverage_path,
@@ -869,24 +870,43 @@ def _validate_file_record_simple(record: Any, *, path: Path, label: str) -> None
         raise ValueError(f"{label} size不一致")
 
 
-@lru_cache(maxsize=16)
-def load_continuous_ranker_oos_contract(
+def _load_continuous_ranker_oos_contract_uncached(
     project_root: str,
     filter_id: str,
     model_architecture: str,
     experiment_profile: str,
     require_scores: bool = True,
+    *,
+    model_dir_override: Path | None = None,
+    research_output_dir_override: Path | None = None,
 ) -> ContinuousRankerOOSContract:
+    """Validate one explicit physical Forward source with unchanged scientific gates."""
     root = Path(project_root).resolve()
     profile = get_breakout_quality_experiment_profile(str(experiment_profile))
-    artifacts = resolve_filter_artifact_paths(
+    isolated = model_dir_override is not None or research_output_dir_override is not None
+    if isolated and (model_dir_override is None or research_output_dir_override is None):
+        raise ValueError("Forward isolated model and report directories must be supplied together")
+    artifacts = (
+        build_filter_artifact_paths_from_dir(
+            filter_id=filter_id, model_architecture=model_architecture,
+            experiment_profile=experiment_profile, model_dir=model_dir_override,
+        )
+        if isolated else resolve_filter_artifact_paths(
+            root, filter_id, model_architecture, experiment_profile
+        )
+    )
+    output_dir = (
+        Path(research_output_dir_override).resolve()
+        if isolated else resolve_filter_model_output_dir(
+            root, filter_id, model_architecture, experiment_profile
+        )
+    )
+    canonical_score_path = resolve_continuous_ranker_oos_score_path(
         root, filter_id, model_architecture, experiment_profile
     )
-    output_dir = resolve_filter_model_output_dir(
-        root, filter_id, model_architecture, experiment_profile
-    )
-    score_path = resolve_continuous_ranker_oos_score_path(
-        root, filter_id, model_architecture, experiment_profile
+    score_path = (
+        (output_dir / canonical_score_path.name).resolve()
+        if isolated else canonical_score_path
     )
     report_path = (output_dir / CONTINUOUS_RANKER_REPORT_FILENAME).resolve()
     manifest_path = artifacts.manifest_path.resolve()
@@ -1132,6 +1152,44 @@ def load_continuous_ranker_oos_contract(
         execution_start=execution_start,
         available_from=available_from,
         available_through=available_through,
+    )
+
+
+@lru_cache(maxsize=16)
+def load_continuous_ranker_oos_contract(
+    project_root: str,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    require_scores: bool = True,
+) -> ContinuousRankerOOSContract:
+    """Cached canonical published source; signature and cache_clear stay stable."""
+    return _load_continuous_ranker_oos_contract_uncached(
+        project_root, filter_id, model_architecture, experiment_profile,
+        require_scores=require_scores,
+    )
+
+
+def load_continuous_ranker_oos_contract_at_paths(
+    project_root: str,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    *,
+    model_dir: Path,
+    research_output_dir: Path,
+) -> ContinuousRankerOOSContract:
+    """Revalidate seed-isolated model/report bytes without canonical cache reuse.
+
+    Robustness consumes this same complete Forward contract, never a partial
+    existence-based manifest/report check. The model producer remains responsible
+    for OOS SCORE creation; SOP-only reuse does not require its score CSV.
+    """
+    return _load_continuous_ranker_oos_contract_uncached(
+        project_root, filter_id, model_architecture, experiment_profile,
+        require_scores=False,
+        model_dir_override=Path(model_dir),
+        research_output_dir_override=Path(research_output_dir),
     )
 
 

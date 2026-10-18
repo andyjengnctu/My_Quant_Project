@@ -11164,6 +11164,7 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
         write_fitted_model_contract,
     )
     from services.breakout_quality import rolling_model_source as rolling_source_owner
+    from services.breakout_quality import forward_model_source as forward_source_owner
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -12260,15 +12261,19 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
             "experiment_profile": settings.experiment_profile,
         }), encoding="utf-8")
         report_path.write_text(json.dumps({}), encoding="utf-8")
-        synthetic_artifact_paths = SimpleNamespace(
-            model_path=model_path, manifest_path=manifest_path
+        synthetic_contract = SimpleNamespace(
+            seed=42, report_path=report_path, manifest={}, report={},
         )
         with patch.object(
-            research_app, "_model_robustness_dirs", return_value=(model_dir, research_dir)
+            research_app, "_model_robustness_dirs", return_value=(model_dir, research_dir),
         ), patch.object(
-            research_app, "build_filter_artifact_paths_from_dir", return_value=synthetic_artifact_paths
+            forward_source_owner, "load_continuous_ranker_oos_contract_at_paths",
+            return_value=synthetic_contract,
         ), patch.object(
-            research_app, "fitted_model_settings_issues",
+            forward_source_owner, "build_filter_artifact_paths_from_dir",
+            return_value=SimpleNamespace(model_dir=model_dir),
+        ), patch.object(
+            forward_source_owner, "fitted_model_settings_issues",
             return_value=("early_stopping_patience mismatch: artifact=1, current=3",),
         ):
             robust_payload, _robust_path, robust_reason = research_app._load_forward_robustness_seed(
@@ -12277,7 +12282,7 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
         check_true(
             "forward_robustness_seed_cannot_reuse_changed_early_stopping_patience",
             robust_payload is None
-            and "Forward robustness fitted-model training settings stale" in str(robust_reason),
+            and "Fitted model training settings stale" in str(robust_reason),
         )
 
         rolling_dir = root / "rolling_seed"
