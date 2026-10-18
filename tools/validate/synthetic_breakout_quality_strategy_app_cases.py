@@ -1214,6 +1214,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             ) == "optimizer_raw_price_strategy_params"
         )
     )
+    from services.research import strategy_multi_seed_robustness as robustness_plan_runtime
+
     rolling_reusable = {
         (arm_id, int(seed)): {
             "source_run_root": Path("synthetic_registered_extending_run"),
@@ -1226,7 +1228,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         for arm_id in rolling_canonical_reuse_arm_ids
         for seed in rolling_robustness.resolved_seeds
     }
+    # AI: The plan must exercise the canonical preparation/model-score inspectors,
+    # but a synthetic planning invariant cannot depend on the size, age or validity
+    # of an operator's physical research artifacts.  Inspect a fresh isolated root.
     with (
+        tempfile.TemporaryDirectory(prefix="strategy_compare_rolling_plan_") as isolated_root,
+        patch.object(robustness_plan_runtime, "PROJECT_ROOT", Path(isolated_root)),
+        patch.object(
+            robustness_plan_runtime,
+            "inspect_reusable_model_research_rolling_score",
+            wraps=robustness_plan_runtime.inspect_reusable_model_research_rolling_score,
+        ) as isolated_model_inspections,
         patch(
             "services.research.strategy_multi_seed_robustness._discover_registered_strategy_only_scientific_reuse",
             return_value=rolling_reusable,
@@ -1242,15 +1254,91 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             return_value={"action": "BUILD", "status": "ARTIFACT_MISSING"},
         ),
     ):
+        isolated_status_started = perf_counter()
+        isolated_plan_status = collect_robustness_artifact_status(
+            project_root=Path(isolated_root), settings=rolling_robust_settings,
+        )
+        isolated_status_seconds = perf_counter() - isolated_status_started
+        # Exercise the real dependency-pending branch as well; a missing upstream
+        # cannot authorize a completed scientific result or Model Score REUSE.
+        _, pending_rolling_plan = _render_robustness_execution_plan(
+            cfg=rolling_robustness,
+            settings=rolling_robust_settings,
+            status=isolated_plan_status,
+            fixed_arms=rolling_fixed,
+            stochastic_arms=rolling_stochastic,
+        )
+        # This test's first rolling scenario is a post-upstream planning snapshot:
+        # the canonical isolated preparation observer has already been called,
+        # while the producer-completion stage is represented by explicit fixture
+        # state. It must not query real project artifacts for this synthetic check.
+        first_rolling_plan_status = {
+            **isolated_plan_status,
+            "preparation_plan": SimpleNamespace(actions=[]),
+        }
+        isolated_render_started = perf_counter()
         rendered_robustness_plan, rendered_robustness_payload = (
             _render_robustness_execution_plan(
                 cfg=rolling_robustness,
                 settings=rolling_robust_settings,
-                status=collect_robustness_artifact_status(settings=rolling_robust_settings),
+                status=first_rolling_plan_status,
                 fixed_arms=rolling_fixed,
                 stochastic_arms=rolling_stochastic,
             )
         )
+        isolated_render_seconds = perf_counter() - isolated_render_started
+    check_true(
+        "robustness_first_rolling_plan_does_not_reuse_results_while_upstream_is_missing",
+        bool(pending_rolling_plan.get("model_upstream_prepare_required"))
+        and pending_rolling_plan.get("overall_status") in {"PREPARABLE", "BLOCKED"}
+        and not pending_rolling_plan.get("registered_scientific_reuse_units"),
+    )
+    check_true(
+        "robustness_first_rolling_plan_real_isolated_preparation_observer_detects_missing_inputs",
+        bool(isolated_plan_status.get("preparation_plan"))
+        and any(
+            action.action in {"BUILD", "REBUILD", "RESUME"}
+            for action in isolated_plan_status["preparation_plan"].actions
+        ),
+    )
+    # A completed Strategy Result avoids redundant Model Score inspection.
+    # For every still-pending model source the canonical inspector must receive
+    # the exact registered seed and the isolated root, not the user's workspace.
+    model_seed_arms = robustness_plan_runtime._model_seed_sensitive_arms(
+        rolling_robust_settings, rolling_robustness, tuple(rolling_stochastic),
+    )
+    expected_model_inspections = {
+        (
+            str(rolling_robust_settings.dl_sources[str(dl_id)].experiment_profile),
+            int(seed),
+        )
+        for dl_id, arm_entries in robustness_plan_runtime._training_source_groups(
+            tuple(model_seed_arms), settings=rolling_robust_settings,
+        )
+        for seed in rolling_robustness.resolved_seeds
+        if not all(
+            (arm.arm_id, int(seed)) in rolling_reusable
+            for _order, arm in arm_entries
+        )
+    }
+    observed_model_inspections = [
+        (str(call.kwargs["source"].experiment_profile), int(call.kwargs["seed"]))
+        for call in isolated_model_inspections.call_args_list
+    ]
+    check_true(
+        "robustness_first_rolling_plan_inspects_each_model_seed_without_workspace_artifacts",
+        bool(expected_model_inspections)
+        and len(observed_model_inspections) == len(expected_model_inspections)
+        and set(observed_model_inspections) == expected_model_inspections
+        and all(
+            Path(call.kwargs["project_root"]) == Path(isolated_root)
+            for call in isolated_model_inspections.call_args_list
+        ),
+        note=(
+            f"expected_units={len(expected_model_inspections)}, "
+            f"observed_units={len(observed_model_inspections)}"
+        ),
+    )
     expected_reuse_units = len(rolling_canonical_reuse_arm_ids) * len(rolling_robustness.resolved_seeds)
     rolling_pending_param_truth_paths = {
         (str(binding["path"]), str(binding["manifest_path"]))
@@ -1284,14 +1372,18 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
 
     _mark_benchmark_step("first_rolling_plan")
+    # Additional engineering diagnostics; the original first_rolling_plan subtotal
+    # and the single 15-second test-case budget stay unchanged.
+    _benchmark_steps.extend((
+        ("benchmark_first_rolling_preparation_status", isolated_status_seconds),
+        ("benchmark_first_rolling_renderer", isolated_render_seconds),
+    ))
     # Previously fitted robustness parameter artifacts are replay prerequisites, not
     # pending Optimizer searches.  When their full scientific contracts are READY,
     # the plan must show zero pending search even if no completed replay result exists.
     # AI: Isolate both artifact existence and result-state discovery: a user's
     # populated workspace can legitimately add arm-level REUSE rows, which must
     # never be mistaken for extra parameter artifacts or Optimizer search work.
-    from services.research import strategy_multi_seed_robustness as robustness_plan_runtime
-
     ready_param_paths = set()
     for seed in rolling_robustness.resolved_seeds:
         for arm in rolling_stochastic:
