@@ -230,6 +230,9 @@ from .synthetic_breakout_quality_model_cases import (
 from .synthetic_breakout_quality_audit_cases import (
     validate_breakout_quality_audit_framework_contract_case,
 )
+from .synthetic_research_lifecycle_architecture_cases import (
+    validate_research_fit_lifecycle_architecture_case,
+)
 from .synthetic_breakout_quality_pit_cases import (
     validate_breakout_quality_point_in_time_score_builder_contract_case,
     validate_breakout_quality_pit_training_performance_semantics_case,
@@ -545,6 +548,7 @@ def get_synthetic_validator_entries():
         _entry(validate_exact_accounting_display_leg_reconciliation_case, layer="unit_boundary", cost_class="fast"),
         _entry(validate_independent_oracle_golden_case, layer="unit_boundary", cost_class="fast"),
         _entry(validate_research_report_contract_freeze_case, layer="meta_contract", cost_class="fast"),
+        _entry(validate_research_fit_lifecycle_architecture_case, layer="meta_contract", cost_class="fast"),
         _entry(validate_model_extension_architecture_contract_case, layer="meta_contract", cost_class="fast"),
         _entry(validate_registry_checklist_entry_consistency_case, layer="meta_contract", cost_class="fast"),
         _entry(validate_checklist_generated_view_ssot_contract_case, layer="meta_contract", cost_class="fast"),

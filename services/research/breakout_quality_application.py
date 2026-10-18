@@ -3412,57 +3412,32 @@ def _rolling_build_reason(reason: str | None, forward_source: tuple[Path, Path] 
     )
 
 
-def _has_continuous_forward_fitted_candidate(settings) -> bool:
-    """Cheap status probe that never labels a known-stale fit as refresh-only."""
-
+def _probe_continuous_fitted_candidates(settings):
+    """Status-only canonical FIT owner probe; does not decide REUSE."""
+    from services.breakout_quality.fitted_model_artifacts import probe_fitted_candidates
     try:
-        paths = resolve_filter_artifact_paths(
-            PROJECT_ROOT,
-            str(settings.filter_id),
-            str(settings.model_architecture),
-            str(settings.experiment_profile),
-        )
-        report_path = (
-            resolve_filter_model_output_dir(
-                PROJECT_ROOT,
-                str(settings.filter_id),
-                str(settings.model_architecture),
-                str(settings.experiment_profile),
-            )
-            / CONTINUOUS_RANKER_REPORT_FILENAME
+        return probe_fitted_candidates(
+            project_root=PROJECT_ROOT, filter_id=str(settings.filter_id),
+            model_architecture=str(settings.model_architecture),
+            experiment_profile=str(settings.experiment_profile),
+            report_filename=CONTINUOUS_RANKER_REPORT_FILENAME,
+            expected_settings=current_default_fitting_settings(),
         )
     except ValueError:
-        # Status-only probe: synthetic/mutation settings may intentionally use an
-        # unregistered architecture. Exact legality is owned by the real producer.
-        return False
-    return bool(
-        paths.model_path.is_file()
-        and not fitted_model_settings_issues(
-            model_dir=paths.model_dir,
-            report_path=report_path,
-            expected=current_default_fitting_settings(),
-        )
-    )
+        # Unregistered synthetic profiles have no legal path; producer validates legality.
+        return None
+
+
+def _has_continuous_forward_fitted_candidate(settings) -> bool:
+    """Compatibility export: all status facts are owned by the FIT service."""
+    probe = _probe_continuous_fitted_candidates(settings)
+    return bool(probe is not None and probe.forward_fit_candidate)
 
 
 def _has_rolling_first_fold_fit_candidate(settings) -> bool:
-    """Display-only existence probe; exact reuse is verified by the PIT owner."""
-
-    mode = get_breakout_quality_rolling_test_mode("rolling")
-    score_start = str(mode.score_start_date or "")
-    if len(score_start) != 10 or score_start[4] != "-" or score_start[7] != "-":
-        return False
-    pit_root = _rolling_mode_point_in_time_dir(settings, mode)
-    if pit_root is None:
-        pit_root = resolve_filter_point_in_time_dir(
-            PROJECT_ROOT, str(settings.filter_id),
-            str(settings.model_architecture), str(settings.experiment_profile),
-        )
-    folds_root = pit_root / "folds"
-    if not folds_root.is_dir():
-        return False
-    pattern = f"fold_{score_start.replace('-', '')}_*"
-    return any((path / "model.pt").is_file() for path in folds_root.glob(pattern))
+    """Compatibility export: never authorizes checkpoint REUSE."""
+    probe = _probe_continuous_fitted_candidates(settings)
+    return bool(probe is not None and probe.rolling_first_fold_candidate)
 
 
 @contextmanager

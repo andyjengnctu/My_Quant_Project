@@ -215,3 +215,47 @@ def resolve_strategy_compare_robustness_benchmark_yearly(
     ):
         raise ValueError("Strategy SOP v2 INCOMPLETE: canonical 0050 yearly result incomplete")
     return yearly
+
+
+def collect_consistent_benchmark_yearly(
+    evidence_by_arm: dict[str, dict[str, Any]], *, source_kind: str = "fixed",
+) -> list[dict[str, Any]]:
+    """Only 0050 evidence owner validates cross-arm yearly-source agreement.
+
+    The source rows are already canonical; this checks identity/equality without
+    recomputing price returns, changing annual boundaries, or filling missing data.
+    """
+    sources = [list(item.get("benchmark_yearly") or []) for item in evidence_by_arm.values()]
+    if source_kind not in {"single", "fixed"}:
+        raise ValueError("Strategy SOP v2 INCOMPLETE: unregistered benchmark evidence source kind")
+    if not sources or not all(sources):
+        detail = ("source missing canonical 0050 yearly evidence" if source_kind == "single"
+                  else "fixed baseline missing canonical 0050 yearly evidence")
+        raise ValueError("Strategy SOP v2 INCOMPLETE: " + detail)
+    if any(rows != sources[0] for rows in sources[1:]):
+        detail = ("baseline 0050 source disagreement" if source_kind == "single"
+                  else "fixed 0050 benchmark sources inconsistent")
+        raise ValueError("Strategy SOP v2 INCOMPLETE: " + detail)
+    return sources[0]
+
+
+def resolve_strategy_robustness_report_benchmark_yearly(
+    *, project_root: Path, contract: dict[str, Any],
+    fixed_results: dict[str, dict[str, Any]], seed_yearly_frame: pd.DataFrame,
+) -> list[dict[str, Any]]:
+    """Canonical Fixed/All-seed 0050 reporting decision, not a Strategy-side fork."""
+    if fixed_results:
+        return collect_consistent_benchmark_yearly(fixed_results)
+    return resolve_strategy_compare_robustness_benchmark_yearly(
+        project_root=project_root, contract=contract,
+        seed_yearly_frame=seed_yearly_frame,
+    )
+
+
+def collect_strategy_pair_benchmark_yearly(
+    pair_payloads: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Single-seed Strategy source consensus, owned by 0050 evidence producer."""
+    return collect_consistent_benchmark_yearly({
+        str(name): dict(item["payload"]) for name, item in pair_payloads.items()
+    }, source_kind="single")

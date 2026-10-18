@@ -95,6 +95,14 @@ from services.breakout_quality.fitted_model_artifacts import (
     FittedModelContract,
     load_fitted_model_training_evidence,
     scientific_torch_execution,
+    _fold_training_contract_is_compatible,
+    _forward_checkpoint_import_issues,
+    _checkpoint_matches_rescore_contract,
+    _fold_training_identity_payload,
+    fold_training_identity,
+    validate_rolling_fold_fitted_checkpoint,
+    select_unique_fitted_contract,
+    resolve_rolling_fitted_folds_root,
 )
 from services.breakout_quality.continuous_ranker_pipeline import (
     build_checkpoint_payload,
@@ -920,348 +928,8 @@ def _fold_contract_is_compatible(
     return True
 
 
-def _fold_training_contract_is_compatible(
-    candidate: dict[str, Any], *, expected_contract: dict[str, Any]
-) -> bool:
-    """Check model-fitting identity while intentionally ignoring score-only horizon differences."""
-
-    exact_fields = (
-        "filter_id",
-        "model_architecture",
-        "experiment_profile",
-        "continuous_target_id",
-        "training_label_scope",
-        "training_sample_scope",
-        "seed",
-        "model_information_cutoff",
-        "model_spec",
-        "experiment_settings",
-        "training_settings",
-        "source_contract",
-        "lookahead_contract",
-    )
-    if not all(candidate.get(field) == expected_contract.get(field) for field in exact_fields):
-        return False
-
-    candidate_planned = candidate.get("planned_periods")
-    expected_planned = expected_contract.get("planned_periods")
-    if not isinstance(candidate_planned, dict) or not isinstance(expected_planned, dict):
-        return False
-    # score_end only controls how far an already-fitted model is evaluated.  Any OOS / Rolling
-    # folds therefore share one model whenever all fitting periods plus the common
-    # score_start/information cutoff are identical; no calendar year is special-cased.
-    for field in ("validation_start", "validation_end", "score_start", "history_start"):
-        if candidate_planned.get(field) != expected_planned.get(field):
-            return False
-
-    for field in ("observed_periods", "group_counts", "event_row_counts"):
-        candidate_values = candidate.get(field)
-        expected_values = expected_contract.get(field)
-        if not isinstance(candidate_values, dict) or not isinstance(expected_values, dict):
-            return False
-        for phase in ("inner_train", "validation", "final_refit"):
-            if candidate_values.get(phase) != expected_values.get(phase):
-                return False
-    return True
-
-
-def _fold_training_identity_payload(contract: dict[str, Any]) -> dict[str, Any]:
-    """Canonical model-fitting identity; score-only horizon fields are excluded."""
-
-    planned = dict(contract.get("planned_periods") or {})
-    observed = dict(contract.get("observed_periods") or {})
-    group_counts = dict(contract.get("group_counts") or {})
-    event_row_counts = dict(contract.get("event_row_counts") or {})
-    payload = {
-        key: contract.get(key)
-        for key in (
-            "filter_id",
-            "model_architecture",
-            "experiment_profile",
-            "continuous_target_id",
-            "training_label_scope",
-            "training_sample_scope",
-            "seed",
-            "model_information_cutoff",
-            "model_spec",
-            "experiment_settings",
-            "training_settings",
-            "source_contract",
-            "lookahead_contract",
-        )
-    }
-    payload["planned_periods"] = {
-        key: planned.get(key)
-        for key in ("validation_start", "validation_end", "score_start", "history_start")
-    }
-    payload["observed_periods"] = {
-        phase: observed.get(phase) for phase in ("inner_train", "validation", "final_refit")
-    }
-    payload["group_counts"] = {
-        phase: group_counts.get(phase) for phase in ("inner_train", "validation", "final_refit")
-    }
-    payload["event_row_counts"] = {
-        phase: event_row_counts.get(phase) for phase in ("inner_train", "validation", "final_refit")
-    }
-    return payload
-
-
-def fold_training_identity(contract: dict[str, Any]) -> str:
-    return _json_fingerprint(_fold_training_identity_payload(contract))
-
-
 def _checkpoint_cache_entry_dir(cache_root: Path, fold_contract: dict[str, Any]) -> Path:
     return Path(cache_root).resolve() / fold_training_identity(fold_contract)
-
-
-def _forward_checkpoint_import_issues(
-    *,
-    source_manifest: dict[str, Any],
-    source_report: dict[str, Any],
-    source_fitting_evidence,
-    checkpoint: dict[str, Any],
-    checkpoint_manifest: dict[str, Any],
-    fold_contract: dict[str, Any],
-    bundle,
-    execution_plan,
-) -> tuple[str, ...]:
-    """Validate that a canonical Forward model is the exact fit required by this PIT fold.
-
-    Forward and Rolling remain separate evaluation identities.  This bridge only imports the
-    fitted model bytes; score rows are always regenerated for the Rolling fold.  The current
-    bridge is intentionally limited to daily-universal stock-day training, whose Forward split
-    report fully pins the deterministic group membership used by the first Rolling fold.
-    """
-
-    issues: list[str] = []
-    if str(fold_contract.get("training_sample_scope") or "") != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
-        issues.append("checkpoint import目前只支援daily-universal stock-day fitting identity")
-
-    for field in (
-        "filter_id",
-        "model_architecture",
-        "experiment_profile",
-        "continuous_target_id",
-        "training_label_scope",
-        "model_information_cutoff",
-        "model_spec",
-        "experiment_settings",
-    ):
-        if source_manifest.get(field) != fold_contract.get(field):
-            issues.append(f"manifest {field} mismatch")
-
-    source_profile_settings = dict(source_manifest.get("experiment_settings") or {})
-    manifest_sample_scope = str(
-        source_manifest.get("training_sample_scope")
-        or source_profile_settings.get("training_sample_scope")
-        or ""
-    )
-    if manifest_sample_scope != str(fold_contract.get("training_sample_scope") or ""):
-        issues.append("manifest training_sample_scope mismatch")
-
-    training = dict(source_report.get("training") or {})
-    if int(training.get("seed", -1)) != int(fold_contract.get("seed", -2)):
-        issues.append("report seed mismatch")
-
-    # Weight-affecting optimizer/epoch-selection settings belong to the fitted-model
-    # lifecycle contract, not to the evaluation report schema.  Forward reports may
-    # legitimately omit these fields, so cross-evaluation checkpoint reuse must read
-    # the canonical fitted-model sidecar (or immutable legacy defaults) instead.
-    training_settings = dict(fold_contract.get("training_settings") or {})
-    persisted_settings = dict(getattr(source_fitting_evidence, "training_settings", {}) or {})
-    fitting_setting_pairs = (
-        ("max_epochs", "epochs_max", int),
-        ("batch_size", "batch_size", int),
-        ("learning_rate", "learning_rate", float),
-        ("weight_decay", "weight_decay", float),
-        ("gradient_clip_norm", "gradient_clip_norm", float),
-        ("early_stopping_patience", "early_stopping_patience", int),
-        ("early_stopping_min_delta", "early_stopping_min_delta", float),
-    )
-    for persisted_field, fold_field, caster in fitting_setting_pairs:
-        try:
-            actual = caster(persisted_settings.get(persisted_field))
-            expected = caster(training_settings.get(fold_field))
-        except (TypeError, ValueError):
-            issues.append(f"fitted-model training {persisted_field} missing")
-            continue
-        if actual != expected:
-            issues.append(f"fitted-model training {persisted_field} mismatch")
-    if persisted_settings.get("use_inner_validation") is not True:
-        issues.append("fitted-model use_inner_validation mismatch")
-
-    expected_execution = scientific_torch_execution(execution_plan)
-    persisted_execution = dict(getattr(source_fitting_evidence, "torch_execution", {}) or {})
-    if persisted_execution != expected_execution:
-        issues.append("fitted-model torch_execution mismatch")
-    # ``fitted_model_manifest.json`` is the fitting-execution SSOT.  The final
-    # Forward ``manifest.json`` is an evaluation/publication manifest and the
-    # canonical producer does not persist ``torch_execution`` there.  Requiring
-    # that non-canonical field made every real Forward -> first Rolling import
-    # fail even though the fitted sidecar held the exact resolved execution.
-    report_execution = dict(source_report.get("torch_execution") or {})
-    report_execution.pop("requested_device", None)
-    if report_execution and report_execution != expected_execution:
-        issues.append("report torch_execution mismatch")
-
-    manifest_selected_epoch = int(source_manifest.get("selected_epoch", 0) or 0)
-    if manifest_selected_epoch < 1:
-        issues.append("manifest selected_epoch missing")
-    if int(training.get("selected_epoch", 0) or 0) != manifest_selected_epoch:
-        issues.append("report/manifest selected_epoch mismatch")
-    if int(getattr(source_fitting_evidence, "selected_epoch", 0) or 0) != manifest_selected_epoch:
-        issues.append("fitted-model/manifest selected_epoch mismatch")
-    persisted_model_record = getattr(source_fitting_evidence, "model_record", None)
-    if persisted_model_record is not None and dict(persisted_model_record) != checkpoint_manifest:
-        issues.append("fitted-model checkpoint hash/size mismatch")
-
-    standard = dict(source_report.get("standard_model_sop") or {})
-    if str(standard.get("evaluation_mode") or "") != "forward_oos":
-        issues.append("source report is not canonical forward_oos evidence")
-
-    planned = dict(fold_contract.get("planned_periods") or {})
-    split_report = dict(source_report.get("split_report") or {})
-    expected_split_values = {
-        "selection_start_date": dict(fold_contract.get("source_contract") or {}).get("training_universe_start_date"),
-        "inner_validation_start_date": planned.get("validation_start"),
-        "selection_end_date": planned.get("validation_end"),
-        "oos_start_date": planned.get("score_start"),
-    }
-    for field, expected in expected_split_values.items():
-        if expected is not None and str(split_report.get(field) or "") != str(expected):
-            issues.append(f"split_report {field} mismatch")
-
-    counts = dict(split_report.get("counts") or {})
-    expected_counts = dict(fold_contract.get("group_counts") or {})
-    for source_key, fold_key in (
-        ("inner_train", "inner_train"),
-        ("validation", "validation"),
-        ("selection", "final_refit"),
-    ):
-        if int(counts.get(source_key, -1)) != int(expected_counts.get(fold_key, -2)):
-            issues.append(f"split_report {source_key} count mismatch")
-
-    source_dataset = dict(source_manifest.get("source_dataset") or {})
-    source_target = dict(source_manifest.get("source_continuous_target") or {})
-    expected_source = dict(fold_contract.get("source_contract") or {})
-    source_pairs = (
-        ("dataset_policy", source_dataset.get("policy")),
-        ("dataset_storage_schema_version", source_dataset.get("dataset_storage_schema_version")),
-        ("source_data_inventory", source_dataset.get("source_data_inventory")),
-        ("input_price_source", source_dataset.get("input_price_source")),
-        ("input_trade_count_source", source_dataset.get("input_trade_count_source")),
-        ("dataset_artifacts", source_dataset.get("source_dataset_artifacts", source_dataset.get("dataset_artifacts"))),
-        ("target_schema_version", source_target.get("schema_version")),
-        ("target_contract", source_target.get("target_contract")),
-        ("target_artifacts", source_target.get("artifacts")),
-        ("training_universe_start_date", source_dataset.get("training_universe_start_date")),
-    )
-    for field, actual in source_pairs:
-        if field == "source_data_inventory" and field in expected_source:
-            matched = source_inventory_matches_current(
-                published=actual, current=expected_source.get(field),
-                project_root=PROJECT_ROOT,
-            )
-        else:
-            matched = actual == expected_source.get(field)
-        if field in expected_source and not matched:
-            issues.append(f"source_contract {field} mismatch")
-
-    if checkpoint.get("model_spec") != fold_contract.get("model_spec"):
-        issues.append("checkpoint model_spec mismatch")
-    if checkpoint.get("experiment_settings") != fold_contract.get("experiment_settings"):
-        issues.append("checkpoint experiment_settings mismatch")
-    if str(checkpoint.get("experiment_profile") or "") != str(fold_contract.get("experiment_profile") or ""):
-        issues.append("checkpoint experiment_profile mismatch")
-    checkpoint_profile_settings = dict(checkpoint.get("experiment_settings") or {})
-    checkpoint_sample_scope = str(
-        checkpoint.get("training_sample_scope")
-        or checkpoint_profile_settings.get("training_sample_scope")
-        or ""
-    )
-    if checkpoint_sample_scope != str(fold_contract.get("training_sample_scope") or ""):
-        issues.append("checkpoint training_sample_scope mismatch")
-
-    expected_shape = (
-        int(bundle.feature_bank.shape[1]),
-        int(bundle.feature_bank.shape[2]),
-        int(bundle.group_context.shape[1]),
-    )
-    checkpoint_shape = tuple(
-        int(checkpoint.get(field)) if checkpoint.get(field) is not None else -1
-        for field in ("sequence_length", "feature_count", "context_count")
-    )
-    if checkpoint_shape != expected_shape:
-        issues.append("checkpoint input shape mismatch")
-
-    source_model_manifest = source_manifest.get("model")
-    report_model_manifest = dict(source_report.get("artifacts") or {}).get("model")
-    if source_model_manifest != checkpoint_manifest:
-        issues.append("source manifest checkpoint hash/size mismatch")
-    if report_model_manifest is not None and report_model_manifest != checkpoint_manifest:
-        issues.append("source report checkpoint hash/size mismatch")
-    return tuple(dict.fromkeys(issues))
-
-
-
-
-# These values control routing / throughput, not optimizer samples, gradients,
-# loss, step order, or selected epochs.  The *resolved* torch execution is
-# independently required to match before any weight reuse is approved.
-_FIRST_FOLD_NON_FITTING_SETTINGS = frozenset({
-    "evaluation_batch_size", "train_prefetch_batches", "train_prefetch_workers",
-    "device", "mixed_precision", "mixed_precision_dtype",
-    "deterministic_algorithms", "allow_tf32",
-})
-
-
-def _first_fold_fit_identity_issues(
-    candidate: dict[str, Any], expected: dict[str, Any],
-) -> tuple[str, ...]:
-    """Explain a cross-mode fitting mismatch without weakening PIT's native reuse.
-
-    Forward and Rolling can use different score throughput settings.  Only those
-    enumerated options are ignored here; all other candidate fields, including
-    optimizer settings and actual training cohorts, remain exact requirements.
-    """
-    fields = (
-        "filter_id", "model_architecture", "experiment_profile",
-        "continuous_target_id", "training_label_scope", "training_sample_scope",
-        "seed", "model_information_cutoff", "model_spec", "experiment_settings",
-        "source_contract", "lookahead_contract",
-    )
-    issues = [f"{field} mismatch" for field in fields
-              if candidate.get(field) != expected.get(field)]
-    left_settings = candidate.get("training_settings")
-    right_settings = expected.get("training_settings")
-    if not isinstance(left_settings, dict) or not isinstance(right_settings, dict):
-        issues.append("training_settings missing")
-    else:
-        for field in sorted(set(left_settings) | set(right_settings)):
-            if field not in _FIRST_FOLD_NON_FITTING_SETTINGS and (
-                field not in left_settings or field not in right_settings
-                or left_settings[field] != right_settings[field]
-            ):
-                issues.append(f"training_settings.{field} mismatch")
-    left_planned = candidate.get("planned_periods")
-    right_planned = expected.get("planned_periods")
-    if not isinstance(left_planned, dict) or not isinstance(right_planned, dict):
-        issues.append("planned_periods missing")
-    else:
-        for field in ("validation_start", "validation_end", "score_start", "history_start"):
-            if left_planned.get(field) != right_planned.get(field):
-                issues.append(f"planned_periods.{field} mismatch")
-    for family in ("observed_periods", "group_counts", "event_row_counts"):
-        left = candidate.get(family)
-        right = expected.get(family)
-        if not isinstance(left, dict) or not isinstance(right, dict):
-            issues.append(f"{family} missing")
-        else:
-            for stage in ("inner_train", "validation", "final_refit"):
-                if left.get(stage) != right.get(stage):
-                    issues.append(f"{family}.{stage} mismatch")
-    return tuple(issues)
-
 
 
 def load_forward_compatible_rolling_checkpoint(
@@ -1317,18 +985,11 @@ def load_forward_compatible_rolling_checkpoint(
     if mismatched:
         return None, "Forward/Rolling fitting settings differ: " + ", ".join(mismatched)
 
-    rolling_mode = get_breakout_quality_rolling_test_mode("rolling")
-    if rolling_mode.point_in_time_dirname not in (None, ""):
-        pit_root = resolve_filter_model_output_dir(
-            Path(project_root), str(forward_args.filter_id),
-            str(forward_args.model_architecture), str(forward_args.experiment_profile),
-        ) / str(rolling_mode.point_in_time_dirname)
-    else:
-        pit_root = resolve_filter_point_in_time_dir(
-            Path(project_root), str(forward_args.filter_id),
-            str(forward_args.model_architecture), str(forward_args.experiment_profile),
-        )
-    folds_root = pit_root / "folds"
+    folds_root = resolve_rolling_fitted_folds_root(
+        project_root=Path(project_root), filter_id=str(forward_args.filter_id),
+        model_architecture=str(forward_args.model_architecture),
+        experiment_profile=str(forward_args.experiment_profile),
+    )
     if not folds_root.is_dir():
         return None, "canonical Rolling folds directory missing"
 
@@ -1392,64 +1053,19 @@ def load_forward_compatible_rolling_checkpoint(
             ineligible.append(f"{fold['fold_id']}: different fitted sample membership")
             continue
         expected = _fold_contract_payload(pit_args, bundle, fold, ids)
-        fitting_issues = _first_fold_fit_identity_issues(manifest, expected)
-        if fitting_issues:
-            ineligible.append(f"{fold['fold_id']}: " + "; ".join(fitting_issues[:7]))
+        contract, reason = validate_rolling_fold_fitted_checkpoint(
+            manifest_path=manifest_path, manifest=manifest, expected=expected,
+            expected_execution=scientific_torch_execution(forward_plan),
+            bundle=bundle, torch_module=torch_module,
+        )
+        if contract is None:
+            ineligible.append(f"{fold['fold_id']}: {reason}")
             continue
-        actual_execution = dict(manifest.get("torch_execution") or {})
-        actual_execution.pop("requested_device", None)
-        if actual_execution != scientific_torch_execution(forward_plan):
-            ineligible.append(f"{fold['fold_id']}: torch execution mismatch")
-            continue
-
-        checkpoint_path = manifest_path.parent / DEFAULT_MODEL_FILENAME
-        expected_checkpoint = dict(dict(manifest.get("artifacts") or {}).get("checkpoint") or {})
-        if not expected_checkpoint or not checkpoint_path.is_file():
-            raise RuntimeError(f"Rolling fitted checkpoint missing: {fold['fold_id']}")
-        if build_file_manifest(checkpoint_path) != expected_checkpoint:
-            raise RuntimeError(f"Rolling fitted checkpoint hash mismatch: {fold['fold_id']}")
-        selected_epoch = int(manifest.get("selected_epoch", 0) or 0)
-        if selected_epoch < 1 or not isinstance(manifest.get("epoch_selection"), dict):
-            raise RuntimeError(f"Rolling fitted checkpoint has invalid epoch evidence: {fold['fold_id']}")
-        checkpoint = torch_module.load(checkpoint_path, map_location="cpu", weights_only=True)
-        if not isinstance(checkpoint, dict):
-            raise RuntimeError(f"Rolling fitted checkpoint has invalid content: {fold['fold_id']}")
-        if checkpoint.get("model_spec") != bundle.model_spec.as_manifest_payload() or (
-            checkpoint.get("experiment_settings") != bundle.profile.as_manifest_payload()
-        ) or int(checkpoint.get("selected_epoch", 0) or 0) != selected_epoch:
-            raise RuntimeError(f"Rolling fitted checkpoint embedded identity mismatch: {fold['fold_id']}")
-        embedded_contract = checkpoint.get("fold_contract")
-        migration = dict(manifest.get("migration") or {})
-        if isinstance(embedded_contract, dict):
-            embedded_issues = _first_fold_fit_identity_issues(embedded_contract, expected)
-            if embedded_issues:
-                raise RuntimeError(
-                    f"Rolling checkpoint embedded fitting contract mismatch: {fold['fold_id']}: "
-                    + "; ".join(embedded_issues[:7])
-                )
-        elif not (
-            migration.get("kind") == "forward_model_fitting_identity_import"
-            and migration.get("training_contract_unchanged") is True
-            and migration.get("source_checkpoint_sha_preserved") is True
-        ):
-            raise RuntimeError(f"Rolling checkpoint missing native fitting contract: {fold['fold_id']}")
-        verified.append(FittedModelContract(
-            manifest_path=manifest_path,
-            model_path=checkpoint_path,
-            manifest=manifest,
-            fitting_identity=expected,
-            selected_epoch=selected_epoch,
-            epoch_selection=dict(manifest["epoch_selection"]),
-            final_refit_history=list(manifest.get("final_refit_history") or []),
-            source="rolling_first_fold_verified",
-        ))
+        verified.append(contract)
 
     if not verified:
         return None, "; ".join(ineligible[:5]) or "no matching Rolling fitted identity"
-    hashes = {build_file_manifest(item.model_path)["sha256"] for item in verified}
-    if len(hashes) != 1 or len({item.selected_epoch for item in verified}) != 1:
-        raise RuntimeError("one Forward fitting identity has conflicting Rolling checkpoints")
-    return verified[0], "verified same fitting identity with Rolling first fold"
+    return select_unique_fitted_contract(verified), "verified same fitting identity with Rolling first fold"
 
 
 def _import_forward_checkpoint_to_fitting_cache(
@@ -1502,6 +1118,7 @@ def _import_forward_checkpoint_to_fitting_cache(
         fold_contract=fold_contract,
         bundle=bundle,
         execution_plan=execution_plan,
+        project_root=PROJECT_ROOT,
     )
     if issues:
         # For the canonical first Rolling fold, Forward and Rolling share the
@@ -1752,66 +1369,6 @@ def _reload_fold_manifest_after_checkpoint_cache_sync(
     if build_file_manifest(validation_score_path) != artifacts.get("validation_scores"):
         raise RuntimeError(f"PIT fold cache同步後validation score hash/size與manifest不一致: {fold_dir.name}")
     return manifest
-
-
-def _checkpoint_matches_rescore_contract(
-    *,
-    checkpoint: dict[str, Any],
-    manifest: dict[str, Any],
-    fold_contract: dict[str, Any],
-    bundle,
-) -> bool:
-    """Validate PIT-native or imported-Forward checkpoint metadata before score regeneration."""
-
-    migration = dict(manifest.get("migration") or {})
-    imported_forward = (
-        str(migration.get("kind") or "") == "forward_model_fitting_identity_import"
-        and migration.get("training_contract_unchanged") is True
-        and migration.get("source_checkpoint_sha_preserved") is True
-    )
-    checkpoint_contract = checkpoint.get("fold_contract")
-    if isinstance(checkpoint_contract, dict):
-        if not _fold_training_contract_is_compatible(
-            checkpoint_contract, expected_contract=fold_contract
-        ):
-            return False
-    elif not imported_forward:
-        return False
-
-    manifest_epoch = int(manifest.get("selected_epoch") or 0)
-    if manifest_epoch < 1:
-        return False
-    if not imported_forward:
-        checkpoint_epoch = int(checkpoint.get("selected_epoch") or 0)
-        if checkpoint_epoch != manifest_epoch:
-            return False
-
-    if checkpoint.get("model_spec") != fold_contract.get("model_spec"):
-        return False
-    if imported_forward:
-        if checkpoint.get("experiment_settings") != fold_contract.get("experiment_settings"):
-            return False
-        if str(checkpoint.get("experiment_profile") or "") != str(fold_contract.get("experiment_profile") or ""):
-            return False
-        checkpoint_profile_settings = dict(checkpoint.get("experiment_settings") or {})
-        checkpoint_sample_scope = str(
-            checkpoint.get("training_sample_scope")
-            or checkpoint_profile_settings.get("training_sample_scope")
-            or ""
-        )
-        if checkpoint_sample_scope != str(fold_contract.get("training_sample_scope") or ""):
-            return False
-
-    expected_shape = (
-        int(bundle.feature_bank.shape[1]),
-        int(bundle.feature_bank.shape[2]),
-        int(bundle.group_context.shape[1]),
-    )
-    checkpoint_shape = tuple(
-        int(checkpoint.get(field)) if checkpoint.get(field) is not None else -1
-        for field in ("sequence_length", "feature_count", "context_count")
-    )
-    return checkpoint_shape == expected_shape
 
 
 def _rescore_fold_from_compatible_checkpoint(

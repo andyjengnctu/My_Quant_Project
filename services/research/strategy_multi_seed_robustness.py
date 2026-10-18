@@ -57,7 +57,7 @@ from core.breakout_quality_registry import (
 from core.research_report_contract import require_approved_report_contract, persistent_report_contract_fingerprint
 from services.research.strategy_compare_benchmark import (
     resolve_strategy_compare_benchmark_yearly,
-    resolve_strategy_compare_robustness_benchmark_yearly,
+    resolve_strategy_robustness_report_benchmark_yearly,
 )
 from core.breakout_quality_policy import (
     get_breakout_quality_workflow_settings,
@@ -3966,34 +3966,6 @@ def _run_fixed_baselines(
     return results
 
 
-def _common_fixed_benchmark_yearly(fixed_results: dict[str, dict[str, Any]]) -> list[dict]:
-    sources = [list(item.get("benchmark_yearly") or []) for item in fixed_results.values()]
-    if not sources or not all(sources):
-        raise ValueError("Strategy SOP v2 INCOMPLETE: fixed baseline missing canonical 0050 yearly evidence")
-    if any(source != sources[0] for source in sources[1:]):
-        raise ValueError("Strategy SOP v2 INCOMPLETE: fixed 0050 benchmark sources inconsistent")
-    return sources[0]
-
-
-def _robustness_benchmark_yearly(
-    *, contract: dict[str, Any], fixed_results: dict[str, dict[str, Any]],
-    seed_yearly_frame: pd.DataFrame,
-) -> list[dict[str, Any]]:
-    """Use canonical fixed evidence, or the dataset-pinned common 0050 truth.
-
-    A benchmark-id end-to-end suite can have zero fixed arms: its no-DL
-    references are per-seed observations and must not be mistaken for missing
-    scientific results or forced into a fixed-baseline replay.
-    """
-    if fixed_results:
-        return _common_fixed_benchmark_yearly(fixed_results)
-    return resolve_strategy_compare_robustness_benchmark_yearly(
-        project_root=PROJECT_ROOT,
-        contract=contract,
-        seed_yearly_frame=seed_yearly_frame,
-    )
-
-
 def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
     settings = get_strategy_comparison_settings(str(job["profile_id"]))
     arm = settings.arms[str(job["arm_id"])]
@@ -4536,8 +4508,8 @@ def _robustness_summary(
         "yearly_statistics": yearly_statistics,
         "yearly_same_seed_comparison": flattened_yearly,
     }
-    payload["benchmark_yearly"] = _robustness_benchmark_yearly(
-        contract=contract, fixed_results=fixed_results,
+    payload["benchmark_yearly"] = resolve_strategy_robustness_report_benchmark_yearly(
+        project_root=PROJECT_ROOT, contract=contract, fixed_results=fixed_results,
         seed_yearly_frame=seed_yearly_frame,
     )
     payload["common_strategy_report"] = _build_common_report_payload(
@@ -4915,8 +4887,8 @@ def run_multi_seed_robustness(
                             fixed_arms=fixed_arms, allow_replay=False,
                         ) if fixed_arms else {}
                     )
-                    summary["benchmark_yearly"] = _robustness_benchmark_yearly(
-                        contract=contract, fixed_results=fixed_evidence,
+                    summary["benchmark_yearly"] = resolve_strategy_robustness_report_benchmark_yearly(
+                        project_root=PROJECT_ROOT, contract=contract, fixed_results=fixed_evidence,
                         seed_yearly_frame=seed_yearly_frame,
                     )
                 summary = _upgrade_derived_report_summary(

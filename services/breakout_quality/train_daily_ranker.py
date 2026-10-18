@@ -98,7 +98,7 @@ from services.breakout_quality.continuous_ranker_pipeline import (
 from services.breakout_quality.fitted_model_artifacts import (
     build_daily_forward_fitting_identity,
     load_model_from_fitted_checkpoint,
-    load_reusable_fitted_model_contract,
+    resolve_forward_fitted_checkpoint,
     write_fitted_model_contract,
 )
 
@@ -1233,67 +1233,30 @@ def run(args) -> int:
         args=args,
         plan=plan,
     )
-    existing_fitted_contract = None
-    rolling_reused_model = None
-    fitted_reuse_reason = None
-    if bool(getattr(args, "reuse_fitted_model", False)):
-        existing_fitted_contract, fitted_reuse_reason = load_reusable_fitted_model_contract(
-            model_dir=artifact_paths.model_dir,
-            expected_identity=expected_fitting_identity,
-            final_manifest_path=artifact_paths.manifest_path,
-            report_path=output_dir / ranker_api.RANKER_REPORT_JSON_FILENAME,
-            project_root=PROJECT_ROOT,
+    # This is the only Forward FIT resolution path. The service examines local
+    # and cross-mode candidates under one fitting-identity/checkpoint policy.
+    resolved_fit = resolve_forward_fitted_checkpoint(
+        reuse_fitted=bool(getattr(args, "reuse_fitted_model", False)),
+        model_dir=artifact_paths.model_dir, output_dir=output_dir,
+        final_manifest_path=artifact_paths.manifest_path,
+        report_path=output_dir / ranker_api.RANKER_REPORT_JSON_FILENAME,
+        expected_identity=expected_fitting_identity, project_root=PROJECT_ROOT,
+        bundle=bundle, forward_split=split, forward_args=args,
+        forward_plan=plan, torch_module=torch,
+    )
+    existing_fitted_contract = resolved_fit.contract
+    rolling_reused_model = resolved_fit.preloaded_model
+    fitted_reuse_reason = resolved_fit.reason
+    if resolved_fit.source == "ROLLING_FIT":
+        print(
+            "[REUSE FIT] Rolling first-fold checkpoint -> Forward OOS | "
+            f"selected_epoch={existing_fitted_contract.selected_epoch}; "
+            "Forward scores/report will be evaluated independently"
         )
-
-    # A stale Forward publication must not suppress a valid Rolling first-fold
-    # fit. Its old bytes are archived before a different verified fit is imported.
-    # If no legitimate current fit exists, explain the mismatch rather than
-    # silently refitting through a comparison/report-refresh workflow.
-    rolling_reuse_reason = None
-    if existing_fitted_contract is None and bool(getattr(args, "reuse_fitted_model", False)):
-        from services.breakout_quality.point_in_time_scores import (
-            load_forward_compatible_rolling_checkpoint,
-        )
-        rolling_contract, rolling_reuse_reason = load_forward_compatible_rolling_checkpoint(
-            bundle=bundle,
-            forward_split=split,
-            forward_args=args,
-            forward_plan=plan,
-            torch_module=torch,
-            project_root=PROJECT_ROOT,
-        )
-        if rolling_contract is not None:
-            # Ensure the checkpoint's embedded architecture, tensor shapes and
-            # weights are loadable before modifying any published artifact.
-            rolling_reused_model = load_model_from_fitted_checkpoint(
-                torch, contract=rolling_contract, bundle=bundle, plan=plan,
-            )
-            from services.breakout_quality.fitted_model_artifacts import (
-                import_verified_rolling_forward_checkpoint,
-            )
-            archive, _copied = import_verified_rolling_forward_checkpoint(
-                model_dir=artifact_paths.model_dir,
-                output_dir=output_dir,
-                rolling_contract=rolling_contract,
-            )
-            existing_fitted_contract = rolling_contract
-            print(
-                "[REUSE FIT] Rolling first-fold checkpoint -> Forward OOS | "
-                f"selected_epoch={rolling_contract.selected_epoch}; "
-                "Forward scores/report will be evaluated independently"
-            )
-            if archive is not None:
-                print("[HISTORICAL FIT] old Forward publication preserved under model/historical_forward_fits")
-        else:
-            print(f"[FIT CHECK] Rolling first-fold checkpoint unavailable: {rolling_reuse_reason}")
-            if artifact_paths.model_path.is_file():
-                raise RuntimeError(
-                    "Existing Forward checkpoint is not reusable and no verified Rolling FIT "
-                    "can replace it. The legacy model has NOT been overwritten; "
-                    "automatic retraining during report refresh is blocked. "
-                    f"Forward identity: {fitted_reuse_reason or 'unverified'}; "
-                    f"Rolling identity: {rolling_reuse_reason or 'unverified'}"
-                )
+        if resolved_fit.archived_forward is not None:
+            print("[HISTORICAL FIT] old Forward publication preserved under model/historical_forward_fits")
+    elif resolved_fit.source == "FIT_REQUIRED" and bool(getattr(args, "reuse_fitted_model", False)):
+        print(f"[FIT CHECK] No reusable fitted checkpoint: {fitted_reuse_reason}")
 
     if existing_fitted_contract is not None:
         model = (

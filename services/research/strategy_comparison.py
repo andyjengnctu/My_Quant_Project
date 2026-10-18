@@ -96,6 +96,7 @@ from filters.breakout_quality.strategy_compare_reporting import (
 )
 from services.research.strategy_compare_benchmark import (
     resolve_strategy_compare_benchmark_yearly,
+    collect_strategy_pair_benchmark_yearly,
 )
 from services.research.strategy_compare_pair_integrity import (
     PAIR_FILE_INTEGRITY_FIELD,
@@ -1055,19 +1056,6 @@ def _strategy_year_completeness(pair_payloads: dict[str, dict[str, Any]]) -> dic
     return by_year
 
 
-def _strategy_benchmark_yearly(pair_payloads: dict[str, dict[str, Any]]) -> list[dict]:
-    evidence = None
-    for pair in pair_payloads.values():
-        payload = dict(pair["payload"])
-        rows = list(payload.get("benchmark_yearly") or [])
-        if not rows:
-            raise ValueError("Strategy SOP v2 INCOMPLETE: source missing canonical 0050 yearly evidence")
-        if evidence is not None and rows != evidence:
-            raise ValueError("Strategy SOP v2 INCOMPLETE: baseline 0050 source disagreement")
-        evidence = rows
-    return list(evidence or [])
-
-
 def render_strategy_aggregate_report(
     *,
     settings: StrategyComparisonSettings,
@@ -1150,7 +1138,7 @@ def _render_report(
         scenarios=scenarios,
         diagnostics=diagnostics,
         yearly_by_id=_yearly_values_by_id(pair_payloads, settings=settings),
-        benchmark_yearly=_strategy_benchmark_yearly(pair_payloads),
+        benchmark_yearly=collect_strategy_pair_benchmark_yearly(pair_payloads),
         year_is_complete=_strategy_year_completeness(pair_payloads),
         execution_summary=execution_summary,
         target=target,
