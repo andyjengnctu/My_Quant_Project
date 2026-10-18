@@ -227,6 +227,27 @@ def validate_current_pit_score_source_lineage(
 
 
 @dataclass(frozen=True)
+class SelectionPointInTimeScoreSourceContract:
+    """Validated PIT score lineage independent of downstream model Audit.
+
+    Not a model-validation PASS gate: strategy consumers must still use the
+    complete SelectionPointInTimeRankingContract with its Audit gate.
+    """
+    score_path: Path
+    manifest_path: Path
+    coverage_path: Path
+    audit_path: Path
+    manifest: dict[str, Any]
+    filter_id: str
+    model_architecture: str
+    experiment_profile: str
+    continuous_target_id: str
+    seed: int
+    available_from: str
+    available_through: str
+
+
+@dataclass(frozen=True)
 class SelectionPointInTimeRankingContract:
     score_path: Path
     manifest_path: Path
@@ -425,23 +446,25 @@ def derive_point_in_time_model_validation_gate(audit: dict[str, Any]) -> dict[st
     return result
 
 
-@lru_cache(maxsize=32)
-def load_selection_point_in_time_ranking_contract(
-    project_root: str,
+def load_selection_point_in_time_score_source_contract(
+    project_root: str | Path,
     filter_id: str,
     model_architecture: str,
     experiment_profile: str,
     *,
-    require_model_validation_pass: bool = True,
     point_in_time_dir_override: str | Path | None = None,
-) -> SelectionPointInTimeRankingContract:
-    """Validate the PIT bundle; optionally allow inspection of a completed FAIL gate."""
+    expected_seed: int | None = None,
+) -> SelectionPointInTimeScoreSourceContract:
+    """Canonical SCORE owner: verify persisted PIT score without reading Audit.
 
+    Verify manifest, physical score hash, PIT source lineage and output schema.
+    Evaluation/Audit can be rebuilt from this score source without fitting.
+    This deliberately does not grant the downstream strategy validation gate.
+    """
     root = Path(project_root).resolve()
     override_raw = None if point_in_time_dir_override in (None, "") else Path(point_in_time_dir_override)
     if override_raw is not None:
-        base = override_raw if override_raw.is_absolute() else root / override_raw
-        base = base.resolve()
+        base = (override_raw if override_raw.is_absolute() else root / override_raw).resolve()
         score_path = (base / SELECTION_POINT_IN_TIME_SCORE_FILENAME).resolve()
         manifest_path = (base / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME).resolve()
         coverage_path = (base / SELECTION_POINT_IN_TIME_COVERAGE_FILENAME).resolve()
@@ -462,49 +485,116 @@ def load_selection_point_in_time_ranking_contract(
     for label, path in (
         ("Selection PIT score", score_path),
         ("Selection PIT manifest", manifest_path),
-        ("Selection PIT audit", audit_path),
+        ("Selection PIT coverage", coverage_path),
     ):
         if not path.is_file():
             raise FileNotFoundError(
-                f"找不到{label}: {_display_path(path, project_root=root)}"
+                f"Missing {label}: {_display_path(path, project_root=root)}"
             )
-
     manifest = _read_json_object(
-        manifest_path,
-        label="Selection PIT manifest",
-        project_root=root,
+        manifest_path, label="Selection PIT manifest", project_root=root,
     )
-    audit = _read_json_object(
-        audit_path,
-        label="Selection PIT audit",
-        project_root=root,
-    )
-    expected_identity = {
-        "filter_id": str(filter_id),
-        "model_architecture": str(model_architecture),
-        "experiment_profile": str(experiment_profile),
-    }
-    for field, expected in expected_identity.items():
-        if str(manifest.get(field) or "") != expected:
-            raise ValueError(
-                f"Selection PIT manifest identity不一致: field={field}, "
-                f"expected={expected}, actual={manifest.get(field)!r}"
-            )
-        if str(audit.get(field) or "") != expected:
-            raise ValueError(
-                f"Selection PIT audit identity不一致: field={field}, "
-                f"expected={expected}, actual={audit.get(field)!r}"
-            )
+    for field, expected in (
+        ("filter_id", filter_id),
+        ("model_architecture", model_architecture),
+        ("experiment_profile", experiment_profile),
+    ):
+        if str(manifest.get(field) or "") != str(expected):
+            raise ValueError(f"Selection PIT manifest identity mismatch: {field}")
     profile = get_breakout_quality_experiment_profile(str(experiment_profile))
-    manifest_sample_scope = str(
-        manifest.get("training_sample_scope")
-        or TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS
+    sample_scope = str(
+        manifest.get("training_sample_scope") or TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS
     )
-    if manifest_sample_scope != str(profile.training_sample_scope):
-        raise ValueError(
-            "Selection PIT manifest sample scope與profile不一致: "
-            f"manifest={manifest_sample_scope}, profile={profile.training_sample_scope}"
+    if sample_scope != str(profile.training_sample_scope):
+        raise ValueError("Selection PIT manifest sample scope mismatch")
+    if str(manifest.get("status") or "") != "BUILT":
+        raise ValueError("Selection PIT manifest not BUILT")
+    if expected_seed is not None and int(manifest.get("seed", -1)) != int(expected_seed):
+        raise ValueError("Selection PIT manifest seed mismatch")
+    score_record = dict((manifest.get("artifacts") or {}).get("scores") or {})
+    if str(score_record.get("filename") or "") != score_path.name:
+        raise ValueError("Selection PIT score filename mismatch")
+    expected_hash = str(score_record.get("sha256") or "").lower()
+    actual_hash = compute_file_sha256(score_path).lower()
+    if not expected_hash or expected_hash != actual_hash:
+        raise ValueError("Selection PIT score SHA256 mismatch")
+    if int(score_record.get("size_bytes", -1)) != int(score_path.stat().st_size):
+        raise ValueError("Selection PIT score size mismatch")
+    coverage_record = (manifest.get("artifacts") or {}).get("coverage")
+    if coverage_record is not None:
+        if not isinstance(coverage_record, dict):
+            raise ValueError("Selection PIT coverage record malformed")
+        if str(coverage_record.get("filename") or "") != coverage_path.name:
+            raise ValueError("Selection PIT coverage filename mismatch")
+        if str(coverage_record.get("sha256") or "").lower() != compute_file_sha256(coverage_path).lower():
+            raise ValueError("Selection PIT coverage SHA256 mismatch")
+        if int(coverage_record.get("size_bytes", -1)) != int(coverage_path.stat().st_size):
+            raise ValueError("Selection PIT coverage size mismatch")
+    if sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+        _validate_score_eligibility_contract(manifest, profile=profile)
+        _validate_score_output_capability_contract(manifest, profile=profile)
+        if not dict(manifest.get("source_continuous_target") or {}).get("target_contract"):
+            raise ValueError("Selection PIT embedded target contract missing")
+    period = dict(manifest.get("score_period") or {})
+    score_start = pd.Timestamp(period.get("start"))
+    score_end = pd.Timestamp(period.get("end"))
+    if pd.isna(score_start) or pd.isna(score_end) or score_start > score_end:
+        raise ValueError("Selection PIT score period invalid")
+    available_from = score_start.strftime("%Y-%m-%d")
+    available_through = score_end.strftime("%Y-%m-%d")
+    validate_current_pit_score_source_lineage(
+        project_root=root, filter_id=str(filter_id),
+        model_architecture=str(model_architecture),
+        experiment_profile=str(experiment_profile), manifest=manifest,
+    )
+    return SelectionPointInTimeScoreSourceContract(
+        score_path=score_path, manifest_path=manifest_path,
+        coverage_path=coverage_path, audit_path=audit_path,
+        manifest=manifest, filter_id=str(filter_id),
+        model_architecture=str(model_architecture),
+        experiment_profile=str(experiment_profile),
+        continuous_target_id=str(manifest.get("continuous_target_id") or ""),
+        seed=int(manifest.get("seed")),
+        available_from=available_from, available_through=available_through,
+    )
+
+
+@lru_cache(maxsize=32)
+def load_selection_point_in_time_ranking_contract(
+    project_root: str,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    *,
+    require_model_validation_pass: bool = True,
+    point_in_time_dir_override: str | Path | None = None,
+) -> SelectionPointInTimeRankingContract:
+    """Validate the PIT bundle; optionally allow inspection of a completed FAIL gate."""
+
+    root = Path(project_root).resolve()
+    score_source = load_selection_point_in_time_score_source_contract(
+        root, filter_id, model_architecture, experiment_profile,
+        point_in_time_dir_override=point_in_time_dir_override,
+    )
+    score_path, manifest_path = score_source.score_path, score_source.manifest_path
+    coverage_path, audit_path = score_source.coverage_path, score_source.audit_path
+    manifest = score_source.manifest
+    if not audit_path.is_file():
+        raise FileNotFoundError(
+            f"Missing Selection PIT audit: {_display_path(audit_path, project_root=root)}"
         )
+    audit = _read_json_object(
+        audit_path, label="Selection PIT audit", project_root=root,
+    )
+    for field, expected in (
+        ("filter_id", filter_id),
+        ("model_architecture", model_architecture),
+        ("experiment_profile", experiment_profile),
+    ):
+        if str(audit.get(field) or "") != str(expected):
+            raise ValueError(f"Selection PIT audit identity mismatch: {field}")
+    profile = get_breakout_quality_experiment_profile(str(experiment_profile))
+    manifest_sample_scope = str(profile.training_sample_scope)
     audit_workflow = dict(audit.get("workflow") or {})
     audit_sample_scope = str(
         audit_workflow.get("training_sample_scope")
@@ -515,8 +605,6 @@ def load_selection_point_in_time_ranking_contract(
             "Selection PIT audit sample scope與manifest不一致: "
             f"audit={audit_sample_scope}, manifest={manifest_sample_scope}"
         )
-    if str(manifest.get("status") or "") != "BUILT":
-        raise ValueError(f"Selection PIT manifest尚未完成: status={manifest.get('status')!r}")
     if int(audit.get("schema_version", 0) or 0) < 3:
         raise ValueError("Selection PIT audit版本未綁定來源雜湊，請重新執行模型audit")
     if str(audit.get("status") or "") not in {
@@ -526,27 +614,9 @@ def load_selection_point_in_time_ranking_contract(
     }:
         raise ValueError(f"Selection PIT audit尚無可用結果: status={audit.get('status')!r}")
 
-    score_record = dict((manifest.get("artifacts") or {}).get("scores") or {})
-    if str(score_record.get("filename") or "") != score_path.name:
-        raise ValueError("Selection PIT score filename與manifest不一致")
-    expected_hash = str(score_record.get("sha256") or "").lower()
-    actual_hash = compute_file_sha256(score_path).lower()
-    if not expected_hash or expected_hash != actual_hash:
-        raise ValueError(
-            "Selection PIT score SHA256與manifest不一致: "
-            f"expected={expected_hash or '<missing>'}, actual={actual_hash}"
-        )
-    expected_size = int(score_record.get("size_bytes", -1))
-    if expected_size != int(score_path.stat().st_size):
-        raise ValueError("Selection PIT score size與manifest不一致")
-
     score_period = dict(manifest.get("score_period") or {})
-    available_from = pd.Timestamp(score_period.get("start")).strftime("%Y-%m-%d")
-    available_through = pd.Timestamp(score_period.get("end")).strftime("%Y-%m-%d")
-    if available_through < available_from:
-        raise ValueError("Selection PIT score period不合法")
-
-    manifest_target = str(manifest.get("continuous_target_id") or "")
+    manifest_target = score_source.continuous_target_id
+    available_from, available_through = score_source.available_from, score_source.available_through
     audit_sources = dict(audit.get("source_artifacts") or {})
     for key, path, label in (
         ("point_in_time_manifest", manifest_path, "PIT manifest"),
@@ -601,11 +671,6 @@ def load_selection_point_in_time_ranking_contract(
         raise ValueError("Selection PIT audit score group count與manifest coverage不一致")
 
 
-    validate_current_pit_score_source_lineage(
-        project_root=root, filter_id=str(filter_id),
-        model_architecture=str(model_architecture),
-        experiment_profile=str(experiment_profile), manifest=manifest,
-    )
     gate = derive_point_in_time_model_validation_gate(audit)
     if require_model_validation_pass and gate["status"] != "PASS":
         failed = [name for name, passed in gate["checks"].items() if not passed]

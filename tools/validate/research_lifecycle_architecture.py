@@ -214,6 +214,7 @@ def check_research_fit_architecture_sources(
     return tuple(dict.fromkeys(issues))
 
 
+MODEL_SCORE_OWNER = "filters/breakout_quality/ranking_score_store.py"
 MODEL_EVIDENCE_OWNER = "services/breakout_quality/standard_model_sop.py"
 MODEL_STAGE_OWNER = "services/breakout_quality/model_artifact_readiness.py"
 
@@ -310,6 +311,74 @@ def check_model_stage_readiness_architecture_sources(
     return tuple(dict.fromkeys(issues))
 
 
+def check_model_score_owner_architecture_sources(
+    sources: Mapping[str, str],
+) -> tuple[str, ...]:
+    """Prevent SCORE/Audit coupling and another app-level score validator.
+
+    This is a structural dependency gate; only the canonical SCORE owner
+    computes hash/lineage/schema validity. Audit may consume SCORE, but
+    Score readiness must never require an Audit JSON.
+    """
+    trees = {path: ast.parse(sources[path], filename=path)
+             for path in (MODEL_SCORE_OWNER, RESEARCH_APPLICATION)}
+    owner_defs = _defs(trees[MODEL_SCORE_OWNER])
+    app_defs = _defs(trees[RESEARCH_APPLICATION])
+    issues: list[str] = []
+    source_name = "load_selection_point_in_time_score_source_contract"
+    complete_name = "load_selection_point_in_time_ranking_contract"
+    for name in (source_name, complete_name):
+        if name not in owner_defs:
+            issues.append(f"canonical PIT SCORE owner missing: {name}")
+    if complete_name in owner_defs and not any(
+        isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        and n.func.id == source_name
+        for n in ast.walk(owner_defs[complete_name])
+    ):
+        issues.append("full PIT Audit contract bypasses canonical SCORE source")
+    if source_name in owner_defs:
+        score_owner = owner_defs[source_name]
+        if any(
+            isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            and n.func.id == complete_name
+            for n in ast.walk(score_owner)
+        ):
+            issues.append("canonical SCORE owner depends on downstream Audit")
+        tokens = {n.value for n in ast.walk(score_owner)
+                  if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+        if "Selection PIT audit" in tokens:
+            issues.append("SCORE source directly validates Audit")
+    required_calls = {
+        "_load_reusable_rolling_standard_report": (source_name, complete_name),
+        "_rolling_robustness_score_core_contract": (source_name,),
+        "_rolling_robustness_score_core_ready": ("_rolling_robustness_score_core_contract",),
+        "_load_rolling_robustness_seed": ("_rolling_robustness_score_core_contract", complete_name),
+    }
+    for fn_name, called in required_calls.items():
+        fn = app_defs.get(fn_name)
+        if fn is None:
+            issues.append(f"Rolling owner consumer missing: {fn_name}")
+            continue
+        observed = {n.func.id for n in ast.walk(fn)
+                    if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        for callee in called:
+            if callee not in observed:
+                issues.append(f"{fn_name} bypasses canonical SCORE lifecycle: {callee}")
+        if any(n in observed for n in ("build_file_manifest", "compute_file_sha256")):
+            issues.append(f"{fn_name} implements duplicate score checksum policy")
+    # Semantic rejection independent of helper name. A newly added source
+    # checker may not infer Score READY by checking score file presence/hash.
+    for fn_name, fn in app_defs.items():
+        calls = {n.func.id for n in ast.walk(fn)
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        tokens = {n.value for n in ast.walk(fn)
+                  if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+        if (calls & {"build_file_manifest", "compute_file_sha256"}
+            and ("score_columns" in tokens or "scores" in tokens)):
+            issues.append(f"Application independently validates PIT SCORE: {fn_name}")
+    return tuple(dict.fromkeys(issues))
+
+
 def check_research_fit_architecture(project_root: Path) -> tuple[str, ...]:
     root = Path(project_root)
     sources = {
@@ -322,10 +391,11 @@ def check_research_fit_architecture(project_root: Path) -> tuple[str, ...]:
     }
     model_sources = {
         path: (root / path).read_text(encoding="utf-8")
-        for path in (MODEL_EVIDENCE_OWNER, MODEL_STAGE_OWNER)
+        for path in (MODEL_EVIDENCE_OWNER, MODEL_STAGE_OWNER, MODEL_SCORE_OWNER)
     }
     return (
         *check_research_fit_architecture_sources(sources),
         *check_strategy_benchmark_architecture_sources(strategy_sources),
         *check_model_stage_readiness_architecture_sources({**sources, **model_sources}),
+        *check_model_score_owner_architecture_sources({**sources, **model_sources}),
     )

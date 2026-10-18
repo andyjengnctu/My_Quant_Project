@@ -245,6 +245,246 @@ def validate_research_model_readiness_architecture_case(_base_params):
     check_true("missing_stage_owner_blocked",
                bool(check_model_stage_readiness_architecture_sources(edited)))
 
+    # Phase 3 SCORE source must remain independent of Audit. Structural
+    # mutations simulate future consumer-side copies under unrelated names.
+    from .research_lifecycle_architecture import (
+        MODEL_SCORE_OWNER, check_model_score_owner_architecture_sources,
+    )
+    score_sources = dict(sources)
+    score_sources[MODEL_SCORE_OWNER] = (
+        root / MODEL_SCORE_OWNER
+    ).read_text(encoding="utf-8")
+    check("canonical_pit_score_source_without_audit_dependency", (),
+          check_model_score_owner_architecture_sources(score_sources))
+    for index, (path, mutation) in enumerate((
+        (RESEARCH_APPLICATION,
+         "\ndef shadow_pit_score_ready(manifest, score):\n"
+         "    return build_file_manifest(score) == manifest['artifacts']['scores']\n"),
+        (MODEL_SCORE_OWNER,
+         "\ndef load_selection_point_in_time_score_source_contract_shadow():\n"
+         "    return load_selection_point_in_time_ranking_contract('shadow')\n"),
+    )):
+        edited = dict(score_sources)
+        edited[path] += mutation
+        if index == 1:
+            edited[MODEL_SCORE_OWNER] = edited[MODEL_SCORE_OWNER].replace(
+                "def load_selection_point_in_time_score_source_contract(",
+                "def deleted_pit_score_source_contract(", 1,
+            )
+        check_true(f"second_score_lifecycle_mutation_{index}_blocked",
+                   bool(check_model_score_owner_architecture_sources(edited)))
+
+    # SCORE is a legitimate Research artifact with no Audit file. Complete
+    # strategy Ranking still requires a source-hash-bound Audit and its gate.
+    from hashlib import sha256
+    import json
+    from filters.breakout_quality import ranking_score_store as score_owner
+    from core.breakout_quality_policy import get_breakout_quality_workflow_settings
+    from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+    from core.breakout_quality_runtime import get_continuous_ranker_score_output_columns
+    from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
+    from filters.breakout_quality.paths import (
+        SELECTION_POINT_IN_TIME_SCORE_FILENAME,
+        SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
+        SELECTION_POINT_IN_TIME_COVERAGE_FILENAME,
+        SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME,
+    )
+    settings = get_breakout_quality_workflow_settings()
+    profile = get_breakout_quality_experiment_profile(settings.experiment_profile)
+
+    def _record(path):
+        raw = path.read_bytes()
+        return {"path": str(path.resolve()), "filename": path.name,
+                "sha256": sha256(raw).hexdigest(), "size_bytes": len(raw)}
+
+    with TemporaryDirectory() as td:
+        directory = Path(td).resolve()
+        score = directory / SELECTION_POINT_IN_TIME_SCORE_FILENAME
+        coverage = directory / SELECTION_POINT_IN_TIME_COVERAGE_FILENAME
+        manifest_file = directory / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
+        audit_file = directory / SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME
+        score.write_text("ticker,date,breakout_quality_score\n0050,2021-01-04,0.7\n", encoding="utf-8")
+        coverage.write_text("fold_id,groups\nfold_20210104_20211231,1\n", encoding="utf-8")
+        target_identity = "synthetic_target"
+        embedded = {"target_contract": {"schema": "fixture-v1"}}
+        manifest = {
+            "filter_id": settings.filter_id,
+            "model_architecture": settings.model_architecture,
+            "experiment_profile": settings.experiment_profile,
+            "training_sample_scope": profile.training_sample_scope,
+            "seed": int(settings.seed),
+            "status": "BUILT",
+            "continuous_target_id": target_identity,
+            "source_continuous_target": embedded,
+            "score_period": {"start": "2021-01-04", "end": "2021-01-04"},
+            "coverage": {"scored_group_count": 1},
+            "artifacts": {"scores": _record(score), "coverage": _record(coverage)},
+            "score_columns": get_continuous_ranker_score_output_columns(
+                profile.training_objective
+            ),
+            "score_eligibility_contract": build_score_eligibility_contract(profile),
+        }
+        manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
+        kwargs = {
+            "project_root": directory,
+            "filter_id": str(settings.filter_id),
+            "model_architecture": str(settings.model_architecture),
+            "experiment_profile": str(settings.experiment_profile),
+            "point_in_time_dir_override": directory,
+        }
+        with patch.object(score_owner, "validate_current_pit_score_source_lineage"):
+            validated_score = score_owner.load_selection_point_in_time_score_source_contract(
+                **kwargs, expected_seed=int(settings.seed)
+            )
+            check_true("score_independent_of_audit", not audit_file.exists()
+                       and validated_score.score_path == score)
+            try:
+                score_owner.load_selection_point_in_time_ranking_contract(
+                    **kwargs, require_model_validation_pass=False
+                )
+                unapproved_audit_passed = True
+            except FileNotFoundError:
+                unapproved_audit_passed = False
+            check_true("strategy_rejects_missing_audit", not unapproved_audit_passed)
+            # A malformed score period may parse as NaT without raising; this
+            # must never qualify as a reusable PIT SCORE source.
+            broken_period = dict(manifest)
+            broken_period["score_period"] = {"start": None, "end": "2021-01-04"}
+            manifest_file.write_text(json.dumps(broken_period), encoding="utf-8")
+            try:
+                score_owner.load_selection_point_in_time_score_source_contract(**kwargs)
+                accepted_missing_period = True
+            except ValueError:
+                accepted_missing_period = False
+            check_true("missing_score_period_blocks_score_reuse", not accepted_missing_period)
+            manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
+            coverage.write_text("tampered coverage", encoding="utf-8")
+            try:
+                score_owner.load_selection_point_in_time_score_source_contract(**kwargs)
+                accepted_corrupt_coverage = True
+            except ValueError:
+                accepted_corrupt_coverage = False
+            check_true("coverage_hash_tamper_blocks_score_reuse", not accepted_corrupt_coverage)
+            coverage.write_text("fold_id,groups\nfold_20210104_20211231,1\n", encoding="utf-8")
+            from services.research import breakout_quality_application as app
+            from unittest.mock import MagicMock
+            with patch.object(app, "PROJECT_ROOT", directory), patch.object(
+                app, "_rolling_pit_dir_for_loader", return_value=directory,
+            ), patch.object(
+                app, "_model_robustness_dirs", return_value=(directory, directory),
+            ), patch.object(
+                app, "pit_fold_fitting_settings_issues", return_value=(),
+            ):
+                rolling_source, rolling_evidence, rolling_reason = (
+                    app._load_reusable_rolling_standard_report(settings, None)
+                )
+                check_true("single_model_refreshes_audit_without_score_rebuild",
+                           isinstance(rolling_source, score_owner.SelectionPointInTimeScoreSourceContract)
+                           and rolling_evidence is None
+                           and "Audit refresh required" in str(rolling_reason))
+                seed_source, seed_reason = app._rolling_robustness_score_core_contract(
+                    settings, seed=int(settings.seed)
+                )
+                check_true("seed_core_uses_same_score_owner",
+                           seed_source is not None and seed_reason is None)
+                missing_seed_evidence, _, _ = app._load_rolling_robustness_seed(
+                    settings, seed=int(settings.seed)
+                )
+                check_true("seed_evidence_not_fabricated_without_audit",
+                           missing_seed_evidence is None)
+                calls = []
+                def _capture_producer(command, _argv, **_kwargs):
+                    calls.append(command)
+                    return 0
+                with patch.object(
+                    app, "_load_forward_robustness_seed", return_value=(None, None, None),
+                ), patch.object(app, "_run_command", side_effect=_capture_producer):
+                    action_result = app._build_rolling_robustness_seed(
+                        "synthetic", settings, seed=int(settings.seed)
+                    )
+                check("robustness_audit_only_does_not_rebuild_score",
+                      (0, ["audit-point-in-time-scores"]),
+                      (action_result, calls))
+            stage = resolve_model_artifact_readiness(
+                mode="rolling", source_contract=validated_score,
+                evidence_payload=None, source_reason="Audit missing", source_path=None,
+            )
+            check("score_ready_only_requires_evaluation_refresh",
+                  ("NOT_REQUIRED", "REUSE", "DERIVE"),
+                  tuple(stage.plan.action_by_key[key].action
+                        for key in ("FIT", "SCORE", "EVIDENCE")))
+            source_artifacts = {
+                "point_in_time_manifest": _record(manifest_file),
+                "point_in_time_scores": _record(score),
+                "point_in_time_coverage": _record(coverage),
+                "continuous_target_manifest": {
+                    "source": "embedded_in_point_in_time_manifest",
+                    "target_id": target_identity,
+                    "target_contract": embedded["target_contract"],
+                },
+            }
+            audit = {
+                "filter_id": settings.filter_id,
+                "model_architecture": settings.model_architecture,
+                "experiment_profile": settings.experiment_profile,
+                "schema_version": 4,
+                "status": "RESULT_AVAILABLE",
+                "workflow": {"training_sample_scope": profile.training_sample_scope},
+                "source_artifacts": source_artifacts,
+                "continuous_target_id": target_identity,
+                "score_period": manifest["score_period"],
+                "score_group_count": 1,
+                "decision_contract": {"primary_metric_scope": "pass_only_target"},
+                "metrics": {"pass_only_target": {
+                    "global_spearman": 0.2, "mean_daily_spearman": 0.1,
+                }},
+                "direction_summary": {
+                    "valid_year_count": 1,
+                    "positive_spearman_year_count": 1,
+                    "positive_spread_year_count": 1,
+                },
+            }
+            audit_file.write_text(json.dumps(audit), encoding="utf-8")
+            complete = score_owner.load_selection_point_in_time_ranking_contract(
+                **kwargs, require_model_validation_pass=True
+            )
+            check_true("audit_completes_ranking_without_new_score", complete.score_path == score
+                       and complete.model_validation_gate["status"] == "PASS")
+            # The healthy multi-seed path must not independently hash SCORE a
+            # second time; the full contract already consumes the SCORE owner.
+            score_owner.clear_selection_point_in_time_ranking_contract_cache()
+            with patch.object(app, "PROJECT_ROOT", directory), patch.object(
+                app, "_model_robustness_dirs", return_value=(directory, directory),
+            ), patch.object(
+                app, "pit_fold_fitting_settings_issues", return_value=(),
+            ), patch.object(
+                app, "_validate_robustness_standard_payload", return_value=(),
+            ), patch.object(
+                app, "_rolling_robustness_score_core_contract",
+                side_effect=AssertionError("SCORE-only fallback used for complete Ranking"),
+            ):
+                complete_seed, _, complete_reason = app._load_rolling_robustness_seed(
+                    settings, seed=int(settings.seed)
+                )
+            check_true("healthy_multiseed_uses_single_full_score_validation",
+                       complete_seed is not None and complete_reason is None)
+            score.write_text("tampered", encoding="utf-8")
+            try:
+                score_owner.load_selection_point_in_time_score_source_contract(**kwargs)
+                accepted_corrupt_score = True
+            except ValueError:
+                accepted_corrupt_score = False
+            check_true("score_hash_tamper_blocks_score_only", not accepted_corrupt_score)
+            score_owner.clear_selection_point_in_time_ranking_contract_cache()
+            try:
+                score_owner.load_selection_point_in_time_ranking_contract(
+                    **kwargs, require_model_validation_pass=False
+                )
+                accepted_corrupt_complete = True
+            except ValueError:
+                accepted_corrupt_complete = False
+            check_true("score_hash_tamper_blocks_complete_ranking", not accepted_corrupt_complete)
+
     # Use completed synthetically validated evidence for the non-file-facing
     # stage action test; no model training, OOS or production source is touched.
     with patch("services.breakout_quality.model_artifact_readiness.standard_model_sop_completeness_issues", return_value=()):

@@ -1646,6 +1646,12 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     pit_score_source = (
         project_root / "services" / "breakout_quality" / "point_in_time_scores.py"
     ).read_text(encoding="utf-8")
+    fit_owner_source = (
+        project_root / "services" / "breakout_quality" / "fitted_model_artifacts.py"
+    ).read_text(encoding="utf-8")
+    score_owner_source = (
+        project_root / "filters" / "breakout_quality" / "ranking_score_store.py"
+    ).read_text(encoding="utf-8")
     check_true(
         "model_workflow_ui_uses_mr_identity_one_status_table_and_inline_daily_target_progress",
         'print("Training Model：" + _model_identity_text(_model_display_id(settings.experiment_profile)))' in app_source
@@ -1686,9 +1692,9 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and '"--checkpoint-cache-root", str(BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT)' in app_source
         and '"--checkpoint-import-model-dir", str(Path(model_dir).resolve())' in app_source
         and '"--checkpoint-import-report-path", str(Path(report_path).resolve())' in app_source
-        and 'def _forward_checkpoint_import_issues(' in pit_score_source
+        and 'def _forward_checkpoint_import_issues(' in fit_owner_source
         and 'execution_plan=plan' in pit_score_source
-        and 'checkpoint_sample_scope = str(' in pit_score_source
+        and 'checkpoint_sample_scope = str(' in fit_owner_source
         and 'checkpoint selected_epoch mismatch' not in pit_score_source,
     )
 
@@ -1869,8 +1875,9 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         "def _refresh_rolling_audit_only" in app_source
         and "確認只刷新Rolling audit/evidence（不重訓、不重算PIT scores）" in app_source
         and "def _rolling_robustness_score_core_ready" in app_source
-        and "Rolling PIT score-output capability stale" in app_source
-        and "get_continuous_ranker_score_output_columns" in app_source
+        and "def load_selection_point_in_time_score_source_contract(" in score_owner_source
+        and "def _rolling_robustness_score_core_contract" in app_source
+        and "get_continuous_ranker_score_output_columns" in score_owner_source
         and "if force_core or not core_ready:" in app_source
         and '"audit-point-in-time-scores"' in app_source
         and "aggregate_robustness_row_extension" in app_source
@@ -12173,7 +12180,7 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
             research_app, "pit_fold_fitting_settings_issues",
             return_value=(),
         ), patch.object(
-            research_app, "validate_current_pit_score_source_lineage",
+            research_app, "load_selection_point_in_time_score_source_contract",
             side_effect=ValueError("source_data_inventory mismatch"),
         ):
             stale_payload, _stale_path, stale_reason = research_app._load_rolling_robustness_seed(
@@ -12181,7 +12188,7 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
             )
         check_true(
             "rolling_robustness_complete_audit_cannot_bypass_current_dataset_preflight",
-            stale_payload is None and "Rolling robustness source lineage stale" in str(stale_reason)
+            stale_payload is None and "Rolling robustness SCORE not reusable" in str(stale_reason)
             and "source_data_inventory mismatch" in str(stale_reason),
         )
 
@@ -12261,6 +12268,9 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
         (rolling_dir / "selection_point_in_time_audit.json").write_text(json.dumps({}), encoding="utf-8")
         with patch.object(
             research_app, "_model_robustness_dirs", return_value=(rolling_dir, research_dir)
+        ), patch.object(
+            research_app, "load_selection_point_in_time_score_source_contract",
+            return_value=SimpleNamespace(manifest={"folds": []}),
         ), patch.object(
             research_app, "pit_fold_fitting_settings_issues",
             return_value=("fold_20210101_20211231 early_stopping_patience mismatch: artifact=1, current=3",),

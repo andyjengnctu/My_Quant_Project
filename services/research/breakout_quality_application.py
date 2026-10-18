@@ -59,7 +59,6 @@ from core.breakout_quality_policy import (
     get_breakout_quality_workflow_settings,
 )
 from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
-from core.breakout_quality_runtime import get_continuous_ranker_score_output_columns
 from core.display_common import FixedProgressBlock, render_elapsed
 from core.file_integrity import load_json_object_or_none
 from core.training_progress import (
@@ -131,7 +130,6 @@ from services.research.training_process import (
     terminate_registered_training_processes,
 )
 from core.training_policy import resolve_robustness_benchmark_seeds
-from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.artifact_dependency_registry import (
     ARTIFACT_DATASET_CORE,
     ARTIFACT_CONTINUOUS_TARGET,
@@ -173,7 +171,6 @@ from filters.breakout_quality.paths import (
     resolve_filter_report_markdown_path,
     SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME,
     SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
-    SELECTION_POINT_IN_TIME_SCORE_FILENAME,
     resolve_selection_point_in_time_audit_json_path,
     resolve_selection_point_in_time_audit_markdown_path,
     resolve_selection_point_in_time_coverage_path,
@@ -191,7 +188,7 @@ from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
     derive_point_in_time_model_validation_gate,
     load_selection_point_in_time_ranking_contract,
-    validate_current_pit_score_source_lineage,
+    load_selection_point_in_time_score_source_contract,
     load_continuous_ranker_oos_contract,
     load_continuous_ranker_oos_score_table,
     resolve_continuous_ranker_oos_score_path,
@@ -3529,42 +3526,54 @@ def _rolling_pit_dir_for_loader(settings, mode) -> Path | None:
 
 
 def _load_reusable_rolling_standard_report(settings, mode):
-    """Validate Rolling PIT artifacts and return the current Standard-SOP payload."""
+    """Verify complete Audit or reuse independently verified SCORE-only evidence.
 
+    Valid complete bundles take the normal strategy-grade loader. If the Audit
+    is missing or stale, ask the same canonical SCORE owner for an Audit-free
+    score contract. Score defects cannot be repaired by Audit alone.
+    """
     override = _rolling_pit_dir_for_loader(settings, mode)
     try:
         contract = load_selection_point_in_time_ranking_contract(
-            str(PROJECT_ROOT),
-            str(settings.filter_id),
-            str(settings.model_architecture),
-            str(settings.experiment_profile),
+            str(PROJECT_ROOT), str(settings.filter_id),
+            str(settings.model_architecture), str(settings.experiment_profile),
             require_model_validation_pass=False,
             point_in_time_dir_override=override,
         )
-    except (FileNotFoundError, RuntimeError, ValueError, KeyError, TypeError) as exc:
-        return None, None, f"{type(exc).__name__}: {exc}"
-
+        audit_problem = None
+    except (FileNotFoundError, RuntimeError, ValueError, KeyError, TypeError, OSError) as exc:
+        contract = None
+        audit_problem = f"{type(exc).__name__}: {exc}"
+    if contract is None:
+        try:
+            score_source = load_selection_point_in_time_score_source_contract(
+                str(PROJECT_ROOT), str(settings.filter_id),
+                str(settings.model_architecture), str(settings.experiment_profile),
+                point_in_time_dir_override=override,
+            )
+        except (FileNotFoundError, RuntimeError, ValueError, KeyError, TypeError, OSError) as exc:
+            return None, None, f"SCORE invalid: {type(exc).__name__}: {exc}; Audit: {audit_problem}"
+        contract = score_source
     fit_issues = pit_fold_fitting_settings_issues(
         point_in_time_dir=Path(contract.manifest_path).resolve().parent,
         manifest=contract.manifest,
         expected=current_default_fitting_settings(),
     )
     if fit_issues:
-        # The PIT score/audit may exist physically, but stale fitting settings make the
-        # scientific model contract non-reusable.  Return no reusable contract so the
-        # canonical PIT producer can refit/resume instead of entering audit-only refresh.
-        return None, None, "Rolling fitted-model training settings stale: " + "; ".join(fit_issues[:8])
-
+        return None, None, (
+            "Rolling fitted-model training settings stale: " + "; ".join(fit_issues[:8])
+        )
+    if audit_problem:
+        return contract, None, f"Rolling evaluation/Audit refresh required: {audit_problem}"
     payload = dict(contract.audit or {})
     standard = dict(payload.get("standard_model_sop") or {})
     if not standard:
-        return contract, None, "Rolling audit缺少current Standard SOP payload"
+        return contract, None, "Rolling Audit missing current Standard SOP evidence"
     spec = get_continuous_ranker_research_spec(settings.experiment_profile)
     payload["model_research_id"] = str(spec.model_research_id)
     issues = _standard_model_sop_completeness_issues(payload)
     if issues:
-        return contract, None, "Standard SOP evidence不完整: " + "; ".join(issues)
-    # Optional, head-specific evidence belongs to a separate one-time Audit.
+        return contract, None, "Standard SOP evidence incomplete: " + "; ".join(issues)
     return contract, payload, None
 
 
@@ -4663,40 +4672,59 @@ def _load_forward_robustness_seed(settings, *, seed: int):
     return report, report_path, None
 
 
+def _rolling_robustness_score_core_contract(settings, *, seed: int):
+    """One canonical SCORE and FIT evidence boundary for each robustness seed."""
+    pit_dir, _unused = _model_robustness_dirs(settings, seed=seed, rolling=True)
+    try:
+        source = load_selection_point_in_time_score_source_contract(
+            PROJECT_ROOT, str(settings.filter_id),
+            str(settings.model_architecture), str(settings.experiment_profile),
+            point_in_time_dir_override=pit_dir, expected_seed=int(seed),
+        )
+        fit_issues = pit_fold_fitting_settings_issues(
+            point_in_time_dir=pit_dir, manifest=source.manifest,
+            expected=current_default_fitting_settings(),
+        )
+        if fit_issues:
+            return None, "Rolling robustness fitted-model training settings stale: " + "; ".join(fit_issues[:8])
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+        return None, f"Rolling robustness SCORE not reusable: {type(exc).__name__}: {exc}"
+    return source, None
+
+
 def _load_rolling_robustness_seed(settings, *, seed: int):
+    """Validate complete seed evidence, with SCORE-only fallback on Audit failure.
+
+    The complete Ranking Contract already consumes the canonical SCORE owner.
+    Rechecking that same score hash before every healthy seed would duplicate
+    expensive file I/O; SCORE-only is needed only to classify failed evidence.
+    """
     pit_dir, _unused = _model_robustness_dirs(settings, seed=seed, rolling=True)
     audit_path = pit_dir / SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME
-    manifest_path = pit_dir / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
-    if not audit_path.is_file() or not manifest_path.is_file():
-        return None, audit_path, "Rolling manifest/audit missing"
-    manifest = load_json_object_or_none(manifest_path)
-    audit = load_json_object_or_none(audit_path)
-    if not isinstance(manifest, dict) or not isinstance(audit, dict):
-        return None, audit_path, "Rolling manifest or audit invalid"
-    for key, expected in (
-        ("filter_id", settings.filter_id),
-        ("model_architecture", settings.model_architecture),
-        ("experiment_profile", settings.experiment_profile),
-    ):
-        if str(manifest.get(key) or "") != str(expected):
-            return None, audit_path, f"Rolling manifest {key} mismatch"
-    if int(manifest.get("seed", -1)) != int(seed):
-        return None, audit_path, f"Rolling seed mismatch: artifact={manifest.get('seed')}, expected={seed}"
+    try:
+        contract = load_selection_point_in_time_ranking_contract(
+            str(PROJECT_ROOT), str(settings.filter_id),
+            str(settings.model_architecture), str(settings.experiment_profile),
+            point_in_time_dir_override=pit_dir,
+            require_model_validation_pass=False,
+        )
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+        source, reason = _rolling_robustness_score_core_contract(settings, seed=seed)
+        if source is None:
+            return None, audit_path, reason
+        return None, audit_path, f"Rolling robustness EVIDENCE refresh required: {type(exc).__name__}: {exc}"
+    if int(contract.seed) != int(seed):
+        return None, audit_path, "Rolling robustness SCORE not reusable: manifest seed mismatch"
     fit_issues = pit_fold_fitting_settings_issues(
-        point_in_time_dir=pit_dir,
-        manifest=manifest,
+        point_in_time_dir=pit_dir, manifest=contract.manifest,
         expected=current_default_fitting_settings(),
     )
     if fit_issues:
-        return None, audit_path, "Rolling robustness fitted-model training settings stale: " + "; ".join(fit_issues[:8])
-    try:
-        validate_current_pit_score_source_lineage(
-            project_root=PROJECT_ROOT, filter_id=str(settings.filter_id),
-            model_architecture=str(settings.model_architecture),
-            experiment_profile=str(settings.experiment_profile), manifest=manifest,
+        return None, audit_path, (
+            "Rolling robustness fitted-model training settings stale: "
+            + "; ".join(fit_issues[:8])
         )
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        return None, audit_path, f"Rolling robustness source lineage stale: {type(exc).__name__}: {exc}"
+    audit = dict(contract.audit or {})
     issues = _validate_robustness_standard_payload(
         audit, settings=settings, seed=seed, evaluation_mode="rolling_oos"
     )
@@ -4740,33 +4768,13 @@ def _build_forward_robustness_seed(
 
 
 def _rolling_robustness_score_core_ready(settings, *, seed: int) -> tuple[bool, str | None]:
-    pit_dir, _unused = _model_robustness_dirs(settings, seed=seed, rolling=True)
-    manifest_path = pit_dir / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
-    score_path = pit_dir / SELECTION_POINT_IN_TIME_SCORE_FILENAME
-    if not manifest_path.is_file() or not score_path.is_file():
-        return False, "Rolling PIT score/manifest missing"
-    manifest = load_json_object_or_none(manifest_path)
-    if not isinstance(manifest, dict):
-        return False, "Rolling PIT manifest invalid"
-    for key, expected in (
-        ("filter_id", settings.filter_id),
-        ("model_architecture", settings.model_architecture),
-        ("experiment_profile", settings.experiment_profile),
-    ):
-        if str(manifest.get(key) or "") != str(expected):
-            return False, f"Rolling PIT manifest {key} mismatch"
-    if int(manifest.get("seed", -1)) != int(seed):
-        return False, "Rolling PIT seed mismatch"
-    if str(manifest.get("status") or "") != "BUILT":
-        return False, "Rolling PIT manifest not BUILT"
-    expected_score_columns = get_continuous_ranker_score_output_columns(
-        str(settings.training_objective)
-    )
-    if dict(manifest.get("score_columns") or {}) != dict(expected_score_columns):
-        return False, "Rolling PIT score-output capability stale"
-    if build_file_manifest(score_path) != dict((manifest.get("artifacts") or {}).get("scores") or {}):
-        return False, "Rolling PIT score hash mismatch"
-    return True, None
+    """Compatibility entry consuming canonical SCORE owner, never a second check.
+
+    In particular, Rolling PIT score-output capability stale is an upstream
+    producer error, not evidence that the model Audit should be refitted.
+    """
+    source, reason = _rolling_robustness_score_core_contract(settings, seed=seed)
+    return source is not None, reason
 
 
 def _build_rolling_robustness_seed(
@@ -4875,8 +4883,37 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
             )
             seed_states.append((seed, payload, path, reason))
         ready_count = sum(payload is not None for _seed, payload, _path, _reason in seed_states)
-        action = "REUSE" if ready_count == len(seeds) else "BUILD/REFRESH"
-        reason = "READY" if ready_count == len(seeds) else f"{ready_count}/{len(seeds)} seeds READY"
+        if rolling:
+            # Multi-seed reports consume exactly the same lifecycle stage owner
+            # as single-model Rolling. A missing Audit is EVIDENCE refresh, not
+            # an implicit FIT/SCORE rebuild. A validated seed source is not a
+            # checkpoint REUSE authorization.
+            stage_plans = []
+            for seed, payload, path, seed_reason in seed_states:
+                if payload is not None:
+                    source_contract, score_reason = object(), None
+                else:
+                    source_contract, score_reason = _rolling_robustness_score_core_contract(
+                        settings, seed=seed,
+                    )
+                stage_plans.append(resolve_model_artifact_readiness(
+                    mode="rolling", source_contract=source_contract,
+                    evidence_payload=payload,
+                    source_reason=seed_reason or score_reason,
+                    source_path=path if payload is not None else None,
+                ))
+            score_count = sum(stage.source_ready for stage in stage_plans)
+            if ready_count == len(seeds):
+                action, reason = "REUSE", "READY"
+            elif score_count == len(seeds):
+                action = "REFRESH EVIDENCE"
+                reason = f"{ready_count}/{len(seeds)} seeds EVIDENCE READY; all SCORE sources valid"
+            else:
+                action = "BUILD/REFRESH"
+                reason = f"{ready_count}/{len(seeds)} seeds EVIDENCE READY; {score_count}/{len(seeds)} SCORE READY"
+        else:
+            action = "REUSE" if ready_count == len(seeds) else "BUILD/REFRESH"
+            reason = "READY" if ready_count == len(seeds) else f"{ready_count}/{len(seeds)} seeds READY"
         rows.append((str(model_id), str(profile_name), action, reason))
         plans.append((str(model_id), settings, seed_states))
 
