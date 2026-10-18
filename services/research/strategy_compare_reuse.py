@@ -493,10 +493,21 @@ def _comparison_runs_roots(*, root: Path, settings: StrategyComparisonSettings) 
     registered profile.
     """
 
-    return tuple(
-        _resolve_relative_path(root, raw) / "runs"
-        for raw in resolve_strategy_comparison_result_search_roots(settings)
-    )
+    # AI: Registry discovery includes namespaces without physical run folders.
+    # Avoid resolving every absent path (especially expensive on Windows) while
+    # preserving canonical resolution for every existing source.  Check disk
+    # existence afresh on every call: no cached state can authorize REUSE.
+    runs_roots: list[Path] = []
+    for raw in resolve_strategy_comparison_result_search_roots(settings):
+        relative = Path(str(raw))
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError(f"設定路徑必須是專案root相對路徑: {raw}")
+        candidate = root / relative / "runs"
+        if candidate.is_dir():
+            runs_roots.append(_resolve_relative_path(root, raw) / "runs")
+        else:
+            runs_roots.append(candidate)
+    return tuple(runs_roots)
 
 
 def _research_dataset_generation_identity_matches_current(

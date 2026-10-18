@@ -311,7 +311,10 @@ def main(argv=None, environ=None):
         # synthetic-then-real order. No real-data lines enter synthetic coverage.
         real_scan_executor = None
         real_scan_future = None
-        if total_tickers > 0 and suite_run_dir:
+        # AI: With the reduced shared-prep dataset, a second Python process
+        # competes with coverage-intensive synthetic checks and adds startup
+        # overhead.  Retain overlap for the larger full-data validation only.
+        if total_tickers > 0 and suite_run_dir and dataset_profile_key != "reduced":
             from concurrent.futures import ProcessPoolExecutor
             from multiprocessing import get_context
             from tools.validate.real_case_runners import run_real_ticker_scan_background
