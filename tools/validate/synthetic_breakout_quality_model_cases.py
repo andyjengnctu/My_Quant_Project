@@ -11163,6 +11163,7 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
         load_reusable_fitted_model_contract,
         write_fitted_model_contract,
     )
+    from services.breakout_quality import rolling_model_source as rolling_source_owner
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -12200,7 +12201,10 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
             research_app, "pit_fold_fitting_settings_issues",
             return_value=(),
         ), patch.object(
-            research_app, "load_selection_point_in_time_score_source_contract",
+            rolling_source_owner, "load_selection_point_in_time_ranking_contract",
+            side_effect=ValueError("source_data_inventory mismatch"),
+        ), patch.object(
+            rolling_source_owner, "load_selection_point_in_time_score_source_contract",
             side_effect=ValueError("source_data_inventory mismatch"),
         ):
             stale_payload, _stale_path, stale_reason = research_app._load_rolling_robustness_seed(
@@ -12222,7 +12226,7 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
         "_rolling_pit_dir_for_loader",
         return_value=Path("synthetic_point_in_time"),
     ), patch.object(
-        research_app,
+        rolling_source_owner,
         "load_selection_point_in_time_ranking_contract",
         return_value=rolling_contract,
     ), patch.object(
@@ -12289,8 +12293,8 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
         with patch.object(
             research_app, "_model_robustness_dirs", return_value=(rolling_dir, research_dir)
         ), patch.object(
-            research_app, "load_selection_point_in_time_score_source_contract",
-            return_value=SimpleNamespace(manifest={"folds": []}),
+            rolling_source_owner, "load_selection_point_in_time_ranking_contract",
+            return_value=SimpleNamespace(seed=42, manifest={"folds": []}, audit={}),
         ), patch.object(
             research_app, "pit_fold_fitting_settings_issues",
             return_value=("fold_20210101_20211231 early_stopping_patience mismatch: artifact=1, current=3",),
