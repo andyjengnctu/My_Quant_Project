@@ -1674,7 +1674,11 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         'return paint(str(label), "light_yellow", enabled=color, bold=True)' in app_source
         and 'return f"### {markdown_tone(label, \'light_yellow\', bold=True)}"' in app_source
         and 'f"seed={int(seed)} ({int(index)}/{int(total)})"' in app_source
-        and 'for seed_index, (seed, payload, path, reason) in enumerate(seed_states, start=1):' in app_source
+        # Phase 7 pairs each source with its canonical per-seed dependency plan.
+        # Verify strict alignment and the actual per-seed progress label,
+        # rather than requiring the removed source-only loop spelling.
+        and 'zip(seed_states, readiness.seeds, strict=True), start=1,' in app_source
+        and 'seed_text = _seed_progress_text(seed, seed_index, len(seeds))' in app_source
         and '確認產生{mode_label}多模型Standard SOP比較；完整者REUSE，缺失者由canonical producer補建' not in app_source
         and '確認產生{mode_label} Robustness多模型Standard SOP比較；缺失seed由canonical producer補建' not in app_source
         and 'daily_data_progress = InlineProgress()' in pit_score_source
