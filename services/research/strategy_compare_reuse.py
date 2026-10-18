@@ -8,6 +8,7 @@ from core.file_integrity import (
     load_json_object_or_none as _read_json,
 )
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -400,6 +401,39 @@ def _pair_cache_required_files(
     return tuple(required)
 
 
+def _required_pair_files_present(
+    pair_dir: Path, required_paths: tuple[Path, ...]
+) -> bool:
+    """Check required direct-child files in one fresh directory read.
+
+    This is only a presence preflight, not integrity/reuse authorization.
+    SHA256 and the complete pair file inventory are still checked later by
+    ``completed_pair_file_integrity_matches``.  Directory entries retain the
+    ``Path.is_file()`` follow-symlink behavior used by the old preflight.
+    """
+    if any(path.parent != pair_dir for path in required_paths):
+        # Keep the original semantics for any future non-direct-child paths.
+        return all(path.is_file() for path in required_paths)
+
+    remaining = {path.name for path in required_paths}
+    if not remaining:
+        return True
+    try:
+        with os.scandir(pair_dir) as entries:
+            for entry in entries:
+                if entry.name not in remaining:
+                    continue
+                if not entry.is_file():
+                    return False
+                remaining.remove(entry.name)
+                if not remaining:
+                    return True
+    except OSError:
+        # Missing/unreadable pair folder cannot authorize any completed pair.
+        return False
+    return False
+
+
 def _pair_json_matches_recorded_result(
     pair_dir: Path, recorded_pair: dict[str, Any]
 ) -> bool:
@@ -700,17 +734,15 @@ def _find_reusable_pair_with_archived_source(
         if stored_param_sha != current_param_sha:
             continue
         pair_dir = run_dir / "pairs" / stored_group_id
-        if not all(
-            path.is_file()
-            for path in _pair_cache_required_files(pair_dir, on_arm=on_arm)
-        ):
+        required_paths = _pair_cache_required_files(pair_dir, on_arm=on_arm)
+        if not _required_pair_files_present(pair_dir, required_paths):
             continue
         if not _pair_json_matches_recorded_result(pair_dir, pair_payload):
             continue
         if not completed_pair_file_integrity_matches(
             run_dir=run_dir, run_payload=run_payload,
             pair_id=stored_group_id, pair_dir=pair_dir,
-            required_paths=_pair_cache_required_files(pair_dir, on_arm=on_arm),
+            required_paths=required_paths,
         ):
             continue
         try:
@@ -977,10 +1009,8 @@ def _find_reusable_pair(
             continue
         metadata = dict(pair_payload.get("metadata") or {})
         pair_dir = run_dir / "pairs" / stored_group_id
-        if not all(
-            path.is_file()
-            for path in _pair_cache_required_files(pair_dir, on_arm=on_arm)
-        ):
+        required_paths = _pair_cache_required_files(pair_dir, on_arm=on_arm)
+        if not _required_pair_files_present(pair_dir, required_paths):
             continue
         try:
             actual = _pair_cache_fingerprint_from_payload(
@@ -1024,7 +1054,7 @@ def _find_reusable_pair(
         if not completed_pair_file_integrity_matches(
             run_dir=run_dir, run_payload=run_payload,
             pair_id=stored_group_id, pair_dir=pair_dir,
-            required_paths=_pair_cache_required_files(pair_dir, on_arm=on_arm),
+            required_paths=required_paths,
         ):
             continue
         return {

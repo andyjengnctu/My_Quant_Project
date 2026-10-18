@@ -39,6 +39,41 @@ def append_completed_pair_score_reuse_contract_checks(
     )
     c44_contract = forward_score_reuse_base.arms["C44"]
 
+    # AI: Presence preflight is not a REUSE decision. A single fresh scandir
+    # must agree with the prior per-path is_file check as files change.
+    with tempfile.TemporaryDirectory(prefix="strategy_pair_presence_") as temp_dir:
+        folder = Path(temp_dir) / "pair"
+        required_names = ("strategy_comparison.json", "no_filter_trades.csv", "strategy_comparison.md")
+        paths = tuple(folder / name for name in required_names)
+        observations = []
+
+        def capture_presence() -> None:
+            previous = all(path.is_file() for path in paths)
+            current = reuse_owner_module._required_pair_files_present(folder, paths)
+            observations.append((previous, current))
+
+        capture_presence()  # no directory
+        folder.mkdir()
+        capture_presence()  # empty directory
+        for name in required_names:
+            (folder / name).write_text("fixture\n", encoding="utf-8")
+        capture_presence()  # all required files
+        (folder / required_names[1]).unlink()
+        (folder / required_names[1]).mkdir()
+        capture_presence()  # same-name directory is not a regular file
+        (folder / required_names[1]).rmdir()
+        (folder / required_names[1]).write_text("restored\n", encoding="utf-8")
+        capture_presence()  # restored between independent checks
+        with patch.object(Path, "is_file", side_effect=AssertionError("unexpected per-file stat")):
+            uses_fresh_scandir = reuse_owner_module._required_pair_files_present(folder, paths)
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "required_pair_presence_scandir_matches_per_file_checks_across_mutations",
+            True,
+            observations == [(False, False), (False, False), (True, True), (False, False), (True, True)]
+            and uses_fresh_scandir,
+        )
+
     # AI: Read-side search must not stat dozens of absent historical namespaces,
     # but the ordinary helper still exposes registered prospective paths to
     # callers that create fixture runs. Never cache existence across searches.
