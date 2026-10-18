@@ -201,3 +201,171 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
     # No approved science/report identity may change merely because this is a
     # code-organization refactor; those fingerprints live in the report registry.
     return results, summary
+
+
+def validate_research_model_readiness_architecture_case(_base_params):
+    """Cross-mode Stage Readiness and anti-divergence mutation contract."""
+    from .research_lifecycle_architecture import (
+        MODEL_EVIDENCE_OWNER, MODEL_STAGE_OWNER,
+        check_model_stage_readiness_architecture_sources,
+    )
+    from services.breakout_quality.model_artifact_readiness import (
+        resolve_model_artifact_readiness,
+    )
+    case_id = "RESEARCH_MODEL_STAGE_READINESS_ARCHITECTURE"
+    results, summary, check, check_true = bind_synthetic_case(
+        case_id, "meta_architecture_contract",
+    )
+    root = Path(__file__).resolve().parents[2]
+    files = (MODEL_EVIDENCE_OWNER, MODEL_STAGE_OWNER, RESEARCH_APPLICATION,
+             FORWARD_PRODUCER, PIT_PRODUCER)
+    sources = {path: (root / path).read_text(encoding="utf-8") for path in files}
+    check("shared_model_readiness_architecture", (),
+          check_model_stage_readiness_architecture_sources(sources))
+    mutations = (
+        (RESEARCH_APPLICATION,
+         "\ndef _standard_model_sop_completeness_issues(payload):\n    return ()\n"),
+        (RESEARCH_APPLICATION,
+         "\ndef hidden_m4_checker(payload):\n    return payload['joint_quality_evaluation_id'] and payload['mfe_pct_mean']\n"),
+        (RESEARCH_APPLICATION,
+         "\ndef second_report_ready(path):\n    return path.exists() and 'standard_model_report.json' and 'report_contract_fingerprint'\n"),
+        (FORWARD_PRODUCER,
+         "\ndef standard_model_sop_completeness_issues(payload):\n    return ()\n"),
+    )
+    for index, (path, extra) in enumerate(mutations):
+        edited = dict(sources)
+        edited[path] += extra
+        check_true(f"non_owner_readiness_mutation_{index}_blocked",
+                   bool(check_model_stage_readiness_architecture_sources(edited)))
+    edited = dict(sources)
+    edited[MODEL_STAGE_OWNER] = edited[MODEL_STAGE_OWNER].replace(
+        "def resolve_model_artifact_readiness(",
+        "def disabled_model_artifact_readiness(", 1,
+    )
+    check_true("missing_stage_owner_blocked",
+               bool(check_model_stage_readiness_architecture_sources(edited)))
+
+    # Use completed synthetically validated evidence for the non-file-facing
+    # stage action test; no model training, OOS or production source is touched.
+    with patch("services.breakout_quality.model_artifact_readiness.standard_model_sop_completeness_issues", return_value=()):
+        good = {"standard_model_sop": {"schema": "synthetic_complete"}}
+        with TemporaryDirectory() as td:
+            source = Path(td) / "source.json"
+            source.write_text("{}", encoding="utf-8")
+            reuse = resolve_model_artifact_readiness(
+                mode="rolling", source_contract=SimpleNamespace(audit_path=source),
+                evidence_payload=good, source_reason=None, source_path=source,
+            )
+            check_true("valid_source_never_builds_fit_or_score",
+                       reuse.plan.action_by_key["FIT"].action == "NOT_REQUIRED"
+                       and reuse.plan.action_by_key["SCORE"].action == "REUSE"
+                       and reuse.plan.action_by_key["EVIDENCE"].action == "REUSE"
+                       and reuse.plan.action_by_key["REPORT"].action == "DERIVE")
+            check_true("missing_report_only_requires_report_derive",
+                       reuse.report_only_refresh and reuse.evidence_ready)
+        audit = resolve_model_artifact_readiness(
+            mode="rolling", source_contract=object(), evidence_payload=None,
+            source_reason="outdated evidence", source_path=None,
+        )
+        check_true("rolling_audit_only_not_fit_or_score",
+                   audit.audit_only_refresh
+                   and audit.plan.action_by_key["FIT"].action == "NOT_REQUIRED"
+                   and audit.plan.action_by_key["SCORE"].action == "REUSE"
+                   and audit.plan.action_by_key["EVIDENCE"].action == "DERIVE")
+        missing = resolve_model_artifact_readiness(
+            mode="forward", source_contract=None, evidence_payload=None,
+            source_reason="source absent", source_path=None,
+            rolling_fit_candidate=True,
+        )
+        check_true("cross_mode_fit_candidate_is_not_reused_before_verification",
+                   missing.display_action == "VERIFY FIT"
+                   and missing.plan.action_by_key["FIT"].action == "RESUME"
+                   and missing.plan.action_by_key["SCORE"].action == "BUILD")
+    # Report publication is the last, independent dependency.  Tampering or
+    # removing the renderer output must not invalidate FIT/SCORE/EVIDENCE.
+    from services.breakout_quality.standard_model_sop import standard_model_sop_completeness_issues
+    from services.breakout_quality.model_artifact_readiness import standard_model_report_matches_source
+    from services.research.breakout_quality_application import _write_standard_model_sop_report
+    import json
+    scopes = ("validation", "oos", "breakout_candidate_oos")
+    m1 = {
+        "group_count": 8, "mean_daily_spearman": 0.3,
+        "global_spearman_vs_raw_target": 0.2,
+        "pairwise_concordance": 0.58,
+        "top_score_decile_raw_target_mean": 1.5,
+        "bottom_score_decile_raw_target_mean": 0.5,
+    }
+    m3m4 = {
+        "target_to_full_mfe_daily_spearman": 0.5,
+        "target_to_low_adverse_daily_spearman": 0.3,
+        "score_to_full_mfe_daily_spearman": 0.4,
+        "score_to_low_adverse_daily_spearman": 0.1,
+        "joint_quality_evaluation_id": "same_day_min_mfe_safety_percentile_v1",
+        "top_10pct": {
+            "n": 8, "mfe_pct_mean": 20.0, "adverse_pct_mean": 4.0,
+            "joint_quality_pct": 70.0,
+        },
+    }
+    standard = {
+        "schema": "standard_model_sop_v10", "evaluation_mode": "rolling_oos",
+        "training": {"objective": "synthetic"},
+        "split_metrics": {key: m1 for key in scopes},
+        "upside_downside_alignment_evaluation": {key: m3m4 for key in scopes},
+        "evaluation_truth": {
+            "horizon_bars": 40, "mfe_source": "target_favorable_return",
+            "adverse_source": "target_adverse_return_to_peak",
+            "joint_quality_id": "same_day_min_mfe_safety_percentile_v1",
+            "cohort_identity": {key: "f" * 64 for key in scopes},
+        },
+    }
+    witness = {"model_research_id": "SYNTHETIC", "standard_model_sop": standard}
+    check("independent_standard_evidence_ready", (),
+          standard_model_sop_completeness_issues(witness))
+    settings = SimpleNamespace(
+        filter_id="breakout_quality_v1", model_architecture="inception_time_v1",
+        experiment_profile="synthetic",
+    )
+    identity = {
+        "filter_id": settings.filter_id, "architecture": settings.model_architecture,
+        "profile": settings.experiment_profile,
+    }
+    with TemporaryDirectory() as td:
+        source = Path(td) / "audit.json"
+        source.write_text("{}", encoding="utf-8")
+        first = resolve_model_artifact_readiness(
+            mode="rolling", source_contract=object(), evidence_payload=witness,
+            source_reason=None, source_path=source, report_identity=identity,
+        )
+        check("missing_renderer_only_derives_report",
+              ("NOT_REQUIRED", "REUSE", "REUSE", "DERIVE"),
+              tuple(first.plan.action_by_key[key].action
+                    for key in ("FIT", "SCORE", "EVIDENCE", "REPORT")))
+        files = _write_standard_model_sop_report(
+            settings, source_payload=witness, source_path=source,
+        )
+        mtime = tuple(file.stat().st_mtime_ns for file in files)
+        second = resolve_model_artifact_readiness(
+            mode="rolling", source_contract=object(), evidence_payload=witness,
+            source_reason=None, source_path=source, report_identity=identity,
+        )
+        check_true("approved_renderer_artifacts_are_reusable",
+                   second.plan.action_by_key["REPORT"].action == "REUSE")
+        _write_standard_model_sop_report(settings, source_payload=witness, source_path=source)
+        check("report_reuse_does_not_rewrite_history", mtime,
+              tuple(file.stat().st_mtime_ns for file in files))
+        tampered = json.loads(files[0].read_text(encoding="utf-8"))
+        tampered["profile"] = "different-profile"
+        files[0].write_text(json.dumps(tampered), encoding="utf-8")
+        check_true("report_identity_drift_detected",
+                   not standard_model_report_matches_source(
+                       witness, source, expected_identity=identity,
+                   ))
+        after_tamper = resolve_model_artifact_readiness(
+            mode="forward", source_contract=object(), evidence_payload=witness,
+            source_reason=None, source_path=source, report_identity=identity,
+        )
+        check("tampering_only_refreshes_report_not_fit_or_score",
+              ("REUSE", "REUSE", "REUSE", "DERIVE"),
+              tuple(after_tamper.plan.action_by_key[key].action
+                    for key in ("FIT", "SCORE", "EVIDENCE", "REPORT")))
+    return results, summary

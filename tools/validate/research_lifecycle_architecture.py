@@ -214,6 +214,102 @@ def check_research_fit_architecture_sources(
     return tuple(dict.fromkeys(issues))
 
 
+MODEL_EVIDENCE_OWNER = "services/breakout_quality/standard_model_sop.py"
+MODEL_STAGE_OWNER = "services/breakout_quality/model_artifact_readiness.py"
+
+
+def check_model_stage_readiness_architecture_sources(
+    sources: Mapping[str, str],
+) -> tuple[str, ...]:
+    """Enforce one SOP evidence validator and one cross-mode stage policy.
+
+    The verifier is structural, not a competing metric or readiness engine.
+    Both required call sites and forbidden duplicate-policy patterns are checked.
+    """
+    paths = (MODEL_EVIDENCE_OWNER, MODEL_STAGE_OWNER, RESEARCH_APPLICATION,
+             FORWARD_PRODUCER, PIT_PRODUCER)
+    trees = {path: ast.parse(sources[path], filename=path) for path in paths}
+    issues: list[str] = []
+    evidence_defs = _defs(trees[MODEL_EVIDENCE_OWNER])
+    stage_defs = _defs(trees[MODEL_STAGE_OWNER])
+    app_defs = _defs(trees[RESEARCH_APPLICATION])
+    if "standard_model_sop_completeness_issues" not in evidence_defs:
+        issues.append("canonical Model SOP evidence owner is missing")
+    for name in ("resolve_model_artifact_readiness", "standard_model_report_matches_source"):
+        if name not in stage_defs:
+            issues.append(f"canonical Model stage owner is missing: {name}")
+    if "_resolve_continuous_model_readiness" not in app_defs:
+        issues.append("Application does not delegate Model stage readiness")
+
+    # Explicit ownership and direct, traceable imports: avoiding a second
+    # consumer-side implementation is more important than the helper name.
+    for path in (RESEARCH_APPLICATION, FORWARD_PRODUCER, PIT_PRODUCER):
+        for fn_name in _defs(trees[path]):
+            if fn_name in {
+                "standard_model_sop_completeness_issues",
+                "_standard_model_sop_completeness_issues",
+                "resolve_model_artifact_readiness",
+                "standard_model_report_matches_source",
+            }:
+                issues.append(f"non-owner duplicates Model readiness logic: {path}::{fn_name}")
+    imported_eval = any(
+        isinstance(n, ast.ImportFrom)
+        and n.module == "services.breakout_quality.standard_model_sop"
+        and any(alias.name == "standard_model_sop_completeness_issues" for alias in n.names)
+        for n in ast.walk(trees[RESEARCH_APPLICATION])
+    )
+    if not imported_eval:
+        issues.append("Application bypasses Model SOP evidence owner")
+    imported_stage = any(
+        isinstance(n, ast.ImportFrom)
+        and n.module == "services.breakout_quality.model_artifact_readiness"
+        and any(alias.name == "resolve_model_artifact_readiness" for alias in n.names)
+        for n in ast.walk(trees[RESEARCH_APPLICATION])
+    )
+    if not imported_stage:
+        issues.append("Application bypasses canonical Model stage owner")
+    stage_owner_calls = [
+        n for n in ast.walk(trees[MODEL_STAGE_OWNER])
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+    ]
+    if not any(n.func.id == "standard_model_sop_completeness_issues" for n in stage_owner_calls):
+        issues.append("Model stage owner does not consume canonical SOP evidence")
+    if not any(n.func.id == "ResearchArtifactPlan" or n.func.id == "ResearchArtifactAction"
+               for n in stage_owner_calls):
+        issues.append("Model stage owner bypasses generic Research DAG")
+    resolver = app_defs.get("_resolve_continuous_model_readiness")
+    if resolver is not None and not any(
+        isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        and n.func.id == "resolve_model_artifact_readiness"
+        for n in ast.walk(resolver)
+    ):
+        issues.append("Application Model status bypasses canonical stage resolver")
+    for entry in ("_run_continuous_forward_model_gate",
+                  "_run_continuous_rolling_mode_direct", "_run_configured_model_comparison"):
+        fn = app_defs.get(entry)
+        if fn is None or not any(
+            isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            and n.func.id == "_resolve_continuous_model_readiness"
+            for n in ast.walk(fn)
+        ):
+            issues.append(f"{entry} does not consume shared Model stage plan")
+
+    # Semantic duplicate: another application helper evaluating truth-schema
+    # identity and M4 numeric completeness must never become a new owner.
+    for name, fn in app_defs.items():
+        tokens = {
+            n.value for n in ast.walk(fn)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+        }
+        if "joint_quality_evaluation_id" in tokens and "mfe_pct_mean" in tokens:
+            issues.append(f"Application independently validates M4 evidence: {name}")
+        if "standard_model_report.json" in tokens and "report_contract_fingerprint" in tokens:
+            # Publication is allowed; separate publication *readiness* is not.
+            if name != "_write_standard_model_sop_report":
+                issues.append(f"Application independently decides report readiness: {name}")
+    return tuple(dict.fromkeys(issues))
+
+
 def check_research_fit_architecture(project_root: Path) -> tuple[str, ...]:
     root = Path(project_root)
     sources = {
@@ -224,7 +320,12 @@ def check_research_fit_architecture(project_root: Path) -> tuple[str, ...]:
         path: (root / path).read_text(encoding="utf-8")
         for path in (BENCHMARK_OWNER, STRATEGY_SINGLE, STRATEGY_MULTI)
     }
+    model_sources = {
+        path: (root / path).read_text(encoding="utf-8")
+        for path in (MODEL_EVIDENCE_OWNER, MODEL_STAGE_OWNER)
+    }
     return (
         *check_research_fit_architecture_sources(sources),
         *check_strategy_benchmark_architecture_sources(strategy_sources),
+        *check_model_stage_readiness_architecture_sources({**sources, **model_sources}),
     )

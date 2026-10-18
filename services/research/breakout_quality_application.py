@@ -99,6 +99,11 @@ from core.runtime_utils import (
     resolve_cli_program_name,
     run_cli_entrypoint,
 )
+from services.breakout_quality.standard_model_sop import standard_model_sop_completeness_issues as _standard_model_sop_completeness_issues
+from services.breakout_quality.model_artifact_readiness import (
+    resolve_model_artifact_readiness,
+    standard_model_report_matches_source,
+)
 from services.breakout_quality.standard_model_sop import (
     aggregate_standard_model_sop_robustness,
     migrate_legacy_forward_standard_model_sop,
@@ -923,72 +928,6 @@ def _comparison_evidence_issues(payload: dict, settings) -> tuple[str, ...]:
         )
     return tuple(dict.fromkeys(issues))
 
-
-def _standard_model_sop_completeness_issues(payload: dict) -> tuple[str, ...]:
-    """Block publication of missing/legacy truth; never backfill Joint Quality from averages."""
-    source = dict(payload or {})
-    standard = dict(source.get("standard_model_sop") or {})
-    if not standard and str(source.get("schema") or "").startswith("standard_model_sop_v"):
-        standard = source
-    issues = []
-    expected_schema = {"standard_model_sop_v10", "standard_model_sop_v10_robustness_mean"}
-    if str(standard.get("schema") or "") not in expected_schema:
-        issues.append("Standard SOP evaluation truth version v10 missing: refresh from scored stock-day evidence (do not relabel averages)")
-    truth = dict(standard.get("evaluation_truth") or {})
-    try:
-        horizon = int(truth.get("horizon_bars"))
-    except (TypeError, ValueError, OverflowError):
-        horizon = 0
-    if horizon != int(DEFAULT_LABEL_POLICY.label_horizon_bars):
-        issues.append(
-            "evaluation truth mismatch: horizon_bars must match the canonical common 40-bar "
-            "MFE/Adverse evaluation (refresh audit from validated scores)"
-        )
-    for key, expected in (
-        ("mfe_source", "target_favorable_return"),
-        ("adverse_source", "target_adverse_return_to_peak"),
-        ("joint_quality_id", "same_day_min_mfe_safety_percentile_v1"),
-    ):
-        if truth.get(key) != expected:
-            issues.append(f"evaluation_truth:{key} mismatch")
-    cohorts = dict(truth.get("cohort_identity") or {})
-    for split in ("validation", "oos", "breakout_candidate_oos"):
-        if not isinstance(cohorts.get(split), str) or len(cohorts[split]) != 64:
-            issues.append(f"evaluation_truth:{split}:cohort SHA256 missing")
-        learn = dict((standard.get("split_metrics") or {}).get(split) or {})
-        alignment = dict((standard.get("upside_downside_alignment_evaluation") or {}).get(split) or {})
-        top = dict(alignment.get("top_10pct") or {})
-        for key in ("group_count", "mean_daily_spearman", "global_spearman_vs_raw_target",
-                    "pairwise_concordance", "top_score_decile_raw_target_mean", "bottom_score_decile_raw_target_mean"):
-            value = learn.get(key)
-            if (not isinstance(value, (int, float)) or isinstance(value, bool)
-                    or not math.isfinite(float(value))
-                    or (key == "group_count" and int(value) < 1)):
-                issues.append(f"M1:{split}:{key} invalid or missing")
-        for key in ("target_to_full_mfe_daily_spearman", "target_to_low_adverse_daily_spearman",
-                    "score_to_full_mfe_daily_spearman", "score_to_low_adverse_daily_spearman"):
-            value = alignment.get(key)
-            if (not isinstance(value, (int, float)) or isinstance(value, bool)
-                    or not math.isfinite(float(value))):
-                issues.append(f"M3:{split}:{key} invalid or missing")
-        if alignment.get("joint_quality_evaluation_id") != "same_day_min_mfe_safety_percentile_v1":
-            issues.append(f"M4:{split}:joint_quality_evaluation_id mismatch")
-        for key in ("n", "mfe_pct_mean", "adverse_pct_mean", "joint_quality_pct"):
-            value = top.get(key)
-            if (not isinstance(value, (int, float)) or isinstance(value, bool)
-                    or not math.isfinite(float(value))):
-                issues.append(f"M4:{split}:{key} invalid or missing")
-        if isinstance(top.get("n"), (int, float)) and math.isfinite(float(top["n"])):
-            if float(top["n"]) < 1:
-                issues.append(f"M4:{split}:top10 sample empty")
-        joint_quality = top.get("joint_quality_pct")
-        if isinstance(joint_quality, (int, float)) and math.isfinite(float(joint_quality)):
-            if not (0 <= float(joint_quality) <= 100):
-                issues.append(f"M4:{split}:Joint Quality out of range")
-    view = _model_sop_view(source)
-    if not view or len(view.get("generalization") or []) != 2:
-        issues.append("M2:both transitions missing")
-    return tuple(dict.fromkeys(issues))
 
 
 def _standard_model_comparison_views(models: list[dict]) -> list[dict]:
@@ -3502,6 +3441,9 @@ def _ensure_continuous_forward_model_report(
 ):
     """REUSE a valid model/manifest/report contract or train only when it is unavailable."""
 
+    # Re-resolve from the canonical loader at execution time (TOCTOU guard).
+    # A returned contract has already passed FIT, source lineage and Standard
+    # SOP evidence checks; reimplementing their validation here would fork SSOT.
     contract, reuse_reason = _load_reusable_continuous_forward_contract(settings)
     if contract is not None and not force_rebuild:
         return 0, contract, "REUSE"
@@ -3558,24 +3500,10 @@ def _run_continuous_forward_model_gate(program_name: str, settings) -> int:
 
     _print_workflow_status(settings)
     research_spec = get_continuous_ranker_research_spec(settings.experiment_profile)
-    reusable_contract, reuse_reason = _load_reusable_continuous_forward_contract(settings)
-    forward_fit_candidate = (
-        reusable_contract is None and _has_continuous_forward_fitted_candidate(settings)
-    )
-    rolling_fit_candidate = (
-        reusable_contract is None
-        and _has_rolling_first_fold_fit_candidate(settings)
-    )
+    readiness = _resolve_continuous_model_readiness(settings, rolling=False)
     _print_model_action_status(((
-        str(research_spec.model_research_id),
-        str(settings.experiment_profile),
-        "REUSE" if reusable_contract is not None
-        else "VERIFY FIT" if rolling_fit_candidate
-        else "REFRESH/VERIFY" if forward_fit_candidate
-        else "BUILD",
-        "READY" if reusable_contract is not None
-        else "Rolling first-fold fitted checkpoint候選；待核對exact fitting identity"
-        if rolling_fit_candidate else str(reuse_reason or "missing"),
+        str(research_spec.model_research_id), str(settings.experiment_profile),
+        readiness.display_action, readiness.display_reason,
     ),))
     code, contract, action = _ensure_continuous_forward_model_report(
         program_name,
@@ -3640,6 +3568,42 @@ def _load_reusable_rolling_standard_report(settings, mode):
     return contract, payload, None
 
 
+def _resolve_continuous_model_readiness(settings, *, rolling: bool, mode=None):
+    """One canonical stage plan used by training and model comparison menus.
+
+    Source contracts are validated exclusively by their canonical producers;
+    Standard SOP evidence by the Model Evaluation owner.  This application
+    translates neither checkpoint paths nor numerical evidence to readiness.
+    """
+    report_identity = {
+        "filter_id": str(settings.filter_id),
+        "architecture": str(settings.model_architecture),
+        "profile": str(settings.experiment_profile),
+    }
+    if rolling:
+        selected_mode = mode or get_breakout_quality_rolling_test_mode("rolling")
+        contract, payload, reason = _load_reusable_rolling_standard_report(settings, selected_mode)
+        source_path = Path(contract.audit_path) if contract is not None else None
+        status = resolve_model_artifact_readiness(
+            mode="rolling", source_contract=contract, evidence_payload=payload,
+            source_reason=reason, source_path=source_path,
+            report_identity=report_identity,
+        )
+        return status
+    contract, reason = _load_reusable_continuous_forward_contract(settings)
+    payload = None if contract is None else dict(contract.report or {})
+    probe = _probe_continuous_fitted_candidates(settings) if contract is None else None
+    status = resolve_model_artifact_readiness(
+        mode="forward", source_contract=contract, evidence_payload=payload,
+        source_reason=reason,
+        source_path=Path(contract.report_path) if contract is not None else None,
+        forward_fit_candidate=bool(probe is not None and probe.forward_fit_candidate),
+        rolling_fit_candidate=bool(probe is not None and probe.rolling_first_fold_candidate),
+        report_identity=report_identity,
+    )
+    return status
+
+
 def _write_standard_model_sop_report(
     settings,
     *,
@@ -3665,6 +3629,15 @@ def _write_standard_model_sop_report(
     base = Path(source_path).resolve().parent
     json_path = base / "standard_model_report.json"
     markdown_path = base / "standard_model_report.md"
+    expected_identity = {
+        "filter_id": str(settings.filter_id),
+        "architecture": str(settings.model_architecture),
+        "profile": str(settings.experiment_profile),
+    }
+    if standard_model_report_matches_source(
+        payload, source_path, expected_identity=expected_identity,
+    ):
+        return json_path, markdown_path
     report = require_approved_report_contract("model.standard_sop")
     machine = {
         "report_id": report.report_id,
@@ -3848,18 +3821,19 @@ def _run_continuous_rolling_mode_direct(
         print("目前Profile不在current Training／Model-Test SSOT，且沒有historical Rolling authorization；本次BLOCKED。")
         return 0
     _print_workflow_status(settings)
-    contract, payload, reason = _load_reusable_rolling_standard_report(settings, mode)
+    readiness = _resolve_continuous_model_readiness(settings, rolling=True, mode=mode)
+    contract, payload, reason = (
+        readiness.source_contract, readiness.evidence_payload, readiness.source_reason
+    )
     model_id = _model_display_id(settings.experiment_profile)
     forward_source = None
-    if contract is None or payload is None:
+    if not readiness.evidence_ready:
         forward_source, _forward_reason = _load_canonical_forward_checkpoint_import_source(settings)
     _print_model_action_status(((
-        model_id,
-        str(settings.experiment_profile),
-        "REUSE" if contract is not None and payload is not None else "BUILD/REFRESH",
-        "READY" if contract is not None and payload is not None else _rolling_build_reason(reason, forward_source),
+        model_id, str(settings.experiment_profile), readiness.display_action,
+        "READY" if readiness.evidence_ready else _rolling_build_reason(readiness.display_reason, forward_source),
     ),))
-    if contract is not None and payload is not None:
+    if readiness.evidence_ready:
         _emit_standard_model_sop_report(
             settings, source_payload=payload, source_path=Path(contract.audit_path), action="REUSE"
         )
@@ -3868,7 +3842,7 @@ def _run_continuous_rolling_mode_direct(
     # PIT scores/folds are already a valid scientific artifact when ``contract`` exists.
     # A stale/missing comparison extension is evaluation/report staleness only, so refresh
     # the audit from the persisted score sidecars and never re-enter model fitting/scoring.
-    if contract is not None and payload is None:
+    if readiness.audit_only_refresh:
         if prompt_for_build and not _prompt_bool("確認只刷新Rolling audit/evidence（不重訓、不重算PIT scores）", True):
             return 0
         refreshed_contract, refreshed_payload, refreshed_reason = _refresh_rolling_audit_only(
@@ -4504,25 +4478,15 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
     blocked_model_ids = []
     for model_id, profile_name in model_list:
         settings = get_breakout_quality_workflow_settings(experiment_profile=str(profile_name))
-        if rolling:
-            contract, payload, reason = _load_reusable_rolling_standard_report(settings, rolling_mode)
-            ready = contract is not None and payload is not None
-            action = "REUSE" if ready else "BUILD/REFRESH"
-            if not ready:
-                forward_source, _forward_reason = _load_canonical_forward_checkpoint_import_source(settings)
-                reason = _rolling_build_reason(reason, forward_source)
-        else:
-            contract, reason = _load_reusable_continuous_forward_contract(settings)
-            payload = None if contract is None else dict(contract.report or {})
-            ready = contract is not None
-            action = (
-                "REUSE"
-                if ready
-                else "VERIFY FIT"
-                if _has_rolling_first_fold_fit_candidate(settings)
-                else "REFRESH/VERIFY" if _has_continuous_forward_fitted_candidate(settings)
-                else "BUILD"
-            )
+        readiness = _resolve_continuous_model_readiness(
+            settings, rolling=rolling, mode=rolling_mode,
+        )
+        contract, payload = readiness.source_contract, readiness.evidence_payload
+        reason, action = readiness.display_reason, readiness.display_action
+        ready = readiness.evidence_ready
+        if rolling and not ready:
+            forward_source, _forward_reason = _load_canonical_forward_checkpoint_import_source(settings)
+            reason = _rolling_build_reason(reason, forward_source)
         if not ready:
             # Comparison is an atomic, config-defined model suite: resolve all
             # non-rebuildable source blockers before building *any* model. This
