@@ -804,3 +804,11 @@ Direct-account BUY provenance is owned by `services/trading/account_trade_entry.
 - `tools/local_regression/run_meta_quality.py::_summarize_checklist_consistency()` 在**單次呼叫**內對重複 DONE entry 的完全相同專案相對 `.py` 路徑僅查詢一次 `Path.is_file()`，仍逐項保留原有 missing-path 結果及順序。每次獨立 meta-quality／synthetic mutation 驗證均重新讀取 Checklist、重新檢查磁碟；不快取長期存在性或改變 DONE 合法性。
 - `STRATEGY_COMPARE_CONFIG_DRIVEN_APP` 的既有十段 `perf_counter()` 診斷同步置入 synthetic summary；`tools/validate/reporting.py` 僅在該案例列入最慢 10 案時，將 `section_durations_sec` 附在既有 `validate_consistency_summary.json` 的 `synthetic_slowest_cases` 項目內。此檔已屬正常 PASS `minimum_set` Bundle，因此 Windows 正式測試可直接提供最慢段落，不需切換 Debug 模式。耗時資訊非科學指標，不影響 PASS 判定、執行順序、coverage、15/80 秒門檻或任何 Research／Trading 計算。
 - 本輪優先定位 Windows 專屬的最慢階段，不將 Linux 偵測到的查詢次數減幅解讀為整份 Windows Bundle 的可靠秒數改善。
+
+### Phase 25 — Strategy Compare synthetic Benchmark Plan 檢查隔離與 Windows 分段計時（工程專用，2026-10-18）
+
+- Windows PASS Bundle 已證實 `validate_strategy_compare_config_driven_app_contract_case` 的 `benchmark_plan` 約 11.70 秒，占整個案例約 94.6%；不能再把 Pair Integrity／RUN directory 搜尋視為該案例主要瓶頸。
+- 該跨模組 synthetic 中，`_benchmark_parameter_plan_rows()` 的檢查目的為 **每個 seed／physical source 只解析一次 binding、result-level REUSE 正確剪枝、fixed multi-seed inspector 依 registered profile／policy／replication seed 正確委派**，不應依賴使用者實際本機 Optimizer 歷史工件的存在、內容或 Windows I/O 負載。故僅在這個規劃 fixture 內，對 canonical fixed-multiseed artifact inspector 回傳隔離的 `BUILD` 觀測；仍執行真實 `_benchmark_parameter_plan_rows()`、binding resolver、variant dispatcher，並新增每個唯一 physical unit 恰委派一次、完整 seed／profile／policy 參數一致性的防回退檢查。正式 Runtime 以及其他測試中的 canonical inspector 均未替換；實際 BUILD→REUSE、註冊科學身分漂移、manifest／publication 和 hash 語意仍由 `synthetic_strategy_cases.py` 等 Strategy Parameter 專屬測試使用真實暫存工件驗證。
+- Benchmark Plan 現在有不影響執行的五段 `perf_counter()` 子計時，併入既有 synthetic `section_durations_sec`，正常 minimum-set Bundle 的 `validate_consistency_summary.json` 即可定位 policy／binding／rolling／ready-fixture 成本。子段計時不改變或切割該案例的 15 秒限制，亦不調整 synthetic registry、實際樣本、coverage 設定或 consistency 80 秒總限制。Windows 正式耗時只以使用者執行既有 `apps/run_bundle.py` 的結果認定；GPT Linux 單案例計時不代表 Windows 加速幅度。
+
+- GPT 端原版與隔離版之 157 項原有 Strategy Compare 判定完全保留，新增兩個 mode 的 seed inspector 委派斷言及三個註冊 Profile 的真實 isolated inspector case；其餘未修改模組的 branch arcs 在相同 coverage 條件下逐項一致。這是合成案例對本機 artifact workspace 的依賴隔離，不是正式 Runtime 的新快取或 REUSE 捷徑。

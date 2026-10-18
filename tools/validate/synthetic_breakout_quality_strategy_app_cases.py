@@ -710,6 +710,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             )
 
     _mark_section("mode_config_and_p5")
+    # AI: Benchmark subsections remain within the existing 15-second case budget.
+    # They are diagnostics, not separate tests or a relaxed performance gate.
+    _benchmark_started = perf_counter()
+    _benchmark_steps: list[tuple[str, float]] = []
+
+    def _mark_benchmark_step(label: str) -> None:
+        nonlocal _benchmark_started
+        now = perf_counter()
+        _benchmark_steps.append((f"benchmark_{label}", now - _benchmark_started))
+        _benchmark_started = now
+
     arm_ids = [arm.arm_id for arm in oos_settings.enabled_arms]
     contrasts = {
         item.contrast_id: {
@@ -908,11 +919,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         ),
     )
 
+    _mark_benchmark_step("policy_and_seed_matrix")
     from core.strategy_compare_policy import resolve_strategy_robustness_result_search_roots
     from services.research.strategy_multi_seed_robustness import (
         _benchmark_param_binding,
         _benchmark_parameter_plan_rows,
     )
+    representative_fixed_bindings = {}
     for robustness in current_robustness:
         roots = resolve_strategy_robustness_result_search_roots(robustness)
         check_true(
@@ -986,10 +999,22 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             robust_settings.arms[arm_id] for arm_id in robustness.stochastic_arm_ids
         )
         from services.research import strategy_multi_seed_robustness as robustness_owner
-        with patch.object(
-            robustness_owner, "_benchmark_param_binding",
-            wraps=robustness_owner._benchmark_param_binding,
-        ) as binding_resolver:
+        # AI: This test owns the seed/source -> dependency-plan contract, not the
+        # optimizer's artifact inspection. The latter is exercised with real
+        # temporary files, registration drift and BUILD/REUSE in the dedicated
+        # Strategy Parameter validators. Avoid probing the user's actual
+        # historical optimizer workspace once per seed when checking dedup.
+        with (
+            patch.object(
+                robustness_owner, "_benchmark_param_binding",
+                wraps=robustness_owner._benchmark_param_binding,
+            ) as binding_resolver,
+            patch.object(
+                robustness_owner,
+                "inspect_fixed_multiseed_robustness_strategy_parameter_artifact",
+                return_value={"action": "BUILD", "status": "ARTIFACT_MISSING_OR_INVALID"},
+            ) as fixed_inspector,
+        ):
             rows, blockers, _bindings = _benchmark_parameter_plan_rows(
                 settings=robust_settings,
                 robustness=robustness,
@@ -1029,6 +1054,40 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             for arm_seed, binding in _bindings.items()
             if arm_seed not in reused_keys
         }
+        # AI: Keep every unique fixed-multiseed seed/unit routed through the
+        # canonical inspector; only its filesystem-backed result is isolated.
+        expected_fixed_units = {
+            (int(binding["seed"]), str(binding["training_profile_id"]),
+             str(binding["param_policy"]))
+            for unit, binding in _bindings.items()
+            if unit not in reused_keys
+            and str(binding["producer_variant"]) in {"fixed_multiseed_v1", "fixed_single_seed_v1"}
+        }
+        for unit, binding in _bindings.items():
+            if unit not in reused_keys and str(binding["producer_variant"]) in {
+                "fixed_multiseed_v1", "fixed_single_seed_v1"
+            }:
+                representative_fixed_bindings.setdefault(
+                    (str(binding["training_profile_id"]), str(binding["param_policy"])),
+                    (robustness, robust_settings, binding),
+                )
+        observed_fixed_units = {
+            (int(call.kwargs["replication_seed"]),
+             str(call.kwargs["training_profile_id"]), str(call.kwargs["policy"]))
+            for call in fixed_inspector.call_args_list
+        }
+        check_true(
+            f"robustness_fixed_seed_inspector_is_called_once_per_physical_unit:{robustness.robustness_id}",
+            len(fixed_inspector.call_args_list) == len(expected_fixed_units)
+            and observed_fixed_units == expected_fixed_units
+            and all(
+                str(call.kwargs["benchmark_id"]) == str(robustness.benchmark_id)
+                and str(call.kwargs["dataset"]) == str(robust_settings.dataset)
+                and str(call.kwargs["rotation"]) == str(robust_settings.rotation)
+                and int(call.kwargs["max_positions"]) == int(robust_settings.max_positions)
+                for call in fixed_inspector.call_args_list
+            ),
+        )
         check_true(
             f"robustness_reused_scientific_units_prune_param_dependencies:{robustness.robustness_id}",
             not blockers
@@ -1080,6 +1139,37 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             ),
         )
 
+    # AI: One real, isolated filesystem-backed inspection per distinct registered
+    # profile/policy preserves the scientific-identity and missing-artifact
+    # branches here. Per-seed production/reuse/tamper cases remain the job of
+    # the dedicated Strategy Parameter tests, never the user's live workspace.
+    with tempfile.TemporaryDirectory(prefix="benchmark_plan_inspector_") as temp_dir:
+        for (profile_id, policy), (robustness, robust_settings, binding) in sorted(
+            representative_fixed_bindings.items()
+        ):
+            seed = int(binding["seed"])
+            state = robustness_owner.inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
+                temp_dir,
+                training_profile_id=profile_id,
+                benchmark_id=str(robustness.benchmark_id),
+                replication_seed=seed,
+                policy=policy,
+                comparison_end_date="2026-03-02",
+                dataset=str(robust_settings.dataset),
+                max_positions=int(robust_settings.max_positions),
+                rotation=str(robust_settings.rotation),
+                fixed_risk=float(robustness_owner.DEFAULT_FIXED_RISK),
+                max_position_cap_pct=float(robustness_owner.DEFAULT_MAX_POSITION_CAP_PCT),
+            )
+            check_true(
+                f"robustness_fixed_inspector_registered_identity:{profile_id}:{policy}",
+                state.get("action") == "BUILD"
+                and state.get("status") == "ARTIFACT_MISSING_OR_INVALID"
+                and bool(state.get("scientific_identity", {}).get("source_registration_matches"))
+                and int(state.get("build_contract", {}).get("robustness_replication_seed", -1)) == seed,
+            )
+
+    _mark_benchmark_step("source_binding_plans")
     from services.research.strategy_multi_seed_robustness import (
         _render_robustness_execution_plan,
         _robustness_arms,
@@ -1193,6 +1283,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "4 seeds x 1000 trials" not in rendered_robustness_plan,
     )
 
+    _mark_benchmark_step("first_rolling_plan")
     # Previously fitted robustness parameter artifacts are replay prerequisites, not
     # pending Optimizer searches.  When their full scientific contracts are READY,
     # the plan must show zero pending search even if no completed replay result exists.
@@ -1212,6 +1303,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             )
             ready_param_paths.update((Path(binding["path"]), Path(binding["manifest_path"])))
 
+    _mark_benchmark_step("ready_fixture_setup")
     original_is_file = Path.is_file
 
     def _isolated_ready_param_is_file(path):
@@ -1292,6 +1384,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         ),
     )
 
+    _mark_benchmark_step("ready_rolling_plan")
     _mark_section("benchmark_plan")
     # Regression: current suite capability already resolved C93/raw-price into the
     # same-seed benchmark matrix, but a stale runtime-entry allowlist once rejected
@@ -2338,7 +2431,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     # consistency summary.  The minimal PASS bundle does not include
     # consistency.log, so console-only timing could not diagnose Windows cases.
     summary["section_durations_sec"] = {
-        name: round(seconds, 6) for name, seconds in _section_durations
+        name: round(seconds, 6)
+        for name, seconds in (*_section_durations, *_benchmark_steps)
     }
     print(
         "[STRATEGY_COMPARE_CASE_TIMING] "
