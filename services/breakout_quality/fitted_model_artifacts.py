@@ -222,21 +222,39 @@ _FIRST_FOLD_NON_FITTING_SETTINGS = frozenset({
 
 def _first_fold_fit_identity_issues(
     candidate: dict[str, Any], expected: dict[str, Any],
+    *, project_root: str | Path | None = None,
 ) -> tuple[str, ...]:
     """Explain a cross-mode fitting mismatch without weakening PIT's native reuse.
 
-    Forward and Rolling can use different score throughput settings.  Only those
-    enumerated options are ignored here; all other candidate fields, including
-    optimizer settings and actual training cohorts, remain exact requirements.
+    Forward and Rolling can use different score throughput settings. Only those
+    enumerated options are ignored. A historical CSV inventory is equivalent to
+    the current inventory only through the existing full-source, fail-closed
+    provenance proof; Dataset/Target hashes and all other fitting inputs stay exact.
     """
     fields = (
         "filter_id", "model_architecture", "experiment_profile",
         "continuous_target_id", "training_label_scope", "training_sample_scope",
         "seed", "model_information_cutoff", "model_spec", "experiment_settings",
-        "source_contract", "lookahead_contract",
+        "lookahead_contract",
     )
     issues = [f"{field} mismatch" for field in fields
               if candidate.get(field) != expected.get(field)]
+    left_source = candidate.get("source_contract")
+    right_source = expected.get("source_contract")
+    if not isinstance(left_source, Mapping) or not isinstance(right_source, Mapping):
+        issues.append("source_contract missing")
+    else:
+        for field in sorted(set(left_source) | set(right_source)):
+            if field not in left_source or field not in right_source:
+                issues.append(f"source_contract.{field} missing")
+            elif field == "source_data_inventory":
+                if not source_inventory_matches_current(
+                    published=left_source[field], current=right_source[field],
+                    project_root=project_root,
+                ):
+                    issues.append("source_contract.source_data_inventory mismatch")
+            elif left_source[field] != right_source[field]:
+                issues.append(f"source_contract.{field} mismatch")
     left_settings = candidate.get("training_settings")
     right_settings = expected.get("training_settings")
     if not isinstance(left_settings, dict) or not isinstance(right_settings, dict):
@@ -275,7 +293,7 @@ def _first_fold_fit_identity_issues(
 def validate_rolling_fold_fitted_checkpoint(
     *, manifest_path: Path, manifest: Mapping[str, Any],
     expected: Mapping[str, Any], expected_execution: Mapping[str, Any],
-    bundle, torch_module,
+    bundle, torch_module, project_root: str | Path | None = None,
 ) -> tuple[FittedModelContract | None, str | None]:
     """Only FIT owner may approve Rolling checkpoint bytes for another evaluation mode.
 
@@ -285,7 +303,9 @@ def validate_rolling_fold_fitted_checkpoint(
     """
     manifest_path = Path(manifest_path).resolve()
     fold_id = str(manifest.get("fold_id") or manifest_path.parent.name)
-    issues = _first_fold_fit_identity_issues(dict(manifest), dict(expected))
+    issues = _first_fold_fit_identity_issues(
+        dict(manifest), dict(expected), project_root=project_root,
+    )
     if issues:
         return None, "; ".join(issues[:7])
     actual_execution = dict(manifest.get("torch_execution") or {})
@@ -313,7 +333,9 @@ def validate_rolling_fold_fitted_checkpoint(
     embedded = checkpoint.get("fold_contract")
     migration = dict(manifest.get("migration") or {})
     if isinstance(embedded, dict):
-        embedded_issues = _first_fold_fit_identity_issues(embedded, dict(expected))
+        embedded_issues = _first_fold_fit_identity_issues(
+            embedded, dict(expected), project_root=project_root,
+        )
         if embedded_issues:
             raise RuntimeError(
                 f"Rolling checkpoint embedded fitting contract mismatch: {fold_id}: "
@@ -1587,7 +1609,7 @@ def resolve_compatible_rolling_first_fold(
         contract, reason = validate_rolling_fold_fitted_checkpoint(
             manifest_path=manifest_path, manifest=manifest, expected=expected,
             expected_execution=scientific_torch_execution(forward_plan),
-            bundle=bundle, torch_module=torch_module,
+            bundle=bundle, torch_module=torch_module, project_root=project_root,
         )
         if contract is None:
             ineligible.append(f"{fold['fold_id']}: {reason}")

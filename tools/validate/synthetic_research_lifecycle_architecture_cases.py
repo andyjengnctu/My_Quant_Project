@@ -384,6 +384,131 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
         changed_train, expected_contract=identity,
     ))
 
+    # Reverse Rolling -> Forward FIT uses the SAME one-way, byte-verified CSV
+    # inventory compatibility proof as the published source validators. It may
+    # never grant equivalence to changed Dataset/Target SHA, training cohorts,
+    # checkpoint bytes, or unproven/missing historical inventory metadata.
+    historical = deepcopy(identity)
+    historical["source_contract"] = {
+        "dataset_policy": "canonical", "dataset_artifacts": {"feature_bank": "sha-old"},
+        "target_artifacts": {"raw_target": "sha-target"},
+        "source_data_inventory": {"csv_inventory_sha256": "legacy"},
+    }
+    current = deepcopy(historical)
+    current["source_contract"]["source_data_inventory"] = {
+        "csv_inventory_sha256": "current", "ohlcv_sanitization_contract_version": 2,
+    }
+    check_true("reverse_bridge_without_root_rejects_unproven_inventory",
+               "source_contract.source_data_inventory mismatch" in
+               owner._first_fold_fit_identity_issues(historical, current))
+    with TemporaryDirectory() as td:
+        root_dir = Path(td)
+        with patch.object(owner, "source_inventory_matches_current", return_value=True) as proof:
+            check("reverse_bridge_verified_inventory_same_fitting_identity", (),
+                  owner._first_fold_fit_identity_issues(
+                      historical, current, project_root=root_dir,
+                  ))
+            check_true("reverse_bridge_delegates_to_canonical_source_proof",
+                       proof.call_count == 1 and
+                       proof.call_args.kwargs["project_root"] == root_dir and
+                       proof.call_args.kwargs["published"] == historical["source_contract"]["source_data_inventory"])
+            changed_dataset = deepcopy(current)
+            changed_dataset["source_contract"]["dataset_artifacts"] = {"feature_bank": "changed"}
+            check_true("reverse_bridge_dataset_sha_change_never_reused",
+                       "source_contract.dataset_artifacts mismatch" in
+                       owner._first_fold_fit_identity_issues(
+                           historical, changed_dataset, project_root=root_dir,
+                       ))
+            changed_target = deepcopy(current)
+            changed_target["source_contract"]["target_artifacts"] = {"raw_target": "changed"}
+            check_true("reverse_bridge_target_sha_change_never_reused",
+                       "source_contract.target_artifacts mismatch" in
+                       owner._first_fold_fit_identity_issues(
+                           historical, changed_target, project_root=root_dir,
+                       ))
+            missing_inventory = deepcopy(historical)
+            missing_inventory["source_contract"].pop("source_data_inventory")
+            check_true("reverse_bridge_missing_inventory_never_reused",
+                       "source_contract.source_data_inventory missing" in
+                       owner._first_fold_fit_identity_issues(
+                           missing_inventory, current, project_root=root_dir,
+                       ))
+            changed_seed = deepcopy(current)
+            changed_seed["seed"] = 314
+            check_true("reverse_bridge_seed_change_never_reused",
+                       "seed mismatch" in owner._first_fold_fit_identity_issues(
+                           historical, changed_seed, project_root=root_dir,
+                       ))
+
+            # Validate the real byte/manifest/checkpoint path, including the
+            # checkpoint-embedded native fold contract, without a GPU training run.
+            from filters.breakout_quality.artifacts import build_file_manifest
+            fold_dir = root_dir / "fold_20210101_20211231"
+            fold_dir.mkdir()
+            checkpoint_path = fold_dir / "model.pt"
+            checkpoint_path.write_bytes(b"archived-synthetic-checkpoint")
+            manifest_path = fold_dir / "manifest.json"
+            execution = {"device_type": "cpu", "deterministic_algorithms": True}
+            manifest = {
+                **historical, "fold_id": fold_dir.name,
+                "torch_execution": {**execution, "requested_device": "auto"},
+                "selected_epoch": 2, "epoch_selection": {"best_epoch": 2},
+                "artifacts": {"checkpoint": build_file_manifest(checkpoint_path)},
+            }
+            checkpoint = {
+                "model_spec": historical["model_spec"],
+                "experiment_settings": historical["experiment_settings"],
+                "selected_epoch": 2, "fold_contract": historical,
+            }
+            bundle = SimpleNamespace(
+                model_spec=SimpleNamespace(as_manifest_payload=lambda: historical["model_spec"]),
+                profile=SimpleNamespace(as_manifest_payload=lambda: historical["experiment_settings"]),
+            )
+            verify_args = dict(
+                manifest_path=manifest_path, manifest=manifest, expected=current,
+                expected_execution=execution, bundle=bundle,
+                torch_module=SimpleNamespace(load=lambda *_args, **_kwargs: checkpoint),
+                project_root=root_dir,
+            )
+            candidate, reason = owner.validate_rolling_fold_fitted_checkpoint(**verify_args)
+            check_true("reverse_bridge_verified_fold_bytes_and_embedded_identity",
+                       candidate is not None and reason is None
+                       and candidate.selected_epoch == 2)
+            wrong_execution = owner.validate_rolling_fold_fitted_checkpoint(
+                **{**verify_args, "expected_execution": {"device_type": "cuda"}},
+            )
+            check_true("reverse_bridge_execution_drift_rejected",
+                       wrong_execution[0] is None and "torch execution" in str(wrong_execution[1]))
+            altered_checkpoint = deepcopy(checkpoint)
+            altered_checkpoint["fold_contract"] = deepcopy(historical)
+            altered_checkpoint["fold_contract"]["training_settings"]["epochs_max"] = 99
+            try:
+                owner.validate_rolling_fold_fitted_checkpoint(**{
+                    **verify_args, "torch_module": SimpleNamespace(
+                        load=lambda *_args, **_kwargs: altered_checkpoint,
+                    ),
+                })
+            except RuntimeError as exc:
+                embedded_rejected = "embedded fitting contract mismatch" in str(exc)
+            else:
+                embedded_rejected = False
+            check_true("reverse_bridge_embedded_fitting_drift_fails_closed", embedded_rejected)
+            corrupted = dict(manifest)
+            corrupted["artifacts"] = {"checkpoint": {"sha256": "bad", "size_bytes": 5}}
+            try:
+                owner.validate_rolling_fold_fitted_checkpoint(
+                    **{**verify_args, "manifest": corrupted},
+                )
+            except RuntimeError as exc:
+                corrupt_rejected = "checkpoint hash mismatch" in str(exc)
+            else:
+                corrupt_rejected = False
+            check_true("reverse_bridge_checkpoint_sha_conflict_fails_closed", corrupt_rejected)
+        with patch.object(owner, "source_inventory_matches_current", return_value=False):
+            denied, reason = owner.validate_rolling_fold_fitted_checkpoint(**verify_args)
+        check_true("reverse_bridge_unproven_full_csv_inventory_fails_closed",
+                   denied is None and "source_contract.source_data_inventory mismatch" in str(reason))
+
     # FIT owner, not Forward mode, handles native/rolling fallback and conflict.
     with TemporaryDirectory() as td:
         model_dir = Path(td) / "model"
@@ -479,7 +604,8 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
             check_true("migrated_fit_owner_accepts_matching_first_fold",
                        found == candidate and "verified" in reason)
             check_true("pit_only_supplies_native_cohort_for_fit_owner",
-                       fold_ids.call_count == 1 and verify.call_count == 1)
+                       fold_ids.call_count == 1 and verify.call_count == 1
+                       and verify.call_args.kwargs["project_root"] == Path(td))
             with patch.object(pit, "_fold_group_ids", return_value={
                 **cohort, "train_ids": np.array([7, 8])}):
                 mismatch, reason = owner.resolve_compatible_rolling_first_fold(**call)
