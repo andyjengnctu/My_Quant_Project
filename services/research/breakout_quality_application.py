@@ -6,6 +6,7 @@ from functools import partial
 
 import argparse
 from collections import deque
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 import importlib
@@ -3016,6 +3017,7 @@ def _prepare_continuous_research_inputs(
     *,
     dataset_profile: str | None = None,
     max_tickers: int | None = None,
+    execution_observer: Callable[[bool], None] | None = None,
 ) -> int:
     """Prepare deterministic model inputs through the shared Research orchestrator.
 
@@ -3158,6 +3160,10 @@ def _prepare_continuous_research_inputs(
                 + "｜historical-effective Min ROOS atr_len / atr_times_init"
                 + f"｜periods={len(schedule)}"
             )
+    # The canonical orchestrator records actual producer actions. A successful
+    # read-only REUSE check must not be mistaken for an upstream mutation.
+    if execution_observer is not None:
+        execution_observer(bool(outcome.executed))
     return 0
 
 
@@ -4940,20 +4946,31 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
         # within the seed producer and re-enters the normal input gate.
         inputs_prepared = bool(force_rebuild or not rolling or readiness.score_build_required)
         if inputs_prepared and (force_rebuild or readiness.evidence_refresh_required):
-            code = _prepare_continuous_research_inputs(program_name, settings)
+            # Keep the prior fail-closed behavior if a legacy/test caller does
+            # not supply a canonical execution observation. Real preparation
+            # always reports whether a Dataset/Target producer actually ran.
+            upstream_mutated = True
+
+            def _record_upstream_execution(executed: bool) -> None:
+                nonlocal upstream_mutated
+                upstream_mutated = bool(executed)
+
+            code = _prepare_continuous_research_inputs(
+                program_name, settings, execution_observer=_record_upstream_execution,
+            )
             if code != 0:
                 return int(code)
-            affected_completed_models.update(range(len(completed)))
-            preceding_model_mutation = True
-            if rolling:
-                invalidate_rolling_model_source_cache()
-            # Upstream Dataset/Target preparation may publish a new lineage.
-            # Do not execute a seed plan or reuse its evidence from *before*
-            # that publication; re-observe only when upstream ran. Fully READY
-            # models never pay for this second full validation pass.
-            seed_states, readiness = _plan_model_robustness_snapshot(
-                settings, seeds=seeds, rolling=rolling,
-            )
+            if upstream_mutated:
+                affected_completed_models.update(range(len(completed)))
+                preceding_model_mutation = True
+                if rolling:
+                    invalidate_rolling_model_source_cache()
+                # A real Dataset/Target producer may publish a new lineage.
+                # Only then is the previously verified seed plan stale; the
+                # subsequent SCORE producer still revalidates at execution.
+                seed_states, readiness = _plan_model_robustness_snapshot(
+                    settings, seeds=seeds, rolling=rolling,
+                )
         seed_payloads = []
         source_reports = []
         built = False

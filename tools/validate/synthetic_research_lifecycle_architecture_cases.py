@@ -1358,7 +1358,9 @@ def validate_research_model_readiness_architecture_case(_base_params):
     # Both must force new canonical observations before stale evidence is
     # consumed, without rereading fully READY runs.
     def run_phase9_synthetic_routing(*, initially_ready, after_prepare_ready,
-                                     after_first_build_stale, final_stale_first=False):
+                                     after_first_build_stale, final_stale_first=False,
+                                     seeds=(101, 202), upstream_executes=True,
+                                     rolling=False):
         phase = {"prepared": False, "built": [], "observed": []}
         def observe(_settings, *, seed, rolling):
             phase["observed"].append((int(seed), phase["prepared"], tuple(phase["built"])))
@@ -1373,8 +1375,10 @@ def validate_research_model_readiness_architecture_case(_base_params):
                 int(seed), synthetic_report if ready else None,
                 Path(f"synthetic/{int(seed)}.json"), None if ready else "lineage stale",
             )
-        def prepare(_name, _settings):
-            phase["prepared"] = True
+        def prepare(_name, _settings, *, execution_observer=None):
+            phase["prepared"] = bool(upstream_executes)
+            if execution_observer is not None:
+                execution_observer(bool(upstream_executes))
             return 0
         def build(_name, _settings, *, seed, **_kwargs):
             phase["built"].append(int(seed))
@@ -1384,12 +1388,16 @@ def validate_research_model_readiness_architecture_case(_base_params):
             patch.object(model_app, "get_breakout_quality_model_test_settings",
                          return_value=SimpleNamespace(model_profiles=(("MR-SYN", "synthetic_profile"),))),
             patch.object(model_app, "get_breakout_quality_workflow_settings", return_value=workflow),
-            patch.object(model_app, "resolve_robustness_benchmark_seeds", return_value=(101, 202)),
+            patch.object(model_app, "resolve_robustness_benchmark_seeds", return_value=tuple(seeds)),
             patch.object(model_app, "_observe_model_robustness_seed", side_effect=observe),
             patch.object(model_app, "_prepare_continuous_research_inputs", side_effect=prepare) as prep,
-            patch.object(model_app, "_build_forward_robustness_seed", side_effect=build) as producer,
+            patch.object(model_app, "_build_forward_robustness_seed", side_effect=build) as fwd_producer,
+            patch.object(model_app, "_build_rolling_robustness_seed", side_effect=build) as roll_producer,
             patch.object(model_app, "_load_forward_robustness_seed",
                          side_effect=lambda _settings, *, seed: (synthetic_report, Path(f"synthetic/{seed}.json"), None)),
+            patch.object(model_app, "_load_rolling_robustness_seed",
+                         side_effect=lambda _settings, *, seed: (synthetic_report, Path(f"synthetic/{seed}.json"), None)),
+            patch.object(model_app, "invalidate_rolling_model_source_cache"),
             patch.object(model_app, "aggregate_standard_model_sop_robustness",
                          return_value={"schema": "synthetic"}) as aggregate,
             patch.object(model_app, "_render_standard_model_comparison", return_value="SYNTHETIC"),
@@ -1400,10 +1408,11 @@ def validate_research_model_readiness_architecture_case(_base_params):
             redirect_stdout(StringIO()),
         ):
             try:
-                status = model_app._run_configured_model_robustness("synthetic", rolling=False)
+                status = model_app._run_configured_model_robustness("synthetic", rolling=rolling)
                 error = None
             except RuntimeError as exc:
                 status, error = None, str(exc)
+        producer = roll_producer if rolling else fwd_producer
         return (status, phase, prep.call_count, producer.call_count,
                 published.call_count, aggregate.call_count, error)
 
@@ -1439,6 +1448,64 @@ def validate_research_model_readiness_architecture_case(_base_params):
         status is None and prep_count == 1 and build_count == 2
         and agg_count == report_count == 0
         and "拒絕發布報表" in str(error) and "seed=101" in str(error))
+
+    # The preparation API must report the canonical orchestrator's actual
+    # executed actions, not infer mutations from a successful return code.
+    for executed in ((), (("dataset:synthetic", "BUILD", None, "producer"),)):
+        observations = []
+        with (
+            patch.object(model_app, "run_research_artifact_preparation", return_value=SimpleNamespace(
+                plan=SimpleNamespace(actions=()), executed=executed,
+            )),
+            patch.object(model_app, "get_breakout_quality_experiment_profile", return_value=SimpleNamespace(
+                training_sample_scope="synthetic_not_daily",
+            )),
+            redirect_stdout(StringIO()),
+        ):
+            prepared_status = model_app._prepare_continuous_research_inputs(
+                "synthetic", workflow, execution_observer=observations.append,
+            )
+        check_true(f"phase12_preparation_observer_matches_executed_{bool(executed)}",
+                   prepared_status == 0 and observations == [bool(executed)])
+
+    observer_on_error = []
+    with (
+        patch.object(model_app, "run_research_artifact_preparation", side_effect=RuntimeError("blocked")),
+        redirect_stdout(StringIO()),
+    ):
+        error_status = model_app._prepare_continuous_research_inputs(
+            "synthetic", workflow, execution_observer=observer_on_error.append,
+        )
+    check_true("phase12_failed_preparation_does_not_signal_successful_noop",
+               error_status == 2 and observer_on_error == [])
+
+    # Phase 12: the canonical preparation outcome distinguishes a real
+    # Dataset/Target publication from a read-only upstream REUSE check. The
+    # latter must not pay for a second complete seed source-plan snapshot.
+    four_seeds = (101, 202, 303, 404)
+    one_missing = {101: False, 202: True, 303: True, 404: True}
+    for test_rolling in (False, True):
+        status, no_op, prep_count, build_count, report_count, agg_count, error = run_phase9_synthetic_routing(
+            initially_ready=one_missing, after_prepare_ready=one_missing,
+            after_first_build_stale=False, seeds=four_seeds,
+            upstream_executes=False, rolling=test_rolling,
+        )
+        changed_status, changed, changed_prep, changed_build, changed_report, changed_agg, changed_error = run_phase9_synthetic_routing(
+            initially_ready=one_missing, after_prepare_ready=one_missing,
+            after_first_build_stale=False, seeds=four_seeds,
+            upstream_executes=True, rolling=test_rolling,
+        )
+        name = "rolling" if test_rolling else "forward"
+        check_true(f"phase12_{name}_noop_upstream_saves_one_full_seed_observation",
+            status == changed_status == 0 and error is changed_error is None
+            and prep_count == changed_prep == build_count == changed_build == 1
+            and report_count == changed_report == agg_count == changed_agg == 1
+            and no_op["built"] == changed["built"] == [101]
+            and len(no_op["observed"]) == 11
+            and len(changed["observed"]) == 15
+            and all(row[1] is False for row in no_op["observed"])
+            and any(row[1] is True for row in changed["observed"])
+        )
 
     # Multi-model preview happens before any per-model Producer. A model built
     # earlier may invalidate a later model's precomputed stage plan, and a model
