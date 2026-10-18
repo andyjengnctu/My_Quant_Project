@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 from datetime import date
 from calendar import monthrange
 from hashlib import sha256
+from functools import lru_cache
 import json
 from typing import Iterable, Mapping
 
@@ -150,9 +151,9 @@ class BootstrapRequestManifest:
         return len(self.requests)
 
 
-def build_registry_fingerprint(specs: Iterable[MarketDatasetSpec]) -> str:
+def _compute_registry_fingerprint(specs: Iterable[MarketDatasetSpec]) -> str:
     # Trading sync query cadence and latest-view row identity are execution/view
-    # sidecar policy.  They must not alter the neutral bootstrap/provider artifact identity.
+    # sidecar policy. They must not alter the neutral bootstrap/provider artifact identity.
     ordered = []
     for spec in specs:
         item = asdict(spec)
@@ -165,6 +166,27 @@ def build_registry_fingerprint(specs: Iterable[MarketDatasetSpec]) -> str:
         key=lambda item: (str(item.get("dataset") or ""), str(item.get("archive_policy") or "")),
     )
     return _canonical_sha256(ordered)
+
+
+@lru_cache(maxsize=16)
+def _cached_registry_fingerprint(specs: tuple[MarketDatasetSpec, ...]) -> str:
+    """Cache only the digest of immutable registry content, never readiness evidence."""
+    return _compute_registry_fingerprint(specs)
+
+
+def build_registry_fingerprint(specs: Iterable[MarketDatasetSpec]) -> str:
+    """Resolve the canonical provider identity from *current* specs on every call.
+
+    Dataset specs are frozen dataclasses; equal content may reuse the exact same
+    digest. A changed spec necessarily has a different key. Nonhashable legacy
+    inputs retain the original uncached behavior and error semantics.
+    """
+    values = tuple(specs)
+    try:
+        hash(values)
+    except TypeError:
+        return _compute_registry_fingerprint(values)
+    return _cached_registry_fingerprint(values)
 
 
 def build_bootstrap_request_manifest(

@@ -8,6 +8,8 @@ independent notions of READY, due dates or publication timing.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
+import json
 from datetime import time
 from typing import Iterable, Mapping
 
@@ -171,14 +173,40 @@ def build_market_data_freshness_contract(spec: MarketDatasetSpec) -> MarketDataF
     )
 
 
+def _build_freshness_contracts(
+    included: tuple[MarketDatasetSpec, ...],
+) -> tuple[MarketDataFreshnessContract, ...]:
+    contracts = tuple(build_market_data_freshness_contract(spec) for spec in included)
+    validate_market_data_freshness_contracts(specs=included, contracts=contracts)
+    return contracts
+
+
+@lru_cache(maxsize=16)
+def _cached_freshness_contracts(
+    included: tuple[MarketDatasetSpec, ...], publication_policy_signature: str,
+) -> tuple[MarketDataFreshnessContract, ...]:
+    # The second argument is intentionally part of the key: in-place publication
+    # policy edits must never reuse yesterday's operational readiness contract.
+    return _build_freshness_contracts(included)
+
+
 def get_market_data_freshness_contracts(
     *, specs: Iterable[MarketDatasetSpec] | None = None,
 ) -> tuple[MarketDataFreshnessContract, ...]:
     source = tuple(specs) if specs is not None else get_market_dataset_specs(included_only=True)
     included = tuple(spec for spec in source if spec.included)
-    contracts = tuple(build_market_data_freshness_contract(spec) for spec in included)
-    validate_market_data_freshness_contracts(specs=included, contracts=contracts)
-    return contracts
+    try:
+        # Capture both mutable configuration *content* and immutable dataset
+        # registry content. Only these inputs can determine the pure contract.
+        policy_signature = json.dumps(
+            MARKET_DATA_V2_PUBLICATION_POLICY,
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        )
+        hash(included)
+    except (TypeError, ValueError):
+        # Preserve canonical errors/semantics for unusual runtime overrides.
+        return _build_freshness_contracts(included)
+    return _cached_freshness_contracts(included, policy_signature)
 
 
 def get_market_data_freshness_contract(dataset: str) -> MarketDataFreshnessContract:

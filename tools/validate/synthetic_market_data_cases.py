@@ -1716,6 +1716,41 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
     check("integrity_contract_covers_current_included_registry", len(specs), integrity_contract["dataset_count"])
     check("integrity_contract_has_authoritative_calendar_owner", 1, integrity_contract["authoritative_calendar_count"])
     check("integrity_contract_has_dense_trading_date_scope", True, integrity_contract["dense_trading_calendar_count"] > 0)
+    # AI: Operational publication policy changes can be made in-place. Cached
+    # contracts must still observe a changed time and restore the old semantics.
+    from core import market_data_freshness_contract as freshness_owner
+    with patch.object(
+        freshness_owner, "_build_freshness_contracts",
+        wraps=freshness_owner._build_freshness_contracts,
+    ) as builder:
+        freshness_owner._cached_freshness_contracts.cache_clear()
+        first_contracts = freshness_owner.get_market_data_freshness_contracts(specs=specs)
+        cached_contracts = freshness_owner.get_market_data_freshness_contracts(specs=tuple(specs))
+        with patch.dict(
+            freshness_owner.MARKET_DATA_V2_PUBLICATION_POLICY["conservative_fallback"],
+            {"first_check_time": "22:17"},
+        ):
+            changed_contracts = freshness_owner.get_market_data_freshness_contracts(specs=specs)
+        restored_contracts = freshness_owner.get_market_data_freshness_contracts(specs=specs)
+        check(
+            "trading_freshness_reuses_immutable_registry_and_publication_policy",
+            (first_contracts, first_contracts, 2),
+            (cached_contracts, restored_contracts, builder.call_count),
+        )
+        check(
+            "trading_freshness_policy_in_place_drift_cannot_reuse_stale_contract",
+            True,
+            any(a != b for a, b in zip(first_contracts, changed_contracts, strict=True)),
+        )
+        with patch.object(freshness_owner, "MARKET_DATA_V2_PUBLICATION_POLICY", {"invalid": True}):
+            try:
+                freshness_owner.get_market_data_freshness_contracts(specs=specs)
+            except ValueError:
+                invalid_rejected = True
+            else:
+                invalid_rejected = False
+        check("trading_freshness_rejects_invalid_policy_after_cache_warmup", True, invalid_rejected)
+
     date_pass = evaluate_date_semantics(
         mode=DATE_SEMANTIC_TRADING_CALENDAR_DENSE,
         observed_dates=("2026-09-07", "2026-09-08", "2026-09-09"),
@@ -1844,6 +1879,41 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
 
     registry_fp = build_registry_fingerprint(specs)
     first_spec = specs[0]
+    # AI: A cached registry digest is legal only for identical immutable inputs.
+    # Never let the cache hide a provider-identity drift or reuse an old schema.
+    from core import market_data_bootstrap_requests as bootstrap_requests
+    with patch.object(
+        bootstrap_requests,
+        "_compute_registry_fingerprint",
+        wraps=bootstrap_requests._compute_registry_fingerprint,
+    ) as compute_fp:
+        bootstrap_requests._cached_registry_fingerprint.cache_clear()
+        first = build_registry_fingerprint(iter(specs))
+        repeated = build_registry_fingerprint(specs)
+        changed_specs = (
+            replace(first_spec, bootstrap_mode="isolated_changed_bootstrap_mode"),
+            *specs[1:],
+        )
+        changed = build_registry_fingerprint(changed_specs)
+        restored = build_registry_fingerprint(specs)
+        check(
+            "provider_registry_digest_reuses_only_identical_immutable_registry",
+            (first, first, first, 2),
+            (repeated, restored, registry_fp, compute_fp.call_count),
+        )
+        check(
+            "provider_registry_digest_recomputes_changed_bootstrap_semantics",
+            True,
+            changed != first,
+        )
+    # A legacy caller may supply a nonhashable nested field despite the tuple
+    # annotation. It must still use the canonical digest implementation.
+    nonhashable_specs = (replace(first_spec, fixed_data_ids=["TEST"]), *specs[1:])
+    check(
+        "provider_registry_digest_keeps_nonhashable_inputs_compatible",
+        bootstrap_requests._compute_registry_fingerprint(nonhashable_specs),
+        build_registry_fingerprint(nonhashable_specs),
+    )
     specs_with_view_only_row_identity_change = tuple(
         replace(spec, row_identity_hint=("synthetic_row_id",)) if spec.dataset == first_spec.dataset else spec
         for spec in specs
