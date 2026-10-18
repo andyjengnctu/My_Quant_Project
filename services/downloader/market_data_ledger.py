@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import local
 import sqlite3
 from typing import Iterable
 
@@ -131,6 +132,10 @@ class MarketDataJobLedger:
         if not self.workload_namespace:
             raise ValueError("Market Data ledger workload_namespace 不可空白")
         self.read_only = bool(read_only)
+        # AI: Execution-scoped connection reuse is opt-in. Other callers keep
+        # the original one-operation/one-connection behavior; thread-local
+        # ownership prevents a writer's connection from leaking to readers.
+        self._execution_connection = local()
         if self.read_only:
             if not self.path.is_file():
                 raise FileNotFoundError(f"Market Data ledger 不存在: {self.path}")
@@ -155,7 +160,39 @@ class MarketDataJobLedger:
 
 
     @contextmanager
+    def execution_session(self):
+        """Reuse one SQLite handle under the executor lock, not one transaction.
+
+        Writes keep their existing explicit COMMIT or SQLite autocommit
+        boundaries, preserving completed requests and retry evidence.
+        """
+        if getattr(self._execution_connection, "conn", None) is not None:
+            raise RuntimeError("Market Data ledger execution_session 不可巢狀開啟")
+        conn = self._connect()
+        self._execution_connection.conn = conn
+        try:
+            yield
+        finally:
+            try:
+                if conn.in_transaction:
+                    conn.rollback()
+            finally:
+                del self._execution_connection.conn
+                conn.close()
+
+    @contextmanager
     def _connection(self):
+        conn = getattr(self._execution_connection, "conn", None)
+        if conn is not None:
+            try:
+                yield conn
+            finally:
+                # Closing the old per-operation handle implicitly rolled back
+                # any uncommitted BEGIN, including a non-error early return.
+                # Retain that exact operation boundary with a shared handle.
+                if conn.in_transaction:
+                    conn.rollback()
+            return
         conn = self._connect()
         try:
             yield conn

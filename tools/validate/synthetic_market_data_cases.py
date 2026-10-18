@@ -727,6 +727,87 @@ def validate_market_data_v2_resumable_executor_contract_case(_base_params):
         check("completed_executor_releases_lock_for_done_resume", WORKLOAD_DONE, resumed_done.workload_status)
         check("done_resume_still_uses_zero_provider_calls", (0, 0), (second_client.data_request_count, second_client.usage_request_count))
 
+    # AI: An execution-scoped SQLite connection must not change the per-job
+    # transaction boundary, cross-thread isolation, or read-only durability.
+    from unittest.mock import patch as session_patch
+    from threading import Thread
+    import sqlite3
+    with TemporaryDirectory() as td:
+        session_ledger = MarketDataJobLedger(Path(td) / "session.sqlite3")
+        with session_ledger._connection() as conn:
+            conn.execute("CREATE TABLE session_probe (value INTEGER NOT NULL)")
+        original_connect = session_ledger._connect
+        with session_patch.object(session_ledger, "_connect", wraps=original_connect) as connect_probe:
+            with session_ledger.execution_session():
+                with session_ledger._connection() as first:
+                    first_id = id(first)
+                    check("ledger_execution_session_keeps_wal_and_full_sync", ("wal", 2, 1), (
+                        str(first.execute("PRAGMA journal_mode").fetchone()[0]).lower(),
+                        int(first.execute("PRAGMA synchronous").fetchone()[0]),
+                        int(first.execute("PRAGMA foreign_keys").fetchone()[0]),
+                    ))
+                    first.execute("BEGIN IMMEDIATE")
+                    first.execute("INSERT INTO session_probe(value) VALUES (1)")
+                    first.execute("COMMIT")
+                with session_ledger._connection() as second:
+                    check("ledger_session_reuses_one_physical_connection", first_id, id(second))
+                check("ledger_session_single_connect_for_multiple_operations", 1, connect_probe.call_count)
+                nested_rejected = False
+                try:
+                    with session_ledger.execution_session():
+                        pass
+                except RuntimeError as exc:
+                    nested_rejected = "不可巢狀" in str(exc)
+                check("ledger_session_rejects_nested_open", True, nested_rejected)
+                independent = MarketDataJobLedger(Path(td) / "session.sqlite3", read_only=True)
+                with independent._connection() as reader:
+                    committed_before_close = reader.execute("SELECT value FROM session_probe").fetchall()
+                check("ledger_session_commits_are_readable_before_session_close", [1], [int(row[0]) for row in committed_before_close])
+                try:
+                    with session_ledger._connection() as connection:
+                        connection.execute("BEGIN IMMEDIATE")
+                        connection.execute("INSERT INTO session_probe(value) VALUES (2)")
+                        raise RuntimeError("synthetic rollback")
+                except RuntimeError:
+                    pass
+                with session_ledger._connection() as connection:
+                    check("ledger_session_rolls_back_failed_operation_only", [1], [int(row[0]) for row in connection.execute("SELECT value FROM session_probe").fetchall()])
+                with session_ledger._connection() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    connection.execute("INSERT INTO session_probe(value) VALUES (4)")
+                with session_ledger._connection() as connection:
+                    check("ledger_session_rolls_back_uncommitted_successful_operation", [1], [int(row[0]) for row in connection.execute("SELECT value FROM session_probe").fetchall()])
+                separate_thread_connections = []
+                def _thread_probe():
+                    with session_ledger._connection() as connection:
+                        separate_thread_connections.append(id(connection) != first_id)
+                worker = Thread(target=_thread_probe)
+                worker.start()
+                worker.join()
+                check("ledger_session_does_not_share_connection_across_threads", [True], separate_thread_connections)
+            with session_ledger._connection() as connection:
+                check("ledger_session_closure_preserves_committed_only", [1], [int(row[0]) for row in connection.execute("SELECT value FROM session_probe").fetchall()])
+            check("ledger_session_closes_handle_and_restores_default_connections", 3, connect_probe.call_count)
+        closed_connection_rejected = False
+        try:
+            first.execute("SELECT 1")
+        except sqlite3.ProgrammingError:
+            closed_connection_rejected = True
+        check("ledger_session_physical_connection_closed_on_exit", True, closed_connection_rejected)
+
+        deliberately_aborted = False
+        try:
+            with session_ledger.execution_session():
+                with session_ledger._connection() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    conn.execute("INSERT INTO session_probe(value) VALUES (3)")
+                raise RuntimeError("synthetic session abort")
+        except RuntimeError as exc:
+            deliberately_aborted = str(exc) == "synthetic session abort"
+        check("ledger_session_explicit_abort_path_reached", True, deliberately_aborted)
+        with MarketDataJobLedger(Path(td) / "session.sqlite3", read_only=True)._connection() as reader:
+            check("ledger_session_abort_rolls_back_pending_transaction", [1], [int(row[0]) for row in reader.execute("SELECT value FROM session_probe").fetchall()])
+
     summary.update(
         {
             "logical_requests": manifest.total_requests,

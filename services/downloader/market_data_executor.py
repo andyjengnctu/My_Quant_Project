@@ -347,7 +347,11 @@ class MarketDataBootstrapExecutor:
         with try_process_lock(lock_dir / f"{lock_key}.sqlite3") as acquired:
             if not acquired:
                 raise RuntimeError("Market Data workload 已有執行中的 executor；請等待完成後重試")
-            return self._run_exclusive(manifest=manifest, sink=sink)
+            # AI: The process lock owns the sole writer. Reuse one physical
+            # SQLite connection while preserving each original transaction
+            # or SQLite autocommit boundary for request and lease writes.
+            with self.ledger.execution_session():
+                return self._run_exclusive(manifest=manifest, sink=sink)
 
     def _run_exclusive(
         self,
