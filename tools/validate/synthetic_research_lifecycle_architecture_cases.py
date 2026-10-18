@@ -1512,6 +1512,128 @@ def validate_research_model_readiness_architecture_case(_base_params):
         and publish_count == 0
         and "MR-SYN-A" in str(error) and "拒絕發布報表" in str(error))
 
+    # Single Forward/Rolling model comparisons share the same cross-model
+    # publication guarantee as Robustness. Only synthetic sources and producer
+    # ports are used; no market Data, PIT score or artifact is touched.
+    def run_single_comparison_revalidation(
+        *, rolling: bool, stale_previous: bool = False,
+        all_ready: bool = False, blocked_second: bool = False,
+        reused_first: bool = False,
+    ):
+        profiles = (("MR-SYN-A", "phase11_a"), ("MR-SYN-B", "phase11_b"))
+        state = {
+            "ready": {"phase11_a": all_ready or reused_first, "phase11_b": all_ready},
+            "version": {"phase11_a": 0, "phase11_b": 0},
+            "built": [], "observed": [],
+        }
+        def workflow(*, experiment_profile):
+            return SimpleNamespace(experiment_profile=str(experiment_profile))
+        def evidence(profile):
+            return {"standard_model_sop": {"model": profile, "version": state["version"][profile]}}
+        def contract(profile):
+            return SimpleNamespace(report=evidence(profile), audit_path=Path(f"synthetic/{profile}/audit.json"))
+        def observe(settings, *, rolling, mode=None):
+            profile = settings.experiment_profile
+            ready = bool(state["ready"][profile])
+            state["observed"].append((profile, ready, tuple(state["built"])))
+            return SimpleNamespace(
+                evidence_ready=ready, source_contract=contract(profile) if ready else None,
+                evidence_payload=evidence(profile) if ready else None,
+                display_action="REUSE" if ready else "BUILD",
+                display_reason="READY" if ready else "stale",
+                source_reason=None if ready else "stale",
+            )
+        def produce(_program, settings, **_kwargs):
+            profile = settings.experiment_profile
+            state["built"].append(profile)
+            state["ready"][profile] = True
+            state["version"][profile] += 1
+            if profile == "phase11_a":
+                state["ready"]["phase11_b"] = False
+            else:
+                state["ready"]["phase11_a"] = not stale_previous
+                state["version"]["phase11_a"] += 1
+            return 0 if rolling else (0, contract(profile), "BUILD/REFRESH")
+        def inputs(settings):
+            blocked = bool(blocked_second and settings.experiment_profile == "phase11_b")
+            return SimpleNamespace(
+                blocked=blocked,
+                actions=(SimpleNamespace(action="BLOCKED", description="synthetic blocker"),) if blocked else (),
+            )
+        rendered = []
+        def render(rows, **_kwargs):
+            rendered.extend((row["model_id"], dict(row["payload"]["standard_model_sop"])) for row in rows)
+            return "SYNTHETIC"
+        with (
+            patch.object(model_app, "get_breakout_quality_model_test_settings",
+                         return_value=SimpleNamespace(model_profiles=profiles)),
+            patch.object(model_app, "get_breakout_quality_workflow_settings", side_effect=workflow),
+            patch.object(model_app, "get_breakout_quality_rolling_test_mode", return_value=SimpleNamespace()),
+            patch.object(model_app, "_resolve_continuous_model_readiness", side_effect=observe),
+            patch.object(model_app, "_collect_continuous_research_input_plan", side_effect=inputs),
+            patch.object(model_app, "_load_canonical_forward_checkpoint_import_source", return_value=(None, None)),
+            patch.object(model_app, "_run_continuous_rolling_mode_direct", side_effect=produce) as roll_producer,
+            patch.object(model_app, "_load_reusable_rolling_standard_report", side_effect=lambda settings, _mode: (
+                contract(settings.experiment_profile), evidence(settings.experiment_profile), None,
+            )),
+            patch.object(model_app, "_ensure_continuous_forward_model_report", side_effect=produce) as fwd_producer,
+            patch.object(model_app, "_render_standard_model_comparison", side_effect=render),
+            patch.object(model_app, "_write_standard_model_comparison_report",
+                         return_value=(Path("synthetic.json"), Path("synthetic.md"))) as publish,
+            patch.object(model_app, "render_status_paths", return_value=""),
+            patch.object(model_app, "_print_model_action_status"),
+            patch.object(model_app, "invalidate_rolling_model_source_cache") as clear_cache,
+            redirect_stdout(StringIO()),
+        ):
+            try:
+                code = model_app._run_configured_model_comparison("synthetic", rolling=rolling)
+                error = None
+            except RuntimeError as exc:
+                code, error = None, str(exc)
+        return (code, error, state, rendered, publish.call_count,
+                clear_cache.call_count, roll_producer.call_count, fwd_producer.call_count)
+
+    for rolling in (False, True):
+        label = "rolling" if rolling else "forward"
+        code, error, state, rows, publishes, clears, roll_calls, fwd_calls = (
+            run_single_comparison_revalidation(rolling=rolling)
+        )
+        check_true(f"single_{label}_replans_next_model_and_refreshes_earlier_evidence",
+                   code == 0 and error is None and publishes == 1
+                   and state["built"] == ["phase11_a", "phase11_b"]
+                   and ("phase11_b", False, ("phase11_a",)) in state["observed"]
+                   and rows[0][1]["version"] == 2
+                   and (roll_calls, fwd_calls) == ((2, 0) if rolling else (0, 2))
+                   and clears == (3 if rolling else 0))
+        code, error, state, rows, publishes, *_ = run_single_comparison_revalidation(
+            rolling=rolling, stale_previous=True,
+        )
+        check_true(f"single_{label}_later_producer_cannot_publish_stale_earlier_source",
+                   code is None and publishes == 0 and not rows
+                   and state["built"] == ["phase11_a", "phase11_b"]
+                   and "MR-SYN-A" in str(error) and "拒絕發布報表" in str(error))
+        code, error, state, rows, publishes, clears, roll_calls, fwd_calls = (
+            run_single_comparison_revalidation(rolling=rolling, all_ready=True)
+        )
+        check_true(f"single_{label}_all_ready_keeps_one_observation_per_model",
+                   code == 0 and error is None and publishes == 1
+                   and len(state["observed"]) == 2 and not state["built"]
+                   and (roll_calls, fwd_calls) == (0, 0)
+                   and clears == (1 if rolling else 0))
+        code, error, state, rows, publishes, _, roll_calls, fwd_calls = (
+            run_single_comparison_revalidation(rolling=rolling, blocked_second=True)
+        )
+        check_true(f"single_{label}_atomic_blocker_preflight_runs_before_any_producer",
+                   code == 2 and error is None and publishes == 0
+                   and not state["built"] and (roll_calls, fwd_calls) == (0, 0))
+        code, error, state, rows, publishes, *_ = run_single_comparison_revalidation(
+            rolling=rolling, reused_first=True, stale_previous=True,
+        )
+        check_true(f"single_{label}_previous_reused_model_also_requires_publication_revalidation",
+                   code is None and publishes == 0 and not rows
+                   and state["built"] == ["phase11_b"]
+                   and "MR-SYN-A" in str(error) and "拒絕發布報表" in str(error))
+
     # Normal Single resolver does not infer source readiness from unattested
     # payload, even though the Robustness adapter can pass validated evidence.
     bare = resolve_model_artifact_readiness(

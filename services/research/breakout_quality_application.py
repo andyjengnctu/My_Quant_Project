@@ -4369,9 +4369,37 @@ def _interactive_rolling_timing_mode(program_name: str, settings) -> int:
         except KeyboardInterrupt:
             print("\nTiming操作已中止，返回Timing Mode選單。")
 
+def _require_fresh_model_comparison_source(
+    settings, *, model_id: str, rolling: bool, mode, after: str,
+):
+    """Require current canonical Evidence before cross-model publication.
+
+    Earlier model results cannot be published from a pre-Producer snapshot if
+    another model has since prepared shared inputs or produced new artifacts.
+    The Forward/Rolling source owners remain the sole legality validators.
+    """
+    readiness = _resolve_continuous_model_readiness(
+        settings, rolling=rolling, mode=mode,
+    )
+    if (
+        not readiness.evidence_ready
+        or readiness.source_contract is None
+        or readiness.evidence_payload is None
+    ):
+        raise RuntimeError(
+            f"{model_id} 模型比較來源在{after}已失效；拒絕發布報表: "
+            f"{readiness.display_reason or readiness.source_reason or 'Standard SOP evidence incomplete'}"
+        )
+    return readiness.source_contract, dict(readiness.evidence_payload)
+
+
 def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int:
     """Run Forward/Rolling comparison through one model list and one report pipeline."""
 
+    # An external PIT Producer can update Audit after this Research process
+    # previously cached a valid source. Re-read it on each comparison entry.
+    if rolling:
+        invalidate_rolling_model_source_cache()
     model_list = get_breakout_quality_model_test_settings().model_profiles
     rolling_mode = get_breakout_quality_rolling_test_mode("rolling") if rolling else None
     planned = []
@@ -4416,13 +4444,33 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
         return 2
 
     completed = []
+    # Previewing the full suite does not freeze shared input lineage. Once a
+    # Producer has run, refresh later models before using their old preview;
+    # recheck preceding consumers before the one aggregate publication.
+    preceding_model_mutation = False
+    affected_completed_models: set[int] = set()
     for model_id, settings, contract, payload, _reason in planned:
+        if preceding_model_mutation:
+            readiness = _resolve_continuous_model_readiness(
+                settings, rolling=rolling, mode=rolling_mode,
+            )
+            contract, payload = readiness.source_contract, readiness.evidence_payload
+            if not readiness.evidence_ready:
+                # A previous Producer can change the upstream source inventory
+                # after the initial all-model blocker preflight.
+                upstream_plan = _collect_continuous_research_input_plan(settings)
+                if upstream_plan.blocked:
+                    print(f"{model_id} 模型比較來源更新後存在不可補建依賴；本次不發布報表。")
+                    return 2
         action = "REUSE"
         if contract is None or payload is None:
             if rolling:
                 code = _run_continuous_rolling_mode_direct(program_name, settings, prompt_for_build=False)
                 if code != 0:
                     return int(code)
+                # Audit may have been written by a child process; the parent
+                # must not validate its result against a cached old contract.
+                invalidate_rolling_model_source_cache()
                 contract, payload, reason = _load_reusable_rolling_standard_report(settings, rolling_mode)
                 if contract is None or payload is None:
                     raise RuntimeError(f"{model_id} Rolling OOS補建後仍不可比較: {reason}")
@@ -4434,6 +4482,8 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
                 if code != 0 or contract is None:
                     return int(code or 1)
                 payload = dict(contract.report or {})
+            affected_completed_models.update(range(len(completed)))
+            preceding_model_mutation = True
         payload = dict(payload or {})
         payload.setdefault("model_research_id", str(model_id))
         completed.append({
@@ -4443,6 +4493,19 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
             "payload": payload,
             "artifact_action": action,
         })
+
+    # Standard comparison is one publication. A subsequent model's canonical
+    # Producer must not let earlier verified Evidence silently go stale.
+    # Do not impose extra validation on the all-READY no-mutation fast path.
+    for completed_index in sorted(affected_completed_models):
+        previous = completed[completed_index]
+        source, payload = _require_fresh_model_comparison_source(
+            previous["settings"], model_id=str(previous["model_id"]),
+            rolling=rolling, mode=rolling_mode, after="其他模型Producer執行後",
+        )
+        payload.setdefault("model_research_id", str(previous["model_id"]))
+        previous["contract"] = source
+        previous["payload"] = payload
 
     # Model-specific D40/joint/U40 hypotheses are independent one-off Audits.
     # Standard Comparison consumes approved M1-M4 only: never materialize
@@ -4459,7 +4522,6 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
         project_root=PROJECT_ROOT,
     ))
     return 0
-
 
 
 def _model_robustness_dirs(settings, *, seed: int, rolling: bool) -> tuple[Path, Path]:
