@@ -142,24 +142,6 @@ def print_progress(idx, total_tickers, ticker, ticker_pass_count, ticker_skip_co
 
 
 
-def _synthetic_coverage_core_override(*, platform_name=None, python_version=None, environ=None):
-    """Prefer the comparable C tracer for the Windows/Python 3.14 timing trial.
-
-    The installed coverage.py defaults to the sys.monitoring core on 3.14.
-    Both cores collect full line and branch coverage.  Respect an explicit
-    COVERAGE_CORE override so the formal runner can be A/B tested or restored
-    without changing scientific inputs, tests or coverage targets.
-    """
-    platform_name = sys.platform if platform_name is None else str(platform_name)
-    python_version = (sys.version_info.major, sys.version_info.minor) if python_version is None else tuple(python_version)
-    environ = os.environ if environ is None else environ
-    if str(environ.get("COVERAGE_CORE") or "").strip():
-        return None
-    if platform_name == "win32" and python_version >= (3, 14):
-        return "ctrace"
-    return None
-
-
 def _run_synthetic_suite_with_optional_coverage(run_dir, base_params, validator_runner, recoverable_exceptions):
     if not run_dir:
         return validator_runner(base_params)
@@ -182,12 +164,12 @@ def _run_synthetic_suite_with_optional_coverage(run_dir, base_params, validator_
         include=build_coverage_include_paths(PROJECT_ROOT),
         omit=HEADLESS_COVERAGE_OMIT_PATTERNS,
     )
-    core_override = _synthetic_coverage_core_override()
-    if core_override is not None:
-        cov.set_option("run:core", core_override)
+    # AI: Phase 16 forced ctrace on Windows/Python 3.14, but the formal A/B
+    # showed slower coverage and an 80-second parent-budget failure.  Let
+    # coverage.py select its native tracer; explicit COVERAGE_CORE remains
+    # supported directly by coverage.py without a project-specific override.
     selected_core = str(cov.get_option("run:core") or "auto")
-    if core_override is not None:
-        print(f"[synthetic coverage] core={selected_core} (Windows/Python 3.14 trial)")
+    print(f"[synthetic coverage] core={selected_core}")
     results = []
     summaries = []
     synthetic_fail_count = 0

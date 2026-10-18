@@ -4,7 +4,7 @@
 
 ## 驗證執行與來源快取邊界
 
-Windows／Python 3.14 的 reduced synthetic coverage 性能對照暫採 coverage.py `ctrace`，代替該版本預設的 `sysmon`；此為**待本機實測的執行引擎選擇**，不是已證明的加速成果。標準環境變數 `COVERAGE_CORE` 有明確值時優先採用，方便不修改測試或套件鎖版直接 A/B 測量。`coverage_run_info.json` 保存 `coverage_core_requested`。完整原始 synthetic Registry、branch/line coverage 的 include／omit、品質門檻與 FAIL 判定均不變；正式 Windows Bundle 耗時及 coverage 比率須以本機結果為準。
+Synthetic coverage 使用 **coverage.py 原生自動選擇的追蹤引擎**，不再強制 Windows／Python 3.14 改用 `ctrace`。Phase 16 本機 A/B 顯示：強制 `ctrace` 後 `consistency` 從 78.32 秒增加為 83.53 秒，超過原有 80 秒預算，屬已證實的效能退步。標準環境變數 `COVERAGE_CORE` 仍由 coverage.py 直接解讀，供隔離效能診斷；`coverage_run_info.json` 保留 `coverage_core_requested` 紀錄，未指定時為 `auto`。Synthetic Registry、branch／line coverage include／omit、coverage 品質門檻與 FAIL／timeout 判定完全不變。本次撤回退步不是對 30～40 秒目標的達成宣告。
 
 `tools/validate/source_index.py` 對檔案來源提供依修改時間與大小辨識的共用 AST／import／結構摘要，`research_lifecycle_architecture.py` 對合成故障注入採**檔名與原始碼內容**作為 AST／函式結構摘要快取鍵。`meta_contracts.py` 仍對每個模組完整檢查靜態 import；只有原始碼不包含 `import_module`／`__import__` 識別字時，才跳過不可能出現 literal dynamic import 的第二輪 AST 走訪。所有原有驗證項目、違規判斷、SSOT 凍結測試及 coverage 門檻維持不變；檔案或注入內容變更必須重新驗證，不得用上次快取結果授權 PASS。
 
