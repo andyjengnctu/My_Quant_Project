@@ -28,7 +28,14 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
     BREAKOUT_QUALITY_USE_INNER_VALIDATION,
 )
-from core.breakout_quality_policy import get_breakout_quality_rolling_test_mode
+from core.breakout_quality_policy import (
+    get_breakout_quality_rolling_test_mode,
+    get_continuous_ranker_execution_recipe,
+)
+from core.breakout_quality_runtime import (
+    CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE,
+    CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+)
 from filters.breakout_quality.paths import (
     resolve_filter_artifact_paths,
     resolve_filter_model_output_dir,
@@ -36,6 +43,7 @@ from filters.breakout_quality.paths import (
 )
 from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME
 from filters.breakout_quality.artifacts import build_file_manifest
+from filters.breakout_quality.dataset_store import resolve_dataset_paths
 from filters.breakout_quality.model_source_provenance import (
     canonical_source_dataset_artifacts,
     forward_published_source_provenance_issues,
@@ -220,16 +228,68 @@ _FIRST_FOLD_NON_FITTING_SETTINGS = frozenset({
 })
 
 
+def _daily_lazy_fit_ignores_event_dataset_artifacts(
+    candidate: Mapping[str, Any], expected: Mapping[str, Any],
+    published: Any, current: Any,
+) -> bool:
+    """Prove that the changed *event* Dataset files are not DL fitting inputs.
+
+    Daily-universal lazy features, daily labels and stock-day membership come
+    from the canonical OHLCV CSV, not the breakout event feature-bank/label cache.
+    The complete event Dataset itself is still SHA-validated by the canonical
+    daily data loader. Here we only recognize complete historical/current file
+    records, never a missing, partial or unverifiable source snapshot.
+
+    Models with external predicted contexts or a non-daily target materializer
+    cannot use this bridge: their fitting inputs might depend on older artifacts
+    not recorded in the native first-fold source contract.
+    """
+    if (
+        candidate.get("training_sample_scope") != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+        or expected.get("training_sample_scope") != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+        or candidate.get("experiment_profile") != expected.get("experiment_profile")
+    ):
+        return False
+    try:
+        recipe = get_continuous_ranker_execution_recipe(str(expected.get("experiment_profile") or ""))
+    except (KeyError, TypeError, ValueError):
+        return False
+    if (
+        recipe.context_policy.source != CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE
+        or recipe.target_policy.materialization_mode
+        != CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT
+    ):
+        return False
+    files = resolve_dataset_paths(Path(".")).artifact_paths()
+    for records in (published, current):
+        if not isinstance(records, Mapping) or set(records) != set(files):
+            return False
+        for name, file_path in files.items():
+            row = records.get(name)
+            if not isinstance(row, Mapping) or row.get("filename") != file_path.name:
+                return False
+            sha = row.get("sha256")
+            size = row.get("size_bytes")
+            if (
+                not isinstance(sha, str) or len(sha) != 64
+                or any(char not in "0123456789abcdef" for char in sha.lower())
+                or type(size) is not int or size < 0
+            ):
+                return False
+    return True
+
+
 def _first_fold_fit_identity_issues(
     candidate: dict[str, Any], expected: dict[str, Any],
     *, project_root: str | Path | None = None,
 ) -> tuple[str, ...]:
-    """Explain a cross-mode fitting mismatch without weakening PIT's native reuse.
+    """Explain cross-mode fitting mismatches while preserving historical FitKeys.
 
-    Forward and Rolling can use different score throughput settings. Only those
-    enumerated options are ignored. A historical CSV inventory is equivalent to
-    the current inventory only through the existing full-source, fail-closed
-    provenance proof; Dataset/Target hashes and all other fitting inputs stay exact.
+    The original Fold FitKey remains byte-for-byte unchanged. When both complete
+    event Dataset manifests differ, only a daily-universal lazy fit with no
+    external context may reuse the weights, *after* canonical CSV inventory
+    equivalence is proved and all remaining source/target/fitting inputs match.
+    This is not a general Dataset hash bypass or a PIT score reuse exemption.
     """
     fields = (
         "filter_id", "model_architecture", "experiment_profile",
@@ -244,17 +304,44 @@ def _first_fold_fit_identity_issues(
     if not isinstance(left_source, Mapping) or not isinstance(right_source, Mapping):
         issues.append("source_contract missing")
     else:
+        inventory_verified = (
+            "source_data_inventory" in left_source
+            and "source_data_inventory" in right_source
+            and source_inventory_matches_current(
+                published=left_source["source_data_inventory"],
+                current=right_source["source_data_inventory"],
+                project_root=project_root,
+            )
+        )
         for field in sorted(set(left_source) | set(right_source)):
             if field not in left_source or field not in right_source:
                 issues.append(f"source_contract.{field} missing")
             elif field == "source_data_inventory":
-                if not source_inventory_matches_current(
-                    published=left_source[field], current=right_source[field],
-                    project_root=project_root,
-                ):
+                if not inventory_verified:
                     issues.append("source_contract.source_data_inventory mismatch")
             elif left_source[field] != right_source[field]:
-                issues.append(f"source_contract.{field} mismatch")
+                # AI: Event-indexed Dataset artifacts are validated upstream, but
+                # they are not daily-universal lazy FIT inputs. Other sources,
+                # the checkpoint and the original Fold FitKey stay unchanged.
+                if not (
+                    field == "dataset_artifacts"
+                    and project_root is not None
+                    and inventory_verified
+                    and isinstance(left_source.get("source_data_inventory"), Mapping)
+                    and bool(left_source["source_data_inventory"])
+                    and isinstance(right_source.get("source_data_inventory"), Mapping)
+                    and bool(right_source["source_data_inventory"])
+                    and isinstance(left_source.get("target_contract"), Mapping)
+                    and bool(left_source["target_contract"])
+                    and left_source["target_contract"] == right_source.get("target_contract")
+                    and isinstance(left_source.get("target_artifacts"), Mapping)
+                    and bool(left_source["target_artifacts"])
+                    and left_source["target_artifacts"] == right_source.get("target_artifacts")
+                    and _daily_lazy_fit_ignores_event_dataset_artifacts(
+                        candidate, expected, left_source[field], right_source[field],
+                    )
+                ):
+                    issues.append(f"source_contract.{field} mismatch")
     left_settings = candidate.get("training_settings")
     right_settings = expected.get("training_settings")
     if not isinstance(left_settings, dict) or not isinstance(right_settings, dict):

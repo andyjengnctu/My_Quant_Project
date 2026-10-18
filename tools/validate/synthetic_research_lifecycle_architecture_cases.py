@@ -384,10 +384,8 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
         changed_train, expected_contract=identity,
     ))
 
-    # Reverse Rolling -> Forward FIT uses the SAME one-way, byte-verified CSV
-    # inventory compatibility proof as the published source validators. It may
-    # never grant equivalence to changed Dataset/Target SHA, training cohorts,
-    # checkpoint bytes, or unproven/missing historical inventory metadata.
+    # AI: Reverse Rolling -> Forward FIT preserves the historical Fold FitKey.
+    # Event Dataset hash changes only pass with fully proven FIT inputs.
     historical = deepcopy(identity)
     historical["source_contract"] = {
         "dataset_policy": "canonical", "dataset_artifacts": {"feature_bank": "sha-old"},
@@ -419,6 +417,121 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                        owner._first_fold_fit_identity_issues(
                            historical, changed_dataset, project_root=root_dir,
                        ))
+            # AI: Derive safe/unsafe capabilities from the canonical profile
+            # registry, independent of the current comparison-model settings.
+            import hashlib
+            from core.breakout_quality_registry import (
+                SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+                TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+            )
+            from core.breakout_quality_runtime import (
+                CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE,
+                CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+            )
+            from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+            from filters.breakout_quality.dataset_store import resolve_dataset_paths
+
+            profiles = [
+                p for p in SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES
+                if get_breakout_quality_experiment_profile(p).training_sample_scope
+                == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+            ]
+            self_contained = next(
+                (p for p in profiles
+                 if get_continuous_ranker_execution_recipe(p).context_policy.source
+                 == CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE
+                 and get_continuous_ranker_execution_recipe(p).target_policy.materialization_mode
+                 == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT), None
+            )
+            external_context = next(
+                (p for p in profiles
+                 if get_continuous_ranker_execution_recipe(p).context_policy.source
+                 != CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE), None
+            )
+            check_true("reverse_bridge_self_contained_and_external_context_profiles_available",
+                       self_contained is not None and external_context is not None)
+            if self_contained is not None and external_context is not None:
+                files = resolve_dataset_paths(Path(".")).artifact_paths()
+                event_records = {
+                    key: {
+                        "filename": path.name,
+                        "sha256": hashlib.sha256(f"old:{key}".encode()).hexdigest(),
+                        "size_bytes": 10,
+                    }
+                    for key, path in files.items()
+                }
+                old_daily = deepcopy(historical)
+                old_daily["training_sample_scope"] = TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+                old_daily["experiment_profile"] = self_contained
+                old_daily["source_contract"]["target_contract"] = {"source": "synthetic_daily_target"}
+                old_daily["source_contract"]["dataset_artifacts"] = event_records
+                new_daily = deepcopy(old_daily)
+                new_daily["source_contract"]["source_data_inventory"] = deepcopy(
+                    current["source_contract"]["source_data_inventory"]
+                )
+                new_daily["source_contract"]["dataset_artifacts"] = deepcopy(event_records)
+                new_daily["source_contract"]["dataset_artifacts"]["event_labels"]["sha256"] = hashlib.sha256(
+                    b"relabel-only-refresh"
+                ).hexdigest()
+                check("reverse_bridge_verified_daily_lazy_event_relabel_does_not_change_fit", (),
+                      owner._first_fold_fit_identity_issues(old_daily, new_daily, project_root=root_dir))
+                check_true("reverse_bridge_original_fitkey_not_rewritten_by_event_relabel",
+                           owner.fold_training_identity(old_daily) != owner.fold_training_identity(new_daily))
+
+                unsafe_context_old = deepcopy(old_daily)
+                unsafe_context_new = deepcopy(new_daily)
+                unsafe_context_old["experiment_profile"] = external_context
+                unsafe_context_new["experiment_profile"] = external_context
+                check_true("reverse_bridge_external_context_requires_original_dataset_lineage",
+                           "source_contract.dataset_artifacts mismatch" in
+                           owner._first_fold_fit_identity_issues(
+                               unsafe_context_old, unsafe_context_new, project_root=root_dir))
+                missing_dataset = deepcopy(old_daily)
+                missing_dataset["source_contract"]["dataset_artifacts"].pop("events_csv")
+                check_true("reverse_bridge_partial_dataset_hash_records_rejected",
+                           "source_contract.dataset_artifacts mismatch" in
+                           owner._first_fold_fit_identity_issues(
+                               missing_dataset, new_daily, project_root=root_dir))
+                bad_dataset = deepcopy(new_daily)
+                bad_dataset["source_contract"]["dataset_artifacts"]["feature_bank"]["sha256"] = "not-a-sha"
+                check_true("reverse_bridge_unverifiable_dataset_sha_rejected",
+                           "source_contract.dataset_artifacts mismatch" in
+                           owner._first_fold_fit_identity_issues(
+                               old_daily, bad_dataset, project_root=root_dir))
+                missing_inventory_proof = deepcopy(old_daily)
+                missing_inventory_proof["source_contract"]["source_data_inventory"] = None
+                matching_missing_inventory = deepcopy(new_daily)
+                matching_missing_inventory["source_contract"]["source_data_inventory"] = None
+                check_true("reverse_bridge_missing_inventory_records_not_a_proof",
+                           "source_contract.dataset_artifacts mismatch" in
+                           owner._first_fold_fit_identity_issues(
+                               missing_inventory_proof, matching_missing_inventory,
+                               project_root=root_dir))
+                absent_target_contract = deepcopy(new_daily)
+                absent_target_contract["source_contract"]["target_contract"] = None
+                check_true("reverse_bridge_missing_target_contract_not_a_proof",
+                           "source_contract.dataset_artifacts mismatch" in
+                           owner._first_fold_fit_identity_issues(
+                               old_daily, absent_target_contract, project_root=root_dir))
+                absent_target_hashes = deepcopy(new_daily)
+                absent_target_hashes["source_contract"]["target_artifacts"] = None
+                check_true("reverse_bridge_missing_target_hashes_not_a_proof",
+                           "source_contract.dataset_artifacts mismatch" in
+                           owner._first_fold_fit_identity_issues(
+                               old_daily, absent_target_hashes, project_root=root_dir))
+                changed_source = deepcopy(new_daily)
+                changed_source["source_contract"]["input_price_source"] = {"materialization_fingerprint": "new"}
+                check_true("reverse_bridge_supplemental_feature_source_change_rejected",
+                           "source_contract.input_price_source missing" in
+                           owner._first_fold_fit_identity_issues(
+                               old_daily, changed_source, project_root=root_dir))
+                changed_training = deepcopy(new_daily)
+                changed_training["group_counts"]["inner_train"] += 1
+                check_true("reverse_bridge_new_dataset_does_not_mask_training_cohort_change",
+                           "group_counts.inner_train mismatch" in
+                           owner._first_fold_fit_identity_issues(
+                               old_daily, changed_training, project_root=root_dir))
+
             changed_target = deepcopy(current)
             changed_target["source_contract"]["target_artifacts"] = {"raw_target": "changed"}
             check_true("reverse_bridge_target_sha_change_never_reused",
@@ -440,8 +553,8 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                            historical, changed_seed, project_root=root_dir,
                        ))
 
-            # Validate the real byte/manifest/checkpoint path, including the
-            # checkpoint-embedded native fold contract, without a GPU training run.
+            # AI: Validate native checkpoint bytes and embedded Fold identity
+            # without requiring a GPU training run.
             from filters.breakout_quality.artifacts import build_file_manifest
             fold_dir = root_dir / "fold_20210101_20211231"
             fold_dir.mkdir()
@@ -474,6 +587,20 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
             check_true("reverse_bridge_verified_fold_bytes_and_embedded_identity",
                        candidate is not None and reason is None
                        and candidate.selected_epoch == 2)
+            if self_contained is not None and external_context is not None:
+                # AI: Test native manifest and embedded checkpoint through FIT owner.
+                verified_daily_manifest = {**manifest, **old_daily}
+                verified_daily_checkpoint = {
+                    **checkpoint, "fold_contract": old_daily,
+                    "experiment_settings": old_daily["experiment_settings"],
+                    "model_spec": old_daily["model_spec"],
+                }
+                verified_daily, verified_reason = owner.validate_rolling_fold_fitted_checkpoint(**{
+                    **verify_args, "manifest": verified_daily_manifest, "expected": new_daily,
+                    "torch_module": SimpleNamespace(load=lambda *_args, **_kwargs: verified_daily_checkpoint),
+                })
+                check_true("reverse_bridge_complete_fold_checkpoint_allows_proven_event_artifact_refresh",
+                           verified_daily is not None and verified_reason is None)
             wrong_execution = owner.validate_rolling_fold_fitted_checkpoint(
                 **{**verify_args, "expected_execution": {"device_type": "cuda"}},
             )
