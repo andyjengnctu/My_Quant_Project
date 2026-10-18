@@ -7275,13 +7275,29 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
     # the active Training Model does not authorize its own Rolling training.
     report_stub = SimpleNamespace(report={})
     outputs = (Path("synthetic_comparison.json"), Path("synthetic_comparison.md"))
-    settings_stub = lambda experiment_profile: SimpleNamespace(experiment_profile=experiment_profile)
+    # [AI] Routing tests use the real canonical workflow settings factory.
+    # A profile-only SimpleNamespace no longer satisfies the shared lifecycle
+    # contract (filter_id / architecture / profile) and is not a valid fixture.
+    canonical_workflow_settings = research_app.get_breakout_quality_workflow_settings
+    settings_stub = lambda experiment_profile: canonical_workflow_settings(
+        experiment_profile=experiment_profile
+    )
+    # [AI] Isolate menu/model-list dispatch from SCORE/EVIDENCE readiness.
+    # The latter is validated by its own lifecycle and SOP contract cases;
+    # this stub asserts only that already-validated results follow both routes.
+    route_ready = SimpleNamespace(
+        source_contract=report_stub,
+        evidence_payload={"model_research_id": "SYNTHETIC_ROUTE_ONLY"},
+        source_reason=None,
+        display_reason="READY",
+        display_action="REUSE",
+        evidence_ready=True,
+    )
     with (
         patch.object(research_app, "get_breakout_quality_model_test_settings", return_value=SimpleNamespace(model_profiles=configured_models)),
         patch.object(research_app, "get_breakout_quality_workflow_settings", side_effect=settings_stub),
         patch.object(research_app, "get_breakout_quality_rolling_test_mode", return_value=object()),
-        patch.object(research_app, "_load_reusable_continuous_forward_contract", return_value=(report_stub, None)),
-        patch.object(research_app, "_load_reusable_rolling_standard_report", return_value=(report_stub, {}, None)),
+        patch.object(research_app, "_resolve_continuous_model_readiness", return_value=route_ready) as routed_readiness,
         patch.object(research_app, "_print_model_action_status") as comparison_status,
         # [AI] Model-list routing is isolated from post-fit score-artifact parsing.
         # D40, joint-quadrant and direct-U40 extensions have independent evidence tests.
@@ -7302,6 +7318,10 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
         forward_return == rolling_return == 0
         and tuple((model_id, profile) for model_id, profile, _action, _reason in forward_rows) == configured_models
         and tuple((model_id, profile) for model_id, profile, _action, _reason in rolling_rows) == configured_models
+        and tuple(
+            (call.args[0].experiment_profile, bool(call.kwargs["rolling"]))
+            for call in routed_readiness.call_args_list
+        ) == tuple((profile, rolling) for rolling in (False, True) for _model_id, profile in configured_models)
         and [call.kwargs.get("evaluation_mode") for call in paired_extension.call_args_list]
         == ["forward_oos", "rolling_oos"]
         and [call.kwargs.get("evaluation_mode") for call in joint_extension.call_args_list]
@@ -7316,6 +7336,7 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
         patch.object(research_app, "resolve_robustness_benchmark_seeds", return_value=(11, 17)),
         patch.object(research_app, "_load_forward_robustness_seed", return_value=(None, outputs[0], "missing")),
         patch.object(research_app, "_load_rolling_robustness_seed", return_value=(None, outputs[0], "missing")),
+        patch.object(research_app, "_rolling_robustness_score_core_contract", return_value=(None, "synthetic SCORE missing")),
         patch.object(research_app, "_prepare_continuous_research_inputs", return_value=98),
         patch.object(research_app, "_print_model_action_status") as robustness_status,
         redirect_stdout(StringIO()),
