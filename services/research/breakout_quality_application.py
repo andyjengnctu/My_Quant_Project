@@ -3364,16 +3364,8 @@ def _probe_continuous_fitted_candidates(settings):
         return None
 
 
-def _has_continuous_forward_fitted_candidate(settings) -> bool:
-    """Compatibility export: all status facts are owned by the FIT service."""
-    probe = _probe_continuous_fitted_candidates(settings)
-    return bool(probe is not None and probe.forward_fit_candidate)
 
 
-def _has_rolling_first_fold_fit_candidate(settings) -> bool:
-    """Compatibility export: never authorizes checkpoint REUSE."""
-    probe = _probe_continuous_fitted_candidates(settings)
-    return bool(probe is not None and probe.rolling_first_fold_candidate)
 
 
 @contextmanager

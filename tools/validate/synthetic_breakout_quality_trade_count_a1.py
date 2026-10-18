@@ -245,8 +245,14 @@ def test_comparison_blocks_before_fit() -> None:
     with (
         patch.object(app, "get_breakout_quality_model_test_settings", return_value=SimpleNamespace(model_profiles=models)),
         patch.object(app, "get_breakout_quality_workflow_settings", side_effect=lambda experiment_profile: SimpleNamespace(experiment_profile=experiment_profile)),
-        patch.object(app, "_load_reusable_continuous_forward_contract", side_effect=((ModelContract(), None), (None, "model.pt missing"))),
-        patch.object(app, "_has_continuous_forward_fitted_candidate", return_value=False),
+        # Model status is resolved once by the canonical stage owner.  Keep
+        # this preflight test about atomic blocker handling, not FIT internals.
+        patch.object(app, "_resolve_continuous_model_readiness", side_effect=(
+            SimpleNamespace(source_contract=ModelContract(), evidence_payload={},
+                            display_action="REUSE", display_reason="READY", evidence_ready=True),
+            SimpleNamespace(source_contract=None, evidence_payload=None,
+                            display_action="BUILD", display_reason="model.pt missing", evidence_ready=False),
+        )),
         patch.object(app, "_collect_continuous_research_input_plan", side_effect=(blocked,)),
         patch.object(app, "_print_model_action_status", side_effect=lambda rows: statuses.extend(rows)),
         patch.object(app, "_ensure_continuous_forward_model_report") as fit,

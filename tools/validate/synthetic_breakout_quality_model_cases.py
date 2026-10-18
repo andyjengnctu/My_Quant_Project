@@ -1541,7 +1541,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
             research_app, "_load_reusable_continuous_forward_contract",
             return_value=(None, "synthetic missing"),
         ),
-        patch.object(research_app, "_has_continuous_forward_fitted_candidate", return_value=False),
+        patch.object(research_app, "_probe_continuous_fitted_candidates", return_value=None),
         patch.object(research_app, "_collect_continuous_research_input_plan", return_value=ready_plan),
         patch.object(research_app, "_render_continuous_research_input_plan"),
         patch.object(research_app, "_prompt_bool", return_value=True),

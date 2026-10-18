@@ -27,6 +27,7 @@ OWNED_FIT_BEHAVIORS = frozenset({
     "validate_rolling_fold_fitted_checkpoint",
     "select_unique_fitted_contract",
     "resolve_forward_fitted_checkpoint",
+    "resolve_compatible_rolling_first_fold",
     "probe_fitted_candidates",
     "resolve_rolling_fitted_folds_root",
 })
@@ -165,21 +166,17 @@ def check_research_fit_architecture_sources(
 
     app_defs = _defs(trees[RESEARCH_APPLICATION])
     for name in ("_has_continuous_forward_fitted_candidate", "_has_rolling_first_fold_fit_candidate"):
-        fn = app_defs.get(name)
-        if fn is None:
-            continue  # Removing the deprecated compatibility names is permitted.
-        if not any(
-            isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-            and node.func.id == "_probe_continuous_fitted_candidates"
-            for node in ast.walk(fn)
-        ):
-            issues.append(f"Application compatibility method bypasses FIT probe: {name}")
-        if any(
-            isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-            and node.func.attr in {"exists", "is_file", "glob", "is_dir"}
-            for node in ast.walk(fn)
-        ):
-            issues.append(f"Application contains a second artifact locator: {name}")
+        if name in app_defs:
+            issues.append(f"retired application FIT compatibility entry was recreated: {name}")
+    if "load_forward_compatible_rolling_checkpoint" in _defs(trees[PIT_PRODUCER]):
+        issues.append("retired PIT rolling FIT resolver was recreated")
+    owner_resolution = _defs(trees[FIT_OWNER]).get("resolve_forward_fitted_checkpoint")
+    if owner_resolution is not None and not any(
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id == "resolve_compatible_rolling_first_fold"
+        for node in ast.walk(owner_resolution)
+    ):
+        issues.append("FIT owner bypasses canonical cross-mode resolution")
     if "_probe_continuous_fitted_candidates" not in app_defs:
         issues.append("Application has no canonical FIT status boundary")
     elif not any(

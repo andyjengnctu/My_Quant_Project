@@ -36,6 +36,25 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
     mut[PIT_PRODUCER] += "\ndef fold_training_identity(contract):\n    return 'shadow'\n"
     check_true("second_pit_fit_identity_blocked", bool(check_research_fit_architecture_sources(mut)))
     mut = dict(sources)
+    mut[PIT_PRODUCER] += ("\ndef load_forward_compatible_rolling_checkpoint(*args, **kwargs):\n"
+                          "    return None, 'shadow'\n")
+    check_true("retired_pit_fit_bridge_cannot_return",
+               any("retired PIT" in issue for issue in check_research_fit_architecture_sources(mut)))
+    mut = dict(sources)
+    mut[RESEARCH_APPLICATION] += (
+        "\ndef _has_continuous_forward_fitted_candidate(settings):\n"
+        "    return True\n"
+    )
+    check_true("retired_application_fit_readiness_cannot_return",
+               any("retired application" in issue for issue in check_research_fit_architecture_sources(mut)))
+    mut = dict(sources)
+    mut[FIT_OWNER] = mut[FIT_OWNER].replace(
+        "rolling, rolling_reason = resolve_compatible_rolling_first_fold(",
+        "rolling, rolling_reason = nonexistent_shadow_resolver(", 1,
+    )
+    check_true("owner_cross_mode_bypass_blocked",
+               bool(check_research_fit_architecture_sources(mut)))
+    mut = dict(sources)
     mut[RESEARCH_APPLICATION] += (
         "\ndef new_shadow_fit_ready(path):\n"
         "    return (path / 'model.pt').is_file()\n"
@@ -121,6 +140,8 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
 
     from services.breakout_quality import fitted_model_artifacts as owner
     from services.breakout_quality import point_in_time_scores as pit
+    check_true("retired_pit_rolling_fit_resolver_removed",
+               not hasattr(pit, "load_forward_compatible_rolling_checkpoint"))
     # Fold identity serialization MUST match the historical byte-level contract.
     identity = {
         "filter_id": "synthetic", "model_architecture": "synthetic",
@@ -168,14 +189,14 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
             torch_module=SimpleNamespace(),
         )
         with patch.object(owner, "load_reusable_fitted_model_contract", return_value=(None, "local missing")), patch.object(
-            pit, "load_forward_compatible_rolling_checkpoint", return_value=(None, "rolling missing"),
+            owner, "resolve_compatible_rolling_first_fold", return_value=(None, "rolling missing"),
         ):
             result = owner.resolve_forward_fitted_checkpoint(**kwargs)
         check("missing_fit_action", "FIT_REQUIRED", result.source)
         check_true("missing_fit_has_evidence_reason", "rolling missing" in str(result.reason))
         (model_dir / "model.pt").write_bytes(b"unverified bytes")
         with patch.object(owner, "load_reusable_fitted_model_contract", return_value=(None, "stale")), patch.object(
-            pit, "load_forward_compatible_rolling_checkpoint", return_value=(None, "not equivalent"),
+            owner, "resolve_compatible_rolling_first_fold", return_value=(None, "not equivalent"),
         ):
             try:
                 owner.resolve_forward_fitted_checkpoint(**kwargs)
@@ -185,18 +206,83 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
         check_true("unverified_existing_fit_blocks_refit", blocked)
         candidate = SimpleNamespace(selected_epoch=3, source="verified_fit")
         with patch.object(owner, "load_reusable_fitted_model_contract", return_value=(candidate, None)), patch.object(
-            pit, "load_forward_compatible_rolling_checkpoint", side_effect=AssertionError("must not scan Rolling when Forward FIT valid"),
+            owner, "resolve_compatible_rolling_first_fold", side_effect=AssertionError("must not scan Rolling when Forward FIT valid"),
         ):
             result = owner.resolve_forward_fitted_checkpoint(**kwargs)
         check("valid_forward_fit_reuse", "FORWARD_FIT", result.source)
         with patch.object(owner, "load_reusable_fitted_model_contract", return_value=(None, "old")), patch.object(
-            pit, "load_forward_compatible_rolling_checkpoint", return_value=(candidate, "verified"),
+            owner, "resolve_compatible_rolling_first_fold", return_value=(candidate, "verified"),
         ), patch.object(owner, "load_model_from_fitted_checkpoint", return_value="model"), patch.object(
             owner, "import_verified_rolling_forward_checkpoint", return_value=(None, True),
         ):
             result = owner.resolve_forward_fitted_checkpoint(**kwargs)
         check("cross_mode_fit_reuse", "ROLLING_FIT", result.source)
         check("cross_mode_fit_loaded_without_refit", "model", result.preloaded_model)
+
+    # Exercise the *migrated* resolver, not only mocked Forward policy calls.
+    # PIT produces train/validation cohort facts; the FIT owner alone locates
+    # and approves a candidate.  This must work without any one-off MR identity.
+    import json
+    import numpy as np
+    from core.breakout_quality_registry import TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+    with TemporaryDirectory() as td:
+        folds_dir = Path(td) / "folds"
+        fold_dir = folds_dir / "fold_20210101_20211231"
+        fold_dir.mkdir(parents=True)
+        manifest = {"fold_id": fold_dir.name, "planned_periods": {
+            "score_start": "2021-01-01", "score_end": "2021-12-31"}}
+        (fold_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (fold_dir / "model.pt").write_bytes(b"synthetic FIT bytes")
+        candidate = owner.FittedModelContract(
+            manifest_path=fold_dir / "manifest.json", model_path=fold_dir / "model.pt",
+            manifest=manifest, fitting_identity={"fixture": "same_fit"},
+            selected_epoch=3, epoch_selection={}, final_refit_history=[], source="synthetic",
+        )
+        args = SimpleNamespace(
+            filter_id="fixture", model_architecture="fixture", experiment_profile="fixture",
+            seed=42, inner_validation_months=24, use_inner_validation=True,
+            epochs=3, batch_size=64, lr=0.001, weight_decay=0.0,
+            gradient_clip_norm=1.0, early_stopping_patience=1,
+            early_stopping_min_delta=0.0,
+        )
+        pit_args = SimpleNamespace(**{k: v for k, v in vars(args).items()
+                                      if k != "use_inner_validation"}, train_window_months=None)
+        bundle = SimpleNamespace(profile=SimpleNamespace(
+            training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS))
+        split = SimpleNamespace(report={"oos_start_date": "2021-01-01"},
+                                inner_train_ids=np.array([1, 2]),
+                                validation_ids=np.array([3]),
+                                selection_ids=np.array([1, 2, 3]))
+        cohort = {"train_ids": np.array([1, 2]), "validation_ids": np.array([3]),
+                  "final_ids": np.array([1, 2, 3])}
+        call = dict(bundle=bundle, forward_split=split, forward_args=args,
+                    forward_plan=SimpleNamespace(), torch_module=SimpleNamespace(),
+                    project_root=Path(td))
+        with patch.object(owner, "resolve_rolling_fitted_folds_root", return_value=folds_dir), \
+             patch.object(pit, "parse_args", return_value=pit_args), \
+             patch.object(pit, "_fold_group_ids", return_value=cohort) as fold_ids, \
+             patch.object(pit, "_fold_contract_payload", return_value={"fixture": "same_fit"}), \
+             patch.object(owner, "scientific_torch_execution", return_value={}), \
+             patch.object(owner, "validate_rolling_fold_fitted_checkpoint", return_value=(candidate, None)) as verify:
+            found, reason = owner.resolve_compatible_rolling_first_fold(**call)
+            check_true("migrated_fit_owner_accepts_matching_first_fold",
+                       found == candidate and "verified" in reason)
+            check_true("pit_only_supplies_native_cohort_for_fit_owner",
+                       fold_ids.call_count == 1 and verify.call_count == 1)
+            with patch.object(pit, "_fold_group_ids", return_value={
+                **cohort, "train_ids": np.array([7, 8])}):
+                mismatch, reason = owner.resolve_compatible_rolling_first_fold(**call)
+            check_true("migrated_fit_owner_rejects_cohort_mismatch",
+                       mismatch is None and "sample membership" in reason)
+            (fold_dir / "manifest.json").unlink()
+            try:
+                owner.resolve_compatible_rolling_first_fold(**call)
+            except RuntimeError as exc:
+                missing_manifest_blocked = "missing its fitting manifest" in str(exc)
+            else:
+                missing_manifest_blocked = False
+            check_true("migrated_fit_owner_blocks_corrupt_first_fold",
+                       missing_manifest_blocked)
 
     # No approved science/report identity may change merely because this is a
     # code-organization refactor; those fingerprints live in the report registry.
