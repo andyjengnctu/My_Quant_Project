@@ -105,9 +105,13 @@ from services.breakout_quality.model_artifact_readiness import (
     ModelRobustnessSeedSource,
     resolve_model_artifact_readiness,
     resolve_model_robustness_readiness,
+    resolve_model_robustness_seed_readiness,
     standard_model_report_matches_source,
 )
-from services.breakout_quality.rolling_model_source import load_rolling_model_source
+from services.breakout_quality.rolling_model_source import (
+    invalidate_rolling_model_source_cache,
+    load_rolling_model_source,
+)
 from services.breakout_quality.forward_model_source import (
     load_forward_model_source,
     _forward_source_provenance_issues as _forward_provenance_owner,
@@ -4541,12 +4545,13 @@ def _rolling_robustness_score_core_contract(settings, *, seed: int):
     return source, None
 
 
-def _load_rolling_robustness_seed(settings, *, seed: int):
-    """Validate seed evidence via the same audited/SCORE-only source selector.
+def _inspect_rolling_robustness_seed(settings, *, seed: int) -> ModelRobustnessSeedSource:
+    """Observe a seed's EVIDENCE and SCORE from one canonical source read.
 
-    A valid full Ranking contract already verified its SCORE.  On an Audit
-    failure only, the owner verifies SCORE independently and we classify an
-    EVIDENCE-only refresh without checking that score twice.
+    A missing/bad Audit may retain the independently validated SCORE returned
+    by the Rolling source owner. Reject a stale FIT recipe or wrong benchmark
+    seed before either evidence can authorize REUSE. The execution-time producer
+    separately revalidates SCORE to handle changes after this preview.
     """
     pit_dir, _unused = _model_robustness_dirs(settings, seed=seed, rolling=True)
     audit_path = pit_dir / SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME
@@ -4560,30 +4565,48 @@ def _load_rolling_robustness_seed(settings, *, seed: int):
     )
     source = resolved.source_contract
     if source is None:
-        return None, audit_path, f"Rolling robustness SCORE not reusable: {resolved.score_error}"
+        return ModelRobustnessSeedSource(
+            int(seed), None, audit_path,
+            f"Rolling robustness SCORE not reusable: {resolved.score_error}",
+        )
     contract = resolved.complete_contract
     if contract is not None and int(contract.seed) != int(seed):
-        return None, audit_path, "Rolling robustness SCORE not reusable: manifest seed mismatch"
+        return ModelRobustnessSeedSource(
+            int(seed), None, audit_path,
+            "Rolling robustness SCORE not reusable: manifest seed mismatch",
+        )
     fit_issues = pit_fold_fitting_settings_issues(
         point_in_time_dir=pit_dir, manifest=source.manifest,
         expected=current_default_fitting_settings(),
     )
     if fit_issues:
-        return None, audit_path, (
+        return ModelRobustnessSeedSource(
+            int(seed), None, audit_path,
             "Rolling robustness fitted-model training settings stale: "
-            + "; ".join(fit_issues[:8])
+            + "; ".join(fit_issues[:8]),
         )
     if contract is None:
-        return None, audit_path, (
-            f"Rolling robustness EVIDENCE refresh required: {resolved.audit_error}"
+        return ModelRobustnessSeedSource(
+            int(seed), None, audit_path,
+            f"Rolling robustness EVIDENCE refresh required: {resolved.audit_error}",
+            score_contract=source,
         )
     audit = dict(contract.audit or {})
     issues = _validate_robustness_standard_payload(
         audit, settings=settings, seed=seed, evaluation_mode="rolling_oos"
     )
     if issues:
-        return None, audit_path, "; ".join(issues[:8])
-    return audit, audit_path, None
+        return ModelRobustnessSeedSource(
+            int(seed), None, audit_path, "; ".join(issues[:8]),
+            score_contract=source,
+        )
+    return ModelRobustnessSeedSource(int(seed), audit, audit_path, None)
+
+
+def _load_rolling_robustness_seed(settings, *, seed: int):
+    """Compatibility facade for consumers expecting (payload, path, reason)."""
+    observed = _inspect_rolling_robustness_seed(settings, seed=seed)
+    return observed.verified_evidence, observed.evidence_path, observed.reason
 
 
 def _build_forward_robustness_seed(
@@ -4733,9 +4756,68 @@ def _build_rolling_robustness_seed(
     return _run(build_args)
 
 
+def _observe_model_robustness_seed(settings, *, seed: int, rolling: bool) -> ModelRobustnessSeedSource:
+    """Observe one mode/seed through the verified canonical source adapter."""
+    if rolling:
+        return _inspect_rolling_robustness_seed(settings, seed=seed)
+    payload, path, reason = _load_forward_robustness_seed(settings, seed=seed)
+    return ModelRobustnessSeedSource(
+        seed=int(seed), verified_evidence=payload,
+        evidence_path=path, reason=reason,
+    )
+
+
+def _observe_model_robustness_sources(settings, *, seeds: tuple[int, ...], rolling: bool):
+    """One verified snapshot shared by the execution plan and report inputs."""
+    sources = tuple(
+        _observe_model_robustness_seed(settings, seed=seed, rolling=rolling)
+        for seed in seeds
+    )
+    if tuple(item.seed for item in sources) != seeds:
+        raise RuntimeError("Model robustness observed seed order/identity differs from benchmark spec")
+    states = tuple(
+        (item.seed, item.verified_evidence, item.evidence_path, item.reason)
+        for item in sources
+    )
+    return states, sources
+
+
+def _require_model_robustness_report_sources(
+    settings, *, model_id: str, seeds: tuple[int, ...], rolling: bool, after: str,
+) -> tuple[list[dict], list[Path]]:
+    """Fail closed on a fresh, complete per-model canonical EVIDENCE snapshot.
+
+    Used by the per-model and cross-model publication boundaries. The shared
+    stage owner, not this consumer, determines whether EVIDENCE is reusable.
+    """
+    states, sources = _observe_model_robustness_sources(
+        settings, seeds=seeds, rolling=rolling,
+    )
+    readiness = resolve_model_robustness_readiness(
+        mode="rolling" if rolling else "forward", sources=sources,
+    )
+    if not readiness.evidence_ready:
+        failed = (
+            f"seed={item.seed}: {item.readiness.source_reason or 'Standard SOP evidence incomplete'}"
+            for item in readiness.seeds if not item.readiness.evidence_ready
+        )
+        raise RuntimeError(
+            f"{model_id} robustness來源在{after}已失效；拒絕發布報表: "
+            + "; ".join(list(failed)[:8])
+        )
+    return (
+        [dict(payload["standard_model_sop"]) for _seed, payload, _path, _reason in states],
+        [Path(path) for _seed, _payload, path, _reason in states],
+    )
+
+
 def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int:
     """Run model robustness through the same model list, SOP builder and comparison renderer."""
 
+    # A prior Research invocation (or an external score/audit Producer) may
+    # have rewritten a PIT source since its last cached complete validation.
+    if rolling:
+        invalidate_rolling_model_source_cache()
     seeds = tuple(int(seed) for seed in resolve_robustness_benchmark_seeds())
     if len(seeds) < 2:
         raise ValueError("Model robustness benchmark至少需要兩個seed")
@@ -4754,27 +4836,9 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
     rows = []
     for model_id, profile_name in model_list:
         settings = get_breakout_quality_workflow_settings(experiment_profile=str(profile_name))
-        seed_states = []
-        verified_sources = []
-        for seed in seeds:
-            payload, path, reason = (
-                _load_rolling_robustness_seed(settings, seed=seed)
-                if rolling else _load_forward_robustness_seed(settings, seed=seed)
-            )
-            # Full evidence already implies that the canonical source owner
-            # verified SCORE. Only an incomplete Rolling seed needs the
-            # independent SCORE-only fallback to classify EVIDENCE refresh.
-            score_contract, score_reason = (None, None)
-            if rolling and payload is None:
-                score_contract, score_reason = _rolling_robustness_score_core_contract(
-                    settings, seed=seed,
-                )
-            seed_states.append((seed, payload, path, reason))
-            verified_sources.append(ModelRobustnessSeedSource(
-                seed=seed, verified_evidence=payload,
-                evidence_path=path, reason=reason or score_reason,
-                score_contract=score_contract,
-            ))
+        seed_states, verified_sources = _observe_model_robustness_sources(
+            settings, seeds=seeds, rolling=rolling,
+        )
         readiness = resolve_model_robustness_readiness(
             mode="rolling" if rolling else "forward", sources=verified_sources,
         )
@@ -4787,7 +4851,19 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
     force_rebuild = False
 
     completed = []
+    # Model plans were previewed together before any Producer ran. If one
+    # model changes shared inputs, later models must refresh their preview;
+    # earlier completed model evidence must be verified again before REPORT.
+    preceding_model_mutation = False
+    affected_completed_models: set[int] = set()
     for model_id, settings, seed_states, readiness in plans:
+        if preceding_model_mutation:
+            seed_states, verified_sources = _observe_model_robustness_sources(
+                settings, seeds=seeds, rolling=rolling,
+            )
+            readiness = resolve_model_robustness_readiness(
+                mode="rolling" if rolling else "forward", sources=verified_sources,
+            )
         # A missing Rolling Audit is an EVIDENCE-only refresh: no upstream
         # preparation is permitted unless the canonical stage plan requires
         # a new SCORE. Unexpected execution-time SCORE invalidation is handled
@@ -4801,12 +4877,40 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
             code = _prepare_continuous_research_inputs(program_name, settings)
             if code != 0:
                 return int(code)
+            affected_completed_models.update(range(len(completed)))
+            preceding_model_mutation = True
+            if rolling:
+                invalidate_rolling_model_source_cache()
+            # Upstream Dataset/Target preparation may publish a new lineage.
+            # Do not execute a seed plan or reuse its evidence from *before*
+            # that publication; re-observe only when upstream ran. Fully READY
+            # models never pay for this second full validation pass.
+            seed_states, verified_sources = _observe_model_robustness_sources(
+                settings, seeds=seeds, rolling=rolling,
+            )
+            readiness = resolve_model_robustness_readiness(
+                mode="rolling" if rolling else "forward", sources=verified_sources,
+            )
         seed_payloads = []
         source_reports = []
         built = False
         for seed_index, ((seed, payload, path, reason), seed_stage) in enumerate(
             zip(seed_states, readiness.seeds, strict=True), start=1,
         ):
+            if built:
+                # A preceding seed's Producer may have changed shared input
+                # lineage; never REUSE the following seed's old preview state.
+                current = _observe_model_robustness_seed(
+                    settings, seed=seed, rolling=rolling,
+                )
+                if int(current.seed) != int(seed):
+                    raise RuntimeError("Model robustness seed observation identity changed")
+                payload, path, reason = (
+                    current.verified_evidence, current.evidence_path, current.reason,
+                )
+                seed_stage = resolve_model_robustness_seed_readiness(
+                    mode="rolling" if rolling else "forward", source=current,
+                )
             seed_text = _seed_progress_text(seed, seed_index, len(seeds))
             if force_rebuild or seed_stage.readiness.plan.action_by_key["EVIDENCE"].action != "REUSE":
                 print(
@@ -4826,6 +4930,13 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
                 )
                 if code != 0:
                     return int(code)
+                affected_completed_models.update(range(len(completed)))
+                preceding_model_mutation = True
+                # The Producer may have run as a subprocess and cleared only
+                # its own cache. Refresh our source process before verifying
+                # its result or any subsequent seed.
+                if rolling:
+                    invalidate_rolling_model_source_cache()
                 payload, path, reason = (
                     _load_rolling_robustness_seed(settings, seed=seed)
                     if rolling else _load_forward_robustness_seed(settings, seed=seed)
@@ -4850,6 +4961,13 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
                 )
             seed_payloads.append(dict(payload["standard_model_sop"]))
             source_reports.append(Path(path))
+        if built:
+            # The last Producer may invalidate earlier seeds. Never aggregate
+            # results unless all source evidence is valid after the last write.
+            seed_payloads, source_reports = _require_model_robustness_report_sources(
+                settings, model_id=model_id, seeds=seeds, rolling=rolling,
+                after="Producer執行後",
+            )
         aggregated = aggregate_standard_model_sop_robustness(seed_payloads, seeds=seeds)
         completed.append({
             "model_id": str(model_id),
@@ -4862,6 +4980,20 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
             "benchmark_seeds": seeds,
             "source_reports": source_reports,
         })
+
+    # A later model's Producer can alter a shared upstream after an earlier
+    # model was aggregated. Only those earlier, potentially affected models
+    # require another full source check. Never publish a mixed-lineage report.
+    for completed_index in sorted(affected_completed_models):
+        previous = completed[completed_index]
+        final_payloads, final_reports = _require_model_robustness_report_sources(
+            previous["settings"], model_id=str(previous["model_id"]),
+            seeds=seeds, rolling=rolling, after="其他模型Producer執行後",
+        )
+        previous["payload"]["standard_model_sop"] = aggregate_standard_model_sop_robustness(
+            final_payloads, seeds=seeds,
+        )
+        previous["source_reports"] = final_reports
 
     print("\n" + render_title(f"{mode_label} Robustness Standard Model SOP Comparison"))
     print(_render_standard_model_comparison(completed, target="console"))

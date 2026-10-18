@@ -13,9 +13,20 @@ from pathlib import Path
 from typing import Any
 
 from filters.breakout_quality.ranking_score_store import (
+    clear_selection_point_in_time_ranking_contract_cache,
     load_selection_point_in_time_ranking_contract,
     load_selection_point_in_time_score_source_contract,
 )
+
+
+def invalidate_rolling_model_source_cache() -> None:
+    """Refresh canonical Audit cache after subprocess Producer publication.
+
+    The score/audit Producer may run in a *different Python process*, whose
+    local cache invalidation does not reach this Research application process.
+    The score-store remains the only cache owner and source validator.
+    """
+    clear_selection_point_in_time_ranking_contract_cache()
 
 
 @dataclass(frozen=True)

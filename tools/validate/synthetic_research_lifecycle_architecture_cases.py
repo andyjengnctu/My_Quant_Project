@@ -570,16 +570,18 @@ def validate_research_model_readiness_architecture_case(_base_params):
     check_true("missing_multiseed_stage_owner_blocked",
                bool(check_model_stage_readiness_architecture_sources(edited)))
     edited = dict(sources)
+    # Preview, post-upstream and pre-publication gates all require the owner.
     edited[RESEARCH_APPLICATION] = edited[RESEARCH_APPLICATION].replace(
-        "        readiness = resolve_model_robustness_readiness(",
-        "        readiness = hidden_robustness_plan(", 1,
+        "resolve_model_robustness_readiness(",
+        "hidden_robustness_plan(",
     )
     check_true("application_multiseed_owner_bypass_blocked",
                bool(check_model_stage_readiness_architecture_sources(edited)))
     edited = dict(sources)
     edited[RESEARCH_APPLICATION] = edited[RESEARCH_APPLICATION].replace(
-        "        verified_sources = []",
-        "        verified_sources = []\n        ghost_score = object()", 1,
+        "        seed_states, verified_sources = _observe_model_robustness_sources(",
+        "        ghost_score = object()\n"
+        "        seed_states, verified_sources = _observe_model_robustness_sources(", 1,
     )
     check_true("application_multiseed_fake_source_blocked",
                bool(check_model_stage_readiness_architecture_sources(edited)))
@@ -1000,6 +1002,9 @@ def validate_research_model_readiness_architecture_case(_base_params):
     synthetic_report = {"standard_model_sop": {"schema": "synthetic_complete"}}
     def complete_seed(_settings, *, seed):
         return synthetic_report, Path(f"synthetic/{int(seed)}.json"), None
+    def complete_observation(_settings, *, seed):
+        payload, path, reason = complete_seed(_settings, seed=seed)
+        return ModelRobustnessSeedSource(seed, payload, path, reason)
     with (
         patch("services.breakout_quality.model_artifact_readiness.standard_model_sop_completeness_issues", return_value=()),
         patch.object(model_app, "get_breakout_quality_model_test_settings",
@@ -1007,9 +1012,10 @@ def validate_research_model_readiness_architecture_case(_base_params):
         patch.object(model_app, "get_breakout_quality_workflow_settings", return_value=workflow),
         patch.object(model_app, "resolve_robustness_benchmark_seeds", return_value=(101, 202)),
         patch.object(model_app, "_load_forward_robustness_seed", side_effect=complete_seed),
-        patch.object(model_app, "_load_rolling_robustness_seed", side_effect=complete_seed),
+        patch.object(model_app, "_inspect_rolling_robustness_seed", side_effect=complete_observation),
         patch.object(model_app, "_rolling_robustness_score_core_contract",
                      side_effect=AssertionError("complete seed must not rescore")) as no_rescore,
+        patch.object(model_app, "invalidate_rolling_model_source_cache") as cache_reset,
         patch.object(model_app, "_prepare_continuous_research_inputs",
                      side_effect=AssertionError("complete seeds must not prepare")) as no_prepare,
         patch.object(model_app, "_build_forward_robustness_seed",
@@ -1032,6 +1038,7 @@ def validate_research_model_readiness_architecture_case(_base_params):
         forward_code == rolling_code == 0
         and forward_action == rolling_action == "REUSE"
         and write_report.call_count == 2 and no_rescore.call_count == 0
+        and cache_reset.call_count == 1  # Fresh Rolling preview, no Producer
         and no_prepare.call_count == no_forward_build.call_count == no_rolling_build.call_count == 0)
 
     # When exactly one Rolling seed loses Audit while retaining validated SCORE,
@@ -1041,17 +1048,23 @@ def validate_research_model_readiness_architecture_case(_base_params):
         if seed == 202:
             calls[202] += 1
             if calls[202] == 1:
-                return None, Path("synthetic/202.json"), "Audit missing"
-        return synthetic_report, Path(f"synthetic/{seed}.json"), None
+                return ModelRobustnessSeedSource(
+                    seed, None, Path("synthetic/202.json"), "Audit missing",
+                    score_contract=SimpleNamespace(seed=seed),
+                )
+        return ModelRobustnessSeedSource(
+            seed, synthetic_report, Path(f"synthetic/{seed}.json"), None,
+        )
     with (
         patch("services.breakout_quality.model_artifact_readiness.standard_model_sop_completeness_issues", return_value=()),
         patch.object(model_app, "get_breakout_quality_model_test_settings",
                      return_value=SimpleNamespace(model_profiles=(("MR-SYN", "synthetic_profile"),))),
         patch.object(model_app, "get_breakout_quality_workflow_settings", return_value=workflow),
         patch.object(model_app, "resolve_robustness_benchmark_seeds", return_value=(101, 202)),
-        patch.object(model_app, "_load_rolling_robustness_seed", side_effect=interrupted_seed),
+        patch.object(model_app, "_inspect_rolling_robustness_seed", side_effect=interrupted_seed),
         patch.object(model_app, "_rolling_robustness_score_core_contract",
-                     return_value=(SimpleNamespace(seed=202), None)) as score_only,
+                     side_effect=AssertionError("preview must consume validated SCORE")) as score_only,
+        patch.object(model_app, "invalidate_rolling_model_source_cache") as audit_cache_reset,
         patch.object(model_app, "_prepare_continuous_research_inputs", return_value=0) as prep,
         patch.object(model_app, "_build_rolling_robustness_seed", return_value=0) as audit_build,
         patch.object(model_app, "_build_forward_robustness_seed",
@@ -1068,10 +1081,11 @@ def validate_research_model_readiness_architecture_case(_base_params):
         status_action = print_status.call_args.args[0][0][2]
     check_true("missing_one_seed_audit_refreshes_only_that_seed_then_aggregates",
         code == 0 and status_action == "REFRESH EVIDENCE"
-        and score_only.call_count == 1 and prep.call_count == 0
+        and score_only.call_count == 0 and prep.call_count == 0
+        and audit_cache_reset.call_count == 2  # Initial preview + subprocess Audit
         and audit_build.call_count == 1 and audit_build.call_args.kwargs["seed"] == 202
         and audit_build.call_args.kwargs["inputs_prepared"] is False
-        and calls[202] == 2 and forward_build.call_count == 0
+        and calls[202] == 3 and forward_build.call_count == 0
         and final_report.call_count == 1)
 
     # Producer failure must stop before the cross-seed REPORT can be emitted.
@@ -1080,10 +1094,11 @@ def validate_research_model_readiness_architecture_case(_base_params):
                      return_value=SimpleNamespace(model_profiles=(("MR-SYN", "synthetic_profile"),))),
         patch.object(model_app, "get_breakout_quality_workflow_settings", return_value=workflow),
         patch.object(model_app, "resolve_robustness_benchmark_seeds", return_value=(101, 202)),
-        patch.object(model_app, "_load_rolling_robustness_seed",
-                     return_value=(None, Path("synthetic/audit.json"), "SCORE missing")),
+        patch.object(model_app, "_inspect_rolling_robustness_seed",
+                     side_effect=lambda _settings, *, seed: ModelRobustnessSeedSource(
+                         seed, None, Path("synthetic/audit.json"), "SCORE hash mismatch")),
         patch.object(model_app, "_rolling_robustness_score_core_contract",
-                     return_value=(None, "SCORE hash mismatch")),
+                     side_effect=AssertionError("preview must not recheck SCORE")),
         patch.object(model_app, "_prepare_continuous_research_inputs", return_value=0),
         patch.object(model_app, "_build_rolling_robustness_seed", return_value=71) as failed_producer,
         patch.object(model_app, "aggregate_standard_model_sop_robustness",
@@ -1216,6 +1231,257 @@ def validate_research_model_readiness_architecture_case(_base_params):
             and no_reuse.call_count == no_extra_prep.call_count == no_forward.call_count == 0
             and "--no-resume" in calls[0][1]
             and calls[0][1].count("--checkpoint-cache-root") == 1)
+
+    # Phase 9: one Rolling inspection must retain the verified SCORE returned
+    # by the common source owner; never re-read SCORE solely for a preview.
+    with TemporaryDirectory() as td:
+        fake_score = SimpleNamespace(seed=101, manifest={"synthetic": True})
+        missing_audit = SimpleNamespace(
+            source_contract=fake_score, complete_contract=None,
+            audit_error="Audit missing", score_error=None,
+        )
+        with (
+            patch.object(model_app, "_model_robustness_dirs", return_value=(Path(td), Path(td))),
+            patch.object(model_app, "load_rolling_model_source", return_value=missing_audit) as canonical_load,
+            patch.object(model_app, "pit_fold_fitting_settings_issues", return_value=()) as fit_check,
+        ):
+            missing_observation = model_app._inspect_rolling_robustness_seed(workflow, seed=101)
+        check_true("seed_missing_audit_uses_exactly_one_canonical_score_observation",
+            canonical_load.call_count == 1 and fit_check.call_count == 1
+            and missing_observation.verified_evidence is None
+            and missing_observation.score_contract is fake_score
+            and "EVIDENCE refresh" in str(missing_observation.reason))
+        missing_stage = resolve_model_robustness_readiness(
+            mode="rolling", sources=(missing_observation,),
+        )
+        check_true("single_rolling_observation_authorizes_evidence_only_not_fit",
+            missing_stage.plan.action_by_key["seed:101:FIT"].action == "NOT_REQUIRED"
+            and missing_stage.plan.action_by_key["seed:101:SCORE"].action == "REUSE"
+            and missing_stage.plan.action_by_key["seed:101:EVIDENCE"].action == "DERIVE")
+        with (
+            patch.object(model_app, "_model_robustness_dirs", return_value=(Path(td), Path(td))),
+            patch.object(model_app, "load_rolling_model_source", return_value=missing_audit),
+            patch.object(model_app, "pit_fold_fitting_settings_issues", return_value=("FIT settings stale",)),
+        ):
+            invalid_fit = model_app._inspect_rolling_robustness_seed(workflow, seed=101)
+        check_true("seed_fit_recipe_drift_cannot_reuse_score_or_evidence",
+            invalid_fit.score_contract is None and invalid_fit.verified_evidence is None
+            and "settings stale" in str(invalid_fit.reason))
+        wrong_seed = SimpleNamespace(
+            source_contract=fake_score,
+            complete_contract=SimpleNamespace(seed=202, audit=synthetic_report),
+            audit_error=None, score_error=None,
+        )
+        with (
+            patch.object(model_app, "_model_robustness_dirs", return_value=(Path(td), Path(td))),
+            patch.object(model_app, "load_rolling_model_source", return_value=wrong_seed),
+            patch.object(model_app, "pit_fold_fitting_settings_issues",
+                         side_effect=AssertionError("seed mismatch must fail before FIT settings")) as no_fit,
+        ):
+            wrong = model_app._inspect_rolling_robustness_seed(workflow, seed=101)
+        check_true("complete_seed_mismatch_does_not_turn_into_score_only_reuse",
+            wrong.score_contract is None and wrong.verified_evidence is None
+            and no_fit.call_count == 0)
+        complete_audit = SimpleNamespace(
+            source_contract=fake_score,
+            complete_contract=SimpleNamespace(seed=101, audit=synthetic_report),
+            audit_error=None, score_error=None,
+        )
+        with (
+            patch.object(model_app, "_model_robustness_dirs", return_value=(Path(td), Path(td))),
+            patch.object(model_app, "load_rolling_model_source", return_value=complete_audit) as canonical_load,
+            patch.object(model_app, "pit_fold_fitting_settings_issues", return_value=()),
+            patch.object(model_app, "_validate_robustness_standard_payload", return_value=()),
+        ):
+            complete_observation = model_app._inspect_rolling_robustness_seed(workflow, seed=101)
+        check_true("complete_seed_reuses_full_audit_without_secondary_score_validation",
+            canonical_load.call_count == 1
+            and complete_observation.verified_evidence == synthetic_report
+            and complete_observation.score_contract is None)
+
+    # Source-owner API delegates invalidation to the cached canonical Ranking
+    # contract; a subprocess cannot invalidate the parent process implicitly.
+    from services.breakout_quality import rolling_model_source as rolling_owner
+    with patch.object(
+        rolling_owner, "clear_selection_point_in_time_ranking_contract_cache",
+    ) as owner_clear:
+        rolling_owner.invalidate_rolling_model_source_cache()
+    check_true("rolling_source_cache_invalidation_uses_canonical_cache_owner",
+               owner_clear.call_count == 1)
+
+    with patch.object(
+        model_app, "_observe_model_robustness_seed",
+        side_effect=lambda _settings, *, seed, rolling: ModelRobustnessSeedSource(
+            seed + 1, synthetic_report, Path(f"synthetic/{seed + 1}.json"), None,
+        ),
+    ):
+        try:
+            model_app._observe_model_robustness_sources(
+                workflow, seeds=(101, 202), rolling=True,
+            )
+            wrong_seed_order_accepted = True
+        except RuntimeError:
+            wrong_seed_order_accepted = False
+    check_true("verified_seed_observation_must_match_configured_order_and_identity",
+               not wrong_seed_order_accepted)
+
+    # Dataset/Target preparation and per-seed Producers are mutation barriers.
+    # Both must force new canonical observations before stale evidence is
+    # consumed, without rereading fully READY runs.
+    def run_phase9_synthetic_routing(*, initially_ready, after_prepare_ready,
+                                     after_first_build_stale, final_stale_first=False):
+        phase = {"prepared": False, "built": [], "observed": []}
+        def observe(_settings, *, seed, rolling):
+            phase["observed"].append((int(seed), phase["prepared"], tuple(phase["built"])))
+            ready = initially_ready[int(seed)] if not phase["prepared"] else after_prepare_ready[int(seed)]
+            if int(seed) == 202 and phase["built"] and after_first_build_stale:
+                ready = False
+            if int(seed) in phase["built"]:
+                ready = True
+            if int(seed) == 101 and 202 in phase["built"] and final_stale_first:
+                ready = False  # last seed's Producer invalidated an earlier seed
+            return ModelRobustnessSeedSource(
+                int(seed), synthetic_report if ready else None,
+                Path(f"synthetic/{int(seed)}.json"), None if ready else "lineage stale",
+            )
+        def prepare(_name, _settings):
+            phase["prepared"] = True
+            return 0
+        def build(_name, _settings, *, seed, **_kwargs):
+            phase["built"].append(int(seed))
+            return 0
+        with (
+            patch("services.breakout_quality.model_artifact_readiness.standard_model_sop_completeness_issues", return_value=()),
+            patch.object(model_app, "get_breakout_quality_model_test_settings",
+                         return_value=SimpleNamespace(model_profiles=(("MR-SYN", "synthetic_profile"),))),
+            patch.object(model_app, "get_breakout_quality_workflow_settings", return_value=workflow),
+            patch.object(model_app, "resolve_robustness_benchmark_seeds", return_value=(101, 202)),
+            patch.object(model_app, "_observe_model_robustness_seed", side_effect=observe),
+            patch.object(model_app, "_prepare_continuous_research_inputs", side_effect=prepare) as prep,
+            patch.object(model_app, "_build_forward_robustness_seed", side_effect=build) as producer,
+            patch.object(model_app, "_load_forward_robustness_seed",
+                         side_effect=lambda _settings, *, seed: (synthetic_report, Path(f"synthetic/{seed}.json"), None)),
+            patch.object(model_app, "aggregate_standard_model_sop_robustness",
+                         return_value={"schema": "synthetic"}) as aggregate,
+            patch.object(model_app, "_render_standard_model_comparison", return_value="SYNTHETIC"),
+            patch.object(model_app, "_write_standard_model_comparison_report",
+                         return_value=(Path("synthetic.json"), Path("synthetic.md"))) as published,
+            patch.object(model_app, "render_status_paths", return_value=""),
+            patch.object(model_app, "_print_model_action_status"),
+            redirect_stdout(StringIO()),
+        ):
+            try:
+                status = model_app._run_configured_model_robustness("synthetic", rolling=False)
+                error = None
+            except RuntimeError as exc:
+                status, error = None, str(exc)
+        return (status, phase, prep.call_count, producer.call_count,
+                published.call_count, aggregate.call_count, error)
+
+    status, phase, prep_count, build_count, report_count, agg_count, error = run_phase9_synthetic_routing(
+        initially_ready={101: True, 202: True},
+        after_prepare_ready={101: True, 202: True}, after_first_build_stale=False,
+    )
+    check_true("all_ready_seed_sources_checked_once_without_upstream_or_rebuild",
+        status == 0 and prep_count == build_count == 0 and report_count == 1
+        and phase["observed"] == [(101, False, ()), (202, False, ())])
+    status, phase, prep_count, build_count, report_count, agg_count, error = run_phase9_synthetic_routing(
+        initially_ready={101: True, 202: False},
+        after_prepare_ready={101: False, 202: False}, after_first_build_stale=False,
+    )
+    check_true("dataset_preparation_replans_previously_ready_seed_before_report",
+        status == 0 and prep_count == 1 and build_count == 2 and report_count == 1
+        and phase["built"] == [101, 202]
+        and (101, True, ()) in phase["observed"])
+    status, phase, prep_count, build_count, report_count, agg_count, error = run_phase9_synthetic_routing(
+        initially_ready={101: False, 202: True},
+        after_prepare_ready={101: False, 202: True}, after_first_build_stale=True,
+    )
+    check_true("earlier_seed_producer_invalidates_later_seed_reuse_before_aggregate",
+        status == 0 and prep_count == 1 and build_count == 2 and report_count == agg_count == 1
+        and error is None and phase["built"] == [101, 202]
+        and (202, True, (101,)) in phase["observed"])
+    status, phase, prep_count, build_count, report_count, agg_count, error = run_phase9_synthetic_routing(
+        initially_ready={101: False, 202: True},
+        after_prepare_ready={101: False, 202: True},
+        after_first_build_stale=True, final_stale_first=True,
+    )
+    check_true("last_seed_mutation_of_prior_source_blocks_report_publication",
+        status is None and prep_count == 1 and build_count == 2
+        and agg_count == report_count == 0
+        and "拒絕發布報表" in str(error) and "seed=101" in str(error))
+
+    # Multi-model preview happens before any per-model Producer. A model built
+    # earlier may invalidate a later model's precomputed stage plan, and a model
+    # built later can invalidate an earlier model's already aggregated evidence.
+    def run_cross_model_revalidation(*, corrupt_prior_after_later_build):
+        phase = {"built": [], "observed": []}
+        profiles = (("MR-SYN-A", "phase9_a"), ("MR-SYN-B", "phase9_b"))
+        def profile_settings(*, experiment_profile):
+            return SimpleNamespace(
+                filter_id="synthetic", model_architecture="synthetic_arch",
+                experiment_profile=experiment_profile,
+            )
+        def observed(settings, *, seed, rolling):
+            profile = str(settings.experiment_profile)
+            phase["observed"].append((profile, int(seed), tuple(phase["built"])))
+            if profile == "phase9_a":
+                ready = seed == 202 or (profile, seed) in phase["built"]
+                if seed == 202 and ("phase9_b", 101) in phase["built"] and corrupt_prior_after_later_build:
+                    ready = False
+            else:
+                ready = seed == 202 or ("phase9_a", 101) not in phase["built"] or (profile, seed) in phase["built"]
+            return ModelRobustnessSeedSource(
+                int(seed), synthetic_report if ready else None,
+                Path(f"synthetic/{profile}/{seed}.json"), None if ready else "lineage stale",
+            )
+        def producer(_program, settings, *, seed, **_kwargs):
+            phase["built"].append((str(settings.experiment_profile), int(seed)))
+            return 0
+        with (
+            patch("services.breakout_quality.model_artifact_readiness.standard_model_sop_completeness_issues", return_value=()),
+            patch.object(model_app, "get_breakout_quality_model_test_settings",
+                         return_value=SimpleNamespace(model_profiles=profiles)),
+            patch.object(model_app, "get_breakout_quality_workflow_settings", side_effect=profile_settings),
+            patch.object(model_app, "resolve_robustness_benchmark_seeds", return_value=(101, 202)),
+            patch.object(model_app, "_observe_model_robustness_seed", side_effect=observed),
+            patch.object(model_app, "_prepare_continuous_research_inputs", return_value=0) as prepare,
+            patch.object(model_app, "_build_forward_robustness_seed", side_effect=producer),
+            patch.object(model_app, "_load_forward_robustness_seed", side_effect=lambda settings, *, seed: (
+                synthetic_report, Path(f"synthetic/{settings.experiment_profile}/{seed}.json"), None,
+            )),
+            patch.object(model_app, "aggregate_standard_model_sop_robustness",
+                         return_value={"schema": "synthetic"}) as aggregate,
+            patch.object(model_app, "_render_standard_model_comparison", return_value="SYNTHETIC"),
+            patch.object(model_app, "_write_standard_model_comparison_report",
+                         return_value=(Path("synthetic.json"), Path("synthetic.md"))) as publish,
+            patch.object(model_app, "render_status_paths", return_value=""),
+            patch.object(model_app, "_print_model_action_status"),
+            redirect_stdout(StringIO()),
+        ):
+            try:
+                code = model_app._run_configured_model_robustness("synthetic", rolling=False)
+                error = None
+            except RuntimeError as exc:
+                code, error = None, str(exc)
+        return code, error, phase, prepare.call_count, aggregate.call_count, publish.call_count
+
+    code, error, phase, prepare_count, aggregate_count, publish_count = run_cross_model_revalidation(
+        corrupt_prior_after_later_build=False,
+    )
+    check_true("later_model_reobserves_plan_after_prior_model_producer",
+        code == 0 and error is None
+        and phase["built"] == [("phase9_a", 101), ("phase9_b", 101)]
+        and prepare_count == 2 and aggregate_count == 3 and publish_count == 1
+        and ("phase9_b", 101, ()) in phase["observed"]
+        and ("phase9_b", 101, (("phase9_a", 101),)) in phase["observed"])
+    code, error, phase, prepare_count, aggregate_count, publish_count = run_cross_model_revalidation(
+        corrupt_prior_after_later_build=True,
+    )
+    check_true("later_model_producer_cannot_publish_stale_earlier_model_evidence",
+        code is None and prepare_count == 2 and aggregate_count == 2
+        and publish_count == 0
+        and "MR-SYN-A" in str(error) and "拒絕發布報表" in str(error))
 
     # Normal Single resolver does not infer source readiness from unattested
     # payload, even though the Robustness adapter can pass validated evidence.

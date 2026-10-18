@@ -7339,8 +7339,11 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
         patch.object(research_app, "get_breakout_quality_workflow_settings", side_effect=settings_stub),
         patch.object(research_app, "resolve_robustness_benchmark_seeds", return_value=(11, 17)),
         patch.object(research_app, "_load_forward_robustness_seed", return_value=(None, outputs[0], "missing")),
-        patch.object(research_app, "_load_rolling_robustness_seed", return_value=(None, outputs[0], "missing")),
-        patch.object(research_app, "_rolling_robustness_score_core_contract", return_value=(None, "synthetic SCORE missing")),
+        patch.object(research_app, "_inspect_rolling_robustness_seed",
+                     side_effect=lambda _settings, *, seed: research_app.ModelRobustnessSeedSource(
+                         seed, None, outputs[0], "synthetic SCORE missing")),
+        patch.object(research_app, "_rolling_robustness_score_core_contract",
+                     side_effect=AssertionError("preview source should not revalidate SCORE")),
         patch.object(research_app, "_prepare_continuous_research_inputs", return_value=98),
         patch.object(research_app, "_print_model_action_status") as robustness_status,
         redirect_stdout(StringIO()),

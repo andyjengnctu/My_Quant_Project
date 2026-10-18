@@ -415,7 +415,8 @@ def check_model_score_owner_architecture_sources(
         "_load_reusable_rolling_standard_report": ("load_rolling_model_source",),
         "_rolling_robustness_score_core_contract": (source_name,),
         "_rolling_robustness_score_core_ready": ("_rolling_robustness_score_core_contract",),
-        "_load_rolling_robustness_seed": ("load_rolling_model_source",),
+        "_inspect_rolling_robustness_seed": ("load_rolling_model_source",),
+        "_load_rolling_robustness_seed": ("_inspect_rolling_robustness_seed",),
     }
     for fn_name, called in required_calls.items():
         fn = app_defs.get(fn_name)
@@ -427,7 +428,7 @@ def check_model_score_owner_architecture_sources(
         for callee in called:
             if callee not in observed:
                 issues.append(f"{fn_name} bypasses canonical SCORE lifecycle: {callee}")
-        if fn_name in {"_load_reusable_rolling_standard_report", "_load_rolling_robustness_seed"}:
+        if fn_name in {"_load_reusable_rolling_standard_report", "_inspect_rolling_robustness_seed", "_load_rolling_robustness_seed"}:
             if observed & {source_name, complete_name}:
                 issues.append(f"{fn_name} reintroduces a consumer-owned SCORE/Audit fallback")
         if any(n in observed for n in ("build_file_manifest", "compute_file_sha256")):

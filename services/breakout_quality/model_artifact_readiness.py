@@ -237,6 +237,28 @@ class ModelRobustnessReadiness:
         return all(item.readiness.evidence_ready for item in self.seeds)
 
 
+def resolve_model_robustness_seed_readiness(
+    *, mode: str, source: ModelRobustnessSeedSource,
+) -> ModelRobustnessSeedReadiness:
+    """Project a re-observed seed through the same canonical stage policy.
+
+    Used both during initial planning and after upstream or seed Producers
+    mutate artifacts. A consumer may never locally infer stage readiness from
+    file presence or a previously displayed action.
+    """
+    return ModelRobustnessSeedReadiness(
+        seed=int(source.seed),
+        readiness=resolve_model_artifact_readiness(
+            mode=mode,
+            source_contract=source.score_contract,
+            verified_source_ready=source.verified_evidence is not None,
+            evidence_payload=source.verified_evidence,
+            source_reason=source.reason,
+            source_path=None,  # Robustness does not publish per-seed reports.
+        ),
+    )
+
+
 def resolve_model_robustness_readiness(
     *, mode: str, sources: Sequence[ModelRobustnessSeedSource],
 ) -> ModelRobustnessReadiness:
@@ -259,18 +281,13 @@ def resolve_model_robustness_readiness(
     stages: list[ModelRobustnessSeedReadiness] = []
     actions: list[ResearchArtifactAction] = []
     for item in sources:
-        # A complete evidence payload is passed here only after the canonical
-        # complete source loader has validated FIT/SCORE and SOP publication.
-        # Never synthesize a placeholder model/score contract (e.g. object()).
-        stage = resolve_model_artifact_readiness(
-            mode=normalized_mode,
-            source_contract=item.score_contract,
-            verified_source_ready=item.verified_evidence is not None,
-            evidence_payload=item.verified_evidence,
-            source_reason=item.reason,
-            source_path=None,  # No per-seed standalone report publication.
+        # The complete source owner has already verified FIT/SCORE/SOP.
+        # No synthetic placeholder can authorize a seed's SCORE or EVIDENCE.
+        observed_stage = resolve_model_robustness_seed_readiness(
+            mode=normalized_mode, source=item,
         )
-        stages.append(ModelRobustnessSeedReadiness(seed=int(item.seed), readiness=stage))
+        stage = observed_stage.readiness
+        stages.append(observed_stage)
         for key in ("FIT", "SCORE", "EVIDENCE"):
             step = stage.plan.action_by_key[key]
             actions.append(ResearchArtifactAction(
