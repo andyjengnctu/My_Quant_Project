@@ -39,6 +39,73 @@ def append_completed_pair_score_reuse_contract_checks(
     )
     c44_contract = forward_score_reuse_base.arms["C44"]
 
+    # AI: Read-side search must not stat dozens of absent historical namespaces,
+    # but the ordinary helper still exposes registered prospective paths to
+    # callers that create fixture runs. Never cache existence across searches.
+    with tempfile.TemporaryDirectory(prefix="strategy_compare_cache_roots_") as temp_dir:
+        discovery_root = Path(temp_dir)
+        declared_namespaces = strategy_config.resolve_strategy_comparison_result_search_roots(
+            forward_score_reuse_base
+        )
+        expected_first = discovery_root / declared_namespaces[0] / "runs"
+        prospective = reuse_owner_module._comparison_runs_roots(
+            root=discovery_root, settings=forward_score_reuse_base
+        )
+        missing = reuse_owner_module._comparison_runs_roots(
+            root=discovery_root, settings=forward_score_reuse_base,
+            existing_only=True,
+        )
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "result_root_discovery_preserves_prospective_registered_namespaces",
+            True,
+            len(prospective) == len(declared_namespaces)
+            and prospective[0] == expected_first
+            and missing == (),
+        )
+        expected_first.mkdir(parents=True)
+        visible = reuse_owner_module._comparison_runs_roots(
+            root=discovery_root, settings=forward_score_reuse_base,
+            existing_only=True,
+        )
+        expected_first.rmdir()
+        removed = reuse_owner_module._comparison_runs_roots(
+            root=discovery_root, settings=forward_score_reuse_base,
+            existing_only=True,
+        )
+        expected_first.mkdir()
+        recreated = reuse_owner_module._comparison_runs_roots(
+            root=discovery_root, settings=forward_score_reuse_base,
+            existing_only=True,
+        )
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "result_root_read_side_discovery_rechecks_publish_and_removal",
+            True,
+            visible == (expected_first.resolve(),)
+            and removed == ()
+            and recreated == (expected_first.resolve(),),
+        )
+        with patch.object(
+            reuse_owner_module,
+            "resolve_strategy_comparison_result_search_roots",
+            return_value=("../invalid",),
+        ):
+            try:
+                reuse_owner_module._comparison_runs_roots(
+                    root=discovery_root, settings=forward_score_reuse_base,
+                    existing_only=True,
+                )
+            except ValueError:
+                invalid_rejected = True
+            else:
+                invalid_rejected = False
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "result_root_existing_only_never_bypasses_path_validation",
+            True, invalid_rejected,
+        )
+
     # A completed result is only a reusable candidate while its scientific Params
     # producer is still BUILD/REBUILD/RESUME.  The final REUSE/RUN decision must be
     # made after canonical parameter production completes and the plan is re-resolved.

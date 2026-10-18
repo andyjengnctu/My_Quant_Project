@@ -483,7 +483,7 @@ def _archived_pair_source_is_self_contained(
         for name in required_names
     )
 
-def _comparison_runs_roots(*, root: Path, settings: StrategyComparisonSettings) -> tuple[Path, ...]:
+def _comparison_runs_roots(*, root: Path, settings: StrategyComparisonSettings, existing_only: bool = False) -> tuple[Path, ...]:
     """Return registry-derived completed-result cache roots.
 
     A profile owns only its write namespace. Completed-result discovery is global
@@ -494,18 +494,38 @@ def _comparison_runs_roots(*, root: Path, settings: StrategyComparisonSettings) 
     """
 
     # AI: Registry discovery includes namespaces without physical run folders.
-    # Avoid resolving every absent path (especially expensive on Windows) while
-    # preserving canonical resolution for every existing source.  Check disk
-    # existence afresh on every call: no cached state can authorize REUSE.
+    # Runtime searchers consume existing folders only.  Callers that construct
+    # prospective publication paths retain the complete registered list.
+    # Preserve canonical resolution for present sources and probe afresh on each
+    # invocation: no prior result is allowed to authorize REUSE.
+    # A registered suite can expose dozens of cache namespaces, most of which
+    # do not exist in a fresh workspace.  Probe shared ancestors once *within
+    # this read-only discovery call* instead of stat-ing every absent descendant.
+    # Deliberately do not cache across calls: a producer may publish a new run
+    # between two independent cache/reuse decisions.
+    observed_dirs: dict[Path, bool] = {}
+
+    def is_observed_dir(directory: Path) -> bool:
+        cached = observed_dirs.get(directory)
+        if cached is not None:
+            return cached
+        parent = directory.parent
+        parent_exists = (
+            True if parent == root else is_observed_dir(parent)
+        )
+        exists = parent_exists and directory.is_dir()
+        observed_dirs[directory] = exists
+        return exists
+
     runs_roots: list[Path] = []
     for raw in resolve_strategy_comparison_result_search_roots(settings):
         relative = Path(str(raw))
         if relative.is_absolute() or ".." in relative.parts:
             raise ValueError(f"設定路徑必須是專案root相對路徑: {raw}")
         candidate = root / relative / "runs"
-        if candidate.is_dir():
+        if is_observed_dir(candidate):
             runs_roots.append(_resolve_relative_path(root, raw) / "runs")
-        else:
+        elif not existing_only:
             runs_roots.append(candidate)
     return tuple(runs_roots)
 
@@ -572,7 +592,7 @@ def _find_reusable_pair_with_archived_source(
     if not comparison_period:
         return None
     runs_roots = tuple(
-        path for path in _comparison_runs_roots(root=root, settings=settings)
+        path for path in _comparison_runs_roots(root=root, settings=settings, existing_only=True)
         if path.is_dir()
     )
     if not runs_roots:
@@ -900,7 +920,7 @@ def _find_reusable_pair(
     if not settings.preparation.reuse_completed_results:
         return None
     runs_roots = tuple(
-        path for path in _comparison_runs_roots(root=root, settings=settings)
+        path for path in _comparison_runs_roots(root=root, settings=settings, existing_only=True)
         if path.is_dir()
     )
     if not runs_roots:
@@ -1253,7 +1273,7 @@ def _historical_continuous_score_provenance_entries(
     run_dirs = sorted(
         (
             path
-            for runs_root in _comparison_runs_roots(root=root, settings=settings)
+            for runs_root in _comparison_runs_roots(root=root, settings=settings, existing_only=True)
             if runs_root.is_dir()
             for path in runs_root.iterdir()
             if path.is_dir()
@@ -1832,7 +1852,7 @@ def _find_reusable_baseline_source(
     run_dirs = sorted(
         (
             path
-            for runs_root in _comparison_runs_roots(root=root, settings=settings)
+            for runs_root in _comparison_runs_roots(root=root, settings=settings, existing_only=True)
             if runs_root.is_dir()
             for path in runs_root.iterdir()
             if path.is_dir()
