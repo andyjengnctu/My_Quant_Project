@@ -256,9 +256,20 @@ def _daily_lazy_event_dataset_artifact_blocker(
         != CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT
     ):
         return "target materialization is not daily-component"
+    # The native daily-universal loader obtains numerical features/targets from
+    # the canonical source CSV, never from event feature-bank/label artifacts.
+    # Legacy Rolling folds can explicitly record None for these unused
+    # event artifacts. Require complete proof of the actual fitting sources
+    # in the caller; do not manufacture a historical event SHA after the fact.
+    # An existing but incomplete/malformed historical mapping is different:
+    # keep rejecting it, as well as any missing CURRENT event evidence.
     files = resolve_dataset_paths(Path(".")).artifact_paths()
     expected_keys = set(files)
+    if published is not None and not isinstance(published, Mapping):
+        return "historical event Dataset records have an unsupported representation"
     for label, records in (("historical", published), ("current", current)):
+        if label == "historical" and records is None:
+            continue
         if not isinstance(records, Mapping):
             return f"{label} event Dataset records absent or not a mapping"
         actual_keys = set(records)
@@ -307,6 +318,8 @@ def _daily_lazy_dataset_artifact_reuse_blocker(
         return "historical target contract missing or empty"
     if old_target != new_target:
         return "target contract differs"
+    if "dataset_artifacts" not in old_source or "dataset_artifacts" not in new_source:
+        return "event Dataset artifact field absent"
     if "target_artifacts" not in old_source or "target_artifacts" not in new_source:
         return "target artifact field absent"
     target_artifacts = old_source["target_artifacts"]
@@ -328,11 +341,11 @@ def _first_fold_fit_identity_issues(
 ) -> tuple[str, ...]:
     """Explain cross-mode fitting mismatches while preserving historical FitKeys.
 
-    The original Fold FitKey remains byte-for-byte unchanged. When both complete
-    event Dataset manifests differ, only a daily-universal lazy fit with no
-    external context may reuse the weights, *after* canonical CSV inventory
-    equivalence is proved and all remaining source/target/fitting inputs match.
-    This is not a general Dataset hash bypass or a PIT score reuse exemption.
+    The original Fold FitKey remains byte-for-byte unchanged. Event-only
+    Dataset records may differ, or the historical records may be explicitly
+    None, only for a no-external-context daily-component fit whose canonical
+    CSV inventory, Target and every other fitting input have been verified.
+    This never exempts PIT score identity or checkpoint integrity.
     """
     fields = (
         "filter_id", "model_architecture", "experiment_profile",

@@ -489,6 +489,79 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                       owner._first_fold_fit_identity_issues(
                           lazy_target_old, lazy_target_new, project_root=root_dir,
                       ))
+                # AI: Old native Rolling folds can explicitly publish None for
+                # unused event artifacts. This is safe ONLY for a daily-component,
+                # no-external-context fit with independently matched source CSV,
+                # target contract, periods/cohort and complete current evidence.
+                native_none_old = deepcopy(lazy_target_old)
+                native_none_old["source_contract"]["dataset_artifacts"] = None
+                check("reverse_bridge_legacy_none_event_artifacts_do_not_force_refit", (),
+                      owner._first_fold_fit_identity_issues(
+                          native_none_old, lazy_target_new, project_root=root_dir,
+                      ))
+                check_true("reverse_bridge_legacy_none_keeps_original_fitkey",
+                           owner.fold_training_identity(native_none_old)
+                           != owner.fold_training_identity(lazy_target_new))
+                missing_historical_event_field = deepcopy(native_none_old)
+                missing_historical_event_field["source_contract"].pop("dataset_artifacts")
+                check_true("reverse_bridge_absent_event_field_is_not_explicit_none",
+                           "source_contract.dataset_artifacts missing" in
+                           owner._first_fold_fit_identity_issues(
+                               missing_historical_event_field, lazy_target_new,
+                               project_root=root_dir,
+                           ))
+                malformed_historical_event = deepcopy(native_none_old)
+                malformed_historical_event["source_contract"]["dataset_artifacts"] = "legacy-unknown"
+                check_true("reverse_bridge_arbitrary_historical_event_value_rejected",
+                           "dataset_artifacts proof blocked: historical event Dataset "
+                           "records have an unsupported representation" in
+                           owner._first_fold_fit_identity_issues(
+                               malformed_historical_event, lazy_target_new,
+                               project_root=root_dir,
+                           ))
+                partial_historical_event = deepcopy(native_none_old)
+                partial_historical_event["source_contract"]["dataset_artifacts"] = {}
+                check_true("reverse_bridge_partial_historical_event_mapping_not_treated_as_none",
+                           "source_contract.dataset_artifacts mismatch" in
+                           owner._first_fold_fit_identity_issues(
+                               partial_historical_event, lazy_target_new,
+                               project_root=root_dir,
+                           ))
+                changed_csv_old = deepcopy(native_none_old)
+                changed_csv_old["source_contract"]["source_data_inventory"] = None
+                check_true("reverse_bridge_none_event_cannot_replace_missing_csv_inventory",
+                           "source_contract.dataset_artifacts mismatch" in
+                           owner._first_fold_fit_identity_issues(
+                               changed_csv_old, lazy_target_new, project_root=root_dir,
+                           ))
+                changed_target_for_none = deepcopy(lazy_target_new)
+                changed_target_for_none["source_contract"]["target_contract"] = {
+                    "source": "different-target",
+                }
+                check_true("reverse_bridge_none_event_cannot_replace_target_contract",
+                           "source_contract.target_contract mismatch" in
+                           owner._first_fold_fit_identity_issues(
+                               native_none_old, changed_target_for_none,
+                               project_root=root_dir,
+                           ))
+                changed_samples_for_none = deepcopy(lazy_target_new)
+                changed_samples_for_none["group_counts"]["inner_train"] += 1
+                check_true("reverse_bridge_none_event_cannot_replace_sample_membership",
+                           "group_counts.inner_train mismatch" in
+                           owner._first_fold_fit_identity_issues(
+                               native_none_old, changed_samples_for_none,
+                               project_root=root_dir,
+                           ))
+                native_none_external_old = deepcopy(native_none_old)
+                native_none_external_new = deepcopy(lazy_target_new)
+                native_none_external_old["experiment_profile"] = external_context
+                native_none_external_new["experiment_profile"] = external_context
+                check_true("reverse_bridge_none_event_not_exempt_for_predicted_context",
+                           "source_contract.dataset_artifacts mismatch" in
+                           owner._first_fold_fit_identity_issues(
+                               native_none_external_old, native_none_external_new,
+                               project_root=root_dir,
+                           ))
                 missing_target_field = deepcopy(lazy_target_old)
                 missing_target_field["source_contract"].pop("target_artifacts")
                 check_true("reverse_bridge_unrecorded_target_artifact_contract_rejected",
@@ -690,6 +763,36 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                 })
                 check_true("reverse_bridge_native_lazy_target_fold_and_checkpoint_reuse",
                            verified_lazy is not None and verified_lazy_reason is None)
+                # AI: Reproduce the reported Windows failure shape through
+                # both the published Fold manifest and the checkpoint's embedded
+                # contract; a helper-only check can miss the second validation.
+                verified_none_manifest = {**manifest, **native_none_old}
+                verified_none_checkpoint = {
+                    **checkpoint, "fold_contract": native_none_old,
+                    "experiment_settings": native_none_old["experiment_settings"],
+                    "model_spec": native_none_old["model_spec"],
+                }
+                verified_none, verified_none_reason = owner.validate_rolling_fold_fitted_checkpoint(**{
+                    **verify_args, "manifest": verified_none_manifest,
+                    "expected": lazy_target_new,
+                    "torch_module": SimpleNamespace(load=lambda *_args, **_kwargs: verified_none_checkpoint),
+                })
+                check_true("reverse_bridge_native_none_event_manifest_and_checkpoint_reuse",
+                           verified_none is not None and verified_none_reason is None)
+                # The dataset exemption must not bypass checkpoint integrity.
+                damaged_none_manifest = deepcopy(verified_none_manifest)
+                damaged_none_manifest["artifacts"]["checkpoint"]["sha256"] = "0" * 64
+                try:
+                    owner.validate_rolling_fold_fitted_checkpoint(**{
+                        **verify_args, "manifest": damaged_none_manifest,
+                        "expected": lazy_target_new,
+                        "torch_module": SimpleNamespace(load=lambda *_args, **_kwargs: verified_none_checkpoint),
+                    })
+                except RuntimeError as exc:
+                    hash_rejected = "checkpoint hash mismatch" in str(exc)
+                else:
+                    hash_rejected = False
+                check_true("reverse_bridge_native_none_event_checkpoint_hash_still_enforced", hash_rejected)
             wrong_execution = owner.validate_rolling_fold_fitted_checkpoint(
                 **{**verify_args, "expected_execution": {"device_type": "cuda"}},
             )
