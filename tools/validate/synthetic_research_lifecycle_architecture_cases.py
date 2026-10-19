@@ -1103,6 +1103,148 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                     })
                     check_true("ssot_migrated_checkpoint_without_original_context_proof_is_blocked",
                                denied is None and "migrated Rolling checkpoint" in str(reason))
+                    # Legacy Rolling-native checkpoints may later acquire a
+                    # score-refresh migration. The refresh is NOT a Forward
+                    # import: native checkpoint contract + execution must be
+                    # checked against the current FIT, with aggregate and
+                    # Context SHA still binding the published Fold bytes.
+                    # This reproduces the historical second-fold failure where
+                    # no original Forward publication is supposed to exist.
+                    score_only_native = {
+                        **ctx_manifest,
+                        "migration": {
+                            "kind": "expanded_daily_score_universe_checkpoint_reuse",
+                            "training_contract_unchanged": True,
+                            "source_checkpoint_sha_preserved": True,
+                        },
+                    }
+                    native_fitted_checkpoint = {
+                        **ctx_embedded, "torch_execution": dict(execution),
+                    }
+                    def verify_native_score_only(
+                        candidate, checkpoint_to_check=native_fitted_checkpoint,
+                        current_target=target_lineage,
+                    ):
+                        ctx_path.write_text(json.dumps(candidate), encoding="utf-8")
+                        aggregate["folds"][0]["fold_manifest"] = build_file_manifest(ctx_path)
+                        aggregate_path.write_text(json.dumps(aggregate), encoding="utf-8")
+                        return owner.validate_rolling_fold_fitted_checkpoint(**{
+                            **ctx_args, "manifest": candidate,
+                            "torch_module": SimpleNamespace(
+                                load=lambda *_a, **_k: checkpoint_to_check),
+                            "bundle": SimpleNamespace(
+                                model_spec=bundle.model_spec,
+                                profile=bundle.profile,
+                                target_manifest=current_target,
+                            ),
+                        })
+                    reused_native, native_reason = verify_native_score_only(score_only_native)
+                    check_true("ssot_native_rolling_score_refresh_does_not_require_nonexistent_forward_source",
+                               reused_native is not None and native_reason is None)
+                    copied_from_native = deepcopy(score_only_native)
+                    copied_from_native["migration"] = {
+                        "kind": "fitting_identity_checkpoint_reuse",
+                        "training_contract_unchanged": True,
+                        "source_checkpoint_sha_preserved": True,
+                        "source_checkpoint": deepcopy(ctx_manifest["artifacts"]["checkpoint"]),
+                        "initial_fitting_migration": deepcopy(score_only_native["migration"]),
+                    }
+                    reused_copy, copied_reason = verify_native_score_only(copied_from_native)
+                    check_true("ssot_native_score_only_fold_cache_copy_preserves_reuse",
+                               reused_copy is not None and copied_reason is None)
+                    # An owner-verified legacy event-cache drift must be
+                    # consumable by archive score regeneration too. The
+                    # ordinary cache/score path must NOT acquire that bypass.
+                    from services.breakout_quality.fitted_model_artifacts import (
+                        _checkpoint_matches_rescore_contract,
+                        _fold_training_contract_is_compatible,
+                    )
+                    shape_bundle = SimpleNamespace(
+                        feature_bank=SimpleNamespace(shape=(1, 300, 10)),
+                        group_context=SimpleNamespace(shape=(1, 1)),
+                    )
+                    shaped_checkpoint = {
+                        **native_fitted_checkpoint,
+                        "sequence_length": 300, "feature_count": 10,
+                        "context_count": 1,
+                    }
+                    exact_old_schema = _fold_training_contract_is_compatible(
+                        native_context_old, expected_contract=native_context_new,
+                    )
+                    old_schema_denied = _checkpoint_matches_rescore_contract(
+                        checkpoint=shaped_checkpoint, manifest=score_only_native,
+                        fold_contract=native_context_new, bundle=shape_bundle,
+                    )
+                    owner_verified_archive = _checkpoint_matches_rescore_contract(
+                        checkpoint=shaped_checkpoint, manifest=score_only_native,
+                        fold_contract=native_context_new, bundle=shape_bundle,
+                        verified_archived_fit=True, project_root=root_dir,
+                    )
+                    check_true("ssot_archive_reuses_canonical_proven_nonconsumed_event_artifact_drift",
+                               (not exact_old_schema) and (not old_schema_denied)
+                               and owner_verified_archive)
+                    different_seed = deepcopy(native_context_new)
+                    different_seed["seed"] = 777
+                    check_true("ssot_archive_verified_flag_does_not_bypass_changed_seed",
+                               not _checkpoint_matches_rescore_contract(
+                                   checkpoint=shaped_checkpoint, manifest=score_only_native,
+                                   fold_contract=different_seed, bundle=shape_bundle,
+                                   verified_archived_fit=True, project_root=root_dir,
+                               ))
+                    no_native_contract = deepcopy(native_fitted_checkpoint)
+                    no_native_contract.pop("fold_contract")
+                    blocked_native, blocked_reason = verify_native_score_only(
+                        score_only_native, checkpoint_to_check=no_native_contract)
+                    check_true("ssot_legacy_score_refresh_missing_embedded_fold_contract_blocks",
+                               blocked_native is None and "migrated Rolling checkpoint" in str(blocked_reason))
+                    wrong_execution = deepcopy(native_fitted_checkpoint)
+                    wrong_execution["torch_execution"]["deterministic_algorithms"] = False
+                    blocked_native, blocked_reason = verify_native_score_only(
+                        score_only_native, checkpoint_to_check=wrong_execution)
+                    check_true("ssot_legacy_score_refresh_wrong_checkpoint_execution_blocks",
+                               blocked_native is None and "migrated Rolling checkpoint" in str(blocked_reason))
+                    wrong_fold = deepcopy(native_fitted_checkpoint)
+                    wrong_fold["fold_contract"]["seed"] = 777
+                    blocked_native, blocked_reason = verify_native_score_only(
+                        score_only_native, checkpoint_to_check=wrong_fold)
+                    check_true("ssot_legacy_score_refresh_wrong_embedded_fitkey_blocks",
+                               blocked_native is None and "migrated Rolling checkpoint" in str(blocked_reason))
+                    explicit_forward_import = deepcopy(score_only_native)
+                    explicit_forward_import["migration"]["initial_fitting_migration"] = {
+                        "kind": "forward_model_fitting_identity_import",
+                        "training_contract_unchanged": True,
+                        "source_checkpoint_sha_preserved": True,
+                        "source_forward_checkpoint": deepcopy(ctx_manifest["artifacts"]["checkpoint"]),
+                    }
+                    blocked_native, blocked_reason = verify_native_score_only(explicit_forward_import)
+                    check_true("ssot_forward_origin_marker_must_not_be_rebranded_native_rolling",
+                               blocked_native is None and "migrated Rolling checkpoint" in str(blocked_reason))
+                    invalid_source_sha = deepcopy(copied_from_native)
+                    invalid_source_sha["migration"]["source_checkpoint"]["sha256"] = "0" * 64
+                    blocked_native, blocked_reason = verify_native_score_only(invalid_source_sha)
+                    check_true("ssot_native_score_only_bad_source_sha_blocks",
+                               blocked_native is None and "migrated Rolling checkpoint" in str(blocked_reason))
+                    changed_original_context = deepcopy(target_lineage)
+                    changed_original_context[context_spec.manifest_key]["artifact"]["sha256"] = "c" * 64
+                    blocked_native, blocked_reason = verify_native_score_only(
+                        score_only_native, current_target=changed_original_context)
+                    check_true("ssot_native_score_refresh_context_content_change_still_blocks",
+                               blocked_native is None and "external fitting context proof blocked" in str(blocked_reason))
+                    wrong_aggregate = deepcopy(aggregate)
+                    wrong_aggregate["folds"][0]["fold_manifest"]["sha256"] = "0" * 64
+                    ctx_path.write_text(json.dumps(score_only_native), encoding="utf-8")
+                    aggregate_path.write_text(json.dumps(wrong_aggregate), encoding="utf-8")
+                    blocked_native, blocked_reason = owner.validate_rolling_fold_fitted_checkpoint(**{
+                        **ctx_args, "manifest": score_only_native,
+                        "torch_module": SimpleNamespace(
+                            load=lambda *_a, **_k: native_fitted_checkpoint),
+                    })
+                    check_true("ssot_native_score_refresh_aggregate_sha_drift_blocks",
+                               blocked_native is None and "fold/checkpoint SHA" in str(blocked_reason))
+                    # Restore the normal test fixture before Forward-origin cases.
+                    ctx_path.write_text(json.dumps(ctx_manifest), encoding="utf-8")
+                    aggregate["folds"][0]["fold_manifest"] = build_file_manifest(ctx_path)
+                    aggregate_path.write_text(json.dumps(aggregate), encoding="utf-8")
                     
                     from filters.breakout_quality.paths import (
                         resolve_filter_artifact_paths, resolve_filter_model_output_dir,

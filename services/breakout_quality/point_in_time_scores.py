@@ -92,6 +92,7 @@ from core.console_report import (
     render_section,
     render_table,
 )
+from services.breakout_quality.fit_repair_transaction import archived_rolling_fit_fold_candidates
 from services.breakout_quality.fitting_data_dependencies import (
     FitDataDependencies, build_fitting_context_origin, preserve_fitting_migration_chain,
 )
@@ -1366,6 +1367,7 @@ def _rescore_fold_from_compatible_checkpoint(
     args,
     torch_module,
     plan,
+    verified_archived_fit: bool = False,
 ) -> tuple[pd.DataFrame, dict[str, Any]] | None:
     """Reuse an unchanged fitted fold model and regenerate its score rows only."""
 
@@ -1380,10 +1382,24 @@ def _rescore_fold_from_compatible_checkpoint(
         artifacts = dict(manifest.get("artifacts") or {})
         if build_file_manifest(model_path) != artifacts.get("checkpoint"):
             return None
-        if not _fold_training_contract_is_compatible(
+        exact_fitting_schema = _fold_training_contract_is_compatible(
             manifest, expected_contract=fold_contract
-        ):
-            return None
+        )
+        if not exact_fitting_schema and not verified_archived_fit:
+            # A previously restored archive may need another score-only
+            # refresh. Revalidate its immutable source through the FIT owner
+            # rather than silently switching to optimizer training.
+            if manifest.get("archived_rolling_fit_source") is not None:
+                contract, _reason = validate_rolling_fold_fitted_checkpoint(
+                    manifest_path=manifest_path, manifest=manifest,
+                    expected=fold_contract,
+                    expected_execution=scientific_torch_execution(plan),
+                    bundle=bundle, torch_module=torch_module,
+                    project_root=PROJECT_ROOT,
+                )
+                verified_archived_fit = contract is not None
+            if not verified_archived_fit:
+                return None
 
         checkpoint = torch_module.load(model_path, map_location="cpu", weights_only=True)
         if not isinstance(checkpoint, dict):
@@ -1393,6 +1409,8 @@ def _rescore_fold_from_compatible_checkpoint(
             manifest=manifest,
             fold_contract=fold_contract,
             bundle=bundle,
+            verified_archived_fit=verified_archived_fit,
+            project_root=PROJECT_ROOT,
         ):
             return None
         expected_shape = (
@@ -1500,6 +1518,7 @@ def _rescore_fold_from_fitting_checkpoint(
     args,
     torch_module,
     plan,
+    verified_archive_binding: dict[str, Any] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]] | None:
     """Materialize a compatible checkpoint from the shared fitting-identity cache, then rescore locally.
 
@@ -1521,9 +1540,9 @@ def _rescore_fold_from_fitting_checkpoint(
         source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
         if not isinstance(source_manifest, dict):
             return None
-        if not _fold_training_contract_is_compatible(
+        if (verified_archive_binding is None and not _fold_training_contract_is_compatible(
             source_manifest, expected_contract=fold_contract
-        ):
+        )):
             return None
         source_checkpoint_manifest = build_file_manifest(source_model_path)
         if source_checkpoint_manifest != dict(source_manifest.get("artifacts") or {}).get(
@@ -1541,7 +1560,19 @@ def _rescore_fold_from_fitting_checkpoint(
     staging.mkdir(parents=True, exist_ok=False)
     try:
         shutil.copy2(source_model_path, staging / DEFAULT_MODEL_FILENAME)
-        shutil.copy2(source_manifest_path, staging / FOLD_MANIFEST_FILENAME)
+        if verified_archive_binding is None:
+            shutil.copy2(source_manifest_path, staging / FOLD_MANIFEST_FILENAME)
+        else:
+            # The owner previously established semantic FIT equivalence even
+            # when old event-only source artifact metadata differs. Project
+            # only current evaluation/FIT source fields into the new manifest;
+            # original archive and checkpoint bytes remain unchanged and SHA-
+            # bound by archived_rolling_fit_source.
+            write_json(staging / FOLD_MANIFEST_FILENAME, {
+                **source_manifest, **fold_contract,
+                "archived_rolling_fit_source": dict(verified_archive_binding),
+                "artifacts": dict(source_manifest.get("artifacts") or {}),
+            })
         rescored = _rescore_fold_from_compatible_checkpoint(
             fold_dir=staging,
             bundle=bundle,
@@ -1551,6 +1582,7 @@ def _rescore_fold_from_fitting_checkpoint(
             args=args,
             torch_module=torch_module,
             plan=plan,
+            verified_archived_fit=verified_archive_binding is not None,
         )
         if rescored is None:
             return None
@@ -1586,6 +1618,161 @@ def _rescore_fold_from_fitting_checkpoint(
 
 # Backward-compatible helper name retained for existing focused contract tests.
 _rescore_daily_fold_from_compatible_checkpoint = _rescore_fold_from_compatible_checkpoint
+
+
+def _verified_archived_rolling_fit(
+    *, point_in_time_dir: Path, fold_contract: dict[str, Any],
+    bundle, torch_module, plan, project_root: Path,
+) -> tuple[Path, dict[str, Any]] | None:
+    """Resolve an archived fold as FIT evidence, never as permission to retrain.
+
+    A Forward-origin repair can move the *entire* Rolling six-fold tree into
+    historical_fit_repairs. Each fold is independently verified using the
+    canonical FIT owner and its preserved aggregate/context binding. The old
+    score rows are not used, and a conflicting or unprovable archived FIT must
+    fail closed instead of triggering another optimizer run.
+    """
+    fold_id = str(fold_contract["fold_id"])
+    locations = archived_rolling_fit_fold_candidates(
+        point_in_time_dir=point_in_time_dir, fold_id=fold_id,
+        project_root=project_root,
+    )
+    if not locations:
+        return None
+    verified: list[tuple[Path, dict[str, Any]]] = []
+    problems: list[str] = []
+    for location in locations:
+        path = location / FOLD_MANIFEST_FILENAME
+        model = location / DEFAULT_MODEL_FILENAME
+        if not path.is_file() or not model.is_file():
+            problems.append(f"{location.name}: incomplete historical FIT")
+            continue
+        try:
+            original = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(original, dict):
+                raise ValueError("manifest is not a mapping")
+            contract, issue = validate_rolling_fold_fitted_checkpoint(
+                manifest_path=path, manifest=original,
+                expected=fold_contract,
+                expected_execution=scientific_torch_execution(plan),
+                bundle=bundle, torch_module=torch_module,
+                project_root=project_root,
+            )
+            if contract is None:
+                problems.append(f"{location.name}: {issue}")
+                continue
+            # The FIT owner's verification already covers the actual fitting
+            # dependencies and historical context; a second raw-manifest
+            # equality check would incorrectly reject event-only cache drift.
+            rolling_aggregate = location.parent.parent / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
+            if not rolling_aggregate.is_file():
+                problems.append(f"{location.name}: historical Rolling aggregate missing")
+                continue
+            verified.append((location, {
+                "source_fold_manifest": build_file_manifest(path),
+                "source_aggregate_manifest": build_file_manifest(rolling_aggregate),
+                "source_checkpoint": build_file_manifest(model),
+                "source_fold_path": location.resolve().relative_to(project_root.resolve()).as_posix(),
+            }))
+        except (OSError, UnicodeError, ValueError, TypeError, RuntimeError) as exc:
+            problems.append(f"{location.name}: {type(exc).__name__}: {exc}")
+    if not verified:
+        raise RuntimeError(
+            f"Historical Rolling FIT found for {fold_id} but provenance is unverified; "
+            "automatic training blocked: " + "; ".join(problems[:5])
+        )
+    records = {item[1]["source_checkpoint"]["sha256"] for item in verified}
+    if len(records) != 1:
+        raise RuntimeError(
+            f"Historical Rolling FIT conflict for {fold_id}: matching fitting identity "
+            f"has {len(records)} different checkpoint SHA values"
+        )
+    return verified[0]
+
+
+def _materialize_verified_archived_rolling_fit(
+    *, archived_fold: Path, archive_binding: dict[str, Any],
+    fold_dir: Path, cache_root: Path | None,
+    bundle, ids: dict[str, Any], fold_contract: dict[str, Any],
+    expected_fingerprint: str, args, torch_module, plan,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Re-score a proven historical FIT, preserving the original archive bytes.
+
+    The archive was verified by the canonical FIT owner in an all-fold preflight.
+    Recheck its SHA immediately before materializing (TOCTOU); incomplete live
+    folds/caches are never deleted in order to make a report look READY.
+    """
+    fold_id = str(fold_contract["fold_id"])
+    if fold_dir.exists() and (not fold_dir.is_dir() or any(fold_dir.iterdir())):
+        raise RuntimeError(
+            f"Rolling FIT recovery refuses to overwrite existing publication: {fold_id}"
+        )
+    if cache_root is not None:
+        cache_entry = _checkpoint_cache_entry_dir(cache_root, fold_contract)
+        if cache_entry.exists():
+            raise RuntimeError(
+                f"Rolling FIT recovery refuses to overwrite existing shared cache: {fold_id}"
+            )
+    if any((
+        build_file_manifest(archived_fold / FOLD_MANIFEST_FILENAME)
+        != archive_binding["source_fold_manifest"],
+        build_file_manifest(archived_fold / DEFAULT_MODEL_FILENAME)
+        != archive_binding["source_checkpoint"],
+        build_file_manifest(archived_fold.parent.parent / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME)
+        != archive_binding["source_aggregate_manifest"],
+    )):
+        raise RuntimeError(f"Historical Rolling FIT changed during recovery: {fold_id}")
+    # Prefer zero-GPU restoration when the archive contains the *exact* PIT
+    # score/evaluation contract, including complete score and validation SHA.
+    # Different score horizons may share FIT but must re-score independently.
+    exact = _load_reusable_fold(
+        fold_dir=archived_fold, expected_fingerprint=expected_fingerprint,
+        fold_contract=fold_contract,
+    )
+    if exact is not None:
+        frame, manifest = exact
+        staging = fold_dir.parent / (
+            f".{fold_dir.name}.archived_reuse_{os.getpid()}_{time.time_ns()}"
+        )
+        staging.mkdir(parents=True, exist_ok=False)
+        try:
+            for filename, field in (
+                (DEFAULT_MODEL_FILENAME, "checkpoint"),
+                (FOLD_SCORE_FILENAME, "scores"),
+                (FOLD_VALIDATION_SCORE_FILENAME, "validation_scores"),
+            ):
+                shutil.copy2(archived_fold / filename, staging / filename)
+                if build_file_manifest(staging / filename) != dict(manifest.get("artifacts") or {}).get(field):
+                    raise RuntimeError(f"Historical Rolling {field} changed during copy: {fold_id}")
+            restored = {**manifest, "archived_rolling_fit_source": dict(archive_binding)}
+            write_json(staging / FOLD_MANIFEST_FILENAME, restored)
+            if fold_dir.exists():
+                fold_dir.rmdir()  # only an empty prechecked directory may exist
+            staging.replace(fold_dir)
+            return frame, restored
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)
+
+    reused = _rescore_fold_from_fitting_checkpoint(
+        source_fold_dir=archived_fold, target_fold_dir=fold_dir,
+        bundle=bundle, ids=ids, fold_contract=fold_contract,
+        expected_fingerprint=expected_fingerprint, args=args,
+        torch_module=torch_module, plan=plan,
+        verified_archive_binding=archive_binding,
+    )
+    if reused is None:
+        raise RuntimeError(
+            f"Verified historical Rolling FIT cannot be re-scored: {fold_id}; training blocked"
+        )
+    frame, manifest = reused
+    if build_file_manifest(fold_dir / DEFAULT_MODEL_FILENAME) != archive_binding["source_checkpoint"]:
+        raise RuntimeError(
+            f"Historical Rolling FIT checkpoint SHA changed during rescore: {fold_id}"
+        )
+    restored = {**manifest, "archived_rolling_fit_source": dict(archive_binding)}
+    write_json(fold_dir / FOLD_MANIFEST_FILENAME, restored)
+    return frame, restored
 
 
 def _migrate_compatible_legacy_fold(
@@ -2285,6 +2472,40 @@ def _run_point_in_time_scores(
     point_in_time_dir = _point_in_time_dir_for_args(args)
     point_in_time_dir.mkdir(parents=True, exist_ok=True)
 
+    # A prior Forward FIT repair may have committed the *whole* six-fold Rolling
+    # publication to historical_fit_repairs. Inspect every missing fold's saved
+    # FIT before touching any score publication. An unprovable historical FIT
+    # must stop the entire refresh before fold 1 is imported/re-scored; it is
+    # never interpreted as permission to repeat epochs 1..N.
+    archived_fits: dict[str, tuple[Path, dict[str, Any]]] = {}
+    if bool(args.resume):
+        for preview_index, (preview_fold, preview_ids) in enumerate(zip(folds, fold_details), start=1):
+            preview_contract = _fold_contract_payload(args, bundle, preview_fold, preview_ids)
+            fold_id = str(preview_fold["fold_id"])
+            local_fold = _point_in_time_fold_dir_for_args(args, fold_id)
+            cache_model = None
+            if args.checkpoint_cache_root not in (None, ""):
+                cache_model = (
+                    _checkpoint_cache_entry_dir(Path(str(args.checkpoint_cache_root)), preview_contract)
+                    / DEFAULT_MODEL_FILENAME
+                )
+            # Live fold/cache candidates are owned by the normal identity
+            # checks. The canonical Forward bridge owns the matching first
+            # fold, including its intentionally superseded historical copy.
+            if ((local_fold / DEFAULT_MODEL_FILENAME).is_file()
+                or (cache_model is not None and cache_model.is_file())
+                or (preview_index == 1
+                    and getattr(args, "checkpoint_import_model_dir", None) not in (None, "")
+                    and getattr(args, "checkpoint_import_report_path", None) not in (None, ""))):
+                continue
+            archived = _verified_archived_rolling_fit(
+                point_in_time_dir=point_in_time_dir, fold_contract=preview_contract,
+                bundle=bundle, torch_module=torch, plan=plan,
+                project_root=PROJECT_ROOT,
+            )
+            if archived is not None:
+                archived_fits[fold_id] = archived
+
     score_frames: list[pd.DataFrame] = []
     fold_manifests: list[dict[str, Any]] = []
     coverage_rows: list[dict[str, Any]] = []
@@ -2379,6 +2600,19 @@ def _run_point_in_time_scores(
                 plan=plan,
             )
             fitting_checkpoint_reuse = reused is not None
+        archived_checkpoint_reuse = False
+        if reused is None and bool(args.resume) and str(fold["fold_id"]) in archived_fits:
+            archived_fold, archive_binding = archived_fits[str(fold["fold_id"])]
+            reused = _materialize_verified_archived_rolling_fit(
+                archived_fold=archived_fold, archive_binding=archive_binding,
+                fold_dir=fold_dir,
+                cache_root=(Path(str(args.checkpoint_cache_root))
+                            if args.checkpoint_cache_root not in (None, "") else None),
+                bundle=bundle, ids=ids, fold_contract=fold_contract,
+                expected_fingerprint=fingerprint, args=args,
+                torch_module=torch, plan=plan,
+            )
+            archived_checkpoint_reuse = True
         if reused is None and bool(args.resume):
             reused = _migrate_compatible_legacy_fold(
                 point_in_time_dir=point_in_time_dir,
@@ -2390,7 +2624,7 @@ def _run_point_in_time_scores(
             migrated = reused is not None
         if reused is not None:
             frame, manifest = reused
-            if fitting_checkpoint_reuse:
+            if fitting_checkpoint_reuse or archived_checkpoint_reuse:
                 fitting_checkpoint_reuse_fold_count += 1
             elif rescored_checkpoint:
                 rescored_checkpoint_fold_count += 1
@@ -2398,7 +2632,10 @@ def _run_point_in_time_scores(
                 migrated_fold_count += 1
             else:
                 reused_fold_count += 1
-            if fitting_checkpoint_reuse:
+            if archived_checkpoint_reuse:
+                reuse_source = "verified historical Rolling fold → score refresh"
+                reuse_label = "重用歷史封存的Rolling FIT並重新評分"
+            elif fitting_checkpoint_reuse:
                 if forward_checkpoint_verified:
                     reuse_source = (
                         "Forward OOS fitting checkpoint → shared cache"

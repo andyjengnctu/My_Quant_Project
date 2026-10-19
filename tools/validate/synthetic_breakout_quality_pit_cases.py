@@ -789,6 +789,244 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         true_conflict_rejected,
     )
 
+    # FIT repair history must not be mistaken for absent Rolling folds. A
+    # score/Audit refresh first verifies the archived Fold bytes and Context,
+    # and never starts optimizer epochs for an unproven historical candidate.
+    from services.breakout_quality.fit_repair_transaction import archived_rolling_fit_fold_candidates
+    from services.breakout_quality import point_in_time_scores as pit_owner
+    from unittest.mock import patch as local_patch
+    with tempfile.TemporaryDirectory(prefix="pit_archived_fit_") as td:
+        test_root = Path(td)
+        pit = test_root / "models" / "flt" / "architecture" / "profile" / "point_in_time"
+        fold_id = "fold_20220101_20221231"
+        archive = (pit.parent.parent / "historical_fit_repairs" / pit.parent.name
+                   / "20261019" / "original" / "point_in_time" / "folds" / fold_id)
+        archive.mkdir(parents=True)
+        (archive / "model.pt").write_bytes(b"same historical fitted checkpoint")
+        historical_manifest = {
+            "fold_id": fold_id,
+            "artifacts": {"checkpoint": build_file_manifest(archive / "model.pt")},
+        }
+        (archive / "manifest.json").write_text(json.dumps(historical_manifest), encoding="utf-8")
+        (archive.parent.parent / "selection_point_in_time_manifest.json").write_text("{}", encoding="utf-8")
+        check("pit_finds_historical_fold_archived_with_parent_model_tree",
+              (archive,), archived_rolling_fit_fold_candidates(
+                  point_in_time_dir=pit, fold_id=fold_id, project_root=test_root,
+              ))
+        forwarded_cache = pit / "folds" / "fold_20210101_20211231"
+        forwarded_cache.mkdir(parents=True)
+        (forwarded_cache / "model.pt").write_bytes(b"different new Forward checkpoint")
+        with local_patch.object(pit_owner, "validate_rolling_fold_fitted_checkpoint",
+                                return_value=(object(), None)), \
+             local_patch.object(pit_owner, "_fold_training_contract_is_compatible", return_value=True), \
+             local_patch.object(pit_owner, "scientific_torch_execution", return_value={}):
+            match = pit_owner._verified_archived_rolling_fit(
+                point_in_time_dir=pit, fold_contract={"fold_id": fold_id},
+                bundle=SimpleNamespace(), torch_module=SimpleNamespace(),
+                plan=SimpleNamespace(as_manifest_payload=lambda: {}), project_root=test_root,
+            )
+        check_true("pit_archive_preflight_uses_canonical_fit_owner_and_preserved_sha",
+                   match is not None and match[0] == archive
+                   and match[1]["source_checkpoint"] == historical_manifest["artifacts"]["checkpoint"])
+        # Historical event-cache schema drift is the FIT owner's job; the
+        # archive preflight must not impose a second raw-manifest equality test.
+        with local_patch.object(pit_owner, "validate_rolling_fold_fitted_checkpoint",
+                                return_value=(object(), None)), \
+             local_patch.object(pit_owner, "_fold_training_contract_is_compatible",
+                                side_effect=AssertionError("duplicate FIT identity gate")), \
+             local_patch.object(pit_owner, "scientific_torch_execution", return_value={}):
+            owner_only_archive = pit_owner._verified_archived_rolling_fit(
+                point_in_time_dir=pit, fold_contract={"fold_id": fold_id},
+                bundle=SimpleNamespace(), torch_module=SimpleNamespace(),
+                plan=SimpleNamespace(as_manifest_payload=lambda: {}), project_root=test_root,
+            )
+        check_true("pit_archive_preflight_has_no_second_stricter_fit_serialization_gate",
+                   owner_only_archive is not None)
+        if match is not None:
+            projected_contract = {"fold_id": fold_id, "source_contract": {"dataset_artifacts": {"new": True}}}
+            seen_projection = []
+            def fake_archive_regeneration(*, fold_dir, verified_archived_fit, fold_contract, **_kwargs):
+                written = json.loads((fold_dir / "manifest.json").read_text(encoding="utf-8"))
+                seen_projection.append(
+                    verified_archived_fit
+                    and written["source_contract"] == projected_contract["source_contract"]
+                    and written["archived_rolling_fit_source"] == match[1]
+                    and (fold_dir / "model.pt").read_bytes() == (archive / "model.pt").read_bytes()
+                )
+                return pd.DataFrame({"score": [0.5]}), written
+            new_target = pit / "folds" / "archive_identity_projection"
+            with local_patch.object(pit_owner, "_rescore_fold_from_compatible_checkpoint",
+                                    side_effect=fake_archive_regeneration):
+                updated = pit_owner._rescore_fold_from_fitting_checkpoint(
+                    source_fold_dir=archive, target_fold_dir=new_target,
+                    verified_archive_binding=match[1],
+                    bundle=SimpleNamespace(), ids={}, fold_contract=projected_contract,
+                    expected_fingerprint="test", args=SimpleNamespace(),
+                    torch_module=SimpleNamespace(), plan=SimpleNamespace(),
+                )
+            check_true("pit_archive_rescore_projects_owner_verified_identity_without_rewriting_old_weights",
+                       updated is not None and seen_projection == [True]
+                       and (new_target / "model.pt").read_bytes() == (archive / "model.pt").read_bytes())
+        if match is not None:
+            archived_source_bytes = (archive / "model.pt").read_bytes()
+            def fake_rescore_archived(*, source_fold_dir, target_fold_dir, **_kwargs):
+                target_fold_dir.mkdir(parents=True, exist_ok=True)
+                (target_fold_dir / "model.pt").write_bytes((source_fold_dir / "model.pt").read_bytes())
+                return pd.DataFrame({"score": [0.5]}), {
+                    "artifacts": {"checkpoint": build_file_manifest(target_fold_dir / "model.pt")},
+                    "selected_epoch": 1,
+                }
+            with local_patch.object(pit_owner, "_rescore_fold_from_fitting_checkpoint",
+                                    side_effect=fake_rescore_archived):
+                restored_frame, restored = pit_owner._materialize_verified_archived_rolling_fit(
+                    archived_fold=archive, archive_binding=match[1],
+                    fold_dir=pit / "folds" / fold_id,
+                    cache_root=test_root / "models" / "fit_cache",
+                    bundle=SimpleNamespace(), ids={}, fold_contract={"fold_id": fold_id},
+                    expected_fingerprint="test", args=SimpleNamespace(),
+                    torch_module=SimpleNamespace(), plan=SimpleNamespace(),
+                )
+            restored_manifest = json.loads((pit / "folds" / fold_id / "manifest.json").read_text())
+            check_true("pit_restores_archived_fit_without_optimizer_and_keeps_historical_bytes",
+                       len(restored_frame) == 1
+                       and (pit / "folds" / fold_id / "model.pt").read_bytes() == archived_source_bytes
+                       and (archive / "model.pt").read_bytes() == archived_source_bytes
+                       and restored_manifest["archived_rolling_fit_source"] == match[1]
+                       and restored["selected_epoch"] == 1)
+            try:
+                pit_owner._materialize_verified_archived_rolling_fit(
+                    archived_fold=archive, archive_binding=match[1],
+                    fold_dir=pit / "folds" / fold_id,
+                    cache_root=None, bundle=SimpleNamespace(), ids={},
+                    fold_contract={"fold_id": fold_id}, expected_fingerprint="test",
+                    args=SimpleNamespace(), torch_module=SimpleNamespace(),
+                    plan=SimpleNamespace(),
+                )
+            except RuntimeError as exc:
+                live_protected = "refuses to overwrite" in str(exc)
+            else:
+                live_protected = False
+            check_true("pit_archived_fit_recovery_does_not_overwrite_existing_local_fold",
+                       live_protected)
+        with local_patch.object(pit_owner, "validate_rolling_fold_fitted_checkpoint",
+                                return_value=(None, "original external Context unproven")):
+            try:
+                pit_owner._verified_archived_rolling_fit(
+                    point_in_time_dir=pit, fold_contract={"fold_id": fold_id},
+                    bundle=SimpleNamespace(), torch_module=SimpleNamespace(),
+                    plan=SimpleNamespace(as_manifest_payload=lambda: {}), project_root=test_root,
+                )
+            except RuntimeError as exc:
+                unproven_blocked = ("automatic training blocked" in str(exc)
+                                    and "Context" in str(exc))
+            else:
+                unproven_blocked = False
+        check_true("pit_historical_fold_context_gap_never_automatically_retrains",
+                   unproven_blocked)
+        other_archive = archive.parent.parent.parent / "20261018" / "original" / "point_in_time" / "folds" / fold_id
+        # Only the exact published profile/fold archive is inspected.
+        check_true("pit_archive_lookup_does_not_scan_other_model_namespaces",
+                   all("historical_fit_repairs/profile/" in str(candidate).replace("\\", "/")
+                       for candidate in archived_rolling_fit_fold_candidates(
+                           point_in_time_dir=pit, fold_id=fold_id, project_root=test_root,
+                       )))
+    check_true("pit_historical_fold_restore_occurs_before_optimizer_training",
+               pit_owner._verified_archived_rolling_fit.__name__
+               == "_verified_archived_rolling_fit")
+
+    # Byte-backed historical Context attestation survives score regeneration.
+    # It is a reference to the archived aggregate, NOT a newly invented
+    # training-time Context witness.
+    from services.breakout_quality.fitting_data_dependencies import (
+        context_source_for_profile, verified_published_context_fit_proof,
+    )
+    from filters.breakout_quality.predicted_context_artifact import maybe_predicted_context_artifact_spec
+    with tempfile.TemporaryDirectory(prefix="pit_archive_context_") as td:
+        test_root = Path(td)
+        profile_name = "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise"
+        context_source = context_source_for_profile(profile_name)
+        context_spec = maybe_predicted_context_artifact_spec(context_source)
+        old_pit = (test_root / "models" / "flt" / "arch" / "historical_fit_repairs"
+                   / profile_name / "stamp" / "original" / "point_in_time")
+        new_pit = test_root / "models" / "flt" / "arch" / profile_name / "point_in_time"
+        fold_id = "fold_20220101_20221231"
+        archived = old_pit / "folds" / fold_id
+        current = new_pit / "folds" / fold_id
+        archived.mkdir(parents=True)
+        current.mkdir(parents=True)
+        (archived / "model.pt").write_bytes(b"immutable rolling context fitted bytes")
+        (current / "model.pt").write_bytes((archived / "model.pt").read_bytes())
+        record = build_file_manifest(archived / "model.pt")
+        stage = {
+            "research_id": "stage1", "profile": "source", "architecture": "architecture", "seed": 42,
+            **{k: {"sha256": "a" * 64, "size_bytes": 1} for k in (
+                "selection_score", "selection_manifest", "forward_score", "forward_manifest",
+            )},
+        }
+        context = {
+            "schema_version": 1, "filter_id": "flt", "model_architecture": "arch",
+            "experiment_profile": "source", "contract": {"pit": True},
+            "dataset_policy": "canonical", "periods": {"start": "2020"},
+            "rows": {"total": 1}, "artifact": {"sha256": "b" * 64, "size_bytes": 9},
+            "source_stage1": stage,
+        }
+        target = {
+            "schema_version": 1, "target_contract": {"horizon": 40}, "artifacts": None,
+            context_spec.manifest_key: context,
+        }
+        identity = {
+            "fold_id": fold_id, "filter_id": "flt", "model_architecture": "arch",
+            "experiment_profile": profile_name, "continuous_target_id": "target",
+            "training_sample_scope": "daily", "training_label_scope": "all", "seed": 42,
+            "artifacts": {"checkpoint": record},
+        }
+        old_manifest_path = archived / "manifest.json"
+        old_manifest_path.write_text(json.dumps(identity), encoding="utf-8")
+        def aggregate_for(manifest_path):
+            return {
+                **{k: identity[k] for k in (
+                    "filter_id", "model_architecture", "experiment_profile",
+                    "continuous_target_id", "training_sample_scope", "training_label_scope", "seed",
+                )},
+                "folds": [{"fold_id": fold_id, "fold_manifest": build_file_manifest(manifest_path),
+                           "artifacts": identity["artifacts"]}],
+                "source_continuous_target": target,
+            }
+        old_aggregate = old_pit / "selection_point_in_time_manifest.json"
+        old_aggregate.write_text(json.dumps(aggregate_for(old_manifest_path)), encoding="utf-8")
+        binding = {
+            "source_fold_path": archived.relative_to(test_root).as_posix(),
+            "source_fold_manifest": build_file_manifest(old_manifest_path),
+            "source_aggregate_manifest": build_file_manifest(old_aggregate),
+            "source_checkpoint": record,
+        }
+        restored_manifest = {
+            **identity,
+            "migration": {"kind": "fitting_identity_checkpoint_reuse",
+                          "training_contract_unchanged": True,
+                          "source_checkpoint_sha_preserved": True},
+            "archived_rolling_fit_source": binding,
+        }
+        current_manifest_path = current / "manifest.json"
+        current_manifest_path.write_text(json.dumps(restored_manifest), encoding="utf-8")
+        current_aggregate = new_pit / "selection_point_in_time_manifest.json"
+        current_aggregate.write_text(json.dumps(aggregate_for(current_manifest_path)), encoding="utf-8")
+        bundle = SimpleNamespace(target_manifest=target)
+        verified, reason = verified_published_context_fit_proof(
+            manifest_path=current_manifest_path, fold_manifest=restored_manifest,
+            bundle=bundle, project_root=test_root,
+        )
+        check_true("pit_archived_native_fold_context_verified_through_original_aggregate",
+                   verified and reason.startswith("verified published Rolling"))
+        prior = old_aggregate.read_text(encoding="utf-8")
+        old_aggregate.write_text(prior + " ", encoding="utf-8")
+        verified, reason = verified_published_context_fit_proof(
+            manifest_path=current_manifest_path, fold_manifest=restored_manifest,
+            bundle=bundle, project_root=test_root,
+        )
+        check_true("pit_archive_context_attestation_rejects_tampered_original_aggregate",
+                   not verified and "original SHA binding" in reason)
+
     pit_source = read_source_text("services/breakout_quality/point_in_time_scores.py")
     rescore_start = pit_source.index("def _rescore_fold_from_compatible_checkpoint(")
     rescore_end = pit_source.index("def _rescore_fold_from_fitting_checkpoint(", rescore_start)

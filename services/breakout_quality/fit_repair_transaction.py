@@ -85,6 +85,55 @@ def _safe_roots(project_root: Path, publication_roots: tuple[Path, ...]) -> tupl
     ))
 
 
+def archived_rolling_fit_fold_candidates(
+    *, point_in_time_dir: Path, fold_id: str, project_root: Path,
+) -> tuple[Path, ...]:
+    """Locate old Rolling folds displaced by a committed FIT repair.
+
+    Repairs can archive an entire model directory containing ``point_in_time``.
+    Search only the exact former ancestors of this PIT directory, within the
+    same project and ``models``/``outputs`` domain. An archive is a candidate,
+    never a REUSE decision; the PIT FIT owner must validate all source bytes,
+    training identity and historical context binding before materializing it.
+    """
+    root = Path(project_root).resolve(strict=True)
+    pit = Path(point_in_time_dir).absolute()
+    name = str(fold_id).strip()
+    if not name or Path(name).name != name or name in {".", ".."}:
+        raise ValueError("Archived FIT fold ID must be a single safe path component")
+    if pit.is_symlink() or not _under_root(root, pit.resolve()):
+        raise RuntimeError("Archived FIT lookup requires a non-symlink project PIT directory")
+    relative = pit.relative_to(root)
+    if not relative.parts or relative.parts[0] not in {"models", "outputs"}:
+        return ()
+    domain_root = root / relative.parts[0]
+    candidates: list[Path] = []
+    ancestor = pit
+    while ancestor != domain_root:
+        if ancestor.is_symlink():
+            raise RuntimeError("Archived FIT lookup refuses symlink ancestor")
+        archive_base = ancestor.parent / "historical_fit_repairs" / ancestor.name
+        if archive_base.is_symlink():
+            raise RuntimeError("Archived FIT lookup refuses symlink archive root")
+        if archive_base.is_dir():
+            suffix = pit.relative_to(ancestor)
+            for stamp in sorted(archive_base.iterdir(), reverse=True):
+                if stamp.is_symlink() or not stamp.is_dir():
+                    raise RuntimeError("Archived FIT lookup refuses unsafe repair archive")
+                original = stamp / "original"
+                candidate = original / suffix / "folds" / name
+                if any(part.is_symlink() for part in (original, candidate.parent, candidate)):
+                    raise RuntimeError("Archived FIT lookup refuses symlink source fold")
+                if ((candidate / "manifest.json").is_file()
+                    or (candidate / "model.pt").is_file()):
+                    if ((candidate / "manifest.json").is_symlink()
+                        or (candidate / "model.pt").is_symlink()):
+                        raise RuntimeError("Archived FIT lookup refuses symlink FIT artifacts")
+                    candidates.append(candidate)
+        ancestor = ancestor.parent
+    return tuple(dict.fromkeys(candidates))
+
+
 def _atomic_json(path: Path, payload: dict) -> None:
     temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:

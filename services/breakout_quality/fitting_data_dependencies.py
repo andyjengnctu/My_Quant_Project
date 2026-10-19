@@ -672,9 +672,111 @@ def preserve_fitting_migration_chain(
     return current
 
 
+
+# A score refresh describes the *evaluation*, not where the fitted weights
+# originated. The training owner must independently verify the checkpoint's
+# embedded native Fold contract before approving this legacy case.
+_NATIVE_SCORE_REFRESH_KINDS = frozenset({
+    "expanded_daily_score_universe_checkpoint_reuse",
+    "checkpoint_score_regeneration",
+    "fitting_identity_checkpoint_reuse",
+})
+
+
+def native_rolling_score_refresh_candidate(fold_manifest: Mapping[str, Any]) -> bool:
+    """Identify a legacy score-only publication with no declared Forward import.
+
+    This is a candidate classification, NOT a FIT proof. The caller must prove
+    the *model.pt* bytes and the embedded native Fold contract match the expected
+    scientific identity. The published aggregate still binds those bytes to
+    historical Target/Context and the exact Fold manifest SHA.
+    """
+    migration = fold_manifest.get("migration")
+    if not isinstance(migration, Mapping) or fold_manifest.get("fitting_origin") is not None:
+        return False
+    artifacts = fold_manifest.get("artifacts")
+    checkpoint = artifacts.get("checkpoint") if isinstance(artifacts, Mapping) else None
+    if not _valid_file_record(checkpoint):
+        return False
+    first = migration.get("initial_fitting_migration")
+    if first is not None and not isinstance(first, Mapping):
+        return False
+    for stage in ((migration, first) if first is not None else (migration,)):
+        if (stage.get("kind") not in _NATIVE_SCORE_REFRESH_KINDS
+            or stage.get("training_contract_unchanged") is not True
+            or stage.get("source_checkpoint_sha_preserved") is not True
+            or "source_forward_checkpoint" in stage):
+            return False
+        if "source_checkpoint" in stage and not _same_file_bytes(
+            stage["source_checkpoint"], checkpoint,
+        ):
+            return False
+    # This marker is a reference to an original Forward import, not proof of
+    # native Rolling fitting, even if a later rescore overwrites migration.kind.
+    return True
+
+def _verify_archived_rolling_fit_binding(
+    *, archive_binding: Any, current_manifest_path: Path,
+    current_manifest: Mapping[str, Any], bundle: Any,
+    project_root: Path | None, depth: int,
+    native_checkpoint_fit_verified: bool = False,
+) -> tuple[bool, str]:
+    """Recheck the original historical aggregate, not a new context assertion.
+
+    An archived FIT is reusable only when its old aggregate bound the *exact*
+    original Fold manifest and context source. The new score-only publication
+    carries a path/SHA link to that immutable evidence; validation replays the
+    full owner proof each time rather than inventing a historical FIT origin.
+    """
+    if depth >= 8 or not isinstance(archive_binding, Mapping) or project_root is None:
+        return False, "historical Rolling FIT source evidence unavailable"
+    root = Path(project_root).resolve()
+    relative = archive_binding.get("source_fold_path")
+    if not isinstance(relative, str):
+        return False, "historical Rolling FIT path missing"
+    parts = relative.split("/")
+    if (not parts or any(part in {"", ".", ".."} or "\\" in part for part in parts)
+        or parts[0] not in {"models", "outputs"}):
+        return False, "historical Rolling FIT path is invalid"
+    source_dir = root.joinpath(*parts)
+    from services.breakout_quality.fit_repair_transaction import archived_rolling_fit_fold_candidates
+    candidate_dirs = archived_rolling_fit_fold_candidates(
+        point_in_time_dir=current_manifest_path.parent.parent.parent,
+        fold_id=str(current_manifest.get("fold_id") or ""), project_root=root,
+    )
+    if source_dir not in candidate_dirs:
+        return False, "historical Rolling FIT archive is outside canonical repair history"
+    source_manifest_path = source_dir / "manifest.json"
+    source_checkpoint = source_dir / "model.pt"
+    source_aggregate = source_dir.parent.parent / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
+    if not all(p.is_file() and not p.is_symlink() for p in (
+        source_manifest_path, source_checkpoint, source_aggregate,
+    )):
+        return False, "historical Rolling FIT original artifacts missing"
+    if any((
+        build_file_manifest(source_manifest_path) != archive_binding.get("source_fold_manifest"),
+        build_file_manifest(source_aggregate) != archive_binding.get("source_aggregate_manifest"),
+        build_file_manifest(source_checkpoint) != archive_binding.get("source_checkpoint"),
+        archive_binding.get("source_checkpoint")
+        != dict(current_manifest.get("artifacts") or {}).get("checkpoint"),
+    )):
+        return False, "historical Rolling FIT original SHA binding differs"
+    source_payload = _read_published_json(source_manifest_path)
+    if not isinstance(source_payload, Mapping):
+        return False, "historical Rolling FIT original manifest invalid"
+    if source_payload.get("fold_id") != current_manifest.get("fold_id"):
+        return False, "historical Rolling FIT fold identity differs"
+    return verified_published_context_fit_proof(
+        manifest_path=source_manifest_path, fold_manifest=source_payload,
+        bundle=bundle, project_root=root, _archive_depth=depth + 1,
+        native_checkpoint_fit_verified=native_checkpoint_fit_verified,
+    )
+
+
 def verified_published_context_fit_proof(
     *, manifest_path: Path, fold_manifest: Mapping[str, Any], bundle: Any,
-    project_root: Path | None = None,
+    project_root: Path | None = None, _archive_depth: int = 0,
+    native_checkpoint_fit_verified: bool = False,
 ) -> tuple[bool, str]:
     """Bind any declared external fitting context to the original published Fold.
 
@@ -754,14 +856,31 @@ def verified_published_context_fit_proof(
         )
         if issue is not None:
             return False, "original FIT context witness invalid: " + issue
-    elif fold_manifest.get("migration") is not None:
-        _origin_report, origin_error = _migrated_fold_forward_context_proof(
-            fold_manifest=fold_manifest, original_target=original_target,
-            current_target=target, context_key=spec.manifest_key,
-            project_root=project_root,
+    elif fold_manifest.get("archived_rolling_fit_source") is not None:
+        verified, reason = _verify_archived_rolling_fit_binding(
+            archive_binding=fold_manifest.get("archived_rolling_fit_source"),
+            current_manifest_path=manifest_path, current_manifest=fold_manifest,
+            bundle=bundle, project_root=project_root, depth=_archive_depth,
+            native_checkpoint_fit_verified=native_checkpoint_fit_verified,
         )
-        if origin_error is not None:
-            return False, "migrated Rolling checkpoint lacks original context binding: " + origin_error
+        if not verified:
+            return False, "archived Rolling FIT origin unverified: " + reason
+    elif fold_manifest.get("migration") is not None:
+        if (native_checkpoint_fit_verified
+            and native_rolling_score_refresh_candidate(fold_manifest)):
+            # A native Rolling checkpoint remains native after SCORE refresh.
+            # Its embedded Fold contract is verified by the FIT owner, while
+            # this published aggregate verifies the historical Context/Stage-1
+            # and the exact Fold/checkpoint bytes. No Forward archive is needed.
+            pass
+        else:
+            _origin_report, origin_error = _migrated_fold_forward_context_proof(
+                fold_manifest=fold_manifest, original_target=original_target,
+                current_target=target, context_key=spec.manifest_key,
+                project_root=project_root,
+            )
+            if origin_error is not None:
+                return False, "migrated Rolling checkpoint lacks original context binding: " + origin_error
     return True, "verified published Rolling context bytes, original FIT witness and PIT fold SHA"
 
 
@@ -769,5 +888,6 @@ __all__ = [
     "FitDataDependencies", "ForwardOriginEvidence", "context_source_for_profile", "fold_source_dependency_issues",
     "verified_published_context_fit_proof", "migrated_forward_origin_training_evidence",
     "build_fitting_context_origin", "fitting_context_origin_issue", "preserve_fitting_migration_chain",
+    "native_rolling_score_refresh_candidate",
     "forward_publication_fit_dependency_issues",
 ]

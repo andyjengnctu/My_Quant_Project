@@ -43,6 +43,7 @@ from filters.breakout_quality.model_source_provenance import (
 from services.breakout_quality.fitting_data_dependencies import (
     FitDataDependencies, fold_source_dependency_issues,
     forward_publication_fit_dependency_issues, verified_published_context_fit_proof,
+    native_rolling_score_refresh_candidate,
     migrated_forward_origin_training_evidence, context_source_for_profile,
     fitting_context_origin_issue,
 )
@@ -299,9 +300,42 @@ def validate_rolling_fold_fitted_checkpoint(
     """
     manifest_path = Path(manifest_path).resolve()
     fold_id = str(manifest.get("fold_id") or manifest_path.parent.name)
+    # Classify score-only migration separately from FIT origin. Historical
+    # native Rolling checkpoints may predate the immutable fitting_origin
+    # witness. In that case require actual checkpoint bytes, its embedded
+    # native Fold contract, and matching execution BEFORE the published
+    # aggregate/Context proof can authorize REUSE. A genuine Forward import
+    # with no embedded native contract still needs original Forward evidence.
+    native_checkpoint_fit_verified = False
+    preloaded_checkpoint = None
+    if native_rolling_score_refresh_candidate(manifest):
+        candidate_path = manifest_path.parent / "model.pt"
+        checkpoint_record = dict(dict(manifest.get("artifacts") or {}).get("checkpoint") or {})
+        if candidate_path.is_file() and checkpoint_record == build_file_manifest(candidate_path):
+            preloaded_checkpoint = torch_module.load(
+                candidate_path, map_location="cpu", weights_only=True,
+            )
+            if isinstance(preloaded_checkpoint, dict):
+                embedded = preloaded_checkpoint.get("fold_contract")
+                execution = dict(preloaded_checkpoint.get("torch_execution") or {})
+                execution.pop("requested_device", None)
+                native_checkpoint_fit_verified = (
+                    isinstance(embedded, dict)
+                    and not _first_fold_fit_identity_issues(
+                        embedded, dict(expected), project_root=project_root,
+                        external_context_verified=True,
+                    )
+                    and execution == dict(expected_execution)
+                    and preloaded_checkpoint.get("model_spec") == bundle.model_spec.as_manifest_payload()
+                    and preloaded_checkpoint.get("experiment_settings") == bundle.profile.as_manifest_payload()
+                    and preloaded_checkpoint.get("selected_epoch") == manifest.get("selected_epoch")
+                    and isinstance(manifest.get("epoch_selection"), dict)
+                    and bool(manifest["epoch_selection"])
+                )
     context_verified, context_reason = verified_published_context_fit_proof(
         manifest_path=manifest_path, fold_manifest=manifest, bundle=bundle,
         project_root=(Path(project_root) if project_root is not None else None),
+        native_checkpoint_fit_verified=native_checkpoint_fit_verified,
     )
     if not context_verified:
         return None, f"external fitting context proof blocked: {context_reason}"
@@ -429,7 +463,8 @@ def validate_rolling_fold_fitted_checkpoint(
             ) or not forward_training["epoch_selection"]:
                 raise RuntimeError(f"Rolling imported checkpoint lacks original epoch-selection evidence: {fold_id}")
             epoch_selection = dict(forward_training["epoch_selection"])
-    checkpoint = torch_module.load(checkpoint_path, map_location="cpu", weights_only=True)
+    checkpoint = (preloaded_checkpoint if preloaded_checkpoint is not None else
+                  torch_module.load(checkpoint_path, map_location="cpu", weights_only=True))
     if not isinstance(checkpoint, dict):
         raise RuntimeError(f"Rolling fitted checkpoint has invalid content: {fold_id}")
     if (
@@ -753,6 +788,8 @@ def _checkpoint_matches_rescore_contract(
     manifest: dict[str, Any],
     fold_contract: dict[str, Any],
     bundle,
+    verified_archived_fit: bool = False,
+    project_root: Path | None = None,
 ) -> bool:
     """Validate PIT-native or imported-Forward checkpoint metadata before score regeneration."""
 
@@ -792,7 +829,15 @@ def _checkpoint_matches_rescore_contract(
         if not _fold_training_contract_is_compatible(
             checkpoint_contract, expected_contract=fold_contract
         ):
-            return False
+            # The original archived FIT was validated by this same owner.
+            # Legacy event-only Dataset cache metadata may have changed without
+            # changing consumed fitting data. Allow only that *proven* case;
+            # ordinary score/cache reuse keeps the exact FitKey guard.
+            if not verified_archived_fit or _first_fold_fit_identity_issues(
+                checkpoint_contract, fold_contract, project_root=project_root,
+                external_context_verified=True,
+            ):
+                return False
     elif not imported_forward:
         return False
 
