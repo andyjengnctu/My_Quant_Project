@@ -31,6 +31,15 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
     }
     check("canonical_source_owner_and_dependency_boundary", (),
           check_research_fit_architecture_sources(sources))
+    # AI: Test the shared provenance seam, not fixed experiment identities.
+    for module_name in (FIT_OWNER, PIT_PRODUCER):
+        disconnected = dict(sources)
+        disconnected[module_name] = disconnected[module_name].replace(
+            "from services.breakout_quality.fitting_data_dependencies import",
+            "from services.breakout_quality.unregistered_dependency import", 1,
+        )
+        check_true("fit_dependency_ssot_import_required_" + module_name.rsplit("/", 1)[-1],
+                   bool(check_research_fit_architecture_sources(disconnected)))
     forward_sources = {
         **sources,
         MODEL_SCORE_OWNER: (root / MODEL_SCORE_OWNER).read_text(encoding="utf-8"),
@@ -384,9 +393,95 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
         changed_train, expected_contract=identity,
     ))
 
+    # AI: A single dependency snapshot must project to the *unchanged* legacy
+    # Forward and native PIT Fold source schemas for every registered profile.
+    # This is an identity-preserving engineering refactor, not a migration.
+    from services.breakout_quality.fitting_data_dependencies import FitDataDependencies
+    from filters.breakout_quality.model_source_provenance import canonical_source_dataset_artifacts
+    from core.breakout_quality_registry import SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES
+    projection_issues = []
+    for profile_name in SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES:
+        summary = {
+            "dataset": "synthetic", "policy": {"id": "p"},
+            "training_universe_start_date": "2017-01-03",
+            "source_data_inventory": {"csv_inventory_sha256": "v"},
+            "dataset_storage_schema_version": 2,
+            "dataset_artifacts": {"events": "a"},
+            "source_dataset_artifacts": {"events": "b"},
+            "input_price_source": {"source": "raw"},
+            "input_trade_count_source": {"source": "pit"},
+        }
+        target = {
+            "artifacts": None, "schema_version": 3, "target_id": "synthetic",
+            "target_contract": {"target": "T"}, "context_features": ["A"],
+            "pair_weight_context_features": ["B"],
+            "pair_weight_context_contract": {"kind": "C"},
+            "risk_param_coverage_start": "2016-01-01",
+            "predicted_upside_context_manifest": {"artifact": "U"},
+            "predicted_safety_context_manifest": {"artifact": "S"},
+        }
+        fixture = SimpleNamespace(summary=summary, target_manifest=target)
+        old_forward = {
+            "dataset": summary.get("dataset"), "dataset_policy": summary.get("policy"),
+            "training_universe_start_date": summary.get("training_universe_start_date"),
+            "source_data_inventory": summary.get("source_data_inventory"),
+            "input_price_source": summary["input_price_source"],
+            "input_trade_count_source": summary["input_trade_count_source"],
+            "source_dataset_artifacts": canonical_source_dataset_artifacts(summary),
+            "source_target_artifacts": target.get("artifacts"),
+            "target_id": target.get("target_id"), "target_contract": target.get("target_contract"),
+            "context_features": target.get("context_features"),
+            "pair_weight_context_features": target.get("pair_weight_context_features"),
+            "pair_weight_context_contract": target.get("pair_weight_context_contract"),
+            "risk_param_coverage_start": target.get("risk_param_coverage_start"),
+            "predicted_upside_context_manifest": target.get("predicted_upside_context_manifest"),
+            "predicted_safety_context_manifest": target.get("predicted_safety_context_manifest"),
+        }
+        old_fold = {
+            "dataset_policy": summary.get("policy"),
+            "dataset_storage_schema_version": summary.get("dataset_storage_schema_version"),
+            "source_data_inventory": summary.get("source_data_inventory"),
+            "input_price_source": summary["input_price_source"],
+            "input_trade_count_source": summary["input_trade_count_source"],
+            "dataset_artifacts": summary["source_dataset_artifacts"],
+            "target_schema_version": target.get("schema_version"),
+            "target_contract": target.get("target_contract"),
+            "target_artifacts": target.get("artifacts"),
+            "training_universe_start_date": "2017-01-03",
+        }
+        snapshot = FitDataDependencies.from_bundle(fixture)
+        if (owner.source_training_identity(fixture) != old_forward
+            or snapshot.forward_source() != old_forward
+            or snapshot.rolling_source(daily_training_universe_start_date="2017-01-03") != old_fold
+            or "training_universe_start_date" in snapshot.rolling_source()):
+            projection_issues.append(profile_name)
+    check("fit_data_dependency_ssot_preserves_all_registry_profile_source_bytes", (),
+          tuple(projection_issues))
+
     # AI: Reverse Rolling -> Forward FIT preserves the historical Fold FitKey.
     # Event Dataset hash changes only pass with fully proven FIT inputs.
     historical = deepcopy(identity)
+    # AI: Native checkpoint fixtures use a registered capability profile. A
+    # dummy profile cannot prove which optional context is consumed by fitting.
+    from core.breakout_quality_registry import (
+        SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+        TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    )
+    from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+    from core.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE,
+        CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+    )
+    no_context_profile = next(
+        profile_name for profile_name in SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES
+        if get_breakout_quality_experiment_profile(profile_name).training_sample_scope
+           == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+        and get_continuous_ranker_execution_recipe(profile_name).context_policy.source
+           == CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE
+        and get_continuous_ranker_execution_recipe(profile_name).target_policy.materialization_mode
+           == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT
+    )
+    historical["experiment_profile"] = no_context_profile
     historical["source_contract"] = {
         "dataset_policy": "canonical", "dataset_artifacts": {"feature_bank": "sha-old"},
         "target_artifacts": {"raw_target": "sha-target"},
@@ -633,7 +728,7 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                 )
                 check_true("reverse_bridge_external_context_exemption_blocker_explained",
                            "dataset_artifacts proof blocked: external context requires "
-                           "exact Dataset source identity" in unsafe_context_issues)
+                           "published context/fit binding proof" in unsafe_context_issues)
                 bad_dataset = deepcopy(new_daily)
                 bad_dataset["source_contract"]["dataset_artifacts"]["feature_bank"]["sha256"] = "not-a-sha"
                 check_true("reverse_bridge_unverifiable_dataset_sha_rejected",
@@ -793,6 +888,211 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                 else:
                     hash_rejected = False
                 check_true("reverse_bridge_native_none_event_checkpoint_hash_still_enforced", hash_rejected)
+            # AI: Generic external-context policy, selected from the registry.
+            # Independently link original PIT aggregate -> Fold SHA -> checkpoint
+            # and recorded context bytes. Both outer and embedded native contracts
+            # must pass; current context READY alone is explicitly insufficient.
+            if external_context is not None:
+                import json
+                from filters.breakout_quality.paths import SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
+                from filters.breakout_quality.predicted_context_artifact import maybe_predicted_context_artifact_spec
+                context_recipe = get_continuous_ranker_execution_recipe(external_context)
+                context_spec = maybe_predicted_context_artifact_spec(context_recipe.context_policy.source)
+                check_true("ssot_external_context_has_registered_artifact_capability", context_spec is not None)
+                if context_spec is not None:
+                    native_context_old = deepcopy(native_none_old)
+                    native_context_new = deepcopy(lazy_target_new)
+                    for item in (native_context_old, native_context_new):
+                        item["experiment_profile"] = external_context
+                    pit_root = root_dir / "published_pit"
+                    ctx_fold_dir = pit_root / "folds" / "fold_20210101_20211231"
+                    ctx_fold_dir.mkdir(parents=True)
+                    ctx_ckpt = ctx_fold_dir / "model.pt"
+                    ctx_ckpt.write_bytes(b"context_checkpoint_synthetic")
+                    ctx_path = ctx_fold_dir / "manifest.json"
+                    ctx_manifest = {
+                        **native_context_old, "fold_id": ctx_fold_dir.name,
+                        "torch_execution": dict(execution),
+                        "selected_epoch": 2, "epoch_selection": {"best_epoch": 2},
+                        "artifacts": {"checkpoint": build_file_manifest(ctx_ckpt)},
+                    }
+                    ctx_path.write_text(json.dumps(ctx_manifest), encoding="utf-8")
+                    ctx_embedded = {
+                        "model_spec": native_context_old["model_spec"],
+                        "experiment_settings": native_context_old["experiment_settings"],
+                        "selected_epoch": 2, "fold_contract": native_context_old,
+                    }
+                    stage = {
+                        "research_id": "synthetic_s1", "profile": "stage1_profile",
+                        "architecture": "stage1_arch", "seed": 42,
+                        **{k: {"sha256": "a" * 64, "size_bytes": 10} for k in (
+                            "selection_score", "selection_manifest",
+                            "forward_score", "forward_manifest",
+                        )},
+                    }
+                    context_record = {
+                        "schema_version": 1, "filter_id": "synthetic",
+                        "model_architecture": "stage1_arch",
+                        "experiment_profile": "stage1_profile", "contract": {"pit": True},
+                        "dataset_policy": "canonical", "periods": {"oos_start": "2021-01-01"},
+                        "rows": {"total": 50},
+                        "artifact": {"sha256": "b" * 64, "size_bytes": 123},
+                        "source_stage1": stage,
+                    }
+                    target_lineage = {
+                        "schema_version": None,
+                        "target_contract": native_context_old["source_contract"]["target_contract"],
+                        "artifacts": None,
+                        context_spec.manifest_key: context_record,
+                    }
+                    ctx_bundle = SimpleNamespace(
+                        model_spec=bundle.model_spec, profile=bundle.profile,
+                        target_manifest=target_lineage,
+                    )
+                    aggregate = {
+                        **{k: ctx_manifest[k] for k in (
+                            "filter_id", "model_architecture", "experiment_profile",
+                            "continuous_target_id", "training_sample_scope",
+                            "training_label_scope", "seed",
+                        )},
+                        "folds": [{
+                            "fold_id": ctx_manifest["fold_id"],
+                            "fold_manifest": build_file_manifest(ctx_path),
+                            "artifacts": ctx_manifest["artifacts"],
+                        }],
+                        "source_continuous_target": target_lineage,
+                    }
+                    aggregate_path = pit_root / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
+                    aggregate_path.write_text(json.dumps(aggregate), encoding="utf-8")
+                    ctx_args = {
+                        **verify_args, "manifest_path": ctx_path,
+                        "manifest": ctx_manifest, "expected": native_context_new,
+                        "bundle": ctx_bundle,
+                        "torch_module": SimpleNamespace(load=lambda *_a, **_k: ctx_embedded),
+                    }
+                    # The opposite Forward -> Rolling bridge consumes exactly
+                    # the same snapshot projection and registered Context proof.
+                    from services.breakout_quality.fitting_data_dependencies import (
+                        forward_publication_fit_dependency_issues,
+                    )
+                    published_dataset = {
+                        "policy": native_context_new["source_contract"]["dataset_policy"],
+                        "source_data_inventory": native_context_new["source_contract"]["source_data_inventory"],
+                        "source_dataset_artifacts": native_context_new["source_contract"]["dataset_artifacts"],
+                    }
+                    opposite_kwargs = dict(
+                        source_dataset=published_dataset, source_target=target_lineage,
+                        expected_fold_source=native_context_new["source_contract"],
+                        current_target=target_lineage,
+                        experiment_profile=external_context,
+                        project_root=root_dir,
+                        inventory_matcher=lambda *, published, current, project_root:
+                            published == current,
+                    )
+                    check("ssot_forward_to_rolling_reads_same_declared_context", (),
+                          forward_publication_fit_dependency_issues(**opposite_kwargs))
+                    changed_published_target = deepcopy(target_lineage)
+                    changed_published_target[context_spec.manifest_key]["artifact"]["sha256"] = "d" * 64
+                    check_true("ssot_forward_to_rolling_context_bytes_drift_rejected",
+                               "source_context proof blocked" in str(
+                                   forward_publication_fit_dependency_issues(**{
+                                       **opposite_kwargs, "source_target": changed_published_target,
+                                   })
+                               ))
+                    changed_stage_provenance = deepcopy(target_lineage)
+                    changed_stage_provenance[context_spec.manifest_key]["source_stage1"]["forward_manifest"]["sha256"] = "e" * 64
+                    check_true("ssot_forward_to_rolling_stage1_artifact_drift_rejected",
+                               "Stage-1 forward_manifest artifact lineage differs" in str(
+                                   forward_publication_fit_dependency_issues(**{
+                                       **opposite_kwargs, "source_target": changed_stage_provenance,
+                                   })
+                               ))
+                    replaced_target_contract = deepcopy(target_lineage)
+                    replaced_target_contract["target_contract"] = {"synthetic": "changed"}
+                    check_true("ssot_forward_to_rolling_target_semantic_drift_rejected",
+                               "source_contract target_contract mismatch" in
+                               forward_publication_fit_dependency_issues(**{
+                                   **opposite_kwargs, "source_target": replaced_target_contract,
+                               }))
+                    changed_published_dataset = deepcopy(published_dataset)
+                    changed_published_dataset["source_data_inventory"] = {"source": "modified"}
+                    check_true("ssot_forward_to_rolling_source_csv_drift_rejected",
+                               "source_contract source_data_inventory mismatch" in
+                               forward_publication_fit_dependency_issues(**{
+                                   **opposite_kwargs, "source_dataset": changed_published_dataset,
+                               }))
+                    check_true("ssot_forward_to_rolling_unregistered_context_recipe_rejected",
+                               "unregistered fitting context recipe" in
+                               forward_publication_fit_dependency_issues(**{
+                                   **opposite_kwargs, "experiment_profile": "unregistered_profile",
+                               }))
+                    ok_ctx, ctx_reason = owner.validate_rolling_fold_fitted_checkpoint(**ctx_args)
+                    check_true("ssot_published_external_context_both_native_fit_contracts_reusable",
+                               ok_ctx is not None and ctx_reason is None)
+                    bad_ctx = deepcopy(target_lineage)
+                    bad_ctx[context_spec.manifest_key]["artifact"]["sha256"] = "c" * 64
+                    denied, reason = owner.validate_rolling_fold_fitted_checkpoint(
+                        **{**ctx_args, "bundle": SimpleNamespace(
+                            model_spec=bundle.model_spec, profile=bundle.profile,
+                            target_manifest=bad_ctx,
+                        )},
+                    )
+                    check_true("ssot_changed_context_content_blocks_even_with_other_fitting_inputs_equal",
+                               denied is None and "external fitting context proof blocked" in str(reason))
+                    altered_stage = deepcopy(target_lineage)
+                    altered_stage[context_spec.manifest_key]["source_stage1"]["selection_score"]["sha256"] = "f" * 64
+                    denied, reason = owner.validate_rolling_fold_fitted_checkpoint(
+                        **{**ctx_args, "bundle": SimpleNamespace(
+                            model_spec=bundle.model_spec, profile=bundle.profile,
+                            target_manifest=altered_stage,
+                        )},
+                    )
+                    check_true("ssot_rolling_to_forward_stage1_artifact_drift_rejected",
+                               denied is None and "Stage-1 selection_score artifact lineage differs" in str(reason))
+                    unchanged_sources = deepcopy(native_context_old)
+                    unchanged_sources["source_contract"]["dataset_artifacts"] = deepcopy(
+                        native_context_new["source_contract"]["dataset_artifacts"]
+                    )
+                    equal_manifest = {**ctx_manifest, "source_contract": unchanged_sources["source_contract"]}
+                    equal_manifest["artifacts"] = deepcopy(ctx_manifest["artifacts"])
+                    equal_ckpt = {**ctx_embedded, "fold_contract": unchanged_sources}
+                    # Rebind published fold to this variant so event Dataset
+                    # equality cannot mask an unproven context input change.
+                    ctx_path.write_text(json.dumps(equal_manifest), encoding="utf-8")
+                    aggregate["folds"][0]["fold_manifest"] = build_file_manifest(ctx_path)
+                    aggregate_path.write_text(json.dumps(aggregate), encoding="utf-8")
+                    denied, reason = owner.validate_rolling_fold_fitted_checkpoint(**{
+                        **ctx_args, "manifest": equal_manifest, "expected": native_context_new,
+                        "bundle": SimpleNamespace(
+                            model_spec=bundle.model_spec, profile=bundle.profile,
+                            target_manifest=bad_ctx,
+                        ),
+                        "torch_module": SimpleNamespace(load=lambda *_a, **_k: equal_ckpt),
+                    })
+                    check_true("ssot_same_event_sha_cannot_bypass_external_context_identity",
+                               denied is None and "external fitting context proof blocked" in str(reason))
+                    # Restore native original and its aggregate SHA.
+                    ctx_path.write_text(json.dumps(ctx_manifest), encoding="utf-8")
+                    aggregate["folds"][0]["fold_manifest"] = build_file_manifest(ctx_path)
+                    aggregate_path.write_text(json.dumps(aggregate), encoding="utf-8")
+                    aggregate_bad = deepcopy(aggregate)
+                    aggregate_bad["folds"][0]["fold_manifest"]["sha256"] = "0" * 64
+                    aggregate_path.write_text(json.dumps(aggregate_bad), encoding="utf-8")
+                    denied, reason = owner.validate_rolling_fold_fitted_checkpoint(**ctx_args)
+                    check_true("ssot_published_fold_sha_tamper_blocks_context_reuse",
+                               denied is None and "fold/checkpoint SHA" in str(reason))
+                    aggregate_path.write_text(json.dumps(aggregate), encoding="utf-8")
+                    migrated_manifest = {**ctx_manifest, "migration": {"kind": "copy"}}
+                    denied, reason = owner.validate_rolling_fold_fitted_checkpoint(**{
+                        **ctx_args, "manifest": migrated_manifest,
+                    })
+                    check_true("ssot_migrated_checkpoint_without_original_context_proof_is_blocked",
+                               denied is None and "migrated Rolling checkpoint" in str(reason))
+                    aggregate_path.unlink()
+                    denied, reason = owner.validate_rolling_fold_fitted_checkpoint(**ctx_args)
+                    check_true("ssot_missing_published_context_binding_fail_closed",
+                               denied is None and "aggregate manifest unavailable" in str(reason))
+
             wrong_execution = owner.validate_rolling_fold_fitted_checkpoint(
                 **{**verify_args, "expected_execution": {"device_type": "cuda"}},
             )

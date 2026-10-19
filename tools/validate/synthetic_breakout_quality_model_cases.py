@@ -11622,6 +11622,21 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
     from services.breakout_quality.point_in_time_scores import (
         _import_forward_checkpoint_to_fitting_cache,
     )
+    from core.breakout_quality_registry import (
+        SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+        TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        get_breakout_quality_experiment_profile,
+    )
+    from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+    from core.breakout_quality_runtime import CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE
+    # AI: Real FIT-source registration is mandatory even for synthetic checkpoints.
+    fit_fixture_profile = next(
+        key for key in SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES
+        if get_breakout_quality_experiment_profile(key).training_sample_scope
+           == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+        and get_continuous_ranker_execution_recipe(key).context_policy.source
+           == CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE
+    )
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -11635,7 +11650,7 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
         checkpoint_record = build_file_manifest(model_path)
         model_spec = {"architecture": "synthetic_architecture"}
         experiment_settings = {
-            "name": "synthetic_profile",
+            "name": fit_fixture_profile,
             "training_sample_scope": "daily_eligible_stock_days",
         }
         execution_payload = {
@@ -11662,7 +11677,7 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
             "fold_id": "fold_20210101_20211231",
             "filter_id": "breakout_quality_v1",
             "model_architecture": "synthetic_architecture",
-            "experiment_profile": "synthetic_profile",
+            "experiment_profile": fit_fixture_profile,
             "continuous_target_id": "synthetic_target",
             "training_label_scope": "all_labels",
             "training_sample_scope": "daily_eligible_stock_days",
@@ -11713,7 +11728,7 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
         source_manifest = {
             "filter_id": "breakout_quality_v1",
             "model_architecture": "synthetic_architecture",
-            "experiment_profile": "synthetic_profile",
+            "experiment_profile": fit_fixture_profile,
             "continuous_target_id": "synthetic_target",
             "training_label_scope": "all_labels",
             "training_sample_scope": "daily_eligible_stock_days",
@@ -11785,7 +11800,7 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
         checkpoint = {
             "model_spec": model_spec,
             "experiment_settings": experiment_settings,
-            "experiment_profile": "synthetic_profile",
+            "experiment_profile": fit_fixture_profile,
             "training_sample_scope": "daily_eligible_stock_days",
             "sequence_length": 300,
             "feature_count": 10,

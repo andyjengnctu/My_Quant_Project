@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Mapping
 
 FIT_OWNER = "services/breakout_quality/fitted_model_artifacts.py"
+FIT_DEPENDENCY_OWNER = "services/breakout_quality/fitting_data_dependencies.py"
 PIT_PRODUCER = "services/breakout_quality/point_in_time_scores.py"
 FORWARD_PRODUCER = "services/breakout_quality/train_daily_ranker.py"
 RESEARCH_APPLICATION = "services/research/breakout_quality_application.py"
@@ -190,6 +191,17 @@ def check_research_fit_architecture_sources(
              for path in (FIT_OWNER, PIT_PRODUCER, FORWARD_PRODUCER, RESEARCH_APPLICATION)}
     issues: list[str] = []
     owner_defs = set(_defs(trees[FIT_OWNER]))
+    # Both evaluation modes must project persisted sources from the same
+    # dependency snapshot. The FIT owner alone authorizes checkpoint reuse.
+    for module, method in ((FIT_OWNER, "forward_source"), (PIT_PRODUCER, "rolling_source")):
+        imports = _module_facts(trees[module]).imports.get(
+            "services.breakout_quality.fitting_data_dependencies", frozenset(),
+        )
+        facts = _top_level_function_facts(module, sources[module])
+        if ("FitDataDependencies" not in imports
+                or not any("from_bundle" in f.attribute_calls and method in f.attribute_calls
+                           for f in facts.values())):
+            issues.append(f"{module} bypasses FIT data-dependency SSOT: {method}")
     # Owner -> PIT is always a forbidden reverse dependency, including lazy
     # imports in nested functions. The dependency must be inverted via the
     # PIT-provided cohort proof port; do not exempt it from the cycle guard.

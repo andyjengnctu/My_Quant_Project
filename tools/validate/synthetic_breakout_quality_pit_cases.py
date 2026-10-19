@@ -123,7 +123,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         "allow_tf32": False,
     }
     profile_payload = {
-        "name": "synthetic_daily_profile",
+        "name": DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
         "training_sample_scope": TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     }
     checkpoint_manifest = {"sha256": "abc", "size_bytes": 123}
@@ -140,7 +140,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     fold_contract = {
         "filter_id": "synthetic_quality",
         "model_architecture": "synthetic_arch",
-        "experiment_profile": "synthetic_daily_profile",
+        "experiment_profile": DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
         "continuous_target_id": "synthetic_target",
         "training_label_scope": TRAINING_LABEL_SCOPE_ALL,
         "training_sample_scope": TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,

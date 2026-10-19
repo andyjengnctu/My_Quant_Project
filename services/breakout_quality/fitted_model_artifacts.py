@@ -28,14 +28,7 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
     BREAKOUT_QUALITY_USE_INNER_VALIDATION,
 )
-from core.breakout_quality_policy import (
-    get_breakout_quality_rolling_test_mode,
-    get_continuous_ranker_execution_recipe,
-)
-from core.breakout_quality_runtime import (
-    CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE,
-    CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
-)
+from core.breakout_quality_policy import get_breakout_quality_rolling_test_mode
 from filters.breakout_quality.paths import (
     resolve_filter_artifact_paths,
     resolve_filter_model_output_dir,
@@ -43,11 +36,13 @@ from filters.breakout_quality.paths import (
 )
 from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME
 from filters.breakout_quality.artifacts import build_file_manifest
-from filters.breakout_quality.dataset_store import resolve_dataset_paths
 from filters.breakout_quality.model_source_provenance import (
-    canonical_source_dataset_artifacts,
     forward_published_source_provenance_issues,
     source_inventory_matches_current,
+)
+from services.breakout_quality.fitting_data_dependencies import (
+    FitDataDependencies, fold_source_dependency_issues,
+    forward_publication_fit_dependency_issues, verified_published_context_fit_proof,
 )
 from filters.breakout_quality.models.factory import build_model, count_trainable_parameters
 
@@ -228,124 +223,18 @@ _FIRST_FOLD_NON_FITTING_SETTINGS = frozenset({
 })
 
 
-def _daily_lazy_event_dataset_artifact_blocker(
-    candidate: Mapping[str, Any], expected: Mapping[str, Any],
-    published: Any, current: Any,
-) -> str | None:
-    """Explain why event-only Dataset artifact drift cannot yet be exempted.
-
-    An explanation is not an authorization: a failed proof leaves the original
-    scientific FIT identity and checkpoint untouched.  Only field names, record
-    counts and validation categories are emitted, never local paths or hashes.
-    """
-    if (
-        candidate.get("training_sample_scope") != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
-        or expected.get("training_sample_scope") != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
-    ):
-        return "training sample scope is not daily-universal"
-    if candidate.get("experiment_profile") != expected.get("experiment_profile"):
-        return "experiment profile differs"
-    try:
-        recipe = get_continuous_ranker_execution_recipe(str(expected.get("experiment_profile") or ""))
-    except (KeyError, TypeError, ValueError):
-        return "experiment profile has no verified execution recipe"
-    if recipe.context_policy.source != CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE:
-        return "external context requires exact Dataset source identity"
-    if (
-        recipe.target_policy.materialization_mode
-        != CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT
-    ):
-        return "target materialization is not daily-component"
-    # The native daily-universal loader obtains numerical features/targets from
-    # the canonical source CSV, never from event feature-bank/label artifacts.
-    # Legacy Rolling folds can explicitly record None for these unused
-    # event artifacts. Require complete proof of the actual fitting sources
-    # in the caller; do not manufacture a historical event SHA after the fact.
-    # An existing but incomplete/malformed historical mapping is different:
-    # keep rejecting it, as well as any missing CURRENT event evidence.
-    files = resolve_dataset_paths(Path(".")).artifact_paths()
-    expected_keys = set(files)
-    if published is not None and not isinstance(published, Mapping):
-        return "historical event Dataset records have an unsupported representation"
-    for label, records in (("historical", published), ("current", current)):
-        if label == "historical" and records is None:
-            continue
-        if not isinstance(records, Mapping):
-            return f"{label} event Dataset records absent or not a mapping"
-        actual_keys = set(records)
-        if actual_keys != expected_keys:
-            missing = sorted(expected_keys - actual_keys)
-            return (
-                f"{label} event Dataset key set differs: "
-                f"missing={','.join(missing) or '-'}, "
-                f"unexpected_count={len(actual_keys - expected_keys)}, "
-                f"record_count={len(actual_keys)}"
-            )
-        for name, file_path in files.items():
-            row = records.get(name)
-            if not isinstance(row, Mapping):
-                return f"{label} {name} record is not a mapping"
-            if row.get("filename") != file_path.name:
-                return f"{label} {name} filename differs from canonical Dataset contract"
-            sha = row.get("sha256")
-            if (
-                not isinstance(sha, str) or len(sha) != 64
-                or any(char not in "0123456789abcdef" for char in sha.lower())
-            ):
-                return f"{label} {name} SHA256 metadata invalid"
-            size = row.get("size_bytes")
-            if type(size) is not int or size < 0:
-                return f"{label} {name} file-size metadata invalid"
-    return None
-
-
-def _daily_lazy_dataset_artifact_reuse_blocker(
-    candidate: Mapping[str, Any], expected: Mapping[str, Any],
-    old_source: Mapping[str, Any], new_source: Mapping[str, Any],
-    *, project_root: str | Path | None, inventory_verified: bool,
-) -> str | None:
-    """One fail-closed owner for cross-mode event Dataset artifact exemptions."""
-    if project_root is None:
-        return "canonical project root missing"
-    if not inventory_verified:
-        return "source CSV inventory equivalence not verified"
-    for label, source in (("historical", old_source), ("current", new_source)):
-        if not isinstance(source.get("source_data_inventory"), Mapping) or not source["source_data_inventory"]:
-            return f"{label} source CSV inventory evidence absent"
-    old_target = old_source.get("target_contract")
-    new_target = new_source.get("target_contract")
-    if not isinstance(old_target, Mapping) or not old_target:
-        return "historical target contract missing or empty"
-    if old_target != new_target:
-        return "target contract differs"
-    if "dataset_artifacts" not in old_source or "dataset_artifacts" not in new_source:
-        return "event Dataset artifact field absent"
-    if "target_artifacts" not in old_source or "target_artifacts" not in new_source:
-        return "target artifact field absent"
-    target_artifacts = old_source["target_artifacts"]
-    if target_artifacts is not None and (
-        not isinstance(target_artifacts, Mapping) or not target_artifacts
-    ):
-        return "historical target artifact record invalid"
-    if target_artifacts != new_source["target_artifacts"]:
-        return "target artifact lineage differs"
-    return _daily_lazy_event_dataset_artifact_blocker(
-        candidate, expected,
-        old_source.get("dataset_artifacts"), new_source.get("dataset_artifacts"),
-    )
-
-
 def _first_fold_fit_identity_issues(
     candidate: dict[str, Any], expected: dict[str, Any],
     *, project_root: str | Path | None = None,
+    external_context_verified: bool = False,
 ) -> tuple[str, ...]:
     """Explain cross-mode fitting mismatches while preserving historical FitKeys.
 
     The original Fold FitKey remains byte-for-byte unchanged. Event-only
-    Dataset records may differ, or the historical records may be explicitly
-    None, only for a no-external-context daily-component fit whose canonical
-    CSV inventory, Target and every other fitting input have been verified.
-    This never exempts PIT score identity or checkpoint integrity.
+    Dataset records may differ (or be explicitly None) for daily-component FIT
+    when canonical source CSV, Target and fitting inputs match. Any declared
+    external context additionally requires verified published Fold provenance.
+    PIT score identity and checkpoint integrity remain mandatory.
     """
     fields = (
         "filter_id", "model_architecture", "experiment_profile",
@@ -355,42 +244,11 @@ def _first_fold_fit_identity_issues(
     )
     issues = [f"{field} mismatch" for field in fields
               if candidate.get(field) != expected.get(field)]
-    left_source = candidate.get("source_contract")
-    right_source = expected.get("source_contract")
-    if not isinstance(left_source, Mapping) or not isinstance(right_source, Mapping):
-        issues.append("source_contract missing")
-    else:
-        inventory_verified = (
-            "source_data_inventory" in left_source
-            and "source_data_inventory" in right_source
-            and source_inventory_matches_current(
-                published=left_source["source_data_inventory"],
-                current=right_source["source_data_inventory"],
-                project_root=project_root,
-            )
-        )
-        for field in sorted(set(left_source) | set(right_source)):
-            if field not in left_source or field not in right_source:
-                issues.append(f"source_contract.{field} missing")
-            elif field == "source_data_inventory":
-                if not inventory_verified:
-                    issues.append("source_contract.source_data_inventory mismatch")
-            elif left_source[field] != right_source[field]:
-                # AI: The lazy daily loader consumes the pinned CSV and native
-                # daily target, not event-indexed feature-bank/label caches.
-                # A failed exemption reports the precise missing proof but never
-                # silently converts an incompatible checkpoint into REUSE.
-                if field == "dataset_artifacts":
-                    proof_blocker = _daily_lazy_dataset_artifact_reuse_blocker(
-                        candidate, expected, left_source, right_source,
-                        project_root=project_root,
-                        inventory_verified=inventory_verified,
-                    )
-                    if proof_blocker is not None:
-                        issues.append("source_contract.dataset_artifacts mismatch")
-                        issues.append(f"dataset_artifacts proof blocked: {proof_blocker}")
-                else:
-                    issues.append(f"source_contract.{field} mismatch")
+    issues.extend(fold_source_dependency_issues(
+        candidate, expected, project_root=(Path(project_root) if project_root is not None else None),
+        inventory_matcher=source_inventory_matches_current,
+        external_context_verified=external_context_verified,
+    ))
     left_settings = candidate.get("training_settings")
     right_settings = expected.get("training_settings")
     if not isinstance(left_settings, dict) or not isinstance(right_settings, dict):
@@ -439,8 +297,14 @@ def validate_rolling_fold_fitted_checkpoint(
     """
     manifest_path = Path(manifest_path).resolve()
     fold_id = str(manifest.get("fold_id") or manifest_path.parent.name)
+    context_verified, context_reason = verified_published_context_fit_proof(
+        manifest_path=manifest_path, fold_manifest=manifest, bundle=bundle,
+    )
+    if not context_verified:
+        return None, f"external fitting context proof blocked: {context_reason}"
     issues = _first_fold_fit_identity_issues(
         dict(manifest), dict(expected), project_root=project_root,
+        external_context_verified=context_verified,
     )
     if issues:
         return None, "; ".join(issues[:7])
@@ -471,6 +335,7 @@ def validate_rolling_fold_fitted_checkpoint(
     if isinstance(embedded, dict):
         embedded_issues = _first_fold_fit_identity_issues(
             embedded, dict(expected), project_root=project_root,
+            external_context_verified=context_verified,
         )
         if embedded_issues:
             raise RuntimeError(
@@ -698,28 +563,15 @@ def _forward_checkpoint_import_issues(
     source_dataset = dict(source_manifest.get("source_dataset") or {})
     source_target = dict(source_manifest.get("source_continuous_target") or {})
     expected_source = dict(fold_contract.get("source_contract") or {})
-    source_pairs = (
-        ("dataset_policy", source_dataset.get("policy")),
-        ("dataset_storage_schema_version", source_dataset.get("dataset_storage_schema_version")),
-        ("source_data_inventory", source_dataset.get("source_data_inventory")),
-        ("input_price_source", source_dataset.get("input_price_source")),
-        ("input_trade_count_source", source_dataset.get("input_trade_count_source")),
-        ("dataset_artifacts", source_dataset.get("source_dataset_artifacts", source_dataset.get("dataset_artifacts"))),
-        ("target_schema_version", source_target.get("schema_version")),
-        ("target_contract", source_target.get("target_contract")),
-        ("target_artifacts", source_target.get("artifacts")),
-        ("training_universe_start_date", source_dataset.get("training_universe_start_date")),
-    )
-    for field, actual in source_pairs:
-        if field == "source_data_inventory" and field in expected_source:
-            matched = source_inventory_matches_current(
-                published=actual, current=expected_source.get(field),
-                project_root=(Path(project_root) if project_root is not None else Path(__file__).resolve().parents[2]),
-            )
-        else:
-            matched = actual == expected_source.get(field)
-        if field in expected_source and not matched:
-            issues.append(f"source_contract {field} mismatch")
+    issues.extend(forward_publication_fit_dependency_issues(
+        source_dataset=source_dataset, source_target=source_target,
+        expected_fold_source=expected_source,
+        current_target=dict(getattr(bundle, "target_manifest", {}) or {}),
+        experiment_profile=str(fold_contract.get("experiment_profile") or ""),
+        project_root=(Path(project_root) if project_root is not None
+                      else Path(__file__).resolve().parents[2]),
+        inventory_matcher=source_inventory_matches_current,
+    ))
 
     if checkpoint.get("model_spec") != fold_contract.get("model_spec"):
         issues.append("checkpoint model_spec mismatch")
@@ -1105,28 +957,7 @@ def fitting_split_identity(split_report: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def source_training_identity(bundle) -> dict[str, Any]:
-    summary = dict(bundle.summary or {})
-    target = dict(bundle.target_manifest or {})
-    # Do not bind the fit to Forward score horizon/tail metadata. Only source
-    # and target bytes/semantics that can affect Selection fitting belong here.
-    return {
-        "dataset": summary.get("dataset"),
-        "dataset_policy": summary.get("policy"),
-        "training_universe_start_date": summary.get("training_universe_start_date"),
-        "source_data_inventory": summary.get("source_data_inventory"),
-        **({"input_price_source": summary["input_price_source"]} if "input_price_source" in summary else {}),
-        **({"input_trade_count_source": summary["input_trade_count_source"]} if "input_trade_count_source" in summary else {}),
-        "source_dataset_artifacts": canonical_source_dataset_artifacts(summary),
-        "source_target_artifacts": target.get("artifacts"),
-        "target_id": target.get("target_id"),
-        "target_contract": target.get("target_contract"),
-        "context_features": target.get("context_features"),
-        "pair_weight_context_features": target.get("pair_weight_context_features"),
-        "pair_weight_context_contract": target.get("pair_weight_context_contract"),
-        "risk_param_coverage_start": target.get("risk_param_coverage_start"),
-        "predicted_upside_context_manifest": target.get("predicted_upside_context_manifest"),
-        "predicted_safety_context_manifest": target.get("predicted_safety_context_manifest"),
-    }
+    return FitDataDependencies.from_bundle(bundle).forward_source()
 
 
 def build_daily_forward_fitting_identity(

@@ -91,6 +91,7 @@ from core.console_report import (
     render_section,
     render_table,
 )
+from services.breakout_quality.fitting_data_dependencies import FitDataDependencies
 from services.breakout_quality.fitted_model_artifacts import (
     FittedModelContract,
     load_fitted_model_training_evidence,
@@ -782,21 +783,13 @@ def _fold_contract_payload(args, bundle, fold, ids: dict[str, Any]) -> dict[str,
             "deterministic_algorithms": bool(args.deterministic_algorithms),
             "allow_tf32": bool(args.allow_tf32),
         },
-        "source_contract": {
-            "dataset_policy": bundle.summary.get("policy"),
-            "dataset_storage_schema_version": bundle.summary.get(
-                "dataset_storage_schema_version"
+        "source_contract": FitDataDependencies.from_bundle(bundle).rolling_source(
+            daily_training_universe_start_date=(
+                str(training_universe_start.date())
+                if str(bundle.profile.training_sample_scope)
+                == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS else None
             ),
-            "source_data_inventory": bundle.summary.get("source_data_inventory"),
-            **({"input_price_source": bundle.summary["input_price_source"]} if "input_price_source" in bundle.summary else {}),
-            **({"input_trade_count_source": bundle.summary["input_trade_count_source"]} if "input_trade_count_source" in bundle.summary else {}),
-            "dataset_artifacts": bundle.summary.get(
-                "source_dataset_artifacts", bundle.summary.get("dataset_artifacts")
-            ),
-            "target_schema_version": bundle.target_manifest.get("schema_version"),
-            "target_contract": bundle.target_manifest.get("target_contract"),
-            "target_artifacts": bundle.target_manifest.get("artifacts"),
-        },
+        ),
         "lookahead_contract": {
             "training_requires_label_eval_end_before_score_start": True,
             "validation_requires_label_eval_end_before_score_start": True,
@@ -804,14 +797,6 @@ def _fold_contract_payload(args, bundle, fold, ids: dict[str, Any]) -> dict[str,
             "oos_used_for_training_or_epoch_selection": False,
         },
     }
-
-    if (
-        str(bundle.profile.training_sample_scope)
-        == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
-    ):
-        payload["source_contract"]["training_universe_start_date"] = str(
-            training_universe_start.date()
-        )
 
     if args.train_window_months is not None:
         payload["training_settings"]["train_window_months"] = int(args.train_window_months)
