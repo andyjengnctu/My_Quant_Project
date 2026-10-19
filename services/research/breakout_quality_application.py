@@ -130,6 +130,7 @@ from services.breakout_quality.fitted_model_artifacts import (
     fitted_model_settings_issues,
     pit_fold_fitting_settings_issues,
 )
+from services.breakout_quality.fit_origin_repair_plan import plan_fit_origin_repairs
 from services.research.strategy_compare_training import (
     run_strategy_compare_training_unit,
     validate_strategy_compare_training_artifacts,
@@ -3345,6 +3346,7 @@ def _ensure_continuous_forward_model_report(
     settings,
     prompt_for_build: bool,
     force_rebuild: bool = False,
+    require_rolling_fit_reuse: bool = False,
 ):
     """REUSE a valid model/manifest/report contract or train only when it is unavailable."""
 
@@ -3353,6 +3355,8 @@ def _ensure_continuous_forward_model_report(
     # SOP evidence checks; reimplementing their validation here would fork SSOT.
     contract, reuse_reason = _load_reusable_continuous_forward_contract(settings)
     if contract is not None and not force_rebuild:
+        if require_rolling_fit_reuse:
+            raise RuntimeError("FIT repair cannot substitute an existing Forward model")
         return 0, contract, "REUSE"
 
     upstream_plan = _collect_continuous_research_input_plan(settings)
@@ -3375,6 +3379,10 @@ def _ensure_continuous_forward_model_report(
     ]
     if not force_rebuild:
         train_args.append("--reuse-fitted-model")
+    if require_rolling_fit_reuse:
+        if force_rebuild:
+            raise ValueError("FIT repair cannot separately force rebuild Forward")
+        train_args.append("--require-rolling-fit-reuse")
 
     def _run_and_validate():
         code = _run_command(
@@ -3689,6 +3697,135 @@ def _run_continuous_pit_profile(
                     )
                 return int(result)
     return _run_build_and_audit(build_args)
+
+
+
+def repair_missing_fit_origin_from_canonical_rolling(
+    program_name: str, *, profile_name: str, expected_previous_checkpoint_sha256: str,
+) -> dict[str, str]:
+    """Canonical repair action dispatched from Research's shared dependency plan.
+
+    Caller must first do an all-profile read-only provenance preflight and
+    select *only* missing-origin profiles. Canonical Rolling trains the single
+    new FIT; Forward can only consume its validated first fold. Existing
+    publications are staged before producer mutation, then archived on commit
+    or restored on any exception. This does not re-attest old weights.
+    """
+    from services.breakout_quality.fit_repair_transaction import preserved_fit_publications
+    from services.breakout_quality.fitted_model_artifacts import (
+        verify_fit_repair_previous_checkpoint, verify_fit_repair_rebuilt_checkpoint,
+        verified_fit_repair_legacy_cache_entry,
+    )
+
+    allowed_profiles = {
+        str(profile) for _model_id, profile
+        in get_breakout_quality_model_test_settings().model_profiles
+    }
+    if str(profile_name) not in allowed_profiles:
+        raise ValueError("FIT repair requires a configured Model Compare/Test profile")
+    settings = get_breakout_quality_workflow_settings(experiment_profile=str(profile_name))
+    if not settings.rolling_authorized:
+        raise RuntimeError("FIT repair requires current Rolling scientific authorization")
+    model_id = _model_display_id(str(profile_name))
+    mode = get_breakout_quality_rolling_test_mode("rolling")
+    model_dir, output_dir = _forward_publication_paths(settings)
+    pit_dir = _rolling_publication_dir(settings, mode)
+    verify_fit_repair_previous_checkpoint(
+        rolling_dir=pit_dir, score_start=str(mode.score_start_date),
+        expected_profile=str(profile_name),
+        expected_checkpoint_sha256=str(expected_previous_checkpoint_sha256),
+    )
+    # Stale shared FIT cache is a second physical publication of the same
+    # unverified legacy weight. Stage that exact FitKey transactionally; all
+    # unrelated profile/FitKey cache entries remain untouched.
+    old_cache_entry = verified_fit_repair_legacy_cache_entry(
+        rolling_dir=pit_dir, score_start=str(mode.score_start_date),
+        expected_profile=str(profile_name),
+        checkpoint_cache_root=(PROJECT_ROOT / BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT),
+    )
+
+    upstream = _collect_continuous_research_input_plan(settings)
+    if upstream.blocked:
+        raise RuntimeError("FIT repair scientific/data dependency is BLOCKED")
+    if any(action.action != "REUSE" for action in upstream.actions):
+        # Dependencies must be prepared by their canonical producers, not by
+        # the FIT repair service. No old model publication is staged yet.
+        rc = _prepare_continuous_research_inputs(program_name, settings)
+        if int(rc) != 0:
+            raise RuntimeError("FIT repair upstream preparation failed")
+        upstream = _collect_continuous_research_input_plan(settings)
+        if upstream.blocked or any(action.action != "REUSE" for action in upstream.actions):
+            raise RuntimeError("FIT repair upstream identity not READY after canonical producer")
+    # Validate all configurable paths before staging anything. If the Rolling
+    # namespace is not nested under either canonical profile publication root,
+    # it participates independently in the same rollback transaction.
+    journal = (PROJECT_ROOT / "outputs" / "filters" / "breakout_quality"
+               / str(settings.filter_id) / "audit" / "fit_repair"
+               / (str(profile_name) + ".in_progress.json"))
+    result: dict[str, str] = {}
+    with preserved_fit_publications(
+        project_root=PROJECT_ROOT,
+        publication_roots=(model_dir, output_dir, pit_dir, old_cache_entry),
+        journal_path=journal,
+        repair_identity=str(profile_name),
+    ):
+        # Explicit force-rebuild is delegated to PIT/Model canonical producers.
+        # The PIT producer receives a fresh temporary cache, so it cannot
+        # import the historical unverified checkpoint into the replacement.
+        rc = _run_continuous_pit_profile(
+            program_name, model_id=model_id, profile_name=str(profile_name),
+            mode=mode, forward_checkpoint_source=None, force_rebuild=True,
+        )
+        if int(rc) != 0:
+            raise RuntimeError(f"canonical Rolling FIT rebuild failed: returncode={int(rc)}")
+        invalidate_rolling_model_source_cache()
+        rolling_contract, rolling_payload, reason = _load_reusable_rolling_standard_report(
+            settings, mode,
+        )
+        if rolling_contract is None or rolling_payload is None:
+            raise RuntimeError(f"Rolling rebuilding succeeded without complete SOP: {reason}")
+        _clear_continuous_forward_reuse_caches()
+        code, forward_contract, action = _ensure_continuous_forward_model_report(
+            program_name, model_id=model_id, settings=settings, prompt_for_build=False,
+            require_rolling_fit_reuse=True,
+        )
+        if int(code) != 0 or forward_contract is None:
+            raise RuntimeError("Forward cannot reuse the rebuilt Rolling FIT")
+        # A new model is not a successfully repaired common FIT unless the
+        # canonical resolver actually selected Rolling first-fold checkpoint.
+        publication = resolve_filter_artifact_paths(
+            PROJECT_ROOT, str(settings.filter_id),
+            str(settings.model_architecture), str(settings.experiment_profile),
+        )
+        common_sha = verify_fit_repair_rebuilt_checkpoint(
+            rolling_dir=pit_dir, score_start=str(mode.score_start_date),
+            expected_profile=str(profile_name), forward_checkpoint=publication.model_path,
+        )
+        # Forward's full source validator is the final gate, not this SHA check.
+        _clear_continuous_forward_reuse_caches()
+        verified, verification_reason = _load_reusable_continuous_forward_contract(settings)
+        if verified is None:
+            raise RuntimeError(f"Rebuilt Forward full source fails validation: {verification_reason}")
+        # PIT is the sole shared FIT-cache publisher. Normal force rebuild uses
+        # an isolated temporary cache; put the verified native first fold back
+        # into its single canonical FitKey location while the old entry is still
+        # staged by the rollback transaction.
+        from services.breakout_quality.point_in_time_scores import publish_verified_native_first_fold_cache
+        new_fit_identity = publish_verified_native_first_fold_cache(
+            rolling_dir=pit_dir, score_start=str(mode.score_start_date),
+            cache_root=(PROJECT_ROOT / BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT),
+            expected_checkpoint_sha256=common_sha,
+        )
+        result = {
+            "profile": str(profile_name), "model_id": str(model_id),
+            "original_checkpoint_sha256": str(expected_previous_checkpoint_sha256),
+            "repaired_checkpoint_sha256": common_sha,
+            "fitting_identity": new_fit_identity,
+            "forward_action": str(action),
+        }
+    # Archive ownership is the transaction service. Returning here means
+    # canonical publication and old-history preservation both committed.
+    return result
 
 
 def _refresh_rolling_audit_only(program_name: str, settings, mode) -> tuple[object | None, dict | None, str | None]:
@@ -4438,22 +4575,62 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
         display_rows.append((str(model_id), str(profile_name), action, reason or "READY"))
         planned.append((str(model_id), settings, contract, payload, reason))
 
+    # All-model, read-only provenance preflight precedes ANY repair, FIT build
+    # or comparison publication. The FIT service classifies only the historical
+    # source gap it can safely fix with an authorized canonical rebuild; it
+    # never promotes an unproven historical checkpoint to REUSE.
+    missing_profiles = tuple(
+        (model_id, str(settings.experiment_profile))
+        for model_id, settings, contract, payload, _reason in planned
+        # The repair is a *Forward* missing-FIT dependency. Rolling's
+        # checkpoint may already be valid when only its Audit/SOP needs
+        # refreshing; never refit that checkpoint to repair a report.
+        if not rolling and contract is None
+    )
+    repairs, repair_blockers = plan_fit_origin_repairs(
+        project_root=PROJECT_ROOT, model_profiles=missing_profiles,
+    )
+    repair_ids = {item.model_id for item in repairs}
+    display_rows = [
+        (model_id, profile, "REBUILD FIT" if model_id in repair_ids and action != "BLOCKED" else action,
+         "Unproven historical FIT origin; canonical Rolling rebuild + verified Forward reuse"
+         if model_id in repair_ids and action != "BLOCKED" else reason)
+        for model_id, profile, action, reason in display_rows
+    ]
     mode_label = "Rolling OOS" if rolling else "Forward OOS"
     print("\n" + render_title(f"{mode_label} 模型比較"))
     _print_model_action_status(display_rows)
-    if blocked_model_ids:
-        print(
-            "此比較包含不可自動補建的Research資料依賴："
-            + "、".join(blocked_model_ids)
-            + "；尚未開始補建任何模型或更新比較報表。"
-        )
+    if blocked_model_ids or repair_blockers:
+        for issue in repair_blockers:
+            print(f"[FIT BLOCKED] {issue.model_id}: {issue.reason}")
+        if blocked_model_ids:
+            print("不可自動補建的Research資料依賴：" + "、".join(blocked_model_ids))
+        print("全模型前置檢查未通過；不修改模型工件或正式比較報表。")
         return 2
+
+    # Same seven Research operations: execute the dependency plan in place.
+    # This delegated producer action is not a new research/selection workflow.
+    for repair in repairs:
+        print(f"[FIT REBUILD] {repair.model_id} | preserving historical publications")
+        try:
+            result = repair_missing_fit_origin_from_canonical_rolling(
+                program_name, profile_name=repair.profile,
+                expected_previous_checkpoint_sha256=repair.previous_checkpoint_sha256,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"[FIT BLOCKED] {repair.model_id}: {exc}")
+            print("受控修復未通過；不發布本次模型比較結果。")
+            return 2
+        print(f"[FIT VERIFIED] {repair.model_id} | Rolling/Forward SHA={result['repaired_checkpoint_sha256'][:16]}...")
+    if repairs:
+        invalidate_rolling_model_source_cache()
+        _clear_continuous_forward_reuse_caches()
 
     completed = []
     # Previewing the full suite does not freeze shared input lineage. Once a
     # Producer has run, refresh later models before using their old preview;
     # recheck preceding consumers before the one aggregate publication.
-    preceding_model_mutation = False
+    preceding_model_mutation = bool(repairs)
     affected_completed_models: set[int] = set()
     for model_id, settings, contract, payload, _reason in planned:
         if preceding_model_mutation:
@@ -4468,7 +4645,9 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
                 if upstream_plan.blocked:
                     print(f"{model_id} 模型比較來源更新後存在不可補建依賴；本次不發布報表。")
                     return 2
-        action = "REUSE"
+        # Persist the existing report action vocabulary; detailed FIT repair
+        # remains an execution-plan status, not a new report schema value.
+        action = "BUILD/REFRESH" if str(model_id) in repair_ids else "REUSE"
         if contract is None or payload is None:
             if rolling:
                 code = _run_continuous_rolling_mode_direct(program_name, settings, prompt_for_build=False)

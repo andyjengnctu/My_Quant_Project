@@ -585,6 +585,61 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         and bool((hs_eval["oos"].get("lexicographic_model_gate") or {})),
     )
 
+    # Controlled native FIT repair must republish the newly verified first Fold
+    # into the *same* canonical shared FitKey cache. A temporary rebuild cache
+    # cannot be discarded without leaving the old first Fold's cache absent.
+    from services.breakout_quality.point_in_time_scores import publish_verified_native_first_fold_cache
+    with tempfile.TemporaryDirectory(prefix="pit_fit_repair_canonical_cache_") as td:
+        root = Path(td)
+        rolling_dir = root / "pit"
+        fold_dir = rolling_dir / "folds" / "fold_20210101_20211231"
+        fold_dir.mkdir(parents=True)
+        original = dict(expected_contract)
+        original.update({
+            "fold_id": fold_dir.name,
+            "planned_periods": {**dict(expected_contract.get("planned_periods") or {}),
+                                 "score_start": "2021-01-01"},
+        })
+        (fold_dir / "model.pt").write_bytes(b"new canonical native model bytes")
+        sha_record = build_file_manifest(fold_dir / "model.pt")
+        original["artifacts"] = {"checkpoint": sha_record}
+        original["fitting_origin"] = {"kind": "rolling_native", "checkpoint": sha_record}
+        (fold_dir / "manifest.json").write_text(json.dumps(original), encoding="utf-8")
+        cache_root = root / "fit_cache"
+        key = publish_verified_native_first_fold_cache(
+            rolling_dir=rolling_dir, score_start="2021-01-01",
+            cache_root=cache_root, expected_checkpoint_sha256=sha_record["sha256"],
+        )
+        entry = cache_root / key
+        check_true("repair_native_fit_published_by_pit_to_canonical_shared_cache",
+                   key == fold_training_identity(original)
+                   and (entry / "model.pt").read_bytes() == (fold_dir / "model.pt").read_bytes()
+                   and build_file_manifest(entry / "model.pt") == sha_record)
+        try:
+            publish_verified_native_first_fold_cache(
+                rolling_dir=rolling_dir, score_start="2021-01-01",
+                cache_root=cache_root, expected_checkpoint_sha256=sha_record["sha256"],
+            )
+        except RuntimeError as exc:
+            duplicate_guarded = "already occupied" in str(exc)
+        else:
+            duplicate_guarded = False
+        check_true("repair_native_fit_cache_does_not_overwrite_existing_fitkey", duplicate_guarded)
+        (entry / "model.pt").unlink()
+        original["fitting_origin"] = {"kind": "forward_import", "checkpoint": sha_record}
+        (fold_dir / "manifest.json").write_text(json.dumps(original), encoding="utf-8")
+        try:
+            publish_verified_native_first_fold_cache(
+                rolling_dir=rolling_dir, score_start="2021-01-01",
+                cache_root=root / "unpublished_cache",
+                expected_checkpoint_sha256=sha_record["sha256"],
+            )
+        except RuntimeError as exc:
+            fake_origin_guarded = "no verified checkpoint origin" in str(exc)
+        else:
+            fake_origin_guarded = False
+        check_true("repair_native_fit_rejects_forward_origin_instead_of_relabeled_legacy", fake_origin_guarded)
+
     # Reproduce the C71 score-only upgrade failure: legacy code refreshed the
     # embedded fold_contract inside model.pt, changing its SHA while fitting identity
     # stayed unchanged.  The fitting cache is canonical and must restore its exact

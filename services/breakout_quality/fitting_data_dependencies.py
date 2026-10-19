@@ -559,6 +559,119 @@ def migrated_forward_origin_training_evidence(
     )
 
 
+def build_fitting_context_origin(
+    *, profile: str, target: Mapping[str, Any], checkpoint: Mapping[str, Any],
+    kind: str, forward_training: Mapping[str, Any] | None = None,
+    forward_evidence: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Capture original weight-affecting context once, at the canonical producer.
+
+    This witness belongs to the *fitted checkpoint*, not a score refresh. It
+    intentionally does not change historical FitKey serialization. No witness
+    is manufactured for legacy models after their original publication is lost.
+    """
+    context_source = context_source_for_profile(profile)
+    if context_source == CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE:
+        return None
+    spec = maybe_predicted_context_artifact_spec(context_source)
+    if spec is None:
+        raise ValueError("unknown registered fitting-context artifact capability")
+    context = target.get(spec.manifest_key)
+    if not isinstance(context, Mapping) or not _valid_file_record(context.get("artifact")):
+        raise ValueError("original fitting-context content witness missing")
+    if not _valid_file_record(checkpoint):
+        raise ValueError("original fitted checkpoint SHA witness missing")
+    witness: dict[str, Any] = {
+        "schema_version": 1,
+        "kind": str(kind),
+        "context_source": context_source,
+        "checkpoint": dict(checkpoint),
+        "target_schema_version": target.get("schema_version"),
+        "target_contract": target.get("target_contract"),
+        "context_manifest": dict(context),
+    }
+    if kind == "forward_import":
+        if not isinstance(forward_training, Mapping) or not isinstance(forward_evidence, Mapping):
+            raise ValueError("original Forward fitting evidence missing")
+        if not isinstance(forward_training.get("epoch_selection"), Mapping) or not forward_training["epoch_selection"]:
+            raise ValueError("original Forward epoch-selection witness missing")
+        mandatory = ("training_settings", "torch_execution", "selected_epoch")
+        if any(forward_evidence.get(key) is None for key in mandatory):
+            raise ValueError("original Forward execution witness incomplete")
+        witness["epoch_selection"] = dict(forward_training["epoch_selection"])
+        witness["final_refit_history"] = list(forward_training.get("final_refit_history") or [])
+        witness["training_evidence"] = {
+            key: forward_evidence[key] for key in mandatory
+        }
+    elif kind != "rolling_native":
+        raise ValueError("unsupported fitted-context origin kind")
+    return witness
+
+
+def fitting_context_origin_issue(
+    *, origin: Any, profile: str, target: Mapping[str, Any],
+    published_target: Mapping[str, Any], checkpoint: Any,
+) -> str | None:
+    """Verify a producer-captured checkpoint/context witness, without legacy guesses."""
+    if not isinstance(origin, Mapping) or origin.get("schema_version") != 1:
+        return "original fitting context witness absent or unsupported"
+    source = context_source_for_profile(profile)
+    spec = maybe_predicted_context_artifact_spec(source)
+    if spec is None:
+        return "external fitting context capability unavailable"
+    if origin.get("context_source") != source:
+        return "original fitting context source differs"
+    if not _same_file_bytes(origin.get("checkpoint"), checkpoint):
+        return "original fitting checkpoint SHA binding differs"
+    if origin.get("target_schema_version") != target.get("schema_version"):
+        return "original fitting target schema differs"
+    if origin.get("target_contract") != target.get("target_contract"):
+        return "original fitting target contract differs"
+    for label, witness in (("current", target), ("published", published_target)):
+        reason = _context_manifest_mismatch(origin.get("context_manifest"), witness.get(spec.manifest_key))
+        if reason is not None:
+            return f"original fitting context vs {label}: {reason}"
+    if origin.get("kind") not in {"forward_import", "rolling_native"}:
+        return "original fitting context kind unsupported"
+    if origin.get("kind") == "forward_import":
+        evidence = origin.get("training_evidence")
+        if not isinstance(evidence, Mapping) or not isinstance(origin.get("epoch_selection"), Mapping):
+            return "original imported fitting execution/epoch witness missing"
+        if not origin["epoch_selection"] or any(
+            evidence.get(key) is None for key in ("training_settings", "torch_execution", "selected_epoch")
+        ):
+            return "original imported fitting execution/epoch witness incomplete"
+    return None
+
+
+def preserve_fitting_migration_chain(
+    source_manifest: Mapping[str, Any], next_migration: Mapping[str, Any],
+    *, checkpoint: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Carry the oldest migration descriptor through score-only refreshes.
+
+    The descriptor is *diagnostic*, not an authorization to reuse weights. An
+    original fitted-context witness, when present, lives separately in the
+    immutable ``fitting_origin`` field and is kept by manifest projections.
+    """
+    current = dict(next_migration)
+    previous = source_manifest.get("migration")
+    if not isinstance(previous, Mapping):
+        return current
+    first = previous.get("initial_fitting_migration")
+    if first is None:
+        first = dict(previous)
+        first.pop("initial_fitting_migration", None)
+    if not isinstance(first, Mapping):
+        raise RuntimeError("existing FIT migration lineage is invalid")
+    if first.get("source_checkpoint_sha_preserved") is True:
+        for field in ("source_forward_checkpoint", "source_checkpoint"):
+            if field in first and not _same_file_bytes(first[field], checkpoint):
+                raise RuntimeError("FIT migration origin checkpoint SHA differs")
+    current["initial_fitting_migration"] = dict(first)
+    return current
+
+
 def verified_published_context_fit_proof(
     *, manifest_path: Path, fold_manifest: Mapping[str, Any], bundle: Any,
     project_root: Path | None = None,
@@ -631,7 +744,17 @@ def verified_published_context_fit_proof(
     context_error = _context_manifest_mismatch(old_context, current_context)
     if context_error is not None:
         return False, context_error
-    if fold_manifest.get("migration") is not None:
+    origin = fold_manifest.get("fitting_origin")
+    if origin is not None:
+        issue = fitting_context_origin_issue(
+            origin=origin,
+            profile=str(fold_manifest.get("experiment_profile") or ""),
+            target=target, published_target=original_target,
+            checkpoint=dict(fold_manifest.get("artifacts") or {}).get("checkpoint"),
+        )
+        if issue is not None:
+            return False, "original FIT context witness invalid: " + issue
+    elif fold_manifest.get("migration") is not None:
         _origin_report, origin_error = _migrated_fold_forward_context_proof(
             fold_manifest=fold_manifest, original_target=original_target,
             current_target=target, context_key=spec.manifest_key,
@@ -639,11 +762,12 @@ def verified_published_context_fit_proof(
         )
         if origin_error is not None:
             return False, "migrated Rolling checkpoint lacks original context binding: " + origin_error
-    return True, "verified published Rolling context bytes and PIT fold SHA"
+    return True, "verified published Rolling context bytes, original FIT witness and PIT fold SHA"
 
 
 __all__ = [
     "FitDataDependencies", "ForwardOriginEvidence", "context_source_for_profile", "fold_source_dependency_issues",
     "verified_published_context_fit_proof", "migrated_forward_origin_training_evidence",
+    "build_fitting_context_origin", "fitting_context_origin_issue", "preserve_fitting_migration_chain",
     "forward_publication_fit_dependency_issues",
 ]

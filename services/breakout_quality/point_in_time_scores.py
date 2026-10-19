@@ -91,7 +91,9 @@ from core.console_report import (
     render_section,
     render_table,
 )
-from services.breakout_quality.fitting_data_dependencies import FitDataDependencies
+from services.breakout_quality.fitting_data_dependencies import (
+    FitDataDependencies, build_fitting_context_origin, preserve_fitting_migration_chain,
+)
 from services.breakout_quality.fitted_model_artifacts import (
     FittedModelContract,
     load_fitted_model_training_evidence,
@@ -1014,6 +1016,28 @@ def _import_forward_checkpoint_to_fitting_cache(
             )
         return None
 
+    # Source publication, execution and checkpoint bytes were all verified above.
+    # Capture its original weight-affecting context before returning an existing
+    # cache entry, too: prior importers left otherwise valid caches unwitnessed.
+    forward_training = dict(source_report.get("training") or {})
+    source_origin = build_fitting_context_origin(
+        profile=str(fold_contract["experiment_profile"]),
+        target=dict(source_manifest.get("source_continuous_target") or {}),
+        checkpoint=checkpoint_manifest, kind="forward_import",
+        forward_training=forward_training,
+        forward_evidence={
+            "training_settings": dict(source_fitting_evidence.training_settings),
+            "torch_execution": dict(source_fitting_evidence.torch_execution),
+            "selected_epoch": int(source_fitting_evidence.selected_epoch),
+        },
+    )
+    forward_cache_metadata = {
+        "selected_epoch": int(source_manifest["selected_epoch"]),
+        "epoch_selection": dict(forward_training.get("epoch_selection") or {}),
+        "final_refit_history": list(forward_training.get("final_refit_history") or []),
+        "torch_execution": dict(source_fitting_evidence.torch_execution),
+    }
+
     identity = fold_training_identity(fold_contract)
     entry_dir = _checkpoint_cache_entry_dir(Path(cache_root), fold_contract)
     cached_manifest_path = entry_dir / FOLD_MANIFEST_FILENAME
@@ -1036,6 +1060,39 @@ def _import_forward_checkpoint_to_fitting_cache(
                 f"identity={identity}, cached={cached_checkpoint.get('sha256')}, "
                 f"forward={checkpoint_manifest.get('sha256')}"
             )
+        if source_origin is not None:
+            existing_origin = cached_manifest.get("fitting_origin")
+            migration = cached_manifest.get("migration")
+            imported_cache = (
+                isinstance(migration, dict)
+                and migration.get("kind") == "forward_model_fitting_identity_import"
+            )
+            if imported_cache and existing_origin is not None and existing_origin != source_origin:
+                raise RuntimeError(
+                    "same FIT/cache checkpoint has conflicting Forward context origin: "
+                    f"identity={identity}"
+                )
+            if imported_cache and existing_origin is None:
+                # Upgrade only an *existing Forward-import cache* whose bytes
+                # match the fully verified original Forward checkpoint. This is
+                # not a historical inference from the cache alone. Keep native
+                # Rolling caches, original weights and the FitKey unchanged.
+                for key, value in forward_cache_metadata.items():
+                    if key in cached_manifest and cached_manifest[key] is not None and cached_manifest[key] != value:
+                        raise RuntimeError(
+                            "same FIT/cache has conflicting original Forward evidence: "
+                            f"identity={identity}, field={key}"
+                        )
+                upgraded = {**cached_manifest, **forward_cache_metadata, "fitting_origin": source_origin}
+                temporary = cached_manifest_path.with_name(
+                    f".{cached_manifest_path.name}.verified_origin_{os.getpid()}_{time.time_ns()}"
+                )
+                try:
+                    write_json(temporary, upgraded)
+                    temporary.replace(cached_manifest_path)
+                finally:
+                    if temporary.exists():
+                        temporary.unlink()
         return {
             "training_identity": identity,
             "cache_entry": str(entry_dir),
@@ -1045,7 +1102,8 @@ def _import_forward_checkpoint_to_fitting_cache(
     cache_manifest = {
         **fold_contract,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-        "selected_epoch": int(source_manifest["selected_epoch"]),
+        **forward_cache_metadata,
+        **({"fitting_origin": source_origin} if source_origin is not None else {}),
         "migration": {
             "kind": "forward_model_fitting_identity_import",
             "training_contract_unchanged": True,
@@ -1214,6 +1272,46 @@ def _publish_fold_checkpoint_to_cache(
     }
 
 
+def publish_verified_native_first_fold_cache(
+    *, rolling_dir: Path, score_start: str, cache_root: Path,
+    expected_checkpoint_sha256: str,
+) -> str:
+    """PIT producer publication after an isolated canonical FIT rebuild.
+
+    The old first-fold shared cache must already be transactionally isolated.
+    Normal force-rebuild uses a temporary cache to prevent accidental mutation;
+    after complete Rolling/Forward identity verification the repairing caller
+    restores this one new native FitKey entry through the canonical publisher.
+    """
+    from services.breakout_quality.fitted_model_artifacts import _fit_repair_first_fold
+
+    path, manifest = _fit_repair_first_fold(rolling_dir=rolling_dir, score_start=score_start)
+    fold_dir = path.parent
+    actual = build_file_manifest(fold_dir / DEFAULT_MODEL_FILENAME)
+    origin = manifest.get("fitting_origin")
+    if (not isinstance(origin, dict) or origin.get("kind") != "rolling_native"
+        or dict(origin.get("checkpoint") or {}) != actual
+        or dict(dict(manifest.get("artifacts") or {}).get("checkpoint") or {}) != actual
+        or actual.get("sha256") != str(expected_checkpoint_sha256)):
+        raise RuntimeError("Rebuilt native first-fold FIT has no verified checkpoint origin")
+    identity = fold_training_identity(manifest)
+    entry = Path(cache_root).resolve() / identity
+    if entry.exists():
+        raise RuntimeError("New FIT cache identity already occupied during transaction")
+    # All score, target, and sample semantics are from the actual PIT Fold
+    # contract; no Research-side cache writer or synthetic FitKey is introduced.
+    _publish_fold_checkpoint_to_cache(
+        fold_dir=fold_dir, cache_root=Path(cache_root), fold_contract=manifest,
+    )
+    cached = entry / FOLD_MANIFEST_FILENAME
+    cached_model = entry / DEFAULT_MODEL_FILENAME
+    if (not cached.is_file() or not cached_model.is_file()
+        or build_file_manifest(cached_model) != actual
+        or fold_training_identity(json.loads(cached.read_text(encoding="utf-8"))) != identity):
+        raise RuntimeError("Rebuilt native shared FIT cache publication failed verification")
+    return identity
+
+
 def _reload_fold_manifest_after_checkpoint_cache_sync(
     *, fold_dir: Path, fold_contract: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1357,7 +1455,8 @@ def _rescore_fold_from_compatible_checkpoint(
             "scored_groups": int(len(frame)),
             "coverage_rate": 1.0 if len(ids["score_ids"]) else None,
         },
-        "migration": {
+        "migration": preserve_fitting_migration_chain(
+            manifest, {
             "kind": (
                 "expanded_daily_score_universe_checkpoint_reuse"
                 if str(bundle.profile.training_sample_scope)
@@ -1372,7 +1471,7 @@ def _rescore_fold_from_compatible_checkpoint(
                 == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
                 else {}
             ),
-        },
+        }, checkpoint=source_checkpoint_manifest),
         "artifacts": {
             "checkpoint": source_checkpoint_manifest,
             "scores": build_file_manifest(score_path),
@@ -1455,14 +1554,15 @@ def _rescore_fold_from_fitting_checkpoint(
         shutil.copy2(source_model_path, staging / DEFAULT_MODEL_FILENAME)
         manifest = {
             **manifest,
-            "migration": {
+            "migration": preserve_fitting_migration_chain(
+                source_manifest, {
                 "kind": "fitting_identity_checkpoint_reuse",
                 "training_contract_unchanged": True,
                 "source_fold_id": str(source_manifest.get("fold_id") or ""),
                 "source_checkpoint": source_checkpoint_manifest,
                 "source_score_reused": False,
                 "source_checkpoint_sha_preserved": True,
-            },
+            }, checkpoint=source_checkpoint_manifest),
             "artifacts": {
                 **dict(manifest.get("artifacts") or {}),
                 "checkpoint": build_file_manifest(staging / DEFAULT_MODEL_FILENAME),
@@ -1734,8 +1834,14 @@ def _train_fold(
     torch.save(checkpoint_payload, model_path)
     frame.to_csv(score_path, index=False, encoding="utf-8-sig")
     validation_frame.to_csv(validation_score_path, index=False, encoding="utf-8-sig")
+    native_origin = build_fitting_context_origin(
+        profile=str(fold_contract["experiment_profile"]),
+        target=dict(bundle.target_manifest or {}),
+        checkpoint=build_file_manifest(model_path), kind="rolling_native",
+    )
     manifest = {
         **fold_contract,
+        **({"fitting_origin": native_origin} if native_origin is not None else {}),
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "contract_fingerprint": contract_fingerprint,
         "selected_epoch": selected_epoch,

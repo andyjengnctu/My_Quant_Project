@@ -1248,6 +1248,13 @@ def run(args) -> int:
         forward_plan=plan, torch_module=torch,
         rolling_fold_proof_factory=build_rolling_first_fold_fit_proof,
     )
+    # Engineering FIT provenance repair must never quietly run a second Forward
+    # optimizer. It can only consume the already-verified Rolling first-fold FIT.
+    if getattr(args, "require_rolling_fit_reuse", False) and resolved_fit.source != "ROLLING_FIT":
+        raise RuntimeError(
+            "FIT repair requires a verified Rolling first-fold checkpoint; "
+            "separate Forward fitting is forbidden"
+        )
     existing_fitted_contract = resolved_fit.contract
     rolling_reused_model = resolved_fit.preloaded_model
     fitted_reuse_reason = resolved_fit.reason

@@ -1178,6 +1178,89 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                         "model": forward_checkpoint_record,
                     }
                     fitted_sidecar_path.write_text(json.dumps(fitted_sidecar), encoding="utf-8")
+                    # AI: A valid legacy Forward-import fitting cache can be
+                    # upgraded *only while the original verified Forward bytes
+                    # still exist*. Previously the importer returned early and
+                    # silently skipped the producer-captured origin witness.
+                    from services.breakout_quality import point_in_time_scores as pit_owner
+                    from shutil import copy2
+                    cache_root = root_dir / "isolated_fit_cache"
+                    entry = pit_owner._checkpoint_cache_entry_dir(cache_root, ctx_manifest)
+                    entry.mkdir(parents=True)
+                    copy2(model_paths.model_path, entry / "model.pt")
+                    legacy_cache = {
+                        **ctx_manifest,
+                        "migration": {
+                            "kind": "forward_model_fitting_identity_import",
+                            "training_contract_unchanged": True,
+                            "source_forward_checkpoint": forward_checkpoint_record,
+                        },
+                    }
+                    cache_manifest_path = entry / "manifest.json"
+                    cache_manifest_path.write_text(json.dumps(legacy_cache), encoding="utf-8")
+                    original_cache_checkpoint_sha = build_file_manifest(entry / "model.pt")
+                    fake_evidence = SimpleNamespace(
+                        training_settings=fitted_settings,
+                        torch_execution=execution,
+                        selected_epoch=ctx_manifest["selected_epoch"],
+                    )
+                    def run_verified_cache_import():
+                        # Input identity checks are exercised above through the
+                        # canonical validator; isolate the post-proof cache path.
+                        with patch.object(pit_owner, "_forward_checkpoint_import_issues", return_value=[]), \
+                             patch.object(pit_owner, "load_fitted_model_training_evidence", return_value=(fake_evidence, None)):
+                            return pit_owner._import_forward_checkpoint_to_fitting_cache(
+                                source_model_dir=model_paths.model_dir,
+                                source_report_path=report_path,
+                                cache_root=cache_root,
+                                fold_contract=ctx_manifest,
+                                bundle=SimpleNamespace(),
+                                torch_module=SimpleNamespace(load=lambda *_a, **_k: {"version": 1}),
+                                execution_plan=SimpleNamespace(),
+                            )
+                    upgraded_entry = run_verified_cache_import()
+                    upgraded_cache = json.loads(cache_manifest_path.read_text(encoding="utf-8"))
+                    check_true("ssot_existing_forward_import_cache_captures_verified_original_context",
+                               upgraded_entry is not None
+                               and upgraded_entry["reused_existing_cache"]
+                               and upgraded_cache["fitting_origin"]["kind"] == "forward_import"
+                               and upgraded_cache["fitting_origin"]["checkpoint"] == forward_checkpoint_record
+                               and build_file_manifest(entry / "model.pt") == original_cache_checkpoint_sha)
+                    upgraded_hash = build_file_manifest(cache_manifest_path)
+                    run_verified_cache_import()
+                    check("ssot_verified_cache_enrichment_is_idempotent", upgraded_hash,
+                          build_file_manifest(cache_manifest_path))
+                    tampered = deepcopy(upgraded_cache)
+                    tampered["fitting_origin"]["checkpoint"]["sha256"] = "0" * 64
+                    cache_manifest_path.write_text(json.dumps(tampered), encoding="utf-8")
+                    before_conflict = build_file_manifest(cache_manifest_path)
+                    try:
+                        run_verified_cache_import()
+                    except RuntimeError as exc:
+                        conflicting_origin_blocked = "conflicting Forward context origin" in str(exc)
+                    else:
+                        conflicting_origin_blocked = False
+                    check_true("ssot_cached_forward_origin_conflict_blocks_without_mutation",
+                               conflicting_origin_blocked
+                               and before_conflict == build_file_manifest(cache_manifest_path))
+                    native_cache = {
+                        **legacy_cache,
+                        "migration": {"kind": "rolling_native"},
+                    }
+                    cache_manifest_path.write_text(json.dumps(native_cache), encoding="utf-8")
+                    native_hash = build_file_manifest(cache_manifest_path)
+                    run_verified_cache_import()
+                    check("ssot_native_rolling_cache_never_rebranded_forward_import", native_hash,
+                          build_file_manifest(cache_manifest_path))
+                    invalid_legacy = {**legacy_cache, "selected_epoch": ctx_manifest["selected_epoch"] + 1}
+                    cache_manifest_path.write_text(json.dumps(invalid_legacy), encoding="utf-8")
+                    try:
+                        run_verified_cache_import()
+                    except RuntimeError as exc:
+                        epoch_conflict_blocked = "conflicting original Forward evidence" in str(exc)
+                    else:
+                        epoch_conflict_blocked = False
+                    check_true("ssot_historical_forward_cache_epoch_conflict_blocks", epoch_conflict_blocked)
                     valid_migration = {
                         "kind": "fitting_identity_checkpoint_reuse",
                         "training_contract_unchanged": True,
@@ -1338,6 +1421,148 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                     check_true("ssot_migrated_context_no_publication_evidence_blocks",
                                denied is None and "original Forward checkpoint SHA publication unavailable" in str(reason))
                     
+                    # AI: A new canonical Forward importer captures context and
+                    # original FIT execution when provenance is still available.
+                    # Later score refreshes must not erase it or require a
+                    # Forward copy that no longer exists. Legacy missing-source
+                    # checkpoints must continue to fail closed.
+                    from services.breakout_quality.fitting_data_dependencies import (
+                        build_fitting_context_origin, preserve_fitting_migration_chain,
+                    )
+                    attested_origin = build_fitting_context_origin(
+                        profile=external_context,
+                        target=target_lineage,
+                        checkpoint=ctx_manifest["artifacts"]["checkpoint"],
+                        kind="forward_import",
+                        forward_training=source_report["training"],
+                        forward_evidence={
+                            "training_settings": fitted_settings,
+                            "torch_execution": execution,
+                            "selected_epoch": ctx_manifest["selected_epoch"],
+                        },
+                    )
+                    attested_fold = {
+                        **no_native_epoch,
+                        "fitting_origin": attested_origin,
+                    }
+                    recovered, recovered_reason = verify_linked(
+                        attested_fold, checkpoint_to_check=imported_forward_checkpoint,
+                    )
+                    check_true("ssot_attested_import_survives_forward_source_loss",
+                               recovered is not None and recovered_reason is None
+                               and recovered.epoch_selection == source_report["training"]["epoch_selection"])
+                    tampered_origin = deepcopy(attested_fold)
+                    tampered_origin["fitting_origin"]["context_manifest"]["source_stage1"]["selection_score"]["sha256"] = "0" * 64
+                    denied, reason = verify_linked(
+                        tampered_origin, checkpoint_to_check=imported_forward_checkpoint,
+                    )
+                    check_true("ssot_attested_import_changed_stage1_blocks",
+                               denied is None and "original FIT context witness invalid" in str(reason))
+                    tampered_origin = deepcopy(attested_fold)
+                    tampered_origin["fitting_origin"]["checkpoint"]["sha256"] = "0" * 64
+                    denied, reason = verify_linked(
+                        tampered_origin, checkpoint_to_check=imported_forward_checkpoint,
+                    )
+                    check_true("ssot_attested_import_wrong_checkpoint_sha_blocks",
+                               denied is None and "checkpoint SHA binding" in str(reason))
+                    tampered_origin = deepcopy(attested_fold)
+                    tampered_origin["fitting_origin"]["training_evidence"]["torch_execution"]["deterministic_algorithms"] = False
+                    try:
+                        verify_linked(tampered_origin, checkpoint_to_check=imported_forward_checkpoint)
+                    except RuntimeError as exc:
+                        execution_blocked = "torch_execution mismatch" in str(exc)
+                    else:
+                        execution_blocked = False
+                    check_true("ssot_attested_import_torch_execution_mismatch_blocks", execution_blocked)
+                    tampered_origin = deepcopy(attested_fold)
+                    tampered_origin["fitting_origin"]["training_evidence"]["selected_epoch"] += 1
+                    try:
+                        verify_linked(tampered_origin, checkpoint_to_check=imported_forward_checkpoint)
+                    except RuntimeError as exc:
+                        epoch_blocked = "original fitted epoch differs" in str(exc)
+                    else:
+                        epoch_blocked = False
+                    check_true("ssot_attested_import_wrong_epoch_blocks", epoch_blocked)
+                    old_migration = {"kind": "forward_model_fitting_identity_import",
+                                     "training_contract_unchanged": True,
+                                     "source_checkpoint_sha_preserved": True,
+                                     "source_forward_checkpoint": ctx_manifest["artifacts"]["checkpoint"]}
+                    first_rescore = preserve_fitting_migration_chain(
+                        {"migration": old_migration},
+                        {"kind": "checkpoint_score_regeneration",
+                         "training_contract_unchanged": True,
+                         "source_checkpoint_sha_preserved": True},
+                        checkpoint=ctx_manifest["artifacts"]["checkpoint"],
+                    )
+                    second_rescore = preserve_fitting_migration_chain(
+                        {"migration": first_rescore},
+                        {"kind": "fitting_identity_checkpoint_reuse",
+                         "training_contract_unchanged": True,
+                         "source_checkpoint_sha_preserved": True},
+                        checkpoint=ctx_manifest["artifacts"]["checkpoint"],
+                    )
+                    check("ssot_score_only_preserves_earliest_import_source",
+                          old_migration, second_rescore["initial_fitting_migration"])
+                    try:
+                        preserve_fitting_migration_chain(
+                            {"migration": old_migration},
+                            {"kind": "checkpoint_score_regeneration"},
+                            checkpoint={"sha256": "f" * 64, "size_bytes": 10},
+                        )
+                    except RuntimeError:
+                        wrong_source_denied = True
+                    else:
+                        wrong_source_denied = False
+                    check_true("ssot_rescore_cannot_transfer_origin_to_new_checkpoint", wrong_source_denied)
+                    from services.breakout_quality.fitted_model_artifacts import (
+                        _checkpoint_matches_rescore_contract,
+                    )
+                    rescore_checkpoint = {
+                        **imported_forward_checkpoint,
+                        "experiment_profile": external_context,
+                        "training_sample_scope": attested_fold["training_sample_scope"],
+                        "sequence_length": 300,
+                        "feature_count": 10,
+                        "context_count": 2,
+                    }
+                    # Structural sample data only; no inference or weights are fitted.
+                    shape_bundle = SimpleNamespace(
+                        feature_bank=SimpleNamespace(shape=(1, 300, 10)),
+                        group_context=SimpleNamespace(shape=(1, 2)),
+                        target_manifest=target_lineage,
+                    )
+                    check_true("ssot_attested_forward_rescore_twice_without_original_publication",
+                               _checkpoint_matches_rescore_contract(
+                                   checkpoint=rescore_checkpoint, manifest=attested_fold,
+                                   fold_contract=native_context_new, bundle=shape_bundle,
+                               ))
+                    unproven_rescore = deepcopy(attested_fold)
+                    unproven_rescore.pop("fitting_origin")
+                    check_true("ssot_legacy_forward_rescore_without_original_proof_blocks",
+                               not _checkpoint_matches_rescore_contract(
+                                   checkpoint=rescore_checkpoint, manifest=unproven_rescore,
+                                   fold_contract=native_context_new, bundle=shape_bundle,
+                               ))
+                    invalid_training = deepcopy(attested_fold)
+                    invalid_training["fitting_origin"]["training_evidence"]["training_settings"]["max_epochs"] += 1
+                    check_true("ssot_attested_rescore_wrong_optimizer_training_blocks",
+                               not _checkpoint_matches_rescore_contract(
+                                   checkpoint=rescore_checkpoint, manifest=invalid_training,
+                                   fold_contract=native_context_new, bundle=shape_bundle,
+                               ))
+                    native_forgery = deepcopy(attested_fold)
+                    native_forgery["fitting_origin"]["kind"] = "rolling_native"
+                    try:
+                        verify_linked(native_forgery, checkpoint_to_check=imported_forward_checkpoint)
+                    except RuntimeError as exc:
+                        forged_native_blocked = (
+                            "original Forward evidence missing" in str(exc)
+                            or "lacks embedded native fold contract" in str(exc)
+                        )
+                    else:
+                        forged_native_blocked = False
+                    check_true("ssot_forward_import_cannot_claim_rolling_native_lineage",
+                               forged_native_blocked)
                     ctx_path.write_text(json.dumps(ctx_manifest), encoding="utf-8")
                     aggregate["folds"][0]["fold_manifest"] = build_file_manifest(ctx_path)
                     aggregate_path.write_text(json.dumps(aggregate), encoding="utf-8")
@@ -1511,6 +1736,599 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                "model.pt" not in healthy_facts.tokens
                and "model.pt" in mutated_facts.tokens
                and not healthy_facts.path_probe and mutated_facts.path_probe)
+
+    # A single temporary diagnostic must inventory every configured model,
+    # report missing immutable source evidence and export metadata only. It
+    # never modifies scientific publications or authorizes FIT reuse.
+    from contextlib import redirect_stdout
+    from io import StringIO
+    from zipfile import ZipFile
+    from tools.audit.breakout_quality.fit_lineage_snapshot import main as lineage_audit_main
+    from core.breakout_quality_policy import get_breakout_quality_model_test_settings
+    with TemporaryDirectory() as td:
+        with redirect_stdout(StringIO()):
+            audit_status = lineage_audit_main(["--project-root", td, "--no-torch"])
+        bundle_path = (Path(td) / "outputs" / "filters" / "breakout_quality"
+                       / "breakout_quality_v1" / "audit" / "fit_lineage_snapshot"
+                       / "fit_lineage_snapshot.zip")
+        with ZipFile(bundle_path) as z:
+            recorded_files = z.namelist()
+            snapshot = json.loads(z.read("fit_lineage_snapshot.json"))
+        expected_profiles = get_breakout_quality_model_test_settings().model_profiles
+        check_true("ssot_audit_inventories_all_configured_profiles_in_one_run",
+                   audit_status == 0 and snapshot["model_count"] == len(expected_profiles)
+                   and [(r["model_id"], r["profile"]) for r in snapshot["models"]]
+                   == list(expected_profiles))
+        check("ssot_readonly_audit_zip_contains_metadata_only",
+              ["fit_lineage_snapshot.json"], recorded_files)
+        check_true("ssot_readonly_audit_never_creates_fitted_artifacts",
+                   all(r["classification"] == "SOURCE_EVIDENCE_GAP" for r in snapshot["models"])
+                   and not (Path(td) / "models").exists())
+
+    # Explicit provenance repair has a different responsibility from FIT REUSE.
+    # Test the transaction with real directory operations and synthetic model
+    # bytes, without invoking training or modifying current data/artifacts.
+    from services.breakout_quality.fit_repair_transaction import (
+        preserved_fit_publications, recover_incomplete_fit_repair,
+    )
+    from hashlib import sha256 as _sha256
+    with TemporaryDirectory() as td:
+        root = Path(td)
+        mod = root / "models" / "model_profile"
+        out = root / "outputs" / "model_profile"
+        mod.mkdir(parents=True)
+        out.mkdir(parents=True)
+        (mod / "model.pt").write_bytes(b"original_model")
+        (out / "report.json").write_bytes(b"original_report")
+        journal = root / "audit" / "fitting.in_progress.json"
+        with preserved_fit_publications(
+            project_root=root, publication_roots=(mod, out, mod / "point_in_time"),
+            journal_path=journal, repair_identity="fixture",
+        ):
+            mod.mkdir(parents=True)
+            out.mkdir(parents=True)
+            (mod / "model.pt").write_bytes(b"new_model")
+            (out / "report.json").write_bytes(b"new_report")
+            check_true("fit_repair_old_publication_is_staged_before_canonical_build",
+                       not any(mod.parent.glob("historical_fit_repairs/model_profile/*/original/model.pt")))
+        archived = sorted(mod.parent.glob("historical_fit_repairs/model_profile/*/original/model.pt"))
+        check_true("fit_repair_preserves_old_model_and_output_on_commit",
+                   len(archived) == 1 and archived[0].read_bytes() == b"original_model"
+                   and (mod / "model.pt").read_bytes() == b"new_model"
+                   and len(list(out.parent.glob("historical_fit_repairs/model_profile/*/original/report.json"))) == 1
+                   and not journal.exists())
+        try:
+            with preserved_fit_publications(
+                project_root=root, publication_roots=(mod, out),
+                journal_path=journal, repair_identity="fixture",
+            ):
+                mod.mkdir(parents=True)
+                (mod / "model.pt").write_bytes(b"invalid_new_model")
+                raise RuntimeError("simulate producer failure")
+        except RuntimeError as exc:
+            check_true("fit_repair_producer_failure_is_visible", "simulate producer failure" in str(exc))
+        check_true("fit_repair_rolls_back_both_publications_on_failure",
+                   (mod / "model.pt").read_bytes() == b"new_model"
+                   and (out / "report.json").read_bytes() == b"new_report"
+                   and not journal.exists())
+        recovery = root / "audit" / "interrupted.in_progress.json"
+        held = mod.with_name(".model_profile.fit_repair_pending_fixture")
+        mod.rename(held)
+        recovery.write_text(json.dumps({
+            "schema": "fit_repair_transaction_v1", "state": "in_progress",
+            "sources": [{"source": str(mod), "hold": str(held),
+                         "archive": str(mod.parent / "historical_fit_repairs" / mod.name / "fixture" / "original"),
+                         "existed": True}],
+        }), encoding="utf-8")
+        mod.mkdir()
+        (mod / "model.pt").write_bytes(b"incomplete_model")
+        recover_incomplete_fit_repair(journal_path=recovery)
+        check_true("fit_repair_recovers_after_interrupted_publication",
+                   (mod / "model.pt").read_bytes() == b"new_model"
+                   and not recovery.exists())
+        try:
+            with preserved_fit_publications(
+                project_root=root, publication_roots=(root.parent, ),
+                journal_path=journal, repair_identity="fixture",
+            ):
+                pass
+        except RuntimeError:
+            outside_blocked = True
+        else:
+            outside_blocked = False
+        check_true("fit_repair_rejects_outside_project_publications", outside_blocked)
+
+    # FIT authority checks *real bytes* and producer-bound native origins,
+    # not model names, READY status or reports reconstructed from later context.
+    from services.breakout_quality.fitted_model_artifacts import (
+        verify_fit_repair_previous_checkpoint,
+        verify_fit_repair_rebuilt_checkpoint,
+        verified_fit_repair_legacy_cache_entry, fold_training_identity,
+    )
+    from filters.breakout_quality.artifacts import build_file_manifest
+    import json
+    with TemporaryDirectory() as td:
+        root = Path(td)
+        fold = root / "rolling" / "folds" / "fold_20210101_20211231"
+        fold.mkdir(parents=True)
+        model = fold / "model.pt"
+        model.write_bytes(b"verified canonical Rolling FIT bytes")
+        model_record = build_file_manifest(model)
+        historical_manifest = {
+            "experiment_profile": "profile_fixture",
+            "planned_periods": {"score_start": "2021-01-01"},
+            "artifacts": {"checkpoint": model_record},
+        }
+        (fold / "manifest.json").write_text(json.dumps(historical_manifest))
+        sha = str(model_record["sha256"])
+        verify_fit_repair_previous_checkpoint(
+            rolling_dir=root / "rolling", score_start="2021-01-01",
+            expected_profile="profile_fixture", expected_checkpoint_sha256=sha,
+        )
+        check_true("fit_repair_old_checkpoint_sha_requires_exact_published_bytes",
+                   len(sha) == 64)
+        # The stale shared cache is not a new origin witness; quarantine only
+        # the exact first-Fold FitKey and require byte/manifest equality.
+        cache_root = root / "shared_fitting_checkpoints"
+        cache_entry = cache_root / fold_training_identity(historical_manifest)
+        cache_entry.mkdir(parents=True)
+        (cache_entry / "model.pt").write_bytes(model.read_bytes())
+        (cache_entry / "manifest.json").write_text(json.dumps(historical_manifest))
+        cache_selected = verified_fit_repair_legacy_cache_entry(
+            rolling_dir=root / "rolling", score_start="2021-01-01",
+            expected_profile="profile_fixture", checkpoint_cache_root=cache_root,
+        )
+        check_true("fit_repair_locates_only_same_fitkey_shared_cache_entry",
+                   cache_selected == cache_entry)
+        (cache_entry / "model.pt").write_bytes(b"conflicting cached optimizer")
+        try:
+            verified_fit_repair_legacy_cache_entry(
+                rolling_dir=root / "rolling", score_start="2021-01-01",
+                expected_profile="profile_fixture", checkpoint_cache_root=cache_root,
+            )
+        except RuntimeError:
+            conflicting_cache_blocked = True
+        else:
+            conflicting_cache_blocked = False
+        check_true("fit_repair_blocks_same_fitkey_different_shared_cache_weights",
+                   conflicting_cache_blocked)
+        (cache_entry / "model.pt").write_bytes(model.read_bytes())
+        def old_fit_rejected(**overrides):
+            call = dict(rolling_dir=root / "rolling", score_start="2021-01-01",
+                        expected_profile="profile_fixture", expected_checkpoint_sha256=sha)
+            call.update(overrides)
+            try:
+                verify_fit_repair_previous_checkpoint(**call)
+            except RuntimeError:
+                return True
+            return False
+        check_true("fit_repair_rejects_changed_preflight_checkpoint_sha",
+                   old_fit_rejected(expected_checkpoint_sha256="b" * 64))
+        native = {**historical_manifest,
+                  "fitting_origin": {"kind": "rolling_native", "checkpoint": model_record}}
+        (fold / "manifest.json").write_text(json.dumps(native))
+        forwarded = root / "forward" / "model.pt"
+        forwarded.parent.mkdir()
+        forwarded.write_bytes(model.read_bytes())
+        rebuilt = verify_fit_repair_rebuilt_checkpoint(
+            rolling_dir=root / "rolling", score_start="2021-01-01",
+            expected_profile="profile_fixture", forward_checkpoint=forwarded,
+        )
+        check_true("fit_repair_new_forward_has_same_native_rolling_fit_sha", rebuilt == sha)
+        forwarded.write_bytes(b"another optimizer unexpectedly retrained Forward")
+        try:
+            verify_fit_repair_rebuilt_checkpoint(
+                rolling_dir=root / "rolling", score_start="2021-01-01",
+                expected_profile="profile_fixture", forward_checkpoint=forwarded,
+            )
+        except RuntimeError:
+            second_optimizer_blocked = True
+        else:
+            second_optimizer_blocked = False
+        check_true("fit_repair_rejects_independent_forward_optimizer_checkpoint",
+                   second_optimizer_blocked)
+        forwarded.write_bytes(model.read_bytes())
+        native["fitting_origin"] = {"kind": "forward_import", "checkpoint": model_record}
+        (fold / "manifest.json").write_text(json.dumps(native))
+        try:
+            verify_fit_repair_rebuilt_checkpoint(
+                rolling_dir=root / "rolling", score_start="2021-01-01",
+                expected_profile="profile_fixture", forward_checkpoint=forwarded,
+            )
+        except RuntimeError:
+            imported_not_native = True
+        else:
+            imported_not_native = False
+        check_true("fit_repair_rejects_old_import_disguised_as_native_rebuild",
+                   imported_not_native)
+
+    # If the archive step committed before a process interruption, recovery
+    # must only clear its journal, never revert a proven new publication.
+    with TemporaryDirectory() as td:
+        root = Path(td)
+        published = root / "models" / "p"
+        published.mkdir(parents=True)
+        (published / "model.pt").write_bytes(b"committed new model")
+        archived = root / "models" / "historical_fit_repairs" / "p" / "stamp" / "original"
+        archived.mkdir(parents=True)
+        (archived / "model.pt").write_bytes(b"old model")
+        pending = published.with_name(".p.fit_repair_pending_stamp")
+        journal = root / "audit" / "committed.in_progress.json"
+        journal.parent.mkdir()
+        journal.write_text(json.dumps({"schema": "fit_repair_transaction_v1", "state": "committed",
+            "sources": [{"source": str(published), "hold": str(pending),
+                         "archive": str(archived), "existed": True}]}))
+        recover_incomplete_fit_repair(journal_path=journal)
+        check_true("fit_repair_committed_journal_recovery_keeps_new_fitted_truth",
+                   (published / "model.pt").read_bytes() == b"committed new model"
+                   and (archived / "model.pt").read_bytes() == b"old model"
+                   and not journal.exists())
+
+    # One-pass, registry-driven preflight identifies unprovable original FITs
+    # without ever treating a matching context SHA as a reuse authorization.
+    from tools.audit.breakout_quality import repair_fit_lineage as repair_tool
+    example_profiles = (("MR-FIXTURE-A", "profile_a"), ("MR-FIXTURE-B", "profile_b"))
+    def audit_fixture(_root, model_id, profile, *, include_torch):
+        bad = profile == "profile_b"
+        checkpoint = {"sha256": "a" * 64, "size_bytes": 5} if bad else None
+        return {
+            "model_id": model_id, "profile": profile,
+            "classification": "SOURCE_EVIDENCE_GAP" if bad else "CANDIDATES_PRESENT_NOT_FULLY_VERIFIED",
+            "blockers": ["MIGRATED_EXTERNAL_CONTEXT_ORIGINAL_FORWARD_MISSING"] if bad else [],
+            "first_folds": [{"checkpoint": checkpoint,
+                             "declared_checkpoint_matches_bytes": True}] if bad else [],
+        }
+    planning_seen = []
+    def delegated_plan(**kwargs):
+        planning_seen.append(tuple(kwargs["model_profiles"]))
+        return ((FitOriginRepairCandidate("MR-FIXTURE-B", "profile_b", "a" * 64),), ())
+    from services.breakout_quality.fit_origin_repair_plan import FitOriginRepairCandidate
+    with patch.object(repair_tool, "get_breakout_quality_model_test_settings",
+                      return_value=SimpleNamespace(model_profiles=example_profiles)), \
+         patch.object(repair_tool, "_inspect_profile", side_effect=audit_fixture), \
+         patch.object(repair_tool, "plan_fit_origin_repairs", side_effect=delegated_plan):
+        observations, jobs = repair_tool.collect_repair_plan(Path("/synthetic"))
+    check_true("fit_repair_scans_all_registered_profiles_before_mutation",
+               len(observations) == 2 and len(jobs) == 1
+               and jobs[0]["profile"] == "profile_b"
+               and planning_seen == [example_profiles])
+    unsafe, authorized = audit_fixture(Path("/synthetic"), "MR-FIXTURE-B", "profile_b", include_torch=False), jobs
+    check_true("fit_repair_plan_does_not_relabel_unverified_fit_as_reuse",
+               unsafe["classification"] == "SOURCE_EVIDENCE_GAP"
+               and len(authorized) == 1 and authorized[0]["old_sha256"] == "a" * 64)
+
+    # Exercise the actual Research orchestrator with byte-backed FIT fixtures.
+    # It must stage originals, call canonical Rolling first, *require* Forward
+    # checkpoint REUSE and roll back every publication on a bad Forward FIT.
+    from contextlib import ExitStack
+    from services.research import breakout_quality_application as app
+    for invalid_forward in (False, True):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            mod, out = root / "models" / "profile", root / "outputs" / "profile"
+            rolling = mod / "point_in_time"
+            fold = rolling / "folds" / "fold_20210101_20211231"
+            fold.mkdir(parents=True)
+            out.mkdir(parents=True)
+            old_checkpoint = fold / "model.pt"
+            old_checkpoint.write_bytes(b"old unverified source checkpoint")
+            old_record = build_file_manifest(old_checkpoint)
+            (fold / "manifest.json").write_text(json.dumps({
+                "experiment_profile": "profile_fixture",
+                "planned_periods": {"score_start": "2021-01-01"},
+                "artifacts": {"checkpoint": old_record},
+            }))
+            (mod / "model.pt").write_bytes(b"historical Forward checkpoint")
+            (out / "report.json").write_text("historical report")
+            from config.breakout_quality import BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT
+            legacy_cache = (root / BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT
+                            / fold_training_identity(json.loads((fold / "manifest.json").read_text())))
+            legacy_cache.mkdir(parents=True)
+            (legacy_cache / "model.pt").write_bytes(old_checkpoint.read_bytes())
+            (legacy_cache / "manifest.json").write_bytes((fold / "manifest.json").read_bytes())
+            settings = SimpleNamespace(
+                rolling_authorized=True, filter_id="fixture_filter",
+                model_architecture="fixture_arch", experiment_profile="profile_fixture",
+            )
+            stages = []
+            def canonical_rolling(*_args, **kwargs):
+                check_true("repair_invokes_native_rolling_fresh_without_forward_import_"
+                           + str(invalid_forward),
+                           kwargs["force_rebuild"] is True
+                           and kwargs["forward_checkpoint_source"] is None
+                           and not (mod / "model.pt").exists())
+                fold.mkdir(parents=True)
+                native_model = fold / "model.pt"
+                native_model.write_bytes(b"new native Rolling checkpoint")
+                new_record = build_file_manifest(native_model)
+                (fold / "manifest.json").write_text(json.dumps({
+                    "experiment_profile": "profile_fixture",
+                    "planned_periods": {"score_start": "2021-01-01"},
+                    "artifacts": {"checkpoint": new_record},
+                    "fitting_origin": {"kind": "rolling_native", "checkpoint": new_record},
+                }))
+                stages.append("rolling")
+                return 0
+            def forward_evaluation(*_args, **kwargs):
+                check_true("repair_requires_verified_forward_fitted_reuse_"
+                           + str(invalid_forward),
+                           kwargs["require_rolling_fit_reuse"] is True
+                           and stages == ["rolling"])
+                mod.mkdir(parents=True, exist_ok=True)
+                (mod / "model.pt").write_bytes(
+                    b"unexpected new Forward training" if invalid_forward
+                    else (fold / "model.pt").read_bytes()
+                )
+                out.mkdir(parents=True, exist_ok=True)
+                (out / "report.json").write_text("new Forward report")
+                stages.append("forward")
+                return 0, object(), "BUILD/REFRESH"
+            mock_values = {
+                "PROJECT_ROOT": root,
+                "get_breakout_quality_model_test_settings": lambda: SimpleNamespace(
+                    model_profiles=(("MR-FIXTURE", "profile_fixture"),)),
+                "get_breakout_quality_workflow_settings": lambda **_kw: settings,
+                "get_breakout_quality_rolling_test_mode": lambda _mode: SimpleNamespace(
+                    score_start_date="2021-01-01"),
+                "_model_display_id": lambda _profile: "MR-FIXTURE",
+                "_forward_publication_paths": lambda _settings: (mod, out),
+                "_rolling_publication_dir": lambda _settings, _mode: rolling,
+                "_collect_continuous_research_input_plan": lambda _settings: SimpleNamespace(
+                    blocked=False, actions=()),
+                "_run_continuous_pit_profile": canonical_rolling,
+                "_load_reusable_rolling_standard_report": lambda _settings, _mode: (object(), {}, None),
+                "invalidate_rolling_model_source_cache": lambda: None,
+                "_clear_continuous_forward_reuse_caches": lambda: None,
+                "_ensure_continuous_forward_model_report": forward_evaluation,
+                "resolve_filter_artifact_paths": lambda *_args, **_kw: SimpleNamespace(
+                    model_path=mod / "model.pt"),
+                "_load_reusable_continuous_forward_contract": lambda _settings: (object(), ""),
+            }
+            with ExitStack() as stack:
+                stack.enter_context(patch(
+                    "services.breakout_quality.point_in_time_scores.publish_verified_native_first_fold_cache",
+                    return_value="fixture-native-fitkey",
+                ))
+                for attr, value in mock_values.items():
+                    stack.enter_context(patch.object(app, attr, value))
+                try:
+                    result = app.repair_missing_fit_origin_from_canonical_rolling(
+                        "apps/research.py", profile_name="profile_fixture",
+                        expected_previous_checkpoint_sha256=str(old_record["sha256"]),
+                    )
+                except RuntimeError:
+                    failure = True
+                    result = None
+                else:
+                    failure = False
+            if invalid_forward:
+                check_true("repair_rolls_back_after_incompatible_forward_fit",
+                           failure and stages == ["rolling", "forward"]
+                           and (fold / "model.pt").read_bytes() == b"old unverified source checkpoint"
+                           and (mod / "model.pt").read_bytes() == b"historical Forward checkpoint"
+                           and (out / "report.json").read_text() == "historical report"
+                           and (legacy_cache / "model.pt").read_bytes()
+                           == b"old unverified source checkpoint")
+            else:
+                preserved = sorted(mod.parent.glob(
+                    "historical_fit_repairs/profile/*/original/point_in_time/folds/*/model.pt"))
+                stale_cache_archives = sorted(legacy_cache.parent.glob(
+                    "historical_fit_repairs/" + legacy_cache.name + "/*/original/model.pt"))
+                check_true("repair_commits_single_native_rolling_fit_and_historical_archive",
+                           not failure and stages == ["rolling", "forward"]
+                           and result is not None
+                           and result["repaired_checkpoint_sha256"]
+                           == build_file_manifest(mod / "model.pt")["sha256"]
+                           and len(preserved) == 1
+                           and preserved[0].read_bytes() == b"old unverified source checkpoint"
+                           and not legacy_cache.exists()
+                           and len(stale_cache_archives) == 1
+                           and stale_cache_archives[0].read_bytes()
+                           == b"old unverified source checkpoint")
+
+    # Shared FIT-origin preflight is a formal Research dependency capability,
+    # not a manual audit command or an MR identity switch.
+    from core.breakout_quality_policy import (
+        get_breakout_quality_model_test_settings as configured_models,
+        get_breakout_quality_workflow_settings as configured_settings,
+        get_breakout_quality_rolling_test_mode as configured_rolling_mode,
+    )
+    from services.breakout_quality.fit_origin_repair_plan import (
+        FitOriginRepairCandidate, FitOriginRepairBlocker, plan_fit_origin_repairs,
+    )
+    from services.breakout_quality.fitting_data_dependencies import context_source_for_profile
+    from filters.breakout_quality.predicted_context_artifact import maybe_predicted_context_artifact_spec
+    from services.breakout_quality.fitted_model_artifacts import resolve_rolling_fitted_folds_root
+    from filters.breakout_quality.paths import (
+        SELECTION_POINT_IN_TIME_MANIFEST_FILENAME, resolve_filter_artifact_paths,
+    )
+    from services.research import breakout_quality_application as app
+
+    external_profiles = [
+        (str(model_id), str(profile)) for model_id, profile in configured_models().model_profiles
+        if maybe_predicted_context_artifact_spec(context_source_for_profile(str(profile))) is not None
+    ]
+    check_true("normal_research_repair_profile_registry_driven", bool(external_profiles))
+    if external_profiles:
+        model_id, profile = external_profiles[0]
+        settings = configured_settings(experiment_profile=profile)
+        score_start = str(configured_rolling_mode("rolling").score_start_date)
+        with TemporaryDirectory() as td:
+            project = Path(td)
+            fold_root = resolve_rolling_fitted_folds_root(
+                project_root=project, filter_id=str(settings.filter_id),
+                model_architecture=str(settings.model_architecture), experiment_profile=profile,
+            )
+            fold = fold_root / "fold_source_fixture"
+            fold.mkdir(parents=True)
+            (fold / "model.pt").write_bytes(b"unverified source for native FIT rebuild")
+            original_record = build_file_manifest(fold / "model.pt")
+            legacy = {
+                "fold_id": "fold_source_fixture", "experiment_profile": profile,
+                "planned_periods": {"score_start": score_start},
+                "artifacts": {"checkpoint": original_record},
+                "migration": {
+                    "kind": "expanded_daily_score_universe_checkpoint_reuse",
+                    "source_checkpoint_sha_preserved": True,
+                    "training_contract_unchanged": True,
+                },
+            }
+            fold_manifest = fold / "manifest.json"
+            aggregate_path = fold_root.parent / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
+            def write_case():
+                fold_manifest.write_text(json.dumps(legacy), encoding="utf-8")
+                aggregate_path.write_text(json.dumps({"folds": [{
+                    "fold_id": "fold_source_fixture",
+                    "fold_manifest": build_file_manifest(fold_manifest),
+                }]}), encoding="utf-8")
+            write_case()
+            kwargs = {"project_root": project, "model_profiles": ((model_id, profile),)}
+            jobs, blockers = plan_fit_origin_repairs(**kwargs)
+            check_true("normal_research_detects_missing_origin_in_registry_context",
+                       len(jobs) == 1 and not blockers
+                       and jobs[0].previous_checkpoint_sha256 == original_record["sha256"])
+            paths = resolve_filter_artifact_paths(
+                project, str(settings.filter_id), str(settings.model_architecture), profile,
+            )
+            paths.model_dir.mkdir(parents=True, exist_ok=True)
+            paths.model_path.write_bytes((fold / "model.pt").read_bytes())
+            jobs, blockers = plan_fit_origin_repairs(**kwargs)
+            check_true("normal_research_never_rebuilds_with_matching_forward_witness",
+                       not jobs and not blockers)
+            paths.model_path.write_bytes(b"other published Forward weight")
+            legacy["fitting_origin"] = {"kind": "rolling_native"}
+            write_case()
+            jobs, blockers = plan_fit_origin_repairs(**kwargs)
+            check_true("normal_research_never_relabels_existing_fitting_origin",
+                       not jobs and not blockers)
+            legacy.pop("fitting_origin")
+            legacy["artifacts"]["checkpoint"]["sha256"] = "0" * 64
+            write_case()
+            jobs, blockers = plan_fit_origin_repairs(**kwargs)
+            check_true("normal_research_refuses_corrupt_checkpoint_in_all_model_preflight",
+                       not jobs and len(blockers) == 1
+                       and "SHA mismatch" in blockers[0].reason)
+            legacy["artifacts"]["checkpoint"] = original_record
+            write_case()
+            aggregate_path.unlink()
+            jobs, blockers = plan_fit_origin_repairs(**kwargs)
+            check_true("normal_research_refuses_missing_aggregate_binding",
+                       not jobs and len(blockers) == 1)
+
+        # The standard Research Model Compare call owns the repair orchestration:
+        # no external CLI, new menu key, manual confirmation, or producer fork.
+        for case in ("commit", "block", "rollback"):
+            with TemporaryDirectory() as td:
+                project = Path(td)
+                statuses = []
+                report_written = []
+                repaired = []
+                state = {"ready": False}
+                scenario_settings = SimpleNamespace(experiment_profile=profile)
+                candidate = FitOriginRepairCandidate(model_id, profile, "a" * 64)
+                def readiness(*_args, **_kwargs):
+                    ok = state["ready"]
+                    return SimpleNamespace(
+                        source_contract=object() if ok else None,
+                        evidence_payload={"model_research_id": model_id} if ok else None,
+                        display_reason="READY" if ok else "FIT lineage gap",
+                        display_action="REUSE" if ok else "VERIFY FIT",
+                        evidence_ready=ok,
+                    )
+                def repair(_program, *, profile_name, expected_previous_checkpoint_sha256):
+                    repaired.append(profile_name)
+                    if case == "rollback":
+                        raise RuntimeError("synthetic canonical rebuild failure; old FIT retained")
+                    state["ready"] = True
+                    return {"repaired_checkpoint_sha256": "b" * 64}
+                mock_map = {
+                    "PROJECT_ROOT": project,
+                    "get_breakout_quality_model_test_settings": lambda: SimpleNamespace(
+                        model_profiles=((model_id, profile),)),
+                    "get_breakout_quality_workflow_settings": lambda **_kw: scenario_settings,
+                    "_resolve_continuous_model_readiness": readiness,
+                    "_collect_continuous_research_input_plan": lambda _settings: SimpleNamespace(blocked=False),
+                    "plan_fit_origin_repairs": lambda **_kw: (
+                        (candidate,) if case != "block" else (),
+                        (FitOriginRepairBlocker(model_id, profile, "synthetic invalid source"),)
+                        if case == "block" else (),
+                    ),
+                    "repair_missing_fit_origin_from_canonical_rolling": repair,
+                    "invalidate_rolling_model_source_cache": lambda: None,
+                    "_clear_continuous_forward_reuse_caches": lambda: None,
+                    "_print_model_action_status": lambda rows: statuses.extend(rows),
+                    "_render_standard_model_comparison": lambda *_a, **_kw: "comparison",
+                    "_write_standard_model_comparison_report": lambda *_a, **_kw: (
+                        report_written.append(True) or project / "result.json", project / "result.md"),
+                    "render_status_paths": lambda *_a, **_kw: "artifact paths",
+                    "render_title": lambda label: label,
+                }
+                from contextlib import ExitStack
+                with ExitStack() as stack:
+                    for attr, value in mock_map.items():
+                        stack.enter_context(patch.object(app, attr, value))
+                    result_code = app._run_configured_model_comparison(
+                        "apps/research.py model", rolling=False,
+                    )
+                if case == "commit":
+                    check_true("normal_research_compare_delegates_rebuild_before_report",
+                               result_code == 0 and repaired == [profile]
+                               and bool(report_written) and statuses[0][2] == "REBUILD FIT")
+                elif case == "block":
+                    check_true("normal_research_preflight_blocks_before_all_mutations",
+                               result_code == 2 and not repaired and not report_written)
+                else:
+                    check_true("normal_research_failed_rebuild_stops_before_report",
+                               result_code == 2 and repaired == [profile]
+                               and not report_written)
+
+    # Rolling report refresh is not a FIT-origin defect: the shared entry must
+    # not start a GPU rebuild when its published SCORE is already valid.
+    if external_profiles:
+        model_id, profile = external_profiles[0]
+        with TemporaryDirectory() as td:
+            project = Path(td)
+            report_refresh_calls = []
+            plan_inputs = []
+            settings = SimpleNamespace(experiment_profile=profile, filter_id="synthetic")
+            contract = SimpleNamespace(audit_path=str(project / "old_audit.json"))
+            def only_report_stale(*_a, **_kw):
+                return SimpleNamespace(
+                    source_contract=contract, evidence_payload=None,
+                    display_reason="Rolling Audit refresh required",
+                    display_action="BUILD/REFRESH", evidence_ready=False,
+                )
+            def record_plan(**kw):
+                plan_inputs.append(tuple(kw["model_profiles"]))
+                return (), ()
+            mocked = {
+                "PROJECT_ROOT": project,
+                "get_breakout_quality_model_test_settings": lambda: SimpleNamespace(
+                    model_profiles=((model_id, profile),)),
+                "get_breakout_quality_workflow_settings": lambda **_kw: settings,
+                "_resolve_continuous_model_readiness": only_report_stale,
+                "_load_canonical_forward_checkpoint_import_source": lambda _settings: (None, None),
+                "_collect_continuous_research_input_plan": lambda _settings: SimpleNamespace(blocked=False),
+                "plan_fit_origin_repairs": record_plan,
+                "_run_continuous_rolling_mode_direct": lambda *_a, **_kw: (
+                    report_refresh_calls.append("audit_refresh") or 0),
+                "invalidate_rolling_model_source_cache": lambda: None,
+                "_load_reusable_rolling_standard_report": lambda *_a, **_kw: (contract, {"model_research_id": model_id}, None),
+                "_print_model_action_status": lambda *_a: None,
+                "_render_standard_model_comparison": lambda *_a, **_kw: "comparison",
+                "_write_standard_model_comparison_report": lambda *_a, **_kw: (
+                    project / "model.json", project / "model.md"),
+                "render_status_paths": lambda *_a, **_kw: "artifact paths",
+                "render_title": lambda label: label,
+            }
+            from contextlib import ExitStack
+            with ExitStack() as stack:
+                for key, value in mocked.items():
+                    stack.enter_context(patch.object(app, key, value))
+                code = app._run_configured_model_comparison("apps/research.py model", rolling=True)
+            check_true("rolling_audit_only_refresh_never_rebuilds_fitting_origin",
+                       code == 0 and report_refresh_calls == ["audit_refresh"]
+                       and plan_inputs == [()])
 
     # No approved science/report identity may change merely because this is a
     # code-organization refactor; those fingerprints live in the report registry.

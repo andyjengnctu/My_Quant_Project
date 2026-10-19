@@ -43,7 +43,8 @@ from filters.breakout_quality.model_source_provenance import (
 from services.breakout_quality.fitting_data_dependencies import (
     FitDataDependencies, fold_source_dependency_issues,
     forward_publication_fit_dependency_issues, verified_published_context_fit_proof,
-    migrated_forward_origin_training_evidence,
+    migrated_forward_origin_training_evidence, context_source_for_profile,
+    fitting_context_origin_issue,
 )
 from filters.breakout_quality.models.factory import build_model, count_trainable_parameters
 
@@ -332,6 +333,49 @@ def validate_rolling_fold_fitted_checkpoint(
     # with an evaluation-only migration marker. An imported model has no native
     # Fold contract, and older migrations may have no native epoch-selection
     # field. Recover both only from a byte-bound original Forward publication.
+    def verified_imported_origin():
+        origin = manifest.get("fitting_origin")
+        if not isinstance(origin, Mapping) or origin.get("kind") != "forward_import":
+            return None
+        context_source = context_source_for_profile(str(manifest.get("experiment_profile") or ""))
+        if context_source == "none":
+            return None
+        target = getattr(bundle, "target_manifest", None)
+        if not isinstance(target, Mapping):
+            raise RuntimeError(f"Rolling checkpoint fitting target missing: {fold_id}")
+        origin_issue = fitting_context_origin_issue(
+            origin=origin,
+            profile=str(manifest.get("experiment_profile") or ""),
+            target=target, published_target=target,
+            checkpoint=dict(manifest.get("artifacts") or {}).get("checkpoint"),
+        )
+        if origin_issue is not None:
+            raise RuntimeError(f"Rolling checkpoint FIT origin inconsistent: {fold_id}: {origin_issue}")
+        evidence = origin.get("training_evidence")
+        if not isinstance(evidence, Mapping):
+            raise RuntimeError(f"Rolling Forward-import FIT evidence missing: {fold_id}")
+        fit_evidence = FittedModelTrainingEvidence(
+            training_settings=dict(evidence.get("training_settings") or {}),
+            torch_execution=dict(evidence.get("torch_execution") or {}),
+            selected_epoch=int(evidence.get("selected_epoch") or 0),
+            model_record=dict(origin.get("checkpoint") or {}),
+            source="original_forward_import_attestation",
+        )
+        proof_issues = _fitted_forward_evidence_fold_issues(
+            source_fitting_evidence=fit_evidence,
+            fold_contract=manifest, expected_execution=expected_execution,
+        )
+        if fit_evidence.selected_epoch != selected_epoch:
+            proof_issues += ("original fitted epoch differs",)
+        if not isinstance(origin.get("epoch_selection"), Mapping) or not origin["epoch_selection"]:
+            proof_issues += ("original epoch-selection witness missing",)
+        if proof_issues:
+            raise RuntimeError(
+                f"Rolling checkpoint original Forward fitting identity differs: {fold_id}: "
+                + "; ".join(proof_issues[:6])
+            )
+        return origin
+
     def verify_original_forward():
         nonlocal original_forward_evidence
         if original_forward_evidence is None:
@@ -375,12 +419,16 @@ def validate_rolling_fold_fitted_checkpoint(
     if epoch_selection is None:
         if not migration:
             raise RuntimeError(f"Rolling fitted checkpoint has invalid epoch evidence: {fold_id}")
-        forward_training = verify_original_forward().get("training")
-        if not isinstance(forward_training, Mapping) or not isinstance(
-            forward_training.get("epoch_selection"), Mapping,
-        ) or not forward_training["epoch_selection"]:
-            raise RuntimeError(f"Rolling imported checkpoint lacks original epoch-selection evidence: {fold_id}")
-        epoch_selection = dict(forward_training["epoch_selection"])
+        attested = verified_imported_origin()
+        if attested is not None:
+            epoch_selection = dict(attested["epoch_selection"])
+        else:
+            forward_training = verify_original_forward().get("training")
+            if not isinstance(forward_training, Mapping) or not isinstance(
+                forward_training.get("epoch_selection"), Mapping,
+            ) or not forward_training["epoch_selection"]:
+                raise RuntimeError(f"Rolling imported checkpoint lacks original epoch-selection evidence: {fold_id}")
+            epoch_selection = dict(forward_training["epoch_selection"])
     checkpoint = torch_module.load(checkpoint_path, map_location="cpu", weights_only=True)
     if not isinstance(checkpoint, dict):
         raise RuntimeError(f"Rolling fitted checkpoint has invalid content: {fold_id}")
@@ -391,6 +439,11 @@ def validate_rolling_fold_fitted_checkpoint(
     ):
         raise RuntimeError(f"Rolling fitted checkpoint embedded identity mismatch: {fold_id}")
     embedded = checkpoint.get("fold_contract")
+    native_origin = manifest.get("fitting_origin")
+    if (isinstance(native_origin, Mapping)
+        and native_origin.get("kind") == "rolling_native"
+        and not isinstance(embedded, dict)):
+        raise RuntimeError(f"Rolling-native FIT origin lacks embedded native fold contract: {fold_id}")
     if isinstance(embedded, dict):
         embedded_issues = _first_fold_fit_identity_issues(
             embedded, dict(expected), project_root=project_root,
@@ -409,9 +462,13 @@ def validate_rolling_fold_fitted_checkpoint(
         if not migration:
             raise RuntimeError(f"Rolling checkpoint missing native fitting contract: {fold_id}")
         # A cache/rescore migration may legally hold Forward checkpoint bytes;
-        # provenance must bind those exact bytes to the original publication.
-        verify_original_forward()
+        # a producer-captured witness is immutable to subsequent rescores.
+        # Older checkpoints without one still require original publication.
+        if verified_imported_origin() is None:
+            verify_original_forward()
     refit_history = manifest.get("final_refit_history")
+    if refit_history is None and verified_imported_origin() is not None:
+        refit_history = verified_imported_origin().get("final_refit_history")
     if refit_history is None and original_forward_evidence is not None:
         training = original_forward_evidence.report.get("training")
         if isinstance(training, Mapping):
@@ -705,6 +762,31 @@ def _checkpoint_matches_rescore_contract(
         and migration.get("training_contract_unchanged") is True
         and migration.get("source_checkpoint_sha_preserved") is True
     )
+    origin = manifest.get("fitting_origin")
+    if isinstance(origin, Mapping) and origin.get("kind") == "forward_import":
+        target = getattr(bundle, "target_manifest", None)
+        if not isinstance(target, Mapping) or fitting_context_origin_issue(
+            origin=origin, profile=str(fold_contract.get("experiment_profile") or ""),
+            target=target, published_target=target,
+            checkpoint=dict(manifest.get("artifacts") or {}).get("checkpoint"),
+        ) is not None:
+            return False
+        evidence = origin.get("training_evidence")
+        if not isinstance(evidence, Mapping):
+            return False
+        training = FittedModelTrainingEvidence(
+            training_settings=dict(evidence.get("training_settings") or {}),
+            torch_execution=dict(evidence.get("torch_execution") or {}),
+            selected_epoch=int(evidence.get("selected_epoch") or 0),
+            model_record=dict(origin.get("checkpoint") or {}),
+            source="original_forward_import_attestation",
+        )
+        if (_fitted_forward_evidence_fold_issues(
+            source_fitting_evidence=training, fold_contract=fold_contract,
+            expected_execution=dict(manifest.get("torch_execution") or {}),
+        ) or training.selected_epoch != int(manifest.get("selected_epoch") or 0)):
+            return False
+        imported_forward = True
     checkpoint_contract = checkpoint.get("fold_contract")
     if isinstance(checkpoint_contract, dict):
         if not _fold_training_contract_is_compatible(
@@ -1533,6 +1615,107 @@ def import_verified_rolling_forward_checkpoint(
 
 
 
+
+
+
+def _fit_repair_first_fold(
+    *, rolling_dir: Path, score_start: str,
+) -> tuple[Path, dict[str, Any]]:
+    """FIT owner: find one native first-fold publication, never a filename guess."""
+    matched = []
+    for path in sorted((Path(rolling_dir) / "folds").glob("*/manifest.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            if path.parent.name.startswith("fold_" + str(score_start).replace("-", "")):
+                raise RuntimeError("First-fold FIT manifest is corrupt")
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if str(dict(payload.get("planned_periods") or {}).get("score_start") or "") == str(score_start):
+            matched.append((path, payload))
+    if len(matched) != 1:
+        raise RuntimeError("FIT repair requires exactly one published Rolling first-fold identity")
+    return matched[0]
+
+
+def verify_fit_repair_previous_checkpoint(
+    *, rolling_dir: Path, score_start: str,
+    expected_profile: str, expected_checkpoint_sha256: str,
+) -> None:
+    """Fail closed if the read-only snapshot no longer matches local model bytes."""
+    if len(expected_checkpoint_sha256) != 64:
+        raise RuntimeError("FIT repair requires a full SHA256 from an actual checkpoint")
+    path, manifest = _fit_repair_first_fold(rolling_dir=rolling_dir, score_start=score_start)
+    if str(manifest.get("experiment_profile") or "") != str(expected_profile):
+        raise RuntimeError("FIT repair first-fold profile differs")
+    model = path.parent / DEFAULT_MODEL_FILENAME
+    if not model.is_file():
+        raise RuntimeError("FIT repair original first-fold checkpoint missing")
+    actual = build_file_manifest(model)
+    if (actual != dict(dict(manifest.get("artifacts") or {}).get("checkpoint") or {})
+        or actual.get("sha256") != expected_checkpoint_sha256):
+        raise RuntimeError("FIT repair original checkpoint or published SHA mismatch")
+
+
+def verified_fit_repair_legacy_cache_entry(
+    *, rolling_dir: Path, score_start: str, expected_profile: str,
+    checkpoint_cache_root: Path,
+) -> Path:
+    """Resolve only this old first-fold FIT's shared cache, rejecting conflicts.
+
+    A cache is **not** an independent historical Context witness. The repair
+    isolates it to prevent future consumers from reusing the unverified legacy
+    checkpoint after a new native FIT is published. Other FitKey entries stay.
+    """
+    path, first = _fit_repair_first_fold(rolling_dir=rolling_dir, score_start=score_start)
+    if str(first.get("experiment_profile") or "") != str(expected_profile):
+        raise RuntimeError("FIT repair cache first-fold profile differs")
+    identity = fold_training_identity(first)
+    cache = Path(checkpoint_cache_root).resolve() / identity
+    if not cache.exists():
+        return cache
+    if not cache.is_dir() or cache.is_symlink():
+        raise RuntimeError("FIT repair legacy shared cache is not a directory")
+    try:
+        cached = json.loads((cache / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("FIT repair legacy shared cache manifest is unreadable") from exc
+    if not isinstance(cached, dict) or fold_training_identity(cached) != identity:
+        raise RuntimeError("FIT repair legacy shared cache FitKey conflicts with first Fold")
+    model = cache / DEFAULT_MODEL_FILENAME
+    if not model.is_file():
+        raise RuntimeError("FIT repair legacy shared cache checkpoint missing")
+    expected_checkpoint = dict(dict(first.get("artifacts") or {}).get("checkpoint") or {})
+    record = build_file_manifest(model)
+    if (record != expected_checkpoint
+        or record != dict(dict(cached.get("artifacts") or {}).get("checkpoint") or {})):
+        raise RuntimeError("FIT repair legacy shared cache checkpoint differs from first Fold")
+    return cache
+
+
+def verify_fit_repair_rebuilt_checkpoint(
+    *, rolling_dir: Path, score_start: str,
+    expected_profile: str, forward_checkpoint: Path,
+) -> str:
+    """Verify one newly producer-bound Rolling weight truth at both destinations."""
+    path, manifest = _fit_repair_first_fold(rolling_dir=rolling_dir, score_start=score_start)
+    if str(manifest.get("experiment_profile") or "") != str(expected_profile):
+        raise RuntimeError("Rebuilt FIT first-fold profile differs")
+    origin = manifest.get("fitting_origin")
+    if not isinstance(origin, Mapping) or origin.get("kind") != "rolling_native":
+        raise RuntimeError("Rebuilt Rolling checkpoint lacks original producer FIT provenance")
+    model = path.parent / DEFAULT_MODEL_FILENAME
+    if not model.is_file() or not Path(forward_checkpoint).is_file():
+        raise RuntimeError("Rebuilt FIT checkpoint publication missing")
+    rolling_record = build_file_manifest(model)
+    forward_record = build_file_manifest(forward_checkpoint)
+    if (rolling_record != forward_record
+        or rolling_record != dict(dict(manifest.get("artifacts") or {}).get("checkpoint") or {})):
+        raise RuntimeError("Forward/Rolling FIT checkpoint bytes or publication SHA differ")
+    if (dict(origin.get("checkpoint") or {}) != rolling_record):
+        raise RuntimeError("Rebuilt FIT origin is not bound to published checkpoint bytes")
+    return str(rolling_record["sha256"])
 
 
 def resolve_compatible_rolling_first_fold(
