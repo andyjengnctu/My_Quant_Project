@@ -24,9 +24,23 @@ from core.breakout_quality_runtime import (
 )
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.dataset_store import resolve_dataset_paths
-from filters.breakout_quality.model_source_provenance import canonical_source_dataset_artifacts
-from filters.breakout_quality.paths import SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
+from filters.breakout_quality.model_source_provenance import (
+    canonical_source_dataset_artifacts, source_inventory_matches_current,
+)
+from filters.breakout_quality.paths import (
+    SELECTION_POINT_IN_TIME_MANIFEST_FILENAME, resolve_filter_artifact_paths,
+    resolve_filter_model_output_dir,
+)
 from filters.breakout_quality.predicted_context_artifact import maybe_predicted_context_artifact_spec
+
+
+@dataclass(frozen=True)
+class ForwardOriginEvidence:
+    """Previously published original FIT, addressed by checkpoint bytes."""
+
+    model_dir: Path
+    report_path: Path
+    report: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -304,8 +318,250 @@ def forward_publication_fit_dependency_issues(
     return tuple(dict.fromkeys(issues))
 
 
+def _same_file_bytes(first: Any, second: Any) -> bool:
+    """A copied checkpoint may have a different filename but identical bytes."""
+    return (
+        _valid_file_record(first) and _valid_file_record(second)
+        and first["sha256"] == second["sha256"]
+        and first["size_bytes"] == second["size_bytes"]
+    )
+
+
+def _read_published_json(path: Path) -> Mapping[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return None
+    return payload if isinstance(payload, Mapping) else None
+
+
+def _migrated_fold_forward_context_proof(
+    *, fold_manifest: Mapping[str, Any], original_target: Mapping[str, Any],
+    current_target: Mapping[str, Any], context_key: str | None, project_root: Path | None,
+) -> tuple[ForwardOriginEvidence | None, str | None]:
+    """Recover a migrated FIT's *original* context from a byte-bound Forward publication.
+
+    A rescore/reuse migration may overwrite the native Fold's origin marker; its
+    new aggregate is not evidence of which context created the old weights.
+    Only a matching original Forward checkpoint publication (canonical or
+    immutable historical archive) can establish that missing source binding.
+    No synthetic lineage is written back into historical artifacts.
+    """
+    migration = fold_manifest.get("migration")
+    valid_kinds = frozenset({
+        "forward_model_fitting_identity_import",
+        "fitting_identity_checkpoint_reuse",
+        "expanded_daily_score_universe_checkpoint_reuse",
+        "checkpoint_score_regeneration",
+    })
+    if (not isinstance(migration, Mapping)
+        or migration.get("kind") not in valid_kinds
+        or migration.get("training_contract_unchanged") is not True
+        or migration.get("source_checkpoint_sha_preserved") is not True):
+        return None, "migrated Fold has no approved unchanged-checkpoint provenance"
+    artifacts = fold_manifest.get("artifacts")
+    checkpoint_record = artifacts.get("checkpoint") if isinstance(artifacts, Mapping) else None
+    if not _valid_file_record(checkpoint_record):
+        return None, "migrated Fold checkpoint identity absent"
+    for field in ("source_checkpoint", "source_forward_checkpoint"):
+        if field in migration and not _same_file_bytes(migration[field], checkpoint_record):
+            return None, f"migrated Fold {field} SHA differs from checkpoint"
+    if migration.get("kind") == "forward_model_fitting_identity_import" and (
+        not _same_file_bytes(migration.get("source_forward_checkpoint"), checkpoint_record)
+    ):
+        return None, "Forward import lacks source checkpoint SHA binding"
+    if project_root is None:
+        return None, "original Forward provenance project root unavailable"
+    root = Path(project_root).resolve()
+    try:
+        paths = resolve_filter_artifact_paths(
+            root, str(fold_manifest["filter_id"]),
+            str(fold_manifest["model_architecture"]),
+            str(fold_manifest["experiment_profile"]),
+        )
+        output_dir = resolve_filter_model_output_dir(
+            root, str(fold_manifest["filter_id"]),
+            str(fold_manifest["model_architecture"]),
+            str(fold_manifest["experiment_profile"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None, "migrated Fold has no resolvable original Forward namespace"
+
+    sources = [(paths.model_dir, output_dir, None)]
+    # The historical archive is hash-addressed. Never scan unrelated profiles
+    # or rely on the mutable current research-model selection.
+    archive = paths.model_dir / "historical_forward_fits" / checkpoint_record["sha256"]
+    if archive.is_dir():
+        sources.append((archive / "model", archive / "report", archive))
+
+    saw_checkpoint = False
+    for model_dir, report_dir, archive_dir in sources:
+        original_model = model_dir / "model.pt"
+        if (not original_model.is_file()
+            or not _same_file_bytes(build_file_manifest(original_model), checkpoint_record)):
+            continue
+        saw_checkpoint = True
+        original_manifest_path = model_dir / "manifest.json"
+        original_report_path = report_dir / "continuous_ranker_report.json"
+        original_manifest = _read_published_json(original_manifest_path)
+        original_report = _read_published_json(original_report_path)
+        if not isinstance(original_manifest, Mapping) or not isinstance(original_report, Mapping):
+            continue
+        if archive_dir is not None:
+            archive_manifest = _read_published_json(archive_dir / "archive_manifest.json")
+            if (not isinstance(archive_manifest, Mapping)
+                or archive_manifest.get("archive_version") != 1
+                or not _same_file_bytes(archive_manifest.get("original_model"), checkpoint_record)
+                or not _valid_file_record(archive_manifest.get("replacement_rolling_model"))):
+                continue
+            preserved = archive_manifest.get("preserved_files")
+            if not isinstance(preserved, list):
+                continue
+            records = {
+                row.get("path"): row.get("manifest") for row in preserved
+                if isinstance(row, Mapping) and isinstance(row.get("path"), str)
+            }
+            original_fit_sidecar = model_dir / "fitted_model_manifest.json"
+            evidence_files = [
+                ("model/model.pt", original_model),
+                ("model/manifest.json", original_manifest_path),
+                ("report/continuous_ranker_report.json", original_report_path),
+            ]
+            if original_fit_sidecar.is_file():
+                evidence_files.append(("model/fitted_model_manifest.json", original_fit_sidecar))
+            if any(records.get(relative) != build_file_manifest(path)
+                   for relative, path in evidence_files):
+                continue
+        report_artifacts = original_report.get("artifacts")
+        forward_outputs = original_manifest.get("research_outputs")
+        if not isinstance(report_artifacts, Mapping) or not isinstance(forward_outputs, Mapping):
+            continue
+        if not _same_file_bytes(original_manifest.get("model"), checkpoint_record):
+            continue
+        if not _same_file_bytes(report_artifacts.get("model"), checkpoint_record):
+            continue
+        if forward_outputs.get("report_json") != build_file_manifest(original_report_path):
+            continue
+        if any(original_manifest.get(key) != fold_manifest.get(key) for key in (
+            "filter_id", "model_architecture", "experiment_profile",
+            "continuous_target_id", "training_label_scope", "model_spec",
+            "experiment_settings", "model_information_cutoff", "selected_epoch",
+        )):
+            continue
+        published_settings = original_manifest.get("experiment_settings")
+        if not isinstance(published_settings, Mapping):
+            continue
+        declared_scope = (original_manifest.get("training_sample_scope")
+                          or published_settings.get("training_sample_scope"))
+        if declared_scope != fold_manifest.get("training_sample_scope"):
+            continue
+        training = original_report.get("training")
+        split = original_report.get("split_report")
+        if not isinstance(training, Mapping) or not isinstance(split, Mapping):
+            continue
+        sop = original_report.get("standard_model_sop")
+        planned = fold_manifest.get("planned_periods")
+        counts = fold_manifest.get("group_counts")
+        split_counts = split.get("counts")
+        if not all(isinstance(item, Mapping) for item in (sop, planned, counts, split_counts)):
+            continue
+        if (training.get("seed") != fold_manifest.get("seed")
+            or training.get("selected_epoch") != fold_manifest.get("selected_epoch")
+            or sop.get("evaluation_mode") != "forward_oos"):
+            continue
+        if any(str(split.get(key)) != str(planned.get(value)) for key, value in (
+            ("inner_validation_start_date", "validation_start"),
+            ("selection_end_date", "validation_end"),
+            ("oos_start_date", "score_start"),
+        )) or any(split_counts.get(key) != counts.get(value) for key, value in (
+            ("inner_train", "inner_train"),
+            ("validation", "validation"),
+            ("selection", "final_refit"),
+        )):
+            continue
+        source_dataset = original_manifest.get("source_dataset")
+        fold_source = fold_manifest.get("source_contract")
+        if not isinstance(source_dataset, Mapping) or not isinstance(fold_source, Mapping):
+            continue
+        if source_dataset.get("policy") != fold_source.get("dataset_policy"):
+            continue
+        published_inventory = source_dataset.get("source_data_inventory")
+        fold_inventory = fold_source.get("source_data_inventory")
+        if (not isinstance(published_inventory, Mapping) or not published_inventory
+            or not isinstance(fold_inventory, Mapping) or not fold_inventory
+            or not source_inventory_matches_current(
+                published=published_inventory,
+                current=fold_inventory, project_root=root,
+            )):
+            continue
+        if fold_source.get("training_universe_start_date") is not None and (
+            source_dataset.get("training_universe_start_date") != fold_source.get("training_universe_start_date")
+        ):
+            continue
+        original_source_target = original_manifest.get("source_continuous_target")
+        if not isinstance(original_source_target, Mapping):
+            continue
+        if (not isinstance(original_source_target.get("target_contract"), Mapping)
+            or not original_source_target["target_contract"]):
+            continue
+        if any(original_source_target.get(key) != current_target.get(key) for key in (
+            "schema_version", "target_contract", "artifacts", "context_features",
+            "pair_weight_context_features", "pair_weight_context_contract",
+            "risk_param_coverage_start",
+        )):
+            continue
+        if context_key is not None:
+            if _context_manifest_mismatch(
+                original_source_target.get(context_key), current_target.get(context_key),
+            ) is not None:
+                continue
+            if _context_manifest_mismatch(
+                original_source_target.get(context_key), original_target.get(context_key),
+            ) is not None:
+                continue
+        return ForwardOriginEvidence(
+            model_dir=model_dir, report_path=original_report_path, report=original_report,
+        ), None
+    if saw_checkpoint:
+        return None, "original Forward checkpoint found but publication/context identity cannot be proven"
+    return None, "original Forward checkpoint SHA publication unavailable (including historical archive)"
+
+
+
+def migrated_forward_origin_training_evidence(
+    *, fold_manifest: Mapping[str, Any], bundle: Any,
+    project_root: Path | None,
+) -> tuple[ForwardOriginEvidence | None, str | None]:
+    """Resolve legacy Forward-origin epoch selection without fabricating Fold metadata.
+
+    The main context proof additionally verifies published Rolling aggregate and
+    Fold SHA first. This helper only recovers the *same* original Forward report
+    bound to the unchanged checkpoint bytes, after the FIT owner has validated
+    the expected cohort/execution and checkpoint integrity.
+    """
+    target = getattr(bundle, "target_manifest", None)
+    if not isinstance(target, Mapping):
+        return None, "current Target manifest missing"
+    try:
+        source = context_source_for_profile(str(fold_manifest.get("experiment_profile") or ""))
+    except (KeyError, ValueError, TypeError):
+        return None, "execution profile not registered"
+    if source == CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE:
+        key = None
+    else:
+        spec = maybe_predicted_context_artifact_spec(source)
+        if spec is None:
+            return None, "predicted-context artifact capability not registered"
+        key = spec.manifest_key
+    return _migrated_fold_forward_context_proof(
+        fold_manifest=fold_manifest, original_target=target,
+        current_target=target, context_key=key, project_root=project_root,
+    )
+
+
 def verified_published_context_fit_proof(
     *, manifest_path: Path, fold_manifest: Mapping[str, Any], bundle: Any,
+    project_root: Path | None = None,
 ) -> tuple[bool, str]:
     """Bind any declared external fitting context to the original published Fold.
 
@@ -319,8 +575,6 @@ def verified_published_context_fit_proof(
         return False, "unknown execution recipe"
     if source == CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE:
         return True, "no external fitting context"
-    if fold_manifest.get("migration") is not None:
-        return False, "migrated Rolling checkpoint lacks original context binding"
     spec = maybe_predicted_context_artifact_spec(source)
     if spec is None:
         return False, "no registered external-context artifact proof"
@@ -377,11 +631,19 @@ def verified_published_context_fit_proof(
     context_error = _context_manifest_mismatch(old_context, current_context)
     if context_error is not None:
         return False, context_error
+    if fold_manifest.get("migration") is not None:
+        _origin_report, origin_error = _migrated_fold_forward_context_proof(
+            fold_manifest=fold_manifest, original_target=original_target,
+            current_target=target, context_key=spec.manifest_key,
+            project_root=project_root,
+        )
+        if origin_error is not None:
+            return False, "migrated Rolling checkpoint lacks original context binding: " + origin_error
     return True, "verified published Rolling context bytes and PIT fold SHA"
 
 
 __all__ = [
-    "FitDataDependencies", "context_source_for_profile", "fold_source_dependency_issues",
-    "verified_published_context_fit_proof",
+    "FitDataDependencies", "ForwardOriginEvidence", "context_source_for_profile", "fold_source_dependency_issues",
+    "verified_published_context_fit_proof", "migrated_forward_origin_training_evidence",
     "forward_publication_fit_dependency_issues",
 ]

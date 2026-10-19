@@ -43,6 +43,7 @@ from filters.breakout_quality.model_source_provenance import (
 from services.breakout_quality.fitting_data_dependencies import (
     FitDataDependencies, fold_source_dependency_issues,
     forward_publication_fit_dependency_issues, verified_published_context_fit_proof,
+    migrated_forward_origin_training_evidence,
 )
 from filters.breakout_quality.models.factory import build_model, count_trainable_parameters
 
@@ -299,6 +300,7 @@ def validate_rolling_fold_fitted_checkpoint(
     fold_id = str(manifest.get("fold_id") or manifest_path.parent.name)
     context_verified, context_reason = verified_published_context_fit_proof(
         manifest_path=manifest_path, fold_manifest=manifest, bundle=bundle,
+        project_root=(Path(project_root) if project_root is not None else None),
     )
     if not context_verified:
         return None, f"external fitting context proof blocked: {context_reason}"
@@ -319,8 +321,66 @@ def validate_rolling_fold_fitted_checkpoint(
     if build_file_manifest(checkpoint_path) != expected_checkpoint:
         raise RuntimeError(f"Rolling fitted checkpoint hash mismatch: {fold_id}")
     selected_epoch = int(manifest.get("selected_epoch", 0) or 0)
-    if selected_epoch < 1 or not isinstance(manifest.get("epoch_selection"), dict):
-        raise RuntimeError(f"Rolling fitted checkpoint has invalid epoch evidence: {fold_id}")
+    if selected_epoch < 1:
+        raise RuntimeError(f"Rolling fitted checkpoint has invalid selected epoch: {fold_id}")
+    migration = dict(manifest.get("migration") or {})
+    native_epoch_selection = manifest.get("epoch_selection")
+    epoch_selection = (dict(native_epoch_selection)
+                       if isinstance(native_epoch_selection, dict) else None)
+    original_forward_evidence = None
+    # Score regeneration may have replaced the original Forward-import marker
+    # with an evaluation-only migration marker. An imported model has no native
+    # Fold contract, and older migrations may have no native epoch-selection
+    # field. Recover both only from a byte-bound original Forward publication.
+    def verify_original_forward():
+        nonlocal original_forward_evidence
+        if original_forward_evidence is None:
+            origin, issue = migrated_forward_origin_training_evidence(
+                fold_manifest=manifest, bundle=bundle,
+                project_root=(Path(project_root) if project_root is not None else None),
+            )
+            if origin is None:
+                raise RuntimeError(
+                    f"Rolling checkpoint original Forward evidence missing: {fold_id}: {issue}"
+                )
+            fit_evidence, evidence_reason = load_fitted_model_training_evidence(
+                model_dir=origin.model_dir, report_path=origin.report_path,
+            )
+            if fit_evidence is None:
+                raise RuntimeError(
+                    f"Rolling checkpoint original Forward fitting execution missing: {fold_id}: "
+                    f"{evidence_reason}"
+                )
+            proof_issues = list(_fitted_forward_evidence_fold_issues(
+                source_fitting_evidence=fit_evidence,
+                fold_contract=manifest, expected_execution=expected_execution,
+            ))
+            if fit_evidence.selected_epoch != selected_epoch:
+                proof_issues.append("original fitted epoch differs")
+            if (fit_evidence.model_record is not None
+                and dict(fit_evidence.model_record) != dict(origin.report["artifacts"]["model"])):
+                proof_issues.append("original fitted checkpoint SHA differs")
+            published_execution = dict(origin.report.get("torch_execution") or {})
+            published_execution.pop("requested_device", None)
+            if published_execution and published_execution != dict(expected_execution):
+                proof_issues.append("original report torch execution differs")
+            if proof_issues:
+                raise RuntimeError(
+                    f"Rolling checkpoint original Forward fitting identity differs: {fold_id}: "
+                    + "; ".join(proof_issues[:6])
+                )
+            original_forward_evidence = origin
+        return original_forward_evidence.report
+
+    if epoch_selection is None:
+        if not migration:
+            raise RuntimeError(f"Rolling fitted checkpoint has invalid epoch evidence: {fold_id}")
+        forward_training = verify_original_forward().get("training")
+        if not isinstance(forward_training, Mapping) or not isinstance(
+            forward_training.get("epoch_selection"), Mapping,
+        ) or not forward_training["epoch_selection"]:
+            raise RuntimeError(f"Rolling imported checkpoint lacks original epoch-selection evidence: {fold_id}")
+        epoch_selection = dict(forward_training["epoch_selection"])
     checkpoint = torch_module.load(checkpoint_path, map_location="cpu", weights_only=True)
     if not isinstance(checkpoint, dict):
         raise RuntimeError(f"Rolling fitted checkpoint has invalid content: {fold_id}")
@@ -331,7 +391,6 @@ def validate_rolling_fold_fitted_checkpoint(
     ):
         raise RuntimeError(f"Rolling fitted checkpoint embedded identity mismatch: {fold_id}")
     embedded = checkpoint.get("fold_contract")
-    migration = dict(manifest.get("migration") or {})
     if isinstance(embedded, dict):
         embedded_issues = _first_fold_fit_identity_issues(
             embedded, dict(expected), project_root=project_root,
@@ -347,13 +406,22 @@ def validate_rolling_fold_fitted_checkpoint(
         and migration.get("training_contract_unchanged") is True
         and migration.get("source_checkpoint_sha_preserved") is True
     ):
-        raise RuntimeError(f"Rolling checkpoint missing native fitting contract: {fold_id}")
+        if not migration:
+            raise RuntimeError(f"Rolling checkpoint missing native fitting contract: {fold_id}")
+        # A cache/rescore migration may legally hold Forward checkpoint bytes;
+        # provenance must bind those exact bytes to the original publication.
+        verify_original_forward()
+    refit_history = manifest.get("final_refit_history")
+    if refit_history is None and original_forward_evidence is not None:
+        training = original_forward_evidence.report.get("training")
+        if isinstance(training, Mapping):
+            refit_history = training.get("final_refit_history")
     return FittedModelContract(
         manifest_path=manifest_path, model_path=checkpoint_path,
         manifest=dict(manifest), fitting_identity=dict(expected),
         selected_epoch=selected_epoch,
-        epoch_selection=dict(manifest["epoch_selection"]),
-        final_refit_history=list(manifest.get("final_refit_history") or []),
+        epoch_selection=epoch_selection,
+        final_refit_history=list(refit_history or []),
         source="rolling_first_fold_verified",
     ), None
 
@@ -432,6 +500,39 @@ def probe_fitted_candidates(
         )
     return FittedCandidateProbe(forward_candidate, rolling_candidate)
 
+def _fitted_forward_evidence_fold_issues(
+    *, source_fitting_evidence: FittedModelTrainingEvidence,
+    fold_contract: Mapping[str, Any], expected_execution: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """One owner for weight-affecting Forward-origin vs Rolling Fold settings."""
+    issues = []
+    training_settings = dict(fold_contract.get("training_settings") or {})
+    persisted_settings = dict(source_fitting_evidence.training_settings or {})
+    fitting_setting_pairs = (
+        ("max_epochs", "epochs_max", int),
+        ("batch_size", "batch_size", int),
+        ("learning_rate", "learning_rate", float),
+        ("weight_decay", "weight_decay", float),
+        ("gradient_clip_norm", "gradient_clip_norm", float),
+        ("early_stopping_patience", "early_stopping_patience", int),
+        ("early_stopping_min_delta", "early_stopping_min_delta", float),
+    )
+    for persisted_field, fold_field, caster in fitting_setting_pairs:
+        try:
+            actual = caster(persisted_settings.get(persisted_field))
+            expected = caster(training_settings.get(fold_field))
+        except (TypeError, ValueError):
+            issues.append(f"fitted-model training {persisted_field} missing")
+            continue
+        if actual != expected:
+            issues.append(f"fitted-model training {persisted_field} mismatch")
+    if persisted_settings.get("use_inner_validation") is not True:
+        issues.append("fitted-model use_inner_validation mismatch")
+    if dict(source_fitting_evidence.torch_execution or {}) != dict(expected_execution):
+        issues.append("fitted-model torch_execution mismatch")
+    return tuple(issues)
+
+
 def _forward_checkpoint_import_issues(
     *,
     source_manifest: dict[str, Any],
@@ -486,33 +587,11 @@ def _forward_checkpoint_import_issues(
     # lifecycle contract, not to the evaluation report schema.  Forward reports may
     # legitimately omit these fields, so cross-evaluation checkpoint reuse must read
     # the canonical fitted-model sidecar (or immutable legacy defaults) instead.
-    training_settings = dict(fold_contract.get("training_settings") or {})
-    persisted_settings = dict(getattr(source_fitting_evidence, "training_settings", {}) or {})
-    fitting_setting_pairs = (
-        ("max_epochs", "epochs_max", int),
-        ("batch_size", "batch_size", int),
-        ("learning_rate", "learning_rate", float),
-        ("weight_decay", "weight_decay", float),
-        ("gradient_clip_norm", "gradient_clip_norm", float),
-        ("early_stopping_patience", "early_stopping_patience", int),
-        ("early_stopping_min_delta", "early_stopping_min_delta", float),
-    )
-    for persisted_field, fold_field, caster in fitting_setting_pairs:
-        try:
-            actual = caster(persisted_settings.get(persisted_field))
-            expected = caster(training_settings.get(fold_field))
-        except (TypeError, ValueError):
-            issues.append(f"fitted-model training {persisted_field} missing")
-            continue
-        if actual != expected:
-            issues.append(f"fitted-model training {persisted_field} mismatch")
-    if persisted_settings.get("use_inner_validation") is not True:
-        issues.append("fitted-model use_inner_validation mismatch")
-
     expected_execution = scientific_torch_execution(execution_plan)
-    persisted_execution = dict(getattr(source_fitting_evidence, "torch_execution", {}) or {})
-    if persisted_execution != expected_execution:
-        issues.append("fitted-model torch_execution mismatch")
+    issues.extend(_fitted_forward_evidence_fold_issues(
+        source_fitting_evidence=source_fitting_evidence,
+        fold_contract=fold_contract, expected_execution=expected_execution,
+    ))
     # ``fitted_model_manifest.json`` is the fitting-execution SSOT.  The final
     # Forward ``manifest.json`` is an evaluation/publication manifest and the
     # canonical producer does not persist ``torch_execution`` there.  Requiring

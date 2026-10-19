@@ -904,6 +904,16 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                     native_context_new = deepcopy(lazy_target_new)
                     for item in (native_context_old, native_context_new):
                         item["experiment_profile"] = external_context
+                        # A real registered architecture is needed when resolving
+                        # the original Forward namespace for migrated FIT proof.
+                        item["model_architecture"] = model_settings.model_architecture
+                        item["training_settings"] = {
+                            "epochs_max": 3, "batch_size": 128,
+                            "learning_rate": 0.001, "weight_decay": 0.0001,
+                            "gradient_clip_norm": 1.0,
+                            "early_stopping_patience": 1,
+                            "early_stopping_min_delta": 0.0,
+                        }
                     pit_root = root_dir / "published_pit"
                     ctx_fold_dir = pit_root / "folds" / "fold_20210101_20211231"
                     ctx_fold_dir.mkdir(parents=True)
@@ -1082,12 +1092,255 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                     check_true("ssot_published_fold_sha_tamper_blocks_context_reuse",
                                denied is None and "fold/checkpoint SHA" in str(reason))
                     aggregate_path.write_text(json.dumps(aggregate), encoding="utf-8")
+                    # AI: A post-rescore migration changes Fold manifest bytes.
+                    # The aggregate must be rebased for an actual provenance test.
                     migrated_manifest = {**ctx_manifest, "migration": {"kind": "copy"}}
+                    ctx_path.write_text(json.dumps(migrated_manifest), encoding="utf-8")
+                    aggregate["folds"][0]["fold_manifest"] = build_file_manifest(ctx_path)
+                    aggregate_path.write_text(json.dumps(aggregate), encoding="utf-8")
                     denied, reason = owner.validate_rolling_fold_fitted_checkpoint(**{
                         **ctx_args, "manifest": migrated_manifest,
                     })
                     check_true("ssot_migrated_checkpoint_without_original_context_proof_is_blocked",
                                denied is None and "migrated Rolling checkpoint" in str(reason))
+                    
+                    from filters.breakout_quality.paths import (
+                        resolve_filter_artifact_paths, resolve_filter_model_output_dir,
+                    )
+                    model_paths = resolve_filter_artifact_paths(
+                        root_dir, ctx_manifest["filter_id"],
+                        ctx_manifest["model_architecture"], external_context,
+                    )
+                    forward_output = resolve_filter_model_output_dir(
+                        root_dir, ctx_manifest["filter_id"],
+                        ctx_manifest["model_architecture"], external_context,
+                    )
+                    model_paths.model_dir.mkdir(parents=True, exist_ok=True)
+                    forward_output.mkdir(parents=True, exist_ok=True)
+                    model_paths.model_path.write_bytes(ctx_ckpt.read_bytes())
+                    forward_checkpoint_record = build_file_manifest(model_paths.model_path)
+                    source_report = {
+                        "training": {
+                            "seed": ctx_manifest["seed"],
+                            "selected_epoch": ctx_manifest["selected_epoch"],
+                            "epoch_selection": {"best_epoch": ctx_manifest["selected_epoch"]},
+                            "final_refit_history": [{"epoch": ctx_manifest["selected_epoch"]}],
+                        },
+                        "split_report": {
+                            "inner_validation_start_date": ctx_manifest["planned_periods"]["validation_start"],
+                            "selection_end_date": ctx_manifest["planned_periods"]["validation_end"],
+                            "oos_start_date": ctx_manifest["planned_periods"]["score_start"],
+                            "counts": {
+                                "inner_train": ctx_manifest["group_counts"]["inner_train"],
+                                "validation": ctx_manifest["group_counts"]["validation"],
+                                "selection": ctx_manifest["group_counts"]["final_refit"],
+                            },
+                        },
+                        "standard_model_sop": {"evaluation_mode": "forward_oos"},
+                        "artifacts": {"model": forward_checkpoint_record},
+                    }
+                    report_path = forward_output / "continuous_ranker_report.json"
+                    report_path.write_text(json.dumps(source_report), encoding="utf-8")
+                    source_manifest = {
+                        **{k: ctx_manifest[k] for k in (
+                            "filter_id", "model_architecture", "experiment_profile",
+                            "continuous_target_id", "training_label_scope", "training_sample_scope",
+                            "model_spec", "experiment_settings", "model_information_cutoff",
+                            "selected_epoch",
+                        )},
+                        "model": forward_checkpoint_record,
+                        "research_outputs": {"report_json": build_file_manifest(report_path)},
+                        "source_dataset": {
+                            "policy": ctx_manifest["source_contract"]["dataset_policy"],
+                            "source_data_inventory": ctx_manifest["source_contract"]["source_data_inventory"],
+                        },
+                        "source_continuous_target": target_lineage,
+                    }
+                    model_paths.manifest_path.write_text(json.dumps(source_manifest), encoding="utf-8")
+                    fitted_settings = {
+                        "max_epochs": ctx_manifest["training_settings"]["epochs_max"],
+                        **{key: ctx_manifest["training_settings"][key] for key in (
+                            "batch_size", "learning_rate", "weight_decay",
+                            "gradient_clip_norm", "early_stopping_patience",
+                            "early_stopping_min_delta",
+                        )},
+                        "use_inner_validation": True,
+                        "inner_validation_months": 24,
+                    }
+                    fitted_sidecar_path = model_paths.model_dir / "fitted_model_manifest.json"
+                    fitted_sidecar = {
+                        "contract_version": 1,
+                        "fitting_identity": {
+                            "training_settings": fitted_settings,
+                            "torch_execution": execution,
+                        },
+                        "fitting_result": {"selected_epoch": ctx_manifest["selected_epoch"]},
+                        "model": forward_checkpoint_record,
+                    }
+                    fitted_sidecar_path.write_text(json.dumps(fitted_sidecar), encoding="utf-8")
+                    valid_migration = {
+                        "kind": "fitting_identity_checkpoint_reuse",
+                        "training_contract_unchanged": True,
+                        "source_checkpoint_sha_preserved": True,
+                        "source_checkpoint": deepcopy(ctx_manifest["artifacts"]["checkpoint"]),
+                    }
+                    linked_migration = {**ctx_manifest, "migration": valid_migration}
+                    def verify_linked(manifest_to_check, target_to_check=target_lineage,
+                                      checkpoint_to_check=ctx_embedded):
+                        ctx_path.write_text(json.dumps(manifest_to_check), encoding="utf-8")
+                        aggregate["folds"][0]["fold_manifest"] = build_file_manifest(ctx_path)
+                        aggregate_path.write_text(json.dumps(aggregate), encoding="utf-8")
+                        return owner.validate_rolling_fold_fitted_checkpoint(**{
+                            **ctx_args, "manifest": manifest_to_check,
+                            "bundle": SimpleNamespace(
+                                model_spec=bundle.model_spec, profile=bundle.profile,
+                                target_manifest=target_to_check,
+                            ),
+                            "torch_module": SimpleNamespace(
+                                load=lambda *_a, **_k: checkpoint_to_check,
+                            ),
+                        })
+
+                    ok, linked_reason = verify_linked(linked_migration)
+                    check_true("ssot_migrated_context_verified_forward_sha_origin_reusable",
+                               ok is not None and linked_reason is None)
+                    # The actual Forward imported model may have no native PIT
+                    # fold_contract, and older rescore manifests may omit the
+                    # selection decision. Both must come from proven Forward bytes.
+                    no_native_epoch = deepcopy(linked_migration)
+                    no_native_epoch.pop("epoch_selection", None)
+                    imported_forward_checkpoint = deepcopy(ctx_embedded)
+                    imported_forward_checkpoint.pop("fold_contract", None)
+                    recovered, recovered_reason = verify_linked(
+                        no_native_epoch, checkpoint_to_check=imported_forward_checkpoint,
+                    )
+                    check_true("ssot_migrated_forward_checkpoint_without_native_fold_uses_original_epoch",
+                               recovered is not None and recovered_reason is None
+                               and recovered.epoch_selection == source_report["training"]["epoch_selection"]
+                               and recovered.final_refit_history == source_report["training"]["final_refit_history"])
+                    bad_fitting = deepcopy(fitted_sidecar)
+                    bad_fitting["fitting_identity"]["torch_execution"]["deterministic_algorithms"] = False
+                    fitted_sidecar_path.write_text(json.dumps(bad_fitting), encoding="utf-8")
+                    try:
+                        verify_linked(no_native_epoch, checkpoint_to_check=imported_forward_checkpoint)
+                    except RuntimeError as exc:
+                        execution_drift_blocked = "fitted-model torch_execution mismatch" in str(exc)
+                    else:
+                        execution_drift_blocked = False
+                    check_true("ssot_migrated_forward_original_torch_execution_mismatch_blocks",
+                               execution_drift_blocked)
+                    fitted_sidecar_path.write_text(json.dumps(fitted_sidecar), encoding="utf-8")
+                    bad_fitting = deepcopy(fitted_sidecar)
+                    bad_fitting["model"]["sha256"] = "a" * 64
+                    fitted_sidecar_path.write_text(json.dumps(bad_fitting), encoding="utf-8")
+                    try:
+                        verify_linked(no_native_epoch, checkpoint_to_check=imported_forward_checkpoint)
+                    except RuntimeError as exc:
+                        wrong_model_blocked = "original fitted checkpoint SHA differs" in str(exc)
+                    else:
+                        wrong_model_blocked = False
+                    check_true("ssot_migrated_forward_original_fit_sidecar_sha_mismatch_blocks",
+                               wrong_model_blocked)
+                    fitted_sidecar_path.write_text(json.dumps(fitted_sidecar), encoding="utf-8")
+                    missing_epoch_report = deepcopy(source_report)
+                    missing_epoch_report["training"].pop("epoch_selection", None)
+                    report_path.write_text(json.dumps(missing_epoch_report), encoding="utf-8")
+                    missing_epoch_source = deepcopy(source_manifest)
+                    missing_epoch_source["research_outputs"]["report_json"] = build_file_manifest(report_path)
+                    model_paths.manifest_path.write_text(json.dumps(missing_epoch_source), encoding="utf-8")
+                    try:
+                        verify_linked(no_native_epoch, checkpoint_to_check=imported_forward_checkpoint)
+                    except RuntimeError as exc:
+                        epoch_gap_blocked = "lacks original epoch-selection evidence" in str(exc)
+                    else:
+                        epoch_gap_blocked = False
+                    check_true("ssot_migrated_forward_no_native_epoch_and_no_source_epoch_blocks",
+                               epoch_gap_blocked)
+                    model_paths.manifest_path.write_text(json.dumps(source_manifest), encoding="utf-8")
+                    report_path.write_text(json.dumps(source_report), encoding="utf-8")
+                    bad_source = deepcopy(source_manifest)
+                    bad_source["source_continuous_target"][context_spec.manifest_key][
+                        "source_stage1"]["selection_score"]["sha256"] = "f" * 64
+                    model_paths.manifest_path.write_text(json.dumps(bad_source), encoding="utf-8")
+                    denied, reason = verify_linked(linked_migration)
+                    check_true("ssot_migrated_context_changed_forward_stage1_blocks",
+                               denied is None and "original context binding" in str(reason))
+                    model_paths.manifest_path.write_text(json.dumps(source_manifest), encoding="utf-8")
+                    bad_report = deepcopy(source_report)
+                    bad_report["training"]["seed"] = 777
+                    report_path.write_text(json.dumps(bad_report), encoding="utf-8")
+                    denied, reason = verify_linked(linked_migration)
+                    check_true("ssot_migrated_context_forward_report_identity_drift_blocks",
+                               denied is None and "original context binding" in str(reason))
+                    report_path.write_text(json.dumps(source_report), encoding="utf-8")
+                    bad_link = deepcopy(linked_migration)
+                    bad_link["migration"]["source_checkpoint"]["sha256"] = "0" * 64
+                    denied, reason = verify_linked(bad_link)
+                    check_true("ssot_migrated_context_source_checkpoint_drift_blocks",
+                               denied is None and "source_checkpoint SHA" in str(reason))
+                    unsafe_link = deepcopy(linked_migration)
+                    unsafe_link["migration"]["training_contract_unchanged"] = False
+                    denied, reason = verify_linked(unsafe_link)
+                    check_true("ssot_migrated_context_unapproved_migration_blocks",
+                               denied is None and "approved unchanged-checkpoint" in str(reason))
+                    
+                    # AI: The FIT owner preserves immutable original Forward
+                    # evidence in historical_forward_fits when its publication
+                    # is replaced by verified Rolling model bytes.
+                    from shutil import copy2
+                    archived = (model_paths.model_dir / "historical_forward_fits"
+                                / forward_checkpoint_record["sha256"])
+                    archived_model = archived / "model"
+                    archived_report = archived / "report"
+                    archived_model.mkdir(parents=True, exist_ok=True)
+                    archived_report.mkdir(parents=True, exist_ok=True)
+                    for fname in ("model.pt", "manifest.json", "fitted_model_manifest.json"):
+                        copy2(model_paths.model_dir / fname, archived_model / fname)
+                    copy2(report_path, archived_report / report_path.name)
+                    preserved = [
+                        {"path": relative, "manifest": build_file_manifest(path)}
+                        for relative, path in (
+                            ("model/model.pt", archived_model / "model.pt"),
+                            ("model/manifest.json", archived_model / "manifest.json"),
+                            ("model/fitted_model_manifest.json", archived_model / "fitted_model_manifest.json"),
+                            ("report/continuous_ranker_report.json",
+                             archived_report / "continuous_ranker_report.json"),
+                        )
+                    ]
+                    archive_record = {
+                        "archive_version": 1,
+                        "original_model": forward_checkpoint_record,
+                        "replacement_rolling_model": {"sha256": "9" * 64, "size_bytes": 10},
+                        "preserved_files": preserved,
+                    }
+                    archive_path = archived / "archive_manifest.json"
+                    archive_path.write_text(json.dumps(archive_record), encoding="utf-8")
+                    model_paths.manifest_path.unlink()
+                    model_paths.model_path.unlink()
+                    fitted_sidecar_path.unlink()
+                    report_path.unlink()
+                    ok, reason = verify_linked(linked_migration)
+                    check_true("ssot_migrated_context_verified_historical_forward_archive_reusable",
+                               ok is not None and reason is None)
+                    bad_archive = deepcopy(archive_record)
+                    bad_archive["preserved_files"][1]["manifest"]["sha256"] = "0" * 64
+                    archive_path.write_text(json.dumps(bad_archive), encoding="utf-8")
+                    denied, reason = verify_linked(linked_migration)
+                    check_true("ssot_migrated_context_tampered_historical_archive_blocks",
+                               denied is None and "original context binding" in str(reason))
+                    archive_path.write_text(json.dumps(archive_record), encoding="utf-8")
+                    ok, reason = verify_linked(linked_migration)
+                    check_true("ssot_migrated_context_restored_archive_recovers",
+                               ok is not None and reason is None)
+                    archive_path.unlink()
+                    (archived_model / "model.pt").unlink()
+                    denied, reason = verify_linked(linked_migration)
+                    check_true("ssot_migrated_context_no_publication_evidence_blocks",
+                               denied is None and "original Forward checkpoint SHA publication unavailable" in str(reason))
+                    
+                    ctx_path.write_text(json.dumps(ctx_manifest), encoding="utf-8")
+                    aggregate["folds"][0]["fold_manifest"] = build_file_manifest(ctx_path)
+                    aggregate_path.write_text(json.dumps(aggregate), encoding="utf-8")
                     aggregate_path.unlink()
                     denied, reason = owner.validate_rolling_fold_fitted_checkpoint(**ctx_args)
                     check_true("ssot_missing_published_context_binding_fail_closed",
