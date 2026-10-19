@@ -3640,8 +3640,14 @@ def _run_continuous_pit_profile(
         "--seed", str(settings.seed),
     ]
     if not force_rebuild:
+        # A standard Rolling publication uses an output-dir override too; PIT
+        # still needs to inspect the matching *standard Forward* FIT candidate
+        # before it can train an otherwise missing fold. A stale Forward report
+        # must not silently cause a duplicate same-cutoff optimizer run.
+        forward_model_dir, _forward_report_dir = _forward_publication_paths(settings)
         build_args.extend([
             "--checkpoint-cache-root", str(BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT),
+            "--forward-fit-candidate-model-dir", str(forward_model_dir),
         ])
         _append_pit_forward_checkpoint_import_args(build_args, forward_checkpoint_source)
     if selected_mode.fold_anchor_date is not None:
@@ -4558,32 +4564,39 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
         display_rows.append((str(model_id), str(profile_name), action, reason or "READY"))
         planned.append((str(model_id), settings, contract, payload, reason))
 
-    # All-model, read-only provenance preflight precedes ANY repair, FIT build
-    # or comparison publication. The FIT service classifies only the historical
-    # source gap it can safely fix with an authorized canonical rebuild; it
-    # never promotes an unproven historical checkpoint to REUSE.
+    # Resolve all-model FIT provenance BEFORE running any producer. A legacy
+    # source-attestation gap means the checkpoint needs verification, *not*
+    # a new optimizer run. Neither Forward nor Rolling comparison authorizes
+    # changing a scientific FIT just because an evaluation/report is stale.
     missing_profiles = tuple(
         (model_id, str(settings.experiment_profile))
         for model_id, settings, contract, payload, _reason in planned
-        # The repair is a *Forward* missing-FIT dependency. Rolling's
-        # checkpoint may already be valid when only its Audit/SOP needs
-        # refreshing; never refit that checkpoint to repair a report.
+        # A valid Rolling source can refresh its Audit without fitting; only
+        # absent Forward evidence needs the cross-mode provenance preflight.
         if not rolling and contract is None
     )
     repairs, repair_blockers = plan_fit_origin_repairs(
         project_root=PROJECT_ROOT, model_profiles=missing_profiles,
     )
-    repair_ids = {item.model_id for item in repairs}
+    unverified_ids = {item.model_id for item in repairs}
+    fit_blocker_reason = {item.model_id: item.reason for item in repair_blockers}
     display_rows = [
-        (model_id, profile, "REBUILD FIT" if model_id in repair_ids and action != "BLOCKED" else action,
-         "Unproven historical FIT origin; build one canonical Forward FIT (no Rolling refit)"
-         if model_id in repair_ids and action != "BLOCKED" else reason)
+        (model_id, profile,
+         "BLOCKED" if model_id in unverified_ids or model_id in fit_blocker_reason else action,
+         "Historical FIT origin unverified; preserve Rolling/Forward checkpoints, do not refit"
+         if model_id in unverified_ids else fit_blocker_reason.get(model_id, reason))
         for model_id, profile, action, reason in display_rows
     ]
     mode_label = "Rolling OOS" if rolling else "Forward OOS"
     print("\n" + render_title(f"{mode_label} 模型比較"))
     _print_model_action_status(display_rows)
-    if blocked_model_ids or repair_blockers:
+    if blocked_model_ids or repair_blockers or repairs:
+        for candidate in repairs:
+            print(
+                f"[FIT BLOCKED] {candidate.model_id}: published Rolling FIT "
+                "has no original external-context attestation; no training "
+                "or historical publication is changed by this comparison"
+            )
         for issue in repair_blockers:
             print(f"[FIT BLOCKED] {issue.model_id}: {issue.reason}")
         if blocked_model_ids:
@@ -4591,29 +4604,11 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
         print("全模型前置檢查未通過；不修改模型工件或正式比較報表。")
         return 2
 
-    # Same seven Research operations: execute the dependency plan in place.
-    # This delegated producer action is not a new research/selection workflow.
-    for repair in repairs:
-        print(f"[FIT REBUILD] {repair.model_id} | one Forward FIT; preserve historical Rolling")
-        try:
-            result = repair_missing_fit_origin_using_forward(
-                program_name, profile_name=repair.profile,
-                expected_previous_checkpoint_sha256=repair.previous_checkpoint_sha256,
-            )
-        except (OSError, RuntimeError, ValueError) as exc:
-            print(f"[FIT BLOCKED] {repair.model_id}: {exc}")
-            print("受控修復未通過；不發布本次模型比較結果。")
-            return 2
-        print(f"[FIT VERIFIED] {repair.model_id} | Forward SHA={result['repaired_checkpoint_sha256'][:16]}...")
-    if repairs:
-        invalidate_rolling_model_source_cache()
-        _clear_continuous_forward_reuse_caches()
-
     completed = []
     # Previewing the full suite does not freeze shared input lineage. Once a
     # Producer has run, refresh later models before using their old preview;
     # recheck preceding consumers before the one aggregate publication.
-    preceding_model_mutation = bool(repairs)
+    preceding_model_mutation = False
     affected_completed_models: set[int] = set()
     for model_id, settings, contract, payload, _reason in planned:
         if preceding_model_mutation:
@@ -4630,7 +4625,7 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
                     return 2
         # Persist the existing report action vocabulary; detailed FIT repair
         # remains an execution-plan status, not a new report schema value.
-        action = "BUILD/REFRESH" if str(model_id) in repair_ids else "REUSE"
+        action = "REUSE"
         if contract is None or payload is None:
             if rolling:
                 code = _run_continuous_rolling_mode_direct(program_name, settings, prompt_for_build=False)
@@ -4854,7 +4849,13 @@ def _build_forward_robustness_seed(
         "--research-output-dir", str(research_dir),
     ]
     if not force_rebuild:
-        args.append("--reuse-fitted-model")
+        rolling_pit_dir, _rolling_report = _model_robustness_dirs(
+            settings, seed=seed, rolling=True,
+        )
+        args.extend([
+            "--reuse-fitted-model",
+            "--rolling-folds-root", str(Path(rolling_pit_dir).resolve() / "folds"),
+        ])
 
     def _run():
         return int(_run_command(
@@ -4938,6 +4939,9 @@ def _build_rolling_robustness_seed(
         "--inner-validation-months", str(int(settings.point_in_time_inner_validation_months)),
         "--seed", str(int(seed)),
         "--point-in-time-dir-override", str(pit_dir),
+        "--forward-fit-candidate-model-dir", str(_model_robustness_dirs(
+            settings, seed=seed, rolling=False,
+        )[0]),
         "--no-resume" if force_rebuild else ("--resume" if settings.point_in_time_resume else "--no-resume"),
     ]
     if not force_rebuild:

@@ -1752,6 +1752,7 @@ def resolve_compatible_rolling_first_fold(
     torch_module,
     project_root: Path,
     rolling_fold_proof_factory,
+    rolling_folds_root: Path | None = None,
 ) -> tuple[FittedModelContract | None, str]:
     """Validate an existing Rolling first-fold FIT for Forward OOS, without using its scores.
 
@@ -1797,10 +1798,17 @@ def resolve_compatible_rolling_first_fold(
     if mismatched:
         return None, "Forward/Rolling fitting settings differ: " + ", ".join(mismatched)
 
-    folds_root = resolve_rolling_fitted_folds_root(
-        project_root=Path(project_root), filter_id=str(forward_args.filter_id),
-        model_architecture=str(forward_args.model_architecture),
-        experiment_profile=str(forward_args.experiment_profile),
+    # The same FIT identity is valid in standard, isolated robustness, and
+    # other authorized evaluations. Only the location of the *published*
+    # Rolling evidence changes. The proof, sample membership and SHA rules do not.
+    folds_root = (
+        Path(rolling_folds_root).resolve()
+        if rolling_folds_root is not None else
+        resolve_rolling_fitted_folds_root(
+            project_root=Path(project_root), filter_id=str(forward_args.filter_id),
+            model_architecture=str(forward_args.model_architecture),
+            experiment_profile=str(forward_args.experiment_profile),
+        )
     )
     if not folds_root.is_dir():
         return None, "canonical Rolling folds directory missing"
@@ -1871,8 +1879,57 @@ def resolve_compatible_rolling_first_fold(
         verified.append(contract)
 
     if not verified:
-        return None, "; ".join(ineligible[:5]) or "no matching Rolling fitted identity"
+        # A published FIT at the SAME cutoff must not silently trigger a
+        # replacement optimizer run merely because its legacy provenance is
+        # incomplete. A genuinely missing Fold remains eligible for BUILD.
+        # An incompatible Fold requires an explicit fitting decision and a
+        # separate scientific lineage, never a report-refresh side effect.
+        return None, (
+            "UNVERIFIED_ROLLING_FIT: " + "; ".join(ineligible[:5])
+            if ineligible else "no matching Rolling fitted identity"
+        )
     return select_unique_fitted_contract(verified), "verified same fitting identity with Rolling first fold"
+
+
+def unresolved_forward_fit_candidate_issue(
+    *, model_dir: Path, fold_contract: Mapping[str, Any],
+    potentially_same_cutoff: bool = False,
+) -> str | None:
+    """Fail-closed witness for an unverified Forward FIT before PIT may refit.
+
+    Called ONLY after all PIT-native and verified Forward/cache reuse paths fail.
+    This is a candidate-existence guard, not a substitute for full FIT identity
+    verification: unknown or legacy metadata never attests a checkpoint.
+    """
+    directory = Path(model_dir)
+    model = directory / DEFAULT_MODEL_FILENAME
+    if not model.is_file():
+        return None
+    manifest_path = directory / "manifest.json"
+    if not manifest_path.is_file():
+        return (
+            "published Forward checkpoint has no readable fitting manifest"
+            if potentially_same_cutoff else None
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError) as exc:
+        return (
+            "published Forward fitting manifest cannot be verified: " + type(exc).__name__
+            if potentially_same_cutoff else None
+        )
+    if not isinstance(manifest, dict):
+        return "published Forward fitting manifest is not a mapping" if potentially_same_cutoff else None
+    for field in ("filter_id", "model_architecture", "experiment_profile"):
+        if field in manifest and manifest[field] != fold_contract.get(field):
+            return None  # A different declared scientific model, not this fold's FIT.
+    forward_cutoff = str(manifest.get("model_information_cutoff") or "")
+    fold_cutoff = str(fold_contract.get("model_information_cutoff") or "")
+    if forward_cutoff and fold_cutoff and forward_cutoff != fold_cutoff:
+        return None
+    if not forward_cutoff and not potentially_same_cutoff:
+        return None  # A legacy Forward FIT cannot match a later Rolling fold by location alone.
+    return "published Forward FIT may match this fold but was not verified for checkpoint reuse"
 
 
 @dataclass(frozen=True)
@@ -1891,6 +1948,7 @@ def resolve_forward_fitted_checkpoint(
     expected_identity: Mapping[str, Any], project_root: Path,
     bundle, forward_split, forward_args, forward_plan, torch_module,
     rolling_fold_proof_factory,
+    rolling_folds_root: Path | None = None,
 ) -> ForwardFittedResolution:
     """FIT owner resolves all legitimate sources before any Forward trainer can build.
 
@@ -1914,17 +1972,19 @@ def resolve_forward_fitted_checkpoint(
         forward_args=forward_args, forward_plan=forward_plan,
         torch_module=torch_module, project_root=project_root,
         rolling_fold_proof_factory=rolling_fold_proof_factory,
+        rolling_folds_root=rolling_folds_root,
     )
     if rolling is None:
         reason = (
             f"Forward identity: {local_reason or 'unverified'}; "
             f"Rolling identity: {rolling_reason or 'unverified'}"
         )
-        if (Path(model_dir) / "model.pt").exists():
+        if ((Path(model_dir) / "model.pt").exists()
+            or str(rolling_reason).startswith("UNVERIFIED_ROLLING_FIT:")):
             raise RuntimeError(
-                "Existing Forward checkpoint is not reusable and no verified Rolling FIT "
-                "can replace it. The legacy model has NOT been overwritten; "
-                "automatic retraining during report refresh is blocked. " + reason
+                "A published FIT exists but cross-mode fitting identity is not verified. "
+                "Existing model publications are preserved; automatic retraining "
+                "during evaluation/report refresh is prohibited. " + reason
             )
         return ForwardFittedResolution(None, None, "FIT_REQUIRED", reason)
     loaded = load_model_from_fitted_checkpoint(
@@ -1978,6 +2038,7 @@ def load_model_from_fitted_checkpoint(torch, *, contract: FittedModelContract, b
 
 __all__ = [
     "resolve_forward_fitted_checkpoint",
+    "unresolved_forward_fit_candidate_issue",
     "probe_fitted_candidates",
     "resolve_rolling_fitted_folds_root",
     "select_unique_fitted_contract",

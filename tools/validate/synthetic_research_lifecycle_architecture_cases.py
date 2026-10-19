@@ -1607,6 +1607,7 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                    denied is None and "source_contract.source_data_inventory mismatch" in str(reason))
 
     # FIT owner, not Forward mode, handles native/rolling fallback and conflict.
+    import json
     with TemporaryDirectory() as td:
         model_dir = Path(td) / "model"
         model_dir.mkdir()
@@ -1650,6 +1651,47 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
             result = owner.resolve_forward_fitted_checkpoint(**kwargs)
         check("cross_mode_fit_reuse", "ROLLING_FIT", result.source)
         check("cross_mode_fit_loaded_without_refit", "model", result.preloaded_model)
+
+        # If the same-cutoff Rolling Fold exists but cannot supply a complete
+        # FIT witness, a missing Forward publication is NOT license to train.
+        with patch.object(owner, "load_reusable_fitted_model_contract", return_value=(None, "missing")), patch.object(
+            owner, "resolve_compatible_rolling_first_fold",
+            return_value=(None, "UNVERIFIED_ROLLING_FIT: missing original context"),
+        ):
+            try:
+                owner.resolve_forward_fitted_checkpoint(**kwargs)
+            except RuntimeError as exc:
+                guarded = "automatic retraining" in str(exc)
+            else:
+                guarded = False
+        check_true("cross_mode_forward_ambiguous_fold_never_retrains", guarded)
+
+        # Reverse direction: a published Forward checkpoint with this Fold's
+        # cutoff, but missing verified sidecars, must never be silently replaced
+        # by Rolling. Different PIT cutoffs and clearly different profiles may
+        # legitimately build independent folds.
+        fold = {"filter_id": "fixture", "model_architecture": "arch",
+                "experiment_profile": "profile", "model_information_cutoff": "2020-12-31"}
+        check_true("cross_mode_rolling_potential_first_fold_without_manifest_blocks",
+                   owner.unresolved_forward_fit_candidate_issue(
+                       model_dir=model_dir, fold_contract=fold,
+                       potentially_same_cutoff=True) is not None)
+        check("cross_mode_rolling_later_fold_does_not_infer_same_cutoff", None,
+              owner.unresolved_forward_fit_candidate_issue(
+                  model_dir=model_dir, fold_contract=fold,
+                  potentially_same_cutoff=False))
+        (model_dir / "manifest.json").write_text(json.dumps({
+            **fold, "model_information_cutoff": "2020-12-31",
+        }), encoding="utf-8")
+        check_true("cross_mode_rolling_matching_forward_requires_proof",
+                   owner.unresolved_forward_fit_candidate_issue(
+                       model_dir=model_dir, fold_contract=fold) is not None)
+        check("cross_mode_rolling_different_cutoff_is_not_same_fit", None,
+              owner.unresolved_forward_fit_candidate_issue(
+                  model_dir=model_dir, fold_contract={**fold, "model_information_cutoff": "2022-01-01"}))
+        check("cross_mode_rolling_other_profile_is_not_same_fit", None,
+              owner.unresolved_forward_fit_candidate_issue(
+                  model_dir=model_dir, fold_contract={**fold, "experiment_profile": "different"}))
 
     # Exercise the *migrated* resolver, not only mocked Forward policy calls.
     # PIT produces train/validation cohort facts; the FIT owner alone locates
@@ -1717,6 +1759,86 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                 missing_manifest_blocked = False
             check_true("migrated_fit_owner_blocks_corrupt_first_fold",
                        missing_manifest_blocked)
+
+    # Seed-isolated Forward and Rolling jobs must resolve the other mode's
+    # published FIT under the SAME seed, never the standard/non-seed root.
+    from services.research import breakout_quality_application as cross_mode_app
+    with TemporaryDirectory() as td:
+        seed_home = Path(td)
+        paths = {
+            True: (seed_home / "rolling_seed_101", seed_home / "rolling_reports"),
+            False: (seed_home / "forward_seed_101", seed_home / "forward_reports"),
+        }
+        seed_settings = SimpleNamespace(
+            filter_id="fixture", model_architecture="fixture_arch",
+            experiment_profile="fixture_profile", seed=101,
+            point_in_time_resume=True, point_in_time_inner_validation_months=24,
+            point_in_time_train_window_months=None,
+        )
+        def seed_paths(_settings, *, seed, rolling):
+            if int(seed) != 101:
+                raise AssertionError("wrong benchmark seed")
+            return paths[bool(rolling)]
+        with patch.object(cross_mode_app, "_model_robustness_dirs", side_effect=seed_paths), patch.object(
+            cross_mode_app, "_run_command", return_value=0,
+        ) as cli:
+            result = cross_mode_app._build_forward_robustness_seed(
+                "synthetic", seed_settings, seed=101,
+            )
+            forward_args = cli.call_args.args[1]
+        check_true("cross_mode_forward_robustness_uses_same_seed_rolling_folds",
+                   result == 0 and "--rolling-folds-root" in forward_args and
+                   forward_args[forward_args.index("--rolling-folds-root") + 1]
+                   == str((paths[True][0] / "folds").resolve()))
+        with patch.object(cross_mode_app, "_model_robustness_dirs", side_effect=seed_paths), patch.object(
+            cross_mode_app, "_rolling_robustness_score_core_ready", return_value=(False, "no score"),
+        ), patch.object(cross_mode_app, "_load_forward_robustness_seed", return_value=(None, None, "no report")), patch.object(
+            cross_mode_app, "_run_command", return_value=0,
+        ) as cli:
+            result = cross_mode_app._build_rolling_robustness_seed(
+                "synthetic", seed_settings, seed=101, inputs_prepared=True,
+            )
+            rolling_args = cli.call_args_list[0].args[1]
+        check_true("cross_mode_rolling_robustness_inspects_same_seed_forward_fit",
+                   result == 0 and "--forward-fit-candidate-model-dir" in rolling_args and
+                   rolling_args[rolling_args.index("--forward-fit-candidate-model-dir") + 1]
+                   == str(paths[False][0]))
+
+    # Standard Rolling uses a PIT directory override; it must still locate the
+    # matching canonical Forward candidate before permitting a new optimizer.
+    with TemporaryDirectory() as td:
+        standard_home = Path(td)
+        standard_settings = SimpleNamespace(
+            filter_id="fixture", model_architecture="fixture_arch",
+            experiment_profile="fixture_profile", seed=101,
+            point_in_time_resume=True, point_in_time_inner_validation_months=24,
+            point_in_time_train_window_months=None,
+        )
+        standard_mode = SimpleNamespace(
+            score_start_date="2021-01-01", score_end_date=None,
+            fold_months=12, fold_anchor_date=None, single_score_block=False,
+        )
+        candidate_dir = standard_home / "forward_fit"
+        pit_dir = standard_home / "rolling_pit_override"
+        with patch.object(cross_mode_app, "get_breakout_quality_workflow_settings",
+                          return_value=standard_settings), patch.object(
+            cross_mode_app, "_rolling_mode_point_in_time_dir", return_value=pit_dir,
+        ), patch.object(cross_mode_app, "_forward_publication_paths",
+                        return_value=(candidate_dir, standard_home / "forward_report")), patch.object(
+            cross_mode_app, "_prepare_continuous_research_inputs", return_value=0,
+        ), patch.object(cross_mode_app, "_run_command", return_value=1) as cli:
+            # Producer failure is deliberate: inspect the forwarded CLI flags
+            # without changing any real training / score / FIT artifacts.
+            result = cross_mode_app._run_continuous_pit_profile(
+                "synthetic", model_id="fixture", profile_name="fixture_profile",
+                mode=standard_mode,
+            )
+            standard_args = cli.call_args.args[1]
+        check_true("cross_mode_standard_rolling_override_inspects_forward_fit",
+                   result == 1 and "--point-in-time-dir-override" in standard_args
+                   and "--forward-fit-candidate-model-dir" in standard_args
+                   and standard_args[standard_args.index("--forward-fit-candidate-model-dir") + 1]
+                   == str(candidate_dir) and "--resume" in standard_args)
 
     # Snapshot caches must observe in-memory fault-injection source changes.
     # Their keys cannot be only a module filename, or tests would miss a
@@ -2289,15 +2411,17 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
             check_true("normal_research_refuses_missing_aggregate_binding",
                        not jobs and len(blockers) == 1)
 
-        # The standard Research Model Compare call owns the repair orchestration:
-        # no external CLI, new menu key, manual confirmation, or producer fork.
-        for case in ("commit", "block", "rollback"):
+        # A comparison is an evaluation consumer, never permission to replace
+        # existing historical weights because their original attestation is stale.
+        # Complete FIT evidence may be reused; unproven lineage must BLOCK before
+        # any publication mutation or training, regardless of profile identity.
+        for case in ("candidate", "block", "ready"):
             with TemporaryDirectory() as td:
                 project = Path(td)
                 statuses = []
                 report_written = []
                 repaired = []
-                state = {"ready": False}
+                state = {"ready": case == "ready"}
                 scenario_settings = SimpleNamespace(experiment_profile=profile)
                 candidate = FitOriginRepairCandidate(model_id, profile, "a" * 64)
                 def readiness(*_args, **_kwargs):
@@ -2323,7 +2447,7 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                     "_resolve_continuous_model_readiness": readiness,
                     "_collect_continuous_research_input_plan": lambda _settings: SimpleNamespace(blocked=False),
                     "plan_fit_origin_repairs": lambda **_kw: (
-                        (candidate,) if case != "block" else (),
+                        (candidate,) if case == "candidate" else (),
                         (FitOriginRepairBlocker(model_id, profile, "synthetic invalid source"),)
                         if case == "block" else (),
                     ),
@@ -2345,17 +2469,17 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                     result_code = app._run_configured_model_comparison(
                         "apps/research.py model", rolling=False,
                     )
-                if case == "commit":
-                    check_true("normal_research_compare_delegates_rebuild_before_report",
-                               result_code == 0 and repaired == [profile]
-                               and bool(report_written) and statuses[0][2] == "REBUILD FIT")
+                if case == "candidate":
+                    check_true("normal_research_unproven_fit_blocks_without_refitting",
+                               result_code == 2 and not repaired
+                               and not report_written and statuses[0][2] == "BLOCKED")
                 elif case == "block":
                     check_true("normal_research_preflight_blocks_before_all_mutations",
                                result_code == 2 and not repaired and not report_written)
                 else:
-                    check_true("normal_research_failed_rebuild_stops_before_report",
-                               result_code == 2 and repaired == [profile]
-                               and not report_written)
+                    check_true("normal_research_verified_fit_reuses_without_rebuilding",
+                               result_code == 0 and not repaired
+                               and bool(report_written) and statuses[0][2] == "REUSE")
 
     # Rolling report refresh is not a FIT-origin defect: the shared entry must
     # not start a GPU rebuild when its published SCORE is already valid.

@@ -75,6 +75,7 @@ from filters.breakout_quality.paths import (
     SELECTION_POINT_IN_TIME_SCORE_FILENAME,
     resolve_filter_point_in_time_dir,
     resolve_filter_model_output_dir,
+    resolve_filter_artifact_paths,
 )
 from filters.breakout_quality.torch_runtime import (
     add_torch_execution_cli_arguments,
@@ -106,6 +107,7 @@ from services.breakout_quality.fitted_model_artifacts import (
     validate_rolling_fold_fitted_checkpoint,
     select_unique_fitted_contract,
     resolve_rolling_fitted_folds_root,
+    unresolved_forward_fit_candidate_issue,
 )
 from services.breakout_quality.continuous_ranker_pipeline import (
     build_checkpoint_payload,
@@ -285,6 +287,11 @@ def parse_args(argv=None) -> argparse.Namespace:
             "可選的既有Forward model目錄；只在其canonical training evidence與目前fold fitting identity"
             "完全相容時，將原checkpoint位元組登錄至shared fitting cache供本fold重評score。"
         ),
+    )
+    parser.add_argument(
+        "--forward-fit-candidate-model-dir",
+        default=None,
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--checkpoint-import-report-path",
@@ -2438,6 +2445,43 @@ def _run_point_in_time_scores(
                     "checkpoint-only PIT重建無法完成；fold缺少可重用score/checkpoint或identity不相容: "
                     f"{fold['fold_id']}。請由canonical model-training service以resume模式補齊PIT fold。"
                 )
+            if bool(args.resume):
+                # Rebuild only a genuinely absent FIT. An existing fold/cache
+                # checkpoint whose contract failed validation is NOT an absent
+                # checkpoint and must never be overwritten by a report refresh.
+                unverified = [fold_dir / DEFAULT_MODEL_FILENAME]
+                if args.checkpoint_cache_root not in (None, ""):
+                    cache_entry = _checkpoint_cache_entry_dir(
+                        Path(str(args.checkpoint_cache_root)), fold_contract
+                    )
+                    unverified.append(cache_entry / DEFAULT_MODEL_FILENAME)
+                if any(path.is_file() for path in unverified):
+                    raise RuntimeError(
+                        "PIT FIT identity unverified: existing fold/shared-cache checkpoint "
+                        f"for {fold['fold_id']} cannot be reused; automatic refit is blocked"
+                    )
+                candidate_override = str(
+                    getattr(args, "forward_fit_candidate_model_dir", "") or ""
+                ).strip()
+                if candidate_override:
+                    forward_model_dir = Path(candidate_override)
+                elif str(getattr(args, "point_in_time_dir_override", "") or "").strip():
+                    forward_model_dir = None  # isolated scope needs explicit same-seed locator
+                else:
+                    forward_model_dir = resolve_filter_artifact_paths(
+                        PROJECT_ROOT, str(args.filter_id),
+                        str(args.model_architecture), str(args.experiment_profile),
+                    ).model_dir
+                if forward_model_dir is not None:
+                    issue = unresolved_forward_fit_candidate_issue(
+                        model_dir=Path(forward_model_dir), fold_contract=fold_contract,
+                        potentially_same_cutoff=(fold_index == 1),
+                    )
+                    if issue is not None:
+                        raise RuntimeError(
+                            f"PIT FIT identity unverified: {fold['fold_id']}: {issue}; "
+                            "automatic refit is blocked"
+                        )
             built_fold_count += 1
             fold_started = time.perf_counter()
             if compact_console:

@@ -1247,6 +1247,10 @@ def run(args) -> int:
         bundle=bundle, forward_split=split, forward_args=args,
         forward_plan=plan, torch_module=torch,
         rolling_fold_proof_factory=build_rolling_first_fold_fit_proof,
+        rolling_folds_root=(
+            Path(args.rolling_folds_root)
+            if getattr(args, "rolling_folds_root", None) else None
+        ),
     )
     # Engineering FIT provenance repair must never quietly run a second Forward
     # optimizer. It can only consume the already-verified Rolling first-fold FIT.
