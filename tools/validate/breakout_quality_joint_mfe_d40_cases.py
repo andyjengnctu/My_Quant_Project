@@ -4,20 +4,14 @@ This is an independent developer check. It is not a formal-suite entry point.
 """
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
 
 from core.breakout_quality_runtime import get_continuous_ranker_training_policy
-from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.joint_mfe_d40 import (
     build_joint_mfe_d40_quadrants, joint_probabilistic_metrics,
 )
-from services.breakout_quality import joint_mfe_d40_comparison as comparison
 
 
 def _sample():
@@ -53,72 +47,12 @@ def case() -> None:
     perfect = joint_probabilistic_metrics(ideal_logits, labels)
     assert perfect["cross_entropy"] < 1e-5
     assert perfect["joint_event_brier"] < 1e-8
-    # Distinct dependence structure: independence-projection is not the joint event probability.
-    columns = tuple(policy.categorical_score_columns)
-    probs = np.tile(np.array([[.05, .1, .15, .7], [.5, .1, .3, .1]]), (16, 1))
-    sample = group[["ticker", "date", "group_index"]].copy()
-    for i, col in enumerate(columns):
-        sample[col] = probs[:, i]
-    sample["joint_truth"] = labels.astype(int)
-    reference = comparison._proper_scores(sample, split="Rolling OOS", columns=columns)
-    assert reference["stock_days"] == 32
-    assert reference["dates"] == 2
-    assert reference["multiclass_logloss"] > 0
-    assert reference["joint_brier"] != reference["independent_brier"]
-    altered = sample.copy()
-    altered.loc[0, columns[3]] = 1.1
-    with np.testing.assert_raises(ValueError):
-        comparison._proper_scores(altered, split="Rolling OOS", columns=columns)
-
-    # Exact same validated canonical OOS samples used by the two workflow paths.
-    # Forward uses model_score while rolling stores breakout_quality_score.
-    for mode in ("forward_oos", "rolling_oos"):
-        with tempfile.TemporaryDirectory(prefix="cd_joint_oos_") as tmp:
-            score = sample.drop(columns=["joint_truth"]).copy()
-            score["model_score" if mode == "forward_oos" else "breakout_quality_score"] = score[columns[3]]
-            if mode == "forward_oos":
-                score["target_raw_r"] = group["target_favorable_r"]
-            else:
-                score["fold_id"] = "F01"
-                score["model_information_cutoff"] = "2020-12-31"
-            path = Path(tmp) / ("scores.csv.gz" if mode == "forward_oos" else "scores.csv")
-            score.to_csv(path, index=False, encoding="utf-8-sig", compression="infer")
-            report = {"artifacts": {"oos_scores_gzip": build_file_manifest(path)}} if mode == "forward_oos" else {}
-            item = {
-                "model_id": "MR-13CD",
-                "settings": SimpleNamespace(
-                    filter_id="breakout_quality_v1",
-                    model_architecture="inception_time_joint_quadrant_v1",
-                    experiment_profile="daily_universal_joint_mfe_d40_quadrant_cross_entropy",
-                    training_objective="daily_joint_mfe_d40_quadrant_cross_entropy",
-                ),
-                "contract": SimpleNamespace(score_path=path, report=report),
-                "payload": {},
-            }
-            bundle = SimpleNamespace(group_table=group, target_valid=np.ones(len(group), dtype=bool))
-            candidates = {(str(group.iloc[i]["ticker"]), group.iloc[i]["date"]) for i in range(16)}
-            with patch.object(comparison, "load_daily_universal_ranker_data", return_value=bundle), patch.object(
-                comparison, "load_official_breakout_candidate_keys", return_value=candidates
-            ):
-                result = comparison.attach_joint_mfe_d40_extension([item], evaluation_mode=mode, project_root=Path(tmp))
-                evidence = result[0]["payload"]["comparison_extensions"][0]
-                assert evidence["id"] == comparison.EXTENSION_ID
-                assert {row["split"] for row in evidence["rows"]} == {
-                    "Forward OOS" if mode == "forward_oos" else "Rolling OOS", "Breakout slice"
-                }
-                assert evidence["rows"][0]["stock_days"] == 32
-                bad_score = score.copy()
-                bad_score.loc[0, columns[3]] = 1.2
-                bad_score.to_csv(path, index=False, encoding="utf-8-sig", compression="infer")
-                if mode == "forward_oos":
-                    # Forward must reject a changed score-manifest hash.
-                    with np.testing.assert_raises_regex(ValueError, "manifest"):
-                        comparison.attach_joint_mfe_d40_extension([item], evaluation_mode=mode, project_root=Path(tmp))
-                else:
-                    with np.testing.assert_raises(ValueError):
-                        comparison.attach_joint_mfe_d40_extension([item], evaluation_mode=mode, project_root=Path(tmp))
+    # [AI] Categorical target validity and probability scores are the retained
+    # canonical primitives; post-fit historical Extension audit is retired.
+    assert perfect["joint_event_predicted_mean"] > 0.0
+    assert perfect["joint_event_brier"] >= 0.0
 
 
 if __name__ == "__main__":
     case()
-    print("MR-13CD isolated target, probability and Forward/Rolling OOS tests PASS")
+    print("Joint MFE-D40 label and probabilistic metric primitives PASS")

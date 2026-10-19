@@ -372,10 +372,6 @@ def _continuous_ranker_simple_report_payload(
 
 
 
-def _model_sop_section_title(section_id: str, *, suffix: str = "") -> str:
-    section = section_contract("model.standard_sop", section_id)
-    base = f"MODEL SOP | {section.number}. {section.title}"
-    return base + (f"｜{suffix}" if suffix else "")
 
 
 def _model_sop_view(payload: dict, *, include_legacy_extension_evidence: bool = False) -> dict:
@@ -1048,19 +1044,6 @@ def _robustness_specific_comparison_rows(views: list[dict]) -> list[dict]:
     return rows
 
 
-def _robustness_extension_capability_rows() -> list[dict]:
-    rows = []
-    for extension_id in comparison_extension_ids():
-        spec = extension_contract(extension_id)
-        aggregation = str(spec.robustness_aggregation)
-        rows.append({
-            "extension": spec.title,
-            "aggregation": (
-                "Arithmetic row mean" if aggregation == "row_mean" else "Single-seed only"
-            ),
-            "status": "AGGREGATED" if aggregation == "row_mean" else "NOT AGGREGATED",
-        })
-    return rows
 
 
 def _render_standard_model_comparison(models: list[dict], *, target: str) -> str:
@@ -3197,8 +3180,6 @@ def _rolling_publication_dir(settings, mode) -> Path:
     ).resolve()
 
 
-def _interactive_continuous_rolling_test(program_name: str, settings) -> int:
-    return _run_continuous_rolling_mode_direct(program_name, settings)
 
 
 

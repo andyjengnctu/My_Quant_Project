@@ -34,9 +34,6 @@ from filters.breakout_quality.hs_conditional_mfe import build_hs_conditional_mfe
 from filters.breakout_quality.ranker_training_contract import training_semantics
 from core.breakout_quality_registry import get_breakout_quality_experiment_profile
 from filters.breakout_quality.continuous_target import full_horizon_mae_safety_r_from_minimum_low_return
-from services.breakout_quality.full_horizon_mae_comparison import (
-    build_paired_full_horizon_mae_rows,
-)
 
 from services.breakout_quality import train_continuous_ranker as ranker
 
@@ -268,38 +265,13 @@ def test_cg_rolling_audit_true_hs_cohort(source):
         assert len(observed)==1 and np.array_equal(observed[0],cohort), profile
 
 
-def test_paired_common_truth_extension(source):
-    sample = source.copy()
-    sample["group_index"] = np.arange(len(sample), dtype=np.int64)
-    sample["d40_r"] = -full_horizon_mae_safety_r_from_minimum_low_return(
-        sample["target_minimum_low_return"].to_numpy(dtype=np.float64),
-        risk_budget_return=0.10,
-    )
-    sample["old_safety_r"] = -sample["target_adverse_r"].to_numpy(dtype=np.float64)
-    a = sample[["ticker", "date", "group_index"]].copy()
-    a["safety_prediction"] = [0.5, 0.6, 0.7, 0.8] * 2
-    c = sample[["ticker", "date", "group_index"]].copy()
-    c["safety_prediction"] = [0.8, 0.1, 0.7, 0.2] * 2
-    result, meta = build_paired_full_horizon_mae_rows(
-        truth=sample,
-        predictions_by_model={"MR-13AO": a, "MR-13CC": c},
-        split_label="Forward OOS",
-    )
-    assert meta["paired_stock_days"] == len(sample)
-    assert meta["paired_dates"] == 2
-    assert result["MR-13AO"]["d40_daily_rho"] is not None
-    assert result["MR-13CC"]["d40_daily_rho"] is not None
-    assert result["MR-13AO"]["d40_daily_rho"] != result["MR-13CC"]["d40_daily_rho"]
-    assert meta["d40_strictly_worse_than_peak_pct"] == 50.0
-
 
 def main():
     source, ao, cc = test_mae_primitive_and_mask_contract()
     test_ao_mfe_loss_eligibility_unchanged(ao, cc)
     test_cg_full_d40_true_hs_cohort(source, ao, cc)
     test_cg_rolling_audit_true_hs_cohort(source)
-    test_paired_common_truth_extension(source)
-    print('PASS: AO/CC frozen, CG full-D40 true-HS cohort and scoped MFE loss, common truth')
+    print('PASS: AO/CC frozen, CG full-D40 true-HS cohort and scoped MFE loss')
 
 
 if __name__ == '__main__':

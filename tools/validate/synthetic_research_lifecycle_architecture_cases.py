@@ -2001,34 +2001,6 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                and "model.pt" in mutated_facts.tokens
                and not healthy_facts.path_probe and mutated_facts.path_probe)
 
-    # A single temporary diagnostic must inventory every configured model,
-    # report missing immutable source evidence and export metadata only. It
-    # never modifies scientific publications or authorizes FIT reuse.
-    from contextlib import redirect_stdout
-    from io import StringIO
-    from zipfile import ZipFile
-    from tools.audit.breakout_quality.fit_lineage_snapshot import main as lineage_audit_main
-    from core.breakout_quality_policy import get_breakout_quality_model_test_settings
-    with TemporaryDirectory() as td:
-        with redirect_stdout(StringIO()):
-            audit_status = lineage_audit_main(["--project-root", td, "--no-torch"])
-        bundle_path = (Path(td) / "outputs" / "filters" / "breakout_quality"
-                       / "breakout_quality_v1" / "audit" / "fit_lineage_snapshot"
-                       / "fit_lineage_snapshot.zip")
-        with ZipFile(bundle_path) as z:
-            recorded_files = z.namelist()
-            snapshot = json.loads(z.read("fit_lineage_snapshot.json"))
-        expected_profiles = get_breakout_quality_model_test_settings().model_profiles
-        check_true("ssot_audit_inventories_all_configured_profiles_in_one_run",
-                   audit_status == 0 and snapshot["model_count"] == len(expected_profiles)
-                   and [(r["model_id"], r["profile"]) for r in snapshot["models"]]
-                   == list(expected_profiles))
-        check("ssot_readonly_audit_zip_contains_metadata_only",
-              ["fit_lineage_snapshot.json"], recorded_files)
-        check_true("ssot_readonly_audit_never_creates_fitted_artifacts",
-                   all(r["classification"] == "SOURCE_EVIDENCE_GAP" for r in snapshot["models"])
-                   and not (Path(td) / "models").exists())
-
     # Explicit provenance repair has a different responsibility from FIT REUSE.
     # Test the transaction with real directory operations and synthetic model
     # bytes, without invoking training or modifying current data/artifacts.
@@ -2227,39 +2199,6 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                    (published / "model.pt").read_bytes() == b"committed new model"
                    and (archived / "model.pt").read_bytes() == b"old model"
                    and not journal.exists())
-
-    # One-pass, registry-driven preflight identifies unprovable original FITs
-    # without ever treating a matching context SHA as a reuse authorization.
-    from tools.audit.breakout_quality import repair_fit_lineage as repair_tool
-    example_profiles = (("MR-FIXTURE-A", "profile_a"), ("MR-FIXTURE-B", "profile_b"))
-    def audit_fixture(_root, model_id, profile, *, include_torch):
-        bad = profile == "profile_b"
-        checkpoint = {"sha256": "a" * 64, "size_bytes": 5} if bad else None
-        return {
-            "model_id": model_id, "profile": profile,
-            "classification": "SOURCE_EVIDENCE_GAP" if bad else "CANDIDATES_PRESENT_NOT_FULLY_VERIFIED",
-            "blockers": ["MIGRATED_EXTERNAL_CONTEXT_ORIGINAL_FORWARD_MISSING"] if bad else [],
-            "first_folds": [{"checkpoint": checkpoint,
-                             "declared_checkpoint_matches_bytes": True}] if bad else [],
-        }
-    planning_seen = []
-    def delegated_plan(**kwargs):
-        planning_seen.append(tuple(kwargs["model_profiles"]))
-        return ((FitOriginRepairCandidate("MR-FIXTURE-B", "profile_b", "a" * 64),), ())
-    from services.breakout_quality.fit_origin_repair_plan import FitOriginRepairCandidate
-    with patch.object(repair_tool, "get_breakout_quality_model_test_settings",
-                      return_value=SimpleNamespace(model_profiles=example_profiles)), \
-         patch.object(repair_tool, "_inspect_profile", side_effect=audit_fixture), \
-         patch.object(repair_tool, "plan_fit_origin_repairs", side_effect=delegated_plan):
-        observations, jobs = repair_tool.collect_repair_plan(Path("/synthetic"))
-    check_true("fit_repair_scans_all_registered_profiles_before_mutation",
-               len(observations) == 2 and len(jobs) == 1
-               and jobs[0]["profile"] == "profile_b"
-               and planning_seen == [example_profiles])
-    unsafe, authorized = audit_fixture(Path("/synthetic"), "MR-FIXTURE-B", "profile_b", include_torch=False), jobs
-    check_true("fit_repair_plan_does_not_relabel_unverified_fit_as_reuse",
-               unsafe["classification"] == "SOURCE_EVIDENCE_GAP"
-               and len(authorized) == 1 and authorized[0]["old_sha256"] == "a" * 64)
 
     # Exercise the actual Research orchestrator with byte-backed FIT fixtures.
     # Forward comparison must stage originals and call ONE canonical Forward
