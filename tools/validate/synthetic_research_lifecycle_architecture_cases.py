@@ -1998,8 +1998,8 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                and len(authorized) == 1 and authorized[0]["old_sha256"] == "a" * 64)
 
     # Exercise the actual Research orchestrator with byte-backed FIT fixtures.
-    # It must stage originals, call canonical Rolling first, *require* Forward
-    # checkpoint REUSE and roll back every publication on a bad Forward FIT.
+    # Forward comparison must stage originals and call ONE canonical Forward
+    # trainer. No Rolling fold rebuild is permitted for a Forward-only repair.
     from contextlib import ExitStack
     from services.research import breakout_quality_application as app
     for invalid_forward in (False, True):
@@ -2031,38 +2031,26 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                 model_architecture="fixture_arch", experiment_profile="profile_fixture",
             )
             stages = []
-            def canonical_rolling(*_args, **kwargs):
-                check_true("repair_invokes_native_rolling_fresh_without_forward_import_"
+            def canonical_rolling(*_args, **_kwargs):
+                raise AssertionError("Forward comparison must not train Rolling folds")
+            def forward_evaluation(*_args, **kwargs):
+                check_true("forward_repair_builds_only_one_fresh_forward_fit_"
                            + str(invalid_forward),
                            kwargs["force_rebuild"] is True
-                           and kwargs["forward_checkpoint_source"] is None
-                           and not (mod / "model.pt").exists())
-                fold.mkdir(parents=True)
-                native_model = fold / "model.pt"
-                native_model.write_bytes(b"new native Rolling checkpoint")
-                new_record = build_file_manifest(native_model)
-                (fold / "manifest.json").write_text(json.dumps({
-                    "experiment_profile": "profile_fixture",
-                    "planned_periods": {"score_start": "2021-01-01"},
-                    "artifacts": {"checkpoint": new_record},
-                    "fitting_origin": {"kind": "rolling_native", "checkpoint": new_record},
-                }))
-                stages.append("rolling")
-                return 0
-            def forward_evaluation(*_args, **kwargs):
-                check_true("repair_requires_verified_forward_fitted_reuse_"
-                           + str(invalid_forward),
-                           kwargs["require_rolling_fit_reuse"] is True
-                           and stages == ["rolling"])
+                           and kwargs["prompt_for_build"] is False
+                           and "require_rolling_fit_reuse" not in kwargs
+                           and not (mod / "model.pt").exists()
+                           and not rolling.exists()
+                           and not legacy_cache.exists())
                 mod.mkdir(parents=True, exist_ok=True)
-                (mod / "model.pt").write_bytes(
-                    b"unexpected new Forward training" if invalid_forward
-                    else (fold / "model.pt").read_bytes()
-                )
+                (mod / "model.pt").write_bytes(b"one newly trained Forward FIT")
+                (mod / "manifest.json").write_text(json.dumps({
+                    "model": build_file_manifest(mod / "model.pt"), "selected_epoch": 1,
+                }), encoding="utf-8")
                 out.mkdir(parents=True, exist_ok=True)
                 (out / "report.json").write_text("new Forward report")
                 stages.append("forward")
-                return 0, object(), "BUILD/REFRESH"
+                return 0, object(), "REUSE" if invalid_forward else "FORCE_REBUILD"
             mock_values = {
                 "PROJECT_ROOT": root,
                 "get_breakout_quality_model_test_settings": lambda: SimpleNamespace(
@@ -2081,18 +2069,14 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                 "_clear_continuous_forward_reuse_caches": lambda: None,
                 "_ensure_continuous_forward_model_report": forward_evaluation,
                 "resolve_filter_artifact_paths": lambda *_args, **_kw: SimpleNamespace(
-                    model_path=mod / "model.pt"),
+                    model_path=mod / "model.pt", manifest_path=mod / "manifest.json"),
                 "_load_reusable_continuous_forward_contract": lambda _settings: (object(), ""),
             }
             with ExitStack() as stack:
-                stack.enter_context(patch(
-                    "services.breakout_quality.point_in_time_scores.publish_verified_native_first_fold_cache",
-                    return_value="fixture-native-fitkey",
-                ))
                 for attr, value in mock_values.items():
                     stack.enter_context(patch.object(app, attr, value))
                 try:
-                    result = app.repair_missing_fit_origin_from_canonical_rolling(
+                    result = app.repair_missing_fit_origin_using_forward(
                         "apps/research.py", profile_name="profile_fixture",
                         expected_previous_checkpoint_sha256=str(old_record["sha256"]),
                     )
@@ -2103,7 +2087,7 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                     failure = False
             if invalid_forward:
                 check_true("repair_rolls_back_after_incompatible_forward_fit",
-                           failure and stages == ["rolling", "forward"]
+                           failure and stages == ["forward"]
                            and (fold / "model.pt").read_bytes() == b"old unverified source checkpoint"
                            and (mod / "model.pt").read_bytes() == b"historical Forward checkpoint"
                            and (out / "report.json").read_text() == "historical report"
@@ -2114,17 +2098,107 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                     "historical_fit_repairs/profile/*/original/point_in_time/folds/*/model.pt"))
                 stale_cache_archives = sorted(legacy_cache.parent.glob(
                     "historical_fit_repairs/" + legacy_cache.name + "/*/original/model.pt"))
-                check_true("repair_commits_single_native_rolling_fit_and_historical_archive",
-                           not failure and stages == ["rolling", "forward"]
+                check_true("repair_commits_one_forward_fit_and_preserves_old_rolling_history",
+                           not failure and stages == ["forward"]
                            and result is not None
                            and result["repaired_checkpoint_sha256"]
                            == build_file_manifest(mod / "model.pt")["sha256"]
                            and len(preserved) == 1
                            and preserved[0].read_bytes() == b"old unverified source checkpoint"
                            and not legacy_cache.exists()
+                           and not rolling.exists()  # old six-fold OOS is historical, not READY
                            and len(stale_cache_archives) == 1
                            and stale_cache_archives[0].read_bytes()
                            == b"old unverified source checkpoint")
+
+    # New Forward evidence is verified by the FIT owner, not by a filename
+    # probe in the Research orchestration layer.
+    from services.breakout_quality.fitted_model_artifacts import (
+        verified_new_forward_fit_repair_checkpoint,
+    )
+    with TemporaryDirectory() as td:
+        d = Path(td)
+        model_path, manifest_path = d / "model.pt", d / "manifest.json"
+        model_path.write_bytes(b"new native Forward checkpoint")
+        current_record = build_file_manifest(model_path)
+        manifest_path.write_text(json.dumps({
+            "selected_epoch": 1, "model": current_record,
+        }), encoding="utf-8")
+        check_true("new_forward_fit_repair_uses_canonical_manifest_checkpoint_sha",
+                   verified_new_forward_fit_repair_checkpoint(
+                       model_path=model_path, manifest_path=manifest_path,
+                   ) == current_record["sha256"])
+        model_path.write_bytes(b"tampered model weights")
+        rejected = False
+        try:
+            verified_new_forward_fit_repair_checkpoint(
+                model_path=model_path, manifest_path=manifest_path,
+            )
+        except RuntimeError:
+            rejected = True
+        check_true("new_forward_fit_repair_rejects_corrupted_checkpoint_after_training", rejected)
+        model_path.write_bytes(b"new native Forward checkpoint")
+        manifest_path.write_text(json.dumps({
+            "selected_epoch": 0, "model": current_record,
+        }), encoding="utf-8")
+        rejected = False
+        try:
+            verified_new_forward_fit_repair_checkpoint(
+                model_path=model_path, manifest_path=manifest_path,
+            )
+        except RuntimeError:
+            rejected = True
+        check_true("new_forward_fit_repair_rejects_missing_epoch_evidence", rejected)
+
+    # A Ctrl+C/terminated process must not create a manual --recover prerequisite.
+    from services.breakout_quality.fit_repair_transaction import (
+        fit_repair_journal_path, _fit_repair_lock,
+    )
+    with TemporaryDirectory() as td:
+        root = Path(td)
+        from services.research import breakout_quality_application as app
+        model_root = root / "models" / "fixture_profile"
+        model_root.mkdir(parents=True)
+        (model_root / "model.pt").write_bytes(b"new uncommitted FIT")
+        pending = model_root.with_name(".fixture_profile.fit_repair_pending_aborted")
+        pending.mkdir()
+        (pending / "model.pt").write_bytes(b"original FIT")
+        journal = fit_repair_journal_path(
+            project_root=root, filter_id="test_filter", profile="fixture_profile",
+        )
+        journal.parent.mkdir(parents=True)
+        journal.write_text(json.dumps({
+            "schema": "fit_repair_transaction_v1", "state": "in_progress",
+            "sources": [{"source": str(model_root), "hold": str(pending),
+                         "archive": str(model_root.parent / "historical_fit_repairs"
+                                        / model_root.name / "aborted" / "original"),
+                         "existed": True}],
+        }), encoding="utf-8")
+        test_settings = SimpleNamespace(filter_id="test_filter")
+        with patch.object(app, "PROJECT_ROOT", root), \
+             patch.object(app, "get_breakout_quality_workflow_settings", return_value=test_settings), \
+             patch.object(app, "invalidate_rolling_model_source_cache", lambda: None), \
+             patch.object(app, "_clear_continuous_forward_reuse_caches", lambda: None):
+            count = app._recover_pending_model_fit_repairs((("TEST", "fixture_profile"),))
+        check_true("normal_research_auto_recovers_abandoned_fit_publications",
+                   count == 1 and not journal.exists() and not pending.exists()
+                   and (model_root / "model.pt").read_bytes() == b"original FIT")
+        empty_journal = journal
+        empty_journal.touch()
+        outcome = recover_incomplete_fit_repair(journal_path=empty_journal, project_root=root)
+        check_true("normal_research_clears_interrupted_empty_transaction_marker",
+                   outcome == "EMPTY_JOURNAL_CLEARED" and not empty_journal.exists())
+        # A second process may not reclaim a live staged FIT even if the
+        # journal exists. The same cross-platform kernel lock guards both.
+        journal.write_text("{}", encoding="utf-8")
+        lock_blocked = False
+        with _fit_repair_lock(journal):
+            try:
+                recover_incomplete_fit_repair(journal_path=journal, project_root=root)
+            except RuntimeError as exc:
+                lock_blocked = "still active" in str(exc)
+        check_true("fit_recovery_does_not_touch_live_repair_transaction",
+                   lock_blocked and journal.read_text(encoding="utf-8") == "{}")
 
     # Shared FIT-origin preflight is a formal Research dependency capability,
     # not a manual audit command or an MR identity switch.
@@ -2253,7 +2327,8 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                         (FitOriginRepairBlocker(model_id, profile, "synthetic invalid source"),)
                         if case == "block" else (),
                     ),
-                    "repair_missing_fit_origin_from_canonical_rolling": repair,
+                    "repair_missing_fit_origin_using_forward": repair,
+                    "_recover_pending_model_fit_repairs": lambda _models: 0,
                     "invalidate_rolling_model_source_cache": lambda: None,
                     "_clear_continuous_forward_reuse_caches": lambda: None,
                     "_print_model_action_status": lambda rows: statuses.extend(rows),
@@ -3470,6 +3545,7 @@ def validate_research_model_readiness_architecture_case(_base_params):
             patch.object(model_app, "get_breakout_quality_model_test_settings",
                          return_value=SimpleNamespace(model_profiles=profiles)),
             patch.object(model_app, "get_breakout_quality_workflow_settings", side_effect=workflow),
+            patch.object(model_app, "_recover_pending_model_fit_repairs", return_value=0),
             patch.object(model_app, "get_breakout_quality_rolling_test_mode", return_value=SimpleNamespace()),
             patch.object(model_app, "_resolve_continuous_model_readiness", side_effect=observe),
             patch.object(model_app, "_collect_continuous_research_input_plan", side_effect=inputs),

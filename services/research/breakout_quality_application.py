@@ -131,6 +131,9 @@ from services.breakout_quality.fitted_model_artifacts import (
     pit_fold_fitting_settings_issues,
 )
 from services.breakout_quality.fit_origin_repair_plan import plan_fit_origin_repairs
+from services.breakout_quality.fit_repair_transaction import (
+    fit_repair_journal_path, preserved_fit_publications, recover_incomplete_fit_repair,
+)
 from services.research.strategy_compare_training import (
     run_strategy_compare_training_unit,
     validate_strategy_compare_training_artifacts,
@@ -3700,32 +3703,27 @@ def _run_continuous_pit_profile(
 
 
 
-def repair_missing_fit_origin_from_canonical_rolling(
+def repair_missing_fit_origin_using_forward(
     program_name: str, *, profile_name: str, expected_previous_checkpoint_sha256: str,
 ) -> dict[str, str]:
-    """Canonical repair action dispatched from Research's shared dependency plan.
+    """Repair a missing historical FIT origin with ONE new canonical Forward FIT.
 
-    Caller must first do an all-profile read-only provenance preflight and
-    select *only* missing-origin profiles. Canonical Rolling trains the single
-    new FIT; Forward can only consume its validated first fold. Existing
-    publications are staged before producer mutation, then archived on commit
-    or restored on any exception. This does not re-attest old weights.
+    The old Rolling six-fold publication and same-FitKey cache are quarantined
+    as historical evidence. No Rolling evaluation, fold 2..N fitting, or
+    historical checkpoint re-attestation occurs during Forward comparison.
+    A later Rolling evaluation may import the newly verified Forward FIT via
+    its existing canonical Forward-to-PIT fitting resolver.
     """
-    from services.breakout_quality.fit_repair_transaction import preserved_fit_publications
     from services.breakout_quality.fitted_model_artifacts import (
-        verify_fit_repair_previous_checkpoint, verify_fit_repair_rebuilt_checkpoint,
-        verified_fit_repair_legacy_cache_entry,
+        verify_fit_repair_previous_checkpoint, verified_fit_repair_legacy_cache_entry,
+        verified_new_forward_fit_repair_checkpoint,
     )
 
-    allowed_profiles = {
-        str(profile) for _model_id, profile
-        in get_breakout_quality_model_test_settings().model_profiles
-    }
-    if str(profile_name) not in allowed_profiles:
+    permitted = {str(profile) for _, profile
+                 in get_breakout_quality_model_test_settings().model_profiles}
+    if str(profile_name) not in permitted:
         raise ValueError("FIT repair requires a configured Model Compare/Test profile")
     settings = get_breakout_quality_workflow_settings(experiment_profile=str(profile_name))
-    if not settings.rolling_authorized:
-        raise RuntimeError("FIT repair requires current Rolling scientific authorization")
     model_id = _model_display_id(str(profile_name))
     mode = get_breakout_quality_rolling_test_mode("rolling")
     model_dir, output_dir = _forward_publication_paths(settings)
@@ -3735,97 +3733,81 @@ def repair_missing_fit_origin_from_canonical_rolling(
         expected_profile=str(profile_name),
         expected_checkpoint_sha256=str(expected_previous_checkpoint_sha256),
     )
-    # Stale shared FIT cache is a second physical publication of the same
-    # unverified legacy weight. Stage that exact FitKey transactionally; all
-    # unrelated profile/FitKey cache entries remain untouched.
-    old_cache_entry = verified_fit_repair_legacy_cache_entry(
+    old_cache = verified_fit_repair_legacy_cache_entry(
         rolling_dir=pit_dir, score_start=str(mode.score_start_date),
         expected_profile=str(profile_name),
         checkpoint_cache_root=(PROJECT_ROOT / BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT),
     )
-
     upstream = _collect_continuous_research_input_plan(settings)
     if upstream.blocked:
         raise RuntimeError("FIT repair scientific/data dependency is BLOCKED")
-    if any(action.action != "REUSE" for action in upstream.actions):
-        # Dependencies must be prepared by their canonical producers, not by
-        # the FIT repair service. No old model publication is staged yet.
-        rc = _prepare_continuous_research_inputs(program_name, settings)
-        if int(rc) != 0:
+    if any(item.action != "REUSE" for item in upstream.actions):
+        code = _prepare_continuous_research_inputs(program_name, settings)
+        if int(code) != 0:
             raise RuntimeError("FIT repair upstream preparation failed")
         upstream = _collect_continuous_research_input_plan(settings)
-        if upstream.blocked or any(action.action != "REUSE" for action in upstream.actions):
-            raise RuntimeError("FIT repair upstream identity not READY after canonical producer")
-    # Validate all configurable paths before staging anything. If the Rolling
-    # namespace is not nested under either canonical profile publication root,
-    # it participates independently in the same rollback transaction.
-    journal = (PROJECT_ROOT / "outputs" / "filters" / "breakout_quality"
-               / str(settings.filter_id) / "audit" / "fit_repair"
-               / (str(profile_name) + ".in_progress.json"))
-    result: dict[str, str] = {}
+        if upstream.blocked or any(item.action != "REUSE" for item in upstream.actions):
+            raise RuntimeError("FIT repair upstream identity not READY")
+
+    journal = fit_repair_journal_path(
+        project_root=PROJECT_ROOT, filter_id=str(settings.filter_id), profile=str(profile_name),
+    )
     with preserved_fit_publications(
         project_root=PROJECT_ROOT,
-        publication_roots=(model_dir, output_dir, pit_dir, old_cache_entry),
-        journal_path=journal,
-        repair_identity=str(profile_name),
+        publication_roots=(model_dir, output_dir, pit_dir, old_cache),
+        journal_path=journal, repair_identity=str(profile_name),
     ):
-        # Explicit force-rebuild is delegated to PIT/Model canonical producers.
-        # The PIT producer receives a fresh temporary cache, so it cannot
-        # import the historical unverified checkpoint into the replacement.
-        rc = _run_continuous_pit_profile(
-            program_name, model_id=model_id, profile_name=str(profile_name),
-            mode=mode, forward_checkpoint_source=None, force_rebuild=True,
-        )
-        if int(rc) != 0:
-            raise RuntimeError(f"canonical Rolling FIT rebuild failed: returncode={int(rc)}")
-        invalidate_rolling_model_source_cache()
-        rolling_contract, rolling_payload, reason = _load_reusable_rolling_standard_report(
-            settings, mode,
-        )
-        if rolling_contract is None or rolling_payload is None:
-            raise RuntimeError(f"Rolling rebuilding succeeded without complete SOP: {reason}")
         _clear_continuous_forward_reuse_caches()
-        code, forward_contract, action = _ensure_continuous_forward_model_report(
-            program_name, model_id=model_id, settings=settings, prompt_for_build=False,
-            require_rolling_fit_reuse=True,
+        # The existing Forward trainer owns sample selection, fitting, checkpoint
+        # serialization and OOS reporting. `force_rebuild=True` suppresses reuse
+        # of the invalid historical FIT; no Rolling Producer is called.
+        code, new_contract, action = _ensure_continuous_forward_model_report(
+            program_name, model_id=model_id, settings=settings,
+            prompt_for_build=False, force_rebuild=True,
         )
-        if int(code) != 0 or forward_contract is None:
-            raise RuntimeError("Forward cannot reuse the rebuilt Rolling FIT")
-        # A new model is not a successfully repaired common FIT unless the
-        # canonical resolver actually selected Rolling first-fold checkpoint.
+        if int(code) != 0 or new_contract is None or action != "FORCE_REBUILD":
+            raise RuntimeError("Forward canonical FIT build did not finish as a new training")
         publication = resolve_filter_artifact_paths(
             PROJECT_ROOT, str(settings.filter_id),
             str(settings.model_architecture), str(settings.experiment_profile),
         )
-        common_sha = verify_fit_repair_rebuilt_checkpoint(
-            rolling_dir=pit_dir, score_start=str(mode.score_start_date),
-            expected_profile=str(profile_name), forward_checkpoint=publication.model_path,
+        new_sha = verified_new_forward_fit_repair_checkpoint(
+            model_path=publication.model_path, manifest_path=publication.manifest_path,
         )
-        # Forward's full source validator is the final gate, not this SHA check.
         _clear_continuous_forward_reuse_caches()
-        verified, verification_reason = _load_reusable_continuous_forward_contract(settings)
+        verified, reason = _load_reusable_continuous_forward_contract(settings)
         if verified is None:
-            raise RuntimeError(f"Rebuilt Forward full source fails validation: {verification_reason}")
-        # PIT is the sole shared FIT-cache publisher. Normal force rebuild uses
-        # an isolated temporary cache; put the verified native first fold back
-        # into its single canonical FitKey location while the old entry is still
-        # staged by the rollback transaction.
-        from services.breakout_quality.point_in_time_scores import publish_verified_native_first_fold_cache
-        new_fit_identity = publish_verified_native_first_fold_cache(
-            rolling_dir=pit_dir, score_start=str(mode.score_start_date),
-            cache_root=(PROJECT_ROOT / BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT),
-            expected_checkpoint_sha256=common_sha,
-        )
+            raise RuntimeError(f"Forward canonical FIT source identity invalid: {reason}")
         result = {
             "profile": str(profile_name), "model_id": str(model_id),
             "original_checkpoint_sha256": str(expected_previous_checkpoint_sha256),
-            "repaired_checkpoint_sha256": common_sha,
-            "fitting_identity": new_fit_identity,
+            "repaired_checkpoint_sha256": new_sha,
             "forward_action": str(action),
         }
-    # Archive ownership is the transaction service. Returning here means
-    # canonical publication and old-history preservation both committed.
+    # All historical sources are archived only after canonical Forward verified.
+    # Rolling's archived six-fold result must never be advertised as current.
     return result
+
+
+def _recover_pending_model_fit_repairs(model_profiles) -> int:
+    """On normal Research entry, roll back only abandoned FIT repair journals."""
+    count = 0
+    for _model_id, profile in model_profiles:
+        settings = get_breakout_quality_workflow_settings(experiment_profile=str(profile))
+        journal = fit_repair_journal_path(
+            project_root=PROJECT_ROOT, filter_id=str(settings.filter_id),
+            profile=str(profile),
+        )
+        if not journal.is_file():
+            continue
+        outcome = recover_incomplete_fit_repair(journal_path=journal, project_root=PROJECT_ROOT)
+        if outcome != "NO_JOURNAL":
+            print(f"[FIT RECOVERY] {profile} | {outcome} | previous publications preserved")
+            count += 1
+    if count:
+        invalidate_rolling_model_source_cache()
+        _clear_continuous_forward_reuse_caches()
+    return count
 
 
 def _refresh_rolling_audit_only(program_name: str, settings, mode) -> tuple[object | None, dict | None, str | None]:
@@ -4544,6 +4526,7 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
     if rolling:
         invalidate_rolling_model_source_cache()
     model_list = get_breakout_quality_model_test_settings().model_profiles
+    _recover_pending_model_fit_repairs(model_list)
     rolling_mode = get_breakout_quality_rolling_test_mode("rolling") if rolling else None
     planned = []
     display_rows = []
@@ -4593,7 +4576,7 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
     repair_ids = {item.model_id for item in repairs}
     display_rows = [
         (model_id, profile, "REBUILD FIT" if model_id in repair_ids and action != "BLOCKED" else action,
-         "Unproven historical FIT origin; canonical Rolling rebuild + verified Forward reuse"
+         "Unproven historical FIT origin; build one canonical Forward FIT (no Rolling refit)"
          if model_id in repair_ids and action != "BLOCKED" else reason)
         for model_id, profile, action, reason in display_rows
     ]
@@ -4611,9 +4594,9 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
     # Same seven Research operations: execute the dependency plan in place.
     # This delegated producer action is not a new research/selection workflow.
     for repair in repairs:
-        print(f"[FIT REBUILD] {repair.model_id} | preserving historical publications")
+        print(f"[FIT REBUILD] {repair.model_id} | one Forward FIT; preserve historical Rolling")
         try:
-            result = repair_missing_fit_origin_from_canonical_rolling(
+            result = repair_missing_fit_origin_using_forward(
                 program_name, profile_name=repair.profile,
                 expected_previous_checkpoint_sha256=repair.previous_checkpoint_sha256,
             )
@@ -4621,7 +4604,7 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
             print(f"[FIT BLOCKED] {repair.model_id}: {exc}")
             print("受控修復未通過；不發布本次模型比較結果。")
             return 2
-        print(f"[FIT VERIFIED] {repair.model_id} | Rolling/Forward SHA={result['repaired_checkpoint_sha256'][:16]}...")
+        print(f"[FIT VERIFIED] {repair.model_id} | Forward SHA={result['repaired_checkpoint_sha256'][:16]}...")
     if repairs:
         invalidate_rolling_model_source_cache()
         _clear_continuous_forward_reuse_caches()
@@ -5280,6 +5263,7 @@ def _interactive_model_research(program_name: str) -> int:
     if not settings.is_continuous_ranker:
         raise ValueError(f"不支援的 workflow training objective: {settings.training_objective!r}")
 
+    _recover_pending_model_fit_repairs(get_breakout_quality_model_test_settings().model_profiles)
     while True:
         print("\n=== Continuous DL 模型研究與驗證 ===")
         print("Training Model：" + _model_identity_text(_model_display_id(settings.experiment_profile)))

@@ -18,6 +18,51 @@ import shutil
 from typing import Iterator
 
 
+@contextmanager
+def _fit_repair_lock(journal_path: Path) -> Iterator[None]:
+    """Per-journal OS lock; released by the kernel even after process termination.
+
+    The lock file itself remains on disk to avoid races caused by deleting an
+    inode while a second process is waiting on it. No extra user CLI is needed.
+    """
+    lock_file = journal_path.with_suffix(".lock")
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    with lock_file.open("a+b") as stream:
+        stream.seek(0, os.SEEK_END)
+        if stream.tell() == 0:
+            stream.write(b"\x00")
+            stream.flush()
+        stream.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise RuntimeError("Another FIT repair is still active for this profile") from exc
+        try:
+            yield
+        finally:
+            stream.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+
+def fit_repair_journal_path(*, project_root: Path, filter_id: str, profile: str) -> Path:
+    """Single owner for the legacy FIT repair transaction namespace."""
+    if not str(filter_id).strip() or not str(profile).strip():
+        raise ValueError("FIT repair identity must not be empty")
+    if any(char in str(profile) for char in ("/", "\\", "..")):
+        raise ValueError("FIT repair profile is not a path component")
+    return (Path(project_root) / "outputs" / "filters" / "breakout_quality"
+            / str(filter_id) / "audit" / "fit_repair"
+            / (str(profile) + ".in_progress.json"))
+
+
 def _under_root(root: Path, candidate: Path) -> bool:
     return candidate == root or root in candidate.parents
 
@@ -84,13 +129,14 @@ def _restore(sources: list[dict]) -> None:
         existing_backup.rename(source)
 
 
-def recover_incomplete_fit_repair(*, journal_path: Path) -> None:
-    """Explicit recovery after an interrupted Python/process/OS session.
-
-    Never auto-recover on a new run: a human must choose recovery instead of
-    silently discarding newly produced but not yet committed evidence.
-    """
+def _recover_incomplete_fit_repair_unlocked(*, journal_path: Path, project_root: Path | None = None) -> str:
+    """Restore only a verified, uncommitted journal; do not infer FIT identity."""
     journal_path = Path(journal_path).resolve(strict=True)
+    if journal_path.stat().st_size == 0:
+        # The initial O_EXCL marker precedes every publication move; an empty
+        # journal can only be created before staging started.
+        journal_path.unlink()
+        return "EMPTY_JOURNAL_CLEARED"
     payload = json.loads(journal_path.read_text(encoding="utf-8"))
     if (payload.get("schema") != "fit_repair_transaction_v1"
         or payload.get("state") not in {"in_progress", "committed"}
@@ -102,12 +148,19 @@ def recover_incomplete_fit_repair(*, journal_path: Path) -> None:
         source = Path(row["source"])
         hold = Path(row["hold"])
         archive = Path(row["archive"])
+        if (source.is_symlink() or hold.is_symlink() or archive.is_symlink()):
+            raise RuntimeError("FIT repair recovery refuses symlink publication paths")
         if (not source.is_absolute() or not hold.is_absolute() or not archive.is_absolute()
             or source.parent != hold.parent
             or not hold.name.startswith("." + source.name + ".fit_repair_pending_")
             or archive.parent.parent.parent != source.parent / "historical_fit_repairs"
             or archive.parent.parent.name != source.name or archive.name != "original"):
             raise RuntimeError("FIT repair journal contains unsupported path; manual inspection required")
+    if project_root is not None:
+        project_root = Path(project_root).resolve(strict=True)
+        if not _under_root(project_root, journal_path):
+            raise RuntimeError("FIT recovery journal is outside project root")
+        _safe_roots(project_root, tuple(Path(row["source"]) for row in payload["sources"]))
     if payload["state"] == "committed":
         # A crash after atomic commit but before journal cleanup is not a
         # failed repair. Never roll the new model back after a recorded commit.
@@ -117,13 +170,41 @@ def recover_incomplete_fit_repair(*, journal_path: Path) -> None:
         ) for row in payload["sources"]):
             raise RuntimeError("Committed FIT repair has incomplete historical archives")
         journal_path.unlink()
-        return
+        return "COMMITTED_CLEANED"
     _restore(list(payload["sources"]))
     journal_path.unlink()
+    return "ROLLED_BACK"
+
+
+def recover_incomplete_fit_repair(
+    *, journal_path: Path, project_root: Path | None = None,
+) -> str:
+    """Auto-safe restart: no live process may be using this profile's journal."""
+    journal_path = Path(journal_path).absolute()
+    with _fit_repair_lock(journal_path):
+        if not journal_path.is_file():
+            return "NO_JOURNAL"
+        return _recover_incomplete_fit_repair_unlocked(
+            journal_path=journal_path, project_root=project_root,
+        )
 
 
 @contextmanager
 def preserved_fit_publications(
+    *, project_root: Path, publication_roots: tuple[Path, ...],
+    journal_path: Path, repair_identity: str,
+) -> Iterator[tuple[Path, ...]]:
+    """Guard mutation and interruption recovery with the same OS lock."""
+    with _fit_repair_lock(Path(journal_path).absolute()):
+        with _preserved_fit_publications_unlocked(
+            project_root=project_root, publication_roots=publication_roots,
+            journal_path=journal_path, repair_identity=repair_identity,
+        ) as paths:
+            yield paths
+
+
+@contextmanager
+def _preserved_fit_publications_unlocked(
     *, project_root: Path, publication_roots: tuple[Path, ...],
     journal_path: Path, repair_identity: str,
 ) -> Iterator[tuple[Path, ...]]:

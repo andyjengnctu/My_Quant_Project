@@ -1,7 +1,7 @@
 """One-off controlled repair of missing FIT provenance, not a model-selection workflow.
 
 Uses the existing read-only audit to inspect every configured model first, then
-hands approved work to canonical Rolling and Forward producers through Research.
+hands approved work to the single canonical Forward producer through Research.
 No legacy checkpoint is relabelled as a newly verified fitted model.
 """
 from __future__ import annotations
@@ -17,7 +17,9 @@ if str(_PROJECT_ROOT) not in sys.path:
 from core.breakout_quality_policy import (
     get_breakout_quality_model_test_settings, get_breakout_quality_workflow_settings,
 )
-from services.breakout_quality.fit_repair_transaction import recover_incomplete_fit_repair
+from services.breakout_quality.fit_repair_transaction import (
+    fit_repair_journal_path, recover_incomplete_fit_repair,
+)
 from services.breakout_quality.fit_origin_repair_plan import plan_fit_origin_repairs
 from tools.audit.breakout_quality.fit_lineage_snapshot import _inspect_profile
 
@@ -50,11 +52,11 @@ def main(argv: list[str] | None = None) -> int:
         recovered = 0
         for _model_id, profile in get_breakout_quality_model_test_settings().model_profiles:
             settings = get_breakout_quality_workflow_settings(experiment_profile=str(profile))
-            journal = (root / "outputs" / "filters" / "breakout_quality"
-                       / str(settings.filter_id) / "audit" / "fit_repair"
-                       / (str(profile) + ".in_progress.json"))
+            journal = fit_repair_journal_path(
+                project_root=root, filter_id=str(settings.filter_id), profile=str(profile),
+            )
             if journal.is_file():
-                recover_incomplete_fit_repair(journal_path=journal)
+                recover_incomplete_fit_repair(journal_path=journal, project_root=root)
                 print(f"Recovered original publications for {_model_id}")
                 recovered += 1
         print(f"FIT recovery complete: {recovered} pending transaction(s)")
@@ -77,10 +79,10 @@ def main(argv: list[str] | None = None) -> int:
         print("Read-only plan complete; use --execute for explicit, rollback-protected canonical rebuilding.")
         return 0
 
-    from services.research.breakout_quality_application import repair_missing_fit_origin_from_canonical_rolling
+    from services.research.breakout_quality_application import repair_missing_fit_origin_using_forward
     for job in jobs:
-        print(f"[CANONICAL FIT REPAIR] {job['model_id']} | Rolling FIT then verified Forward reuse")
-        result = repair_missing_fit_origin_from_canonical_rolling(
+        print(f"[CANONICAL FIT REPAIR] {job['model_id']} | one canonical Forward FIT (Rolling unchanged until separately requested)")
+        result = repair_missing_fit_origin_using_forward(
             "apps/research.py model",
             profile_name=job["profile"],
             expected_previous_checkpoint_sha256=job["old_sha256"],

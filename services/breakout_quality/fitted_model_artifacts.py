@@ -1694,6 +1694,31 @@ def verified_fit_repair_legacy_cache_entry(
     return cache
 
 
+def verified_new_forward_fit_repair_checkpoint(
+    *, model_path: Path, manifest_path: Path,
+) -> str:
+    """FIT owner verifies exact newly produced Forward checkpoint publication.
+
+    The caller separately requires the normal full Forward source/report contract
+    and a fresh Forward producer result. This is NOT a legacy FIT attestation.
+    """
+    model_path, manifest_path = Path(model_path), Path(manifest_path)
+    if not model_path.is_file() or not manifest_path.is_file():
+        raise RuntimeError("New Forward FIT model/manifest publication missing")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("New Forward FIT manifest unreadable") from exc
+    if not isinstance(manifest, Mapping) or not isinstance(manifest.get("model"), Mapping):
+        raise RuntimeError("New Forward FIT manifest missing checkpoint record")
+    record = build_file_manifest(model_path)
+    if record != dict(manifest["model"]):
+        raise RuntimeError("New Forward FIT checkpoint SHA disagrees with manifest")
+    if not isinstance(manifest.get("selected_epoch"), int) or manifest["selected_epoch"] < 1:
+        raise RuntimeError("New Forward FIT epoch selection evidence missing")
+    return str(record["sha256"])
+
+
 def verify_fit_repair_rebuilt_checkpoint(
     *, rolling_dir: Path, score_start: str,
     expected_profile: str, forward_checkpoint: Path,

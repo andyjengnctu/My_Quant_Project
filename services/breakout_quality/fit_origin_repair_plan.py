@@ -23,6 +23,7 @@ from filters.breakout_quality.paths import (
     resolve_filter_artifact_paths,
 )
 from filters.breakout_quality.predicted_context_artifact import maybe_predicted_context_artifact_spec
+from services.breakout_quality.fit_repair_transaction import fit_repair_journal_path
 from services.breakout_quality.fitted_model_artifacts import resolve_rolling_fitted_folds_root
 from services.breakout_quality.fitting_data_dependencies import context_source_for_profile
 
@@ -130,14 +131,14 @@ def _missing_context_origin(
                 and witness_record.get("size_bytes") == original["size_bytes"]):
                 return None, None  # Existing FIT verifier must assess that witness.
 
-    if not bool(settings.rolling_authorized):
-        return None, FitOriginRepairBlocker(model_id, profile, "Rolling FIT rebuilding not authorized")
-    journal = (project_root / "outputs" / "filters" / "breakout_quality"
-               / str(settings.filter_id) / "audit" / "fit_repair"
-               / (profile + ".in_progress.json"))
+    # Forward comparison is authorized by its configured scientific workflow;
+    # do not require permission to rebuild the unrelated Rolling evaluation.
+    journal = fit_repair_journal_path(
+        project_root=project_root, filter_id=str(settings.filter_id), profile=profile,
+    )
     if journal.exists():
         return None, FitOriginRepairBlocker(
-            model_id, profile, "Interrupted FIT repair transaction requires evidence-preserving recovery",
+            model_id, profile, "FIT repair transaction is still active or recovery has not completed",
         )
     return FitOriginRepairCandidate(model_id, profile, sha), None
 
