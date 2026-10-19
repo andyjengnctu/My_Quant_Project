@@ -373,12 +373,6 @@ from services.breakout_quality.report import (
     render_console_summary,
     render_markdown_report,
 )
-from tools.audit.breakout_quality.regime import (
-    assign_market_regimes,
-    build_regime_audit_payload,
-    derive_benchmark_regime_features,
-    render_regime_audit_markdown,
-)
 from services.research.strategy_compare_engine import (
     COMPARISON_MODE_HARD_FILTER,
     COMPARISON_MODE_SCORE_RANKING,

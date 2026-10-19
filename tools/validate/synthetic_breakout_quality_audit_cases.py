@@ -79,8 +79,8 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
 
     commands = get_domain_cli_commands("breakout_quality")
     check_true(
-        "research_audit_utilities_remain_catalogued_alongside_formal_gate",
-        bool("regime-audit" in commands and "audit-point-in-time-scores" in commands),
+        "research_point_in_time_score_validation_remains_catalogued",
+        "audit-point-in-time-scores" in commands,
     )
     # One-time Audit may have zero definitions; this is not a failure of reusable Audit.
     check_true(

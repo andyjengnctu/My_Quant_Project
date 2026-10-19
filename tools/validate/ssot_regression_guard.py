@@ -47,10 +47,6 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _json_canonical(obj: Any) -> bytes:
-    return json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-
-
 def _file_ast(project_root: Path, relative_path: str) -> ast.Module:
     # Content signature is checked on every read; mutated synthetic files
     # cannot accidentally reuse the AST of an earlier snapshot.

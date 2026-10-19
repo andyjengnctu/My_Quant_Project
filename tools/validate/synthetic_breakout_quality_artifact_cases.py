@@ -59,18 +59,15 @@ from .synthetic_breakout_quality_support import (
     TRAINING_SAMPLING_ALL_EVENT_ROWS,
     TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
     add_check,
-    assign_market_regimes,
     breakout_quality_export_scores,
     breakout_quality_train,
     build_breakout_quality_model,
     build_breakout_quality_pretraining_profile_payload,
     build_file_manifest,
     build_pass_condition_from_score_table,
-    build_regime_audit_payload,
     build_report_payload,
     compute_outer_policy_fingerprint,
     count_trainable_parameters,
-    derive_benchmark_regime_features,
     generate_signals,
     get_breakout_quality_experiment_profile,
     get_model_spec,
@@ -87,7 +84,6 @@ from .synthetic_breakout_quality_support import (
     pd,
     render_console_summary,
     render_markdown_report,
-    render_regime_audit_markdown,
     resolve_existing_filter_artifact_paths,
     resolve_filter_artifact_paths,
     resolve_filter_report_json_path,
@@ -846,121 +842,6 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     )
     add_check(results, "synthetic_breakout_quality", case_id, "report_without_oos_is_research_only", "RESEARCH_ONLY", research_only["conclusion"]["status"])
 
-    regime_bank = np.zeros((12, 300, len(FEATURE_COLUMNS)), dtype=np.float32)
-    benchmark_close_index = FEATURE_COLUMNS.index("benchmark_close_norm")
-    for group_index in range(12):
-        relative_close = (
-            np.linspace(0.70, 1.0, 300)
-            if group_index < 6
-            else np.linspace(1.30, 1.0, 300)
-        )
-        relative_close = relative_close * (
-            1.0
-            + 0.002
-            * (group_index % 3)
-            * np.sin(np.linspace(0.0, 20.0, 300))
-        )
-        relative_close = relative_close / relative_close[-1]
-        regime_bank[group_index, :, benchmark_close_index] = relative_close - 1.0
-    regime_features = derive_benchmark_regime_features(
-        regime_bank, np.arange(12, dtype=np.int64)
-    )
-    regime_groups = pd.DataFrame(
-        {
-            "ticker": [f"R{index}" for index in range(12)],
-            "date": list(pd.date_range("2018-01-01", periods=6, freq="YS"))
-            + list(pd.date_range("2024-01-02", periods=6, freq="MS")),
-            "group_index": np.arange(12, dtype=np.int64),
-            "outer_split": [OUTER_SPLIT_SELECTION] * 6 + [OUTER_SPLIT_OOS] * 6,
-            "selection_role": [SELECTION_ROLE_TRAIN] * 6
-            + [SELECTION_ROLE_NOT_APPLICABLE] * 6,
-            "label": [1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0],
-            SCORE_COLUMN: [0.8, 0.2, 0.7, 0.3, 0.6, 0.4, 0.7, 0.6, 0.8, 0.55, 0.75, 0.65],
-        }
-    ).merge(regime_features, on="group_index", validate="one_to_one")
-    regime_groups, regime_thresholds = assign_market_regimes(regime_groups)
-    (
-        regime_payload,
-        regime_cells,
-        regime_focus_year_cells,
-        enriched_regime_groups,
-    ) = build_regime_audit_payload(
-        regime_groups,
-        threshold=0.5,
-        min_selection_groups=2,
-        min_support_share_ratio=0.5,
-        focus_year=2024,
-        regime_thresholds=regime_thresholds,
-        score_group_diagnostics={"group_score_reduction": "synthetic"},
-        metadata={
-            "filter_id": "synthetic_quality",
-            "model_architecture": "inception_time_v1",
-            "experiment_profile": BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
-        },
-    )
-    regime_markdown = render_regime_audit_markdown(regime_payload)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "regime_audit_uses_selection_only_volatility_quantiles",
-        "selection_only",
-        regime_payload["regime_feature_contract"]["thresholds"][
-            "volatility_quantile_source"
-        ],
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "regime_audit_preserves_one_row_per_ticker_date_group",
-        12,
-        len(enriched_regime_groups),
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "regime_audit_emits_all_dimensions_and_support_fields",
-        True,
-        (
-            set(regime_cells["dimension"])
-            == {
-                "trend_state",
-                "drawdown_state",
-                "volatility_state",
-                "combined_regime",
-            }
-            and enriched_regime_groups["selection_support_groups"].notna().all()
-            and not regime_focus_year_cells.empty
-            and "Selection低代表性" in regime_markdown
-            and "2024 Combined regime 歸因" in regime_markdown
-            and "Low-support 排除診斷" in regime_markdown
-            and "不得依 OOS 結果回頭調整" in regime_markdown
-        ),
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "regime_audit_emits_focus_year_attribution_and_support_exclusion",
-        True,
-        (
-            regime_payload["focus_year"] == 2024
-            and set(
-                regime_payload["focus_year_analysis"][
-                    "support_exclusion_diagnostic"
-                ]
-            )
-            == {
-                "all_focus_year_events",
-                "low_support_only",
-                "supported_only",
-                "supported_only_delta_vs_all",
-            }
-            and int(regime_focus_year_cells["group_count"].sum()) == 6
-        ),
-    )
 
 def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
     """Protect the runtime artifact boundary, not every historical model recipe."""

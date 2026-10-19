@@ -46,7 +46,7 @@ from core.trading_order_state import (
 )
 from services.trading.account_state import load_trading_account_state
 from services.trading.pending_entry_links import (
-    original_buy_event, pending_entry_matches_buy, resolve_pending_entry_for_buy_event, resolve_position_pending_entry,
+    original_buy_event, resolve_pending_entry_for_buy_event, resolve_position_pending_entry,
 )
 from services.trading.pending_entry_state import (
     PENDING_ENTRY_STATUS_ACTIVE,
@@ -1210,28 +1210,6 @@ def _shadow_plan_from_pending_entry(entry: Mapping[str, Any], *, last_date: str 
     }
 
 
-
-
-def _matching_account_buy_event_for_pending(
-    entry: Mapping[str, Any],
-    inspection: Mapping[str, Any],
-) -> Mapping[str, Any] | None:
-    """Match one FILLED pending audit row to its effective account BUY event.
-
-    Lineage alone is insufficient for legacy manual pending rows because old
-    lineage identities did not include ``planned_trade_date``.  Match the
-    immutable lineage together with actual fill date/qty/price so an older order
-    cannot be resurrected as a second chart annotation for the current position.
-    """
-
-    audit_events = inspection.get("account_audit_events") or inspection.get("account_events") or ()
-    for event in inspection.get("account_events") or ():
-        if not isinstance(event, Mapping):
-            continue
-        original = original_buy_event(event, audit_events)
-        if pending_entry_matches_buy(entry, original):
-            return event
-    return None
 
 
 def _effective_pending_entries(inspection: Mapping[str, Any]) -> list[dict[str, Any]]:

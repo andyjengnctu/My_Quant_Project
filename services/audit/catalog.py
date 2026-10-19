@@ -100,15 +100,6 @@ def get_audit_method(method_id: str) -> AuditMethodEntry:
 AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
     # Only genuinely supported diagnostic commands belong here.  Canonical
     # Dataset/Target/PIT builders live in services/ and are not research Audits.
-    "regime": AuditCatalogEntry(
-        audit_type="regime",
-        domain="breakout_quality",
-        module="tools.audit.breakout_quality.regime",
-        mode="research",
-        description="稽核Selection／OOS市場狀態與breakout event覆蓋",
-        read_only=True,
-        cli_command="regime-audit",
-    ),
     "point_in_time_scores": AuditCatalogEntry(
         audit_type="point_in_time_scores",
         domain="breakout_quality",
