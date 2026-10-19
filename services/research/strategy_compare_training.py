@@ -18,11 +18,14 @@ from core.breakout_quality_registry import (
     get_breakout_quality_experiment_profile,
 )
 from core.breakout_quality_policy import (
+    get_breakout_quality_rolling_test_mode,
     is_breakout_quality_model_test_profile,
 )
 from core.console_report import COMPACT_CONSOLE_ENV
 from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.paths import (
+    resolve_filter_point_in_time_dir,
+    resolve_filter_model_output_dir,
     SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME,
     SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
     SELECTION_POINT_IN_TIME_SCORE_FILENAME,
@@ -54,6 +57,42 @@ STRATEGY_COMPARE_TRAINER_ENV: Mapping[str, str] = {
 }
 
 
+def resolve_strategy_compare_fit_source_dirs(
+    *, project_root: str | Path, source: Any, seed: int, target_dir: str | Path | None,
+) -> tuple[Path, ...]:
+    """Resolve published FIT candidate namespaces without inferring score identity.
+
+    Canonical Rolling and single-block OOS share fitting truth.  Research model
+    robustness publishes the same per-seed truth in its own governed namespace.
+    The PIT owner validates every candidate before copying any checkpoint; the
+    presence of a directory alone does not grant REUSE.
+    """
+    root = Path(project_root).resolve()
+    profile = str(source.experiment_profile)
+    filter_id = str(source.filter_id)
+    architecture = str(source.model_architecture)
+    roll = resolve_filter_point_in_time_dir(root, filter_id, architecture, profile)
+    oos_mode = get_breakout_quality_rolling_test_mode("oos")
+    oos_dirname = oos_mode.point_in_time_dirname
+    candidates: list[Path] = [roll]
+    if oos_dirname:
+        candidates.append(
+            resolve_filter_model_output_dir(root, filter_id, architecture, profile)
+            / str(oos_dirname)
+        )
+    robust_roll, _research_dir = resolve_model_research_robustness_seed_dirs(
+        root, filter_id, architecture, profile, seed=int(seed), rolling=True,
+    )
+    candidates.append(robust_roll)
+    target = None if target_dir is None else Path(target_dir).resolve()
+    distinct: list[Path] = []
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved != target and resolved not in distinct:
+            distinct.append(resolved)
+    return tuple(distinct)
+
+
 def build_strategy_compare_trainer_command(
     *,
     source: Any,
@@ -63,6 +102,7 @@ def build_strategy_compare_trainer_command(
     score_end_date: str | None = None,
     point_in_time_dir_override: str | Path | None = None,
     checkpoint_cache_root: str | Path | None = None,
+    fit_source_pit_dirs: tuple[str | Path, ...] = (),
     model_output_dir: str | Path | None = None,
     research_output_dir: str | Path | None = None,
     strategy_compare_profile_id: str | None = None,
@@ -148,6 +188,8 @@ def build_strategy_compare_trainer_command(
             "--checkpoint-cache-root",
             str(Path(checkpoint_cache_root).resolve()),
         ])
+    for fit_source_pit_dir in fit_source_pit_dirs:
+        args.extend(["--fit-source-pit-dir", str(Path(fit_source_pit_dir).resolve())])
     source_is_shared_model_target = is_breakout_quality_model_test_profile(
         str(source.experiment_profile)
     )
@@ -420,6 +462,7 @@ def run_strategy_compare_training_unit(
     comparison_end: str | None,
     point_in_time_dir_override: str | Path | None = None,
     checkpoint_cache_root: str | Path | None = None,
+    fit_source_pit_dirs: tuple[str | Path, ...] = (),
     model_output_dir: str | Path | None = None,
     research_output_dir: str | Path | None = None,
     registry: dict[str, Any] | None = None,
@@ -445,6 +488,13 @@ def run_strategy_compare_training_unit(
         score_end_date=(None if comparison_end in (None, "") else str(comparison_end)),
         point_in_time_dir_override=point_in_time_dir_override,
         checkpoint_cache_root=checkpoint_cache_root,
+        fit_source_pit_dirs=(
+            resolve_strategy_compare_fit_source_dirs(
+                project_root=root, source=source, seed=int(seed),
+                target_dir=point_in_time_dir_override or model_dir,
+            ) if str(source.score_source) == SCORE_SOURCE_SELECTION_POINT_IN_TIME
+            else ()
+        ),
         model_output_dir=model_output_dir,
         research_output_dir=research_output_dir,
         strategy_compare_profile_id=strategy_compare_profile_id,

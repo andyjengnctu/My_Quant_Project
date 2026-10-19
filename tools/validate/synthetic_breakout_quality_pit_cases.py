@@ -73,6 +73,180 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         _stable_fold_id,
     )
 
+    # Strategy Compare Forward/ Rolling / Robustness reuse must be an actual
+    # checkpoint-before-epoch behavior, not just a READY display projection.
+    from services.breakout_quality.point_in_time_scores import (
+        _resolve_verified_cross_mode_fit_source,
+    )
+    from services.research.strategy_compare_training import (
+        build_strategy_compare_trainer_command,
+        resolve_strategy_compare_fit_source_dirs,
+    )
+    from filters.breakout_quality.paths import (
+        resolve_filter_point_in_time_dir,
+        resolve_model_research_robustness_seed_dirs,
+    )
+    from core.breakout_quality_policy import get_breakout_quality_rolling_test_mode
+    from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME
+    from filters.breakout_quality.paths import SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
+    from services.breakout_quality.point_in_time_scores import FOLD_MANIFEST_FILENAME
+    from services.breakout_quality import point_in_time_scores as pit_module
+    with tempfile.TemporaryDirectory(prefix="strategy_fit_cross_mode_source_") as td:
+        base = Path(td).resolve()
+        profile = DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
+        source = SimpleNamespace(
+            filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+            model_architecture="inception_time_v1", experiment_profile=profile,
+            score_source="selection_point_in_time",
+            point_in_time_fold_months=12, point_in_time_score_start_date="2021-01-01",
+            point_in_time_score_end_date="auto", point_in_time_fold_anchor_date="2021-01-01",
+            point_in_time_single_score_block=True,
+            single_seed_strategy_conversion_authorized=False, dl_id="fixture_source",
+        )
+        seed = 693545351
+        target = base / "new_forward_scores"
+        candidate_roots = resolve_strategy_compare_fit_source_dirs(
+            project_root=base, source=source, seed=seed, target_dir=target,
+        )
+        model_robust_roll, _ = resolve_model_research_robustness_seed_dirs(
+            base, source.filter_id, source.model_architecture, profile,
+            seed=seed, rolling=True,
+        )
+        check_true(
+            "strategy_oos_fitting_source_resolver_includes_rolling_and_same_seed_robustness",
+            resolve_filter_point_in_time_dir(
+                base, source.filter_id, source.model_architecture, profile,
+            ) in candidate_roots and model_robust_roll in candidate_roots
+            and target not in candidate_roots,
+        )
+        oos_mode = get_breakout_quality_rolling_test_mode("oos")
+        check_true(
+            "strategy_rolling_fitting_source_resolver_includes_published_single_block_oos",
+            any(path.name == oos_mode.point_in_time_dirname for path in candidate_roots),
+        )
+        workflow = SimpleNamespace(
+            point_in_time_fold_months=12, point_in_time_score_start_date="2021-01-01",
+            point_in_time_score_end_date="auto", point_in_time_inner_validation_months=24,
+        )
+        command, trainer_args, _metadata = build_strategy_compare_trainer_command(
+            source=source, workflow=workflow, seed=seed,
+            point_in_time_dir_override=target,
+            fit_source_pit_dirs=candidate_roots,
+        )
+        from services.research import strategy_compare_training as strategy_training
+        class _StopBeforeTrainerStarts(Exception):
+            pass
+        captured_command = []
+        def _capture_without_starting_trainer(**kwargs):
+            captured_command.extend(kwargs["command"])
+            raise _StopBeforeTrainerStarts
+        with patch.object(strategy_training, "run_logged_training_process",
+                          side_effect=_capture_without_starting_trainer):
+            try:
+                strategy_training.run_strategy_compare_training_unit(
+                    project_root=base, source=source, workflow=workflow, seed=seed,
+                    model_dir=target, research_dir=target, log_path=base / "never_train.log",
+                    comparison_start="2021-01-01", comparison_end="2026-03-02",
+                    point_in_time_dir_override=target,
+                )
+            except _StopBeforeTrainerStarts:
+                pass
+        check_true(
+            "strategy_single_and_robustness_shared_training_unit_reaches_cross_mode_fit_precheck",
+            captured_command.count("--fit-source-pit-dir") == len(candidate_roots)
+            and str(model_robust_roll.resolve()) in captured_command
+            and "--single-score-block" in captured_command
+            and "--resume" in captured_command,
+        )
+        check_true(
+            "strategy_trainer_command_passes_shared_fit_candidate_roots_without_changing_score_mode",
+            trainer_args.count("--fit-source-pit-dir") == len(candidate_roots)
+            and "--single-score-block" in trainer_args
+            and "--point-in-time-dir-override" in trainer_args
+            and command[-len(trainer_args):] == trainer_args,
+        )
+        source_root = base / "published_rolling"
+        source_fold = source_root / "folds" / "fold_20210101_20211231"
+        source_fold.mkdir(parents=True)
+        contract = {
+            "filter_id": source.filter_id,
+            "model_architecture": source.model_architecture,
+            "experiment_profile": profile,
+            "seed": seed,
+            "planned_periods": {"score_start": "2021-01-01", "score_end": "2026-03-02"},
+        }
+        (source_fold / FOLD_MANIFEST_FILENAME).write_text(
+            json.dumps(contract), encoding="utf-8",
+        )
+        (source_fold / DEFAULT_MODEL_FILENAME).write_bytes(b"published-fit-one")
+        (source_root / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME).write_text(
+            json.dumps({"folds": [contract]}), encoding="utf-8",
+        )
+        expected = {**contract, "planned_periods": {
+            "score_start": "2021-01-01", "score_end": "2021-12-31",
+        }}
+        with patch.object(pit_module, "validate_rolling_fold_fitted_checkpoint",
+                          return_value=(SimpleNamespace(), None)) as validation:
+            matched = _resolve_verified_cross_mode_fit_source(
+                fit_source_pit_dirs=(source_root,),
+                target_fold_dir=target / "folds" / "fold_20210101_20260302",
+                fold_contract=expected, bundle=object(), torch_module=object(),
+                plan=SimpleNamespace(as_manifest_payload=lambda: {}), project_root=base,
+            )
+        check_true(
+            "cross_mode_source_reuses_published_fit_without_score_horizon_equality",
+            matched is not None and matched[0] == source_fold
+            and matched[1]["source_checkpoint"]["sha256"]
+                == build_file_manifest(source_fold / DEFAULT_MODEL_FILENAME)["sha256"]
+            and validation.call_count == 1,
+        )
+        with patch.object(pit_module, "validate_rolling_fold_fitted_checkpoint",
+                          return_value=(None, "external context mismatch")):
+            try:
+                _resolve_verified_cross_mode_fit_source(
+                    fit_source_pit_dirs=(source_root,),
+                    target_fold_dir=target / "folds" / "fold_20210101_20260302",
+                    fold_contract=expected, bundle=object(), torch_module=object(),
+                    plan=SimpleNamespace(as_manifest_payload=lambda: {}), project_root=base,
+                )
+            except RuntimeError as exc:
+                invalid_blocked = "automatic training blocked" in str(exc)
+            else:
+                invalid_blocked = False
+        check_true("unverified_cross_mode_fit_blocks_training_instead_of_refitting", invalid_blocked)
+        second_root = base / "published_oos"
+        second_fold = second_root / "folds" / "fold_20210101_20260302"
+        second_fold.mkdir(parents=True)
+        (second_fold / FOLD_MANIFEST_FILENAME).write_text(json.dumps(contract), encoding="utf-8")
+        (second_fold / DEFAULT_MODEL_FILENAME).write_bytes(b"different-fit-weights")
+        (second_root / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME).write_text(
+            json.dumps({"folds": [contract]}), encoding="utf-8",
+        )
+        with patch.object(pit_module, "validate_rolling_fold_fitted_checkpoint",
+                          return_value=(SimpleNamespace(), None)):
+            try:
+                _resolve_verified_cross_mode_fit_source(
+                    fit_source_pit_dirs=(source_root, second_root),
+                    target_fold_dir=target / "folds" / "fold_20210101_20260302",
+                    fold_contract=expected, bundle=object(), torch_module=object(),
+                    plan=SimpleNamespace(as_manifest_payload=lambda: {}), project_root=base,
+                )
+            except RuntimeError as exc:
+                conflicting_sha_blocked = "different SHA" in str(exc)
+            else:
+                conflicting_sha_blocked = False
+        check_true("same_fitting_identity_different_published_checkpoint_sha_blocks", conflicting_sha_blocked)
+        unrelated = {**expected, "seed": seed + 1}
+        check_true(
+            "unrelated_seed_does_not_provide_fit_or_trigger_training_reuse",
+            _resolve_verified_cross_mode_fit_source(
+                fit_source_pit_dirs=(source_root,),
+                target_fold_dir=target / "folds" / "fold_20210101_20260302",
+                fold_contract=unrelated, bundle=object(), torch_module=object(),
+                plan=SimpleNamespace(as_manifest_payload=lambda: {}), project_root=base,
+            ) is None,
+        )
+
     terminal = pd.DataFrame([
         {"ticker": "2330", "date": "2026-03-02", "group_index": 0, "label_eval_end_date": None},
         {"ticker": "2330", "date": "2026-03-02", "group_index": 0, "label_eval_end_date": None},

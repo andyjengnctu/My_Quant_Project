@@ -282,6 +282,13 @@ def parse_args(argv=None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--fit-source-pit-dir", action="append", default=[],
+        help=(
+            "已發布的其他 OOS／Rolling PIT 根目錄；僅用作逐 Fold FIT 來源候選，"
+            "通過 canonical fitting provenance 驗證才載入 checkpoint，從不複製來源 Scores。"
+        ),
+    )
+    parser.add_argument(
         "--checkpoint-import-model-dir",
         default=None,
         help=(
@@ -1690,6 +1697,85 @@ def _verified_archived_rolling_fit(
     return verified[0]
 
 
+def _resolve_verified_cross_mode_fit_source(
+    *, fit_source_pit_dirs: tuple[Path, ...], target_fold_dir: Path,
+    fold_contract: dict[str, Any], bundle, torch_module, plan,
+    project_root: Path = PROJECT_ROOT,
+) -> tuple[Path, dict[str, Any]] | None:
+    """Find a previously published FIT with the same training identity.
+
+    Only the canonical FIT validator can authorize a source; scores and fold
+    calendar ends are NOT part of fitting identity.  A matching candidate with
+    broken evidence or conflicting checkpoint SHA must never trigger refitting.
+    """
+    expected_start = str(dict(fold_contract.get("planned_periods") or {}).get("score_start") or "")
+    verified: list[tuple[Path, dict[str, Any]]] = []
+    problems: list[str] = []
+    for root in dict.fromkeys(Path(value).resolve() for value in fit_source_pit_dirs):
+        if root == target_fold_dir.parent.parent.resolve():
+            continue
+        fold_root = root / "folds"
+        if not fold_root.is_dir():
+            continue
+        for manifest_path in sorted(fold_root.glob("*/" + FOLD_MANIFEST_FILENAME)):
+            try:
+                source_manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+            except (OSError, UnicodeError, ValueError, TypeError) as exc:
+                problems.append(f"{manifest_path.parent.name}: unreadable FIT manifest ({exc})")
+                continue
+            if not isinstance(source_manifest, dict):
+                problems.append(f"{manifest_path.parent.name}: FIT manifest not a mapping")
+                continue
+            # Filter genuinely distinct experiments before applying the single FIT owner.
+            if any(source_manifest.get(field) != fold_contract.get(field) for field in (
+                "filter_id", "model_architecture", "experiment_profile", "seed",
+            )):
+                continue
+            source_start = str(dict(source_manifest.get("planned_periods") or {}).get("score_start") or "")
+            if source_start != expected_start:
+                continue
+            model_path = manifest_path.parent / DEFAULT_MODEL_FILENAME
+            aggregate = root / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
+            if not model_path.is_file() or not aggregate.is_file():
+                problems.append(f"{manifest_path.parent.name}: checkpoint or aggregate missing")
+                continue
+            try:
+                fitted, issue = validate_rolling_fold_fitted_checkpoint(
+                    manifest_path=manifest_path, manifest=source_manifest,
+                    expected=fold_contract,
+                    expected_execution=scientific_torch_execution(plan),
+                    bundle=bundle, torch_module=torch_module,
+                    project_root=project_root,
+                )
+                if fitted is None:
+                    problems.append(f"{manifest_path.parent.name}: {issue}")
+                    continue
+                verified.append((manifest_path.parent, {
+                    "source_fold_manifest": build_file_manifest(manifest_path),
+                    "source_aggregate_manifest": build_file_manifest(aggregate),
+                    "source_checkpoint": build_file_manifest(model_path),
+                    "source_fold_path": manifest_path.parent.resolve().relative_to(
+                        project_root.resolve()
+                    ).as_posix(),
+                }))
+            except (OSError, UnicodeError, ValueError, TypeError, RuntimeError) as exc:
+                problems.append(f"{manifest_path.parent.name}: {type(exc).__name__}: {exc}")
+    if problems:
+        raise RuntimeError(
+            "Cross-mode FIT candidate exists but provenance is unverified; "
+            "automatic training blocked: " + "; ".join(problems[:5])
+        )
+    if not verified:
+        return None
+    checkpoint_hashes = {item[1]["source_checkpoint"]["sha256"] for item in verified}
+    if len(checkpoint_hashes) != 1:
+        raise RuntimeError(
+            "Cross-mode FIT identity conflict: multiple verified checkpoints with different SHA; "
+            "automatic training blocked"
+        )
+    return verified[0]
+
+
 def _materialize_verified_archived_rolling_fit(
     *, archived_fold: Path, archive_binding: dict[str, Any],
     fold_dir: Path, cache_root: Path | None,
@@ -2600,6 +2686,46 @@ def _run_point_in_time_scores(
                 plan=plan,
             )
             fitting_checkpoint_reuse = reused is not None
+        cross_mode_fit_reuse = False
+        if reused is None and bool(args.resume) and getattr(args, "fit_source_pit_dir", ()):
+            # Never overwrite a failed/partially-resumable target Fold while
+            # repairing only the score publication from another evaluation mode.
+            if any((fold_dir / name).exists() for name in (
+                DEFAULT_MODEL_FILENAME, FOLD_MANIFEST_FILENAME,
+            )):
+                raise RuntimeError(
+                    f"Cross-mode FIT destination {fold['fold_id']} already has unverified "
+                    "checkpoint/manifest; automatic overwrite and training blocked"
+                )
+            if args.checkpoint_cache_root not in (None, ""):
+                existing_cache = _checkpoint_cache_entry_dir(
+                    Path(str(args.checkpoint_cache_root)), fold_contract
+                )
+                if (existing_cache / DEFAULT_MODEL_FILENAME).exists():
+                    raise RuntimeError(
+                        f"Cross-mode FIT shared cache for {fold['fold_id']} is unverified; "
+                        "automatic overwrite and training blocked"
+                    )
+            external_source = _resolve_verified_cross_mode_fit_source(
+                fit_source_pit_dirs=tuple(Path(x) for x in args.fit_source_pit_dir),
+                target_fold_dir=fold_dir, fold_contract=fold_contract,
+                bundle=bundle, torch_module=torch, plan=plan, project_root=PROJECT_ROOT,
+            )
+            if external_source is not None:
+                source_fold, verified_binding = external_source
+                reused = _rescore_fold_from_fitting_checkpoint(
+                    source_fold_dir=source_fold, target_fold_dir=fold_dir,
+                    bundle=bundle, ids=ids, fold_contract=fold_contract,
+                    expected_fingerprint=fingerprint, args=args,
+                    torch_module=torch, plan=plan,
+                    verified_archive_binding=verified_binding,
+                )
+                if reused is None:
+                    raise RuntimeError(
+                        f"Cross-mode FIT verified for {fold['fold_id']}, but score regeneration "
+                        "failed; automatic training blocked"
+                    )
+                cross_mode_fit_reuse = True
         archived_checkpoint_reuse = False
         if reused is None and bool(args.resume) and str(fold["fold_id"]) in archived_fits:
             archived_fold, archive_binding = archived_fits[str(fold["fold_id"])]
@@ -2624,7 +2750,7 @@ def _run_point_in_time_scores(
             migrated = reused is not None
         if reused is not None:
             frame, manifest = reused
-            if fitting_checkpoint_reuse or archived_checkpoint_reuse:
+            if fitting_checkpoint_reuse or archived_checkpoint_reuse or cross_mode_fit_reuse:
                 fitting_checkpoint_reuse_fold_count += 1
             elif rescored_checkpoint:
                 rescored_checkpoint_fold_count += 1
@@ -2632,7 +2758,10 @@ def _run_point_in_time_scores(
                 migrated_fold_count += 1
             else:
                 reused_fold_count += 1
-            if archived_checkpoint_reuse:
+            if cross_mode_fit_reuse:
+                reuse_source = "verified cross-mode published Fold → score refresh"
+                reuse_label = "重用跨模式已發布 FIT 並重新評分"
+            elif archived_checkpoint_reuse:
                 reuse_source = "verified historical Rolling fold → score refresh"
                 reuse_label = "重用歷史封存的Rolling FIT並重新評分"
             elif fitting_checkpoint_reuse:
