@@ -3165,6 +3165,43 @@ def validate_research_model_readiness_architecture_case(_base_params):
             forward_stale.display_action == "BUILD/REFRESH"
             and forward_stale.plan.action_by_key["seed:202:FIT"].action == "BUILD"
             and forward_stale.plan.action_by_key["seed:202:SCORE"].action == "BUILD")
+        # Regression: Forward per-seed report absence must not erase a
+        # candidate Rolling first-fold FIT from the stage projection.
+        pending_rolling_fit = ModelRobustnessSeedSource(
+            202, None, Path("reports/202.json"), "Forward SCORE/report missing",
+            rolling_fit_candidate=True,
+        )
+        forward_verify = resolve_model_robustness_readiness(mode="forward", sources=(
+            forward_seeds[0], pending_rolling_fit,
+        ))
+        pending_stage = forward_verify.seeds[1].readiness
+        check_true("forward_robustness_missing_report_with_rolling_fit_shows_verify_not_build",
+            forward_verify.display_action == "VERIFY FIT"
+            and "1/2" in forward_verify.display_reason
+            and "FIT candidates" in forward_verify.display_reason
+            and pending_stage.display_action == "VERIFY FIT"
+            and tuple(pending_stage.plan.action_by_key[key].action
+                      for key in ("FIT", "SCORE", "EVIDENCE"))
+                == ("RESUME", "BUILD", "DERIVE")
+            and not forward_verify.evidence_ready)
+        all_pending = resolve_model_robustness_readiness(mode="forward", sources=(
+            ModelRobustnessSeedSource(101, None, Path("reports/101.json"), "missing",
+                                      rolling_fit_candidate=True),
+            pending_rolling_fit,
+        ))
+        check_true("forward_robustness_all_rolling_first_folds_present_requires_proof",
+            all_pending.display_action == "VERIFY FIT"
+            and "2/2" in all_pending.display_reason
+            and all(item.readiness.plan.action_by_key["FIT"].action == "RESUME"
+                    for item in all_pending.seeds))
+        mixed = resolve_model_robustness_readiness(mode="forward", sources=(
+            ModelRobustnessSeedSource(101, None, Path("reports/101.json"), "no candidate"),
+            pending_rolling_fit,
+        ))
+        check_true("forward_robustness_partial_fit_candidates_do_not_hide_missing_fit",
+            mixed.display_action == "BUILD/REFRESH"
+            and "1/2" in mixed.display_reason
+            and mixed.seeds[0].readiness.plan.action_by_key["FIT"].action == "BUILD")
         try:
             resolve_model_robustness_readiness(mode="rolling", sources=(
                 forward_seeds[0], forward_seeds[0],
@@ -3174,6 +3211,66 @@ def validate_research_model_readiness_architecture_case(_base_params):
         else:
             duplicate_rejected = False
         check_true("robustness_duplicate_seed_never_merges_provenance", duplicate_rejected)
+    # Seed-specific FIT candidate paths must use the same canonical FIT
+    # locator as ordinary Forward, not a second robustness presence policy.
+    from services.breakout_quality.fitted_model_artifacts import (
+        FittedCandidateProbe, probe_fitted_candidates,
+    )
+    with TemporaryDirectory() as td:
+        root_dir = Path(td)
+        forward_model_dir = root_dir / "isolated_forward" / "seed_101"
+        forward_report_path = root_dir / "isolated_forward_reports" / "seed_101" / "report.json"
+        rolling_folds = root_dir / "isolated_rolling" / "seed_101" / "folds"
+        first_fold = rolling_folds / "fold_20210101_20211231"
+        first_fold.mkdir(parents=True)
+        (first_fold / "model.pt").write_bytes(b"synthetic-provisional-weight")
+        with patch("services.breakout_quality.fitted_model_artifacts.get_breakout_quality_rolling_test_mode",
+                   return_value=SimpleNamespace(score_start_date="2021-01-01")):
+            candidate = probe_fitted_candidates(
+                project_root=root_dir, filter_id="breakout_quality_v1",
+                model_architecture="inception_time_v1",
+                experiment_profile="daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise",
+                report_filename="report.json",
+                forward_model_dir_override=forward_model_dir,
+                forward_report_path_override=forward_report_path,
+                rolling_folds_root_override=rolling_folds,
+            )
+            absent = probe_fitted_candidates(
+                project_root=root_dir, filter_id="breakout_quality_v1",
+                model_architecture="inception_time_v1",
+                experiment_profile="daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise",
+                report_filename="report.json",
+                rolling_folds_root_override=root_dir / "isolated_rolling" / "seed_202" / "folds",
+            )
+        check_true("canonical_fit_probe_uses_exact_robustness_seed_isolation",
+            candidate.rolling_first_fold_candidate
+            and not candidate.forward_fit_candidate
+            and not absent.rolling_first_fold_candidate)
+        from services.research import breakout_quality_application as candidate_app
+        candidate_settings = SimpleNamespace(
+            filter_id="breakout_quality_v1", model_architecture="inception_time_v1",
+            experiment_profile="daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise",
+        )
+        def candidate_dirs(_settings, *, seed, rolling):
+            if rolling:
+                return root_dir / "isolated_rolling" / f"seed_{seed}", root_dir / "unused"
+            return root_dir / "isolated_forward" / f"seed_{seed}", root_dir / "isolated_forward_reports" / f"seed_{seed}"
+        with (
+            patch.object(candidate_app, "_model_robustness_dirs", side_effect=candidate_dirs),
+            patch.object(candidate_app, "_load_forward_robustness_seed",
+                         return_value=(None, forward_report_path, "Forward report missing")),
+            patch.object(candidate_app, "_probe_continuous_fitted_candidates",
+                         return_value=FittedCandidateProbe(False, True)) as status_probe,
+        ):
+            observed = candidate_app._observe_model_robustness_seed(
+                candidate_settings, seed=101, rolling=False,
+            )
+        check_true("forward_robustness_application_probes_exact_seed_fold_when_report_missing",
+            observed.seed == 101 and observed.rolling_fit_candidate
+            and observed.verified_evidence is None
+            and status_probe.call_count == 1
+            and status_probe.call_args.kwargs["rolling_folds_root_override"] == rolling_folds
+            and status_probe.call_args.kwargs["forward_model_dir_override"] == forward_model_dir)
     # A source snapshot and its dependency plan must agree before any Producer
     # can run. Source order alone is not sufficient if a stage owner is bypassed
     # or accidentally returns another benchmark's seed plan.

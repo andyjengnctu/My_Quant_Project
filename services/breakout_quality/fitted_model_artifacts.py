@@ -559,6 +559,9 @@ def probe_fitted_candidates(
     *, project_root: Path, filter_id: str, model_architecture: str,
     experiment_profile: str, report_filename: str,
     expected_settings: Mapping[str, Any] | None = None,
+    forward_model_dir_override: Path | None = None,
+    forward_report_path_override: Path | None = None,
+    rolling_folds_root_override: Path | None = None,
 ) -> FittedCandidateProbe:
     """Locate provisional FIT inputs, not full scientific readiness.
 
@@ -568,13 +571,21 @@ def probe_fitted_candidates(
     paths = resolve_filter_artifact_paths(
         project_root, filter_id, model_architecture, experiment_profile,
     )
-    report_path = resolve_filter_model_output_dir(
-        project_root, filter_id, model_architecture, experiment_profile,
-    ) / report_filename
+    forward_model_dir = (
+        Path(forward_model_dir_override)
+        if forward_model_dir_override is not None else paths.model_dir
+    )
+    report_path = (
+        Path(forward_report_path_override)
+        if forward_report_path_override is not None else
+        resolve_filter_model_output_dir(
+            project_root, filter_id, model_architecture, experiment_profile,
+        ) / report_filename
+    )
     forward_candidate = bool(
-        paths.model_path.is_file()
+        (forward_model_dir / paths.model_path.name).is_file()
         and not fitted_model_settings_issues(
-            model_dir=paths.model_dir, report_path=report_path,
+            model_dir=forward_model_dir, report_path=report_path,
             expected=expected_settings,
         )
     )
@@ -582,9 +593,13 @@ def probe_fitted_candidates(
     start = str(mode.score_start_date or "")
     rolling_candidate = False
     if len(start) == 10 and start[4] == "-" and start[7] == "-":
-        folds = resolve_rolling_fitted_folds_root(
-            project_root=project_root, filter_id=filter_id,
-            model_architecture=model_architecture, experiment_profile=experiment_profile,
+        folds = (
+            Path(rolling_folds_root_override)
+            if rolling_folds_root_override is not None else
+            resolve_rolling_fitted_folds_root(
+                project_root=project_root, filter_id=filter_id,
+                model_architecture=model_architecture, experiment_profile=experiment_profile,
+            )
         )
         pattern = "fold_" + start.replace("-", "") + "_*"
         rolling_candidate = folds.is_dir() and any(

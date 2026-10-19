@@ -214,6 +214,10 @@ class ModelRobustnessSeedSource:
     evidence_path: Path | None
     reason: str | None
     score_contract: Any | None = None
+    # Unverified FIT locations discovered by the canonical FIT owner.
+    # Neither field is a scientific proof or an authorization to REUSE.
+    forward_fit_candidate: bool = False
+    rolling_fit_candidate: bool = False
 
 
 @dataclass(frozen=True)
@@ -270,6 +274,8 @@ def resolve_model_robustness_seed_readiness(
             evidence_payload=source.verified_evidence,
             source_reason=source.reason,
             source_path=None,  # Robustness does not publish per-seed reports.
+            forward_fit_candidate=source.forward_fit_candidate,
+            rolling_fit_candidate=source.rolling_fit_candidate,
         ),
     )
 
@@ -333,8 +339,26 @@ def resolve_model_robustness_readiness(
         action = "BUILD/REFRESH"
         reason = f"{evidence_count}/{total} seeds EVIDENCE READY; {score_count}/{total} SCORE READY"
     else:
-        action = "BUILD/REFRESH"
-        reason = f"{evidence_count}/{total} seeds READY"
+        # A missing Forward evaluation is not proof that the Seed's FIT is
+        # missing. Rolling first-fold and Forward checkpoints are only
+        # provisional candidates until the canonical owner validates them.
+        fit_candidates = sum(
+            stage.readiness.plan.action_by_key["FIT"].action == "RESUME"
+            for stage in stages
+        )
+        missing = total - evidence_count
+        if fit_candidates and fit_candidates == missing:
+            action = "VERIFY FIT"
+            reason = (
+                f"{fit_candidates}/{total} seeds FIT candidates require verification; "
+                f"{evidence_count}/{total} EVIDENCE READY"
+            )
+        else:
+            action = "BUILD/REFRESH"
+            reason = (
+                f"{evidence_count}/{total} seeds EVIDENCE READY; "
+                f"{fit_candidates}/{total} FIT candidates awaiting verification"
+            )
     return ModelRobustnessReadiness(
         mode=normalized_mode, seeds=tuple(stages), plan=plan,
         display_action=action, display_reason=reason,

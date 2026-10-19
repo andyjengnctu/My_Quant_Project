@@ -3270,8 +3270,11 @@ def _rolling_build_reason(reason: str | None, forward_source: tuple[Path, Path] 
     )
 
 
-def _probe_continuous_fitted_candidates(settings):
-    """Status-only canonical FIT owner probe; does not decide REUSE."""
+def _probe_continuous_fitted_candidates(
+    settings, *, forward_model_dir_override=None,
+    forward_report_path_override=None, rolling_folds_root_override=None,
+):
+    """Status-only canonical FIT probe for normal or seed-isolated paths."""
     from services.breakout_quality.fitted_model_artifacts import probe_fitted_candidates
     try:
         return probe_fitted_candidates(
@@ -3280,6 +3283,9 @@ def _probe_continuous_fitted_candidates(settings):
             experiment_profile=str(settings.experiment_profile),
             report_filename=CONTINUOUS_RANKER_REPORT_FILENAME,
             expected_settings=current_default_fitting_settings(),
+            forward_model_dir_override=forward_model_dir_override,
+            forward_report_path_override=forward_report_path_override,
+            rolling_folds_root_override=rolling_folds_root_override,
         )
     except ValueError:
         # Unregistered synthetic profiles have no legal path; producer validates legality.
@@ -4995,9 +5001,24 @@ def _observe_model_robustness_seed(settings, *, seed: int, rolling: bool) -> Mod
     if rolling:
         return _inspect_rolling_robustness_seed(settings, seed=seed)
     payload, path, reason = _load_forward_robustness_seed(settings, seed=seed)
+    # A missing per-seed Forward SCORE/REPORT can still have a compatible
+    # Rolling first-fold FIT. Only the FIT owner may identify the provisional
+    # candidate; the Forward Producer later checks its *full* fitting identity.
+    probe = None
+    if payload is None:
+        model_dir, research_dir = _model_robustness_dirs(settings, seed=seed, rolling=False)
+        pit_dir, _unused = _model_robustness_dirs(settings, seed=seed, rolling=True)
+        probe = _probe_continuous_fitted_candidates(
+            settings,
+            forward_model_dir_override=model_dir,
+            forward_report_path_override=research_dir / CONTINUOUS_RANKER_REPORT_FILENAME,
+            rolling_folds_root_override=pit_dir / "folds",
+        )
     return ModelRobustnessSeedSource(
         seed=int(seed), verified_evidence=payload,
         evidence_path=path, reason=reason,
+        forward_fit_candidate=bool(probe is not None and probe.forward_fit_candidate),
+        rolling_fit_candidate=bool(probe is not None and probe.rolling_first_fold_candidate),
     )
 
 
@@ -5159,11 +5180,18 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
                 )
             seed_text = _seed_progress_text(seed, seed_index, len(seeds))
             if force_rebuild or not seed_stage.readiness.evidence_ready:
+                verifying_fit = bool(
+                    not rolling and not force_rebuild
+                    and seed_stage.readiness.display_action == "VERIFY FIT"
+                )
                 print(
-                    styled_workflow_status("[FORCE_REBUILD]" if force_rebuild else "[BUILD/REFRESH]")
+                    styled_workflow_status(
+                        "[FORCE_REBUILD]" if force_rebuild else
+                        ("[VERIFY FIT]" if verifying_fit else "[BUILD/REFRESH]")
+                    )
                     + " " + _model_identity_text(model_id)
                     + " | " + seed_text
-                    + f" | {reason}"
+                    + f" | {seed_stage.readiness.display_reason if verifying_fit else reason}"
                 )
                 code = (
                     _build_rolling_robustness_seed(
