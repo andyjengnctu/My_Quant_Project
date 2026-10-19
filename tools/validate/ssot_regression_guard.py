@@ -21,16 +21,18 @@ from .meta_contracts import (
 )
 from .source_index import read_source_ast
 
-GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v3.json"
+GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v4.json"
+V3_GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v3.json"
 V2_GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v2.json"
 LEGACY_GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v1.json"
 LEGACY_GOLDEN_SHA256 = "172b828579a2302be866092cbe12897a2e8c9ffe2d6ab7fd6bc8ada1b14d4a9b"
 # A deliberately separate anchor: editing a Golden fixture is not sufficient
 # to change what the existing regression gate accepts.
 V2_GOLDEN_SHA256 = "f03067dc0258ea95295b22e549e08a158da39449ac0021dd3f0a2c07a3bfe066"
-APPROVED_GOLDEN_SHA256 = "5a5b3b8cd82528c5170283c5f9f2f955d7934e27ecaa8f79949c5f7263578280"
-# v1 and v2 remain immutable; v3 independently anchors the user-authorized
-# SOP v9/comparison v13/strategy v2 release. No local Git tag is required.
+V3_GOLDEN_SHA256 = "5a5b3b8cd82528c5170283c5f9f2f955d7934e27ecaa8f79949c5f7263578280"
+APPROVED_GOLDEN_SHA256 = "551533f707ee1c8d06101f5bef1462ca1af279063f4f36ce2253fa906b2d2f1e"
+# v1, v2 and v3 remain immutable. The v4 release records the authorized
+# Model SOP presentation-color alignment with identical scientific metrics.
 
 IDENTITY_PATTERN = re.compile(r"^(?:MR-[A-Za-z0-9-]+|ARCH-[A-Za-z0-9_]+|PARAM-P[A-Za-z0-9-]+)$")
 GENERIC_CONSUMER_PATHS = (
@@ -122,15 +124,17 @@ def read_approved_baseline(project_root: Path, *, raw_bytes: bytes | None = None
         raise ValueError("Historical SSOT v1 Golden was modified")
     if _sha256((project_root / V2_GOLDEN_RELATIVE_PATH).read_bytes()) != V2_GOLDEN_SHA256:
         raise ValueError("Historical SSOT v2 Golden was modified")
+    if _sha256((project_root / V3_GOLDEN_RELATIVE_PATH).read_bytes()) != V3_GOLDEN_SHA256:
+        raise ValueError("Historical SSOT v3 Golden was modified")
     if raw_bytes is None:
         raw_bytes = (project_root / GOLDEN_RELATIVE_PATH).read_bytes()
     if _sha256(raw_bytes) != APPROVED_GOLDEN_SHA256:
-        raise ValueError("SSOT v3 Golden hash mismatch; never rewrite an existing version")
+        raise ValueError("SSOT v4 Golden hash mismatch; never rewrite an existing version")
     baseline = json.loads(raw_bytes)
-    if baseline.get("schema_version") != 3:
-        raise ValueError("SSOT Golden schema_version must be 3")
+    if baseline.get("schema_version") != 4:
+        raise ValueError("SSOT Golden schema_version must be 4")
     if not isinstance(baseline.get("protected_report_versions"), dict):
-        raise ValueError("SSOT v3 Golden is missing approved report contract history")
+        raise ValueError("SSOT v4 Golden is missing approved report contract history")
     return baseline
 
 
@@ -283,5 +287,6 @@ def summarize_ssot_regression_guard(project_root: Path) -> dict[str, Any]:
         "behavior_differences": behavior_snapshot_differences(baseline["expected"], actual),
         "golden_sha256": APPROVED_GOLDEN_SHA256,
         "historical_v1_golden_sha256": LEGACY_GOLDEN_SHA256,
+        "historical_v3_golden_sha256": V3_GOLDEN_SHA256,
         "scenario_count": len(actual["portfolio"]),
     }

@@ -654,7 +654,7 @@ def _model_sop_view(payload: dict, *, include_legacy_extension_evidence: bool = 
     }
 
 
-# Machine Standard SOP v9/v13 contains only the approved M1-M4 and mode evidence.
+# Current Standard SOP machine view retains the approved M1-M4 and mode evidence.
 # No historical Audit extension or convenience ranking fields may leak into publication.
 _MODEL_STANDARD_MACHINE_VIEW_KEYS = (
     "learnability", "generalization", "upside_downside_alignment",
@@ -665,9 +665,9 @@ _MODEL_STANDARD_MACHINE_VIEW_KEYS = (
 def _standard_model_machine_view(payload: dict) -> dict:
     view = _model_sop_view(payload, include_legacy_extension_evidence=False)
     if not view:
-        raise ValueError("Model Standard SOP v9 missing canonical view")
+        raise ValueError("Model Standard SOP missing canonical view")
     if any(key not in view for key in _MODEL_STANDARD_MACHINE_VIEW_KEYS):
-        raise ValueError("Model Standard SOP v9 missing approved view fields")
+        raise ValueError("Model Standard SOP missing approved view fields")
     return {key: view[key] for key in _MODEL_STANDARD_MACHINE_VIEW_KEYS}
 
 
@@ -1121,7 +1121,9 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
                 table_id,
                 table_rows,
                 target=target,
-                best_worst_style=(section_id == "joint_mfe_adverse_quality"),
+                # The same approved higher/lower preference owns M1, M3 and M4;
+                # neutral columns and across-model ties remain uncolored.
+                best_worst_style=True,
             ))
 
     # 1. Learnability
@@ -1147,7 +1149,9 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
                 "generalization",
                 table_rows,
                 target=target,
-                best_worst_style=False,
+                # Signed M2 changes are improvements/regressions relative to
+                # the source scope, not cross-model ranking extrema.
+                delta_style=True,
             ))
 
     # 3. Upside / Downside Alignment

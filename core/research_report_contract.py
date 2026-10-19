@@ -162,7 +162,7 @@ S = ReportSectionContract
 
 MODEL_STANDARD_SOP = PersistentReportContract(
     report_id="model.standard_sop",
-    version=9,
+    version=10,
     role="persistent_standard_model_sop_all_evaluation_modes",
     menu_path=("Research", "模型訓練／驗證"),
     sections=(
@@ -240,7 +240,7 @@ def _model_comparison_sections() -> tuple[ReportSectionContract, ...]:
 
 MODEL_STANDARD_COMPARISON = PersistentReportContract(
     report_id="model.standard_comparison",
-    version=13,
+    version=14,
     role="persistent_multi_model_comparison_all_evaluation_modes",
     menu_path=("Research", "模型訓練／驗證"),
     sections=_model_comparison_sections(),
@@ -1010,7 +1010,7 @@ def mode_extension_contract(extension_id: str) -> ModelExtensionContract:
 
 def _persistent_schema_payload(contract: PersistentReportContract) -> dict:
     payload = asdict(contract)
-    # Starting at v13, model-specific comparisons belong solely to read-only Audit.
+    # Since v13, model-specific comparisons belong solely to read-only Audit.
     # The historical v11/v12 schema snapshots remain in versioned definition files.
     return payload
 

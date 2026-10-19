@@ -4903,6 +4903,115 @@ def validate_portfolio_rotation_mark_to_market_return_contract_case(_base_params
 
 
 
+def _model_report_color_alignment_checks(app):
+    """Same semantic colors across all standard Model SOP evaluation surfaces.
+
+    Uses only canonical contract preferences, never MR identities.  This
+    regressions both the colored Markdown report and the ANSI console view.
+    """
+    from core.display_common import C_GREEN, C_RED
+
+    def view(*, higher: bool, mode: str):
+        sign = 1 if higher else -1
+        return {
+            "evaluation_mode": mode,
+            "learnability": [
+                {"split": scope, "group_count": 25,
+                 "mean_daily_spearman": (0.45 if higher else 0.15) if scope == "oos" else (0.12 if higher else 0.50),
+                 "global_spearman_vs_raw_target": 0.2,
+                 "pairwise_concordance": 0.65 if higher else 0.55,
+                 "top_score_decile_raw_target_mean": 2.0 if higher else 1.0,
+                 "bottom_score_decile_raw_target_mean": 0.5 if higher else 0.9,
+                 "top_bottom_raw_target_gap": 1.5 if higher else 0.1}
+                for scope in ("oos", "breakout_candidate_oos")
+            ],
+            "generalization": [
+                {"comparison": "Validation → OOS", "delta_daily_rho": (0.03 if higher else -0.02),
+                 "delta_pair": sign * 1.5, "delta_top_bottom": sign * 0.2},
+                {"comparison": "Global OOS → Breakout OOS", "delta_daily_rho": -sign * 0.01,
+                 "delta_pair": -sign * 0.5, "delta_top_bottom": -sign * 0.1},
+            ],
+            "upside_downside_alignment": [
+                {"split": scope, "target_to_full_mfe_daily_spearman": 1.0,
+                 "target_to_safety_daily_spearman": 0.0,
+                 "score_to_full_mfe_daily_spearman": 0.44 if higher else 0.24,
+                 "score_to_safety_daily_spearman": -0.2 if higher else -0.4}
+                for scope in ("oos", "breakout_candidate_oos")
+            ],
+            "joint_mfe_adverse_quality": [
+                {"split": scope, "top10_n": 20,
+                 "top10_mfe_pct": 28.0 if higher else 18.0,
+                 "top10_adverse_pct": 5.2 if higher else 10.0,
+                 "top10_joint_quality": 30.0 if higher else 20.0}
+                for scope in ("oos", "breakout_candidate_oos")
+            ],
+            "rolling_specific": {
+                "fold_count": 6, "fold_months": 12,
+                "direction_summary": {"valid_year_count": 5 if higher else 4,
+                    "positive_spearman_year_count": 5, "positive_spread_year_count": 5},
+                "fold_drift": {"max_adjacent_mean_shift_in_pooled_std": 0.5 if higher else 1.5,
+                               "drift_flag": not higher},
+            },
+            "robustness_specific": {
+                "seed_count": 4, "oos_daily_rho_std": 0.01 if higher else 0.04,
+                "oos_pair_std": 0.01 if higher else 0.04,
+                "oos_top_bottom_std": 0.04 if higher else 0.1,
+                "oos_top10_joint_quality_std": 0.1 if higher else 0.3,
+            },
+        }
+
+    results = []
+    for mode in ("forward_oos", "rolling_oos"):
+        views = [
+            {"model_id": "TEST_HIGH", "view": view(higher=True, mode=mode)},
+            {"model_id": "TEST_LOW", "view": view(higher=False, mode=mode)},
+        ]
+        with patch.object(app, "_standard_model_comparison_views", return_value=views), \
+             patch.object(app, "console_color_enabled", return_value=True):
+            md = app._render_standard_model_comparison([{}, {}], target="markdown")
+            console = app._render_standard_model_comparison([{}, {}], target="console")
+        with patch.object(app, "_standard_model_comparison_views", return_value=views[:1]):
+            single_md = app._render_standard_model_comparison([{}], target="markdown")
+        green = '<span style="color:#188038;font-weight:700;">'
+        red = '<span style="color:#C62828;font-weight:700;">'
+        m3 = md.split("MODEL SOP | 3. Upside / Downside Validation", 1)[1].split(
+            "MODEL SOP | 4. Joint MFE / Adverse Quality", 1
+        )[0]
+        results.extend([
+            (f"{mode}_m1_best_worst_same_in_markdown_and_console",
+             f"{green}0.4500</span>" in md and f"{red}0.1500</span>" in md
+             and C_GREEN + "0.4500" in console and C_RED + "0.1500" in console),
+            (f"{mode}_m1_bottom_decile_lower_is_better",
+             f"{green}0.5000</span>" in md and f"{red}0.9000</span>" in md),
+            (f"{mode}_m1_split_ranks_are_local_not_global",
+             f"{red}0.1200</span>" in md and f"{green}0.5000</span>" in md),
+            (f"{mode}_m2_delta_uses_contract_direction_not_best_worst",
+             f"{green}+0.0300</span>" in md and f"{red}-0.0200</span>" in md),
+            (f"{mode}_m3_higher_negative_rho_is_better",
+             f"{green}-0.2000</span>" in md and f"{red}-0.4000</span>" in md),
+            (f"{mode}_m4_adverse_lower_is_better",
+             f"{green}5.20%</span>" in md and f"{red}10.00%</span>" in md),
+            (f"{mode}_neutral_and_tied_metrics_remain_uncolored",
+             f"{green}25</span>" not in md and f"{red}25</span>" not in md
+             and f"{green}1.0000</span>" not in m3 and f"{red}1.0000</span>" not in m3),
+            (f"{mode}_single_model_has_no_spurious_best_worst",
+             f"{green}0.4500</span>" not in single_md
+             and f"{red}0.1500</span>" not in single_md
+             and f"{green}+0.0300</span>" in single_md),
+            (f"{mode}_same_standard_section_and_scope_headings",
+             md.count("MODEL SOP | 1. Learnability") == 1
+             and md.count("MODEL SOP | 4. Joint MFE / Adverse Quality") == 1
+             and "#42A5F5" in md and "#D6B53A" in md),
+        ])
+        if mode == "rolling_oos":
+            results.append(("rolling_extension_lower_drift_highlight",
+                            f"{green}0.5000 pooled σ</span>" in md
+                            and f"{red}1.5000 pooled σ</span>" in md))
+        results.append((f"{mode}_robustness_lower_std_highlight",
+                        f"{green}0.0100</span>" in md and f"{red}0.0400</span>" in md))
+    return results
+
+
 def validate_research_report_contract_freeze_case(_base_params):
     """Persistent Research report/menu contracts stay frozen and cross-profile comparable."""
 
@@ -4950,6 +5059,9 @@ def validate_research_report_contract_freeze_case(_base_params):
     def check_true(name, condition, detail=""):
         add_check(results, "synthetic_meta", case_id, name, True, bool(condition), note=detail)
 
+    for color_case, color_ok in _model_report_color_alignment_checks(app):
+        check_true(color_case, color_ok)
+
     current = persistent_report_contract_fingerprints()
     errors = validate_approved_persistent_report_contracts()
     check_true(
@@ -4979,8 +5091,8 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
 
     check_true(
-        "model_sop_v9_authorized_four_section_contract_not_historical_v7",
-        int(MODEL_STANDARD_SOP.version) == 9
+        "model_sop_v10_preserves_approved_four_section_contract",
+        int(MODEL_STANDARD_SOP.version) == 10
         and [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
         == [(1,"Learnability"),(2,"Generalization"),
             (3,"Upside / Downside Validation"),(4,"Joint MFE / Adverse Quality")],
@@ -4992,8 +5104,8 @@ def validate_research_report_contract_freeze_case(_base_params):
     # Frozen to the user's 2026-09-04 standard comparison presentation.  These
     # are UI invariants, not assertions about a particular experimental model.
     check_true(
-        "model_comparison_v13_matches_approved_sop_v9_and_preserves_generalization_tables",
-        int(MODEL_STANDARD_COMPARISON.version) == 13
+        "model_comparison_v14_matches_approved_sop_v10_and_preserves_generalization_tables",
+        int(MODEL_STANDARD_COMPARISON.version) == 14
         and not hasattr(MODEL_STANDARD_COMPARISON, "model_specific_extension_ids")
         and comparison_extension_ids() == tuple(MODEL_COMPARISON_EXTENSION_SCHEMAS)
         and comparison_sections == [(item.number, item.title) for item in MODEL_STANDARD_SOP.sections]
@@ -5103,8 +5215,8 @@ def validate_research_report_contract_freeze_case(_base_params):
         and "model.rolling_standard_comparison" not in current,
     )
 
-    # Version 9 retains every shared M1/M2 metric and M3 four-correlation
-    # contract; version 13 derives the multi-model headers from the same owner.
+    # Version 10 preserves v9 science and all M1–M4 metric contracts;
+    # version 14 derives the same multi-model columns from the same owner.
     # The numerical four-section producer is tested below against independent
     # stock-day ground truth, not merely renderer string matches.
     from services.breakout_quality.standard_model_sop import (
@@ -5125,7 +5237,7 @@ def validate_research_report_contract_freeze_case(_base_params):
                                        "Top 10% Adverse", "Top 10% Joint Quality")),
     )
     check_true(
-        "model_sop_v9_user_authorized_exact_four_chapter_titles_and_metric_sets",
+        "model_sop_v10_preserves_four_chapter_titles_and_metric_sets",
         [(s.number, s.section_id, s.title) for s in MODEL_STANDARD_SOP.sections] == [
             (1, "learnability", "Learnability"),
             (2, "generalization", "Generalization"),

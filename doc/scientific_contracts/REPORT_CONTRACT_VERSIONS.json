@@ -55,6 +55,13 @@
           "fingerprint": "d04250bf71c5212d",
           "definition_path": "doc/scientific_contracts/MODEL_STANDARD_COMPARISON_v13.json",
           "definition_sha256": "bec4cf30e91b22f99ccbdbb25cc31cb1d7b2e654f7954b7bba48d250b65b937d"
+        },
+        {
+          "contract_id": "model.standard_comparison@v14",
+          "version": 14,
+          "fingerprint": "63fcc3529cdb8d81",
+          "definition_path": "doc/scientific_contracts/MODEL_STANDARD_COMPARISON_v14.json",
+          "definition_sha256": "318e830125b283fdcb5b15327f63c83af540cb92e3c274fc6eca6efd2587e533"
         }
       ]
     },
@@ -81,6 +88,13 @@
           "fingerprint": "bd4201957c8e4a42",
           "definition_path": "doc/scientific_contracts/MODEL_STANDARD_SOP_v9.json",
           "definition_sha256": "0221581cdce7012c4b333fce070f340d655ea3558966650cd0826a8570411a8c"
+        },
+        {
+          "contract_id": "model.standard_sop@v10",
+          "version": 10,
+          "fingerprint": "4719bdbbb2b15d3b",
+          "definition_path": "doc/scientific_contracts/MODEL_STANDARD_SOP_v10.json",
+          "definition_sha256": "aa062ffd343a0d8d8669644231e355c284870382447d46517a17474d27b926c8"
         }
       ]
     },
