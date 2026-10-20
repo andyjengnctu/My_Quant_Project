@@ -5292,115 +5292,24 @@ def _commit_robustness_scientific_result(
     return summary
 
 
-def _execute_robustness_under_lock(
-    *, cfg, settings, status: dict[str, Any], contract: dict[str, Any],
-    fixed_arms: tuple[StrategyComparisonArm, ...],
+def _prepare_strategy_only_baseline_units(
+    *, cfg: Any, settings: Any, run_root: Path,
     stochastic_arms: tuple[StrategyComparisonArm, ...],
     model_arms: tuple[StrategyComparisonArm, ...],
     strategy_only_arms: tuple[StrategyComparisonArm, ...],
-    registered_scientific_reuse: dict[tuple[str, int], dict[str, Any]],
+    seeds: tuple[int, ...],
     benchmark_bindings: dict[tuple[str, int], dict[str, Any]],
     comparison_start: str, comparison_end: str,
-) -> dict[str, Any]:
-    """Mutate one exact robustness run only while the caller holds both locks."""
-    run_root = _run_root(contract)
-    model_root = _model_work_root(contract)
-    run_root.mkdir(parents=True, exist_ok=True)
-    completed_summary = _reuse_completed_robustness_run(
-        cfg=cfg, settings=settings, run_root=run_root, contract=contract,
-        status=status, fixed_arms=fixed_arms,
-    )
-    if completed_summary is not None:
-        return completed_summary
-    # Even with REUSE disabled, the same scientific fingerprint cannot overwrite
-    # an existing COMPLETED result or a foreign/malformed historical manifest.
-    # Disabling REUSE is not authorization to rewrite durable science.
-    _check_resumable_robustness_manifest(run_root, contract=contract)
-    model_root.mkdir(parents=True, exist_ok=True)
-    manifest_path = run_root / MANIFEST_FILENAME
+    scientific_completed: set[tuple[str, int]],
+    completed: set[tuple[str, int]],
+    rows: list[dict[str, Any]], yearly_rows: list[dict[str, Any]],
+) -> tuple[dict[tuple[str, int], str], dict[tuple[str, int], str], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Reuse durable strategy-only observations; build baseline context only if a model replay needs it.
+
+    The caller owns the scientific identity and mutable completed-unit sets.
+    """
     seed_results_path = run_root / SEED_RESULTS_FILENAME
     seed_yearly_results_path = run_root / SEED_YEARLY_RESULTS_FILENAME
-    registered_reuse_provenance = _materialize_registered_strategy_only_scientific_reuse(
-        run_root=run_root,
-        contract=contract,
-        stochastic_arms=tuple(stochastic_arms),
-        reusable=registered_scientific_reuse,
-    )
-    manifest = {
-        "schema_version": ROBUSTNESS_SCHEMA_VERSION,
-        "status": "RUNNING",
-        "created_at_utc": datetime.now(timezone.utc).isoformat(),
-        "contract": contract,
-        "comparison_period": {"start": comparison_start, "end": comparison_end},
-        "seed_results_path": project_relative_display_path(seed_results_path, project_root=PROJECT_ROOT),
-        "seed_yearly_results_path": project_relative_display_path(
-            seed_yearly_results_path, project_root=PROJECT_ROOT
-        ),
-        "registered_scientific_reuse": registered_reuse_provenance,
-    }
-    _write_json(manifest_path, manifest)
-
-    started_total = time.perf_counter()
-    seeds = tuple(int(value) for value in contract["resolved_seeds"])
-    try:
-        existing, existing_yearly, scientific_unit_states = (
-            _resolve_existing_scientific_unit_states(
-                run_root=run_root,
-                contract=contract,
-                stochastic_arms=tuple(stochastic_arms),
-                reuse_completed=bool(cfg.reuse_completed),
-            )
-        )
-        fixed_results = _run_fixed_baselines(
-            settings=settings, status=status, run_root=run_root, fixed_arms=fixed_arms
-        )
-    except BaseException as exc:
-        manifest.update({
-            "status": "FAILED",
-            "failed_at_utc": datetime.now(timezone.utc).isoformat(),
-            "failed_stage": "resume_preflight_or_fixed_baseline",
-            "error_type": type(exc).__name__,
-            "error": str(exc),
-            "resumable": True,
-        })
-        _write_json(manifest_path, manifest)
-        print(
-            styled_workflow_status("[FAILED]")
-            + " Multiple-seed robustness前置回放階段已停止；可由同一入口接續。"
-            + f" manifest={project_relative_display_path(manifest_path, project_root=PROJECT_ROOT)}"
-        )
-        raise
-    scientific_completed = {
-        unit
-        for unit, state in scientific_unit_states.items()
-        if str(state.get("action") or "") == RESULT_ACTION_REUSE
-    }
-    model_arm_ids = {arm.arm_id for arm in model_arms}
-    strategy_only_completed = {unit for unit in scientific_completed if unit[0] not in model_arm_ids}
-    attribution_ready = (
-        _attribution_ready_units(
-            run_root,
-            stochastic_arms=tuple(model_arms),
-            seeds=seeds,
-            fingerprint=str(contract["fingerprint"]),
-        )
-        if cfg.keep_attribution_source
-        else {unit for unit in scientific_completed if unit[0] in model_arm_ids}
-    )
-    completed = set(strategy_only_completed | (scientific_completed & attribution_ready))
-    rows = (
-        [row for row in existing.to_dict("records") if (str(row.get("arm_id")), int(row.get("seed"))) in scientific_completed]
-        if not existing.empty and cfg.reuse_completed else []
-    )
-    yearly_rows = (
-        [row for row in existing_yearly.to_dict("records") if (str(row.get("arm_id")), int(row.get("seed"))) in scientific_completed]
-        if cfg.reuse_completed and not existing_yearly.empty else []
-    )
-    existing_by_unit = {
-        (str(row.get("arm_id")), int(row.get("seed"))): dict(row)
-        for row in rows
-    }
-
     # C61/C58 are per-seed scientific baselines.  Their durable seed results are
     # reusable; the replay directory itself is transient and is rebuilt only when
     # an unfinished model arm actually needs baseline_reuse_dir.
@@ -5511,6 +5420,202 @@ def _execute_robustness_under_lock(
             _write_seed_results(seed_results_path, seed_frame_checkpoint)
         if not yearly_frame_checkpoint.empty:
             _write_seed_yearly_results(seed_yearly_results_path, yearly_frame_checkpoint)
+
+    return benchmark_baseline_dirs, strategy_only_actions, rows, yearly_rows
+
+
+def _cleanup_completed_robustness_transients(
+    *, cfg: Any, settings: Any, run_root: Path, model_root: Path,
+    model_arms: tuple[StrategyComparisonArm, ...],
+    training_cleanup_targets: list[dict[str, Any]],
+) -> None:
+    """Remove only transient training/replay products after all replay work is committed."""
+    # 同一DL source/seed可fan-out多個selector replay；必須等所有replay完成後才清除
+    # 共用的isolated model/score，避免第一個arm完成就刪掉第二個arm仍需讀取的工件。
+    for target in training_cleanup_targets:
+        _cleanup_unit_artifacts(
+            model_dir=target["model_dir"],
+            research_dir=target["research_dir"],
+            keep_checkpoints=cfg.keep_checkpoints,
+            keep_scores=cfg.keep_scores,
+            score_source=target["score_source"],
+        )
+
+    summary = _commit_robustness_scientific_result(
+        cfg=cfg, run_root=run_root, contract=contract,
+        manifest=manifest, manifest_path=manifest_path,
+        seed_results_path=seed_results_path,
+        seed_yearly_results_path=seed_yearly_results_path,
+        stochastic_arms=stochastic_arms, model_arms=model_arms, seeds=seeds,
+        fixed_results=fixed_results, comparison_start=comparison_start,
+        comparison_end=comparison_end, started_total=started_total,
+    )
+    selection_score_tree = any(
+        str(settings.dl_sources[str(arm.dl_id)].score_source) == "selection_point_in_time"
+        for arm in model_arms
+    )
+    if not cfg.keep_replay_details:
+        shutil.rmtree(run_root / "work" / "replay", ignore_errors=True)
+    shutil.rmtree(run_root / "work" / "results", ignore_errors=True)
+    shutil.rmtree(run_root / "work" / "baselines", ignore_errors=True)
+    if selection_score_tree or not cfg.keep_scores:
+        shutil.rmtree(run_root / "work" / "training", ignore_errors=True)
+    if not cfg.keep_checkpoints and (not selection_score_tree or not cfg.keep_scores):
+        shutil.rmtree(model_root, ignore_errors=True)
+    if not cfg.keep_replay_details and (selection_score_tree or not cfg.keep_scores):
+        shutil.rmtree(run_root / "work", ignore_errors=True)
+
+
+def _display_completed_robustness_result(
+    *, cfg: Any, summary: dict[str, Any], run_root: Path,
+    progress: InlineProgress,
+) -> None:
+    """Show the committed canonical report and durable evidence paths."""
+    if progress.inline:
+        progress.finish()
+    _print_report_tables(summary)
+    print(f"\n總耗時：{format_elapsed(summary['elapsed_sec'])}")
+    cleanup_tag = styled_workflow_status("暫存清理")
+    print(
+        f"{cleanup_tag}：checkpoints={'保留' if cfg.keep_checkpoints else '已清除'}｜"
+        f"scores={'保留' if cfg.keep_scores else '已清除'}｜"
+        f"replay details={'保留' if cfg.keep_replay_details else '已清除'}"
+        + ("｜fitting-identity checkpoint cache=保留" if cfg.checkpoint_cache_root else "")
+    )
+    print("永久工件：")
+    permanent_paths = [
+        run_root / MANIFEST_FILENAME,
+        _scientific_observation_manifest_path(run_root),
+        run_root / SEED_RESULTS_FILENAME,
+        run_root / SEED_YEARLY_RESULTS_FILENAME,
+    ]
+    if cfg.keep_attribution_source:
+        permanent_paths.append(_attribution_source_root(run_root) / MANIFEST_FILENAME)
+    permanent_paths.extend([run_root / SUMMARY_FILENAME, run_root / REPORT_FILENAME])
+    for path in permanent_paths:
+        print("- " + project_relative_display_path(path, project_root=PROJECT_ROOT))
+
+
+def _execute_robustness_under_lock(
+    *, cfg, settings, status: dict[str, Any], contract: dict[str, Any],
+    fixed_arms: tuple[StrategyComparisonArm, ...],
+    stochastic_arms: tuple[StrategyComparisonArm, ...],
+    model_arms: tuple[StrategyComparisonArm, ...],
+    strategy_only_arms: tuple[StrategyComparisonArm, ...],
+    registered_scientific_reuse: dict[tuple[str, int], dict[str, Any]],
+    benchmark_bindings: dict[tuple[str, int], dict[str, Any]],
+    comparison_start: str, comparison_end: str,
+) -> dict[str, Any]:
+    """Mutate one exact robustness run only while the caller holds both locks."""
+    run_root = _run_root(contract)
+    model_root = _model_work_root(contract)
+    run_root.mkdir(parents=True, exist_ok=True)
+    completed_summary = _reuse_completed_robustness_run(
+        cfg=cfg, settings=settings, run_root=run_root, contract=contract,
+        status=status, fixed_arms=fixed_arms,
+    )
+    if completed_summary is not None:
+        return completed_summary
+    # Even with REUSE disabled, the same scientific fingerprint cannot overwrite
+    # an existing COMPLETED result or a foreign/malformed historical manifest.
+    # Disabling REUSE is not authorization to rewrite durable science.
+    _check_resumable_robustness_manifest(run_root, contract=contract)
+    model_root.mkdir(parents=True, exist_ok=True)
+    manifest_path = run_root / MANIFEST_FILENAME
+    seed_results_path = run_root / SEED_RESULTS_FILENAME
+    seed_yearly_results_path = run_root / SEED_YEARLY_RESULTS_FILENAME
+    registered_reuse_provenance = _materialize_registered_strategy_only_scientific_reuse(
+        run_root=run_root,
+        contract=contract,
+        stochastic_arms=tuple(stochastic_arms),
+        reusable=registered_scientific_reuse,
+    )
+    manifest = {
+        "schema_version": ROBUSTNESS_SCHEMA_VERSION,
+        "status": "RUNNING",
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "contract": contract,
+        "comparison_period": {"start": comparison_start, "end": comparison_end},
+        "seed_results_path": project_relative_display_path(seed_results_path, project_root=PROJECT_ROOT),
+        "seed_yearly_results_path": project_relative_display_path(
+            seed_yearly_results_path, project_root=PROJECT_ROOT
+        ),
+        "registered_scientific_reuse": registered_reuse_provenance,
+    }
+    _write_json(manifest_path, manifest)
+
+    started_total = time.perf_counter()
+    seeds = tuple(int(value) for value in contract["resolved_seeds"])
+    try:
+        existing, existing_yearly, scientific_unit_states = (
+            _resolve_existing_scientific_unit_states(
+                run_root=run_root,
+                contract=contract,
+                stochastic_arms=tuple(stochastic_arms),
+                reuse_completed=bool(cfg.reuse_completed),
+            )
+        )
+        fixed_results = _run_fixed_baselines(
+            settings=settings, status=status, run_root=run_root, fixed_arms=fixed_arms
+        )
+    except BaseException as exc:
+        manifest.update({
+            "status": "FAILED",
+            "failed_at_utc": datetime.now(timezone.utc).isoformat(),
+            "failed_stage": "resume_preflight_or_fixed_baseline",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "resumable": True,
+        })
+        _write_json(manifest_path, manifest)
+        print(
+            styled_workflow_status("[FAILED]")
+            + " Multiple-seed robustness前置回放階段已停止；可由同一入口接續。"
+            + f" manifest={project_relative_display_path(manifest_path, project_root=PROJECT_ROOT)}"
+        )
+        raise
+    scientific_completed = {
+        unit
+        for unit, state in scientific_unit_states.items()
+        if str(state.get("action") or "") == RESULT_ACTION_REUSE
+    }
+    model_arm_ids = {arm.arm_id for arm in model_arms}
+    strategy_only_completed = {unit for unit in scientific_completed if unit[0] not in model_arm_ids}
+    attribution_ready = (
+        _attribution_ready_units(
+            run_root,
+            stochastic_arms=tuple(model_arms),
+            seeds=seeds,
+            fingerprint=str(contract["fingerprint"]),
+        )
+        if cfg.keep_attribution_source
+        else {unit for unit in scientific_completed if unit[0] in model_arm_ids}
+    )
+    completed = set(strategy_only_completed | (scientific_completed & attribution_ready))
+    rows = (
+        [row for row in existing.to_dict("records") if (str(row.get("arm_id")), int(row.get("seed"))) in scientific_completed]
+        if not existing.empty and cfg.reuse_completed else []
+    )
+    yearly_rows = (
+        [row for row in existing_yearly.to_dict("records") if (str(row.get("arm_id")), int(row.get("seed"))) in scientific_completed]
+        if cfg.reuse_completed and not existing_yearly.empty else []
+    )
+    existing_by_unit = {
+        (str(row.get("arm_id")), int(row.get("seed"))): dict(row)
+        for row in rows
+    }
+
+    benchmark_baseline_dirs, strategy_only_actions, rows, yearly_rows = (
+        _prepare_strategy_only_baseline_units(
+            cfg=cfg, settings=settings, run_root=run_root,
+            stochastic_arms=stochastic_arms, model_arms=model_arms,
+            strategy_only_arms=strategy_only_arms, seeds=seeds,
+            benchmark_bindings=benchmark_bindings,
+            comparison_start=comparison_start, comparison_end=comparison_end,
+            scientific_completed=scientific_completed, completed=completed,
+            rows=rows, yearly_rows=yearly_rows,
+        )
+    )
 
     total_units = len(stochastic_arms) * len(seeds)
     training_sources = _training_source_groups(stochastic_arms, settings=settings)
@@ -5933,63 +6038,15 @@ def _execute_robustness_under_lock(
         training_executor.shutdown(wait=True, cancel_futures=True)
         replay_executor.shutdown(wait=True, cancel_futures=False)
 
-    # 同一DL source/seed可fan-out多個selector replay；必須等所有replay完成後才清除
-    # 共用的isolated model/score，避免第一個arm完成就刪掉第二個arm仍需讀取的工件。
-    for target in training_cleanup_targets:
-        _cleanup_unit_artifacts(
-            model_dir=target["model_dir"],
-            research_dir=target["research_dir"],
-            keep_checkpoints=cfg.keep_checkpoints,
-            keep_scores=cfg.keep_scores,
-            score_source=target["score_source"],
-        )
-
-    summary = _commit_robustness_scientific_result(
-        cfg=cfg, run_root=run_root, contract=contract,
-        manifest=manifest, manifest_path=manifest_path,
-        seed_results_path=seed_results_path,
-        seed_yearly_results_path=seed_yearly_results_path,
-        stochastic_arms=stochastic_arms, model_arms=model_arms, seeds=seeds,
-        fixed_results=fixed_results, comparison_start=comparison_start,
-        comparison_end=comparison_end, started_total=started_total,
+    _cleanup_completed_robustness_transients(
+        cfg=cfg, settings=settings, run_root=run_root,
+        model_root=model_root, model_arms=model_arms,
+        training_cleanup_targets=training_cleanup_targets,
     )
-    selection_score_tree = any(
-        str(settings.dl_sources[str(arm.dl_id)].score_source) == "selection_point_in_time"
-        for arm in model_arms
+    _display_completed_robustness_result(
+        cfg=cfg, summary=summary, run_root=run_root,
+        progress=progress,
     )
-    if not cfg.keep_replay_details:
-        shutil.rmtree(run_root / "work" / "replay", ignore_errors=True)
-    shutil.rmtree(run_root / "work" / "results", ignore_errors=True)
-    shutil.rmtree(run_root / "work" / "baselines", ignore_errors=True)
-    if selection_score_tree or not cfg.keep_scores:
-        shutil.rmtree(run_root / "work" / "training", ignore_errors=True)
-    if not cfg.keep_checkpoints and (not selection_score_tree or not cfg.keep_scores):
-        shutil.rmtree(model_root, ignore_errors=True)
-    if not cfg.keep_replay_details and (selection_score_tree or not cfg.keep_scores):
-        shutil.rmtree(run_root / "work", ignore_errors=True)
-    if progress.inline:
-        progress.finish()
-    _print_report_tables(summary)
-    print(f"\n總耗時：{format_elapsed(summary['elapsed_sec'])}")
-    cleanup_tag = styled_workflow_status("暫存清理")
-    print(
-        f"{cleanup_tag}：checkpoints={'保留' if cfg.keep_checkpoints else '已清除'}｜"
-        f"scores={'保留' if cfg.keep_scores else '已清除'}｜"
-        f"replay details={'保留' if cfg.keep_replay_details else '已清除'}"
-        + ("｜fitting-identity checkpoint cache=保留" if cfg.checkpoint_cache_root else "")
-    )
-    print("永久工件：")
-    permanent_paths = [
-        manifest_path,
-        _scientific_observation_manifest_path(run_root),
-        seed_results_path,
-        seed_yearly_results_path,
-    ]
-    if cfg.keep_attribution_source:
-        permanent_paths.append(_attribution_source_root(run_root) / MANIFEST_FILENAME)
-    permanent_paths.extend([run_root / SUMMARY_FILENAME, run_root / REPORT_FILENAME])
-    for path in permanent_paths:
-        print("- " + project_relative_display_path(path, project_root=PROJECT_ROOT))
     return summary
 
 
