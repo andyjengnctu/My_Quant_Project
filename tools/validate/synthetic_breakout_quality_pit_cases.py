@@ -173,12 +173,40 @@ def _check_selection_pit_publication_invariants(check_true, pit_module):
         immutable_example = {"z": ["歷史"], "a": 1}
         json_path = directory / "format_parity.json"
         write_json(json_path, immutable_example)
+        legacy_json_text = json.dumps(
+            immutable_example, ensure_ascii=False, indent=2, sort_keys=True,
+        )
+        legacy_json_path = directory / "format_parity_legacy.json"
+        # AI: Exact reference: pre-atomic Research writer used Path.write_text().
+        # AI: On Windows its native text-mode newline conversion produced CRLF.
+        legacy_json_path.write_text(legacy_json_text, encoding="utf-8")
         check_true(
             "research_json_atomic_publication_preserves_historical_exact_bytes",
-            json_path.read_bytes() == json.dumps(
-                immutable_example, ensure_ascii=False, indent=2, sort_keys=True,
-            ).encode("utf-8"),
+            json_path.read_bytes() == legacy_json_path.read_bytes(),
         )
+
+        # AI: Simulate Windows' native newline behavior on non-Windows runners too.
+        original_path_open = Path.open
+
+        def windows_default_open(path, *args, **kwargs):
+            mode = args[0] if args else kwargs.get("mode", "r")
+            if "b" not in mode and any(flag in mode for flag in ("w", "a", "x")):
+                if kwargs.get("newline") is None:
+                    kwargs["newline"] = "\r\n"
+            return original_path_open(path, *args, **kwargs)
+
+        windows_json_path = directory / "format_parity_windows.json"
+        windows_legacy_path = directory / "format_parity_windows_legacy.json"
+        with patch.object(Path, "open", new=windows_default_open):
+            windows_legacy_path.write_text(legacy_json_text, encoding="utf-8")
+            write_json(windows_json_path, immutable_example)
+        expected_windows_bytes = legacy_json_text.replace("\n", "\r\n").encode("utf-8")
+        check_true(
+            "research_json_atomic_publication_preserves_windows_native_crlf",
+            windows_json_path.read_bytes() == windows_legacy_path.read_bytes()
+            == expected_windows_bytes,
+        )
+
 
 
 def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_params):
