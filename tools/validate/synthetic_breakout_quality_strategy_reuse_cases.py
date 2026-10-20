@@ -966,6 +966,7 @@ def append_completed_pair_score_reuse_contract_checks(
         import os
         from core.file_integrity import compute_file_sha256
         from filters.breakout_quality import ranking_score_store as score_owner
+        from filters.breakout_quality import strategy_score_projection as projection_owner
         cached_table = score_owner.load_selection_point_in_time_score_table_from_path(str(score_path))
         stamp = score_path.stat()
         old_bytes = score_path.read_bytes()
@@ -978,7 +979,12 @@ def append_completed_pair_score_reuse_contract_checks(
             columns=("breakout_quality_score", "raw_safety_score"),
             score_file_sha256=compute_file_sha256(score_path),
         )
+        projection_was_cached = projection_owner._selection_pit_projection_cached.cache_info().currsize > 0
         score_owner.clear_selection_point_in_time_ranking_contract_cache()
+        dependent_projection_was_invalidated = (
+            projection_was_cached
+            and projection_owner._selection_pit_projection_cached.cache_info().currsize == 0
+        )
         refreshed_table = score_owner.load_selection_point_in_time_score_table_from_path(str(score_path))
         same_stat_collision_blocked = (
             (score_path.stat().st_size, score_path.stat().st_mtime_ns)
@@ -1045,6 +1051,11 @@ def append_completed_pair_score_reuse_contract_checks(
         results, "synthetic_breakout_quality", case_id,
         "strategy_projection_and_pit_cache_invalidate_same_stat_changed_bytes",
         True, same_stat_collision_blocked,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "pit_score_owner_invalidates_registered_projection_cache_without_reverse_import",
+        True, dependent_projection_was_invalidated,
     )
     add_check(
         results,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import tempfile
 from functools import lru_cache
@@ -162,8 +163,13 @@ def _source_content_witness(
                 os.fsync(handle.fileno())
             try:
                 os.link(temporary, witness)
-            except FileExistsError:
-                pass  # Another process published first; validate *its* bytes.
+            except FileExistsError as exc:
+                # A concurrent writer won the atomic publish race. Validate its
+                # immutable witness below; keep the collision traceable at DEBUG.
+                logging.getLogger(__name__).debug(
+                    "來源 CSV 內容見證已由其他程序建立；改驗證現有檔案 (%s): %s",
+                    witness.name, exc,
+                )
         finally:
             temporary.unlink(missing_ok=True)
     try:

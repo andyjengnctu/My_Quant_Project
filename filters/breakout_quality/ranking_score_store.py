@@ -12,7 +12,7 @@ from functools import lru_cache
 import json
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -696,21 +696,32 @@ def load_selection_point_in_time_ranking_contract(
     )
 
 
+# Read-only PIT projection consumers register their invalidators with the score
+# owner. This keeps publication-time invalidation centralized without importing
+# a downstream Strategy Compare consumer back into the score-store module.
+_selection_pit_dependent_cache_invalidators: list[Callable[[], None]] = []
+
+
+def register_selection_pit_cache_invalidator(invalidate: Callable[[], None]) -> None:
+    """Register a dependent PIT-score cache for canonical publication invalidation."""
+    if not callable(invalidate):
+        raise TypeError("PIT score cache invalidator must be callable")
+    if invalidate not in _selection_pit_dependent_cache_invalidators:
+        _selection_pit_dependent_cache_invalidators.append(invalidate)
+
+
 def clear_selection_point_in_time_ranking_contract_cache() -> None:
-    """Invalidate *all* PIT score/contract projections after canonical publication.
+    """Invalidate PIT contracts, tables, and registered consumer projections.
 
     The producer and Research subprocess consumer both use this single owner.
-    Clearing only the contract permits the independently cached DataFrame to
-    outlive a new score artifact, even when its path is unchanged.
+    Clearing only the contract permits independently cached scores to outlive
+    a publication, even when its artifact path is unchanged.
     """
     load_selection_point_in_time_ranking_contract.cache_clear()
     load_selection_point_in_time_score_table.cache_clear()
     _load_selection_point_in_time_score_table_from_path_cached.cache_clear()
-    # Import at invalidation time: the projection consumer imports this owner.
-    from filters.breakout_quality.strategy_score_projection import (
-        clear_selection_point_in_time_projection_cache,
-    )
-    clear_selection_point_in_time_projection_cache()
+    for invalidate in tuple(_selection_pit_dependent_cache_invalidators):
+        invalidate()
 
 
 def _selection_pit_file_cache_signature(path: Path) -> tuple[int, int]:
@@ -1461,6 +1472,7 @@ __all__ = [
     "load_continuous_ranker_oos_score_table",
     "clear_continuous_ranker_oos_score_caches",
     "clear_selection_point_in_time_ranking_contract_cache",
+    "register_selection_pit_cache_invalidator",
     "lookup_continuous_ranker_oos_candidate_score",
     "SelectionPointInTimeRankingContract",
     "derive_point_in_time_model_validation_gate",

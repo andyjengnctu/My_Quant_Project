@@ -20,6 +20,7 @@ from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
     load_selection_point_in_time_score_table_from_path,
+    register_selection_pit_cache_invalidator,
 )
 
 SCORE_PROJECTION_SCHEMA_VERSION = 1
@@ -162,8 +163,13 @@ def compute_score_projection_sha256s(
 
 
 def clear_selection_point_in_time_projection_cache() -> None:
-    """Only the canonical PIT score owner calls this during publication."""
+    """Drop the read-only projection cache when the PIT score owner invalidates."""
     _selection_pit_projection_cached.cache_clear()
+
+
+# One-way dependency: the consumer registers a cache invalidator with its
+# upstream score owner; the owner never imports Strategy Compare.
+register_selection_pit_cache_invalidator(clear_selection_point_in_time_projection_cache)
 
 
 __all__ = [
