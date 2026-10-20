@@ -2287,6 +2287,159 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             rejected == [True, True] and malformed_rejected,
         )
 
+    # AI: Viewing a committed result must not silently break the durable SHA
+    # evidence used by the canonical REUSE validator.  Exercise the real viewer
+    # with isolated files, including historical presentation upgrades and drift.
+    with tempfile.TemporaryDirectory(prefix="robustness_latest_readonly_") as temp_dir:
+        viewer_root = Path(temp_dir)
+        output_root = viewer_root / "results"
+        fingerprint = "synthetic_completed_fingerprint"
+        run_root = output_root / fingerprint
+        run_root.mkdir(parents=True)
+        report_path = run_root / robustness_runtime.REPORT_FILENAME
+        summary_path = run_root / robustness_runtime.SUMMARY_FILENAME
+        manifest_path = run_root / robustness_runtime.MANIFEST_FILENAME
+        latest_path = output_root / robustness_runtime.LATEST_FILENAME
+        seed_path = run_root / robustness_runtime.SEED_RESULTS_FILENAME
+        yearly_path = run_root / robustness_runtime.SEED_YEARLY_RESULTS_FILENAME
+        seed_path.write_text("arm_id,seed,direct_selection_r\nA,1,0.2\n", encoding="utf-8")
+        yearly_path.write_text("arm_id,seed,year\nA,1,2020\n", encoding="utf-8")
+        summary_payload = {
+            "schema_version": robustness_runtime.ROBUSTNESS_SCHEMA_VERSION,
+            "contract": {"fingerprint": fingerprint},
+            "paired_comparisons": [],
+            "direct_selection_r_same_seed_comparison": [],
+            "selection_r_to_strategy_same_seed_translation": [],
+            "common_strategy_report": [],
+        }
+        summary_path.write_text(json.dumps(summary_payload), encoding="utf-8")
+        report_path.write_text("preserved completed Markdown\n", encoding="utf-8")
+        latest_path.write_text(json.dumps({
+            "fingerprint": fingerprint,
+            "summary_path": f"results/{fingerprint}/{robustness_runtime.SUMMARY_FILENAME}",
+            "report_path": f"results/{fingerprint}/{robustness_runtime.REPORT_FILENAME}",
+        }), encoding="utf-8")
+        with patch.object(robustness_runtime, "PROJECT_ROOT", viewer_root), patch.object(
+            robustness_runtime, "get_strategy_multi_seed_robustness_settings",
+            return_value=SimpleNamespace(output_root="results"),
+        ):
+            def _commit_viewer_fixture():
+                artifacts = robustness_runtime._build_durable_result_artifacts(run_root)
+                manifest_path.write_text(json.dumps({
+                    "status": "COMPLETED",
+                    "contract": {"fingerprint": fingerprint},
+                    "durable_artifacts": artifacts,
+                }), encoding="utf-8")
+                return artifacts
+
+            initial_artifacts = _commit_viewer_fixture()
+            original_bytes = {
+                file.name: file.read_bytes() for file in
+                (report_path, summary_path, manifest_path, seed_path, yearly_path)
+            }
+            with patch.object(robustness_runtime, "_print_report_tables") as printed, patch.object(
+                robustness_runtime, "_write_json", side_effect=AssertionError("viewer wrote JSON")
+            ), patch.object(
+                robustness_runtime, "atomic_write_text", side_effect=AssertionError("viewer wrote Markdown")
+            ):
+                robustness_runtime.show_latest_multi_seed_robustness_report(
+                    robustness_id="synthetic"
+                )
+            check_true(
+                "robustness_latest_view_does_not_mutate_completed_durable_evidence",
+                printed.call_count == 1
+                and all((run_root / name).read_bytes() == data for name, data in original_bytes.items())
+                and robustness_runtime._validate_durable_result_artifacts(run_root, initial_artifacts),
+            )
+
+            # An old schema may be normalized for display, but must not be
+            # persisted by a read-only menu action (which has no write authority).
+            old_summary = {"schema_version": 1, "contract": {"fingerprint": fingerprint}}
+            summary_path.write_text(json.dumps(old_summary), encoding="utf-8")
+            old_artifacts = _commit_viewer_fixture()
+            upgraded_summary = {**old_summary, "display_upgrade_only": True}
+            with patch.object(
+                robustness_runtime, "_load_seed_results",
+                return_value=pd.DataFrame([{"direct_selection_r": 0.2}]),
+            ), patch.object(
+                robustness_runtime, "_load_seed_yearly_results", return_value=pd.DataFrame()
+            ), patch.object(
+                robustness_runtime, "_upgrade_derived_report_summary", return_value=upgraded_summary
+            ) as upgrader, patch.object(
+                robustness_runtime, "_print_report_tables"
+            ) as rendered, patch.object(
+                robustness_runtime, "_write_json", side_effect=AssertionError("viewer wrote JSON")
+            ), patch.object(
+                robustness_runtime, "atomic_write_text", side_effect=AssertionError("viewer wrote Markdown")
+            ):
+                robustness_runtime.show_latest_multi_seed_robustness_report(
+                    robustness_id="synthetic"
+                )
+            check_true(
+                "robustness_latest_legacy_upgrade_is_in_memory_only",
+                upgrader.call_count == 1
+                and rendered.call_args.args[0] == upgraded_summary
+                and json.loads(summary_path.read_text(encoding="utf-8")) == old_summary
+                and robustness_runtime._validate_durable_result_artifacts(run_root, old_artifacts),
+            )
+
+            # A stale pointer, an interrupted run, and a modified report must
+            # not be presented as a validated completed result.
+            report_path.write_text("modified without updating manifest\n", encoding="utf-8")
+            with patch.object(robustness_runtime, "_print_report_tables") as printed:
+                try:
+                    robustness_runtime.show_latest_multi_seed_robustness_report(robustness_id="synthetic")
+                except RuntimeError:
+                    corrupted_rejected = True
+                else:
+                    corrupted_rejected = False
+            check_true(
+                "robustness_latest_rejects_changed_report_without_manifest_commit",
+                corrupted_rejected and not printed.called,
+            )
+            report_path.write_text("preserved completed Markdown\n", encoding="utf-8")
+            _commit_viewer_fixture()
+            incomplete = json.loads(manifest_path.read_text(encoding="utf-8"))
+            incomplete["status"] = "RUNNING"
+            manifest_path.write_text(json.dumps(incomplete), encoding="utf-8")
+            try:
+                robustness_runtime.show_latest_multi_seed_robustness_report(robustness_id="synthetic")
+            except RuntimeError:
+                interrupted_rejected = True
+            else:
+                interrupted_rejected = False
+            check_true("robustness_latest_rejects_incomplete_manifest", interrupted_rejected)
+            _commit_viewer_fixture()
+            latest_payload = json.loads(latest_path.read_text(encoding="utf-8"))
+            latest_payload["summary_path"] = "results/foreign/robustness_summary.json"
+            latest_path.write_text(json.dumps(latest_payload), encoding="utf-8")
+            try:
+                robustness_runtime.show_latest_multi_seed_robustness_report(robustness_id="synthetic")
+            except ValueError:
+                wrong_pointer_rejected = True
+            else:
+                wrong_pointer_rejected = False
+            check_true("robustness_latest_rejects_foreign_result_pointer", wrong_pointer_rejected)
+            latest_payload["summary_path"] = (
+                f"results/{fingerprint}/{robustness_runtime.SUMMARY_FILENAME}"
+            )
+            latest_path.write_text(json.dumps(latest_payload), encoding="utf-8")
+            with robustness_runtime.exclusive_file_lock(
+                robustness_runtime.sibling_publication_lock_path(run_root)
+            ):
+                try:
+                    robustness_runtime.show_latest_multi_seed_robustness_report(
+                        robustness_id="synthetic"
+                    )
+                except RuntimeError:
+                    publishing_reader_blocked = True
+                else:
+                    publishing_reader_blocked = False
+            check_true(
+                "robustness_latest_reader_shares_exact_result_publication_lock",
+                publishing_reader_blocked,
+            )
+
     application_source = read_source_text(
         project_root / "services" / "research" / "breakout_quality_application.py"
     )

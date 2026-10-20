@@ -4729,17 +4729,51 @@ def show_multi_seed_robustness_status(*, robustness_id: str | None = None) -> No
 
 
 def show_latest_multi_seed_robustness_report(*, robustness_id: str | None = None) -> None:
+    """Display a committed robustness result without mutating durable evidence.
+
+    Report upgrades are presentation-only when viewing historical results.  The
+    canonical, locked REUSE execution owns any persistent report/manifest refresh.
+    """
     cfg = get_strategy_multi_seed_robustness_settings(robustness_id)
-    latest = (PROJECT_ROOT / cfg.output_root / LATEST_FILENAME).resolve()
+    output_root = (PROJECT_ROOT / cfg.output_root).resolve()
+    latest = output_root / LATEST_FILENAME
     if not latest.is_file():
         raise FileNotFoundError("尚無Multiple-seed robustness最新結果")
     pointer = _read_json(latest)
-    report = (PROJECT_ROOT / str(pointer["report_path"])).resolve()
-    summary_path = (
-        PROJECT_ROOT / str(pointer.get("summary_path") or "")
-    ).resolve()
-    if summary_path.is_file():
+    fingerprint = str(pointer.get("fingerprint") or "").strip()
+    run_root = (output_root / fingerprint).resolve()
+    report = (PROJECT_ROOT / str(pointer.get("report_path") or "")).resolve()
+    summary_path = (PROJECT_ROOT / str(pointer.get("summary_path") or "")).resolve()
+    if (
+        not fingerprint or run_root.parent != output_root or run_root.name != fingerprint
+        or summary_path != run_root / SUMMARY_FILENAME
+        or report != run_root / REPORT_FILENAME
+    ):
+        raise ValueError("Robustness latest指標與正式結果目錄不一致")
+
+    # Share the exact-run writer's stable lock (not the shared model-work lock).
+    # Readers never inspect partially refreshed completed reports.
+    with exclusive_file_lock(
+        sibling_publication_lock_path(run_root),
+        conflict_message="Robustness結果正在更新；無法讀取未提交的混合版本",
+    ):
+        # Latest is a presentation pointer, not an alternative artifact authority.
+        # Prevent an interrupted or corrupt result from being displayed as COMPLETED.
+        manifest = _read_json(run_root / MANIFEST_FILENAME)
+        if (
+            str(manifest.get("status") or "") != "COMPLETED"
+            or str(dict(manifest.get("contract") or {}).get("fingerprint") or "") != fingerprint
+        ):
+            raise RuntimeError("Robustness最新結果尚未完成或身分不一致")
+        durable = dict(manifest.get("durable_artifacts") or {})
+        if durable and not _validate_durable_result_artifacts(run_root, durable):
+            raise RuntimeError("Robustness最新結果完整性驗證失敗；禁止顯示混版報表")
+
+        if not summary_path.is_file():
+            raise FileNotFoundError(f"最新robustness摘要不存在: {summary_path}")
         summary = _read_json(summary_path)
+        if str(dict(summary.get("contract") or {}).get("fingerprint") or "") != fingerprint:
+            raise RuntimeError("Robustness最新摘要與已完成結果身分不一致")
         needs_upgrade = (
             int(summary.get("schema_version") or 0) < ROBUSTNESS_SCHEMA_VERSION
             or "paired_comparisons" not in summary
@@ -4747,31 +4781,17 @@ def show_latest_multi_seed_robustness_report(*, robustness_id: str | None = None
             or "selection_r_to_strategy_same_seed_translation" not in summary
             or "common_strategy_report" not in summary
         )
-        seed_results_path = summary_path.parent / SEED_RESULTS_FILENAME
-        seed_yearly_results_path = summary_path.parent / SEED_YEARLY_RESULTS_FILENAME
-        seed_frame = _load_seed_results(seed_results_path)
-        seed_yearly_frame = _load_seed_yearly_results(seed_yearly_results_path)
-        if (
-            needs_upgrade
-            and not seed_frame.empty
-            and "direct_selection_r" in seed_frame.columns
-        ):
-            upgraded = _upgrade_derived_report_summary(
-                summary,
-                seed_frame=seed_frame,
-                seed_yearly_frame=seed_yearly_frame,
-                run_root=summary_path.parent,
-            )
-            _write_json(summary_path, upgraded)
-            atomic_write_text(
-                report, render_multi_seed_robustness_report(upgraded, target="markdown")
-            )
-    if not summary_path.is_file():
-        raise FileNotFoundError(f"最新robustness摘要不存在: {summary_path}")
-    summary = _read_json(summary_path)
-    atomic_write_text(
-        report, render_multi_seed_robustness_report(summary, target="markdown")
-    )
+        if needs_upgrade:
+            seed_frame = _load_seed_results(run_root / SEED_RESULTS_FILENAME)
+            seed_yearly_frame = _load_seed_yearly_results(run_root / SEED_YEARLY_RESULTS_FILENAME)
+            if not seed_frame.empty and "direct_selection_r" in seed_frame.columns:
+                summary = _upgrade_derived_report_summary(
+                    summary,
+                    seed_frame=seed_frame,
+                    seed_yearly_frame=seed_yearly_frame,
+                    run_root=run_root,
+                )
+        # Read-only: never write the summary, report or completed manifest here.
     _print_report_tables(summary)
 
 
