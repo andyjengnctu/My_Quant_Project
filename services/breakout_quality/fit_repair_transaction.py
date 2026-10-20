@@ -17,6 +17,8 @@ from pathlib import Path
 import shutil
 from typing import Iterator
 
+from core.file_integrity import exclusive_file_lock
+
 
 @contextmanager
 def _fit_repair_lock(journal_path: Path) -> Iterator[None]:
@@ -25,31 +27,11 @@ def _fit_repair_lock(journal_path: Path) -> Iterator[None]:
     The lock file itself remains on disk to avoid races caused by deleting an
     inode while a second process is waiting on it. No extra user CLI is needed.
     """
-    lock_file = journal_path.with_suffix(".lock")
-    lock_file.parent.mkdir(parents=True, exist_ok=True)
-    with lock_file.open("a+b") as stream:
-        stream.seek(0, os.SEEK_END)
-        if stream.tell() == 0:
-            stream.write(b"\x00")
-            stream.flush()
-        stream.seek(0)
-        try:
-            if os.name == "nt":
-                import msvcrt
-                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as exc:
-            raise RuntimeError("Another FIT repair is still active for this profile") from exc
-        try:
-            yield
-        finally:
-            stream.seek(0)
-            if os.name == "nt":
-                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    with exclusive_file_lock(
+        journal_path.with_suffix(".lock"),
+        conflict_message="Another FIT repair is still active for this profile",
+    ):
+        yield
 
 
 def fit_repair_journal_path(*, project_root: Path, filter_id: str, profile: str) -> Path:

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
 import json
 import os
 import re
 import tempfile
 import time
 from pathlib import Path
+from typing import Iterator
 from typing import Any
 
 
@@ -83,6 +85,43 @@ def atomic_replace_with_retry(
             time.sleep(float(retry_delay_seconds))
     raise RuntimeError("atomic replace retry loop ended unexpectedly")
 
+
+
+@contextmanager
+def exclusive_file_lock(
+    lock_path: str | Path, *, conflict_message: str = "Another artifact publication is active"
+) -> Iterator[None]:
+    """Nonblocking cross-process publication lock; OS releases it on process exit.
+
+    Keep the lock file instead of unlinking it (unlinking permits split inodes).
+    This is a writer coordination primitive, not an artifact identity or a reader
+    transaction. Publication readers continue to enforce manifest and file SHA.
+    """
+    lock_file = Path(lock_path)
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    with lock_file.open("a+b") as stream:
+        stream.seek(0, os.SEEK_END)
+        if stream.tell() == 0:
+            stream.write(b"\x00")
+            stream.flush()
+        stream.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise RuntimeError(str(conflict_message)) from exc
+        try:
+            yield
+        finally:
+            stream.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 def atomic_write_text(
     path: str | Path,
@@ -184,6 +223,7 @@ def canonical_json_sha256(payload: object, *, length: int | None = None) -> str:
 __all__ = [
     "file_change_signature",
     "atomic_replace_with_retry",
+    "exclusive_file_lock",
     "atomic_write_json",
     "atomic_write_text",
     "canonical_json_sha256",

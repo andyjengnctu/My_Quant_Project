@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import os
+import tempfile
 import shutil
 import time
 from datetime import datetime, timezone
@@ -17,6 +18,11 @@ import numpy as np
 import pandas as pd
 
 from core.display_common import InlineProgress, format_elapsed
+from core.file_integrity import (
+    atomic_replace_with_retry,
+    compute_file_sha256,
+    exclusive_file_lock,
+)
 from core.training_progress import (
     clear_trainer_pit_progress_context,
     render_training_unit_progress,
@@ -2330,6 +2336,98 @@ def _snapshot_superseded_point_in_time_aggregate(
     return snapshot_dir
 
 
+
+def _pit_aggregate_baseline_sha256(manifest_path: Path) -> str | None:
+    """Capture a publisher's initial top-level commit marker, not FIT identity."""
+    return compute_file_sha256(manifest_path) if manifest_path.is_file() else None
+
+
+def _stage_pit_aggregate_csv(path: Path, frame: pd.DataFrame) -> Path:
+    """Create an fsynced sibling CSV without truncating an active publication."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    os.close(fd)
+    staged = Path(name)
+    try:
+        with staged.open("w", encoding="utf-8-sig", newline="") as stream:
+            frame.to_csv(stream, index=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
+    return staged
+
+
+def _publish_selection_pit_aggregate(
+    *,
+    score_path: Path,
+    coverage_path: Path,
+    manifest_path: Path,
+    score_frame: pd.DataFrame,
+    coverage_frame: pd.DataFrame,
+    manifest: dict[str, Any],
+    baseline_manifest_sha256: str | None,
+    point_in_time_dir: Path,
+    score_start: pd.Timestamp,
+    score_end: pd.Timestamp,
+    selection_end: pd.Timestamp,
+    started_at: float | None = None,
+) -> None:
+    """Publish a PIT aggregate through one writer owner and manifest-last commit.
+
+    Staging is outside the publication lock. A second publisher that completed
+    after this run started cannot be silently overwritten: the initial commit
+    marker must still match while we own the OS lock. Readers validate the
+    content SHA, so interrupted multi-file swaps fail closed, not as READY.
+    """
+    staged: list[Path] = []
+    try:
+        staged_score = _stage_pit_aggregate_csv(score_path, score_frame)
+        staged.append(staged_score)
+        staged_coverage = _stage_pit_aggregate_csv(coverage_path, coverage_frame)
+        staged.append(staged_coverage)
+        records = {
+            "scores": build_file_manifest(staged_score),
+            "coverage": build_file_manifest(staged_coverage),
+        }
+        records["scores"]["filename"] = score_path.name
+        records["coverage"]["filename"] = coverage_path.name
+        manifest["artifacts"] = records
+        lock_path = manifest_path.with_name("." + manifest_path.name + ".publish.lock")
+        with exclusive_file_lock(
+            lock_path, conflict_message="Another Selection PIT aggregate publication is active",
+        ):
+            if _pit_aggregate_baseline_sha256(manifest_path) != baseline_manifest_sha256:
+                raise RuntimeError(
+                    "Selection PIT manifest changed during this run; "
+                    "refusing to overwrite a concurrent publication"
+                )
+            _snapshot_superseded_point_in_time_aggregate(
+                point_in_time_dir=point_in_time_dir,
+                manifest_path=manifest_path,
+                score_start=score_start,
+                score_end=score_end,
+                selection_end=selection_end,
+            )
+            atomic_replace_with_retry(staged_score, score_path)
+            atomic_replace_with_retry(staged_coverage, coverage_path)
+            # Legacy/uncoordinated writers are not expected, but verify exact
+            # staged bytes before making a valid top-level manifest visible.
+            for name, path in (("scores", score_path), ("coverage", coverage_path)):
+                if compute_file_sha256(path).lower() != str(records[name]["sha256"]).lower():
+                    raise RuntimeError(f"Selection PIT {name} changed while publishing")
+            if started_at is not None:
+                # Observed wall time includes staging/snapshot/commit I/O, as it
+                # did before the publisher became transactional.
+                manifest["elapsed_sec"] = round(time.perf_counter() - started_at, 3)
+                manifest["generated_at_utc"] = datetime.now(timezone.utc).isoformat()
+            write_json(manifest_path, manifest)
+    finally:
+        for path in staged:
+            path.unlink(missing_ok=True)
+
+
 def _run_point_in_time_scores(
     args: argparse.Namespace,
     *,
@@ -2383,6 +2481,20 @@ def _run_point_in_time_scores(
             raise ValueError("stacking context必須使用isolated point_in_time_dir_override")
     else:
         raise ValueError(f"未知PIT authorization mode: {authorization_mode!r}")
+    # Authorization must precede all publication-side effects. Serialize the
+    # entire authorized build (including Fold FIT imports and rescores), not
+    # only the final manifest, so two processes cannot mutate the same Fold.
+    if bool(args.plan_only):
+        return _run_authorized_point_in_time_scores(args, settings=settings)
+    pit_dir = _point_in_time_dir_for_args(args)
+    with exclusive_file_lock(
+        pit_dir / ".selection_pit_build.lock",
+        conflict_message="Another Selection PIT build is active for this output directory",
+    ):
+        return _run_authorized_point_in_time_scores(args, settings=settings)
+
+
+def _run_authorized_point_in_time_scores(args, *, settings) -> int:
     started = time.perf_counter()
     color_enabled = console_color_enabled()
     data_started = time.perf_counter()
@@ -2557,6 +2669,10 @@ def _run_point_in_time_scores(
         )
     point_in_time_dir = _point_in_time_dir_for_args(args)
     point_in_time_dir.mkdir(parents=True, exist_ok=True)
+    # Detect an aggregate published by another process while folds are in flight.
+    aggregate_baseline_sha256 = _pit_aggregate_baseline_sha256(
+        _selection_point_in_time_manifest_path_for_args(args)
+    )
 
     # A prior Forward FIT repair may have committed the *whole* six-fold Rolling
     # publication to historical_fit_repairs. Inspect every missing fold's saved
@@ -2950,17 +3066,6 @@ def _run_point_in_time_scores(
     coverage_path = _selection_point_in_time_coverage_path_for_args(args)
     manifest_path = _selection_point_in_time_manifest_path_for_args(args)
 
-    # Preserve superseded top-level aggregates while reusing immutable annual folds.
-    _snapshot_superseded_point_in_time_aggregate(
-        point_in_time_dir=point_in_time_dir,
-        manifest_path=manifest_path,
-        score_start=score_start,
-        score_end=score_end,
-        selection_end=selection_end,
-    )
-
-    combined.to_csv(score_path, index=False, encoding="utf-8-sig")
-    pd.DataFrame(coverage_rows).to_csv(coverage_path, index=False, encoding="utf-8-sig")
 
     manifest = {
         "schema_version": POINT_IN_TIME_SCHEMA_VERSION,
@@ -3047,10 +3152,7 @@ def _run_point_in_time_scores(
             "per_score_fold_information_cutoff_required": True,
             "frozen_forward_required": False,
         },
-        "artifacts": {
-            "scores": build_file_manifest(score_path),
-            "coverage": build_file_manifest(coverage_path),
-        },
+        "artifacts": {},  # filled from fully staged CSVs by the publication owner
         "torch_execution": plan.as_manifest_payload(),
         "elapsed_sec": round(time.perf_counter() - started, 3),
     }
@@ -3059,7 +3161,20 @@ def _run_point_in_time_scores(
         == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
     ):
         manifest["score_eligibility_contract"] = build_score_eligibility_contract(bundle.profile)
-    write_json(manifest_path, manifest)
+    _publish_selection_pit_aggregate(
+        score_path=score_path,
+        coverage_path=coverage_path,
+        manifest_path=manifest_path,
+        score_frame=combined,
+        coverage_frame=pd.DataFrame(coverage_rows),
+        manifest=manifest,
+        baseline_manifest_sha256=aggregate_baseline_sha256,
+        point_in_time_dir=point_in_time_dir,
+        score_start=score_start,
+        score_end=score_end,
+        selection_end=selection_end,
+        started_at=started,
+    )
     clear_selection_point_in_time_ranking_contract_cache()
     if compact_console:
         print(

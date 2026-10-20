@@ -33,6 +33,154 @@ from .synthetic_breakout_quality_support import (
 
 from .source_index import read_source_ast, read_source_text
 
+def _check_selection_pit_publication_invariants(check_true, pit_module):
+    """Cross-process writer ownership and manifest-last data consistency."""
+    import subprocess
+    import sys
+
+    from core.file_integrity import compute_file_sha256, exclusive_file_lock
+    from filters.breakout_quality.workflow_io import write_json
+
+    with tempfile.TemporaryDirectory(prefix="selection_pit_publication_contract_") as temp_dir:
+        directory = Path(temp_dir)
+        score_path = directory / "selection_point_in_time_scores.csv"
+        coverage_path = directory / "selection_point_in_time_coverage.csv"
+        manifest_path = directory / "selection_point_in_time_manifest.json"
+        initial_score = pd.DataFrame({"ticker": ["2330"], "score": [0.2]})
+        initial_coverage = pd.DataFrame({"fold_id": ["old"]})
+        initial_score.to_csv(score_path, index=False, encoding="utf-8-sig")
+        initial_coverage.to_csv(coverage_path, index=False, encoding="utf-8-sig")
+        initial_manifest = {"score_period": {"start": "2021-01-01", "end": "2021-12-31"}}
+        write_json(manifest_path, initial_manifest)
+        baseline = compute_file_sha256(manifest_path)
+
+        def publish(expected_baseline, *, score=0.9):
+            return pit_module._publish_selection_pit_aggregate(
+                score_path=score_path,
+                coverage_path=coverage_path,
+                manifest_path=manifest_path,
+                score_frame=pd.DataFrame({"ticker": ["2330"], "score": [score]}),
+                coverage_frame=pd.DataFrame({"fold_id": ["new"]}),
+                manifest={"score_period": {"start": "2021-01-01", "end": "2021-12-31"}},
+                baseline_manifest_sha256=expected_baseline,
+                point_in_time_dir=directory,
+                score_start=pd.Timestamp("2021-01-01"),
+                score_end=pd.Timestamp("2021-12-31"),
+                selection_end=pd.Timestamp("2020-12-31"),
+            )
+
+        publish(baseline)
+        published = json.loads(manifest_path.read_text(encoding="utf-8"))
+        check_true(
+            "pit_atomic_publication_manifest_commits_exact_score_and_coverage_bytes",
+            published["artifacts"]["scores"] == build_file_manifest(score_path)
+            and published["artifacts"]["coverage"] == build_file_manifest(coverage_path)
+            and abs(float(pd.read_csv(score_path)["score"].iloc[0]) - 0.9) < 1e-12,
+        )
+        committed_bytes = (
+            score_path.read_bytes(), coverage_path.read_bytes(), manifest_path.read_bytes()
+        )
+        stale_rejected = False
+        try:
+            publish(baseline, score=0.1)
+        except RuntimeError as exc:
+            stale_rejected = "concurrent publication" in str(exc)
+        check_true(
+            "pit_concurrent_publisher_cannot_overwrite_newer_manifest",
+            stale_rejected and committed_bytes == (
+                score_path.read_bytes(), coverage_path.read_bytes(), manifest_path.read_bytes()
+            ),
+        )
+        initial_stager = pit_module._stage_pit_aggregate_csv
+        stage_count = [0]
+
+        def fail_second_stage(*args):
+            stage_count[0] += 1
+            if stage_count[0] == 2:
+                raise OSError("synthetic coverage stage failure")
+            return initial_stager(*args)
+
+        staging_failure_rejected = False
+        with patch.object(pit_module, "_stage_pit_aggregate_csv", side_effect=fail_second_stage):
+            try:
+                publish(compute_file_sha256(manifest_path), score=0.3)
+            except OSError as exc:
+                staging_failure_rejected = "stage failure" in str(exc)
+        check_true(
+            "pit_csv_stage_failure_preserves_current_publication_and_cleans_temp",
+            staging_failure_rejected
+            and committed_bytes == (
+                score_path.read_bytes(), coverage_path.read_bytes(), manifest_path.read_bytes()
+            )
+            and not list(directory.glob(".*.tmp")),
+        )
+        active_lock = directory / ".selection_point_in_time_manifest.json.publish.lock"
+        lock_rejected = False
+        with exclusive_file_lock(active_lock):
+            try:
+                publish(compute_file_sha256(manifest_path), score=0.4)
+            except RuntimeError as exc:
+                lock_rejected = "publication is active" in str(exc)
+        check_true(
+            "pit_active_publication_lock_refuses_second_writer",
+            lock_rejected and committed_bytes == (
+                score_path.read_bytes(), coverage_path.read_bytes(), manifest_path.read_bytes()
+            ),
+        )
+        process_lock = directory / ".selection_pit_build.lock"
+        with exclusive_file_lock(process_lock):
+            probe = (
+                "from core.file_integrity import exclusive_file_lock\n"
+                "from pathlib import Path\n"
+                f"with exclusive_file_lock(Path({str(process_lock)!r})):\n    pass\n"
+            )
+            outcome = subprocess.run(
+                [sys.executable, "-c", probe],
+                cwd=str(Path(__file__).resolve().parents[2]),
+                capture_output=True, text=True, check=False,
+            )
+        check_true(
+            "pit_build_lock_is_cross_process_and_crash_safe",
+            outcome.returncode != 0
+            and "Another artifact publication is active" in outcome.stderr,
+        )
+        previous_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest_before_failure = manifest_path.read_bytes()
+        interrupted = False
+        with patch.object(pit_module, "write_json", side_effect=OSError("injected manifest failure")):
+            try:
+                publish(compute_file_sha256(manifest_path), score=0.7)
+            except OSError as exc:
+                interrupted = "manifest failure" in str(exc)
+        check_true(
+            "pit_interrupted_csv_commit_fails_closed_against_old_manifest_sha",
+            interrupted
+            and manifest_path.read_bytes() == manifest_before_failure
+            and compute_file_sha256(score_path) != previous_manifest["artifacts"]["scores"]["sha256"],
+        )
+        parity_frame = pd.DataFrame({
+            "ticker": ["2330", "0050"], "score": [0.123456789, 0.875],
+            "head": ["原始", "Safety"],
+        })
+        old_csv = directory / "old_style.csv"
+        parity_frame.to_csv(old_csv, index=False, encoding="utf-8-sig")
+        staged_csv = pit_module._stage_pit_aggregate_csv(directory / "new_style.csv", parity_frame)
+        check_true(
+            "pit_staged_csv_is_byte_identical_to_previous_pandas_writer",
+            staged_csv.read_bytes() == old_csv.read_bytes(),
+        )
+        staged_csv.unlink()
+        immutable_example = {"z": ["歷史"], "a": 1}
+        json_path = directory / "format_parity.json"
+        write_json(json_path, immutable_example)
+        check_true(
+            "research_json_atomic_publication_preserves_historical_exact_bytes",
+            json_path.read_bytes() == json.dumps(
+                immutable_example, ensure_ascii=False, indent=2, sort_keys=True,
+            ).encode("utf-8"),
+        )
+
+
 def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_params):
     """Protect PIT legality, fold identity and score-universe semantics."""
     case_id = "BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_BUILDER"
@@ -91,6 +239,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     from filters.breakout_quality.paths import SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
     from services.breakout_quality.point_in_time_scores import FOLD_MANIFEST_FILENAME
     from services.breakout_quality import point_in_time_scores as pit_module
+    _check_selection_pit_publication_invariants(check_true, pit_module)
     with tempfile.TemporaryDirectory(prefix="strategy_fit_cross_mode_source_") as td:
         base = Path(td).resolve()
         profile = DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
