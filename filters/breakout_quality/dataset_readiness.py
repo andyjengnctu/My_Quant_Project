@@ -1,4 +1,4 @@
-"""Canonical metadata-only readiness for the breakout-quality Dataset artifact.
+"""Canonical version-aware readiness for the breakout-quality Dataset artifact.
 
 The model-research workflow and every downstream artifact planner must agree on
 whether the indexed Dataset can be reused.  This module owns that decision; it
@@ -21,6 +21,7 @@ from filters.breakout_quality.dataset_store import (
     DATASET_STORAGE_FORMAT,
     DATASET_STORAGE_SCHEMA_VERSION,
     dataset_artifact_metadata_reasons,
+    dataset_artifact_content_reasons,
     market_set_artifact_metadata_reasons,
     resolve_dataset_paths,
 )
@@ -59,10 +60,10 @@ def collect_dataset_readiness(
 ) -> DatasetReadiness:
     """Return the single canonical Dataset reuse/rebuild/relabel decision.
 
-    This is the metadata-only equivalent of the strict runtime loader.  It keeps
-    status/preparation cheap while still checking storage schema, artifact
-    metadata, source-inventory freshness, policy and architecture-specific
-    sidecars.  Builders remain outside this module.
+    Cheap metadata and source gates run first. Otherwise-reusable artifacts are
+    bound to the hashes already recorded in dataset_summary; SHA checks are
+    cached by physical file revision to avoid repeated scans. Builders remain
+    outside this module.
     """
 
     root = Path(project_root).resolve()
@@ -179,6 +180,25 @@ def collect_dataset_readiness(
             ready=False,
             refresh_mode="relabel",
             reasons=tuple(relabel_reasons),
+            summary_path=paths.summary,
+            summary=summary,
+        )
+    # Only hash an otherwise reusable Dataset. An unchanged summary and file
+    # size must not authorize a new physical .npy revision for PIT/FIT reuse.
+    # The published SHA remains the sole content truth; the memoized physical
+    # revision is only a performance hint (never part of scientific identity).
+    content_reasons = dataset_artifact_content_reasons(
+        paths.artifact_paths(), summary.get("dataset_artifacts")
+    )
+    if bool(model_spec.requires_market_set):
+        content_reasons.extend(dataset_artifact_content_reasons(
+            paths.market_set_artifact_paths(), summary.get("market_set_artifacts")
+        ))
+    if content_reasons:
+        return DatasetReadiness(
+            ready=False,
+            refresh_mode="rebuild",
+            reasons=tuple(content_reasons),
             summary_path=paths.summary,
             summary=summary,
         )

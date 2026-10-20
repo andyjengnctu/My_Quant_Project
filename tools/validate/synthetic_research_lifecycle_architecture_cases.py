@@ -4198,4 +4198,173 @@ def validate_research_model_readiness_architecture_case(_base_params):
               ("REUSE", "REUSE", "REUSE", "DERIVE"),
               tuple(after_tamper.plan.action_by_key[key].action
                     for key in ("FIT", "SCORE", "EVIDENCE", "REPORT")))
+    # Dataset content integrity and PIT upstream version invalidation share the
+    # canonical readiness owner. These are deliberately tiny fake artifact bytes:
+    # no new Dataset/Target scientific identity or training fixture is produced.
+    from core.breakout_quality_policy import get_breakout_quality_model_research_settings
+    from filters.breakout_quality import dataset_readiness as readiness_owner
+    from filters.breakout_quality import dataset_store as dataset_owner
+    from filters.breakout_quality import artifact_dependency_registry as upstream_owner
+    from filters.breakout_quality.paths import resolve_filter_output_dir
+    from filters.breakout_quality.artifacts import build_file_manifest
+    from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY, FEATURE_COLUMNS, CONTEXT_COLUMNS
+    import os
+    integrity_settings = get_breakout_quality_model_research_settings()
+    with TemporaryDirectory() as td:
+        project = Path(td)
+        dataset_paths = dataset_owner.resolve_dataset_paths(
+            resolve_filter_output_dir(project, integrity_settings.filter_id)
+        )
+        dataset_paths.output_dir.mkdir(parents=True)
+        for name, artifact in dataset_paths.artifact_paths().items():
+            artifact.write_bytes(f"{name} old bytes".encode())
+        inventory = {"csv_inventory_sha256": "synthetic-source-bytes"}
+        summary_data = {
+            "filter_id": integrity_settings.filter_id,
+            "dataset": "full",
+            "dataset_storage_schema_version": dataset_owner.DATASET_STORAGE_SCHEMA_VERSION,
+            "dataset_storage_format": dataset_owner.DATASET_STORAGE_FORMAT,
+            "source_selection": {"requested_max_tickers": 0},
+            "feature_cache_policy": DEFAULT_LABEL_POLICY.feature_cache_manifest_payload(),
+            "feature_columns": list(FEATURE_COLUMNS),
+            "context_columns": list(CONTEXT_COLUMNS),
+            "label_policy": DEFAULT_LABEL_POLICY.label_manifest_payload(),
+            "policy": DEFAULT_LABEL_POLICY.as_manifest_payload(),
+            "source_data_inventory": inventory,
+            "dataset_artifacts": {
+                name: build_file_manifest(path)
+                for name, path in dataset_paths.artifact_paths().items()
+            },
+        }
+        dataset_paths.summary.write_text(json.dumps(summary_data), encoding="utf-8")
+        readiness_args = {
+            "filter_id": integrity_settings.filter_id,
+            "model_architecture": integrity_settings.model_architecture,
+            "dataset": "full", "max_tickers": 0,
+        }
+        signature_args = {
+            "filter_id": integrity_settings.filter_id,
+            "model_architecture": integrity_settings.model_architecture,
+            "experiment_profile": integrity_settings.experiment_profile,
+        }
+        with patch.object(readiness_owner, "build_source_data_inventory", return_value=inventory):
+            before = readiness_owner.collect_dataset_readiness(project, **readiness_args)
+            check_true("dataset_existing_sha_records_ready", before.ready)
+            signature_before = upstream_owner.model_upstream_publication_signature(
+                project, **signature_args,
+            )
+            artifact = dataset_paths.feature_bank
+            old_stat = artifact.stat()
+            staged = artifact.with_name(".synthetic_replacement.npy")
+            staged.write_bytes(b"X" + artifact.read_bytes()[1:])
+            os.utime(staged, ns=(old_stat.st_atime_ns, old_stat.st_mtime_ns))
+            os.replace(staged, artifact)
+            signature_after = upstream_owner.model_upstream_publication_signature(
+                project, **signature_args,
+            )
+            check_true("dataset_rewrite_without_summary_invalidates_pit_hint",
+                       signature_before != signature_after
+                       and old_stat.st_size == artifact.stat().st_size
+                       and old_stat.st_mtime_ns == artifact.stat().st_mtime_ns)
+            stale = readiness_owner.collect_dataset_readiness(project, **readiness_args)
+            check_true("dataset_same_metadata_corruption_rejected_by_canonical_readiness",
+                       not stale.ready and any("feature_bank artifact SHA256 mismatch" in reason
+                                                   for reason in stale.reasons))
+            summary_data["dataset_artifacts"]["feature_bank"] = build_file_manifest(artifact)
+            dataset_paths.summary.write_text(json.dumps(summary_data), encoding="utf-8")
+            fresh = readiness_owner.collect_dataset_readiness(project, **readiness_args)
+            check_true("dataset_legit_summary_republication_allows_ready", fresh.ready)
+            with patch.object(dataset_owner, "compute_file_sha256", side_effect=AssertionError(
+                "unchanged physical revision should hit bounded SHA cache"
+            )):
+                check_true("dataset_unchanged_revision_does_not_rehash",
+                           readiness_owner.collect_dataset_readiness(project, **readiness_args).ready)
+            # Market-set input is architecture-dependent, but its evidence
+            # must use the same Dataset content-verification owner.
+            from filters.breakout_quality.models.architectures import SUPPORTED_MODEL_ARCHITECTURES
+            from filters.breakout_quality.models.spec import get_model_spec
+            from filters.breakout_quality.market_set import market_set_contract_payload
+            market_arch = next(
+                arch for arch in SUPPORTED_MODEL_ARCHITECTURES
+                if get_model_spec(arch).requires_market_set
+            )
+            for name, market_path in dataset_paths.market_set_artifact_paths().items():
+                market_path.write_bytes(f"{name} valid market".encode())
+            summary_data["market_set_contract"] = market_set_contract_payload()
+            summary_data["market_set_artifacts"] = {
+                name: build_file_manifest(path)
+                for name, path in dataset_paths.market_set_artifact_paths().items()
+            }
+            dataset_paths.summary.write_text(json.dumps(summary_data), encoding="utf-8")
+            market_args = {**readiness_args, "model_architecture": market_arch}
+            check_true("market_set_artifacts_sha_ready_when_valid",
+                       readiness_owner.collect_dataset_readiness(project, **market_args).ready)
+            market_feature = dataset_paths.market_daily_features
+            market_feature.write_bytes(b"X" + market_feature.read_bytes()[1:])
+            invalid_market = readiness_owner.collect_dataset_readiness(project, **market_args)
+            check_true("market_set_artifacts_sha_mismatch_rejects_ready",
+                       not invalid_market.ready and any(
+                           "market_daily_features artifact SHA256 mismatch" in reason
+                           for reason in invalid_market.reasons
+                       ))
+            # An interrupted, same-size rewrite *during* the SHA check cannot
+            # be persisted as a reusable verified revision.
+            artifact.write_bytes(b"Z" + artifact.read_bytes()[1:])
+            real_hash = dataset_owner.compute_file_sha256
+            def mutation_during_hash(path):
+                observed = real_hash(path)
+                artifact.write_bytes(b"Y" + artifact.read_bytes()[1:])
+                return observed
+            with patch.object(dataset_owner, "compute_file_sha256", side_effect=mutation_during_hash):
+                raced = readiness_owner.collect_dataset_readiness(project, **readiness_args)
+            check_true("dataset_changed_during_sha_validation_rejected",
+                       not raced.ready and any("verification failed" in reason
+                                               for reason in raced.reasons))
+
+    # The Continuous Target manifest loader already owns main-target hashes.
+    # Optional published components must not silently bypass that same owner.
+    from filters.breakout_quality.continuous_target import (
+        CONTINUOUS_TARGET_SCHEMA_VERSION, TARGET_FAVORABLE_RETURN_FILENAME,
+        TARGET_RAW_FILENAME, TARGET_VALID_MASK_FILENAME,
+        load_validated_continuous_target_manifest, resolve_continuous_target_dir,
+    )
+    from core.breakout_quality_runtime import STRATEGY_ALIGNED_TARGET_ID
+    with TemporaryDirectory() as td:
+        project = Path(td)
+        target_dir = resolve_continuous_target_dir(
+            project, integrity_settings.filter_id, target_id=STRATEGY_ALIGNED_TARGET_ID,
+        )
+        target_dir.mkdir(parents=True)
+        target_files = {
+            "target_raw_r": target_dir / TARGET_RAW_FILENAME,
+            "valid_mask": target_dir / TARGET_VALID_MASK_FILENAME,
+            "favorable_return": target_dir / TARGET_FAVORABLE_RETURN_FILENAME,
+        }
+        for name, path in target_files.items():
+            path.write_bytes(f"{name} valid target".encode())
+        target_manifest = {
+            "schema_version": CONTINUOUS_TARGET_SCHEMA_VERSION,
+            "filter_id": integrity_settings.filter_id,
+            "target_contract": {"target_id": STRATEGY_ALIGNED_TARGET_ID},
+            "artifacts": {name: build_file_manifest(path) for name, path in target_files.items()},
+        }
+        (target_dir / "manifest.json").write_text(json.dumps(target_manifest), encoding="utf-8")
+        load_args = {"target_id": STRATEGY_ALIGNED_TARGET_ID}
+        check_true("target_published_component_valid_before_rewrite",
+                   isinstance(load_validated_continuous_target_manifest(
+                       project, integrity_settings.filter_id, **load_args,
+                   ), dict))
+        target_files["favorable_return"].write_bytes(
+            b"X" + target_files["favorable_return"].read_bytes()[1:]
+        )
+        try:
+            load_validated_continuous_target_manifest(
+                project, integrity_settings.filter_id, **load_args,
+            )
+            accepted_changed_component = True
+        except ValueError as exc:
+            accepted_changed_component = "component SHA256" not in str(exc)
+        check_true("target_published_component_corruption_rejected",
+                   not accepted_changed_component)
+
     return results, summary

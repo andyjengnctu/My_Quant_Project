@@ -33,6 +33,12 @@ from core.research_orchestration import (
 )
 from filters.breakout_quality.continuous_target import (
     TARGET_MANIFEST_FILENAME,
+    TARGET_RAW_FILENAME,
+    TARGET_VALID_MASK_FILENAME,
+    TARGET_FAVORABLE_RETURN_FILENAME,
+    TARGET_ADVERSE_RETURN_FILENAME,
+    TARGET_OPPORTUNITY_BAR_FILENAME,
+    TARGET_RISK_BREACH_BAR_FILENAME,
     load_validated_continuous_target_manifest,
     resolve_continuous_target_dir,
 )
@@ -185,26 +191,35 @@ def _model_upstream_publication_paths(
     """Resolve canonical upstream publication boundaries, not a second readiness rule."""
     root = Path(project_root).resolve()
     dataset_paths = resolve_dataset_paths(resolve_filter_output_dir(root, filter_id))
-    paths = [dataset_paths.summary]
+    paths = [dataset_paths.summary, *dataset_paths.artifact_paths().values()]
+    from filters.breakout_quality.models.spec import get_model_spec
+    if bool(get_model_spec(model_architecture).requires_market_set):
+        paths.extend(dataset_paths.market_set_artifact_paths().values())
     required = required_upstream_artifact_types(experiment_profile)
     if ARTIFACT_CONTINUOUS_TARGET in required:
         profile = get_breakout_quality_experiment_profile(experiment_profile)
-        paths.append(
-            resolve_continuous_target_dir(
-                root, filter_id, target_id=str(profile.continuous_target_id)
-            ) / TARGET_MANIFEST_FILENAME
+        target_dir = resolve_continuous_target_dir(
+            root, filter_id, target_id=str(profile.continuous_target_id)
         )
+        paths.extend(target_dir / filename for filename in (
+            TARGET_MANIFEST_FILENAME,
+            TARGET_RAW_FILENAME,
+            TARGET_VALID_MASK_FILENAME,
+            TARGET_FAVORABLE_RETURN_FILENAME,
+            TARGET_ADVERSE_RETURN_FILENAME,
+            TARGET_OPPORTUNITY_BAR_FILENAME,
+            TARGET_RISK_BREACH_BAR_FILENAME,
+        ))
     context = maybe_predicted_context_artifact_spec(
         get_continuous_ranker_execution_recipe(experiment_profile).context_policy.source
     )
     if context is not None:
-        paths.append(
-            resolve_predicted_context_dir(
-                context.source, root, filter_id=filter_id,
-                model_architecture=model_architecture,
-                experiment_profile=experiment_profile,
-            ) / context.manifest_filename
+        context_dir = resolve_predicted_context_dir(
+            context.source, root, filter_id=filter_id,
+            model_architecture=model_architecture,
+            experiment_profile=experiment_profile,
         )
+        paths.extend((context_dir / context.manifest_filename, context_dir / context.filename))
     return tuple(path.resolve() for path in paths)
 
 
@@ -217,6 +232,8 @@ def model_upstream_publication_signature(
 ) -> tuple:
     """Cheap physical-version hint for cached consumers of canonical upstream truth.
 
+    Include the published physical Dataset/Target/context artifacts as well as
+    their manifests: out-of-band byte changes must also invalidate PIT caches.
     A changed Dataset/Target/context publication forces the consumer to re-run
     ``collect_model_upstream_readiness`` and its existing source-provenance gates.
     This metadata hint is never a scientific or content identity.

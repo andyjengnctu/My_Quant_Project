@@ -58,6 +58,14 @@ TARGET_OPPORTUNITY_BAR_FILENAME = "group_opportunity_bar.npy"
 TARGET_RISK_BREACH_BAR_FILENAME = "group_first_risk_breach_bar.npy"
 TARGET_VALID_MASK_FILENAME = "group_target_valid_mask.npy"
 TARGET_MANIFEST_FILENAME = "manifest.json"
+# Optional published component arrays use the same provenance owner as the
+# required raw-target and validity-mask arrays.
+_TARGET_COMPONENT_FILENAMES = {
+    "favorable_return": TARGET_FAVORABLE_RETURN_FILENAME,
+    "adverse_return_to_peak": TARGET_ADVERSE_RETURN_FILENAME,
+    "opportunity_bar": TARGET_OPPORTUNITY_BAR_FILENAME,
+    "first_risk_breach_bar": TARGET_RISK_BREACH_BAR_FILENAME,
+}
 TARGET_AUDIT_JSON_FILENAME = "continuous_target_audit.json"
 TARGET_AUDIT_MARKDOWN_FILENAME = "continuous_target_audit.md"
 TARGET_DAILY_CSV_FILENAME = "continuous_target_daily_rankability.csv"
@@ -1022,6 +1030,19 @@ def load_validated_continuous_target_manifest(
             raise ValueError(f"continuous target artifact size不一致: {name}")
         if str(record.get("sha256") or "").lower() != compute_file_sha256(path).lower():
             raise ValueError(f"continuous target artifact SHA256不一致: {name}")
+    # Component arrays are optional for older manifests. If published, they
+    # must be valid even when a consumer only requests the minimal target mask.
+    for name, filename in _TARGET_COMPONENT_FILENAMES.items():
+        if name not in artifacts:
+            continue
+        record = artifacts[name]
+        path = target_dir / filename
+        if not isinstance(record, dict) or record.get("filename") != filename or not path.is_file():
+            raise ValueError(f"continuous target component不存在或filename不一致: {name}")
+        if int(record.get("size_bytes", -1)) != int(path.stat().st_size):
+            raise ValueError(f"continuous target component size不一致: {name}")
+        if str(record.get("sha256") or "").lower() != compute_file_sha256(path).lower():
+            raise ValueError(f"continuous target component SHA256不一致: {name}")
     return manifest
 
 
@@ -1095,12 +1116,7 @@ def load_validated_continuous_target_component_arrays(
     artifacts = manifest.get("artifacts")
     if not isinstance(artifacts, dict):
         raise ValueError("continuous target manifest缺少artifacts")
-    component_specs = {
-        "favorable_return": TARGET_FAVORABLE_RETURN_FILENAME,
-        "adverse_return_to_peak": TARGET_ADVERSE_RETURN_FILENAME,
-        "opportunity_bar": TARGET_OPPORTUNITY_BAR_FILENAME,
-        "first_risk_breach_bar": TARGET_RISK_BREACH_BAR_FILENAME,
-    }
+    component_specs = _TARGET_COMPONENT_FILENAMES
     arrays: dict[str, np.ndarray] = {
         "target_raw_r": np.asarray(target, dtype=np.float32),
         "valid_mask": np.asarray(valid_mask, dtype=bool),

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+from core.file_integrity import compute_file_sha256, file_change_signature, is_sha256_hex
 
 DATASET_STORAGE_SCHEMA_VERSION = 3
 DATASET_STORAGE_FORMAT = "indexed_feature_bank_npy_v2"
@@ -194,6 +197,52 @@ def market_set_artifact_metadata_reasons(
             )
     return reasons
 
+@lru_cache(maxsize=256)
+def _revision_verified_sha256(path: str, revision: tuple) -> str:
+    """Verify bytes once per physical revision, not once per model/PIT lookup.
+
+    The revision is a cache invalidation hint only; the expected SHA from the
+    canonical dataset_summary remains the sole content truth.
+    """
+    digest = compute_file_sha256(path)
+    if file_change_signature(path) != revision:
+        raise RuntimeError("Dataset artifact changed during SHA256 verification")
+    return digest
+
+
+def dataset_artifact_content_reasons(
+    artifact_paths: dict[str, Path], artifact_records: object,
+) -> list[str]:
+    """Check Dataset artifact bytes against their existing published SHA256 records.
+
+    Call after cheap metadata/source checks.  Does not change Dataset/FIT
+    identity or write new evidence; it fails closed on a concurrent rewrite.
+    """
+    if not isinstance(artifact_records, dict):
+        return ["dataset artifact SHA256 evidence missing"]
+    reasons: list[str] = []
+    for name, path in artifact_paths.items():
+        record = artifact_records.get(name)
+        if not isinstance(record, dict) or not is_sha256_hex(record.get("sha256")):
+            reasons.append(f"{name} SHA256 evidence missing or invalid")
+            continue
+        try:
+            before = file_change_signature(path)
+            if before == ("missing",):
+                reasons.append(f"{name} artifact missing during SHA256 verification")
+                continue
+            actual = _revision_verified_sha256(str(path.resolve()), before)
+            after = file_change_signature(path)
+        except (OSError, RuntimeError) as exc:
+            reasons.append(f"{name} artifact SHA256 verification failed: {type(exc).__name__}: {exc}")
+            continue
+        if before != after:
+            reasons.append(f"{name} artifact changed during SHA256 verification")
+        elif actual != str(record["sha256"]).strip().lower():
+            reasons.append(f"{name} artifact SHA256 mismatch with dataset_summary")
+    return reasons
+
+
 def save_npy_atomic(path: str | Path, array: np.ndarray) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -215,6 +264,7 @@ __all__ = [
     "LEGACY_DATASET_FILENAME",
     "SUMMARY_FILENAME",
     "dataset_artifact_metadata_reasons",
+    "dataset_artifact_content_reasons",
     "market_set_artifact_metadata_reasons",
     "load_npy",
     "resolve_dataset_paths",
