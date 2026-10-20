@@ -32,7 +32,10 @@ from core.buy_sort import (
     SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES,
 )
 from core.console_report import project_relative_display_path, render_table, render_title
-from core.file_integrity import canonical_json_sha256
+from core.file_integrity import (
+    canonical_json_sha256, publish_latest_snapshot, text_publication_bytes,
+    exclusive_file_lock, sibling_publication_lock_path,
+)
 from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
     StrategyComparisonArm,
@@ -873,9 +876,12 @@ def run_runtime_integration_gate(*, project_root: Path = PROJECT_ROOT) -> dict[s
     report = render_runtime_integration_report(payload)
     _write_json(run_dir / RESULT_FILENAME, payload)
     (run_dir / REPORT_FILENAME).write_text(report, encoding="utf-8")
-    latest_dir.mkdir(parents=True, exist_ok=True)
-    _write_json(latest_dir / RESULT_FILENAME, payload)
-    (latest_dir / REPORT_FILENAME).write_text(report, encoding="utf-8")
+    publish_latest_snapshot(latest_dir, (
+        (REPORT_FILENAME, text_publication_bytes(report)),
+        (RESULT_FILENAME, text_publication_bytes(
+            json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
+        )),
+    ))
     _print_console_summary(payload)
     print("永久輸出：")
     print(f"- {project_relative_display_path(run_dir / RESULT_FILENAME, project_root=root)}")
@@ -891,8 +897,13 @@ def show_latest_runtime_integration_report(*, project_root: Path = PROJECT_ROOT)
     report_path = root / cfg.output_root / "latest" / REPORT_FILENAME
     if not result_path.is_file() or not report_path.is_file():
         raise FileNotFoundError("尚無Runtime integration Gate最新結果")
-    payload = _read_json(result_path)
-    print("\n" + report_path.read_text(encoding="utf-8"))
+    with exclusive_file_lock(
+        sibling_publication_lock_path(result_path.parent),
+        conflict_message="Runtime integration最新結果正在發布；請稍後重試",
+    ):
+        payload = _read_json(result_path)
+        report = report_path.read_text(encoding="utf-8")
+    print("\n" + report)
     return payload
 
 

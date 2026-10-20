@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 import gzip
 from collections import deque
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -4700,21 +4700,31 @@ def show_multi_seed_robustness_status(*, robustness_id: str | None = None) -> No
         benchmark_parameter_identities=_benchmark_identity_payload(resolved_benchmark_bindings),
     )
     run_root = _run_root(contract)
-    existing, _existing_yearly, unit_states = _resolve_existing_scientific_unit_states(
-        run_root=run_root,
-        contract=contract,
-        stochastic_arms=tuple(stochastic),
-        reuse_completed=bool(cfg.reuse_completed),
+    # Read a consistent seed/attribution snapshot while the exact-result writer
+    # is inactive. A missing result has nothing to read or lock yet.
+    reader_guard = (
+        exclusive_file_lock(
+            sibling_publication_lock_path(run_root),
+            conflict_message="Robustness結果正在發布；請稍後重試狀態查詢",
+        ) if run_root.is_dir() else nullcontext()
     )
-    seeds = tuple(int(value) for value in contract["resolved_seeds"])
-    scientific_reuse_count = sum(
-        1 for state in unit_states.values()
-        if state.get("action") == RESULT_ACTION_REUSE
-    )
+    with reader_guard:
+        existing, _existing_yearly, unit_states = _resolve_existing_scientific_unit_states(
+            run_root=run_root,
+            contract=contract,
+            stochastic_arms=tuple(stochastic),
+            reuse_completed=bool(cfg.reuse_completed),
+        )
+        seeds = tuple(int(value) for value in contract["resolved_seeds"])
+        scientific_reuse_count = sum(
+            1 for state in unit_states.values()
+            if state.get("action") == RESULT_ACTION_REUSE
+        )
+        ready_attribution = _attribution_ready_units(
+            run_root, stochastic_arms=tuple(model_arms), seeds=seeds,
+            fingerprint=str(contract["fingerprint"]),
+        ) if cfg.keep_attribution_source else set()
     print(f"Fingerprint       ：{contract['fingerprint']}")
-    ready_attribution = _attribution_ready_units(
-        run_root, stochastic_arms=tuple(model_arms), seeds=seeds, fingerprint=str(contract["fingerprint"])
-    ) if cfg.keep_attribution_source else set()
     print(f"已完成seed結果    ：{scientific_reuse_count}/{len(stochastic) * cfg.seed_count}")
     if cfg.keep_attribution_source:
         print(f"Attribution工件   ：{len(ready_attribution)}/{len(model_arms) * cfg.seed_count}")
@@ -4769,6 +4779,11 @@ def show_latest_multi_seed_robustness_report(*, robustness_id: str | None = None
         if durable and not _validate_durable_result_artifacts(run_root, durable):
             raise RuntimeError("Robustness最新結果完整性驗證失敗；禁止顯示混版報表")
 
+        # The output-root latest pointer is atomic but shared by distinct run
+        # fingerprints. It may have advanced while we acquired this run's lock.
+        # Never present a stale selection as if it were the latest result.
+        if _read_json(latest) != pointer:
+            raise RuntimeError("Robustness Latest已由另一程序更新；請重新查看")
         if not summary_path.is_file():
             raise FileNotFoundError(f"最新robustness摘要不存在: {summary_path}")
         summary = _read_json(summary_path)
@@ -4793,6 +4808,38 @@ def show_latest_multi_seed_robustness_report(*, robustness_id: str | None = None
                 )
         # Read-only: never write the summary, report or completed manifest here.
     _print_report_tables(summary)
+
+
+def _publish_completed_robustness_latest(
+    *, run_root: Path, latest_path: Path, contract: dict[str, Any],
+    attribution_index_path: Path | None,
+) -> None:
+    """Update a presentation pointer only after the durable run has committed.
+
+    A pointer failure must never demote a committed COMPLETED scientific run.
+    Keep this call *outside* the finalization exception handler.
+    """
+    manifest = _read_json(run_root / MANIFEST_FILENAME)
+    if (
+        str(manifest.get("status") or "") != "COMPLETED"
+        or str(dict(manifest.get("contract") or {}).get("fingerprint") or "")
+        != str(contract["fingerprint"])
+    ):
+        raise RuntimeError("Robustness尚未提交COMPLETED，不可更新Latest")
+    _write_json(latest_path, {
+        "fingerprint": contract["fingerprint"],
+        "report_path": project_relative_display_path(
+            run_root / REPORT_FILENAME, project_root=PROJECT_ROOT,
+        ),
+        "summary_path": project_relative_display_path(
+            run_root / SUMMARY_FILENAME, project_root=PROJECT_ROOT,
+        ),
+        "attribution_source_manifest_path": (
+            None if attribution_index_path is None else project_relative_display_path(
+                attribution_index_path, project_root=PROJECT_ROOT,
+            )
+        ),
+    })
 
 
 def _cleanup_unit_artifacts(
@@ -5068,8 +5115,10 @@ def _execute_robustness_under_lock(
             )
             _print_report_tables(summary)
             return summary
-    if cfg.reuse_completed:
-        _check_resumable_robustness_manifest(run_root, contract=contract)
+    # Even with REUSE disabled, the same scientific fingerprint cannot overwrite
+    # an existing COMPLETED result or a foreign/malformed historical manifest.
+    # Disabling REUSE is not authorization to rewrite durable science.
+    _check_resumable_robustness_manifest(run_root, contract=contract)
     model_root.mkdir(parents=True, exist_ok=True)
     manifest_path = run_root / MANIFEST_FILENAME
     seed_results_path = run_root / SEED_RESULTS_FILENAME
@@ -5817,15 +5866,6 @@ def _execute_robustness_under_lock(
             "report_path": project_relative_display_path(run_root / REPORT_FILENAME, project_root=PROJECT_ROOT),
         })
         _write_json(manifest_path, manifest)
-        latest_path = (PROJECT_ROOT / cfg.output_root / LATEST_FILENAME).resolve()
-        _write_json(latest_path, {
-            "fingerprint": contract["fingerprint"],
-            "report_path": project_relative_display_path(run_root / REPORT_FILENAME, project_root=PROJECT_ROOT),
-            "summary_path": project_relative_display_path(run_root / SUMMARY_FILENAME, project_root=PROJECT_ROOT),
-            "attribution_source_manifest_path": (
-                None if attribution_index_path is None else project_relative_display_path(attribution_index_path, project_root=PROJECT_ROOT)
-            ),
-        })
     except BaseException as exc:
         manifest.update({
             "status": "FAILED",
@@ -5842,6 +5882,20 @@ def _execute_robustness_under_lock(
             + f" manifest={project_relative_display_path(manifest_path, project_root=PROJECT_ROOT)}"
         )
         raise
+    # COMPLETED was committed above. Publishing latest.json is presentation-only;
+    # if it fails, leave the committed manifest intact and make the failure clear.
+    try:
+        _publish_completed_robustness_latest(
+            run_root=run_root,
+            latest_path=(PROJECT_ROOT / cfg.output_root / LATEST_FILENAME).resolve(),
+            contract=contract,
+            attribution_index_path=attribution_index_path,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Robustness科學結果已COMPLETED，但Latest指標更新失敗；"
+            "保留既有結果；Latest指標仍需由正式發布流程處理"
+        ) from exc
     selection_score_tree = any(
         str(settings.dl_sources[str(arm.dl_id)].score_source) == "selection_point_in_time"
         for arm in model_arms

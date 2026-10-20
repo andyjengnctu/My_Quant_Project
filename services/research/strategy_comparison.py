@@ -21,7 +21,7 @@ from core.strategy_compare_policy import (
     get_strategy_runtime_integration_settings,
 )
 from core.runtime_utils import get_taipei_now
-from core.file_integrity import atomic_write_json
+from core.file_integrity import atomic_write_json, publish_latest_snapshot
 from core.display_common import format_elapsed
 from core.display import _display_width
 from core.strategy_comparison import (
@@ -1160,6 +1160,21 @@ def _run_directory(
     return run_dir, latest_dir
 
 
+def _publish_strategy_latest_snapshot(
+    latest_dir: Path, *, report_path: Path, json_path: Path, manifest_path: Path,
+) -> None:
+    """Keep the legacy latest view; canonical science stays in immutable run_dir."""
+    publish_latest_snapshot(
+        latest_dir,
+        (
+            ("strategy_comparison.md", Path(report_path).read_bytes()),
+            ("strategy_comparison.json", Path(json_path).read_bytes()),
+            ("manifest.json", Path(manifest_path).read_bytes()),
+        ),
+        conflict_message="Strategy Compare最新結果正在由另一程序發布",
+    )
+
+
 def run_strategy_comparison(
     *,
     project_root: Path = PROJECT_ROOT,
@@ -1787,15 +1802,12 @@ def run_strategy_comparison(
         },
     )
 
-    if latest_dir.exists():
-        shutil.rmtree(latest_dir)
-    latest_dir.mkdir(parents=True, exist_ok=True)
-    for source, filename in (
-        (report_path, "strategy_comparison.md"),
-        (json_path, "strategy_comparison.json"),
-        (manifest_path, "manifest.json"),
-    ):
-        shutil.copy2(source, latest_dir / filename)
+    _publish_strategy_latest_snapshot(
+        latest_dir,
+        report_path=report_path,
+        json_path=json_path,
+        manifest_path=manifest_path,
+    )
 
     print("\n" + console_report)
     print_artifact_paths(

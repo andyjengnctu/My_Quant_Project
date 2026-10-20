@@ -28,7 +28,9 @@ from core.strategy_compare_policy import (
 )
 from core.active_param_ensemble import build_active_param_ensemble_schedule
 from core.console_report import print_artifact_paths, render_key_values, render_title
-from core.file_integrity import compute_file_sha256
+from core.file_integrity import (
+    compute_file_sha256, publish_latest_snapshot, reserve_immutable_output_dir,
+)
 from core.params_io import build_params_from_mapping, load_params_from_json, params_to_json_dict
 from services.breakout_quality.export_scores import export_workflow_runtime_scores
 from services.research.runtime_integration_gate import collect_runtime_integration_status
@@ -185,8 +187,8 @@ def apply_or_refresh_runtime_promotion(*, project_root: Path = PROJECT_ROOT) -> 
     backup_path = state_write.get("backup_path")
     load_params_from_json(str(official_path))
 
-    output_dir = root / "outputs" / "strategy_compare" / "runtime_integration" / "promotion" / timestamp
-    output_dir.mkdir(parents=True, exist_ok=True)
+    promotion_root = root / "outputs" / "strategy_compare" / "runtime_integration" / "promotion"
+    output_dir = reserve_immutable_output_dir(promotion_root, timestamp)
     payload = {
         "schema_version": 1,
         "status": "PROMOTED",
@@ -232,9 +234,12 @@ def apply_or_refresh_runtime_promotion(*, project_root: Path = PROJECT_ROOT) -> 
     _write_text_atomic(md_path, _render_promotion_report(payload))
 
     latest_dir = output_dir.parent / "latest"
-    latest_dir.mkdir(parents=True, exist_ok=True)
-    write_json(latest_dir / "runtime_promotion.json", payload)
-    _write_text_atomic(latest_dir / "runtime_promotion.md", _render_promotion_report(payload))
+    # Publication-only view; consume already-written original bytes rather than
+    # regenerating JSON/Markdown with potentially different OS newlines.
+    publish_latest_snapshot(latest_dir, (
+        ("runtime_promotion.md", md_path.read_bytes()),
+        ("runtime_promotion.json", json_path.read_bytes()),
+    ))
 
     print(render_title("MR-13E Exact 正式 Runtime"))
     print(

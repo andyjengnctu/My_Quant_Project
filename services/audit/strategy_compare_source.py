@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -9,6 +11,7 @@ from typing import Any, Mapping, Sequence
 
 import pandas as pd
 
+from core.file_integrity import exclusive_file_lock, sibling_publication_lock_path
 from core.strategy_compare_policy import get_strategy_comparison_settings
 from core.path_utils import project_relative_display_path
 from core.strategy_comparison import strategy_comparison_fingerprint
@@ -309,19 +312,28 @@ def load_strategy_compare_source(
         if pinned
         else resolve_latest_strategy_result_dir(root, settings.output_root)
     )
-    result_path = result_dir / "strategy_comparison.json"
-    if not result_path.is_file():
-        raise AuditSourceBlockedError(
-            "Strategy Compare latest缺少strategy_comparison.json: "
-            f"{project_relative_display_path(result_dir, project_root=root)}"
-        )
-    result = _read_json(result_path)
-    if not isinstance(result, Mapping):
-        raise AuditSourceBlockedError("Strategy Compare strategy_comparison.json格式無效")
-    manifest_path = result_dir / "manifest.json"
-    manifest_raw = _read_json(manifest_path) if manifest_path.is_file() else None
-    if manifest_raw is not None and not isinstance(manifest_raw, Mapping):
-        raise AuditSourceBlockedError("Strategy Compare manifest.json格式無效")
+    # Immutable run directories need no presentation lock. Mutable latest
+    # is read as one snapshot under the publisher's shared stable lock.
+    latest_read_guard = (
+        exclusive_file_lock(
+            sibling_publication_lock_path(result_dir),
+            conflict_message="Strategy Compare最新結果正在發布；Audit不可讀取混版",
+        ) if result_dir.name == "latest" else nullcontext()
+    )
+    with latest_read_guard:
+        result_path = result_dir / "strategy_comparison.json"
+        if not result_path.is_file():
+            raise AuditSourceBlockedError(
+                "Strategy Compare latest缺少strategy_comparison.json: "
+                f"{project_relative_display_path(result_dir, project_root=root)}"
+            )
+        result = _read_json(result_path)
+        if not isinstance(result, Mapping):
+            raise AuditSourceBlockedError("Strategy Compare strategy_comparison.json格式無效")
+        manifest_path = result_dir / "manifest.json"
+        manifest_raw = _read_json(manifest_path) if manifest_path.is_file() else None
+        if manifest_raw is not None and not isinstance(manifest_raw, Mapping):
+            raise AuditSourceBlockedError("Strategy Compare manifest.json格式無效")
     payloads = [result, *( [manifest_raw] if manifest_raw is not None else [] )]
     if pinned:
         stored_fingerprints: set[str] = set()

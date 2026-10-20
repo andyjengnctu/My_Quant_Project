@@ -5,8 +5,10 @@ from contextlib import contextmanager
 import json
 import os
 import re
+import shutil
 import tempfile
 import time
+from uuid import uuid4
 from pathlib import Path
 from typing import Iterator
 from typing import Any
@@ -171,16 +173,102 @@ def atomic_write_text(
     return target
 
 
+def reserve_immutable_output_dir(parent: str | Path, timestamp: str) -> Path:
+    """Allocate a distinct historical run directory, even for same-second runs."""
+    root = Path(parent)
+    candidate = root / str(timestamp)
+    try:
+        candidate.mkdir(parents=True, exist_ok=False)
+    except FileExistsError:
+        candidate = root / f"{timestamp}_{uuid4().hex}"
+        candidate.mkdir(parents=True, exist_ok=False)
+    return candidate
+
+
+def publish_latest_snapshot(
+    latest_dir: str | Path, files: tuple[tuple[str, bytes], ...],
+    *, conflict_message: str = "Another latest snapshot publication is active",
+) -> None:
+    """Publish legacy multi-file latest views via one shared, bounded owner.
+
+    Stage and fsync every file before changing the visible view; publish in
+    caller-declared order (commit metadata last). A recoverable failure rolls
+    back all already replaced files. The stable sibling lock serializes only
+    cooperating readers/writers. This is *not* an all-files atomic transaction:
+    uncoordinated readers may still observe an in-flight transition.
+    """
+    root = Path(latest_dir)
+    names = [str(name) for name, _value in files]
+    if not files or len(names) != len(set(names)) or any(
+        not name or name in {".", ".."} or Path(name).name != name
+        for name in names
+    ):
+        raise ValueError("latest snapshot requires unique basename-only file names")
+    with exclusive_file_lock(
+        sibling_publication_lock_path(root), conflict_message=conflict_message,
+    ):
+        root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=f".{root.name}.stage.", dir=str(root.parent)) as tmp_name:
+            stage = Path(tmp_name)
+            staged: list[tuple[Path, Path, Path | None]] = []
+            for filename, content in files:
+                target = root / filename
+                staged_path = stage / filename
+                with staged_path.open("wb") as stream:
+                    stream.write(bytes(content))
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                backup = stage / (filename + ".backup") if target.is_file() else None
+                if backup is not None:
+                    shutil.copy2(target, backup)
+                staged.append((staged_path, target, backup))
+            published: list[tuple[Path, Path | None]] = []
+            try:
+                for staged_path, target, backup in staged:
+                    atomic_replace_with_retry(staged_path, target)
+                    published.append((target, backup))
+            except BaseException as exc:
+                restore_errors = []
+                for target, backup in reversed(published):
+                    try:
+                        if backup is None:
+                            target.unlink(missing_ok=True)
+                        else:
+                            atomic_replace_with_retry(backup, target)
+                    except OSError as restore_exc:
+                        restore_errors.append(f"{target.name}: {restore_exc}")
+                if restore_errors:
+                    raise RuntimeError(
+                        "latest snapshot publication failed and restoration incomplete: "
+                        + "; ".join(restore_errors)
+                    ) from exc
+                raise
+
+
+def text_publication_bytes(text: str) -> bytes:
+    """Match historical Path.write_text/atomic_write_text newline bytes on this OS.
+
+    Windows TextIOWrapper translates LF to CRLF when newline is unspecified;
+    binary latest publication must do the same without a second conversion.
+    """
+    return str(text).replace("\n", os.linesep).encode("utf-8")
+
+
+def _json_publication_text(payload: Any) -> str:
+    return json.dumps(
+        payload, ensure_ascii=False, indent=2, allow_nan=False, default=str,
+    ) + "\n"
+
+
+def json_publication_bytes(payload: Any) -> bytes:
+    """Match the *platform-native* bytes of historical atomic_write_json."""
+    return text_publication_bytes(_json_publication_text(payload))
+
+
 def atomic_write_json(path: str | Path, payload: Any) -> Path:
     """Atomically replace one JSON file through the shared text-publication primitive."""
-
-    return atomic_write_text(
-        path,
-        json.dumps(
-            payload, ensure_ascii=False, indent=2, allow_nan=False, default=str
-        )
-        + "\n",
-    )
+    # Feed native *text*, not already-newline-converted bytes, to TextIOWrapper.
+    return atomic_write_text(path, _json_publication_text(payload))
 
 
 def load_json_object_or_none(
@@ -234,6 +322,10 @@ __all__ = [
     "exclusive_file_lock",
     "sibling_publication_lock_path",
     "atomic_write_json",
+    "json_publication_bytes",
+    "text_publication_bytes",
+    "publish_latest_snapshot",
+    "reserve_immutable_output_dir",
     "atomic_write_text",
     "canonical_json_sha256",
     "compute_file_sha256",

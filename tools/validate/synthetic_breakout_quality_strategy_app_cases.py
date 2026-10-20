@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 from .checks import run_bound_checks
 
 from .synthetic_breakout_quality_support import (
@@ -2439,6 +2441,360 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 "robustness_latest_reader_shares_exact_result_publication_lock",
                 publishing_reader_blocked,
             )
+
+    # Completed evidence is immutable even when REUSE is explicitly disabled.
+    # A reset/replay knob is not authorization to overwrite an existing run.
+    with tempfile.TemporaryDirectory(prefix="robustness_commit_boundaries_") as temp_dir:
+        commit_root = Path(temp_dir)
+        completed_root = commit_root / "completed" / "run-1"
+        completed_root.mkdir(parents=True)
+        recorded = {"status": "COMPLETED", "contract": {"fingerprint": "run-1"}}
+        completed_manifest = completed_root / robustness_runtime.MANIFEST_FILENAME
+        robustness_runtime._write_json(completed_manifest, recorded)
+        original_completed = completed_manifest.read_bytes()
+        with patch.object(robustness_runtime, "_run_root", return_value=completed_root), patch.object(
+            robustness_runtime, "_model_work_root", return_value=commit_root / "models"
+        ), patch.object(
+            robustness_runtime, "_materialize_registered_strategy_only_scientific_reuse"
+        ) as cannot_start_producer:
+            try:
+                robustness_runtime._execute_robustness_under_lock(
+                    cfg=SimpleNamespace(reuse_completed=False),
+                    settings=SimpleNamespace(), status={},
+                    contract={"fingerprint": "run-1", "resolved_seeds": []},
+                    fixed_arms=(), stochastic_arms=(), model_arms=(),
+                    strategy_only_arms=(), registered_scientific_reuse={},
+                    benchmark_bindings={}, comparison_start="2021-01-01",
+                    comparison_end="2021-12-31",
+                )
+            except RuntimeError:
+                completed_protected = True
+            else:
+                completed_protected = False
+        check_true(
+            "robustness_reuse_off_does_not_overwrite_completed_or_start_producer",
+            completed_protected and not cannot_start_producer.called
+            and completed_manifest.read_bytes() == original_completed,
+        )
+        with patch.object(robustness_runtime, "PROJECT_ROOT", commit_root):
+            latest_target = commit_root / "latest.json"
+            original_write = robustness_runtime._write_json
+            def _reject_latest_only(path, payload):
+                if Path(path) == latest_target:
+                    raise OSError("injected latest pointer failure")
+                return original_write(path, payload)
+            with patch.object(robustness_runtime, "_write_json", side_effect=_reject_latest_only):
+                try:
+                    robustness_runtime._publish_completed_robustness_latest(
+                        run_root=completed_root, latest_path=latest_target,
+                        contract={"fingerprint": "run-1"},
+                        attribution_index_path=None,
+                    )
+                except OSError:
+                    pointer_failure_observed = True
+                else:
+                    pointer_failure_observed = False
+        check_true(
+            "robustness_latest_failure_never_demotes_completed_manifest",
+            pointer_failure_observed and completed_manifest.read_bytes() == original_completed
+            and not latest_target.exists(),
+        )
+
+    # The latest pointer may advance to another complete fingerprint before the
+    # reader acquires the old run lock. It must not show a stale 'latest'.
+    with tempfile.TemporaryDirectory(prefix="robustness_latest_race_") as temp_dir:
+        latest_root = Path(temp_dir)
+        run_root = latest_root / "results" / "first"
+        run_root.mkdir(parents=True)
+        latest_path = latest_root / "results" / robustness_runtime.LATEST_FILENAME
+        (run_root / robustness_runtime.SUMMARY_FILENAME).write_text(
+            json.dumps({"contract": {"fingerprint": "first"}}), encoding="utf-8",
+        )
+        (run_root / robustness_runtime.REPORT_FILENAME).write_text("report", encoding="utf-8")
+        for key, filename in robustness_runtime.DURABLE_RESULT_FILENAMES.items():
+            (run_root / filename).touch(exist_ok=True)
+        initial_pointer = {
+            "fingerprint": "first",
+            "summary_path": f"results/first/{robustness_runtime.SUMMARY_FILENAME}",
+            "report_path": f"results/first/{robustness_runtime.REPORT_FILENAME}",
+        }
+        latest_path.write_text(json.dumps(initial_pointer), encoding="utf-8")
+        (run_root / robustness_runtime.MANIFEST_FILENAME).write_text(json.dumps({
+            "status": "COMPLETED", "contract": {"fingerprint": "first"},
+            "durable_artifacts": {},
+        }), encoding="utf-8")
+        original_reader = robustness_runtime._read_json
+        replaced = [False]
+        def _advance_during_read(path):
+            parsed = original_reader(path)
+            if Path(path) == run_root / robustness_runtime.MANIFEST_FILENAME and not replaced[0]:
+                replaced[0] = True
+                latest_path.write_text(json.dumps({**initial_pointer, "fingerprint": "second"}), encoding="utf-8")
+            return parsed
+        with patch.object(robustness_runtime, "PROJECT_ROOT", latest_root), patch.object(
+            robustness_runtime, "get_strategy_multi_seed_robustness_settings",
+            return_value=SimpleNamespace(output_root="results"),
+        ), patch.object(robustness_runtime, "_read_json", side_effect=_advance_during_read), patch.object(
+            robustness_runtime, "_print_report_tables"
+        ) as printed:
+            try:
+                robustness_runtime.show_latest_multi_seed_robustness_report(robustness_id="test")
+            except RuntimeError:
+                stale_pointer_rejected = True
+            else:
+                stale_pointer_rejected = False
+        check_true(
+            "robustness_latest_reader_rejects_concurrent_pointer_advance",
+            stale_pointer_rejected and replaced[0] and not printed.called,
+        )
+
+    # Strategy Compare's historical latest/{md,json,manifest} files are legacy
+    # display copies, never the unique scientific run. Prepare all copies and
+    # serialize writer commits; on a recoverable fault restore old bytes.
+    from services.research import strategy_comparison as comparison_writer
+    with tempfile.TemporaryDirectory(prefix="comparison_latest_concurrency_") as temp_dir:
+        base = Path(temp_dir)
+        newest = base / "new_run"
+        newest.mkdir()
+        latest = base / "latest"
+        latest.mkdir()
+        filenames = ("strategy_comparison.md", "strategy_comparison.json", "manifest.json")
+        old_bytes = {}
+        for filename in filenames:
+            (newest / filename).write_bytes(f"new/{filename}".encode("utf-8"))
+            data = f"old/{filename}".encode("utf-8")
+            (latest / filename).write_bytes(data)
+            old_bytes[filename] = data
+        from core import file_integrity as latest_integrity
+        original_replace = latest_integrity.atomic_replace_with_retry
+        rejected_once = [False]
+        def _interrupt_manifest(src, dst, **kwargs):
+            if Path(dst).name == "manifest.json" and not rejected_once[0]:
+                rejected_once[0] = True
+                raise OSError("synthetic final manifest publication interrupted")
+            return original_replace(src, dst, **kwargs)
+        with patch.object(latest_integrity, "atomic_replace_with_retry", side_effect=_interrupt_manifest):
+            try:
+                comparison_writer._publish_strategy_latest_snapshot(
+                    latest, report_path=newest / filenames[0],
+                    json_path=newest / filenames[1], manifest_path=newest / filenames[2],
+                )
+            except OSError:
+                interrupted_latest = True
+            else:
+                interrupted_latest = False
+        check_true(
+            "strategy_compare_latest_copy_failure_restores_previous_complete_view",
+            interrupted_latest and rejected_once[0]
+            and all((latest / name).read_bytes() == old_bytes[name] for name in filenames),
+        )
+        with latest_integrity.exclusive_file_lock(
+            latest_integrity.sibling_publication_lock_path(latest)
+        ):
+            try:
+                comparison_writer._publish_strategy_latest_snapshot(
+                    latest, report_path=newest / filenames[0],
+                    json_path=newest / filenames[1], manifest_path=newest / filenames[2],
+                )
+            except RuntimeError:
+                concurrent_latest_rejected = True
+            else:
+                concurrent_latest_rejected = False
+        check_true(
+            "strategy_compare_latest_uses_one_stable_publication_lock",
+            concurrent_latest_rejected
+            and all((latest / name).read_bytes() == old_bytes[name] for name in filenames),
+        )
+        comparison_writer._publish_strategy_latest_snapshot(
+            latest, report_path=newest / filenames[0],
+            json_path=newest / filenames[1], manifest_path=newest / filenames[2],
+        )
+        check_true(
+            "strategy_compare_latest_commits_all_three_original_format_files",
+            all((latest / name).read_bytes() == (newest / name).read_bytes() for name in filenames),
+        )
+
+    # A binary latest publisher must preserve the original text writer's
+    # platform-dependent newline bytes (Windows CRLF, POSIX LF).
+    with patch.object(latest_integrity.os, "linesep", "\r\n"):
+        simulated_windows_md = latest_integrity.text_publication_bytes("a\nb\n")
+        simulated_windows_json = latest_integrity.json_publication_bytes({"a": 1})
+    check_true(
+        "latest_binary_publisher_preserves_windows_legacy_newline_bytes",
+        simulated_windows_md == b"a\r\nb\r\n"
+        and b"\r\n" in simulated_windows_json
+        and b"\r\r\n" not in simulated_windows_json,
+    )
+
+    # The same core latest publisher must also own presentation-only Audit,
+    # OOS/Rolling consistency, and historical Runtime Promotion Gate copies.
+    # Their old JSON/Markdown bytes must remain unchanged.
+    from core import file_integrity as latest_integrity
+    from services.audit import reusable_report as audit_writer
+    from services.research import strategy_compare_application as consistency_writer
+    from services.research import runtime_integration_gate as gate_writer
+    with tempfile.TemporaryDirectory(prefix="shared_latest_publication_") as temp_dir:
+        temp_root = Path(temp_dir)
+        audit_def = SimpleNamespace(
+            output_subdir="synthetic_audit", report_id="synthetic-audit",
+            report_type="read_only",
+        )
+        with redirect_stdout(io.StringIO()):
+            audit_result = audit_writer.persist_reusable_report(
+                definition=audit_def, project_root=temp_root,
+                payload={"value": 1}, console_text="console", markdown_text="audit report",
+            )
+        audit_root = temp_root / audit_writer.AUDIT_OUTPUT_ROOT / "synthetic_audit"
+        audit_latest = audit_root / "latest"
+        audit_run = temp_root / audit_result["artifacts"]["json"]
+        check_true(
+            "audit_latest_uses_single_owner_and_keeps_historical_json_bytes",
+            (audit_latest / "audit.json").read_bytes() == audit_run.read_bytes()
+            and (audit_latest / "audit.md").read_bytes() == (audit_run.parent / "audit.md").read_bytes(),
+        )
+        # Same-second audit reports must not overwrite immutable historical
+        # evidence even when two workers share the same timestamp.
+        from datetime import datetime, timezone
+        fixed_now = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
+        collision_def = SimpleNamespace(
+            output_subdir="collision_audit", report_id="collision-audit",
+            report_type="read_only",
+        )
+        with patch.object(
+            audit_writer, "datetime", SimpleNamespace(now=lambda _tz: fixed_now)
+        ), redirect_stdout(io.StringIO()):
+            first = audit_writer.persist_reusable_report(
+                definition=collision_def, project_root=temp_root, payload={"version": 1},
+                console_text="first", markdown_text="first markdown",
+            )
+            first_path = temp_root / first["artifacts"]["json"]
+            first_bytes = first_path.read_bytes()
+            second = audit_writer.persist_reusable_report(
+                definition=collision_def, project_root=temp_root, payload={"version": 2},
+                console_text="second", markdown_text="second markdown",
+            )
+        second_path = temp_root / second["artifacts"]["json"]
+        check_true(
+            "audit_same_second_runs_keep_independent_immutable_result_directories",
+            first_path != second_path and first_path.read_bytes() == first_bytes
+            and json.loads(second_path.read_text(encoding="utf-8"))["version"] == 2
+            and (second_path.parent.parent / "latest" / "audit.json").read_bytes()
+                == second_path.read_bytes(),
+        )
+
+        consistent_payload = {
+            "schema_version": 1, "suite_id": "test", "arm_rows": [], "contrast_rows": [],
+        }
+        with patch.object(
+            consistency_writer, "build_strategy_oos_rolling_consistency",
+            return_value=consistent_payload,
+        ), patch.object(
+            consistency_writer, "render_strategy_oos_rolling_consistency",
+            return_value="synthetic markdown",
+        ), redirect_stdout(io.StringIO()):
+            consistency_writer.materialize_strategy_oos_rolling_consistency(
+                {}, {}, project_root=temp_root,
+            )
+        consistency_dir = temp_root / "outputs/strategy_compare/extending_window/consistency/latest"
+        check_true(
+            "strategy_consistency_latest_shares_one_transaction_and_json_format",
+            (consistency_dir / "strategy_consistency.md").read_bytes()
+            == latest_integrity.text_publication_bytes("synthetic markdown\n")
+            and (consistency_dir / "strategy_consistency.json").read_bytes()
+            == latest_integrity.json_publication_bytes(consistent_payload),
+        )
+        gate_root = temp_root / "gate"
+        gate_cfg = SimpleNamespace(output_root="gate")
+        gate_payload = {"fingerprint": "gate-case", "status": "NO_GO"}
+        with patch.object(
+            gate_writer, "get_strategy_runtime_integration_settings", return_value=gate_cfg,
+        ), patch.object(
+            gate_writer, "collect_runtime_integration_status", return_value=gate_payload,
+        ), patch.object(
+            gate_writer, "render_runtime_integration_report", return_value="gate markdown",
+        ), patch.object(gate_writer, "_print_console_summary"), redirect_stdout(io.StringIO()):
+            gate_writer.run_runtime_integration_gate(project_root=temp_root)
+            gate_latest = gate_root / "latest"
+            gate_original = {
+                name: (gate_latest / name).read_bytes()
+                for name in (gate_writer.RESULT_FILENAME, gate_writer.REPORT_FILENAME)
+            }
+            with latest_integrity.exclusive_file_lock(
+                latest_integrity.sibling_publication_lock_path(gate_latest)
+            ):
+                try:
+                    gate_writer.show_latest_runtime_integration_report(project_root=temp_root)
+                except RuntimeError:
+                    gate_reader_rejected = True
+                else:
+                    gate_reader_rejected = False
+            with redirect_stdout(io.StringIO()):
+                restored_gate = gate_writer.show_latest_runtime_integration_report(
+                    project_root=temp_root
+                )
+        check_true(
+            "runtime_gate_latest_reader_obeys_same_publisher_lock_and_legacy_bytes",
+            gate_reader_rejected and restored_gate == gate_payload
+            and all((gate_latest / name).read_bytes() == raw
+                    for name, raw in gate_original.items())
+            and gate_original[gate_writer.REPORT_FILENAME]
+                == latest_integrity.text_publication_bytes("gate markdown"),
+        )
+
+    # The retained Runtime Promotion latest view also uses the canonical
+    # binary publisher. Its completed run artifacts and bytes are immutable.
+    from services.breakout_quality import runtime_promotion as promotion_writer
+    from services.audit import strategy_compare_source as audit_compare_reader
+    with tempfile.TemporaryDirectory(prefix="promotion_latest_contract_") as temp_dir:
+        synthetic_root = Path(temp_dir)
+        history_parent = synthetic_root / "promotion"
+        timestamp = "20261020_142301"
+        first_run = latest_integrity.reserve_immutable_output_dir(history_parent, timestamp)
+        original_record = first_run / "runtime_promotion.json"
+        original_record.write_bytes(b"first\r\n")
+        next_run = latest_integrity.reserve_immutable_output_dir(history_parent, timestamp)
+        check_true(
+            "runtime_promotion_same_second_history_cannot_overwrite_prior_run",
+            first_run != next_run and original_record.read_bytes() == b"first\r\n"
+            and next_run.parent == history_parent,
+        )
+        md = next_run / "runtime_promotion.md"
+        js = next_run / "runtime_promotion.json"
+        md.write_bytes(b"report\r\n")
+        js.write_bytes(b"{\r\n  \"status\": \"PROMOTED\"\r\n}\r\n")
+        latest = history_parent / "latest"
+        latest_integrity.publish_latest_snapshot(latest, (
+            (md.name, md.read_bytes()), (js.name, js.read_bytes()),
+        ))
+        check_true(
+            "runtime_promotion_latest_keeps_original_run_bytes_and_shared_owner",
+            all((latest / file.name).read_bytes() == file.read_bytes()
+                for file in (md, js))
+            and "publish_latest_snapshot" in inspect.getsource(promotion_writer.apply_or_refresh_runtime_promotion),
+        )
+        # A canonical Audit reading mutable latest must use the same lock as
+        # Strategy Compare's publisher; immutable pinned runs remain unaffected.
+        compare_latest = synthetic_root / "strategy_compare" / "latest"
+        compare_latest.mkdir(parents=True)
+        with patch.object(
+            audit_compare_reader, "get_strategy_comparison_settings",
+            return_value=SimpleNamespace(output_root="strategy_compare"),
+        ):
+            with latest_integrity.exclusive_file_lock(
+                latest_integrity.sibling_publication_lock_path(compare_latest)
+            ):
+                try:
+                    audit_compare_reader.load_strategy_compare_source(
+                        synthetic_root, profile_id="test"
+                    )
+                except RuntimeError as exc:
+                    audited_latest_is_locked = "發布" in str(exc)
+                else:
+                    audited_latest_is_locked = False
+        check_true(
+            "strategy_compare_audit_latest_reader_respects_canonical_writer_lock",
+            audited_latest_is_locked,
+        )
 
     application_source = read_source_text(
         project_root / "services" / "research" / "breakout_quality_application.py"

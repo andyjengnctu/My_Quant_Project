@@ -26,7 +26,7 @@ from core.console_report import (
     render_table,
     render_title,
 )
-from core.file_integrity import atomic_write_json
+from core.file_integrity import json_publication_bytes, text_publication_bytes, publish_latest_snapshot
 from core.research_report_contract import (
     STRATEGY_CONSISTENCY_METRIC_KEYS,
     section_contract,
@@ -219,8 +219,12 @@ def materialize_strategy_oos_rolling_consistency(
     out_dir.mkdir(parents=True, exist_ok=True)
     json_path = out_dir / "strategy_consistency.json"
     md_path = out_dir / "strategy_consistency.md"
-    atomic_write_json(json_path, payload)
-    md_path.write_text(render_strategy_oos_rolling_consistency(payload) + "\n", encoding="utf-8")
+    # Reuse the same latest-publication owner as Strategy Compare itself.
+    # JSON is the final committed sidecar for coordinated consumers.
+    publish_latest_snapshot(out_dir, (
+        ("strategy_consistency.md", text_publication_bytes(render_strategy_oos_rolling_consistency(payload) + "\n")),
+        ("strategy_consistency.json", json_publication_bytes(payload)),
+    ))
     print("\n" + render_strategy_oos_rolling_consistency(payload))
     print_artifact_paths(
         (("Consistency Markdown", md_path), ("Consistency JSON", json_path)),

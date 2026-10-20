@@ -18,6 +18,9 @@ from core.console_report import (
     render_table,
     render_title,
 )
+from core.file_integrity import (
+    publish_latest_snapshot, text_publication_bytes, reserve_immutable_output_dir,
+)
 from core.report_style import (
     SIGNAL_NEGATIVE,
     SIGNAL_NEUTRAL,
@@ -136,10 +139,10 @@ def persist_reusable_report(
     root = Path(project_root).resolve()
     output_root = root / AUDIT_OUTPUT_ROOT / Path(definition.output_subdir)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    run_dir = output_root / timestamp
     latest_dir = output_root / "latest"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    latest_dir.mkdir(parents=True, exist_ok=True)
+    # Preserve the historic timestamp name when available; same-second runs
+    # get a distinct suffix instead of silently overwriting older evidence.
+    run_dir = reserve_immutable_output_dir(output_root, timestamp)
     result = dict(payload)
     result.setdefault("schema_version", 1)
     result.setdefault("generated_at_utc", datetime.now(timezone.utc).isoformat())
@@ -154,8 +157,10 @@ def persist_reusable_report(
     (run_dir / "audit.md").write_text(markdown_text.rstrip() + "\n", encoding="utf-8")
     (run_dir / "audit.json").write_text(json_text + "\n", encoding="utf-8")
     (run_dir / "console.txt").write_text(console_text.rstrip() + "\n", encoding="utf-8")
-    (latest_dir / "audit.md").write_text(markdown_text.rstrip() + "\n", encoding="utf-8")
-    (latest_dir / "audit.json").write_text(json_text + "\n", encoding="utf-8")
+    publish_latest_snapshot(latest_dir, (
+        ("audit.md", text_publication_bytes(markdown_text.rstrip() + "\n")),
+        ("audit.json", text_publication_bytes(json_text + "\n")),
+    ))
     return result
 
 
