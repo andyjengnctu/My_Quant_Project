@@ -210,15 +210,22 @@ def publish_latest_snapshot(
         root.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix=f".{root.name}.stage.", dir=str(root.parent)) as tmp_name:
             stage = Path(tmp_name)
+            # Keep unpublished payloads and rollback backups in disjoint trees.
+            # A legal target named e.g. "foo.backup" must never overwrite the
+            # backup of "foo" during staging.
+            staged_root = stage / "staged"
+            backup_root = stage / "backups"
+            staged_root.mkdir()
+            backup_root.mkdir()
             staged: list[tuple[Path, Path, Path | None]] = []
             for filename, content in files:
                 target = root / filename
-                staged_path = stage / filename
+                staged_path = staged_root / filename
                 with staged_path.open("wb") as stream:
                     stream.write(bytes(content))
                     stream.flush()
                     os.fsync(stream.fileno())
-                backup = stage / (filename + ".backup") if target.is_file() else None
+                backup = backup_root / filename if target.is_file() else None
                 if backup is not None:
                     shutil.copy2(target, backup)
                 staged.append((staged_path, target, backup))

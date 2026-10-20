@@ -446,6 +446,15 @@ Breakout Quality 的研究身份與可執行語意必須分層，避免每個新
 - Daily loader只在有historical risk-param coverage的stock-day產生13I/J Target；不得future-backfill。13I sequence-only inference不要求context，13J score inference則必須同日具有合法geometry。正式model app在訓練前驗證Min ROOS risk-param工件READY；模型流程不得自行建param。
 
 
+
+## 共用最新視圖與永久結果的發布責任（工程契約）
+
+- `core/file_integrity.py::publish_latest_snapshot` 是多檔案 `latest/` 視圖的單一寫入、回復與鎖 owner。`staged/` 與 `backups/` 使用獨立暫存目錄，合法檔名即使帶有 `.backup` 也不得覆蓋其他檔案的回復證據。讀取多檔案 latest 的 consumer 必須使用相同的 sibling OS lock；外部不遵守鎖的讀取者仍不具目錄級原子性保證。
+- Strategy Compare 正式 RUN 的永久 `runs/<timestamp>_<arms>_<fingerprint>/` 由 `core/file_integrity.py::reserve_immutable_output_dir` 建立；同秒碰撞只額外配置唯一目錄，不覆寫或改寫原 scientific fingerprint。歷史 Runtime Integration Gate 的永久結果目錄使用相同機制。
+- `services/research/strategy_compare_pair_integrity.py::completed_strategy_run_publication_matches` 唯一檢查 Strategy Compare **COMPLETED JSON + Manifest-last** 的提交一致性；具有 modern pair integrity 的工件還需驗證全部已宣告 pair JSON／sidecar SHA。未帶 modern pair integrity 的合法歷史結果只有 manifest/共用身分相符的相容路徑，不能推定其不存在的舊版 sidecar SHA。
+- 歷史 `services/research/runtime_integration_gate.py` 的只讀 evidence resolver 不得僅憑單份 `COMPLETED` JSON 採信未提交結果；mutable `latest/` 必須在共用讀鎖下與 durable run 的兩份 JSON/manifest 比對，遇到發布衝突即 `BLOCKED`。此工程修正不啟用歷史 Gate，也不改正式現行 Research／Trading 授權。
+
+
 ## Strategy Parameter Runtime Scientific Identity
 
 Current strategy-parameter artifacts intentionally maintain two hashes. `compute_strategy_param_file_sha256()` is exact-byte integrity/provenance and may change when `created_at`, optimizer diagnostics, manifest/publication metadata, or formatting changes. `compute_strategy_param_scientific_sha256()` projects the artifact through `build_strategy_param_runtime_identity_payload()` and hashes only replay-affecting selector/ensemble policy, raw-universe contract, effective-date coverage and runtime parameter members. Strategy Compare replay metadata, Robustness benchmark/result identity and cross-run reuse must use the runtime-scientific hash; raw file/manifest hashes may be retained only as integrity/provenance or exact-byte legacy migration evidence. Re-publishing an unchanged runtime schedule must therefore remain REUSE/REPAIR-compatible, while any effective runtime parameter change must remain stale.

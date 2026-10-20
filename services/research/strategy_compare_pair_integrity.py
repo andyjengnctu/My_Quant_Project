@@ -130,9 +130,82 @@ def completed_pair_file_integrity_matches(
         return False
 
 
+def completed_strategy_run_publication_matches(
+    *, run_dir: Path, run_payload: Mapping[str, Any], project_root: Path,
+) -> bool:
+    """Verify a completed run was committed through its manifest-last boundary.
+
+    This is a publication check, not a new scientific identity or comparison
+    policy. Modern pair-file SHA evidence continues to use the canonical pair
+    owner above; historical runs lacking pair hashes remain readable only if
+    their committed manifest and result agree on the fields they declare.
+    """
+    try:
+        directory = Path(run_dir).resolve()
+        manifest = load_json_object_or_none(directory / "manifest.json")
+        if not isinstance(manifest, dict) or not isinstance(run_payload, Mapping):
+            return False
+        if str(run_payload.get("status") or "") != "COMPLETED":
+            return False
+        fingerprint = str(run_payload.get("config_fingerprint") or "")
+        if len(fingerprint) != 12 or manifest.get("config_fingerprint") != fingerprint:
+            return False
+        for key in (
+            "report_id", "report_version", "report_contract_fingerprint",
+            "pair_file_integrity", "pair_execution", "comparison_period",
+            "artifact_identities",
+        ):
+            if key in run_payload or key in manifest:
+                if run_payload.get(key) != manifest.get(key):
+                    return False
+        recorded_run_dir = str(manifest.get("run_dir") or "").strip()
+        if recorded_run_dir:
+            recorded_path = Path(recorded_run_dir)
+            if not recorded_path.is_absolute():
+                recorded_path = Path(project_root) / recorded_path
+            if recorded_path.resolve() != directory:
+                return False
+        # A run-level JSON written before its manifest is not COMPLETED.
+        # Modern runs additionally pin every pair's completed sidecar bytes.
+        record = run_payload.get(PAIR_FILE_INTEGRITY_FIELD)
+        if record is not None:
+            if not isinstance(record, dict):
+                return False
+            expected_pairs = record.get("pairs")
+            recorded_pairs = run_payload.get("pairs")
+            if (
+                not isinstance(expected_pairs, dict) or not expected_pairs
+                or not isinstance(recorded_pairs, dict)
+                or set(expected_pairs) != set(recorded_pairs)
+            ):
+                return False
+            for pair_id, recorded_pair in recorded_pairs.items():
+                if (
+                    not isinstance(pair_id, str)
+                    or pair_id in {"", ".", ".."}
+                    or Path(pair_id).name != pair_id
+                    or not isinstance(recorded_pair, dict)
+                ):
+                    return False
+                pair_dir = directory / "pairs" / pair_id
+                if not pair_dir.is_dir() or pair_dir.is_symlink():
+                    return False
+                if load_json_object_or_none(pair_dir / _PRIMARY_PAIR_JSON) != recorded_pair:
+                    return False
+                if not completed_pair_file_integrity_matches(
+                    run_dir=directory, run_payload=run_payload,
+                    pair_id=pair_id, pair_dir=pair_dir, required_paths=(),
+                ):
+                    return False
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 __all__ = [
     "PAIR_FILE_INTEGRITY_FIELD",
     "PAIR_FILE_INTEGRITY_SCHEMA_VERSION",
     "build_completed_pair_file_integrity",
     "completed_pair_file_integrity_matches",
+    "completed_strategy_run_publication_matches",
 ]

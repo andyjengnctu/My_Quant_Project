@@ -10,6 +10,7 @@ GO / NO_GO / BLOCKED evidence for a separate runtime-default change.
 from __future__ import annotations
 
 from datetime import datetime
+from contextlib import nullcontext
 import json
 from pathlib import Path
 from typing import Any
@@ -34,7 +35,8 @@ from core.buy_sort import (
 from core.console_report import project_relative_display_path, render_table, render_title
 from core.file_integrity import (
     canonical_json_sha256, publish_latest_snapshot, text_publication_bytes,
-    exclusive_file_lock, sibling_publication_lock_path,
+    exclusive_file_lock, sibling_publication_lock_path, reserve_immutable_output_dir,
+    load_json_object_or_none,
 )
 from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
@@ -42,6 +44,9 @@ from core.strategy_comparison import (
     StrategyComparisonSettings,
 )
 from services.research.strategy_comparison import collect_artifact_status
+from services.research.strategy_compare_pair_integrity import (
+    completed_strategy_run_publication_matches,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 GATE_SCHEMA_VERSION = 2
@@ -333,17 +338,50 @@ def _find_strategy_result_evidence(
         if resolved in seen:
             continue
         seen.add(resolved)
-        try:
-            payload = _read_json(path)
-        except (OSError, ValueError):
-            continue
-        if _strategy_result_matches_current_pair(
-            payload,
-            settings=settings,
-            candidate=candidate,
-            baseline=baseline,
-        ):
-            return path, payload
+        is_latest = path.parent.name == "latest"
+        # Mutable latest is a multi-file presentation view, not the durable
+        # truth. Read its JSON/manifest under the same lock as the publisher.
+        read_guard = (
+            exclusive_file_lock(
+                sibling_publication_lock_path(path.parent),
+                conflict_message="Strategy Compare最新結果正在發布；Runtime Gate不可讀取混版",
+            ) if is_latest else nullcontext()
+        )
+        with read_guard:
+            payload = load_json_object_or_none(path)
+            if not isinstance(payload, dict):
+                continue
+            if is_latest:
+                latest_manifest = load_json_object_or_none(path.parent / "manifest.json")
+                if not isinstance(latest_manifest, dict):
+                    continue
+                run_text = str(latest_manifest.get("run_dir") or "").strip()
+                if not run_text:
+                    continue
+                run_dir = Path(run_text)
+                if not run_dir.is_absolute():
+                    run_dir = root / run_dir
+                run_dir = run_dir.resolve()
+                # Only the immutable run under this profile's runs/ tree may
+                # authorize a mutable presentation copy.
+                if run_dir.parent != (path.parent.parent / "runs").resolve():
+                    continue
+                durable_result = load_json_object_or_none(
+                    run_dir / "strategy_comparison.json"
+                )
+                durable_manifest = load_json_object_or_none(run_dir / "manifest.json")
+                if payload != durable_result or latest_manifest != durable_manifest:
+                    continue
+            else:
+                run_dir = path.parent
+            if not completed_strategy_run_publication_matches(
+                run_dir=run_dir, run_payload=payload, project_root=root,
+            ):
+                continue
+            if _strategy_result_matches_current_pair(
+                payload, settings=settings, candidate=candidate, baseline=baseline,
+            ):
+                return path, payload
     searched = [
         project_relative_display_path(path, project_root=root)
         for path in search_roots
@@ -419,7 +457,7 @@ def _single_run_checks(
         result_path, payload = _find_strategy_result_evidence(
             root, settings, candidate=candidate, baseline=baseline
         )
-    except (FileNotFoundError, ValueError, KeyError) as exc:
+    except (FileNotFoundError, ValueError, KeyError, RuntimeError) as exc:
         _add_check(
             checks,
             check_id=f"{settings.profile_id}_single_run_evidence",
@@ -870,9 +908,10 @@ def run_runtime_integration_gate(*, project_root: Path = PROJECT_ROOT) -> dict[s
     cfg = get_strategy_runtime_integration_settings()
     output_root = root / cfg.output_root
     timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
-    run_dir = output_root / "runs" / f"{timestamp}_{payload['fingerprint'][:12]}"
+    run_dir = reserve_immutable_output_dir(
+        output_root / "runs", f"{timestamp}_{payload['fingerprint'][:12]}",
+    )
     latest_dir = output_root / "latest"
-    run_dir.mkdir(parents=True, exist_ok=False)
     report = render_runtime_integration_report(payload)
     _write_json(run_dir / RESULT_FILENAME, payload)
     (run_dir / REPORT_FILENAME).write_text(report, encoding="utf-8")

@@ -21,7 +21,7 @@ from core.strategy_compare_policy import (
     get_strategy_runtime_integration_settings,
 )
 from core.runtime_utils import get_taipei_now
-from core.file_integrity import atomic_write_json, publish_latest_snapshot
+from core.file_integrity import atomic_write_json, publish_latest_snapshot, reserve_immutable_output_dir
 from core.display_common import format_elapsed
 from core.display import _display_width
 from core.strategy_comparison import (
@@ -1248,7 +1248,7 @@ def run_strategy_comparison(
         settings=settings,
         fingerprint=status["config_fingerprint"],
     )
-    run_dir.mkdir(parents=True, exist_ok=False)
+    run_dir = reserve_immutable_output_dir(run_dir.parent, run_dir.name)
     replay_started = time.perf_counter()
     arm_execution_timing: dict[str, dict[str, Any]] = {}
     pair_payloads: dict[str, dict[str, Any]] = {}
