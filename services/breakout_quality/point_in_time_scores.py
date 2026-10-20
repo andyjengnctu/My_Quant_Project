@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import hashlib
 import json
 import math
@@ -22,6 +23,7 @@ from core.file_integrity import (
     atomic_replace_with_retry,
     compute_file_sha256,
     exclusive_file_lock,
+    sibling_publication_lock_path,
 )
 from core.training_progress import (
     clear_trainer_pit_progress_context,
@@ -98,7 +100,9 @@ from core.console_report import (
     render_section,
     render_table,
 )
-from services.breakout_quality.fit_repair_transaction import archived_rolling_fit_fold_candidates
+from services.breakout_quality.fit_repair_transaction import (
+    archived_rolling_fit_fold_candidates, selection_pit_build_lock_path,
+)
 from services.breakout_quality.fitting_data_dependencies import (
     FitDataDependencies, build_fitting_context_origin, preserve_fitting_migration_chain,
 )
@@ -971,7 +975,7 @@ def _checkpoint_cache_entry_dir(cache_root: Path, fold_contract: dict[str, Any])
 
 
 
-def _import_forward_checkpoint_to_fitting_cache(
+def _import_forward_checkpoint_to_fitting_cache_unlocked(
     *,
     source_model_dir: Path,
     source_report_path: Path,
@@ -1064,6 +1068,8 @@ def _import_forward_checkpoint_to_fitting_cache(
     cached_manifest_path = entry_dir / FOLD_MANIFEST_FILENAME
     cached_model_path = entry_dir / DEFAULT_MODEL_FILENAME
     if entry_dir.exists():
+        if entry_dir.is_symlink() or not entry_dir.is_dir():
+            raise RuntimeError(f"fitting identity cache entry is not a plain directory: identity={identity}")
         if not (cached_manifest_path.is_file() and cached_model_path.is_file()):
             raise RuntimeError(f"fitting identity cache entry不完整: identity={identity}")
         try:
@@ -1075,6 +1081,8 @@ def _import_forward_checkpoint_to_fitting_cache(
             cached_manifest, expected_contract=fold_contract
         ):
             raise RuntimeError(f"fitting identity cache contract衝突: identity={identity}")
+        if cached_checkpoint != dict(dict(cached_manifest.get("artifacts") or {}).get("checkpoint") or {}):
+            raise RuntimeError(f"fitting identity cache checkpoint manifest mismatch: identity={identity}")
         if cached_checkpoint != checkpoint_manifest:
             raise RuntimeError(
                 "同一fitting identity已有不同checkpoint；"
@@ -1141,6 +1149,8 @@ def _import_forward_checkpoint_to_fitting_cache(
     try:
         shutil.copy2(source_model_path, staging / DEFAULT_MODEL_FILENAME)
         write_json(staging / FOLD_MANIFEST_FILENAME, cache_manifest)
+        if build_file_manifest(staging / DEFAULT_MODEL_FILENAME) != checkpoint_manifest:
+            raise RuntimeError(f"Forward cache staged checkpoint changed: identity={identity}")
         write_json(
             staging / "cache_manifest.json",
             {
@@ -1151,6 +1161,8 @@ def _import_forward_checkpoint_to_fitting_cache(
                 "published_at_utc": datetime.now(timezone.utc).isoformat(),
             },
         )
+        if entry_dir.exists():
+            raise RuntimeError(f"fitting identity cache entry appeared during Forward import: identity={identity}")
         staging.replace(entry_dir)
     finally:
         if staging.exists():
@@ -1160,6 +1172,26 @@ def _import_forward_checkpoint_to_fitting_cache(
         "cache_entry": str(entry_dir),
         "reused_existing_cache": False,
     }
+
+
+def _import_forward_checkpoint_to_fitting_cache(
+    *, source_model_dir: Path, source_report_path: Path, cache_root: Path,
+    fold_contract: dict[str, Any], bundle, torch_module, execution_plan,
+) -> dict[str, Any] | None:
+    """One FitKey writer at a time; source/evidence checks stay in the sole FIT owner."""
+    entry = _checkpoint_cache_entry_dir(Path(cache_root), fold_contract)
+    with exclusive_file_lock(
+        sibling_publication_lock_path(entry),
+        conflict_message="Another shared FIT checkpoint publication is active",
+    ):
+        return _import_forward_checkpoint_to_fitting_cache_unlocked(
+            source_model_dir=source_model_dir,
+            source_report_path=source_report_path,
+            cache_root=cache_root,
+            fold_contract=fold_contract,
+            bundle=bundle, torch_module=torch_module,
+            execution_plan=execution_plan,
+        )
 
 
 _SCORE_ONLY_CHECKPOINT_REUSE_MIGRATION_KINDS = frozenset({
@@ -1178,7 +1210,7 @@ def _is_score_only_checkpoint_reuse_manifest(manifest: dict[str, Any]) -> bool:
     )
 
 
-def _publish_fold_checkpoint_to_cache(
+def _publish_fold_checkpoint_to_cache_unlocked(
     *, fold_dir: Path, cache_root: Path | None, fold_contract: dict[str, Any]
 ) -> dict[str, Any] | None:
     if cache_root is None:
@@ -1201,7 +1233,11 @@ def _publish_fold_checkpoint_to_cache(
     entry_dir = _checkpoint_cache_entry_dir(Path(cache_root), fold_contract)
     cached_manifest_path = entry_dir / FOLD_MANIFEST_FILENAME
     cached_model_path = entry_dir / DEFAULT_MODEL_FILENAME
-    if cached_manifest_path.is_file() and cached_model_path.is_file():
+    if entry_dir.exists():
+        if entry_dir.is_symlink() or not entry_dir.is_dir():
+            raise RuntimeError(f"fitting identity cache entry is not a plain directory: identity={identity}")
+        if not (cached_manifest_path.is_file() and cached_model_path.is_file()):
+            raise RuntimeError(f"fitting identity cache entry不完整: identity={identity}")
         try:
             cached_manifest = json.loads(cached_manifest_path.read_text(encoding="utf-8"))
             cached_checkpoint = build_file_manifest(cached_model_path)
@@ -1209,6 +1245,8 @@ def _publish_fold_checkpoint_to_cache(
         except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError):
             cached_checkpoint = {}
             cached_identity = ""
+        if cached_identity == identity and cached_checkpoint != dict(dict(cached_manifest.get("artifacts") or {}).get("checkpoint") or {}):
+            raise RuntimeError(f"fitting identity cache checkpoint manifest mismatch: identity={identity}")
         if cached_identity == identity and cached_checkpoint == checkpoint_manifest:
             return {
                 "training_identity": identity,
@@ -1271,6 +1309,13 @@ def _publish_fold_checkpoint_to_cache(
     try:
         shutil.copy2(model_path, staging / DEFAULT_MODEL_FILENAME)
         shutil.copy2(manifest_path, staging / FOLD_MANIFEST_FILENAME)
+        if build_file_manifest(staging / DEFAULT_MODEL_FILENAME) != checkpoint_manifest:
+            raise RuntimeError(f"PIT cache staged checkpoint changed: identity={identity}")
+        staged_manifest = json.loads((staging / FOLD_MANIFEST_FILENAME).read_text(encoding="utf-8"))
+        if (not isinstance(staged_manifest, dict)
+            or not _fold_training_contract_is_compatible(staged_manifest, expected_contract=fold_contract)
+            or dict(dict(staged_manifest.get("artifacts") or {}).get("checkpoint") or {}) != checkpoint_manifest):
+            raise RuntimeError(f"PIT cache staged manifest/weights changed: identity={identity}")
         write_json(
             staging / "cache_manifest.json",
             {
@@ -1281,7 +1326,11 @@ def _publish_fold_checkpoint_to_cache(
                 "published_at_utc": datetime.now(timezone.utc).isoformat(),
             },
         )
-        shutil.rmtree(entry_dir, ignore_errors=True)
+        # Do not destroy an existing FIT identity, including incomplete or
+        # concurrently published evidence. The per-FitKey OS lock serializes
+        # cooperating producers; rename is the first visible publication.
+        if entry_dir.exists():
+            raise RuntimeError(f"fitting identity cache entry appeared during publication: identity={identity}")
         staging.replace(entry_dir)
     finally:
         if staging.exists():
@@ -1291,6 +1340,22 @@ def _publish_fold_checkpoint_to_cache(
         "cache_entry": str(entry_dir),
         "reused_existing_cache": False,
     }
+
+
+def _publish_fold_checkpoint_to_cache(
+    *, fold_dir: Path, cache_root: Path | None, fold_contract: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Single FIT cache publisher for native fold checkpoints and score-only reuse."""
+    if cache_root is None:
+        return None
+    entry = _checkpoint_cache_entry_dir(Path(cache_root), fold_contract)
+    with exclusive_file_lock(
+        sibling_publication_lock_path(entry),
+        conflict_message="Another shared FIT checkpoint publication is active",
+    ):
+        return _publish_fold_checkpoint_to_cache_unlocked(
+            fold_dir=fold_dir, cache_root=cache_root, fold_contract=fold_contract,
+        )
 
 
 def publish_verified_native_first_fold_cache(
@@ -1317,19 +1382,25 @@ def publish_verified_native_first_fold_cache(
         raise RuntimeError("Rebuilt native first-fold FIT has no verified checkpoint origin")
     identity = fold_training_identity(manifest)
     entry = Path(cache_root).resolve() / identity
-    if entry.exists():
-        raise RuntimeError("New FIT cache identity already occupied during transaction")
-    # All score, target, and sample semantics are from the actual PIT Fold
-    # contract; no Research-side cache writer or synthetic FitKey is introduced.
-    _publish_fold_checkpoint_to_cache(
-        fold_dir=fold_dir, cache_root=Path(cache_root), fold_contract=manifest,
-    )
-    cached = entry / FOLD_MANIFEST_FILENAME
-    cached_model = entry / DEFAULT_MODEL_FILENAME
-    if (not cached.is_file() or not cached_model.is_file()
-        or build_file_manifest(cached_model) != actual
-        or fold_training_identity(json.loads(cached.read_text(encoding="utf-8"))) != identity):
-        raise RuntimeError("Rebuilt native shared FIT cache publication failed verification")
+    # The repair-specific "must be absent" rule and canonical publication
+    # must be one lock transaction; a late concurrent writer is not a REUSE.
+    with exclusive_file_lock(
+        sibling_publication_lock_path(entry),
+        conflict_message="Another shared FIT checkpoint publication is active",
+    ):
+        if entry.exists():
+            raise RuntimeError("New FIT cache identity already occupied during transaction")
+        # All score, target, and sample semantics are from the actual PIT Fold
+        # contract; no Research-side cache writer or synthetic FitKey is introduced.
+        _publish_fold_checkpoint_to_cache_unlocked(
+            fold_dir=fold_dir, cache_root=Path(cache_root), fold_contract=manifest,
+        )
+        cached = entry / FOLD_MANIFEST_FILENAME
+        cached_model = entry / DEFAULT_MODEL_FILENAME
+        if (not cached.is_file() or not cached_model.is_file()
+            or build_file_manifest(cached_model) != actual
+            or fold_training_identity(json.loads(cached.read_text(encoding="utf-8"))) != identity):
+            raise RuntimeError("Rebuilt native shared FIT cache publication failed verification")
     return identity
 
 
@@ -1547,45 +1618,61 @@ def _rescore_fold_from_fitting_checkpoint(
         return None
     source_manifest_path = source_fold_dir / FOLD_MANIFEST_FILENAME
     source_model_path = source_fold_dir / DEFAULT_MODEL_FILENAME
-    if not (source_manifest_path.is_file() and source_model_path.is_file()):
-        return None
-    try:
-        source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
-        if not isinstance(source_manifest, dict):
-            return None
-        if (verified_archive_binding is None and not _fold_training_contract_is_compatible(
-            source_manifest, expected_contract=fold_contract
-        )):
-            return None
-        source_checkpoint_manifest = build_file_manifest(source_model_path)
-        if source_checkpoint_manifest != dict(source_manifest.get("artifacts") or {}).get(
-            "checkpoint"
-        ):
-            return None
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError):
-        return None
-
     target_fold_dir.parent.mkdir(parents=True, exist_ok=True)
     staging = target_fold_dir.parent / (
         f".{target_fold_dir.name}.fitting_checkpoint_reuse_{os.getpid()}_{time.time_ns()}"
     )
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir(parents=True, exist_ok=False)
+
+    # A shared FitKey can be concurrently archived by FIT Repair, or published
+    # by another PIT mode. Snapshot source manifest and exact model bytes under
+    # the same short OS lock as those writers, then release before slow rescore.
+    shared_root = getattr(args, "checkpoint_cache_root", None)
+    is_shared_cache = (
+        shared_root not in (None, "")
+        and source_fold_dir == _checkpoint_cache_entry_dir(Path(shared_root), fold_contract)
+    )
+    source_guard = (
+        exclusive_file_lock(
+            sibling_publication_lock_path(source_fold_dir),
+            conflict_message="Another shared FIT checkpoint publication is active",
+        )
+        if is_shared_cache else nullcontext()
+    )
     try:
-        shutil.copy2(source_model_path, staging / DEFAULT_MODEL_FILENAME)
-        if verified_archive_binding is None:
-            shutil.copy2(source_manifest_path, staging / FOLD_MANIFEST_FILENAME)
-        else:
-            # The owner previously established semantic FIT equivalence even
-            # when old event-only source artifact metadata differs. Project
-            # only current evaluation/FIT source fields into the new manifest;
-            # original archive and checkpoint bytes remain unchanged and SHA-
-            # bound by archived_rolling_fit_source.
-            write_json(staging / FOLD_MANIFEST_FILENAME, {
-                **source_manifest, **fold_contract,
-                "archived_rolling_fit_source": dict(verified_archive_binding),
-                "artifacts": dict(source_manifest.get("artifacts") or {}),
-            })
+        with source_guard:
+            if not (source_manifest_path.is_file() and source_model_path.is_file()):
+                return None
+            try:
+                source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
+                if not isinstance(source_manifest, dict):
+                    return None
+                if (verified_archive_binding is None and not _fold_training_contract_is_compatible(
+                    source_manifest, expected_contract=fold_contract
+                )):
+                    return None
+                source_checkpoint_manifest = build_file_manifest(source_model_path)
+                if source_checkpoint_manifest != dict(source_manifest.get("artifacts") or {}).get(
+                    "checkpoint"
+                ):
+                    return None
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError):
+                return None
+            shutil.copy2(source_model_path, staging / DEFAULT_MODEL_FILENAME)
+            if verified_archive_binding is None:
+                shutil.copy2(source_manifest_path, staging / FOLD_MANIFEST_FILENAME)
+            else:
+                # Verified archived FITs may project evaluation-specific fields,
+                # but preserve their source model's exact checkpoint bytes.
+                write_json(staging / FOLD_MANIFEST_FILENAME, {
+                    **source_manifest, **fold_contract,
+                    "archived_rolling_fit_source": dict(verified_archive_binding),
+                    "artifacts": dict(source_manifest.get("artifacts") or {}),
+                })
+            if build_file_manifest(staging / DEFAULT_MODEL_FILENAME) != source_checkpoint_manifest:
+                raise RuntimeError("Fitting checkpoint changed while snapshotting its source")
+        # Source data is immutable for this local rescore from now on.
         rescored = _rescore_fold_from_compatible_checkpoint(
             fold_dir=staging,
             bundle=bundle,
@@ -1603,7 +1690,6 @@ def _rescore_fold_from_fitting_checkpoint(
         # The mode-local rescore helper preserves fitted checkpoint bytes.
         # Fitting-identity reuse likewise restores the exact source checkpoint bytes so
         # OOS and Rolling share one identical fitted artifact SHA.
-        shutil.copy2(source_model_path, staging / DEFAULT_MODEL_FILENAME)
         manifest = {
             **manifest,
             "migration": preserve_fitting_migration_chain(
@@ -2488,8 +2574,8 @@ def _run_point_in_time_scores(
         return _run_authorized_point_in_time_scores(args, settings=settings)
     pit_dir = _point_in_time_dir_for_args(args)
     with exclusive_file_lock(
-        pit_dir / ".selection_pit_build.lock",
-        conflict_message="Another Selection PIT build is active for this output directory",
+        selection_pit_build_lock_path(pit_dir),
+        conflict_message="Another Selection PIT build or FIT repair is active for this output directory",
     ):
         return _run_authorized_point_in_time_scores(args, settings=settings)
 

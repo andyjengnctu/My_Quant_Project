@@ -87,6 +87,14 @@ def atomic_replace_with_retry(
 
 
 
+def sibling_publication_lock_path(artifact_dir: str | Path) -> Path:
+    """Stable lock file beside an artifact directory, never inside its movable tree."""
+    entry = Path(artifact_dir).resolve()
+    if entry.name in {"", ".", ".."}:
+        raise ValueError("Artifact lock requires a named directory")
+    return entry.parent / ("." + entry.name + ".publish.lock")
+
+
 @contextmanager
 def exclusive_file_lock(
     lock_path: str | Path, *, conflict_message: str = "Another artifact publication is active"
@@ -224,6 +232,7 @@ __all__ = [
     "file_change_signature",
     "atomic_replace_with_retry",
     "exclusive_file_lock",
+    "sibling_publication_lock_path",
     "atomic_write_json",
     "atomic_write_text",
     "canonical_json_sha256",

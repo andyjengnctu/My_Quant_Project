@@ -3477,10 +3477,29 @@ def repair_missing_fit_origin_using_forward(
     journal = fit_repair_journal_path(
         project_root=PROJECT_ROOT, filter_id=str(settings.filter_id), profile=str(profile_name),
     )
+    # Recheck the preflight evidence while holding the same PIT and FitKey
+    # locks as cooperating producers. A long dependency preparation above must
+    # not turn the original checked checkpoint into a stale repair target.
+    def verify_locked_repair_sources():
+        verify_fit_repair_previous_checkpoint(
+            rolling_dir=pit_dir, score_start=str(mode.score_start_date),
+            expected_profile=str(profile_name),
+            expected_checkpoint_sha256=str(expected_previous_checkpoint_sha256),
+        )
+        verified_cache = verified_fit_repair_legacy_cache_entry(
+            rolling_dir=pit_dir, score_start=str(mode.score_start_date),
+            expected_profile=str(profile_name),
+            checkpoint_cache_root=(PROJECT_ROOT / BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT),
+        )
+        if verified_cache != old_cache:
+            raise RuntimeError("FIT repair shared checkpoint changed after preflight")
+
     with preserved_fit_publications(
         project_root=PROJECT_ROOT,
         publication_roots=(model_dir, output_dir, pit_dir, old_cache),
         journal_path=journal, repair_identity=str(profile_name),
+        point_in_time_dir=pit_dir, shared_cache_entry=old_cache,
+        locked_preflight=verify_locked_repair_sources,
     ):
         _clear_continuous_forward_reuse_caches()
         # The existing Forward trainer owns sample selection, fitting, checkpoint
@@ -3525,7 +3544,16 @@ def _recover_pending_model_fit_repairs(model_profiles) -> int:
         )
         if not journal.is_file():
             continue
-        outcome = recover_incomplete_fit_repair(journal_path=journal, project_root=PROJECT_ROOT)
+        # The same stable publication lock is taken by PIT Builder, including
+        # after a repair has renamed its previous profile/PIT directory.
+        pit_dir = None
+        if getattr(settings, "model_architecture", None) and getattr(settings, "experiment_profile", None):
+            pit_dir = _rolling_publication_dir(settings, get_breakout_quality_rolling_test_mode("rolling"))
+        outcome = recover_incomplete_fit_repair(
+            journal_path=journal, project_root=PROJECT_ROOT,
+            point_in_time_dir=pit_dir,
+            shared_cache_root=(PROJECT_ROOT / BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT),
+        )
         if outcome != "NO_JOURNAL":
             print(f"[FIT RECOVERY] {profile} | {outcome} | previous publications preserved")
             count += 1

@@ -144,6 +144,26 @@ def _check_selection_pit_publication_invariants(check_true, pit_module):
             outcome.returncode != 0
             and "Another artifact publication is active" in outcome.stderr,
         )
+        # A FIT Repair can rename the whole profile/PIT directory. The build
+        # lock must stay at one stable inode so a new builder cannot bypass it.
+        from services.breakout_quality.fit_repair_transaction import selection_pit_build_lock_path
+        simulated_profile = directory / "architecture" / "profile"
+        simulated_pit = simulated_profile / "point_in_time"
+        simulated_pit.mkdir(parents=True)
+        stable_lock = selection_pit_build_lock_path(simulated_pit)
+        renamed_profile = simulated_profile.with_name(".profile.fit_repair_pending_synthetic")
+        stable_blocked = False
+        with exclusive_file_lock(stable_lock):
+            simulated_profile.rename(renamed_profile)
+            try:
+                with exclusive_file_lock(selection_pit_build_lock_path(simulated_pit)):
+                    pass
+            except RuntimeError:
+                stable_blocked = True
+        check_true(
+            "pit_build_lock_stays_stable_when_fit_repair_renames_profile",
+            stable_blocked and stable_lock == selection_pit_build_lock_path(simulated_pit),
+        )
         previous_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest_before_failure = manifest_path.read_bytes()
         interrupted = False
@@ -1139,6 +1159,123 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         "pit_true_same_identity_different_checkpoint_still_fails_closed",
         true_conflict_rejected,
     )
+
+    # Shared FitKey cache is append-once: an incomplete existing directory is
+    # historical evidence, never a disposable staging directory. Keep that
+    # evidence if a second process attempts to publish a native checkpoint.
+    from core.file_integrity import sibling_publication_lock_path, exclusive_file_lock
+    with tempfile.TemporaryDirectory(prefix="pit_shared_fit_lock_") as td:
+        root = Path(td)
+        cache_root = root / "shared_fit"
+        fold_dir = root / "fold"
+        fold_dir.mkdir()
+        (fold_dir / "model.pt").write_bytes(b"new native fold bytes")
+        local_manifest = {
+            **expected_contract,
+            "artifacts": {"checkpoint": build_file_manifest(fold_dir / "model.pt")},
+        }
+        (fold_dir / "manifest.json").write_text(json.dumps(local_manifest), encoding="utf-8")
+        entry = cache_root / fold_training_identity(expected_contract)
+        entry.mkdir(parents=True)
+        (entry / "unverified_evidence.txt").write_bytes(b"historical partial evidence")
+        partial_blocked = False
+        from services.breakout_quality.point_in_time_scores import _publish_fold_checkpoint_to_cache
+        try:
+            _publish_fold_checkpoint_to_cache(
+                fold_dir=fold_dir, cache_root=cache_root, fold_contract=expected_contract,
+            )
+        except RuntimeError as exc:
+            partial_blocked = "entry不完整" in str(exc)
+        check_true(
+            "shared_fit_partial_entry_is_never_deleted_or_overwritten",
+            partial_blocked
+            and (entry / "unverified_evidence.txt").read_bytes() == b"historical partial evidence"
+            and not (entry / "model.pt").exists(),
+        )
+        # Unchanged FitKey and checkpoint may REUSE an existing publication.
+        import shutil
+        shutil.rmtree(entry)
+        first = _publish_fold_checkpoint_to_cache(
+            fold_dir=fold_dir, cache_root=cache_root, fold_contract=expected_contract,
+        )
+        cached_manifest_bytes = (entry / "manifest.json").read_bytes()
+        again = _publish_fold_checkpoint_to_cache(
+            fold_dir=fold_dir, cache_root=cache_root, fold_contract=expected_contract,
+        )
+        check_true(
+            "shared_fit_cache_first_publish_and_identical_reuse_preserve_bytes",
+            first.get("reused_existing_cache") is False
+            and again.get("reused_existing_cache") is True
+            and (entry / "manifest.json").read_bytes() == cached_manifest_bytes,
+        )
+        # Both Forward import and native fold publish use this SAME cache lock.
+        active_lock = sibling_publication_lock_path(entry)
+        native_lock_blocked = False
+        with exclusive_file_lock(active_lock):
+            try:
+                _publish_fold_checkpoint_to_cache(
+                    fold_dir=fold_dir, cache_root=cache_root, fold_contract=expected_contract,
+                )
+            except RuntimeError as exc:
+                native_lock_blocked = "Another shared FIT" in str(exc)
+        check_true("shared_fit_native_publisher_uses_cross_process_entry_lock", native_lock_blocked)
+        import subprocess
+        import sys
+        lock_probe = (
+            "from pathlib import Path\n"
+            "from core.file_integrity import exclusive_file_lock\n"
+            f"with exclusive_file_lock(Path({str(active_lock)!r})):\n    pass\n"
+        )
+        with exclusive_file_lock(active_lock):
+            result = subprocess.run(
+                [sys.executable, "-c", lock_probe],
+                cwd=str(Path(__file__).resolve().parents[2]),
+                capture_output=True, text=True, check=False,
+            )
+        check_true("shared_fit_cache_lock_is_effective_across_processes",
+                   result.returncode != 0 and "Another artifact publication is active" in result.stderr)
+        from services.breakout_quality.point_in_time_scores import _import_forward_checkpoint_to_fitting_cache
+        forward_import_lock_blocked = False
+        with exclusive_file_lock(active_lock):
+            try:
+                _import_forward_checkpoint_to_fitting_cache(
+                    source_model_dir=root / "forward", source_report_path=root / "forward_report.json",
+                    cache_root=cache_root, fold_contract=expected_contract,
+                    bundle=SimpleNamespace(), torch_module=SimpleNamespace(),
+                    execution_plan=SimpleNamespace(),
+                )
+            except RuntimeError as exc:
+                forward_import_lock_blocked = "Another shared FIT" in str(exc)
+        check_true("shared_fit_forward_import_and_native_publisher_have_one_lock_owner",
+                   forward_import_lock_blocked)
+        from services.breakout_quality.point_in_time_scores import _rescore_fold_from_fitting_checkpoint
+        shared_reader_blocked = False
+        with exclusive_file_lock(active_lock):
+            try:
+                _rescore_fold_from_fitting_checkpoint(
+                    source_fold_dir=entry, target_fold_dir=root / "rescore",
+                    bundle=SimpleNamespace(), ids={}, fold_contract=expected_contract,
+                    expected_fingerprint="synthetic", args=SimpleNamespace(checkpoint_cache_root=str(cache_root)),
+                    torch_module=SimpleNamespace(), plan=SimpleNamespace(),
+                )
+            except RuntimeError as exc:
+                shared_reader_blocked = "Another shared FIT" in str(exc)
+        check_true("shared_fit_reader_cannot_observe_partially_moved_cache_during_repair",
+                   shared_reader_blocked)
+        (fold_dir / "model.pt").write_bytes(b"another checkpoint same fitting identity")
+        local_manifest["artifacts"]["checkpoint"] = build_file_manifest(fold_dir / "model.pt")
+        (fold_dir / "manifest.json").write_text(json.dumps(local_manifest), encoding="utf-8")
+        conflict_blocked = False
+        try:
+            _publish_fold_checkpoint_to_cache(
+                fold_dir=fold_dir, cache_root=cache_root, fold_contract=expected_contract,
+            )
+        except RuntimeError as exc:
+            conflict_blocked = "同一fitting identity產生不同checkpoint" in str(exc)
+        check_true(
+            "shared_fit_same_identity_conflict_retains_original_bytes",
+            conflict_blocked and (entry / "model.pt").read_bytes() == b"new native fold bytes",
+        )
 
     # FIT repair history must not be mistaken for absent Rolling folds. A
     # score/Audit refresh first verifies the archived Fold bytes and Context,

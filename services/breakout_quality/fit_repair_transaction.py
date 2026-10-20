@@ -9,15 +9,25 @@ research identity or FitKey is changed by this engineering transaction.
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 import shutil
-from typing import Iterator
+from typing import Callable, Iterator
 
-from core.file_integrity import exclusive_file_lock
+from core.file_integrity import exclusive_file_lock, sibling_publication_lock_path
+
+
+def selection_pit_build_lock_path(point_in_time_dir: Path) -> Path:
+    """Stable per-PIT-root lock even while FIT Repair renames its parent profile.
+
+    The profile's architecture-level parent is never one of the standard FIT
+    Repair publication roots. Do not put this lock inside the movable PIT tree.
+    """
+    pit = Path(point_in_time_dir).resolve()
+    return pit.parent.parent / f".{pit.parent.name}.{pit.name}.selection_pit_build.lock"
 
 
 @contextmanager
@@ -209,29 +219,71 @@ def _recover_incomplete_fit_repair_unlocked(*, journal_path: Path, project_root:
 
 def recover_incomplete_fit_repair(
     *, journal_path: Path, project_root: Path | None = None,
+    point_in_time_dir: Path | None = None, shared_cache_root: Path | None = None,
 ) -> str:
-    """Auto-safe restart: no live process may be using this profile's journal."""
+    """Auto-safe restart: recovery cannot overlap a PIT writer or FIT cache writer."""
     journal_path = Path(journal_path).absolute()
     with _fit_repair_lock(journal_path):
         if not journal_path.is_file():
             return "NO_JOURNAL"
-        return _recover_incomplete_fit_repair_unlocked(
-            journal_path=journal_path, project_root=project_root,
-        )
+        with ExitStack() as locks:
+            if point_in_time_dir is not None:
+                locks.enter_context(exclusive_file_lock(
+                    selection_pit_build_lock_path(point_in_time_dir),
+                    conflict_message="Another Selection PIT build or FIT repair is active",
+                ))
+            if shared_cache_root is not None and journal_path.stat().st_size:
+                # Journal source paths are not trusted merely because they are
+                # named here. The existing strict recovery validator runs before
+                # any mutation; this lookup ONLY selects a coordination lock.
+                payload = json.loads(journal_path.read_text(encoding="utf-8"))
+                cache_parent = Path(shared_cache_root).resolve()
+                sources = payload.get("sources") if isinstance(payload, dict) else None
+                if not isinstance(sources, list):
+                    raise RuntimeError("FIT recovery journal sources invalid")
+                entries = [Path(row["source"]).absolute() for row in sources
+                           if isinstance(row, dict) and isinstance(row.get("source"), str)
+                           and Path(row["source"]).absolute().parent == cache_parent]
+                if len(entries) > 1:
+                    raise RuntimeError("FIT recovery journal has multiple shared FIT cache entries")
+                if entries:
+                    locks.enter_context(exclusive_file_lock(
+                        sibling_publication_lock_path(entries[0]),
+                        conflict_message="Another shared FIT checkpoint publication is active",
+                    ))
+            return _recover_incomplete_fit_repair_unlocked(
+                journal_path=journal_path, project_root=project_root,
+            )
 
 
 @contextmanager
 def preserved_fit_publications(
     *, project_root: Path, publication_roots: tuple[Path, ...],
     journal_path: Path, repair_identity: str,
+    point_in_time_dir: Path | None = None,
+    shared_cache_entry: Path | None = None,
+    locked_preflight: Callable[[], None] | None = None,
 ) -> Iterator[tuple[Path, ...]]:
-    """Guard mutation and interruption recovery with the same OS lock."""
+    """Guard the repair and overlapping PIT/FitKey mutations with stable OS locks."""
     with _fit_repair_lock(Path(journal_path).absolute()):
-        with _preserved_fit_publications_unlocked(
-            project_root=project_root, publication_roots=publication_roots,
-            journal_path=journal_path, repair_identity=repair_identity,
-        ) as paths:
-            yield paths
+        with ExitStack() as locks:
+            if point_in_time_dir is not None:
+                locks.enter_context(exclusive_file_lock(
+                    selection_pit_build_lock_path(point_in_time_dir),
+                    conflict_message="Another Selection PIT build or FIT repair is active",
+                ))
+            if shared_cache_entry is not None:
+                locks.enter_context(exclusive_file_lock(
+                    sibling_publication_lock_path(shared_cache_entry),
+                    conflict_message="Another shared FIT checkpoint publication is active",
+                ))
+            if locked_preflight is not None:
+                locked_preflight()
+            with _preserved_fit_publications_unlocked(
+                project_root=project_root, publication_roots=publication_roots,
+                journal_path=journal_path, repair_identity=repair_identity,
+            ) as paths:
+                yield paths
 
 
 @contextmanager

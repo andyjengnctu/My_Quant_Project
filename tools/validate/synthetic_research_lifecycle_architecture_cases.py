@@ -2403,6 +2403,74 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
         check_true("fit_recovery_does_not_touch_live_repair_transaction",
                    lock_blocked and journal.read_text(encoding="utf-8") == "{}")
 
+    # FIT repair's full transaction holds both the durable PIT build lock and
+    # same-FitKey cache lock. Conflict is fail-closed before any root is moved.
+    from core.file_integrity import exclusive_file_lock, sibling_publication_lock_path
+    from services.breakout_quality.fit_repair_transaction import selection_pit_build_lock_path
+    with TemporaryDirectory(prefix="fit_repair_shared_locks_") as td:
+        root = Path(td)
+        model_root = root / "models" / "arch" / "profile"
+        pit_dir = model_root / "point_in_time"
+        pit_dir.mkdir(parents=True)
+        cache_entry = root / "shared_cache" / "fit_key"
+        cache_entry.mkdir(parents=True)
+        (pit_dir / "evidence.txt").write_bytes(b"original PIT")
+        (cache_entry / "model.pt").write_bytes(b"original FIT")
+        journal = root / "audit" / "repair.in_progress.json"
+        kwargs = dict(
+            project_root=root, publication_roots=(model_root, cache_entry),
+            journal_path=journal, repair_identity="profile",
+            point_in_time_dir=pit_dir, shared_cache_entry=cache_entry,
+        )
+        for active_lock in (
+            selection_pit_build_lock_path(pit_dir),
+            sibling_publication_lock_path(cache_entry),
+        ):
+            blocked = False
+            with exclusive_file_lock(active_lock):
+                try:
+                    with preserved_fit_publications(**kwargs):
+                        pass
+                except RuntimeError as exc:
+                    blocked = "active" in str(exc)
+            check_true(
+                "fit_repair_blocks_active_" + (
+                    "pit_builder" if "selection_pit_build" in active_lock.name else "fit_cache_publisher"
+                ),
+                blocked and (pit_dir / "evidence.txt").read_bytes() == b"original PIT"
+                and (cache_entry / "model.pt").read_bytes() == b"original FIT",
+            )
+        locked_preflight_called = []
+        def verify_at_lock_boundary():
+            locked_preflight_called.append(True)
+            assert (pit_dir / "evidence.txt").read_bytes() == b"original PIT"
+            assert (cache_entry / "model.pt").read_bytes() == b"original FIT"
+        with preserved_fit_publications(
+            **kwargs, locked_preflight=verify_at_lock_boundary,
+        ):
+            old_profile_moved = not model_root.exists()
+            old_cache_moved = not cache_entry.exists()
+            with_overlap = []
+            for active_lock in (
+                selection_pit_build_lock_path(pit_dir),
+                sibling_publication_lock_path(cache_entry),
+            ):
+                try:
+                    with exclusive_file_lock(active_lock):
+                        with_overlap.append(False)
+                except RuntimeError:
+                    with_overlap.append(True)
+            model_root.mkdir(parents=True)
+            (model_root / "model.pt").write_bytes(b"new forward")
+            cache_entry.mkdir(parents=True)
+            (cache_entry / "model.pt").write_bytes(b"new fit")
+        check_true("fit_repair_locks_pit_and_fitkey_through_complete_directory_move",
+                   locked_preflight_called == [True]
+                   and old_profile_moved and old_cache_moved
+                   and with_overlap == [True, True]
+                   and (model_root / "model.pt").read_bytes() == b"new forward"
+                   and (cache_entry / "model.pt").read_bytes() == b"new fit")
+
     # Shared FIT-origin preflight is a formal Research dependency capability,
     # not a manual audit command or an MR identity switch.
     from core.breakout_quality_policy import (
