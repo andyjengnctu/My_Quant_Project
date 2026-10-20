@@ -1449,6 +1449,16 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             "services.research.strategy_multi_seed_robustness._resolve_existing_scientific_unit_states",
             return_value=({}, {}, exact_result_reuse_states),
         ),
+        # AI: This fixture checks *parameter* READY/replay accounting.  The
+        # preceding missing-upstream scenario already exercises the real model
+        # score inspector against an isolated project root and checks its exact
+        # (source, seed) calls.  Do not let this second scenario probe the
+        # operator's live Research Rolling artifacts: their contents and size
+        # are unrelated to the parameter-plan contract or its time budget.
+        patch(
+            "services.research.strategy_multi_seed_robustness.inspect_reusable_model_research_rolling_score",
+            return_value=(None, "isolated synthetic model-score absence"),
+        ),
     ):
         fitted_param_plan, fitted_param_payload = _render_robustness_execution_plan(
             cfg=rolling_robustness,
