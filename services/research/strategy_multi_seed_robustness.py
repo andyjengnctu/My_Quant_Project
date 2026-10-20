@@ -5053,20 +5053,11 @@ def run_multi_seed_robustness(
         )
 
 
-def _execute_robustness_under_lock(
-    *, cfg, settings, status: dict[str, Any], contract: dict[str, Any],
-    fixed_arms: tuple[StrategyComparisonArm, ...],
-    stochastic_arms: tuple[StrategyComparisonArm, ...],
-    model_arms: tuple[StrategyComparisonArm, ...],
-    strategy_only_arms: tuple[StrategyComparisonArm, ...],
-    registered_scientific_reuse: dict[tuple[str, int], dict[str, Any]],
-    benchmark_bindings: dict[tuple[str, int], dict[str, Any]],
-    comparison_start: str, comparison_end: str,
-) -> dict[str, Any]:
-    """Mutate one exact robustness run only while the caller holds both locks."""
-    run_root = _run_root(contract)
-    model_root = _model_work_root(contract)
-    run_root.mkdir(parents=True, exist_ok=True)
+def _reuse_completed_robustness_run(
+    *, cfg: Any, settings: Any, run_root: Path, contract: dict[str, Any],
+    status: dict[str, Any], fixed_arms: tuple[StrategyComparisonArm, ...],
+) -> dict[str, Any] | None:
+    """Validate/reuse an existing scientific run; upgrade presentation only."""
     if cfg.reuse_completed:
         completed_run = _validate_completed_run(
             run_root, expected_contract=contract, backfill_integrity=True
@@ -5115,6 +5106,212 @@ def _execute_robustness_under_lock(
             )
             _print_report_tables(summary)
             return summary
+    return None
+
+
+def _build_robustness_replay_job(
+    *, cfg: Any, settings: Any, contract: dict[str, Any], run_root: Path,
+    arm: StrategyComparisonArm, arm_order: int, seed: int, seed_order: int,
+    param_binding: dict[str, Any], baseline_dir: str,
+    source_artifacts: dict[str, dict[str, Any]],
+    comparison_start: str, comparison_end: str,
+) -> dict[str, Any]:
+    """Project one validated model/parameter binding into the replay worker payload."""
+    primary = source_artifacts[str(arm.dl_id)]
+    runtime_source_identities = {
+        dl_id: {
+            "selected_epoch": int(artifacts.get("selected_epoch", 0) or 0),
+            "fold_count": artifacts.get("fold_count"),
+            "model_sha256": str(artifacts.get("model_sha256") or "") or None,
+            "score_sha256": str(artifacts.get("score_sha256") or "") or None,
+            "score_available_from": str(artifacts.get("score_available_from") or "") or None,
+            "score_available_through": str(artifacts.get("score_available_through") or "") or None,
+        }
+        for dl_id, artifacts in source_artifacts.items()
+    }
+    score_overrides = {
+        dl_id: {
+            "score_path": str(artifacts["score"]),
+            "manifest_path": (
+                None if not artifacts.get("manifest") else str(artifacts["manifest"])
+            ),
+            "execution_start": str(artifacts.get("score_execution_start") or ""),
+        }
+        for dl_id, artifacts in source_artifacts.items()
+    }
+    unit = _unit_key(arm.arm_id, int(seed))
+    pair_dir = run_root / "work" / "replay" / unit
+    result_path = run_root / "work" / "results" / f"{unit}.json"
+    replay_job = {
+        "profile_id": settings.profile_id,
+        "arm_id": arm.arm_id,
+        "arm_order": int(arm_order),
+        "seed": int(seed),
+        "seed_order": int(seed_order),
+        "params_path": str(param_binding["path"]),
+        "strategy_param_sha256": str(param_binding["sha256"]),
+        "strategy_param_manifest_sha256": str(param_binding["manifest_sha256"]),
+        "param_evaluation_mode": str(param_binding["evaluation_mode"]),
+        "comparison_start": comparison_start,
+        "comparison_end": comparison_end,
+        "baseline_dir": baseline_dir,
+        "score_path": primary["score"],
+        "score_manifest_path": primary.get("manifest"),
+        "score_execution_start": primary["score_execution_start"],
+        "score_overrides": score_overrides,
+        "selected_epoch": primary["selected_epoch"],
+        "fold_count": primary.get("fold_count"),
+        "training_elapsed_sec": float(sum(
+            float(artifacts.get("training_elapsed_sec", 0.0) or 0.0)
+            for artifacts in source_artifacts.values()
+        )),
+        "model_sha256": primary.get("model_sha256"),
+        "score_sha256": primary.get("score_sha256"),
+        "runtime_source_identities": runtime_source_identities,
+        "runtime_source_identity_sha256": canonical_json_sha256(runtime_source_identities),
+        "model_prediction_metrics": dict(primary.get("model_prediction_metrics") or {}),
+        "pair_dir": str(pair_dir),
+        "result_path": str(result_path),
+        "scientific_fingerprint": str(contract["fingerprint"]),
+        "robustness_id": cfg.robustness_id,
+        "keep_replay_details": cfg.keep_replay_details,
+        "keep_attribution_source": cfg.keep_attribution_source,
+        "attribution_dir": str(_attribution_unit_dir(run_root, arm.arm_id, int(seed))),
+    }
+    return replay_job
+
+
+def _commit_robustness_scientific_result(
+    *, cfg: Any, run_root: Path, contract: dict[str, Any],
+    manifest: dict[str, Any], manifest_path: Path,
+    seed_results_path: Path, seed_yearly_results_path: Path,
+    stochastic_arms: tuple[StrategyComparisonArm, ...],
+    model_arms: tuple[StrategyComparisonArm, ...], seeds: tuple[int, ...],
+    fixed_results: dict[str, Any], comparison_start: str, comparison_end: str,
+    started_total: float,
+) -> dict[str, Any]:
+    """Validate seed evidence, commit COMPLETED, then publish its view pointer.
+
+    A display-only Latest failure must never demote the committed science.
+    """
+    try:
+        seed_frame = _load_seed_results(seed_results_path)
+        _validate_seed_results_frame(
+            seed_frame, stochastic_arms=stochastic_arms, seeds=seeds
+        )
+        _validate_seed_result_scientific_identities(seed_frame, contract=contract)
+        expected = len(stochastic_arms) * len(seeds)
+        if len(seed_frame) != expected:
+            raise RuntimeError(
+                f"multi-seed robustness結果不完整: expected={expected}, actual={len(seed_frame)}"
+            )
+        seed_yearly_frame = _load_seed_yearly_results(seed_yearly_results_path)
+        _validate_seed_yearly_results_frame(
+            seed_yearly_frame, stochastic_arms=stochastic_arms, seeds=seeds,
+            expected_years=_comparison_years(comparison_start, comparison_end),
+            require_complete_units=True,
+        )
+        attribution_index_path = None
+        if cfg.keep_attribution_source:
+            expected_attribution = len(model_arms) * len(seeds)
+            ready_attribution = _attribution_ready_units(
+                run_root,
+                stochastic_arms=tuple(model_arms),
+                seeds=seeds,
+                fingerprint=str(contract["fingerprint"]),
+            )
+            if len(ready_attribution) != expected_attribution:
+                raise RuntimeError(
+                    f"compact attribution source不完整: expected={expected_attribution}, actual={len(ready_attribution)}"
+                )
+            attribution_index_path = _write_attribution_index_manifest(
+                run_root,
+                contract=contract,
+                stochastic_arms=tuple(model_arms),
+                seeds=seeds,
+            )
+        _write_scientific_observation_manifest(
+            run_root,
+            contract=contract,
+            seed_frame=seed_frame,
+            seed_yearly_frame=seed_yearly_frame,
+            attribution_index_path=attribution_index_path,
+        )
+        summary = _robustness_summary(
+            contract=contract, fixed_results=fixed_results, seed_frame=seed_frame,
+            seed_yearly_frame=seed_yearly_frame, run_root=run_root,
+        )
+        summary["elapsed_sec"] = round(time.perf_counter() - started_total, 3)
+        _write_json(run_root / SUMMARY_FILENAME, summary)
+        report_text = render_multi_seed_robustness_report(summary, target="markdown")
+        atomic_write_text(run_root / REPORT_FILENAME, report_text)
+        manifest.update({
+            "status": "COMPLETED",
+            "completed_at_utc": datetime.now(timezone.utc).isoformat(),
+            "elapsed_sec": summary["elapsed_sec"],
+            "durable_artifacts": _build_durable_result_artifacts(run_root),
+            "completed_seed_strategy_observations": int(len(seed_frame)),
+            "attribution_source_units": (len(model_arms) * len(seeds) if cfg.keep_attribution_source else 0),
+            "attribution_source_manifest_path": (
+                None if attribution_index_path is None else project_relative_display_path(attribution_index_path, project_root=PROJECT_ROOT)
+            ),
+            "summary_path": project_relative_display_path(run_root / SUMMARY_FILENAME, project_root=PROJECT_ROOT),
+            "report_path": project_relative_display_path(run_root / REPORT_FILENAME, project_root=PROJECT_ROOT),
+        })
+        _write_json(manifest_path, manifest)
+    except BaseException as exc:
+        manifest.update({
+            "status": "FAILED",
+            "failed_at_utc": datetime.now(timezone.utc).isoformat(),
+            "failed_stage": "summary_or_report_finalization",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "resumable": True,
+        })
+        _write_json(manifest_path, manifest)
+        print(
+            styled_workflow_status("[FAILED]")
+            + " Multiple-seed robustness彙總階段失敗；seed結果已保留，可由同一入口接續。"
+            + f" manifest={project_relative_display_path(manifest_path, project_root=PROJECT_ROOT)}"
+        )
+        raise
+    # COMPLETED was committed above. Publishing latest.json is presentation-only;
+    # if it fails, leave the committed manifest intact and make the failure clear.
+    try:
+        _publish_completed_robustness_latest(
+            run_root=run_root,
+            latest_path=(PROJECT_ROOT / cfg.output_root / LATEST_FILENAME).resolve(),
+            contract=contract,
+            attribution_index_path=attribution_index_path,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Robustness科學結果已COMPLETED，但Latest指標更新失敗；"
+            "保留既有結果；Latest指標仍需由正式發布流程處理"
+        ) from exc
+    return summary
+
+
+def _execute_robustness_under_lock(
+    *, cfg, settings, status: dict[str, Any], contract: dict[str, Any],
+    fixed_arms: tuple[StrategyComparisonArm, ...],
+    stochastic_arms: tuple[StrategyComparisonArm, ...],
+    model_arms: tuple[StrategyComparisonArm, ...],
+    strategy_only_arms: tuple[StrategyComparisonArm, ...],
+    registered_scientific_reuse: dict[tuple[str, int], dict[str, Any]],
+    benchmark_bindings: dict[tuple[str, int], dict[str, Any]],
+    comparison_start: str, comparison_end: str,
+) -> dict[str, Any]:
+    """Mutate one exact robustness run only while the caller holds both locks."""
+    run_root = _run_root(contract)
+    model_root = _model_work_root(contract)
+    run_root.mkdir(parents=True, exist_ok=True)
+    completed_summary = _reuse_completed_robustness_run(
+        cfg=cfg, settings=settings, run_root=run_root, contract=contract,
+        status=status, fixed_arms=fixed_arms,
+    )
+    if completed_summary is not None:
+        return completed_summary
     # Even with REUSE disabled, the same scientific fingerprint cannot overwrite
     # an existing COMPLETED result or a foreign/malformed historical manifest.
     # Disabling REUSE is not authorization to rewrite durable science.
@@ -5580,67 +5777,13 @@ def _execute_robustness_under_lock(
             dl_id: dict(trained_artifacts[(dl_id, int(seed))])
             for dl_id in required_dl_ids
         }
-        primary = source_artifacts[str(arm.dl_id)]
-        runtime_source_identities = {
-            dl_id: {
-                "selected_epoch": int(artifacts.get("selected_epoch", 0) or 0),
-                "fold_count": artifacts.get("fold_count"),
-                "model_sha256": str(artifacts.get("model_sha256") or "") or None,
-                "score_sha256": str(artifacts.get("score_sha256") or "") or None,
-                "score_available_from": str(artifacts.get("score_available_from") or "") or None,
-                "score_available_through": str(artifacts.get("score_available_through") or "") or None,
-            }
-            for dl_id, artifacts in source_artifacts.items()
-        }
-        score_overrides = {
-            dl_id: {
-                "score_path": str(artifacts["score"]),
-                "manifest_path": (
-                    None if not artifacts.get("manifest") else str(artifacts["manifest"])
-                ),
-                "execution_start": str(artifacts.get("score_execution_start") or ""),
-            }
-            for dl_id, artifacts in source_artifacts.items()
-        }
-        unit = _unit_key(arm.arm_id, int(seed))
-        pair_dir = run_root / "work" / "replay" / unit
-        result_path = run_root / "work" / "results" / f"{unit}.json"
-        replay_job = {
-            "profile_id": settings.profile_id,
-            "arm_id": arm.arm_id,
-            "arm_order": int(arm_order),
-            "seed": int(seed),
-            "seed_order": int(seed_order),
-            "params_path": str(benchmark_bindings[(arm.arm_id, int(seed))]["path"]),
-            "strategy_param_sha256": str(benchmark_bindings[(arm.arm_id, int(seed))]["sha256"]),
-            "strategy_param_manifest_sha256": str(benchmark_bindings[(arm.arm_id, int(seed))]["manifest_sha256"]),
-            "param_evaluation_mode": str(benchmark_bindings[(arm.arm_id, int(seed))]["evaluation_mode"]),
-            "comparison_start": comparison_start,
-            "comparison_end": comparison_end,
-            "baseline_dir": baseline_dir,
-            "score_path": primary["score"],
-            "score_manifest_path": primary.get("manifest"),
-            "score_execution_start": primary["score_execution_start"],
-            "score_overrides": score_overrides,
-            "selected_epoch": primary["selected_epoch"],
-            "fold_count": primary.get("fold_count"),
-            "training_elapsed_sec": float(sum(
-                float(artifacts.get("training_elapsed_sec", 0.0) or 0.0)
-                for artifacts in source_artifacts.values()
-            )),
-            "model_sha256": primary.get("model_sha256"),
-            "score_sha256": primary.get("score_sha256"),
-            "runtime_source_identities": runtime_source_identities,
-            "runtime_source_identity_sha256": canonical_json_sha256(runtime_source_identities),
-            "model_prediction_metrics": dict(primary.get("model_prediction_metrics") or {}),
-            "pair_dir": str(pair_dir),
-            "result_path": str(result_path),
-            "scientific_fingerprint": str(contract["fingerprint"]),
-            "robustness_id": cfg.robustness_id,
-            "keep_replay_details": cfg.keep_replay_details,
-            "keep_attribution_source": cfg.keep_attribution_source,
-            "attribution_dir": str(_attribution_unit_dir(run_root, arm.arm_id, int(seed))),
-        }
+        replay_job = _build_robustness_replay_job(
+            cfg=cfg, settings=settings, contract=contract, run_root=run_root,
+            arm=arm, arm_order=arm_order, seed=seed, seed_order=seed_order,
+            param_binding=benchmark_bindings[unit_identity],
+            baseline_dir=baseline_dir, source_artifacts=source_artifacts,
+            comparison_start=comparison_start, comparison_end=comparison_end,
+        )
         ready_replays.append((
             replay_job,
             {
@@ -5801,101 +5944,15 @@ def _execute_robustness_under_lock(
             score_source=target["score_source"],
         )
 
-    try:
-        seed_frame = _load_seed_results(seed_results_path)
-        _validate_seed_results_frame(
-            seed_frame, stochastic_arms=stochastic_arms, seeds=seeds
-        )
-        _validate_seed_result_scientific_identities(seed_frame, contract=contract)
-        expected = len(stochastic_arms) * len(seeds)
-        if len(seed_frame) != expected:
-            raise RuntimeError(
-                f"multi-seed robustness結果不完整: expected={expected}, actual={len(seed_frame)}"
-            )
-        seed_yearly_frame = _load_seed_yearly_results(seed_yearly_results_path)
-        _validate_seed_yearly_results_frame(
-            seed_yearly_frame, stochastic_arms=stochastic_arms, seeds=seeds,
-            expected_years=_comparison_years(comparison_start, comparison_end),
-            require_complete_units=True,
-        )
-        attribution_index_path = None
-        if cfg.keep_attribution_source:
-            expected_attribution = len(model_arms) * len(seeds)
-            ready_attribution = _attribution_ready_units(
-                run_root,
-                stochastic_arms=tuple(model_arms),
-                seeds=seeds,
-                fingerprint=str(contract["fingerprint"]),
-            )
-            if len(ready_attribution) != expected_attribution:
-                raise RuntimeError(
-                    f"compact attribution source不完整: expected={expected_attribution}, actual={len(ready_attribution)}"
-                )
-            attribution_index_path = _write_attribution_index_manifest(
-                run_root,
-                contract=contract,
-                stochastic_arms=tuple(model_arms),
-                seeds=seeds,
-            )
-        _write_scientific_observation_manifest(
-            run_root,
-            contract=contract,
-            seed_frame=seed_frame,
-            seed_yearly_frame=seed_yearly_frame,
-            attribution_index_path=attribution_index_path,
-        )
-        summary = _robustness_summary(
-            contract=contract, fixed_results=fixed_results, seed_frame=seed_frame,
-            seed_yearly_frame=seed_yearly_frame, run_root=run_root,
-        )
-        summary["elapsed_sec"] = round(time.perf_counter() - started_total, 3)
-        _write_json(run_root / SUMMARY_FILENAME, summary)
-        report_text = render_multi_seed_robustness_report(summary, target="markdown")
-        atomic_write_text(run_root / REPORT_FILENAME, report_text)
-        manifest.update({
-            "status": "COMPLETED",
-            "completed_at_utc": datetime.now(timezone.utc).isoformat(),
-            "elapsed_sec": summary["elapsed_sec"],
-            "durable_artifacts": _build_durable_result_artifacts(run_root),
-            "completed_seed_strategy_observations": int(len(seed_frame)),
-            "attribution_source_units": (len(model_arms) * len(seeds) if cfg.keep_attribution_source else 0),
-            "attribution_source_manifest_path": (
-                None if attribution_index_path is None else project_relative_display_path(attribution_index_path, project_root=PROJECT_ROOT)
-            ),
-            "summary_path": project_relative_display_path(run_root / SUMMARY_FILENAME, project_root=PROJECT_ROOT),
-            "report_path": project_relative_display_path(run_root / REPORT_FILENAME, project_root=PROJECT_ROOT),
-        })
-        _write_json(manifest_path, manifest)
-    except BaseException as exc:
-        manifest.update({
-            "status": "FAILED",
-            "failed_at_utc": datetime.now(timezone.utc).isoformat(),
-            "failed_stage": "summary_or_report_finalization",
-            "error_type": type(exc).__name__,
-            "error": str(exc),
-            "resumable": True,
-        })
-        _write_json(manifest_path, manifest)
-        print(
-            styled_workflow_status("[FAILED]")
-            + " Multiple-seed robustness彙總階段失敗；seed結果已保留，可由同一入口接續。"
-            + f" manifest={project_relative_display_path(manifest_path, project_root=PROJECT_ROOT)}"
-        )
-        raise
-    # COMPLETED was committed above. Publishing latest.json is presentation-only;
-    # if it fails, leave the committed manifest intact and make the failure clear.
-    try:
-        _publish_completed_robustness_latest(
-            run_root=run_root,
-            latest_path=(PROJECT_ROOT / cfg.output_root / LATEST_FILENAME).resolve(),
-            contract=contract,
-            attribution_index_path=attribution_index_path,
-        )
-    except Exception as exc:
-        raise RuntimeError(
-            "Robustness科學結果已COMPLETED，但Latest指標更新失敗；"
-            "保留既有結果；Latest指標仍需由正式發布流程處理"
-        ) from exc
+    summary = _commit_robustness_scientific_result(
+        cfg=cfg, run_root=run_root, contract=contract,
+        manifest=manifest, manifest_path=manifest_path,
+        seed_results_path=seed_results_path,
+        seed_yearly_results_path=seed_yearly_results_path,
+        stochastic_arms=stochastic_arms, model_arms=model_arms, seeds=seeds,
+        fixed_results=fixed_results, comparison_start=comparison_start,
+        comparison_end=comparison_end, started_total=started_total,
+    )
     selection_score_tree = any(
         str(settings.dl_sources[str(arm.dl_id)].score_source) == "selection_point_in_time"
         for arm in model_arms
