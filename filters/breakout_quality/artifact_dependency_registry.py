@@ -9,9 +9,11 @@ missing node.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from core.file_integrity import file_change_signature
 from core.research_policy import get_research_artifact_preparation_policy
 from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
@@ -35,7 +37,9 @@ from filters.breakout_quality.continuous_target import (
     resolve_continuous_target_dir,
 )
 from filters.breakout_quality.dataset_readiness import collect_dataset_readiness
+from filters.breakout_quality.dataset_store import resolve_dataset_paths
 from filters.breakout_quality.models.architectures import get_architecture_descriptor
+from filters.breakout_quality.paths import resolve_filter_output_dir
 from core.market_data_storage_contract import MARKET_DATA_BOOTSTRAP_RELATIVE_ROOT
 from filters.breakout_quality.trade_count_capture_preflight import preflight_trade_count_capture_evidence
 from filters.breakout_quality.predicted_context_artifact import (
@@ -169,6 +173,59 @@ def required_upstream_artifact_types(experiment_profile: str) -> tuple[str, ...]
     ):
         required.append(ARTIFACT_TRADE_COUNT_SOURCE)
     return tuple(required)
+
+
+@lru_cache(maxsize=128)
+def _model_upstream_publication_paths(
+    project_root: str,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+) -> tuple[Path, ...]:
+    """Resolve canonical upstream publication boundaries, not a second readiness rule."""
+    root = Path(project_root).resolve()
+    dataset_paths = resolve_dataset_paths(resolve_filter_output_dir(root, filter_id))
+    paths = [dataset_paths.summary]
+    required = required_upstream_artifact_types(experiment_profile)
+    if ARTIFACT_CONTINUOUS_TARGET in required:
+        profile = get_breakout_quality_experiment_profile(experiment_profile)
+        paths.append(
+            resolve_continuous_target_dir(
+                root, filter_id, target_id=str(profile.continuous_target_id)
+            ) / TARGET_MANIFEST_FILENAME
+        )
+    context = maybe_predicted_context_artifact_spec(
+        get_continuous_ranker_execution_recipe(experiment_profile).context_policy.source
+    )
+    if context is not None:
+        paths.append(
+            resolve_predicted_context_dir(
+                context.source, root, filter_id=filter_id,
+                model_architecture=model_architecture,
+                experiment_profile=experiment_profile,
+            ) / context.manifest_filename
+        )
+    return tuple(path.resolve() for path in paths)
+
+
+def model_upstream_publication_signature(
+    project_root: str | Path,
+    *,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+) -> tuple:
+    """Cheap physical-version hint for cached consumers of canonical upstream truth.
+
+    A changed Dataset/Target/context publication forces the consumer to re-run
+    ``collect_model_upstream_readiness`` and its existing source-provenance gates.
+    This metadata hint is never a scientific or content identity.
+    """
+    paths = _model_upstream_publication_paths(
+        str(Path(project_root).resolve()), str(filter_id),
+        str(model_architecture), str(experiment_profile),
+    )
+    return tuple(file_change_signature(path) for path in paths)
 
 
 def dependency_types_for(
@@ -483,6 +540,7 @@ __all__ = [
     "collect_model_upstream_readiness",
     "collect_model_upstream_preparation_plan",
     "dependency_types_for",
+    "model_upstream_publication_signature",
     "model_upstream_prerequisite_blockers",
     "required_upstream_artifact_types",
 ]

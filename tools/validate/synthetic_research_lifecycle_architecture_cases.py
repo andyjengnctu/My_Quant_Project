@@ -2978,6 +2978,107 @@ def validate_research_model_readiness_architecture_case(_base_params):
             )
             check_true("audit_completes_ranking_without_new_score", complete.score_path == score
                        and complete.model_validation_gate["status"] == "PASS")
+            # A PIT bundle can stay byte-identical while a different process
+            # publishes a new upstream Dataset. Revalidation must not depend
+            # solely on a PIT Score/Audit producer calling cache_clear().
+            from filters.breakout_quality.dataset_store import resolve_dataset_paths
+            from filters.breakout_quality.paths import resolve_filter_output_dir
+            dataset_summary_path = resolve_dataset_paths(
+                resolve_filter_output_dir(directory, str(settings.filter_id))
+            ).summary
+            dataset_summary_path.parent.mkdir(parents=True, exist_ok=True)
+            dataset_summary_path.write_text('{"revision": "a"}', encoding="utf-8")
+            score_owner.clear_selection_point_in_time_ranking_contract_cache()
+            score_owner.load_selection_point_in_time_ranking_contract(**kwargs)
+            original_dataset_stat = dataset_summary_path.stat()
+            staged_dataset = dataset_summary_path.with_name(".dataset_next.json")
+            staged_dataset.write_text('{"revision": "b"}', encoding="utf-8")
+            import os
+            os.utime(staged_dataset, ns=(
+                original_dataset_stat.st_atime_ns, original_dataset_stat.st_mtime_ns,
+            ))
+            os.replace(staged_dataset, dataset_summary_path)
+            with patch.object(
+                score_owner, "validate_current_pit_score_source_lineage",
+                side_effect=ValueError("PIT score Dataset/Target provenance stale"),
+            ) as revalidated_upstream:
+                try:
+                    score_owner.load_selection_point_in_time_ranking_contract(**kwargs)
+                except ValueError as exc:
+                    changed_dataset_rejected = "provenance stale" in str(exc)
+                else:
+                    changed_dataset_rejected = False
+            current_dataset_stat = dataset_summary_path.stat()
+            check_true("pit_cached_ranking_rechecks_republished_dataset_without_pit_change",
+                       changed_dataset_rejected and revalidated_upstream.call_count == 1
+                       and original_dataset_stat.st_size == current_dataset_stat.st_size
+                       and original_dataset_stat.st_mtime_ns == current_dataset_stat.st_mtime_ns)
+            dataset_summary_path.unlink()
+            score_owner.clear_selection_point_in_time_ranking_contract_cache()
+
+            # Event-target profiles have a separate canonical Target manifest.
+            # A new Target publication must likewise invalidate the cached PIT
+            # Ranking contract even if all four PIT publication files are frozen.
+            from core.breakout_quality_registry import (
+                CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
+                SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+            )
+            from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+            from filters.breakout_quality.continuous_target import (
+                TARGET_MANIFEST_FILENAME, resolve_continuous_target_dir,
+            )
+            event_profile = next(
+                name for name in SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES
+                if get_breakout_quality_experiment_profile(name).training_objective
+                in CONTINUOUS_RANKER_TRAINING_OBJECTIVES
+                if get_continuous_ranker_execution_recipe(name).dependency_spec.requires_continuous_target_artifact
+            )
+            event_target = get_breakout_quality_experiment_profile(event_profile).continuous_target_id
+            target_path = resolve_continuous_target_dir(
+                directory, str(settings.filter_id), target_id=str(event_target),
+            ) / TARGET_MANIFEST_FILENAME
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_text('{"revision": "a"}', encoding="utf-8")
+            score_owner.clear_selection_point_in_time_ranking_contract_cache()
+            event_kwargs = {**kwargs, "experiment_profile": event_profile}
+            with patch.object(
+                score_owner, "_load_selection_point_in_time_ranking_contract_uncached",
+                return_value=complete,
+            ) as canonical_gate:
+                score_owner.load_selection_point_in_time_ranking_contract(**event_kwargs)
+                score_owner.load_selection_point_in_time_ranking_contract(**event_kwargs)
+                before_target_stat = target_path.stat()
+                staged_target = target_path.with_name(".target_next.json")
+                staged_target.write_text('{"revision": "b"}', encoding="utf-8")
+                os.utime(staged_target, ns=(
+                    before_target_stat.st_atime_ns, before_target_stat.st_mtime_ns,
+                ))
+                os.replace(staged_target, target_path)
+                score_owner.load_selection_point_in_time_ranking_contract(**event_kwargs)
+                after_target_stat = target_path.stat()
+                check_true("pit_cached_ranking_rechecks_republished_target_without_pit_change",
+                           canonical_gate.call_count == 2
+                           and before_target_stat.st_size == after_target_stat.st_size
+                           and before_target_stat.st_mtime_ns == after_target_stat.st_mtime_ns)
+            score_owner.clear_selection_point_in_time_ranking_contract_cache()
+            dataset_summary_path.write_text('{"revision": "a"}', encoding="utf-8")
+            def _upstream_changes_during_ranking_validation(*_args, **_kwargs):
+                dataset_summary_path.write_text('{"revision": "b"}', encoding="utf-8")
+                return complete
+            with patch.object(
+                score_owner, "_load_selection_point_in_time_ranking_contract_uncached",
+                side_effect=_upstream_changes_during_ranking_validation,
+            ):
+                try:
+                    score_owner.load_selection_point_in_time_ranking_contract(**kwargs)
+                except RuntimeError as exc:
+                    upstream_race_rejected = "驗證期間更新" in str(exc)
+                else:
+                    upstream_race_rejected = False
+            check_true("pit_upstream_publication_during_contract_validation_fails_closed",
+                       upstream_race_rejected)
+            dataset_summary_path.unlink()
+            score_owner.clear_selection_point_in_time_ranking_contract_cache()
             # The healthy multi-seed path must not independently hash SCORE a
             # second time; the full contract already consumes the SCORE owner.
             score_owner.clear_selection_point_in_time_ranking_contract_cache()

@@ -481,12 +481,23 @@ def _selection_pit_contract_file_signature(
     experiment_profile: str,
     point_in_time_dir_override: str | None,
 ) -> tuple:
-    """Cheap publication hint; complete SHA / Audit validation remains canonical."""
+    """Cheap PIT + upstream publication hint; canonical SHA gates remain unchanged."""
     paths = _selection_pit_artifact_paths(
         Path(project_root), filter_id, model_architecture, experiment_profile,
         point_in_time_dir_override,
     )
-    return tuple(file_change_signature(path) for path in paths)
+    from filters.breakout_quality.artifact_dependency_registry import (
+        model_upstream_publication_signature,
+    )
+
+    return (
+        tuple(file_change_signature(path) for path in paths),
+        model_upstream_publication_signature(
+            project_root, filter_id=filter_id,
+            model_architecture=model_architecture,
+            experiment_profile=experiment_profile,
+        ),
+    )
 
 
 def load_selection_point_in_time_score_source_contract(
@@ -755,9 +766,9 @@ def load_selection_point_in_time_ranking_contract(
 ) -> SelectionPointInTimeRankingContract:
     """Return a validated Ranking/Audit contract for the current PIT revision.
 
-    A different process may republish Score or Audit without invoking this
-    process's cache-clear callback. Version checks are intentionally cheap;
-    the existing source SHA and model-validation gates run on cache misses.
+    Another process may republish PIT or its upstream Dataset/Target/context
+    without invoking this process's cache-clear callback. Physical-version
+    hints are cheap; source SHA and model-validation gates run on cache misses.
     """
     root = str(Path(project_root).resolve())
     override = None
