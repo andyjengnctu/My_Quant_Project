@@ -4367,4 +4367,86 @@ def validate_research_model_readiness_architecture_case(_base_params):
         check_true("target_published_component_corruption_rejected",
                    not accepted_changed_component)
 
+    # A derived Target pins another Target's manifest by SHA. PIT cache keys
+    # must notice that *linked* publication, not just the derived arrays.
+    # This uses the real Target provenance validator and existing PIT
+    # upstream-version owner; no independent source-legality rule is added.
+    from core.breakout_quality_registry import STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE
+    from core.breakout_quality_runtime import STRATEGY_ALIGNED_NO_TIME_TARGET_ID
+    with TemporaryDirectory() as td:
+        project = Path(td)
+        filter_id = integrity_settings.filter_id
+        original_dir = resolve_continuous_target_dir(
+            project, filter_id, target_id=STRATEGY_ALIGNED_TARGET_ID,
+        )
+        derived_dir = resolve_continuous_target_dir(
+            project, filter_id, target_id=STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+        )
+        original_dir.mkdir(parents=True)
+        derived_dir.mkdir(parents=True)
+        original_manifest = original_dir / "manifest.json"
+        source_dataset_record = {
+            "feature_bank": {"filename": "feature.npy", "size_bytes": 1, "sha256": "0" * 64}
+        }
+        source_payload = {"dataset_artifact_source": source_dataset_record, "revision": "a"}
+        original_manifest.write_text(json.dumps(source_payload), encoding="utf-8")
+        derived_artifacts = {}
+        for name, filename in (
+            ("target_raw_r", TARGET_RAW_FILENAME),
+            ("valid_mask", TARGET_VALID_MASK_FILENAME),
+        ):
+            path = derived_dir / filename
+            path.write_bytes(f"isolated-{name}".encode())
+            derived_artifacts[name] = build_file_manifest(path)
+        derived_manifest = {
+            "schema_version": CONTINUOUS_TARGET_SCHEMA_VERSION,
+            "filter_id": filter_id,
+            "target_contract": {"target_id": STRATEGY_ALIGNED_NO_TIME_TARGET_ID},
+            "source_target": {
+                "target_id": STRATEGY_ALIGNED_TARGET_ID,
+                "manifest": build_file_manifest(original_manifest),
+            },
+            "artifacts": derived_artifacts,
+        }
+        (derived_dir / "manifest.json").write_text(
+            json.dumps(derived_manifest), encoding="utf-8"
+        )
+        source_args = {
+            "filter_id": filter_id,
+            "model_architecture": integrity_settings.model_architecture,
+            "experiment_profile": STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
+        }
+        def published_signature():
+            return upstream_owner.model_upstream_publication_signature(project, **source_args)
+        def original_source_valid():
+            return load_validated_continuous_target_manifest(
+                project, filter_id, target_id=STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+                expected_dataset_artifacts=source_dataset_record,
+            )
+        check_true("derived_target_initial_linked_source_valid",
+                   bool(original_source_valid()))
+        initial_signature = published_signature()
+        check("derived_target_unchanged_linked_source_stable",
+              initial_signature, published_signature())
+        previous_stat = original_manifest.stat()
+        sibling = original_dir / "updated-manifest.tmp"
+        sibling.write_text(
+            json.dumps({**source_payload, "revision": "b"}), encoding="utf-8",
+        )
+        os.utime(sibling, ns=(previous_stat.st_atime_ns, previous_stat.st_mtime_ns))
+        sibling.replace(original_manifest)
+        check_true("derived_target_linked_manifest_invalidates_pit_cache",
+                   initial_signature != published_signature())
+        try:
+            original_source_valid()
+            stale_source_accepted = True
+        except ValueError as exc:
+            stale_source_accepted = "source manifest已改變" not in str(exc)
+        check_true("derived_target_linked_source_stays_canonical_fail_closed",
+                   not stale_source_accepted)
+        before_missing = published_signature()
+        original_manifest.unlink()
+        check_true("derived_target_missing_linked_manifest_invalidates_pit_cache",
+                   before_missing != published_signature())
+
     return results, summary

@@ -9,6 +9,7 @@ missing node.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -223,6 +224,38 @@ def _model_upstream_publication_paths(
     return tuple(path.resolve() for path in paths)
 
 
+@lru_cache(maxsize=128)
+def _linked_target_manifest_for_revision(
+    manifest_path: str, revision: tuple,
+) -> Path | None:
+    """Resolve a published derived Target's source manifest without new lineage rules.
+
+    Only a new physical revision of the derived manifest needs JSON parsing.
+    The original Target validator still owns all source SHA and dataset checks.
+    """
+    if revision == ("missing",):
+        return None
+    path = Path(manifest_path)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        payload = None  # The canonical Target validator rejects malformed manifests.
+    if file_change_signature(path) != revision:
+        raise RuntimeError("Continuous Target manifest changed during upstream version check")
+    if not isinstance(payload, dict):
+        return None
+    source = payload.get("source_target")
+    if not isinstance(source, dict):
+        return None
+    source_id = str(source.get("target_id") or "").strip()
+    if not source_id:
+        return None
+    # A target identity must name a direct sibling target, never a filesystem path.
+    if source_id in {".", ".."} or "/" in source_id or "\\" in source_id:
+        raise ValueError("Continuous Target source_target.target_id is not a direct target ID")
+    return (path.parent.parent / source_id / TARGET_MANIFEST_FILENAME).resolve()
+
+
 def model_upstream_publication_signature(
     project_root: str | Path,
     *,
@@ -242,7 +275,18 @@ def model_upstream_publication_signature(
         str(Path(project_root).resolve()), str(filter_id),
         str(model_architecture), str(experiment_profile),
     )
-    return tuple(file_change_signature(path) for path in paths)
+    revisions = [file_change_signature(path) for path in paths]
+    linked_revisions = []
+    for path, revision in zip(paths, revisions):
+        if (path.name != TARGET_MANIFEST_FILENAME
+                or path.parent.parent.name != "continuous_targets"):
+            continue
+        source_manifest = _linked_target_manifest_for_revision(str(path), revision)
+        if source_manifest is not None:
+            # A derived Target is validated against its source Target manifest;
+            # changing that manifest must invalidate cached PIT legality as well.
+            linked_revisions.append(file_change_signature(source_manifest))
+    return tuple(revisions + linked_revisions)
 
 
 def dependency_types_for(
