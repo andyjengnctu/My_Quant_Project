@@ -2731,6 +2731,13 @@ def validate_research_model_readiness_architecture_case(_base_params):
                    bool(check_model_score_owner_architecture_sources(edited)))
 
     edited = dict(score_sources)
+    edited[MODEL_SCORE_OWNER] = edited[MODEL_SCORE_OWNER].replace(
+        "    score_source = load_selection_point_in_time_score_source_contract(",
+        "    score_source = bypassed_score_validation(", 1,
+    )
+    check_true("delegated_complete_pit_ranking_must_reach_canonical_score_owner",
+               bool(check_model_score_owner_architecture_sources(edited)))
+    edited = dict(score_sources)
     edited[ROLLING_MODEL_SOURCE_OWNER] = edited[ROLLING_MODEL_SOURCE_OWNER].replace(
         "        score = load_selection_point_in_time_score_source_contract(",
         "        score = hidden_second_score_owner(", 1,
@@ -2820,7 +2827,11 @@ def validate_research_model_readiness_architecture_case(_base_params):
         coverage = directory / SELECTION_POINT_IN_TIME_COVERAGE_FILENAME
         manifest_file = directory / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
         audit_file = directory / SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME
-        score.write_text("ticker,date,breakout_quality_score\n0050,2021-01-04,0.7\n", encoding="utf-8")
+        score.write_text(
+            "ticker,date,group_index,breakout_quality_score,fold_id,model_information_cutoff\n"
+            "0050,2021-01-04,1,0.7,fold_20210104_20211231,2020-12-31\n",
+            encoding="utf-8",
+        )
         coverage.write_text("fold_id,groups\nfold_20210104_20211231,1\n", encoding="utf-8")
         target_identity = "synthetic_target"
         embedded = {"target_contract": {"schema": "fixture-v1"}}
@@ -2985,6 +2996,81 @@ def validate_research_model_readiness_architecture_case(_base_params):
                 )
             check_true("healthy_multiseed_uses_single_full_score_validation",
                        complete_seed is not None and complete_reason is None)
+            # Revisions can be published by another process, so this reader
+            # cannot rely exclusively on the local producer's cache-clear call.
+            import os
+            previous_audit_stat = audit_file.stat()
+            audit["metrics"]["pass_only_target"]["global_spearman"] = 0.0
+            staged_audit = directory / ".synthetic_pit_audit_next.json"
+            staged_audit.write_text(json.dumps(audit), encoding="utf-8")
+            os.utime(staged_audit, ns=(
+                previous_audit_stat.st_atime_ns, previous_audit_stat.st_mtime_ns,
+            ))
+            os.replace(staged_audit, audit_file)
+            current_audit_stat = audit_file.stat()
+            same_mtime_and_size = (
+                previous_audit_stat.st_mtime_ns == current_audit_stat.st_mtime_ns
+                and previous_audit_stat.st_size == current_audit_stat.st_size
+            )
+            try:
+                score_owner.load_selection_point_in_time_ranking_contract(
+                    **kwargs, require_model_validation_pass=True,
+                )
+            except ValueError as exc:
+                stale_gate_rejected = "模型驗證未通過" in str(exc)
+            else:
+                stale_gate_rejected = False
+            check_true("pit_external_audit_publication_invalidates_cached_pass_gate",
+                       stale_gate_rejected and same_mtime_and_size)
+            audit["metrics"]["pass_only_target"]["global_spearman"] = 0.2
+            audit_file.write_text(json.dumps(audit), encoding="utf-8")
+            check_true("pit_audit_republication_restores_validated_gate_without_clear",
+                       score_owner.load_selection_point_in_time_ranking_contract(
+                           **kwargs,
+                       ).model_validation_gate["status"] == "PASS")
+
+            # Canonical PIT access must not preserve a second fixed-key Score
+            # table after a valid same-path Score + Manifest + Audit publication.
+            # Use the production resolvers with isolated fixture paths.
+            with patch.object(score_owner, "resolve_selection_point_in_time_score_path", return_value=score), patch.object(
+                score_owner, "resolve_selection_point_in_time_manifest_path", return_value=manifest_file,
+            ), patch.object(
+                score_owner, "resolve_selection_point_in_time_coverage_path", return_value=coverage,
+            ), patch.object(
+                score_owner, "resolve_selection_point_in_time_audit_json_path", return_value=audit_file,
+            ):
+                canonical_kwargs = {key: value for key, value in kwargs.items()
+                                    if key != "point_in_time_dir_override"}
+                previous_table = score_owner.load_selection_point_in_time_score_table(
+                    **canonical_kwargs,
+                )
+                score.write_text(
+                    score.read_text(encoding="utf-8").replace(",0.7,", ",0.9,"),
+                    encoding="utf-8",
+                )
+                manifest["artifacts"]["scores"] = _record(score)
+                manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
+                audit["source_artifacts"]["point_in_time_scores"] = _record(score)
+                audit["source_artifacts"]["point_in_time_manifest"] = _record(manifest_file)
+                audit_file.write_text(json.dumps(audit), encoding="utf-8")
+                republished_table = score_owner.load_selection_point_in_time_score_table(
+                    **canonical_kwargs,
+                )
+                check_true("pit_canonical_table_reads_valid_republished_score_without_clear",
+                           float(previous_table.loc[("0050", "2021-01-04"), "breakout_quality_score"]) == 0.7
+                           and float(republished_table.loc[("0050", "2021-01-04"), "breakout_quality_score"]) == 0.9)
+                # A score-only change without its manifest hash must fail,
+                # not return an earlier cached table or an unverified 0.9.
+                score.write_text("tampered", encoding="utf-8")
+                try:
+                    score_owner.load_selection_point_in_time_score_table(**canonical_kwargs)
+                except ValueError as exc:
+                    invalid_score_rejected = "SHA256" in str(exc)
+                else:
+                    invalid_score_rejected = False
+                check_true("pit_canonical_table_rejects_score_manifest_sha_drift_without_clear",
+                           invalid_score_rejected)
+
             score.write_text("tampered", encoding="utf-8")
             try:
                 score_owner.load_selection_point_in_time_score_source_contract(**kwargs)

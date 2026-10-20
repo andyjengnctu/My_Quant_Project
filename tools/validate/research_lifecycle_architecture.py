@@ -452,11 +452,19 @@ def check_model_score_owner_architecture_sources(
     for name in (source_name, complete_name):
         if name not in owner_defs:
             issues.append(f"canonical PIT SCORE owner missing: {name}")
-    if complete_name in owner_defs and not any(
-        isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-        and n.func.id == source_name
-        for n in ast.walk(owner_defs[complete_name])
-    ):
+    def _reaches_score_owner(name: str, seen: frozenset[str] = frozenset()) -> bool:
+        """Follow local delegation without requiring a specific cache-wrapper shape."""
+        if name == source_name:
+            return True
+        if name in seen or name not in owner_defs:
+            return False
+        calls = {
+            n.func.id for n in ast.walk(owner_defs[name])
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        }
+        return any(_reaches_score_owner(callee, seen | {name}) for callee in calls)
+
+    if complete_name in owner_defs and not _reaches_score_owner(complete_name):
         issues.append("full PIT Audit contract bypasses canonical SCORE source")
     if source_name in owner_defs:
         score_owner = owner_defs[source_name]

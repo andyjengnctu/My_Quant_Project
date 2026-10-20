@@ -448,6 +448,47 @@ def derive_point_in_time_model_validation_gate(audit: dict[str, Any]) -> dict[st
     return result
 
 
+def _selection_pit_artifact_paths(
+    project_root: Path,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    point_in_time_dir_override: str | Path | None = None,
+) -> tuple[Path, Path, Path, Path]:
+    """One path owner for validated PIT reads and publication-version checks."""
+    root = Path(project_root).resolve()
+    override = None if point_in_time_dir_override in (None, "") else Path(point_in_time_dir_override)
+    if override is not None:
+        base = (override if override.is_absolute() else root / override).resolve()
+        return (
+            (base / SELECTION_POINT_IN_TIME_SCORE_FILENAME).resolve(),
+            (base / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME).resolve(),
+            (base / SELECTION_POINT_IN_TIME_COVERAGE_FILENAME).resolve(),
+            (base / SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME).resolve(),
+        )
+    return (
+        resolve_selection_point_in_time_score_path(root, filter_id, model_architecture, experiment_profile).resolve(),
+        resolve_selection_point_in_time_manifest_path(root, filter_id, model_architecture, experiment_profile).resolve(),
+        resolve_selection_point_in_time_coverage_path(root, filter_id, model_architecture, experiment_profile).resolve(),
+        resolve_selection_point_in_time_audit_json_path(root, filter_id, model_architecture, experiment_profile).resolve(),
+    )
+
+
+def _selection_pit_contract_file_signature(
+    project_root: str,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    point_in_time_dir_override: str | None,
+) -> tuple:
+    """Cheap publication hint; complete SHA / Audit validation remains canonical."""
+    paths = _selection_pit_artifact_paths(
+        Path(project_root), filter_id, model_architecture, experiment_profile,
+        point_in_time_dir_override,
+    )
+    return tuple(file_change_signature(path) for path in paths)
+
+
 def load_selection_point_in_time_score_source_contract(
     project_root: str | Path,
     filter_id: str,
@@ -464,26 +505,10 @@ def load_selection_point_in_time_score_source_contract(
     This deliberately does not grant the downstream strategy validation gate.
     """
     root = Path(project_root).resolve()
-    override_raw = None if point_in_time_dir_override in (None, "") else Path(point_in_time_dir_override)
-    if override_raw is not None:
-        base = (override_raw if override_raw.is_absolute() else root / override_raw).resolve()
-        score_path = (base / SELECTION_POINT_IN_TIME_SCORE_FILENAME).resolve()
-        manifest_path = (base / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME).resolve()
-        coverage_path = (base / SELECTION_POINT_IN_TIME_COVERAGE_FILENAME).resolve()
-        audit_path = (base / SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME).resolve()
-    else:
-        score_path = resolve_selection_point_in_time_score_path(
-            root, filter_id, model_architecture, experiment_profile
-        ).resolve()
-        manifest_path = resolve_selection_point_in_time_manifest_path(
-            root, filter_id, model_architecture, experiment_profile
-        ).resolve()
-        coverage_path = resolve_selection_point_in_time_coverage_path(
-            root, filter_id, model_architecture, experiment_profile
-        ).resolve()
-        audit_path = resolve_selection_point_in_time_audit_json_path(
-            root, filter_id, model_architecture, experiment_profile
-        ).resolve()
+    score_path, manifest_path, coverage_path, audit_path = _selection_pit_artifact_paths(
+        root, filter_id, model_architecture, experiment_profile,
+        point_in_time_dir_override,
+    )
     for label, path in (
         ("Selection PIT score", score_path),
         ("Selection PIT manifest", manifest_path),
@@ -561,8 +586,7 @@ def load_selection_point_in_time_score_source_contract(
     )
 
 
-@lru_cache(maxsize=32)
-def load_selection_point_in_time_ranking_contract(
+def _load_selection_point_in_time_ranking_contract_uncached(
     project_root: str,
     filter_id: str,
     model_architecture: str,
@@ -697,6 +721,63 @@ def load_selection_point_in_time_ranking_contract(
     )
 
 
+@lru_cache(maxsize=32)
+def _load_selection_point_in_time_ranking_contract_cached(
+    project_root: str,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    require_model_validation_pass: bool,
+    point_in_time_dir_override: str | None,
+    file_signature: tuple,
+) -> SelectionPointInTimeRankingContract:
+    contract = _load_selection_point_in_time_ranking_contract_uncached(
+        project_root, filter_id, model_architecture, experiment_profile,
+        require_model_validation_pass=require_model_validation_pass,
+        point_in_time_dir_override=point_in_time_dir_override,
+    )
+    if file_signature != _selection_pit_contract_file_signature(
+        project_root, filter_id, model_architecture, experiment_profile,
+        point_in_time_dir_override,
+    ):
+        raise RuntimeError("Selection PIT Contract 在驗證期間更新；請重新載入")
+    return contract
+
+
+def load_selection_point_in_time_ranking_contract(
+    project_root: str,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    *,
+    require_model_validation_pass: bool = True,
+    point_in_time_dir_override: str | Path | None = None,
+) -> SelectionPointInTimeRankingContract:
+    """Return a validated Ranking/Audit contract for the current PIT revision.
+
+    A different process may republish Score or Audit without invoking this
+    process's cache-clear callback. Version checks are intentionally cheap;
+    the existing source SHA and model-validation gates run on cache misses.
+    """
+    root = str(Path(project_root).resolve())
+    override = None
+    if point_in_time_dir_override not in (None, ""):
+        candidate = Path(point_in_time_dir_override)
+        override = str((candidate if candidate.is_absolute() else Path(root) / candidate).resolve())
+    return _load_selection_point_in_time_ranking_contract_cached(
+        root, str(filter_id), str(model_architecture), str(experiment_profile),
+        bool(require_model_validation_pass), override,
+        _selection_pit_contract_file_signature(
+            root, str(filter_id), str(model_architecture), str(experiment_profile),
+            override,
+        ),
+    )
+
+
+load_selection_point_in_time_ranking_contract.cache_clear = _load_selection_point_in_time_ranking_contract_cached.cache_clear
+load_selection_point_in_time_ranking_contract.cache_info = _load_selection_point_in_time_ranking_contract_cached.cache_info
+
+
 # Read-only PIT projection consumers register their invalidators with the score
 # owner. This keeps publication-time invalidation centralized without importing
 # a downstream Strategy Compare consumer back into the score-store module.
@@ -720,7 +801,6 @@ def clear_selection_point_in_time_ranking_contract_cache() -> None:
     """
     load_selection_point_in_time_ranking_contract.cache_clear()
     load_selection_point_in_time_score_table.cache_clear()
-    _load_selection_point_in_time_score_table_from_path_cached.cache_clear()
     for invalidate in tuple(_selection_pit_dependent_cache_invalidators):
         invalidate()
 
@@ -855,7 +935,6 @@ def load_selection_point_in_time_score_table_from_path(
     )
 
 
-@lru_cache(maxsize=16)
 def load_selection_point_in_time_score_table(
     project_root: str,
     filter_id: str,
@@ -868,7 +947,16 @@ def load_selection_point_in_time_score_table(
     return load_selection_point_in_time_score_table_from_path(
         str(contract.score_path), manifest_path=str(contract.manifest_path),
         experiment_profile=str(experiment_profile),
+        expected_score_sha256=str(
+            (contract.manifest.get("artifacts") or {}).get("scores", {}).get("sha256") or ""
+        ).lower(),
     )
+
+
+# Canonical Score table has no independent, non-versioned cache. Explicit-path
+# loading and canonical loading share one table cache and its invalidation API.
+load_selection_point_in_time_score_table.cache_clear = _load_selection_point_in_time_score_table_from_path_cached.cache_clear
+load_selection_point_in_time_score_table.cache_info = _load_selection_point_in_time_score_table_from_path_cached.cache_info
 
 
 @dataclass(frozen=True)
