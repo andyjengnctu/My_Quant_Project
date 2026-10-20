@@ -1197,6 +1197,17 @@ def _prepare_benchmark_strategy_parameter_artifacts(
                 str(binding["param_policy"]),
             )
             result = built_by_unit.get(unit)
+            if result is not None and (
+                Path(binding["path"]) != Path(result["path"])
+                or Path(binding["manifest_path"]) != Path(result["manifest_path"])
+            ):
+                # AI: Match the read-only plan's one-physical-truth invariant.
+                # Never silently route a distinct arm's fitting identity to the
+                # first arm's artifact simply because their dedup keys match.
+                raise ValueError(
+                    "相同benchmark strategy-parameter fitting identity不得對應不同physical truth: "
+                    f"seed={seed}, arm={arm.arm_id}, unit={unit}"
+                )
             if result is None:
                 result = _ensure_benchmark_strategy_parameter_binding(
                     settings=settings,
@@ -1216,7 +1227,9 @@ def _prepare_benchmark_strategy_parameter_artifacts(
                         else f" [{binding['producer_variant']}]"
                     )
                 )
-            bindings[(arm.arm_id, int(seed))] = result
+            # AI: Reuse one verified physical result, not the same mutable arm
+            # binding; every replay and output row retains its owning arm ID.
+            bindings[(arm.arm_id, int(seed))] = {**result, "arm_id": arm.arm_id}
     return bindings
 
 

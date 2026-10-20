@@ -1550,6 +1550,90 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     _mark_benchmark_step("ready_rolling_plan")
     _mark_section("benchmark_plan")
+    # AI: Runtime parameter production must enforce the same physical-identity
+    # invariant as the preview plan. Shared FIT truth may be produced once, but
+    # its consuming arm bindings must not alias the same mutable dictionary.
+    synthetic_shared_arms = (
+        SimpleNamespace(arm_id="synthetic-A", param_source="shared"),
+        SimpleNamespace(arm_id="synthetic-B", param_source="shared"),
+    )
+    synthetic_shared_robustness = SimpleNamespace(
+        benchmark_id="synthetic-binding", resolved_seeds=(17,),
+    )
+
+    def _synthetic_runtime_parameter_binding(*, settings, robustness, arm, seed):
+        return {
+            "arm_id": arm.arm_id, "seed": int(seed),
+            "family": "min", "evaluation_mode": "rolling", "param_policy": "min",
+            "producer_variant": "canonical_schedule_v1", "training_profile_id": None,
+            "fitting_seed_count": 1, "fitting_trials_per_seed": 0,
+            "path": Path("isolated") / str(arm.param_source) / "params.json",
+            "manifest_path": Path("isolated") / str(arm.param_source) / "manifest.json",
+        }
+
+    def _synthetic_runtime_parameter_producer(*, settings, robustness, binding,
+                                              seed, comparison_start, comparison_end):
+        return {
+            **binding, "sha256": "1" * 64, "file_sha256": "2" * 64,
+            "manifest_sha256": "3" * 64, "producer_action": "REUSE",
+            "parameter_payload_ready": True,
+        }
+
+    with (
+        patch.object(
+            robustness_plan_runtime, "_benchmark_param_binding",
+            side_effect=_synthetic_runtime_parameter_binding,
+        ),
+        patch.object(
+            robustness_plan_runtime, "_ensure_benchmark_strategy_parameter_binding",
+            side_effect=_synthetic_runtime_parameter_producer,
+        ) as shared_producer,
+        redirect_stdout(io.StringIO()),
+    ):
+        runtime_bindings = robustness_plan_runtime._prepare_benchmark_strategy_parameter_artifacts(
+            settings=None, robustness=synthetic_shared_robustness,
+            benchmark_arms=synthetic_shared_arms,
+            comparison_start="2021-01-01", comparison_end="2026-03-02",
+        )
+    first_binding = runtime_bindings[("synthetic-A", 17)]
+    second_binding = runtime_bindings[("synthetic-B", 17)]
+    check_true(
+        "robustness_runtime_shared_parameter_keeps_independent_arm_bindings",
+        shared_producer.call_count == 1
+        and first_binding is not second_binding
+        and first_binding["arm_id"] == "synthetic-A"
+        and second_binding["arm_id"] == "synthetic-B"
+        and first_binding["path"] == second_binding["path"]
+        and first_binding["sha256"] == second_binding["sha256"],
+    )
+    conflicting_arms = (
+        synthetic_shared_arms[0],
+        SimpleNamespace(arm_id="synthetic-B", param_source="different"),
+    )
+    runtime_conflict_rejected = False
+    with (
+        patch.object(
+            robustness_plan_runtime, "_benchmark_param_binding",
+            side_effect=_synthetic_runtime_parameter_binding,
+        ),
+        patch.object(
+            robustness_plan_runtime, "_ensure_benchmark_strategy_parameter_binding",
+            side_effect=_synthetic_runtime_parameter_producer,
+        ) as conflicting_producer,
+        redirect_stdout(io.StringIO()),
+    ):
+        try:
+            robustness_plan_runtime._prepare_benchmark_strategy_parameter_artifacts(
+                settings=None, robustness=synthetic_shared_robustness,
+                benchmark_arms=conflicting_arms,
+                comparison_start="2021-01-01", comparison_end="2026-03-02",
+            )
+        except ValueError as exc:
+            runtime_conflict_rejected = "不得對應不同physical truth" in str(exc)
+    check_true(
+        "robustness_runtime_rejects_shared_fitting_identity_with_conflicting_paths",
+        runtime_conflict_rejected and conflicting_producer.call_count == 1,
+    )
     # Regression: current suite capability already resolved C93/raw-price into the
     # same-seed benchmark matrix, but a stale runtime-entry allowlist once rejected
     # every non-canonical data_source before the shared planner was even reached.
