@@ -843,6 +843,70 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     add_check(results, "synthetic_breakout_quality", case_id, "report_without_oos_is_research_only", "RESEARCH_ONLY", research_only["conclusion"]["status"])
 
 
+def _validate_canonical_runtime_score_cache_revision(results, case_id: str) -> None:
+    """A changed score must never survive the contract/table/candidate cache stack."""
+    from datetime import date
+    from filters.breakout_quality import score_store as score_owner
+
+    with tempfile.TemporaryDirectory(prefix="runtime_score_revision_") as tmp:
+        root = Path(tmp)
+        score_path = root / "scores.csv"
+        manifest_path = root / "manifest.json"
+        model_path = root / "model.pt"
+        split_path = root / "split_assignments.csv"
+        manifest_path.write_text("{}", encoding="utf-8")
+        model_path.write_bytes(b"model")
+        split_path.write_bytes(b"split")
+        pd.DataFrame([{
+            "ticker": "2330", "date": "2026-08-14", "high_len": 250,
+            SCORE_COLUMN: 0.2,
+        }]).to_csv(score_path, index=False, encoding="utf-8-sig")
+        paths = SimpleNamespace(
+            manifest_path=manifest_path, model_path=model_path,
+            split_path=split_path, score_path=score_path,
+        )
+        contract = SimpleNamespace(
+            manifest={
+                "score_table": {
+                    "columns": list(SCORE_TABLE_REQUIRED_COLUMNS),
+                    "event_date_range": {"start": "2026-08-14", "end": "2026-08-14"},
+                    "row_count": 1,
+                },
+                "conservative_unscorable_events": None,
+            },
+            paths=SimpleNamespace(score_path=score_path),
+            high_len_values=(250,), available_from=date(2026, 8, 14),
+            available_through=date(2026, 8, 14),
+            shared_group_score_broadcast=False,
+        )
+
+        def lookup():
+            return score_owner.lookup_breakout_quality_candidate_score(
+                project_root=str(root), filter_id="synthetic_quality", ticker="2330",
+                signal_date="2026-08-14", high_len=250,
+            )["score"]
+
+        with patch.object(score_owner, "resolve_existing_filter_artifact_paths", return_value=paths), patch.object(
+            score_owner, "resolve_score_table_path", return_value=score_path,
+        ), patch.object(score_owner, "load_runtime_artifact_contract", return_value=contract):
+            before_score = lookup()
+            before = score_path.stat()
+            stage = score_path.with_name("scores.revision.tmp")
+            stage.write_bytes(score_path.read_bytes().replace(b"0.2", b"0.9"))
+            os.replace(stage, score_path)
+            os.utime(score_path, ns=(before.st_atime_ns, before.st_mtime_ns))
+            after_score = lookup()
+            same_metadata = (
+                score_path.stat().st_size == before.st_size
+                and score_path.stat().st_mtime_ns == before.st_mtime_ns
+            )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "canonical_runtime_nested_score_cache_reloads_after_same_metadata_atomic_replacement",
+        (0.2, 0.9, True), (before_score, after_score, same_metadata),
+    )
+
+
 def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
     """Protect the runtime artifact boundary, not every historical model recipe."""
     case_id = "BREAKOUT_QUALITY_RUNTIME_ARTIFACT"
@@ -925,6 +989,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
     )
 
     _validate_signal_runtime_wiring(results, case_id)
+    _validate_canonical_runtime_score_cache_revision(results, case_id)
     _validate_core_filter_dependency_inversion(results, case_id)
     _validate_breakout_quality_report_rendering(results, case_id)
     summary.update(

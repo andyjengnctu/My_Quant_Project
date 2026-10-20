@@ -4,11 +4,18 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from threading import RLock
+
+from core.file_integrity import file_change_signature
 
 import numpy as np
 import pandas as pd
 
-from filters.breakout_quality.artifacts import load_runtime_artifact_contract, validate_required_high_len
+from filters.breakout_quality.artifacts import (
+    load_model_artifact_contract,
+    load_runtime_artifact_contract,
+    validate_required_high_len,
+)
 from filters.breakout_quality.contract import (
     DEFAULT_FILTER_ID,
     DEFAULT_UNAVAILABLE_SCORE_FILENAME,
@@ -16,6 +23,54 @@ from filters.breakout_quality.contract import (
     SCORE_TABLE_REQUIRED_COLUMNS,
 )
 from filters.breakout_quality.csv_io import read_breakout_quality_csv
+from filters.breakout_quality.paths import resolve_existing_filter_artifact_paths
+
+
+# Non-scientific observation table: each source version still validates via the
+# existing canonical manifest/SHA owner when a cache is first populated.
+_runtime_score_versions: dict[tuple, tuple] = {}
+_runtime_score_version_lock = RLock()
+_MAX_TRACKED_RUNTIME_SCORE_SOURCES = 128  # Bound observations across transient research roots.
+
+
+def _invalidate_runtime_score_cache_stack() -> None:
+    load_model_artifact_contract.cache_clear()
+    load_runtime_artifact_contract.cache_clear()
+    _load_score_table_cached.cache_clear()
+    _load_shared_group_score_table_cached.cache_clear()
+    _load_unavailable_score_table_cached.cache_clear()
+    _lookup_breakout_quality_candidate_score_cached.cache_clear()
+
+
+def _ensure_runtime_score_cache_fresh(
+    project_root: str,
+    filter_id: str,
+    model_architecture: str | None,
+    experiment_profile: str | None,
+) -> None:
+    paths = resolve_existing_filter_artifact_paths(
+        str(project_root), str(filter_id), model_architecture, experiment_profile,
+    )
+    version = (str(paths.manifest_path),) + tuple(
+        file_change_signature(path) for path in (
+            paths.manifest_path, paths.model_path, paths.split_path,
+            paths.score_path, paths.score_path.with_name(DEFAULT_UNAVAILABLE_SCORE_FILENAME),
+        )
+    )
+    key = (str(project_root), str(filter_id), model_architecture, experiment_profile)
+    with _runtime_score_version_lock:
+        previous = _runtime_score_versions.get(key)
+        if previous is not None and previous != version:
+            # One invalidation boundary for contracts, tables and individual
+            # candidate lookups. Never keep old derived tables after publication.
+            _invalidate_runtime_score_cache_stack()
+        if previous is None and len(_runtime_score_versions) >= _MAX_TRACKED_RUNTIME_SCORE_SOURCES:
+            # Dropping observations also evicts their dependent cached values;
+            # otherwise an evicted source could return a stale table on revisit.
+            _invalidate_runtime_score_cache_stack()
+            _runtime_score_versions.clear()
+        _runtime_score_versions[key] = version
+
 
 
 def resolve_score_table_path(
@@ -37,7 +92,7 @@ def resolve_score_table_path(
 
 
 @lru_cache(maxsize=16)
-def load_score_table(
+def _load_score_table_cached(
     project_root: str,
     filter_id: str = DEFAULT_FILTER_ID,
     model_architecture: str | None = None,
@@ -49,6 +104,14 @@ def load_score_table(
         model_architecture=model_architecture,
         experiment_profile=experiment_profile,
     )
+    source_paths = resolve_existing_filter_artifact_paths(
+        project_root, filter_id, model_architecture, experiment_profile,
+    )
+    source_files = (
+        source_paths.manifest_path, source_paths.score_path,
+        source_paths.score_path.with_name(DEFAULT_UNAVAILABLE_SCORE_FILENAME),
+    )
+    before_publication = tuple(file_change_signature(source) for source in source_files)
     table = read_breakout_quality_csv(path)
     missing = sorted(set(SCORE_TABLE_REQUIRED_COLUMNS) - set(table.columns))
     if missing:
@@ -141,11 +204,13 @@ def load_score_table(
     observed_high_lens = set(int(value) for value in indexed.index.get_level_values("high_len").unique())
     if not observed_high_lens.issubset(set(contract.high_len_values)):
         raise ValueError("breakout quality score table 含 manifest 未宣告的 high_len")
+    if before_publication != tuple(file_change_signature(source) for source in source_files):
+        raise RuntimeError("breakout quality score 工件在讀取期間更新；請重新載入")
     return indexed
 
 
 @lru_cache(maxsize=16)
-def load_shared_group_score_table(
+def _load_shared_group_score_table_cached(
     project_root: str,
     filter_id: str = DEFAULT_FILTER_ID,
     model_architecture: str | None = None,
@@ -189,7 +254,7 @@ def load_shared_group_score_table(
 
 
 @lru_cache(maxsize=16)
-def load_unavailable_score_table(
+def _load_unavailable_score_table_cached(
     project_root: str,
     filter_id: str = DEFAULT_FILTER_ID,
     model_architecture: str | None = None,
@@ -214,6 +279,46 @@ def load_unavailable_score_table(
     return unavailable.set_index(["ticker", "date", "high_len"])[["reason"]].sort_index()
 
 
+def load_score_table(
+    project_root: str,
+    filter_id: str = DEFAULT_FILTER_ID,
+    model_architecture: str | None = None,
+    experiment_profile: str | None = None,
+) -> pd.DataFrame:
+    _ensure_runtime_score_cache_fresh(project_root, filter_id, model_architecture, experiment_profile)
+    return _load_score_table_cached(project_root, filter_id, model_architecture, experiment_profile)
+
+
+def load_shared_group_score_table(
+    project_root: str,
+    filter_id: str = DEFAULT_FILTER_ID,
+    model_architecture: str | None = None,
+    experiment_profile: str | None = None,
+) -> pd.DataFrame:
+    _ensure_runtime_score_cache_fresh(project_root, filter_id, model_architecture, experiment_profile)
+    return _load_shared_group_score_table_cached(project_root, filter_id, model_architecture, experiment_profile)
+
+
+def load_unavailable_score_table(
+    project_root: str,
+    filter_id: str = DEFAULT_FILTER_ID,
+    model_architecture: str | None = None,
+    experiment_profile: str | None = None,
+) -> pd.DataFrame:
+    _ensure_runtime_score_cache_fresh(project_root, filter_id, model_architecture, experiment_profile)
+    return _load_unavailable_score_table_cached(project_root, filter_id, model_architecture, experiment_profile)
+
+
+# Preserve the existing explicit eviction hooks used by validators/clients.
+for _public, _cached in (
+    (load_score_table, _load_score_table_cached),
+    (load_shared_group_score_table, _load_shared_group_score_table_cached),
+    (load_unavailable_score_table, _load_unavailable_score_table_cached),
+):
+    _public.cache_clear = _cached.cache_clear
+    _public.cache_info = _cached.cache_info
+
+
 def lookup_breakout_quality_candidate_score(
     *,
     project_root: str,
@@ -230,6 +335,7 @@ def lookup_breakout_quality_candidate_score(
     if not ticker_text:
         raise ValueError("breakout quality ranking lookup 必須提供 ticker")
     date_text = pd.Timestamp(signal_date).strftime("%Y-%m-%d")
+    _ensure_runtime_score_cache_fresh(project_root, filter_id, model_architecture, experiment_profile)
     return dict(_lookup_breakout_quality_candidate_score_cached(
         str(project_root),
         str(filter_id),
@@ -334,6 +440,7 @@ def build_pass_condition_from_score_table(
     if len(df) == 0:
         return out
 
+    _ensure_runtime_score_cache_fresh(project_root, filter_id, None, None)
     contract = load_runtime_artifact_contract(str(project_root), str(filter_id))
     validate_required_high_len(contract, int(high_len))
     score_table = (

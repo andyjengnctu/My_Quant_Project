@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from core.file_integrity import compute_file_sha256
+from core.file_integrity import compute_file_sha256, file_change_signature
 from core.model_paths import resolve_models_dir
 from filters.breakout_quality.contract import (
     DEFAULT_SCORE_FILENAME,
@@ -60,13 +60,37 @@ def _validate_file_record(path: Path, record: dict, *, field_name: str) -> None:
         )
 
 
-@lru_cache(maxsize=8)
-def load_workflow_runtime_score_bundle(
+def _workflow_runtime_file_signature(
     project_root: str,
     filter_id: str,
     model_architecture: str,
     experiment_profile: str,
+) -> tuple:
+    paths = resolve_workflow_runtime_score_paths(
+        project_root=project_root, filter_id=filter_id,
+        model_architecture=model_architecture, experiment_profile=experiment_profile,
+    )
+    upstream_paths = resolve_filter_artifact_paths(
+        project_root, filter_id, model_architecture, experiment_profile,
+    )
+    return tuple(file_change_signature(path) for path in (
+        paths["manifest"], paths["score"], paths["unavailable"],
+        getattr(upstream_paths, "manifest_path", upstream_paths.model_path.with_name("manifest.json")),
+        upstream_paths.model_path,
+    ))
+
+
+@lru_cache(maxsize=8)
+def _load_workflow_runtime_score_bundle_cached(
+    project_root: str,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    file_signature: tuple,
 ) -> dict:
+    # A new local publication also invalidates the source contract cache;
+    # never validate a new runtime bundle against an earlier cached source.
+    load_continuous_ranker_oos_contract.cache_clear()
     paths = resolve_workflow_runtime_score_paths(
         project_root=project_root,
         filter_id=filter_id,
@@ -173,12 +197,36 @@ def load_workflow_runtime_score_bundle(
             columns=["reason"],
             index=pd.MultiIndex.from_arrays([[], []], names=["ticker", "date"]),
         )
+    if file_signature != _workflow_runtime_file_signature(
+        project_root, filter_id, model_architecture, experiment_profile,
+    ):
+        raise RuntimeError("workflow runtime 工件在讀取期間更新；請重新載入")
     return {
         "manifest": manifest,
         "score_lookup": score_lookup,
         "unavailable_lookup": unavailable_lookup,
         "shared_group_score_broadcast": shared,
     }
+
+
+def load_workflow_runtime_score_bundle(
+    project_root: str,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+) -> dict:
+    """Reuse a verified bundle only while its on-disk publication is unchanged."""
+    signature = _workflow_runtime_file_signature(
+        str(project_root), str(filter_id), str(model_architecture), str(experiment_profile),
+    )
+    return _load_workflow_runtime_score_bundle_cached(
+        str(project_root), str(filter_id), str(model_architecture), str(experiment_profile), signature,
+    )
+
+
+# Preserve the original public cache control used by canonical runtime promotion.
+load_workflow_runtime_score_bundle.cache_clear = _load_workflow_runtime_score_bundle_cached.cache_clear
+load_workflow_runtime_score_bundle.cache_info = _load_workflow_runtime_score_bundle_cached.cache_info
 
 
 def lookup_workflow_runtime_candidate_score(

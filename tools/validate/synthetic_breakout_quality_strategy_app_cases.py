@@ -3394,8 +3394,61 @@ def validate_breakout_quality_runtime_integration_gate_contract_case(_base_param
                 outside_coverage_rejected = "coverage不足" in str(exc)
             else:
                 outside_coverage_rejected = False
+
+            # Simulate an out-of-band atomic publication, intentionally keeping
+            # size/mtime identical while updating score bytes and manifest hash.
+            from core.file_integrity import compute_file_sha256
+            from os import replace as replace_file, utime
+
+            before = score_path.stat()
+            stage = score_path.with_name("scores.revision.tmp")
+            stage.write_bytes(score_path.read_bytes().replace(b"0.75", b"0.95"))
+            replace_file(stage, score_path)
+            utime(score_path, ns=(before.st_atime_ns, before.st_mtime_ns))
+            same_metadata = (
+                score_path.stat().st_size == before.st_size
+                and score_path.stat().st_mtime_ns == before.st_mtime_ns
+            )
+            try:
+                runtime_store.lookup_workflow_runtime_candidate_score(
+                    project_root=str(temp_root), ticker="2330", information_date="2026-08-14",
+                    high_len=201, filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                    model_architecture=workflow.model_architecture,
+                    experiment_profile=workflow.experiment_profile,
+                )
+            except ValueError as exc:
+                score_sha_conflict_rejected = "SHA256" in str(exc)
+            else:
+                score_sha_conflict_rejected = False
+            refreshed_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            refreshed_manifest["score_table"]["sha256"] = compute_file_sha256(score_path)
+            manifest_path.write_text(json.dumps(refreshed_manifest), encoding="utf-8")
+            updated_rank = runtime_store.lookup_workflow_runtime_candidate_score(
+                project_root=str(temp_root), ticker="2330", information_date="2026-08-14",
+                high_len=201, filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                model_architecture=workflow.model_architecture,
+                experiment_profile=workflow.experiment_profile,
+            )
+            score_path.unlink()
+            try:
+                runtime_store.lookup_workflow_runtime_candidate_score(
+                    project_root=str(temp_root), ticker="2330", information_date="2026-08-14",
+                    high_len=201, filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                    model_architecture=workflow.model_architecture,
+                    experiment_profile=workflow.experiment_profile,
+                )
+            except FileNotFoundError:
+                missing_published_score_rejected = True
+            else:
+                missing_published_score_rejected = False
         runtime_store.load_workflow_runtime_score_bundle.cache_clear()
 
+    check_true(
+        "workflow_runtime_revalidates_out_of_band_same_metadata_published_scores",
+        same_metadata and score_sha_conflict_rejected
+        and float(updated_rank["score"]) == 0.95
+        and missing_published_score_rejected,
+    )
     check_true(
         "workflow_runtime_daily_score_lookup_preserves_c44_unavailable_semantics",
         available_rank["available"] is True

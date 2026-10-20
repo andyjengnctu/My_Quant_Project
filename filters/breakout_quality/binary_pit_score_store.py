@@ -6,6 +6,8 @@ from functools import lru_cache
 import json
 from pathlib import Path
 
+from core.file_integrity import compute_file_sha256, file_change_signature
+
 import numpy as np
 import pandas as pd
 
@@ -41,9 +43,10 @@ def _read_manifest(path: str) -> dict:
 
 
 @lru_cache(maxsize=8)
-def load_binary_point_in_time_score_table(
+def _load_binary_point_in_time_score_table_cached(
     manifest_path: str,
     scores_path: str,
+    file_signature: tuple,
 ) -> tuple[pd.DataFrame, dict]:
     manifest = _read_manifest(manifest_path)
     path = Path(scores_path).resolve()
@@ -74,6 +77,11 @@ def load_binary_point_in_time_score_table(
     if bool((cutoffs >= score_dates).any()):
         raise ValueError("Binary PIT model_information_cutoff必須早於score date")
     score_record = dict(manifest.get("score_table") or {})
+    # Published score manifests already carry SHA256. Legacy manifest records
+    # without this optional evidence retain their historical read semantics.
+    expected_sha = str(score_record.get("sha256") or "").strip().lower()
+    if expected_sha and compute_file_sha256(path) != expected_sha:
+        raise ValueError("Binary PIT score SHA256 與 manifest 不一致")
     expected_rows = int(score_record.get("row_count", -1))
     if expected_rows != len(table):
         raise ValueError(
@@ -86,7 +94,31 @@ def load_binary_point_in_time_score_table(
     if actual_start != str(period.get("start")) or actual_end != str(period.get("end")):
         raise ValueError("Binary PIT score period與manifest不一致")
     indexed = table.set_index(["ticker", "date"])[[SCORE_COLUMN]].sort_index()
+    if file_signature != _binary_pit_file_signature(manifest_path, scores_path):
+        raise RuntimeError("Binary PIT 工件在讀取期間更新；請重新載入")
     return indexed, manifest
+
+
+def _binary_pit_file_signature(manifest_path: str, scores_path: str) -> tuple:
+    return (
+        file_change_signature(manifest_path),
+        file_change_signature(scores_path),
+    )
+
+
+def load_binary_point_in_time_score_table(
+    manifest_path: str,
+    scores_path: str,
+) -> tuple[pd.DataFrame, dict]:
+    """Reload after any observed on-disk publication rather than by path alone."""
+    return _load_binary_point_in_time_score_table_cached(
+        str(manifest_path), str(scores_path),
+        _binary_pit_file_signature(str(manifest_path), str(scores_path)),
+    )
+
+
+load_binary_point_in_time_score_table.cache_clear = _load_binary_point_in_time_score_table_cached.cache_clear
+load_binary_point_in_time_score_table.cache_info = _load_binary_point_in_time_score_table_cached.cache_info
 
 
 def build_pass_condition_from_binary_point_in_time_scores(

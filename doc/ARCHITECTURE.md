@@ -4,6 +4,8 @@
 
 ## 驗證執行與來源快取邊界
 
+正式 workflow、legacy canonical Runtime 與 Binary PIT Score loader 以 `core/file_integrity.py` 的非科學性檔案變更簽章（device/inode、size、mtime、ctime）偵測本機正常發布／替換。版本改變時清除或重建完整的 contract／table／candidate 快取鏈，重新依原有 manifest SHA256 契約驗證；不得因外部重寫未走既有 publisher 的 `cache_clear()` 而讀回舊 Score。Binary PIT 對已宣告的 score SHA 做完整驗證，舊 manifest 缺少 SHA 時維持歷史唯讀語意。檔案變更簽章**僅是快取失效提示，不是 content hash／FIT／Score identity**；刻意同時偽造所有檔案系統屬性的內容變更，仍須由 cold-load SHA 驗證／正式批次前置驗證偵測。正式 snapshot/publisher 仍須以 canonical manifest 的內容 Hash 作為真理。
+
 Synthetic coverage 使用 **coverage.py 原生自動選擇的追蹤引擎**，不再強制 Windows／Python 3.14 改用 `ctrace`。Phase 16 本機 A/B 顯示：強制 `ctrace` 後 `consistency` 從 78.32 秒增加為 83.53 秒，超過原有 80 秒預算，屬已證實的效能退步。標準環境變數 `COVERAGE_CORE` 仍由 coverage.py 直接解讀，供隔離效能診斷；`coverage_run_info.json` 保留 `coverage_core_requested` 紀錄，未指定時為 `auto`。Synthetic Registry、branch／line coverage include／omit、coverage 品質門檻與 FAIL／timeout 判定完全不變。本次撤回退步不是對 30～40 秒目標的達成宣告。
 
 `tools/validate/source_index.py` 對檔案來源提供依修改時間與大小辨識的共用 AST／import／結構摘要，`research_lifecycle_architecture.py` 對合成故障注入採**檔名與原始碼內容**作為 AST／函式結構摘要快取鍵。`meta_contracts.py` 仍對每個模組完整檢查靜態 import；只有原始碼不包含 `import_module`／`__import__` 識別字時，才跳過不可能出現 literal dynamic import 的第二輪 AST 走訪。所有原有驗證項目、違規判斷、SSOT 凍結測試及 coverage 門檻維持不變；檔案或注入內容變更必須重新驗證，不得用上次快取結果授權 PASS。

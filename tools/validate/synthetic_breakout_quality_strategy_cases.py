@@ -570,7 +570,40 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
             "kwargs": {"score_source": BINARY_PIT_SCORE_SOURCE, "manifest_path": str(manifest), "scores_path": str(scores)},
         }}
         _validate_optimizer_runtime_context(_ContextSession(), runtime_spec)
+
+        from core.file_integrity import compute_file_sha256
+        from os import replace as replace_file, utime
+
+        before = scores.stat()
+        stage = scores.with_name("scores.revision.tmp")
+        stage.write_bytes(scores.read_bytes().replace(b"0.7", b"0.2"))
+        replace_file(stage, scores)
+        utime(scores, ns=(before.st_atime_ns, before.st_mtime_ns))
+        revised_binary, _ = load_binary_point_in_time_score_table(str(manifest), str(scores))
+        binary_reloaded = (
+            scores.stat().st_size == before.st_size
+            and scores.stat().st_mtime_ns == before.st_mtime_ns
+            and float(revised_binary.loc[("2330", "2020-01-02"), SCORE_COLUMN]) == 0.2
+        )
+        manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+        manifest_payload["score_table"]["sha256"] = compute_file_sha256(scores)
+        manifest.write_text(json.dumps(manifest_payload), encoding="utf-8")
+        load_binary_point_in_time_score_table(str(manifest), str(scores))
+        before = scores.stat()
+        stage.write_bytes(scores.read_bytes().replace(b"0.2", b"0.9"))
+        replace_file(stage, scores)
+        utime(scores, ns=(before.st_atime_ns, before.st_mtime_ns))
+        try:
+            load_binary_point_in_time_score_table(str(manifest), str(scores))
+        except ValueError as exc:
+            binary_sha_mismatch_rejected = "SHA256" in str(exc)
+        else:
+            binary_sha_mismatch_rejected = False
     check("binary_pit_runtime_matches_direct_store_semantics", tuple(direct), tuple(runtime))
+    check_true(
+        "binary_pit_score_cache_refreshes_and_rejects_corrupt_manifest_hash",
+        binary_reloaded and binary_sha_mismatch_rejected,
+    )
 
     summary["checks"] = len(results)
     return results, summary

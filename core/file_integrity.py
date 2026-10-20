@@ -31,6 +31,23 @@ def require_sha256_hex(
     return text
 
 
+def file_change_signature(path: str | Path) -> tuple[int, int, int, int, int] | tuple[str]:
+    """Cheap local invalidation hint, NOT a scientific/content fingerprint.
+
+    Include inode and ctime in addition to mtime/size so normal atomic
+    replacements and same-size restored-mtime writes trigger revalidation.
+    The owning loader must verify canonical SHA256 on every cache miss.
+    """
+    try:
+        stat = Path(path).stat()
+    except FileNotFoundError:
+        return ("missing",)
+    return (
+        int(stat.st_dev), int(stat.st_ino), int(stat.st_size),
+        int(stat.st_mtime_ns), int(stat.st_ctime_ns),
+    )
+
+
 def compute_file_sha256(path: str | Path, *, chunk_size: int = 1024 * 1024) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:
@@ -165,6 +182,7 @@ def canonical_json_sha256(payload: object, *, length: int | None = None) -> str:
 
 
 __all__ = [
+    "file_change_signature",
     "atomic_replace_with_retry",
     "atomic_write_json",
     "atomic_write_text",
