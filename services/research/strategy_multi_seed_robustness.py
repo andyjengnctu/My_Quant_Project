@@ -80,6 +80,7 @@ from core.file_integrity import (
     atomic_replace_with_retry,
     atomic_write_text,
     canonical_json_sha256,
+    file_change_signature,
     load_json_object_or_none,
 )
 from core.training_progress import (
@@ -1702,6 +1703,13 @@ def _render_robustness_execution_plan(
     ):
         try:
             resolved_bindings: dict[tuple[str, int], dict[str, Any]] = {}
+            # Multiple arms can consume one physical parameter truth. Derive its
+            # hashes/evaluation view only once per planning call; never persist
+            # this memo beyond the call or merge the independent arm-seed rows.
+            physical_views: dict[
+                tuple[Path, Path, str, str, str],
+                tuple[dict[str, Any], tuple[tuple, tuple]],
+            ] = {}
             for unit, item in benchmark_bindings.items():
                 path = Path(item["path"])
                 manifest_path = Path(item["manifest_path"])
@@ -1716,25 +1724,47 @@ def _render_robustness_execution_plan(
                         comparison_end=str(end),
                     )
                     continue
-                if not path.is_file():
-                    raise FileNotFoundError(f"benchmark parameter artifact missing: {unit}")
-                if not manifest_path.is_file():
-                    raise FileNotFoundError(f"benchmark parameter manifest missing: {unit}")
-                scientific_sha = compute_strategy_param_scientific_sha256(path)
+                view_key = (
+                    path, manifest_path, str(item["evaluation_mode"]),
+                    str(start), str(end),
+                )
+                cached = physical_views.get(view_key)
+                if cached is None:
+                    if not path.is_file():
+                        raise FileNotFoundError(f"benchmark parameter artifact missing: {unit}")
+                    if not manifest_path.is_file():
+                        raise FileNotFoundError(f"benchmark parameter manifest missing: {unit}")
+                    before = (file_change_signature(path), file_change_signature(manifest_path))
+                    physical_identity = {
+                        "sha256": compute_strategy_param_scientific_sha256(path),
+                        "evaluation_sha256": resolve_strategy_param_evaluation_identity_sha256(
+                            path,
+                            evaluation_mode=str(item["evaluation_mode"]),
+                            start_date=str(start),
+                            end_date=str(end),
+                        ),
+                        "file_sha256": compute_file_sha256(path),
+                        "manifest_sha256": compute_file_sha256(manifest_path),
+                    }
+                    after = (file_change_signature(path), file_change_signature(manifest_path))
+                    if before != after:
+                        raise RuntimeError(f"benchmark parameter changed during planning: {unit}")
+                    physical_views[view_key] = (physical_identity, after)
+                else:
+                    physical_identity, after = cached
+                    if (file_change_signature(path), file_change_signature(manifest_path)) != after:
+                        raise RuntimeError(f"benchmark parameter changed during planning: {unit}")
                 resolved_bindings[unit] = {
-                    **item,
-                    "sha256": scientific_sha,
-                    "evaluation_sha256": resolve_strategy_param_evaluation_identity_sha256(
-                        path,
-                        evaluation_mode=str(item["evaluation_mode"]),
-                        start_date=str(start),
-                        end_date=str(end),
-                    ),
-                    "file_sha256": compute_file_sha256(path),
-                    "manifest_sha256": compute_file_sha256(manifest_path),
+                    **item, **physical_identity,
                     "parameter_payload_ready": True,
                     "result_reuse_only": False,
                 }
+            # A normal atomic re-publication between arm observations is not a
+            # valid multi-arm scientific snapshot. Let the existing planner mark
+            # this run BLOCKED instead of binding mixed source revisions.
+            for (path, manifest_path, _mode, _start, _end), (_identity, signature) in physical_views.items():
+                if (file_change_signature(path), file_change_signature(manifest_path)) != signature:
+                    raise RuntimeError("benchmark parameter changed during planning")
             robustness_contract = build_multi_seed_robustness_contract(
                 robustness_id=cfg.robustness_id,
                 comparison_period={"start": start, "end": end},

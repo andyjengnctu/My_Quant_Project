@@ -1436,15 +1436,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         patch(
             "services.research.strategy_multi_seed_robustness.compute_strategy_param_scientific_sha256",
             return_value="1" * 64,
-        ),
+        ) as physical_scientific_calls,
         patch(
             "services.research.strategy_multi_seed_robustness.resolve_strategy_param_evaluation_identity_sha256",
             return_value="2" * 64,
-        ),
+        ) as physical_evaluation_calls,
         patch(
             "services.research.strategy_multi_seed_robustness.compute_file_sha256",
             return_value="3" * 64,
-        ),
+        ) as physical_file_sha_calls,
         patch(
             "services.research.strategy_multi_seed_robustness._resolve_existing_scientific_unit_states",
             return_value=({}, {}, exact_result_reuse_states),
@@ -1467,8 +1467,70 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             fixed_arms=rolling_fixed,
             stochastic_arms=rolling_stochastic,
         )
+        ready_hash_call_counts = (
+            physical_scientific_calls.call_count,
+            physical_evaluation_calls.call_count,
+            physical_file_sha_calls.call_count,
+        )
+        # AI: Force an observable artifact revision *during* one parameter
+        # snapshot. Hash memoization may not certify mixed-version inputs.
+        mutated_revision = {"value": 0}
+
+        def _mutating_parameter_hash(_path):
+            mutated_revision["value"] = 1
+            return "3" * 64
+
+        with (
+            patch.object(
+                robustness_plan_runtime,
+                "file_change_signature",
+                side_effect=lambda _path: ("isolated-revision", mutated_revision["value"]),
+            ),
+            patch.object(
+                robustness_plan_runtime, "compute_file_sha256",
+                side_effect=_mutating_parameter_hash,
+            ),
+        ):
+            _, mutation_plan_payload = _render_robustness_execution_plan(
+                cfg=rolling_robustness,
+                settings=rolling_robust_settings,
+                status=isolated_robustness_status,
+                fixed_arms=rolling_fixed,
+                stochastic_arms=rolling_stochastic,
+            )
     ready_param_bindings = fitted_param_payload.get("benchmark_param_bindings") or {}
     ready_result_states = fitted_param_payload.get("robustness_unit_states") or {}
+    # A shared physical parameter truth is hashed once, but each arm-seed keeps
+    # its own identity row. No long-lived hash cache may bypass later validation.
+    physical_views = {
+        (str(binding["path"]), str(binding["manifest_path"]), str(binding["evaluation_mode"]))
+        for binding in ready_param_bindings.values()
+        if not binding.get("result_reuse_only")
+    }
+    physical_paths = {item[0] for item in physical_views}
+    manifest_paths = {item[1] for item in physical_views}
+    check_true(
+        "robustness_ready_rolling_hashes_shared_parameter_truth_once_per_plan",
+        len(ready_param_bindings) >= len(physical_views) > 0
+        and ready_hash_call_counts[0] == len(physical_paths)
+        and ready_hash_call_counts[1] == len(physical_views)
+        and ready_hash_call_counts[2] == len(physical_paths) + len(manifest_paths),
+        note=(
+            f"arm_seeds={len(ready_param_bindings)} physical_views={len(physical_views)} "
+            f"scientific={ready_hash_call_counts[0]} "
+            f"evaluation={ready_hash_call_counts[1]} "
+            f"file_sha={ready_hash_call_counts[2]}"
+        ),
+    )
+    check_true(
+        "robustness_ready_rolling_blocks_artifact_revision_during_hash_snapshot",
+        mutated_revision["value"] == 1
+        and mutation_plan_payload.get("overall_status") == "BLOCKED"
+        and any(
+            "benchmark parameter changed during planning" in str(item)
+            for item in mutation_plan_payload.get("blockers") or ()
+        ),
+    )
     check_true(
         "robustness_plan_does_not_count_ready_trained_params_as_pending_optimizer_search",
         fitted_param_payload.get("overall_status") == "READY"
