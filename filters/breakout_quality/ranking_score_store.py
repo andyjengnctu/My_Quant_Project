@@ -31,6 +31,7 @@ from core.breakout_quality_runtime import (
 )
 
 from filters.breakout_quality.artifacts import compute_file_sha256
+from core.file_integrity import file_change_signature
 from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
 from filters.breakout_quality.ranker_training_contract import (
     stored_training_semantics_mismatches,
@@ -724,23 +725,24 @@ def clear_selection_point_in_time_ranking_contract_cache() -> None:
         invalidate()
 
 
-def _selection_pit_file_cache_signature(path: Path) -> tuple[int, int]:
-    stat = path.stat()
-    return int(stat.st_mtime_ns), int(stat.st_size)
+def _selection_pit_file_cache_signature(path: Path) -> tuple:
+    """Use the shared physical-version hint for same-mtime atomic replacements."""
+    return file_change_signature(path)
 
 
 @lru_cache(maxsize=4)
 def _load_selection_point_in_time_score_table_from_path_cached(
     score_path: str,
     manifest_path: str | None,
-    score_signature: tuple[int, int],
-    manifest_signature: tuple[int, int] | None,
+    score_signature: tuple,
+    manifest_signature: tuple | None,
     experiment_profile: str | None = None,
     expected_score_sha256: str | None = None,
 ) -> pd.DataFrame:
-    # Signatures are part of the cache key so an in-place rebuilt artifact cannot
-    # reuse a stale DataFrame.  The values themselves are intentionally unused.
-    del score_signature, manifest_signature
+    # Capture the physical revision before reading so the final check can reject
+    # an in-flight producer write instead of caching a mixed artifact.
+    original_score_signature = score_signature
+    original_manifest_signature = manifest_signature
     path = Path(score_path).resolve()
     if not path.is_file():
         raise FileNotFoundError(f"找不到Selection PIT score: {path}")
@@ -813,6 +815,11 @@ def _load_selection_point_in_time_score_table_from_path_cached(
     indexed = table.set_index(["ticker", "date"]).sort_index()
     indexed.attrs["available_from"] = available_from or str(table["date"].min())
     indexed.attrs["available_through"] = available_through or str(table["date"].max())
+    # A publication raced the read. Do not cache a DataFrame with uncertain provenance.
+    if (file_change_signature(path) != original_score_signature
+            or (manifest_path not in (None, "")
+                and file_change_signature(manifest_file) != original_manifest_signature)):
+        raise RuntimeError("Selection PIT 工件在讀取期間更新；請重新載入")
     return indexed
 
 
@@ -1182,7 +1189,50 @@ def _load_continuous_ranker_oos_contract_uncached(
     )
 
 
+def _continuous_ranker_oos_contract_file_signature(
+    project_root: str,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    *,
+    require_scores: bool,
+) -> tuple:
+    """Cheap publication-version hint; SHA validation stays with the contract owner."""
+    root = Path(project_root).resolve()
+    artifacts = resolve_filter_artifact_paths(root, filter_id, model_architecture, experiment_profile)
+    output_dir = resolve_filter_model_output_dir(root, filter_id, model_architecture, experiment_profile)
+    files = [
+        artifacts.manifest_path, artifacts.model_path,
+        output_dir / CONTINUOUS_RANKER_REPORT_FILENAME,
+    ]
+    if require_scores:
+        files.append(resolve_continuous_ranker_oos_score_path(
+            root, filter_id, model_architecture, experiment_profile,
+        ))
+    return tuple(file_change_signature(path) for path in files)
+
+
 @lru_cache(maxsize=16)
+def _load_continuous_ranker_oos_contract_cached(
+    project_root: str,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    require_scores: bool,
+    file_signature: tuple,
+) -> ContinuousRankerOOSContract:
+    contract = _load_continuous_ranker_oos_contract_uncached(
+        project_root, filter_id, model_architecture, experiment_profile,
+        require_scores=require_scores,
+    )
+    if file_signature != _continuous_ranker_oos_contract_file_signature(
+        project_root, filter_id, model_architecture, experiment_profile,
+        require_scores=require_scores,
+    ):
+        raise RuntimeError("Continuous ranker OOS 工件在驗證期間更新；請重新載入")
+    return contract
+
+
 def load_continuous_ranker_oos_contract(
     project_root: str,
     filter_id: str,
@@ -1190,11 +1240,19 @@ def load_continuous_ranker_oos_contract(
     experiment_profile: str,
     require_scores: bool = True,
 ) -> ContinuousRankerOOSContract:
-    """Cached canonical published source; signature and cache_clear stay stable."""
-    return _load_continuous_ranker_oos_contract_uncached(
+    """Revalidate the canonical score SHA after a local publication changes."""
+    signature = _continuous_ranker_oos_contract_file_signature(
         project_root, filter_id, model_architecture, experiment_profile,
         require_scores=require_scores,
     )
+    return _load_continuous_ranker_oos_contract_cached(
+        project_root, filter_id, model_architecture, experiment_profile,
+        require_scores, signature,
+    )
+
+
+load_continuous_ranker_oos_contract.cache_clear = _load_continuous_ranker_oos_contract_cached.cache_clear
+load_continuous_ranker_oos_contract.cache_info = _load_continuous_ranker_oos_contract_cached.cache_info
 
 
 def load_continuous_ranker_oos_contract_at_paths(
@@ -1228,9 +1286,10 @@ def clear_continuous_ranker_oos_score_caches() -> None:
 
 
 @lru_cache(maxsize=32)
-def load_continuous_ranker_oos_score_table_from_path(
+def _load_continuous_ranker_oos_score_table_from_path_cached(
     score_path: str,
     experiment_profile: str,
+    file_signature: tuple,
 ) -> pd.DataFrame:
     profile = get_breakout_quality_experiment_profile(str(experiment_profile))
     path = Path(score_path).resolve()
@@ -1274,10 +1333,28 @@ def load_continuous_ranker_oos_score_table_from_path(
     indexed = frame.set_index(["ticker", "date"]).sort_index()
     indexed.attrs["available_from"] = available_from
     indexed.attrs["available_through"] = available_through
+    if file_signature != file_change_signature(path):
+        raise RuntimeError("Continuous ranker OOS Score 在讀取期間更新；請重新載入")
     return indexed
 
 
-@lru_cache(maxsize=16)
+def load_continuous_ranker_oos_score_table_from_path(
+    score_path: str,
+    experiment_profile: str,
+) -> pd.DataFrame:
+    """Read a path override with the same version-aware cache as canonical scores."""
+    path = Path(score_path).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"找不到Continuous ranker scores: {path.name}")
+    return _load_continuous_ranker_oos_score_table_from_path_cached(
+        str(path), str(experiment_profile), file_change_signature(path),
+    )
+
+
+load_continuous_ranker_oos_score_table_from_path.cache_clear = _load_continuous_ranker_oos_score_table_from_path_cached.cache_clear
+load_continuous_ranker_oos_score_table_from_path.cache_info = _load_continuous_ranker_oos_score_table_from_path_cached.cache_info
+
+
 def load_continuous_ranker_oos_score_table(
     project_root: str,
     filter_id: str,
@@ -1291,6 +1368,11 @@ def load_continuous_ranker_oos_score_table(
     return load_continuous_ranker_oos_score_table_from_path(
         str(path), str(experiment_profile)
     )
+
+
+# The canonical accessor has no independent cache; path revisions have one owner.
+load_continuous_ranker_oos_score_table.cache_clear = load_continuous_ranker_oos_score_table_from_path.cache_clear
+load_continuous_ranker_oos_score_table.cache_info = load_continuous_ranker_oos_score_table_from_path.cache_info
 
 
 def lookup_continuous_ranker_oos_candidate_score(

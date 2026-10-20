@@ -1057,6 +1057,129 @@ def append_completed_pair_score_reuse_contract_checks(
         "pit_score_owner_invalidates_registered_projection_cache_without_reverse_import",
         True, dependent_projection_was_invalidated,
     )
+    # Regression: a published Forward OOS table may be atomically replaced at
+    # the same path during a multi-seed replay. A cached score/contract must not
+    # be reused merely because the path and the restored mtime/size match.
+    from filters.breakout_quality import ranking_score_store as forward_owner
+    from types import SimpleNamespace
+    import os
+    with tempfile.TemporaryDirectory(prefix="forward_score_revision_") as temp_dir:
+        forward_path = Path(temp_dir) / "forward.csv"
+        pit_path = Path(temp_dir) / "pit.csv"
+        profile = "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
+        forward_frame = pd.DataFrame({
+            "ticker": ["2330"], "date": ["2021-01-04"],
+            "group_index": [0], "model_score": [0.20],
+        })
+        forward_frame.to_csv(forward_path, index=False, encoding="utf-8-sig")
+        old_forward = forward_owner.load_continuous_ranker_oos_score_table_from_path(
+            str(forward_path), profile
+        )
+        with patch.object(forward_owner, "resolve_continuous_ranker_oos_score_path", return_value=forward_path):
+            old_canonical = forward_owner.load_continuous_ranker_oos_score_table(
+                temp_dir, "fixture", "fixture", profile
+            )
+            stamp = forward_path.stat()
+            staged = forward_path.with_suffix(".staged")
+            forward_frame["model_score"] = 0.90
+            forward_frame.to_csv(staged, index=False, encoding="utf-8-sig")
+            os.utime(staged, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+            os.replace(staged, forward_path)
+            new_forward = forward_owner.load_continuous_ranker_oos_score_table_from_path(
+                str(forward_path), profile
+            )
+            new_canonical = forward_owner.load_continuous_ranker_oos_score_table(
+                temp_dir, "fixture", "fixture", profile
+            )
+            old_value = float(old_forward.loc[("2330", "2021-01-04"), "model_score"])
+            changed_value = float(new_forward.loc[("2330", "2021-01-04"), "model_score"])
+            canonical_value = float(new_canonical.loc[("2330", "2021-01-04"), "model_score"])
+            signature_collision = (
+                forward_path.stat().st_size == stamp.st_size
+                and forward_path.stat().st_mtime_ns == stamp.st_mtime_ns
+            )
+            # Fail closed when a revision violates the existing score domain;
+            # a formerly valid cached DataFrame is not acceptable evidence.
+            forward_frame["model_score"] = -0.90
+            forward_frame.to_csv(staged, index=False, encoding="utf-8-sig")
+            os.replace(staged, forward_path)
+            try:
+                forward_owner.load_continuous_ranker_oos_score_table_from_path(
+                    str(forward_path), profile
+                )
+            except ValueError:
+                invalid_forward_rejected = True
+            else:
+                invalid_forward_rejected = False
+
+        # The same physical revision hint must cover isolated PIT path overrides
+        # that have no manifest/hash input from a Strategy Compare planner.
+        pit_frame = pd.DataFrame({
+            "ticker": ["2330"], "date": ["2021-01-04"],
+            "group_index": [0], "breakout_quality_score": [0.25],
+            "fold_id": ["fold_fixture"],
+            "model_information_cutoff": ["2020-12-31"],
+        })
+        pit_frame.to_csv(pit_path, index=False, encoding="utf-8-sig")
+        old_pit = forward_owner.load_selection_point_in_time_score_table_from_path(
+            str(pit_path), experiment_profile=profile
+        )
+        pit_stamp = pit_path.stat()
+        pit_staged = pit_path.with_suffix(".staged")
+        pit_frame["breakout_quality_score"] = 0.85
+        pit_frame.to_csv(pit_staged, index=False, encoding="utf-8-sig")
+        os.utime(pit_staged, ns=(pit_stamp.st_atime_ns, pit_stamp.st_mtime_ns))
+        os.replace(pit_staged, pit_path)
+        new_pit = forward_owner.load_selection_point_in_time_score_table_from_path(
+            str(pit_path), experiment_profile=profile
+        )
+        pit_reloaded = (
+            pit_path.stat().st_size == pit_stamp.st_size
+            and pit_path.stat().st_mtime_ns == pit_stamp.st_mtime_ns
+            and float(old_pit.loc[("2330", "2021-01-04"), "breakout_quality_score"]) == 0.25
+            and float(new_pit.loc[("2330", "2021-01-04"), "breakout_quality_score"]) == 0.85
+        )
+
+        # A changed canonical manifest/report/score publication must cause the
+        # canonical FIT/score contract to revalidate, not return the old object.
+        manifest = Path(temp_dir) / "manifest.json"
+        model = Path(temp_dir) / "model.pt"
+        report = Path(temp_dir) / "continuous_ranker_report.json"
+        for item in (manifest, model, report):
+            item.write_bytes(b"synthetic contract identity")
+        artifacts = SimpleNamespace(manifest_path=manifest, model_path=model)
+        forward_owner.load_continuous_ranker_oos_contract.cache_clear()
+        with patch.object(forward_owner, "resolve_filter_artifact_paths", return_value=artifacts), patch.object(
+            forward_owner, "resolve_filter_model_output_dir", return_value=Path(temp_dir)
+        ), patch.object(
+            forward_owner, "resolve_continuous_ranker_oos_score_path", return_value=forward_path
+        ), patch.object(
+            forward_owner, "_load_continuous_ranker_oos_contract_uncached", side_effect=lambda *a, **k: object()
+        ) as validation:
+            once = forward_owner.load_continuous_ranker_oos_contract(temp_dir, "fixture", "fixture", profile)
+            cached = forward_owner.load_continuous_ranker_oos_contract(temp_dir, "fixture", "fixture", profile)
+            manifest.write_bytes(b"new contract identity")
+            refreshed = forward_owner.load_continuous_ranker_oos_contract(temp_dir, "fixture", "fixture", profile)
+            contract_rerun = once is cached and refreshed is not cached and validation.call_count == 2
+        forward_owner.load_continuous_ranker_oos_contract.cache_clear()
+
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "forward_oos_same_path_republication_invalidates_override_and_canonical_score_cache",
+        True, old_value == 0.20 and changed_value == 0.90 and canonical_value == 0.90
+        and float(old_canonical.loc[("2330", "2021-01-04"), "model_score"]) == 0.20
+        and signature_collision and invalid_forward_rejected,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "pit_isolated_same_stat_atomic_replacement_reloads_without_manual_cache_clear",
+        True, pit_reloaded,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "forward_canonical_contract_revalidates_changed_publication",
+        True, contract_rerun,
+    )
     add_check(
         results,
         "synthetic_breakout_quality",
