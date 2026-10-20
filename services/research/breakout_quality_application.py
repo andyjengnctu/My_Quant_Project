@@ -192,6 +192,7 @@ from filters.breakout_quality.ranking_score_store import (
     load_selection_point_in_time_score_source_contract,
     load_continuous_ranker_oos_contract,
     load_continuous_ranker_oos_score_table,
+    clear_continuous_ranker_oos_score_caches,
     resolve_continuous_ranker_oos_score_path,
 )
 from services.audit.catalog import get_domain_cli_commands
@@ -2931,13 +2932,9 @@ def _load_reusable_continuous_forward_contract(settings):
 
 
 def _clear_continuous_forward_reuse_caches() -> None:
-    for loader in (
-        load_continuous_ranker_oos_contract,
-        load_continuous_ranker_oos_score_table,
-    ):
-        clear = getattr(loader, "cache_clear", None)
-        if callable(clear):
-            clear()
+    # Keep Research's existing lifecycle entrypoint, but let the score owner
+    # invalidate every cache layer, including explicit-path Forward score loads.
+    clear_continuous_ranker_oos_score_caches()
 
 
 def _load_canonical_forward_checkpoint_import_source(settings):

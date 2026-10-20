@@ -11367,6 +11367,31 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
                 certified is not None and certified_reason is None and without_proof is None
                 and certified.fitting_identity == old_fitting_identity,
             )
+            # The archived inventory SHA and scientific fitting identity cannot
+            # be rewritten; its independent content witness catches content
+            # drift even when size and mtime are artificially held constant.
+            import os
+            csv_stamp = csv_file.stat()
+            original_csv_bytes = csv_file.read_bytes()
+            assert b"100" in original_csv_bytes
+            csv_file.write_bytes(original_csv_bytes.replace(b"100", b"102", 1))
+            os.utime(csv_file, ns=(csv_stamp.st_atime_ns, csv_stamp.st_mtime_ns))
+            unchanged_metadata_inventory = source_inventory._build_source_data_inventory(
+                test_root, "reduced",
+            )
+            try:
+                source_inventory.build_source_data_inventory(test_root, "reduced")
+                rejected_same_stat_content_drift = False
+            except ValueError as exc:
+                rejected_same_stat_content_drift = "內容已變更" in str(exc)
+            csv_file.write_bytes(original_csv_bytes)
+            os.utime(csv_file, ns=(csv_stamp.st_atime_ns, csv_stamp.st_mtime_ns))
+            check_true(
+                "source_inventory_witness_blocks_same_metadata_different_csv_content",
+                unchanged_metadata_inventory == current_inventory
+                and rejected_same_stat_content_drift
+                and source_inventory.build_source_data_inventory(test_root, "reduced") == current_inventory,
+            )
             for condition_name, affected_rows in (
                 ("nonfinite_high", [*clean_rows, {**clean_rows[1], "Date": "2020-01-04", "High": float("inf")}]),
                 ("duplicate_date", [*clean_rows, {**clean_rows[1], "Volume": 500}]),

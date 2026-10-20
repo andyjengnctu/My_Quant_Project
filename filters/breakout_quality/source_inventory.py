@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
@@ -12,6 +15,9 @@ from core.dataset_profiles import DATASET_PROFILE_FULL, get_dataset_dir, normali
 
 SOURCE_DATA_INVENTORY_SCHEMA_VERSION = 1
 SOURCE_DATA_INVENTORY_ALGORITHM = "sha256(ticker,relative_path,size_bytes,mtime_ns)"
+# This additional local observation is intentionally NOT part of the historic
+# CSV inventory identity, FIT fingerprint, or serialized research manifests.
+SOURCE_CONTENT_WITNESS_SCHEMA_VERSION = 1
 # AI: This one-way compatibility proof is specific to the 2026-09-12 change.
 PRE_FINITE_STABLE_OHLCV_CONTRACT_VERSION = 2
 
@@ -96,9 +102,86 @@ def _build_source_data_inventory(
     return payload
 
 
+def _source_content_witness(
+    project_root: str | Path, dataset: str, inventory: Mapping[str, Any],
+) -> None:
+    """Detect a same-metadata source rewrite without changing legacy identity.
+
+    A content witness is a local integrity observation, not a new scientific
+    input or an authorization to treat previously unproven history as verified.
+    The *first* observation is trust-on-first-use; subsequent calls (including
+    in new processes) fail closed if the same metadata inventory has new bytes.
+    Changing legitimate mtime/size creates a different inventory identity and
+    continues to be handled by the canonical dataset/fit readiness planner.
+    """
+    root = Path(project_root).resolve()
+    profile = normalize_dataset_profile_key(dataset)
+    data_dir = Path(get_dataset_dir(str(root), profile)).resolve()
+    csv_inputs, _ = discover_unique_csv_inputs(str(data_dir))
+    content = hashlib.sha256()
+    for ticker, raw_path in csv_inputs:
+        path = Path(raw_path).resolve()
+        before = path.stat()
+        file_hash = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(4 * 1024 * 1024), b""):
+                file_hash.update(chunk)
+        after = path.stat()
+        if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+            raise ValueError("來源 CSV 在內容驗證期間已更新，拒絕判定同一 source inventory")
+        for token in (str(ticker), path.relative_to(data_dir).as_posix(), file_hash.hexdigest()):
+            content.update(token.encode("utf-8"))
+            content.update(b"\0")
+    # Detect additions/deletions and regular metadata changes during the scan.
+    if dict(inventory) != _build_source_data_inventory(root, profile):
+        raise ValueError("來源 CSV inventory 在內容驗證期間已變更")
+
+    digest = str(inventory["csv_inventory_sha256"])
+    witness_dir = root / "outputs" / "filters" / "breakout_quality" / "source_integrity" / profile
+    witness = witness_dir / (digest + ".json")
+    payload = {
+        "schema_version": SOURCE_CONTENT_WITNESS_SCHEMA_VERSION,
+        "dataset_profile": profile,
+        "csv_inventory_sha256": digest,
+        "csv_content_sha256": content.hexdigest(),
+        "csv_file_count": len(csv_inputs),
+    }
+    witness_dir.mkdir(parents=True, exist_ok=True)
+    if not witness.exists():
+        # An immutable, atomic first observation. Never overwrite a previous
+        # observation even when another process races to publish it. A staged
+        # hard-link is atomic on the same volume on Windows and POSIX.
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=".source_content_", suffix=".tmp", dir=str(witness_dir),
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                handle.flush()
+                os.fsync(handle.fileno())
+            try:
+                os.link(temporary, witness)
+            except FileExistsError:
+                pass  # Another process published first; validate *its* bytes.
+        finally:
+            temporary.unlink(missing_ok=True)
+    try:
+        observed = json.loads(witness.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("來源 CSV 內容見證無法讀取，不允許沿用資料身分") from exc
+    if observed != payload:
+        raise ValueError(
+            "來源 CSV 內容已變更，但檔案大小與修改時間等既有 identity 未變；"
+            "拒絕沿用來源資料、FIT 或 Score，須調查來源及重新取得合法工件"
+        )
+
+
 def build_source_data_inventory(project_root: str | Path, dataset: str) -> dict[str, Any]:
-    """Build canonical metadata fingerprint including source cleaning semantics."""
-    return _build_source_data_inventory(project_root, dataset)
+    """Preserve canonical historic identity; independently check source bytes."""
+    inventory = _build_source_data_inventory(project_root, dataset)
+    _source_content_witness(project_root, dataset, inventory)
+    return inventory
 
 
 @lru_cache(maxsize=8)

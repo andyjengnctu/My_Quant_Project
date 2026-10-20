@@ -961,6 +961,35 @@ def append_completed_pair_score_reuse_contract_checks(
             off_arm=off_arm,
             on_arm=on_arm,
         )
+        # Regression: same mtime AND size, different bytes. The physical file
+        # SHA must supersede the old metadata-only projection-cache key.
+        import os
+        from core.file_integrity import compute_file_sha256
+        from filters.breakout_quality import ranking_score_store as score_owner
+        cached_table = score_owner.load_selection_point_in_time_score_table_from_path(str(score_path))
+        stamp = score_path.stat()
+        old_bytes = score_path.read_bytes()
+        assert b"0.91" in old_bytes
+        score_path.write_bytes(old_bytes.replace(b"0.91", b"0.92", 1))
+        os.utime(score_path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        same_stat_projection = compute_score_projection_sha256s(
+            score_path=score_path,
+            score_source="selection_point_in_time",
+            columns=("breakout_quality_score", "raw_safety_score"),
+            score_file_sha256=compute_file_sha256(score_path),
+        )
+        score_owner.clear_selection_point_in_time_ranking_contract_cache()
+        refreshed_table = score_owner.load_selection_point_in_time_score_table_from_path(str(score_path))
+        same_stat_collision_blocked = (
+            (score_path.stat().st_size, score_path.stat().st_mtime_ns)
+            == (stamp.st_size, stamp.st_mtime_ns)
+            and same_stat_projection["breakout_quality_score"]
+            != changed_projection_map["breakout_quality_score"]
+            and same_stat_projection["raw_safety_score"]
+            == changed_projection_map["raw_safety_score"]
+            and float(cached_table.loc[("2330", "2021-01-04"), "breakout_quality_score"]) == 0.91
+            and float(refreshed_table.loc[("2330", "2021-01-04"), "breakout_quality_score"]) == 0.92
+        )
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -1011,6 +1040,11 @@ def append_completed_pair_score_reuse_contract_checks(
         and archived_missing_manifest_rejected
         and truncated_manifest_rejected
         and formatted_pair_json_still_reusable,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "strategy_projection_and_pit_cache_invalidate_same_stat_changed_bytes",
+        True, same_stat_collision_blocked,
     )
     add_check(
         results,

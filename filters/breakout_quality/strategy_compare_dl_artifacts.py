@@ -413,6 +413,7 @@ def _collect_selection_pit_source_status(
                     score_path=path,
                     score_source=source.score_source,
                     columns=required_projection_columns,
+                    score_file_sha256=sha256,
                 )
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 artifact_identity["score_projection_status"] = (

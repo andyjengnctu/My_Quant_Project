@@ -14,6 +14,8 @@ from typing import Any, Iterable
 
 import numpy as np
 
+from core.file_integrity import compute_file_sha256, require_sha256_hex
+
 from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
@@ -81,9 +83,19 @@ def required_score_columns_for_dl(
     return tuple(sorted(columns))
 
 
-def _score_file_signature(path: Path) -> tuple[int, int]:
+def _score_file_signature(path: Path, *, expected_sha256: str | None) -> tuple[int, int, str]:
+    """Bind projection-cache identity to physical *content*, not file metadata.
+
+    Strategy Compare's artifact planner already computes the physical SHA,
+    which is reused as the cache key. A newly loaded table independently
+    checks that SHA once; candidate-by-candidate lookups never rehash the CSV.
+    """
     stat = path.stat()
-    return int(stat.st_mtime_ns), int(stat.st_size)
+    digest = require_sha256_hex(
+        expected_sha256 or compute_file_sha256(path),
+        field="Selection PIT score sha256",
+    )
+    return int(stat.st_mtime_ns), int(stat.st_size), digest
 
 
 def _projection_digest(*, table, score_column: str) -> str:
@@ -109,11 +121,12 @@ def _projection_digest(*, table, score_column: str) -> str:
 @lru_cache(maxsize=12)
 def _selection_pit_projection_cached(
     score_path: str,
-    signature: tuple[int, int],
+    signature: tuple[int, int, str],
     columns: tuple[str, ...],
 ) -> tuple[tuple[str, str], ...]:
-    del signature
-    table = load_selection_point_in_time_score_table_from_path(score_path)
+    table = load_selection_point_in_time_score_table_from_path(
+        score_path, expected_score_sha256=signature[2],
+    )
     output: list[tuple[str, str]] = []
     for column in columns:
         if column not in table.columns:
@@ -127,6 +140,7 @@ def compute_score_projection_sha256s(
     score_path: str | Path,
     score_source: str,
     columns: Iterable[str],
+    score_file_sha256: str | None = None,
 ) -> dict[str, str]:
     """Hash available requested score columns without requiring unrelated auxiliaries."""
 
@@ -141,15 +155,21 @@ def compute_score_projection_sha256s(
     return dict(
         _selection_pit_projection_cached(
             str(path),
-            _score_file_signature(path),
+            _score_file_signature(path, expected_sha256=score_file_sha256),
             requested,
         )
     )
 
 
+def clear_selection_point_in_time_projection_cache() -> None:
+    """Only the canonical PIT score owner calls this during publication."""
+    _selection_pit_projection_cached.cache_clear()
+
+
 __all__ = [
     "SCORE_PROJECTION_SCHEMA_VERSION",
     "compute_score_projection_sha256s",
+    "clear_selection_point_in_time_projection_cache",
     "primary_score_column_for_source",
     "required_score_columns_for_dl",
     "runtime_score_projection_requirements",

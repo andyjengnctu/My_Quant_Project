@@ -697,9 +697,20 @@ def load_selection_point_in_time_ranking_contract(
 
 
 def clear_selection_point_in_time_ranking_contract_cache() -> None:
-    """Invalidate cached PIT contract after canonical score/audit producers rewrite artifacts."""
+    """Invalidate *all* PIT score/contract projections after canonical publication.
 
+    The producer and Research subprocess consumer both use this single owner.
+    Clearing only the contract permits the independently cached DataFrame to
+    outlive a new score artifact, even when its path is unchanged.
+    """
     load_selection_point_in_time_ranking_contract.cache_clear()
+    load_selection_point_in_time_score_table.cache_clear()
+    _load_selection_point_in_time_score_table_from_path_cached.cache_clear()
+    # Import at invalidation time: the projection consumer imports this owner.
+    from filters.breakout_quality.strategy_score_projection import (
+        clear_selection_point_in_time_projection_cache,
+    )
+    clear_selection_point_in_time_projection_cache()
 
 
 def _selection_pit_file_cache_signature(path: Path) -> tuple[int, int]:
@@ -714,6 +725,7 @@ def _load_selection_point_in_time_score_table_from_path_cached(
     score_signature: tuple[int, int],
     manifest_signature: tuple[int, int] | None,
     experiment_profile: str | None = None,
+    expected_score_sha256: str | None = None,
 ) -> pd.DataFrame:
     # Signatures are part of the cache key so an in-place rebuilt artifact cannot
     # reuse a stale DataFrame.  The values themselves are intentionally unused.
@@ -740,6 +752,8 @@ def _load_selection_point_in_time_score_table_from_path_cached(
         available_through = pd.Timestamp(period.get("end")).strftime("%Y-%m-%d")
         expected_count = int((manifest.get("coverage") or {}).get("scored_group_count", -1))
     table = read_breakout_quality_csv(path).copy()
+    if expected_score_sha256 is not None and compute_file_sha256(path).lower() != expected_score_sha256:
+        raise ValueError("Selection PIT score在讀取時來源 SHA256 已變更")
     missing = sorted(set(PIT_REQUIRED_SCORE_COLUMNS).difference(table.columns))
     if missing:
         raise ValueError(f"Selection PIT score table缺少欄位: {missing}")
@@ -796,6 +810,7 @@ def load_selection_point_in_time_score_table_from_path(
     *,
     manifest_path: str | None = None,
     experiment_profile: str | None = None,
+    expected_score_sha256: str | None = None,
 ) -> pd.DataFrame:
     """Load one PIT score table once per immutable file revision.
 
@@ -818,6 +833,7 @@ def load_selection_point_in_time_score_table_from_path(
         _selection_pit_file_cache_signature(score),
         None if manifest is None else _selection_pit_file_cache_signature(manifest),
         experiment_profile,
+        expected_score_sha256,
     )
 
 
@@ -1193,6 +1209,13 @@ def load_continuous_ranker_oos_contract_at_paths(
     )
 
 
+def clear_continuous_ranker_oos_score_caches() -> None:
+    """Invalidate every Forward contract/score cache after publisher/subprocess writes."""
+    load_continuous_ranker_oos_contract.cache_clear()
+    load_continuous_ranker_oos_score_table.cache_clear()
+    load_continuous_ranker_oos_score_table_from_path.cache_clear()
+
+
 @lru_cache(maxsize=32)
 def load_continuous_ranker_oos_score_table_from_path(
     score_path: str,
@@ -1436,6 +1459,8 @@ __all__ = [
     "resolve_continuous_ranker_oos_score_path",
     "load_continuous_ranker_oos_contract",
     "load_continuous_ranker_oos_score_table",
+    "clear_continuous_ranker_oos_score_caches",
+    "clear_selection_point_in_time_ranking_contract_cache",
     "lookup_continuous_ranker_oos_candidate_score",
     "SelectionPointInTimeRankingContract",
     "derive_point_in_time_model_validation_gate",
