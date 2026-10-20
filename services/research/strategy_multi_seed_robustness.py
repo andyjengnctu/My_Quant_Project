@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import gzip
 from collections import deque
+from contextlib import ExitStack, contextmanager
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -81,6 +82,8 @@ from core.file_integrity import (
     atomic_write_text,
     canonical_json_sha256,
     file_change_signature,
+    exclusive_file_lock,
+    sibling_publication_lock_path,
     load_json_object_or_none,
 )
 from core.training_progress import (
@@ -2403,6 +2406,59 @@ def _model_work_root(contract: dict[str, Any]) -> Path:
         contract.get("model_artifact_fingerprint") or contract["fingerprint"]
     )
     return (PROJECT_ROOT / cfg.model_work_root / model_fingerprint).resolve()
+
+
+@contextmanager
+def _exclusive_robustness_run(contract: dict[str, Any]):
+    """Own both result publication and shared model workspace for one run.
+
+    The locks are stable sibling files (never under the cleanup/movable trees).
+    Acquire in a deterministic order to prevent opposite-order deadlocks when
+    two result fingerprints share a model-work fingerprint.  The OS releases
+    locks after process termination, allowing the next invocation to RESUME.
+    """
+    lock_paths = sorted({
+        sibling_publication_lock_path(_run_root(contract)),
+        sibling_publication_lock_path(_model_work_root(contract)),
+    }, key=lambda path: str(path).casefold())
+    with ExitStack() as stack:
+        for lock_path in lock_paths:
+            stack.enter_context(exclusive_file_lock(
+                lock_path,
+                conflict_message=(
+                    "Robustness結果或共用模型暫存正在由另一程序執行；"
+                    "本次停止以保留現有RESUME工件，請稍後從原入口重新執行"
+                ),
+            ))
+        yield
+
+
+def _check_resumable_robustness_manifest(
+    run_root: Path, *, contract: dict[str, Any]
+) -> None:
+    """Do not overwrite invalid COMPLETED evidence or foreign RUNNING state.
+
+    An interrupted RUNNING/FAILED run with the same fingerprint retains its
+    partial seed/yearly observations, verified later by the canonical resolver.
+    """
+    path = Path(run_root) / MANIFEST_FILENAME
+    if not path.is_file():
+        return
+    try:
+        previous = _read_json(path)
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise RuntimeError("既有Robustness manifest無法驗證；保留原始證據，不覆寫") from exc
+    previous_fingerprint = str(dict(previous.get("contract") or {}).get("fingerprint") or "")
+    current_fingerprint = str(contract.get("fingerprint") or "")
+    if previous_fingerprint != current_fingerprint:
+        raise RuntimeError("既有Robustness結果與目前contract fingerprint衝突；禁止覆寫")
+    if str(previous.get("status") or "") == "COMPLETED":
+        raise RuntimeError(
+            "既有Robustness結果標記COMPLETED但未通過完整SHA／報表契約驗證；"
+            "禁止改寫歷史證據或將其視為RESUME"
+        )
+    if str(previous.get("status") or "") not in {"RUNNING", "FAILED"}:
+        raise RuntimeError("既有Robustness結果狀態未知；禁止直接覆寫")
 
 
 def _unit_key(arm_id: str, seed: int) -> str:
@@ -4916,6 +4972,31 @@ def run_multi_seed_robustness(
         artifact_identities=dict(status.get("artifact_identities") or {}),
         benchmark_parameter_identities=_benchmark_identity_payload(benchmark_bindings),
     )
+    # The planner and canonical parameter producers run before these locks.
+    # One acquired session owns every mutation of this run's result files and
+    # the shared model workspace, including exact REUSE and derived upgrades.
+    with _exclusive_robustness_run(contract):
+        return _execute_robustness_under_lock(
+            cfg=cfg, settings=settings, status=status, contract=contract,
+            fixed_arms=fixed_arms, stochastic_arms=stochastic_arms,
+            model_arms=model_arms, strategy_only_arms=strategy_only_arms,
+            registered_scientific_reuse=registered_scientific_reuse,
+            benchmark_bindings=benchmark_bindings,
+            comparison_start=comparison_start, comparison_end=comparison_end,
+        )
+
+
+def _execute_robustness_under_lock(
+    *, cfg, settings, status: dict[str, Any], contract: dict[str, Any],
+    fixed_arms: tuple[StrategyComparisonArm, ...],
+    stochastic_arms: tuple[StrategyComparisonArm, ...],
+    model_arms: tuple[StrategyComparisonArm, ...],
+    strategy_only_arms: tuple[StrategyComparisonArm, ...],
+    registered_scientific_reuse: dict[tuple[str, int], dict[str, Any]],
+    benchmark_bindings: dict[tuple[str, int], dict[str, Any]],
+    comparison_start: str, comparison_end: str,
+) -> dict[str, Any]:
+    """Mutate one exact robustness run only while the caller holds both locks."""
     run_root = _run_root(contract)
     model_root = _model_work_root(contract)
     run_root.mkdir(parents=True, exist_ok=True)
@@ -4967,6 +5048,8 @@ def run_multi_seed_robustness(
             )
             _print_report_tables(summary)
             return summary
+    if cfg.reuse_completed:
+        _check_resumable_robustness_manifest(run_root, contract=contract)
     model_root.mkdir(parents=True, exist_ok=True)
     manifest_path = run_root / MANIFEST_FILENAME
     seed_results_path = run_root / SEED_RESULTS_FILENAME

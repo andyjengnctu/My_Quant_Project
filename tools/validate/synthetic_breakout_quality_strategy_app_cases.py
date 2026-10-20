@@ -2166,6 +2166,127 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         ),
     )
 
+    # Rolling Robustness: one publishing process owns both its exact result
+    # fingerprint and the shared model workspace until finalization/cleanup.
+    # Existing core.file_integrity OS locks are tested across processes; do not
+    # introduce a second locking implementation for this workflow.
+    import subprocess
+    import sys
+    from core.file_integrity import sibling_publication_lock_path
+    with tempfile.TemporaryDirectory(prefix="robustness_publication_lock_") as temp_dir:
+        lock_test_root = Path(temp_dir)
+        a = {"fingerprint": "run_a", "model_artifact_fingerprint": "shared_model"}
+        b = {"fingerprint": "run_b", "model_artifact_fingerprint": "shared_model"}
+        c = {"fingerprint": "run_c", "model_artifact_fingerprint": "different_model"}
+        def result_root(value):
+            return lock_test_root / "results" / value["fingerprint"]
+        def model_root(value):
+            return lock_test_root / "models" / value["model_artifact_fingerprint"]
+
+        with patch.object(robustness_runtime, "_run_root", side_effect=result_root), patch.object(
+            robustness_runtime, "_model_work_root", side_effect=model_root
+        ):
+            same_run_blocked = False
+            same_model_blocked = False
+            independent_run_allowed = False
+            outside_process_blocked = False
+            with robustness_runtime._exclusive_robustness_run(a):
+                try:
+                    with robustness_runtime._exclusive_robustness_run(a):
+                        pass
+                except RuntimeError:
+                    same_run_blocked = True
+                try:
+                    with robustness_runtime._exclusive_robustness_run(b):
+                        pass
+                except RuntimeError:
+                    same_model_blocked = True
+                with robustness_runtime._exclusive_robustness_run(c):
+                    independent_run_allowed = True
+                locked_path = sibling_publication_lock_path(model_root(a))
+                # Another interpreter must not acquire this lock while the
+                # first process owns it; this also exercises Windows msvcrt.
+                child_script = (
+                    "from core.file_integrity import exclusive_file_lock\n"
+                    "import sys\n"
+                    "try:\n"
+                    "    with exclusive_file_lock(sys.argv[1]):\n"
+                    "        sys.exit(2)\n"
+                    "except RuntimeError:\n"
+                    "    sys.exit(0)\n"
+                )
+                child = subprocess.run(
+                    [sys.executable, "-c", child_script, str(locked_path)],
+                    cwd=str(project_root), capture_output=True, text=True, timeout=8,
+                )
+                outside_process_blocked = child.returncode == 0
+            try:
+                with robustness_runtime._exclusive_robustness_run(b):
+                    raise RuntimeError("synthetic interrupted robustness process")
+            except RuntimeError as exc:
+                interrupted_was_observed = "synthetic interrupted" in str(exc)
+            with robustness_runtime._exclusive_robustness_run(b):
+                released_for_resume = True
+
+            check_true(
+                "robustness_results_single_fingerprint_writer_and_shared_model_writer_lock",
+                same_run_blocked and same_model_blocked and independent_run_allowed,
+            )
+            check_true(
+                "robustness_shared_model_lock_blocks_other_process_and_releases_for_resume",
+                outside_process_blocked and released_for_resume and interrupted_was_observed,
+            )
+            check_true(
+                "robustness_lock_files_outside_mutable_result_and_model_directories",
+                not result_root(a).exists() and not model_root(a).exists(),
+            )
+
+        resume_root = lock_test_root / "resume" / "same_scientific_run"
+        resume_root.mkdir(parents=True)
+        current_contract = {"fingerprint": "same_scientific_run"}
+        historical_manifest = resume_root / robustness_runtime.MANIFEST_FILENAME
+        resume_valid = []
+        for state in ("RUNNING", "FAILED"):
+            robustness_runtime._write_json(historical_manifest, {
+                "status": state, "contract": dict(current_contract),
+            })
+            robustness_runtime._check_resumable_robustness_manifest(
+                resume_root, contract=current_contract,
+            )
+            resume_valid.append(state)
+        rejection_cases = (
+            {"status": "COMPLETED", "contract": dict(current_contract)},
+            {"status": "RUNNING", "contract": {"fingerprint": "foreign_run"}},
+        )
+        rejected = []
+        for previous_manifest in rejection_cases:
+            robustness_runtime._write_json(historical_manifest, previous_manifest)
+            try:
+                robustness_runtime._check_resumable_robustness_manifest(
+                    resume_root, contract=current_contract,
+                )
+            except RuntimeError:
+                rejected.append(True)
+            else:
+                rejected.append(False)
+        historical_manifest.write_text("{not-valid-json", encoding="utf-8")
+        try:
+            robustness_runtime._check_resumable_robustness_manifest(
+                resume_root, contract=current_contract,
+            )
+        except RuntimeError:
+            malformed_rejected = True
+        else:
+            malformed_rejected = False
+        check_true(
+            "robustness_interrupted_same_identity_can_resume_without_rewriting_complete",
+            resume_valid == ["RUNNING", "FAILED"],
+        )
+        check_true(
+            "robustness_invalid_completed_or_foreign_or_malformed_manifest_is_not_overwritten",
+            rejected == [True, True] and malformed_rejected,
+        )
+
     application_source = read_source_text(
         project_root / "services" / "research" / "breakout_quality_application.py"
     )
