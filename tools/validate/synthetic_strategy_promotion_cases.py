@@ -12,12 +12,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from config.strategy_compare import STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE
-from core.file_integrity import compute_file_sha256
+from core.file_integrity import canonical_json_sha256, compute_file_sha256
 from core.strategy_compare_policy import get_strategy_comparison_settings
 from core.strategy_promotion import (
     approve_current_strategy_rule, current_strategy_rules, get_approved_rule,
     get_trading_release, load_promotion_approvals, load_trading_release_state,
-    stage_trading_strategy_rule,
+    stage_trading_strategy_rule, record_active_release_fitting,
 )
 from core.trading_policy import (
     build_trading_strategy_param_training_plan, get_trading_strategy_profile,
@@ -50,6 +50,212 @@ class StrategyPromotionMVPTest(unittest.TestCase):
             directory.mkdir(parents=True, exist_ok=True)
             (directory / "strategy_comparison.json").write_text(json.dumps(result), encoding="utf-8")
             (directory / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    def _archived_c95_active(self):
+        """Simulate an existing, explicitly approved C95 before the suite rotated."""
+        from core.strategy_promotion import _approvals_path, _release_path, _write_state
+
+        self.assertNotIn("C95", [arm["arm_id"] for arm in current_strategy_rules()])
+        historical = self.root / "outputs/strategy_compare/historical/rolling/runs/c95-approved"
+        historical.mkdir(parents=True, exist_ok=True)
+        evidence = historical / "strategy_comparison.json"
+        manifest = historical / "manifest.json"
+        evidence.write_text('{"status":"COMPLETED","scenarios":{"C95":{}}}', encoding="utf-8")
+        manifest.write_text('{"config_fingerprint":"historical-C95"}', encoding="utf-8")
+        rule_sha = canonical_json_sha256({"approved_rule": "historical-C95"})
+        approval = {
+            "arm_id": "C95", "suite_id": "non_dl_c85_same_signal_revalidation_v1",
+            "rule_sha256": rule_sha, "status": "APPROVED",
+            "evidence_path": evidence.relative_to(self.root).as_posix(),
+            "evidence_sha256": compute_file_sha256(evidence),
+            "manifest_path": manifest.relative_to(self.root).as_posix(),
+            "manifest_sha256": compute_file_sha256(manifest),
+            "approved_at": "2026-10-20T10:00:00+08:00",
+        }
+        _write_state(_approvals_path(self.root), {
+            "schema_version": 1, "approvals": {"C95": approval}, "history": [approval],
+        })
+        release = {
+            "release_id": "a" * 32, "status": "ACTIVE",
+            "arm_id": "C95", "suite_id": approval["suite_id"],
+            "rule_sha256": rule_sha,
+            "training_profile_id": "c85_same_signal_revalidation_current",
+            "activated_at": "2026-10-20T11:00:00+08:00",
+        }
+        # Persist first; subsequent path resolution must derive from this release.
+        _write_state(_release_path(self.root), {
+            "schema_version": 1, "active": release, "pending": None,
+            "history": [{**release, "action": "ACTIVATED"}],
+        })
+        selected = Path(resolve_trading_selected_strategy_param_path(self.root))
+        selected.parent.mkdir(parents=True, exist_ok=True)
+        selected.write_text("frozen C95 params", encoding="utf-8")
+        from services.trading.strategy_promotion import _param_manifest_path
+        param_manifest = _param_manifest_path(self.root)
+        param_manifest.parent.mkdir(parents=True, exist_ok=True)
+        param_manifest.write_text("frozen C95 native manifest", encoding="utf-8")
+        release.update({
+            "selected_params_sha256": compute_file_sha256(selected),
+            "param_manifest_sha256": compute_file_sha256(param_manifest),
+            "binding_sha256_at_activation": "frozen-binding-sha",
+        })
+        _write_state(_release_path(self.root), {
+            "schema_version": 1, "active": release, "pending": None,
+            "history": [{**release, "action": "ACTIVATED"}],
+        })
+        return approval, release, selected, param_manifest
+
+    def test_archived_active_c95_survives_research_suite_rotation(self):
+        approval, release, selected, manifest = self._archived_c95_active()
+        with self.assertRaisesRegex(ValueError, "C95"):
+            get_approved_rule(self.root, "C95")
+        self.assertEqual(get_trading_release(self.root, purpose="active", require_current=True)["release_id"], release["release_id"])
+        self.assertEqual(get_trading_release(self.root, purpose="training", require_current=True)["arm_id"], "C95")
+        self.assertEqual(get_trading_strategy_profile(self.root).parameter_set_identity, "PARAM-P14")
+        bound = {"promotion_release_id": release["release_id"], "strategy_rule_sha256": release["rule_sha256"]}
+        with patch("services.trading.strategy_promotion.load_trading_strategy_param_binding", return_value=bound), \
+             patch("services.trading.strategy_promotion.get_trading_strategy_param_binding_sha256", return_value="frozen-binding-sha"):
+            self.assertEqual(assert_active_trading_release_ready(self.root)["arm_id"], "C95")
+        record_active_release_fitting(
+            self.root, expected_release_id=release["release_id"],
+            selected_params_sha256=compute_file_sha256(selected),
+            binding_sha256="frozen-binding-sha", manifest_sha256=compute_file_sha256(manifest),
+        )
+        self.assertEqual(load_trading_release_state(self.root)["active"]["arm_id"], "C95")
+
+    def test_archived_active_requires_original_approval_and_untampered_evidence(self):
+        from core.strategy_promotion import _approvals_path, _write_state
+        approval, release, _, _ = self._archived_c95_active()
+        approval_state = load_promotion_approvals(self.root)
+        # New approvals for the same ID cannot redefine the old activated Rule.
+        approval_state["approvals"]["C95"] = {**approval, "rule_sha256": "0" * 64}
+        _write_state(_approvals_path(self.root), approval_state)
+        self.assertEqual(get_trading_release(self.root, require_current=True)["release_id"], release["release_id"])
+        (self.root / approval["manifest_path"]).write_text("tampered", encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "歷史 Research 核准"):
+            get_trading_release(self.root, require_current=True)
+        # A current approval alone must not rescue a different frozen identity.
+        approval_state["history"] = []
+        _write_state(_approvals_path(self.root), approval_state)
+        with self.assertRaisesRegex(RuntimeError, "歷史 Research 核准"):
+            get_trading_release(self.root, require_current=True)
+
+    def test_archived_c95_existing_params_can_rebind_without_restage(self):
+        from services.trading.strategy_param_training import reuse_trading_strategy_params
+        _, release, _, _ = self._archived_c95_active()
+        binding = {
+            "binding_fingerprint": "frozen-binding-fingerprint",
+            "latest_data_date": "2026-10-21", "param_training_data_date": "2026-10-20",
+            "param_member_count": 4, "param_min_agree": 3,
+            "market_data_consumer_state_sha256": "synthetic-consumer-sha",
+            "market_data_source_view_fingerprint": "synthetic-view",
+            "usage_mode": "REUSE_EXISTING",
+        }
+        with patch("services.trading.strategy_param_training.publish_trading_strategy_param_binding", return_value=binding), \
+             patch("services.trading.strategy_param_training.get_trading_strategy_param_binding_sha256", return_value="rebound-binding-sha"):
+            result = reuse_trading_strategy_params(project_root=self.root)
+        self.assertEqual(result["status"], "READY")
+        self.assertEqual(result["parameter_set_identity"], "PARAM-P14")
+        after = load_trading_release_state(self.root)
+        self.assertEqual(after["active"]["release_id"], release["release_id"])
+        self.assertEqual(after["active"]["binding_sha256_at_activation"], "rebound-binding-sha")
+        self.assertEqual(after["history"][-1]["action"], "PARAMS_BOUND")
+        self.assertEqual(get_trading_release(self.root, require_current=True)["arm_id"], "C95")
+
+    def test_archived_c95_param_retraining_uses_frozen_release(self):
+        from services.trading.strategy_param_training import run_trading_strategy_param_training
+        _, release, selected, manifest = self._archived_c95_active()
+        consumer = {"market_date": "2026-10-21", "source_view_fingerprint": "synthetic-view"}
+        observed = {}
+
+        def producer(**kwargs):
+            observed.update(kwargs)
+            selected.write_text("retrained archived C95 params", encoding="utf-8")
+            manifest.write_text("retrained native manifest", encoding="utf-8")
+            return {
+                "selected_params_path": str(selected), "manifest_path": str(manifest),
+                "resolved_optimizer_seeds": [3, 5, 7, 11],
+            }
+
+        def publish(root, *, usage_mode, purpose):
+            self.assertEqual(purpose, "training")
+            return {
+                "selected_params_sha256": compute_file_sha256(selected),
+                "binding_fingerprint": "synthetic-updated-binding",
+                "usage_mode": usage_mode, "param_training_data_date": "2026-10-21",
+                "param_member_count": 4, "param_min_agree": 3,
+            }
+
+        with patch("services.trading.strategy_param_training.load_trading_v2_consumer_state", return_value=consumer), \
+             patch("services.trading.strategy_param_training.get_trading_v2_consumer_state_sha256", return_value="synthetic-consumer"), \
+             patch("services.trading.strategy_param_training.run_static_strategy_parameter_training", side_effect=producer), \
+             patch("services.trading.strategy_param_training.publish_trading_strategy_param_binding", side_effect=publish), \
+             patch("services.trading.strategy_param_training.get_trading_strategy_param_binding_sha256", return_value="updated-binding-sha"):
+            result = run_trading_strategy_param_training(project_root=self.root)
+        self.assertEqual(result["parameter_set_identity"], "PARAM-P14")
+        self.assertEqual(observed["param_family"], "full")
+        self.assertEqual(observed["seed_count"], 4)
+        self.assertEqual(result["optimizer_resolved_seeds"], [3, 5, 7, 11])
+        after = load_trading_release_state(self.root)
+        self.assertEqual(after["active"]["release_id"], release["release_id"])
+        self.assertEqual(after["active"]["binding_sha256_at_activation"], "updated-binding-sha")
+        self.assertEqual(get_trading_release(self.root, require_current=True)["arm_id"], "C95")
+
+    def test_new_current_staging_does_not_suspend_archived_active(self):
+        _, active, _, _ = self._archived_c95_active()
+        approve_current_strategy_rule(self.root, "C98")
+        staged = stage_trading_strategy_rule(self.root, "C98")
+        self.assertEqual(get_trading_release(self.root, purpose="active", require_current=True)["release_id"], active["release_id"])
+        self.assertEqual(get_trading_release(self.root, purpose="training", require_current=True)["release_id"], staged["release_id"])
+        self.assertEqual(get_trading_strategy_profile(self.root, purpose="active").parameter_set_identity, "PARAM-P14")
+        self.assertEqual(get_trading_strategy_profile(self.root, purpose="training").parameter_set_identity, "PARAM-P15")
+        bound = {"promotion_release_id": active["release_id"], "strategy_rule_sha256": active["rule_sha256"]}
+        with patch("services.trading.strategy_promotion.load_trading_strategy_param_binding", return_value=bound), \
+             patch("services.trading.strategy_promotion.get_trading_strategy_param_binding_sha256", return_value="frozen-binding-sha"):
+            self.assertEqual(assert_active_trading_release_ready(self.root)["arm_id"], "C95")
+
+    def test_archived_active_profile_must_match_original_activation(self):
+        from core.strategy_promotion import _release_path, _write_state
+        self._archived_c95_active()
+        state = load_trading_release_state(self.root)
+        state["active"]["training_profile_id"] = "c85_same_signal_broker_cash_current"
+        _write_state(_release_path(self.root), state)
+        with self.assertRaisesRegex(RuntimeError, "原始啟用紀錄"):
+            get_trading_release(self.root, require_current=True)
+
+    def test_archived_c95_pending_still_requires_current_research(self):
+        from core.strategy_promotion import _release_path, _write_state, commit_trading_release
+        _, release, _, _ = self._archived_c95_active()
+        state = load_trading_release_state(self.root)
+        state["pending"] = {**release, "release_id": "b" * 32, "status": "PENDING_PARAMS"}
+        _write_state(_release_path(self.root), state)
+        self.assertEqual(get_trading_release(self.root, purpose="active", require_current=True)["arm_id"], "C95")
+        with self.assertRaisesRegex(ValueError, "C95"):
+            get_trading_release(self.root, purpose="training", require_current=True)
+        with self.assertRaisesRegex(ValueError, "C95"):
+            commit_trading_release(self.root, "b" * 32,
+                selected_params_sha256="params", binding_sha256="binding", manifest_sha256="manifest")
+        with self.assertRaisesRegex(ValueError, "C95"):
+            stage_trading_strategy_rule(self.root, "C95")
+        self.assertEqual(load_trading_release_state(self.root)["active"]["release_id"], release["release_id"])
+
+    def test_archived_active_still_blocks_params_and_manifest_drift(self):
+        _, release, selected, manifest = self._archived_c95_active()
+        bound = {"promotion_release_id": release["release_id"], "strategy_rule_sha256": release["rule_sha256"]}
+        with patch("services.trading.strategy_promotion.load_trading_strategy_param_binding", return_value=bound), \
+             patch("services.trading.strategy_promotion.get_trading_strategy_param_binding_sha256", return_value="frozen-binding-sha"):
+            selected.write_text("different params", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "Params 已改變"):
+                assert_active_trading_release_ready(self.root)
+            selected.write_text("frozen C95 params", encoding="utf-8")
+            manifest.write_text("different manifest", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "manifest 已改變"):
+                assert_active_trading_release_ready(self.root)
+            manifest.write_text("frozen C95 native manifest", encoding="utf-8")
+        with patch("services.trading.strategy_promotion.load_trading_strategy_param_binding", return_value=bound), \
+             patch("services.trading.strategy_promotion.get_trading_strategy_param_binding_sha256", return_value="different-binding"):
+            with self.assertRaisesRegex(RuntimeError, "binding 已改變"):
+                assert_active_trading_release_ready(self.root)
 
     def test_all_options_exactly_match_compare_suite(self):
         settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)

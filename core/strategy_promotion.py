@@ -1,4 +1,4 @@
-"""Strategy Promotion SSOT: same current Compare Suite, immutable rule identity.
+"""Strategy Promotion SSOT: current staging, frozen ACTIVE release identity.
 
 Only the user explicitly approves/activates. No scientific fitting or backtest is
 performed in this module; historical evidence is linked, never copied or altered.
@@ -124,25 +124,61 @@ def load_promotion_approvals(root: str | Path) -> dict:
     return _read_state(_approvals_path(root), fields=("approvals", "history"))
 
 
+def _valid_approval_evidence(root: str | Path, approval: object) -> dict | None:
+    """Validate a pinned Research approval without consulting mutable suite membership."""
+    if not isinstance(approval, dict) or approval.get("status") != "APPROVED":
+        return None
+    project_root = Path(root).resolve()
+    paths = []
+    for path_key, sha_key, filename in (
+        ("evidence_path", "evidence_sha256", "strategy_comparison.json"),
+        ("manifest_path", "manifest_sha256", "manifest.json"),
+    ):
+        relative = Path(str(approval.get(path_key) or ""))
+        if relative.is_absolute() or "runs" not in relative.parts or relative.name != filename:
+            return None
+        pinned = (project_root / relative).resolve()
+        if not pinned.is_relative_to(project_root) or not pinned.is_file():
+            return None
+        if compute_file_sha256(pinned) != str(approval.get(sha_key) or ""):
+            return None
+        paths.append(pinned)
+    if paths[0].parent != paths[1].parent:
+        return None
+    return dict(approval)
+
+
 def _valid_approval(root: str | Path, arm: dict) -> dict | None:
     approval = (load_promotion_approvals(root).get("approvals") or {}).get(arm["arm_id"])
     if not isinstance(approval, dict):
         return None
-    if (approval.get("rule_sha256") != arm["rule_sha256"]
-            or approval.get("suite_id") != arm["suite_id"]
-            or approval.get("status") != "APPROVED"):
+    if (approval.get("arm_id") != arm["arm_id"]
+            or approval.get("rule_sha256") != arm["rule_sha256"]
+            or approval.get("suite_id") != arm["suite_id"]):
         return None
-    evidence = Path(root).resolve() / str(approval.get("evidence_path") or "")
-    if not evidence.resolve().is_relative_to(Path(root).resolve()) or not evidence.is_file():
-        return None
-    if compute_file_sha256(evidence) != str(approval.get("evidence_sha256") or ""):
-        return None
-    manifest = Path(root).resolve() / str(approval.get("manifest_path") or "")
-    if not manifest.resolve().is_relative_to(Path(root).resolve()) or not manifest.is_file():
-        return None
-    if compute_file_sha256(manifest) != str(approval.get("manifest_sha256") or ""):
-        return None
-    return dict(approval)
+    return _valid_approval_evidence(root, approval)
+
+
+def _valid_active_release_approval(root: str | Path, release: dict) -> dict:
+    """An activated release keeps its original, pinned authorization after suite rotation."""
+    approvals = load_promotion_approvals(root)
+    latest = (approvals.get("approvals") or {}).get(release["arm_id"])
+    history = approvals.get("history") or []
+    if not isinstance(history, list):
+        raise RuntimeError("Research 升格核准歷史紀錄不合法")
+    # Historical approvals are append-only; a newer approval for the same arm
+    # must not redefine a previously activated release's frozen rule identity.
+    for approval in (latest, *reversed(history)):
+        if not isinstance(approval, dict):
+            continue
+        if (approval.get("arm_id") != release["arm_id"]
+                or approval.get("suite_id") != release["suite_id"]
+                or approval.get("rule_sha256") != release["rule_sha256"]):
+            continue
+        verified = _valid_approval_evidence(root, approval)
+        if verified is not None:
+            return verified
+    raise RuntimeError("Trading ACTIVE Release 的歷史 Research 核准或封存證據缺失／已改變；禁止新增交易")
 
 
 def get_approved_rule(root: str | Path, arm_id: str) -> dict:
@@ -225,6 +261,11 @@ def load_trading_release_state(root: str | Path) -> dict:
 
 
 def get_trading_release(root: str | Path, *, purpose: str = "active", require_current: bool = False) -> dict | None:
+    """Resolve a release; authorization is current for PENDING, frozen for ACTIVE.
+
+    ``require_current`` is the existing new-entry guard flag, not a request
+    to re-evaluate an activated rule against mutable Research suite membership.
+    """
     if purpose not in {"active", "training"}:
         raise ValueError(f"未知 Trading release purpose: {purpose}")
     state = load_trading_release_state(root)
@@ -238,15 +279,36 @@ def get_trading_release(root: str | Path, *, purpose: str = "active", require_cu
     for required in ("arm_id", "suite_id", "rule_sha256", "training_profile_id"):
         if not str(release.get(required) or ""):
             raise RuntimeError(f"Trading Release 缺少 {required}")
-    # Frozen positions and read-only charts must remain readable even after a
-    # suite migration.  Only NEW entries / activation enforce current approval.
+    # Read-only positions remain accessible without new-entry authorization.
+    # PENDING activation must still use current Research approval.  ACTIVE
+    # releases (also when training falls back to ACTIVE) use their original
+    # pinned Research approval, independent of subsequent Compare Suite edits.
     if require_current:
-        arm = current_strategy_rule(str(release["arm_id"]))
-        get_approved_rule(root, arm["arm_id"])
-        if (str(release["rule_sha256"]) != arm["rule_sha256"]
-                or str(release["suite_id"]) != arm["suite_id"]
-                or str(release["training_profile_id"]) != arm["training_profile_id"]):
-            raise RuntimeError("Trading Release 與目前 Compare Suite canonical rule 不一致；禁止新增交易")
+        pending_selected = purpose == "training" and state.get("pending") is not None
+        if pending_selected:
+            if release.get("status") != "PENDING_PARAMS":
+                raise RuntimeError("Trading 待啟用 Release 狀態不合法")
+            arm = current_strategy_rule(str(release["arm_id"]))
+            get_approved_rule(root, arm["arm_id"])
+            if (str(release["rule_sha256"]) != arm["rule_sha256"]
+                    or str(release["suite_id"]) != arm["suite_id"]
+                    or str(release["training_profile_id"]) != arm["training_profile_id"]):
+                raise RuntimeError("Trading 待啟用 Release 與目前 Compare Suite canonical rule 不一致")
+        else:
+            if release.get("status") != "ACTIVE":
+                raise RuntimeError("Trading ACTIVE Release 狀態不合法")
+            # The original ACTIVATE event freezes the profile as well as the
+            # Research rule; no mutable current-suite lookup may replace it.
+            frozen_fields = ("release_id", "arm_id", "suite_id", "rule_sha256", "training_profile_id")
+            activations = [entry for entry in (state.get("history") or [])
+                           if isinstance(entry, dict) and entry.get("action") == "ACTIVATED"
+                           and entry.get("release_id") == release["release_id"]]
+            if not activations or any(
+                any(entry.get(field) != release.get(field) for field in frozen_fields)
+                for entry in activations
+            ):
+                raise RuntimeError("Trading ACTIVE Release 與原始啟用紀錄身分不一致")
+            _valid_active_release_approval(root, release)
     return dict(release)
 
 
