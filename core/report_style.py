@@ -15,7 +15,7 @@ import math
 import re
 from typing import Any
 
-from core.display_common import C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, console_color_enabled
+from core.display_common import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, console_color_enabled
 
 SIGNAL_POSITIVE = "positive"
 SIGNAL_NEGATIVE = "negative"
@@ -28,23 +28,21 @@ _SIGNAL_LABELS = {
     SIGNAL_WARNING: "注意",
     SIGNAL_NEUTRAL: "中性",
 }
-_SIGNAL_COLORS = {
-    SIGNAL_POSITIVE: C_GREEN,
-    SIGNAL_NEGATIVE: C_RED,
-    SIGNAL_WARNING: C_YELLOW,
-    SIGNAL_NEUTRAL: C_GRAY,
-}
 _SIGNAL_TONES = {
     SIGNAL_POSITIVE: "green",
     SIGNAL_NEGATIVE: "red",
     SIGNAL_WARNING: "yellow",
     SIGNAL_NEUTRAL: "gray",
 }
-_SIGNAL_MARKDOWN_COLORS = {
-    SIGNAL_POSITIVE: "#188038",
-    SIGNAL_NEGATIVE: "#C62828",
-    SIGNAL_WARNING: "#B06000",
-    SIGNAL_NEUTRAL: "#667085",
+# Single palette owner. Console titles/statuses and semantic metric signals
+# consume these same tone mappings; report contracts still own metric direction.
+_TONE_TERMINAL_COLORS = {
+    "cyan": C_CYAN,
+    "green": C_GREEN,
+    "yellow": C_YELLOW,
+    "light_yellow": "\033[38;5;229m",
+    "red": C_RED,
+    "gray": C_GRAY,
 }
 _TONE_MARKDOWN_COLORS = {
     "green": "#188038",
@@ -55,6 +53,8 @@ _TONE_MARKDOWN_COLORS = {
     "cyan": "#42A5F5",
     "blue": "#42A5F5",
 }
+_SIGNAL_COLORS = {signal: _TONE_TERMINAL_COLORS[tone] for signal, tone in _SIGNAL_TONES.items()}
+_SIGNAL_MARKDOWN_COLORS = {signal: _TONE_MARKDOWN_COLORS[tone] for signal, tone in _SIGNAL_TONES.items()}
 
 
 def finite_number(value: Any) -> float | None:
@@ -261,6 +261,21 @@ def terminal_signal(text: str, signal: str, *, enabled: bool | None = None) -> s
     return f"{color}{text}{C_RESET}"
 
 
+def terminal_tone(text: Any, tone: str, *, enabled: bool, bold: bool = False) -> str:
+    """Style a console title or label through the same palette as report signals.
+
+    Preserve the legacy console `paint` behavior, including unknown-tone and
+    disabled-color rendering, so a palette centralization changes no report.
+    """
+
+    raw = str(text)
+    if not enabled:
+        return raw
+    color = _TONE_TERMINAL_COLORS.get(str(tone), "")
+    bold_code = "\033[1m" if bold else ""
+    return f"{bold_code}{color}{raw}{C_RESET}"
+
+
 def markdown_tone(text: Any, tone: str, *, bold: bool = False) -> str:
     """Color Markdown text with the project-wide HTML palette, without icons."""
 
@@ -317,6 +332,7 @@ __all__ = [
     "tone_for_signal",
     "terminal_color_for_signal",
     "terminal_signal",
+    "terminal_tone",
     "markdown_tone",
     "markdown_signal",
     "styled_signal",

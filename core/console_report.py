@@ -7,18 +7,9 @@ from datetime import datetime
 from typing import Iterable, Sequence
 from zoneinfo import ZoneInfo
 
-from core.display_common import (
-    C_CYAN,
-    C_GRAY,
-    C_GREEN,
-    C_RED,
-    C_RESET,
-    C_YELLOW,
-    _display_width,
-    _strip_ansi,
-    console_color_enabled,
-)
+from core.display_common import _display_width, _strip_ansi, console_color_enabled
 from core.path_utils import project_relative_display_path
+from core.report_style import terminal_tone
 
 DEFAULT_REPORT_WIDTH = 100
 COMPACT_CONSOLE_ENV = "BREAKOUT_QUALITY_COMPACT_CONSOLE"
@@ -32,20 +23,9 @@ def compact_console_enabled() -> bool:
 
 
 def paint(text: object, tone: str, *, enabled: bool, bold: bool = False) -> str:
-    raw = str(text)
-    if not enabled:
-        return raw
-    colors = {
-        "cyan": C_CYAN,
-        "green": C_GREEN,
-        "yellow": C_YELLOW,
-        "light_yellow": "\033[38;5;229m",
-        "red": C_RED,
-        "gray": C_GRAY,
-    }
-    color = colors.get(str(tone), "")
-    bold_code = "\033[1m" if bold else ""
-    return f"{bold_code}{color}{raw}{C_RESET}"
+    """Backward-compatible report API; the palette is owned by report_style."""
+
+    return terminal_tone(text, tone, enabled=enabled, bold=bold)
 
 
 def _pad(text: object, width: int, *, align: str) -> str:

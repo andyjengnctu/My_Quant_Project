@@ -1390,6 +1390,23 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             enabled=True,
         )
     )
+    # AI: Capabilities test: the long-standing console `paint` entrypoint must
+    # consume the same palette as the semantic report colors, in every mode.
+    from core.console_report import paint as shared_report_paint
+    from core.report_style import SIGNAL_NEGATIVE, SIGNAL_POSITIVE, terminal_tone
+
+    palette_tones = ("green", "red", "yellow", "light_yellow", "gray", "cyan", "blue", "unknown")
+    check_true(
+        "human_report_console_tones_match_canonical_palette",
+        all(
+            shared_report_paint("報表", tone, enabled=enabled, bold=bold)
+            == terminal_tone("報表", tone, enabled=enabled, bold=bold)
+            for tone in palette_tones for enabled in (True, False) for bold in (True, False)
+        ) and shared_report_paint("最佳", "green", enabled=True)
+            == canonical_terminal_signal("最佳", SIGNAL_POSITIVE, enabled=True)
+        and shared_report_paint("最差", "red", enabled=True)
+            == canonical_terminal_signal("最差", SIGNAL_NEGATIVE, enabled=True),
+    )
     render_report_source = comparison_source[
         comparison_source.index("def render_strategy_aggregate_report("):
         comparison_source.index("def _run_directory(")
