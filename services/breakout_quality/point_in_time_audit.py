@@ -19,14 +19,19 @@ from config.breakout_quality import (
 from core.breakout_quality_policy import (
     get_breakout_quality_workflow_settings,
 )
-from core.file_integrity import exclusive_file_lock
+from core.file_integrity import (
+    compute_file_sha256, exclusive_file_lock, publish_latest_snapshot,
+    text_publication_bytes,
+)
 from filters.breakout_quality.artifacts import build_file_manifest
+from filters.breakout_quality.pit_fold_provenance import (
+    pit_fold_evidence_paths, validate_pit_fold_evidence,
+)
 from filters.breakout_quality.continuous_target import (
     TARGET_MANIFEST_FILENAME,
     resolve_continuous_target_dir,
 )
 from filters.breakout_quality.contract import (
-    DEFAULT_MODEL_FILENAME,
     LABEL_PASS,
     LABEL_REJECT,
 )
@@ -37,7 +42,6 @@ from filters.breakout_quality.paths import (
     SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
     SELECTION_POINT_IN_TIME_SCORE_FILENAME,
     resolve_filter_output_dir,
-    resolve_filter_point_in_time_fold_dir,
     resolve_selection_point_in_time_audit_json_path,
     resolve_selection_point_in_time_audit_markdown_path,
     resolve_selection_point_in_time_coverage_path,
@@ -50,18 +54,14 @@ from filters.breakout_quality.ranking_score_store import (
     load_selection_point_in_time_score_source_contract,
     validate_continuous_ranker_score_values,
 )
-from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
+from filters.breakout_quality.workflow_io import PROJECT_ROOT
 from services.breakout_quality.standard_model_sop import (
     build_standard_model_sop,
     resolve_standard_evaluation_truth_table,
 )
 from services.breakout_quality import ranker_training as ranker_api
-from services.breakout_quality.point_in_time_scores import (
-    FOLD_MANIFEST_FILENAME,
-    FOLD_SCORE_FILENAME,
-    FOLD_VALIDATION_SCORE_FILENAME,
-    POINT_IN_TIME_SCHEMA_VERSION,
-)
+from services.breakout_quality.point_in_time_scores import POINT_IN_TIME_SCHEMA_VERSION
+from services.breakout_quality.fit_repair_transaction import selection_pit_build_lock_path
 from core.breakout_quality_registry import (
     TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
@@ -170,6 +170,26 @@ def _pit_artifact_paths(args) -> dict[str, Path]:
     }
 
 
+def _pit_fold_integrity_paths(args, fold_id: str) -> dict[str, Path]:
+    """Compatibility adapter; path ownership lives in the shared Fold verifier."""
+    return pit_fold_evidence_paths(
+        PROJECT_ROOT, filter_id=str(args.filter_id),
+        model_architecture=str(args.model_architecture),
+        experiment_profile=str(args.experiment_profile), fold_id=fold_id,
+        point_in_time_dir_override=(str(args.point_in_time_dir_override or "").strip() or None),
+    )
+
+
+def _canonical_audit_score_source(args):
+    """One SCORE-source authorization seam for the start and commit checks."""
+    return load_selection_point_in_time_score_source_contract(
+        PROJECT_ROOT, str(args.filter_id), str(args.model_architecture),
+        str(args.experiment_profile),
+        point_in_time_dir_override=(str(args.point_in_time_dir_override or "").strip() or None),
+        allow_stale_source=bool(getattr(args, "allow_stale_source", False)),
+    )
+
+
 def _validate_score_artifacts(args) -> tuple[pd.DataFrame, dict[str, Any]]:
     paths = _pit_artifact_paths(args)
     score_path = paths["score"]
@@ -182,12 +202,7 @@ def _validate_score_artifacts(args) -> tuple[pd.DataFrame, dict[str, Any]]:
     # SCORE identity, scope, eligibility, output capability, hash and upstream
     # lineage are validated by the one canonical SCORE owner. Audit only adds
     # fold/checkpoint/evaluation constraints; it never silently relaxes SCORE.
-    source = load_selection_point_in_time_score_source_contract(
-        PROJECT_ROOT, str(args.filter_id), str(args.model_architecture),
-        str(args.experiment_profile),
-        point_in_time_dir_override=(str(args.point_in_time_dir_override or "").strip() or None),
-        allow_stale_source=bool(getattr(args, "allow_stale_source", False)),
-    )
+    source = _canonical_audit_score_source(args)
     manifest = source.manifest
     if (
         int(manifest.get("schema_version", -1)) != POINT_IN_TIME_SCHEMA_VERSION
@@ -320,28 +335,15 @@ def _validate_score_artifacts(args) -> tuple[pd.DataFrame, dict[str, Any]]:
         fold_end = pd.Timestamp(periods.get("score_end"))
         if bool(((fold_frame["date"] < fold_start) | (fold_frame["date"] > fold_end)).any()):
             raise ValueError(f"Rolling PIT {fold_id} score日期超出fold期間")
-        override = str(args.point_in_time_dir_override or "").strip()
-        fold_dir = (
-            (_pit_artifact_paths(args)["manifest"].parent / "folds" / fold_id)
-            if override
-            else resolve_filter_point_in_time_fold_dir(
-                PROJECT_ROOT,
-                args.filter_id,
-                fold_id,
-                args.model_architecture,
-                args.experiment_profile,
-            )
-        )
-        fold_manifest_path = fold_dir / FOLD_MANIFEST_FILENAME
-        checkpoint_path = fold_dir / DEFAULT_MODEL_FILENAME
-        fold_score_path = fold_dir / FOLD_SCORE_FILENAME
-        if build_file_manifest(fold_manifest_path) != record.get("fold_manifest"):
-            raise ValueError(f"Rolling PIT {fold_id} fold manifest hash不一致")
-        fold_artifacts = record.get("artifacts") or {}
-        if build_file_manifest(checkpoint_path) != fold_artifacts.get("checkpoint"):
-            raise ValueError(f"Rolling PIT {fold_id} checkpoint hash不一致")
-        if build_file_manifest(fold_score_path) != fold_artifacts.get("scores"):
-            raise ValueError(f"Rolling PIT {fold_id} fold score hash不一致")
+
+    # One Fold provenance owner also validates validation sidecar bytes used by
+    # Model SOP. Do not leave that field to a separate Audit-only checker.
+    validate_pit_fold_evidence(
+        PROJECT_ROOT, filter_id=str(args.filter_id),
+        model_architecture=str(args.model_architecture),
+        experiment_profile=str(args.experiment_profile), manifest=manifest,
+        point_in_time_dir_override=(str(args.point_in_time_dir_override or "").strip() or None),
+    )
 
     coverage = manifest.get("coverage") or {}
     if int(coverage.get("scored_group_count", -1)) != len(frame):
@@ -355,13 +357,25 @@ def _validate_score_artifacts(args) -> tuple[pd.DataFrame, dict[str, Any]]:
     return frame, manifest
 
 
-def _assert_audit_source_revision_unchanged(args, manifest: dict[str, Any]) -> None:
+def _assert_audit_source_revision_unchanged(
+    args, manifest: dict[str, Any], *, expected_manifest_sha256: str,
+    expected_target_manifest_record: dict[str, Any] | None = None,
+) -> None:
     """Fail closed if the audited SCORE/manifest revision changed before publish.
 
     Canonical source authorization is checked before computation; this final
     guard prevents labeling a newer on-disk SCORE with earlier Audit results.
     """
     paths = _pit_artifact_paths(args)
+    # Parsed-JSON equality alone is insufficient: the published Audit also
+    # records the *physical* source manifest SHA. A byte-level rewrite with
+    # identical JSON content must not silently change that evidence identity.
+    try:
+        current_manifest_sha256 = compute_file_sha256(paths["manifest"])
+    except OSError as exc:
+        raise RuntimeError("Rolling PIT manifest在audit期間遺失或不可讀；拒絕發布") from exc
+    if current_manifest_sha256 != expected_manifest_sha256:
+        raise RuntimeError("Rolling PIT manifest在audit期間更新（SHA256）；拒絕發布舊來源結果")
     if _read_json(paths["manifest"]) != manifest:
         raise RuntimeError("Rolling PIT manifest在audit期間更新；拒絕發布舊來源結果")
     artifacts = dict(manifest.get("artifacts") or {})
@@ -369,6 +383,30 @@ def _assert_audit_source_revision_unchanged(args, manifest: dict[str, Any]) -> N
         record = artifacts.get(key)
         if record is not None and build_file_manifest(path) != record:
             raise RuntimeError(f"Rolling PIT {key}在audit期間更新；拒絕發布混合版本")
+    # The aggregate revision alone does not bind its underlying Fold inputs.
+    # A concurrent FIT repair or Fold rescore may leave the aggregate manifest
+    # untouched. Recheck the *same* Fold provenance used before evaluation,
+    # including validation sidecars that contribute to Standard Model SOP.
+    validate_pit_fold_evidence(
+        PROJECT_ROOT, filter_id=str(args.filter_id),
+        model_architecture=str(args.model_architecture),
+        experiment_profile=str(args.experiment_profile), manifest=manifest,
+        point_in_time_dir_override=(str(args.point_in_time_dir_override or "").strip() or None),
+        error_type=RuntimeError, error_context="在audit期間更新；拒絕發布混合來源",
+    )
+    if expected_target_manifest_record is not None:
+        target_manifest_path = (
+            resolve_continuous_target_dir(
+                PROJECT_ROOT, str(args.filter_id),
+                target_id=str(manifest.get("continuous_target_id") or ""),
+            ) / TARGET_MANIFEST_FILENAME
+        )
+        try:
+            current = build_file_manifest(target_manifest_path)
+        except OSError as exc:
+            raise RuntimeError("Continuous Target manifest在audit期間遺失或不可讀") from exc
+        if current != expected_target_manifest_record:
+            raise RuntimeError("Continuous Target manifest在audit期間更新；拒絕發布混合來源")
 
 
 def _primary_scope_key(payload: dict[str, Any]) -> str:
@@ -1479,7 +1517,26 @@ def _run_point_in_time_scores_audit(
         )
     else:
         raise ValueError(f"未知PIT audit authorization mode: {authorization_mode!r}")
+    # Pin the aggregate bytes *before* reading Score/Fold evidence, not after.
+    # Otherwise a byte-level rewrite during validation could be adopted as the
+    # expected source revision for metrics computed from the earlier manifest.
+    source_manifest_sha256 = compute_file_sha256(_pit_artifact_paths(args)["manifest"])
     score_frame, manifest = _validate_score_artifacts(args)
+    _assert_audit_source_revision_unchanged(
+        args, manifest, expected_manifest_sha256=source_manifest_sha256,
+    )
+    sample_scope = str(
+        manifest.get("training_sample_scope") or TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS
+    )
+    source_target_manifest_record = None
+    if sample_scope != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+        target_manifest_path = (
+            resolve_continuous_target_dir(
+                PROJECT_ROOT, str(args.filter_id),
+                target_id=str(manifest.get("continuous_target_id") or ""),
+            ) / TARGET_MANIFEST_FILENAME
+        )
+        source_target_manifest_record = build_file_manifest(target_manifest_path)
     bundle = load_continuous_ranker_data(
         filter_id=args.filter_id,
         model_architecture=args.model_architecture,
@@ -1563,16 +1620,7 @@ def _run_point_in_time_scores_audit(
     validation_frames: list[pd.DataFrame] = []
     fold_records_by_id = {str(item["fold_id"]): dict(item) for item in manifest.get("folds", [])}
     for fold_id, record in fold_records_by_id.items():
-        override = str(args.point_in_time_dir_override or "").strip()
-        fold_dir = (
-            (_pit_artifact_paths(args)["manifest"].parent / "folds" / fold_id)
-            if override
-            else resolve_filter_point_in_time_fold_dir(
-                PROJECT_ROOT, args.filter_id, fold_id,
-                args.model_architecture, args.experiment_profile,
-            )
-        )
-        validation_path = fold_dir / FOLD_VALIDATION_SCORE_FILENAME
+        validation_path = _pit_fold_integrity_paths(args, fold_id)["validation_scores"]
         artifacts = dict(record.get("artifacts") or {})
         if not validation_path.is_file():
             raise FileNotFoundError(f"Rolling Standard SOP缺少validation score sidecar: {validation_path}")
@@ -1672,7 +1720,7 @@ def _run_point_in_time_scores_audit(
             )
         target_source_artifact = {
             "path": str(target_manifest_path),
-            **build_file_manifest(target_manifest_path),
+            **source_target_manifest_record,
         }
     shared_evaluation_table, shared_evaluation_horizon = resolve_standard_evaluation_truth_table(
         bundle,
@@ -1773,17 +1821,43 @@ def _run_point_in_time_scores_audit(
             "json": str(output_json),
         },
     }
-    # Serialize only the short audit publication with the canonical SCORE
-    # writer's aggregate lock. The final source revision check plus the two
-    # report writes must be atomic with respect to a competing score commit.
+    # Use the producer's stable build/FIT-repair lock before its aggregate
+    # lock (same acquisition order as the canonical producer). A Fold must
+    # not be replaced between the final provenance SHA checks and publication.
     publisher_lock = manifest_path.with_name("." + manifest_path.name + ".publish.lock")
     with exclusive_file_lock(
-        publisher_lock, conflict_message="Selection PIT aggregate publication is active",
+        selection_pit_build_lock_path(manifest_path.parent),
+        conflict_message="Selection PIT build or FIT repair is active",
     ):
-        _assert_audit_source_revision_unchanged(args, manifest)
-        output_json.parent.mkdir(parents=True, exist_ok=True)
-        write_json(output_json, payload)
-        output_markdown.write_text(_render_markdown(payload), encoding="utf-8")
+        with exclusive_file_lock(
+            publisher_lock, conflict_message="Selection PIT aggregate publication is active",
+        ):
+            _assert_audit_source_revision_unchanged(
+                args, manifest, expected_manifest_sha256=source_manifest_sha256,
+                expected_target_manifest_record=source_target_manifest_record,
+            )
+            # Dataset/Target lineage can be republished without touching any
+            # PIT artifact. Reapply the canonical SCORE authorization just
+            # before committing the audit; the cheap physical revision guard
+            # above alone cannot prove those upstream sources remain current.
+            refreshed_source = _canonical_audit_score_source(args)
+            if refreshed_source.manifest != manifest:
+                raise RuntimeError(
+                    "Rolling PIT SCORE canonical lineage在audit期間更新；拒絕發布混合來源"
+                )
+            # Audit has two human/machine views. Stage both and commit JSON
+            # last; on a recoverable write failure restore the previous pair.
+            # Keep precisely the writer's existing UTF-8 / platform newline
+            # bytes: this is a publication fix, not a report-version change.
+            report_json = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+            publish_latest_snapshot(
+                output_json.parent,
+                (
+                    (output_markdown.name, text_publication_bytes(_render_markdown(payload))),
+                    (output_json.name, text_publication_bytes(report_json)),
+                ),
+                conflict_message="Another Selection PIT audit publication is active",
+            )
     clear_selection_point_in_time_ranking_contract_cache()
     color_enabled = console_color_enabled()
     if compact_console_enabled():

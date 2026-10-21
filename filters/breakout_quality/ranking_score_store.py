@@ -31,6 +31,9 @@ from core.breakout_quality_runtime import (
 )
 
 from filters.breakout_quality.artifacts import compute_file_sha256
+from filters.breakout_quality.pit_fold_provenance import (
+    pit_fold_file_signatures, validate_pit_fold_evidence,
+)
 from core.file_integrity import file_change_signature
 from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
 from filters.breakout_quality.ranker_training_contract import (
@@ -474,6 +477,16 @@ def _selection_pit_artifact_paths(
     )
 
 
+@lru_cache(maxsize=32)
+def _pit_signature_manifest(manifest_path: str, file_signature: tuple) -> dict[str, Any]:
+    """Only parse the aggregate manifest after its physical revision changes."""
+    del file_signature  # Stable cache identity; no semantic role in parsed JSON.
+    manifest = Path(manifest_path)
+    return _read_json_object(
+        manifest, label="Selection PIT manifest", project_root=manifest.parent,
+    )
+
+
 def _selection_pit_contract_file_signature(
     project_root: str,
     filter_id: str,
@@ -490,8 +503,22 @@ def _selection_pit_contract_file_signature(
         model_upstream_publication_signature,
     )
 
+    manifest_path = paths[1]
+    aggregate_signature = tuple(file_change_signature(path) for path in paths)
+    fold_signatures = ()
+    # A SCORE-only publication legitimately has no Audit; do not require Fold
+    # evidence just to report that downstream Audit is absent.
+    if manifest_path.is_file() and paths[3].is_file():
+        manifest = _pit_signature_manifest(str(manifest_path), aggregate_signature[1])
+        fold_signatures = pit_fold_file_signatures(
+            project_root, filter_id=filter_id,
+            model_architecture=model_architecture,
+            experiment_profile=experiment_profile, manifest=manifest,
+            point_in_time_dir_override=point_in_time_dir_override,
+        )
     return (
-        tuple(file_change_signature(path) for path in paths),
+        aggregate_signature,
+        fold_signatures,
         model_upstream_publication_signature(
             project_root, filter_id=filter_id,
             model_architecture=model_architecture,
@@ -560,15 +587,16 @@ def load_selection_point_in_time_score_source_contract(
     if int(score_record.get("size_bytes", -1)) != int(score_path.stat().st_size):
         raise ValueError("Selection PIT score size mismatch")
     coverage_record = (manifest.get("artifacts") or {}).get("coverage")
-    if coverage_record is not None:
-        if not isinstance(coverage_record, dict):
-            raise ValueError("Selection PIT coverage record malformed")
-        if str(coverage_record.get("filename") or "") != coverage_path.name:
-            raise ValueError("Selection PIT coverage filename mismatch")
-        if str(coverage_record.get("sha256") or "").lower() != compute_file_sha256(coverage_path).lower():
-            raise ValueError("Selection PIT coverage SHA256 mismatch")
-        if int(coverage_record.get("size_bytes", -1)) != int(coverage_path.stat().st_size):
-            raise ValueError("Selection PIT coverage size mismatch")
+    # The canonical producer always publishes a coverage manifest record.
+    # An existing CSV without this binding is not provenance-verified evidence.
+    if not isinstance(coverage_record, dict):
+        raise ValueError("Selection PIT coverage record missing or malformed")
+    if str(coverage_record.get("filename") or "") != coverage_path.name:
+        raise ValueError("Selection PIT coverage filename mismatch")
+    if str(coverage_record.get("sha256") or "").lower() != compute_file_sha256(coverage_path).lower():
+        raise ValueError("Selection PIT coverage SHA256 mismatch")
+    if int(coverage_record.get("size_bytes", -1)) != int(coverage_path.stat().st_size):
+        raise ValueError("Selection PIT coverage size mismatch")
     if sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
         _validate_score_eligibility_contract(manifest, profile=profile)
         _validate_score_output_capability_contract(manifest, profile=profile)
@@ -625,6 +653,14 @@ def _load_selection_point_in_time_ranking_contract_uncached(
         raise FileNotFoundError(
             f"Missing Selection PIT audit: {_display_path(audit_path, project_root=root)}"
         )
+    # The aggregate SCORE and Audit SHA alone cannot prove their Fold fitting
+    # sources are still intact after FIT repair or an external replacement.
+    # Reuse the same canonical Fold provenance gate as Audit publication.
+    validate_pit_fold_evidence(
+        root, filter_id=filter_id, model_architecture=model_architecture,
+        experiment_profile=experiment_profile, manifest=manifest,
+        point_in_time_dir_override=point_in_time_dir_override,
+    )
     audit = _read_json_object(
         audit_path, label="Selection PIT audit", project_root=root,
     )
@@ -816,6 +852,7 @@ def clear_selection_point_in_time_ranking_contract_cache() -> None:
     a publication, even when its artifact path is unchanged.
     """
     load_selection_point_in_time_ranking_contract.cache_clear()
+    _pit_signature_manifest.cache_clear()
     load_selection_point_in_time_score_table.cache_clear()
     for invalidate in tuple(_selection_pit_dependent_cache_invalidators):
         invalidate()

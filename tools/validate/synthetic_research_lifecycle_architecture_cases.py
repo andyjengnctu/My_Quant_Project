@@ -2953,6 +2953,19 @@ def validate_research_model_readiness_architecture_case(_base_params):
             except ValueError:
                 accepted_missing_period = False
             check_true("missing_score_period_blocks_score_reuse", not accepted_missing_period)
+            # A physical coverage CSV without its manifest binding must not
+            # be treated as a validated canonical SCORE source.
+            missing_coverage_binding = deepcopy(manifest)
+            missing_coverage_binding["artifacts"].pop("coverage")
+            manifest_file.write_text(json.dumps(missing_coverage_binding), encoding="utf-8")
+            try:
+                score_owner.load_selection_point_in_time_score_source_contract(**kwargs)
+            except ValueError as exc:
+                coverage_missing_blocked = "coverage record" in str(exc)
+            else:
+                coverage_missing_blocked = False
+            check_true("pit_missing_coverage_binding_blocks_score_reuse",
+                       coverage_missing_blocked)
             manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
             coverage.write_text("tampered coverage", encoding="utf-8")
             try:
@@ -3009,6 +3022,32 @@ def validate_research_model_readiness_architecture_case(_base_params):
                   ("NOT_REQUIRED", "REUSE", "DERIVE"),
                   tuple(stage.plan.action_by_key[key].action
                         for key in ("FIT", "SCORE", "EVIDENCE")))
+            # A complete Ranking Audit must bind its physical Fold FIT,
+            # scores and SOP validation sidecars. Score-only is intentionally
+            # allowed to exist without them, but promoted Ranking is not.
+            fold_id = "fold_20210104_20211231"
+            fold_dir = directory / "folds" / fold_id
+            fold_dir.mkdir(parents=True, exist_ok=True)
+            (fold_dir / "manifest.json").write_text('{"synthetic": true}', encoding="utf-8")
+            (fold_dir / "model.pt").write_bytes(b"synthetic-fold-fit")
+            (fold_dir / "scores.csv").write_text("synthetic-fold-score", encoding="utf-8")
+            (fold_dir / "validation_scores.csv").write_text(
+                "group_index,date,breakout_quality_score,fold_id\n"
+                f"1,2020-12-30,0.7,{fold_id}\n", encoding="utf-8",
+            )
+            def _fold_record(name):
+                return {k: v for k, v in _record(fold_dir / name).items() if k != "path"}
+            manifest["fold_count"] = 1
+            manifest["folds"] = [{
+                "fold_id": fold_id,
+                "fold_manifest": _fold_record("manifest.json"),
+                "artifacts": {
+                    "checkpoint": _fold_record("model.pt"),
+                    "scores": _fold_record("scores.csv"),
+                    "validation_scores": _fold_record("validation_scores.csv"),
+                },
+            }]
+            manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
             source_artifacts = {
                 "point_in_time_manifest": _record(manifest_file),
                 "point_in_time_scores": _record(score),
@@ -3046,6 +3085,55 @@ def validate_research_model_readiness_architecture_case(_base_params):
             )
             check_true("audit_completes_ranking_without_new_score", complete.score_path == score
                        and complete.model_validation_gate["status"] == "PASS")
+            # The accepted Audit must not outlive its referenced physical
+            # Fold evidence. A second process can atomically replace a Fold
+            # without updating the aggregate Score or Audit files. Compare
+            # same-size, same-mtime replacements to exercise the cache key,
+            # not only the uncached validator.
+            from core.file_integrity import compute_file_sha256 as _fold_sha
+            import os
+            for label, filename in (
+                ("checkpoint", "model.pt"),
+                ("scores", "scores.csv"),
+                ("fold_manifest", "manifest.json"),
+                ("validation_scores", "validation_scores.csv"),
+            ):
+                artifact = fold_dir / filename
+                original = artifact.read_bytes()
+                original_stat = artifact.stat()
+                staged = fold_dir / (".pending_" + filename)
+                # Replacing one byte preserves the serialized length.
+                different = (b"X" if original[:1] != b"X" else b"Y") + original[1:]
+                assert different != original
+                staged.write_bytes(different)
+                os.utime(staged, ns=(
+                    original_stat.st_atime_ns, original_stat.st_mtime_ns,
+                ))
+                os.replace(staged, artifact)
+                altered_stat = artifact.stat()
+                try:
+                    try:
+                        score_owner.load_selection_point_in_time_ranking_contract(
+                            **kwargs, require_model_validation_pass=True,
+                        )
+                    except ValueError as exc:
+                        blocked = label in str(exc) and "雜湊不一致" in str(exc)
+                    else:
+                        blocked = False
+                    check_true("pit_cached_ranking_rejects_changed_fold_" + label,
+                               blocked and altered_stat.st_size == original_stat.st_size
+                               and altered_stat.st_mtime_ns == original_stat.st_mtime_ns)
+                finally:
+                    staged.write_bytes(original)
+                    os.utime(staged, ns=(
+                        original_stat.st_atime_ns, original_stat.st_mtime_ns,
+                    ))
+                    os.replace(staged, artifact)
+                check_true("pit_cached_ranking_recovers_restored_fold_" + label,
+                           _fold_sha(artifact) == __import__("hashlib").sha256(original).hexdigest()
+                           and score_owner.load_selection_point_in_time_ranking_contract(
+                               **kwargs, require_model_validation_pass=True,
+                           ).model_validation_gate["status"] == "PASS")
             # A PIT bundle can stay byte-identical while a different process
             # publishes a new upstream Dataset. Revalidation must not depend
             # solely on a PIT Score/Audit producer calling cache_clear().
@@ -3200,8 +3288,12 @@ def validate_research_model_readiness_architecture_case(_base_params):
 
             # Canonical PIT access must not preserve a second fixed-key Score
             # table after a valid same-path Score + Manifest + Audit publication.
-            # Use the production resolvers with isolated fixture paths.
-            with patch.object(score_owner, "resolve_selection_point_in_time_score_path", return_value=score), patch.object(
+            # The fixture substitutes the entire canonical PIT namespace,
+            # including Fold provenance, never just the aggregate Score paths.
+            from filters.breakout_quality import pit_fold_provenance as fold_provenance
+            with patch.object(fold_provenance, "resolve_filter_point_in_time_fold_dir", return_value=fold_dir), patch.object(
+                score_owner, "resolve_selection_point_in_time_score_path", return_value=score,
+            ), patch.object(
                 score_owner, "resolve_selection_point_in_time_manifest_path", return_value=manifest_file,
             ), patch.object(
                 score_owner, "resolve_selection_point_in_time_coverage_path", return_value=coverage,

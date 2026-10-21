@@ -66,6 +66,9 @@ from core.breakout_quality_runtime import (
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.model_source_provenance import source_inventory_matches_current
 from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME
+from filters.breakout_quality.pit_fold_provenance import (
+    FOLD_MANIFEST_FILENAME, FOLD_SCORE_FILENAME, FOLD_VALIDATION_SCORE_FILENAME,
+)
 from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
 from filters.breakout_quality.ranking_score_store import (
     clear_selection_point_in_time_ranking_contract_cache,
@@ -133,9 +136,6 @@ from services.breakout_quality.continuous_ranker_pipeline import (
 
 POINT_IN_TIME_SCHEMA_VERSION = 2
 AUTO_SCORE_START_VALUE = "auto"
-FOLD_MANIFEST_FILENAME = "manifest.json"
-FOLD_SCORE_FILENAME = "scores.csv"
-FOLD_VALIDATION_SCORE_FILENAME = "validation_scores.csv"
 REQUIRED_SCORE_COLUMNS = (
     "ticker",
     "date",

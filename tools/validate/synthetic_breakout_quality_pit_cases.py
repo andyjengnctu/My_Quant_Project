@@ -1719,14 +1719,19 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     pit_cache_clear = pit_source.index(
         "clear_selection_point_in_time_ranking_contract_cache()", pit_manifest_write
     )
-    audit_json_write = audit_source.index("write_json(output_json, payload)")
+    audit_json_write = audit_source.index("publish_latest_snapshot(")
     audit_cache_clear = audit_source.index(
         "clear_selection_point_in_time_ranking_contract_cache()", audit_json_write
+    )
+    audit_publication = audit_source[audit_json_write:audit_cache_clear]
+    audit_json_commits_last = (
+        audit_publication.index("output_markdown.name") < audit_publication.index("output_json.name")
+        and "text_publication_bytes" in audit_publication
     )
     run_bound_checks(
         check_true,
         (
-            ('pit_score_and_audit_producers_invalidate_cached_ranking_contract_after_artifact_rewrite', 'def clear_selection_point_in_time_ranking_contract_cache()' in ranking_store_source and pit_manifest_write < pit_cache_clear and (audit_json_write < audit_cache_clear),),
+            ('pit_score_and_audit_producers_invalidate_cached_ranking_contract_after_artifact_rewrite', 'def clear_selection_point_in_time_ranking_contract_cache()' in ranking_store_source and pit_manifest_write < pit_cache_clear and (audit_json_write < audit_cache_clear) and audit_json_commits_last,),
             ('rolling_standard_sop_validation_sidecar_reader_ignores_non_sop_ticker_dtype', 'usecols=sorted(required)' in audit_source and 'dtype={"fold_id": "string"}' in audit_source,),
         ),
     )
