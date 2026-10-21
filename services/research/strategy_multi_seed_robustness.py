@@ -5441,15 +5441,6 @@ def _cleanup_completed_robustness_transients(
             score_source=target["score_source"],
         )
 
-    summary = _commit_robustness_scientific_result(
-        cfg=cfg, run_root=run_root, contract=contract,
-        manifest=manifest, manifest_path=manifest_path,
-        seed_results_path=seed_results_path,
-        seed_yearly_results_path=seed_yearly_results_path,
-        stochastic_arms=stochastic_arms, model_arms=model_arms, seeds=seeds,
-        fixed_results=fixed_results, comparison_start=comparison_start,
-        comparison_end=comparison_end, started_total=started_total,
-    )
     selection_score_tree = any(
         str(settings.dl_sources[str(arm.dl_id)].score_source) == "selection_point_in_time"
         for arm in model_arms
@@ -6038,6 +6029,17 @@ def _execute_robustness_under_lock(
         training_executor.shutdown(wait=True, cancel_futures=True)
         replay_executor.shutdown(wait=True, cancel_futures=False)
 
+    # Preserve durable evidence before deleting any transient model/replay state.
+    # A failed scientific commit must leave those work products available for RESUME.
+    summary = _commit_robustness_scientific_result(
+        cfg=cfg, run_root=run_root, contract=contract,
+        manifest=manifest, manifest_path=manifest_path,
+        seed_results_path=seed_results_path,
+        seed_yearly_results_path=seed_yearly_results_path,
+        stochastic_arms=stochastic_arms, model_arms=model_arms, seeds=seeds,
+        fixed_results=fixed_results, comparison_start=comparison_start,
+        comparison_end=comparison_end, started_total=started_total,
+    )
     _cleanup_completed_robustness_transients(
         cfg=cfg, settings=settings, run_root=run_root,
         model_root=model_root, model_arms=model_arms,

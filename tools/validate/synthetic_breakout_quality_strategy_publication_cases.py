@@ -294,6 +294,91 @@ def append_robustness_publication_checks(*, check_true, project_root, robustness
                 publishing_reader_blocked,
             )
 
+    # Execute the real post-replay orchestration with no stochastic units, not
+    # just a mocked unit helper. This catches closure variables accidentally
+    # moved into cleanup, and makes the science-then-cleanup order observable.
+    with tempfile.TemporaryDirectory(prefix="robustness_commit_order_") as temp_dir:
+        fixture_root = Path(temp_dir)
+        synthetic_cfg = SimpleNamespace(
+            reuse_completed=False, keep_attribution_source=False,
+            keep_replay_details=False, keep_checkpoints=False, keep_scores=False,
+            gpu_train_workers=1, cpu_replay_workers=1, benchmark_id=None,
+            checkpoint_cache_root=None, console_mode="compact",
+            progress_interval_seconds=60,
+        )
+        seen: list[str] = []
+
+        def _run_isolated_finalization(*, fail_commit: bool):
+            seen.clear()
+            synthetic_run = fixture_root / ("failed" if fail_commit else "completed")
+            synthetic_contract = {
+                "fingerprint": synthetic_run.name,
+                "resolved_seeds": [], "romd_reference_baselines": {},
+            }
+
+            def _commit(**_kwargs):
+                seen.append("commit")
+                if fail_commit:
+                    raise RuntimeError("synthetic commit failure")
+                return {"elapsed_sec": 0.0}
+
+            def _cleanup(**_kwargs):
+                seen.append("cleanup")
+
+            def _display(**_kwargs):
+                seen.append("display")
+
+            with patch.object(robustness_runtime, "PROJECT_ROOT", fixture_root), patch.object(
+                robustness_runtime, "_run_root", return_value=synthetic_run,
+            ), patch.object(
+                robustness_runtime, "_model_work_root", return_value=fixture_root / "models",
+            ), patch.object(
+                robustness_runtime, "_materialize_registered_strategy_only_scientific_reuse", return_value={},
+            ), patch.object(
+                robustness_runtime, "_resolve_existing_scientific_unit_states",
+                return_value=(pd.DataFrame(), pd.DataFrame(), {}),
+            ), patch.object(
+                robustness_runtime, "_run_fixed_baselines", return_value={},
+            ), patch.object(
+                robustness_runtime, "_training_source_groups", return_value={},
+            ), patch.object(
+                robustness_runtime, "_training_units", return_value=[],
+            ), patch.object(
+                robustness_runtime, "_commit_robustness_scientific_result", side_effect=_commit,
+            ), patch.object(
+                robustness_runtime, "_cleanup_completed_robustness_transients", side_effect=_cleanup,
+            ), patch.object(
+                robustness_runtime, "_display_completed_robustness_result", side_effect=_display,
+            ), redirect_stdout(io.StringIO()):
+                try:
+                    result = robustness_runtime._execute_robustness_under_lock(
+                        cfg=synthetic_cfg,
+                        settings=SimpleNamespace(dl_sources={}), status={},
+                        contract=synthetic_contract,
+                        fixed_arms=(), stochastic_arms=(), model_arms=(),
+                        strategy_only_arms=(), registered_scientific_reuse={},
+                        benchmark_bindings={}, comparison_start="2021-01-01",
+                        comparison_end="2021-12-31",
+                    )
+                except Exception as exc:
+                    return None, type(exc).__name__, list(seen)
+            return result, None, list(seen)
+
+        final_result, final_error, final_events = _run_isolated_finalization(fail_commit=False)
+        check_true(
+            "robustness_scientific_commit_precedes_transient_cleanup_and_display",
+            final_error is None and final_result == {"elapsed_sec": 0.0}
+            and final_events == ["commit", "cleanup", "display"],
+            note=f"events={final_events}, error={final_error}",
+        )
+        failed_result, failed_error, failed_events = _run_isolated_finalization(fail_commit=True)
+        check_true(
+            "robustness_failed_scientific_commit_keeps_transients_for_resume",
+            failed_result is None and failed_error == "RuntimeError"
+            and failed_events == ["commit"],
+            note=f"events={failed_events}, error={failed_error}",
+        )
+
     # Completed evidence is immutable even when REUSE is explicitly disabled.
     # A reset/replay knob is not authorization to overwrite an existing run.
     with tempfile.TemporaryDirectory(prefix="robustness_commit_boundaries_") as temp_dir:
