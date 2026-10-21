@@ -69,17 +69,11 @@ from config.training_policy import (
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
-    OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
-    OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE,
-    OPTIMIZER_RETENTION_FINALISTS_AGREE_MIN_AGREE,
 )
 from core.training_policy import (
     is_optimizer_local_min_review_enabled,
     set_optimizer_runtime_model_mode,
     resolve_optimizer_runtime_model_mode,
-    resolve_optimizer_base_finalists_agree_min_agree,
-    resolve_optimizer_local_finalists_agree_min_agree,
-    resolve_optimizer_retention_finalists_agree_min_agree,
 )
 from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS, DEFAULT_PORTFOLIO_ROTATION
 from config.training_policy import OPTIMIZER_RANDOM_SEED_DEFAULT
@@ -839,39 +833,11 @@ def _resolve_nonrolling_seed_ensemble_policy(
 
 
 
-def _is_local_finalists_agree_policy_name(policy_name: str | None) -> bool:
-    return str(policy_name or "").strip() == "local_finalists_agree"
-
-
-def _is_retention_finalists_agree_policy_name(policy_name: str | None) -> bool:
-    return str(policy_name or "").strip() == "retention_finalists_agree"
-
-
 def _is_finalists_agree_policy_name(policy_name: str | None) -> bool:
-    return str(policy_name or "").strip() in {"base_finalists_agree", "local_finalists_agree", "retention_finalists_agree"}
+    # Reuse the canonical Rolling policy-name registry; no static whitelist.
+    from services.optimizer.outer_rolling_policy import FINALISTS_AGREE_POLICY_NAMES
 
-
-def _resolve_finalists_agree_min_agree_for_policy_name(policy_name: str, member_count: int) -> int:
-    if _is_local_finalists_agree_policy_name(policy_name):
-        return int(resolve_optimizer_local_finalists_agree_min_agree(member_count, OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE))
-    if _is_retention_finalists_agree_policy_name(policy_name):
-        return int(resolve_optimizer_retention_finalists_agree_min_agree(member_count, OPTIMIZER_RETENTION_FINALISTS_AGREE_MIN_AGREE))
-    return int(resolve_optimizer_base_finalists_agree_min_agree(member_count, OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE))
-
-
-def _finalists_agree_policy_metadata(policy_name: str) -> dict:
-    # Rolling's established policy owner also owns static publication labels.
-    # The static path deliberately reuses those fields without a second mapping.
-    from services.optimizer.outer_rolling_policy import _finalists_agree_policy_config
-
-    policy = _finalists_agree_policy_config(str(policy_name))
-    return {
-        key: policy[key]
-        for key in (
-            "selection_rule", "min_agree_requested_key",
-            "min_agree_requested", "member_selection",
-        )
-    }
+    return str(policy_name or "").strip() in FINALISTS_AGREE_POLICY_NAMES
 
 
 def _resolve_nonrolling_policy_seed_ensemble_policy(
@@ -882,12 +848,14 @@ def _resolve_nonrolling_policy_seed_ensemble_policy(
     requested_seed_policy: dict | None = None,
 ) -> dict:
     if _is_finalists_agree_policy_name(policy_name):
+        from services.optimizer.outer_rolling_policy import resolve_finalists_agree_publication_policy
+
         member_count = max(1, len(renumber_seed_ensemble_members(list(members or []))))
-        metadata = _finalists_agree_policy_metadata(policy_name)
+        metadata = resolve_finalists_agree_publication_policy(policy_name, member_count)
         policy = build_seed_ensemble_policy_snapshot(
             enabled=member_count > 1,
             seed_count=member_count,
-            min_agree=_resolve_finalists_agree_min_agree_for_policy_name(policy_name, member_count),
+            min_agree=int(metadata["min_agree"]),
         )
         policy["selection_rule"] = str(metadata["selection_rule"])
         policy[str(metadata["min_agree_requested_key"])] = metadata["min_agree_requested"]

@@ -639,6 +639,22 @@ def _validate_builder(
         )
     if not isinstance(builder.options, Mapping):
         raise ValueError(f"{field_name}.options必須是mapping")
+    if builder.builder_type == "optimizer_validation_budget_refit_strategy_params":
+        # Validate at configuration load, before any planner/producer can
+        # accidentally substitute an unregistered scientific parameter identity.
+        from core.strategy_param_policy import (
+            resolve_validation_budget_builder_identity,
+            resolve_validation_strategy_param_training_profile,
+        )
+
+        parameter_set, protocol = resolve_validation_budget_builder_identity(builder.options)
+        profile = resolve_validation_strategy_param_training_profile(parameter_set, protocol)
+        declared_profile = str(builder.options.get("training_profile_id") or "").strip()
+        if declared_profile and declared_profile != profile.profile_id:
+            raise ValueError(
+                f"{field_name}.training_profile_id與已登記validation身份不一致: "
+                f"declared={declared_profile}, registered={profile.profile_id}"
+            )
     if builder.builder_type == "forward_oos_scores":
         if str(builder.options.get("scope") or "") != "forward_oos":
             raise ValueError(f"{field_name}.scope必須是forward_oos")

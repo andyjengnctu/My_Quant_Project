@@ -439,9 +439,34 @@ def _finalists_agree_policy_config(policy_name: str, *, session=None) -> dict:
     }
 
 
+def resolve_finalists_agree_publication_policy(
+    policy_name: str, member_count: int, *, session=None,
+) -> dict:
+    """One canonical policy snapshot for Rolling and static publication.
+
+    Classification, min-agree resolution and persisted metadata must not be
+    independently selected by each consumer.  The existing selection rule and
+    scientific defaults are unchanged.
+    """
+    name = str(policy_name or "").strip()
+    if not _is_finalists_agree_policy(name):
+        raise ValueError(f"Unsupported finalists-agree policy: {name or '(blank)'}")
+    config = _finalists_agree_policy_config(name, session=session)
+    return {
+        "min_agree": int(resolve_finalists_agree_min_agree(
+            name, member_count, config["min_agree_requested"]
+        )),
+        "selection_rule": str(config["selection_rule"]),
+        "min_agree_requested_key": str(config["min_agree_requested_key"]),
+        "min_agree_requested": config["min_agree_requested"],
+        "member_selection": str(config["member_selection"]),
+    }
+
+
 def _resolve_finalists_agree_min_agree(policy_name: str, member_count: int, *, session=None) -> int:
-    config = _finalists_agree_policy_config(policy_name, session=session)
-    return int(resolve_finalists_agree_min_agree(policy_name, member_count, config["min_agree_requested"]))
+    return int(resolve_finalists_agree_publication_policy(
+        policy_name, member_count, session=session,
+    )["min_agree"])
 
 
 def _finalists_agree_metadata(finalists: list[dict], *, policy_name: str, session=None) -> dict:

@@ -1646,6 +1646,111 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         )
     )
     validation_source = validation_settings.parameter_sources[validation_arm.param_source]
+    # AI: A missing field is not permission to silently fit under legacy P5.
+    # Verify both the single identity owner and pre-execution config validation.
+    from core.strategy_param_policy import resolve_validation_budget_builder_identity
+    from core.strategy_comparison import validate_strategy_comparison_settings
+    incomplete_validation_builders = (
+        {},
+        {"parameter_set": "PARAM-P9"},
+        {"optimizer_search_protocol": "validation_plateau_refit_v3"},
+        {"parameter_set": " ", "optimizer_search_protocol": " "},
+    )
+    for index, options in enumerate(incomplete_validation_builders):
+        try:
+            resolve_validation_budget_builder_identity(options)
+        except ValueError:
+            resolver_rejected = True
+        else:
+            resolver_rejected = False
+        malformed_settings = replace(
+            validation_settings,
+            parameter_sources={
+                **validation_settings.parameter_sources,
+                validation_arm.param_source: replace(
+                    validation_source, builder=replace(validation_source.builder, options=options),
+                ),
+            },
+        )
+        try:
+            validate_strategy_comparison_settings(malformed_settings)
+        except ValueError:
+            config_rejected = True
+        else:
+            config_rejected = False
+        check_true(
+            f"validation_budget_incomplete_identity_{index}_fails_closed_at_owner_and_config",
+            resolver_rejected and config_rejected,
+        )
+    check_true(
+        "validation_budget_legacy_explicit_identity_remains_supported",
+        resolve_validation_budget_builder_identity(validation_source.builder.options)
+        == ("PARAM-P5", "validation_budget_refit_v1"),
+    )
+    for index, options in enumerate((
+        {"parameter_set": "PARAM-UNKNOWN", "optimizer_search_protocol": "validation_budget_refit_v1"},
+        {"parameter_set": "PARAM-P9", "optimizer_search_protocol": "validation_budget_refit_v1"},
+        {"parameter_set": "PARAM-P5", "optimizer_search_protocol": "validation_budget_refit_v1",
+         "training_profile_id": "validation_plateau_current"},
+    )):
+        malformed_settings = replace(
+            validation_settings,
+            parameter_sources={
+                **validation_settings.parameter_sources,
+                validation_arm.param_source: replace(
+                    validation_source, builder=replace(validation_source.builder, options=options),
+                ),
+            },
+        )
+        try:
+            validate_strategy_comparison_settings(malformed_settings)
+        except ValueError:
+            config_rejected = True
+        else:
+            config_rejected = False
+        check_true(f"validation_budget_unregistered_or_conflicting_profile_{index}_rejected", config_rejected)
+    # AI: Static publication must consume the Rolling owner even when a new
+    # policy rule is injected. A matching hard-coded switch is not sufficient.
+    from services.optimizer import application as optimizer_application
+    from services.optimizer import outer_rolling_policy as finalist_policy_owner
+    for policy_name in finalist_policy_owner.FINALISTS_AGREE_POLICY_NAMES:
+        member_count = 3
+        members = [
+            {"member_index": i, "seed": 17, "optimizer_seed": 17,
+             "params": {"high_len": 200 + i}}
+            for i in range(1, member_count + 1)
+        ]
+        owner_policy = finalist_policy_owner.resolve_finalists_agree_publication_policy(
+            policy_name, member_count,
+        )
+        static_policy = optimizer_application._resolve_nonrolling_policy_seed_ensemble_policy(
+            policy_name=policy_name, members=members, seeds=[17],
+        )
+        check_true(
+            f"nonrolling_finalists_agree_{policy_name}_consumes_owner_metadata",
+            static_policy["min_agree"] == owner_policy["min_agree"]
+            and static_policy["selection_rule"] == owner_policy["selection_rule"]
+            and static_policy["member_selection"] == owner_policy["member_selection"]
+            and static_policy[owner_policy["min_agree_requested_key"]]
+            == owner_policy["min_agree_requested"],
+        )
+    policy_name = finalist_policy_owner.FINALISTS_AGREE_POLICY_NAMES[0]
+    injected = dict(finalist_policy_owner.resolve_finalists_agree_publication_policy(policy_name, 3))
+    injected["min_agree"] = 1
+    injected["selection_rule"] = "synthetic_owner_rule"
+    members = [
+        {"member_index": i, "seed": 17, "optimizer_seed": 17,
+         "params": {"high_len": 200 + i}}
+        for i in range(1, 4)
+    ]
+    with patch.object(finalist_policy_owner, "resolve_finalists_agree_publication_policy", return_value=injected):
+        published = optimizer_application._resolve_nonrolling_policy_seed_ensemble_policy(
+            policy_name=policy_name, members=members, seeds=[17],
+        )
+    check_true(
+        "nonrolling_finalists_agree_snapshot_follows_single_owner_mutation",
+        published["min_agree"] == 1 and published["selection_rule"] == "synthetic_owner_rule",
+    )
     validation_seed = int(validation_robustness.resolved_seeds[0])
     baseline_binding = _benchmark_param_binding(
         settings=validation_settings, robustness=validation_robustness,

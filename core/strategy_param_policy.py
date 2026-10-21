@@ -431,10 +431,16 @@ def resolve_validation_budget_builder_identity(
     explicitly declares another historical validation experiment.
     """
     values = dict(options or {})
-    return (
-        str(values.get("parameter_set") or "PARAM-P5").strip().upper(),
-        str(values.get("optimizer_search_protocol") or "validation_budget_refit_v1").strip(),
-    )
+    parameter_set = str(values.get("parameter_set") or "").strip().upper()
+    protocol = str(values.get("optimizer_search_protocol") or "").strip()
+    # An incomplete builder is not authorization to fit the historical P5
+    # identity. All supported P5-P12 sources explicitly declare both fields.
+    if not parameter_set or not protocol:
+        raise ValueError(
+            "validation-budget builder必須明確宣告parameter_set及"
+            "optimizer_search_protocol；禁止隱含PARAM-P5 fallback"
+        )
+    return parameter_set, protocol
 
 
 def resolve_validation_strategy_param_training_profile(
