@@ -50,10 +50,12 @@ def _contract_cell(column, value, *, target: str, signal: str | None = None) -> 
     """The extension column alone owns order, precision, unit and direction."""
     if value is not None and column.format_kind not in {"text", "int"}:
         try:
-            if not math.isfinite(float(value)):
-                return "-"
+            number = float(value)
         except (TypeError, ValueError):
-            pass
+            # Non-numeric evidence uses the canonical formatter's text fallback.
+            number = None
+        if number is not None and not math.isfinite(number):
+            return "-"
     return _style_text(format_contract_value(column, value), signal, target=target)
 
 def _style_text(text: str, signal: str | None, *, target: str) -> str:

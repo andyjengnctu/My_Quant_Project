@@ -1367,6 +1367,19 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and swapped_markdown.index("3.2345") < swapped_markdown.index("12.3456"),
     )
 
+    # AI: Non-finite numeric evidence is unavailable, while nonnumeric text
+    # remains the canonical formatter's explicit fallback (not a hidden pass).
+    numeric_column = next(column for column in original_table.columns if column.key == "mean")
+    check_true(
+        "robustness_nonfinite_numeric_renders_missing_without_coloring",
+        all(robustness_reporting._contract_cell(numeric_column, value, target="markdown") == "-"
+            for value in (float("nan"), float("inf"), float("-inf"))),
+    )
+    check_true(
+        "robustness_nonnumeric_value_uses_canonical_text_fallback",
+        robustness_reporting._contract_cell(numeric_column, "unavailable", target="markdown") == "unavailable",
+    )
+
     # AI: The approved annual table remains byte-compatible, while its data
     # precision and best/worst direction follow the canonical column contract.
     from core.research_report_contract import table_contract
