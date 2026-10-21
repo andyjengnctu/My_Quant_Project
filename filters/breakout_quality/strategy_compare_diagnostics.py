@@ -77,6 +77,7 @@ from filters.breakout_quality.ranking_score_store import (
     load_continuous_ranker_oos_score_table_from_path,
     load_selection_point_in_time_score_table,
     load_selection_point_in_time_score_table_from_path,
+    load_selection_point_in_time_ranking_contract,
 )
 from filters.breakout_quality.strategy_compare_contracts import (
     COMPARISON_MODE_SCORE_RANKING,
@@ -785,11 +786,25 @@ def _continuous_forward_target_lookup(
     ]].rename(columns={"date": "signal_date"})
 
 def _load_isolated_selection_pit_contract(
-    *, score_path: str, manifest_path: str, filter_id: str, model_architecture: str,
+    *, project_root: str | Path, score_path: str, manifest_path: str,
+    filter_id: str, model_architecture: str,
     experiment_profile: str, expected_seed: int | None,
 ):
     score = Path(str(score_path)).resolve()
     manifest_file = Path(str(manifest_path)).resolve()
+    if score.parent != manifest_file.parent:
+        raise ValueError("isolated Selection PIT score/manifest不在同一個bundle")
+    # The Strategy Compare preflight uses the complete Ranking/Audit owner. Its
+    # actual replay must not take a shorter path that silently accepts a SCORE
+    # without a verified Audit or with replaced Fold evidence. Preserve the
+    # existing isolated-seed display metadata after the canonical check.
+    verified = load_selection_point_in_time_ranking_contract(
+        str(Path(project_root).resolve()), str(filter_id), str(model_architecture),
+        str(experiment_profile), require_model_validation_pass=False,
+        point_in_time_dir_override=score.parent,
+    )
+    if verified.score_path.resolve() != score or verified.manifest_path.resolve() != manifest_file:
+        raise ValueError("isolated Selection PIT score/manifest位置與canonical contract不一致")
     for label, path in (("Selection PIT score", score), ("Selection PIT manifest", manifest_file)):
         if not path.is_file():
             raise FileNotFoundError(f"找不到isolated {label}: {path}")

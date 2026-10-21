@@ -240,6 +240,74 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 note=f"error={type(validation_error).__name__}: {validation_error}",
             )
 
+    # An isolated multi-seed replay must recheck the complete PIT Audit/Fold
+    # provenance at execution time. Passing the earlier preparation gate does
+    # not authorize an unverified score-file override after the fact.
+    from filters.breakout_quality import strategy_compare_diagnostics as pit_diagnostics
+    with tempfile.TemporaryDirectory() as isolated_tmp:
+        isolated_dir = Path(isolated_tmp)
+        isolated_score = isolated_dir / "selection_point_in_time_scores.csv"
+        isolated_manifest = isolated_dir / "selection_point_in_time_manifest.json"
+        pd.DataFrame({
+            "ticker": ["1234"], "date": ["2021-01-04"], "group_index": [1],
+            "breakout_quality_score": [0.5], "fold_id": ["fold_1"],
+            "model_information_cutoff": ["2020-12-31"],
+        }).to_csv(isolated_score, index=False, encoding="utf-8-sig")
+        isolated_manifest.write_text(json.dumps({
+            "status": "BUILT", "filter_id": "synthetic_filter",
+            "model_architecture": "synthetic_arch",
+            "experiment_profile": DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+            "seed": 7,
+            "artifacts": {"scores": build_file_manifest(isolated_score)},
+            "score_period": {"start": "2021-01-04", "end": "2021-01-04"},
+            "coverage": {"scored_group_count": 1},
+            "lookahead_contract": {
+                "every_score_uses_model_not_trained_on_scored_event": True,
+                "training_requires_label_eval_end_before_score_start": True,
+                "oos_rows_or_target_statistics_used_for_training_or_epoch_selection": False,
+                "future_target_in_score_table": False,
+            },
+        }), encoding="utf-8")
+        isolated_kwargs = {
+            "project_root": project_root, "score_path": str(isolated_score),
+            "manifest_path": str(isolated_manifest), "filter_id": "synthetic_filter",
+            "model_architecture": "synthetic_arch",
+            "experiment_profile": DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+            "expected_seed": 7,
+        }
+        with patch.object(
+            pit_diagnostics, "load_selection_point_in_time_ranking_contract",
+            side_effect=ValueError("missing verified PIT Audit"),
+        ) as canonical_gate:
+            try:
+                pit_diagnostics._load_isolated_selection_pit_contract(**isolated_kwargs)
+            except ValueError as exc:
+                missing_audit_rejected = "missing verified PIT Audit" in str(exc)
+            else:
+                missing_audit_rejected = False
+            check_true(
+                "isolated_strategy_pit_rechecks_canonical_audit_at_replay",
+                missing_audit_rejected and canonical_gate.call_count == 1
+                and canonical_gate.call_args.kwargs["require_model_validation_pass"] is False
+                and Path(canonical_gate.call_args.kwargs["point_in_time_dir_override"]) == isolated_dir,
+            )
+        with patch.object(
+            pit_diagnostics, "load_selection_point_in_time_ranking_contract",
+            return_value=SimpleNamespace(
+                score_path=isolated_score, manifest_path=isolated_manifest,
+            ),
+        ):
+            isolated_result = pit_diagnostics._load_isolated_selection_pit_contract(
+                **isolated_kwargs
+            )
+        check_true(
+            "isolated_strategy_pit_retains_approved_seed_and_display_semantics",
+            isolated_result.seed == 7
+            and isolated_result.available_from == "2021-01-04"
+            and isolated_result.available_through == "2021-01-04"
+            and isolated_result.model_validation_gate["status"] == "ISOLATED_MULTI_SEED_ROBUSTNESS",
+        )
+
     modes = strategy_config.get_strategy_rolling_test_modes()
     settings_by_mode = {
         str(mode["profile_id"]): strategy_config.get_strategy_comparison_settings(

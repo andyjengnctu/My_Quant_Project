@@ -232,6 +232,7 @@ def resolve_strategy_compare_runtime_contract(
             raise ValueError("Selection PIT score source只支援score-ranking比較")
         if has_selection_pit_score_override:
             pit_contract = _load_isolated_selection_pit_contract(
+                project_root=root,
                 score_path=str(selection_pit_score_path_override),
                 manifest_path=str(selection_pit_manifest_path_override),
                 filter_id=filter_id,
