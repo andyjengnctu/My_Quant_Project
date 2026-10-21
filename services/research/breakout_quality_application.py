@@ -5059,7 +5059,10 @@ def _interactive_model_research(program_name: str) -> int:
         if choice in {"0", "q", "quit", "exit"}:
             return 0
         if choice == "1":
-            return _run_continuous_forward_model_gate(program_name, settings)
+            code = _run_continuous_forward_model_gate(program_name, settings)
+            if code != 0:
+                return int(code)
+            continue
         if choice == "2":
             _run_continuous_rolling_mode_direct(program_name, settings)
             continue

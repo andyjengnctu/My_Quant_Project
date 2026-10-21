@@ -1581,6 +1581,28 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and rolling_gate.call_count == 0,
     )
 
+    # [AI] A successful Forward run must redisplay the model menu; only the
+    # explicit [0] exit returns to the parent Research menu.
+    from contextlib import redirect_stdout
+    from io import StringIO
+    forward_menu_stdout = StringIO()
+    with (
+        patch.object(research_app, "get_breakout_quality_model_research_settings", return_value=model_gate_settings),
+        patch("builtins.input", side_effect=["", "0"]) as menu_input,
+        patch.object(research_app, "_run_continuous_forward_model_gate", return_value=0) as forward_success,
+        patch.object(research_app, "_run_continuous_rolling_mode_direct", return_value=31) as rolling_gate,
+        redirect_stdout(forward_menu_stdout),
+    ):
+        forward_menu_rc = research_app._interactive_model_research("apps/research.py model")
+    check_true(
+        "continuous_forward_workflow_success_redisplays_model_menu_until_explicit_exit",
+        forward_menu_rc == 0
+        and forward_success.call_count == 1
+        and rolling_gate.call_count == 0
+        and menu_input.call_count == 2
+        and forward_menu_stdout.getvalue().count("=== Continuous DL 模型研究與驗證 ===") == 2,
+    )
+
     # Regression for B338: even if the current Training Model object carries a false
     # rolling flag (synthetic historical state), [4] belongs to the shared compare list
     # and must not be re-gated by that current Training Model.
