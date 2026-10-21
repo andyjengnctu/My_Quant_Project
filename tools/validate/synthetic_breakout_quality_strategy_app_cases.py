@@ -296,11 +296,48 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             return_value=SimpleNamespace(
                 score_path=isolated_score, manifest_path=isolated_manifest,
                 manifest=json.loads(isolated_manifest.read_text(encoding="utf-8")),
+                seed=7,
+                model_architecture="synthetic_arch",
+                experiment_profile=DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+                available_from="2021-01-04",
+                available_through="2021-01-04",
             ),
         ):
             isolated_result = pit_diagnostics._load_isolated_selection_pit_contract(
                 **isolated_kwargs
             )
+            try:
+                pit_diagnostics._load_isolated_selection_pit_contract(
+                    **{**isolated_kwargs, "expected_seed": 8}
+                )
+            except ValueError as exc:
+                wrong_seed_rejected = "seed" in str(exc)
+            else:
+                wrong_seed_rejected = False
+            try:
+                pit_diagnostics._load_isolated_selection_pit_contract(
+                    **{**isolated_kwargs, "manifest_path": str(isolated_dir / "wrong_manifest.json")}
+                )
+            except ValueError as exc:
+                wrong_bundle_rejected = "canonical contract" in str(exc)
+            else:
+                wrong_bundle_rejected = False
+            # Model a physical replacement after Ranking/Audit validated the
+            # original revision: the consumer must not read a different Score.
+            original_score = isolated_score.read_bytes()
+            isolated_score.write_bytes(original_score.replace(b"0.5", b"0.8"))
+            try:
+                pit_diagnostics._load_isolated_selection_pit_contract(**isolated_kwargs)
+            except ValueError as exc:
+                changed_score_rejected = "SHA256" in str(exc)
+            else:
+                changed_score_rejected = False
+            finally:
+                isolated_score.write_bytes(original_score)
+        check_true(
+            "isolated_strategy_pit_owner_boundary_retains_seed_path_and_physical_revision_guards",
+            wrong_seed_rejected and wrong_bundle_rejected and changed_score_rejected,
+        )
         check_true(
             "isolated_strategy_pit_retains_approved_seed_and_display_semantics",
             isolated_result.seed == 7

@@ -55,7 +55,6 @@ from core.exact_accounting import (
 from core.order_lot_policy import apply_board_lot_preferred_qty
 from core.price_utils import calc_position_size
 
-from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.continuous_target import (
     DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
     DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
@@ -792,12 +791,9 @@ def _load_isolated_selection_pit_contract(
 ):
     score = Path(str(score_path)).resolve()
     manifest_file = Path(str(manifest_path)).resolve()
-    if score.parent != manifest_file.parent:
-        raise ValueError("isolated Selection PIT score/manifest不在同一個bundle")
-    # The Strategy Compare preflight uses the complete Ranking/Audit owner. Its
-    # actual replay must not take a shorter path that silently accepts a SCORE
-    # without a verified Audit or with replaced Fold evidence. Preserve the
-    # existing isolated-seed display metadata after the canonical check.
+    # The canonical Ranking/Audit owner verifies completion, source identity,
+    # physical score/coverage hashes, lookahead and Fold provenance.  Isolated
+    # replay adds only its explicit bundle-path and benchmark-seed requirements.
     verified = load_selection_point_in_time_ranking_contract(
         str(Path(project_root).resolve()), str(filter_id), str(model_architecture),
         str(experiment_profile), require_model_validation_pass=False,
@@ -805,57 +801,31 @@ def _load_isolated_selection_pit_contract(
     )
     if verified.score_path.resolve() != score or verified.manifest_path.resolve() != manifest_file:
         raise ValueError("isolated Selection PIT score/manifest位置與canonical contract不一致")
-    for label, path in (("Selection PIT score", score), ("Selection PIT manifest", manifest_file)):
-        if not path.is_file():
-            raise FileNotFoundError(f"找不到isolated {label}: {path}")
-    manifest = verified.manifest
-    if str(manifest.get("status") or "") != "BUILT":
-        raise ValueError(f"isolated Selection PIT manifest尚未完成: {manifest.get('status')!r}")
-    expected_identity = {
-        "filter_id": str(filter_id),
-        "model_architecture": str(model_architecture),
-        "experiment_profile": str(experiment_profile),
-    }
-    for field, expected in expected_identity.items():
-        actual = str(manifest.get(field) or "")
-        if actual != expected:
-            raise ValueError(
-                f"isolated Selection PIT identity不一致: field={field}, expected={expected}, actual={actual}"
-            )
-    if expected_seed is not None and int(manifest.get("seed", -1)) != int(expected_seed):
+    if expected_seed is not None and verified.seed != int(expected_seed):
         raise ValueError(
             "isolated Selection PIT seed不一致: "
-            f"expected={int(expected_seed)}, actual={manifest.get('seed')!r}"
+            f"expected={int(expected_seed)}, actual={verified.seed!r}"
         )
-    # The complete Ranking/Audit loader already validates aggregate PIT
-    # lookahead; isolated replay only adds seed and score path checks.
-    score_record = dict((manifest.get("artifacts") or {}).get("scores") or {})
-    if str(score_record.get("filename") or "") != score.name:
-        raise ValueError("isolated Selection PIT score filename與manifest不一致")
-    expected_hash = str(score_record.get("sha256") or "").lower()
-    actual_hash = compute_file_sha256(score).lower()
-    if not expected_hash or expected_hash != actual_hash:
-        raise ValueError("isolated Selection PIT score SHA256與manifest不一致")
-    expected_size = int(score_record.get("size_bytes", -1))
-    if expected_size != int(score.stat().st_size):
-        raise ValueError("isolated Selection PIT score size與manifest不一致")
-    table = load_selection_point_in_time_score_table_from_path(
-        str(score), manifest_path=str(manifest_file)
+    manifest = verified.manifest
+    # Preserve score-table validation, but bind this second physical read to the
+    # SHA already authorized by the owner.  No local hash/identity policy remains.
+    score_sha256 = str(
+        ((manifest.get("artifacts") or {}).get("scores") or {}).get("sha256") or ""
+    ).lower()
+    load_selection_point_in_time_score_table_from_path(
+        str(score), manifest_path=str(manifest_file),
+        experiment_profile=str(experiment_profile), expected_score_sha256=score_sha256,
     )
-    available_from = str(table.attrs.get("available_from") or "")
-    available_through = str(table.attrs.get("available_through") or "")
-    if not available_from or not available_through or available_through < available_from:
-        raise ValueError("isolated Selection PIT score period不合法")
     return SimpleNamespace(
         score_path=score,
         manifest_path=manifest_file,
         audit_path=None,
         manifest=manifest,
-        model_architecture=str(model_architecture),
-        experiment_profile=str(experiment_profile),
-        seed=int(manifest.get("seed", 0) or 0),
-        available_from=available_from,
-        available_through=available_through,
+        model_architecture=verified.model_architecture,
+        experiment_profile=verified.experiment_profile,
+        seed=verified.seed,
+        available_from=verified.available_from,
+        available_through=verified.available_through,
         model_validation_gate={
             "status": "ISOLATED_MULTI_SEED_ROBUSTNESS",
             "strategy_metrics_used": False,

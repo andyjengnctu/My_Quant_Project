@@ -751,8 +751,8 @@ def _load_selection_point_in_time_ranking_contract_uncached(
         )
 
     if manifest_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
-        _validate_score_eligibility_contract(manifest, profile=profile)
-        _validate_score_output_capability_contract(manifest, profile=profile)
+        # Eligibility and output capability were checked by the SCORE owner.
+        # Ranking adds only the Audit-to-Target source binding here.
         _validate_embedded_target_source_artifact(
             audit_sources.get("continuous_target_manifest"),
             manifest=manifest,
