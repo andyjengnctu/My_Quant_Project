@@ -67,6 +67,7 @@ from core.training_policy import resolve_robustness_benchmark_seeds
 from core.strategy_param_policy import (
     get_strategy_param_fitting_seed_protocol,
     get_strategy_param_training_profile,
+    resolve_validation_budget_builder_identity,
 )
 from core.strategy_compare_policy import (
     get_strategy_comparison_settings,
@@ -698,12 +699,19 @@ def _benchmark_param_binding(
     elif builder_type == "optimizer_validation_budget_refit_strategy_params":
         family = "full"
         mode = str(source.consumption_evaluation_mode or "rolling").strip()
+        parameter_set_identity, validation_protocol_id = resolve_validation_budget_builder_identity(
+            None if source.builder is None else source.builder.options
+        )
         path = validation_budget_robustness_strategy_param_artifact_path(
             PROJECT_ROOT, benchmark_id=str(robustness.benchmark_id),
             seed=int(seed), policy=policy,
+            parameter_set_identity=parameter_set_identity,
+            validation_protocol_id=validation_protocol_id,
         )
         manifest_path = validation_budget_robustness_strategy_param_manifest_path(
             PROJECT_ROOT, benchmark_id=str(robustness.benchmark_id), seed=int(seed),
+            parameter_set_identity=parameter_set_identity,
+            validation_protocol_id=validation_protocol_id,
         )
         producer_variant = "validation_budget_refit_v1"
         training_profile_id = None
@@ -768,7 +776,7 @@ def _benchmark_param_binding(
         training_profile_id = None
         fitting_seed_count = 1
         fitting_trials_per_seed = 0
-    return {
+    binding = {
         "arm_id": arm.arm_id,
         "seed": int(seed),
         "family": family,
@@ -781,6 +789,12 @@ def _benchmark_param_binding(
         "path": path,
         "manifest_path": manifest_path,
     }
+    if builder_type == "optimizer_validation_budget_refit_strategy_params":
+        binding.update({
+            "parameter_set_identity": parameter_set_identity,
+            "validation_protocol_id": validation_protocol_id,
+        })
+    return binding
 
 
 def _inspect_benchmark_strategy_parameter_binding(
@@ -822,6 +836,8 @@ def _inspect_benchmark_strategy_parameter_binding(
             rotation=str(settings.rotation),
             fixed_risk=float(DEFAULT_FIXED_RISK),
             max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+            parameter_set_identity=str(binding["parameter_set_identity"]),
+            validation_protocol_id=str(binding["validation_protocol_id"]),
         )
     if str(binding["producer_variant"]) in {"fixed_multiseed_v1", "fixed_single_seed_v1"}:
         return inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
@@ -886,7 +902,7 @@ def _benchmark_parameter_plan_rows(
     # Several strategy arms may consume the same physical optimizer truth for
     # one replicate. Plan/build it only once and propagate its verified action
     # to each consuming arm; arm-level scientific results remain independent.
-    seen_units: dict[tuple[int, str, str, str, str, str], dict[str, Any]] = {}
+    seen_units: dict[tuple[str | int, ...], dict[str, Any]] = {}
     # AI: A parameter source with the same resolved policy and benchmark seed
     # has exactly one binding contract regardless of how many strategy arms use
     # it. Resolve its paths/profile once per plan; retain per-arm binding copies
@@ -924,6 +940,8 @@ def _benchmark_parameter_plan_rows(
                 str(binding["family"]),
                 str(binding["evaluation_mode"]),
                 str(binding["param_policy"]),
+                str(binding.get("parameter_set_identity") or ""),
+                str(binding.get("validation_protocol_id") or ""),
             )
             if unit in seen_units:
                 canonical = seen_units[unit]
@@ -963,10 +981,24 @@ def _benchmark_parameter_plan_rows(
                 "replicate" if str(binding["producer_variant"]) == "fixed_multiseed_v1"
                 else "seed"
             )
+            # Keep the approved P5 plan labels unchanged; distinguish other
+            # validation protocols when historical sources share a seed/policy.
+            validation_identity_suffix = ""
+            if (
+                str(binding["producer_variant"]) == "validation_budget_refit_v1"
+                and (
+                    str(binding["parameter_set_identity"]) != "PARAM-P5"
+                    or str(binding["validation_protocol_id"]) != "validation_budget_refit_v1"
+                )
+            ):
+                validation_identity_suffix = (
+                    f":parameter_set={binding['parameter_set_identity']}"
+                    f":protocol={binding['validation_protocol_id']}"
+                )
             label = (
                 f"param-benchmark:{robustness.benchmark_id}:{seed_role}={seed}:"
                 f"{binding['family']}:{binding['evaluation_mode']}:{binding['param_policy']}"
-                f"{variant_suffix}{budget_suffix}{profile_suffix}"
+                f"{variant_suffix}{budget_suffix}{profile_suffix}{validation_identity_suffix}"
             )
             state = _inspect_benchmark_strategy_parameter_binding(
                 settings=settings,
@@ -1103,6 +1135,8 @@ def _ensure_benchmark_strategy_parameter_binding(
             max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
             resume_parameter_training=True,
             quiet=False,
+            parameter_set_identity=str(binding["parameter_set_identity"]),
+            validation_protocol_id=str(binding["validation_protocol_id"]),
         )
     elif str(binding["producer_variant"]) in {"fixed_multiseed_v1", "fixed_single_seed_v1"}:
         result = ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
@@ -1171,7 +1205,7 @@ def _prepare_benchmark_strategy_parameter_artifacts(
 ) -> dict[tuple[str, int], dict[str, Any]]:
     if robustness.benchmark_id is None:
         return {}
-    built_by_unit: dict[tuple[int, str, str, str, str, str], dict[str, Any]] = {}
+    built_by_unit: dict[tuple[str, ...], dict[str, Any]] = {}
     bindings: dict[tuple[str, int], dict[str, Any]] = {}
     reusable = dict(reusable_observations or {})
     for seed in robustness.resolved_seeds:
@@ -1198,6 +1232,8 @@ def _prepare_benchmark_strategy_parameter_artifacts(
                 str(binding["family"]),
                 str(binding["evaluation_mode"]),
                 str(binding["param_policy"]),
+                str(binding.get("parameter_set_identity") or ""),
+                str(binding.get("validation_protocol_id") or ""),
             )
             result = built_by_unit.get(unit)
             if result is not None and (

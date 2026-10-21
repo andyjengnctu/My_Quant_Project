@@ -1323,6 +1323,88 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         ),
     )
 
+    # Contract-driven renderer regression: column reordering and precision must
+    # travel with the contract rather than an unrelated renderer key tuple.
+    from core.research_report_contract import strategy_mode_extension_contract
+    from services.research import strategy_multi_seed_reporting as robustness_reporting
+    sample_robustness = {
+        "contract": {"profile_id": "synthetic", "fingerprint": "synthetic",
+                     "seed_count": 2, "comparison_period": {}},
+        "schema_version": 1,
+        "common_strategy_report": {
+            "scenarios": {"synthetic": {}},
+            "yearly_by_id": {"SYN": {2021: {}}},
+        },
+        "romd_statistics": [{
+            "arm_id": "SYN", "name": "Synthetic", "n": 2,
+            "mean": 12.3456, "median": 3.2345,
+            "std": 1.3, "min": 1.0, "max": 15.0,
+        }],
+    }
+    stability_contract = strategy_mode_extension_contract("robustness_stability")
+    original_table = stability_contract.tables[0]
+    swapped_columns = list(original_table.columns)
+    swapped_columns[2], swapped_columns[3] = (
+        replace(swapped_columns[3], digits=4),
+        replace(swapped_columns[2], digits=4),
+    )
+    adjusted_contract = replace(
+        stability_contract, tables=(
+            replace(original_table, columns=tuple(swapped_columns)),
+            stability_contract.tables[1],
+        ),
+    )
+    with (
+        patch.object(robustness_reporting, "get_strategy_comparison_settings", return_value=object()),
+        patch.object(robustness_reporting, "_report_settings_for_contract", return_value=object()),
+        patch.object(robustness_reporting, "render_strategy_aggregate_report", return_value="CANONICAL"),
+        patch.object(robustness_reporting, "strategy_mode_extension_contract", return_value=adjusted_contract),
+    ):
+        swapped_markdown = robustness_reporting.render_multi_seed_robustness_report(sample_robustness)
+    check_true(
+        "robustness_report_contract_owns_column_order_and_precision",
+        "3.2345" in swapped_markdown and "12.3456" in swapped_markdown
+        and swapped_markdown.index("3.2345") < swapped_markdown.index("12.3456"),
+    )
+
+    # AI: The approved annual table remains byte-compatible, while its data
+    # precision and best/worst direction follow the canonical column contract.
+    from core.research_report_contract import table_contract
+    from services.research import strategy_comparison as annual_reporting
+    annual_settings = SimpleNamespace(enabled_arms=(
+        SimpleNamespace(arm_id="C910", name="Synthetic A"),
+        SimpleNamespace(arm_id="C911", name="Synthetic B"),
+    ))
+    annual_values = {"C910": {2021: 1.23456}, "C911": {2021: -2.34567}}
+    annual_evidence = [{
+        "year": 2021, "start_date": "2021-01-01",
+        "end_date": "2021-12-31", "year_return_pct": 3.45678,
+    }]
+    annual_args = dict(
+        yearly_by_id=annual_values, benchmark_yearly=annual_evidence,
+        year_is_complete={2021: True}, settings=annual_settings, target="markdown",
+    )
+    annual_approved = annual_reporting._contract_strategy_yearly_table(**annual_args)
+    check_true(
+        "strategy_yearly_approved_contract_preserves_two_decimal_signed_pct",
+        all(token in annual_approved for token in ("+3.46%", "+1.23%", "-2.35%")),
+    )
+    yearly_table = table_contract("strategy.standard_sop", "yearly_results", "yearly_results")
+    changed_yearly = replace(yearly_table, columns=(
+        yearly_table.columns[0],
+        replace(yearly_table.columns[1], digits=4),
+        replace(yearly_table.columns[2], digits=4, preference="lower"),
+    ))
+    with patch("core.research_report_contract.table_contract", return_value=changed_yearly):
+        annual_precision = annual_reporting._contract_strategy_yearly_table(**annual_args)
+    from core.report_style import SIGNAL_NEGATIVE, SIGNAL_POSITIVE, styled_signal
+    check_true(
+        "strategy_yearly_contract_owns_precision_and_direction",
+        all(token in annual_precision for token in ("+3.4568%", "+1.2346%", "-2.3457%"))
+        and styled_signal("-2.3457%", SIGNAL_POSITIVE, target="markdown") in annual_precision
+        and styled_signal("+1.2346%", SIGNAL_NEGATIVE, target="markdown") in annual_precision,
+    )
+
     comparison_source = (
         project_root / "services/research/strategy_comparison.py"
     ).read_text(encoding="utf-8")
@@ -1528,6 +1610,122 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     )
     from filters.breakout_quality.strategy_compare_sources import (
         strategy_param_source_identity_sha256,
+    )
+
+    # Historical validation-budget regressions: P9 must never fall back to
+    # P5 identity even when the benchmark seed and parameter policy are equal.
+    from core.strategy_compare_policy import get_strategy_comparison_settings
+    from services.research import strategy_multi_seed_robustness as robustness_owner
+    validation_robustness = get_strategy_multi_seed_robustness_settings(
+        "non_dl_validation_budget_rolling"
+    )
+    validation_settings = get_strategy_comparison_settings(validation_robustness.profile_id)
+    validation_arm = next(
+        validation_settings.arms[arm_id]
+        for arm_id in validation_robustness.benchmark_strategy_arm_ids
+        if (
+            validation_settings.parameter_sources[
+                validation_settings.arms[arm_id].param_source
+            ].builder is not None
+            and validation_settings.parameter_sources[
+                validation_settings.arms[arm_id].param_source
+            ].builder.builder_type == "optimizer_validation_budget_refit_strategy_params"
+        )
+    )
+    validation_source = validation_settings.parameter_sources[validation_arm.param_source]
+    validation_seed = int(validation_robustness.resolved_seeds[0])
+    baseline_binding = _benchmark_param_binding(
+        settings=validation_settings, robustness=validation_robustness,
+        arm=validation_arm, seed=validation_seed,
+    )
+    historical_options = {
+        **dict(validation_source.builder.options),
+        "parameter_set": "PARAM-P9",
+        "optimizer_search_protocol": "validation_plateau_refit_v3",
+    }
+    historic_settings = replace(
+        validation_settings,
+        parameter_sources={
+            **validation_settings.parameter_sources,
+            validation_arm.param_source: replace(
+                validation_source, builder=replace(
+                    validation_source.builder, options=historical_options,
+                ),
+            ),
+        },
+    )
+    historical_binding = _benchmark_param_binding(
+        settings=historic_settings, robustness=validation_robustness,
+        arm=validation_arm, seed=validation_seed,
+    )
+    check_true(
+        "robustness_validation_budget_builder_identity_isolation",
+        historical_binding["parameter_set_identity"] == "PARAM-P9"
+        and historical_binding["validation_protocol_id"] == "validation_plateau_refit_v3"
+        and historical_binding["path"] != baseline_binding["path"]
+        and historical_binding["manifest_path"] != baseline_binding["manifest_path"],
+    )
+    with patch.object(
+        robustness_owner, "inspect_validation_budget_robustness_strategy_parameter_artifact",
+        return_value={"ready": False, "action": "BUILD", "status": "MISSING"},
+    ) as validation_inspection:
+        robustness_owner._inspect_benchmark_strategy_parameter_binding(
+            settings=historic_settings, robustness=validation_robustness,
+            binding=historical_binding, seed=validation_seed,
+            comparison_start="2021-01-01", comparison_end="2026-03-02",
+        )
+    check_true(
+        "robustness_validation_budget_inspection_uses_declared_identity",
+        validation_inspection.call_args.kwargs.get("parameter_set_identity") == "PARAM-P9"
+        and validation_inspection.call_args.kwargs.get("validation_protocol_id") == "validation_plateau_refit_v3",
+    )
+
+    # Physical-truth de-dup must distinguish two registered parameter-set
+    # identities, while still building one physical source for duplicate arms.
+    historic_arm = replace(
+        validation_arm, arm_id="SYN-P9", param_source="synthetic_validation_p9",
+    )
+    historic_source = replace(
+        historic_settings.parameter_sources[validation_arm.param_source],
+        source_id="synthetic_validation_p9",
+    )
+    mixed_settings = replace(
+        validation_settings, parameter_sources={
+            **validation_settings.parameter_sources,
+            historic_arm.param_source: historic_source,
+        },
+    )
+    single_seed_robustness = replace(
+        validation_robustness, resolved_seeds=(validation_seed,), seed_count=1,
+    )
+    with patch.object(
+        robustness_owner, "_inspect_benchmark_strategy_parameter_binding",
+        return_value={"action": "BUILD", "status": "MISSING"},
+    ) as mixed_inspector:
+        mixed_plan, mixed_blockers, _ = robustness_owner._benchmark_parameter_plan_rows(
+            settings=mixed_settings, robustness=single_seed_robustness,
+            benchmark_arms=(validation_arm, historic_arm),
+            comparison_start="2021-01-01", comparison_end="2026-03-02",
+        )
+    check_true(
+        "robustness_distinct_validation_producer_units_have_distinct_plan_rows",
+        not mixed_blockers and len(mixed_plan) == 2
+        and len({label for _action, label, _detail in mixed_plan}) == 2
+        and mixed_inspector.call_count == 2,
+    )
+    duplicate_arm = replace(validation_arm, arm_id="SYN-DUP")
+    with patch.object(
+        robustness_owner, "_inspect_benchmark_strategy_parameter_binding",
+        return_value={"action": "BUILD", "status": "MISSING"},
+    ) as same_inspector:
+        same_plan, _same_blockers, _ = robustness_owner._benchmark_parameter_plan_rows(
+            settings=mixed_settings, robustness=single_seed_robustness,
+            benchmark_arms=(validation_arm, duplicate_arm),
+            comparison_start="2021-01-01", comparison_end="2026-03-02",
+        )
+    check_true(
+        "robustness_identical_validation_producer_units_dedup_once",
+        len(same_plan) == 1 and same_inspector.call_count == 1,
     )
 
     run_bound_checks(

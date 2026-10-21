@@ -860,25 +860,17 @@ def _resolve_finalists_agree_min_agree_for_policy_name(policy_name: str, member_
 
 
 def _finalists_agree_policy_metadata(policy_name: str) -> dict:
-    if _is_local_finalists_agree_policy_name(policy_name):
-        return {
-            "selection_rule": "all_finalists_local_min_sum_best_seed_finalist_agree",
-            "min_agree_requested_key": "local_agree_min_agree_requested",
-            "min_agree_requested": OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE,
-            "member_selection": "seed_with_max_all_finalists_local_min_sum",
-        }
-    if _is_retention_finalists_agree_policy_name(policy_name):
-        return {
-            "selection_rule": "all_finalists_retention_sum_best_seed_finalist_agree",
-            "min_agree_requested_key": "retention_agree_min_agree_requested",
-            "min_agree_requested": OPTIMIZER_RETENTION_FINALISTS_AGREE_MIN_AGREE,
-            "member_selection": "seed_with_max_all_finalists_retention_sum",
-        }
+    # Rolling's established policy owner also owns static publication labels.
+    # The static path deliberately reuses those fields without a second mapping.
+    from services.optimizer.outer_rolling_policy import _finalists_agree_policy_config
+
+    policy = _finalists_agree_policy_config(str(policy_name))
     return {
-        "selection_rule": "all_finalists_base_score_sum_best_seed_finalist_agree",
-        "min_agree_requested_key": "base_agree_min_agree_requested",
-        "min_agree_requested": OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
-        "member_selection": "seed_with_max_all_finalists_base_score_sum",
+        key: policy[key]
+        for key in (
+            "selection_rule", "min_agree_requested_key",
+            "min_agree_requested", "member_selection",
+        )
     }
 
 

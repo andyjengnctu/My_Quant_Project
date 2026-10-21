@@ -17,11 +17,14 @@ import numpy as np
 import pandas as pd
 
 from core.breakout_quality_runtime import get_continuous_ranker_score_output_columns
+from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.ranking_score_store import (
     validate_continuous_ranker_score_values,
     load_continuous_ranker_oos_score_table_from_path,
     load_selection_point_in_time_score_table_from_path,
+    load_selection_point_in_time_score_source_contract,
     lookup_continuous_ranker_oos_candidate_score,
     lookup_selection_point_in_time_candidate_score,
 )
@@ -232,10 +235,57 @@ def case() -> None:
     with TemporaryDirectory(prefix="u40_audit_domain_") as tmp:
         folder = Path(tmp)
         args, paths = _write_audit_fixture(folder, scores, profile=MARGIN_PROFILE)
+        owner_profile = get_breakout_quality_experiment_profile(MARGIN_PROFILE)
+        persisted = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+        persisted.update({
+            "training_sample_scope": str(owner_profile.training_sample_scope),
+            "seed": 42,
+            "source_continuous_target": {"target_contract": {"synthetic": True}},
+        })
+        paths["manifest"].write_text(json.dumps(persisted), encoding="utf-8")
+
+        def verify_owned_score_source(*, allow_stale_source=False):
+            return load_selection_point_in_time_score_source_contract(
+                folder, args.filter_id, args.model_architecture, args.experiment_profile,
+                point_in_time_dir_override=folder,
+                allow_stale_source=allow_stale_source,
+            )
+
+        # A daily-model PIT SCORE without canonical eligibility is invalid
+        # even if its Audit-specific fold and checksum fields all look sound.
+        _expect_rejected(verify_owned_score_source, "eligibility contract")
+        persisted["score_eligibility_contract"] = build_score_eligibility_contract(owner_profile)
+        paths["manifest"].write_text(json.dumps(persisted), encoding="utf-8")
+        with patch(
+            "filters.breakout_quality.ranking_score_store.validate_current_pit_score_source_lineage",
+            side_effect=ValueError("synthetic stale publication"),
+        ):
+            _expect_rejected(verify_owned_score_source, "synthetic stale publication")
+            assert verify_owned_score_source(allow_stale_source=True).seed == 42
+
+        # This fixture isolates Audit-specific signed-score/fold checks from the
+        # canonical SCORE loader, whose full upstream lineage is tested by its
+        # own producer-reader synthetic contracts.
+        def verified_fixture_source(*_args, **_kwargs):
+            return SimpleNamespace(manifest=json.loads(paths["manifest"].read_text(encoding="utf-8")))
+
         with patch.object(pit_audit, "_pit_artifact_paths", return_value=paths), patch.object(
             pit_audit, "resolve_filter_point_in_time_fold_dir", return_value=folder / "folds" / FOLD_ID
-        ):
+        ), patch.object(
+            pit_audit, "load_selection_point_in_time_score_source_contract",
+            side_effect=verified_fixture_source,
+        ) as canonical:
             checked, check_manifest = pit_audit._validate_score_artifacts(args)
+            assert canonical.call_count == 1
+            pit_audit._assert_audit_source_revision_unchanged(args, check_manifest)
+            with patch.object(
+                pit_audit, "load_selection_point_in_time_score_source_contract",
+                side_effect=ValueError("canonical SCORE eligibility rejected"),
+            ):
+                _expect_rejected(
+                    lambda: pit_audit._validate_score_artifacts(args),
+                    "canonical SCORE eligibility rejected",
+                )
         assert len(checked) == len(scores) and check_manifest["fold_count"] == 1
         corrupted = _score_frame([float("inf"), *scores[1:]])
         corrupted.to_csv(paths["score"], index=False, encoding="utf-8-sig")
@@ -244,8 +294,17 @@ def case() -> None:
         paths["manifest"].write_text(json.dumps(written_manifest), encoding="utf-8")
         with patch.object(pit_audit, "_pit_artifact_paths", return_value=paths), patch.object(
             pit_audit, "resolve_filter_point_in_time_fold_dir", return_value=folder / "folds" / FOLD_ID
+        ), patch.object(
+            pit_audit, "load_selection_point_in_time_score_source_contract",
+            side_effect=verified_fixture_source,
         ):
             _expect_rejected(lambda: pit_audit._validate_score_artifacts(args), "非有限")
+            try:
+                pit_audit._assert_audit_source_revision_unchanged(args, check_manifest)
+            except RuntimeError as exc:
+                assert "audit期間更新" in str(exc)
+            else:
+                raise AssertionError("Audit accepted changed SCORE as the original revision")
 
 
 

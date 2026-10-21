@@ -742,6 +742,8 @@ def format_contract_value(column: ReportColumnContract, value) -> str:
         return f"{number * 100.0:.{digits}f}%"
     if kind == "pct":
         return f"{number:.{digits}f}%"
+    if kind == "signed_pct":
+        return f"{number:+.{digits}f}{column.unit or '%'}"
     if kind == "signed_pp":
         return f"{number * 100.0:+.{digits}f}pp" if column.unit == "pp_fraction" else f"{number:+.{digits}f}pp"
     if kind == "signed_number":

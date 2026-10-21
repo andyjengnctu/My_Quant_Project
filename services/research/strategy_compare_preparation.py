@@ -15,7 +15,9 @@ from core.strategy_comparison import (
     resolve_strategy_parameter_consumption_mode,
     resolve_strategy_parameter_required_schedule_end,
 )
-from core.strategy_param_policy import get_strategy_param_training_profile
+from core.strategy_param_policy import (
+    get_strategy_param_training_profile, resolve_validation_budget_builder_identity,
+)
 from services.breakout_quality.export_scores import export_forward_oos_scores
 from filters.breakout_quality.ranking_score_store import SCORE_SOURCE_SELECTION_POINT_IN_TIME
 from services.research.strategy_compare_preparation_status import (
@@ -81,11 +83,9 @@ def _execute_preparation_action(
         builder = source.builder
         if builder is None:
             raise RuntimeError(f"validation-budget參數來源缺少builder: {source_id}")
-        options = dict(builder.options)
-        parameter_set_identity = str(options.get("parameter_set") or "PARAM-P5").upper()
-        validation_protocol_id = str(
-            options.get("optimizer_search_protocol") or "validation_budget_refit_v1"
-        ).strip()
+        parameter_set_identity, validation_protocol_id = resolve_validation_budget_builder_identity(
+            builder.options
+        )
         required_schedule_end = resolve_strategy_parameter_required_schedule_end(
             source,
             comparison_start=comparison_start_date,

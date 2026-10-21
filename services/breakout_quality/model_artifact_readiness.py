@@ -9,6 +9,7 @@ Rolling and Model Comparison.  A candidate path never authorizes checkpoint REUS
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -92,8 +93,15 @@ def standard_model_report_matches_source(
         ):
             return False
         document = markdown_file.read_text(encoding="utf-8")
+        # The publisher owns the entire rendered content. The readiness reader
+        # checks that exact publication, not a handful of surviving markers.
+        # Older JSON lacking this proof is repaired as REPORT-only; FIT/SCORE
+        # and the approved report schema/fingerprint remain unchanged.
+        expected_digest = str(saved.get("markdown_sha256") or "")
         return (
-            f"`{contract.report_id}` v`{contract.version}`" in document
+            len(expected_digest) == 64
+            and hashlib.sha256(document.encode("utf-8")).hexdigest() == expected_digest
+            and f"`{contract.report_id}` v`{contract.version}`" in document
             and fingerprint in document
         )
     except (OSError, ValueError, TypeError, UnicodeError):

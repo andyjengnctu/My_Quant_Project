@@ -19,6 +19,7 @@ from config.breakout_quality import (
 from core.breakout_quality_policy import (
     get_breakout_quality_workflow_settings,
 )
+from core.file_integrity import exclusive_file_lock
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.continuous_target import (
     TARGET_MANIFEST_FILENAME,
@@ -46,6 +47,7 @@ from filters.breakout_quality.paths import (
 from filters.breakout_quality.ranking_score_store import (
     clear_selection_point_in_time_ranking_contract_cache,
     derive_point_in_time_model_validation_gate,
+    load_selection_point_in_time_score_source_contract,
     validate_continuous_ranker_score_values,
 )
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
@@ -177,25 +179,21 @@ def _validate_score_artifacts(args) -> tuple[pd.DataFrame, dict[str, Any]]:
         raise FileNotFoundError(
             "找不到Rolling point-in-time score工件；請先執行 build-point-in-time-scores"
         )
-    manifest = _read_json(manifest_path)
-    expected_identity = {
-        "filter_id": str(args.filter_id),
-        "model_architecture": str(args.model_architecture),
-        "experiment_profile": str(args.experiment_profile),
-    }
-    actual_identity = {key: str(manifest.get(key, "")) for key in expected_identity}
-    if actual_identity != expected_identity:
-        raise ValueError(
-            "Rolling PIT manifest identity與CLI不一致: "
-            f"expected={expected_identity}, actual={actual_identity}"
-        )
+    # SCORE identity, scope, eligibility, output capability, hash and upstream
+    # lineage are validated by the one canonical SCORE owner. Audit only adds
+    # fold/checkpoint/evaluation constraints; it never silently relaxes SCORE.
+    source = load_selection_point_in_time_score_source_contract(
+        PROJECT_ROOT, str(args.filter_id), str(args.model_architecture),
+        str(args.experiment_profile),
+        point_in_time_dir_override=(str(args.point_in_time_dir_override or "").strip() or None),
+        allow_stale_source=bool(getattr(args, "allow_stale_source", False)),
+    )
+    manifest = source.manifest
     if (
         int(manifest.get("schema_version", -1)) != POINT_IN_TIME_SCHEMA_VERSION
-        or manifest.get("status") != "BUILT"
+        or manifest.get("score_column") != "breakout_quality_score"
     ):
-        raise ValueError("Rolling PIT manifest schema/status不支援")
-    if manifest.get("score_column") != "breakout_quality_score":
-        raise ValueError("Rolling PIT manifest score column不一致")
+        raise ValueError("Rolling PIT manifest schema/score column不支援")
     lookahead = manifest.get("lookahead_contract") or {}
     if not bool(lookahead.get("every_score_uses_model_not_trained_on_scored_event")):
         raise ValueError("Rolling PIT manifest未宣告未見事件評分契約")
@@ -214,15 +212,6 @@ def _validate_score_artifacts(args) -> tuple[pd.DataFrame, dict[str, Any]]:
     )
     if not (legacy_runtime_contract or rolling_runtime_contract):
         raise ValueError("Rolling PIT manifest缺少可驗證的runtime information-cutoff契約")
-
-    artifacts = manifest.get("artifacts") or {}
-    if build_file_manifest(score_path) != artifacts.get("scores"):
-        raise ValueError("Rolling point-in-time score hash與manifest不一致")
-    if artifacts.get("coverage") is not None:
-        if not coverage_path.is_file():
-            raise FileNotFoundError(f"Rolling PIT coverage工件不存在: {coverage_path}")
-        if build_file_manifest(coverage_path) != artifacts.get("coverage"):
-            raise ValueError("Rolling point-in-time coverage hash與manifest不一致")
 
     frame = pd.read_csv(
         score_path,
@@ -270,6 +259,11 @@ def _validate_score_artifacts(args) -> tuple[pd.DataFrame, dict[str, Any]]:
     )
     if forbidden:
         raise ValueError(f"Rolling PIT runtime score表不得包含Future Target欄位: {forbidden}")
+
+    # Reject a concurrent score replacement between canonical SHA validation
+    # and the CSV read; the final publication repeats this version check.
+    if build_file_manifest(score_path) != (manifest.get("artifacts") or {}).get("scores"):
+        raise RuntimeError("Rolling PIT score在audit讀取期間更新；拒絕混用來源版本")
 
     frame = frame.copy()
     frame["ticker"] = frame["ticker"].astype(str)
@@ -359,6 +353,22 @@ def _validate_score_artifacts(args) -> tuple[pd.DataFrame, dict[str, Any]]:
     if int(coverage.get("extra_group_count", -1)) != 0:
         raise ValueError("Rolling PIT manifest宣告存在extra groups")
     return frame, manifest
+
+
+def _assert_audit_source_revision_unchanged(args, manifest: dict[str, Any]) -> None:
+    """Fail closed if the audited SCORE/manifest revision changed before publish.
+
+    Canonical source authorization is checked before computation; this final
+    guard prevents labeling a newer on-disk SCORE with earlier Audit results.
+    """
+    paths = _pit_artifact_paths(args)
+    if _read_json(paths["manifest"]) != manifest:
+        raise RuntimeError("Rolling PIT manifest在audit期間更新；拒絕發布舊來源結果")
+    artifacts = dict(manifest.get("artifacts") or {})
+    for key, path in (("scores", paths["score"]), ("coverage", paths["coverage"])):
+        record = artifacts.get(key)
+        if record is not None and build_file_manifest(path) != record:
+            raise RuntimeError(f"Rolling PIT {key}在audit期間更新；拒絕發布混合版本")
 
 
 def _primary_scope_key(payload: dict[str, Any]) -> str:
@@ -1763,9 +1773,17 @@ def _run_point_in_time_scores_audit(
             "json": str(output_json),
         },
     }
-    output_json.parent.mkdir(parents=True, exist_ok=True)
-    write_json(output_json, payload)
-    output_markdown.write_text(_render_markdown(payload), encoding="utf-8")
+    # Serialize only the short audit publication with the canonical SCORE
+    # writer's aggregate lock. The final source revision check plus the two
+    # report writes must be atomic with respect to a competing score commit.
+    publisher_lock = manifest_path.with_name("." + manifest_path.name + ".publish.lock")
+    with exclusive_file_lock(
+        publisher_lock, conflict_message="Selection PIT aggregate publication is active",
+    ):
+        _assert_audit_source_revision_unchanged(args, manifest)
+        output_json.parent.mkdir(parents=True, exist_ok=True)
+        write_json(output_json, payload)
+        output_markdown.write_text(_render_markdown(payload), encoding="utf-8")
     clear_selection_point_in_time_ranking_contract_cache()
     color_enabled = console_color_enabled()
     if compact_console_enabled():

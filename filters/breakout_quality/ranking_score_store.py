@@ -508,6 +508,7 @@ def load_selection_point_in_time_score_source_contract(
     *,
     point_in_time_dir_override: str | Path | None = None,
     expected_seed: int | None = None,
+    allow_stale_source: bool = False,
 ) -> SelectionPointInTimeScoreSourceContract:
     """Canonical SCORE owner: verify persisted PIT score without reading Audit.
 
@@ -580,11 +581,15 @@ def load_selection_point_in_time_score_source_contract(
         raise ValueError("Selection PIT score period invalid")
     available_from = score_start.strftime("%Y-%m-%d")
     available_through = score_end.strftime("%Y-%m-%d")
-    validate_current_pit_score_source_lineage(
-        project_root=root, filter_id=str(filter_id),
-        model_architecture=str(model_architecture),
-        experiment_profile=str(experiment_profile), manifest=manifest,
-    )
+    # The opt-in offline Audit debug mode already permits stale source data.
+    # Preserve that diagnostic contract while keeping ordinary SCORE consumers
+    # fail-closed on current upstream publication lineage.
+    if not allow_stale_source:
+        validate_current_pit_score_source_lineage(
+            project_root=root, filter_id=str(filter_id),
+            model_architecture=str(model_architecture),
+            experiment_profile=str(experiment_profile), manifest=manifest,
+        )
     return SelectionPointInTimeScoreSourceContract(
         score_path=score_path, manifest_path=manifest_path,
         coverage_path=coverage_path, audit_path=audit_path,

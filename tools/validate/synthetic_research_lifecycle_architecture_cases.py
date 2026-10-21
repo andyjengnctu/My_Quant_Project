@@ -4251,6 +4251,25 @@ def validate_research_model_readiness_architecture_case(_base_params):
         _write_standard_model_sop_report(settings, source_payload=witness, source_path=source)
         check("report_reuse_does_not_rewrite_history", mtime,
               tuple(file.stat().st_mtime_ns for file in files))
+        original_markdown = files[1].read_text(encoding="utf-8")
+        # Retaining the title and fingerprint must NOT make a truncated human
+        # report reusable. This is a REPORT-only repair, not an FIT/SCORE miss.
+        files[1].write_text("\n".join(original_markdown.splitlines()[:3]) + "\n", encoding="utf-8")
+        incomplete_markdown = resolve_model_artifact_readiness(
+            mode="rolling", source_contract=object(), evidence_payload=witness,
+            source_reason=None, source_path=source, report_identity=identity,
+        )
+        check("truncated_markdown_refreshes_only_report",
+              ("NOT_REQUIRED", "REUSE", "REUSE", "DERIVE"),
+              tuple(incomplete_markdown.plan.action_by_key[key].action
+                    for key in ("FIT", "SCORE", "EVIDENCE", "REPORT")))
+        _write_standard_model_sop_report(settings, source_payload=witness, source_path=source)
+        check("report_only_repair_restores_entire_markdown", original_markdown,
+              files[1].read_text(encoding="utf-8"))
+        check_true("repaired_markdown_validates_again",
+                   standard_model_report_matches_source(
+                       witness, source, expected_identity=identity,
+                   ))
         tampered = json.loads(files[0].read_text(encoding="utf-8"))
         tampered["profile"] = "different-profile"
         files[0].write_text(json.dumps(tampered), encoding="utf-8")

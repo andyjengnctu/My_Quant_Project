@@ -50,7 +50,9 @@ from core.strategy_param_artifacts import (
     resolve_strategy_param_artifact_path,
     resolve_strategy_param_manifest_path,
 )
-from core.strategy_param_policy import get_strategy_param_training_profile
+from core.strategy_param_policy import (
+    get_strategy_param_training_profile, resolve_validation_budget_builder_identity,
+)
 from filters.breakout_quality.dataset_store import resolve_dataset_paths
 from filters.breakout_quality.expected_r_calibration import (
     EXPECTED_R_CALIBRATION_METHOD,
@@ -968,6 +970,9 @@ def _collect_parameter_artifact_status(
                         policy_identity_status = str(raw_state["status"])
             elif builder_type == "optimizer_validation_budget_refit_strategy_params":
                 builder_options = {} if source.builder is None else dict(source.builder.options)
+                parameter_set_identity, validation_protocol_id = resolve_validation_budget_builder_identity(
+                    builder_options
+                )
                 validation_state = inspect_validation_budget_strategy_parameter_artifact(
                     root,
                     policy=param_policy,
@@ -977,13 +982,8 @@ def _collect_parameter_artifact_status(
                     rotation=str(settings.rotation),
                     fixed_risk=float(DEFAULT_FIXED_RISK),
                     max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
-                    parameter_set_identity=str(
-                        builder_options.get("parameter_set") or "PARAM-P5"
-                    ).upper(),
-                    validation_protocol_id=str(
-                        builder_options.get("optimizer_search_protocol")
-                        or "validation_budget_refit_v1"
-                    ).strip(),
+                    parameter_set_identity=parameter_set_identity,
+                    validation_protocol_id=validation_protocol_id,
                 )
                 policy_identity_ready = bool(validation_state["ready"])
                 policy_identity_status = str(validation_state["status"])

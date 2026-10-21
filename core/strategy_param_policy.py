@@ -421,6 +421,22 @@ def get_strategy_param_training_profile(profile_id: str) -> StrategyParamTrainin
     )
 
 
+def resolve_validation_budget_builder_identity(
+    options: Mapping[str, Any] | None,
+) -> tuple[str, str]:
+    """Resolve the registered builder's parameter-set/protocol at one boundary.
+
+    Single Compare, its readiness planner and multi-seed Robustness must never
+    silently substitute their own PARAM-P5/protocol defaults when a source
+    explicitly declares another historical validation experiment.
+    """
+    values = dict(options or {})
+    return (
+        str(values.get("parameter_set") or "PARAM-P5").strip().upper(),
+        str(values.get("optimizer_search_protocol") or "validation_budget_refit_v1").strip(),
+    )
+
+
 def resolve_validation_strategy_param_training_profile(
     parameter_set_identity: str, validation_protocol_id: str
 ) -> StrategyParamTrainingProfile:
@@ -497,6 +513,7 @@ __all__ = [
     "get_active_strategy_param_training_profile",
     "get_strategy_param_training_profile",
     "get_strategy_param_validation_protocol",
+    "resolve_validation_budget_builder_identity",
     "resolve_validation_strategy_param_training_profile",
     "resolve_canonical_strategy_param_training_profile",
 ]

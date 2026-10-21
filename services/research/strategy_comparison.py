@@ -1000,7 +1000,7 @@ def _contract_strategy_yearly_table(
     settings: StrategyComparisonSettings, target: str = "plain",
 ) -> str:
     """S4 uses existing canonical portfolio 0050 rows; renderer never derives prices."""
-    from core.research_report_contract import table_contract
+    from core.research_report_contract import format_contract_value, table_contract
     if not benchmark_yearly or not year_is_complete:
         raise ValueError("Strategy SOP v2 INCOMPLETE: 0050/year completeness evidence absent")
     table = table_contract("strategy.standard_sop", "yearly_results", "yearly_results")
@@ -1030,14 +1030,14 @@ def _contract_strategy_yearly_table(
             if year not in yearly_by_id.get(arm.arm_id, {}):
                 raise ValueError(f"Strategy SOP v2 INCOMPLETE: {arm.arm_id}/{year} missing")
             comparisons[arm.arm_id] = _required_numeric(yearly_by_id[arm.arm_id][year], context=f"{arm.arm_id}.{year}")
-        signals = best_worst_signals(comparisons, preference="higher")
+        benchmark_column, arm_column = table.columns[1:3]
+        signals = best_worst_signals(comparisons, preference=arm_column.preference)
         for arm in arms:
-            value = comparisons[arm.arm_id]
-            rendered = f"{value:+.2f}%"
+            rendered = format_contract_value(arm_column, comparisons[arm.arm_id])
             signal = signals.get(arm.arm_id)
             values.append(_value_with_signal(rendered, signal, target=target) if signal else rendered)
         rows.append((str(year) + ("" if year_is_complete[year] else "*"),
-                     f"{float(lookup[year]['year_return_pct']):+.2f}%", *values))
+                     format_contract_value(benchmark_column, lookup[year]["year_return_pct"]), *values))
     return render_table((table.columns[0].label, table.columns[1].label,
                          *(arm.arm_id for arm in arms)), rows)
 

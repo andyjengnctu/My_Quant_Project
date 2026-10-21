@@ -8,8 +8,7 @@ from typing import Any
 
 from core.strategy_compare_policy import get_strategy_comparison_settings
 from core.console_report import render_section, render_table
-from core.report_metrics import ROBUSTNESS_ROMD_DISTRIBUTION_METRICS
-from core.research_report_contract import strategy_mode_extension_contract
+from core.research_report_contract import format_contract_value, strategy_mode_extension_contract
 from core.report_style import (
     SIGNAL_NEGATIVE,
     SIGNAL_POSITIVE,
@@ -47,19 +46,20 @@ def _report_settings_for_contract(contract: dict[str, Any], settings):
     }
     return replace(settings, arms=selected, contrasts=selected_contrasts)
 
-def _fmt(value: Any, *, digits: int = 2, suffix: str = "") -> str:
-    if value is None or (isinstance(value, float) and not math.isfinite(value)):
-        return "-"
-    return f"{float(value):.{digits}f}{suffix}"
+def _contract_cell(column, value, *, target: str, signal: str | None = None) -> str:
+    """The extension column alone owns order, precision, unit and direction."""
+    if value is not None and column.format_kind not in {"text", "int"}:
+        try:
+            if not math.isfinite(float(value)):
+                return "-"
+        except (TypeError, ValueError):
+            pass
+    return _style_text(format_contract_value(column, value), signal, target=target)
 
 def _style_text(text: str, signal: str | None, *, target: str) -> str:
     if not signal or text == "-":
         return text
     return styled_signal(text, signal, target=target)
-
-def _format_metric_value(value: Any, metric, *, target: str, signal: str | None = None) -> str:
-    text = _fmt(value, digits=int(metric.digits), suffix=str(metric.unit))
-    return _style_text(text, signal, target=target)
 
 def _distribution_signals(
     rows: list[dict[str, Any]],
@@ -74,11 +74,6 @@ def _distribution_signals(
         )
         for metric in metrics
     }
-
-def _right_minus_left_signal(value: Any, *, preference: str) -> str | None:
-    if preference not in {"higher", "lower"}:
-        return None
-    return signal_for_delta(value, preference=preference)
 
 def _win_count_signals(right_count: int, left_count: int) -> tuple[str | None, str | None]:
     if right_count == left_count:
@@ -150,26 +145,22 @@ def render_multi_seed_robustness_report(
 
     # Compact across-seed RoMD distribution.  Full CV/P25/P75/reference-win
     # diagnostics remain in robustness_summary.json and seed_results.csv.
-    romd_metric_by_key = {metric.key: metric for metric in ROBUSTNESS_ROMD_DISTRIBUTION_METRICS}
-    compact_metric_keys = ("mean", "median", "std", "min", "max")
-    compact_metrics = tuple(romd_metric_by_key[key] for key in compact_metric_keys)
     romd_source_rows = [dict(source) for source in summary.get("romd_statistics") or ()]
     romd_signals = _distribution_signals(
-        romd_source_rows, metrics=compact_metrics, identity_key="arm_id"
+        romd_source_rows,
+        metrics=tuple(column for column in romd_table.columns if column.preference in {"higher", "lower"}),
+        identity_key="arm_id",
     )
     romd_rows: list[list[str]] = []
     for row in romd_source_rows:
         arm_id = str(row["arm_id"])
-        metric_values = [
-            _format_metric_value(
-                row.get(key),
-                romd_metric_by_key[key],
-                target=target,
-                signal=romd_signals.get(key, {}).get(arm_id),
+        romd_rows.append([
+            _contract_cell(
+                column, row.get(column.key), target=target,
+                signal=romd_signals.get(column.key, {}).get(arm_id),
             )
-            for key in compact_metric_keys
-        ]
-        romd_rows.append([row["name"], str(int(row["n"])), *metric_values])
+            for column in romd_table.columns
+        ])
     sections.append(render_table(list(romd_table.headers), romd_rows))
 
     paired = list(summary.get("paired_comparisons") or [])
@@ -193,23 +184,30 @@ def render_multi_seed_robustness_report(
         left_wins = int(same["left_gt_right_count"])
         ties = int(same["tie_count"])
         right_signal, left_signal = _win_count_signals(right_wins, left_wins)
+        contrast_values = {
+            "contrast": f"{same['right']} − {same['left']}",
+            "n": n,
+            "right_wins": f"{right_wins}/{n}",
+            "left_wins": f"{left_wins}/{n}",
+            "ties": f"{ties}/{n}",
+            "delta_romd_mean": same.get("right_minus_left_mean"),
+            "delta_romd_median": same.get("right_minus_left_median"),
+            "delta_romd_std": same.get("right_minus_left_std"),
+        }
+        win_signals = {"right_wins": right_signal, "left_wins": left_signal}
         contrast_rows.append([
-            f"{same['right']} − {same['left']}",
-            str(n),
-            _style_text(f"{right_wins}/{n}", right_signal, target=target),
-            _style_text(f"{left_wins}/{n}", left_signal, target=target),
-            f"{ties}/{n}",
-            _style_text(
-                f"{float(same['right_minus_left_mean']):+.2f}",
-                _right_minus_left_signal(same.get("right_minus_left_mean"), preference="higher"),
-                target=target,
-            ),
-            _style_text(
-                f"{float(same['right_minus_left_median']):+.2f}",
-                _right_minus_left_signal(same.get("right_minus_left_median"), preference="higher"),
-                target=target,
-            ),
-            _fmt(same.get("right_minus_left_std")),
+            _contract_cell(
+                column, contrast_values.get(column.key), target=target,
+                signal=(
+                    signal_for_delta(contrast_values.get(column.key), preference=column.preference)
+                    if column.key.startswith("delta_")
+                    and column.preference in {"higher", "lower"}
+                    and contrast_values.get(column.key) is not None
+                    and column.key != "delta_romd_std"
+                    else win_signals.get(column.key)
+                ),
+            )
+            for column in contrast_table.columns
         ])
     if contrast_rows:
         sections.extend([

@@ -5,6 +5,7 @@ from __future__ import annotations
 from functools import partial
 
 import argparse
+import hashlib
 from collections import deque
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -3276,10 +3277,20 @@ def _write_standard_model_sop_report(
     ):
         return json_path, markdown_path
     report = require_approved_report_contract("model.standard_sop")
+    markdown = (
+        "# Standard Model SOP\n\n"
+        f"- Contract：`{report.report_id}` v`{report.version}` / `{persistent_report_contract_fingerprint(report.report_id)}`\n"
+        f"- Evaluation mode：`{standard.get('evaluation_mode') or ''}`\n"
+        f"- Profile：`{settings.experiment_profile}`\n\n"
+        + "\n".join(_render_continuous_ranker_simple_markdown(payload)).strip()
+        + "\n"
+    )
     machine = {
         "report_id": report.report_id,
         "report_version": int(report.version),
         "report_contract_fingerprint": persistent_report_contract_fingerprint(report.report_id),
+        # Operational integrity metadata, not a new SOP column or report version.
+        "markdown_sha256": hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "evaluation_mode": str(standard.get("evaluation_mode") or ""),
         "filter_id": str(settings.filter_id),
@@ -3290,16 +3301,10 @@ def _write_standard_model_sop_report(
         "standard_model_sop": standard,
         "sop_view": _standard_model_machine_view(payload),
     }
+    # Publish the human output before its matching machine proof. An interrupted
+    # write cannot make an incomplete human report look READY on the next run.
+    markdown_path.write_text(markdown, encoding="utf-8")
     json_path.write_text(json.dumps(machine, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    markdown_path.write_text(
-        "# Standard Model SOP\n\n"
-        f"- Contract：`{report.report_id}` v`{report.version}` / `{machine['report_contract_fingerprint']}`\n"
-        f"- Evaluation mode：`{machine['evaluation_mode']}`\n"
-        f"- Profile：`{settings.experiment_profile}`\n\n"
-        + "\n".join(_render_continuous_ranker_simple_markdown(payload)).strip()
-        + "\n",
-        encoding="utf-8",
-    )
     return json_path, markdown_path
 
 
