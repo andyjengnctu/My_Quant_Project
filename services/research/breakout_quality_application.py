@@ -864,9 +864,9 @@ def _render_standard_model_comparison(models: list[dict], *, target: str) -> str
                 "generalization",
                 table_rows,
                 target=target,
-                # Signed M2 changes are improvements/regressions relative to
-                # the source scope, not cross-model ranking extrema.
-                delta_style=True,
+                # Generalization compares models within the same transition.
+                # Ranking uses each metric's canonical higher/lower preference.
+                best_worst_style=True,
             ))
 
     # 3. Upside / Downside Alignment

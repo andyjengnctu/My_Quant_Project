@@ -4912,7 +4912,6 @@ def _model_report_color_alignment_checks(app):
     from core.display_common import C_GREEN, C_RED
 
     def view(*, higher: bool, mode: str):
-        sign = 1 if higher else -1
         return {
             "evaluation_mode": mode,
             "learnability": [
@@ -4926,10 +4925,10 @@ def _model_report_color_alignment_checks(app):
                 for scope in ("oos", "breakout_candidate_oos")
             ],
             "generalization": [
-                {"comparison": "Validation → OOS", "delta_daily_rho": (0.03 if higher else -0.02),
-                 "delta_pair": sign * 1.5, "delta_top_bottom": sign * 0.2},
-                {"comparison": "Global OOS → Breakout OOS", "delta_daily_rho": -sign * 0.01,
-                 "delta_pair": -sign * 0.5, "delta_top_bottom": -sign * 0.1},
+                {"comparison": "Validation → OOS", "delta_daily_rho": (0.03 if higher else 0.01),
+                 "delta_pair": (1.5 if higher else 0.5), "delta_top_bottom": (0.2 if higher else 0.1)},
+                {"comparison": "Global OOS → Breakout OOS", "delta_daily_rho": (-0.01 if higher else -0.03),
+                 "delta_pair": (-0.5 if higher else -1.5), "delta_top_bottom": (-0.1 if higher else -0.2)},
             ],
             "upside_downside_alignment": [
                 {"split": scope, "target_to_full_mfe_daily_spearman": 1.0,
@@ -4974,6 +4973,15 @@ def _model_report_color_alignment_checks(app):
             single_md = app._render_standard_model_comparison([{}], target="markdown")
         green = '<span style="color:#188038;font-weight:700;">'
         red = '<span style="color:#C62828;font-weight:700;">'
+        m2 = md.split("MODEL SOP | 2. Generalization", 1)[1].split(
+            "MODEL SOP | 3. Upside / Downside Validation", 1
+        )[0]
+        m2_console = console.split("MODEL SOP | 2. Generalization", 1)[1].split(
+            "MODEL SOP | 3. Upside / Downside Validation", 1
+        )[0]
+        single_m2 = single_md.split("MODEL SOP | 2. Generalization", 1)[1].split(
+            "MODEL SOP | 3. Upside / Downside Validation", 1
+        )[0]
         m3 = md.split("MODEL SOP | 3. Upside / Downside Validation", 1)[1].split(
             "MODEL SOP | 4. Joint MFE / Adverse Quality", 1
         )[0]
@@ -4985,8 +4993,12 @@ def _model_report_color_alignment_checks(app):
              f"{green}0.5000</span>" in md and f"{red}0.9000</span>" in md),
             (f"{mode}_m1_split_ranks_are_local_not_global",
              f"{red}0.1200</span>" in md and f"{green}0.5000</span>" in md),
-            (f"{mode}_m2_delta_uses_contract_direction_not_best_worst",
-             f"{green}+0.0300</span>" in md and f"{red}-0.0200</span>" in md),
+            (f"{mode}_m2_positive_deltas_use_best_worst_not_sign",
+             f"{green}+0.0300</span>" in m2 and f"{red}+0.0100</span>" in m2
+             and C_GREEN + "+0.0300" in m2_console and C_RED + "+0.0100" in m2_console),
+            (f"{mode}_m2_negative_deltas_use_best_worst_not_sign",
+             f"{green}-0.0100</span>" in m2 and f"{red}-0.0300</span>" in m2
+             and C_GREEN + "-0.0100" in m2_console and C_RED + "-0.0300" in m2_console),
             (f"{mode}_m3_higher_negative_rho_is_better",
              f"{green}-0.2000</span>" in md and f"{red}-0.4000</span>" in md),
             (f"{mode}_m4_adverse_lower_is_better",
@@ -4997,7 +5009,8 @@ def _model_report_color_alignment_checks(app):
             (f"{mode}_single_model_has_no_spurious_best_worst",
              f"{green}0.4500</span>" not in single_md
              and f"{red}0.1500</span>" not in single_md
-             and f"{green}+0.0300</span>" in single_md),
+             and f"{green}+0.0300</span>" not in single_m2
+             and f"{red}+0.0300</span>" not in single_m2),
             (f"{mode}_same_standard_section_and_scope_headings",
              md.count("MODEL SOP | 1. Learnability") == 1
              and md.count("MODEL SOP | 4. Joint MFE / Adverse Quality") == 1
@@ -5009,6 +5022,28 @@ def _model_report_color_alignment_checks(app):
                             and f"{red}1.5000 pooled σ</span>" in md))
         results.append((f"{mode}_robustness_lower_std_highlight",
                         f"{green}0.0100</span>" in md and f"{red}0.0400</span>" in md))
+
+    # A complete tie or only one finite comparison must stay uncolored, even
+    # when its delta is nonzero. Keep this test local to M2's first transition.
+    tied_views = [
+        {"model_id": "TIE_A", "view": view(higher=True, mode="forward_oos")},
+        {"model_id": "TIE_B", "view": view(higher=True, mode="forward_oos")},
+    ]
+    tied_views[1]["view"]["generalization"][0]["delta_pair"] = None
+    with patch.object(app, "_standard_model_comparison_views", return_value=tied_views):
+        tied_md = app._render_standard_model_comparison([{}, {}], target="markdown")
+    m2_first = tied_md.split("MODEL SOP | 2. Generalization", 1)[1].split(
+        "Global OOS → Breakout OOS", 1
+    )[0]
+    results.extend([
+        ("m2_complete_tie_is_not_best_or_worst",
+         f"{green}+0.0300</span>" not in m2_first
+         and f"{red}+0.0300</span>" not in m2_first),
+        ("m2_one_finite_value_is_not_best_or_worst",
+         "+1.50pp" in m2_first and "-" in m2_first
+         and f"{green}+1.50pp</span>" not in m2_first
+         and f"{red}+1.50pp</span>" not in m2_first),
+    ])
     return results
 
 
@@ -5091,8 +5126,8 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
 
     check_true(
-        "model_sop_v10_preserves_approved_four_section_contract",
-        int(MODEL_STANDARD_SOP.version) == 10
+        "model_sop_v11_preserves_approved_four_section_contract",
+        int(MODEL_STANDARD_SOP.version) == 11
         and [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
         == [(1,"Learnability"),(2,"Generalization"),
             (3,"Upside / Downside Validation"),(4,"Joint MFE / Adverse Quality")],
@@ -5104,8 +5139,8 @@ def validate_research_report_contract_freeze_case(_base_params):
     # Frozen to the user's 2026-09-04 standard comparison presentation.  These
     # are UI invariants, not assertions about a particular experimental model.
     check_true(
-        "model_comparison_v14_matches_approved_sop_v10_and_preserves_generalization_tables",
-        int(MODEL_STANDARD_COMPARISON.version) == 14
+        "model_comparison_v15_matches_approved_sop_v11_and_preserves_generalization_tables",
+        int(MODEL_STANDARD_COMPARISON.version) == 15
         and not hasattr(MODEL_STANDARD_COMPARISON, "model_specific_extension_ids")
         and comparison_extension_ids() == tuple(MODEL_COMPARISON_EXTENSION_SCHEMAS)
         and comparison_sections == [(item.number, item.title) for item in MODEL_STANDARD_SOP.sections]

@@ -162,7 +162,7 @@ S = ReportSectionContract
 
 MODEL_STANDARD_SOP = PersistentReportContract(
     report_id="model.standard_sop",
-    version=10,
+    version=11,
     role="persistent_standard_model_sop_all_evaluation_modes",
     menu_path=("Research", "模型訓練／驗證"),
     sections=(
@@ -240,7 +240,7 @@ def _model_comparison_sections() -> tuple[ReportSectionContract, ...]:
 
 MODEL_STANDARD_COMPARISON = PersistentReportContract(
     report_id="model.standard_comparison",
-    version=14,
+    version=15,
     role="persistent_multi_model_comparison_all_evaluation_modes",
     menu_path=("Research", "模型訓練／驗證"),
     sections=_model_comparison_sections(),

@@ -21,7 +21,8 @@ from .meta_contracts import (
 )
 from .source_index import read_source_ast
 
-GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v4.json"
+GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v5.json"
+V4_GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v4.json"
 V3_GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v3.json"
 V2_GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v2.json"
 LEGACY_GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v1.json"
@@ -30,9 +31,10 @@ LEGACY_GOLDEN_SHA256 = "172b828579a2302be866092cbe12897a2e8c9ffe2d6ab7fd6bc8ada1
 # to change what the existing regression gate accepts.
 V2_GOLDEN_SHA256 = "f03067dc0258ea95295b22e549e08a158da39449ac0021dd3f0a2c07a3bfe066"
 V3_GOLDEN_SHA256 = "5a5b3b8cd82528c5170283c5f9f2f955d7934e27ecaa8f79949c5f7263578280"
-APPROVED_GOLDEN_SHA256 = "551533f707ee1c8d06101f5bef1462ca1af279063f4f36ce2253fa906b2d2f1e"
-# v1, v2 and v3 remain immutable. The v4 release records the authorized
-# Model SOP presentation-color alignment with identical scientific metrics.
+V4_GOLDEN_SHA256 = "551533f707ee1c8d06101f5bef1462ca1af279063f4f36ce2253fa906b2d2f1e"
+APPROVED_GOLDEN_SHA256 = "e1f19d813b5525bd87fe64acfb56e8c5ff2281cf6718aef4a80afc37f0f9856f"
+# v1-v4 stay immutable. The v5 release records the explicitly authorized
+# Generalization best/worst presentation semantics with identical metric data.
 
 IDENTITY_PATTERN = re.compile(r"^(?:MR-[A-Za-z0-9-]+|ARCH-[A-Za-z0-9_]+|PARAM-P[A-Za-z0-9-]+)$")
 GENERIC_CONSUMER_PATHS = (
@@ -115,22 +117,24 @@ def snapshot_structural_violations(project_root: Path) -> dict[str, list[str]]:
 
 
 def read_approved_baseline(project_root: Path, *, raw_bytes: bytes | None = None) -> dict[str, Any]:
-    """Read v3 guard; independent v1/v2 Golden files stay cryptographically frozen."""
+    """Validate immutable historical v1–v4 hashes before accepting the v5 guard."""
     if _sha256((project_root / LEGACY_GOLDEN_RELATIVE_PATH).read_bytes()) != LEGACY_GOLDEN_SHA256:
         raise ValueError("Historical SSOT v1 Golden was modified")
     if _sha256((project_root / V2_GOLDEN_RELATIVE_PATH).read_bytes()) != V2_GOLDEN_SHA256:
         raise ValueError("Historical SSOT v2 Golden was modified")
     if _sha256((project_root / V3_GOLDEN_RELATIVE_PATH).read_bytes()) != V3_GOLDEN_SHA256:
         raise ValueError("Historical SSOT v3 Golden was modified")
+    if _sha256((project_root / V4_GOLDEN_RELATIVE_PATH).read_bytes()) != V4_GOLDEN_SHA256:
+        raise ValueError("Historical SSOT v4 Golden was modified")
     if raw_bytes is None:
         raw_bytes = (project_root / GOLDEN_RELATIVE_PATH).read_bytes()
     if _sha256(raw_bytes) != APPROVED_GOLDEN_SHA256:
-        raise ValueError("SSOT v4 Golden hash mismatch; never rewrite an existing version")
+        raise ValueError("SSOT v5 Golden hash mismatch; never rewrite an existing version")
     baseline = json.loads(raw_bytes)
-    if baseline.get("schema_version") != 4:
-        raise ValueError("SSOT Golden schema_version must be 4")
+    if baseline.get("schema_version") != 5:
+        raise ValueError("SSOT Golden schema_version must be 5")
     if not isinstance(baseline.get("protected_report_versions"), dict):
-        raise ValueError("SSOT v4 Golden is missing approved report contract history")
+        raise ValueError("SSOT v5 Golden is missing approved report contract history")
     return baseline
 
 
