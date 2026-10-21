@@ -26,6 +26,8 @@ from filters.breakout_quality.ranking_score_store import (
     load_continuous_ranker_oos_score_table_from_path,
     load_selection_point_in_time_score_table_from_path,
     load_selection_point_in_time_score_source_contract,
+    selection_pit_lookahead_contract,
+    validate_selection_pit_lookahead_contract,
     lookup_continuous_ranker_oos_candidate_score,
     lookup_selection_point_in_time_candidate_score,
 )
@@ -247,6 +249,7 @@ def case() -> None:
             "training_sample_scope": str(owner_profile.training_sample_scope),
             "seed": 42,
             "source_continuous_target": {"target_contract": {"synthetic": True}},
+            "lookahead_contract": selection_pit_lookahead_contract(),
         })
         paths["manifest"].write_text(json.dumps(persisted), encoding="utf-8")
 
@@ -262,6 +265,32 @@ def case() -> None:
         _expect_rejected(verify_owned_score_source, "eligibility contract")
         persisted["score_eligibility_contract"] = build_score_eligibility_contract(owner_profile)
         paths["manifest"].write_text(json.dumps(persisted), encoding="utf-8")
+
+        # The score-only loader owns the four declaration semantics. A valid
+        # historical-style producer manifest may retain unrelated fields, but
+        # omissions, opposite values and truthy string/integer substitutes
+        # must not reach either PIT Audit or strategy ranking as legal SCORE.
+        assert verify_owned_score_source(allow_stale_source=True).seed == 42
+        expectations = selection_pit_lookahead_contract()
+        validate_selection_pit_lookahead_contract({
+            "lookahead_contract": {**expectations, "legacy_optional_field": "kept"},
+        })
+        for field, correct in expectations.items():
+            for value in ("__omitted__", not correct, str(correct).lower(), int(correct), None):
+                broken = dict(expectations)
+                if value == "__omitted__":
+                    del broken[field]
+                else:
+                    broken[field] = value
+                persisted["lookahead_contract"] = broken
+                paths["manifest"].write_text(json.dumps(persisted), encoding="utf-8")
+                _expect_rejected(
+                    lambda: verify_owned_score_source(allow_stale_source=True),
+                    "Selection PIT lookahead contract",
+                )
+        persisted["lookahead_contract"] = expectations
+        paths["manifest"].write_text(json.dumps(persisted), encoding="utf-8")
+        assert verify_owned_score_source(allow_stale_source=True).seed == 42
         with patch(
             "filters.breakout_quality.ranking_score_store.validate_current_pit_score_source_lineage",
             side_effect=ValueError("synthetic stale publication"),

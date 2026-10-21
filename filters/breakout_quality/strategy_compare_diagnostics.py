@@ -808,9 +808,7 @@ def _load_isolated_selection_pit_contract(
     for label, path in (("Selection PIT score", score), ("Selection PIT manifest", manifest_file)):
         if not path.is_file():
             raise FileNotFoundError(f"找不到isolated {label}: {path}")
-    manifest = json.loads(manifest_file.read_text(encoding="utf-8-sig"))
-    if not isinstance(manifest, dict):
-        raise ValueError("isolated Selection PIT manifest根節點必須是object")
+    manifest = verified.manifest
     if str(manifest.get("status") or "") != "BUILT":
         raise ValueError(f"isolated Selection PIT manifest尚未完成: {manifest.get('status')!r}")
     expected_identity = {
@@ -829,19 +827,8 @@ def _load_isolated_selection_pit_contract(
             "isolated Selection PIT seed不一致: "
             f"expected={int(expected_seed)}, actual={manifest.get('seed')!r}"
         )
-    lookahead = dict(manifest.get("lookahead_contract") or {})
-    required_true = (
-        "every_score_uses_model_not_trained_on_scored_event",
-        "training_requires_label_eval_end_before_score_start",
-    )
-    required_false = (
-        "oos_rows_or_target_statistics_used_for_training_or_epoch_selection",
-        "future_target_in_score_table",
-    )
-    if any(lookahead.get(key) is not True for key in required_true) or any(
-        lookahead.get(key) is not False for key in required_false
-    ):
-        raise ValueError("isolated Selection PIT lookahead contract不符合策略回放要求")
+    # The complete Ranking/Audit loader already validates aggregate PIT
+    # lookahead; isolated replay only adds seed and score path checks.
     score_record = dict((manifest.get("artifacts") or {}).get("scores") or {})
     if str(score_record.get("filename") or "") != score.name:
         raise ValueError("isolated Selection PIT score filename與manifest不一致")

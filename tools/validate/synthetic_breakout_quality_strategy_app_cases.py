@@ -295,6 +295,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             pit_diagnostics, "load_selection_point_in_time_ranking_contract",
             return_value=SimpleNamespace(
                 score_path=isolated_score, manifest_path=isolated_manifest,
+                manifest=json.loads(isolated_manifest.read_text(encoding="utf-8")),
             ),
         ):
             isolated_result = pit_diagnostics._load_isolated_selection_pit_contract(

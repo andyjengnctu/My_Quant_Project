@@ -2919,6 +2919,7 @@ def validate_research_model_readiness_architecture_case(_base_params):
                 profile.training_objective
             ),
             "score_eligibility_contract": build_score_eligibility_contract(profile),
+            "lookahead_contract": score_owner.selection_pit_lookahead_contract(),
         }
         manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
         kwargs = {
@@ -3085,6 +3086,39 @@ def validate_research_model_readiness_architecture_case(_base_params):
             )
             check_true("audit_completes_ranking_without_new_score", complete.score_path == score
                        and complete.model_validation_gate["status"] == "PASS")
+            # Actual isolated replay must consume the verified Ranking/Audit
+            # contract and its exact manifest, rather than reinterpreting the
+            # same lookahead flags after the canonical authorization gate.
+            from filters.breakout_quality.strategy_compare_diagnostics import (
+                _load_isolated_selection_pit_contract,
+            )
+            isolated_kwargs = dict(
+                project_root=directory, score_path=str(score),
+                manifest_path=str(manifest_file), filter_id=str(settings.filter_id),
+                model_architecture=str(settings.model_architecture),
+                experiment_profile=str(settings.experiment_profile),
+                expected_seed=int(settings.seed),
+            )
+            isolated = _load_isolated_selection_pit_contract(**isolated_kwargs)
+            check_true(
+                "isolated_replay_accepts_complete_pit_audit_without_recomputing_identity",
+                isolated.seed == int(settings.seed)
+                and isolated.manifest == complete.manifest
+                and isolated.model_validation_gate["status"] == "ISOLATED_MULTI_SEED_ROBUSTNESS",
+            )
+            original_manifest_bytes = manifest_file.read_bytes()
+            mutated_manifest = json.loads(original_manifest_bytes)
+            mutated_manifest["lookahead_contract"]["every_score_uses_model_not_trained_on_scored_event"] = "true"
+            manifest_file.write_text(json.dumps(mutated_manifest), encoding="utf-8")
+            try:
+                _load_isolated_selection_pit_contract(**isolated_kwargs)
+            except ValueError as exc:
+                invalid_replay_rejected = "lookahead contract" in str(exc)
+            else:
+                invalid_replay_rejected = False
+            finally:
+                manifest_file.write_bytes(original_manifest_bytes)
+            check_true("isolated_replay_rejects_nonboolean_manifest_before_replay", invalid_replay_rejected)
             # The accepted Audit must not outlive its referenced physical
             # Fold evidence. A second process can atomically replace a Fold
             # without updating the aggregate Score or Audit files. Compare

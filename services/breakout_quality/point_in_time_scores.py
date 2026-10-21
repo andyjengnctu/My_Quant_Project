@@ -72,6 +72,7 @@ from filters.breakout_quality.pit_fold_provenance import (
 from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
 from filters.breakout_quality.ranking_score_store import (
     clear_selection_point_in_time_ranking_contract_cache,
+    selection_pit_lookahead_contract,
     validate_continuous_ranker_score_values,
 )
 from filters.breakout_quality.models.factory import build_model
@@ -3225,12 +3226,7 @@ def _run_authorized_point_in_time_scores(args, *, settings) -> int:
         "folds": [_combined_fold_record(args, item) for item in fold_manifests],
         "source_dataset": bundle.summary,
         "source_continuous_target": bundle.target_manifest,
-        "lookahead_contract": {
-            "every_score_uses_model_not_trained_on_scored_event": True,
-            "training_requires_label_eval_end_before_score_start": True,
-            "oos_rows_or_target_statistics_used_for_training_or_epoch_selection": False,
-            "future_target_in_score_table": False,
-        },
+        "lookahead_contract": selection_pit_lookahead_contract(),
         "runtime_eligibility": {
             "eligible_scope": "point_in_time_strategy_replay",
             "eligible": True,

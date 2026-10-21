@@ -209,15 +209,8 @@ def _validate_score_artifacts(args) -> tuple[pd.DataFrame, dict[str, Any]]:
         or manifest.get("score_column") != "breakout_quality_score"
     ):
         raise ValueError("Rolling PIT manifest schema/score column不支援")
-    lookahead = manifest.get("lookahead_contract") or {}
-    if not bool(lookahead.get("every_score_uses_model_not_trained_on_scored_event")):
-        raise ValueError("Rolling PIT manifest未宣告未見事件評分契約")
-    if not bool(lookahead.get("training_requires_label_eval_end_before_score_start")):
-        raise ValueError("Rolling PIT manifest未宣告label completion cutoff")
-    if bool(lookahead.get("oos_rows_or_target_statistics_used_for_training_or_epoch_selection")):
-        raise ValueError("Rolling PIT manifest宣告使用OOS訓練或選epoch")
-    if bool(lookahead.get("future_target_in_score_table")):
-        raise ValueError("Rolling PIT manifest宣告Score表包含Future Target")
+    # The canonical SCORE source has already validated all four aggregate
+    # PIT lookahead booleans.  Audit retains only its extra evaluation gates.
     runtime_eligibility = manifest.get("runtime_eligibility") or {}
     legacy_runtime_contract = bool(
         runtime_eligibility.get("not_eligible_for_forward_oos_runtime")

@@ -103,6 +103,41 @@ PIT_REQUIRED_SCORE_COLUMNS = (
 )
 PIT_OPTIONAL_SCORE_COLUMNS = get_continuous_ranker_persisted_score_columns()
 
+# Aggregate PIT Score publication and all of its consumers share these four
+# decision-time assertions. Fold FIT lookahead conditions are a separate contract.
+_SELECTION_PIT_LOOKAHEAD_REQUIREMENTS = (
+    ("every_score_uses_model_not_trained_on_scored_event", True),
+    ("training_requires_label_eval_end_before_score_start", True),
+    ("oos_rows_or_target_statistics_used_for_training_or_epoch_selection", False),
+    ("future_target_in_score_table", False),
+)
+
+
+def selection_pit_lookahead_contract() -> dict[str, bool]:
+    """Return the producer's PIT aggregate manifest declaration."""
+    return dict(_SELECTION_PIT_LOOKAHEAD_REQUIREMENTS)
+
+
+def validate_selection_pit_lookahead_contract(manifest: dict[str, Any]) -> None:
+    """Fail closed on missing or non-boolean PIT decision-time declarations.
+
+    ``bool(value)`` would accept strings such as "false" and integer 1.  A
+    persisted manifest must instead contain the producer's exact JSON booleans.
+    Other lookahead fields, if present, belong to their own contracts.
+    """
+    lookahead = manifest.get("lookahead_contract")
+    if not isinstance(lookahead, dict):
+        raise ValueError("Selection PIT lookahead contract缺少或格式不正確")
+    invalid = [
+        field for field, expected in _SELECTION_PIT_LOOKAHEAD_REQUIREMENTS
+        if lookahead.get(field) is not expected
+    ]
+    if invalid:
+        raise ValueError(
+            "Selection PIT lookahead contract無效（缺欄、型別或安全宣告不符）: "
+            + ", ".join(invalid)
+        )
+
 
 def validate_continuous_ranker_score_values(
     values,
@@ -575,6 +610,7 @@ def load_selection_point_in_time_score_source_contract(
         raise ValueError("Selection PIT manifest sample scope mismatch")
     if str(manifest.get("status") or "") != "BUILT":
         raise ValueError("Selection PIT manifest not BUILT")
+    validate_selection_pit_lookahead_contract(manifest)
     if expected_seed is not None and int(manifest.get("seed", -1)) != int(expected_seed):
         raise ValueError("Selection PIT manifest seed mismatch")
     score_record = dict((manifest.get("artifacts") or {}).get("scores") or {})
