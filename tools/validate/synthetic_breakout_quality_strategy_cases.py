@@ -2818,23 +2818,68 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                 and "report_refreshed_at_utc" in multi_seed_source,
     )
 
+    # Validate callable ownership and observable status behavior, not an exact
+    # source spelling; equivalent refactors must not cause a false regression.
+    from core import report_style as shared_report_style
+    from core.display_common import C_GREEN, C_RED, C_RESET
+    from services.research import strategy_comparison as comparison_runtime
+    from services.research import strategy_multi_seed_robustness as robustness_runtime
+
     check_true(
         "strategy_compare_and_robustness_share_execution_plan_renderer_and_status_color_ssot",
-        "def render_strategy_execution_plan_surface(" in comparison_source
-                and "return render_strategy_execution_plan_surface(" in comparison_source
-                and "render_strategy_execution_plan_surface(" in multi_seed_source
-                and "_single_line_execution_plan_cell(item)" in comparison_source
-                and "_single_line_execution_plan_cell(description)" in comparison_source
-                and "_single_line_execution_plan_cell(" in comparison_source
-                and "max_column_widths=(" not in comparison_source
-                and "_compact_execution_plan_item(" not in comparison_source
-                and "_compact_execution_plan_description(" not in comparison_source
-                and "_EXECUTION_PLAN_ITEM_WIDTH" not in comparison_source
-                and "_EXECUTION_PLAN_DESCRIPTION_WIDTH" not in comparison_source
-                and "action_colors =" not in multi_seed_source
-                and "def signal_for_workflow_status(" in report_style_source
-                and "def styled_workflow_status(" in report_style_source
-                and "styled_workflow_status" in comparison_source,
+        (
+            robustness_runtime.render_strategy_execution_plan_surface
+            is comparison_runtime.render_strategy_execution_plan_surface
+        )
+        and comparison_runtime.styled_workflow_status is shared_report_style.styled_workflow_status
+        and robustness_runtime.styled_workflow_status is shared_report_style.styled_workflow_status,
+    )
+    workflow_status_cases = (
+        ("ready", "READY", shared_report_style.SIGNAL_POSITIVE),
+        ("reuse_prefixed", "[BASELINE REUSE]", shared_report_style.SIGNAL_POSITIVE),
+        ("done_prefixed", "[TRAIN DONE]", shared_report_style.SIGNAL_POSITIVE),
+        ("pass", "PASS", shared_report_style.SIGNAL_POSITIVE),
+        ("not_ready", "NOT READY", shared_report_style.SIGNAL_NEGATIVE),
+        ("invalid_ready", "INVALID READY", shared_report_style.SIGNAL_NEGATIVE),
+        ("not_ready_underscore", "[MODEL NOT_READY]", shared_report_style.SIGNAL_NEGATIVE),
+        ("not_yet_ready", "[MODEL NOT YET READY]", shared_report_style.SIGNAL_NEGATIVE),
+        ("not_yet_ready_underscore", "NOT_YET_READY", shared_report_style.SIGNAL_NEGATIVE),
+        ("not_run", "NOT RUN", shared_report_style.SIGNAL_NEGATIVE),
+        ("not_done", "[MODEL NOT_DONE]", shared_report_style.SIGNAL_NEGATIVE),
+        ("invalid_pass", "INVALID PASS", shared_report_style.SIGNAL_NEGATIVE),
+        ("incomplete", "INCOMPLETE", shared_report_style.SIGNAL_NEGATIVE),
+        ("blocked_prefixed", "[RISK BLOCKED]", shared_report_style.SIGNAL_NEGATIVE),
+        ("failed_code", "FAIL (1)", shared_report_style.SIGNAL_NEGATIVE),
+        ("preparable", "PREPARABLE", shared_report_style.SIGNAL_WARNING),
+        ("rebuild_prefixed", "[BASELINE CONTEXT REBUILD]", shared_report_style.SIGNAL_WARNING),
+        ("warn", "[WARN]", shared_report_style.SIGNAL_WARNING),
+        ("run", "RUN", shared_report_style.SIGNAL_NEUTRAL),
+        ("report", "REPORT", shared_report_style.SIGNAL_NEUTRAL),
+        ("run_reuse", "RUN/REUSE", shared_report_style.SIGNAL_NEUTRAL),
+        ("not_applicable", "NOT APPLICABLE", shared_report_style.SIGNAL_NEUTRAL),
+        ("reuse_not_required", "REUSE - NOT REQUIRED", shared_report_style.SIGNAL_POSITIVE),
+        ("unknown", "EXPERIMENTAL", shared_report_style.SIGNAL_NEUTRAL),
+    )
+    for case_name, status, expected_signal in workflow_status_cases:
+        check_true(
+            f"workflow_status_semantics_{case_name}",
+            shared_report_style.signal_for_workflow_status(status) == expected_signal,
+        )
+    with patch("core.report_style.console_color_enabled", return_value=True):
+        colored_plan = comparison_runtime.render_strategy_execution_plan_surface(
+            title="Color semantics probe",
+            metadata_rows=(("整體狀態", "NOT READY"),),
+            action_rows=[("REUSE", "ready item", "usable"), ("NOT READY", "pending item", "not usable")],
+        )
+    check_true(
+        "execution_plan_renders_negative_readiness_and_positive_reuse_from_shared_palette",
+        C_RED + "NOT READY" + C_RESET in colored_plan
+        and C_GREEN + "REUSE" + C_RESET in colored_plan,
+    )
+    check_true(
+        "workflow_status_markdown_uses_shared_negative_signal",
+        shared_report_style.styled_workflow_status("INVALID READY", target="markdown")
+        == shared_report_style.markdown_signal("INVALID READY", shared_report_style.SIGNAL_NEGATIVE, bold=True),
     )
 
     # User-approved execution-plan display: one output row per action, with

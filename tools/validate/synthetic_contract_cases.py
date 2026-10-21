@@ -3507,6 +3507,21 @@ def validate_debug_trade_log_prepared_tool_contract_case(base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
+    # The trade-analysis legacy color-map API must consume the canonical ANSI
+    # palette, without maintaining an independently evolving color definition.
+    from core import display_common as shared_palette
+    from services.trade_analysis import trade_log as trade_log_module
+
+    for tone, constant in (
+        ("cyan", "C_CYAN"), ("green", "C_GREEN"),
+        ("yellow", "C_YELLOW"), ("red", "C_RED"), ("reset", "C_RESET"),
+    ):
+        add_check(
+            results, "output_contract", case_id,
+            f"trade_analysis_palette_{tone}_matches_shared_source",
+            getattr(shared_palette, constant), trade_log_module.COLOR_MAP[tone],
+        )
+
     case = build_synthetic_competing_candidates_case(base_params, make_synthetic_validation_params)
     ticker = case["primary_ticker"]
     frame = case["frames"][ticker]

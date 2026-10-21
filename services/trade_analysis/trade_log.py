@@ -22,16 +22,11 @@ from core.strategy_params import V16StrategyParams, strategy_params_to_dict
 from core.output_paths import build_output_dir
 from core.model_paths import resolve_run_best_params_path
 from core.console_report import project_relative_display_path
+from core.display_common import C_CYAN, C_GREEN, C_YELLOW, C_RED, C_RESET
 from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, safe_prompt, validate_cli_args
 
 warnings.simplefilter("default")
 warnings.filterwarnings("once", category=RuntimeWarning)
-
-C_CYAN = '\033[96m'
-C_GREEN = '\033[92m'
-C_YELLOW = '\033[93m'
-C_RED = '\033[91m'
-C_RESET = '\033[0m'
 
 COLOR_MAP = {
     "cyan": C_CYAN,

@@ -93,12 +93,28 @@ def signal_for_workflow_status(value: Any) -> str:
     if status in negative:
         return SIGNAL_NEGATIVE
 
-    # Progress/status labels often add a scope prefix (for example
-    # ``[TRAIN DONE]`` or ``[BASELINE REUSE]``).  Parse semantic status tokens
-    # here instead of teaching every renderer a second color vocabulary.
-    tokens = set(re.findall(r"[A-Z][A-Z0-9_]*", status))
-    if tokens & negative:
+    # Scope prefixes and underscore-separated statuses must obey the same
+    # precedence.  In particular, a negated readiness must never become green
+    # simply because its text also contains the word READY.
+    words = [
+        part
+        for token in re.findall(r"[A-Z][A-Z0-9_]*", status)
+        for part in token.split("_")
+        if part
+    ]
+    tokens = set(words)
+    if tokens & (negative | {"INVALID", "UNREADY", "NOTREADY", "INCOMPLETE"}):
         return SIGNAL_NEGATIVE
+    affirmative = positive | {"RUN"}
+    for index, word in enumerate(words):
+        if word not in {"NOT", "NO", "NON"}:
+            continue
+        following = words[index + 1 : index + 3]
+        if following and (
+            following[0] in affirmative
+            or (following[0] == "YET" and len(following) > 1 and following[1] in affirmative)
+        ):
+            return SIGNAL_NEGATIVE
     if tokens & warning:
         return SIGNAL_WARNING
     if tokens & positive:
