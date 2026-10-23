@@ -7,6 +7,7 @@ Test Suite frozen entry checks, PIT artifacts, or portfolio model fitting.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 import numpy as np
@@ -600,6 +601,50 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 result_again = oracle.build_report(definition, project_root=root, quiet=True)
                 self.assertEqual(len(seen), 16, "completed 11-target rerun must reuse all 48")
                 self.assertEqual(result_again["oracles"], result["oracles"])
+
+                # Regression: V2 may have been completed in the *reusable*
+                # official report before per-arm replay caches were introduced.
+                # Losing the newer cache must not trigger another 16 replays.
+                reusable_root = root / "outputs/audit/breakout_quality/reusable/target_oracle_romd"
+                archived_v2 = dict(
+                    result, report_id="target_oracle_romd",
+                    report_type=oracle.SUPPORTED_AUDIT_TYPE,
+                    report_contract_id="audit.target_oracle_romd@v1",
+                    report_contract_fingerprint=oracle.persistent_report_contract_fingerprint("audit.target_oracle_romd"),
+                )
+                for directory in (reusable_root / "latest", reusable_root / "20261023T121900Z"):
+                    directory.mkdir(parents=True, exist_ok=True)
+                    (directory / "audit.json").write_text(json.dumps(archived_v2), encoding="utf-8")
+                shutil.rmtree(reusable_root / "replay_cache")
+                # Reusable V2 must be sufficient on its own even if the
+                # historical one-time directory has been archived elsewhere.
+                shutil.rmtree(root / "outputs/audit/breakout_quality/one_time/target_oracle_romd")
+                restored = oracle.build_report(definition, project_root=root, quiet=True)
+                self.assertEqual(len(seen), 16, "completed reusable V2 must REUSE all 48 without a per-arm cache")
+                self.assertEqual(restored["oracles"], result["oracles"])
+                self.assertEqual(restored["baseline"], result["baseline"])
+                from services.audit.oracle_replay_artifacts import HistoricalOracleIndex
+                index = HistoricalOracleIndex(root)
+                context = {
+                    "benchmark": Benchmark.benchmark_id,
+                    "strategy_profile_id": "broker_cash_dl_conversion_rolling",
+                    "dataset": "full", "start_date": "2021-01-01", "end_date": "2025-12-22",
+                    "seeds": list(seeds),
+                    "param_sha_by_seed": {seed: "a" * 64 for seed in seeds},
+                    "cohort": common, "definitions": definitions,
+                }
+                self.assertEqual(
+                    index.lookup(target="MFE40_over_D40", seed=11, context=context),
+                    self._observation("MFE40_over_D40", 11),
+                )
+                wrong_params = {**context, "param_sha_by_seed": {seed: "c" * 64 for seed in seeds}}
+                self.assertIsNone(index.lookup(target="MFE40_over_D40", seed=11, context=wrong_params))
+                wrong_cohort = {**context, "cohort": {**common, "cohort_rows": 9}}
+                self.assertIsNone(index.lookup(target="MFE40_over_D40", seed=11, context=wrong_cohort))
+                malformed_contract = {**archived_v2, "report_contract_id": "unapproved.contract@v1"}
+                self.assertFalse(index._compatible(malformed_contract, context=context, origin="reusable"))
+                forged_fingerprint = {**archived_v2, "report_contract_fingerprint": "0" * 16}
+                self.assertFalse(index._compatible(forged_fingerprint, context=context, origin="reusable"))
 
     def test_partial_replay_is_saved_before_later_failure_and_resumes(self):
         seeds = (11, 22, 33, 44)

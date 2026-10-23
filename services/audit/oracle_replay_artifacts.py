@@ -15,6 +15,7 @@ from typing import Any, Mapping
 from uuid import uuid4
 
 from config.audit import AUDIT_OUTPUT_ROOT
+from core.report_contract_versions import load_report_contract_versions
 from core.file_integrity import (
     compute_file_sha256, is_sha256_hex, exclusive_file_lock, atomic_replace_with_retry,
     canonical_json_sha256,
@@ -169,29 +170,34 @@ class OracleReplayStore:
 
 
 class HistoricalOracleIndex:
-    """Conservative V1/V2 snapshot compatibility: use completed seed rows only.
+    """Read completed pre-cache Oracle reports from both historical report homes.
 
-    Prior archived reports predate input-byte fingerprints. This is a *legacy*
-    compatibility check based on their complete persisted canonical provenance;
-    never substitute it for strict fingerprints in subsequent cache writes.
+    One-time V1/V2 and reusable V2 reports can predate per-arm input-byte
+    fingerprints. They are admitted only on their available, complete scientific
+    provenance, then promoted into the current strict per-arm identity cache.
     """
 
     def __init__(self, project_root: Path):
-        output_dir = Path(project_root).resolve() / AUDIT_OUTPUT_ROOT / "breakout_quality/one_time/target_oracle_romd"
-        candidates = [output_dir / "latest/audit.json", *sorted(output_dir.glob("*/audit.json"))]
-        self.snapshots: list[tuple[Path, dict[str, Any]]] = []
-        for path in candidates:
-            if not path.is_file():
-                continue
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError) as exc:
-                raise ValueError("Oracle historical artifact unreadable; do not silently recalculate") from exc
-            if isinstance(payload, dict) and payload.get("status") == "COMPLETED":
-                self.snapshots.append((path, payload))
+        output_root = Path(project_root).resolve() / AUDIT_OUTPUT_ROOT / "breakout_quality"
+        # The append-only report ledger verifies presentation provenance; a
+        # future report version must not force identical science to be replayed.
+        versions = load_report_contract_versions().get("audit.target_oracle_romd", ())
+        self._approved_report_versions = {item["contract_id"]: item["fingerprint"] for item in versions}
+        self.snapshots: list[tuple[str, Path, dict[str, Any]]] = []
+        for origin in ("one_time", "reusable"):
+            output_dir = output_root / origin / "target_oracle_romd"
+            candidates = [output_dir / "latest/audit.json", *sorted(output_dir.glob("*/audit.json"))]
+            for path in candidates:
+                if not path.is_file():
+                    continue
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError) as exc:
+                    raise ValueError("Oracle historical artifact unreadable; do not silently recalculate") from exc
+                if isinstance(payload, dict) and payload.get("status") == "COMPLETED":
+                    self.snapshots.append((origin, path, payload))
 
-    @staticmethod
-    def _compatible(payload: Mapping[str, Any], *, context: Mapping[str, Any]) -> bool:
+    def _compatible(self, payload: Mapping[str, Any], *, context: Mapping[str, Any], origin: str) -> bool:
         if (payload.get("status") != "COMPLETED" or payload.get("hindsight_non_pit") is not True
                 or payload.get("read_only") is not True
                 or payload.get("benchmark_id") != context["benchmark"]
@@ -205,7 +211,22 @@ class HistoricalOracleIndex:
             return False
         if payload.get("report_type") not in (None, "target_ground_truth_strategy_romd"):
             return False
-        if payload.get("report_id") not in (None, "AUD-target-ground-truth-romd"):
+        # The reusable report has a different *presentation* identity, but the
+        # underlying seven/eleven Oracle replay identities are unchanged.
+        # Do not accept a reusable report as anonymous legacy evidence.
+        if origin == "one_time":
+            if payload.get("report_id") not in (None, "AUD-target-ground-truth-romd"):
+                return False
+        elif origin == "reusable":
+            if (payload.get("report_id") != "target_oracle_romd"
+                    or payload.get("report_type") != "target_ground_truth_strategy_romd"
+                    or not isinstance(payload.get("schema_version"), int)
+                    or payload["schema_version"] < 2
+                    or payload.get("report_contract_fingerprint") != self._approved_report_versions.get(
+                        payload.get("report_contract_id")
+                    )):
+                return False
+        else:
             return False
         cohort = payload.get("common_cohort")
         if not isinstance(cohort, dict):
@@ -235,12 +256,20 @@ class HistoricalOracleIndex:
                 or targets != set(definitions)
                 or targets not in (_LEGACY_TARGETS, frozenset(context["definitions"]))):
             return False
+        if targets != _LEGACY_TARGETS:
+            # V2-only geometry evidence must match as well. V1 predates the
+            # ratio counters and cannot be required to contain them.
+            for field in ("ratio_zero_denominator_policy",
+                          "mfe40_over_d40_zero_downside_positive_upside_count",
+                          "mfe40_over_d40_zero_zero_count"):
+                if cohort.get(field) != wanted.get(field):
+                    return False
         return True
 
     def lookup(self, *, target: str, seed: int, context: Mapping[str, Any]) -> dict[str, Any] | None:
         observations = []
-        for source, payload in self.snapshots:
-            if not self._compatible(payload, context=context):
+        for origin, source, payload in self.snapshots:
+            if not self._compatible(payload, context=context, origin=origin):
                 continue
             rows = [payload["baseline"]] if target == "C96" else [
                 row for row in payload["oracles"] if row.get("target") == target

@@ -686,9 +686,9 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
                 origin = "verified per-arm cache"
                 if record is None and not cache.has_other_identity(identity):
                     record = archived.lookup(target=target, seed=seed, context=legacy_context)
-                    origin = "compatible historical one-time result"
+                    origin = "compatible completed Oracle report"
                     if record is not None:
-                        cache.write(identity, record, origin="historical_one_time")
+                        cache.write(identity, record, origin="historical_report")
                 if record is not None:
                     if not quiet:
                         print(f"[REUSE] seed={seed} {target} | {origin}")
