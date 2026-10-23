@@ -29,7 +29,6 @@ from core.strategy_compare_policy import (
     get_strategy_comparison_settings, get_strategy_multi_seed_robustness_settings,
 )
 from filters.breakout_quality.daily_ranker_data import compute_daily_opportunity_target_batch
-from filters.breakout_quality.models.spec import get_model_spec
 from filters.breakout_quality.workflow_io import discover_dataset_csv_inputs, load_dataset_frame
 from filters.breakout_quality.continuous_target import (
     StrategyAlignedContinuousTargetSpec,
@@ -170,73 +169,156 @@ def collect_status(definition, *, project_root: Path) -> dict[str, Any]:
 
 
 
-def _benchmark_truth_for_oracle(
-    definition, root: Path, source_field: str, *, cutoff: str,
-) -> pd.DataFrame:
-    """Audit-only truth for the tradable benchmark excluded from DL training.
+_ORACLE_PROVIDER_FIELDS = ("pure_mfe40_provider", "mfe20_d20_provider", "first_breach_provider")
 
-    The daily-universal provider intentionally uses 0050 only as a feature
-    benchmark. Portfolio replay may nevertheless order it as a stock. Reuse
-    the SAME canonical daily target calculator; never impute a missing score.
+
+def _market_truth_for_oracle(
+    definition, root: Path, *, cutoff: str,
+) -> tuple[dict[str, pd.DataFrame], dict[str, Any]]:
+    """Materialize ex-post truth for the *replay* price universe, not DL samples.
+
+    The canonical daily-universal provider is deliberately feature-window and
+    benchmark restricted.  Neither restriction defines which stocks the
+    strategy can rank.  Reuse its canonical target calculator on each sanitized
+    Research price path, including newly listed stocks and the benchmark.
+    Invalid/unmatured paths never receive a score or a proxy value.
     """
     settings, _baseline, _exact = _contract(definition)
-    profile_id = str(definition.source[source_field])
-    profile = get_breakout_quality_experiment_profile(profile_id)
-    recipe = get_continuous_ranker_execution_recipe(profile_id)
-    policy = recipe.target_policy
-    if (
-        policy.materialization_mode != CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT
-        or policy.postprocess != CONTINUOUS_RANKER_TARGET_POSTPROCESS_NONE
-        or not policy.component_target_id
-        or recipe.continuous_target_id != profile.continuous_target_id
-    ):
-        raise OracleBlockedError(f"{source_field}不能以正式daily target calculator補Benchmark")
-    architecture = str(profile.model_architecture or definition.source["model_architecture"])
-    feature_bars = int(get_model_spec(architecture).input_window_bars or DEFAULT_LABEL_POLICY.feature_window_bars)
-    horizon = int(policy.horizon_bars or DEFAULT_LABEL_POLICY.label_horizon_bars)
-    cohort_horizon = int(policy.sample_universe_horizon_bars or horizon)
-    if cohort_horizon < horizon:
-        raise OracleBlockedError("Oracle Benchmark maturity horizon contract不合法")
-    spec = StrategyAlignedContinuousTargetSpec.from_label_policy(
-        replace(DEFAULT_LABEL_POLICY, label_horizon_bars=horizon)
-    )
+    specs = {}
+    for field in _ORACLE_PROVIDER_FIELDS:
+        profile_id = str(definition.source[field])
+        profile = get_breakout_quality_experiment_profile(profile_id)
+        recipe = get_continuous_ranker_execution_recipe(profile_id)
+        policy = recipe.target_policy
+        if (
+            policy.materialization_mode != CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT
+            or policy.postprocess != CONTINUOUS_RANKER_TARGET_POSTPROCESS_NONE
+            or not policy.component_target_id
+            or recipe.continuous_target_id != profile.continuous_target_id
+        ):
+            raise OracleBlockedError(f"{field}不能以canonical daily target calculator計算")
+        horizon = int(policy.horizon_bars or DEFAULT_LABEL_POLICY.label_horizon_bars)
+        maturity = int(policy.sample_universe_horizon_bars or horizon)
+        if horizon <= 0 or maturity < horizon:
+            raise OracleBlockedError(f"{field}的horizon／maturity contract不合法")
+        specs[field] = (
+            StrategyAlignedContinuousTargetSpec.from_label_policy(
+                replace(DEFAULT_LABEL_POLICY, label_horizon_bars=horizon)
+            ),
+            maturity,
+            str(policy.component_target_id),
+        )
+
+    csv_inputs, duplicates = discover_dataset_csv_inputs(root, settings.dataset)
+    if duplicates:
+        raise OracleBlockedError(f"Oracle Research Dataset含重複ticker來源：{duplicates[:3]}")
+    paths = {}
+    for ticker, path in csv_inputs:
+        key = normalize_ticker(ticker)
+        if key in paths:
+            raise OracleBlockedError(f"Oracle Research Dataset正規化ticker重複：{key}")
+        paths[key] = Path(path)
     benchmark = normalize_ticker(DEFAULT_LABEL_POLICY.benchmark_ticker)
-    csv_inputs, _duplicates = discover_dataset_csv_inputs(root, settings.dataset)
-    paths = {normalize_ticker(ticker): path for ticker, path in csv_inputs}
     if benchmark not in paths:
         raise OracleBlockedError(f"Oracle缺少可交易Benchmark價格：{benchmark}")
-    frame = load_dataset_frame(
-        paths[benchmark], benchmark,
-        min_rows=max(feature_bars + 1, int(DEFAULT_LABEL_POLICY.label_horizon_bars) + 1),
-    )
-    dates = pd.DatetimeIndex(frame.index).normalize()
-    # Match daily-universal's feature-ready start and complete-path requirement.
-    positions = np.arange(feature_bars - 1, len(frame) - cohort_horizon, dtype=np.int64)
-    positions = positions[dates.take(positions + cohort_horizon) <= pd.Timestamp(cutoff)]
-    if not len(positions):
-        raise OracleBlockedError("Oracle Benchmark無足夠的成熟真值與歷史Feature")
-    batch = compute_daily_opportunity_target_batch(
-        frame, positions, spec=spec, target_id=str(policy.component_target_id),
-    )
-    valid = np.asarray(batch.valid_mask, dtype=bool)
-    if cohort_horizon != horizon:
-        cohort_spec = replace(spec, horizon_bars=cohort_horizon)
-        cohort_batch = compute_daily_opportunity_target_batch(
-            frame, positions, spec=cohort_spec, target_id=str(policy.component_target_id),
+
+    # Portfolio simulation can request yesterday's information on its first day.
+    # Use the last actual benchmark trading day before the replay start; no
+    # arbitrary calendar lookback or DL feature-window cutoff is imposed.
+    bench_frame = load_dataset_frame(paths[benchmark], benchmark, min_rows=1)
+    historical_dates = pd.DatetimeIndex(bench_frame.index).normalize()
+    prior = historical_dates[historical_dates < pd.Timestamp(settings.start_date)]
+    if prior.empty:
+        raise OracleBlockedError("Oracle缺少策略起始日前的Benchmark交易日")
+    score_start = prior[-1]
+    limit = pd.Timestamp(cutoff)
+    chunks = {field: [] for field in _ORACLE_PROVIDER_FIELDS}
+    skipped = {}
+    valid_counts = {field: 0 for field in _ORACLE_PROVIDER_FIELDS}
+    for ticker, path in paths.items():
+        try:
+            frame = (bench_frame if ticker == benchmark else load_dataset_frame(path, ticker, min_rows=1))
+        except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError) as exc:
+            # Keep diagnostics traceable without storing host-absolute data paths.
+            reason = str(exc).replace(str(path), path.name).replace(str(root), ".")
+            skipped[ticker] = f"{type(exc).__name__}: {reason}"
+            continue
+        dates = pd.DatetimeIndex(frame.index).normalize()
+        positions = np.flatnonzero((dates >= score_start) & (dates <= limit)).astype(np.int64)
+        if not positions.size:
+            continue
+        for field, (spec, maturity, target_id) in specs.items():
+            eligible = positions[positions + maturity < len(frame)]
+            if not eligible.size:
+                continue
+            eligible = eligible[dates.take(eligible + maturity) <= limit]
+            if not eligible.size:
+                continue
+            batch = compute_daily_opportunity_target_batch(
+                frame, eligible, spec=spec, target_id=target_id,
+            )
+            valid = np.asarray(batch.valid_mask, dtype=bool)
+            if maturity != int(spec.horizon_bars):
+                cohort = compute_daily_opportunity_target_batch(
+                    frame, eligible, spec=replace(spec, horizon_bars=maturity),
+                    target_id=target_id,
+                )
+                valid &= np.asarray(cohort.valid_mask, dtype=bool)
+            risk = float(spec.risk_budget_return)
+            values = np.column_stack((
+                np.asarray(batch.favorable_return, dtype=float) / risk,
+                np.asarray(batch.adverse_return_to_peak, dtype=float) / risk,
+                np.asarray(batch.minimum_low_return, dtype=float),
+                np.asarray(batch.target_raw_r, dtype=float),
+            ))
+            valid &= np.isfinite(values).all(axis=1)
+            if not valid.any():
+                continue
+            valid_counts[field] += int(valid.sum())
+            chunks[field].append(pd.DataFrame({
+                "ticker": ticker,
+                "date": dates.take(eligible[valid]).strftime("%Y-%m-%d"),
+                "mfe": values[valid, 0],
+                "peak_adverse": values[valid, 1],
+                "min_low": values[valid, 2],
+                "raw": values[valid, 3],
+            }))
+    truth = {}
+    for field in _ORACLE_PROVIDER_FIELDS:
+        if not chunks[field]:
+            raise OracleBlockedError(f"{field}沒有可用的已成熟Research價格真值")
+        table = pd.concat(chunks[field], ignore_index=True)
+        if table.duplicated(["ticker", "date"]).any():
+            raise OracleBlockedError(f"{field}的Research價格真值ticker/date重複")
+        truth[field] = table
+    return truth, {
+        "truth_source": "canonical full Research OHLCV via daily target calculator",
+        "score_start": str(score_start.date()),
+        "price_ticker_count": len(paths),
+        "unreadable_tickers": skipped,
+        "mature_rows_by_provider": valid_counts,
+    }
+
+
+def _reconcile_oracle_truth(
+    source: pd.DataFrame, market: pd.DataFrame, *, field: str, score_start: str,
+) -> tuple[pd.DataFrame, int]:
+    """Ensure expanded trading universe agrees with official model truth."""
+    old = source.loc[source["date"] >= score_start]
+    check = old.merge(market, on=["ticker", "date"], how="left",
+                      suffixes=("_provider", "_market"), validate="one_to_one", indicator=True)
+    missing = check["_merge"] == "left_only"
+    if missing.any():
+        row = check.loc[missing, ["ticker", "date"]].iloc[0]
+        raise OracleBlockedError(
+            f"{field}官方真值找不到相應Research價格成熟路徑：{row['ticker']} {row['date']}"
         )
-        valid &= np.asarray(cohort_batch.valid_mask, dtype=bool)
-    if not bool(np.any(valid)):
-        raise OracleBlockedError("Oracle Benchmark沒有有效成熟daily target")
-    positions = positions[valid]
-    risk = float(spec.risk_budget_return)
-    return pd.DataFrame({
-        "ticker": benchmark,
-        "date": dates.take(positions).strftime("%Y-%m-%d"),
-        "mfe": np.asarray(batch.favorable_return, dtype=float)[valid] / risk,
-        "peak_adverse": np.asarray(batch.adverse_return_to_peak, dtype=float)[valid] / risk,
-        "min_low": np.asarray(batch.minimum_low_return, dtype=float)[valid],
-        "raw": np.asarray(batch.target_raw_r, dtype=float)[valid],
-    })
+    for name in ("mfe", "peak_adverse", "min_low", "raw"):
+        if not np.allclose(check[f"{name}_provider"].to_numpy(dtype=float),
+                           check[f"{name}_market"].to_numpy(dtype=float),
+                           rtol=2e-5, atol=2e-5):
+            raise OracleBlockedError(f"{field}的official target與Research價格重建真值不一致：{name}")
+    return market, len(market) - len(old)
 
 
 def _load_truth(definition, root: Path, source_field: str, *, cutoff: str) -> pd.DataFrame:
@@ -279,26 +361,27 @@ def _load_truth(definition, root: Path, source_field: str, *, cutoff: str) -> pd
         raise OracleBlockedError(f"{source_field}沒有研究截止日前成熟且完整的共同樣本")
     if frame.duplicated(["ticker", "date"]).any():
         raise OracleBlockedError(f"{source_field}存在ticker/date重複")
-    benchmark = normalize_ticker(DEFAULT_LABEL_POLICY.benchmark_ticker)
-    if benchmark not in set(frame["ticker"]):
-        # A valid trading candidate is intentionally omitted by the TRAINING
-        # sample provider. Fill only from the canonical future-path target
-        # calculator, leaving all other missing stock-days fail-closed.
-        benchmark_truth = _benchmark_truth_for_oracle(
-            definition, root, source_field, cutoff=cutoff,
-        )
-        frame = pd.concat([frame, benchmark_truth], ignore_index=True)
-    if frame.duplicated(["ticker", "date"]).any():
-        raise OracleBlockedError(f"{source_field}的Benchmark真值重複")
     return frame
 
 
 def build_oracle_score_tables(definition, *, project_root: Path, cutoff: str) -> tuple[dict[str, dict[tuple[str, str], float]], dict[str, Any]]:
     """Pure deterministic hindsight target construction, no data-driven fitting."""
     root = Path(project_root).resolve()
-    raw40 = _load_truth(definition, root, "pure_mfe40_provider", cutoff=cutoff)
-    raw20 = _load_truth(definition, root, "mfe20_d20_provider", cutoff=cutoff)
-    first = _load_truth(definition, root, "first_breach_provider", cutoff=cutoff)
+    market, market_evidence = _market_truth_for_oracle(definition, root, cutoff=cutoff)
+    provider_truth = {
+        field: _load_truth(definition, root, field, cutoff=cutoff)
+        for field in _ORACLE_PROVIDER_FIELDS
+    }
+    complete = {}
+    extra_rows = {}
+    for field in _ORACLE_PROVIDER_FIELDS:
+        complete[field], extra_rows[field] = _reconcile_oracle_truth(
+            provider_truth[field], market[field], field=field,
+            score_start=market_evidence["score_start"],
+        )
+    raw40 = complete["pure_mfe40_provider"]
+    raw20 = complete["mfe20_d20_provider"]
+    first = complete["first_breach_provider"]
     a = raw40.rename(columns={c: f"{c}40" for c in ("mfe", "peak_adverse", "min_low", "raw")})
     b = raw20.rename(columns={c: f"{c}20" for c in ("mfe", "peak_adverse", "min_low", "raw")})
     c = first.rename(columns={col: f"{col}fb" for col in ("mfe", "peak_adverse", "min_low", "raw")})
@@ -359,6 +442,8 @@ def build_oracle_score_tables(definition, *, project_root: Path, cutoff: str) ->
         },
         "scoring": "All targets final-ranked by average_zero_based percentile within common-day universe",
         "oracle_only": True,
+        "market_truth": market_evidence,
+        "rows_outside_dl_training_provider_by_source": extra_rows,
     }
     return scores, evidence
 
