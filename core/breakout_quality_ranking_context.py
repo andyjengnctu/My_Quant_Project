@@ -30,6 +30,8 @@ from core.buy_sort import (
 SCORE_SOURCE_CANONICAL_RUNTIME = WORKFLOW_SCORE_SOURCE_CANONICAL_RUNTIME
 SCORE_SOURCE_SELECTION_POINT_IN_TIME = "selection_point_in_time"
 SCORE_SOURCE_CONTINUOUS_RANKER_OOS = "continuous_ranker_oos"
+# Audit-only hindsight truth. Deliberately excluded from formal score-source registry.
+SCORE_SOURCE_AUDIT_ORACLE_FUTURE_TRUTH = "audit_oracle_future_truth"
 SUPPORTED_RANKING_SCORE_SOURCES = (
     SCORE_SOURCE_CANONICAL_RUNTIME,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
@@ -85,6 +87,8 @@ def breakout_quality_ranking_uses_daily_information_date() -> bool:
     """Return whether the active research ranker must refresh on each completed bar."""
 
     context = get_breakout_quality_ranking_source_context()
+    if context.score_source == SCORE_SOURCE_AUDIT_ORACLE_FUTURE_TRUTH:
+        return True
     if context.score_source not in {
         SCORE_SOURCE_CANONICAL_RUNTIME,
         SCORE_SOURCE_SELECTION_POINT_IN_TIME,
@@ -131,6 +135,25 @@ def breakout_quality_ranking_source_context(
         score_manifest_path_override=(
             None if score_manifest_path_override in (None, "") else str(score_manifest_path_override)
         ),
+    )
+    token = _RANKING_SOURCE_CONTEXT.set(context)
+    try:
+        yield context
+    finally:
+        _RANKING_SOURCE_CONTEXT.reset(token)
+
+
+@contextmanager
+def audit_oracle_ranking_policy_context(
+    *, ranking_policy: str, ranking_options: Mapping[str, Any] | None = None,
+) -> Iterator[BreakoutQualityRankingSourceContext]:
+    """Research-only hindsight context; never a production/PIT score source."""
+    if ranking_policy != BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL:
+        raise ValueError("Oracle Audit只允許正式Exact K/R0 ranking policy")
+    context = BreakoutQualityRankingSourceContext(
+        score_source=SCORE_SOURCE_AUDIT_ORACLE_FUTURE_TRUTH,
+        ranking_policy=ranking_policy,
+        ranking_options=dict(ranking_options or {}),
     )
     token = _RANKING_SOURCE_CONTEXT.set(context)
     try:

@@ -110,7 +110,11 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
 
     empty_one_time_console = io.StringIO()
-    with patch("builtins.input", return_value="0"), redirect_stdout(empty_one_time_console):
+    # The empty-state check must isolate the registry even if a new one-time
+    # experiment is active; do not assert that the live project has zero Audits.
+    with patch.object(research_app, "get_audit_definitions", return_value=()), patch(
+        "builtins.input", return_value="0"
+    ), redirect_stdout(empty_one_time_console):
         research_app._audit_one_time_menu("breakout_quality")
     check_true(
         "empty_one_time_audit_menu_keeps_existing_entry_and_exits_cleanly",

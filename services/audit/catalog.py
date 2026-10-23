@@ -63,6 +63,7 @@ class AuditMethodEntry:
     menu_label: str
     description: str
     order: int
+    one_time_only: bool = False
 
 
 AUDIT_METHOD_CATALOG: dict[str, AuditMethodEntry] = {
@@ -84,10 +85,16 @@ AUDIT_METHOD_CATALOG: dict[str, AuditMethodEntry] = {
         description="比較Realized trades→portfolio capital/exposure與exact MTM drawdown attribution",
         order=30,
     ),
+    "target_ground_truth_strategy_romd": AuditMethodEntry(
+        method_id="target_ground_truth_strategy_romd",
+        menu_label="Target Ground Truth → Strategy RoMD (Oracle)",
+        description="一次性未來真值反事實RoMD比較（不納入正式PIT或常駐SOP）",
+        order=100, one_time_only=True,
+    ),
 }
 
 def get_audit_methods() -> tuple[AuditMethodEntry, ...]:
-    return tuple(sorted(AUDIT_METHOD_CATALOG.values(), key=lambda item: item.order))
+    return tuple(sorted((m for m in AUDIT_METHOD_CATALOG.values() if not m.one_time_only), key=lambda item: item.order))
 
 def get_audit_method(method_id: str) -> AuditMethodEntry:
     key = str(method_id).strip()
@@ -130,6 +137,15 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         method_id="trade_outcome_path_attribution",
         status_function="collect_status",
         run_function="run_formal_audit",
+    ),
+    "target_ground_truth_strategy_romd": AuditCatalogEntry(
+        audit_type="target_ground_truth_strategy_romd",
+        domain="breakout_quality",
+        module="services.audit.target_oracle_romd",
+        mode="formal",
+        description="One-time hindsight Oracle Ground Truth -> Broker-Cash RoMD",
+        read_only=True, method_id="target_ground_truth_strategy_romd",
+        status_function="collect_status", run_function="run_formal_audit",
     ),
     "portfolio_drawdown_attribution": AuditCatalogEntry(
         audit_type="portfolio_drawdown_attribution",

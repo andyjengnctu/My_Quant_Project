@@ -7,7 +7,8 @@ from contextvars import ContextVar
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Mapping
+import math
 
 import numpy as np
 import pandas as pd
@@ -18,6 +19,8 @@ from core.breakout_quality_ranking_context import (
     breakout_quality_ranking_source_context,
     breakout_quality_ranking_uses_daily_information_date,
     get_breakout_quality_ranking_source_context,
+    audit_oracle_ranking_policy_context,
+    SCORE_SOURCE_AUDIT_ORACLE_FUTURE_TRUTH,
 )
 from core.breakout_quality_runtime_port import bind_breakout_quality_runtime_port
 from filters.breakout_quality.contract import DEFAULT_FILTER_ID
@@ -147,6 +150,32 @@ def breakout_quality_filter_source_execution_context(
             else:
                 os.environ[key] = prior
 
+# Private to this adapter: future truth is unavailable to all formal score stores.
+_ORACLE_TRUTH_SCORES: ContextVar[Mapping[tuple[str, str], float] | None] = ContextVar(
+    "breakout_quality_audit_oracle_truth_scores", default=None,
+)
+
+
+@contextmanager
+def audit_oracle_truth_score_context(
+    scores: Mapping[tuple[str, str], float],
+    *, ranking_policy: str, ranking_options: Mapping[str, object] | None = None,
+) -> Iterator[None]:
+    """Bind hindsight scores only during one isolated Audit portfolio replay."""
+    if not scores:
+        raise ValueError("Oracle Audit缺少成熟的Ground Truth scores")
+    if _ORACLE_TRUTH_SCORES.get() is not None:
+        raise RuntimeError("Oracle Audit不得巢狀覆寫未來真值score")
+    with audit_oracle_ranking_policy_context(
+        ranking_policy=ranking_policy, ranking_options=ranking_options,
+    ):
+        token = _ORACLE_TRUTH_SCORES.set(scores)
+        try:
+            yield
+        finally:
+            _ORACLE_TRUTH_SCORES.reset(token)
+
+
 def resolve_project_root_from_runtime() -> str:
     return str(Path(__file__).resolve().parents[2])
 
@@ -194,6 +223,20 @@ def resolve_breakout_quality_candidate_rank(
 ) -> dict:
     root = resolve_project_root_from_runtime() if project_root is None else str(project_root)
     context = get_breakout_quality_ranking_source_context()
+    if context.score_source == SCORE_SOURCE_AUDIT_ORACLE_FUTURE_TRUTH:
+        truth = _ORACLE_TRUTH_SCORES.get()
+        if truth is None or information_date is None:
+            raise RuntimeError("Oracle Audit來源或information_date缺失；禁止降級為正式PIT score")
+        date = pd.Timestamp(information_date).strftime("%Y-%m-%d")
+        key = (str(ticker), date)
+        value = truth.get(key)
+        if value is None or not math.isfinite(float(value)):
+            raise ValueError(f"Oracle Audit未覆蓋可交易候選，停止回測: ticker={ticker}, date={date}")
+        return {
+            "score": float(value), "available": True, "unavailable_reason": "",
+            "score_date": date, "filter_id": str(filter_id),
+            "score_source": SCORE_SOURCE_AUDIT_ORACLE_FUTURE_TRUTH,
+        }
     if context.score_source == SCORE_SOURCE_CANONICAL_RUNTIME:
         lookup_date = signal_date
         if breakout_quality_ranking_uses_daily_information_date():

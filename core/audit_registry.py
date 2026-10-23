@@ -12,6 +12,7 @@ from typing import Any
 from core.breakout_quality_registry import (
     DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
     DAILY_UNIVERSAL_FIRST_RISK_BREACH_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+    DAILY_UNIVERSAL_SHARED_FULL_D20_SAFETY_HS_CONDITIONAL_MFE_PROFILE,
 )
 from core.breakout_quality_policy import (
     BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
@@ -119,7 +120,38 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
 
 AUDIT_MODULES: dict[str, dict[str, Any]] = {
     # Stable module registration survives one-off retirement; reusable Audit remains separate.
-    "breakout_quality": {"enabled": True, "audits": {}},
+    "breakout_quality": {
+        "enabled": True,
+        "audits": {
+            "AUD-target-ground-truth-romd": {
+                "enabled": True,
+                "audit_type": "target_ground_truth_strategy_romd",
+                "description": "Hindsight upside/downside Ground Truth Ranking → Exact K/R0 broker-cash RoMD（一次性）",
+                "source": {
+                    "strategy_profile_id": "broker_cash_dl_conversion_rolling",
+                    "baseline_arm_id": "C96",
+                    "exact_arm_id": "C100",
+                    "filter_id": BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
+                    "model_architecture": BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
+                    "pure_mfe40_provider": DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+                    "mfe20_d20_provider": DAILY_UNIVERSAL_SHARED_FULL_D20_SAFETY_HS_CONDITIONAL_MFE_PROFILE,
+                    "first_breach_provider": DAILY_UNIVERSAL_FIRST_RISK_BREACH_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+                },
+                "dimensions": {
+                    "percentile_method": "average_zero_based",
+                    "oracle_cohort": "common_40bar_mature_stock_days",
+                    "oracle_score_method": "canonical_equal_rank_or_signed_net_r",
+                    "evaluation_mode": "rolling",
+                    "iterative_oos_evidence": True,
+                },
+                "outcomes": {
+                    "decision": "Compare Oracle RoMD/EV(A)/MDD before deciding DL targets",
+                    "stop_rule": "No retraining, no selector changes, no PIT or Trading use",
+                },
+                "output_subdir": "breakout_quality/one_time/target_oracle_romd",
+            },
+        },
+    },
 }
 
 
