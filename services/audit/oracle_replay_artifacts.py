@@ -113,9 +113,38 @@ class OracleReplayStore:
         return self.cache_root / str(seed) / f"{target}_{canonical_json_sha256(identity)}.json"
 
     def has_other_identity(self, identity: Mapping[str, Any]) -> bool:
-        """Do not fall back to weaker legacy evidence after input drift."""
+        """Block weaker legacy fallback after *same-panel* scientific drift.
+
+        Different mature horizon panels legitimately share C96/seed and cache
+        directory. Their distinct window/cohort must never disable report-based
+        reuse for the other panel. Within the same panel, changed input bytes,
+        params or replay policy must still block weaker historical fallback.
+        """
         path = self._path(identity)
-        return any(candidate != path for candidate in path.parent.glob(f"{identity['target']}_*.json"))
+        requested_cohort = identity.get("cohort") or {}
+        for candidate in path.parent.glob(f"{identity['target']}_*.json"):
+            if candidate == path:
+                continue
+            try:
+                payload = json.loads(candidate.read_text(encoding="utf-8"))
+                peer = payload["identity"]
+                if (payload.get("cache_schema") != _CACHE_SCHEMA
+                        or not isinstance(peer, dict)
+                        or peer.get("target") != identity["target"]
+                        or int(peer.get("seed", -1)) != int(identity["seed"])):
+                    raise ValueError("Oracle sibling replay cache identity malformed")
+                peer_cohort = peer.get("cohort") or {}
+                if not isinstance(peer_cohort, dict):
+                    raise ValueError("Oracle sibling replay cache cohort malformed")
+            except (OSError, ValueError, TypeError, KeyError, OverflowError) as exc:
+                raise ValueError("Oracle sibling replay cache is corrupt; fail closed") from exc
+            if (peer.get("dataset") == identity["dataset"]
+                    and peer.get("start_date") == identity["start_date"]
+                    and peer.get("end_date") == identity["end_date"]
+                    and peer_cohort.get("providers") == requested_cohort.get("providers")
+                    and peer_cohort.get("scoring") == requested_cohort.get("scoring")):
+                return True
+        return False
 
     def read(self, identity: Mapping[str, Any]) -> dict[str, Any] | None:
         path = self._path(identity)
@@ -206,6 +235,26 @@ class HistoricalOracleIndex:
                 continue
             if payload.get("status") == "COMPLETED":
                 self.snapshots.append((origin, path, payload))
+                # A persistent Audit may contain independently matured horizon
+                # panels. They carry the same approved report provenance, but
+                # each panel has its own canonical cohort, dates and baseline.
+                # A later run recovers its completed per-seed observations even
+                # when the strict per-arm replay cache is absent.
+                panels = payload.get("additional_panels") or {}
+                if not isinstance(panels, dict):
+                    raise ValueError("Oracle completed report has invalid additional panels")
+                for panel_id, panel in panels.items():
+                    if not isinstance(panel_id, str) or not isinstance(panel, dict):
+                        raise ValueError("Oracle completed panel provenance is malformed")
+                    if not all(field in panel for field in (
+                        "start_date", "end_date", "common_cohort", "definitions", "baseline", "oracles",
+                        "param_artifacts",
+                    )):
+                        raise ValueError("Oracle completed panel lacks scientific provenance")
+                    # No hardcoded horizon or target allowlist in the index.
+                    panel_payload = dict(payload)
+                    panel_payload.update(panel)
+                    self.snapshots.append((origin, path, panel_payload))
 
     def _compatible(self, payload: Mapping[str, Any], *, context: Mapping[str, Any], origin: str) -> bool:
         if (payload.get("status") != "COMPLETED" or payload.get("hindsight_non_pit") is not True

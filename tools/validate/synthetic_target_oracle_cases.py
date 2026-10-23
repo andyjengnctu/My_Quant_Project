@@ -38,6 +38,19 @@ from services.audit.runner import collect_audit_menu_state, collect_audit_status
 from services.audit.catalog import get_audit_methods
 
 
+def _mock_panels(common40):
+    """Single-side-effect fixture; independent 60D maturity identity."""
+    sixty = {"cohort_rows": 3, "last_common_day": "2025-11-24",
+             "research_cutoff": "2026-03-02", "providers": {"60d": "test"}}
+    return (
+        {name: {("2330", "2025-01-02"): 0.8} for name, _ in oracle.ORACLE_TARGETS},
+        common40,
+        {"cohort": sixty,
+         "scores": {name: {("2330", "2025-01-02"): 0.8}
+                    for name, _ in oracle.ORACLE_SIXTY_TARGETS}},
+    )
+
+
 class OracleAuditContractCases(TestCase):
     @classmethod
     def setUpClass(cls):
@@ -64,6 +77,9 @@ class OracleAuditContractCases(TestCase):
             {name for name, _ in oracle.ORACLE_TARGETS},
             {"AO40_EqualRank", "CG40_EqualRank", "CH20_EqualRank", "U40",
              "FirstBreach_NetR", "MFE40_Control", "R40", "T40"},
+        )
+        self.assertEqual(
+            {name for name, _ in oracle.ORACLE_SIXTY_TARGETS}, {"MFE60", "R60", "T60"},
         )
         self.assertEqual(self.definition.output_subdir, "breakout_quality/reusable/target_oracle_romd")
         with tempfile.TemporaryDirectory() as tmp:
@@ -165,6 +181,32 @@ class OracleAuditContractCases(TestCase):
         self.assertEqual(scores["T40"][key("2330")], 0.5)  # All three reach MAE>=1R.
         self.assertTrue(all(0.0 <= v <= 1.0 for table in scores.values() for v in table.values()))
 
+    def test_sixty_day_truth_is_own_mature_cohort_with_same_canonical_risk(self):
+        market, evidence = self._mock_market()
+        # Third stock-day has not matured at 60D; it must not receive a
+        # fabricated 60D score or change the existing 40D cohort.
+        market[oracle._SIXTY_TRUTH_FIELD] = pd.DataFrame({
+            "ticker": ["2330", "2317"], "date": ["2025-01-02"] * 2,
+            "mfe": [3.0, 4.0], "peak_adverse": [0.2, 0.1],
+            "min_low": [-0.2, -0.02], "raw": [3.0, 4.0],
+            "terminal_r": [2.0, 1.0],
+        })
+        evidence.update({"price_ticker_count": 3, "unreadable_tickers": {}})
+        with patch.object(oracle, "_load_truth", side_effect=lambda definition, root, source_field, cutoff: self._truth(source_field)), \
+             patch.object(oracle, "_market_truth_for_oracle", return_value=(market, evidence)):
+            scores40, cohort40, sixty = oracle._build_oracle_score_panels(
+                self.definition, project_root=ROOT, cutoff="2026-03-02", include_sixty=True,
+            )
+        self.assertEqual(cohort40["cohort_rows"], 3)
+        self.assertEqual(sixty["cohort"]["cohort_rows"], 2)
+        a, b, c = [(ticker, "2025-01-02") for ticker in ("2330", "2317", "2454")]
+        self.assertIn(c, scores40["MFE40_Control"])
+        for values in sixty["scores"].values():
+            self.assertNotIn(c, values)
+        self.assertGreater(sixty["scores"]["MFE60"][b], sixty["scores"]["MFE60"][a])
+        self.assertGreater(sixty["scores"]["R60"][a], sixty["scores"]["R60"][b])
+        self.assertGreater(sixty["scores"]["T60"][b], sixty["scores"]["T60"][a])
+
     def test_t40_terminal_return_with_mae_clamp_and_negative_return(self):
         # The actual 40D stop risk is a *research* fixed 1R, not an ATR stop.
         # At MAE>=1R, the result must equal -1R irrespective of positive R40.
@@ -176,6 +218,11 @@ class OracleAuditContractCases(TestCase):
             oracle._terminal_mae_gate_r(pd.Series([1.0]), pd.Series([0.2]))
         with self.assertRaisesRegex(oracle.OracleBlockedError, "finite R40"):
             oracle._terminal_mae_gate_r(pd.Series([float("nan")]), pd.Series([-0.1]))
+        np.testing.assert_allclose(
+            oracle._terminal_mae_gate_r(r40, safety, horizon=60).to_numpy(), target.to_numpy(),
+        )
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "nonnegative MAE60"):
+            oracle._terminal_mae_gate_r(pd.Series([1.0]), pd.Series([0.2]), horizon=60)
 
     def test_mismatched_stock_days_cannot_be_silently_filled(self):
         # If an official source claims a valid row but Research prices cannot
@@ -205,7 +252,9 @@ class OracleAuditContractCases(TestCase):
         with patch.object(oracle, "_contract", return_value=(settings, None, None)), \
              patch.object(oracle, "discover_dataset_csv_inputs", return_value=(paths, [])), \
              patch.object(oracle, "load_dataset_frame", side_effect=lambda path, ticker, **kw: prices[ticker]):
-            truth, evidence = oracle._market_truth_for_oracle(self.definition, ROOT, cutoff="2021-06-01")
+            truth, evidence = oracle._market_truth_for_oracle(
+                self.definition, ROOT, cutoff="2021-06-01", include_sixty=True,
+            )
         self.assertEqual(evidence["price_ticker_count"], 2)
         self.assertEqual(evidence["score_start"], "2020-12-31")
         for provider in oracle._ORACLE_PROVIDER_FIELDS:
@@ -223,6 +272,14 @@ class OracleAuditContractCases(TestCase):
                 budget = oracle.StrategyAlignedContinuousTargetSpec.from_label_policy(oracle.DEFAULT_LABEL_POLICY).risk_budget_return
                 expected = (prices["0050"].iloc[index + 40]["Close"] / prices["0050"].iloc[index]["Close"] - 1) / budget
                 self.assertAlmostEqual(float(first["terminal_r"]), float(expected), places=6)
+        table60 = truth[oracle._SIXTY_TRUTH_FIELD]
+        self.assertEqual(set(table60["ticker"]), {"0050", "2211"})
+        row60 = table60.loc[(table60.ticker == "0050") & (table60.date == "2021-01-13")].iloc[0]
+        index = prices["0050"].index.get_loc(pd.Timestamp("2021-01-13"))
+        expected60 = (prices["0050"].iloc[index+60]["Close"] /
+                      prices["0050"].iloc[index]["Close"] - 1) / budget
+        self.assertAlmostEqual(float(row60["terminal_r"]), expected60, places=6)
+        self.assertGreaterEqual(float(row60["mfe"]), float(first["mfe"]))
 
         # A ticker with only 20 observed bars cannot have a fabricated 40D
         # target. It remains absent; the runtime fail-closed guard still acts.
@@ -316,7 +373,7 @@ class OracleAuditContractCases(TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result.ticker.iloc[0], "2330")
 
-    def test_reusable_research_report_publishes_schema3_8_targets(self):
+    def test_reusable_research_report_publishes_schema4_two_horizon_panels(self):
         def summary(name: str):
             return {
                 "target": name, "total_return_pct": 100.0, "annualized_return_pct": 14.0,
@@ -326,7 +383,7 @@ class OracleAuditContractCases(TestCase):
                 "delta_romd_vs_c96": 0.0, "positive_seed_count": 0,
             }
         result = {
-            "schema_version": 3, "status": "COMPLETED",
+            "schema_version": 4, "status": "COMPLETED",
             "start_date": "2021-01-01", "end_date": "2025-12-22",
             "common_cohort": {
                 "cohort_rows": 3,
@@ -336,25 +393,36 @@ class OracleAuditContractCases(TestCase):
             "benchmark_id": "test", "seeds": [123], "limitations": ["NOT PIT"],
             "baseline": summary("C96"),
             "oracles": [summary(name) for name, _ in oracle.ORACLE_TARGETS],
+            "additional_panels": {"60d": {
+                "start_date": "2021-01-01", "end_date": "2025-11-24",
+                "common_cohort": {"cohort_rows": 2},
+                "baseline": summary("C96"),
+                "oracles": [summary(name) for name, _ in oracle.ORACLE_SIXTY_TARGETS],
+                "definitions": dict(oracle.ORACLE_SIXTY_TARGETS),
+                "param_artifacts": [],
+            }},
         }
         from services.audit.runner import render_latest_audit_summary
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             with patch.object(oracle, "build_report", return_value=result):
                 published = oracle.run_formal_audit(self.definition, project_root=base, quiet=True)
-            self.assertEqual(published["schema_version"], 3)
-            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v2")
+            self.assertEqual(published["schema_version"], 4)
+            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v3")
             self.assertEqual(published["report_id"], self.definition.audit_id)
             latest = base / "outputs/audit" / self.definition.output_subdir / "latest"
             body = (latest / "audit.md").read_text(encoding="utf-8")
             self.assertIn("**R40**", body)
             self.assertIn("**T40**", body)
+            self.assertIn("**T60**", body)
+            self.assertIn("60D Mature Oracle", body)
             self.assertNotIn("**MAE20**", body)
             self.assertNotIn("**MFE40_over_D40**", body)
             self.assertIn("MAE40 >= 1R", body)
             self.assertIn("Delta RoMD", body)
             json_data = json.loads((latest / "audit.json").read_text(encoding="utf-8"))
             self.assertEqual(len(json_data["oracles"]), len(oracle.ORACLE_TARGETS))
+            self.assertEqual(len(json_data["additional_panels"]["60d"]["oracles"]), 3)
             listing = render_latest_audit_summary(
                 "breakout_quality", project_root=base, method_id=oracle.SUPPORTED_AUDIT_TYPE,
             )
@@ -390,7 +458,7 @@ class OracleAuditContractCases(TestCase):
             }
         with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
              patch.object(oracle, "_robustness_artifacts", return_value=(Benchmark(), [(seed, Path(f"seed_{seed}.json")) for seed in seeds])), \
-             patch.object(oracle, "build_oracle_score_tables", return_value=({name: {("2330", "2025-01-02"): 0.8} for name, _ in oracle.ORACLE_TARGETS}, {"cohort_rows": 4, "last_common_day": "2025-12-31", "mfe40_over_d40_zero_downside_positive_upside_count": 0, "mfe40_over_d40_zero_zero_count": 0})), \
+             patch.object(oracle, "_build_oracle_score_panels", return_value=_mock_panels({"cohort_rows": 4, "last_common_day": "2025-12-31", "mfe40_over_d40_zero_downside_positive_upside_count": 0, "mfe40_over_d40_zero_zero_count": 0})), \
              patch.object(oracle, "load_strategy_param_evaluation_view", return_value=({"kind": "rolling_active_param_ensemble", "payload": {}}, "a" * 64)), \
              patch.object(oracle, "_validate_requested_param_policy"), \
              patch.object(oracle, "get_active_param_ensemble_date_range", return_value=("2020-01-01", "2026-03-02")), \
@@ -405,17 +473,20 @@ class OracleAuditContractCases(TestCase):
                 self.assertEqual(len(seen), original_calls, "identical replay must REUSE all arms")
                 self.assertEqual(reused["baseline"], report["baseline"])
                 self.assertEqual(reused["oracles"], report["oracles"])
-        self.assertEqual(len(seen), len(seeds) * (1 + len(oracle.ORACLE_TARGETS)))
+        self.assertEqual(len(seen), len(seeds) * (2 + len(oracle.ORACLE_TARGETS) + len(oracle.ORACLE_SIXTY_TARGETS)))
         self.assertEqual(report["seeds"], list(seeds))
-        self.assertEqual(report["schema_version"], 3)
+        self.assertEqual(report["schema_version"], 4)
         self.assertEqual(len(report["oracles"]), 8)
         self.assertEqual(report["end_date"], "2025-12-31")
+        self.assertEqual(report["additional_panels"]["60d"]["end_date"], "2025-11-24")
+        self.assertEqual(len(report["additional_panels"]["60d"]["oracles"]), 3)
         self.assertEqual(report["baseline"]["romd_std"], report["oracles"][0]["romd_std"])
         self.assertEqual(report["oracles"][0]["delta_romd_vs_c96"], 1.5)
         self.assertEqual(report["oracles"][0]["positive_seed_count"], len(seeds))
         self.assertIn("Oracle Performance", oracle.render_result(report, target="markdown"))
         self.assertIn("**R40**", oracle.render_result(report, target="markdown"))
         self.assertIn("**T40**", oracle.render_result(report, target="markdown"))
+        self.assertIn("**T60**", oracle.render_result(report, target="markdown"))
         self.assertNotIn("MFE40/D40 zero denominator", oracle.render_result(report, target="console"))
         self.assertIn("RoMD Mean", oracle.render_result(report, target="console"))
         json.dumps(report, ensure_ascii=False)
@@ -666,7 +737,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
             (previous / "audit.json").write_text(json.dumps(archived), encoding="utf-8")
             with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
                  patch.object(oracle, "_robustness_artifacts", return_value=(Benchmark(), [(seed, Path(f"seed_{seed}.json")) for seed in seeds])), \
-                 patch.object(oracle, "build_oracle_score_tables", return_value=({key: {("2330", "2025-01-02"): 0.8} for key in definitions}, common)), \
+                 patch.object(oracle, "_build_oracle_score_panels", return_value=_mock_panels(common)), \
                  patch.object(oracle, "load_strategy_param_evaluation_view", return_value=({"kind": "rolling_active_param_ensemble", "payload": {}}, "a" * 64)), \
                  patch.object(oracle, "_validate_requested_param_policy"), \
                  patch.object(oracle, "get_active_param_ensemble_date_range", return_value=("2020-01-01", "2026-03-02")), \
@@ -675,12 +746,13 @@ class OracleReplayEvidenceReuseCases(TestCase):
                  patch.object(oracle, "_run_scenario", side_effect=replay), \
                  patch.object(oracle, "_metrics", side_effect=metrics):
                 result = oracle.build_report(definition, project_root=root, quiet=True)
-                self.assertEqual(len(seen), len(seeds) * 2, "V1 must reuse C96 and six retained targets")
+                self.assertEqual(len(seen), len(seeds) * 6,
+                                 "V1 reuses 40D C96/six targets, plus 60D own C96/three targets")
                 self.assertEqual([r["target"] for r in result["oracles"]], list(definitions))
-                self.assertEqual(result["schema_version"], 3)
+                self.assertEqual(result["schema_version"], 4)
                 self.assertEqual(result["baseline"]["seed_observations"][0]["romd"], 11)
                 same = oracle.build_report(definition, project_root=root, quiet=True)
-                self.assertEqual(len(seen), 8, "current eight-target rerun must reuse all 36")
+                self.assertEqual(len(seen), 24, "rerun must reuse all available 40D and 60D arms")
                 self.assertEqual(same["oracles"], result["oracles"])
 
                 # Simulate an already-completed *eleven-target* reusable v1
@@ -702,7 +774,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 shutil.rmtree(reusable_root / "replay_cache")
                 shutil.rmtree(root / "outputs/audit/breakout_quality/one_time/target_oracle_romd")
                 recovered = oracle.build_report(definition, project_root=root, quiet=True)
-                self.assertEqual(len(seen), 16, "old completed eleven-target report must only run R40 and T40")
+                self.assertEqual(len(seen), 48, "old eleven targets run only 40D R/T and independent 60D panel")
                 self.assertEqual(recovered["oracles"], result["oracles"])
                 self.assertEqual(recovered["baseline"], result["baseline"])
                 index = HistoricalOracleIndex(root)
@@ -729,14 +801,16 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 current_v3 = dict(
                     result, report_id="target_oracle_romd", report_type=oracle.SUPPORTED_AUDIT_TYPE,
                     report_contract_id="audit.target_oracle_romd@v2",
-                    report_contract_fingerprint=oracle.persistent_report_contract_fingerprint("audit.target_oracle_romd"),
+                    report_contract_fingerprint=load_report_contract_versions()["audit.target_oracle_romd"][1]["fingerprint"],
                 )
+                current_v3.pop("additional_panels")  # Prior v2 never contained future 60D panels.
                 current_path = reusable_root / "20261023T132500Z"
                 current_path.mkdir(parents=True)
                 (current_path / "audit.json").write_text(json.dumps(current_v3), encoding="utf-8")
                 shutil.rmtree(reusable_root / "replay_cache")
                 restored = oracle.build_report(definition, project_root=root, quiet=True)
-                self.assertEqual(len(seen), 16, "current completed reusable report must recover 36/36 without replay")
+                self.assertEqual(len(seen), 64,
+                                 "old v2 report restores 40D; only independent 60D needs replay")
                 self.assertEqual(restored["oracles"], result["oracles"])
 
     def test_partial_replay_is_saved_before_later_failure_and_resumes(self):
@@ -758,7 +832,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
                  patch.object(oracle, "_robustness_artifacts", return_value=(Benchmark(), [(seed, Path(f"seed_{seed}.json")) for seed in seeds])), \
-                 patch.object(oracle, "build_oracle_score_tables", return_value=({key: {("2330", "2025-01-02"): 0.8} for key, _ in oracle.ORACLE_TARGETS}, common)), \
+                 patch.object(oracle, "_build_oracle_score_panels", return_value=_mock_panels(common)), \
                  patch.object(oracle, "load_strategy_param_evaluation_view", return_value=({"kind": "rolling_active_param_ensemble", "payload": {}}, "a" * 64)), \
                  patch.object(oracle, "_validate_requested_param_policy"), \
                  patch.object(oracle, "get_active_param_ensemble_date_range", return_value=("2020-01-01", "2026-03-02")), \
@@ -771,10 +845,57 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 self.assertEqual(state["calls"], 10)
                 state["crash"] = False
                 resumed = oracle.build_report(definition, project_root=Path(tmp), quiet=True)
-                self.assertEqual(state["calls"], 37, "the first nine completed arms must not replay")
+                self.assertEqual(state["calls"], 53, "the first nine completed arms must not replay")
                 self.assertEqual(len(resumed["oracles"]), 8)
                 oracle.build_report(definition, project_root=Path(tmp), quiet=True)
-                self.assertEqual(state["calls"], 37)
+                self.assertEqual(state["calls"], 53)
+
+    def test_completed_schema4_panels_restore_all_52_units_without_per_arm_cache(self):
+        from core.report_contract_versions import load_report_contract_versions
+        seeds = (11, 22, 33, 44)
+        class Benchmark:
+            benchmark_id = "end_to_end_v1"
+        common40 = {"cohort_rows": 4, "last_common_day": "2025-12-22"}
+        recorded = []
+        def replay(*, name, **kwargs):
+            recorded.append(name)
+            return {"name": name}
+        def metrics(result, *, target):
+            seed = int(result["name"].split("seed=")[1].split()[0])
+            return self._observation(target, seed)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
+                 patch.object(oracle, "_robustness_artifacts", return_value=(Benchmark(), [(seed, Path(f"seed_{seed}.json")) for seed in seeds])), \
+                 patch.object(oracle, "_build_oracle_score_panels", return_value=_mock_panels(common40)), \
+                 patch.object(oracle, "load_strategy_param_evaluation_view", return_value=({"kind": "rolling_active_param_ensemble", "payload": {}}, "a" * 64)), \
+                 patch.object(oracle, "_validate_requested_param_policy"), \
+                 patch.object(oracle, "get_active_param_ensemble_date_range", return_value=("2020-01-01", "2026-03-02")), \
+                 patch.object(oracle, "_build_controlled_param_source_pair", return_value=("rolling_active_param_ensemble", "base", "oracle", None, None, None)), \
+                 patch.object(oracle, "price_inventory_sha256", return_value="b" * 64), \
+                 patch.object(oracle, "_run_scenario", side_effect=replay), \
+                 patch.object(oracle, "_metrics", side_effect=metrics):
+                report = oracle.build_report(next((
+                    d for d in get_reusable_audit_definitions("breakout_quality")
+                    if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE
+                )), project_root=root, quiet=True)
+                self.assertEqual(len(recorded), 4 * (9 + 4))
+                report.update({
+                    "report_id": "target_oracle_romd", "report_type": oracle.SUPPORTED_AUDIT_TYPE,
+                    "report_contract_id": "audit.target_oracle_romd@v3",
+                    "report_contract_fingerprint": load_report_contract_versions()["audit.target_oracle_romd"][-1]["fingerprint"],
+                })
+                directory = root / "outputs/audit/breakout_quality/reusable/target_oracle_romd"
+                snapshot = directory / "20261023T223000Z"
+                snapshot.mkdir(parents=True)
+                (snapshot / "audit.json").write_text(json.dumps(report), encoding="utf-8")
+                shutil.rmtree(directory / "replay_cache")
+                rebuilt = oracle.build_report(next((
+                    d for d in get_reusable_audit_definitions("breakout_quality")
+                    if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE
+                )), project_root=root, quiet=True)
+                self.assertEqual(len(recorded), 52, f"completed report reuse misses {recorded[52:]}")
+                self.assertEqual(rebuilt["additional_panels"], report["additional_panels"])
 
 
 if __name__ == "__main__":

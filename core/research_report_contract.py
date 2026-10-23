@@ -697,7 +697,7 @@ PORTFOLIO_DRAWDOWN_REPORT = PersistentReportContract(
     ),
 )
 
-TARGET_ORACLE_ROMD_REPORT = PersistentReportContract(
+_TARGET_ORACLE_ROMD_PRIOR_REPORT = PersistentReportContract(
     report_id="audit.target_oracle_romd", version=2, role="persistent_reusable_hindsight_non_pit",
     menu_path=("Research", "Audit／診斷", "可重複使用的原因分析", "Target Ground Truth → Strategy RoMD (Oracle)"),
     sections=(
@@ -727,6 +727,25 @@ TARGET_ORACLE_ROMD_REPORT = PersistentReportContract(
             C("delta_romd_vs_c96", "Paired Delta", 2, preference="higher", format_kind="signed_number"),
         )),)),
         S("constraints", 5, "Research Constraints"),
+    ),
+)
+
+# The v2 section definitions remain a frozen source representation. A new
+# approved v3 retains all 40D tables and appends an independently matured
+# 60D panel with the SAME metric/fee/statistics columns and a separate C96.
+TARGET_ORACLE_ROMD_REPORT = PersistentReportContract(
+    report_id="audit.target_oracle_romd", version=3,
+    role="persistent_reusable_hindsight_non_pit",
+    menu_path=_TARGET_ORACLE_ROMD_PRIOR_REPORT.menu_path,
+    sections=(
+        _TARGET_ORACLE_ROMD_PRIOR_REPORT.sections[0],
+        S("target_definitions", 2, "Target Definitions (8 × 40D / 3 × 60D)"),
+        *_TARGET_ORACLE_ROMD_PRIOR_REPORT.sections[2:],
+        S("sixty_day_comparison", 6, "60D Mature Oracle / Independent Same-Window C96", tables=(
+            T("performance_60d", _TARGET_ORACLE_ROMD_PRIOR_REPORT.sections[0].tables[0].columns),
+            T("yearly_60d", _TARGET_ORACLE_ROMD_PRIOR_REPORT.sections[2].tables[0].columns),
+            T("paired_60d", _TARGET_ORACLE_ROMD_PRIOR_REPORT.sections[3].tables[0].columns),
+        )),
     ),
 )
 
