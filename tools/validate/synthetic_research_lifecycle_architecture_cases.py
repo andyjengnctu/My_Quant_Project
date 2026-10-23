@@ -3253,7 +3253,16 @@ def validate_research_model_readiness_architecture_case(_base_params):
             score_owner.clear_selection_point_in_time_ranking_contract_cache()
             dataset_summary_path.write_text('{"revision": "a"}', encoding="utf-8")
             def _upstream_changes_during_ranking_validation(*_args, **_kwargs):
-                dataset_summary_path.write_text('{"revision": "b"}', encoding="utf-8")
+                # A canonical Dataset publication atomically replaces its
+                # summary. In-place same-size rewrites can be invisible to
+                # Windows' filesystem timestamp/change-time precision.
+                previous_stat = dataset_summary_path.stat()
+                staged = dataset_summary_path.with_name(".dataset_during_validation.json")
+                staged.write_text('{"revision": "b"}', encoding="utf-8")
+                os.utime(staged, ns=(
+                    previous_stat.st_atime_ns, previous_stat.st_mtime_ns,
+                ))
+                os.replace(staged, dataset_summary_path)
                 return complete
             with patch.object(
                 score_owner, "_load_selection_point_in_time_ranking_contract_uncached",

@@ -5022,6 +5022,25 @@ def _model_report_color_alignment_checks(app):
                             and f"{red}1.5000 pooled σ</span>" in md))
         results.append((f"{mode}_robustness_lower_std_highlight",
                         f"{green}0.0100</span>" in md and f"{red}0.0400</span>" in md))
+        # Scope labels in the human-readable SOP are mode-specific. Both
+        # must preserve the existing numerical mean rather than render '-'.
+        human_scope = "Rolling OOS" if mode == "rolling_oos" else "Forward OOS"
+        scoped_views = []
+        for item in views:
+            scoped_view = dict(item["view"])
+            scoped_view["joint_mfe_adverse_quality"] = [
+                {**row, "split": human_scope} if row.get("split") == "oos" else row
+                for row in scoped_view["joint_mfe_adverse_quality"]
+            ]
+            scoped_views.append({**item, "view": scoped_view})
+        with patch.object(app, "_standard_model_comparison_views", return_value=scoped_views):
+            scoped_report = app._render_standard_model_comparison([{}, {}], target="markdown")
+        scoped_rows = app._robustness_specific_comparison_rows(scoped_views)
+        results.append((f"{mode}_robustness_joint_quality_mean_survives_human_scope",
+                        len(scoped_rows) == 2
+                        and [row["joint_quality_mean"] for row in scoped_rows] == [30.0, 20.0]
+                        and "30.00" in scoped_report.split("Across-seed Stability", 1)[1]
+                        and "20.00" in scoped_report.split("Across-seed Stability", 1)[1]))
 
     # A complete tie or only one finite comparison must stay uncolored, even
     # when its delta is nonzero. Keep this test local to M2's first transition.
@@ -5476,21 +5495,6 @@ def validate_research_report_contract_freeze_case(_base_params):
         and "Across-seed Stability" in robust_output
         and "Top10 Joint Quality σ" in robust_output
         and "Top10 Joint Quality mean" in robust_output,
-    )
-    # The human-readable OOS scope is "Rolling OOS" / "Forward OOS", not
-    # the raw machine split key "oos". Verify the numeric mean is present.
-    robustness_rows = app._robustness_specific_comparison_rows(
-        app._standard_model_comparison_views([
-            {"model_id": "ROBUST-A", "payload": {"standard_model_sop": aggregated}},
-            {"model_id": "ROBUST-B", "payload": {"standard_model_sop": aggregated}},
-        ])
-    )
-    check_true(
-        "robustness_joint_quality_mean_uses_formatted_oos_scope_instead_of_dash",
-        len(robustness_rows) == 2
-        and all(abs(float(row["joint_quality_mean"]) - joint_oos) < 1e-8
-                for row in robustness_rows)
-        and f"{joint_oos:.2f}" in robust_output.split("Across-seed Stability", 1)[1],
     )
     try:
         broken_aggregate_seed=json.loads(json.dumps(second_seed))
