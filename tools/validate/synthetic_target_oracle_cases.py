@@ -394,13 +394,20 @@ class OracleAuditContractCases(TestCase):
         with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
              patch.object(oracle, "_robustness_artifacts", return_value=(Benchmark(), [(seed, Path(f"seed_{seed}.json")) for seed in seeds])), \
              patch.object(oracle, "build_oracle_score_tables", return_value=({name: {("2330", "2025-01-02"): 0.8} for name, _ in oracle.ORACLE_TARGETS}, {"cohort_rows": 4, "last_common_day": "2025-12-31", "mfe40_over_d40_zero_downside_positive_upside_count": 0, "mfe40_over_d40_zero_zero_count": 0})), \
-             patch.object(oracle, "load_strategy_param_evaluation_view", return_value=({"kind": "rolling_active_param_ensemble", "payload": {}}, "test-source-sha")), \
+             patch.object(oracle, "load_strategy_param_evaluation_view", return_value=({"kind": "rolling_active_param_ensemble", "payload": {}}, "a" * 64)), \
              patch.object(oracle, "_validate_requested_param_policy"), \
              patch.object(oracle, "get_active_param_ensemble_date_range", return_value=("2020-01-01", "2026-03-02")), \
              patch.object(oracle, "_build_controlled_param_source_pair", return_value=("rolling_active_param_ensemble", "base", "oracle", None, None, None)), \
              patch.object(oracle, "_run_scenario", side_effect=fake_replay), \
+             patch.object(oracle, "price_inventory_sha256", return_value="b" * 64), \
              patch.object(oracle, "_metrics", side_effect=fake_metrics):
-            report = oracle.build_report(self.definition, project_root=ROOT, quiet=True)
+            with tempfile.TemporaryDirectory() as tmp:
+                report = oracle.build_report(self.definition, project_root=Path(tmp), quiet=True)
+                original_calls = len(seen)
+                reused = oracle.build_report(self.definition, project_root=Path(tmp), quiet=True)
+                self.assertEqual(len(seen), original_calls, "identical replay must REUSE all arms")
+                self.assertEqual(reused["baseline"], report["baseline"])
+                self.assertEqual(reused["oracles"], report["oracles"])
         self.assertEqual(len(seen), len(seeds) * (1 + len(oracle.ORACLE_TARGETS)))
         self.assertEqual(report["seeds"], list(seeds))
         self.assertEqual(report["schema_version"], 2)
@@ -417,6 +424,219 @@ class OracleAuditContractCases(TestCase):
         json.dumps(report, ensure_ascii=False)
         self.assertNotEqual(get_breakout_quality_ranking_source_context().score_source,
                             SCORE_SOURCE_AUDIT_ORACLE_FUTURE_TRUTH)
+
+
+class OracleReplayEvidenceReuseCases(TestCase):
+    """Exact-identity per-arm REUSE and conservative historical-V1 compatibility."""
+
+    @staticmethod
+    def _observation(target, seed):
+        romd = float(seed) + (0.0 if target == "C96" else 2.0)
+        observation = {
+            "target": target, "seed": seed,
+            "total_return_pct": 123.0, "annualized_return_pct": 16.0,
+            "mdd_pct": 12.0, "romd": romd, "ev_a_r": 0.7,
+            "trades": 100, "exposure_pct": 75.0,
+            "yearly": [{"year": 2021, "strategy_return_pct": 14.0, "is_full_year": True}],
+        }
+        if target != "C96":
+            observation["delta_romd_vs_c96"] = 2.0
+        return observation
+
+    @staticmethod
+    def _identity(seed=1, target="U40", dataset_sha="a" * 64, param_sha="b" * 64):
+        from services.audit.oracle_replay_artifacts import replay_identity
+        return replay_identity(
+            dataset="full", dataset_sha256=dataset_sha,
+            target=target, definition=dict(oracle.ORACLE_TARGETS),
+            settings_fingerprint="fixture", start="2021-01-01", end="2025-12-22",
+            benchmark="end_to_end_v1", param_sha256=param_sha, seed=seed,
+            cohort={"cohort_rows": 123, "research_cutoff": "2026-03-02"},
+            ranking_policy="score", ranking_options={"preserve_k_r0": True},
+            evaluation_mode="rolling", max_positions=10,
+            replay_policy={"exact_k_r0": True},
+        )
+
+    def test_content_sha_changes_even_when_csv_length_is_unchanged(self):
+        from services.audit import oracle_replay_artifacts as artifacts
+        with tempfile.TemporaryDirectory() as tmp:
+            csv = Path(tmp) / "2330.csv"
+            csv.write_text("100,200\n", encoding="utf-8")
+            with patch.object(artifacts, "discover_dataset_csv_inputs", return_value=([("2330", csv)], [])):
+                before = artifacts.price_inventory_sha256(Path(tmp), "full")
+                csv.write_text("100,201\n", encoding="utf-8")
+                after = artifacts.price_inventory_sha256(Path(tmp), "full")
+                self.assertNotEqual(before, after)
+                self.assertEqual(after, artifacts.price_inventory_sha256(Path(tmp), "full"))
+
+    def test_partial_unit_cache_reuses_only_identical_input_identity(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = OracleReplayStore(Path(tmp), "breakout_quality/reusable/target_oracle_romd")
+            identity = self._identity()
+            record = self._observation("U40", 1)
+            self.assertIsNone(cache.read(identity))
+            cache.write(identity, record, origin="canonical_replay")
+            self.assertEqual(cache.read(identity), record)
+            cache.write(identity, record, origin="canonical_replay")  # idempotent
+            self.assertIsNone(cache.read(self._identity(dataset_sha="c" * 64)))
+            self.assertTrue(cache.has_other_identity(self._identity(dataset_sha="c" * 64)))
+            self.assertIsNone(cache.read(self._identity(param_sha="d" * 64)))
+            with self.assertRaisesRegex(ValueError, "conflict"):
+                cache.write(identity, {**record, "romd": 999}, origin="canonical_replay")
+            location = cache._path(identity)
+            raw = json.loads(location.read_text(encoding="utf-8"))
+            raw["observation"]["romd"] = 999
+            location.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "corrupt"):
+                cache.read(identity)
+
+    def test_history_reuses_only_completed_matching_seven_target_seed_records(self):
+        from services.audit.oracle_replay_artifacts import HistoricalOracleIndex
+        seeds = [1, 2, 3, 4]
+        description = dict(oracle.ORACLE_TARGETS)
+        cohort = {
+            "cohort_rows": 643617,
+            "first_common_day": "2020-12-31", "last_common_day": "2025-12-22",
+            "research_cutoff": "2026-03-02", "risk_budget_return": 0.03,
+            "providers": {"40d": "provider-a"}, "scoring": "shared percentile",
+            "market_truth": {"price_ticker_count": 556},
+            "rows_outside_dl_training_provider_by_source": {"40d": 5},
+        }
+        context = {
+            "benchmark": "end_to_end_v1", "strategy_profile_id": "broker_cash_dl_conversion_rolling",
+            "dataset": "full", "start_date": "2021-01-01", "end_date": "2025-12-22",
+            "seeds": seeds, "param_sha_by_seed": {seed: "a" * 64 for seed in seeds},
+            "cohort": cohort, "definitions": description,
+        }
+        historical = {
+            "schema_version": 1, "status": "COMPLETED", "read_only": True,
+            "hindsight_non_pit": True, "report_id": "AUD-target-ground-truth-romd",
+            "report_type": "target_ground_truth_strategy_romd",
+            "strategy_profile_id": context["strategy_profile_id"],
+            "benchmark_id": context["benchmark"], "dataset": "full",
+            "start_date": context["start_date"], "end_date": context["end_date"],
+            "seeds": seeds,
+            "param_artifacts": [{"seed": seed, "param_sha256": "a" * 64} for seed in seeds],
+            "common_cohort": cohort,
+            "definitions": {key: description[key] for key in list(description)[:7]},
+            "baseline": oracle._aggregate([self._observation("C96", seed) for seed in seeds], target="C96"),
+            "oracles": [oracle._aggregate([self._observation(key, seed) for seed in seeds], target=key)
+                        for key in list(description)[:7]],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "outputs/audit/breakout_quality/one_time/target_oracle_romd/latest"
+            root.mkdir(parents=True)
+            path = root / "audit.json"
+            path.write_text(json.dumps(historical), encoding="utf-8")
+            index = HistoricalOracleIndex(Path(tmp))
+            self.assertEqual(index.lookup(target="C96", seed=3, context=context)["romd"], 3.0)
+            self.assertEqual(index.lookup(target="U40", seed=3, context=context)["romd"], 5.0)
+            self.assertIsNone(index.lookup(target="MFE20", seed=3, context=context))
+            mutated = {**context, "param_sha_by_seed": {seed: "b" * 64 for seed in seeds}}
+            self.assertIsNone(index.lookup(target="U40", seed=3, context=mutated))
+            mutated = {**context, "cohort": {**cohort, "cohort_rows": 999}}
+            self.assertIsNone(index.lookup(target="U40", seed=3, context=mutated))
+            altered = {**historical, "oracles": [dict(item) for item in historical["oracles"]]}
+            altered["oracles"][0]["romd"] += 1.0
+            path.write_text(json.dumps(altered), encoding="utf-8")
+            index = HistoricalOracleIndex(Path(tmp))
+            with self.assertRaisesRegex(ValueError, "incomplete / corrupted"):
+                index.lookup(target="AO40_EqualRank", seed=3, context=context)
+
+    def test_history_seven_targets_runs_only_four_new_targets_and_then_full_reuse(self):
+        seeds = (11, 22, 33, 44)
+        definitions = dict(oracle.ORACLE_TARGETS)
+        common = {"cohort_rows": 4, "first_common_day": "2021-01-01",
+                  "last_common_day": "2025-12-22", "research_cutoff": "2026-03-02",
+                  "risk_budget_return": 0.03, "providers": {}, "scoring": "test",
+                  "market_truth": {}, "rows_outside_dl_training_provider_by_source": {},
+                  "mfe40_over_d40_zero_downside_positive_upside_count": 0,
+                  "mfe40_over_d40_zero_zero_count": 0}
+        class Benchmark:
+            benchmark_id = "end_to_end_v1"
+        archived = {
+            "schema_version": 1, "status": "COMPLETED", "read_only": True,
+            "hindsight_non_pit": True, "report_id": "AUD-target-ground-truth-romd",
+            "report_type": oracle.SUPPORTED_AUDIT_TYPE,
+            "strategy_profile_id": "broker_cash_dl_conversion_rolling",
+            "benchmark_id": Benchmark.benchmark_id, "dataset": "full",
+            "start_date": "2021-01-01", "end_date": "2025-12-22",
+            "seeds": list(seeds), "common_cohort": common,
+            "param_artifacts": [{"seed": seed, "param_sha256": "a" * 64} for seed in seeds],
+            "definitions": {k: definitions[k] for k in list(definitions)[:7]},
+            "baseline": oracle._aggregate([self._observation("C96", seed) for seed in seeds], target="C96"),
+            "oracles": [oracle._aggregate([self._observation(k, seed) for seed in seeds], target=k)
+                        for k in list(definitions)[:7]],
+        }
+        seen = []
+        def replay(*, name, **kwargs):
+            seen.append(name)
+            return {"name": name}
+        def metrics(result, *, target):
+            seed = int(result["name"].split("seed=")[1].split()[0])
+            return self._observation(target, seed)
+        definition = next(d for d in get_reusable_audit_definitions("breakout_quality")
+                          if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            previous = root / "outputs/audit/breakout_quality/one_time/target_oracle_romd/latest"
+            previous.mkdir(parents=True)
+            (previous / "audit.json").write_text(json.dumps(archived), encoding="utf-8")
+            with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
+                 patch.object(oracle, "_robustness_artifacts", return_value=(Benchmark(), [(seed, Path(f"seed_{seed}.json")) for seed in seeds])), \
+                 patch.object(oracle, "build_oracle_score_tables", return_value=({key: {("2330", "2025-01-02"): 0.8} for key in definitions}, common)), \
+                 patch.object(oracle, "load_strategy_param_evaluation_view", return_value=({"kind": "rolling_active_param_ensemble", "payload": {}}, "a" * 64)), \
+                 patch.object(oracle, "_validate_requested_param_policy"), \
+                 patch.object(oracle, "get_active_param_ensemble_date_range", return_value=("2020-01-01", "2026-03-02")), \
+                 patch.object(oracle, "_build_controlled_param_source_pair", return_value=("rolling_active_param_ensemble", "base", "oracle", None, None, None)), \
+                 patch.object(oracle, "price_inventory_sha256", return_value="b" * 64), \
+                 patch.object(oracle, "_run_scenario", side_effect=replay), \
+                 patch.object(oracle, "_metrics", side_effect=metrics):
+                result = oracle.build_report(definition, project_root=root, quiet=True)
+                self.assertEqual(len(seen), len(seeds) * 4, "V1 C96 + 7 targets must not replay")
+                self.assertEqual(len(result["oracles"]), 11)
+                self.assertEqual(result["baseline"]["seed_observations"][0]["romd"], 11)
+                result_again = oracle.build_report(definition, project_root=root, quiet=True)
+                self.assertEqual(len(seen), 16, "completed 11-target rerun must reuse all 48")
+                self.assertEqual(result_again["oracles"], result["oracles"])
+
+    def test_partial_replay_is_saved_before_later_failure_and_resumes(self):
+        seeds = (11, 22, 33, 44)
+        class Benchmark:
+            benchmark_id = "end_to_end_v1"
+        definition = next(d for d in get_reusable_audit_definitions("breakout_quality")
+                          if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
+        common = {"cohort_rows": 4, "last_common_day": "2025-12-22"}
+        state = {"calls": 0, "crash": True}
+        def replay(*, name, **kwargs):
+            state["calls"] += 1
+            if state["crash"] and state["calls"] == 10:
+                raise RuntimeError("injected replay interruption")
+            return {"name": name}
+        def metrics(result, *, target):
+            seed = int(result["name"].split("seed=")[1].split()[0])
+            return self._observation(target, seed)
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
+                 patch.object(oracle, "_robustness_artifacts", return_value=(Benchmark(), [(seed, Path(f"seed_{seed}.json")) for seed in seeds])), \
+                 patch.object(oracle, "build_oracle_score_tables", return_value=({key: {("2330", "2025-01-02"): 0.8} for key, _ in oracle.ORACLE_TARGETS}, common)), \
+                 patch.object(oracle, "load_strategy_param_evaluation_view", return_value=({"kind": "rolling_active_param_ensemble", "payload": {}}, "a" * 64)), \
+                 patch.object(oracle, "_validate_requested_param_policy"), \
+                 patch.object(oracle, "get_active_param_ensemble_date_range", return_value=("2020-01-01", "2026-03-02")), \
+                 patch.object(oracle, "_build_controlled_param_source_pair", return_value=("rolling_active_param_ensemble", "base", "oracle", None, None, None)), \
+                 patch.object(oracle, "price_inventory_sha256", return_value="b" * 64), \
+                 patch.object(oracle, "_run_scenario", side_effect=replay), \
+                 patch.object(oracle, "_metrics", side_effect=metrics):
+                with self.assertRaisesRegex(RuntimeError, "injected replay interruption"):
+                    oracle.build_report(definition, project_root=Path(tmp), quiet=True)
+                self.assertEqual(state["calls"], 10)
+                state["crash"] = False
+                resumed = oracle.build_report(definition, project_root=Path(tmp), quiet=True)
+                self.assertEqual(state["calls"], 49, "the first nine completed arms must not replay")
+                self.assertEqual(len(resumed["oracles"]), 11)
+                oracle.build_report(definition, project_root=Path(tmp), quiet=True)
+                self.assertEqual(state["calls"], 49)
 
 
 if __name__ == "__main__":

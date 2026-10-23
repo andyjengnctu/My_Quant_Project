@@ -25,6 +25,7 @@ from core.breakout_quality_runtime_resolver import get_continuous_ranker_executi
 from core.console_report import render_table, render_title
 from core.dataset_profiles import get_dataset_dir
 from core.path_utils import project_relative_display_path
+from core.file_integrity import canonical_json_sha256
 from core.strategy_compare_policy import (
     get_strategy_comparison_settings, get_strategy_multi_seed_robustness_settings,
 )
@@ -50,10 +51,20 @@ from filters.breakout_quality.strategy_compare_sources import (
 )
 from filters.breakout_quality.strategy_rule_policies import ALL_RULE_FILTERS_OFF_OVERRIDES
 from services.audit.reusable_report import persist_reusable_report
+from services.audit.oracle_replay_artifacts import (
+    HistoricalOracleIndex, OracleReplayStore, price_inventory_sha256, replay_identity,
+)
 from services.optimizer.strategy_param_service import (
     inspect_fixed_multiseed_robustness_strategy_parameter_artifact,
 )
-from config.execution_policy import DEFAULT_FIXED_RISK, DEFAULT_MAX_POSITION_CAP_PCT
+from config.execution_policy import (
+    DEFAULT_FIXED_RISK, DEFAULT_MAX_POSITION_CAP_PCT, EXECUTION_POLICY_PARAM_SPECS,
+)
+from config.broker_accounting import (
+    BROKER_ACCOUNTING_POLICY_ID, BROKER_FEE_RATE, BROKER_MIN_FEE_TWD,
+    BROKER_ODD_LOT_MIN_FEE_TWD, BROKER_BOARD_LOT_SHARES,
+    BROKER_STOCK_TAX_RATE, BROKER_CHARGE_ROUNDING_MODE,
+)
 from config.breakout_quality import BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD
 from core.active_param_ensemble import get_active_param_ensemble_date_range
 from core.rolling_oos_params import get_active_param_date_range
@@ -557,13 +568,12 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
         "max_positions": settings.max_positions, "enable_rotation": False, "quiet": quiet,
     }
     # Same-seed paired replay is essential: benchmark parameter fitting varies by
-    # seed and cannot be replaced by the single-run P16 parameters.
-    observations: dict[str, list[dict[str, Any]]] = {"C96": []}
-    observations.update({target: [] for target, _ in ORACLE_TARGETS})
+    # seed and cannot be replaced by the single-run P16 parameters. Resolve and
+    # verify every current canonical parameter identity *before* considering
+    # any prior scientific observation for reuse.
+    prepared = []
     param_evidence = []
     for seed, path in parameter_paths:
-        if not quiet:
-            print(f"[Oracle Audit] Benchmark seed={seed}: C96 + {len(ORACLE_TARGETS)} Oracle replays")
         source, param_sha = load_strategy_param_evaluation_view(
             path, evaluation_mode=str(definition.dimensions["evaluation_mode"]),
             start_date=start, end_date=end,
@@ -586,31 +596,140 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
             optional_entry_filter_policy=OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
             shared_param_overrides=ALL_RULE_FILTERS_OFF_OVERRIDES,
         )
+        prepared.append((seed, param_sha, kind, base_params, oracle_params))
         param_evidence.append({
             "seed": seed,
             "param_path": project_relative_display_path(path, project_root=root),
             "param_sha256": param_sha,
         })
-        baseline = _metrics(_run_scenario(
+
+    # Evaluation/report schema changes must not rebuild identical scientific
+    # replays. Cache identity includes actual Research price bytes, resolved
+    # P16 SHA, scientific comparison settings, cohort and ranking contract.
+    # Incomplete work is saved per seed/target; a later run resumes missing
+    # observations only. Historical V1 snapshots are checked separately.
+    try:
+        price_sha = price_inventory_sha256(root, settings.dataset)
+        archived = HistoricalOracleIndex(root)
+    except ValueError as exc:
+        raise OracleBlockedError(str(exc)) from exc
+    cache = OracleReplayStore(root, definition.output_subdir)
+    definitions = dict(ORACLE_TARGETS)
+    definitions_with_base = {"C96": "Canonical same-window Min P16 Base-Finalist-Best", **definitions}
+    # Use the exact two-arm scientific contract; changes to unrelated compare
+    # arms/reports must NOT invalidate these completed Oracle replays.
+    comparison_sha = canonical_json_sha256({
+        "dataset": settings.dataset,
+        "start_date": start, "end_date": end,
+        "max_positions": int(settings.max_positions),
+        "rotation": settings.rotation,
+        "parameter_source": settings.parameter_sources[str(base_arm.param_source)].as_dict(),
+        "baseline_arm": base_arm.as_dict(),
+        "exact_arm": exact_arm.as_dict(),
+    })
+    legacy_context = {
+        "benchmark": robustness.benchmark_id,
+        "strategy_profile_id": settings.profile_id,
+        "dataset": settings.dataset,
+        "start_date": start,
+        "end_date": end,
+        "seeds": [seed for seed, _ in parameter_paths],
+        "param_sha_by_seed": {int(item["seed"]): item["param_sha256"] for item in param_evidence},
+        "cohort": cohort,
+        "definitions": definitions,
+    }
+    replay_policy = {
+        "baseline_arm": str(definition.source["baseline_arm_id"]),
+        "exact_arm": str(definition.source["exact_arm_id"]),
+        "filter_id": str(definition.source["filter_id"]),
+        "param_policy": str(base_arm.param_policy),
+        "comparison_mode": COMPARISON_MODE_SCORE_RANKING,
+        "optional_entry_filter_policy": OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
+        "all_rule_filters_off": dict(ALL_RULE_FILTERS_OFF_OVERRIDES),
+        "score_threshold": float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
+        "fixed_risk": float(DEFAULT_FIXED_RISK),
+        "max_position_cap_pct": float(DEFAULT_MAX_POSITION_CAP_PCT),
+        "broker_accounting": {
+            "policy_id": BROKER_ACCOUNTING_POLICY_ID,
+            "fee_rate": str(BROKER_FEE_RATE),
+            "min_fee": str(BROKER_MIN_FEE_TWD),
+            "odd_lot_min_fee": str(BROKER_ODD_LOT_MIN_FEE_TWD),
+            "board_lot_shares": int(BROKER_BOARD_LOT_SHARES),
+            "stock_tax_rate": str(BROKER_STOCK_TAX_RATE),
+            "rounding": BROKER_CHARGE_ROUNDING_MODE,
+        },
+        "execution_defaults": {
+            key: str(spec["default"]) if spec["default"] is not None else None
+            for key, spec in sorted(EXECUTION_POLICY_PARAM_SPECS.items())
+        },
+    }
+    observations: dict[str, list[dict[str, Any]]] = {"C96": []}
+    observations.update({target: [] for target, _ in ORACLE_TARGETS})
+    for seed, param_sha, kind, base_params, oracle_params in prepared:
+        if not quiet:
+            print(f"[Oracle Audit] seed={seed}: verify C96 + {len(ORACLE_TARGETS)} Oracle results")
+
+        def load_or_run(target: str, runner):
+            identity = replay_identity(
+                dataset=settings.dataset, dataset_sha256=price_sha,
+                target=target, definition=definitions_with_base,
+                settings_fingerprint=comparison_sha, start=start, end=end,
+                benchmark=str(robustness.benchmark_id), param_sha256=param_sha,
+                seed=seed, cohort=cohort,
+                ranking_policy=str(exact_arm.dl_runtime_mode),
+                ranking_options=dict(exact_arm.dl_runtime_options),
+                evaluation_mode=str(definition.dimensions["evaluation_mode"]),
+                max_positions=settings.max_positions, replay_policy=replay_policy,
+            )
+            try:
+                record = cache.read(identity)
+                origin = "verified per-arm cache"
+                if record is None and not cache.has_other_identity(identity):
+                    record = archived.lookup(target=target, seed=seed, context=legacy_context)
+                    origin = "compatible historical one-time result"
+                    if record is not None:
+                        cache.write(identity, record, origin="historical_one_time")
+                if record is not None:
+                    if not quiet:
+                        print(f"[REUSE] seed={seed} {target} | {origin}")
+                    return record
+            except ValueError as exc:
+                raise OracleBlockedError(str(exc)) from exc
+            if not quiet:
+                print(f"[RUN] seed={seed} {target} | missing completed identity")
+            record = _metrics(runner(), target=target)
+            record["seed"] = seed
+            if target != "C96":
+                record["delta_romd_vs_c96"] = record["romd"] - observations["C96"][-1]["romd"]
+            try:
+                cache.write(identity, record, origin="canonical_replay")
+            except ValueError as exc:
+                raise OracleBlockedError(str(exc)) from exc
+            return record
+
+        baseline = load_or_run("C96", lambda: _run_scenario(
             name=f"C96 seed={seed} same-window", params=base_params,
             param_source_kind=kind, **replay_kwargs,
-        ), target="C96")
-        baseline["seed"] = seed
+        ))
         observations["C96"].append(baseline)
         for target, _description in ORACLE_TARGETS:
-            with audit_oracle_truth_score_context(
-                scores[target],
-                ranking_policy=str(exact_arm.dl_runtime_mode),
-                ranking_options=exact_arm.dl_runtime_options,
+            def run_oracle(target=target):
+                with audit_oracle_truth_score_context(
+                    scores[target],
+                    ranking_policy=str(exact_arm.dl_runtime_mode),
+                    ranking_options=exact_arm.dl_runtime_options,
+                ):
+                    return _run_scenario(
+                        name=f"Oracle {target} seed={seed}", params=oracle_params,
+                        param_source_kind=kind, **replay_kwargs,
+                    )
+            record = load_or_run(target, run_oracle)
+            if not math.isclose(
+                float(record["delta_romd_vs_c96"]), float(record["romd"] - baseline["romd"]),
+                rel_tol=1e-9, abs_tol=1e-9,
             ):
-                replay = _run_scenario(
-                    name=f"Oracle {target} seed={seed}", params=oracle_params,
-                    param_source_kind=kind, **replay_kwargs,
-                )
-            result = _metrics(replay, target=target)
-            result["seed"] = seed
-            result["delta_romd_vs_c96"] = result["romd"] - baseline["romd"]
-            observations[target].append(result)
+                raise OracleBlockedError(f"Oracle seed={seed} {target}歷史對照C96不一致，禁止重用")
+            observations[target].append(record)
     baseline_summary = _aggregate(observations["C96"], target="C96")
     rows: list[dict[str, Any]] = []
     for target, _ in ORACLE_TARGETS:
@@ -636,7 +755,7 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
         "limitations": [
             "Ex-post future targets are NOT predictions, not PIT-legal, and never a deployable strategy.",
             "AO/CG/CH EqualRank are fixed 50/50 geometry proxies, not learned model-head fusion.",
-            "Same-window C96 is recomputed for each benchmark seed; full-period C96 is not comparable.",
+            "Same-window C96 is verified/reused or replayed for each benchmark seed; full-period C96 is not comparable.",
             "N=4 paired end-to-end parameter seeds; oracle scores have no trainable seed.",
             "No best-target fitting from iterative OOS; multi-target search is exploratory.",
             "MAE40 and MAE20 rank low downside first; MFE40/D40 has a zero-downside singularity, reported separately and not tuned.",
