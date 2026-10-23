@@ -87,7 +87,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         "retired_one_time_studies_do_not_change_reusable_audit_contract",
         len(definitions) == len(enabled)
         and {entry.report_id for entry in get_reusable_audit_definitions("breakout_quality")}
-        == {"opportunity_selection", "trade_outcome_path", "portfolio_drawdown"},
+        == {"opportunity_selection", "trade_outcome_path", "portfolio_drawdown", "target_oracle_romd"},
     )
 
     import apps.research as research_app
@@ -130,18 +130,19 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         research_app._audit_menu()
     reusable_text = reusable_console.getvalue()
     check_true(
-        "reusable_audit_menu_keeps_three_purpose_driven_reports_visible",
+        "reusable_audit_menu_keeps_registered_reports_visible",
         "Opportunity／Selection Attribution  [已設定]" in reusable_text
         and "Trade Outcome／Path Attribution  [已設定]" in reusable_text
         and "Portfolio／Drawdown Attribution  [已設定]" in reusable_text
+        and "Target Ground Truth → Strategy RoMD (Oracle)  [已設定]" in reusable_text
         and "Regime／Stability Attribution" not in reusable_text,
     )
     reusable_defs = get_reusable_audit_definitions("breakout_quality")
     check_true(
         "reusable_audit_reports_are_registry_driven_and_not_scientific_aud_ids",
-        len(reusable_defs) == 3
+        len(reusable_defs) == 4
         and {item.report_id for item in reusable_defs}
-        == {"opportunity_selection", "trade_outcome_path", "portfolio_drawdown"}
+        == {"opportunity_selection", "trade_outcome_path", "portfolio_drawdown", "target_oracle_romd"}
         and all(not item.report_id.startswith("AUD-") for item in reusable_defs),
     )
 

@@ -393,7 +393,14 @@ def render_latest_audit_summary(
 ) -> str:
     root = Path(project_root).resolve()
     rows = []
-    for definition in _definitions_for_method(module_id, method_id, audit_id):
+    # The history page shows both retained one-time studies and reusable reports.
+    # The menu/run scopes stay separate; no second execution route is created.
+    definitions = (
+        (*get_audit_definitions(module_id), *get_reusable_audit_definitions(module_id))
+        if method_id is None and audit_id is None
+        else _definitions_for_method(module_id, method_id, audit_id)
+    )
+    for definition in definitions:
         latest = (
             root
             / Path(AUDIT_OUTPUT_ROOT)

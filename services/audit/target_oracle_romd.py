@@ -1,4 +1,4 @@
-"""One-time hindsight target economics Audit; NEVER a legal prediction source.
+"""Reusable hindsight target economics Audit; NEVER a legal prediction source.
 
 This audit compares future-outcome stock-day rankings by running the same frozen
 Broker-Cash P16 Exact K/R0 portfolio replay. All historical truths are *ex post*.
@@ -59,7 +59,14 @@ from core.active_param_ensemble import get_active_param_ensemble_date_range
 from core.rolling_oos_params import get_active_param_date_range
 from services.research.strategy_compare_replay import _run_scenario
 
+from core.research_report_contract import (
+    report_contract, require_approved_report_contract,
+    persistent_report_contract_fingerprint,
+)
+from services.audit.reusable_report import format_contract_row
+
 SUPPORTED_AUDIT_TYPE = "target_ground_truth_strategy_romd"
+ORACLE_REPORT_SCHEMA_VERSION = 2
 ORACLE_TARGETS = (
     ("AO40_EqualRank", "40D MFE + adverse-to-peak Safety, 50/50 daily rank"),
     ("CG40_EqualRank", "40D MFE + full D40 Safety, 50/50 daily rank"),
@@ -68,6 +75,10 @@ ORACLE_TARGETS = (
     ("U20", "20D MFE - D20, canonical R"),
     ("FirstBreach_NetR", "MFE before first risk breach - adverse to that peak, R"),
     ("MFE40_Control", "40D MFE only (control, not target recommendation)"),
+    ("MFE40_over_D40", "Exact MFE40 / D40 in canonical R; if D40=0 and MFE>0 rank as +infinity, 0/0 ranks as zero"),
+    ("MFE20", "20D maximum favorable excursion, in canonical R"),
+    ("MAE40", "Negative full-horizon 40D MAE (lower adverse excursion ranks higher), in canonical R"),
+    ("MAE20", "Negative full-horizon 20D MAE (lower adverse excursion ranks higher), in canonical R"),
 )
 
 
@@ -364,6 +375,29 @@ def _load_truth(definition, root: Path, source_field: str, *, cutoff: str) -> pd
     return frame
 
 
+def _mfe40_over_d40_ratio(mfe40: pd.Series, safety_d40: pd.Series) -> pd.Series:
+    """Raw MFE40/D40 (both in canonical R), never an arbitrary fitted risk floor.
+
+    Signed MFE40 may be negative when every future high is below the anchor.
+    Zero D40 with positive upside has mathematically unbounded ratio and is
+    ordered above finite values. Zero upside with zero downside is zero utility
+    (0/0 convention for ranking only). The *final* daily percentile is finite.
+    """
+    numerator = np.asarray(mfe40, dtype=float)
+    downside = -np.asarray(safety_d40, dtype=float)
+    if (
+        numerator.shape != downside.shape
+        or not np.isfinite(numerator).all()
+        or not np.isfinite(downside).all()
+        or (downside < 0.0).any()
+    ):
+        raise OracleBlockedError("MFE40/D40必須使用有限的canonical MFE40、非負的D40真值")
+    ratio = np.zeros_like(numerator)
+    np.divide(numerator, downside, out=ratio, where=downside > 0.0)
+    ratio[(downside == 0.0) & (numerator > 0.0)] = np.inf
+    return pd.Series(ratio, index=mfe40.index, dtype=float)
+
+
 def build_oracle_score_tables(definition, *, project_root: Path, cutoff: str) -> tuple[dict[str, dict[tuple[str, str], float]], dict[str, Any]]:
     """Pure deterministic hindsight target construction, no data-driven fitting."""
     root = Path(project_root).resolve()
@@ -418,6 +452,10 @@ def build_oracle_score_tables(definition, *, project_root: Path, cutoff: str) ->
         "U20": joint["mfe20"] + joint["safety_d20"],
         "FirstBreach_NetR": joint["rawfb"] - joint["peak_adversefb"],
         "MFE40_Control": joint["mfe40"],
+        "MFE40_over_D40": _mfe40_over_d40_ratio(joint["mfe40"], joint["safety_d40"]),
+        "MFE20": joint["mfe20"],
+        "MAE40": joint["safety_d40"],
+        "MAE20": joint["safety_d20"],
     }
     expected = {target for target, _ in ORACLE_TARGETS}
     if set(raw) != expected:
@@ -442,6 +480,9 @@ def build_oracle_score_tables(definition, *, project_root: Path, cutoff: str) ->
         },
         "scoring": "All targets final-ranked by average_zero_based percentile within common-day universe",
         "oracle_only": True,
+        "ratio_zero_denominator_policy": "D40=0,MFE40>0 -> +infinity (highest rank); 0/0 -> 0; final score = finite daily percentile",
+        "mfe40_over_d40_zero_downside_positive_upside_count": int(((joint["safety_d40"] == 0.0) & (joint["mfe40"] > 0.0)).sum()),
+        "mfe40_over_d40_zero_zero_count": int(((joint["safety_d40"] == 0.0) & (joint["mfe40"] == 0.0)).sum()),
         "market_truth": market_evidence,
         "rows_outside_dl_training_provider_by_source": extra_rows,
     }
@@ -580,7 +621,7 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
         item["positive_seed_count"] = int((diffs > 0.0).sum())
         rows.append(item)
     return {
-        "schema_version": 1, "status": "COMPLETED", "read_only": True,
+        "schema_version": ORACLE_REPORT_SCHEMA_VERSION, "status": "COMPLETED", "read_only": True,
         "hindsight_non_pit": True, "iterative_oos_evidence": True,
         "strategy_profile_id": settings.profile_id,
         "benchmark_id": robustness.benchmark_id,
@@ -598,55 +639,78 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
             "Same-window C96 is recomputed for each benchmark seed; full-period C96 is not comparable.",
             "N=4 paired end-to-end parameter seeds; oracle scores have no trainable seed.",
             "No best-target fitting from iterative OOS; multi-target search is exploratory.",
+            "MAE40 and MAE20 rank low downside first; MFE40/D40 has a zero-downside singularity, reported separately and not tuned.",
         ],
     }
 
 
 def render_result(report: Mapping[str, Any], *, target: str) -> str:
-    headings = ("Target", "Return Mean", "Ann. Mean", "MDD Mean", "RoMD Mean", "RoMD SD", "Delta RoMD", "Win/Seed", "EV(A) Mean")
+    # Persistent reusable report columns/order/precision are owned by the
+    # approved machine-readable contract; no parallel headings live here.
+    contract = report_contract("audit.target_oracle_romd")
+    sections = contract.sections
+    perf_table = sections[0].tables[0]
+    yearly_table = sections[2].tables[0]
+    paired_table = sections[3].tables[0]
     baseline = dict(report["baseline"])
-    rows = [dict(baseline, target="C96 Same-Window", delta_romd_vs_c96=0.0, positive_seed_count=0), *list(report["oracles"])]
-    cells = [(
-        x["target"], f'{x["total_return_pct"]:+.2f}%', f'{x["annualized_return_pct"]:+.2f}%',
-        f'{x["mdd_pct"]:.2f}%', f'{x["romd"]:.2f}', f'{x["romd_std"]:.2f}',
-        f'{x["delta_romd_vs_c96"]:+.2f}',
-        "-" if x["target"] == "C96 Same-Window" else f'{x["positive_seed_count"]}/{x["seeds"]}',
-        f'{x["ev_a_r"]:+.2f} R',
-    ) for x in rows]
+    items = [dict(baseline, target="C96 Same-Window", delta_romd_vs_c96=0.0, wins="-"),
+             *[dict(item, wins=f'{item["positive_seed_count"]}/{item["seeds"]}')
+               for item in report["oracles"]]]
+    rows = [format_contract_row(perf_table, item) for item in items]
     intro = [
-        "Target Ground Truth → Strategy RoMD (HINDSIGHT ORACLE / NOT PIT)",
-        f'Period: {report["start_date"]} ～ {report["end_date"]} (40D-mature common window)',
+        "Target Ground Truth -> Strategy RoMD (HINDSIGHT ORACLE / NOT PIT)",
+        f'Period: {report["start_date"]} ~ {report["end_date"]} (40D-mature common window)',
         f'Common stock-day cohort: {report["common_cohort"]["cohort_rows"]:,}',
         f'Benchmark: {report["benchmark_id"]}, same-seed pairs N={len(report["seeds"])}',
+        f'Report schema: {report["schema_version"]}, Oracle treatments: {len(report["oracles"])} (formal Research Audit; not Standard SOP)',
         'Ranking: Exact K/R0, Broker-Cash, same seed/P16; future truth changes ranking only.',
+        (
+            'MFE40/D40 zero denominator: '
+            f'{report["common_cohort"]["mfe40_over_d40_zero_downside_positive_upside_count"]:,} positive-MFE (+infinity); '
+            f'{report["common_cohort"]["mfe40_over_d40_zero_zero_count"]:,} zero/zero (rank 0).'
+        ),
         'AO/CG/CH = equal-rank 50/50 geometry PROXIES, not neural-network model heads.',
     ]
     if target == "console":
-        return "\n\n".join((render_title(intro[0]), "\n".join(intro[1:]), render_table(headings, cells),
-            "NOTICE: Future labels are hindsight only; not legal for PIT/Trading."))
-    lines = [f"# {intro[0]}", *[f"- {line}" for line in intro[1:]], "", "## 1. Oracle Performance (4-seed mean)",
-        "| " + " | ".join(headings) + " |", "|" + "|".join("---" for _ in headings) + "|"]
-    lines.extend("| " + " | ".join(row) + " |" for row in cells)
-    lines.extend(["", "## 2. Target Definitions", *[f"- **{key}** — {desc}" for key, desc in ORACLE_TARGETS],
-                  "", "## 3. Yearly Stability (same-window seed means)"])
-    for x in rows:
-        lines.append(f'### {x["target"]}')
-        lines.extend(("| Year | Mean Return | Seed Count | Full Year |", "|---|---:|---:|---|"))
-        for yr in x["yearly"]:
-            lines.append(f'| {yr["year"]} | {yr["strategy_return_pct"]:+.2f}% | {yr["n_seeds"]} | {yr["is_full_year"]} |')
-    lines += ["", "## 4. Robustness (paired same-seed ΔRoMD)",
-              "| Target | Seed | RoMD | C96 Seed RoMD | Paired Delta |", "|---|---:|---:|---:|---:|"]
-    baselines = {int(x["seed"]):float(x["romd"]) for x in baseline["seed_observations"]}
-    for x in report["oracles"]:
-        for obs in x["seed_observations"]:
-            seed = int(obs["seed"])
-            lines.append(f'| {x["target"]} | {seed} | {obs["romd"]:.2f} | {baselines[seed]:.2f} | {obs["delta_romd_vs_c96"]:+.2f} |')
-    lines.extend(["", "## 5. Research Constraints", *[f"- {v}" for v in report["limitations"]]])
+        return "\n\n".join((
+            render_title(intro[0]), "\n".join(intro[1:]),
+            render_table(perf_table.headers, rows),
+            "NOTICE: Future labels are hindsight only; not legal for PIT/Trading.",
+        ))
+    lines = [f"# {intro[0]}", *[f"- {line}" for line in intro[1:]], "",
+             f"## {sections[0].display_title}",
+             "| " + " | ".join(perf_table.headers) + " |",
+             "|" + "|".join("---" for _ in perf_table.headers) + "|"]
+    lines.extend("| " + " | ".join(row) + " |" for row in rows)
+    lines.extend(["", f"## {sections[1].display_title}",
+                  *[f"- **{key}** - {desc}" for key, desc in ORACLE_TARGETS],
+                  "", f"## {sections[2].display_title}"])
+    for item in items:
+        lines.append(f'### {item["target"]}')
+        lines.extend(("| " + " | ".join(yearly_table.headers) + " |",
+                      "|" + "|".join("---" for _ in yearly_table.headers) + "|"))
+        for year in item["yearly"]:
+            lines.append("| " + " | ".join(format_contract_row(yearly_table, year)) + " |")
+    lines.extend(["", f"## {sections[3].display_title}",
+                  "| " + " | ".join(paired_table.headers) + " |",
+                  "|" + "|".join("---" for _ in paired_table.headers) + "|"])
+    baselines = {int(x["seed"]): float(x["romd"]) for x in baseline["seed_observations"]}
+    for item in report["oracles"]:
+        for obs in item["seed_observations"]:
+            row = dict(obs, target=item["target"], c96_romd=baselines[int(obs["seed"])])
+            lines.append("| " + " | ".join(format_contract_row(paired_table, row)) + " |")
+    lines.extend(["", f"## {sections[4].display_title}",
+                  *[f"- {limitation}" for limitation in report["limitations"]]])
     return "\n".join(lines)
 
 
 def run_formal_audit(definition, *, project_root: Path, quiet: bool = False) -> dict[str, Any]:
-    payload = build_report(definition, project_root=project_root, quiet=quiet)
+    # Authorization, frozen schema, and historical snapshot must be checked
+    # before initiating the costly hindsight-only portfolio replays.
+    approved = require_approved_report_contract("audit.target_oracle_romd")
+    payload = dict(build_report(definition, project_root=project_root, quiet=quiet))
+    payload["report_contract_id"] = f"{approved.report_id}@v{approved.version}"
+    payload["report_contract_fingerprint"] = persistent_report_contract_fingerprint(approved.report_id)
     console = render_result(payload, target="console")
     markdown = render_result(payload, target="markdown")
     adapter = SimpleNamespace(

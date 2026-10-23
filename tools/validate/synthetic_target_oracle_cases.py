@@ -1,4 +1,4 @@
-"""Isolated contract regression for one-time Oracle target → RoMD Audit.
+"""Isolated contract regression for reusable Oracle target → RoMD Audit.
 
 Run directly; requires no historical market data and does not touch formal
 Test Suite frozen entry checks, PIT artifacts, or portfolio model fitting.
@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.audit_policy import get_audit_definitions
+from core.audit_policy import get_audit_definitions, get_reusable_audit_definitions
 from core.breakout_quality_ranking_context import (
     SCORE_SOURCE_AUDIT_ORACLE_FUTURE_TRUTH,
     SUPPORTED_RANKING_SCORE_SOURCES,
@@ -41,20 +41,61 @@ class OracleAuditContractCases(TestCase):
     @classmethod
     def setUpClass(cls):
         cls.definition = next(
-            definition for definition in get_audit_definitions("breakout_quality")
+            definition for definition in get_reusable_audit_definitions("breakout_quality")
             if definition.audit_type == oracle.SUPPORTED_AUDIT_TYPE
         )
         cls.exact_policy = oracle._contract(cls.definition)[2].dl_runtime_mode
         cls.exact_options = oracle._contract(cls.definition)[2].dl_runtime_options
 
-    def test_audit_is_one_time_only_and_not_a_reusable_menu_item(self):
-        self.assertEqual(collect_audit_menu_state("breakout_quality")["enabled_count"], 1)
-        self.assertNotIn("target_ground_truth_strategy_romd", [x.method_id for x in get_audit_methods()])
-        self.assertEqual(len(oracle.ORACLE_TARGETS), 7)
+    def test_oracle_is_reusable_only_with_a_single_registered_run_route(self):
+        self.assertEqual(collect_audit_menu_state("breakout_quality")["enabled_count"], 0)
+        self.assertEqual(
+            collect_audit_menu_state("breakout_quality", method_id=oracle.SUPPORTED_AUDIT_TYPE)["enabled_count"], 1
+        )
+        self.assertEqual(
+            [x.method_id for x in get_audit_methods()].count(oracle.SUPPORTED_AUDIT_TYPE), 1
+        )
+        self.assertFalse(any(
+            definition.audit_type == oracle.SUPPORTED_AUDIT_TYPE
+            for definition in get_audit_definitions("breakout_quality")
+        ))
+        self.assertEqual(
+            {name for name, _ in oracle.ORACLE_TARGETS},
+            {"AO40_EqualRank", "CG40_EqualRank", "CH20_EqualRank", "U40", "U20",
+             "FirstBreach_NetR", "MFE40_Control", "MFE40_over_D40", "MFE20", "MAE40", "MAE20"},
+        )
+        self.assertEqual(self.definition.output_subdir, "breakout_quality/reusable/target_oracle_romd")
         with tempfile.TemporaryDirectory() as tmp:
-            status = collect_audit_status("breakout_quality", project_root=Path(tmp))
+            status = collect_audit_status(
+                "breakout_quality", project_root=Path(tmp), method_id=oracle.SUPPORTED_AUDIT_TYPE,
+            )
             self.assertEqual(status["overall_status"], "BLOCKED")
             self.assertIn("full dataset", status["rows"][0]["reason"])
+
+    def test_research_menu_routes_to_reusable_method_once(self):
+        import apps.research as app
+        from contextlib import redirect_stdout
+        from io import StringIO
+        with patch("builtins.input", side_effect=["4", "", "0"]), \
+             patch.object(app, "render_audit_status", return_value="READY"), \
+             patch.object(app, "run_enabled_audits") as runner, \
+             patch.object(app, "render_latest_audit_summary", return_value="LATEST"), \
+             redirect_stdout(StringIO()) as output:
+            rc = app._audit_reusable_menu("breakout_quality")
+        self.assertEqual(rc, 0)
+        runner.assert_called_once()
+        self.assertEqual(runner.call_args.kwargs["method_id"], oracle.SUPPORTED_AUDIT_TYPE)
+        self.assertIn("Target Ground Truth", output.getvalue())
+        with patch("builtins.input", return_value="0"), redirect_stdout(StringIO()) as output:
+            app._audit_one_time_menu("breakout_quality")
+        self.assertNotIn("AUD-target-ground-truth-romd", output.getvalue())
+
+    def test_persistent_contract_must_be_approved_before_replay(self):
+        with patch.object(oracle, "require_approved_report_contract", side_effect=ValueError("UNAUTHORIZED")), \
+             patch.object(oracle, "build_report") as builder:
+            with self.assertRaisesRegex(ValueError, "UNAUTHORIZED"):
+                oracle.run_formal_audit(self.definition, project_root=ROOT, quiet=True)
+            builder.assert_not_called()
 
     def test_future_source_cannot_be_registered_as_formal_pit_score(self):
         self.assertNotIn(SCORE_SOURCE_AUDIT_ORACLE_FUTURE_TRUTH, SUPPORTED_RANKING_SCORE_SOURCES)
@@ -127,6 +168,7 @@ class OracleAuditContractCases(TestCase):
                 self.definition, project_root=ROOT, cutoff="2026-03-02",
             )
         self.assertEqual(evidence["cohort_rows"], 3)
+        self.assertEqual(evidence["mfe40_over_d40_zero_downside_positive_upside_count"], 0)
         self.assertEqual(set(scores), {label for label, _ in oracle.ORACLE_TARGETS})
         key = lambda ticker: (ticker, "2025-01-02")
         self.assertEqual(scores["MFE40_Control"][key("2330")], 1.0)
@@ -136,7 +178,36 @@ class OracleAuditContractCases(TestCase):
         self.assertEqual(scores["U40"][key("2330")], 1.0)
         self.assertEqual(scores["U20"][key("2317")], 1.0)
         self.assertEqual(scores["FirstBreach_NetR"][key("2330")], 1.0)
+        self.assertEqual(scores["MFE40_over_D40"][key("2330")], 1.0)
+        self.assertEqual(scores["MFE20"][key("2317")], 1.0)
+        self.assertEqual(scores["MAE40"][key("2330")], 1.0)
+        self.assertEqual(scores["MAE20"][key("2317")], 1.0)
         self.assertTrue(all(0.0 <= v <= 1.0 for table in scores.values() for v in table.values()))
+
+    def test_raw_ratio_zero_downside_uses_explicit_order_not_pseudocount(self):
+        index = pd.RangeIndex(4)
+        ratio = oracle._mfe40_over_d40_ratio(
+            pd.Series([1.0, 0.0, 4.0, 0.5], index=index),
+            pd.Series([0.0, 0.0, -1.0, -0.01], index=index),
+        )
+        self.assertTrue(np.isposinf(ratio.iloc[0]))
+        self.assertEqual(float(ratio.iloc[1]), 0.0)
+        self.assertEqual(float(ratio.iloc[2]), 4.0)
+        self.assertEqual(float(ratio.iloc[3]), 50.0)
+        self.assertEqual(
+            float(oracle._mfe40_over_d40_ratio(pd.Series([-0.4]), pd.Series([-0.2])).iloc[0]),
+            -2.0,
+        )  # A 40-bar path that never recovers above the anchor is legal.
+        ranked, _ = oracle.ensure_daily_percentile(
+            pd.DataFrame({"date": ["2025-01-02"] * 4, "value": ratio}),
+            method="average_zero_based",
+        )
+        self.assertTrue(np.isfinite(ranked["percentile"]).all())
+        self.assertEqual(float(ranked.iloc[0]["percentile"]), 1.0)
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "非負"):
+            oracle._mfe40_over_d40_ratio(pd.Series([1.0]), pd.Series([0.1]))
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "非負"):
+            oracle._mfe40_over_d40_ratio(pd.Series([float("nan")]), pd.Series([-0.1]))
 
     def test_mismatched_stock_days_cannot_be_silently_filled(self):
         # If an official source claims a valid row but Research prices cannot
@@ -268,6 +339,52 @@ class OracleAuditContractCases(TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result.ticker.iloc[0], "2330")
 
+    def test_reusable_research_report_publishes_schema2_11_targets(self):
+        def summary(name: str):
+            return {
+                "target": name, "total_return_pct": 100.0, "annualized_return_pct": 14.0,
+                "mdd_pct": 12.0, "romd": 8.0, "romd_std": 0.0,
+                "ev_a_r": 0.5, "seeds": 1, "yearly": [],
+                "seed_observations": [{"seed": 123, "romd": 8.0, "delta_romd_vs_c96": 0.0}],
+                "delta_romd_vs_c96": 0.0, "positive_seed_count": 0,
+            }
+        result = {
+            "schema_version": 2, "status": "COMPLETED",
+            "start_date": "2021-01-01", "end_date": "2025-12-22",
+            "common_cohort": {
+                "cohort_rows": 3,
+                "mfe40_over_d40_zero_downside_positive_upside_count": 1,
+                "mfe40_over_d40_zero_zero_count": 0,
+            },
+            "benchmark_id": "test", "seeds": [123], "limitations": ["NOT PIT"],
+            "baseline": summary("C96"),
+            "oracles": [summary(name) for name, _ in oracle.ORACLE_TARGETS],
+        }
+        from services.audit.runner import render_latest_audit_summary
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            with patch.object(oracle, "build_report", return_value=result):
+                published = oracle.run_formal_audit(self.definition, project_root=base, quiet=True)
+            self.assertEqual(published["schema_version"], 2)
+            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v1")
+            self.assertEqual(published["report_id"], self.definition.audit_id)
+            latest = base / "outputs/audit" / self.definition.output_subdir / "latest"
+            body = (latest / "audit.md").read_text(encoding="utf-8")
+            self.assertIn("MFE40_over_D40", body)
+            self.assertIn("MAE20", body)
+            self.assertIn("MFE40/D40 zero denominator", body)
+            self.assertIn("Delta RoMD", body)
+            json_data = json.loads((latest / "audit.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(json_data["oracles"]), len(oracle.ORACLE_TARGETS))
+            listing = render_latest_audit_summary(
+                "breakout_quality", project_root=base, method_id=oracle.SUPPORTED_AUDIT_TYPE,
+            )
+            self.assertIn("存在", listing)
+            self.assertIn(self.definition.report_id, listing)
+            self.assertIn(self.definition.report_id, render_latest_audit_summary(
+                "breakout_quality", project_root=base,
+            ))
+
     def test_four_seed_paired_replay_and_report_without_real_market(self):
         class Benchmark:
             benchmark_id = "end_to_end_v1"
@@ -294,7 +411,7 @@ class OracleAuditContractCases(TestCase):
             }
         with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
              patch.object(oracle, "_robustness_artifacts", return_value=(Benchmark(), [(seed, Path(f"seed_{seed}.json")) for seed in seeds])), \
-             patch.object(oracle, "build_oracle_score_tables", return_value=({name: {("2330", "2025-01-02"): 0.8} for name, _ in oracle.ORACLE_TARGETS}, {"cohort_rows": 4, "last_common_day": "2025-12-31"})), \
+             patch.object(oracle, "build_oracle_score_tables", return_value=({name: {("2330", "2025-01-02"): 0.8} for name, _ in oracle.ORACLE_TARGETS}, {"cohort_rows": 4, "last_common_day": "2025-12-31", "mfe40_over_d40_zero_downside_positive_upside_count": 0, "mfe40_over_d40_zero_zero_count": 0})), \
              patch.object(oracle, "load_strategy_param_evaluation_view", return_value=({"kind": "rolling_active_param_ensemble", "payload": {}}, "test-source-sha")), \
              patch.object(oracle, "_validate_requested_param_policy"), \
              patch.object(oracle, "get_active_param_ensemble_date_range", return_value=("2020-01-01", "2026-03-02")), \
@@ -304,11 +421,16 @@ class OracleAuditContractCases(TestCase):
             report = oracle.build_report(self.definition, project_root=ROOT, quiet=True)
         self.assertEqual(len(seen), len(seeds) * (1 + len(oracle.ORACLE_TARGETS)))
         self.assertEqual(report["seeds"], list(seeds))
+        self.assertEqual(report["schema_version"], 2)
+        self.assertEqual(len(report["oracles"]), 11)
         self.assertEqual(report["end_date"], "2025-12-31")
         self.assertEqual(report["baseline"]["romd_std"], report["oracles"][0]["romd_std"])
         self.assertEqual(report["oracles"][0]["delta_romd_vs_c96"], 1.5)
         self.assertEqual(report["oracles"][0]["positive_seed_count"], len(seeds))
         self.assertIn("Oracle Performance", oracle.render_result(report, target="markdown"))
+        self.assertIn("MFE40_over_D40", oracle.render_result(report, target="markdown"))
+        self.assertIn("MAE20", oracle.render_result(report, target="console"))
+        self.assertIn("MFE40/D40 zero denominator", oracle.render_result(report, target="console"))
         self.assertIn("RoMD Mean", oracle.render_result(report, target="console"))
         json.dumps(report, ensure_ascii=False)
         self.assertNotEqual(get_breakout_quality_ranking_source_context().score_source,

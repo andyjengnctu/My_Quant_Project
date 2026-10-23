@@ -88,8 +88,8 @@ AUDIT_METHOD_CATALOG: dict[str, AuditMethodEntry] = {
     "target_ground_truth_strategy_romd": AuditMethodEntry(
         method_id="target_ground_truth_strategy_romd",
         menu_label="Target Ground Truth → Strategy RoMD (Oracle)",
-        description="一次性未來真值反事實RoMD比較（不納入正式PIT或常駐SOP）",
-        order=100, one_time_only=True,
+        description="Reusable hindsight-only Oracle RoMD comparison (never PIT or Trading)",
+        order=100,
     ),
 }
 
@@ -143,7 +143,7 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         domain="breakout_quality",
         module="services.audit.target_oracle_romd",
         mode="formal",
-        description="One-time hindsight Oracle Ground Truth -> Broker-Cash RoMD",
+        description="Reusable hindsight Oracle Ground Truth -> Broker-Cash RoMD (NON-PIT)",
         read_only=True, method_id="target_ground_truth_strategy_romd",
         status_function="collect_status", run_function="run_formal_audit",
     ),

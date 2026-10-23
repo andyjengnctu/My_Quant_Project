@@ -697,6 +697,39 @@ PORTFOLIO_DRAWDOWN_REPORT = PersistentReportContract(
     ),
 )
 
+TARGET_ORACLE_ROMD_REPORT = PersistentReportContract(
+    report_id="audit.target_oracle_romd", version=1, role="persistent_reusable_hindsight_non_pit",
+    menu_path=("Research", "Audit／診斷", "可重複使用的原因分析", "Target Ground Truth → Strategy RoMD (Oracle)"),
+    sections=(
+        S("oracle_performance", 1, "Oracle Performance (4-seed mean)", tables=(T("performance", (
+            C("target", "Target", alignment="left"),
+            C("total_return_pct", "Return Mean", 2, "%", "higher", "signed_pct"),
+            C("annualized_return_pct", "Ann. Mean", 2, "%", "higher", "signed_pct"),
+            C("mdd_pct", "MDD Mean", 2, "%", "lower", "pct"),
+            C("romd", "RoMD Mean", 2, preference="higher", format_kind="number"),
+            C("romd_std", "RoMD SD", 2, preference="lower", format_kind="number"),
+            C("delta_romd_vs_c96", "Delta RoMD", 2, preference="higher", format_kind="signed_number"),
+            C("wins", "Win/Seed", alignment="right"),
+            C("ev_a_r", "EV(A) Mean", 2, " R", "higher", "signed_number"),
+        )),)),
+        S("target_definitions", 2, "Target Definitions"),
+        S("yearly_stability", 3, "Yearly Stability (same-window seed means)", tables=(T("yearly", (
+            C("year", "Year", alignment="left"),
+            C("strategy_return_pct", "Mean Return", 2, "%", "higher", "signed_pct"),
+            C("n_seeds", "Seed Count", 0, format_kind="int"),
+            C("is_full_year", "Full Year", alignment="left"),
+        )),)),
+        S("seed_robustness", 4, "Robustness (paired same-seed Delta RoMD)", tables=(T("paired", (
+            C("target", "Target", alignment="left"),
+            C("seed", "Seed", 0, format_kind="int"),
+            C("romd", "RoMD", 2, preference="higher", format_kind="number"),
+            C("c96_romd", "C96 Seed RoMD", 2, preference="higher", format_kind="number"),
+            C("delta_romd_vs_c96", "Paired Delta", 2, preference="higher", format_kind="signed_number"),
+        )),)),
+        S("constraints", 5, "Research Constraints"),
+    ),
+)
+
 STRATEGY_CONSISTENCY_REPORT = PersistentReportContract(
     report_id="strategy.oos_rolling_consistency", version=1, role="persistent_standard",
     menu_path=("Research", "策略組合比較", "OOS + Rolling 一鍵／Consistency"),
@@ -715,7 +748,7 @@ STRATEGY_CONSISTENCY_METRIC_KEYS = (
 PERSISTENT_REPORT_CONTRACTS: Mapping[str, PersistentReportContract] = {
     contract.report_id: contract for contract in (
         MODEL_STANDARD_SOP, MODEL_STANDARD_COMPARISON, STRATEGY_STANDARD_SOP, OPPORTUNITY_SELECTION_REPORT,
-        TRADE_OUTCOME_PATH_REPORT, PORTFOLIO_DRAWDOWN_REPORT, STRATEGY_CONSISTENCY_REPORT,
+        TRADE_OUTCOME_PATH_REPORT, PORTFOLIO_DRAWDOWN_REPORT, TARGET_ORACLE_ROMD_REPORT, STRATEGY_CONSISTENCY_REPORT,
     )
 }
 
