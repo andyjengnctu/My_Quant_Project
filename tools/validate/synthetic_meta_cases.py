@@ -5477,6 +5477,21 @@ def validate_research_report_contract_freeze_case(_base_params):
         and "Top10 Joint Quality σ" in robust_output
         and "Top10 Joint Quality mean" in robust_output,
     )
+    # The human-readable OOS scope is "Rolling OOS" / "Forward OOS", not
+    # the raw machine split key "oos". Verify the numeric mean is present.
+    robustness_rows = app._robustness_specific_comparison_rows(
+        app._standard_model_comparison_views([
+            {"model_id": "ROBUST-A", "payload": {"standard_model_sop": aggregated}},
+            {"model_id": "ROBUST-B", "payload": {"standard_model_sop": aggregated}},
+        ])
+    )
+    check_true(
+        "robustness_joint_quality_mean_uses_formatted_oos_scope_instead_of_dash",
+        len(robustness_rows) == 2
+        and all(abs(float(row["joint_quality_mean"]) - joint_oos) < 1e-8
+                for row in robustness_rows)
+        and f"{joint_oos:.2f}" in robust_output.split("Across-seed Stability", 1)[1],
+    )
     try:
         broken_aggregate_seed=json.loads(json.dumps(second_seed))
         broken_aggregate_seed["evaluation_truth"]["cohort_identity"]["oos"]="b"*64

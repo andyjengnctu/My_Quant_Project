@@ -757,11 +757,17 @@ def _robustness_specific_comparison_rows(views: list[dict]) -> list[dict]:
             (dict(row) for row in list(view.get("learnability") or []) if str(row.get("split")) == "oos"),
             {},
         )
-        joint = next(
-            (dict(row) for row in list(view.get("joint_mfe_adverse_quality") or [])
-             if str(row.get("split")) == "oos"),
-            {},
-        )
+        joint_rows = [
+            dict(row) for row in list(view.get("joint_mfe_adverse_quality") or [])
+            if str(row.get("split") or "").strip().lower()
+            in {"oos", "forward oos", "rolling oos"}
+        ]
+        if len(joint_rows) != 1:
+            raise ValueError(f"Robustness Model SOP需要唯一OOS Joint Quality: {model}")
+        joint = joint_rows[0]
+        quality = joint.get("top10_joint_quality")
+        if not isinstance(quality, (int, float)) or not math.isfinite(float(quality)):
+            raise ValueError(f"Robustness Model SOP缺少有效的OOS Joint Quality: {model}")
         rows.append({
             "model": model,
             "seed_count": int(robustness.get("seed_count", 0) or 0),
