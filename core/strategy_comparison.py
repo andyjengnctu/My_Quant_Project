@@ -629,6 +629,7 @@ def _validate_builder(
     *,
     field_name: str,
     allowed_types: set[str],
+    validation_profile_cache: dict[tuple[str, str], Any] | None = None,
 ) -> None:
     if builder is None:
         return
@@ -648,7 +649,20 @@ def _validate_builder(
         )
 
         parameter_set, protocol = resolve_validation_budget_builder_identity(builder.options)
-        profile = resolve_validation_strategy_param_training_profile(parameter_set, protocol)
+        identity = (parameter_set, protocol)
+        if validation_profile_cache is None:
+            profile = resolve_validation_strategy_param_training_profile(*identity)
+        else:
+            # AI: One settings validation can contain many sources sharing the
+            # same declared publication identity. Resolve that immutable
+            # registry match once *per call*, not once per source. Do not keep
+            # a process-wide cache: profile/config overrides must be rechecked
+            # on the next validation call.
+            if identity not in validation_profile_cache:
+                validation_profile_cache[identity] = (
+                    resolve_validation_strategy_param_training_profile(*identity)
+                )
+            profile = validation_profile_cache[identity]
         declared_profile = str(builder.options.get("training_profile_id") or "").strip()
         if declared_profile and declared_profile != profile.profile_id:
             raise ValueError(
@@ -794,6 +808,7 @@ def _validate_strategy_comparison_base(settings: StrategyComparisonSettings) -> 
 def _validate_strategy_comparison_parameter_sources(settings: StrategyComparisonSettings) -> None:
     if not settings.parameter_sources:
         raise ValueError("至少需要一個parameter source")
+    validation_profile_cache: dict[tuple[str, str], Any] = {}
     for key, source in settings.parameter_sources.items():
         if key != source.source_id or not key.strip():
             raise ValueError(f"parameter source key／source_id不一致: {key!r}")
@@ -856,6 +871,7 @@ def _validate_strategy_comparison_parameter_sources(settings: StrategyComparison
                 "optimizer_fixed_multiseed_strategy_params",
                 "optimizer_raw_price_strategy_params",
             },
+            validation_profile_cache=validation_profile_cache,
         )
         if source.builder is not None and source.builder.enabled:
             options = dict(source.builder.options)
