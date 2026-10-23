@@ -137,6 +137,28 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and "Target Ground Truth → Strategy RoMD (Oracle)  [已設定]" in reusable_text
         and "Regime／Stability Attribution" not in reusable_text,
     )
+    # The interactive route belongs to this explicitly app-aware Audit
+    # framework test, not to the Oracle domain's isolated synthetic tests.
+    from services.audit.catalog import get_audit_methods
+    oracle_method_id = "target_ground_truth_strategy_romd"
+    method_ids = [method.method_id for method in get_audit_methods()]
+    check_true("oracle_reusable_route_appears_once", method_ids.count(oracle_method_id) == 1)
+    if method_ids.count(oracle_method_id) == 1:
+        route_console = io.StringIO()
+        with patch("builtins.input", side_effect=[str(method_ids.index(oracle_method_id) + 1), "", "0"]), \
+             patch.object(research_app, "render_audit_status", return_value="READY"), \
+             patch.object(research_app, "run_enabled_audits") as oracle_runner, \
+             patch.object(research_app, "render_latest_audit_summary", return_value="LATEST"), \
+             redirect_stdout(route_console):
+            route_rc = research_app._audit_reusable_menu("breakout_quality")
+        check_true(
+            "oracle_reusable_route_dispatches_exactly_once_via_formal_runner",
+            route_rc == 0
+            and oracle_runner.call_count == 1
+            and oracle_runner.call_args.kwargs.get("method_id") == oracle_method_id
+            and "Target Ground Truth" in route_console.getvalue(),
+        )
+
     reusable_defs = get_reusable_audit_definitions("breakout_quality")
     check_true(
         "reusable_audit_reports_are_registry_driven_and_not_scientific_aud_ids",

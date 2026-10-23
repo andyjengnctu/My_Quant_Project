@@ -72,24 +72,6 @@ class OracleAuditContractCases(TestCase):
             self.assertEqual(status["overall_status"], "BLOCKED")
             self.assertIn("full dataset", status["rows"][0]["reason"])
 
-    def test_research_menu_routes_to_reusable_method_once(self):
-        import apps.research as app
-        from contextlib import redirect_stdout
-        from io import StringIO
-        with patch("builtins.input", side_effect=["4", "", "0"]), \
-             patch.object(app, "render_audit_status", return_value="READY"), \
-             patch.object(app, "run_enabled_audits") as runner, \
-             patch.object(app, "render_latest_audit_summary", return_value="LATEST"), \
-             redirect_stdout(StringIO()) as output:
-            rc = app._audit_reusable_menu("breakout_quality")
-        self.assertEqual(rc, 0)
-        runner.assert_called_once()
-        self.assertEqual(runner.call_args.kwargs["method_id"], oracle.SUPPORTED_AUDIT_TYPE)
-        self.assertIn("Target Ground Truth", output.getvalue())
-        with patch("builtins.input", return_value="0"), redirect_stdout(StringIO()) as output:
-            app._audit_one_time_menu("breakout_quality")
-        self.assertNotIn("AUD-target-ground-truth-romd", output.getvalue())
-
     def test_persistent_contract_must_be_approved_before_replay(self):
         with patch.object(oracle, "require_approved_report_contract", side_effect=ValueError("UNAUTHORIZED")), \
              patch.object(oracle, "build_report") as builder:
