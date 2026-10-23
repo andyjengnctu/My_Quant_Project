@@ -7,6 +7,7 @@ No model training, PIT score publication, optimizer, or trading state is touched
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping
@@ -16,12 +17,20 @@ import numpy as np
 import pandas as pd
 
 from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+from core.breakout_quality_runtime import (
+    CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+    CONTINUOUS_RANKER_TARGET_POSTPROCESS_NONE,
+)
+from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
 from core.console_report import render_table, render_title
 from core.dataset_profiles import get_dataset_dir
 from core.path_utils import project_relative_display_path
 from core.strategy_compare_policy import (
     get_strategy_comparison_settings, get_strategy_multi_seed_robustness_settings,
 )
+from filters.breakout_quality.daily_ranker_data import compute_daily_opportunity_target_batch
+from filters.breakout_quality.models.spec import get_model_spec
+from filters.breakout_quality.workflow_io import discover_dataset_csv_inputs, load_dataset_frame
 from filters.breakout_quality.continuous_target import (
     StrategyAlignedContinuousTargetSpec,
     full_horizon_mae_safety_r_from_minimum_low_return,
@@ -160,6 +169,76 @@ def collect_status(definition, *, project_root: Path) -> dict[str, Any]:
         }
 
 
+
+def _benchmark_truth_for_oracle(
+    definition, root: Path, source_field: str, *, cutoff: str,
+) -> pd.DataFrame:
+    """Audit-only truth for the tradable benchmark excluded from DL training.
+
+    The daily-universal provider intentionally uses 0050 only as a feature
+    benchmark. Portfolio replay may nevertheless order it as a stock. Reuse
+    the SAME canonical daily target calculator; never impute a missing score.
+    """
+    settings, _baseline, _exact = _contract(definition)
+    profile_id = str(definition.source[source_field])
+    profile = get_breakout_quality_experiment_profile(profile_id)
+    recipe = get_continuous_ranker_execution_recipe(profile_id)
+    policy = recipe.target_policy
+    if (
+        policy.materialization_mode != CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT
+        or policy.postprocess != CONTINUOUS_RANKER_TARGET_POSTPROCESS_NONE
+        or not policy.component_target_id
+        or recipe.continuous_target_id != profile.continuous_target_id
+    ):
+        raise OracleBlockedError(f"{source_field}不能以正式daily target calculator補Benchmark")
+    architecture = str(profile.model_architecture or definition.source["model_architecture"])
+    feature_bars = int(get_model_spec(architecture).input_window_bars or DEFAULT_LABEL_POLICY.feature_window_bars)
+    horizon = int(policy.horizon_bars or DEFAULT_LABEL_POLICY.label_horizon_bars)
+    cohort_horizon = int(policy.sample_universe_horizon_bars or horizon)
+    if cohort_horizon < horizon:
+        raise OracleBlockedError("Oracle Benchmark maturity horizon contract不合法")
+    spec = StrategyAlignedContinuousTargetSpec.from_label_policy(
+        replace(DEFAULT_LABEL_POLICY, label_horizon_bars=horizon)
+    )
+    benchmark = normalize_ticker(DEFAULT_LABEL_POLICY.benchmark_ticker)
+    csv_inputs, _duplicates = discover_dataset_csv_inputs(root, settings.dataset)
+    paths = {normalize_ticker(ticker): path for ticker, path in csv_inputs}
+    if benchmark not in paths:
+        raise OracleBlockedError(f"Oracle缺少可交易Benchmark價格：{benchmark}")
+    frame = load_dataset_frame(
+        paths[benchmark], benchmark,
+        min_rows=max(feature_bars + 1, int(DEFAULT_LABEL_POLICY.label_horizon_bars) + 1),
+    )
+    dates = pd.DatetimeIndex(frame.index).normalize()
+    # Match daily-universal's feature-ready start and complete-path requirement.
+    positions = np.arange(feature_bars - 1, len(frame) - cohort_horizon, dtype=np.int64)
+    positions = positions[dates.take(positions + cohort_horizon) <= pd.Timestamp(cutoff)]
+    if not len(positions):
+        raise OracleBlockedError("Oracle Benchmark無足夠的成熟真值與歷史Feature")
+    batch = compute_daily_opportunity_target_batch(
+        frame, positions, spec=spec, target_id=str(policy.component_target_id),
+    )
+    valid = np.asarray(batch.valid_mask, dtype=bool)
+    if cohort_horizon != horizon:
+        cohort_spec = replace(spec, horizon_bars=cohort_horizon)
+        cohort_batch = compute_daily_opportunity_target_batch(
+            frame, positions, spec=cohort_spec, target_id=str(policy.component_target_id),
+        )
+        valid &= np.asarray(cohort_batch.valid_mask, dtype=bool)
+    if not bool(np.any(valid)):
+        raise OracleBlockedError("Oracle Benchmark沒有有效成熟daily target")
+    positions = positions[valid]
+    risk = float(spec.risk_budget_return)
+    return pd.DataFrame({
+        "ticker": benchmark,
+        "date": dates.take(positions).strftime("%Y-%m-%d"),
+        "mfe": np.asarray(batch.favorable_return, dtype=float)[valid] / risk,
+        "peak_adverse": np.asarray(batch.adverse_return_to_peak, dtype=float)[valid] / risk,
+        "min_low": np.asarray(batch.minimum_low_return, dtype=float)[valid],
+        "raw": np.asarray(batch.target_raw_r, dtype=float)[valid],
+    })
+
+
 def _load_truth(definition, root: Path, source_field: str, *, cutoff: str) -> pd.DataFrame:
     profile_id = str(definition.source[source_field])
     profile = get_breakout_quality_experiment_profile(profile_id)
@@ -200,6 +279,17 @@ def _load_truth(definition, root: Path, source_field: str, *, cutoff: str) -> pd
         raise OracleBlockedError(f"{source_field}沒有研究截止日前成熟且完整的共同樣本")
     if frame.duplicated(["ticker", "date"]).any():
         raise OracleBlockedError(f"{source_field}存在ticker/date重複")
+    benchmark = normalize_ticker(DEFAULT_LABEL_POLICY.benchmark_ticker)
+    if benchmark not in set(frame["ticker"]):
+        # A valid trading candidate is intentionally omitted by the TRAINING
+        # sample provider. Fill only from the canonical future-path target
+        # calculator, leaving all other missing stock-days fail-closed.
+        benchmark_truth = _benchmark_truth_for_oracle(
+            definition, root, source_field, cutoff=cutoff,
+        )
+        frame = pd.concat([frame, benchmark_truth], ignore_index=True)
+    if frame.duplicated(["ticker", "date"]).any():
+        raise OracleBlockedError(f"{source_field}的Benchmark真值重複")
     return frame
 
 
