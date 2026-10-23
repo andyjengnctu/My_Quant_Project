@@ -698,7 +698,7 @@ PORTFOLIO_DRAWDOWN_REPORT = PersistentReportContract(
 )
 
 TARGET_ORACLE_ROMD_REPORT = PersistentReportContract(
-    report_id="audit.target_oracle_romd", version=1, role="persistent_reusable_hindsight_non_pit",
+    report_id="audit.target_oracle_romd", version=2, role="persistent_reusable_hindsight_non_pit",
     menu_path=("Research", "Audit／診斷", "可重複使用的原因分析", "Target Ground Truth → Strategy RoMD (Oracle)"),
     sections=(
         S("oracle_performance", 1, "Oracle Performance (4-seed mean)", tables=(T("performance", (
@@ -712,7 +712,7 @@ TARGET_ORACLE_ROMD_REPORT = PersistentReportContract(
             C("wins", "Win/Seed", alignment="right"),
             C("ev_a_r", "EV(A) Mean", 2, " R", "higher", "signed_number"),
         )),)),
-        S("target_definitions", 2, "Target Definitions"),
+        S("target_definitions", 2, "Target Definitions (8 active Oracle targets)"),
         S("yearly_stability", 3, "Yearly Stability (same-window seed means)", tables=(T("yearly", (
             C("year", "Year", alignment="left"),
             C("strategy_return_pct", "Mean Return", 2, "%", "higher", "signed_pct"),

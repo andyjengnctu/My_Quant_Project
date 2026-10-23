@@ -23,10 +23,6 @@ from core.file_integrity import (
 from filters.breakout_quality.workflow_io import discover_dataset_csv_inputs
 
 _CACHE_SCHEMA = 1
-_LEGACY_TARGETS = frozenset({
-    "AO40_EqualRank", "CG40_EqualRank", "CH20_EqualRank", "U40", "U20",
-    "FirstBreach_NetR", "MFE40_Control",
-})
 _REQUIRED_METRICS = (
     "total_return_pct", "annualized_return_pct", "mdd_pct", "romd", "ev_a_r",
     "trades", "exposure_pct",
@@ -170,11 +166,12 @@ class OracleReplayStore:
 
 
 class HistoricalOracleIndex:
-    """Read completed pre-cache Oracle reports from both historical report homes.
+    """Discover locally completed Oracle reports without a target-inventory allowlist.
 
-    One-time V1/V2 and reusable V2 reports can predate per-arm input-byte
-    fingerprints. They are admitted only on their available, complete scientific
-    provenance, then promoted into the current strict per-arm identity cache.
+    Historical reports may predate per-arm input-byte fingerprints. Admit an
+    observation only if its *own* target definition, seed, completed metrics,
+    research cohort and strategy provenance match the current requested arm.
+    Report inventories and presentation versions must not dictate reuse.
     """
 
     def __init__(self, project_root: Path):
@@ -184,18 +181,31 @@ class HistoricalOracleIndex:
         versions = load_report_contract_versions().get("audit.target_oracle_romd", ())
         self._approved_report_versions = {item["contract_id"]: item["fingerprint"] for item in versions}
         self.snapshots: list[tuple[str, Path, dict[str, Any]]] = []
-        for origin in ("one_time", "reusable"):
-            output_dir = output_root / origin / "target_oracle_romd"
-            candidates = [output_dir / "latest/audit.json", *sorted(output_dir.glob("*/audit.json"))]
-            for path in candidates:
-                if not path.is_file():
-                    continue
-                try:
-                    payload = json.loads(path.read_text(encoding="utf-8"))
-                except (OSError, ValueError) as exc:
-                    raise ValueError("Oracle historical artifact unreadable; do not silently recalculate") from exc
-                if isinstance(payload, dict) and payload.get("status") == "COMPLETED":
-                    self.snapshots.append((origin, path, payload))
+        # Search the local Audit output tree, rather than an explicit list of
+        # past report versions, folders or former Oracle target collections.
+        for path in sorted(output_root.rglob("audit.json")):
+            if not path.is_file():
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                if "target_oracle_romd" in path.parts:
+                    raise ValueError("Oracle completed report unreadable; do not silently recalculate") from exc
+                continue  # An unrelated Audit report is not Oracle provenance.
+            if not isinstance(payload, dict) or payload.get("report_type") not in (
+                None, "target_ground_truth_strategy_romd",
+            ):
+                continue
+            if payload.get("report_id") == "target_oracle_romd":
+                origin = "reusable"
+            elif "one_time" in path.parts and payload.get("report_id") in (
+                None, "AUD-target-ground-truth-romd",
+            ):
+                origin = "one_time"
+            else:
+                continue
+            if payload.get("status") == "COMPLETED":
+                self.snapshots.append((origin, path, payload))
 
     def _compatible(self, payload: Mapping[str, Any], *, context: Mapping[str, Any], origin: str) -> bool:
         if (payload.get("status") != "COMPLETED" or payload.get("hindsight_non_pit") is not True
@@ -211,9 +221,8 @@ class HistoricalOracleIndex:
             return False
         if payload.get("report_type") not in (None, "target_ground_truth_strategy_romd"):
             return False
-        # The reusable report has a different *presentation* identity, but the
-        # underlying seven/eleven Oracle replay identities are unchanged.
-        # Do not accept a reusable report as anonymous legacy evidence.
+        # Presentation identity is separate from per-target scientific identity.
+        # Reusable reports must have a ledger-approved report contract.
         if origin == "one_time":
             if payload.get("report_id") not in (None, "AUD-target-ground-truth-romd"):
                 return False
@@ -237,9 +246,16 @@ class HistoricalOracleIndex:
                       "rows_outside_dl_training_provider_by_source"):
             if cohort.get(field) != wanted.get(field):
                 return False
-        definitions = dict(payload.get("definitions") or {})
-        if (not definitions or not set(definitions).issubset(context["definitions"])
-                or any(context["definitions"][name] != desc for name, desc in definitions.items())):
+        # Source-defined supplemental evidence is validated when present, but
+        # an older report need not possess fields introduced in newer schemas.
+        # Unknown source fields cannot silently redefine the current cohort.
+        if any(key not in wanted or wanted[key] != value for key, value in cohort.items()):
+            return False
+        definitions = payload.get("definitions")
+        if (not isinstance(definitions, dict) or not definitions
+                or any(not isinstance(name, str) or not name
+                       or not isinstance(description, str) or not description
+                       for name, description in definitions.items())):
             return False
         param_rows = payload.get("param_artifacts") or []
         if not isinstance(param_rows, list) or len(param_rows) != len(context["seeds"]):
@@ -249,27 +265,21 @@ class HistoricalOracleIndex:
                     if isinstance(item, dict) and "seed" in item and "param_sha256" in item}
         if archived != context["param_sha_by_seed"] or not all(is_sha256_hex(v) for v in archived.values()):
             return False
-        targets = {str(row.get("target")) for row in payload["oracles"] if isinstance(row, dict)}
-        # Full old seven-treatment V1 or full eleven-treatment one-time V2 only.
-        # A partial report can never act as a completed observation source.
+        targets = {row.get("target") for row in payload["oracles"] if isinstance(row, dict)}
+        # A completed report must be internally consistent, regardless of its
+        # historical number of targets. Matching the *requested* definition
+        # is performed in lookup(), not via a hardcoded report inventory.
         if (len(targets) != len(payload["oracles"])
-                or targets != set(definitions)
-                or targets not in (_LEGACY_TARGETS, frozenset(context["definitions"]))):
+                or targets != set(definitions)):
             return False
-        if targets != _LEGACY_TARGETS:
-            # V2-only geometry evidence must match as well. V1 predates the
-            # ratio counters and cannot be required to contain them.
-            for field in ("ratio_zero_denominator_policy",
-                          "mfe40_over_d40_zero_downside_positive_upside_count",
-                          "mfe40_over_d40_zero_zero_count"):
-                if cohort.get(field) != wanted.get(field):
-                    return False
         return True
 
     def lookup(self, *, target: str, seed: int, context: Mapping[str, Any]) -> dict[str, Any] | None:
         observations = []
         for origin, source, payload in self.snapshots:
             if not self._compatible(payload, context=context, origin=origin):
+                continue
+            if target != "C96" and payload["definitions"].get(target) != context["definitions"].get(target):
                 continue
             rows = [payload["baseline"]] if target == "C96" else [
                 row for row in payload["oracles"] if row.get("target") == target

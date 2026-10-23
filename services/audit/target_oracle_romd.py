@@ -77,19 +77,16 @@ from core.research_report_contract import (
 from services.audit.reusable_report import format_contract_row
 
 SUPPORTED_AUDIT_TYPE = "target_ground_truth_strategy_romd"
-ORACLE_REPORT_SCHEMA_VERSION = 2
+ORACLE_REPORT_SCHEMA_VERSION = 3
 ORACLE_TARGETS = (
     ("AO40_EqualRank", "40D MFE + adverse-to-peak Safety, 50/50 daily rank"),
     ("CG40_EqualRank", "40D MFE + full D40 Safety, 50/50 daily rank"),
     ("CH20_EqualRank", "20D MFE + full D20 Safety, 50/50 daily rank"),
     ("U40", "40D MFE - D40, canonical R"),
-    ("U20", "20D MFE - D20, canonical R"),
     ("FirstBreach_NetR", "MFE before first risk breach - adverse to that peak, R"),
     ("MFE40_Control", "40D MFE only (control, not target recommendation)"),
-    ("MFE40_over_D40", "Exact MFE40 / D40 in canonical R; if D40=0 and MFE>0 rank as +infinity, 0/0 ranks as zero"),
-    ("MFE20", "20D maximum favorable excursion, in canonical R"),
-    ("MAE40", "Negative full-horizon 40D MAE (lower adverse excursion ranks higher), in canonical R"),
-    ("MAE20", "Negative full-horizon 20D MAE (lower adverse excursion ranks higher), in canonical R"),
+    ("R40", "40D close-to-close terminal return divided by canonical risk budget R"),
+    ("T40", "(1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 is nonnegative in R"),
 )
 
 
@@ -269,6 +266,7 @@ def _market_truth_for_oracle(
         positions = np.flatnonzero((dates >= score_start) & (dates <= limit)).astype(np.int64)
         if not positions.size:
             continue
+        closes = frame["Close"].to_numpy(dtype=np.float64, copy=False)
         for field, (spec, maturity, target_id) in specs.items():
             eligible = positions[positions + maturity < len(frame)]
             if not eligible.size:
@@ -294,17 +292,26 @@ def _market_truth_for_oracle(
                 np.asarray(batch.target_raw_r, dtype=float),
             ))
             valid &= np.isfinite(values).all(axis=1)
+            # R40 uses the *40th future trading bar Close*, not the peak High,
+            # fixed-day MAE or realized Portfolio Replay exit. The canonical
+            # price path and mature 40D positions are shared with MFE40.
+            if field == "pure_mfe40_provider":
+                terminal_r = (closes[eligible + int(spec.horizon_bars)] / closes[eligible] - 1.0) / risk
+                valid &= np.isfinite(terminal_r)
             if not valid.any():
                 continue
             valid_counts[field] += int(valid.sum())
-            chunks[field].append(pd.DataFrame({
+            columns = {
                 "ticker": ticker,
                 "date": dates.take(eligible[valid]).strftime("%Y-%m-%d"),
                 "mfe": values[valid, 0],
                 "peak_adverse": values[valid, 1],
                 "min_low": values[valid, 2],
                 "raw": values[valid, 3],
-            }))
+            }
+            if field == "pure_mfe40_provider":
+                columns["terminal_r"] = terminal_r[valid]
+            chunks[field].append(pd.DataFrame(columns))
     truth = {}
     for field in _ORACLE_PROVIDER_FIELDS:
         if not chunks[field]:
@@ -386,27 +393,19 @@ def _load_truth(definition, root: Path, source_field: str, *, cutoff: str) -> pd
     return frame
 
 
-def _mfe40_over_d40_ratio(mfe40: pd.Series, safety_d40: pd.Series) -> pd.Series:
-    """Raw MFE40/D40 (both in canonical R), never an arbitrary fitted risk floor.
+def _terminal_mae_gate_r(r40: pd.Series, safety_mae40: pd.Series) -> pd.Series:
+    """T40 = (1-m)*R40-m, m=clip(MAE40_R,0,1); at a 1R stop T40=-1R.
 
-    Signed MFE40 may be negative when every future high is below the anchor.
-    Zero D40 with positive upside has mathematically unbounded ratio and is
-    ordered above finite values. Zero upside with zero downside is zero utility
-    (0/0 convention for ranking only). The *final* daily percentile is finite.
+    Oracle ranking label only: NOT a historical cash execution or ATR stop.
+    Full-horizon MAE is nonnegative; Safety is its negative signed form.
     """
-    numerator = np.asarray(mfe40, dtype=float)
-    downside = -np.asarray(safety_d40, dtype=float)
-    if (
-        numerator.shape != downside.shape
-        or not np.isfinite(numerator).all()
-        or not np.isfinite(downside).all()
-        or (downside < 0.0).any()
-    ):
-        raise OracleBlockedError("MFE40/D40必須使用有限的canonical MFE40、非負的D40真值")
-    ratio = np.zeros_like(numerator)
-    np.divide(numerator, downside, out=ratio, where=downside > 0.0)
-    ratio[(downside == 0.0) & (numerator > 0.0)] = np.inf
-    return pd.Series(ratio, index=mfe40.index, dtype=float)
+    terminal = np.asarray(r40, dtype=np.float64)
+    safety = np.asarray(safety_mae40, dtype=np.float64)
+    if (terminal.shape != safety.shape or not np.isfinite(terminal).all()
+            or not np.isfinite(safety).all() or (safety > 0.0).any()):
+        raise OracleBlockedError("T40 requires finite R40 and nonnegative MAE40 in canonical R")
+    m = np.clip(-safety, 0.0, 1.0)
+    return pd.Series((1.0 - m) * terminal - m, index=r40.index, dtype=float)
 
 
 def build_oracle_score_tables(definition, *, project_root: Path, cutoff: str) -> tuple[dict[str, dict[tuple[str, str], float]], dict[str, Any]]:
@@ -427,7 +426,9 @@ def build_oracle_score_tables(definition, *, project_root: Path, cutoff: str) ->
     raw40 = complete["pure_mfe40_provider"]
     raw20 = complete["mfe20_d20_provider"]
     first = complete["first_breach_provider"]
-    a = raw40.rename(columns={c: f"{c}40" for c in ("mfe", "peak_adverse", "min_low", "raw")})
+    if "terminal_r" not in raw40:
+        raise OracleBlockedError("40D canonical Research price path missing terminal Close return")
+    a = raw40.rename(columns={c: f"{c}40" for c in ("mfe", "peak_adverse", "min_low", "raw", "terminal_r")})
     b = raw20.rename(columns={c: f"{c}20" for c in ("mfe", "peak_adverse", "min_low", "raw")})
     c = first.rename(columns={col: f"{col}fb" for col in ("mfe", "peak_adverse", "min_low", "raw")})
     joint = a.merge(b, on=["ticker", "date"], how="inner", validate="one_to_one")
@@ -460,13 +461,10 @@ def build_oracle_score_tables(definition, *, project_root: Path, cutoff: str) ->
         "CG40_EqualRank": (percentile(joint["mfe40"]) + percentile(joint["safety_d40"])) / 2,
         "CH20_EqualRank": (percentile(joint["mfe20"]) + percentile(joint["safety_d20"])) / 2,
         "U40": joint["mfe40"] + joint["safety_d40"],
-        "U20": joint["mfe20"] + joint["safety_d20"],
         "FirstBreach_NetR": joint["rawfb"] - joint["peak_adversefb"],
         "MFE40_Control": joint["mfe40"],
-        "MFE40_over_D40": _mfe40_over_d40_ratio(joint["mfe40"], joint["safety_d40"]),
-        "MFE20": joint["mfe20"],
-        "MAE40": joint["safety_d40"],
-        "MAE20": joint["safety_d20"],
+        "R40": joint["terminal_r40"],
+        "T40": _terminal_mae_gate_r(joint["terminal_r40"], joint["safety_d40"]),
     }
     expected = {target for target, _ in ORACLE_TARGETS}
     if set(raw) != expected:
@@ -491,6 +489,9 @@ def build_oracle_score_tables(definition, *, project_root: Path, cutoff: str) ->
         },
         "scoring": "All targets final-ranked by average_zero_based percentile within common-day universe",
         "oracle_only": True,
+        # Preserve former 11-target cohort evidence byte-for-byte for strict
+        # per-arm replay REUSE. These are historical-only ratio counters, not
+        # active scores or visible fields in the new eight-target report.
         "ratio_zero_denominator_policy": "D40=0,MFE40>0 -> +infinity (highest rank); 0/0 -> 0; final score = finite daily percentile",
         "mfe40_over_d40_zero_downside_positive_upside_count": int(((joint["safety_d40"] == 0.0) & (joint["mfe40"] > 0.0)).sum()),
         "mfe40_over_d40_zero_zero_count": int(((joint["safety_d40"] == 0.0) & (joint["mfe40"] == 0.0)).sum()),
@@ -758,7 +759,9 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
             "Same-window C96 is verified/reused or replayed for each benchmark seed; full-period C96 is not comparable.",
             "N=4 paired end-to-end parameter seeds; oracle scores have no trainable seed.",
             "No best-target fitting from iterative OOS; multi-target search is exploratory.",
-            "MAE40 and MAE20 rank low downside first; MFE40/D40 has a zero-downside singularity, reported separately and not tuned.",
+            "R40 is the 40th future bar Close versus signal-date Close, in the same fixed risk R as MFE40.",
+            "T40 uses nonnegative full-path MAE40: (1-min(MAE40,1R))*R40-min(MAE40,1R). At MAE40>=1R it equals -1R.",
+            "1R for T40 is the frozen research Label risk budget, NOT an ATR stop or actual executed stop-loss.",
         ],
     }
 
@@ -783,11 +786,7 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
         f'Benchmark: {report["benchmark_id"]}, same-seed pairs N={len(report["seeds"])}',
         f'Report schema: {report["schema_version"]}, Oracle treatments: {len(report["oracles"])} (formal Research Audit; not Standard SOP)',
         'Ranking: Exact K/R0, Broker-Cash, same seed/P16; future truth changes ranking only.',
-        (
-            'MFE40/D40 zero denominator: '
-            f'{report["common_cohort"]["mfe40_over_d40_zero_downside_positive_upside_count"]:,} positive-MFE (+infinity); '
-            f'{report["common_cohort"]["mfe40_over_d40_zero_zero_count"]:,} zero/zero (rank 0).'
-        ),
+        'T40: (1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 >= 1R -> T40 = -1R.',
         'AO/CG/CH = equal-rank 50/50 geometry PROXIES, not neural-network model heads.',
     ]
     if target == "console":
@@ -802,7 +801,7 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
              "|" + "|".join("---" for _ in perf_table.headers) + "|"]
     lines.extend("| " + " | ".join(row) + " |" for row in rows)
     lines.extend(["", f"## {sections[1].display_title}",
-                  *[f"- **{key}** - {desc}" for key, desc in ORACLE_TARGETS],
+                  *[f"- **{key}** - {desc.replace('D40', 'MAE40').replace('D20', 'MAE20')}" for key, desc in ORACLE_TARGETS],
                   "", f"## {sections[2].display_title}"])
     for item in items:
         lines.append(f'### {item["target"]}')
