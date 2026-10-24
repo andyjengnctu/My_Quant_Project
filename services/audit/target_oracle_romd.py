@@ -91,6 +91,7 @@ ORACLE_TARGETS = tuple((item["target"], item["description"]) for item in _ORACLE
 # Recipe implementation is stable; WHICH recipes and providers are needed is
 # resolved from the selected comparisons, never from a second target allowlist.
 _ORACLE_SCORE_RECIPES = frozenset(("equal_rank_mfe_safety", "mfe", "terminal_r", "terminal_mae_gate", "mfe_mae_gate"))
+_ORACLE_SEED_SCORE_RECIPES = frozenset(("trade_path_realized_net_r",))
 _PROVIDER_COHORT_IDS = {
     "pure_mfe40_provider": "40d", "mfe20_d20_provider": "20d",
     "first_breach_provider": "first_breach",
@@ -106,6 +107,7 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
         raise OracleBlockedError("Oracle comparison清單為空；請由正式Registry設定比較對象")
     definitions: list[tuple[str, str]] = []
     recipes: dict[str, tuple[str, str]] = {}
+    seed_recipes: dict[str, tuple[str, str]] = {}
     aliases: dict[str, str] = {}
     selectors: dict[str, str] = {}
     provider_fields: list[str] = []
@@ -135,20 +137,30 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
             aliases[name] = source
         else:
             recipe, provider = str(entry.get("score") or ""), str(entry.get("provider") or "")
-            if recipe not in _ORACLE_SCORE_RECIPES or not definition.source.get(provider):
+            if not definition.source.get(provider):
                 raise OracleBlockedError(f"Oracle {name} score/provider缺少正式定義：{recipe}/{provider}")
             if selector != "exact":
                 raise OracleBlockedError(f"Oracle {name} 的新分數必須使用Exact；Direct僅能重用score來源")
-            recipes[name] = (recipe, provider)
-            if provider not in provider_fields:
-                provider_fields.append(provider)
+            if recipe in _ORACLE_SEED_SCORE_RECIPES:
+                if provider != "event_targets":
+                    raise OracleBlockedError(f"Oracle {name} seed-score provider不合法：{provider}")
+                declared = [row for row in definition.source[provider] if row.get("enabled", True)]
+                if len(declared) != 1 or declared[0].get("target") != name:
+                    raise OracleBlockedError("Oracle交易路徑label身分必須與比較清單相同")
+                seed_recipes[name] = (recipe, provider)
+            elif recipe in _ORACLE_SCORE_RECIPES:
+                recipes[name] = (recipe, provider)
+                if provider not in provider_fields:
+                    provider_fields.append(provider)
+            else:
+                raise OracleBlockedError(f"Oracle未授權的score recipe：{recipe}")
         definitions.append((name, desc))
         selectors[name] = selector
     if not recipes:
         raise OracleBlockedError("Oracle comparison缺少獨立真值score")
     return {"targets": tuple(definitions), "recipes": recipes,
-            "aliases": aliases, "selectors": selectors,
-            "providers": tuple(provider_fields)}
+            "seed_recipes": seed_recipes, "aliases": aliases,
+            "selectors": selectors, "providers": tuple(provider_fields)}
 
 
 # Display labels are intentionally separate from the immutable replay-cache keys.
@@ -605,7 +617,7 @@ def _build_oracle_score_panels(
         scores[name] = dict(zip(keys, ranking.to_numpy(dtype=float)))
     for direct, source in plan["aliases"].items():
         scores[direct] = scores[source]
-    if set(scores) != {name for name, _desc in plan["targets"]}:
+    if set(scores) | set(plan["seed_recipes"]) != {name for name, _desc in plan["targets"]}:
         raise OracleBlockedError("Oracle比較清單／分數工件依賴不一致")
 
     # Backward-compatible evidence keys retain their original scientific
@@ -765,13 +777,14 @@ def render_existing_artifact_inventory(definition, *, project_root: Path) -> str
     ]
     counts = {state: list(actions.values()).count(state)
               for state in ("REUSE", "RUN", "BLOCKED")}
-    return "\n".join((
+    inventory = "\n".join((
         "[Target 驗證 | 既有 Replay 工件]",
         "Seed：" + "  ".join(f"S{i + 1}={seed}" for i, seed in enumerate(seeds)),
         render_table(headers, rows),
         f"REUSE {counts['REUSE']} / RUN（需計算）{counts['RUN']} / BLOCKED {counts['BLOCKED']}",
         "註：既有結果先列 REUSE；按 Enter 後依正式資料與 P16 身分核准。衝突將 BLOCK，不覆寫歷史證據。",
     ))
+    return inventory
 
 
 
@@ -843,6 +856,22 @@ def _canonical_oracle_replay_policy(definition, *, base_arm) -> dict[str, Any]:
     }
     return replay_policy
 
+
+
+def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
+                       replay_policy: Mapping[str, Any]) -> dict[str, Any]:
+    """One target-scoped economic/score identity for fast and normal REUSE."""
+    policy = dict(replay_policy)
+    if plan["selectors"].get(target) == "direct":
+        policy["direct_arm"] = str(definition.source["direct_arm_id"])
+    if target in plan["seed_recipes"]:
+        recipe, provider = plan["seed_recipes"][target]
+        declared = [dict(row) for row in definition.source[provider] if row.get("enabled", True)]
+        policy["hindsight_score_recipe"] = recipe
+        policy["hindsight_score_key_mode"] = "signal_origin_date"
+        policy["hindsight_label_spec"] = declared[0]
+        policy["excluded_score_policy"] = "rank_last_no_realized_r_imputation"
+    return policy
 
 
 def _reusable_completed_oracle_report(
@@ -922,8 +951,9 @@ def _reusable_completed_oracle_report(
             for target in (str(definition.source["baseline_arm_id"]), *wanted_targets):
                 direct = plan["selectors"].get(target) == "direct"
                 arm = direct_arm if direct else exact_arm
-                arm_policy = (dict(replay_policy, direct_arm=str(definition.source["direct_arm_id"]))
-                              if direct else replay_policy)
+                arm_policy = _arm_replay_policy(
+                    definition, plan=plan, target=target, replay_policy=replay_policy,
+                )
                 identity = replay_identity(
                     dataset=settings.dataset, dataset_sha256=price_sha,
                     target=target,
@@ -1013,6 +1043,18 @@ def build_report(
     )
     if not quiet:
         progress("真值及共同樣本完成；檢查價格 SHA、P16 與 Replay Cache")
+    seed_scores: dict[int, dict[str, dict[tuple[str, str], float]]] = {}
+    seed_evidence: dict[int, dict[str, Any]] = {}
+    if plan["seed_recipes"]:
+        from services.audit.min_trade40_target import build_seed_oracle_scores
+        path_scores, seed_evidence = build_seed_oracle_scores(
+            definition, project_root=root, quiet=quiet,
+            resolve_p16_context=lambda: _resolve_min_trade40_p16_context(
+                definition, project_root=root,
+            ),
+        )
+        for seed, score in path_scores.items():
+            seed_scores[int(seed)] = {name: score for name in plan["seed_recipes"]}
     direct_arm = _direct_arm(definition, settings, base_arm, exact_arm)
     start = str(settings.start_date)
     end40 = min(str(settings.end_date), str(cohort40["last_common_day"]))
@@ -1030,8 +1072,10 @@ def build_report(
     # Every treatment carries its own canonical ranking/allocator policy identity.
     def run_panel(*, end: str, cohort: dict[str, Any], scores: dict[str, dict],
                   targets: tuple[tuple[str, str], ...], label: str) -> dict[str, Any]:
-        if set(scores) != {name for name, _ in targets}:
+        if set(scores) | set(plan["seed_recipes"]) != {name for name, _ in targets}:
             raise OracleBlockedError(f"Oracle {label}計算與報表Target清單不一致")
+        if plan["seed_recipes"] and set(seed_scores) != {seed for seed, _ in parameter_paths}:
+            raise OracleBlockedError("Oracle P16逐seed交易路徑真值不完整")
         replay_kwargs = {
             "data_dir": data_dir, "start_date": start, "end_date": end,
             "max_positions": settings.max_positions, "enable_rotation": False, "quiet": quiet,
@@ -1074,8 +1118,9 @@ def build_report(
             for target in ("C96", *(name for name, _ in targets)):
                 is_direct = plan["selectors"].get(target) == "direct"
                 arm = direct_arm if is_direct else exact_arm
-                arm_replay_policy = (dict(replay_policy, direct_arm=str(definition.source["direct_arm_id"]))
-                                     if is_direct else replay_policy)
+                arm_replay_policy = _arm_replay_policy(
+                    definition, plan=plan, target=target, replay_policy=replay_policy,
+                )
                 identity = replay_identity(
                     dataset=settings.dataset, dataset_sha256=price_sha,
                     target=target, definition=definitions_with_base,
@@ -1181,10 +1226,14 @@ def build_report(
             for target, _description in targets:
                 def run_oracle(target=target):
                     arm = direct_arm if plan["selectors"].get(target) == "direct" else exact_arm
+                    score_map = (seed_scores[seed][target] if target in plan["seed_recipes"]
+                                 else scores[target])
                     with audit_oracle_truth_score_context(
-                        scores[target],
+                        score_map,
                         ranking_policy=str(arm.dl_runtime_mode),
                         ranking_options=arm.dl_runtime_options,
+                        key_mode=("signal_origin_date" if target in plan["seed_recipes"]
+                                  else "information_date"),
                     ):
                         return _run_scenario(
                             name=f"Oracle {target} seed={seed}", params=oracle_params,
@@ -1214,6 +1263,8 @@ def build_report(
             "baseline": baseline_summary, "oracles": rows,
             "definitions": definitions,
             "param_artifacts": param_evidence,
+            "seed_target_evidence": ({str(seed): row for seed, row in seed_evidence.items()}
+                                     if seed_evidence else {}),
         }
 
     base = run_panel(
@@ -1241,6 +1292,11 @@ def build_report(
             "T40 uses full-path nonnegative MAE and clamps to -1R at 1R adverse movement.",
             "T40-MFE replaces only terminal R40 by full-path MFE40_R; the identical MAE gate remains.",
             "1R is the fixed research Label risk budget, NOT the actual executed ATR stop-loss.",
+            *( ["MinTrade40_NetR ranks each P16 Min signal by its 40-session canonical executed net R; "
+                "ex-post unfilled/unexecutable signals are ranked LAST without inventing R. "
+                "Its signal-origin cohort differs from price-only stock-day truths, but all "
+                "reported RoMD values use the same Broker-Cash portfolio Replay, seed/P16 and window."]
+               if plan["seed_recipes"] else [] ),
         ],
     }
 
@@ -1261,6 +1317,9 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
         "Target Ground Truth -> Strategy RoMD (HINDSIGHT ORACLE / NOT PIT)",
         f'Period: {report["start_date"]} ~ {report["end_date"]} (40D-mature common window)',
         f'Common stock-day cohort: {report["common_cohort"]["cohort_rows"]:,}',
+        *( ["MinTrade40_NetR: seed-specific P16 signal-event Net-R ranking; "
+            "not part of the stock-day truth cohort; RoMD uses the same portfolio Replay."]
+           if any(row["target"] in {"MinTrade40_NetR"} for row in report["oracles"]) else [] ),
         f'Benchmark: {report["benchmark_id"]}, same-seed pairs N={len(report["seeds"])}',
         f'Report schema: {report["schema_version"]}, Oracle treatments: '
         f'{len(report["oracles"])} (40D, Exact + Direct); not Standard SOP',
@@ -1312,6 +1371,25 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
     lines.extend(["", f"## {sections[4].display_title}",
                   *[f"- {limitation}" for limitation in report["limitations"]]])
     return "\n".join(lines)
+
+
+def _resolve_min_trade40_p16_context(definition, *, project_root: Path):
+    """Reuse the Oracle-owned legal P16 parameter resolution without a cycle."""
+    from services.audit.min_trade40_target import MinTrade40P16Context
+
+    root = Path(project_root).resolve()
+    settings, base_arm, _exact = _contract(definition)
+    benchmark, paths = _robustness_artifacts(definition, root)
+    start, end = str(settings.start_date), str(settings.end_date)
+    prepared, evidences = _prepare_oracle_parameters(
+        definition, root=root, parameter_paths=paths, start=start,
+        end=end, base_arm=base_arm,
+    )
+    return MinTrade40P16Context(
+        dataset=str(settings.dataset), start_date=start, cutoff_date=end,
+        benchmark_id=str(benchmark.benchmark_id),
+        prepared=tuple(prepared), parameter_evidence=tuple(evidences),
+    )
 
 
 def run_formal_audit(

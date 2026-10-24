@@ -107,6 +107,19 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                 # Removing a comparison automatically retires its unused
                 # provider workload; historical provider profiles stay in the
                 # catalog for read-only provenance.
+                # AI: A P16 signal-anchored realized-Net-R score is a normal
+                # Oracle *comparison arm*. The seed-dependent label producer
+                # stays separate from the universal price-truth provider; both
+                # are evaluated by the SAME canonical Broker-Cash replay.
+                "event_targets": (
+                    {
+                        "target": "MinTrade40_NetR",
+                        "label_id": "LABEL-mintrade40_realized_net_r_v1",
+                        "horizon_trading_bars": 40,
+                        "cohort": "p16_min_signal_events",
+                        "enabled": True,
+                    },
+                ),
                 "oracle_comparisons": (
                     {"target": "CG40_EqualRank", "description": "40D MFE + full D40 Safety, 50/50 daily rank", "score": "equal_rank_mfe_safety", "provider": "pure_mfe40_provider", "selector": "exact"},
                     {"target": "MFE40_Control", "description": "40D MFE only (control, not target recommendation)", "score": "mfe", "provider": "pure_mfe40_provider", "selector": "exact"},
@@ -117,6 +130,7 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     {"target": "R40_Direct", "description": "Same R40 score; canonical No-K/No-R0 direct allocation", "score_source": "R40", "selector": "direct"},
                     {"target": "T40_Direct", "description": "Same T40 score; canonical No-K/No-R0 direct allocation", "score_source": "T40", "selector": "direct"},
                     {"target": "T40-MFE_Direct", "description": "Same T40-MFE score; canonical No-K/No-R0 direct allocation", "score_source": "T40-MFE", "selector": "direct"},
+                    {"target": "MinTrade40_NetR", "description": "P16 Min signal-origin realized broker-net R; first stop/indicator exit or 40 market sessions, unfilled ranked last without invented R", "score": "trade_path_realized_net_r", "provider": "event_targets", "selector": "exact"},
                 ),
             },
             "dimensions": {

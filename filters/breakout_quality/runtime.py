@@ -154,25 +154,33 @@ def breakout_quality_filter_source_execution_context(
 _ORACLE_TRUTH_SCORES: ContextVar[Mapping[tuple[str, str], float] | None] = ContextVar(
     "breakout_quality_audit_oracle_truth_scores", default=None,
 )
+_ORACLE_TRUTH_KEY_MODE: ContextVar[str] = ContextVar(
+    "breakout_quality_audit_oracle_truth_key_mode", default="information_date",
+)
 
 
 @contextmanager
 def audit_oracle_truth_score_context(
     scores: Mapping[tuple[str, str], float],
     *, ranking_policy: str, ranking_options: Mapping[str, object] | None = None,
+    key_mode: str = "information_date",
 ) -> Iterator[None]:
     """Bind hindsight scores only during one isolated Audit portfolio replay."""
     if not scores:
         raise ValueError("Oracle Audit缺少成熟的Ground Truth scores")
+    if key_mode not in {"information_date", "signal_origin_date"}:
+        raise ValueError("Oracle Audit未知的 score key mode")
     if _ORACLE_TRUTH_SCORES.get() is not None:
         raise RuntimeError("Oracle Audit不得巢狀覆寫未來真值score")
     with audit_oracle_ranking_policy_context(
         ranking_policy=ranking_policy, ranking_options=ranking_options,
     ):
         token = _ORACLE_TRUTH_SCORES.set(scores)
+        key_token = _ORACLE_TRUTH_KEY_MODE.set(key_mode)
         try:
             yield
         finally:
+            _ORACLE_TRUTH_KEY_MODE.reset(key_token)
             _ORACLE_TRUTH_SCORES.reset(token)
 
 
@@ -227,7 +235,11 @@ def resolve_breakout_quality_candidate_rank(
         truth = _ORACLE_TRUTH_SCORES.get()
         if truth is None or information_date is None:
             raise RuntimeError("Oracle Audit來源或information_date缺失；禁止降級為正式PIT score")
-        date = pd.Timestamp(information_date).strftime("%Y-%m-%d")
+        lookup_day = (signal_date if _ORACLE_TRUTH_KEY_MODE.get() == "signal_origin_date"
+                      else information_date)
+        if lookup_day is None:
+            raise RuntimeError("Oracle Audit缺少原始signal date；禁止不明來源fallback")
+        date = pd.Timestamp(lookup_day).strftime("%Y-%m-%d")
         key = (str(ticker), date)
         value = truth.get(key)
         if value is None or not math.isfinite(float(value)):
