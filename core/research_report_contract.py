@@ -730,15 +730,15 @@ _TARGET_ORACLE_ROMD_PRIOR_REPORT = PersistentReportContract(
     ),
 )
 
-# v1-v3 remain frozen in their immutable definition files. User-approved
-# v4 removes active 20D/60D comparisons and adds Direct allocator controls.
+# v1-v4 remain frozen in immutable files. User-approved v5 narrows the
+# current 40D inventory; all historical evidence and replay keys survive.
 TARGET_ORACLE_ROMD_REPORT = PersistentReportContract(
-    report_id="audit.target_oracle_romd", version=4,
+    report_id="audit.target_oracle_romd", version=5,
     role="persistent_reusable_hindsight_non_pit",
     menu_path=_TARGET_ORACLE_ROMD_PRIOR_REPORT.menu_path,
     sections=(
         _TARGET_ORACLE_ROMD_PRIOR_REPORT.sections[0],
-        S("target_definitions", 2, "Target Definitions (7 × Exact / 3 × Direct, 40D)"),
+        S("target_definitions", 2, "Target Definitions (4 × Exact / 3 × Direct, 40D)"),
         *_TARGET_ORACLE_ROMD_PRIOR_REPORT.sections[2:],
     ),
 )

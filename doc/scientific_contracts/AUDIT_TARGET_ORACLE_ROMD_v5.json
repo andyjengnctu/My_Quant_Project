@@ -1,0 +1,228 @@
+{
+  "report_id": "audit.target_oracle_romd",
+  "version": 5,
+  "role": "persistent_reusable_hindsight_non_pit",
+  "menu_path": [
+    "Research",
+    "Audit／診斷",
+    "可重複使用的原因分析",
+    "Target Ground Truth → Strategy RoMD (Oracle)"
+  ],
+  "sections": [
+    {
+      "section_id": "oracle_performance",
+      "number": 1,
+      "title": "Oracle Performance (4-seed mean)",
+      "applicability": "all",
+      "tables": [
+        {
+          "table_id": "performance",
+          "columns": [
+            {
+              "key": "target",
+              "label": "Target",
+              "digits": null,
+              "unit": "",
+              "preference": "neutral",
+              "format_kind": "text",
+              "alignment": "left"
+            },
+            {
+              "key": "total_return_pct",
+              "label": "Return Mean",
+              "digits": 2,
+              "unit": "%",
+              "preference": "higher",
+              "format_kind": "signed_pct",
+              "alignment": "right"
+            },
+            {
+              "key": "annualized_return_pct",
+              "label": "Ann. Mean",
+              "digits": 2,
+              "unit": "%",
+              "preference": "higher",
+              "format_kind": "signed_pct",
+              "alignment": "right"
+            },
+            {
+              "key": "mdd_pct",
+              "label": "MDD Mean",
+              "digits": 2,
+              "unit": "%",
+              "preference": "lower",
+              "format_kind": "pct",
+              "alignment": "right"
+            },
+            {
+              "key": "romd",
+              "label": "RoMD Mean",
+              "digits": 2,
+              "unit": "",
+              "preference": "higher",
+              "format_kind": "number",
+              "alignment": "right"
+            },
+            {
+              "key": "romd_std",
+              "label": "RoMD SD",
+              "digits": 2,
+              "unit": "",
+              "preference": "lower",
+              "format_kind": "number",
+              "alignment": "right"
+            },
+            {
+              "key": "delta_romd_vs_c96",
+              "label": "Delta RoMD",
+              "digits": 2,
+              "unit": "",
+              "preference": "higher",
+              "format_kind": "signed_number",
+              "alignment": "right"
+            },
+            {
+              "key": "wins",
+              "label": "Win/Seed",
+              "digits": null,
+              "unit": "",
+              "preference": "neutral",
+              "format_kind": "text",
+              "alignment": "right"
+            },
+            {
+              "key": "ev_a_r",
+              "label": "EV(A) Mean",
+              "digits": 2,
+              "unit": " R",
+              "preference": "higher",
+              "format_kind": "signed_number",
+              "alignment": "right"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "section_id": "target_definitions",
+      "number": 2,
+      "title": "Target Definitions (4 × Exact / 3 × Direct, 40D)",
+      "applicability": "all",
+      "tables": []
+    },
+    {
+      "section_id": "yearly_stability",
+      "number": 3,
+      "title": "Yearly Stability (same-window seed means)",
+      "applicability": "all",
+      "tables": [
+        {
+          "table_id": "yearly",
+          "columns": [
+            {
+              "key": "year",
+              "label": "Year",
+              "digits": null,
+              "unit": "",
+              "preference": "neutral",
+              "format_kind": "text",
+              "alignment": "left"
+            },
+            {
+              "key": "strategy_return_pct",
+              "label": "Mean Return",
+              "digits": 2,
+              "unit": "%",
+              "preference": "higher",
+              "format_kind": "signed_pct",
+              "alignment": "right"
+            },
+            {
+              "key": "n_seeds",
+              "label": "Seed Count",
+              "digits": 0,
+              "unit": "",
+              "preference": "neutral",
+              "format_kind": "int",
+              "alignment": "right"
+            },
+            {
+              "key": "is_full_year",
+              "label": "Full Year",
+              "digits": null,
+              "unit": "",
+              "preference": "neutral",
+              "format_kind": "text",
+              "alignment": "left"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "section_id": "seed_robustness",
+      "number": 4,
+      "title": "Robustness (paired same-seed Delta RoMD)",
+      "applicability": "all",
+      "tables": [
+        {
+          "table_id": "paired",
+          "columns": [
+            {
+              "key": "target",
+              "label": "Target",
+              "digits": null,
+              "unit": "",
+              "preference": "neutral",
+              "format_kind": "text",
+              "alignment": "left"
+            },
+            {
+              "key": "seed",
+              "label": "Seed",
+              "digits": 0,
+              "unit": "",
+              "preference": "neutral",
+              "format_kind": "int",
+              "alignment": "right"
+            },
+            {
+              "key": "romd",
+              "label": "RoMD",
+              "digits": 2,
+              "unit": "",
+              "preference": "higher",
+              "format_kind": "number",
+              "alignment": "right"
+            },
+            {
+              "key": "c96_romd",
+              "label": "C96 Seed RoMD",
+              "digits": 2,
+              "unit": "",
+              "preference": "higher",
+              "format_kind": "number",
+              "alignment": "right"
+            },
+            {
+              "key": "delta_romd_vs_c96",
+              "label": "Paired Delta",
+              "digits": 2,
+              "unit": "",
+              "preference": "higher",
+              "format_kind": "signed_number",
+              "alignment": "right"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "section_id": "constraints",
+      "number": 5,
+      "title": "Research Constraints",
+      "applicability": "all",
+      "tables": []
+    }
+  ]
+}

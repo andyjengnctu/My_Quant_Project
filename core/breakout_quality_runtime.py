@@ -26,6 +26,8 @@ DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID = "daily_full_horizon_opportunity_r_v1"
 DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID = "daily_full_horizon_pure_mfe_r_v1"
 DAILY_20BAR_FULL_HORIZON_PURE_MFE_TARGET_ID = "daily_20bar_full_horizon_pure_mfe_r_v1"
 DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID = "daily_full_horizon_mfe_minus_d40_r_v1"
+DAILY_TERMINAL_R40_TARGET_ID = "daily_terminal_r40_v1"
+DAILY_TERMINAL_MAE_GATED_T40_TARGET_ID = "daily_terminal_mae_gated_t40_v1"
 DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID = "daily_first_risk_breach_pure_mfe_r_v1"
 DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID = "daily_full_horizon_low_adverse_r_v1"
 DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID = "daily_full_horizon_equal_rank_mfe_low_adverse_v1"
@@ -1238,6 +1240,16 @@ def _continuous_ranker_target_policies() -> dict[str, ContinuousRankerTargetPoli
             contract_kind="daily_full_horizon_pure_mfe",
             horizon_bars=20,
             sample_universe_horizon_bars=40,
+        ),
+        DAILY_TERMINAL_R40_TARGET_ID: ContinuousRankerTargetPolicy(
+            materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+            component_target_id=DAILY_TERMINAL_R40_TARGET_ID,
+            contract_kind="daily_terminal_r40",
+        ),
+        DAILY_TERMINAL_MAE_GATED_T40_TARGET_ID: ContinuousRankerTargetPolicy(
+            materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+            component_target_id=DAILY_TERMINAL_MAE_GATED_T40_TARGET_ID,
+            contract_kind="daily_terminal_mae_gated_t40",
         ),
         DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID: ContinuousRankerTargetPolicy(
             materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,

@@ -68,8 +68,8 @@ class OracleAuditContractCases(TestCase):
         ))
         self.assertEqual(
             {name for name, _ in oracle.ORACLE_TARGETS},
-            {"AO40_EqualRank", "CG40_EqualRank", "U40", "FirstBreach_NetR",
-             "MFE40_Control", "R40", "T40", "MFE40_Direct", "R40_Direct", "T40_Direct"},
+            {"CG40_EqualRank", "MFE40_Control", "R40", "T40",
+             "MFE40_Direct", "R40_Direct", "T40_Direct"},
         )
         self.assertEqual(oracle.ORACLE_DIRECT_SCORE_SOURCES, {
             "MFE40_Direct": "MFE40_Control", "R40_Direct": "R40", "T40_Direct": "T40",
@@ -184,11 +184,11 @@ class OracleAuditContractCases(TestCase):
         self.assertEqual(set(scores), {label for label, _ in oracle.ORACLE_TARGETS})
         key = lambda ticker: (ticker, "2025-01-02")
         self.assertEqual(scores["MFE40_Control"][key("2330")], 1.0)
-        self.assertEqual(scores["AO40_EqualRank"][key("2317")], 1.0)
         self.assertEqual(scores["CG40_EqualRank"][key("2330")], 1.0)
         self.assertNotIn("CH20_EqualRank", scores)
-        self.assertEqual(scores["U40"][key("2330")], 1.0)
-        self.assertEqual(scores["FirstBreach_NetR"][key("2330")], 1.0)
+        self.assertNotIn("AO40_EqualRank", scores)
+        self.assertNotIn("U40", scores)
+        self.assertNotIn("FirstBreach_NetR", scores)
         self.assertEqual(scores["R40"][key("2317")], 1.0)
         self.assertEqual(scores["T40"][key("2330")], 0.5)  # All three reach MAE>=1R.
         for direct_name, exact_name in oracle.ORACLE_DIRECT_SCORE_SOURCES.items():
@@ -206,7 +206,7 @@ class OracleAuditContractCases(TestCase):
         self.assertEqual(cohort40["cohort_rows"], 3)
         self.assertIn("20d", cohort40["providers"], "keep cohort provenance byte-identical for REUSE")
         self.assertFalse(any(name.endswith("60") or name.startswith("CH20") for name in scores40))
-        self.assertEqual(len(scores40), 10)
+        self.assertEqual(len(scores40), 7)
 
     def test_t40_terminal_return_with_mae_clamp_and_negative_return(self):
         # The actual 40D stop risk is a *research* fixed 1R, not an ATR stop.
@@ -224,6 +224,65 @@ class OracleAuditContractCases(TestCase):
         )
         with self.assertRaisesRegex(oracle.OracleBlockedError, "nonnegative MAE60"):
             oracle._terminal_mae_gate_r(pd.Series([1.0]), pd.Series([0.2]), horizon=60)
+
+    def test_registered_r40_t40_training_targets_match_oracle_economics(self):
+        # One canonical 40-bar price path drives both supervised DL truth and the
+        # previously approved hindsight Oracle T40 formula; no alternative target engine.
+        from core.breakout_quality_registry import (
+            get_breakout_quality_experiment_profile,
+            get_continuous_ranker_research_spec,
+        )
+        from filters.breakout_quality.continuous_target import StrategyAlignedContinuousTargetSpec
+        from filters.breakout_quality.daily_ranker_data import compute_daily_opportunity_target_batch
+        from config.breakout_quality import BREAKOUT_QUALITY_MODEL_TEST_PROFILES
+        spec = StrategyAlignedContinuousTargetSpec.from_label_policy(oracle.DEFAULT_LABEL_POLICY)
+        self.assertEqual(spec.horizon_bars, 40)
+        by_model = dict(BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
+        self.assertTrue({"MR-13CI", "MR-13CJ"}.issubset(by_model))
+        by_target = {
+            "MR-13CI": "daily_terminal_r40_v1",
+            "MR-13CJ": "daily_terminal_mae_gated_t40_v1",
+        }
+        policies = []
+        for mr, expected_id in by_target.items():
+            profile = get_breakout_quality_experiment_profile(by_model[mr])
+            research = get_continuous_ranker_research_spec(by_model[mr])
+            self.assertEqual(profile.continuous_target_id, expected_id)
+            self.assertEqual(profile.model_architecture, "inception_time_v1")
+            self.assertEqual(research.model_research_id, mr)
+            policies.append((profile.training_objective, profile.loss_name,
+                             research.pairwise_reduction, research.trainer_family))
+        self.assertEqual(policies[0], policies[1], "R40/T40 use identical learner and Loss")
+
+        def price_frame(close_40, lowest_40):
+            close = np.full(41, 100.0)
+            close[40] = close_40
+            high = np.maximum(close, 101.0)
+            low = np.minimum(close, 99.0)
+            low[10] = lowest_40
+            low[40] = min(low[40], close_40)
+            return pd.DataFrame({"Close": close, "High": high, "Low": low})
+
+        for terminal_close, min_low, expected_r, expected_t in [
+            (115.0, 95.0, 1.5, 0.25),
+            (115.0, 89.0, 1.5, -1.0),
+            (96.0, 95.0, -0.4, -0.7),
+        ]:
+            frame = price_frame(terminal_close, min_low)
+            scored = {}
+            for mr, target_id in by_target.items():
+                batch = compute_daily_opportunity_target_batch(
+                    frame, np.array([0], dtype=np.int64), spec=spec, target_id=target_id,
+                )
+                self.assertTrue(batch.valid_mask[0], mr)
+                scored[mr] = float(batch.target_raw_r[0])
+            self.assertAlmostEqual(scored["MR-13CI"], expected_r, places=5)
+            self.assertAlmostEqual(scored["MR-13CJ"], expected_t, places=5)
+            mae_r = max(0, 1.0 - min_low / 100.0) / spec.risk_budget_return
+            oracle_t = float(oracle._terminal_mae_gate_r(
+                pd.Series([expected_r]), pd.Series([-mae_r]),
+            ).iloc[0])
+            self.assertAlmostEqual(scored["MR-13CJ"], oracle_t, places=5)
 
     def test_mismatched_stock_days_cannot_be_silently_filled(self):
         # If an official source claims a valid row but Research prices cannot
@@ -365,7 +424,7 @@ class OracleAuditContractCases(TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result.ticker.iloc[0], "2330")
 
-    def test_reusable_research_report_publishes_schema5_exact_and_direct(self):
+    def test_reusable_research_report_publishes_schema6_exact_and_direct(self):
         def summary(name: str):
             return {
                 "target": name, "total_return_pct": 100.0, "annualized_return_pct": 14.0,
@@ -375,7 +434,7 @@ class OracleAuditContractCases(TestCase):
                 "delta_romd_vs_c96": 0.0, "positive_seed_count": 0,
             }
         result = {
-            "schema_version": 5, "status": "COMPLETED",
+            "schema_version": 6, "status": "COMPLETED",
             "start_date": "2021-01-01", "end_date": "2025-12-22",
             "common_cohort": {"cohort_rows": 3},
             "benchmark_id": "test", "seeds": [123], "limitations": ["NOT PIT"],
@@ -387,8 +446,8 @@ class OracleAuditContractCases(TestCase):
             base = Path(tmp)
             with patch.object(oracle, "build_report", return_value=result):
                 published = oracle.run_formal_audit(self.definition, project_root=base, quiet=True)
-            self.assertEqual(published["schema_version"], 5)
-            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v4")
+            self.assertEqual(published["schema_version"], 6)
+            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v5")
             latest = base / "outputs/audit" / self.definition.output_subdir / "latest"
             body = (latest / "audit.md").read_text(encoding="utf-8")
             for name in oracle.ORACLE_DIRECT_SCORE_SOURCES:
@@ -400,7 +459,12 @@ class OracleAuditContractCases(TestCase):
             self.assertIn("MAE40 >= 1R", body)
             self.assertIn("Delta RoMD", body)
             json_data = json.loads((latest / "audit.json").read_text(encoding="utf-8"))
-            self.assertEqual(len(json_data["oracles"]), 10)
+            self.assertEqual(len(json_data["oracles"]), 7)
+            self.assertIn("**MFE40**", body)
+            self.assertNotIn("**MFE40_Control**", body)
+            for old_name in ("AO40_EqualRank", "U40", "FirstBreach_NetR"):
+                self.assertNotIn("**" + old_name + "**", body)
+            self.assertIn("MFE40_Control", json.dumps(json_data))
             self.assertNotIn("additional_panels", json_data)
             listing = render_latest_audit_summary(
                 "breakout_quality", project_root=base, method_id=oracle.SUPPORTED_AUDIT_TYPE,
@@ -456,8 +520,8 @@ class OracleAuditContractCases(TestCase):
                 self.assertEqual(reused["oracles"], report["oracles"])
         self.assertEqual(len(seen), len(seeds) * (1 + len(oracle.ORACLE_TARGETS)))
         self.assertEqual(report["seeds"], list(seeds))
-        self.assertEqual(report["schema_version"], 5)
-        self.assertEqual(len(report["oracles"]), 10)
+        self.assertEqual(report["schema_version"], 6)
+        self.assertEqual(len(report["oracles"]), 7)
         self.assertEqual(report["end_date"], "2025-12-31")
         self.assertNotIn("additional_panels", report)
         self.assertEqual(report["baseline"]["romd_std"], report["oracles"][0]["romd_std"])
@@ -483,6 +547,9 @@ class OracleReplayEvidenceReuseCases(TestCase):
         # Frozen *test fixture* from the historical eleven-treatment evidence.
         # Production reuse must not have any historical target-name allowlist.
         retired = {
+            "AO40_EqualRank": "40D MFE + adverse-to-peak Safety, 50/50 daily rank",
+            "U40": "40D MFE - D40, canonical R",
+            "FirstBreach_NetR": "MFE before first risk breach - adverse to that peak, R",
             "CH20_EqualRank": "20D MFE + full D20 Safety, 50/50 daily rank",
             "U20": "20D MFE - D20, canonical R",
             "MFE40_over_D40": "Exact MFE40 / D40 in canonical R; if D40=0 and MFE>0 rank as +infinity, 0/0 ranks as zero",
@@ -505,7 +572,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
                   "market_truth": {}, "rows_outside_dl_training_provider_by_source": {}}
         definitions = dict(oracle.ORACLE_TARGETS)
         unknown_retired = "RETIRED_UNKNOWN_TO_ENGINE"
-        local_definitions = {"U40": definitions["U40"], unknown_retired: "historical test only"}
+        local_definitions = {"U40": self._old_definitions()["U40"], unknown_retired: "historical test only"}
         payload = {
             "schema_version": 3, "status": "COMPLETED", "read_only": True,
             "hindsight_non_pit": True,
@@ -526,7 +593,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
             "benchmark": "end_to_end_v1", "strategy_profile_id": "broker_cash_dl_conversion_rolling",
             "dataset": "full", "start_date": "2021-01-01", "end_date": "2025-12-22",
             "seeds": seeds, "param_sha_by_seed": {seed: "a" * 64 for seed in seeds},
-            "cohort": cohort, "definitions": definitions,
+            "cohort": cohort, "definitions": {**definitions, "U40": self._old_definitions()["U40"]},
         }
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "outputs/audit/breakout_quality"
@@ -570,7 +637,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
         return observation
 
     @staticmethod
-    def _identity(seed=1, target="U40", dataset_sha="a" * 64, param_sha="b" * 64):
+    def _identity(seed=1, target="CG40_EqualRank", dataset_sha="a" * 64, param_sha="b" * 64):
         from services.audit.oracle_replay_artifacts import replay_identity
         return replay_identity(
             dataset="full", dataset_sha256=dataset_sha,
@@ -600,7 +667,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             cache = OracleReplayStore(Path(tmp), "breakout_quality/reusable/target_oracle_romd")
             identity = self._identity()
-            record = self._observation("U40", 1)
+            record = self._observation("CG40_EqualRank", 1)
             self.assertIsNone(cache.read(identity))
             cache.write(identity, record, origin="canonical_replay")
             self.assertEqual(cache.read(identity), record)
@@ -635,7 +702,8 @@ class OracleReplayEvidenceReuseCases(TestCase):
             "benchmark": "end_to_end_v1", "strategy_profile_id": "broker_cash_dl_conversion_rolling",
             "dataset": "full", "start_date": "2021-01-01", "end_date": "2025-12-22",
             "seeds": seeds, "param_sha_by_seed": {seed: "a" * 64 for seed in seeds},
-            "cohort": cohort, "definitions": description,
+            "cohort": cohort, "definitions": {**description, **{name: historical_descriptions[name]
+                                        for name in ("AO40_EqualRank", "U40", "FirstBreach_NetR")}},
         }
         historical = {
             "schema_version": 1, "status": "COMPLETED", "read_only": True,
@@ -672,7 +740,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
             with self.assertRaisesRegex(ValueError, "incomplete / corrupted"):
                 index.lookup(target="AO40_EqualRank", seed=3, context=context)
 
-    def test_completed_v3_report_reuses_32_exact_and_runs_only_12_direct(self):
+    def test_completed_v3_report_reuses_matching_exact_and_runs_only_missing_direct(self):
         from services.audit.oracle_replay_artifacts import HistoricalOracleIndex
         from core.report_contract_versions import load_report_contract_versions
         seeds = (11, 22, 33, 44)
@@ -680,7 +748,8 @@ class OracleReplayEvidenceReuseCases(TestCase):
         old_definitions = dict(definitions)
         for name in oracle.ORACLE_DIRECT_SCORE_SOURCES:
             old_definitions.pop(name)
-        old_definitions["CH20_EqualRank"] = self._old_definitions()["CH20_EqualRank"]
+        old_definitions.update({name: self._old_definitions()[name]
+                                for name in ("AO40_EqualRank", "U40", "FirstBreach_NetR", "CH20_EqualRank")})
         common = {"cohort_rows": 4, "first_common_day": "2021-01-01",
                   "last_common_day": "2025-12-22", "research_cutoff": "2026-03-02",
                   "risk_budget_return": 0.03, "providers": {}, "scoring": "test",
@@ -739,7 +808,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
                  patch.object(oracle, "_run_scenario", side_effect=replay), \
                  patch.object(oracle, "_metrics", side_effect=metrics):
                 result = oracle.build_report(definition, project_root=root, quiet=True)
-                self.assertEqual(len(seen), 12, "complete v3 must reuse C96 + seven Exact arms")
+                self.assertEqual(len(seen), 12, "v3 must reuse C96 + four matching Exact arms")
                 self.assertTrue(all("_Direct" in name for name in seen))
                 self.assertEqual([r["target"] for r in result["oracles"]], list(definitions))
                 second = oracle.build_report(definition, project_root=root, quiet=True)
@@ -754,14 +823,68 @@ class OracleReplayEvidenceReuseCases(TestCase):
                     "seeds": list(seeds), "param_sha_by_seed": {seed: "a" * 64 for seed in seeds},
                     "cohort": common, "definitions": definitions,
                 }
-                self.assertIsNotNone(index.lookup(target="U40", seed=11, context=context))
+                self.assertIsNotNone(index.lookup(target="CG40_EqualRank", seed=11, context=context))
                 self.assertIsNone(index.lookup(target="R40_Direct", seed=11, context=context))
-                self.assertIsNone(index.lookup(target="U40", seed=11, context={
+                self.assertIsNone(index.lookup(target="CG40_EqualRank", seed=11, context={
                     **context, "param_sha_by_seed": {seed: "c" * 64 for seed in seeds},
                 }))
-                self.assertIsNone(index.lookup(target="U40", seed=11, context={
+                self.assertIsNone(index.lookup(target="CG40_EqualRank", seed=11, context={
                     **context, "cohort": {**common, "cohort_rows": 9},
                 }))
+
+    def test_completed_v4_ten_target_report_reuses_all_seven_current_arms(self):
+        # Resizing the current study must never repeat seven scientifically
+        # identical historical observations or the same-window C96 control.
+        from core.report_contract_versions import load_report_contract_versions
+        seeds = (11, 22, 33, 44)
+        class Benchmark:
+            benchmark_id = "end_to_end_v1"
+        common = {"cohort_rows": 4, "last_common_day": "2025-12-22"}
+        definitions = dict(oracle.ORACLE_TARGETS)
+        old_definitions = {**self._old_definitions(), **definitions}
+        # Old V4 had the ten active controls, not all 11 legacy controls.
+        old_order = ("AO40_EqualRank", "CG40_EqualRank", "U40", "FirstBreach_NetR",
+                     "MFE40_Control", "R40", "T40", "MFE40_Direct", "R40_Direct", "T40_Direct")
+        old_definitions = {name: old_definitions[name] for name in old_order}
+        old_report = {
+            "schema_version": 5, "status": "COMPLETED", "read_only": True,
+            "hindsight_non_pit": True, "report_id": "target_oracle_romd",
+            "report_type": oracle.SUPPORTED_AUDIT_TYPE,
+            "report_contract_id": "audit.target_oracle_romd@v4",
+            "report_contract_fingerprint": load_report_contract_versions()["audit.target_oracle_romd"][3]["fingerprint"],
+            "strategy_profile_id": "broker_cash_dl_conversion_rolling",
+            "benchmark_id": Benchmark.benchmark_id, "dataset": "full",
+            "start_date": "2021-01-01", "end_date": "2025-12-22",
+            "seeds": list(seeds), "common_cohort": common,
+            "param_artifacts": [{"seed": seed, "param_sha256": "a" * 64} for seed in seeds],
+            "definitions": old_definitions,
+            "baseline": oracle._aggregate([self._observation("C96", seed) for seed in seeds], target="C96"),
+            "oracles": [oracle._aggregate([self._observation(name, seed) for seed in seeds], target=name)
+                        for name in old_order],
+        }
+        from core.audit_policy import get_reusable_audit_definitions
+        definition = next(d for d in get_reusable_audit_definitions("breakout_quality")
+                          if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
+        seen = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            previous = root / "outputs/audit/breakout_quality/reusable/target_oracle_romd/20261024T110500Z"
+            previous.mkdir(parents=True)
+            (previous / "audit.json").write_text(json.dumps(old_report), encoding="utf-8")
+            with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
+                 patch.object(oracle, "_robustness_artifacts", return_value=(Benchmark(), [(seed, Path(f"seed_{seed}.json")) for seed in seeds])), \
+                 patch.object(oracle, "_build_oracle_score_panels", return_value=_mock_panels(common)), \
+                 patch.object(oracle, "load_strategy_param_evaluation_view", return_value=({"kind": "rolling_active_param_ensemble", "payload": {}}, "a" * 64)), \
+                 patch.object(oracle, "_validate_requested_param_policy"), \
+                 patch.object(oracle, "get_active_param_ensemble_date_range", return_value=("2020-01-01", "2026-03-02")), \
+                 patch.object(oracle, "_build_controlled_param_source_pair", return_value=("rolling_active_param_ensemble", "base", "oracle", None, None, None)), \
+                 patch.object(oracle, "price_inventory_sha256", return_value="b" * 64), \
+                 patch.object(oracle, "_run_scenario", side_effect=lambda *, name, **kwargs: seen.append(name)), \
+                 patch.object(oracle, "_metrics", side_effect=AssertionError("replay must be fully reused")):
+                rebuilt = oracle.build_report(definition, project_root=root, quiet=True)
+        self.assertFalse(seen, "historical v4 compatible results must never be replayed")
+        self.assertEqual([x["target"] for x in rebuilt["oracles"]], list(definitions))
+        self.assertEqual(rebuilt["schema_version"], 6)
 
     def test_partial_replay_is_saved_before_later_failure_and_resumes(self):
         seeds = (11, 22, 33, 44)
@@ -795,12 +918,12 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 self.assertEqual(state["calls"], 10)
                 state["crash"] = False
                 resumed = oracle.build_report(definition, project_root=Path(tmp), quiet=True)
-                self.assertEqual(state["calls"], 45, "the first nine completed arms must not replay")
-                self.assertEqual(len(resumed["oracles"]), 10)
+                self.assertEqual(state["calls"], 33, "the first nine completed arms must not replay")
+                self.assertEqual(len(resumed["oracles"]), 7)
                 oracle.build_report(definition, project_root=Path(tmp), quiet=True)
-                self.assertEqual(state["calls"], 45)
+                self.assertEqual(state["calls"], 33)
 
-    def test_completed_schema5_report_restores_all_44_units_without_per_arm_cache(self):
+    def test_completed_schema6_report_restores_all_32_units_without_per_arm_cache(self):
         from core.report_contract_versions import load_report_contract_versions
         seeds = (11, 22, 33, 44)
         class Benchmark:
@@ -828,10 +951,10 @@ class OracleReplayEvidenceReuseCases(TestCase):
                  patch.object(oracle, "_run_scenario", side_effect=replay), \
                  patch.object(oracle, "_metrics", side_effect=metrics):
                 report = oracle.build_report(definition, project_root=root, quiet=True)
-                self.assertEqual(len(recorded), 44)
+                self.assertEqual(len(recorded), 32)
                 report.update({
                     "report_id": "target_oracle_romd", "report_type": oracle.SUPPORTED_AUDIT_TYPE,
-                    "report_contract_id": "audit.target_oracle_romd@v4",
+                    "report_contract_id": "audit.target_oracle_romd@v5",
                     "report_contract_fingerprint": load_report_contract_versions()["audit.target_oracle_romd"][-1]["fingerprint"],
                 })
                 directory = root / "outputs/audit/breakout_quality/reusable/target_oracle_romd"
@@ -840,7 +963,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 (snapshot / "audit.json").write_text(json.dumps(report), encoding="utf-8")
                 shutil.rmtree(directory / "replay_cache")
                 rebuilt = oracle.build_report(definition, project_root=root, quiet=True)
-                self.assertEqual(len(recorded), 44, "completed report must REUSE every target x seed")
+                self.assertEqual(len(recorded), 32, "completed report must REUSE every target x seed")
                 self.assertEqual(rebuilt["oracles"], report["oracles"])
 
 if __name__ == "__main__":

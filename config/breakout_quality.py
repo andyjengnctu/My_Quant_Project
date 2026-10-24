@@ -109,10 +109,11 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 # MR-13CG: keep AO's shared two-head training/inference contract while changing
 # the Safety supervised outcome AND the true-HS Conditional-MFE cohort to full D40.
 # Original AO/CC, CG and direct U40 CE/CF fitting identities remain frozen.
-# MR-13CH: same CG architecture / learning recipe, with 20-bar MFE / D20 / true-HS.
+# Current training focus: MR-13CJ T40; MR-13CI R40 is the paired Model Compare reference.
+# All historical MR profiles, model checkpoints, and artifacts remain intact.
 BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE = (
-    "MR-13CH",
-    "daily_universal_shared_full_d20_safety_hs_conditional_mfe_full_list_ndcg_pairwise",
+    "MR-13CJ",
+    "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise",
 )
 # Compatibility alias for call sites that only need the executable profile slug.
 BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = (
@@ -369,13 +370,10 @@ BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_FIXED_K_VALUES = (1, 2, 3, 5, 10)
 # BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE so it cannot be forgotten when a new DL
 # becomes the current research model.
 BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES = (
-    ("MR-13H", "daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise"),
-    ("MR-13AH", "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise"),
     ("MR-13AK", "daily_universal_shared_safety_weighted_pure_mfe_full_list_ndcg_pairwise"),
-    ("MR-13AO", "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
     ("MR-13CG", "daily_universal_shared_full_d40_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
-    # BZ/CC/CD/CE/CF are no longer in the current comparison. Their registered
-    # scientific identities, historical results, and checkpoints remain unchanged.
+    ("MR-13CI", "daily_universal_terminal_r40_full_list_ndcg_pairwise"),
+    # Archived H/AH/AO/CH and all other historical identities/artifacts are retained.
 )
 
 

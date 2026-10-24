@@ -393,6 +393,8 @@ DAILY_UNIVERSAL_SHARED_FULL_D40_SAFETY_HS_CONDITIONAL_MFE_PROFILE = (
 DAILY_UNIVERSAL_SHARED_FULL_D20_SAFETY_HS_CONDITIONAL_MFE_PROFILE = (
     "daily_universal_shared_full_d20_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
+DAILY_UNIVERSAL_TERMINAL_R40_PAIRWISE_PROFILE = "daily_universal_terminal_r40_full_list_ndcg_pairwise"
+DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PAIRWISE_PROFILE = "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE = "daily_universal_joint_mfe_d40_quadrant_cross_entropy"
 DAILY_UNIVERSAL_DIRECT_U40_HUBER_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_huber"
 DAILY_UNIVERSAL_DIRECT_U40_PAIRWISE_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_full_list_ndcg_pairwise"
@@ -1621,6 +1623,30 @@ _EXPERIMENT_PROFILES = {
         training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
         training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
         continuous_target_id="daily_full_horizon_mfe_minus_d40_r_v1",
+        loss_name="pairwise_logistic",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_v1",
+    ),
+    DAILY_UNIVERSAL_TERMINAL_R40_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_TERMINAL_R40_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        continuous_target_id="daily_terminal_r40_v1",
+        loss_name="pairwise_logistic",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_v1",
+    ),
+    DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        continuous_target_id="daily_terminal_mae_gated_t40_v1",
         loss_name="pairwise_logistic",
         epoch_selection_metric="mean_daily_spearman",
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
@@ -3160,6 +3186,45 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         ),
         selection_pit_authorized=False,
         current_time_validation_authorized=False,
+    ),
+    DAILY_UNIVERSAL_TERMINAL_R40_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_TERMINAL_R40_PAIRWISE_PROFILE,
+        model_research_id="MR-13CI",
+        experiment_name="MR-13CI Terminal R40 Full-list Ranker",
+        phase="13CI",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="same-date rank of the fixed day-40 terminal Close return in canonical R",
+        objective_description=(
+            "MR-13K fixed single-head InceptionTime 300x10, Adam, daily-universal "
+            "Delta-NDCG pairwise, Train/Validation maturity and 40D folds; "
+            "only future outcome changes from full 40D MFE to signed 40th Close return. "
+            "No MAE gating, no fitting on OOS, no strategy state, no production promotion."
+        ),
+        metric_scope="all_stock_days_terminal_r40",
+        score_semantic_id="daily_terminal_r40_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        selection_pit_authorized=True,
+        current_time_validation_authorized=True,
+    ),
+    DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PAIRWISE_PROFILE,
+        model_research_id="MR-13CJ",
+        experiment_name="MR-13CJ Terminal T40 MAE-gated Full-list Ranker",
+        phase="13CJ",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="same-date rank of T40=(1-min(MAE40_R,1))*R40-min(MAE40_R,1)",
+        objective_description=(
+            "Matched MR-13CI single-head 300x10 InceptionTime, full-list Delta-NDCG, "
+            "Adam, split, PIT-valid fitting and common 40D cohort; only ground-truth "
+            "changes to nonnegative full-path MAE-gated signed day-40 return. "
+            "MAE>=1R gives -1R; neither MAE nor future R40 enter model features/inference. "
+            "No OOS-fitted thresholds and no Trading promotion."
+        ),
+        metric_scope="all_stock_days_terminal_mae_gated_t40",
+        score_semantic_id="daily_terminal_mae_gated_t40_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        selection_pit_authorized=True,
+        current_time_validation_authorized=True,
     ),
     DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE: ContinuousRankerResearchSpec(
         profile_name=DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE,

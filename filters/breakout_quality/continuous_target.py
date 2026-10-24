@@ -20,6 +20,8 @@ from core.breakout_quality_runtime import (
     DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID,
     DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
     DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID,
+    DAILY_TERMINAL_R40_TARGET_ID,
+    DAILY_TERMINAL_MAE_GATED_T40_TARGET_ID,
     DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
     DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
     DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
@@ -607,6 +609,41 @@ def build_daily_full_horizon_pure_mfe_contract(
     }
 
 
+def build_daily_terminal_r40_contract(policy: BreakoutQualityLabelPolicy) -> dict[str, object]:
+    """Day-40 Close return in the canonical fixed-risk unit, not executed PnL."""
+    spec = StrategyAlignedContinuousTargetSpec.from_label_policy(policy)
+    return {
+        "schema_version": CONTINUOUS_TARGET_SCHEMA_VERSION,
+        "target_id": DAILY_TERMINAL_R40_TARGET_ID,
+        "objective_family": "daily_cross_sectional_terminal_close_return",
+        "information_source": "fixed_future_ohlc_path",
+        "sample_scope": "daily_eligible_stock_days",
+        "horizon_bars": int(spec.horizon_bars),
+        "risk_budget_return": float(spec.risk_budget_return),
+        "formula": "(close_at_exact_horizon / anchor_close - 1) / risk_budget_return",
+        "risk_rule": "full 40D future path required; no stop truncation",
+        "normalization": "fixed canonical research risk budget only; no OOS-fitted scale",
+        "clipping": "none; signed terminal return",
+        "split_derived_parameters": False,
+        "oos_fitted_parameters": False,
+        "requires_strategy_candidate_membership": False,
+    }
+
+
+def build_daily_terminal_mae_gated_t40_contract(policy: BreakoutQualityLabelPolicy) -> dict[str, object]:
+    """T40=(1-m)*R40-m, m=min(full-horizon nonnegative MAE/R, 1)."""
+    contract = build_daily_terminal_r40_contract(policy)
+    contract.update({
+        "target_id": DAILY_TERMINAL_MAE_GATED_T40_TARGET_ID,
+        "objective_family": "daily_cross_sectional_terminal_mae_gated_return",
+        "formula": "(1-min(MAE40_R,1))*R40-min(MAE40_R,1)",
+        "adverse_scope": "minimum Low of every future bar versus anchor Close; nonnegative MAE in fixed R",
+        "risk_rule": "MAE40 >= 1R sets T40 to -1R even if day-40 close rebounds",
+        "clipping": "MAE clamp at 1R; signed terminal return is not clipped",
+    })
+    return contract
+
+
 def build_daily_full_horizon_mfe_minus_d40_contract(
     policy: BreakoutQualityLabelPolicy,
 ) -> dict[str, object]:
@@ -1183,6 +1220,8 @@ __all__ = [
     "StrategyAlignedContinuousTargetSpec",
     "build_daily_full_horizon_opportunity_contract",
     "build_daily_full_horizon_pure_mfe_contract",
+    "build_daily_terminal_r40_contract",
+    "build_daily_terminal_mae_gated_t40_contract",
     "build_daily_first_risk_breach_pure_mfe_contract",
     "build_daily_full_horizon_low_adverse_contract",
     "build_daily_full_horizon_equal_rank_mfe_low_adverse_contract",

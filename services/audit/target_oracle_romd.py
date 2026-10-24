@@ -77,14 +77,11 @@ from core.research_report_contract import (
 from services.audit.reusable_report import format_contract_row
 
 SUPPORTED_AUDIT_TYPE = "target_ground_truth_strategy_romd"
-ORACLE_REPORT_SCHEMA_VERSION = 5
+ORACLE_REPORT_SCHEMA_VERSION = 6
 # Current report's Oracle strategies. Direct is the existing canonical No-K/No-R0
 # selector applied to the SAME score truth; not a new Target formula.
 ORACLE_TARGETS = (
-    ("AO40_EqualRank", "40D MFE + adverse-to-peak Safety, 50/50 daily rank"),
     ("CG40_EqualRank", "40D MFE + full D40 Safety, 50/50 daily rank"),
-    ("U40", "40D MFE - D40, canonical R"),
-    ("FirstBreach_NetR", "MFE before first risk breach - adverse to that peak, R"),
     ("MFE40_Control", "40D MFE only (control, not target recommendation)"),
     ("R40", "40D close-to-close terminal return divided by canonical risk budget R"),
     ("T40", "(1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 is nonnegative in R"),
@@ -92,6 +89,14 @@ ORACLE_TARGETS = (
     ("R40_Direct", "Same R40 score; canonical No-K/No-R0 direct allocation"),
     ("T40_Direct", "Same T40 score; canonical No-K/No-R0 direct allocation"),
 )
+# Display labels are intentionally separate from the immutable replay-cache keys.
+ORACLE_DISPLAY_NAMES = {"MFE40_Control": "MFE40"}
+
+
+def _oracle_display_name(name: str) -> str:
+    return ORACLE_DISPLAY_NAMES.get(str(name), str(name))
+
+
 ORACLE_DIRECT_SCORE_SOURCES = {
     "MFE40_Direct": "MFE40_Control",
     "R40_Direct": "R40",
@@ -494,10 +499,7 @@ def _build_oracle_score_panels(
     # The 50/50 equal-rank combination is the pre-existing canonical MR-13N
     # aggregation. AO/CG describe geometry, NOT a learned model head.
     raw = {
-        "AO40_EqualRank": (percentile(joint["mfe40"]) + percentile(joint["safety_peak40"])) / 2,
         "CG40_EqualRank": (percentile(joint["mfe40"]) + percentile(joint["safety_d40"])) / 2,
-        "U40": joint["mfe40"] + joint["safety_d40"],
-        "FirstBreach_NetR": joint["rawfb"] - joint["peak_adversefb"],
         "MFE40_Control": joint["mfe40"],
         "R40": joint["terminal_r40"],
         "T40": _terminal_mae_gate_r(joint["terminal_r40"], joint["safety_d40"]),
@@ -817,7 +819,7 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
         **base,
         "limitations": [
             "Ex-post future targets are NOT predictions, not PIT-legal, and never a deployable strategy.",
-            "AO/CG EqualRank are fixed 50/50 geometry proxies, not learned model-head fusion.",
+            "CG EqualRank is a fixed 50/50 geometry proxy, not a learned model-head fusion.",
             "Exact and Direct pairs share identical future truth; only canonical K/R0 allocation changes.",
             "Direct means canonical No-K/No-R0, NOT direct raw-R regression or executable prediction.",
             "C96 is the same-seed Min/Broker-Cash control for both selectors; paired deltas use that baseline.",
@@ -839,7 +841,7 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
     paired_table = sections[3].tables[0]
     baseline = dict(report["baseline"])
     items = [dict(baseline, target="C96 Same-Window", delta_romd_vs_c96=0.0, wins="-"),
-             *[dict(item, wins=f'{item["positive_seed_count"]}/{item["seeds"]}')
+             *[dict(item, target=_oracle_display_name(item["target"]), wins=f'{item["positive_seed_count"]}/{item["seeds"]}')
                for item in report["oracles"]]]
     rows = [format_contract_row(perf_table, item) for item in items]
     intro = [
@@ -851,7 +853,7 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
         f'{len(report["oracles"])} (40D, Exact + Direct); not Standard SOP',
         'Ranking: Exact K/R0 or Direct No-K/No-R0; same Broker-Cash, seed/P16 and future scores.',
         'T40: (1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 >= 1R -> T40 = -1R.',
-        'AO/CG = equal-rank 50/50 geometry PROXIES, not neural-network model heads.',
+        'CG = equal-rank 50/50 geometry PROXY, not a neural-network model head.',
     ]
     if target == "console":
         return "\n\n".join((
@@ -865,10 +867,10 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
              "|" + "|".join("---" for _ in perf_table.headers) + "|"]
     lines.extend("| " + " | ".join(row) + " |" for row in rows)
     lines.extend(["", f"## {sections[1].display_title}",
-                  *[f"- **{key}** - {desc.replace('D40', 'MAE40')}" for key, desc in ORACLE_TARGETS],
+                  *[f"- **{_oracle_display_name(key)}** - {desc.replace('D40', 'MAE40')}" for key, desc in ORACLE_TARGETS],
                   "", f"## {sections[2].display_title}"])
     for item in items:
-        lines.append(f'### {item["target"]}')
+        lines.append(f'### {_oracle_display_name(item["target"])}')
         lines.extend(("| " + " | ".join(yearly_table.headers) + " |",
                       "|" + "|".join("---" for _ in yearly_table.headers) + "|"))
         for year in item["yearly"]:
@@ -879,7 +881,7 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
     baselines = {int(x["seed"]): float(x["romd"]) for x in baseline["seed_observations"]}
     for item in report["oracles"]:
         for obs in item["seed_observations"]:
-            row = dict(obs, target=item["target"], c96_romd=baselines[int(obs["seed"])])
+            row = dict(obs, target=_oracle_display_name(item["target"]), c96_romd=baselines[int(obs["seed"])])
             lines.append("| " + " | ".join(format_contract_row(paired_table, row)) + " |")
     lines.extend(["", f"## {sections[4].display_title}",
                   *[f"- {limitation}" for limitation in report["limitations"]]])
