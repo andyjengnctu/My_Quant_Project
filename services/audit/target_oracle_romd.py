@@ -754,8 +754,11 @@ def render_existing_artifact_inventory(definition, *, project_root: Path) -> str
         else:
             actions[key] = "RUN"
     headers = ("Target", *(f"S{i + 1}" for i in range(len(seeds))))
+    # AI: Both the fast inventory and the strict preflight use the shared
+    # workflow palette (REUSE green, BLOCKED red, RUN neutral). No local ANSI
+    # rules or duplicate status classification belong in the Oracle renderer.
     rows = [
-        (target, *(actions[(seed, target)] for seed in seeds))
+        (target, *(styled_workflow_status(actions[(seed, target)]) for seed in seeds))
         for target in targets
     ]
     counts = {state: list(actions.values()).count(state)

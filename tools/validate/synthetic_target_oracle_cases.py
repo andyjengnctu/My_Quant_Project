@@ -109,6 +109,23 @@ class OracleAuditContractCases(TestCase):
                 self.assertIn("REUSE", text)
                 self.assertIn("R40_Direct", text)
                 self.assertIn("按 Enter 後依正式資料與 P16 身分核准", text)
+                # AI: The preview must consume the same semantic status palette
+                # as other Research plans; never hard-code ANSI in Oracle.
+                from core.display_common import C_GREEN, C_RED, C_GRAY, C_RESET
+                candidates[(11, "C96")] = "INVALID"
+                candidates[(22, "C96")] = "MISSING"
+                with patch("core.report_style.console_color_enabled", return_value=True):
+                    colored = oracle.render_existing_artifact_inventory(
+                        self.definition, project_root=Path(tmp))
+                self.assertIn(f"{C_GREEN}REUSE{C_RESET}", colored)
+                self.assertIn(f"{C_RED}BLOCKED{C_RESET}", colored)
+                self.assertIn(f"{C_GRAY}RUN{C_RESET}", colored)
+                self.assertIn("REUSE 30 / RUN（需計算）1 / BLOCKED 1", _strip_ansi(colored))
+                # ANSI must not affect tabular spacing or change the inventory.
+                with patch("core.report_style.console_color_enabled", return_value=False):
+                    uncolored = oracle.render_existing_artifact_inventory(
+                        self.definition, project_root=Path(tmp))
+                self.assertEqual(_strip_ansi(colored), uncolored)
                 score_truth.assert_not_called()
                 price.assert_not_called()
 
