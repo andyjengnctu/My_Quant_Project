@@ -17,7 +17,7 @@ from core.runtime_utils import has_help_flag, get_taipei_now, resolve_cli_progra
 
 HELP_DESCRIPTION = "清除 Python 快取、封存舊 package ZIP，並把目前 working tree 的 tracked / untracked 非忽略檔打成乾淨 ZIP。新 package 會包含 reduced dataset；舊 package 移入 arch/ 時會自動移除 reduced dataset 以節省空間。可選擇先 commit，再於打包後執行 test suite。"
 EXCLUDED_DIR_NAMES = {"__pycache__", "arch"}
-EXCLUDED_SUFFIXES = {".pyc"}
+EXCLUDED_SUFFIXES = {".pyc", ".zip"}
 ARCHIVE_STRIP_DIR_PREFIXES = {
     PurePosixPath("data/tw_stock_data_vip_reduced"),
 }

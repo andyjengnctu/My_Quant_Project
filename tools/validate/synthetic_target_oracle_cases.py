@@ -709,53 +709,87 @@ class OracleAuditContractCases(TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result.ticker.iloc[0], "2330")
 
-    def test_append_only_future_report_version_needs_no_new_ssot_golden(self):
-        import hashlib
-        from core.report_contract_versions import load_report_contract_versions
+    def test_retired_history_never_required_for_current_report_or_oracle_reuse(self):
+        from apps.package_zip import _should_skip
+        from core.report_contract_versions import (
+            load_report_contract_versions, validate_active_report_contract_versions,
+        )
+        from core.research_report_contract import (
+            PERSISTENT_REPORT_CONTRACTS, persistent_report_contract_fingerprints,
+        )
         from tools.validate.ssot_regression_guard import (
             read_approved_baseline, report_contract_version_history_violations,
         )
 
+        # A tracked nested ZIP cannot be accidentally packaged, with no
+        # special historical-archive code path.
+        self.assertTrue(_should_skip(Path("doc/scientific_contracts/CONTRACT_EVIDENCE_HISTORY.zip")))
+        self.assertFalse(_should_skip(Path("doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json")))
+        self.assertFalse(_should_skip(Path("tools/validate/baselines/ssot_regression.json")))
+
+        with tempfile.TemporaryDirectory(prefix="standalone_report_contract_") as tmp:
+            project = Path(tmp)
+            for name in (
+                "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json",
+                "tools/validate/baselines/ssot_regression.json",
+            ):
+                target = project / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(ROOT / name, target)
+            self.assertFalse((project / "doc/scientific_contracts/CONTRACT_EVIDENCE_HISTORY.zip").exists())
+            registry = load_report_contract_versions(project)
+            current = persistent_report_contract_fingerprints()
+            self.assertEqual(validate_active_report_contract_versions({
+                report_id: (contract.version, current[report_id])
+                for report_id, contract in PERSISTENT_REPORT_CONTRACTS.items()
+            }, project_root=project), ())
+            approved = read_approved_baseline(project)
+            self.assertEqual(report_contract_version_history_violations(project, approved), [])
+            # All past report IDs/fingerprints needed for completed Oracle
+            # payload compatibility remain available in one small ledger.
+            oracle_history = registry["audit.target_oracle_romd"]
+            self.assertEqual(tuple(row["version"] for row in oracle_history), tuple(range(1, 10)))
+            self.assertEqual(oracle_history[-1]["fingerprint"], current["audit.target_oracle_romd"])
+            self.assertTrue(all(set(row) == {"contract_id", "version", "fingerprint"}
+                                for rows in registry.values() for row in rows))
+            # Mutation rejection is independent of the retired file inventory.
+            ledger_path = project / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json"
+            ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+            row = next(x for x in ledger["reports"] if x["report_id"] == "audit.target_oracle_romd")
+            row["versions"][0]["fingerprint"] = "0" * 16
+            ledger_path.write_text(json.dumps(ledger, ensure_ascii=False), encoding="utf-8")
+            self.assertTrue(report_contract_version_history_violations(project, approved))
+            fixture = project / "tools/validate/baselines/ssot_regression.json"
+            fixture.write_bytes(fixture.read_bytes() + b" ")
+            with self.assertRaisesRegex(ValueError, "Golden hash mismatch"):
+                read_approved_baseline(project)
+
+    def test_future_report_versions_need_only_compact_ledger_row(self):
+        from core.report_contract_versions import load_report_contract_versions
+        from tools.validate.ssot_regression_guard import (
+            read_approved_baseline, report_contract_version_history_violations,
+        )
         approved = read_approved_baseline(ROOT)
-        self.assertEqual(approved["schema_version"], 14)
-        with tempfile.TemporaryDirectory(prefix="approved_report_append_") as tmp:
+        self.assertEqual(approved["schema_version"], 1)
+        with tempfile.TemporaryDirectory(prefix="report_ledger_append_") as tmp:
             project = Path(tmp)
             folder = project / "doc/scientific_contracts"
-            shutil.copytree(ROOT / "doc/scientific_contracts", folder)
+            folder.mkdir(parents=True)
             ledger_path = folder / "REPORT_CONTRACT_VERSIONS.json"
+            shutil.copy2(ROOT / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json", ledger_path)
             ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
             entry = next(x for x in ledger["reports"] if x["report_id"] == "audit.target_oracle_romd")
             self.assertEqual(entry["versions"][-1]["version"], 9)
-            # A historical version is addressed by its archived logical path,
-            # not a loose per-version JSON file. Future approved revisions
-            # append archive + ledger entries without accumulating *_vN.json.
-            from zipfile import ZipFile, ZIP_DEFLATED
-            history_path = folder / "CONTRACT_EVIDENCE_HISTORY.zip"
-            with ZipFile(history_path) as history:
-                snapshot = json.loads(history.read(
-                    "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v9.json"
-                ).decode("utf-8"))
-            snapshot["version"] = 10
-            snapshot["sections"][1]["title"] = "A different authorized future schema"
-            virtual_path = "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v10.json"
-            raw = (json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-            with ZipFile(history_path, "a", compression=ZIP_DEFLATED) as history:
-                history.writestr(virtual_path, raw)
-            self.assertFalse((folder / "AUDIT_TARGET_ORACLE_ROMD_v10.json").exists())
-            canonical = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             entry["versions"].append({
                 "contract_id": "audit.target_oracle_romd@v10",
                 "version": 10,
-                "fingerprint": hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16],
-                "definition_path": virtual_path,
-                "definition_sha256": hashlib.sha256(raw).hexdigest(),
+                "fingerprint": "1" * 16,
             })
-            ledger_path.write_text(json.dumps(ledger, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            ledger_path.write_text(json.dumps(ledger, ensure_ascii=False), encoding="utf-8")
             self.assertEqual(load_report_contract_versions(project)["audit.target_oracle_romd"][-1]["version"], 10)
             self.assertEqual(report_contract_version_history_violations(project, approved), [])
-            # A historical v8 rewrite must still fail, even when a later v10 was appended.
             entry["versions"][7]["fingerprint"] = "0" * 16
-            ledger_path.write_text(json.dumps(ledger, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            ledger_path.write_text(json.dumps(ledger, ensure_ascii=False), encoding="utf-8")
             self.assertTrue(report_contract_version_history_violations(project, approved))
 
     def test_reusable_research_report_publishes_schema7_exact_and_direct(self):

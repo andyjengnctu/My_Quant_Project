@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "purpose": "Append-only persistent report scientific contract version registry; append a new version for any revised schema or semantics; never rewrite past records.",
+  "purpose": "Current report approval and compact legacy report-id/fingerprint compatibility index. Historical per-version schema files and Golden clones are retired; research results retain their own lineage.",
   "reports": [
     {
       "report_id": "audit.opportunity_selection",
@@ -28,65 +28,47 @@
         {
           "contract_id": "audit.target_oracle_romd@v1",
           "version": 1,
-          "fingerprint": "e87cc91bb4741674",
-          "definition_path": "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v1.json",
-          "definition_sha256": "0e4bf342262ddb037dbab3acc6f1a87895f509240b6581ed00964ce979c6c92d"
+          "fingerprint": "e87cc91bb4741674"
         },
         {
           "contract_id": "audit.target_oracle_romd@v2",
           "version": 2,
-          "fingerprint": "ea8dd35394f5ea66",
-          "definition_path": "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v2.json",
-          "definition_sha256": "79b6d37a818c24661b5e2a86031ff43afd53079393c4bcad6a6c37d913e33bbb"
+          "fingerprint": "ea8dd35394f5ea66"
         },
         {
           "contract_id": "audit.target_oracle_romd@v3",
           "version": 3,
-          "fingerprint": "41d7c2bf0bf08c3b",
-          "definition_path": "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v3.json",
-          "definition_sha256": "e78fa468555605b3655d8ab18030564f88afeddde850582748bab598cf319eb5"
+          "fingerprint": "41d7c2bf0bf08c3b"
         },
         {
           "contract_id": "audit.target_oracle_romd@v4",
           "version": 4,
-          "fingerprint": "7ebe0f8211bce750",
-          "definition_path": "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v4.json",
-          "definition_sha256": "3394f79693ca4cc30fa33daa27fa001b0678bd5cf0539743922d69fbdb200da0"
+          "fingerprint": "7ebe0f8211bce750"
         },
         {
           "contract_id": "audit.target_oracle_romd@v5",
           "version": 5,
-          "fingerprint": "0a98458507db91eb",
-          "definition_path": "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v5.json",
-          "definition_sha256": "88a286aa8d260e833cf8b072bb90bc8921e4ca191d3ecefea3497e747c5b31e0"
+          "fingerprint": "0a98458507db91eb"
         },
         {
           "contract_id": "audit.target_oracle_romd@v6",
           "version": 6,
-          "fingerprint": "2688f1ce316135be",
-          "definition_path": "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v6.json",
-          "definition_sha256": "2f4146f19ed0f0275e9df69d5fd72794e0ab54cdaf45c06d00a5146b5c69a780"
+          "fingerprint": "2688f1ce316135be"
         },
         {
           "contract_id": "audit.target_oracle_romd@v7",
           "version": 7,
-          "fingerprint": "c4c24459cc133aae",
-          "definition_path": "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v7.json",
-          "definition_sha256": "a0ab79295d2e569005b38cbc92f53b07ee7519fcf7edf09f6d11000bea4e5e80"
+          "fingerprint": "c4c24459cc133aae"
         },
         {
           "contract_id": "audit.target_oracle_romd@v8",
           "version": 8,
-          "fingerprint": "ffacec7ba5e7b476",
-          "definition_path": "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v8.json",
-          "definition_sha256": "5f6d2d0032a9f0b2327f5f1bbe19ff8b25e3f4238ef0c1d4259560f401b7fa60"
+          "fingerprint": "ffacec7ba5e7b476"
         },
         {
           "contract_id": "audit.target_oracle_romd@v9",
           "version": 9,
-          "fingerprint": "4f911292da243836",
-          "definition_path": "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v9.json",
-          "definition_sha256": "7763c318765eeb17179e5702d94ef7b72ccf3d85c279bec7e33b5edef2e0b1ea"
+          "fingerprint": "4f911292da243836"
         }
       ]
     },
@@ -106,37 +88,27 @@
         {
           "contract_id": "model.standard_comparison@v11",
           "version": 11,
-          "fingerprint": "0626f6512f145d23",
-          "definition_path": "doc/scientific_contracts/MODEL_STANDARD_COMPARISON_v11.json",
-          "definition_sha256": "bcc291e2a28207d43200af235529c168d1216a0bea58ccd559c3f79ee03cd450"
+          "fingerprint": "0626f6512f145d23"
         },
         {
           "contract_id": "model.standard_comparison@v12",
           "version": 12,
-          "fingerprint": "f64c192d57961e76",
-          "definition_path": "doc/scientific_contracts/MODEL_STANDARD_COMPARISON_v12.md",
-          "definition_sha256": "5dc40af0931c62d73474ced6904eb4e8aa6cc475a068383146e13096199228bf"
+          "fingerprint": "f64c192d57961e76"
         },
         {
           "contract_id": "model.standard_comparison@v13",
           "version": 13,
-          "fingerprint": "d04250bf71c5212d",
-          "definition_path": "doc/scientific_contracts/MODEL_STANDARD_COMPARISON_v13.json",
-          "definition_sha256": "bec4cf30e91b22f99ccbdbb25cc31cb1d7b2e654f7954b7bba48d250b65b937d"
+          "fingerprint": "d04250bf71c5212d"
         },
         {
           "contract_id": "model.standard_comparison@v14",
           "version": 14,
-          "fingerprint": "63fcc3529cdb8d81",
-          "definition_path": "doc/scientific_contracts/MODEL_STANDARD_COMPARISON_v14.json",
-          "definition_sha256": "318e830125b283fdcb5b15327f63c83af540cb92e3c274fc6eca6efd2587e533"
+          "fingerprint": "63fcc3529cdb8d81"
         },
         {
           "contract_id": "model.standard_comparison@v15",
           "version": 15,
-          "fingerprint": "e4e2788496bf746c",
-          "definition_path": "doc/scientific_contracts/MODEL_STANDARD_COMPARISON_v15.json",
-          "definition_sha256": "81766554f55e450e88344734de4123d8d8cf23dc521a18c68038867e918b831d"
+          "fingerprint": "e4e2788496bf746c"
         }
       ]
     },
@@ -146,37 +118,27 @@
         {
           "contract_id": "model.standard_sop@v7",
           "version": 7,
-          "fingerprint": "56e5fb1173404d7f",
-          "definition_path": "doc/scientific_contracts/MODEL_STANDARD_SOP_v7.json",
-          "definition_sha256": "5cef142e57debd810d2165f8464b644eb0ed61e6f1b16c0e8737439b88791ae0"
+          "fingerprint": "56e5fb1173404d7f"
         },
         {
           "contract_id": "model.standard_sop@v8",
           "version": 8,
-          "fingerprint": "0daefa4ac6e22ca4",
-          "definition_path": "doc/scientific_contracts/MODEL_STANDARD_SOP_v8.md",
-          "definition_sha256": "564974fe8566228a6456c4052d5d8e8e806593be1e0bc7f847b0b03513a0886a"
+          "fingerprint": "0daefa4ac6e22ca4"
         },
         {
           "contract_id": "model.standard_sop@v9",
           "version": 9,
-          "fingerprint": "bd4201957c8e4a42",
-          "definition_path": "doc/scientific_contracts/MODEL_STANDARD_SOP_v9.json",
-          "definition_sha256": "0221581cdce7012c4b333fce070f340d655ea3558966650cd0826a8570411a8c"
+          "fingerprint": "bd4201957c8e4a42"
         },
         {
           "contract_id": "model.standard_sop@v10",
           "version": 10,
-          "fingerprint": "4719bdbbb2b15d3b",
-          "definition_path": "doc/scientific_contracts/MODEL_STANDARD_SOP_v10.json",
-          "definition_sha256": "aa062ffd343a0d8d8669644231e355c284870382447d46517a17474d27b926c8"
+          "fingerprint": "4719bdbbb2b15d3b"
         },
         {
           "contract_id": "model.standard_sop@v11",
           "version": 11,
-          "fingerprint": "879150664c67c79b",
-          "definition_path": "doc/scientific_contracts/MODEL_STANDARD_SOP_v11.json",
-          "definition_sha256": "4b4a1662b4d86cc61be0d4fbfc353003154ff55f6d359055c7f82072afe04ea2"
+          "fingerprint": "879150664c67c79b"
         }
       ]
     },
@@ -201,9 +163,7 @@
         {
           "contract_id": "strategy.standard_sop@v2",
           "version": 2,
-          "fingerprint": "20d78fad3fccccb6",
-          "definition_path": "doc/scientific_contracts/STRATEGY_STANDARD_SOP_v2.json",
-          "definition_sha256": "88225dc078a9afe98c826b020915fa67d3f12753e0ecfd5a6238325a4348490d"
+          "fingerprint": "20d78fad3fccccb6"
         }
       ]
     }

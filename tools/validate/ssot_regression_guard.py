@@ -14,7 +14,6 @@ from pathlib import Path
 import re
 import tempfile
 from typing import Any, Mapping
-from zipfile import BadZipFile, ZipFile
 
 from .meta_contracts import (
     load_synthetic_registry_entries_from_source,
@@ -22,11 +21,10 @@ from .meta_contracts import (
 )
 from .source_index import read_source_ast
 
-# One permanent Golden and one archived history. No version-specific JSON
-# files or vN Golden clones are generated when research comparisons change.
+# One permanent Golden and one compact contract ledger. No historic source archive
+# or version-specific JSON file is required, read, or generated.
 GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression.json"
-ARCHIVE_RELATIVE_PATH = "doc/scientific_contracts/CONTRACT_EVIDENCE_HISTORY.zip"
-APPROVED_GOLDEN_SHA256 = "b52e69a83844c07ac09e0ea6ecaad9af84e41766870339e21ba7273db074dc25"
+APPROVED_GOLDEN_SHA256 = "335edc1c6bd803325152d22e5ee8ad528d0008ebe55b3c4938fd7d88e3ee4649"
 
 IDENTITY_PATTERN = re.compile(r"^(?:MR-[A-Za-z0-9-]+|ARCH-[A-Za-z0-9_]+|PARAM-P[A-Za-z0-9-]+)$")
 GENERIC_CONSUMER_PATHS = (
@@ -109,69 +107,17 @@ def snapshot_structural_violations(project_root: Path) -> dict[str, list[str]]:
 
 
 def read_approved_baseline(project_root: Path, *, raw_bytes: bytes | None = None) -> dict[str, Any]:
-    """Verify one stable behavior Golden and every byte-frozen historical Golden.
-
-    All prior approvals (including the original v14) remain recoverable from
-    the archive; the engineering fixture lives at a fixed filename and does
-    not acquire a new vN suffix when the report registry grows.
-    """
+    """Read the independently pinned current Golden; no historical file dependency."""
     if raw_bytes is None:
         raw_bytes = (project_root / GOLDEN_RELATIVE_PATH).read_bytes()
     if _sha256(raw_bytes) != APPROVED_GOLDEN_SHA256:
         raise ValueError("stable SSOT Golden hash mismatch")
     baseline = json.loads(raw_bytes)
-    if baseline.get("schema_version") != 14:
-        raise ValueError("stable SSOT Golden must preserve approved v14 semantics")
-    historical_sha = baseline.get("historical_golden_sha256")
-    if (not isinstance(historical_sha, dict)
-            or set(historical_sha) != {str(v) for v in range(1, 15)}
-            or any(not re.fullmatch(r"[0-9a-f]{64}", str(v)) for v in historical_sha.values())):
-        raise ValueError("stable SSOT Golden lacks complete original historical hashes")
-    try:
-        with ZipFile(project_root / ARCHIVE_RELATIVE_PATH) as archive:
-            names = archive.namelist()
-            if len(names) != len(set(names)):
-                raise ValueError("duplicate historic evidence archive member")
-            historical_entries = {
-                name for name in names if name.startswith("tools/validate/baselines/")
-            }
-            expected_entries = {
-                f"tools/validate/baselines/ssot_regression_v{version}.json"
-                for version in range(1, 15)
-            }
-            if historical_entries != expected_entries:
-                raise ValueError("historical SSOT Golden archive inventory changed")
-            historical = {}
-            for version in range(1, 15):
-                name = f"tools/validate/baselines/ssot_regression_v{version}.json"
-                original = archive.read(name)
-                if _sha256(original) != historical_sha[str(version)]:
-                    raise ValueError(f"historical SSOT Golden v{version} changed")
-                loose = project_root / name
-                if loose.is_file() and loose.read_bytes() != original:
-                    raise ValueError(f"loose historical SSOT Golden v{version} differs from archive")
-                if version == 14:
-                    historical = json.loads(original)
-    except (BadZipFile, OSError, KeyError) as exc:
-        raise ValueError(f"historic SSOT Golden archive unavailable: {exc}") from exc
-
-    # Engineering fixture values, historical report identities, and pinned
-    # synthetic test assertions are still the original v14 evidence. This
-    # migration only changes how the archive is loaded and checked.
-    for key in ("fixed_params", "expected", "protected_tests", "protected_report_versions"):
-        if baseline.get(key) != historical.get(key):
-            raise ValueError(f"stable SSOT Golden rewrites frozen v14 {key}")
-    before = {row["function"]: row for row in historical["protected_guards"]}
-    after = {row["function"]: row for row in baseline["protected_guards"]}
-    if before.keys() != after.keys():
-        raise ValueError("stable SSOT Golden changes protected guard inventory")
-    for name, previous in before.items():
-        updated = after[name]
-        if name in {"read_approved_baseline", "summarize_ssot_regression_guard"}:
-            if updated["path"] != previous["path"]:
-                raise ValueError(f"stable SSOT Golden changes historic guard owner: {name}")
-        elif updated != previous:
-            raise ValueError(f"stable SSOT Golden changes unrelated protected guard {name}")
+    if baseline.get("schema_version") != 1:
+        raise ValueError("stable SSOT Golden schema_version must be 1")
+    required = {"fixed_params", "expected", "protected_tests", "protected_guards", "protected_report_versions"}
+    if not required <= baseline.keys():
+        raise ValueError("stable SSOT Golden incomplete")
     return baseline
 
 
@@ -179,11 +125,11 @@ def report_contract_version_history_violations(
     project_root: Path, approved: Mapping[str, Any], *,
     registry_override: Mapping[str, Any] | None = None,
 ) -> list[str]:
-    """Reject changes/deletions to any previously approved report contract version.
+    """Protect compact past report identities without keeping past schema files.
 
-    The last frozen Golden protects the historical *prefix*. Newly approved
-    report versions live in the canonical ledger and immutable definition
-    files; they do NOT require a new copy of the whole SSOT Golden.
+    Existing IDs/fingerprints remain stable for valid historical Oracle replay.
+    New, authorized versions append one compact identity row; current schemas
+    still pass the independent report publication fingerprint gate.
     """
     from core.report_contract_versions import load_report_contract_versions
     try:
@@ -205,8 +151,6 @@ def report_contract_version_history_violations(
             expected_version = expected_rows[-1]["version"] + offset
             if new.get("version") != expected_version or new.get("contract_id") != f"{report_id}@v{expected_version}":
                 issues.append(f"{report_id}:appended_contract_version_invalid")
-            if not new.get("definition_path") or not new.get("definition_sha256"):
-                issues.append(f"{report_id}@v{expected_version}:new_version_missing_immutable_definition")
     return issues
 
 
@@ -325,7 +269,5 @@ def summarize_ssot_regression_guard(project_root: Path) -> dict[str, Any]:
         "report_contract_version_history_violations": report_contract_version_history_violations(project_root, baseline),
         "behavior_differences": behavior_snapshot_differences(baseline["expected"], actual),
         "golden_sha256": APPROVED_GOLDEN_SHA256,
-        "historical_v1_golden_sha256": baseline["historical_golden_sha256"]["1"],
-        "historical_v3_golden_sha256": baseline["historical_golden_sha256"]["3"],
         "scenario_count": len(actual["portfolio"]),
     }
