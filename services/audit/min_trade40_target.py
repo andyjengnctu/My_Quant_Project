@@ -1,8 +1,10 @@
 """P16 Min 40-session realized-net-R event target, hindsight-only.
 
-This is a separate *event* cohort from the universal 40-bar stock-day Oracle.
-It deliberately does not feed portfolio scores, DL fitting, Strategy Compare,
-or any Trading state. Price/parameters/fee/entry/exit logic are canonical.
+Its event-level realized R feeds only the existing [1] Oracle portfolio
+comparison as a future-truth ranking score.  It does not feed DL fitting,
+PIT/Trading, or Strategy Compare. The canonical Portfolio prepared market,
+setup index and single-stock ledger/entry/exit primitives own all execution
+semantics; this module does not re-scan raw CSV breakout signals.
 """
 
 from __future__ import annotations
@@ -19,15 +21,14 @@ import pandas as pd
 
 from config.audit import AUDIT_OUTPUT_ROOT
 from core.file_integrity import canonical_json_sha256
+from core.dataset_profiles import get_dataset_dir
+from core.portfolio_fast_access import get_fast_dates, is_packed_market_data
+from core.raw_universe_contract import resolve_raw_universe_required_min_rows
 from core.portfolio_param_runtime import (
     build_active_param_ensemble_objects_from_payload,
     build_active_param_objects_from_payload,
 )
-from filters.breakout_quality.mfe_safety_geometry import normalize_ticker
-from filters.breakout_quality.trade_path_label import (
-    build_signal_cache, simulate_realized_trade_path_label,
-)
-from filters.breakout_quality.workflow_io import discover_dataset_csv_inputs, load_dataset_frame
+from filters.breakout_quality.trade_path_label import simulate_realized_trade_path_label
 from services.audit.oracle_replay_artifacts import price_inventory_sha256
 
 
@@ -38,7 +39,7 @@ TARGET_HORIZON_SESSIONS = 40
 REPORT_SCHEMA = 1
 # Reuse existing per-seed evidence path; this is NOT a separate active report.
 OUTPUT_SUBDIR = "breakout_quality/reusable/min_trade40_netr"
-CACHE_SCHEMA = 1
+CACHE_SCHEMA = 2
 
 
 class MinTrade40BlockedError(RuntimeError):
@@ -68,7 +69,7 @@ def _target_spec(definition) -> dict[str, Any]:
             type(spec.get("horizon_trading_bars")) is not int or
             int(spec["horizon_trading_bars"]) != TARGET_HORIZON_SESSIONS or
             spec.get("cohort") != "p16_min_signal_events" or
-            spec.get("signal_membership_policy") != "next_observed_ticker_trade_day_p16_v1"):
+            spec.get("signal_membership_policy") != "canonical_portfolio_setup_index_p16_v2"):
         raise MinTrade40BlockedError("Min event Target 的科學身分／期限／母體契約無效")
     return spec
 
@@ -92,24 +93,47 @@ def _schedule(base_kind: str, base_params: Any) -> tuple[dict[str, Any], ...]:
     return tuple(records)
 
 
-def _benchmark_calendar(root: Path, dataset: str, ticker: str) -> tuple[pd.DatetimeIndex, dict[str, Path]]:
-    sources, duplicates = discover_dataset_csv_inputs(root, dataset)
-    if duplicates or not sources:
-        raise MinTrade40BlockedError(f"Min event Target dataset 缺少或有重複 ticker：{duplicates[:3]}")
-    paths = {}
-    for name, source in sources:
-        key = normalize_ticker(name)
-        if key in paths:
-            raise MinTrade40BlockedError(f"Min event Target normalized ticker重複：{key}")
-        paths[key] = Path(source)
-    benchmark = normalize_ticker(ticker)
-    if benchmark not in paths:
-        raise MinTrade40BlockedError(f"Min event Target缺少交易日曆：{benchmark}")
-    bench = load_dataset_frame(paths[benchmark], benchmark, min_rows=1)
-    dates = pd.DatetimeIndex(bench.index).normalize()
-    if dates.empty or dates.has_duplicates or not dates.is_monotonic_increasing:
-        raise MinTrade40BlockedError("Min event Target benchmark交易日曆不合法")
-    return dates, paths
+def _prepared_min_contexts(root: Path, dataset: str, kind: str, base_params: Any,
+                           schedules: tuple[dict[str, Any], ...]) -> dict[str, Any]:
+    """Consume the same prepared source + normal setup index as portfolio Replay.
+
+    The source is the canonical active-param Portfolio preparer, including the
+    full optimizer raw-universe boundary and OHLCV sanitization.  It is NOT a
+    second breakout scanner or a standalone backtest with different prices.
+    """
+    from services.portfolio_replay import (
+        _load_contexts_for_active_ensemble_schedule,
+        _load_contexts_for_active_schedule,
+    )
+
+    data_dir = str(get_dataset_dir(str(root), dataset))
+    required_rows = resolve_raw_universe_required_min_rows(base_params)
+    if kind == "rolling_active_param_ensemble":
+        contexts = _load_contexts_for_active_ensemble_schedule(
+            data_dir, schedules, verbose=False, keep_trade_logs=False,
+            raw_universe_required_min_rows=required_rows,
+        )
+        return {key: rows[0] for key, rows in contexts.items() if len(rows) == 1}
+    if kind == "rolling_oos_param_schedule":
+        return _load_contexts_for_active_schedule(
+            data_dir, schedules, verbose=False,
+            raw_universe_required_min_rows=required_rows,
+        )
+    raise MinTrade40BlockedError(f"Min event Target未授權的P16回放類型：{kind}")
+
+
+def _prepared_trade_path_view(ticker: str, market: Mapping[str, Any]):
+    """Zero new signal rules: take the Portfolio-prepared OHLCV + indicator arrays."""
+    if not is_packed_market_data(market):
+        raise MinTrade40BlockedError(f"Min event Target缺少Portfolio packed行情：{ticker}")
+    dates = pd.DatetimeIndex(get_fast_dates(market)).normalize()
+    columns = ("Open", "High", "Low", "Close", "Volume")
+    frame = pd.DataFrame({field: market[field] for field in columns}, index=dates, copy=False)
+    frame.attrs["ticker"] = ticker
+    frame.attrs["security_profile"] = market.get("security_profile")
+    signals = (market["ATR"], market["is_setup"],
+               market["ind_sell_signal"], market["buy_limit"])
+    return frame, signals
 
 
 def _build_seed_events(
@@ -117,83 +141,106 @@ def _build_seed_events(
     spec: Mapping[str, Any], seed: int, kind: str, base_params: Any,
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """Compute realized R only on legal Min breakout signal events.
+    """Source only the formal Min Portfolio setup index; freeze each active P16.
 
-    Each event freezes that day's P16 member and its original signal date.
-    Horizon is T+40 *benchmark sessions*, not 40 trading rows for an
-    intermittently halted ticker. Empty, unfilled and unexecutable outcomes
-    have null R and are excluded (never filled with 0/-1).
+    Candidate availability is determined by the same *prepared* market source
+    as the production Portfolio Engine. Continuation/re-entry ranking inherits
+    the originating scored signal via the canonical trading signal state; this
+    function never independently guesses candidate or re-entry eligibility.
     """
     from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY
+    from services.portfolio_replay import PORTFOLIO_DEFAULT_BENCHMARK_TICKER
+
+    benchmark = str(DEFAULT_LABEL_POLICY.benchmark_ticker)
+    if benchmark != PORTFOLIO_DEFAULT_BENCHMARK_TICKER:
+        raise MinTrade40BlockedError("Min event Target與Portfolio benchmark交易日曆身分不一致")
     horizon = int(spec["horizon_trading_bars"])
-    calendar, paths = _benchmark_calendar(root, dataset, DEFAULT_LABEL_POLICY.benchmark_ticker)
-    mapping = {pd.Timestamp(d).normalize(): i for i, d in enumerate(calendar)}
     last = pd.Timestamp(cutoff).normalize()
+    beginning = pd.Timestamp(start).normalize()
+    schedules = _schedule(kind, base_params)
+    for record in schedules:
+        params = record["params_obj"]
+        if bool(params.use_breakout_quality_filter) or bool(params.use_breakout_quality_ranking):
+            raise MinTrade40BlockedError("Min event Target上游P16含DL／quality，禁止使用")
+    contexts = _prepared_min_contexts(root, dataset, kind, base_params, schedules)
+    if len(contexts) != len(schedules):
+        raise MinTrade40BlockedError("Min event Target正式P16 context缺少生效期間")
+
+    # The benchmark is the SAME sanitized, packed price series used by the
+    # real Portfolio replay. Its market sessions define T+40 maturity.
+    first_context = contexts[str(schedules[0]["effective_date_text"])]
+    benchmark_fast = (first_context.get("all_dfs_fast") or {}).get(benchmark)
+    if benchmark_fast is None:
+        raise MinTrade40BlockedError("Min event Target正式Portfolio context缺少0050交易日曆")
+    calendar = pd.DatetimeIndex(get_fast_dates(benchmark_fast)).normalize()
+    if calendar.empty or calendar.has_duplicates or not calendar.is_monotonic_increasing:
+        raise MinTrade40BlockedError("Min event Target正式Portfolio交易日曆不合法")
+    mapping = {day: i for i, day in enumerate(calendar)}
     mature = {date: calendar[idx + horizon] for date, idx in mapping.items()
               if idx + horizon < len(calendar) and calendar[idx + horizon] <= last}
-    schedules = _schedule(kind, base_params)
     events = []
     coverage = Counter()
-    for index, (ticker, path) in enumerate(sorted(paths.items()), start=1):
-        if progress and (index % 250 == 0 or index == len(paths)):
-            progress(f"Seed={seed} event target {index}/{len(paths)} tickers")
-        try:
-            frame = load_dataset_frame(path, ticker, min_rows=1)
-        except (OSError, UnicodeError, ValueError, KeyError, TypeError) as exc:
-            raise MinTrade40BlockedError(f"Min event Target無法讀取 {ticker} price：{exc}") from exc
-        if len(frame) < 2:
-            continue
-        dates = pd.DatetimeIndex(frame.index).normalize()
-        # AI: Portfolio normal_setup_index creates a candidate on the next
-        # observed ticker bar, not on the signal bar.  This also covers the
-        # previous year's final signal and suspended/illiquid tickers whose
-        # preceding observed bar is older than the prior benchmark session.
-        candidate_trade_dates = dates[1:]
-        for record in schedules:
-            params = record["params_obj"]
-            # All-off, no DL ranking is guaranteed by the canonical P16 pair.
-            if (bool(params.use_breakout_quality_filter) or
-                    bool(params.use_breakout_quality_ranking)):
-                raise MinTrade40BlockedError("Min event Target上游P16含DL／quality，禁止使用")
-            effective = pd.Timestamp(record["effective_date"]).normalize()
-            raw_end = record.get("effective_end_date")
-            end_day = pd.Timestamp(raw_end).normalize() if raw_end is not None else last
-            # AI: The P16 member is resolved for the day the candidate first
-            # becomes tradable.  Filtering by signal_date would omit legitimate
-            # lookback signals (e.g. 2020-12-31 -> 2021-01-04), and would use
-            # the previous fold's params on year-end signals.
-            active = np.flatnonzero(
-                (candidate_trade_dates >= max(pd.Timestamp(start).normalize(), effective))
-                & (candidate_trade_dates <= min(last, end_day))
-            )
-            if not len(active):
+    for member_i, record in enumerate(schedules, 1):
+        effective_text = str(record["effective_date_text"])
+        context = contexts[effective_text]
+        market_by_ticker = context.get("all_dfs_fast") or {}
+        setup_index = context.get("normal_setup_index")
+        if not isinstance(setup_index, dict):
+            raise MinTrade40BlockedError(f"正式Min缺少normal_setup_index：{effective_text}")
+        params = record["params_obj"]
+        effective = pd.Timestamp(record["effective_date"]).normalize()
+        raw_end = record.get("effective_end_date")
+        end_day = pd.Timestamp(raw_end).normalize() if raw_end is not None else last
+        period_start = max(beginning, effective)
+        period_end = min(last, end_day)
+        if progress:
+            progress(f"Seed={seed} canonical Min context {member_i}/{len(schedules)}")
+        prepared_views: dict[str, tuple[pd.DataFrame, tuple[Any, ...]]] = {}
+        for candidate_day, entries in sorted(setup_index.items()):
+            trade_day = pd.Timestamp(candidate_day).normalize()
+            if trade_day < period_start or trade_day > period_end:
                 continue
-            # Compute the same formal signal calculator as the A2/Min replay.
-            signals = build_signal_cache(frame, params, ticker=ticker)
-            signal_mask = np.asarray(signals[1], dtype=bool)
-            for pos in active:
-                if not signal_mask[pos]:
-                    continue
-                day = dates[pos]
-                if day not in mapping:
-                    coverage["signal_not_on_market_calendar"] += 1
-                    continue
-                deadline = mature.get(day)
+            # Consume EXACTLY the canonical candidate event tuples.  In
+            # particular, signal date is the prior OBSERVED ticker bar, not
+            # assumed to be the previous benchmark session.
+            for ticker, signal_pos, next_pos in entries:
+                market = market_by_ticker.get(ticker)
+                if market is None:
+                    raise MinTrade40BlockedError(f"正式Min setup缺少股票快取：{ticker}")
+                view = prepared_views.get(ticker)
+                if view is None:
+                    view = _prepared_trade_path_view(ticker, market)
+                    prepared_views[ticker] = view
+                frame, signals = view
+                if next_pos != signal_pos + 1 or next_pos >= len(frame):
+                    raise MinTrade40BlockedError("正式Min setup持有無效原始訊號位置")
+                if pd.Timestamp(frame.index[next_pos]).normalize() != trade_day:
+                    raise MinTrade40BlockedError("正式Min setup與交易日錯位")
+                if not bool(signals[1][signal_pos]):
+                    raise MinTrade40BlockedError("正式Min setup與prepared signal flags衝突")
+                signal_day = pd.Timestamp(frame.index[signal_pos]).normalize()
+                deadline = mature.get(signal_day)
                 if deadline is None:
+                    if signal_day not in mapping:
+                        # A new signal without an exchange session cannot be
+                        # assigned the specified forty-session label.
+                        raise MinTrade40BlockedError(
+                            f"正式Min訊號日不在交易日曆：ticker={ticker}, date={signal_day.date()}"
+                        )
                     coverage["not_40_session_mature"] += 1
                     continue
                 result = simulate_realized_trade_path_label(
-                    frame, ticker=ticker, signal_pos=int(pos), params=params,
-                    teacher_effective_date=effective.strftime("%Y-%m-%d"),
+                    frame, ticker=ticker, signal_pos=int(signal_pos), params=params,
+                    teacher_effective_date=effective_text,
                     precomputed_signals=signals,
                     horizon_end_date=deadline,
                 )
                 reason = str(result.reason)
                 coverage[reason] += 1
                 events.append({
-                    "ticker": ticker, "signal_date": day.strftime("%Y-%m-%d"),
+                    "ticker": str(ticker), "signal_date": signal_day.strftime("%Y-%m-%d"),
                     "horizon_date": deadline.strftime("%Y-%m-%d"),
-                    "p16_effective_date": effective.strftime("%Y-%m-%d"),
+                    "p16_effective_date": effective_text,
                     "status": str(result.status), "reason": reason,
                     "fill_date": result.fill_date,
                     "entry_price": result.entry_price,

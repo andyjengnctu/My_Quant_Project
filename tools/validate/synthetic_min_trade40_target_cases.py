@@ -22,6 +22,10 @@ if str(ROOT) not in sys.path:
 from core.audit_policy import get_reusable_audit_definitions
 from core.research_report_contract import require_approved_report_contract
 from core.strategy_params import V16StrategyParams
+from core.portfolio_fast_data import (
+    pack_static_market_data, merge_static_market_with_dynamic,
+    build_normal_setup_index,
+)
 from filters.breakout_quality.trade_path_label import (
     TRADE_PATH_REASON_HORIZON_SELL_BLOCKED,
     TRADE_PATH_REASON_HORIZON_SAME_DAY_FILL,
@@ -64,6 +68,32 @@ def evaluate(params, data, signals, deadline=None):
     )
 
 
+def prepared_stock(frame, signal_flags=None, *, atr=None, buy_limit=None, sell_flags=None):
+    """Fixture using the actual packed-market adapter consumed by Portfolio."""
+    n = len(frame)
+    stock = frame.copy()
+    if not {"Open", "High", "Low", "Close", "Volume"}.issubset(stock.columns):
+        stock = pd.DataFrame({
+            "Open": np.full(n, 100.0), "High": np.full(n, 101.0),
+            "Low": np.full(n, 99.0), "Close": np.full(n, 100.0),
+            "Volume": np.full(n, 1000.0),
+        }, index=frame.index)
+    return merge_static_market_with_dynamic(pack_static_market_data(stock), {
+        "ATR": np.full(n, 2.0) if atr is None else np.asarray(atr, dtype=float),
+        "is_setup": (np.zeros(n, dtype=bool) if signal_flags is None
+                     else np.asarray(signal_flags, dtype=bool)),
+        "ind_sell_signal": (np.zeros(n, dtype=bool) if sell_flags is None
+                            else np.asarray(sell_flags, dtype=bool)),
+        "buy_limit": (np.full(n, 100.0) if buy_limit is None
+                      else np.asarray(buy_limit, dtype=float)),
+    })
+
+
+def portfolio_context(market):
+    return {"all_dfs_fast": market,
+            "normal_setup_index": build_normal_setup_index(market)}
+
+
 class MinTrade40ContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -81,7 +111,7 @@ class MinTrade40ContractTests(unittest.TestCase):
             target._target_spec(SimpleNamespace(source=bad))
         self.assertEqual(spec['cohort'], 'p16_min_signal_events')
         self.assertEqual(spec['signal_membership_policy'],
-                         'next_observed_ticker_trade_day_p16_v1')
+                         'canonical_portfolio_setup_index_p16_v2')
         # AI: One declarative field scopes BOTH seed-label cache and the
         # normal Oracle Replay arm, without a target-specific cache bypass.
         identity = target._seed_identity(
@@ -147,6 +177,31 @@ class MinTrade40ContractTests(unittest.TestCase):
         from core.breakout_quality_ranking_context import get_breakout_quality_ranking_source_context
         self.assertNotEqual(get_breakout_quality_ranking_source_context().score_source,
                             'audit_oracle_future_truth')
+
+    def test_reentry_inherits_origin_score_from_formal_parent_state(self):
+        # Re-entry is not a separately scanned target event: the formal engine
+        # inherits the original normal setup's frozen hindsight ranking.
+        from core.breakout_reentry import create_breakout_reentry_signal_state
+        from core.extended_signals import resolve_breakout_quality_rank
+        params, _, _ = fixture()
+        params.use_breakout_reclaim_reentry = True
+        rank = {
+            'score': 0.9, 'available': True,
+            'score_date': '2022-01-03',
+            'score_source': 'audit_oracle_future_truth',
+            'shared_group_score': True, 'filter_id': 'breakout_quality_v1',
+        }
+        watch = {'ticker': '2330', 'confirm_price': 100.0,
+                 'breakout_quality_rank': rank, '_params_obj': params}
+        signal = create_breakout_reentry_signal_state(
+            watch, close_price=101.0, atr=2.0, params=params,
+            ticker='2330', signal_date='2022-01-13',
+        )
+        self.assertEqual(signal['source'], 'reentry')
+        inherited = resolve_breakout_quality_rank(signal)
+        self.assertEqual(inherited['score'], 0.9)
+        self.assertEqual(inherited['score_date'], '2022-01-03')
+        self.assertEqual(inherited['score_source'], 'audit_oracle_future_truth')
 
     def test_same_canonical_accounting_at_cap_and_independence_from_later_prices(self):
         params, data, signals = fixture()
@@ -287,10 +342,9 @@ class MinTrade40ContractTests(unittest.TestCase):
         self.assertNotIn('events', report['rows'][0])
         self.assertTrue(report['hindsight_non_pit'])
 
-    def test_event_cohort_uses_next_ticker_trade_date_at_p16_boundaries(self):
-        # AI: A normal candidate is built on the ticker's NEXT observed bar.
-        # 2020-12-31 -> 2021-01-04 must enter the first OOS fold; a halted
-        # ticker may carry an even older signal into a new P16 fold.
+    def test_event_cohort_uses_formal_setup_index_across_p16_boundaries(self):
+        # The official index uses the ticker's NEXT observed bar; a suspended
+        # ticker's candidate can legitimately cross the annual P16 boundary.
         calendar = pd.date_range('2020-12-01', '2022-02-28', freq='B')
         by_ticker = {
             '006205': pd.DataFrame(index=pd.to_datetime([
@@ -311,18 +365,18 @@ class MinTrade40ContractTests(unittest.TestCase):
         p2022 = SimpleNamespace(use_breakout_quality_filter=False,
                                 use_breakout_quality_ranking=False)
         schedule = (
-            {'effective_date': '2021-01-01', 'effective_end_date': '2021-12-31',
-             'params_obj': p2021},
-            {'effective_date': '2022-01-01', 'effective_end_date': '2022-12-31',
-             'params_obj': p2022},
+            {'effective_date': '2021-01-01', 'effective_date_text': '2021-01-01',
+             'effective_end_date': '2021-12-31', 'params_obj': p2021},
+            {'effective_date': '2022-01-01', 'effective_date_text': '2022-01-01',
+             'effective_end_date': '2022-12-31', 'params_obj': p2022},
         )
-
-        def signal_cache(frame, params, *, ticker):
-            flags = np.asarray([
-                day.strftime('%Y-%m-%d') in positions[ticker] for day in frame.index
-            ], dtype=bool)
-            return (np.zeros(len(frame)), flags, np.zeros(len(frame), dtype=bool),
-                    np.zeros(len(frame)))
+        packed = {'0050': prepared_stock(pd.DataFrame(index=calendar))}
+        for ticker, frame in by_ticker.items():
+            flags = np.asarray([day.strftime('%Y-%m-%d') in positions[ticker]
+                                for day in frame.index], dtype=bool)
+            packed[ticker] = prepared_stock(frame, flags)
+        canonical = portfolio_context(packed)
+        contexts = {'2021-01-01': canonical, '2022-01-01': canonical}
 
         def completed_trade(frame, *, ticker, signal_pos, params, **kwargs):
             trade_day = frame.index[signal_pos + 1].strftime('%Y-%m-%d')
@@ -333,14 +387,10 @@ class MinTrade40ContractTests(unittest.TestCase):
                 realized_net_r=1.0, forced_closeout=True,
             )
 
-        with patch.object(target, '_benchmark_calendar', return_value=(
-                calendar, {name: Path(f'/tmp/{name}.csv') for name in by_ticker})), \
-             patch.object(target, 'load_dataset_frame', side_effect=lambda path, ticker, min_rows:
-                          by_ticker[ticker].copy()), \
-             patch.object(target, '_schedule', return_value=schedule), \
-             patch.object(target, 'build_signal_cache', side_effect=signal_cache), \
+        with patch.object(target, '_schedule', return_value=schedule), \
+             patch.object(target, '_prepared_min_contexts', return_value=contexts), \
              patch.object(target, 'simulate_realized_trade_path_label',
-                          side_effect=completed_trade):
+                          side_effect=completed_trade) as label_fn:
             actual = target._build_seed_events(
                 root=ROOT, dataset='full', start='2021-01-01', cutoff='2022-02-28',
                 spec={**target._target_spec(self.definition), 'horizon_trading_bars': 1},
@@ -355,6 +405,7 @@ class MinTrade40ContractTests(unittest.TestCase):
             ('2330', '2021-12-29'): '2021-01-01',
             ('2330', '2021-12-30'): '2022-01-01',
         })
+        self.assertEqual(label_fn.call_count, len(assigned))
         self.assertEqual(actual['signal_events'], len(assigned))
         self.assertEqual(actual['completed_trades'], len(assigned))
         self.assertEqual(actual['excluded_events'], 0)
@@ -363,19 +414,75 @@ class MinTrade40ContractTests(unittest.TestCase):
         self.assertEqual(set(scores), set(assigned))
         self.assertTrue(all(math.isfinite(score) for score in scores.values()))
 
+    def test_event_cohort_respects_canonical_sanitized_setup_for_2404(self):
+        # A fresh formal setup (2404 / 2025-06-11) must be included even if
+        # an independent raw-price scanner would have disagreed or omitted it.
+        dates = pd.date_range('2025-06-09', periods=55, freq='B')
+        frame = pd.DataFrame(index=dates)
+        flags = np.zeros(len(dates), dtype=bool)
+        flags[2] = True  # 2025-06-11: official packed signal
+        market = {'0050': prepared_stock(frame), '2404': prepared_stock(frame, flags)}
+        context = portfolio_context(market)
+        schedule = ({'effective_date': '2025-01-01',
+                     'effective_date_text': '2025-01-01',
+                     'effective_end_date': '2025-12-31',
+                     'params_obj': SimpleNamespace(use_breakout_quality_filter=False,
+                                                   use_breakout_quality_ranking=False)},)
+
+        def complete(frame, **kwargs):
+            return SimpleNamespace(
+                reason='realized_net_profit', status='PASS', fill_date='2025-06-12',
+                entry_price=100.0, exit_date='2025-08-06', exit_price=105.0,
+                exit_reason='HORIZON_CLOSEOUT', realized_net_pnl=500.0,
+                realized_net_r=0.5, forced_closeout=True,
+            )
+
+        with patch.object(target, '_schedule', return_value=schedule), \
+             patch.object(target, '_prepared_min_contexts',
+                          return_value={'2025-01-01': context}), \
+             patch.object(target, 'simulate_realized_trade_path_label',
+                          side_effect=complete):
+            actual = target._build_seed_events(
+                root=ROOT, dataset='full', start='2025-01-01', cutoff='2025-08-25',
+                spec=target._target_spec(self.definition), seed=11,
+                kind='rolling_active_param_ensemble', base_params={},
+            )
+        self.assertEqual(actual['signal_events'], 1)
+        self.assertEqual(actual['events'][0]['ticker'], '2404')
+        self.assertEqual(actual['events'][0]['signal_date'], '2025-06-11')
+        self.assertEqual(actual['events'][0]['p16_effective_date'], '2025-01-01')
+        self.assertIn(('2404', '2025-06-11'), target._rank_seed_events(actual['events']))
+
+    def test_canonical_context_loader_keeps_portfolio_universe_and_single_member(self):
+        schedules = ({'effective_date_text': '2021-01-01', 'members':
+                      [{'params_obj': object()}]},)
+        ctx = {'all_dfs_fast': {}, 'normal_setup_index': {}}
+        with patch.object(target, 'get_dataset_dir', return_value=Path('/test/full')), \
+             patch.object(target, 'resolve_raw_universe_required_min_rows',
+                          return_value=617), \
+             patch('services.portfolio_replay._load_contexts_for_active_ensemble_schedule',
+                   return_value={'2021-01-01': [ctx]}) as formal_loader:
+            actual = target._prepared_min_contexts(
+                ROOT, 'full', 'rolling_active_param_ensemble',
+                {'raw_universe_required_min_rows': 617}, schedules,
+            )
+        self.assertIs(actual['2021-01-01'], ctx)
+        self.assertEqual(formal_loader.call_args.args[0], '/test/full')
+        self.assertEqual(formal_loader.call_args.kwargs['raw_universe_required_min_rows'], 617)
+        self.assertFalse(formal_loader.call_args.kwargs['keep_trade_logs'])
+
     def test_event_builder_counts_actual_net_r_without_fabricated_zeros(self):
         params, data, signals = fixture()
-        bench = data.copy()
-        schedule = [{'effective_date': data.index[0],
-                     'effective_end_date': data.index[-1], 'params_obj': params}]
-        paths = [('0050', Path('/tmp/0050.csv')), ('2330', Path('/tmp/2330.csv'))]
-        with patch.object(target, 'discover_dataset_csv_inputs', return_value=(paths, [])), \
-             patch.object(target, 'load_dataset_frame', side_effect=lambda path,ticker,min_rows: (
-                  bench.copy() if ticker == '0050' else data.copy())), \
-             patch.object(target, '_schedule', return_value=tuple(schedule)), \
-             patch.object(target, 'build_signal_cache', side_effect=lambda frame,p,ticker: (
-                 signals if ticker == '2330' else (signals[0], np.zeros(len(frame), dtype=bool),
-                                                   signals[2], signals[3]))):
+        market = {'0050': prepared_stock(data),
+                  '2330': prepared_stock(data, signals[1], atr=signals[0],
+                                         sell_flags=signals[2], buy_limit=signals[3])}
+        ctx = portfolio_context(market)
+        schedule = ({'effective_date': data.index[0],
+                     'effective_date_text': '2020-01-01',
+                     'effective_end_date': data.index[-1], 'params_obj': params},)
+        with patch.object(target, '_schedule', return_value=schedule), \
+             patch.object(target, '_prepared_min_contexts',
+                          return_value={'2020-01-01': ctx}):
             actual = target._build_seed_events(
                 root=ROOT, dataset='full', start='2020-01-01', cutoff='2020-01-13',
                 spec={**target._target_spec(self.definition), 'horizon_trading_bars': 3},
