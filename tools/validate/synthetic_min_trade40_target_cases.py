@@ -80,6 +80,25 @@ class MinTrade40ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(target.MinTrade40BlockedError, '身分'):
             target._target_spec(SimpleNamespace(source=bad))
         self.assertEqual(spec['cohort'], 'p16_min_signal_events')
+        self.assertEqual(spec['signal_membership_policy'],
+                         'next_observed_ticker_trade_day_p16_v1')
+        # AI: One declarative field scopes BOTH seed-label cache and the
+        # normal Oracle Replay arm, without a target-specific cache bypass.
+        identity = target._seed_identity(
+            spec=spec, dataset='full', price_sha='a'*64, param_sha='b'*64,
+            seed=11, start='2021-01-01', cutoff='2026-03-02',
+        )
+        self.assertEqual(identity['signal_membership_policy'],
+                         spec['signal_membership_policy'])
+        from services.audit.target_oracle_romd import (
+            _arm_replay_policy, _oracle_comparison_plan,
+        )
+        arm_policy = _arm_replay_policy(
+            self.definition, plan=_oracle_comparison_plan(self.definition),
+            target=target.TARGET_NAME, replay_policy={},
+        )
+        self.assertEqual(arm_policy['hindsight_label_spec']['signal_membership_policy'],
+                         spec['signal_membership_policy'])
         self.assertEqual(require_approved_report_contract("audit.target_oracle_romd").report_id,
                          "audit.target_oracle_romd")
         comparison = next(row for row in self.definition.source['oracle_comparisons']
@@ -267,6 +286,82 @@ class MinTrade40ContractTests(unittest.TestCase):
         self.assertEqual(report['rows'][0]['mean_net_r'], 0.5)
         self.assertNotIn('events', report['rows'][0])
         self.assertTrue(report['hindsight_non_pit'])
+
+    def test_event_cohort_uses_next_ticker_trade_date_at_p16_boundaries(self):
+        # AI: A normal candidate is built on the ticker's NEXT observed bar.
+        # 2020-12-31 -> 2021-01-04 must enter the first OOS fold; a halted
+        # ticker may carry an even older signal into a new P16 fold.
+        calendar = pd.date_range('2020-12-01', '2022-02-28', freq='B')
+        by_ticker = {
+            '006205': pd.DataFrame(index=pd.to_datetime([
+                '2020-12-30', '2021-01-06', '2021-12-20',
+                '2022-01-03', '2022-01-04',
+            ])),
+            '2330': pd.DataFrame(index=pd.to_datetime([
+                '2020-12-31', '2021-01-04', '2021-12-29',
+                '2021-12-30', '2022-01-03', '2022-01-04',
+            ])),
+        }
+        positions = {
+            '006205': {'2020-12-30', '2021-12-20'},
+            '2330': {'2020-12-31', '2021-12-29', '2021-12-30'},
+        }
+        p2021 = SimpleNamespace(use_breakout_quality_filter=False,
+                                use_breakout_quality_ranking=False)
+        p2022 = SimpleNamespace(use_breakout_quality_filter=False,
+                                use_breakout_quality_ranking=False)
+        schedule = (
+            {'effective_date': '2021-01-01', 'effective_end_date': '2021-12-31',
+             'params_obj': p2021},
+            {'effective_date': '2022-01-01', 'effective_end_date': '2022-12-31',
+             'params_obj': p2022},
+        )
+
+        def signal_cache(frame, params, *, ticker):
+            flags = np.asarray([
+                day.strftime('%Y-%m-%d') in positions[ticker] for day in frame.index
+            ], dtype=bool)
+            return (np.zeros(len(frame)), flags, np.zeros(len(frame), dtype=bool),
+                    np.zeros(len(frame)))
+
+        def completed_trade(frame, *, ticker, signal_pos, params, **kwargs):
+            trade_day = frame.index[signal_pos + 1].strftime('%Y-%m-%d')
+            return SimpleNamespace(
+                reason='realized_net_profit', status='PASS', fill_date=trade_day,
+                entry_price=100.0, exit_date=trade_day, exit_price=101.0,
+                exit_reason='HORIZON_CLOSEOUT', realized_net_pnl=100.0,
+                realized_net_r=1.0, forced_closeout=True,
+            )
+
+        with patch.object(target, '_benchmark_calendar', return_value=(
+                calendar, {name: Path(f'/tmp/{name}.csv') for name in by_ticker})), \
+             patch.object(target, 'load_dataset_frame', side_effect=lambda path, ticker, min_rows:
+                          by_ticker[ticker].copy()), \
+             patch.object(target, '_schedule', return_value=schedule), \
+             patch.object(target, 'build_signal_cache', side_effect=signal_cache), \
+             patch.object(target, 'simulate_realized_trade_path_label',
+                          side_effect=completed_trade):
+            actual = target._build_seed_events(
+                root=ROOT, dataset='full', start='2021-01-01', cutoff='2022-02-28',
+                spec={**target._target_spec(self.definition), 'horizon_trading_bars': 1},
+                seed=11, kind='rolling_active_param_ensemble', base_params={},
+            )
+        assigned = {(row['ticker'], row['signal_date']): row['p16_effective_date']
+                    for row in actual['events']}
+        self.assertEqual(assigned, {
+            ('006205', '2020-12-30'): '2021-01-01',
+            ('006205', '2021-12-20'): '2022-01-01',
+            ('2330', '2020-12-31'): '2021-01-01',
+            ('2330', '2021-12-29'): '2021-01-01',
+            ('2330', '2021-12-30'): '2022-01-01',
+        })
+        self.assertEqual(actual['signal_events'], len(assigned))
+        self.assertEqual(actual['completed_trades'], len(assigned))
+        self.assertEqual(actual['excluded_events'], 0)
+        self.assertLess(actual['min_signal_date'], '2021-01-01')
+        scores = target._rank_seed_events(actual['events'])
+        self.assertEqual(set(scores), set(assigned))
+        self.assertTrue(all(math.isfinite(score) for score in scores.values()))
 
     def test_event_builder_counts_actual_net_r_without_fabricated_zeros(self):
         params, data, signals = fixture()

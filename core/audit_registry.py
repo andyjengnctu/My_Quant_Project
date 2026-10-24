@@ -117,6 +117,7 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                         "label_id": "LABEL-mintrade40_realized_net_r_v1",
                         "horizon_trading_bars": 40,
                         "cohort": "p16_min_signal_events",
+                        "signal_membership_policy": "next_observed_ticker_trade_day_p16_v1",
                         "enabled": True,
                     },
                 ),

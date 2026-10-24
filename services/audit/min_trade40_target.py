@@ -67,7 +67,8 @@ def _target_spec(definition) -> dict[str, Any]:
             str(spec.get("label_id")) != TARGET_ID or
             type(spec.get("horizon_trading_bars")) is not int or
             int(spec["horizon_trading_bars"]) != TARGET_HORIZON_SESSIONS or
-            spec.get("cohort") != "p16_min_signal_events"):
+            spec.get("cohort") != "p16_min_signal_events" or
+            spec.get("signal_membership_policy") != "next_observed_ticker_trade_day_p16_v1"):
         raise MinTrade40BlockedError("Min event Target 的科學身分／期限／母體契約無效")
     return spec
 
@@ -143,7 +144,11 @@ def _build_seed_events(
         if len(frame) < 2:
             continue
         dates = pd.DatetimeIndex(frame.index).normalize()
-        valid_dates = (dates >= pd.Timestamp(start)) & (dates <= last)
+        # AI: Portfolio normal_setup_index creates a candidate on the next
+        # observed ticker bar, not on the signal bar.  This also covers the
+        # previous year's final signal and suspended/illiquid tickers whose
+        # preceding observed bar is older than the prior benchmark session.
+        candidate_trade_dates = dates[1:]
         for record in schedules:
             params = record["params_obj"]
             # All-off, no DL ranking is guaranteed by the canonical P16 pair.
@@ -153,7 +158,14 @@ def _build_seed_events(
             effective = pd.Timestamp(record["effective_date"]).normalize()
             raw_end = record.get("effective_end_date")
             end_day = pd.Timestamp(raw_end).normalize() if raw_end is not None else last
-            active = np.flatnonzero(valid_dates & (dates >= effective) & (dates <= end_day))
+            # AI: The P16 member is resolved for the day the candidate first
+            # becomes tradable.  Filtering by signal_date would omit legitimate
+            # lookback signals (e.g. 2020-12-31 -> 2021-01-04), and would use
+            # the previous fold's params on year-end signals.
+            active = np.flatnonzero(
+                (candidate_trade_dates >= max(pd.Timestamp(start).normalize(), effective))
+                & (candidate_trade_dates <= min(last, end_day))
+            )
             if not len(active):
                 continue
             # Compute the same formal signal calculator as the A2/Min replay.
@@ -259,6 +271,7 @@ def _seed_identity(*, spec: Mapping[str, Any], dataset: str, price_sha: str,
         "cache_schema": CACHE_SCHEMA, "label_id": str(spec["label_id"]),
         "horizon_sessions": int(spec["horizon_trading_bars"]),
         "cohort": str(spec["cohort"]),
+        "signal_membership_policy": str(spec["signal_membership_policy"]),
         "source": "canonical P16 Base-Finalist-Best / Min no-DL",
         "trade_path_primitive": "A2 canonical signal/entry/exit/ledger v1 + 40D endpoint",
         "dataset": dataset, "price_sha256": price_sha,
