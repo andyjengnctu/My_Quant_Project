@@ -354,24 +354,55 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
     menu_state = collect_audit_menu_state(module_id, method_id=method_id)
     enabled = bool(menu_state["configured"])
     print(f"\n=== {method.menu_label} ===")
+    if method.menu_location == "research_root":
+        print("[Target 驗證｜前置] 先核對來源狀態與四 Seed P16 工件。", flush=True)
     print("\n" + render_audit_status(
         module_id, project_root=PROJECT_ROOT, method_id=method_id
     ))
     if not enabled:
         print("目前沒有啟用此Reusable module的參數設定；保留固定選單但本次不執行。")
         return 0
-    try:
-        confirm = input("👉 按 Enter 執行；輸入 0 返回：").strip().lower()
-    except EOFError:
-        return 0
-    if confirm in {"0", "q", "quit", "exit"}:
-        return 0
-    if confirm not in {"", "1"}:
-        print("輸入無效，本次不執行。")
-        return 0
-    run_enabled_audits(
-        module_id, project_root=PROJECT_ROOT, method_id=method_id
-    )
+    if method.menu_location == "research_root":
+        # AI: The formal Target method must show its VERIFIED, per-seed replay
+        # AI: plan before asking for execution approval. The canonical Audit
+        # AI: builds that plan exactly once; no Replay or report write precedes
+        # AI: this callback. Other reusable Audit methods keep their own flow.
+        class _UserCancelled(Exception):
+            pass
+
+        def confirm_after_preflight(_preview: str) -> None:
+            try:
+                answer = input("👉 已列出 REUSE／RUN／BLOCKED；按 Enter 執行；輸入 0 返回：").strip().lower()
+            except EOFError as exc:
+                raise _UserCancelled from exc
+            if answer in {"0", "q", "quit", "exit"}:
+                raise _UserCancelled
+            if answer not in {"", "1"}:
+                print("輸入無效，本次不執行。")
+                raise _UserCancelled
+
+        print("[Target 驗證] 正在核對 40D 真值、價格與歷史 Replay；此階段不執行 Replay。", flush=True)
+        try:
+            run_enabled_audits(
+                module_id, project_root=PROJECT_ROOT, method_id=method_id,
+                before_replay=confirm_after_preflight,
+            )
+        except _UserCancelled:
+            print("已取消本次執行；未執行 Replay，也未寫入正式報表。")
+            return 0
+    else:
+        try:
+            confirm = input("👉 按 Enter 執行；輸入 0 返回：").strip().lower()
+        except EOFError:
+            return 0
+        if confirm in {"0", "q", "quit", "exit"}:
+            return 0
+        if confirm not in {"", "1"}:
+            print("輸入無效，本次不執行。")
+            return 0
+        run_enabled_audits(
+            module_id, project_root=PROJECT_ROOT, method_id=method_id
+        )
     print("\n" + render_latest_audit_summary(
         module_id, project_root=PROJECT_ROOT, method_id=method_id
     ))

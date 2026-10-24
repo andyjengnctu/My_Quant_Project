@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from config.audit import AUDIT_OUTPUT_ROOT
 from core.audit_policy import (
@@ -320,6 +320,7 @@ def run_enabled_audits(
     quiet: bool = False,
     method_id: str | None = None,
     audit_id: str | None = None,
+    before_replay: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
     definitions = tuple(
@@ -329,6 +330,14 @@ def run_enabled_audits(
     )
     if not definitions:
         raise RuntimeError(f"config/audit.py沒有啟用任何{module_id} Audit")
+    # AI: A pre-replay approval belongs to the unique canonical producer, not
+    # AI: to a second Audit/UI execution path. Never confirm multiple jobs with
+    # AI: a single unseen plan, and never silently drop a requested callback.
+    if before_replay is not None and (
+        len(definitions) != 1
+        or not get_audit_handler(definitions[0]).preflight_confirmation
+    ):
+        raise ValueError("執行前 Replay 確認只能使用已宣告此能力的單一正式 Audit")
     validate_audit_catalog(
         (*get_audit_definitions(module_id), *get_reusable_audit_definitions(module_id))
     )
@@ -376,11 +385,10 @@ def run_enabled_audits(
     outputs: dict[str, Any] = {}
     for definition in definitions:
         spec = get_audit_handler(definition)
-        outputs[definition.audit_id] = spec.load_run_handler()(
-            definition,
-            project_root=root,
-            quiet=quiet,
-        )
+        kwargs: dict[str, Any] = {"project_root": root, "quiet": quiet}
+        if before_replay is not None:
+            kwargs["before_replay"] = before_replay
+        outputs[definition.audit_id] = spec.load_run_handler()(definition, **kwargs)
     return outputs
 
 

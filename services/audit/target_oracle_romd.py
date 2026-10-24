@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 import math
 
 import numpy as np
@@ -226,6 +226,7 @@ _ORACLE_PROVIDER_FIELDS = ("pure_mfe40_provider", "mfe20_d20_provider", "first_b
 
 def _market_truth_for_oracle(
     definition, root: Path, *, cutoff: str,
+    progress: Callable[[str], None] | None = None,
 ) -> tuple[dict[str, pd.DataFrame], dict[str, Any]]:
     """Materialize ex-post truth for the *replay* price universe, not DL samples.
 
@@ -287,7 +288,11 @@ def _market_truth_for_oracle(
     chunks = {field: [] for field in _ORACLE_PROVIDER_FIELDS}
     skipped = {}
     valid_counts = {field: 0 for field in _ORACLE_PROVIDER_FIELDS}
-    for ticker, path in paths.items():
+    if progress is not None:
+        progress(f"成熟真值檢查：0/{len(paths)} 檔價格路徑")
+    for index, (ticker, path) in enumerate(paths.items(), start=1):
+        if progress is not None and (index % 250 == 0 or index == len(paths)):
+            progress(f"成熟真值檢查：{index}/{len(paths)} 檔價格路徑")
         try:
             frame = (bench_frame if ticker == benchmark else load_dataset_frame(path, ticker, min_rows=1))
         except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError) as exc:
@@ -446,16 +451,18 @@ def _terminal_mae_gate_r(r40: pd.Series, safety_mae40: pd.Series, *, horizon: in
 
 def _build_oracle_score_panels(
     definition, *, project_root: Path, cutoff: str,
+    progress: Callable[[str], None] | None = None,
 ) -> tuple[dict[str, dict[tuple[str, str], float]], dict[str, Any]]:
     """Canonical hindsight truth; preserve existing 40D cohort for completed replay reuse."""
     root = Path(project_root).resolve()
     market, market_evidence = _market_truth_for_oracle(
-        definition, root, cutoff=cutoff,
+        definition, root, cutoff=cutoff, progress=progress,
     )
-    provider_truth = {
-        field: _load_truth(definition, root, field, cutoff=cutoff)
-        for field in _ORACLE_PROVIDER_FIELDS
-    }
+    provider_truth = {}
+    for field in _ORACLE_PROVIDER_FIELDS:
+        if progress is not None:
+            progress(f"核對 canonical provider：{field}")
+        provider_truth[field] = _load_truth(definition, root, field, cutoff=cutoff)
     complete = {}
     extra_rows = {}
     for field in _ORACLE_PROVIDER_FIELDS:
@@ -625,16 +632,27 @@ def render_replay_preflight(
     ))
 
 
-def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict[str, Any]:
+def build_report(
+    definition, *, project_root: Path, quiet: bool = False,
+    before_replay: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
     root = Path(project_root).resolve()
     settings, base_arm, exact_arm = _contract(definition)
     status = collect_status(definition, project_root=root)
     if status["status"] != "READY":
         raise OracleBlockedError(status["reason"])
     robustness, parameter_paths = _robustness_artifacts(definition, root)
+    def progress(message: str) -> None:
+        print(f"[Target 驗證｜前置] {message}", flush=True)
+
+    if not quiet:
+        progress("建立完整 REUSE/RUN/BLOCKED 計畫（未執行 Replay）")
     scores40, cohort40 = _build_oracle_score_panels(
         definition, project_root=root, cutoff=str(settings.end_date),
+        progress=None if quiet else progress,
     )
+    if not quiet:
+        progress("真值及共同樣本完成；檢查價格 SHA、P16 與 Replay Cache")
     direct_arm = _direct_arm(definition, settings, base_arm, exact_arm)
     start = str(settings.start_date)
     end40 = min(str(settings.end_date), str(cohort40["last_common_day"]))
@@ -783,13 +801,14 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
             for seed, _path in parameter_paths
             for name in ("C96", *(name for name, _desc in targets))
         }
+        preview = render_replay_preflight(
+            label=label,
+            seeds=[seed for seed, _path in parameter_paths],
+            targets=["C96", *(name for name, _desc in targets)],
+            decisions=decisions,
+        )
         if not quiet:
-            print("\n" + render_replay_preflight(
-                label=label,
-                seeds=[seed for seed, _path in parameter_paths],
-                targets=["C96", *(name for name, _desc in targets)],
-                decisions=decisions,
-            ))
+            print("\n" + preview, flush=True)
         if blocked:
             details = [f"{target} seed={seed}: {reason}"
                        for (seed, target), reason in blocked.items()]
@@ -797,6 +816,11 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
                 f"Oracle {label} REUSE preflight BLOCKED: "
                 f"{len(blocked)} conflict(s); " + " | ".join(details[:3])
             )
+        if before_replay is not None:
+            # AI: Authorization is requested only AFTER the completed plan is
+            # AI: visible, but BEFORE any cache promotion, Replay or report write.
+            # AI: The same verified identity/records continue into execution.
+            before_replay(preview)
 
         for seed, param_sha, kind, base_params, oracle_params in prepared:
             if not quiet:
@@ -972,11 +996,16 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
     return "\n".join(lines)
 
 
-def run_formal_audit(definition, *, project_root: Path, quiet: bool = False) -> dict[str, Any]:
+def run_formal_audit(
+    definition, *, project_root: Path, quiet: bool = False,
+    before_replay: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
     # Authorization, frozen schema, and historical snapshot must be checked
     # before initiating the costly hindsight-only portfolio replays.
     approved = require_approved_report_contract("audit.target_oracle_romd")
-    payload = dict(build_report(definition, project_root=project_root, quiet=quiet))
+    payload = dict(build_report(
+        definition, project_root=project_root, quiet=quiet, before_replay=before_replay,
+    ))
     payload["report_contract_id"] = f"{approved.report_id}@v{approved.version}"
     payload["report_contract_fingerprint"] = persistent_report_contract_fingerprint(approved.report_id)
     console = render_result(payload, target="console")

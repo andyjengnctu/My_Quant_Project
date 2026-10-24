@@ -25,6 +25,7 @@ class AuditCatalogEntry:
     run_function: str | None = None
     cli_command: str | None = None
     preparation_function: str | None = None
+    preflight_confirmation: bool = False
 
     @property
     def formal(self) -> bool:
@@ -153,6 +154,7 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         description="Reusable hindsight Oracle Ground Truth -> Broker-Cash RoMD (NON-PIT)",
         read_only=True, method_id="target_ground_truth_strategy_romd",
         status_function="collect_status", run_function="run_formal_audit",
+        preflight_confirmation=True,
     ),
     "portfolio_drawdown_attribution": AuditCatalogEntry(
         audit_type="portfolio_drawdown_attribution",
@@ -226,6 +228,8 @@ def validate_audit_catalog(definitions: tuple[AuditDefinition, ...] = ()) -> Non
             raise ValueError(f"Audit catalog欄位不可空白: {key}")
         if entry.formal and (not entry.status_function or not entry.run_function or not entry.read_only):
             raise ValueError(f"Formal Audit catalog contract不完整: {key}")
+        if entry.preflight_confirmation and (not entry.formal or not entry.method_id):
+            raise ValueError(f"Replay preflight confirmation僅能宣告於正式Audit: {key}")
         if entry.formal:
             if not entry.method_id:
                 raise ValueError(f"Formal Audit必須綁定method_id: {key}")

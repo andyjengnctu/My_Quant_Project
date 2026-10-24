@@ -889,3 +889,9 @@ Direct-account BUY provenance is owned by `services/trading/account_trade_entry.
 - GPT targeted assertions are **not** the Windows formal suite; run `apps/run_bundle.py` locally after applying the patch. Truly atomic replacement of an entire multi-file `latest/` view for uncoordinated third-party readers would require an explicit compatibility contract/pointer migration and is **not** claimed here.
 
 共用 latest binary publisher 以平台原有文字寫入語意保持換行位元組（Windows CRLF／POSIX LF）；不可因發布器重構改寫歷史 bytes 或 JSON SHA。Runtime Promotion 的 latest 雙檔亦共用此 publisher，正式 Audit 讀取 Strategy Compare latest 時取得相同發布鎖；Audit／Promotion 同秒歷史輸出以唯一目錄保護，不覆寫已存在工件。
+
+### 2026-10-24 — Research [1] Target 驗證的 Replay preflight／確認邊界
+
+- **正式入口／順序**：Research `[1] Target 驗證` 使用現有 `services/audit/runner.py` 與單一 `services/audit/target_oracle_romd.py` canonical handler。先讀取只讀上游真值、價格 SHA、每 Seed P16 及 replay cache，列出完整 Target × Seed 的 `REUSE／RUN／BLOCKED` 及合計，**再**要求一次 Enter 確認；未確認之前不得進行 Broker-Cash replay、legacy-cache promotion 或寫入正式人讀報表。
+- **一次規劃／同鏈消費**：每次互動只建立一份嚴格的 replay identity/compatibility decision matrix；確認 callback 位於 `apps/research.py` UI，透過 `AuditCatalogEntry.preflight_confirmation` 宣告的能力由共用 runner 轉交原 handler，禁止另外實作 quick-cache heuristic、第二組 Replay planner 或改動 scientific identity。`0`／EOF 取消不得發布結果；真正的 `BLOCKED` 要在確認前 fail-closed，不得顯示為可執行。
+- **可見進度／報表界線**：讀取全市場已成熟 40D 真值可能耗時，preflight 階段顯示按股票數與 canonical provider 的進度；狀態與耗時僅屬 console execution observability，`audit.target_oracle_romd@v6` frozen persistent report、metric、PIT/非PIT、四 Seed 與歷史 artifact bytes 均保持不變。Synthetic 驗證涵蓋取消後零 Replay／零發布、32 RUN、32 REUSE、conflict BLOCKED 與既有 Audit 的確認流程隔離；Windows 真實輸出仍由本機執行驗收。

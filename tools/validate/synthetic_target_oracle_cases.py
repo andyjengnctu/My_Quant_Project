@@ -86,6 +86,26 @@ class OracleAuditContractCases(TestCase):
             self.assertEqual(status["overall_status"], "BLOCKED")
             self.assertIn("full dataset", status["rows"][0]["reason"])
 
+    def test_formal_runner_forwards_preflight_approval_only_to_declared_canonical_owner(self):
+        from services.audit import runner
+        seen = []
+        callback = lambda plan: seen.append(plan)
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(runner, "collect_audit_status", return_value={"overall_status": "READY"}), \
+             patch.object(oracle, "run_formal_audit", return_value={"status": "COMPLETED"}) as execute:
+            result = runner.run_enabled_audits(
+                "breakout_quality", project_root=Path(tmp),
+                method_id=oracle.SUPPORTED_AUDIT_TYPE, before_replay=callback,
+            )
+            self.assertEqual(result["target_oracle_romd"]["status"], "COMPLETED")
+            self.assertIs(execute.call_args.kwargs["before_replay"], callback)
+            with self.assertRaisesRegex(ValueError, "執行前 Replay 確認"):
+                runner.run_enabled_audits(
+                    "breakout_quality", project_root=Path(tmp),
+                    method_id="opportunity_selection_attribution", before_replay=callback,
+                )
+            self.assertEqual(seen, [], "runner must not preapprove or call application input")
+
     def test_preflight_action_matrix_and_canonical_best_worst_metric_colors(self):
         from core.research_report_contract import report_contract
         from services.audit.reusable_report import format_comparison_rows
@@ -1263,6 +1283,67 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 self.assertTrue(canonical_path.exists(), "v2 alias must be persistently reusable")
                 self.assertEqual(json.loads(canonical_path.read_text(encoding="utf-8"))["origin"],
                                  "verified_legacy_replay_cache")
+
+    def test_before_replay_confirmation_is_after_full_preflight_and_before_any_side_effect(self):
+        # AI: The same verified 4-seed/8-target plan authorizes execution. A
+        # AI: user cancellation must not create a cache, run Broker-Cash or
+        # AI: persist a misleading current report.
+        seeds = (11, 22, 33, 44)
+        class Benchmark:
+            benchmark_id = "end_to_end_v1"
+
+        class Cancelled(Exception):
+            pass
+
+        definition = next(d for d in get_reusable_audit_definitions("breakout_quality")
+                          if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
+        events = []
+
+        def replay(*, name, **_kwargs):
+            events.append("replay")
+            return {"name": name}
+
+        def metrics(result, *, target):
+            seed = int(result["name"].split("seed=")[1].split()[0])
+            return self._observation(target, seed)
+
+        def refuse(preview):
+            self.assertIn("REUSE 0 / RUN（需計算）32 / BLOCKED 0", preview)
+            self.assertEqual(events, ["preflight"])
+            raise Cancelled
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
+                 patch.object(oracle, "_robustness_artifacts", return_value=(Benchmark(), [(seed, Path(f"seed_{seed}.json")) for seed in seeds])), \
+                 patch.object(oracle, "_build_oracle_score_panels", return_value=_mock_panels({"cohort_rows": 4, "last_common_day": "2025-12-22"})) as panels, \
+                 patch.object(oracle, "load_strategy_param_evaluation_view", return_value=({"kind": "rolling_active_param_ensemble", "payload": {}}, "a" * 64)), \
+                 patch.object(oracle, "_validate_requested_param_policy"), \
+                 patch.object(oracle, "get_active_param_ensemble_date_range", return_value=("2020-01-01", "2026-03-02")), \
+                 patch.object(oracle, "_build_controlled_param_source_pair", return_value=("rolling_active_param_ensemble", "base", "oracle", None, None, None)), \
+                 patch.object(oracle, "price_inventory_sha256", return_value="b" * 64), \
+                 patch.object(oracle, "_run_scenario", side_effect=replay), \
+                 patch.object(oracle, "_metrics", side_effect=metrics), \
+                 patch.object(oracle, "persist_reusable_report") as persist:
+                def before(preview):
+                    events.append("preflight")
+                    refuse(preview)
+                with self.assertRaises(Cancelled):
+                    oracle.run_formal_audit(definition, project_root=root, quiet=True, before_replay=before)
+                self.assertEqual(events, ["preflight"])
+                self.assertEqual(panels.call_count, 1)
+                persist.assert_not_called()
+                self.assertFalse((root / "outputs/audit").exists())
+
+                events.clear()
+                def accept(preview):
+                    events.append("preflight")
+                    self.assertIn("REUSE 0 / RUN（需計算）32 / BLOCKED 0", preview)
+                result = oracle.build_report(definition, project_root=root, quiet=True, before_replay=accept)
+                self.assertEqual(events[0], "preflight")
+                self.assertEqual(events.count("replay"), 32)
+                self.assertEqual(result["status"], "COMPLETED")
+                self.assertEqual(panels.call_count, 2)
 
     def test_completed_schema6_report_restores_all_32_units_without_per_arm_cache(self):
         from core.report_contract_versions import load_report_contract_versions
