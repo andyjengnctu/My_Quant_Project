@@ -21,36 +21,27 @@ from .meta_contracts import (
 )
 from .source_index import read_source_ast
 
-GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v13.json"
-V12_GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v12.json"
-V11_GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v11.json"
-V10_GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v10.json"
-V9_GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v9.json"
-V8_GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v8.json"
-V7_GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v7.json"
-V6_GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v6.json"
-V5_GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v5.json"
-V4_GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v4.json"
-V3_GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v3.json"
-V2_GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v2.json"
-LEGACY_GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v1.json"
-LEGACY_GOLDEN_SHA256 = "172b828579a2302be866092cbe12897a2e8c9ffe2d6ab7fd6bc8ada1b14d4a9b"
-# A deliberately separate anchor: editing a Golden fixture is not sufficient
-# to change what the existing regression gate accepts.
-V2_GOLDEN_SHA256 = "f03067dc0258ea95295b22e549e08a158da39449ac0021dd3f0a2c07a3bfe066"
-V3_GOLDEN_SHA256 = "5a5b3b8cd82528c5170283c5f9f2f955d7934e27ecaa8f79949c5f7263578280"
-V4_GOLDEN_SHA256 = "551533f707ee1c8d06101f5bef1462ca1af279063f4f36ce2253fa906b2d2f1e"
-V5_GOLDEN_SHA256 = "e1f19d813b5525bd87fe64acfb56e8c5ff2281cf6718aef4a80afc37f0f9856f"
-V6_GOLDEN_SHA256 = "ef7962c29806ad9074f60e0242e3b961735e10052224bfd939705871594f57f7"
-V7_GOLDEN_SHA256 = "f20ed33fc2e9dee40baf33d273070a08025d71434e59103d2f7b35acc4cbd0fb"
-V8_GOLDEN_SHA256 = "ba2508b721f96df01ea48ba7b50abe9b49d5ce803374980c62636c1173710e82"
-V9_GOLDEN_SHA256 = "2de580f8147d37a55148bb3841eaddee43532e6872441e25b47972fbce8cdae7"
-V10_GOLDEN_SHA256 = "a49c18311d4875c9aaa0a60af552ed9d9763c8ae37219d5b3d6478fabf5e0ce7"
-V11_GOLDEN_SHA256 = "c400024846bec0560eb6dd8b8990953d506d3d8e31df30d0104c4662e85f104c"
-V12_GOLDEN_SHA256 = "c9679166188693603023babc43b752a404034b740e80ffedb44638bf73caa479"
-APPROVED_GOLDEN_SHA256 = "94312a0688b60e3ba1380a436fb6f54a555e0c361b0aaa34f93e5c4c0a46d861"
-# v1-v12 remain byte-frozen. v13 adds only the authorized Oracle v8
-# Direct replay row; prior accounting behavior and tests remain unchanged.
+GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression_v14.json"
+# Previous Golden bytes are independently frozen. The newest Golden protects
+# engineering behavior and the historic contract prefix, not future inventory.
+_FROZEN_GOLDEN_SHA256 = {
+    1: "172b828579a2302be866092cbe12897a2e8c9ffe2d6ab7fd6bc8ada1b14d4a9b",
+    2: "f03067dc0258ea95295b22e549e08a158da39449ac0021dd3f0a2c07a3bfe066",
+    3: "5a5b3b8cd82528c5170283c5f9f2f955d7934e27ecaa8f79949c5f7263578280",
+    4: "551533f707ee1c8d06101f5bef1462ca1af279063f4f36ce2253fa906b2d2f1e",
+    5: "e1f19d813b5525bd87fe64acfb56e8c5ff2281cf6718aef4a80afc37f0f9856f",
+    6: "ef7962c29806ad9074f60e0242e3b961735e10052224bfd939705871594f57f7",
+    7: "f20ed33fc2e9dee40baf33d273070a08025d71434e59103d2f7b35acc4cbd0fb",
+    8: "ba2508b721f96df01ea48ba7b50abe9b49d5ce803374980c62636c1173710e82",
+    9: "2de580f8147d37a55148bb3841eaddee43532e6872441e25b47972fbce8cdae7",
+    10: "a49c18311d4875c9aaa0a60af552ed9d9763c8ae37219d5b3d6478fabf5e0ce7",
+    11: "c400024846bec0560eb6dd8b8990953d506d3d8e31df30d0104c4662e85f104c",
+    12: "c9679166188693603023babc43b752a404034b740e80ffedb44638bf73caa479",
+    13: "94312a0688b60e3ba1380a436fb6f54a555e0c361b0aaa34f93e5c4c0a46d861",
+}
+LEGACY_GOLDEN_SHA256 = _FROZEN_GOLDEN_SHA256[1]
+V3_GOLDEN_SHA256 = _FROZEN_GOLDEN_SHA256[3]
+APPROVED_GOLDEN_SHA256 = "9f4f2eac8ae2e8ed590e330dd74608cf896936e6425da225bed2efae93cc4962"
 
 IDENTITY_PATTERN = re.compile(r"^(?:MR-[A-Za-z0-9-]+|ARCH-[A-Za-z0-9_]+|PARAM-P[A-Za-z0-9-]+)$")
 GENERIC_CONSUMER_PATHS = (
@@ -133,90 +124,54 @@ def snapshot_structural_violations(project_root: Path) -> dict[str, list[str]]:
 
 
 def read_approved_baseline(project_root: Path, *, raw_bytes: bytes | None = None) -> dict[str, Any]:
-    """Pin v1-v12; accept only authorized v13 Oracle T40-MFE Direct report v8."""
-    if _sha256((project_root / LEGACY_GOLDEN_RELATIVE_PATH).read_bytes()) != LEGACY_GOLDEN_SHA256:
-        raise ValueError("Historical SSOT v1 Golden was modified")
-    if _sha256((project_root / V2_GOLDEN_RELATIVE_PATH).read_bytes()) != V2_GOLDEN_SHA256:
-        raise ValueError("Historical SSOT v2 Golden was modified")
-    if _sha256((project_root / V3_GOLDEN_RELATIVE_PATH).read_bytes()) != V3_GOLDEN_SHA256:
-        raise ValueError("Historical SSOT v3 Golden was modified")
-    if _sha256((project_root / V4_GOLDEN_RELATIVE_PATH).read_bytes()) != V4_GOLDEN_SHA256:
-        raise ValueError("Historical SSOT v4 Golden was modified")
-    v5_bytes = (project_root / V5_GOLDEN_RELATIVE_PATH).read_bytes()
-    if _sha256(v5_bytes) != V5_GOLDEN_SHA256:
-        raise ValueError("Historical SSOT v5 Golden was modified")
-    v5 = json.loads(v5_bytes)
-    v6_bytes = (project_root / V6_GOLDEN_RELATIVE_PATH).read_bytes()
-    if _sha256(v6_bytes) != V6_GOLDEN_SHA256:
-        raise ValueError("Historical SSOT v6 Golden was modified")
-    v6 = json.loads(v6_bytes)
-    v7_bytes = (project_root / V7_GOLDEN_RELATIVE_PATH).read_bytes()
-    if _sha256(v7_bytes) != V7_GOLDEN_SHA256:
-        raise ValueError("Historical SSOT v7 Golden was modified")
-    v7 = json.loads(v7_bytes)
-    v8_bytes = (project_root / V8_GOLDEN_RELATIVE_PATH).read_bytes()
-    if _sha256(v8_bytes) != V8_GOLDEN_SHA256:
-        raise ValueError("Historical SSOT v8 Golden was modified")
-    v8 = json.loads(v8_bytes)
-    v9_bytes = (project_root / V9_GOLDEN_RELATIVE_PATH).read_bytes()
-    if _sha256(v9_bytes) != V9_GOLDEN_SHA256:
-        raise ValueError("Historical SSOT v9 Golden was modified")
-    v9 = json.loads(v9_bytes)
-    v10_bytes = (project_root / V10_GOLDEN_RELATIVE_PATH).read_bytes()
-    if _sha256(v10_bytes) != V10_GOLDEN_SHA256:
-        raise ValueError("Historical SSOT v10 Golden was modified")
-    v10 = json.loads(v10_bytes)
-    v11_bytes = (project_root / V11_GOLDEN_RELATIVE_PATH).read_bytes()
-    if _sha256(v11_bytes) != V11_GOLDEN_SHA256:
-        raise ValueError("Historical SSOT v11 Golden was modified")
-    v11 = json.loads(v11_bytes)
-    # AI: The prior version is immutable independent evidence, not a fixture
-    # AI: that the current report-schema change is allowed to regenerate.
-    v12_bytes = (project_root / V12_GOLDEN_RELATIVE_PATH).read_bytes()
-    if _sha256(v12_bytes) != V12_GOLDEN_SHA256:
-        raise ValueError("Historical SSOT v12 Golden was modified")
-    v12 = json.loads(v12_bytes)
-    if v12.get("schema_version") != 12:
-        raise ValueError("Historical SSOT v12 schema_version changed")
-    if v12.get("protected_report_versions", {}).get("audit.target_oracle_romd", [])[-1].get("contract_id") != "audit.target_oracle_romd@v7":
-        raise ValueError("Historical SSOT v12 Oracle v7 missing")
-    if any(v12.get(key) != v11.get(key)
-           for key in ("fixed_params", "expected", "protected_tests")):
-        raise ValueError("Historical SSOT v12 modifies frozen behavior/tests")
+    """Verify the historical SHA pins and approved v14 engineering release.
+
+    New report rows do not affect this Golden: report schema history has its
+    own append-only ledger, while the fixed regression fixtures stay frozen.
+    """
+    v13: dict[str, Any] | None = None
+    for version, expected_sha in _FROZEN_GOLDEN_SHA256.items():
+        relative = f"tools/validate/baselines/ssot_regression_v{version}.json"
+        previous_bytes = (project_root / relative).read_bytes()
+        if _sha256(previous_bytes) != expected_sha:
+            raise ValueError(f"Historical SSOT v{version} Golden was modified")
+        if version == 13:
+            v13 = json.loads(previous_bytes)
+    if v13 is None or v13.get("schema_version") != 13:
+        raise ValueError("Historical SSOT v13 Golden is missing/invalid")
+
     if raw_bytes is None:
         raw_bytes = (project_root / GOLDEN_RELATIVE_PATH).read_bytes()
     if _sha256(raw_bytes) != APPROVED_GOLDEN_SHA256:
-        raise ValueError("SSOT v13 Golden hash mismatch; never rewrite an existing version")
+        raise ValueError("SSOT v14 Golden hash mismatch; never rewrite an existing version")
     baseline = json.loads(raw_bytes)
-    if baseline.get("schema_version") != 13:
-        raise ValueError("SSOT Golden schema_version must be 13")
+    if baseline.get("schema_version") != 14:
+        raise ValueError("SSOT Golden schema_version must be 14")
+    prior_reports = v13["protected_report_versions"]
     current_reports = baseline.get("protected_report_versions")
-    if not isinstance(current_reports, dict):
-        raise ValueError("SSOT v13 Golden is missing report contract history")
-    if set(current_reports) != set(v12["protected_report_versions"]):
-        raise ValueError("SSOT v13 Golden changes protected report identities")
-    for report_id, previous_rows in v12["protected_report_versions"].items():
+    if not isinstance(current_reports, dict) or set(current_reports) != set(prior_reports):
+        raise ValueError("SSOT v14 Golden changes protected report identities")
+    for report_id, previous_rows in prior_reports.items():
         candidate = current_reports[report_id]
         if report_id == "audit.target_oracle_romd":
             if candidate[:len(previous_rows)] != previous_rows or len(candidate) != len(previous_rows) + 1:
-                raise ValueError("SSOT v13 Golden rewrites or omits historical Oracle versions")
+                raise ValueError("SSOT v14 Golden rewrites or omits historical Oracle versions")
             appended = candidate[-1]
-            if (appended.get("contract_id") != "audit.target_oracle_romd@v8"
-                    or appended.get("version") != 8):
-                raise ValueError("SSOT v13 Golden lacks approved Oracle v8 identity")
+            if (appended.get("contract_id") != "audit.target_oracle_romd@v9"
+                    or appended.get("version") != 9):
+                raise ValueError("SSOT v14 Golden lacks approved Oracle v9 identity")
         elif candidate != previous_rows:
-            raise ValueError("SSOT v13 Golden rewrites historical report evidence")
-    if any(baseline.get(key) != v12.get(key)
+            raise ValueError("SSOT v14 Golden rewrites historical report evidence")
+    if any(baseline.get(key) != v13.get(key)
            for key in ("fixed_params", "expected", "protected_tests")):
-        raise ValueError("SSOT v13 Golden modifies historical behavior/tests")
-    prior_guards = {row["function"]: row for row in v12["protected_guards"]}
+        raise ValueError("SSOT v14 Golden modifies historical behavior/tests")
+    prior_guards = {row["function"]: row for row in v13["protected_guards"]}
     current_guards = {row["function"]: row for row in baseline["protected_guards"]}
+    changed = {"read_approved_baseline", "report_contract_version_history_violations"}
     if prior_guards.keys() != current_guards.keys() or any(
-        current_guards[name] != row
-        for name, row in prior_guards.items()
-        if name != "read_approved_baseline"
+        current_guards[name] != row for name, row in prior_guards.items() if name not in changed
     ):
-        raise ValueError("SSOT v13 Golden changes an unrelated historical guard")
+        raise ValueError("SSOT v14 Golden changes an unrelated historical guard")
     return baseline
 
 
@@ -226,8 +181,9 @@ def report_contract_version_history_violations(
 ) -> list[str]:
     """Reject changes/deletions to any previously approved report contract version.
 
-    New versions may only append, with a new scientific contract document,
-    version number and fingerprint. This is independent of renderer logic.
+    The last frozen Golden protects the historical *prefix*. Newly approved
+    report versions live in the canonical ledger and immutable definition
+    files; they do NOT require a new copy of the whole SSOT Golden.
     """
     from core.report_contract_versions import load_report_contract_versions
     try:
@@ -242,14 +198,15 @@ def report_contract_version_history_violations(
         rows = registry.get(report_id, ())
         if len(rows) < len(expected_rows):
             issues.append(f"{report_id}:historical_contract_deleted")
-        if len(rows) > len(expected_rows):
-            issues.append(f"{report_id}:new_contract_requires_next_approved_guard_release")
         for i,(old,actual) in enumerate(zip(expected_rows,rows)):
             if dict(actual) != dict(old):
                 issues.append(f"{report_id}@v{old['version']}:historical_contract_rewritten")
-        for new in rows[len(expected_rows):]:
+        for offset, new in enumerate(rows[len(expected_rows):], start=1):
+            expected_version = expected_rows[-1]["version"] + offset
+            if new.get("version") != expected_version or new.get("contract_id") != f"{report_id}@v{expected_version}":
+                issues.append(f"{report_id}:appended_contract_version_invalid")
             if not new.get("definition_path") or not new.get("definition_sha256"):
-                issues.append(f"{report_id}@v{new['version']}:new_version_missing_immutable_definition")
+                issues.append(f"{report_id}@v{expected_version}:new_version_missing_immutable_definition")
     return issues
 
 

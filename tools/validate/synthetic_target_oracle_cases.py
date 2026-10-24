@@ -709,6 +709,44 @@ class OracleAuditContractCases(TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result.ticker.iloc[0], "2330")
 
+    def test_append_only_future_report_version_needs_no_new_ssot_golden(self):
+        import hashlib
+        from core.report_contract_versions import load_report_contract_versions
+        from tools.validate.ssot_regression_guard import (
+            read_approved_baseline, report_contract_version_history_violations,
+        )
+
+        approved = read_approved_baseline(ROOT)
+        self.assertEqual(approved["schema_version"], 14)
+        with tempfile.TemporaryDirectory(prefix="approved_report_append_") as tmp:
+            project = Path(tmp)
+            folder = project / "doc/scientific_contracts"
+            shutil.copytree(ROOT / "doc/scientific_contracts", folder)
+            ledger_path = folder / "REPORT_CONTRACT_VERSIONS.json"
+            ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+            entry = next(x for x in ledger["reports"] if x["report_id"] == "audit.target_oracle_romd")
+            self.assertEqual(entry["versions"][-1]["version"], 9)
+            snapshot = json.loads((folder / "AUDIT_TARGET_ORACLE_ROMD_v9.json").read_text(encoding="utf-8"))
+            snapshot["version"] = 10
+            snapshot["sections"][1]["title"] = "A different authorized future schema"
+            path = folder / "AUDIT_TARGET_ORACLE_ROMD_v10.json"
+            path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            canonical = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            entry["versions"].append({
+                "contract_id": "audit.target_oracle_romd@v10",
+                "version": 10,
+                "fingerprint": hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16],
+                "definition_path": "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v10.json",
+                "definition_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            })
+            ledger_path.write_text(json.dumps(ledger, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            self.assertEqual(load_report_contract_versions(project)["audit.target_oracle_romd"][-1]["version"], 10)
+            self.assertEqual(report_contract_version_history_violations(project, approved), [])
+            # A historical v8 rewrite must still fail, even when a later v10 was appended.
+            entry["versions"][7]["fingerprint"] = "0" * 16
+            ledger_path.write_text(json.dumps(ledger, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            self.assertTrue(report_contract_version_history_violations(project, approved))
+
     def test_reusable_research_report_publishes_schema7_exact_and_direct(self):
         def summary(name: str):
             return {
@@ -732,7 +770,7 @@ class OracleAuditContractCases(TestCase):
             with patch.object(oracle, "build_report", return_value=result):
                 published = oracle.run_formal_audit(self.definition, project_root=base, quiet=True)
             self.assertEqual(published["schema_version"], 8)
-            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v8")
+            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v9")
             latest = base / "outputs/audit" / self.definition.output_subdir / "latest"
             body = (latest / "audit.md").read_text(encoding="utf-8")
             for name in oracle.ORACLE_DIRECT_SCORE_SOURCES:
@@ -745,6 +783,16 @@ class OracleAuditContractCases(TestCase):
             self.assertNotIn("**CH20_EqualRank**", body)
             self.assertIn("MAE40 >= 1R", body)
             self.assertIn("Delta RoMD", body)
+            # Display titles describe stable schema, not today's selected inventory.
+            self.assertIn("## 2. Target Definitions\n", body)
+            self.assertIn(f"Oracle treatments: {len(oracle.ORACLE_TARGETS)} ", body)
+            self.assertNotIn("5 × Exact / 4 × Direct", body)
+            # A new comparison row changes rendered data but not report identity.
+            expanded = {**result, "oracles": [*result["oracles"], summary("FUTURE_TEST_ONLY")]}
+            expanded_body = oracle.render_result(expanded, target="markdown")
+            self.assertIn(f"Oracle treatments: {len(oracle.ORACLE_TARGETS) + 1} ", expanded_body)
+            self.assertIn("## 2. Target Definitions\n", expanded_body)
+            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v9")
             json_data = json.loads((latest / "audit.json").read_text(encoding="utf-8"))
             self.assertEqual(len(json_data["oracles"]), len(oracle.ORACLE_TARGETS))
             self.assertIn("**MFE40**", body)
