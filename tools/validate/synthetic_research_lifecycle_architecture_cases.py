@@ -2474,9 +2474,12 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
     # Shared FIT-origin preflight is a formal Research dependency capability,
     # not a manual audit command or an MR identity switch.
     from core.breakout_quality_policy import (
-        get_breakout_quality_model_test_settings as configured_models,
         get_breakout_quality_workflow_settings as configured_settings,
         get_breakout_quality_rolling_test_mode as configured_rolling_mode,
+    )
+    from core.breakout_quality_registry import (
+        SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
+        get_continuous_ranker_research_spec,
     )
     from services.breakout_quality.fit_origin_repair_plan import (
         FitOriginRepairCandidate, FitOriginRepairBlocker, plan_fit_origin_repairs,
@@ -2489,9 +2492,13 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
     )
     from services.research import breakout_quality_application as app
 
+    # AI: FIT-origin repair is a reusable capability even when the current
+    # Model Compare list has no predicted-context model. Use a registered
+    # fixture, then isolate it through the existing comparison mock below.
     external_profiles = [
-        (str(model_id), str(profile)) for model_id, profile in configured_models().model_profiles
-        if maybe_predicted_context_artifact_spec(context_source_for_profile(str(profile))) is not None
+        (get_continuous_ranker_research_spec(profile).model_research_id, profile)
+        for profile in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+        if maybe_predicted_context_artifact_spec(context_source_for_profile(profile)) is not None
     ]
     check_true("normal_research_repair_profile_registry_driven", bool(external_profiles))
     if external_profiles:

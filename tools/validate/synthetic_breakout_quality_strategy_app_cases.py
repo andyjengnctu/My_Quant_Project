@@ -1091,7 +1091,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             and not tuple(item.consensus_reference_arm_ids)
             and tuple(spec["contrast_id"] for spec in item.paired_contrasts)
             == extending_contrast_ids
-            and {"C77", "C80", "C81", "C82", "C83"}.issubset(set(item.model_seed_sensitive_arm_ids))
+            and set(item.model_seed_sensitive_arm_ids) == {
+                arm_id for arm_id in extending_arm_ids
+                if bool(strategy_config.STRATEGY_COMPARE_ARMS[arm_id].get("dl_enabled"))
+            }
             for item in extending_robustness
         ),
     )
@@ -1312,11 +1315,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         experiment_profile=str(ah_research_spec.profile_name)
     )
     check_true(
-        "mr13ah_historical_flags_remain_frozen_but_shared_list_authorizes_current_model_workflow",
+        "historical_source_flags_remain_frozen_and_current_model_scope_derives_from_model_test_list",
         ah_research_spec.selection_pit_authorized is False
         and ah_research_spec.current_time_validation_authorized is False
-        and ah_workflow_auth.rolling_authorized is True
-        and is_breakout_quality_model_test_profile(str(ah_research_spec.profile_name))
+        and ah_workflow_auth.rolling_authorized
+        == is_breakout_quality_model_test_profile(str(ah_research_spec.profile_name))
+        and ah_workflow_auth.robustness_authorized
+        == is_breakout_quality_model_test_profile(str(ah_research_spec.profile_name))
         and all(
             settings.dl_sources["CONT13AH_ROLL"].single_seed_strategy_conversion_authorized
             for settings in extending_settings_by_mode.values()
@@ -1658,9 +1663,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "--single-score-block" not in normal_args,
     )
 
+    # AI: Historical AH can leave the current Model Compare list without gaining
+    # generic PIT/robustness permission; derive the single-seed scope from SSOT.
     ah_dl = rolling_settings.dl_sources["CONT13AH_ROLL"]
     ah_workflow = get_breakout_quality_workflow_settings(
         experiment_profile=str(ah_dl.experiment_profile)
+    )
+    ah_shared_model_target = is_breakout_quality_model_test_profile(
+        str(ah_dl.experiment_profile)
     )
     ah_command, ah_args, _ = training_runtime.build_strategy_compare_trainer_command(
         source=ah_dl,
@@ -1669,27 +1679,53 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         strategy_compare_profile_id=str(rolling_settings.profile_id),
         resume=True,
     )
+    expected_scope_args = (
+        [] if ah_shared_model_target else [
+            "--strategy-compare-profile-id", str(rolling_settings.profile_id),
+            "--strategy-compare-source-id", str(ah_dl.dl_id),
+        ]
+    )
     check_true(
-        "ah_shared_model_target_uses_generic_model_workflow_scope_for_single_and_multiseed",
+        "strategy_compare_trainer_scope_tracks_current_model_test_membership",
         ah_command[:3]
         == [training_runtime.sys.executable, "-m", "services.breakout_quality.point_in_time_scores"]
-        and "--strategy-compare-profile-id" not in ah_args
-        and "--strategy-compare-source-id" not in ah_args
-        and ah_workflow.rolling_authorized is True,
+        and all(
+            (flag in ah_args) == bool(expected_scope_args)
+            for flag in ("--strategy-compare-profile-id", "--strategy-compare-source-id")
+        )
+        and (
+            not expected_scope_args
+            or all(
+                ah_args[ah_args.index(flag) + 1] == value
+                for flag, value in zip(expected_scope_args[::2], expected_scope_args[1::2])
+            )
+        )
+        and ah_workflow.rolling_authorized == ah_shared_model_target,
     )
-    ah_unscoped_command, ah_unscoped_args, _ = training_runtime.build_strategy_compare_trainer_command(
-        source=ah_dl,
-        workflow=ah_workflow,
-        seed=int(ah_workflow.seed),
-        strategy_compare_profile_id=None,
-        resume=True,
-    )
+    try:
+        ah_unscoped_command, ah_unscoped_args, _ = training_runtime.build_strategy_compare_trainer_command(
+            source=ah_dl,
+            workflow=ah_workflow,
+            seed=int(ah_workflow.seed),
+            strategy_compare_profile_id=None,
+            resume=True,
+        )
+    except ValueError as exc:
+        ah_unscoped_allowed = False
+        ah_unscoped_denied_for_scope = (
+            "只授權single-seed Strategy Compare conversion" in str(exc)
+        )
+    else:
+        ah_unscoped_allowed = (
+            ah_unscoped_command[:3]
+            == [training_runtime.sys.executable, "-m", "services.breakout_quality.point_in_time_scores"]
+            and "--strategy-compare-profile-id" not in ah_unscoped_args
+            and "--strategy-compare-source-id" not in ah_unscoped_args
+        )
+        ah_unscoped_denied_for_scope = False
     check_true(
-        "ah_shared_model_target_no_longer_needs_second_strategy_scope_selector",
-        ah_unscoped_command[:3]
-        == [training_runtime.sys.executable, "-m", "services.breakout_quality.point_in_time_scores"]
-        and "--strategy-compare-profile-id" not in ah_unscoped_args
-        and "--strategy-compare-source-id" not in ah_unscoped_args,
+        "generic_pit_scope_requires_current_model_test_membership",
+        ah_unscoped_allowed if ah_shared_model_target else ah_unscoped_denied_for_scope,
     )
     ak_dl = rolling_settings.dl_sources["CONT13AK_ROLL"]
     ak_workflow = get_breakout_quality_workflow_settings(

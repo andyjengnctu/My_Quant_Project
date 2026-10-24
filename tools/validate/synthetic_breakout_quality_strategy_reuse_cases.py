@@ -1721,7 +1721,16 @@ def append_model_robustness_pit_strategy_reuse_contract_checks(*, results, case_
     from services.research import strategy_multi_seed_robustness as robust
 
     settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
-    source = settings.dl_sources["CONT13AO_ROLL"]
+    # AI: Exercise REUSE with a currently authorized model source, not an
+    # archived identity that is still present in the compatibility catalog.
+    active_source_arms = tuple(
+        arm for arm in settings.enabled_arms
+        if arm.dl_enabled and arm.dl_id in settings.dl_sources
+    )
+    source = settings.dl_sources[active_source_arms[0].dl_id]
+    same_source_arms = tuple(
+        arm for arm in active_source_arms if arm.dl_id == source.dl_id
+    )
     workflow = get_breakout_quality_workflow_settings(
         experiment_profile=str(source.experiment_profile)
     )
@@ -1835,7 +1844,7 @@ def append_model_robustness_pit_strategy_reuse_contract_checks(*, results, case_
         # A preexisting Research score must bypass subprocess fitting, without
         # changing any Research [1] file or falsely completing strategy replay.
         job = {
-            "settings": settings, "dl_id": "CONT13AO_ROLL", "seed": seed,
+            "settings": settings, "dl_id": str(source.dl_id), "seed": seed,
             "model_dir": str(root / "strategy_local_model_absent"),
             "research_dir": str(root / "strategy_local_research_absent"),
             "comparison_start": "2021-01-01",
@@ -1860,7 +1869,7 @@ def append_model_robustness_pit_strategy_reuse_contract_checks(*, results, case_
         cfg = get_strategy_multi_seed_robustness_settings("broker_cash_dl_conversion_rolling")
         shared_root = Path(robust.PROJECT_ROOT / str(cfg.checkpoint_cache_root)).resolve()
         units = robust._training_units(
-            seeds=(seed,), stochastic_arms=(settings.arms["C99"], settings.arms["C101"]),
+            seeds=(seed,), stochastic_arms=same_source_arms,
             settings=settings, completed=set(), model_root=root / "strategy_model",
             run_root=root / "strategy_run", comparison_start="2021-01-01",
             comparison_end="2026-03-02", reuse_completed=True,
@@ -1869,12 +1878,13 @@ def append_model_robustness_pit_strategy_reuse_contract_checks(*, results, case_
         add_check(
             results, "synthetic_breakout_quality", case_id,
             "strategy_checkpoint_cache_uses_research_shared_fitting_identity_root_not_seed_silo",
-            True, len(units) == 1 and len(units[0]["replay_arms"]) == 2
+            True, len(units) == 1
+            and len(units[0]["replay_arms"]) == len(same_source_arms)
             and Path(units[0]["checkpoint_cache_root"]) == shared_root,
         )
 
-        # Execution-plan terminology must distinguish reused model evidence
-        # from still-pending scientific strategy observations for all six arms.
+        # AI: Verify execution-plan REUSE against the current dynamic arm set,
+        # rather than a frozen historic AO/CG/CH arm count.
         status = {
             "preparation_plan": SimpleNamespace(actions=()),
             "comparison_period": {"start": "2021-01-01", "end": "2026-03-02"},
@@ -1907,13 +1917,20 @@ def append_model_robustness_pit_strategy_reuse_contract_checks(*, results, case_
                     cfg=cfg, settings=settings, status=status,
                     fixed_arms=fixed_arms, stochastic_arms=strategy_arms,
                 )
+        model_replay_arms = tuple(
+            arm for arm in strategy_arms if arm.dl_enabled
+        )
+        unique_model_ids = {
+            arm.dl_id for arm in model_replay_arms
+        }
+        expected_reused_scores = len(unique_model_ids) * len(cfg.resolved_seeds)
         add_check(
             results, "synthetic_breakout_quality", case_id,
-            "six_arm_plan_reports_model_reuse_and_only_replays_new_strategy_scientific_units",
+            "active_arm_plan_reports_model_reuse_and_only_replays_new_strategy_scientific_units",
             True, reused_state["overall_status"] == "READY"
-            and reused_plan.count("REUSE+REPLAY") == 6
+            and reused_plan.count("REUSE+REPLAY") == len(model_replay_arms)
             and "0 待PIT／checkpoint確認" in reused_plan
-            and "Research模型score REUSE=12" in reused_plan
-            and missing_plan.count("TRAIN+REPLAY") == 6
+            and f"Research模型score REUSE={expected_reused_scores}" in reused_plan
+            and missing_plan.count("TRAIN+REPLAY") == len(model_replay_arms)
             and "Research模型score REUSE=0" in missing_plan,
         )
