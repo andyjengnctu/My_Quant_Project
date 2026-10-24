@@ -29,6 +29,38 @@ _REQUIRED_METRICS = (
 )
 
 
+_MISSING = object()
+
+
+def _changed_identity_fields(stored: Mapping[str, Any], expected: Mapping[str, Any]) -> tuple[str, ...]:
+    """Explain strict scientific identity inequality without relaxing the match."""
+    changes: list[str] = []
+
+    def visit(previous: Any, current: Any, field: str) -> None:
+        if isinstance(previous, dict) and isinstance(current, dict):
+            for key in sorted(previous.keys() | current.keys(), key=str):
+                visit(previous.get(key, _MISSING), current.get(key, _MISSING),
+                      f"{field}.{key}" if field else str(key))
+        elif previous != current:
+            changes.append(field)
+
+    visit(dict(stored), dict(expected), "")
+    return tuple(changes)
+
+
+def _identity_field_value(identity: Mapping[str, Any], field: str) -> str:
+    value: Any = identity
+    for key in field.split("."):
+        if not isinstance(value, dict) or key not in value:
+            return "<absent>"
+        value = value[key]
+    if isinstance(value, str) and is_sha256_hex(value):
+        return value[:16] + "..."
+    if isinstance(value, (list, dict)):
+        return f"<{type(value).__name__}>"
+    printable = repr(value)
+    return printable if len(printable) <= 100 else printable[:97] + "..."
+
 
 def price_inventory_sha256(project_root: Path, dataset: str) -> str:
     """Hash real Research OHLCV *bytes* (not timestamps or file existence)."""
@@ -103,6 +135,7 @@ class OracleReplayStore:
 
     def __init__(self, project_root: Path, output_subdir: str):
         root = Path(project_root).resolve()
+        self.project_root = root
         self.cache_root = root / AUDIT_OUTPUT_ROOT / Path(output_subdir) / "replay_cache"
 
     def _path(self, identity: Mapping[str, Any]) -> Path:
@@ -112,17 +145,18 @@ class OracleReplayStore:
             raise ValueError("Oracle invalid cache target")
         return self.cache_root / str(seed) / f"{target}_{canonical_json_sha256(identity)}.json"
 
-    def has_other_identity(self, identity: Mapping[str, Any]) -> bool:
-        """Block weaker legacy fallback after *same-panel* scientific drift.
+    def explain_other_identity(self, identity: Mapping[str, Any]) -> str | None:
+        """Describe incompatible completed siblings in the same replay panel.
 
-        Different mature horizon panels legitimately share C96/seed and cache
-        directory. Their distinct window/cohort must never disable report-based
-        reuse for the other panel. Within the same panel, changed input bytes,
-        params or replay policy must still block weaker historical fallback.
+        Distinct target names and horizon panels are not conflicts. This is
+        diagnostic only: none of the comparisons permits weaker artifact reuse.
         """
         path = self._path(identity)
         requested_cohort = identity.get("cohort") or {}
-        for candidate in path.parent.glob(f"{identity['target']}_*.json"):
+        if not isinstance(requested_cohort, dict):
+            raise ValueError("Oracle requested replay cohort is malformed")
+        conflicts: list[tuple[Path, dict[str, Any]]] = []
+        for candidate in sorted(path.parent.glob(f"{identity['target']}_*.json")):
             if candidate == path:
                 continue
             try:
@@ -130,26 +164,48 @@ class OracleReplayStore:
                 peer = payload["identity"]
                 if (payload.get("cache_schema") != _CACHE_SCHEMA
                         or not isinstance(peer, dict)
-                        or int(peer.get("seed", -1)) != int(identity["seed"])):
+                        or int(peer.get("seed", -1)) != int(identity["seed"])
+                        or payload.get("identity_sha256") != canonical_json_sha256(peer)
+                        or self._path(peer) != candidate):
                     raise ValueError("Oracle sibling replay cache identity malformed")
-                # A shorter target name can prefix a different valid target
-                # (R40_*.json also matches R40_Direct_*.json).
+                # R40_*.json also matches R40_Direct_*.json; they are distinct.
                 if peer.get("target") != identity["target"]:
-                    if not candidate.name.startswith(f"{peer.get('target')}_"):
-                        raise ValueError("Oracle sibling replay cache target/path mismatch")
                     continue
                 peer_cohort = peer.get("cohort") or {}
                 if not isinstance(peer_cohort, dict):
                     raise ValueError("Oracle sibling replay cache cohort malformed")
+                # A conflict must itself be complete, not an invented filename.
+                if self.read(peer) is None:
+                    raise ValueError("Oracle sibling replay cache is missing")
             except (OSError, ValueError, TypeError, KeyError, OverflowError) as exc:
-                raise ValueError("Oracle sibling replay cache is corrupt; fail closed") from exc
+                raise ValueError(
+                    f"Oracle sibling replay cache is corrupt; fail closed: "
+                    f"{candidate.relative_to(self.project_root).as_posix()}"
+                ) from exc
             if (peer.get("dataset") == identity["dataset"]
                     and peer.get("start_date") == identity["start_date"]
                     and peer.get("end_date") == identity["end_date"]
                     and peer_cohort.get("providers") == requested_cohort.get("providers")
                     and peer_cohort.get("scoring") == requested_cohort.get("scoring")):
-                return True
-        return False
+                conflicts.append((candidate, peer))
+        if not conflicts:
+            return None
+        # One canonical diff routine serves every branch/seed; report all field
+        # names, with concise stored/current values and one concrete source path.
+        examples: dict[str, str] = {}
+        for _candidate, peer in conflicts:
+            for field in _changed_identity_fields(peer, identity):
+                examples.setdefault(
+                    field, f"{field} [cache={_identity_field_value(peer, field)}, "
+                           f"current={_identity_field_value(identity, field)}]",
+                )
+        sample_path = conflicts[0][0].relative_to(self.project_root).as_posix()
+        return (f"{len(conflicts)} conflicting cache file(s); example={sample_path}; "
+                f"changed fields: {'; '.join(examples[name] for name in sorted(examples))}")
+
+    def has_other_identity(self, identity: Mapping[str, Any]) -> bool:
+        """Compatibility probe; explanation and matching have a single owner."""
+        return self.explain_other_identity(identity) is not None
 
     def read(self, identity: Mapping[str, Any]) -> dict[str, Any] | None:
         path = self._path(identity)

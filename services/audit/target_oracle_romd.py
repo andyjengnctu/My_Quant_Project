@@ -742,11 +742,12 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
                     record = cache.read(identity)
                     origin = "verified per-arm cache"
                     if record is None:
-                        if cache.has_other_identity(identity):
+                        conflict = cache.explain_other_identity(identity)
+                        if conflict is not None:
                             raise ValueError(
                                 f"same-window replay_cache has a DIFFERENT identity for "
-                                f"{target} seed={seed}; inspect cached data/param/settings/cohort/policy "
-                                f"before explicitly authorizing a new replay"
+                                f"{target} seed={seed}; {conflict}; "
+                                f"replay remains BLOCKED until provenance is verified"
                             )
                         record = archived.lookup(target=target, seed=seed, context=legacy_context)
                         origin = "compatible completed Oracle report"

@@ -521,7 +521,7 @@ class OracleAuditContractCases(TestCase):
                 # A scientifically different replay identity is NOT permission
                 # to silently run it again when matching-panel cache exists.
                 with patch.object(oracle, "price_inventory_sha256", return_value="c" * 64):
-                    with self.assertRaisesRegex(oracle.OracleBlockedError, "DIFFERENT identity"):
+                    with self.assertRaisesRegex(oracle.OracleBlockedError, "dataset_sha256.*cache="):
                         oracle.build_report(self.definition, project_root=Path(tmp), quiet=True)
                 self.assertEqual(len(seen), original_calls)
         self.assertEqual(len(seen), len(seeds) * (1 + len(oracle.ORACLE_TARGETS)))
@@ -647,7 +647,10 @@ class OracleReplayEvidenceReuseCases(TestCase):
         from services.audit.oracle_replay_artifacts import replay_identity
         return replay_identity(
             dataset="full", dataset_sha256=dataset_sha,
-            target=target, definition=dict(oracle.ORACLE_TARGETS),
+            target=target, definition={
+                "C96": "Canonical same-window Min P16 Base-Finalist-Best",
+                **dict(oracle.ORACLE_TARGETS),
+            },
             settings_fingerprint="fixture", start="2021-01-01", end="2025-12-22",
             benchmark="end_to_end_v1", param_sha256=param_sha, seed=seed,
             cohort={"cohort_rows": 123, "research_cutoff": "2026-03-02"},
@@ -689,6 +692,45 @@ class OracleReplayEvidenceReuseCases(TestCase):
             location.write_text(json.dumps(raw), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "corrupt"):
                 cache.read(identity)
+
+    def test_conflict_reports_exact_fields_and_relative_cache_path_without_replay(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        with tempfile.TemporaryDirectory() as tmp:
+            store = OracleReplayStore(Path(tmp), "breakout_quality/reusable/target_oracle_romd")
+            cached = self._identity(target="C96", dataset_sha="a" * 64, param_sha="b" * 64)
+            # Same dates and panel, but inputs and policy changed; never REUSE.
+            requested = {
+                **cached,
+                "dataset_sha256": "c" * 64,
+                "param_sha256": "d" * 64,
+                "cohort": {**cached["cohort"], "cohort_rows": 124},
+                "replay_policy": {**cached["replay_policy"], "exact_k_r0": False},
+            }
+            store.write(cached, self._observation("C96", 1), origin="canonical_replay")
+            message = store.explain_other_identity(requested)
+            self.assertIsNotNone(message)
+            for field in ("dataset_sha256", "param_sha256", "cohort.cohort_rows",
+                          "replay_policy.exact_k_r0"):
+                self.assertIn(field, message)
+            self.assertIn("outputs/audit/breakout_quality/reusable/target_oracle_romd/replay_cache/1/", message)
+            self.assertIn("cache=aaaaaaaaaaaaaaaa...", message)
+            self.assertIn("current=cccccccccccccccc...", message)
+            self.assertIsNone(store.read(requested))
+            self.assertEqual(store.read(cached), self._observation("C96", 1))
+            self.assertEqual(store.explain_other_identity(requested), message)
+
+    def test_unrelated_maturity_panel_does_not_block_baseline_reuse(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        with tempfile.TemporaryDirectory() as tmp:
+            store = OracleReplayStore(Path(tmp), "breakout_quality/reusable/target_oracle_romd")
+            identity = self._identity(target="C96")
+            different_panel = {
+                **identity,
+                "cohort": {**identity["cohort"], "providers": {"horizon": "60D"}},
+            }
+            store.write(different_panel, self._observation("C96", 1), origin="canonical_replay")
+            self.assertIsNone(store.explain_other_identity(identity))
+            self.assertFalse(store.has_other_identity(identity))
 
     def test_prefix_distinct_targets_are_not_cache_conflicts(self):
         from services.audit.oracle_replay_artifacts import OracleReplayStore
