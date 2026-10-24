@@ -710,7 +710,6 @@ class OracleAuditContractCases(TestCase):
         self.assertEqual(result.ticker.iloc[0], "2330")
 
     def test_retired_history_never_required_for_current_report_or_oracle_reuse(self):
-        from apps.package_zip import _should_skip
         from core.report_contract_versions import (
             load_report_contract_versions, validate_active_report_contract_versions,
         )
@@ -720,12 +719,6 @@ class OracleAuditContractCases(TestCase):
         from tools.validate.ssot_regression_guard import (
             read_approved_baseline, report_contract_version_history_violations,
         )
-
-        # A tracked nested ZIP cannot be accidentally packaged, with no
-        # special historical-archive code path.
-        self.assertTrue(_should_skip(Path("doc/scientific_contracts/CONTRACT_EVIDENCE_HISTORY.zip")))
-        self.assertFalse(_should_skip(Path("doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json")))
-        self.assertFalse(_should_skip(Path("tools/validate/baselines/ssot_regression.json")))
 
         with tempfile.TemporaryDirectory(prefix="standalone_report_contract_") as tmp:
             project = Path(tmp)

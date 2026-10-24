@@ -264,6 +264,8 @@ def validate_package_zip_runtime_contract_case(_base_params):
         (project_root / "pkg").mkdir()
         (project_root / "pkg" / "module.py").write_text("print('ok')\n", encoding="utf-8")
         (project_root / "README.md").write_text("demo\n", encoding="utf-8")
+        (project_root / "pkg" / "registry.json").write_text("{}\n", encoding="utf-8")
+        (project_root / "pkg" / "retired_backup.zip").write_bytes(b"nested-archive")
         (project_root / "pkg" / "__pycache__").mkdir()
         (project_root / "pkg" / "__pycache__" / "module.cpython-312.pyc").write_bytes(b"cache")
         (project_root / "busy" / "__pycache__").mkdir(parents=True)
@@ -283,7 +285,8 @@ def validate_package_zip_runtime_contract_case(_base_params):
             if args == ("ls-files", "--cached", "--others", "--exclude-standard", "-z"):
                 return SimpleNamespace(
                     stdout=(
-                        "pkg/module.py\0README.md\0"
+                        "pkg/module.py\0README.md\0pkg/registry.json\0"
+                        "pkg/retired_backup.zip\0"
                         "pkg/__pycache__/module.cpython-312.pyc\0"
                         "busy/__pycache__/busy.cpython-312.pyc\0orphan.pyc\0"
                     )
@@ -347,7 +350,7 @@ def validate_package_zip_runtime_contract_case(_base_params):
 
         with zipfile.ZipFile(new_zip_path) as zf:
             member_names = sorted(zf.namelist())
-        check("package_zip_zip_members", ["README.md", "pkg/module.py"], member_names)
+        check("package_zip_zip_members", ["README.md", "pkg/module.py", "pkg/registry.json"], member_names)
 
     summary["checks"] = len(results)
     return results, summary
