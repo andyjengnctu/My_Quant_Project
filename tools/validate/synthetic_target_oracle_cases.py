@@ -61,8 +61,11 @@ class OracleAuditContractCases(TestCase):
             collect_audit_menu_state("breakout_quality", method_id=oracle.SUPPORTED_AUDIT_TYPE)["enabled_count"], 1
         )
         self.assertEqual(
-            [x.method_id for x in get_audit_methods()].count(oracle.SUPPORTED_AUDIT_TYPE), 1
+            [x.method_id for x in get_audit_methods(menu_location="research_root")],
+            [oracle.SUPPORTED_AUDIT_TYPE],
         )
+        self.assertNotIn(oracle.SUPPORTED_AUDIT_TYPE,
+                         [x.method_id for x in get_audit_methods(menu_location="audit")])
         self.assertFalse(any(
             definition.audit_type == oracle.SUPPORTED_AUDIT_TYPE
             for definition in get_audit_definitions("breakout_quality")
@@ -82,6 +85,44 @@ class OracleAuditContractCases(TestCase):
             )
             self.assertEqual(status["overall_status"], "BLOCKED")
             self.assertIn("full dataset", status["rows"][0]["reason"])
+
+    def test_preflight_action_matrix_and_canonical_best_worst_metric_colors(self):
+        from core.research_report_contract import report_contract
+        from services.audit.reusable_report import format_comparison_rows
+        from core.report_style import best_worst_signals
+        from core.display_common import _strip_ansi
+        self.assertEqual(best_worst_signals({"a": 2, "b": 2}, preference="higher"), {})
+        perf = report_contract("audit.target_oracle_romd").sections[0].tables[0]
+        values = [
+            {"target": "X", "romd": 5.0, "mdd_pct": 20.0, "total_return_pct": 80},
+            {"target": "Y", "romd": 9.0, "mdd_pct": 8.0, "total_return_pct": 120},
+            {"target": "Z", "romd": 7.0, "mdd_pct": 12.0, "total_return_pct": 100},
+        ]
+        cells = format_comparison_rows(perf, values, target="markdown")
+        columns = {col.key: i for i, col in enumerate(perf.columns)}
+        self.assertIn("#188038", cells[1][columns["romd"]])
+        self.assertIn("#C62828", cells[0][columns["romd"]])
+        self.assertIn("#188038", cells[1][columns["mdd_pct"]])
+        self.assertIn("#C62828", cells[0][columns["mdd_pct"]])
+        self.assertNotIn("<span", cells[2][columns["romd"]])
+        self.assertNotIn("<span", cells[0][columns["target"]])
+        # Year-group values must not be compared to results from other years.
+        grouped = format_comparison_rows(perf, values, target="markdown", groups=["2022", "2022", "2023"])
+        self.assertNotIn("<span", grouped[2][columns["romd"]])
+        plan = oracle.render_replay_preflight(
+            label="40D", seeds=[11, 22], targets=["C96", "R40", "T40"],
+            decisions={
+                (11, "C96"): "REUSE", (22, "C96"): "REUSE",
+                (11, "R40"): "RUN", (22, "R40"): "REUSE",
+                (11, "T40"): "BLOCKED", (22, "T40"): "RUN",
+            },
+        )
+        plain = _strip_ansi(plan)
+        self.assertIn("S1=11", plain)
+        self.assertIn("S2=22", plain)
+        self.assertIn("REUSE 3 / RUN（需計算）2 / BLOCKED 1", plain)
+        self.assertLess(plain.index("C96"), plain.index("R40"))
+        self.assertLess(plain.index("R40"), plain.index("T40"))
 
     def test_persistent_contract_must_be_approved_before_replay(self):
         with patch.object(oracle, "require_approved_report_contract", side_effect=ValueError("UNAUTHORIZED")), \
@@ -448,7 +489,7 @@ class OracleAuditContractCases(TestCase):
             with patch.object(oracle, "build_report", return_value=result):
                 published = oracle.run_formal_audit(self.definition, project_root=base, quiet=True)
             self.assertEqual(published["schema_version"], 6)
-            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v5")
+            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v6")
             latest = base / "outputs/audit" / self.definition.output_subdir / "latest"
             body = (latest / "audit.md").read_text(encoding="utf-8")
             for name in oracle.ORACLE_DIRECT_SCORE_SOURCES:
@@ -1255,7 +1296,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 report.update({
                     "report_id": "target_oracle_romd", "report_type": oracle.SUPPORTED_AUDIT_TYPE,
                     "report_contract_id": "audit.target_oracle_romd@v5",
-                    "report_contract_fingerprint": load_report_contract_versions()["audit.target_oracle_romd"][-1]["fingerprint"],
+                    "report_contract_fingerprint": load_report_contract_versions()["audit.target_oracle_romd"][-2]["fingerprint"],
                 })
                 directory = root / "outputs/audit/breakout_quality/reusable/target_oracle_romd"
                 snapshot = directory / "20261024T104500Z"

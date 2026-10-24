@@ -64,6 +64,7 @@ class AuditMethodEntry:
     description: str
     order: int
     one_time_only: bool = False
+    menu_location: str = "audit"
 
 
 AUDIT_METHOD_CATALOG: dict[str, AuditMethodEntry] = {
@@ -87,14 +88,20 @@ AUDIT_METHOD_CATALOG: dict[str, AuditMethodEntry] = {
     ),
     "target_ground_truth_strategy_romd": AuditMethodEntry(
         method_id="target_ground_truth_strategy_romd",
-        menu_label="Target Ground Truth → Strategy RoMD (Oracle)",
+        menu_label="Target 驗證",
         description="Reusable hindsight-only Oracle RoMD comparison (never PIT or Trading)",
         order=100,
+        menu_location="research_root",
     ),
 }
 
-def get_audit_methods() -> tuple[AuditMethodEntry, ...]:
-    return tuple(sorted((m for m in AUDIT_METHOD_CATALOG.values() if not m.one_time_only), key=lambda item: item.order))
+def get_audit_methods(*, menu_location: str | None = None) -> tuple[AuditMethodEntry, ...]:
+    """One registry; each formal work type has exactly one interactive menu home."""
+    return tuple(sorted(
+        (m for m in AUDIT_METHOD_CATALOG.values()
+         if not m.one_time_only and (menu_location is None or m.menu_location == menu_location)),
+        key=lambda item: item.order,
+    ))
 
 def get_audit_method(method_id: str) -> AuditMethodEntry:
     key = str(method_id).strip()
@@ -209,6 +216,9 @@ def get_domain_cli_commands(domain: str) -> dict[str, AuditCatalogEntry]:
 def validate_audit_catalog(definitions: tuple[AuditDefinition, ...] = ()) -> None:
     seen_modules: set[tuple[str, str]] = set()
     seen_commands: set[tuple[str, str]] = set()
+    for method in AUDIT_METHOD_CATALOG.values():
+        if method.menu_location not in {"audit", "research_root"}:
+            raise ValueError(f"Audit method menu_location不合法: {method.method_id}")
     for key, entry in AUDIT_CATALOG.items():
         if key != entry.audit_type:
             raise ValueError(f"Audit catalog key與audit_type不一致: {key} != {entry.audit_type}")

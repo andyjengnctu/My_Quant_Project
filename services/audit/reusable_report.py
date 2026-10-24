@@ -28,6 +28,7 @@ from core.report_style import (
     SIGNAL_WARNING,
     markdown_tone,
     signal_for_delta,
+    best_worst_signals,
     styled_signal,
 )
 
@@ -100,6 +101,43 @@ def fmt(value: Any, digits: int = 2, suffix: str = "") -> str:
 def format_contract_row(table: ReportTableContract, values: Mapping[str, Any]) -> list[str]:
     row = dict(values or {})
     return [format_contract_value(column, row.get(column.key)) for column in table.columns]
+
+def format_comparison_rows(
+    table: ReportTableContract,
+    records: Sequence[Mapping[str, Any]],
+    *,
+    target: str,
+    groups: Sequence[object] | None = None,
+) -> list[list[str]]:
+    """Render best/worst values via the shared metric preference and palette SSOT.
+
+    Comparisons occur only between rows of the same declared group (e.g. year
+    or seed). Ties are neutral. No inference from raw sign or target identity.
+    """
+    items = list(records)
+    keys = list(range(len(items))) if groups is None else list(groups)
+    if len(keys) != len(items):
+        raise ValueError("comparison group與report row數不一致")
+    formatted = [format_contract_row(table, item) for item in items]
+    for col_idx, column in enumerate(table.columns):
+        if column.preference not in {"higher", "lower"}:
+            continue
+        by_group: dict[object, list[int]] = {}
+        for row_idx, group in enumerate(keys):
+            # None means the entire table is one comparable group.
+            by_group.setdefault(None if groups is None else group, []).append(row_idx)
+        for indices in by_group.values():
+            signals = best_worst_signals(
+                {str(i): items[i].get(column.key) for i in indices},
+                preference=column.preference,
+            )
+            for row_id, signal in signals.items():
+                pos = int(row_id)
+                formatted[pos][col_idx] = styled_signal(
+                    formatted[pos][col_idx], signal, target=target,
+                )
+    return formatted
+
 
 def truth_cell(cell: Mapping[str, Any]) -> str:
     row = dict(cell or {})

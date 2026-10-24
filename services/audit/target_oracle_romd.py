@@ -23,6 +23,7 @@ from core.breakout_quality_runtime import (
 )
 from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
 from core.console_report import render_table, render_title
+from core.report_style import styled_workflow_status
 from core.dataset_profiles import get_dataset_dir
 from core.path_utils import project_relative_display_path
 from core.strategy_compare_policy import (
@@ -73,7 +74,7 @@ from core.research_report_contract import (
     report_contract, require_approved_report_contract,
     persistent_report_contract_fingerprint,
 )
-from services.audit.reusable_report import format_contract_row
+from services.audit.reusable_report import format_comparison_rows
 
 SUPPORTED_AUDIT_TYPE = "target_ground_truth_strategy_romd"
 ORACLE_REPORT_SCHEMA_VERSION = 6
@@ -596,6 +597,34 @@ def _aggregate(records: list[dict[str, Any]], *, target: str) -> dict[str, Any]:
     return summary
 
 
+def render_replay_preflight(
+    *,
+    label: str,
+    seeds: list[int],
+    targets: list[str],
+    decisions: Mapping[tuple[int, str], str],
+) -> str:
+    """Read-only full-workload plan before any Broker-Cash replay starts.
+
+    Display is bounded by target count, not seeds x targets. Source data,
+    training and result identities are never inferred from color/status.
+    """
+    counts = {action: sum(action == value for value in decisions.values())
+              for action in ("REUSE", "RUN", "BLOCKED")}
+    headers = ("Target", *(f"S{i + 1}" for i in range(len(seeds))))
+    rows = [
+        (target, *(styled_workflow_status(decisions[(seed, target)]) for seed in seeds))
+        for target in targets
+    ]
+    return "\n".join((
+        f"[Target 驗證 {label} | Replay preflight（執行前）]",
+        "Seed：" + "  ".join(f"S{i + 1}={seed}" for i, seed in enumerate(seeds)),
+        render_table(headers, rows),
+        f"REUSE {counts['REUSE']} / RUN（需計算）{counts['RUN']} / "
+        f"BLOCKED {counts['BLOCKED']}；本階段尚未執行任何 Replay",
+    ))
+
+
 def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict[str, Any]:
     root = Path(project_root).resolve()
     settings, base_arm, exact_arm = _contract(definition)
@@ -713,6 +742,7 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
         # as permission to silently spend hours computing the same arm again.
         # This plan is derived from on-disk artifacts, not a historic target list.
         completed_plan: dict[tuple[int, str], tuple[dict[str, Any], dict[str, Any] | None, str]] = {}
+        blocked: dict[tuple[int, str], str] = {}
         for seed, param_sha, _kind, _base_params, _oracle_params in prepared:
             for target in ("C96", *(name for name, _ in targets)):
                 is_direct = target in ORACLE_DIRECT_SCORE_SOURCES
@@ -744,12 +774,29 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
                                 )
                     completed_plan[(seed, target)] = (identity, record, origin)
                 except ValueError as exc:
-                    raise OracleBlockedError(f"Oracle {label} REUSE preflight BLOCKED: {exc}") from exc
+                    # Continue read-only inspection so the user sees the full
+                    # REUSE/RUN/BLOCKED matrix; do not replay a partial cohort.
+                    blocked[(seed, target)] = str(exc)
+        decisions = {
+            (seed, name): "BLOCKED" if (seed, name) in blocked else
+            "REUSE" if completed_plan[(seed, name)][1] is not None else "RUN"
+            for seed, _path in parameter_paths
+            for name in ("C96", *(name for name, _desc in targets))
+        }
         if not quiet:
-            reused = sum(item[1] is not None for item in completed_plan.values())
-            print(f"[Oracle Audit {label} preflight] {reused} REUSE / "
-                  f"{len(completed_plan) - reused} genuinely missing RUN; "
-                  f"no replay started during preflight")
+            print("\n" + render_replay_preflight(
+                label=label,
+                seeds=[seed for seed, _path in parameter_paths],
+                targets=["C96", *(name for name, _desc in targets)],
+                decisions=decisions,
+            ))
+        if blocked:
+            details = [f"{target} seed={seed}: {reason}"
+                       for (seed, target), reason in blocked.items()]
+            raise OracleBlockedError(
+                f"Oracle {label} REUSE preflight BLOCKED: "
+                f"{len(blocked)} conflict(s); " + " | ".join(details[:3])
+            )
 
         for seed, param_sha, kind, base_params, oracle_params in prepared:
             if not quiet:
@@ -869,7 +916,7 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
     items = [dict(baseline, target="C96 Same-Window", delta_romd_vs_c96=0.0, wins="-"),
              *[dict(item, target=_oracle_display_name(item["target"]), wins=f'{item["positive_seed_count"]}/{item["seeds"]}')
                for item in report["oracles"]]]
-    rows = [format_contract_row(perf_table, item) for item in items]
+    rows = format_comparison_rows(perf_table, items, target=target)
     intro = [
         "Target Ground Truth -> Strategy RoMD (HINDSIGHT ORACLE / NOT PIT)",
         f'Period: {report["start_date"]} ~ {report["end_date"]} (40D-mature common window)',
@@ -895,20 +942,31 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
     lines.extend(["", f"## {sections[1].display_title}",
                   *[f"- **{_oracle_display_name(key)}** - {desc.replace('D40', 'MAE40')}" for key, desc in ORACLE_TARGETS],
                   "", f"## {sections[2].display_title}"])
+    all_years = [year for item in items for year in item["yearly"]]
+    year_cells = iter(format_comparison_rows(
+        yearly_table, all_years, target=target,
+        groups=[str(year.get("year")) for year in all_years],
+    ))
     for item in items:
         lines.append(f'### {_oracle_display_name(item["target"])}')
         lines.extend(("| " + " | ".join(yearly_table.headers) + " |",
                       "|" + "|".join("---" for _ in yearly_table.headers) + "|"))
-        for year in item["yearly"]:
-            lines.append("| " + " | ".join(format_contract_row(yearly_table, year)) + " |")
+        for _year in item["yearly"]:
+            lines.append("| " + " | ".join(next(year_cells)) + " |")
     lines.extend(["", f"## {sections[3].display_title}",
                   "| " + " | ".join(paired_table.headers) + " |",
                   "|" + "|".join("---" for _ in paired_table.headers) + "|"])
     baselines = {int(x["seed"]): float(x["romd"]) for x in baseline["seed_observations"]}
-    for item in report["oracles"]:
-        for obs in item["seed_observations"]:
-            row = dict(obs, target=_oracle_display_name(item["target"]), c96_romd=baselines[int(obs["seed"])])
-            lines.append("| " + " | ".join(format_contract_row(paired_table, row)) + " |")
+    paired_rows = [
+        dict(obs, target=_oracle_display_name(item["target"]), c96_romd=baselines[int(obs["seed"])])
+        for item in report["oracles"]
+        for obs in item["seed_observations"]
+    ]
+    for paired_cells in format_comparison_rows(
+        paired_table, paired_rows, target=target,
+        groups=[int(row["seed"]) for row in paired_rows],
+    ):
+        lines.append("| " + " | ".join(paired_cells) + " |")
     lines.extend(["", f"## {sections[4].display_title}",
                   *[f"- {limitation}" for limitation in report["limitations"]]])
     return "\n".join(lines)
@@ -938,5 +996,6 @@ def run_formal_audit(definition, *, project_root: Path, quiet: bool = False) -> 
 
 __all__ = [
     "SUPPORTED_AUDIT_TYPE", "ORACLE_TARGETS", "ORACLE_DIRECT_SCORE_SOURCES", "OracleBlockedError",
-    "collect_status", "build_oracle_score_tables", "build_report", "render_result", "run_formal_audit",
+    "collect_status", "build_oracle_score_tables", "render_replay_preflight",
+    "build_report", "render_result", "run_formal_audit",
 ]

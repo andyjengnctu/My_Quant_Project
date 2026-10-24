@@ -42,7 +42,7 @@ from services.research.strategy_compare_application import (
     show_strategy_comparison_profile_status,
     show_strategy_multi_seed_robustness_status,
 )
-from services.audit.catalog import get_audit_methods
+from services.audit.catalog import get_audit_methods, get_audit_method
 from services.audit.runner import (
     collect_audit_menu_state,
     render_audit_status,
@@ -379,7 +379,7 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
 
 
 def _audit_reusable_menu(module_id: str) -> int:
-    methods = get_audit_methods()
+    methods = get_audit_methods(menu_location="audit")
     while True:
         print("\n=== 可重複使用的原因分析 ===")
         enabled_counts = {
@@ -781,18 +781,19 @@ def _print_main_menu() -> None:
     print("\n====================================================================================================")
     print(" Research")
     print("====================================================================================================")
-    print(render_menu_item(1, "模型訓練／驗證", default=True))
-    print(render_menu_item(2, "策略參數最佳化"))
-    print(render_menu_item(3, "策略組合比較"))
-    print(render_menu_item(4, "Audit／診斷"))
+    print(render_menu_item(1, get_audit_method("target_ground_truth_strategy_romd").menu_label, default=True))
+    print(render_menu_item(2, "模型訓練／驗證"))
+    print(render_menu_item(3, "策略參數最佳化"))
+    print(render_menu_item(4, "策略組合比較"))
+    print(render_menu_item(5, "Audit／診斷"))
     integration_cfg = get_strategy_runtime_integration_settings()
     integration_label = integration_cfg.label
     if not runtime_integration_execution_enabled():
         integration_label += "  [歷史／唯讀]"
-    print(render_menu_item(5, integration_label))
-    print(render_menu_item(6, "查看目前研究狀態與工件"))
-    print(render_menu_item(7, "Market Data generation／Research V2 lifecycle"))
-    print(render_menu_item(8, "策略升格（Research → Trading）"))
+    print(render_menu_item(6, integration_label))
+    print(render_menu_item(7, "查看目前研究狀態與工件"))
+    print(render_menu_item(8, "Market Data generation／Research V2 lifecycle"))
+    print(render_menu_item(9, "策略升格（Research → Trading）"))
     print(render_menu_item(0, "離開"))
 
 
@@ -809,23 +810,25 @@ def _interactive_menu() -> int:
             return 0
         try:
             if choice == "1":
-                _run_model_training_menu()
+                _run_reusable_audit_method(get_active_audit_module_id(), "target_ground_truth_strategy_romd")
             elif choice == "2":
-                _run_optimizer()
+                _run_model_training_menu()
             elif choice == "3":
-                _strategy_compare_menu()
+                _run_optimizer()
             elif choice == "4":
-                _audit_menu()
+                _strategy_compare_menu()
             elif choice == "5":
-                _strategy_runtime_integration_menu()
+                _audit_menu()
             elif choice == "6":
-                _show_research_status()
+                _strategy_runtime_integration_menu()
             elif choice == "7":
-                _market_data_menu()
+                _show_research_status()
             elif choice == "8":
+                _market_data_menu()
+            elif choice == "9":
                 _strategy_promotion_menu()
             else:
-                print("選項無效，請按 Enter 或輸入 0～8。")
+                print("選項無效，請按 Enter 或輸入 0～9。")
         except (FileNotFoundError, ImportError, RuntimeError, ValueError) as exc:
             print(f"[錯誤] {type(exc).__name__}: {exc}")
         except KeyboardInterrupt:
@@ -833,8 +836,9 @@ def _interactive_menu() -> int:
 
 
 def _print_help(program_name: str) -> None:
-    print(f"用法: python {program_name} [model|optimizer|compare|audit|market-data|status] [options]")
+    print(f"用法: python {program_name} [target|model|optimizer|compare|audit|market-data|status] [options]")
     print("說明: Research 單一正式入口；互動選單只選工作類型，研究標的與設定由 config/ 決定。")
+    print("  target     正式 Target 驗證（非 PIT hindsight Oracle）；可接 run/status/latest")
     print("  model      目前 active model 的模型訓練／驗證；後續參數原樣轉交model provider")
     print("  optimizer  依 config/strategy_params.py 執行目前策略參數訓練 profile")
     print("             Production-aligned timing：optimizer timing [--trials N] [--seeds N] [--timing-fold-workers N]")
@@ -864,6 +868,21 @@ def main(argv=None) -> int:
     rest = args[1:]
     if command in {"-h", "--help", "help"}:
         _print_help(program_name)
+        return 0
+    if command in {"target", "target-validation", "target_validation"}:
+        if len(rest) > 1:
+            raise ValueError(f"target不支援額外參數: {' '.join(rest[1:])}")
+        action = str(rest[0]).strip().lower() if rest else "status"
+        module_id = get_active_audit_module_id()
+        method_id = "target_ground_truth_strategy_romd"
+        if action == "run":
+            run_enabled_audits(module_id, project_root=PROJECT_ROOT, method_id=method_id)
+        elif action in {"status", "show"}:
+            print(render_audit_status(module_id, project_root=PROJECT_ROOT, method_id=method_id))
+        elif action == "latest":
+            print(render_latest_audit_summary(module_id, project_root=PROJECT_ROOT, method_id=method_id))
+        else:
+            raise ValueError(f"target不支援的命令: {action}")
         return 0
     if command == "model":
         return _run_model_cli(rest)

@@ -730,12 +730,12 @@ _TARGET_ORACLE_ROMD_PRIOR_REPORT = PersistentReportContract(
     ),
 )
 
-# v1-v4 remain frozen in immutable files. User-approved v5 narrows the
-# current 40D inventory; all historical evidence and replay keys survive.
+# v1-v5 stay immutable. v6 promotes the read-only Target validation work type
+# to Research [1] and introduces canonical best/worst display semantics.
 TARGET_ORACLE_ROMD_REPORT = PersistentReportContract(
-    report_id="audit.target_oracle_romd", version=5,
+    report_id="audit.target_oracle_romd", version=6,
     role="persistent_reusable_hindsight_non_pit",
-    menu_path=_TARGET_ORACLE_ROMD_PRIOR_REPORT.menu_path,
+    menu_path=("Research", "Target 驗證"),
     sections=(
         _TARGET_ORACLE_ROMD_PRIOR_REPORT.sections[0],
         S("target_definitions", 2, "Target Definitions (4 × Exact / 3 × Direct, 40D)"),
