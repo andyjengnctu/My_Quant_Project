@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
 from core.audit_policy import get_reusable_audit_definitions
 from core.research_report_contract import require_approved_report_contract
 from core.strategy_params import V16StrategyParams
+from core.portfolio_fast_access import get_fast_dates
 from core.portfolio_fast_data import (
     pack_static_market_data, merge_static_market_with_dynamic,
     build_normal_setup_index,
@@ -90,7 +91,10 @@ def prepared_stock(frame, signal_flags=None, *, atr=None, buy_limit=None, sell_f
 
 
 def portfolio_context(market):
-    return {"all_dfs_fast": market,
+    # Formal Portfolio timeline is the union of prepared stock-session dates.
+    sorted_dates = sorted({pd.Timestamp(day) for packed in market.values()
+                           for day in get_fast_dates(packed)})
+    return {"all_dfs_fast": market, "sorted_dates": sorted_dates,
             "normal_setup_index": build_normal_setup_index(market)}
 
 
@@ -112,6 +116,8 @@ class MinTrade40ContractTests(unittest.TestCase):
         self.assertEqual(spec['cohort'], 'p16_min_signal_events')
         self.assertEqual(spec['signal_membership_policy'],
                          'canonical_portfolio_setup_index_p16_v2')
+        self.assertEqual(spec['horizon_calendar_policy'],
+                         'canonical_portfolio_replay_sorted_dates_v1')
         # AI: One declarative field scopes BOTH seed-label cache and the
         # normal Oracle Replay arm, without a target-specific cache bypass.
         identity = target._seed_identity(
@@ -120,6 +126,18 @@ class MinTrade40ContractTests(unittest.TestCase):
         )
         self.assertEqual(identity['signal_membership_policy'],
                          spec['signal_membership_policy'])
+        self.assertEqual(identity['horizon_calendar_policy'],
+                         spec['horizon_calendar_policy'])
+        # Maturity semantics are part of both seed truth and Oracle Replay
+        # identities; the previous 0050-quote-calendar cache must not REUSE.
+        legacy_spec = dict(spec, horizon_calendar_policy='0050_quote_dates_legacy')
+        old_identity = target._seed_identity(
+            spec=legacy_spec, dataset='full', price_sha='a'*64, param_sha='b'*64,
+            seed=11, start='2021-01-01', cutoff='2026-03-02',
+        )
+        self.assertNotEqual(identity, old_identity)
+        self.assertNotEqual(target._cache_path(ROOT, 11, identity),
+                            target._cache_path(ROOT, 11, old_identity))
         from services.audit.target_oracle_romd import (
             _arm_replay_policy, _oracle_comparison_plan,
         )
@@ -129,6 +147,8 @@ class MinTrade40ContractTests(unittest.TestCase):
         )
         self.assertEqual(arm_policy['hindsight_label_spec']['signal_membership_policy'],
                          spec['signal_membership_policy'])
+        self.assertEqual(arm_policy['hindsight_label_spec']['horizon_calendar_policy'],
+                         spec['horizon_calendar_policy'])
         self.assertEqual(require_approved_report_contract("audit.target_oracle_romd").report_id,
                          "audit.target_oracle_romd")
         comparison = next(row for row in self.definition.source['oracle_comparisons']
@@ -421,8 +441,15 @@ class MinTrade40ContractTests(unittest.TestCase):
         frame = pd.DataFrame(index=dates)
         flags = np.zeros(len(dates), dtype=bool)
         flags[2] = True  # 2025-06-11: official packed signal
-        market = {'0050': prepared_stock(frame), '2404': prepared_stock(frame, flags)}
+        # 0050 has no quote on the legitimate 2404 signal day; the canonical
+        # Portfolio market timeline still contains the session.
+        missing_benchmark_day = pd.Timestamp('2025-06-11')
+        benchmark = frame.drop(index=missing_benchmark_day)
+        market = {'0050': prepared_stock(benchmark), '2404': prepared_stock(frame, flags)}
         context = portfolio_context(market)
+        self.assertIn(missing_benchmark_day, context['sorted_dates'])
+        self.assertNotIn(missing_benchmark_day,
+                         pd.DatetimeIndex(get_fast_dates(market['0050'])))
         schedule = ({'effective_date': '2025-01-01',
                      'effective_date_text': '2025-01-01',
                      'effective_end_date': '2025-12-31',
@@ -451,7 +478,20 @@ class MinTrade40ContractTests(unittest.TestCase):
         self.assertEqual(actual['events'][0]['ticker'], '2404')
         self.assertEqual(actual['events'][0]['signal_date'], '2025-06-11')
         self.assertEqual(actual['events'][0]['p16_effective_date'], '2025-01-01')
+        self.assertEqual(actual['events'][0]['horizon_date'], dates[42].strftime('%Y-%m-%d'))
         self.assertIn(('2404', '2025-06-11'), target._rank_seed_events(actual['events']))
+        # Missing dates in the real Portfolio timeline must still fail closed.
+        broken_context = dict(context, sorted_dates=[d for d in context['sorted_dates']
+                                                     if d != missing_benchmark_day])
+        with patch.object(target, '_schedule', return_value=schedule), \
+             patch.object(target, '_prepared_min_contexts',
+                          return_value={'2025-01-01': broken_context}):
+            with self.assertRaisesRegex(target.MinTrade40BlockedError, '交易日曆'):
+                target._build_seed_events(
+                    root=ROOT, dataset='full', start='2025-01-01', cutoff='2025-08-25',
+                    spec=target._target_spec(self.definition), seed=11,
+                    kind='rolling_active_param_ensemble', base_params={},
+                )
 
     def test_canonical_context_loader_keeps_portfolio_universe_and_single_member(self):
         schedules = ({'effective_date_text': '2021-01-01', 'members':

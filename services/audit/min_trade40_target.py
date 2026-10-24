@@ -40,6 +40,7 @@ REPORT_SCHEMA = 1
 # Reuse existing per-seed evidence path; this is NOT a separate active report.
 OUTPUT_SUBDIR = "breakout_quality/reusable/min_trade40_netr"
 CACHE_SCHEMA = 2
+HORIZON_CALENDAR_POLICY = "canonical_portfolio_replay_sorted_dates_v1"
 
 
 class MinTrade40BlockedError(RuntimeError):
@@ -69,7 +70,8 @@ def _target_spec(definition) -> dict[str, Any]:
             type(spec.get("horizon_trading_bars")) is not int or
             int(spec["horizon_trading_bars"]) != TARGET_HORIZON_SESSIONS or
             spec.get("cohort") != "p16_min_signal_events" or
-            spec.get("signal_membership_policy") != "canonical_portfolio_setup_index_p16_v2"):
+            spec.get("signal_membership_policy") != "canonical_portfolio_setup_index_p16_v2" or
+            spec.get("horizon_calendar_policy") != HORIZON_CALENDAR_POLICY):
         raise MinTrade40BlockedError("Min event Target 的科學身分／期限／母體契約無效")
     return spec
 
@@ -149,7 +151,10 @@ def _build_seed_events(
     function never independently guesses candidate or re-entry eligibility.
     """
     from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY
-    from services.portfolio_replay import PORTFOLIO_DEFAULT_BENCHMARK_TICKER
+    from services.portfolio_replay import (
+        PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
+        _merge_context_market_dates,
+    )
 
     benchmark = str(DEFAULT_LABEL_POLICY.benchmark_ticker)
     if benchmark != PORTFOLIO_DEFAULT_BENCHMARK_TICKER:
@@ -166,13 +171,14 @@ def _build_seed_events(
     if len(contexts) != len(schedules):
         raise MinTrade40BlockedError("Min event Target正式P16 context缺少生效期間")
 
-    # The benchmark is the SAME sanitized, packed price series used by the
-    # real Portfolio replay. Its market sessions define T+40 maturity.
+    # Use EXACTLY the union of prepared-context master dates that the active
+    # P16 Portfolio replay consumes. The 0050 quote series is a benchmark,
+    # not an exchange-session calendar: a valid stock session may be absent
+    # from its sanitized prices (e.g., 2404 on 2025-06-11).
     first_context = contexts[str(schedules[0]["effective_date_text"])]
-    benchmark_fast = (first_context.get("all_dfs_fast") or {}).get(benchmark)
-    if benchmark_fast is None:
-        raise MinTrade40BlockedError("Min event Target正式Portfolio context缺少0050交易日曆")
-    calendar = pd.DatetimeIndex(get_fast_dates(benchmark_fast)).normalize()
+    if (first_context.get("all_dfs_fast") or {}).get(benchmark) is None:
+        raise MinTrade40BlockedError("Min event Target正式Portfolio context缺少0050基準價格")
+    calendar = pd.DatetimeIndex(_merge_context_market_dates(contexts)).normalize()
     if calendar.empty or calendar.has_duplicates or not calendar.is_monotonic_increasing:
         raise MinTrade40BlockedError("Min event Target正式Portfolio交易日曆不合法")
     mapping = {day: i for i, day in enumerate(calendar)}
@@ -319,6 +325,7 @@ def _seed_identity(*, spec: Mapping[str, Any], dataset: str, price_sha: str,
         "horizon_sessions": int(spec["horizon_trading_bars"]),
         "cohort": str(spec["cohort"]),
         "signal_membership_policy": str(spec["signal_membership_policy"]),
+        "horizon_calendar_policy": str(spec["horizon_calendar_policy"]),
         "source": "canonical P16 Base-Finalist-Best / Min no-DL",
         "trade_path_primitive": "A2 canonical signal/entry/exit/ledger v1 + 40D endpoint",
         "dataset": dataset, "price_sha256": price_sha,
@@ -469,7 +476,7 @@ def build_report(
         "read_only": True, "hindsight_non_pit": True,
         "limitations": [
             "P16 Min signal-event cohort; NOT the existing 643617-stock-day 40D universal cohort.",
-            "Signal date + 40 benchmark trading sessions; regular Min STOP/IND_SELL executes sooner.",
+            "Signal date + 40 canonical Portfolio replay sessions; regular Min STOP/IND_SELL executes sooner.",
             "Unfilled, no legal 40th-session sell, and same-day entry/exit are EXCLUDED, not zero or a loss.",
             "Prices, single-stock entry/exit, ledger-net fees/tax and initial risk use canonical Min/A2 primitives.",
             "Event-level isolated sizing is not dynamic multi-position Broker-Cash capital or portfolio RoMD.",

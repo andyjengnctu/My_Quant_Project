@@ -118,6 +118,7 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                         "horizon_trading_bars": 40,
                         "cohort": "p16_min_signal_events",
                         "signal_membership_policy": "canonical_portfolio_setup_index_p16_v2",
+                        "horizon_calendar_policy": "canonical_portfolio_replay_sorted_dates_v1",
                         "enabled": True,
                     },
                 ),
