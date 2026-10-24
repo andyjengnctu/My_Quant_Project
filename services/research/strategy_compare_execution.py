@@ -30,6 +30,7 @@ from filters.breakout_quality.ranking_score_store import (
 )
 from filters.breakout_quality.strategy_compare_pit_contract import (
     resolve_strategy_compare_selection_pit_bundle_dir,
+    resolve_strategy_compare_selection_pit_contract_override,
 )
 from services.research.strategy_compare_engine import run_comparison
 from services.research.strategy_compare_replay import run_standalone_baseline
@@ -211,15 +212,28 @@ def run_strategy_compare_active_arm(
     selection_paths = None
     selection_expected_seed = None
     if str(dl.score_source) == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
-        if primary_override.get("score_path") and primary_override.get("manifest_path"):
+        has_score = bool(primary_override.get("score_path"))
+        has_manifest = bool(primary_override.get("manifest_path"))
+        if has_score != has_manifest:
+            raise ValueError("Selection PIT isolated score/manifest override必須成對提供")
+        if expected_seed_override is not None and not has_score:
+            raise ValueError("Selection PIT robustness seed必須綁定顯式隔離score/manifest工件")
+        if has_score:
             selection_paths = {
                 "score": Path(str(primary_override["score_path"])),
                 "manifest": Path(str(primary_override["manifest_path"])),
             }
             selection_expected_seed = expected_seed_override
         else:
-            selection_paths = selection_pit_mode_paths(dl, project_root=root)
-            if selection_paths is not None:
+            # The canonical Rolling store splits PIT score/manifest (models/)
+            # from Audit (outputs/). Passing its score directory as an override
+            # would reclassify it as an isolated, colocated bundle during replay.
+            # Reuse the same override decision as the preparation READY gate.
+            pit_dir_override = resolve_strategy_compare_selection_pit_contract_override(
+                root=root, source=dl,
+            )
+            if pit_dir_override is not None:
+                selection_paths = selection_pit_mode_paths(dl, project_root=root)
                 selection_expected_seed = (
                     int(expected_seed_override)
                     if expected_seed_override is not None

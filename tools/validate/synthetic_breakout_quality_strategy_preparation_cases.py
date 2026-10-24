@@ -230,7 +230,7 @@ def append_strategy_compare_preparation_contract_checks(
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "strategy_compare_default_pit_execution_pins_models_score_and_manifest_paths",
+        "strategy_compare_default_pit_bundle_paths_do_not_imply_colocated_audit",
         (
             expected_default_pit_dir / "selection_point_in_time_scores.csv",
             expected_default_pit_dir / "selection_point_in_time_manifest.json",
@@ -257,30 +257,188 @@ def append_strategy_compare_preparation_contract_checks(
                 param_evaluation_mode="rolling",
             )
     c59_kwargs, c60_kwargs, c64_kwargs = captured_replay_kwargs
-    c59_primary = Path(str(c59_kwargs.get("selection_pit_score_path_override") or ""))
-    c60_primary = Path(str(c60_kwargs.get("selection_pit_score_path_override") or ""))
     c60_safety = Path(str((c60_kwargs.get("ranking_options") or {}).get("safety_score_path_override") or ""))
-    c64_primary = Path(str(c64_kwargs.get("selection_pit_score_path_override") or ""))
     c64_options = dict(c64_kwargs.get("ranking_options") or {})
     c64_safety = Path(str(c64_options.get("safety_score_path_override") or ""))
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "current_c59_c60_execution_consumes_models_score_manifest_bundle",
+        "rolling_pit_replay_passes_no_colocated_audit_override_for_canonical_source",
         True,
         all(
+            kwargs.get("selection_pit_score_path_override") is None
+            and kwargs.get("selection_pit_manifest_path_override") is None
+            for kwargs in (c59_kwargs, c60_kwargs, c64_kwargs)
+        ) and all(
             path.name == "selection_point_in_time_scores.csv"
             and "models/filters/breakout_quality" in path.as_posix()
-            and "outputs/" not in path.as_posix()
-            for path in (c59_primary, c60_primary, c60_safety, c64_primary, c64_safety)
+            for path in (c60_safety, c64_safety)
         ),
     )
+    c64_score_source = pit_bundle_settings.dl_sources[
+        pit_bundle_settings.arms["C64"].dl_id
+    ]
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "c64_execution_reuses_same_dual_head_pit_artifact_and_selects_conditional_safety_column",
+        "c64_execution_uses_canonical_primary_and_same_safety_score_column",
         True,
-        c64_primary == c64_safety
+        c64_kwargs.get("selection_pit_score_path_override") is None
+        and c64_safety == selection_pit_mode_paths(
+            c64_score_source, project_root=project_root,
+        )["score"]
         and c64_options.get("safety_score_column") == "conditional_safety_score"
         and not c64_options.get("safety_residualization"),
+    )
+
+    # Exercise the actual current Compare Suite at the producer/consumer seam.
+    # These checks previously only asserted a score-path string, which mistakenly
+    # approved treating canonical Rolling PIT as an isolated/colocated bundle.
+    from config.strategy_compare import (
+        STRATEGY_COMPARE_CURRENT_OOS_PROFILE,
+        STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE,
+    )
+    from services.research import strategy_compare_runtime_contract as runtime_module
+
+    recorded = []
+    for profile_id in (
+        STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE,
+        STRATEGY_COMPARE_CURRENT_OOS_PROFILE,
+    ):
+        active_settings = _get_pit_bundle_settings(profile_id)
+        for active_arm in active_settings.enabled_arms:
+            if not active_arm.dl_id:
+                continue
+            source = active_settings.dl_sources[active_arm.dl_id]
+            if str(source.score_source) != "selection_point_in_time":
+                continue
+            with patch.object(execution_module, "run_comparison", return_value={}) as replay:
+                execution_module.run_strategy_compare_active_arm(
+                    settings=active_settings, arm=active_arm,
+                    project_root=project_root, params_path="synthetic.json",
+                    output_dir="outputs/strategy_compare/synthetic",
+                    comparison_start="2021-01-01", comparison_end="2026-03-02",
+                    param_evaluation_mode="rolling",
+                )
+            kwargs = dict(replay.call_args.kwargs)
+            expected_override = resolve_strategy_compare_selection_pit_contract_override(
+                root=project_root, source=source,
+            )
+            score = kwargs.get("selection_pit_score_path_override")
+            manifest = kwargs.get("selection_pit_manifest_path_override")
+            paths_ok = (
+                (score is None and manifest is None)
+                if expected_override is None else
+                (Path(str(score)) == expected_override / "selection_point_in_time_scores.csv"
+                 and Path(str(manifest)) == expected_override / "selection_point_in_time_manifest.json")
+            )
+            # Run the real runtime resolver with a verified synthetic PIT contract:
+            # canonical must call the canonical loader, while colocated/isolated
+            # must call the isolated loader. No real scores/fit or replay are run.
+            synthetic = SimpleNamespace(
+                score_path=selection_pit_mode_paths(source, project_root=project_root)["score"],
+                manifest_path=selection_pit_mode_paths(source, project_root=project_root)["manifest"],
+                seed=42,
+                model_architecture=str(source.model_architecture),
+                experiment_profile=str(source.experiment_profile),
+                available_from="2021-01-01", available_through="2026-03-02",
+            )
+            with patch.object(
+                runtime_module, "load_selection_point_in_time_ranking_contract",
+                return_value=synthetic,
+            ) as canonical_loader, patch.object(
+                runtime_module, "_load_isolated_selection_pit_contract",
+                return_value=synthetic,
+            ) as isolated_loader:
+                resolved = runtime_module.resolve_strategy_compare_runtime_contract(
+                    root=project_root,
+                    comparison_mode=kwargs["comparison_mode"],
+                    ranking_policy=kwargs["ranking_policy"],
+                    ranking_options=kwargs["ranking_options"],
+                    optional_entry_filter_policy=kwargs["optional_entry_filter_policy"],
+                    score_source=kwargs["score_source"],
+                    filter_id=kwargs["filter_id"],
+                    model_architecture=kwargs["model_architecture"],
+                    experiment_profile=kwargs["experiment_profile"],
+                    threshold=kwargs["threshold"],
+                    hard_filter_source=None,
+                    selection_pit_score_path_override=score,
+                    selection_pit_manifest_path_override=manifest,
+                    selection_pit_expected_seed_override=kwargs["selection_pit_expected_seed_override"],
+                    comparison_start_date=kwargs["comparison_start_date"],
+                    comparison_end_date=kwargs["comparison_end_date"],
+                )
+            loader_ok = (
+                resolved.pit_contract is synthetic
+                and canonical_loader.call_count == int(expected_override is None)
+                and isolated_loader.call_count == int(expected_override is not None)
+                and (
+                    expected_override is not None
+                    or canonical_loader.call_args.kwargs.get("require_model_validation_pass") is False
+                )
+            )
+            recorded.append(paths_ok and loader_ok)
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "current_suite_all_pit_arms_replay_through_matching_ready_audit_contract",
+        True,
+        bool(recorded) and all(recorded),
+    )
+
+    # Robustness must never substitute a canonical PIT score when a benchmark
+    # seed's explicit, immutable PIT bundle is missing or only half specified.
+    rolling_settings = _get_pit_bundle_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
+    isolated_arm = next(
+        arm for arm in rolling_settings.enabled_arms
+        if arm.dl_id and str(rolling_settings.dl_sources[arm.dl_id].score_source)
+        == "selection_point_in_time"
+    )
+    isolated_score = "outputs/strategy_compare/synthetic_seed/selection_point_in_time_scores.csv"
+    isolated_manifest = "outputs/strategy_compare/synthetic_seed/selection_point_in_time_manifest.json"
+    with patch.object(execution_module, "run_comparison", return_value={}) as isolated_replay:
+        execution_module.run_strategy_compare_active_arm(
+            settings=rolling_settings, arm=isolated_arm,
+            project_root=project_root, params_path="synthetic.json",
+            output_dir="outputs/strategy_compare/synthetic",
+            comparison_start="2021-01-01", comparison_end="2026-03-02",
+            param_evaluation_mode="rolling",
+            score_overrides={str(isolated_arm.dl_id): {
+                "score_path": isolated_score, "manifest_path": isolated_manifest,
+            }},
+            expected_seed_override=762252050,
+        )
+    isolated_kwargs = dict(isolated_replay.call_args.kwargs)
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "robustness_replay_keeps_explicit_same_seed_pit_bundle",
+        True,
+        isolated_kwargs.get("selection_pit_score_path_override") == isolated_score
+        and isolated_kwargs.get("selection_pit_manifest_path_override") == isolated_manifest
+        and isolated_kwargs.get("selection_pit_expected_seed_override") == 762252050,
+    )
+    fail_closed = []
+    for partial_overrides, seed in (
+        ({}, 762252050),
+        ({str(isolated_arm.dl_id): {"score_path": isolated_score}}, None),
+        ({str(isolated_arm.dl_id): {"manifest_path": isolated_manifest}}, None),
+    ):
+        try:
+            with patch.object(execution_module, "run_comparison", return_value={}):
+                execution_module.run_strategy_compare_active_arm(
+                    settings=rolling_settings, arm=isolated_arm,
+                    project_root=project_root, params_path="synthetic.json",
+                    output_dir="outputs/strategy_compare/synthetic",
+                    comparison_start="2021-01-01", comparison_end="2026-03-02",
+                    param_evaluation_mode="rolling", score_overrides=partial_overrides,
+                    expected_seed_override=seed,
+                )
+        except ValueError:
+            fail_closed.append(True)
+        else:
+            fail_closed.append(False)
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "robustness_seed_or_incomplete_pit_override_cannot_fallback_to_canonical",
+        True,
+        all(fail_closed),
     )
 
     from services.research import strategy_compare_preparation as preparation_module
