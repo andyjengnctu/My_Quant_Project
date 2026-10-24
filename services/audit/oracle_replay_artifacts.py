@@ -132,6 +132,62 @@ def _validate_observation(observation: Mapping[str, Any], *, target: str, seed: 
     return row
 
 
+def oracle_cohorts_compatible(saved: Mapping[str, Any], current: Mapping[str, Any]) -> bool:
+    """Certify an old *superset provider* join was sample-neutral.
+
+    Dropping an unused truth source cannot be proven safe merely because it no
+    longer supplies a score. The historical intersection is equal to the
+    retained source ONLY if the old market evidence proves that each retained
+    source had exactly the same number of rows as the joined cohort. With
+    matching prices/profile identities, this is a set-theoretic equivalence
+    proof (the historical intersection is a subset of each source).
+
+    Missing row-count evidence fails closed. No old cache is modified.
+    """
+    if saved == current:
+        return True
+    if not isinstance(saved, Mapping) or not isinstance(current, Mapping):
+        return False
+    old_providers, new_providers = saved.get("providers"), current.get("providers")
+    old_market, new_market = saved.get("market_truth"), current.get("market_truth")
+    old_extra, new_extra = saved.get("rows_outside_dl_training_provider_by_source"), current.get("rows_outside_dl_training_provider_by_source")
+    if not all(isinstance(x, Mapping) for x in
+               (old_providers, new_providers, old_market, new_market, old_extra, new_extra)):
+        return False
+    if (not new_providers or not set(new_providers).issubset(old_providers)
+            or any(old_providers[key] != value for key, value in new_providers.items())
+            or len(new_providers) >= len(old_providers)):
+        return False
+    for key, value in current.items():
+        if key in {"providers", "market_truth", "rows_outside_dl_training_provider_by_source"}:
+            continue
+        if saved.get(key, _MISSING) != value:
+            return False
+    if set(saved) - set(current):
+        return False
+    old_counts = old_market.get("mature_rows_by_provider")
+    new_counts = new_market.get("mature_rows_by_provider")
+    if not isinstance(old_counts, Mapping) or not isinstance(new_counts, Mapping):
+        return False
+    if any(old_market.get(key, _MISSING) != value
+           for key, value in new_market.items() if key != "mature_rows_by_provider"):
+        return False
+    if set(old_market) != set(new_market):
+        return False
+    if not set(new_counts).issubset(old_counts):
+        return False
+    n = current.get("cohort_rows")
+    if not isinstance(n, int) or n <= 0 or saved.get("cohort_rows") != n:
+        return False
+    if any(old_counts[key] != n or new_counts[key] != n
+           for key in new_counts):
+        return False
+    if (not set(new_extra).issubset(old_extra)
+            or any(old_extra[key] != value for key, value in new_extra.items())):
+        return False
+    return True
+
+
 class OracleReplayStore:
     """Durable per-arm cache; no producer-side recomputation on a cache hit."""
 
@@ -147,7 +203,11 @@ class OracleReplayStore:
             raise ValueError("Oracle invalid cache target")
         return self.cache_root / str(seed) / f"{target}_{canonical_json_sha256(identity)}.json"
 
-    def preview_candidates(self, *, seeds: tuple[int, ...], targets: tuple[str, ...]) -> dict[tuple[int, str], str]:
+    def preview_candidates(
+        self, *, seeds: tuple[int, ...], targets: tuple[str, ...],
+        dataset: str | None = None, start_date: str | None = None,
+        requested_end: str | None = None, benchmark: str | None = None,
+    ) -> dict[tuple[int, str], str]:
         """Lightweight existing-artifact inventory; NEVER an execution/reuse decision.
 
         Reuse the canonical cache reader for evidence integrity.  The current
@@ -177,6 +237,15 @@ class OracleReplayStore:
                             or self._path(identity) != path
                             or self.read(identity) is None):
                         raise ValueError("Invalid cache evidence")
+                    # Cheap research scope guard (NOT the strict price/P16
+                    # certificate). A previous period or dataset is not a
+                    # candidate for this run even if its cached bytes are valid.
+                    if ((dataset is not None and identity.get("dataset") != dataset)
+                            or (start_date is not None and identity.get("start_date") != start_date)
+                            or (benchmark is not None and identity.get("benchmark") != benchmark)
+                            or (requested_end is not None and not (
+                                str(start_date or "") < str(identity.get("end_date") or "") <= requested_end))):
+                        continue
                 except (OSError, KeyError, TypeError, ValueError, OverflowError):
                     candidates[key] = "INVALID"
                     continue
@@ -184,7 +253,9 @@ class OracleReplayStore:
                 if previous == "MISSING":
                     candidates[key] = "CACHE"
                 elif previous == "CACHE":
-                    candidates[key] = "MULTIPLE"
+                    # AI: Historical V1/V2 aliases do not imply a missing
+                    # result. Full resolver still rejects non-equivalent science.
+                    candidates[key] = "CACHE"
         return candidates
 
     @staticmethod
@@ -253,9 +324,16 @@ class OracleReplayStore:
             if (peer.get("dataset") == identity["dataset"]
                     and peer.get("start_date") == identity["start_date"]
                     and peer.get("end_date") == identity["end_date"]
-                    and peer_cohort.get("providers") == requested_cohort.get("providers")
-                    and peer_cohort.get("scoring") == requested_cohort.get("scoring")):
-                if self._legacy_semantic_identity(peer, identity) == dict(identity):
+                    and (peer_cohort.get("providers") == requested_cohort.get("providers")
+                         or (isinstance(peer_cohort.get("providers"), Mapping)
+                             and isinstance(requested_cohort.get("providers"), Mapping)
+                             and set(requested_cohort["providers"]).issubset(peer_cohort["providers"])))):
+                candidate_identity = self._legacy_semantic_identity(peer, identity)
+                if candidate_identity is None:
+                    candidate_identity = dict(peer)
+                if oracle_cohorts_compatible(candidate_identity.get("cohort") or {}, requested_cohort):
+                    candidate_identity = dict(candidate_identity, cohort=dict(requested_cohort))
+                if candidate_identity == dict(identity):
                     aliases.append((candidate, record))
                 else:
                     conflicts.append((candidate, peer))
@@ -418,7 +496,12 @@ class HistoricalOracleIndex:
                     panel_payload.update(panel)
                     self.snapshots.append((origin, path, panel_payload))
 
-    def preview_candidates(self, *, seeds: tuple[int, ...], targets: tuple[str, ...]) -> set[tuple[int, str]]:
+    def preview_candidates(
+        self, *, seeds: tuple[int, ...], targets: tuple[str, ...],
+        dataset: str | None = None, start_date: str | None = None,
+        requested_end: str | None = None, benchmark: str | None = None,
+        strategy_profile_id: str | None = None,
+    ) -> set[tuple[int, str]]:
         """Discover historical observation *presence*, not scientific compatibility.
 
         Exact source/cohort/definition checks remain exclusively in lookup().
@@ -427,6 +510,14 @@ class HistoricalOracleIndex:
         available: set[tuple[int, str]] = set()
         for _origin, _path, payload in self.snapshots:
             if not isinstance(payload.get("definitions"), dict):
+                continue
+            if ((dataset is not None and payload.get("dataset") != dataset)
+                    or (start_date is not None and payload.get("start_date") != start_date)
+                    or (benchmark is not None and payload.get("benchmark_id") != benchmark)
+                    or (strategy_profile_id is not None
+                        and payload.get("strategy_profile_id") != strategy_profile_id)
+                    or (requested_end is not None and not (
+                        str(start_date or "") < str(payload.get("end_date") or "") <= requested_end))):
                 continue
             aggregates = [("C96", payload.get("baseline"))]
             aggregates.extend(
@@ -499,18 +590,8 @@ class HistoricalOracleIndex:
             issues.append("common_cohort")
         else:
             wanted = context["cohort"]
-            for field in (
-                "cohort_rows", "first_common_day", "last_common_day",
-                "research_cutoff", "risk_budget_return", "providers",
-                "scoring", "market_truth", "rows_outside_dl_training_provider_by_source",
-            ):
-                if cohort.get(field) != wanted.get(field):
-                    issues.append(f"common_cohort.{field}")
-            for key, value in cohort.items():
-                if key not in wanted or wanted[key] != value:
-                    name = f"common_cohort.{key}"
-                    if name not in issues:
-                        issues.append(name)
+            if not oracle_cohorts_compatible(cohort, wanted):
+                issues.append("common_cohort.scientific_identity")
         definitions = payload.get("definitions")
         if (not isinstance(definitions, dict) or not definitions
                 or any(not isinstance(name, str) or not name
@@ -601,4 +682,5 @@ class HistoricalOracleIndex:
 
 __all__ = [
     "OracleReplayStore", "HistoricalOracleIndex", "price_inventory_sha256", "replay_identity",
+    "oracle_cohorts_compatible",
 ]

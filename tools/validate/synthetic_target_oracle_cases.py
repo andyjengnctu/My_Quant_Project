@@ -93,19 +93,22 @@ class OracleAuditContractCases(TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             candidates = {(seed, target): "CACHE" for seed in (11, 22, 33, 44)
                           for target in ("C96", *(name for name, _ in oracle.ORACLE_TARGETS))}
-            with patch.object(oracle, "_contract", return_value=(SimpleNamespace(profile_id="test"), None, None)), \
+            with patch.object(oracle, "_contract", return_value=(SimpleNamespace(
+                     profile_id="test", dataset="full", start_date="2021-01-01", end_date="2026-03-02"),
+                     None, None)), \
                  patch.object(oracle, "get_strategy_multi_seed_robustness_settings", return_value=SimpleNamespace(
-                     enabled=True, resolved_seeds=(11, 22, 33, 44), seed_count=4)), \
+                     enabled=True, benchmark_id="end_to_end_v1",
+                     resolved_seeds=(11, 22, 33, 44), seed_count=4)), \
                  patch.object(oracle.OracleReplayStore, "preview_candidates", return_value=candidates), \
                  patch.object(oracle.HistoricalOracleIndex, "preview_candidates", return_value=set()), \
                  patch.object(oracle, "_build_oracle_score_panels") as score_truth, \
                  patch.object(oracle, "price_inventory_sha256") as price:
                 text = _strip_ansi(oracle.render_existing_artifact_inventory(
                     self.definition, project_root=Path(tmp)))
-                self.assertIn("候選 REUSE 32 / 待計算 RUN 0", text)
-                self.assertIn("REUSE?", text)
+                self.assertIn("REUSE 32 / RUN（需計算）0", text)
+                self.assertIn("REUSE", text)
                 self.assertIn("R40_Direct", text)
-                self.assertIn("尚未核對", text)
+                self.assertIn("按 Enter 後依正式資料與 P16 身分核准", text)
                 score_truth.assert_not_called()
                 price.assert_not_called()
 
@@ -279,10 +282,10 @@ class OracleAuditContractCases(TestCase):
                              "date": ["2025-01-02"] * 3, **values})
 
     def _mock_market(self, omit_first_breach_last: bool = False):
-        market = {field: self._truth(field) for field in oracle._ORACLE_PROVIDER_FIELDS}
+        market = {field: self._truth(field) for field in oracle._oracle_comparison_plan(self.definition)["providers"]}
         market["pure_mfe40_provider"] = market["pure_mfe40_provider"].assign(terminal_r=[1.5, 2.0, 0.5])
         if omit_first_breach_last:
-            market["first_breach_provider"] = market["first_breach_provider"].iloc[:2]
+            market["pure_mfe40_provider"] = market["pure_mfe40_provider"].iloc[:2]
         return market, {"score_start": "2025-01-01", "truth_source": "test"}
 
     def test_oracle_target_scores_use_matched_cohort_and_correct_directions(self):
@@ -307,18 +310,144 @@ class OracleAuditContractCases(TestCase):
             self.assertIs(scores[direct_name], scores[exact_name], "Direct must reuse identical truth")
         self.assertTrue(all(0.0 <= v <= 1.0 for table in scores.values() for v in table.values()))
 
-    def test_removed_20d_and_60d_score_arms_still_preserve_historical_40d_cohort(self):
+    def test_selected_score_providers_do_not_run_retired_truth_dependencies(self):
         market, evidence = self._mock_market()
         evidence.update({"price_ticker_count": 3, "unreadable_tickers": {}})
-        with patch.object(oracle, "_load_truth", side_effect=lambda definition, root, source_field, cutoff: self._truth(source_field)), \
+        with patch.object(oracle, "_load_truth", side_effect=lambda definition, root, source_field, cutoff: self._truth(source_field)) as loader, \
              patch.object(oracle, "_market_truth_for_oracle", return_value=(market, evidence)):
             scores40, cohort40 = oracle._build_oracle_score_panels(
                 self.definition, project_root=ROOT, cutoff="2026-03-02",
             )
         self.assertEqual(cohort40["cohort_rows"], 3)
-        self.assertIn("20d", cohort40["providers"], "keep cohort provenance byte-identical for REUSE")
+        self.assertEqual(set(cohort40["providers"]), {"40d"})
+        self.assertEqual(loader.call_count, 1)
         self.assertFalse(any(name.endswith("60") or name.startswith("CH20") for name in scores40))
         self.assertEqual(len(scores40), 7)
+
+    def test_provider_dependencies_follow_selected_comparisons_not_hardcoded(self):
+        from dataclasses import replace
+        original = list(self.definition.source["oracle_comparisons"])
+        mfe40 = next(item for item in original if item["target"] == "MFE40_Control")
+        # Remove all other Exact and Direct arms; only 40D remains.
+        subset = replace(self.definition, source={**self.definition.source,
+                                                 "oracle_comparisons": (mfe40,)})
+        p1 = oracle._oracle_comparison_plan(subset)
+        self.assertEqual(p1["providers"], ("pure_mfe40_provider",))
+        self.assertEqual([name for name, _ in p1["targets"]], ["MFE40_Control"])
+        toggled = replace(self.definition, source={**self.definition.source,
+            "oracle_comparisons": tuple({**item, "enabled": item["target"] == "MFE40_Control"}
+                                        for item in original)})
+        self.assertEqual(oracle._oracle_comparison_plan(toggled)["targets"], p1["targets"])
+        # Add a test-only score referencing the catalogued 20D provider.
+        # Same code path discovers the new dependency without a new allowlist.
+        addition = {"target": "MFE20_Test", "description": "20D canonical test",
+                    "score": "mfe", "provider": "mfe20_d20_provider", "selector": "exact"}
+        extended = replace(self.definition, source={**self.definition.source,
+                                                   "oracle_comparisons": (mfe40, addition)})
+        p2 = oracle._oracle_comparison_plan(extended)
+        self.assertEqual(p2["providers"], ("pure_mfe40_provider", "mfe20_d20_provider"))
+        with patch.object(oracle, "_load_truth", side_effect=lambda d, root, field, cutoff: self._truth(field)) as loader, \
+             patch.object(oracle, "_market_truth_for_oracle", return_value=({
+                 **self._mock_market()[0], "mfe20_d20_provider": self._truth("mfe20_d20_provider")},
+                 self._mock_market()[1])):
+            scores, cohort = oracle._build_oracle_score_panels(extended, project_root=ROOT,
+                                                              cutoff="2026-03-02")
+        self.assertEqual(set(scores), {"MFE40_Control", "MFE20_Test"})
+        self.assertEqual(loader.call_count, 2)
+        self.assertEqual(set(cohort["providers"]), {"40d", "20d"})
+        self.assertNotIn("first_breach", cohort["providers"])
+
+    def test_complete_verified_report_skips_all_truth_provider_recalculation(self):
+        seeds = (11, 22, 33, 44)
+        class Benchmark:
+            benchmark_id = "end_to_end_v1"
+
+        source = self.definition.source
+        full = {
+            "cohort_rows": 3, "first_common_day": "2021-01-04",
+            "last_common_day": "2025-12-22", "research_cutoff": "2026-03-02",
+            "risk_budget_return": 0.1,
+            "providers": {"40d": source["pure_mfe40_provider"]},
+            "scoring": "All targets final-ranked by average_zero_based percentile within common-day universe",
+            "oracle_only": True,
+            "market_truth": {"score_start": "2020-12-31", "mature_rows_by_provider": {
+                "pure_mfe40_provider": 3}},
+            "rows_outside_dl_training_provider_by_source": {"pure_mfe40_provider": 0},
+        }
+        outcomes = []
+        def fake_replay(*, name, **kwargs):
+            outcomes.append(name)
+            return {"name": name}
+        def fake_metrics(replay, *, target):
+            seed = int(replay["name"].split("seed=")[1].split()[0])
+            return {"target": target, "total_return_pct": 120.0,
+                    "annualized_return_pct": 15.0, "mdd_pct": 12.0,
+                    "romd": (8.0 if target == "C96" else 12.0) + seeds.index(seed) * 0.2,
+                    "ev_a_r": 0.4, "trades": 50, "exposure_pct": 45.0,
+                    "yearly": [{"year": 2021, "strategy_return_pct": 4.0,
+                                "is_full_year": True}]}
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
+                 patch.object(oracle, "_robustness_artifacts", return_value=(Benchmark(), [
+                     (seed, Path(f"seed_{seed}.json")) for seed in seeds])), \
+                 patch.object(oracle, "_build_oracle_score_panels", return_value=_mock_panels(full)) as panels, \
+                 patch.object(oracle, "load_strategy_param_evaluation_view", return_value=(
+                     {"kind": "rolling_active_param_ensemble", "payload": {}}, "a" * 64)), \
+                 patch.object(oracle, "_validate_requested_param_policy"), \
+                 patch.object(oracle, "get_active_param_ensemble_date_range", return_value=(
+                     "2020-01-01", "2026-03-02")), \
+                 patch.object(oracle, "_build_controlled_param_source_pair", return_value=(
+                     "rolling_active_param_ensemble", "base", "oracle", None, None, None)), \
+                 patch.object(oracle, "price_inventory_sha256", return_value="b" * 64), \
+                 patch.object(oracle, "_run_scenario", side_effect=fake_replay), \
+                 patch.object(oracle, "_metrics", side_effect=fake_metrics):
+                first = oracle.run_formal_audit(self.definition, project_root=root, quiet=True)
+                self.assertEqual(len(outcomes), 32)
+                self.assertEqual(panels.call_count, 1)
+                second = oracle.build_report(self.definition, project_root=root, quiet=True)
+                self.assertEqual(len(outcomes), 32)
+                self.assertEqual(panels.call_count, 1, "all REUSE must skip even 40D Truth")
+                self.assertEqual(second["oracles"], first["oracles"])
+                # A reduced comparison list must reuse the SAME certified
+                # historical seed-level replays without any provider work.
+                from dataclasses import replace
+                selected = tuple(item for item in self.definition.source["oracle_comparisons"]
+                                 if item["target"] in {"MFE40_Control", "R40"})
+                subset = replace(self.definition, source={**self.definition.source,
+                                                          "oracle_comparisons": selected})
+                approvals = []
+                reduced = oracle.build_report(subset, project_root=root, quiet=True,
+                                              before_replay=approvals.append)
+                self.assertEqual([row["target"] for row in reduced["oracles"]],
+                                 ["MFE40_Control", "R40"])
+                self.assertEqual(len(reduced["definitions"]), 2)
+                self.assertEqual(len(outcomes), 32)
+                self.assertEqual(panels.call_count, 1)
+                self.assertEqual(len(approvals), 1)
+                self.assertIn("REUSE 12 / RUN", approvals[0])
+                with patch.object(oracle, "price_inventory_sha256", return_value="c" * 64):
+                    with self.assertRaises(oracle.OracleBlockedError):
+                        oracle.build_report(self.definition, project_root=root, quiet=True)
+                self.assertEqual(len(outcomes), 32)
+
+    def test_retired_provider_cohort_reuse_requires_mathematical_proof(self):
+        from services.audit.oracle_replay_artifacts import oracle_cohorts_compatible
+        new = {"cohort_rows": 3, "first_common_day": "2021-01-01", "last_common_day": "2021-05-01",
+               "research_cutoff": "2021-06-01", "risk_budget_return": 0.1,
+               "providers": {"40d": "mfe_40"}, "scoring": "percentile",
+               "market_truth": {"score_start": "2020-12-31", "mature_rows_by_provider": {"pure_mfe40_provider": 3}},
+               "rows_outside_dl_training_provider_by_source": {"pure_mfe40_provider": 1}}
+        old = {**new, "providers": {"40d": "mfe_40", "20d": "mfe_20", "first_breach": "breach"},
+               "market_truth": {"score_start": "2020-12-31", "mature_rows_by_provider": {
+                   "pure_mfe40_provider": 3, "mfe20_d20_provider": 3, "first_breach_provider": 3}},
+               "rows_outside_dl_training_provider_by_source": {
+                   "pure_mfe40_provider": 1, "mfe20_d20_provider": 1, "first_breach_provider": 1}}
+        self.assertTrue(oracle_cohorts_compatible(old, new))
+        not_proven = {**old, "market_truth": {"score_start": "2020-12-31", "mature_rows_by_provider": {
+            "pure_mfe40_provider": 4, "mfe20_d20_provider": 3, "first_breach_provider": 3}}}
+        self.assertFalse(oracle_cohorts_compatible(not_proven, new))
+        self.assertFalse(oracle_cohorts_compatible({**old, "providers": {"40d": "changed"}}, new))
 
     def test_t40_terminal_return_with_mae_clamp_and_negative_return(self):
         # The actual 40D stop risk is a *research* fixed 1R, not an ATR stop.
@@ -429,7 +558,7 @@ class OracleAuditContractCases(TestCase):
             )
         self.assertEqual(evidence["price_ticker_count"], 2)
         self.assertEqual(evidence["score_start"], "2020-12-31")
-        for provider in oracle._ORACLE_PROVIDER_FIELDS:
+        for provider in oracle._oracle_comparison_plan(self.definition)["providers"]:
             table = truth[provider]
             self.assertEqual(set(table["ticker"]), {"0050", "2211"})
             self.assertFalse(table.duplicated(["ticker", "date"]).any())
@@ -489,7 +618,7 @@ class OracleAuditContractCases(TestCase):
             provider.assign(ticker="2211", mfe=2.0, peak_adverse=0.2, min_low=-0.03, raw=2.0),
         ], ignore_index=True)
         market = ({field: (price_truth.assign(terminal_r=[0.8, -0.3]) if field == "pure_mfe40_provider" else price_truth)
-                   for field in oracle._ORACLE_PROVIDER_FIELDS},
+                   for field in oracle._oracle_comparison_plan(self.definition)["providers"]},
                   {"score_start": "2021-01-01", "truth_source": "synthetic"})
         with patch.object(oracle, "_market_truth_for_oracle", return_value=market), \
              patch.object(oracle, "_load_truth", return_value=provider):
@@ -498,7 +627,7 @@ class OracleAuditContractCases(TestCase):
             )
         self.assertEqual(evidence["cohort_rows"], 2)
         self.assertEqual(evidence["rows_outside_dl_training_provider_by_source"],
-                         {field: 1 for field in oracle._ORACLE_PROVIDER_FIELDS})
+                         {field: 1 for field in oracle._oracle_comparison_plan(self.definition)["providers"]})
         for target, _ in oracle.ORACLE_TARGETS:
             self.assertIn(("2211", "2021-02-26"), scores[target])
             with audit_oracle_truth_score_context(
@@ -819,6 +948,34 @@ class OracleReplayEvidenceReuseCases(TestCase):
             location.write_text(json.dumps(raw), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "corrupt"):
                 cache.read(identity)
+
+    def test_preview_requires_matching_research_scope_but_not_full_price_hash(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore, HistoricalOracleIndex
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = OracleReplayStore(root, "breakout_quality/reusable/target_oracle_romd")
+            old = self._identity(target="C96")
+            store.write(old, self._observation("C96", 1), origin="canonical_replay")
+            wanted = {"seeds": (1,), "targets": ("C96",),
+                      "dataset": "full", "start_date": "2021-01-01",
+                      "requested_end": "2026-03-02", "benchmark": "end_to_end_v1"}
+            self.assertEqual(store.preview_candidates(**wanted)[(1, "C96")], "CACHE")
+            self.assertEqual(store.preview_candidates(**{**wanted, "dataset": "other"})[(1, "C96")], "MISSING")
+            self.assertEqual(store.preview_candidates(**{**wanted, "start_date": "2022-01-01"})[(1, "C96")], "MISSING")
+            self.assertEqual(store.preview_candidates(**{**wanted, "requested_end": "2025-01-01"})[(1, "C96")], "MISSING")
+            index = HistoricalOracleIndex(root)
+            payload = {
+                "dataset": "full", "start_date": "2021-01-01", "end_date": "2025-12-22",
+                "benchmark_id": "end_to_end_v1", "strategy_profile_id": "test-profile",
+                "definitions": {"CG40_EqualRank": "description"},
+                "baseline": {"seed_observations": [self._observation("C96", 1)]},
+                "oracles": [],
+            }
+            index.snapshots = [("reusable", root / "audit.json", payload)]
+            self.assertEqual(index.preview_candidates(**wanted, strategy_profile_id="test-profile"), {(1, "C96")})
+            self.assertEqual(index.preview_candidates(**wanted, strategy_profile_id="another"), set())
+            self.assertEqual(index.preview_candidates(**{**wanted, "requested_end": "2025-01-01"},
+                                                      strategy_profile_id="test-profile"), set())
 
     def test_conflict_reports_exact_fields_and_relative_cache_path_without_replay(self):
         from services.audit.oracle_replay_artifacts import OracleReplayStore

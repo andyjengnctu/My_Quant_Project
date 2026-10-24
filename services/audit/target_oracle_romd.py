@@ -80,15 +80,76 @@ SUPPORTED_AUDIT_TYPE = "target_ground_truth_strategy_romd"
 ORACLE_REPORT_SCHEMA_VERSION = 6
 # Current report's Oracle strategies. Direct is the existing canonical No-K/No-R0
 # selector applied to the SAME score truth; not a new Target formula.
-ORACLE_TARGETS = (
-    ("CG40_EqualRank", "40D MFE + full D40 Safety, 50/50 daily rank"),
-    ("MFE40_Control", "40D MFE only (control, not target recommendation)"),
-    ("R40", "40D close-to-close terminal return divided by canonical risk budget R"),
-    ("T40", "(1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 is nonnegative in R"),
-    ("MFE40_Direct", "Same MFE40_Control score; canonical No-K/No-R0 direct allocation"),
-    ("R40_Direct", "Same R40 score; canonical No-K/No-R0 direct allocation"),
-    ("T40_Direct", "Same T40 score; canonical No-K/No-R0 direct allocation"),
-)
+# For backward-compatible external call sites only. The runtime reads the
+# actual comparison inventory from the resolved Audit definition on each run.
+from core.audit_registry import AUDIT_REUSABLE_REPORTS
+
+_ORACLE_DEFAULT_COMPARISONS = AUDIT_REUSABLE_REPORTS["breakout_quality"]["target_oracle_romd"]["source"]["oracle_comparisons"]
+ORACLE_TARGETS = tuple((item["target"], item["description"]) for item in _ORACLE_DEFAULT_COMPARISONS)
+
+# Recipe implementation is stable; WHICH recipes and providers are needed is
+# resolved from the selected comparisons, never from a second target allowlist.
+_ORACLE_SCORE_RECIPES = frozenset(("equal_rank_mfe_safety", "mfe", "terminal_r", "terminal_mae_gate"))
+_PROVIDER_COHORT_IDS = {
+    "pure_mfe40_provider": "40d", "mfe20_d20_provider": "20d",
+    "first_breach_provider": "first_breach",
+}
+
+
+def _oracle_comparison_plan(definition) -> dict[str, Any]:
+    """Canonical compare inventory -> score requirements -> provider graph."""
+    declared = tuple(definition.source.get("oracle_comparisons") or ())
+    selected = tuple(item for item in declared
+                     if not isinstance(item, Mapping) or item.get("enabled", True))
+    if not selected:
+        raise OracleBlockedError("Oracle comparison清單為空；請由正式Registry設定比較對象")
+    definitions: list[tuple[str, str]] = []
+    recipes: dict[str, tuple[str, str]] = {}
+    aliases: dict[str, str] = {}
+    selectors: dict[str, str] = {}
+    provider_fields: list[str] = []
+    for entry in selected:
+        if not isinstance(entry, Mapping):
+            raise OracleBlockedError("Oracle comparison設定必須是mapping")
+        name, desc = str(entry.get("target") or ""), str(entry.get("description") or "")
+        selector = str(entry.get("selector") or "")
+        if not name or not desc or name in selectors or name == str(definition.source["baseline_arm_id"]):
+            raise OracleBlockedError(f"Oracle comparison name缺少、重複或非法：{name}")
+        if selector not in {"exact", "direct"}:
+            raise OracleBlockedError(f"Oracle comparison selector未支援：{name} {selector}")
+        # Scientific target names are immutable. A previous name cannot be
+        # reused for a different recipe or score source by changing the list.
+        historical = next((item for item in _ORACLE_DEFAULT_COMPARISONS
+                           if item["target"] == name), None)
+        if historical is not None and any(
+                str(entry.get(key) or "") != str(historical.get(key) or "")
+                for key in ("selector", "score", "provider", "score_source")):
+            raise OracleBlockedError(
+                f"Oracle {name} 的score/selector身分已變更；須建立新Target科學ID，禁止沿用舊快取"
+            )
+        if entry.get("score_source"):
+            source = str(entry["score_source"])
+            if source not in recipes or selector != "direct":
+                raise OracleBlockedError(f"Oracle Direct score來源必須先由Exact宣告：{name} -> {source}")
+            aliases[name] = source
+        else:
+            recipe, provider = str(entry.get("score") or ""), str(entry.get("provider") or "")
+            if recipe not in _ORACLE_SCORE_RECIPES or not definition.source.get(provider):
+                raise OracleBlockedError(f"Oracle {name} score/provider缺少正式定義：{recipe}/{provider}")
+            if selector != "exact":
+                raise OracleBlockedError(f"Oracle {name} 的新分數必須使用Exact；Direct僅能重用score來源")
+            recipes[name] = (recipe, provider)
+            if provider not in provider_fields:
+                provider_fields.append(provider)
+        definitions.append((name, desc))
+        selectors[name] = selector
+    if not recipes:
+        raise OracleBlockedError("Oracle comparison缺少獨立真值score")
+    return {"targets": tuple(definitions), "recipes": recipes,
+            "aliases": aliases, "selectors": selectors,
+            "providers": tuple(provider_fields)}
+
+
 # Display labels are intentionally separate from the immutable replay-cache keys.
 ORACLE_DISPLAY_NAMES = {"MFE40_Control": "MFE40"}
 
@@ -98,9 +159,8 @@ def _oracle_display_name(name: str) -> str:
 
 
 ORACLE_DIRECT_SCORE_SOURCES = {
-    "MFE40_Direct": "MFE40_Control",
-    "R40_Direct": "R40",
-    "T40_Direct": "T40",
+    item["target"]: item["score_source"]
+    for item in _ORACLE_DEFAULT_COMPARISONS if item.get("score_source")
 }
 
 
@@ -221,12 +281,12 @@ def collect_status(definition, *, project_root: Path) -> dict[str, Any]:
 
 
 
-_ORACLE_PROVIDER_FIELDS = ("pure_mfe40_provider", "mfe20_d20_provider", "first_breach_provider")
 
 
 def _market_truth_for_oracle(
     definition, root: Path, *, cutoff: str,
     progress: Callable[[str], None] | None = None,
+    provider_fields: tuple[str, ...] | None = None,
 ) -> tuple[dict[str, pd.DataFrame], dict[str, Any]]:
     """Materialize ex-post truth for the *replay* price universe, not DL samples.
 
@@ -237,8 +297,12 @@ def _market_truth_for_oracle(
     Invalid/unmatured paths never receive a score or a proxy value.
     """
     settings, _baseline, _exact = _contract(definition)
+    plan = _oracle_comparison_plan(definition)
+    fields = (provider_fields if provider_fields is not None else plan["providers"])
+    terminal_fields = {field for recipe, field in plan["recipes"].values()
+                       if recipe in ("terminal_r", "terminal_mae_gate")}
     specs = {}
-    for field in _ORACLE_PROVIDER_FIELDS:
+    for field in fields:
         profile_id = str(definition.source[field])
         profile = get_breakout_quality_experiment_profile(profile_id)
         recipe = get_continuous_ranker_execution_recipe(profile_id)
@@ -285,9 +349,9 @@ def _market_truth_for_oracle(
         raise OracleBlockedError("Oracle缺少策略起始日前的Benchmark交易日")
     score_start = prior[-1]
     limit = pd.Timestamp(cutoff)
-    chunks = {field: [] for field in _ORACLE_PROVIDER_FIELDS}
+    chunks = {field: [] for field in fields}
     skipped = {}
-    valid_counts = {field: 0 for field in _ORACLE_PROVIDER_FIELDS}
+    valid_counts = {field: 0 for field in fields}
     if progress is not None:
         progress(f"成熟真值檢查：0/{len(paths)} 檔價格路徑")
     for index, (ticker, path) in enumerate(paths.items(), start=1):
@@ -333,7 +397,7 @@ def _market_truth_for_oracle(
             # R40 uses the *40th future trading bar Close*, not the peak High,
             # fixed-day MAE or realized Portfolio Replay exit. The canonical
             # price path and mature 40D positions are shared with MFE40.
-            if field == "pure_mfe40_provider":
+            if field in terminal_fields:
                 terminal_r = (closes[eligible + int(spec.horizon_bars)] / closes[eligible] - 1.0) / risk
                 valid &= np.isfinite(terminal_r)
             if not valid.any():
@@ -348,7 +412,7 @@ def _market_truth_for_oracle(
                 "min_low": values[valid, 2],
                 "raw": values[valid, 3],
             }
-            if field == "pure_mfe40_provider":
+            if field in terminal_fields:
                 columns["terminal_r"] = terminal_r[valid]
             chunks[field].append(pd.DataFrame(columns))
     truth = {}
@@ -453,96 +517,115 @@ def _build_oracle_score_panels(
     definition, *, project_root: Path, cutoff: str,
     progress: Callable[[str], None] | None = None,
 ) -> tuple[dict[str, dict[tuple[str, str], float]], dict[str, Any]]:
-    """Canonical hindsight truth; preserve existing 40D cohort for completed replay reuse."""
+    """Build exactly the selected score dependencies, never a stale provider set.
+
+    All selected targets share the same mature common stock-day cohort, so a
+    comparison cannot silently use a larger denominator for one score.  The
+    historical cohort remains immutable in replay caches, and reuse is checked
+    against actual price/parameter provenance by the cache owner.
+    """
+    plan = _oracle_comparison_plan(definition)
+    fields = plan["providers"]
     root = Path(project_root).resolve()
     market, market_evidence = _market_truth_for_oracle(
         definition, root, cutoff=cutoff, progress=progress,
+        provider_fields=fields,
     )
-    provider_truth = {}
-    for field in _ORACLE_PROVIDER_FIELDS:
+    complete: dict[str, pd.DataFrame] = {}
+    extra_rows: dict[str, int] = {}
+    for field in fields:
         if progress is not None:
             progress(f"核對 canonical provider：{field}")
-        provider_truth[field] = _load_truth(definition, root, field, cutoff=cutoff)
-    complete = {}
-    extra_rows = {}
-    for field in _ORACLE_PROVIDER_FIELDS:
+        truth = _load_truth(definition, root, field, cutoff=cutoff)
         complete[field], extra_rows[field] = _reconcile_oracle_truth(
-            provider_truth[field], market[field], field=field,
+            truth, market[field], field=field,
             score_start=market_evidence["score_start"],
         )
-    raw40 = complete["pure_mfe40_provider"]
-    raw20 = complete["mfe20_d20_provider"]
-    first = complete["first_breach_provider"]
-    if "terminal_r" not in raw40:
-        raise OracleBlockedError("40D canonical Research price path missing terminal Close return")
-    a = raw40.rename(columns={c: f"{c}40" for c in ("mfe", "peak_adverse", "min_low", "raw", "terminal_r")})
-    b = raw20.rename(columns={c: f"{c}20" for c in ("mfe", "peak_adverse", "min_low", "raw")})
-    c = first.rename(columns={col: f"{col}fb" for col in ("mfe", "peak_adverse", "min_low", "raw")})
-    joint = a.merge(b, on=["ticker", "date"], how="inner", validate="one_to_one")
-    joint = joint.merge(c, on=["ticker", "date"], how="inner", validate="one_to_one")
-    if joint.empty:
-        raise OracleBlockedError("MFE40、MFE20/D20、First-Breach沒有共同已成熟stock-day")
-    if bool(joint.duplicated(["ticker", "date"]).any()):
-        raise OracleBlockedError("Oracle common cohort存在重複ticker/date")
-    risk = float(StrategyAlignedContinuousTargetSpec.from_label_policy(DEFAULT_LABEL_POLICY).risk_budget_return)
-    for horizon in (20, 40):
-        joint[f"safety_d{horizon}"] = full_horizon_mae_safety_r_from_minimum_low_return(
-            joint[f"min_low{horizon}"].to_numpy(dtype=float), risk_budget_return=risk,
+    joint: pd.DataFrame | None = None
+    for field in fields:
+        framed = complete[field].rename(columns={
+            col: f"{field}__{col}" for col in complete[field]
+            if col not in ("ticker", "date")
+        })
+        joint = framed if joint is None else joint.merge(
+            framed, on=["ticker", "date"], how="inner", validate="one_to_one",
         )
-        joint[f"safety_peak{horizon}"] = -joint[f"peak_adverse{horizon}"].astype(float)
-    if not np.isfinite(joint[["safety_d20", "safety_d40"]].to_numpy(dtype=float)).all():
-        raise OracleBlockedError("Oracle D20/D40 safety包含不合法值")
-
+    if joint is None or joint.empty or joint.duplicated(["ticker", "date"]).any():
+        raise OracleBlockedError("Oracle selected providers沒有共同成熟且唯一的stock-day")
+    risk = float(StrategyAlignedContinuousTargetSpec.from_label_policy(
+        DEFAULT_LABEL_POLICY).risk_budget_return)
     method = str(definition.dimensions["percentile_method"])
     if method != "average_zero_based":
         raise OracleBlockedError("Oracle percentile必須採canonical average_zero_based")
-    def percentile(values: pd.Series, *, dates: pd.Series | None = None) -> pd.Series:
-        temporary = pd.DataFrame({
-            "date": joint["date"] if dates is None else dates, "value": values,
-        })
+
+    def percentile(values: pd.Series) -> pd.Series:
+        temporary = pd.DataFrame({"date": joint["date"], "value": values})
         result, _ = ensure_daily_percentile(temporary, method=method)
         return result["percentile"]
 
-    # The 50/50 equal-rank combination is the pre-existing canonical MR-13N
-    # aggregation. AO/CG describe geometry, NOT a learned model head.
-    raw = {
-        "CG40_EqualRank": (percentile(joint["mfe40"]) + percentile(joint["safety_d40"])) / 2,
-        "MFE40_Control": joint["mfe40"],
-        "R40": joint["terminal_r40"],
-        "T40": _terminal_mae_gate_r(joint["terminal_r40"], joint["safety_d40"]),
-    }
-    expected = {target for target, _ in ORACLE_TARGETS}
-    if set(raw) | set(ORACLE_DIRECT_SCORE_SOURCES) != expected:
-        raise OracleBlockedError("Oracle target inventory不一致")
+    raw: dict[str, pd.Series] = {}
+    safety_by_provider: dict[str, pd.Series] = {}
+    for name, (recipe, provider) in plan["recipes"].items():
+        def col(key: str) -> pd.Series:
+            label = f"{provider}__{key}"
+            if label not in joint:
+                raise OracleBlockedError(f"Oracle {name}缺少canonical欄位：{label}")
+            return pd.to_numeric(joint[label], errors="raise")
+
+        if recipe == "mfe":
+            value = col("mfe")
+        elif recipe == "terminal_r":
+            value = col("terminal_r")
+        else:
+            safety = safety_by_provider.get(provider)
+            if safety is None:
+                safety = full_horizon_mae_safety_r_from_minimum_low_return(
+                    col("min_low").to_numpy(dtype=float), risk_budget_return=risk,
+                )
+                safety = pd.Series(safety, index=joint.index)
+                if not np.isfinite(safety.to_numpy(dtype=float)).all():
+                    raise OracleBlockedError(f"Oracle {provider} MAE safety包含不合法值")
+                safety_by_provider[provider] = safety
+            if recipe == "equal_rank_mfe_safety":
+                value = (percentile(col("mfe")) + percentile(safety)) / 2
+            elif recipe == "terminal_mae_gate":
+                value = _terminal_mae_gate_r(col("terminal_r"), safety)
+            else:
+                raise OracleBlockedError(f"Oracle未授權的score recipe：{recipe}")
+        raw[name] = pd.Series(value, index=joint.index)
+
     keys = list(zip(joint["ticker"].astype(str), joint["date"].astype(str)))
     scores: dict[str, dict[tuple[str, str], float]] = {}
     for name, value in raw.items():
-        ranking = percentile(pd.Series(value, index=joint.index))
+        ranking = percentile(value)
         if not np.isfinite(ranking.to_numpy(dtype=float)).all():
             raise OracleBlockedError(f"Oracle {name}存在非有限rank score")
         scores[name] = dict(zip(keys, ranking.to_numpy(dtype=float)))
-    # A Direct treatment changes ONLY the selector/allocator, never the truth.
-    for direct_name, exact_name in ORACLE_DIRECT_SCORE_SOURCES.items():
-        scores[direct_name] = scores[exact_name]
+    for direct, source in plan["aliases"].items():
+        scores[direct] = scores[source]
+    if set(scores) != {name for name, _desc in plan["targets"]}:
+        raise OracleBlockedError("Oracle比較清單／分數工件依賴不一致")
+
+    # Backward-compatible evidence keys retain their original scientific
+    # definitions; unused provider counters and joins are never computed.
+    reference = safety_by_provider.get("pure_mfe40_provider")
+    mfe_ref = joint.get("pure_mfe40_provider__mfe")
+    reference = reference if reference is not None else pd.Series(dtype=float)
     evidence = {
-        "cohort_rows": len(keys),
-        "first_common_day": min(joint["date"]),
-        "last_common_day": max(joint["date"]),
-        "research_cutoff": cutoff,
+        "cohort_rows": len(keys), "first_common_day": min(joint["date"]),
+        "last_common_day": max(joint["date"]), "research_cutoff": cutoff,
         "risk_budget_return": risk,
-        "providers": {
-            "40d": definition.source["pure_mfe40_provider"],
-            "20d": definition.source["mfe20_d20_provider"],
-            "first_breach": definition.source["first_breach_provider"],
-        },
+        "providers": {_PROVIDER_COHORT_IDS.get(field, field): definition.source[field]
+                      for field in fields},
         "scoring": "All targets final-ranked by average_zero_based percentile within common-day universe",
         "oracle_only": True,
-        # Preserve former 11-target cohort evidence byte-for-byte for strict
-        # per-arm replay REUSE. These are historical-only ratio counters, not
-        # active scores or visible fields in the new eight-target report.
         "ratio_zero_denominator_policy": "D40=0,MFE40>0 -> +infinity (highest rank); 0/0 -> 0; final score = finite daily percentile",
-        "mfe40_over_d40_zero_downside_positive_upside_count": int(((joint["safety_d40"] == 0.0) & (joint["mfe40"] > 0.0)).sum()),
-        "mfe40_over_d40_zero_zero_count": int(((joint["safety_d40"] == 0.0) & (joint["mfe40"] == 0.0)).sum()),
+        "mfe40_over_d40_zero_downside_positive_upside_count": (
+            int(((reference == 0.0) & (mfe_ref > 0.0)).sum()) if mfe_ref is not None and len(reference) else 0
+        ),
+        "mfe40_over_d40_zero_zero_count": (
+            int(((reference == 0.0) & (mfe_ref == 0.0)).sum()) if mfe_ref is not None and len(reference) else 0
+        ),
         "market_truth": market_evidence,
         "rows_outside_dl_training_provider_by_source": extra_rows,
     }
@@ -550,7 +633,7 @@ def _build_oracle_score_panels(
 
 
 def build_oracle_score_tables(definition, *, project_root: Path, cutoff: str) -> tuple[dict[str, dict[tuple[str, str], float]], dict[str, Any]]:
-    """Stable 40D score interface; unchanged cohort for historical replay REUSE."""
+    """Selected-score interface; provider selection is owned by the comparison plan."""
     return _build_oracle_score_panels(
         definition, project_root=project_root, cutoff=cutoff,
     )
@@ -645,14 +728,20 @@ def render_existing_artifact_inventory(definition, *, project_root: Path) -> str
     if (not benchmark.enabled or not seeds or len(seeds) != benchmark.seed_count
             or len(set(seeds)) != len(seeds)):
         raise OracleBlockedError("Target benchmark Seed 設定不完整；無法列出候選工件")
-    targets = ("C96", *(name for name, _description in ORACLE_TARGETS))
+    targets = (str(definition.source["baseline_arm_id"]),
+               *(name for name, _description in _oracle_comparison_plan(definition)["targets"]))
     root = Path(project_root).resolve()
     try:
+        scope = {
+            "dataset": settings.dataset, "start_date": str(settings.start_date),
+            "requested_end": str(settings.end_date), "benchmark": benchmark.benchmark_id,
+        }
         per_arm = OracleReplayStore(root, definition.output_subdir).preview_candidates(
-            seeds=seeds, targets=targets,
+            seeds=seeds, targets=targets, **scope,
         )
         historical = HistoricalOracleIndex(root).preview_candidates(
-            seeds=seeds, targets=targets,
+            seeds=seeds, targets=targets, **scope,
+            strategy_profile_id=settings.profile_id,
         )
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise OracleBlockedError(f"Target 歷史工件盤點無法完成：{exc}") from exc
@@ -660,27 +749,229 @@ def render_existing_artifact_inventory(definition, *, project_root: Path) -> str
     for key, presence in per_arm.items():
         if presence == "INVALID":
             actions[key] = "BLOCKED"
-        elif presence == "MULTIPLE":
-            actions[key] = "CHECK"
-        elif presence == "CACHE" or key in historical:
-            actions[key] = "REUSE?"
+        elif presence in {"CACHE", "MULTIPLE"} or key in historical:
+            actions[key] = "REUSE"
         else:
-            actions[key] = "RUN?"
+            actions[key] = "RUN"
     headers = ("Target", *(f"S{i + 1}" for i in range(len(seeds))))
     rows = [
         (target, *(actions[(seed, target)] for seed in seeds))
         for target in targets
     ]
     counts = {state: list(actions.values()).count(state)
-              for state in ("REUSE?", "RUN?", "CHECK", "BLOCKED")}
+              for state in ("REUSE", "RUN", "BLOCKED")}
     return "\n".join((
         "[Target 驗證 | 既有 Replay 工件]",
         "Seed：" + "  ".join(f"S{i + 1}={seed}" for i, seed in enumerate(seeds)),
         render_table(headers, rows),
-        f"候選 REUSE {counts['REUSE?']} / 待計算 RUN {counts['RUN?']} / "
-        f"待核對 CHECK {counts['CHECK']} / BLOCKED {counts['BLOCKED']}",
-        "註：? 代表依現有工件盤點，尚未核對本次資料與 P16 身分；正式驗證不相容即 BLOCKED，不強制重算。",
+        f"REUSE {counts['REUSE']} / RUN（需計算）{counts['RUN']} / BLOCKED {counts['BLOCKED']}",
+        "註：既有結果先列 REUSE；按 Enter 後依正式資料與 P16 身分核准。衝突將 BLOCK，不覆寫歷史證據。",
     ))
+
+
+
+def _prepare_oracle_parameters(
+    definition, *, root: Path, parameter_paths, start: str, end: str, base_arm,
+):
+    """Single canonical parameter-view resolution for fast REUSE and Replay."""
+    prepared = []
+    param_evidence = []
+    for seed, path in parameter_paths:
+        source, param_sha = load_strategy_param_evaluation_view(
+            path, evaluation_mode=str(definition.dimensions["evaluation_mode"]),
+            start_date=start, end_date=end,
+        )
+        _validate_requested_param_policy(source, str(base_arm.param_policy))
+        kind = str(source["kind"])
+        if kind == "rolling_active_param_ensemble":
+            schedule_start, schedule_end = get_active_param_ensemble_date_range(source["payload"])
+        elif kind == "rolling_oos_param_schedule":
+            schedule_start, schedule_end = get_active_param_date_range(source["payload"])
+        else:
+            raise OracleBlockedError("Oracle基準必須重用正式Rolling P16日程，禁止靜態前視參數")
+        if str(schedule_start) > start or str(schedule_end) < end:
+            raise OracleBlockedError(
+                f"Oracle P16日程未完整覆蓋成熟期間: {schedule_start}~{schedule_end}"
+            )
+        kind, base_params, oracle_params, *_ = _build_controlled_param_source_pair(
+            source, filter_id=str(definition.source["filter_id"]),
+            threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD), fixed_risk=None,
+            comparison_mode=COMPARISON_MODE_SCORE_RANKING,
+            optional_entry_filter_policy=OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
+            shared_param_overrides=ALL_RULE_FILTERS_OFF_OVERRIDES,
+        )
+        prepared.append((seed, param_sha, kind, base_params, oracle_params))
+        param_evidence.append({
+            "seed": seed,
+            "param_path": project_relative_display_path(path, project_root=root),
+            "param_sha256": param_sha,
+        })
+    return prepared, param_evidence
+
+
+def _canonical_oracle_replay_policy(definition, *, base_arm) -> dict[str, Any]:
+    """Shared economic identity for full Replay and fast verified REUSE."""
+    replay_policy = {
+        "baseline_arm": str(definition.source["baseline_arm_id"]),
+        "exact_arm": str(definition.source["exact_arm_id"]),
+        "filter_id": str(definition.source["filter_id"]),
+        "param_policy": str(base_arm.param_policy),
+        "comparison_mode": COMPARISON_MODE_SCORE_RANKING,
+        "optional_entry_filter_policy": OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
+        "all_rule_filters_off": dict(ALL_RULE_FILTERS_OFF_OVERRIDES),
+        "score_threshold": float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
+        "fixed_risk": float(DEFAULT_FIXED_RISK),
+        "max_position_cap_pct": float(DEFAULT_MAX_POSITION_CAP_PCT),
+        "broker_accounting": {
+            "policy_id": BROKER_ACCOUNTING_POLICY_ID,
+            "fee_rate": str(BROKER_FEE_RATE),
+            "min_fee": str(BROKER_MIN_FEE_TWD),
+            "odd_lot_min_fee": str(BROKER_ODD_LOT_MIN_FEE_TWD),
+            "board_lot_shares": int(BROKER_BOARD_LOT_SHARES),
+            "stock_tax_rate": str(BROKER_STOCK_TAX_RATE),
+            "rounding": BROKER_CHARGE_ROUNDING_MODE,
+        },
+        "execution_defaults": {
+            key: str(spec["default"]) if spec["default"] is not None else None
+            for key, spec in sorted(EXECUTION_POLICY_PARAM_SPECS.items())
+        },
+    }
+    return replay_policy
+
+
+
+def _reusable_completed_oracle_report(
+    definition, *, root: Path, settings, base_arm, exact_arm, direct_arm,
+    robustness, parameter_paths, plan, quiet: bool,
+    before_replay: Callable[[str], None] | None = None,
+) -> dict[str, Any] | None:
+    """Fast path: certify an entire completed report WITHOUT materializing targets.
+
+    Only used if EVERY selected Target × Seed has a byte-verified per-arm
+    Replay and the saved completed report independently agrees with all those
+    observations and the current price/P16/economic inputs. Missing evidence
+    falls back to normal dependency planning; mismatched evidence BLOCKS.
+    """
+    archived = HistoricalOracleIndex(root)
+    snapshots = [payload for origin, _path, payload in archived.snapshots
+                 if origin == "reusable"
+                 and payload.get("dataset") == settings.dataset
+                 and payload.get("start_date") == str(settings.start_date)
+                 and payload.get("strategy_profile_id") == settings.profile_id
+                 and payload.get("benchmark_id") == robustness.benchmark_id
+                 and payload.get("status") == "COMPLETED"]
+    if not snapshots:
+        return None
+    wanted_targets = [name for name, _ in plan["targets"]]
+    target_definitions = dict(plan["targets"])
+    seeds = [int(seed) for seed, _ in parameter_paths]
+    cache = OracleReplayStore(root, definition.output_subdir)
+    # Price data SHA is an input certificate; no price-path Target calculator.
+    price_sha = price_inventory_sha256(root, settings.dataset)
+    replay_policy = _canonical_oracle_replay_policy(definition, base_arm=base_arm)
+    for payload in reversed(snapshots):
+        archived_definitions = payload.get("definitions")
+        archived_rows = payload.get("oracles")
+        if (not isinstance(archived_definitions, dict)
+                or not isinstance(archived_rows, list)
+                or any(archived_definitions.get(name) != description
+                       for name, description in target_definitions.items())
+                or len({row.get("target") for row in archived_rows if isinstance(row, dict)})
+                   != len(archived_rows)
+                or not set(wanted_targets).issubset(
+                    {row.get("target") for row in archived_rows if isinstance(row, dict)})
+                or list(payload.get("seeds") or []) != seeds
+                or payload.get("schema_version") != ORACLE_REPORT_SCHEMA_VERSION):
+            continue
+        end = str(payload.get("end_date") or "")
+        if not (str(settings.start_date) < end <= str(settings.end_date)):
+            continue
+        cohort = payload.get("common_cohort")
+        if not isinstance(cohort, dict) or cohort.get("research_cutoff") != str(settings.end_date):
+            continue
+        providers = cohort.get("providers")
+        if not isinstance(providers, dict) or any(
+                providers.get(_PROVIDER_COHORT_IDS.get(field, field)) != definition.source[field]
+                for field in plan["providers"]):
+            continue
+        prepared, evidence = _prepare_oracle_parameters(
+            definition, root=root, parameter_paths=parameter_paths,
+            start=str(settings.start_date), end=end, base_arm=base_arm,
+        )
+        context = {
+            "benchmark": robustness.benchmark_id,
+            "strategy_profile_id": settings.profile_id,
+            "dataset": settings.dataset,
+            "start_date": str(settings.start_date), "end_date": end,
+            "seeds": seeds,
+            "param_sha_by_seed": {int(item["seed"]): item["param_sha256"] for item in evidence},
+            "cohort": cohort,
+            "definitions": target_definitions,
+        }
+        # The verified historical report and every current per-arm cache must
+        # agree. A mere file listing can NEVER authorize fast REUSE.
+        if not archived._compatible(payload, context=context, origin="reusable"):
+            continue
+        complete = True
+        for seed, param_sha, _kind, _base_params, _oracle_params in prepared:
+            for target in (str(definition.source["baseline_arm_id"]), *wanted_targets):
+                direct = plan["selectors"].get(target) == "direct"
+                arm = direct_arm if direct else exact_arm
+                arm_policy = (dict(replay_policy, direct_arm=str(definition.source["direct_arm_id"]))
+                              if direct else replay_policy)
+                identity = replay_identity(
+                    dataset=settings.dataset, dataset_sha256=price_sha,
+                    target=target,
+                    definition={str(definition.source["baseline_arm_id"]):
+                                "Canonical same-window Min P16 Base-Finalist-Best", **target_definitions},
+                    start=str(settings.start_date), end=end,
+                    benchmark=str(robustness.benchmark_id), param_sha256=param_sha,
+                    seed=seed, cohort=cohort, ranking_policy=str(arm.dl_runtime_mode),
+                    ranking_options=dict(arm.dl_runtime_options),
+                    evaluation_mode=str(definition.dimensions["evaluation_mode"]),
+                    max_positions=settings.max_positions, replay_policy=arm_policy,
+                )
+                try:
+                    observation, _origin = cache.resolve_completed(identity)
+                except ValueError as exc:
+                    raise OracleBlockedError(f"Oracle fast REUSE身分衝突：{target} seed={seed}: {exc}") from exc
+                if observation is None:
+                    complete = False
+                    break
+                reported = archived.lookup(target=target, seed=seed, context=context)
+                if reported is None or reported != observation:
+                    raise OracleBlockedError(
+                        f"Oracle fast REUSE報表／cache內容衝突：{target} seed={seed}"
+                    )
+            if not complete:
+                break
+        if complete:
+            if not quiet:
+                print(f"[Target 驗證｜身分核對完成] REUSE {len(seeds) * (len(wanted_targets) + 1)} / "
+                      "RUN（需計算）0 / BLOCKED 0；未重新產生Ground Truth或Replay", flush=True)
+            if before_replay is not None:
+                # The one canonical authorization hook still runs before
+                # publication, including an all-REUSE or narrowed report.
+                before_replay(render_replay_preflight(
+                    label="40D", seeds=seeds,
+                    targets=[str(definition.source["baseline_arm_id"]), *wanted_targets],
+                    decisions={(seed, name): "REUSE" for seed in seeds
+                               for name in (str(definition.source["baseline_arm_id"]), *wanted_targets)},
+                ))
+            # Removing a comparison cannot invalidate a retained per-arm
+            # Replay. A strictly verified historical superset can supply a
+            # smaller CURRENT report; all original evidence stays immutable.
+            # Preserve the historical verified cohort; no claim is made that
+            # its retired providers were rebuilt as 40D-only.
+            rows = {row["target"]: row for row in archived_rows}
+            return {
+                **{key: value for key, value in payload.items()
+                   if key not in {"report_id", "report_type", "report_contract_id",
+                                  "report_contract_fingerprint", "output_subdir"}},
+                "definitions": target_definitions,
+                "oracles": [rows[name] for name in wanted_targets],
+            }
+    return None
 
 
 def build_report(
@@ -691,11 +982,21 @@ def build_report(
     if preflight_display not in {"full", "summary"}:
         raise ValueError("未知 Target Replay preflight 顯示方式")
     root = Path(project_root).resolve()
+    plan = _oracle_comparison_plan(definition)
     settings, base_arm, exact_arm = _contract(definition)
     status = collect_status(definition, project_root=root)
     if status["status"] != "READY":
         raise OracleBlockedError(status["reason"])
     robustness, parameter_paths = _robustness_artifacts(definition, root)
+    fast = _reusable_completed_oracle_report(
+        definition, root=root, settings=settings, base_arm=base_arm,
+        exact_arm=exact_arm,
+        direct_arm=_direct_arm(definition, settings, base_arm, exact_arm),
+        robustness=robustness, parameter_paths=parameter_paths,
+        plan=plan, quiet=quiet, before_replay=before_replay,
+    )
+    if fast is not None:
+        return fast
     def progress(message: str) -> None:
         print(f"[Target 驗證｜前置] {message}", flush=True)
 
@@ -730,41 +1031,14 @@ def build_report(
             "data_dir": data_dir, "start_date": start, "end_date": end,
             "max_positions": settings.max_positions, "enable_rotation": False, "quiet": quiet,
         }
-        prepared = []
-        param_evidence = []
-        for seed, path in parameter_paths:
-            source, param_sha = load_strategy_param_evaluation_view(
-                path, evaluation_mode=str(definition.dimensions["evaluation_mode"]),
-                start_date=start, end_date=end,
-            )
-            _validate_requested_param_policy(source, str(base_arm.param_policy))
-            kind = str(source["kind"])
-            if kind == "rolling_active_param_ensemble":
-                schedule_start, schedule_end = get_active_param_ensemble_date_range(source["payload"])
-            elif kind == "rolling_oos_param_schedule":
-                schedule_start, schedule_end = get_active_param_date_range(source["payload"])
-            else:
-                raise OracleBlockedError("Oracle基準必須重用正式Rolling P16日程，禁止靜態前視參數")
-            if str(schedule_start) > start or str(schedule_end) < end:
-                raise OracleBlockedError(
-                    f"Oracle {label} P16日程未完整覆蓋成熟期間: {schedule_start}~{schedule_end}"
-                )
-            kind, base_params, oracle_params, *_ = _build_controlled_param_source_pair(
-                source, filter_id=str(definition.source["filter_id"]),
-                threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD), fixed_risk=None,
-                comparison_mode=COMPARISON_MODE_SCORE_RANKING,
-                optional_entry_filter_policy=OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
-                shared_param_overrides=ALL_RULE_FILTERS_OFF_OVERRIDES,
-            )
-            prepared.append((seed, param_sha, kind, base_params, oracle_params))
-            param_evidence.append({
-                "seed": seed,
-                "param_path": project_relative_display_path(path, project_root=root),
-                "param_sha256": param_sha,
-            })
+        prepared, param_evidence = _prepare_oracle_parameters(
+            definition, root=root, parameter_paths=parameter_paths,
+            start=start, end=end, base_arm=base_arm,
+        )
         definitions = dict(targets)
         definitions_with_base = {
-            "C96": "Canonical same-window Min P16 Base-Finalist-Best", **definitions,
+            str(definition.source["baseline_arm_id"]): "Canonical same-window Min P16 Base-Finalist-Best",
+            **definitions,
         }
         # AI: Replay computation identity is owned by oracle_replay_artifacts.
         # AI: Strategy Compare arm enabled/name/description, comparison membership,
@@ -781,31 +1055,7 @@ def build_report(
             "cohort": cohort,
             "definitions": definitions,
         }
-        replay_policy = {
-            "baseline_arm": str(definition.source["baseline_arm_id"]),
-            "exact_arm": str(definition.source["exact_arm_id"]),
-            "filter_id": str(definition.source["filter_id"]),
-            "param_policy": str(base_arm.param_policy),
-            "comparison_mode": COMPARISON_MODE_SCORE_RANKING,
-            "optional_entry_filter_policy": OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
-            "all_rule_filters_off": dict(ALL_RULE_FILTERS_OFF_OVERRIDES),
-            "score_threshold": float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
-            "fixed_risk": float(DEFAULT_FIXED_RISK),
-            "max_position_cap_pct": float(DEFAULT_MAX_POSITION_CAP_PCT),
-            "broker_accounting": {
-                "policy_id": BROKER_ACCOUNTING_POLICY_ID,
-                "fee_rate": str(BROKER_FEE_RATE),
-                "min_fee": str(BROKER_MIN_FEE_TWD),
-                "odd_lot_min_fee": str(BROKER_ODD_LOT_MIN_FEE_TWD),
-                "board_lot_shares": int(BROKER_BOARD_LOT_SHARES),
-                "stock_tax_rate": str(BROKER_STOCK_TAX_RATE),
-                "rounding": BROKER_CHARGE_ROUNDING_MODE,
-            },
-            "execution_defaults": {
-                key: str(spec["default"]) if spec["default"] is not None else None
-                for key, spec in sorted(EXECUTION_POLICY_PARAM_SPECS.items())
-            },
-        }
+        replay_policy = _canonical_oracle_replay_policy(definition, base_arm=base_arm)
         observations: dict[str, list[dict[str, Any]]] = {"C96": []}
         observations.update({target: [] for target, _ in targets})
 
@@ -817,7 +1067,7 @@ def build_report(
         blocked: dict[tuple[int, str], str] = {}
         for seed, param_sha, _kind, _base_params, _oracle_params in prepared:
             for target in ("C96", *(name for name, _ in targets)):
-                is_direct = target in ORACLE_DIRECT_SCORE_SOURCES
+                is_direct = plan["selectors"].get(target) == "direct"
                 arm = direct_arm if is_direct else exact_arm
                 arm_replay_policy = (dict(replay_policy, direct_arm=str(definition.source["direct_arm_id"]))
                                      if is_direct else replay_policy)
@@ -925,7 +1175,7 @@ def build_report(
             observations["C96"].append(baseline)
             for target, _description in targets:
                 def run_oracle(target=target):
-                    arm = direct_arm if target in ORACLE_DIRECT_SCORE_SOURCES else exact_arm
+                    arm = direct_arm if plan["selectors"].get(target) == "direct" else exact_arm
                     with audit_oracle_truth_score_context(
                         scores[target],
                         ranking_policy=str(arm.dl_runtime_mode),
@@ -963,7 +1213,7 @@ def build_report(
 
     base = run_panel(
         end=end40, cohort=cohort40, scores=scores40,
-        targets=ORACLE_TARGETS, label="40D",
+        targets=plan["targets"], label="40D",
     )
     return {
         "schema_version": ORACLE_REPORT_SCHEMA_VERSION,
@@ -1024,7 +1274,8 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
              "|" + "|".join("---" for _ in perf_table.headers) + "|"]
     lines.extend("| " + " | ".join(row) + " |" for row in rows)
     lines.extend(["", f"## {sections[1].display_title}",
-                  *[f"- **{_oracle_display_name(key)}** - {desc.replace('D40', 'MAE40')}" for key, desc in ORACLE_TARGETS],
+                  *[f"- **{_oracle_display_name(key)}** - {desc.replace('D40', 'MAE40')}"
+                    for key, desc in report.get("definitions", dict(ORACLE_TARGETS)).items()],
                   "", f"## {sections[2].display_title}"])
     all_years = [year for item in items for year in item["yearly"]]
     year_cells = iter(format_comparison_rows(
