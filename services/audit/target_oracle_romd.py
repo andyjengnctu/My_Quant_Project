@@ -25,7 +25,6 @@ from core.breakout_quality_runtime_resolver import get_continuous_ranker_executi
 from core.console_report import render_table, render_title
 from core.dataset_profiles import get_dataset_dir
 from core.path_utils import project_relative_display_path
-from core.file_integrity import canonical_json_sha256
 from core.strategy_compare_policy import (
     get_strategy_comparison_settings, get_strategy_multi_seed_robustness_settings,
 )
@@ -666,17 +665,10 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
         definitions_with_base = {
             "C96": "Canonical same-window Min P16 Base-Finalist-Best", **definitions,
         }
-        # The 40D panel's fingerprint is byte-for-byte the original v2 replay
-        # fingerprint: neither the new 60D targets nor the report version enter.
-        comparison_sha = canonical_json_sha256({
-            "dataset": settings.dataset,
-            "start_date": start, "end_date": end,
-            "max_positions": int(settings.max_positions),
-            "rotation": settings.rotation,
-            "parameter_source": settings.parameter_sources[str(base_arm.param_source)].as_dict(),
-            "baseline_arm": base_arm.as_dict(),
-            "exact_arm": exact_arm.as_dict(),
-        })
+        # AI: Replay computation identity is owned by oracle_replay_artifacts.
+        # AI: Strategy Compare arm enabled/name/description, comparison membership,
+        # AI: source discovery paths and report inventory are NOT replay inputs.
+        # AI: Per-seed P16 bytes, score policy, economic rules and price bytes are.
         legacy_context = {
             "benchmark": robustness.benchmark_id,
             "strategy_profile_id": settings.profile_id,
@@ -730,7 +722,7 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
                 identity = replay_identity(
                     dataset=settings.dataset, dataset_sha256=price_sha,
                     target=target, definition=definitions_with_base,
-                    settings_fingerprint=comparison_sha, start=start, end=end,
+                    start=start, end=end,
                     benchmark=str(robustness.benchmark_id), param_sha256=param_sha,
                     seed=seed, cohort=cohort,
                     ranking_policy=str(arm.dl_runtime_mode),
@@ -739,16 +731,8 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
                     max_positions=settings.max_positions, replay_policy=arm_replay_policy,
                 )
                 try:
-                    record = cache.read(identity)
-                    origin = "verified per-arm cache"
+                    record, origin = cache.resolve_completed(identity)
                     if record is None:
-                        conflict = cache.explain_other_identity(identity)
-                        if conflict is not None:
-                            raise ValueError(
-                                f"same-window replay_cache has a DIFFERENT identity for "
-                                f"{target} seed={seed}; {conflict}; "
-                                f"replay remains BLOCKED until provenance is verified"
-                            )
                         record = archived.lookup(target=target, seed=seed, context=legacy_context)
                         origin = "compatible completed Oracle report"
                         if record is None:
@@ -775,9 +759,16 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
                 identity, record, origin = completed_plan[(seed, target)]
                 if record is not None:
                     try:
-                        # An older completed report is promoted to a strict
-                        # per-arm cache only after its provenance was checked.
-                        if origin == "compatible completed Oracle report":
+                        # AI: An older completed report is promoted to a strict
+                        # AI: per-arm cache only after its provenance was checked.
+                        if origin.startswith("verified legacy replay cache"):
+                            # AI: Recheck the source immediately before promotion;
+                            # AI: old completed bytes remain immutable and readable.
+                            reread, reread_origin = cache.resolve_completed(identity)
+                            if reread_origin != origin or reread != record:
+                                raise ValueError("Oracle legacy cache changed during preflight; fail closed")
+                            cache.write(identity, record, origin="verified_legacy_replay_cache")
+                        elif origin == "compatible completed Oracle report":
                             cache.write(identity, record, origin="historical_report")
                     except ValueError as exc:
                         raise OracleBlockedError(str(exc)) from exc

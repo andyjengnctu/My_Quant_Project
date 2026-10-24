@@ -7,6 +7,7 @@ Test Suite frozen entry checks, PIT artifacts, or portfolio model fitting.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -651,13 +652,28 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 "C96": "Canonical same-window Min P16 Base-Finalist-Best",
                 **dict(oracle.ORACLE_TARGETS),
             },
-            settings_fingerprint="fixture", start="2021-01-01", end="2025-12-22",
+            start="2021-01-01", end="2025-12-22",
             benchmark="end_to_end_v1", param_sha256=param_sha, seed=seed,
             cohort={"cohort_rows": 123, "research_cutoff": "2026-03-02"},
             ranking_policy="score", ranking_options={"preserve_k_r0": True},
             evaluation_mode="rolling", max_positions=10,
             replay_policy={"exact_k_r0": True},
         )
+
+    @staticmethod
+    def _write_legacy_cache(store, identity, observation):
+        from core.file_integrity import canonical_json_sha256
+        path = store._path(identity)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "cache_schema": 1, "identity": identity,
+            "identity_sha256": canonical_json_sha256(identity),
+            "observation": observation,
+            "observation_sha256": canonical_json_sha256(observation),
+            "origin": "historical_fixture",
+        }
+        path.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        return path
 
     def test_content_sha_changes_even_when_csv_length_is_unchanged(self):
         from services.audit import oracle_replay_artifacts as artifacts
@@ -718,6 +734,83 @@ class OracleReplayEvidenceReuseCases(TestCase):
             self.assertIsNone(store.read(requested))
             self.assertEqual(store.read(cached), self._observation("C96", 1))
             self.assertEqual(store.explain_other_identity(requested), message)
+
+    def test_legacy_comparison_digest_only_can_reuse_and_preserve_old_evidence(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        with tempfile.TemporaryDirectory() as tmp:
+            store = OracleReplayStore(Path(tmp), "breakout_quality/reusable/target_oracle_romd")
+            current = self._identity(target="C96")
+            old = {**current, "cache_schema": 1, "strategy_settings_fingerprint": "7" * 64}
+            record = self._observation("C96", 1)
+            self._write_legacy_cache(store, old, record)
+            legacy_path = store._path(old)
+            original_bytes = legacy_path.read_bytes()
+            with self.assertRaisesRegex(ValueError, "read-only"):
+                store.write(old, record, origin="illegal_legacy_rewrite")
+            self.assertIsNone(store.read(current))
+            self.assertIsNone(store.explain_other_identity(current))
+            reused, origin = store.resolve_completed(current)
+            self.assertEqual(reused, record)
+            self.assertIn("verified legacy replay cache", origin)
+            store.write(current, reused, origin="verified_legacy_replay_cache")
+            self.assertEqual(store.resolve_completed(current)[1], "verified per-arm cache")
+            self.assertEqual(store.read(old), record)
+            self.assertEqual(legacy_path.read_bytes(), original_bytes)
+
+    def test_legacy_migration_rejects_any_replay_semantic_change(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        modifications = (
+            {"dataset_sha256": "d" * 64},
+            {"param_sha256": "e" * 64},
+            {"target_definition": "different mathematical truth"},
+            {"ranking_options": {"preserve_k_r0": False}},
+            {"replay_policy": {"exact_k_r0": False}},
+            {"cohort": {"cohort_rows": 124, "research_cutoff": "2026-03-02"}},
+            {"max_positions": 9},
+            {"end_date": "2025-12-23"},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            store = OracleReplayStore(Path(tmp), "breakout_quality/reusable/target_oracle_romd")
+            base = self._identity(target="C96")
+            old = {**base, "cache_schema": 1, "strategy_settings_fingerprint": "8" * 64}
+            self._write_legacy_cache(store, old, self._observation("C96", 1))
+            for changed in modifications:
+                candidate = dict(base, **changed)
+                if candidate == base:
+                    continue
+                # AI: A different time window is a separate cache cohort, not
+                # AI: a same-window conflict, but must never be reused.
+                if candidate["end_date"] != base["end_date"]:
+                    self.assertEqual(store.resolve_completed(candidate), (None, "none"))
+                else:
+                    with self.subTest(changed=changed), self.assertRaisesRegex(
+                        ValueError, "DIFFERENT identity"
+                    ):
+                        store.resolve_completed(candidate)
+            self.assertFalse(store.has_other_identity(base))
+
+    def test_equivalent_legacy_caches_with_different_observations_fail_closed(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        with tempfile.TemporaryDirectory() as tmp:
+            store = OracleReplayStore(Path(tmp), "breakout_quality/reusable/target_oracle_romd")
+            identity = self._identity(target="C96")
+            for digest, romd in (("a" * 64, 1.0), ("b" * 64, 99.0)):
+                old = {**identity, "cache_schema": 1, "strategy_settings_fingerprint": digest}
+                self._write_legacy_cache(store, old, {**self._observation("C96", 1), "romd": romd})
+            with self.assertRaisesRegex(ValueError, "disagree on observations"):
+                store.resolve_completed(identity)
+
+    def test_incomplete_legacy_identity_is_not_admitted(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        with tempfile.TemporaryDirectory() as tmp:
+            store = OracleReplayStore(Path(tmp), "breakout_quality/reusable/target_oracle_romd")
+            current = self._identity(target="C96")
+            old = {**current, "cache_schema": 1, "strategy_settings_fingerprint": "a" * 64}
+            # AI: A missing broker/score policy is not an innocuous display change.
+            old.pop("replay_policy")
+            self._write_legacy_cache(store, old, self._observation("C96", 1))
+            with self.assertRaisesRegex(ValueError, "DIFFERENT identity"):
+                store.resolve_completed(current)
 
     def test_unrelated_maturity_panel_does_not_block_baseline_reuse(self):
         from services.audit.oracle_replay_artifacts import OracleReplayStore
@@ -1032,6 +1125,103 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 self.assertEqual(len(resumed["oracles"]), 7)
                 oracle.build_report(definition, project_root=Path(tmp), quiet=True)
                 self.assertEqual(state["calls"], 33)
+
+    def test_compare_matrix_display_changes_do_not_replay_oracle(self):
+        from core.strategy_compare_policy import get_strategy_comparison_settings
+        seeds = (11, 22, 33, 44)
+        class Benchmark:
+            benchmark_id = "end_to_end_v1"
+        common = {"cohort_rows": 4, "last_common_day": "2025-12-22"}
+        definition = next(d for d in get_reusable_audit_definitions("breakout_quality")
+                          if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
+        settings = get_strategy_comparison_settings(str(definition.source["strategy_profile_id"]))
+        modified_arms = dict(settings.arms)
+        modified_arms["C100"] = replace(settings.arms["C100"], enabled=True,
+                                        name="new display title", description="new comparison-only description")
+        modified_arms["C96"] = replace(settings.arms["C96"], name="renamed control")
+        modified_sources = dict(settings.parameter_sources)
+        baseline_source = settings.arms["C96"].param_source
+        modified_sources[baseline_source] = replace(settings.parameter_sources[baseline_source],
+                                                    description="new catalog documentation")
+        display_changed = replace(settings, arms=modified_arms, parameter_sources=modified_sources)
+        calls = []
+        def run(*, name, **kwargs):
+            calls.append(name)
+            return {"name": name}
+        def metrics(result, *, target):
+            seed = int(result["name"].split("seed=")[1].split()[0])
+            return self._observation(target, seed)
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
+                 patch.object(oracle, "_robustness_artifacts", return_value=(Benchmark(), [(seed, Path(f"seed_{seed}.json")) for seed in seeds])), \
+                 patch.object(oracle, "_build_oracle_score_panels", return_value=_mock_panels(common)), \
+                 patch.object(oracle, "load_strategy_param_evaluation_view", return_value=({"kind": "rolling_active_param_ensemble", "payload": {}}, "a" * 64)), \
+                 patch.object(oracle, "_validate_requested_param_policy"), \
+                 patch.object(oracle, "get_active_param_ensemble_date_range", return_value=("2020-01-01", "2026-03-02")), \
+                 patch.object(oracle, "_build_controlled_param_source_pair", return_value=("rolling_active_param_ensemble", "base", "oracle", None, None, None)), \
+                 patch.object(oracle, "price_inventory_sha256", return_value="b" * 64), \
+                 patch.object(oracle, "_run_scenario", side_effect=run), \
+                 patch.object(oracle, "_metrics", side_effect=metrics):
+                report = oracle.build_report(definition, project_root=Path(tmp), quiet=True)
+                self.assertEqual(len(calls), 32)
+                with patch.object(oracle, "get_strategy_comparison_settings", return_value=display_changed):
+                    reused = oracle.build_report(definition, project_root=Path(tmp), quiet=True)
+                self.assertEqual(len(calls), 32, "presentation/membership must not cause new replay")
+                self.assertEqual(reused["oracles"], report["oracles"])
+
+    def test_legacy_c96_reuse_in_complete_four_seed_report_without_replay(self):
+        from core.file_integrity import canonical_json_sha256
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        seeds = (11, 22, 33, 44)
+        class Benchmark:
+            benchmark_id = "end_to_end_v1"
+        definition = next(d for d in get_reusable_audit_definitions("breakout_quality")
+                          if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
+        common = {"cohort_rows": 4, "last_common_day": "2025-12-22"}
+        runs = []
+        def replay(*, name, **kwargs):
+            runs.append(name)
+            return {"name": name}
+        def metrics(result, *, target):
+            seed = int(result["name"].split("seed=")[1].split()[0])
+            return self._observation(target, seed)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
+                 patch.object(oracle, "_robustness_artifacts", return_value=(Benchmark(), [(seed, Path(f"seed_{seed}.json")) for seed in seeds])), \
+                 patch.object(oracle, "_build_oracle_score_panels", return_value=_mock_panels(common)), \
+                 patch.object(oracle, "load_strategy_param_evaluation_view", return_value=({"kind": "rolling_active_param_ensemble", "payload": {}}, "a" * 64)), \
+                 patch.object(oracle, "_validate_requested_param_policy"), \
+                 patch.object(oracle, "get_active_param_ensemble_date_range", return_value=("2020-01-01", "2026-03-02")), \
+                 patch.object(oracle, "_build_controlled_param_source_pair", return_value=("rolling_active_param_ensemble", "base", "oracle", None, None, None)), \
+                 patch.object(oracle, "price_inventory_sha256", return_value="b" * 64), \
+                 patch.object(oracle, "_run_scenario", side_effect=replay), \
+                 patch.object(oracle, "_metrics", side_effect=metrics):
+                original = oracle.build_report(definition, project_root=root, quiet=True)
+                self.assertEqual(len(runs), 32)
+                store = OracleReplayStore(root, definition.output_subdir)
+                canonical_path, = tuple((store.cache_root / "11").glob("C96_*.json"))
+                current_payload = json.loads(canonical_path.read_text(encoding="utf-8"))
+                legacy_identity = {
+                    **current_payload["identity"], "cache_schema": 1,
+                    "strategy_settings_fingerprint": "7e7058c39ad23498" + "0" * 48,
+                }
+                legacy_payload = {
+                    **current_payload, "cache_schema": 1, "identity": legacy_identity,
+                    "identity_sha256": canonical_json_sha256(legacy_identity),
+                }
+                legacy_path = store._path(legacy_identity)
+                legacy_path.write_text(json.dumps(legacy_payload), encoding="utf-8")
+                original_legacy_bytes = legacy_path.read_bytes()
+                canonical_path.unlink()  # AI: Fixture: old cache exists, new key does not.
+                rebuilt = oracle.build_report(definition, project_root=root, quiet=True)
+                self.assertEqual(len(runs), 32, "verified old C96 must not run")
+                self.assertEqual(rebuilt["oracles"], original["oracles"])
+                self.assertEqual(rebuilt["baseline"], original["baseline"])
+                self.assertEqual(legacy_path.read_bytes(), original_legacy_bytes)
+                self.assertTrue(canonical_path.exists(), "v2 alias must be persistently reusable")
+                self.assertEqual(json.loads(canonical_path.read_text(encoding="utf-8"))["origin"],
+                                 "verified_legacy_replay_cache")
 
     def test_completed_schema6_report_restores_all_32_units_without_per_arm_cache(self):
         from core.report_contract_versions import load_report_contract_versions

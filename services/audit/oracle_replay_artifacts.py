@@ -22,7 +22,10 @@ from core.file_integrity import (
 )
 from filters.breakout_quality.workflow_io import discover_dataset_csv_inputs
 
-_CACHE_SCHEMA = 1
+# AI: V1 accidentally hashed Strategy Compare presentation/membership metadata.
+# AI: V2 keys only execution inputs; V1 is retained read-only for verified reuse.
+_CACHE_SCHEMA = 2
+_LEGACY_CACHE_SCHEMA = 1
 _REQUIRED_METRICS = (
     "total_return_pct", "annualized_return_pct", "mdd_pct", "romd", "ev_a_r",
     "trades", "exposure_pct",
@@ -78,7 +81,7 @@ def price_inventory_sha256(project_root: Path, dataset: str) -> str:
 
 
 def replay_identity(*, dataset: str, dataset_sha256: str, target: str,
-                    definition: Mapping[str, Any], settings_fingerprint: str,
+                    definition: Mapping[str, Any],
                     start: str, end: str, benchmark: str, param_sha256: str,
                     seed: int, cohort: Mapping[str, Any],
                     ranking_policy: str, ranking_options: Mapping[str, Any],
@@ -96,7 +99,6 @@ def replay_identity(*, dataset: str, dataset_sha256: str, target: str,
         "target_definition": str(definition[target]),
         "dataset": str(dataset),
         "dataset_sha256": str(dataset_sha256),
-        "strategy_settings_fingerprint": str(settings_fingerprint),
         "benchmark": str(benchmark),
         "param_sha256": str(param_sha256),
         "seed": int(seed),
@@ -145,25 +147,51 @@ class OracleReplayStore:
             raise ValueError("Oracle invalid cache target")
         return self.cache_root / str(seed) / f"{target}_{canonical_json_sha256(identity)}.json"
 
-    def explain_other_identity(self, identity: Mapping[str, Any]) -> str | None:
-        """Describe incompatible completed siblings in the same replay panel.
+    @staticmethod
+    def _legacy_semantic_identity(stored: Mapping[str, Any], expected: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Upgrade *only* the old redundant settings digest, never replay semantics.
 
-        Distinct target names and horizon panels are not conflicts. This is
-        diagnostic only: none of the comparisons permits weaker artifact reuse.
+        In V1, that SHA included display names, enabled-in-compare flags and
+        parameter-source catalog details.  All replay-effective facts were
+        also recorded separately (price/param SHA, execution and score policies,
+        exact target, seed, dates, cohort and economic defaults).  Require an
+        exact V2 field inventory and value match; no historical settings hash
+        is treated as authority for a new execution policy.
+        """
+        if stored.get("cache_schema") != _LEGACY_CACHE_SCHEMA:
+            return None
+        if (set(stored) != (set(expected) | {"strategy_settings_fingerprint"})
+                or not is_sha256_hex(stored.get("strategy_settings_fingerprint"))):
+            return None
+        normalized = dict(stored)
+        normalized.pop("strategy_settings_fingerprint")
+        normalized["cache_schema"] = _CACHE_SCHEMA
+        return normalized
+
+    def _inspect_siblings(
+        self, identity: Mapping[str, Any]
+    ) -> tuple[tuple[dict[str, Any], str] | None, str | None]:
+        """Single strict resolver for legacy-equivalent and conflicting caches.
+
+        The legacy settings SHA is non-executable metadata; all other fields
+        must match exactly.  Never silently pick between inconsistent completed
+        observations, and never remove or overwrite historical evidence.
         """
         path = self._path(identity)
         requested_cohort = identity.get("cohort") or {}
         if not isinstance(requested_cohort, dict):
             raise ValueError("Oracle requested replay cohort is malformed")
         conflicts: list[tuple[Path, dict[str, Any]]] = []
+        aliases: list[tuple[Path, dict[str, Any]]] = []
         for candidate in sorted(path.parent.glob(f"{identity['target']}_*.json")):
             if candidate == path:
                 continue
             try:
                 payload = json.loads(candidate.read_text(encoding="utf-8"))
                 peer = payload["identity"]
-                if (payload.get("cache_schema") != _CACHE_SCHEMA
-                        or not isinstance(peer, dict)
+                if (not isinstance(peer, dict)
+                        or peer.get("cache_schema") not in (_LEGACY_CACHE_SCHEMA, _CACHE_SCHEMA)
+                        or payload.get("cache_schema") != peer.get("cache_schema")
                         or int(peer.get("seed", -1)) != int(identity["seed"])
                         or payload.get("identity_sha256") != canonical_json_sha256(peer)
                         or self._path(peer) != candidate):
@@ -174,8 +202,8 @@ class OracleReplayStore:
                 peer_cohort = peer.get("cohort") or {}
                 if not isinstance(peer_cohort, dict):
                     raise ValueError("Oracle sibling replay cache cohort malformed")
-                # A conflict must itself be complete, not an invented filename.
-                if self.read(peer) is None:
+                record = self.read(peer)
+                if record is None:
                     raise ValueError("Oracle sibling replay cache is missing")
             except (OSError, ValueError, TypeError, KeyError, OverflowError) as exc:
                 raise ValueError(
@@ -187,21 +215,49 @@ class OracleReplayStore:
                     and peer.get("end_date") == identity["end_date"]
                     and peer_cohort.get("providers") == requested_cohort.get("providers")
                     and peer_cohort.get("scoring") == requested_cohort.get("scoring")):
-                conflicts.append((candidate, peer))
-        if not conflicts:
-            return None
-        # One canonical diff routine serves every branch/seed; report all field
-        # names, with concise stored/current values and one concrete source path.
-        examples: dict[str, str] = {}
-        for _candidate, peer in conflicts:
-            for field in _changed_identity_fields(peer, identity):
-                examples.setdefault(
-                    field, f"{field} [cache={_identity_field_value(peer, field)}, "
-                           f"current={_identity_field_value(identity, field)}]",
-                )
-        sample_path = conflicts[0][0].relative_to(self.project_root).as_posix()
-        return (f"{len(conflicts)} conflicting cache file(s); example={sample_path}; "
-                f"changed fields: {'; '.join(examples[name] for name in sorted(examples))}")
+                if self._legacy_semantic_identity(peer, identity) == dict(identity):
+                    aliases.append((candidate, record))
+                else:
+                    conflicts.append((candidate, peer))
+        if conflicts:
+            examples: dict[str, str] = {}
+            for _candidate, peer in conflicts:
+                normalized = self._legacy_semantic_identity(peer, identity) or peer
+                for field in _changed_identity_fields(normalized, identity):
+                    examples.setdefault(
+                        field, f"{field} [cache={_identity_field_value(normalized, field)}, "
+                               f"current={_identity_field_value(identity, field)}]",
+                    )
+            sample_path = conflicts[0][0].relative_to(self.project_root).as_posix()
+            return None, (f"{len(conflicts)} conflicting cache file(s); example={sample_path}; "
+                          f"changed fields: {'; '.join(examples[name] for name in sorted(examples))}")
+        if aliases:
+            if len({canonical_json_sha256(record) for _path, record in aliases}) != 1:
+                sample_path = aliases[0][0].relative_to(self.project_root).as_posix()
+                raise ValueError(f"Oracle legacy-equivalent replay caches disagree on observations: {sample_path}")
+            source = aliases[0][0].relative_to(self.project_root).as_posix()
+            return (aliases[0][1], source), None
+        return None, None
+
+    def resolve_completed(self, identity: Mapping[str, Any]) -> tuple[dict[str, Any] | None, str]:
+        """Canonical current cache, or fully verified legacy semantic alias."""
+        current = self.read(identity)
+        if current is not None:
+            return current, "verified per-arm cache"
+        legacy, conflict = self._inspect_siblings(identity)
+        if conflict is not None:
+            raise ValueError(f"same-window replay_cache has a DIFFERENT identity for "
+                             f"{identity['target']} seed={identity['seed']}; {conflict}; "
+                             f"replay remains BLOCKED until provenance is verified")
+        if legacy is not None:
+            record, source = legacy
+            return record, f"verified legacy replay cache ({source})"
+        return None, "none"
+
+    def explain_other_identity(self, identity: Mapping[str, Any]) -> str | None:
+        """Explain genuine replay differences; legacy UI-only drift is compatible."""
+        _legacy, conflict = self._inspect_siblings(identity)
+        return conflict
 
     def has_other_identity(self, identity: Mapping[str, Any]) -> bool:
         """Compatibility probe; explanation and matching have a single owner."""
@@ -213,7 +269,8 @@ class OracleReplayStore:
             return None
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-            if (payload.get("cache_schema") != _CACHE_SCHEMA
+            if (payload.get("cache_schema") != identity.get("cache_schema")
+                    or identity.get("cache_schema") not in (_LEGACY_CACHE_SCHEMA, _CACHE_SCHEMA)
                     or payload.get("identity") != dict(identity)
                     or payload.get("identity_sha256") != canonical_json_sha256(identity)):
                 raise ValueError("Oracle cache identity mismatch")
@@ -225,6 +282,8 @@ class OracleReplayStore:
             raise ValueError("Oracle existing replay cache is corrupt or conflicting; fail closed") from exc
 
     def write(self, identity: Mapping[str, Any], observation: Mapping[str, Any], *, origin: str) -> None:
+        if identity.get("cache_schema") != _CACHE_SCHEMA:
+            raise ValueError("Oracle historical replay cache is read-only")
         record = _validate_observation(observation, target=identity["target"], seed=identity["seed"])
         path = self._path(identity)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -237,7 +296,7 @@ class OracleReplayStore:
                     raise ValueError("Oracle deterministic replay cache conflict")
                 return
             payload = {
-                "cache_schema": _CACHE_SCHEMA,
+                "cache_schema": int(identity["cache_schema"]),
                 "identity": dict(identity),
                 "identity_sha256": canonical_json_sha256(identity),
                 "observation": record,
