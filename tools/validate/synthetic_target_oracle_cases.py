@@ -503,15 +503,21 @@ class OracleAuditContractCases(TestCase):
         # One canonical 40-bar price path drives both supervised DL truth and the
         # hindsight Oracle T40/T40-MFE formulas; no alternative target engine.
         from core.breakout_quality_registry import (
+            SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
             get_breakout_quality_experiment_profile,
             get_continuous_ranker_research_spec,
         )
         from filters.breakout_quality.continuous_target import StrategyAlignedContinuousTargetSpec
         from filters.breakout_quality.daily_ranker_data import compute_daily_opportunity_target_batch
-        from config.breakout_quality import BREAKOUT_QUALITY_MODEL_TEST_PROFILES
         spec = StrategyAlignedContinuousTargetSpec.from_label_policy(oracle.DEFAULT_LABEL_POLICY)
         self.assertEqual(spec.horizon_bars, 40)
-        by_model = dict(BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
+        # Test registered historical Target contracts; do not force retired CI into
+        # the mutable current Model Compare/Test list merely to keep regression coverage.
+        by_model = {
+            research.model_research_id: profile_name
+            for profile_name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+            for research in (get_continuous_ranker_research_spec(profile_name),)
+        }
         self.assertTrue({"MR-13CI", "MR-13CJ", "MR-13CK"}.issubset(by_model))
         by_target = {
             "MR-13CI": "daily_terminal_r40_v1",

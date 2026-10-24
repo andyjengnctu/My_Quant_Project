@@ -372,9 +372,8 @@ BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_FIXED_K_VALUES = (1, 2, 3, 5, 10)
 BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES = (
     ("MR-13AK", "daily_universal_shared_safety_weighted_pure_mfe_full_list_ndcg_pairwise"),
     ("MR-13CG", "daily_universal_shared_full_d40_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
-    ("MR-13CI", "daily_universal_terminal_r40_full_list_ndcg_pairwise"),
     ("MR-13CJ", "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise"),
-    # Archived H/AH/AO/CH and all other historical identities/artifacts are retained.
+    # Archived H/AH/AO/CH/CI and all other historical identities/artifacts are retained.
 )
 
 

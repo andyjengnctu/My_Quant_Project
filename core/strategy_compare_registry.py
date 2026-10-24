@@ -130,8 +130,8 @@ STRATEGY_COMPARE_SUITES = {
     "broker_cash_dl_conversion_v1": {
         "filter_by_current_model_list": True,
         # Single scientific matrix shared by OOS/Rolling and multi-seed robustness.
-        # All DL arms reuse C96/P16; current AK/CG/CI/CJ/CK use Exact K/R0.
-        # Historical AO/CH/Direct arms remain registered but filtered by the
+        # All DL arms reuse C96/P16; active model membership comes from Model Compare/Test SSOT.
+        # Historical AO/CH/CI/Direct arms remain registered but filtered by the
         # canonical Model Compare list; C104 is explicitly retired from this suite.
         "arm_ids": (
             "C96", "C97", "C98", "C99", "C100", "C101", "C102", "C103",
