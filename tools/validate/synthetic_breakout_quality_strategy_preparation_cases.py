@@ -10,7 +10,7 @@ from dataclasses import replace
 import io
 import json
 from contextlib import redirect_stdout
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
@@ -410,8 +410,12 @@ def append_strategy_compare_preparation_contract_checks(
         results, "synthetic_breakout_quality", case_id,
         "robustness_replay_keeps_explicit_same_seed_pit_bundle",
         True,
-        isolated_kwargs.get("selection_pit_score_path_override") == isolated_score
-        and isolated_kwargs.get("selection_pit_manifest_path_override") == isolated_manifest
+        # AI: run_comparison receives str(Path(...)); on Windows the separators
+        # become backslashes. Compare file identities rather than raw strings.
+        PureWindowsPath(str(isolated_kwargs.get("selection_pit_score_path_override") or ""))
+        == PureWindowsPath(isolated_score)
+        and PureWindowsPath(str(isolated_kwargs.get("selection_pit_manifest_path_override") or ""))
+        == PureWindowsPath(isolated_manifest)
         and isolated_kwargs.get("selection_pit_expected_seed_override") == 762252050,
     )
     fail_closed = []
