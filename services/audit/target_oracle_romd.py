@@ -632,10 +632,64 @@ def render_replay_preflight(
     ))
 
 
+def render_existing_artifact_inventory(definition, *, project_root: Path) -> str:
+    """Show cached evidence before any market truth or P16 materialization.
+
+    This is ONLY an existence/integrity inventory, NOT a replay dependency
+    planner.  The full preflight in build_report() remains the sole authority
+    for canonical REUSE/RUN/BLOCKED decisions and Replay authorization.
+    """
+    settings, _base, _exact = _contract(definition)
+    benchmark = get_strategy_multi_seed_robustness_settings(settings.profile_id)
+    seeds = tuple(int(seed) for seed in benchmark.resolved_seeds)
+    if (not benchmark.enabled or not seeds or len(seeds) != benchmark.seed_count
+            or len(set(seeds)) != len(seeds)):
+        raise OracleBlockedError("Target benchmark Seed 設定不完整；無法列出候選工件")
+    targets = ("C96", *(name for name, _description in ORACLE_TARGETS))
+    root = Path(project_root).resolve()
+    try:
+        per_arm = OracleReplayStore(root, definition.output_subdir).preview_candidates(
+            seeds=seeds, targets=targets,
+        )
+        historical = HistoricalOracleIndex(root).preview_candidates(
+            seeds=seeds, targets=targets,
+        )
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise OracleBlockedError(f"Target 歷史工件盤點無法完成：{exc}") from exc
+    actions: dict[tuple[int, str], str] = {}
+    for key, presence in per_arm.items():
+        if presence == "INVALID":
+            actions[key] = "BLOCKED"
+        elif presence == "MULTIPLE":
+            actions[key] = "CHECK"
+        elif presence == "CACHE" or key in historical:
+            actions[key] = "REUSE?"
+        else:
+            actions[key] = "RUN?"
+    headers = ("Target", *(f"S{i + 1}" for i in range(len(seeds))))
+    rows = [
+        (target, *(actions[(seed, target)] for seed in seeds))
+        for target in targets
+    ]
+    counts = {state: list(actions.values()).count(state)
+              for state in ("REUSE?", "RUN?", "CHECK", "BLOCKED")}
+    return "\n".join((
+        "[Target 驗證 | 既有 Replay 工件]",
+        "Seed：" + "  ".join(f"S{i + 1}={seed}" for i, seed in enumerate(seeds)),
+        render_table(headers, rows),
+        f"候選 REUSE {counts['REUSE?']} / 待計算 RUN {counts['RUN?']} / "
+        f"待核對 CHECK {counts['CHECK']} / BLOCKED {counts['BLOCKED']}",
+        "註：? 代表依現有工件盤點，尚未核對本次資料與 P16 身分；正式驗證不相容即 BLOCKED，不強制重算。",
+    ))
+
+
 def build_report(
     definition, *, project_root: Path, quiet: bool = False,
     before_replay: Callable[[str], None] | None = None,
+    preflight_display: str = "full",
 ) -> dict[str, Any]:
+    if preflight_display not in {"full", "summary"}:
+        raise ValueError("未知 Target Replay preflight 顯示方式")
     root = Path(project_root).resolve()
     settings, base_arm, exact_arm = _contract(definition)
     status = collect_status(definition, project_root=root)
@@ -808,7 +862,13 @@ def build_report(
             decisions=decisions,
         )
         if not quiet:
-            print("\n" + preview, flush=True)
+            if blocked or preflight_display == "full":
+                print("\n" + preview, flush=True)
+            else:
+                reuse_count = sum(value == "REUSE" for value in decisions.values())
+                run_count = sum(value == "RUN" for value in decisions.values())
+                print(f"[Target 驗證｜身分核對完成] REUSE {reuse_count} / "
+                      f"RUN（需計算）{run_count} / BLOCKED 0", flush=True)
         if blocked:
             details = [f"{target} seed={seed}: {reason}"
                        for (seed, target), reason in blocked.items()]
@@ -823,7 +883,7 @@ def build_report(
             before_replay(preview)
 
         for seed, param_sha, kind, base_params, oracle_params in prepared:
-            if not quiet:
+            if not quiet and preflight_display == "full":
                 print(f"[Oracle Audit {label}] seed={seed}: verify C96 + {len(targets)} Oracle results")
 
             def load_or_run(target: str, runner):
@@ -843,7 +903,7 @@ def build_report(
                             cache.write(identity, record, origin="historical_report")
                     except ValueError as exc:
                         raise OracleBlockedError(str(exc)) from exc
-                    if not quiet:
+                    if not quiet and preflight_display == "full":
                         print(f"[REUSE] {label} seed={seed} {target} | {origin}")
                     return record
                 if not quiet:
@@ -999,12 +1059,14 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
 def run_formal_audit(
     definition, *, project_root: Path, quiet: bool = False,
     before_replay: Callable[[str], None] | None = None,
+    preflight_display: str = "full",
 ) -> dict[str, Any]:
     # Authorization, frozen schema, and historical snapshot must be checked
     # before initiating the costly hindsight-only portfolio replays.
     approved = require_approved_report_contract("audit.target_oracle_romd")
     payload = dict(build_report(
         definition, project_root=project_root, quiet=quiet, before_replay=before_replay,
+        preflight_display=preflight_display,
     ))
     payload["report_contract_id"] = f"{approved.report_id}@v{approved.version}"
     payload["report_contract_fingerprint"] = persistent_report_contract_fingerprint(approved.report_id)
@@ -1026,5 +1088,6 @@ def run_formal_audit(
 __all__ = [
     "SUPPORTED_AUDIT_TYPE", "ORACLE_TARGETS", "ORACLE_DIRECT_SCORE_SOURCES", "OracleBlockedError",
     "collect_status", "build_oracle_score_tables", "render_replay_preflight",
+    "render_existing_artifact_inventory",
     "build_report", "render_result", "run_formal_audit",
 ]

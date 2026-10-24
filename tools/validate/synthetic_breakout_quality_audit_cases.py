@@ -155,18 +155,18 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     answers = iter(["", "", "0"])
 
     def input_after_plan(prompt):
-        prompts.append((prompt, "REUSE 32" in route_console.getvalue()))
+        prompts.append((prompt, "候選 REUSE 32" in route_console.getvalue()))
         return next(answers)
 
     def fake_target_runner(*args, **kwargs):
-        # AI: A mocked runner must still deliver its preflight approval callback;
-        # AI: it must not hide the new Enter-after-plan contract from the test.
-        print("REUSE 32 / RUN 0 / BLOCKED 0")
-        kwargs["before_replay"]("verified full-workload plan")
+        # AI: This standard Research action needs no second confirmation.
+        # AI: The canonical producer will validate identities and auto-RUN misses.
+        print("[Target 驗證｜身分核對完成] REUSE 32 / RUN（需計算）0 / BLOCKED 0")
         return {}
 
     with patch("builtins.input", side_effect=input_after_plan), \
-         patch.object(research_app, "render_audit_status", return_value="READY"), \
+         patch.object(research_app, "render_audit_status") as expensive_status, \
+         patch.object(research_app, "render_audit_artifact_inventory", return_value="候選 REUSE 32 / 待計算 RUN 0"), \
          patch.object(research_app, "run_enabled_audits", side_effect=fake_target_runner) as oracle_runner, \
          patch.object(research_app, "render_latest_audit_summary", return_value="LATEST"), \
          redirect_stdout(route_console):
@@ -176,6 +176,8 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         "target_validation_runs_once_from_research_default_enter",
         route_rc == 0 and oracle_runner.call_count == 1
         and oracle_runner.call_args.kwargs.get("method_id") == oracle_method_id
+        and oracle_runner.call_args.kwargs.get("preflight_display") == "summary"
+        and not expensive_status.called
         and "[1]" in root_text and "Target 驗證" in root_text
         and "[2]" in root_text and "模型訓練／驗證" in root_text
         and "[5]" in root_text and "Audit／診斷" in root_text
@@ -184,21 +186,22 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     check_true(
         "target_verification_shows_reuse_before_execution_enter",
         len(prompts) == 3 and not prompts[0][1] and prompts[1][1]
-        and "已列出 REUSE" in prompts[1][0]
-        and root_text.index("REUSE 32") < root_text.index("LATEST"),
+        and "按 Enter 驗證並執行需要計算" in prompts[1][0]
+        and root_text.index("候選 REUSE 32") < root_text.index("身分核對完成")
+        and "只核對正式" not in root_text and "完整驗證＋" not in root_text,
     )
     cancellation = io.StringIO()
     with patch("builtins.input", return_value="0"), \
-         patch.object(research_app, "render_audit_status", return_value="READY"), \
+         patch.object(research_app, "render_audit_status") as status, \
+         patch.object(research_app, "render_audit_artifact_inventory", return_value="候選 REUSE 32"), \
          patch.object(research_app, "run_enabled_audits", side_effect=fake_target_runner) as cancelled_runner, \
          patch.object(research_app, "render_latest_audit_summary") as latest, \
          redirect_stdout(cancellation):
         research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
     check_true(
         "target_preflight_cancel_does_not_claim_or_persist_report",
-        cancelled_runner.call_count == 1
-        and not latest.called
-        and "已取消本次執行" in cancellation.getvalue(),
+        not cancelled_runner.called and not latest.called and not status.called
+        and "候選 REUSE 32" in cancellation.getvalue(),
     )
 
     reusable_defs = get_reusable_audit_definitions("breakout_quality")

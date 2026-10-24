@@ -147,6 +147,46 @@ class OracleReplayStore:
             raise ValueError("Oracle invalid cache target")
         return self.cache_root / str(seed) / f"{target}_{canonical_json_sha256(identity)}.json"
 
+    def preview_candidates(self, *, seeds: tuple[int, ...], targets: tuple[str, ...]) -> dict[tuple[int, str], str]:
+        """Lightweight existing-artifact inventory; NEVER an execution/reuse decision.
+
+        Reuse the canonical cache reader for evidence integrity.  The current
+        price, P16 and cohort identities are intentionally NOT loaded here;
+        only resolve_completed() can certify true REUSE during full preflight.
+        """
+        candidates: dict[tuple[int, str], str] = {
+            (seed, target): "MISSING" for seed in seeds for target in targets
+        }
+        # A short target name can prefix another (R40 vs R40_Direct).
+        names = tuple(sorted(targets, key=len, reverse=True))
+        for seed in seeds:
+            directory = self.cache_root / str(seed)
+            if not directory.is_dir():
+                continue
+            for path in sorted(directory.glob("*.json")):
+                target = next((name for name in names if path.name.startswith(f"{name}_")), None)
+                if target is None:
+                    continue
+                key = (seed, target)
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                    identity = payload["identity"]
+                    if (not isinstance(identity, dict)
+                            or identity.get("target") != target
+                            or int(identity.get("seed", -1)) != seed
+                            or self._path(identity) != path
+                            or self.read(identity) is None):
+                        raise ValueError("Invalid cache evidence")
+                except (OSError, KeyError, TypeError, ValueError, OverflowError):
+                    candidates[key] = "INVALID"
+                    continue
+                previous = candidates[key]
+                if previous == "MISSING":
+                    candidates[key] = "CACHE"
+                elif previous == "CACHE":
+                    candidates[key] = "MULTIPLE"
+        return candidates
+
     @staticmethod
     def _legacy_semantic_identity(stored: Mapping[str, Any], expected: Mapping[str, Any]) -> dict[str, Any] | None:
         """Upgrade *only* the old redundant settings digest, never replay semantics.
@@ -377,6 +417,43 @@ class HistoricalOracleIndex:
                     panel_payload = dict(payload)
                     panel_payload.update(panel)
                     self.snapshots.append((origin, path, panel_payload))
+
+    def preview_candidates(self, *, seeds: tuple[int, ...], targets: tuple[str, ...]) -> set[tuple[int, str]]:
+        """Discover historical observation *presence*, not scientific compatibility.
+
+        Exact source/cohort/definition checks remain exclusively in lookup().
+        """
+        wanted = set(seeds)
+        available: set[tuple[int, str]] = set()
+        for _origin, _path, payload in self.snapshots:
+            if not isinstance(payload.get("definitions"), dict):
+                continue
+            aggregates = [("C96", payload.get("baseline"))]
+            aggregates.extend(
+                (item.get("target"), item)
+                for item in (payload.get("oracles") or [])
+                if isinstance(item, dict)
+            )
+            for target, aggregate in aggregates:
+                if (target not in targets or not isinstance(aggregate, dict)
+                        or (target != "C96" and target not in payload["definitions"])):
+                    continue
+                rows = aggregate.get("seed_observations")
+                if not isinstance(rows, list):
+                    continue
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    try:
+                        seed = int(row.get("seed", -1))
+                        if seed in wanted:
+                            _validate_observation(row, target=target, seed=seed)
+                            available.add((seed, target))
+                    except (ValueError, KeyError, TypeError, OverflowError):
+                        # A malformed historical row is never an admission to REUSE;
+                        # the strict resolver diagnoses any requested conflict.
+                        continue
+        return available
 
     def _compatibility_issues(self, payload: Mapping[str, Any], *,
                               context: Mapping[str, Any], origin: str) -> tuple[str, ...]:
