@@ -726,18 +726,29 @@ class OracleAuditContractCases(TestCase):
             ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
             entry = next(x for x in ledger["reports"] if x["report_id"] == "audit.target_oracle_romd")
             self.assertEqual(entry["versions"][-1]["version"], 9)
-            snapshot = json.loads((folder / "AUDIT_TARGET_ORACLE_ROMD_v9.json").read_text(encoding="utf-8"))
+            # A historical version is addressed by its archived logical path,
+            # not a loose per-version JSON file. Future approved revisions
+            # append archive + ledger entries without accumulating *_vN.json.
+            from zipfile import ZipFile, ZIP_DEFLATED
+            history_path = folder / "CONTRACT_EVIDENCE_HISTORY.zip"
+            with ZipFile(history_path) as history:
+                snapshot = json.loads(history.read(
+                    "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v9.json"
+                ).decode("utf-8"))
             snapshot["version"] = 10
             snapshot["sections"][1]["title"] = "A different authorized future schema"
-            path = folder / "AUDIT_TARGET_ORACLE_ROMD_v10.json"
-            path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            virtual_path = "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v10.json"
+            raw = (json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+            with ZipFile(history_path, "a", compression=ZIP_DEFLATED) as history:
+                history.writestr(virtual_path, raw)
+            self.assertFalse((folder / "AUDIT_TARGET_ORACLE_ROMD_v10.json").exists())
             canonical = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             entry["versions"].append({
                 "contract_id": "audit.target_oracle_romd@v10",
                 "version": 10,
                 "fingerprint": hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16],
-                "definition_path": "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v10.json",
-                "definition_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "definition_path": virtual_path,
+                "definition_sha256": hashlib.sha256(raw).hexdigest(),
             })
             ledger_path.write_text(json.dumps(ledger, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             self.assertEqual(load_report_contract_versions(project)["audit.target_oracle_romd"][-1]["version"], 10)

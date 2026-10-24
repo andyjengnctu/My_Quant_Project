@@ -118,6 +118,22 @@
     "vol_long_len": 20,
     "vol_short_len": 5
   },
+  "historical_golden_sha256": {
+    "1": "172b828579a2302be866092cbe12897a2e8c9ffe2d6ab7fd6bc8ada1b14d4a9b",
+    "10": "a49c18311d4875c9aaa0a60af552ed9d9763c8ae37219d5b3d6478fabf5e0ce7",
+    "11": "c400024846bec0560eb6dd8b8990953d506d3d8e31df30d0104c4662e85f104c",
+    "12": "c9679166188693603023babc43b752a404034b740e80ffedb44638bf73caa479",
+    "13": "94312a0688b60e3ba1380a436fb6f54a555e0c361b0aaa34f93e5c4c0a46d861",
+    "14": "9f4f2eac8ae2e8ed590e330dd74608cf896936e6425da225bed2efae93cc4962",
+    "2": "f03067dc0258ea95295b22e549e08a158da39449ac0021dd3f0a2c07a3bfe066",
+    "3": "5a5b3b8cd82528c5170283c5f9f2f955d7934e27ecaa8f79949c5f7263578280",
+    "4": "551533f707ee1c8d06101f5bef1462ca1af279063f4f36ce2253fa906b2d2f1e",
+    "5": "e1f19d813b5525bd87fe64acfb56e8c5ff2281cf6718aef4a80afc37f0f9856f",
+    "6": "ef7962c29806ad9074f60e0242e3b961735e10052224bfd939705871594f57f7",
+    "7": "f20ed33fc2e9dee40baf33d273070a08025d71434e59103d2f7b35acc4cbd0fb",
+    "8": "ba2508b721f96df01ea48ba7b50abe9b49d5ce803374980c62636c1173710e82",
+    "9": "2de580f8147d37a55148bb3841eaddee43532e6872441e25b47972fbce8cdae7"
+  },
   "protected_guards": [
     {
       "ast_sha256": "ea714681584cffb9110658c420127f07f239db58d5809a4616e26bd1f97577bd",
@@ -130,7 +146,7 @@
       "path": "tools/validate/ssot_regression_guard.py"
     },
     {
-      "ast_sha256": "5412f03e47d5da2ba6a6676b9c60c4ca2472c39c734dde79dd7cd5ed3f132c62",
+      "ast_sha256": "6ca9fa6de513a63ef82453ea5cfc6b16775c2e7fa93d64fef904c85189e81263",
       "function": "read_approved_baseline",
       "path": "tools/validate/ssot_regression_guard.py"
     },
@@ -150,12 +166,12 @@
       "path": "tools/validate/ssot_regression_guard.py"
     },
     {
-      "ast_sha256": "6c4e0dbe8a6229f921434b88eec0ca9b5378b4b215eb7e5aca123cee0eebe697",
+      "ast_sha256": "7e0ac84e76a843abdc82e0ff413b8b13c1656b52c898f6e2b02a113b927b6b49",
       "function": "summarize_ssot_regression_guard",
       "path": "tools/validate/ssot_regression_guard.py"
     },
     {
-      "ast_sha256": "a5468bdce47215c853c4da3dd3caf38b004173d93307b7bab2a6540827bcf1a4",
+      "ast_sha256": "b4668e631561affe28ad7695b375cc7dec9e960703199b35f70c0acf2350a7ba",
       "function": "report_contract_version_history_violations",
       "path": "tools/validate/ssot_regression_guard.py"
     }
@@ -185,17 +201,59 @@
       },
       {
         "contract_id": "audit.target_oracle_romd@v2",
-        "version": 2,
-        "fingerprint": "ea8dd35394f5ea66",
         "definition_path": "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v2.json",
-        "definition_sha256": "79b6d37a818c24661b5e2a86031ff43afd53079393c4bcad6a6c37d913e33bbb"
+        "definition_sha256": "79b6d37a818c24661b5e2a86031ff43afd53079393c4bcad6a6c37d913e33bbb",
+        "fingerprint": "ea8dd35394f5ea66",
+        "version": 2
       },
       {
         "contract_id": "audit.target_oracle_romd@v3",
-        "version": 3,
-        "fingerprint": "41d7c2bf0bf08c3b",
         "definition_path": "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v3.json",
-        "definition_sha256": "e78fa468555605b3655d8ab18030564f88afeddde850582748bab598cf319eb5"
+        "definition_sha256": "e78fa468555605b3655d8ab18030564f88afeddde850582748bab598cf319eb5",
+        "fingerprint": "41d7c2bf0bf08c3b",
+        "version": 3
+      },
+      {
+        "contract_id": "audit.target_oracle_romd@v4",
+        "definition_path": "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v4.json",
+        "definition_sha256": "3394f79693ca4cc30fa33daa27fa001b0678bd5cf0539743922d69fbdb200da0",
+        "fingerprint": "7ebe0f8211bce750",
+        "version": 4
+      },
+      {
+        "contract_id": "audit.target_oracle_romd@v5",
+        "definition_path": "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v5.json",
+        "definition_sha256": "88a286aa8d260e833cf8b072bb90bc8921e4ca191d3ecefea3497e747c5b31e0",
+        "fingerprint": "0a98458507db91eb",
+        "version": 5
+      },
+      {
+        "contract_id": "audit.target_oracle_romd@v6",
+        "definition_path": "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v6.json",
+        "definition_sha256": "2f4146f19ed0f0275e9df69d5fd72794e0ab54cdaf45c06d00a5146b5c69a780",
+        "fingerprint": "2688f1ce316135be",
+        "version": 6
+      },
+      {
+        "contract_id": "audit.target_oracle_romd@v7",
+        "definition_path": "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v7.json",
+        "definition_sha256": "a0ab79295d2e569005b38cbc92f53b07ee7519fcf7edf09f6d11000bea4e5e80",
+        "fingerprint": "c4c24459cc133aae",
+        "version": 7
+      },
+      {
+        "contract_id": "audit.target_oracle_romd@v8",
+        "definition_path": "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v8.json",
+        "definition_sha256": "5f6d2d0032a9f0b2327f5f1bbe19ff8b25e3f4238ef0c1d4259560f401b7fa60",
+        "fingerprint": "ffacec7ba5e7b476",
+        "version": 8
+      },
+      {
+        "contract_id": "audit.target_oracle_romd@v9",
+        "definition_path": "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v9.json",
+        "definition_sha256": "7763c318765eeb17179e5702d94ef7b72ccf3d85c279bec7e33b5edef2e0b1ea",
+        "fingerprint": "4f911292da243836",
+        "version": 9
       }
     ],
     "audit.trade_outcome_path": [
@@ -358,7 +416,7 @@
       "path": "tools/validate/synthetic_flow_cases.py"
     }
   ],
-  "purpose": "SSOT regression v6: user-authorized reusable Oracle Audit report registration; preserves all v1-v5 history and immutable existing tests/metrics.",
-  "schema_version": 8,
-  "source_zip_sha256": "9a9356bf98977bc41820057c8846b5d753b775f693b3333f33292369ea5fa094"
+  "purpose": "Approved Oracle v9 inventory-neutral title and one-time SSOT contract-prefix guard migration. Historical v1-v13 frozen; future properly approved append-only report definitions do not need new SSOT Golden.",
+  "schema_version": 14,
+  "source_zip_sha256": "826fbcfac4e663be41566d49c0d3cf9b6b758fd691741bc97951c1762cf827f3"
 }

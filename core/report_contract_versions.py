@@ -12,8 +12,10 @@ import json
 from pathlib import Path
 import re
 from typing import Any, Mapping
+from zipfile import BadZipFile, ZipFile
 
 REGISTRY_RELATIVE_PATH = 'doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json'
+ARCHIVE_RELATIVE_PATH = 'doc/scientific_contracts/CONTRACT_EVIDENCE_HISTORY.zip'
 _SHA16 = re.compile(r'^[0-9a-f]{16}$')
 _SHA64 = re.compile(r'^[0-9a-f]{64}$')
 
@@ -37,6 +39,24 @@ def load_report_contract_versions(project_root: Path | None = None) -> dict[str,
     reports = data.get('reports')
     if not isinstance(reports, list) or not reports:
         raise ValueError('report scientific contract registry has no records')
+    # A single archive holds the byte-identical historical definitions. The
+    # ledger remains the only index/identity owner; no on-disk *_vN.json files
+    # are needed. Future authorized versions append a definition to this archive
+    # and a new ledger row, NOT another standalone JSON file.
+    try:
+        with ZipFile(root / ARCHIVE_RELATIVE_PATH) as archive:
+            paths = archive.namelist()
+            if len(paths) != len(set(paths)):
+                raise ValueError('duplicate historical contract archive member')
+            definitions = {
+                name: archive.read(name) for name in paths
+                if name.startswith('doc/scientific_contracts/')
+            }
+            if any(name.startswith('/') or '..' in Path(name).parts for name in paths):
+                raise ValueError('unsafe historical contract archive path')
+    except (BadZipFile, OSError, KeyError) as exc:
+        raise ValueError(f'historical scientific contract archive missing/invalid: {exc}') from exc
+    referenced_definitions: set[str] = set()
     result: dict[str, tuple[dict[str, Any], ...]] = {}
     for item in reports:
         if not isinstance(item, dict):
@@ -74,15 +94,26 @@ def load_report_contract_versions(project_root: Path | None = None) -> dict[str,
             if doc_path is not None:
                 if not isinstance(doc_path, str) or not isinstance(doc_hash, str) or not _SHA64.fullmatch(doc_hash):
                     raise ValueError(f'{report_id}@v{version}: invalid definition path/hash')
-                full = (root / doc_path).resolve()
-                if not full.is_relative_to(root) or not doc_path.startswith('doc/scientific_contracts/') or not full.is_file():
-                    raise ValueError(f'{report_id}@v{version}: scientific definition missing/invalid path')
-                if hashlib.sha256(full.read_bytes()).hexdigest() != doc_hash:
-                    raise ValueError(f'{report_id}@v{version}: scientific definition changed without new version')
-                if not full.name.endswith((f'_v{version}.md',f'_v{version}.json')):
-                    raise ValueError(f'{report_id}@v{version}: expected versioned definition filename')
-                if full.suffix == '.json':
-                    snapshot = json.loads(full.read_text(encoding='utf-8'), object_pairs_hook=_strict_object)
+                if (not doc_path.startswith('doc/scientific_contracts/')
+                        or '..' in Path(doc_path).parts
+                        or not doc_path.endswith((f'_v{version}.md', f'_v{version}.json'))):
+                    raise ValueError(f'{report_id}@v{version}: invalid archived definition name')
+                raw = definitions.get(doc_path)
+                if raw is None:
+                    raise ValueError(f'{report_id}@v{version}: archived scientific definition missing')
+                if doc_path in referenced_definitions:
+                    raise ValueError(f'{report_id}@v{version}: archived definition referenced twice')
+                referenced_definitions.add(doc_path)
+                if hashlib.sha256(raw).hexdigest() != doc_hash:
+                    raise ValueError(f'{report_id}@v{version}: archived scientific definition changed without new version')
+                # During one-time migration, old loose files may coexist with
+                # the archive. Reject conflicting copies rather than silently
+                # trusting either; they can be removed after validation.
+                old_file = root / doc_path
+                if old_file.is_file() and old_file.read_bytes() != raw:
+                    raise ValueError(f'{report_id}@v{version}: loose definition conflicts with archive')
+                if doc_path.endswith('.json'):
+                    snapshot = json.loads(raw.decode('utf-8'), object_pairs_hook=_strict_object)
                     digest = hashlib.sha256(json.dumps(
                         snapshot, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
                     ).encode('utf-8')).hexdigest()[:16]
@@ -90,6 +121,8 @@ def load_report_contract_versions(project_root: Path | None = None) -> dict[str,
                         raise ValueError(f'{report_id}@v{version}: archived schema fingerprint drift')
             records.append(dict(row))
         result[report_id] = tuple(records)
+    if referenced_definitions != set(definitions):
+        raise ValueError('historical archive/ledger definition inventory differs')
     if tuple(result) != tuple(sorted(result)):
         raise ValueError('report scientific contract registry must be sorted by report_id')
     return result
