@@ -36,7 +36,10 @@ GENERIC_CONSUMER_PATHS = (
 
 
 def _sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+    # LF is the approved Golden byte representation; checkout/ZIP CRLF is
+    # transport formatting, not a scientific or test-contract change.
+    # The other caller hashes AST dumps, which have no physical CRLF.
+    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
 
 
 def _file_ast(project_root: Path, relative_path: str) -> ast.Module:

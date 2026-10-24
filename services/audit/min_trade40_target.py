@@ -18,16 +18,10 @@ import numpy as np
 import pandas as pd
 
 from config.audit import AUDIT_OUTPUT_ROOT
-from core.console_report import render_table, render_title
 from core.file_integrity import canonical_json_sha256
 from core.portfolio_param_runtime import (
     build_active_param_ensemble_objects_from_payload,
     build_active_param_objects_from_payload,
-)
-from core.report_style import styled_workflow_status
-from core.research_report_contract import (
-    report_contract, require_approved_report_contract,
-    persistent_report_contract_fingerprint,
 )
 from filters.breakout_quality.mfe_safety_geometry import normalize_ticker
 from filters.breakout_quality.trade_path_label import (
@@ -35,15 +29,14 @@ from filters.breakout_quality.trade_path_label import (
 )
 from filters.breakout_quality.workflow_io import discover_dataset_csv_inputs, load_dataset_frame
 from services.audit.oracle_replay_artifacts import price_inventory_sha256
-from services.audit.reusable_report import persist_reusable_report, format_contract_row
 
 
 TARGET_ID = "LABEL-mintrade40_realized_net_r_v1"
 TARGET_NAME = "MinTrade40_NetR"
 # This existing scientific label ID is fixed to 40 market trading sessions.
 TARGET_HORIZON_SESSIONS = 40
-REPORT_ID = "audit.min_trade40_netr"
 REPORT_SCHEMA = 1
+# Reuse existing per-seed evidence path; this is NOT a separate active report.
 OUTPUT_SUBDIR = "breakout_quality/reusable/min_trade40_netr"
 CACHE_SCHEMA = 1
 
@@ -426,61 +419,8 @@ def build_report(
     }
 
 
-def render_result(payload: Mapping[str, Any], *, target: str) -> str:
-    contract = report_contract(REPORT_ID)
-    table = contract.sections[0].tables[0]
-    rows = [format_contract_row(table, row) for row in payload["rows"]]
-    header = (
-        f"MinTrade40_NetR | P16 Min 40-session realized net R (HINDSIGHT / NOT PIT)",
-        f"Period: {payload['start_date']} ~ {payload['research_cutoff']}",
-        f"Event cohort: P16 Min breakout setup; seed-sensitive, not comparable with universal Oracle RoMD",
-    )
-    if target == "console":
-        return "\n\n".join((render_title(header[0]), "\n".join(header[1:]),
-                           render_table(table.headers, rows),
-                           "NOTICE: No portfolio RoMD or model predictability is claimed."))
-    lines = ["# " + header[0], *["- " + item for item in header[1:]], "",
-             "## " + contract.sections[0].display_title,
-             "| " + " | ".join(table.headers) + " |",
-             "|" + "|".join("---" for _ in table.headers) + "|"]
-    for row in rows:
-        lines.append("| " + " | ".join(row) + " |")
-    lines.extend(["", "## " + contract.sections[1].display_title,
-                  *["- " + item for item in payload["limitations"]]])
-    for row in payload["rows"]:
-        lines.append(f"- Seed {row['seed']}: exclusions and terminal reasons: " +
-                     ", ".join(f"{reason}={n}" for reason, n in row["reasons"].items()))
-    return "\n".join(lines)
-
-
-def run_validation(
-    definition, *, project_root: Path,
-    resolve_p16_context: Callable[[], MinTrade40P16Context],
-    quiet: bool = False,
-) -> dict[str, Any]:
-    approved = require_approved_report_contract(REPORT_ID)
-    report = build_report(
-        definition, project_root=project_root,
-        resolve_p16_context=resolve_p16_context, quiet=quiet,
-    )
-    report["report_contract_id"] = f"{approved.report_id}@v{approved.version}"
-    report["report_contract_fingerprint"] = persistent_report_contract_fingerprint(REPORT_ID)
-    console = render_result(report, target="console")
-    markdown = render_result(report, target="markdown")
-    from types import SimpleNamespace
-    saved = persist_reusable_report(
-        definition=SimpleNamespace(report_id="min_trade40_netr", report_type="target_min_trade40_netr",
-                                   output_subdir=OUTPUT_SUBDIR),
-        project_root=Path(project_root), payload=report,
-        console_text=console, markdown_text=markdown,
-    )
-    if not quiet:
-        print(console, flush=True)
-    return saved
-
 
 __all__ = [
     "TARGET_ID", "TARGET_NAME", "MinTrade40BlockedError", "MinTrade40P16Context",
-    "build_seed_oracle_scores",
-    "build_report", "render_result", "run_validation",
+    "build_seed_oracle_scores", "build_report",
 ]

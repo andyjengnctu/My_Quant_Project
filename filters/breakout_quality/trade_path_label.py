@@ -21,6 +21,7 @@ from core.backtest_finalize import finalize_open_position_at_end
 from core.capital_policy import resolve_single_backtest_sizing_capital
 from core.entry_plans import build_normal_entry_plan, execute_pre_market_entry_plan
 from core.exact_accounting import calc_ratio_from_milli, milli_to_money
+from core.price_utils import get_exit_sell_block_reason
 from core.extended_signals import (
     build_extended_entry_plan_from_signal,
     create_signal_tracking_state,
@@ -72,6 +73,9 @@ TRADE_PATH_REASON_INVALID_ENTRY_PLAN = "invalid_entry_plan"
 TRADE_PATH_REASON_UNFILLED_SUPERSEDED = "unfilled_superseded_by_new_setup"
 TRADE_PATH_REASON_UNFILLED_TERMINATED = "unfilled_terminated"
 TRADE_PATH_REASON_UNFILLED_DATA_END = "unfilled_censored_at_data_end"
+TRADE_PATH_REASON_UNFILLED_HORIZON = "unfilled_at_horizon"
+TRADE_PATH_REASON_HORIZON_SELL_BLOCKED = "horizon_sell_not_executable"
+TRADE_PATH_REASON_HORIZON_SAME_DAY_FILL = "horizon_same_day_fill"
 TRADE_PATH_REASON_TEACHER_UNAVAILABLE = "teacher_params_unavailable"
 TRADE_PATH_REASON_INACTIVE_HIGH_LEN = "inactive_high_len_for_teacher"
 TRADE_PATH_REASON_SIGNAL_DATE_MISSING = "signal_date_missing_from_source"
@@ -85,6 +89,9 @@ TRADE_PATH_LABEL_REASON_STATUS = {
     TRADE_PATH_REASON_UNFILLED_SUPERSEDED: TRADE_PATH_LABEL_STATUS_EXCLUDED,
     TRADE_PATH_REASON_UNFILLED_TERMINATED: TRADE_PATH_LABEL_STATUS_EXCLUDED,
     TRADE_PATH_REASON_UNFILLED_DATA_END: TRADE_PATH_LABEL_STATUS_EXCLUDED,
+    TRADE_PATH_REASON_UNFILLED_HORIZON: TRADE_PATH_LABEL_STATUS_EXCLUDED,
+    TRADE_PATH_REASON_HORIZON_SELL_BLOCKED: TRADE_PATH_LABEL_STATUS_EXCLUDED,
+    TRADE_PATH_REASON_HORIZON_SAME_DAY_FILL: TRADE_PATH_LABEL_STATUS_EXCLUDED,
     TRADE_PATH_REASON_TEACHER_UNAVAILABLE: TRADE_PATH_LABEL_STATUS_EXCLUDED,
     TRADE_PATH_REASON_INACTIVE_HIGH_LEN: TRADE_PATH_LABEL_STATUS_EXCLUDED,
     TRADE_PATH_REASON_SIGNAL_DATE_MISSING: TRADE_PATH_LABEL_STATUS_EXCLUDED,
@@ -421,7 +428,14 @@ def simulate_realized_trade_path_label(
     teacher_effective_date: str,
     precomputed_signals,
     sizing_capital: float | None = None,
+    horizon_end_date: str | pd.Timestamp | None = None,
 ) -> TradePathLabelResult:
+    """A2 canonical execution path; an optional ex-post deadline is isolated.
+
+    Without a deadline all historical A2 behavior is unchanged. When supplied,
+    the caller owns the exchange-session calendar and target maturity rule;
+    no fill, same-session round trip or blocked forced sale becomes a profit.
+    """
     if signal_pos < 0 or signal_pos >= len(stock_df) - 1:
         return _excluded_result(
             TRADE_PATH_REASON_INSUFFICIENT_FUTURE,
@@ -462,6 +476,15 @@ def simulate_realized_trade_path_label(
     close_values = stock_df["Close"].to_numpy(dtype=np.float64, copy=False)
     volume_values = stock_df["Volume"].to_numpy(dtype=np.float64, copy=False)
     dates = stock_df.index
+    horizon_day = None if horizon_end_date is None else pd.Timestamp(horizon_end_date).normalize()
+    if horizon_day is not None and horizon_day <= pd.Timestamp(signal_date).normalize():
+        raise ValueError("trade-path horizon必須晚於原始signal date")
+    # Do not touch bars *after* the signal-anchored deadline.  A stock that
+    # cannot trade on the deadline is censored, not synthetically liquidated.
+    last_evaluation_pos = (
+        len(stock_df) - 1 if horizon_day is None else
+        int(dates.searchsorted(horizon_day, side="right")) - 1
+    )
     resolved_sizing_capital = (
         resolve_single_backtest_sizing_capital(params, params.initial_capital)
         if sizing_capital is None
@@ -480,7 +503,7 @@ def simulate_realized_trade_path_label(
     wait_bars: int | None = None
     initial_missed_buy = False
 
-    for current_pos in range(signal_pos + 1, len(stock_df)):
+    for current_pos in range(signal_pos + 1, last_evaluation_pos + 1):
         if int(position.get("qty", 0) or 0) > 0:
             position, _freed_cash, _pnl, events = execute_bar_step(
                 position,
@@ -621,20 +644,47 @@ def simulate_realized_trade_path_label(
 
     if fill_date is None:
         return _excluded_result(
-            TRADE_PATH_REASON_UNFILLED_DATA_END,
+            TRADE_PATH_REASON_UNFILLED_DATA_END if horizon_day is None else TRADE_PATH_REASON_UNFILLED_HORIZON,
             start_date=eval_start_date,
-            end_date=_date_text(dates[-1]),
+            end_date=_date_text(dates[last_evaluation_pos]),
             teacher_effective_date=teacher_effective_date,
             wait_bars=wait_bars,
             initial_missed_buy=initial_missed_buy,
             sizing_capital=float(resolved_sizing_capital),
         )
 
+    if horizon_day is not None:
+        # A deadline is a planned closeout, not a license to invent a fill on
+        # a suspended/limit-down bar or to sell an entry made that same day.
+        at_deadline = (last_evaluation_pos >= signal_pos + 1 and
+                       pd.Timestamp(dates[last_evaluation_pos]).normalize() == horizon_day)
+        if not at_deadline:
+            reason = TRADE_PATH_REASON_HORIZON_SELL_BLOCKED
+        elif fill_date == _date_text(horizon_day):
+            reason = TRADE_PATH_REASON_HORIZON_SAME_DAY_FILL
+        else:
+            reason = TRADE_PATH_REASON_HORIZON_SELL_BLOCKED if get_exit_sell_block_reason(
+                open_values[last_evaluation_pos], high_values[last_evaluation_pos],
+                low_values[last_evaluation_pos], close_values[last_evaluation_pos],
+                volume_values[last_evaluation_pos], close_values[last_evaluation_pos - 1],
+                ticker=ticker, security_profile=stock_df.attrs.get("security_profile"),
+            ) else None
+        if reason is not None:
+            return _excluded_result(
+                reason, start_date=eval_start_date,
+                end_date=_date_text(dates[last_evaluation_pos]),
+                teacher_effective_date=teacher_effective_date,
+                fill_type=fill_type, fill_date=fill_date,
+                entry_price=entry_price, wait_bars=wait_bars,
+                initial_missed_buy=initial_missed_buy,
+                sizing_capital=float(resolved_sizing_capital),
+            )
+
     final_state = finalize_open_position_at_end(
         position=dict(position),
         ticker=ticker,
-        final_close=close_values[-1],
-        final_date=dates[-1],
+        final_close=close_values[last_evaluation_pos],
+        final_date=dates[last_evaluation_pos],
         current_capital_milli=0,
         current_equity_milli=0,
         peak_capital_milli=0,
@@ -663,9 +713,10 @@ def simulate_realized_trade_path_label(
         realized_pnl=float(realized_pnl),
         realized_r=float(realized_r),
         eval_start_date=eval_start_date,
-        exit_date=_date_text(dates[-1]),
+        exit_date=_date_text(dates[last_evaluation_pos]),
         exit_price=final_state.get("final_trade_exit_price"),
-        exit_reason=str(final_state.get("final_trade_exit_reason") or "FORCED_CLOSEOUT"),
+        exit_reason=("HORIZON_CLOSEOUT" if horizon_day is not None else
+                     str(final_state.get("final_trade_exit_reason") or "FORCED_CLOSEOUT")),
         teacher_effective_date=teacher_effective_date,
         fill_type=str(fill_type),
         fill_date=str(fill_date),
@@ -704,6 +755,9 @@ __all__ = [
     "TRADE_PATH_REASON_SIGNAL_DATE_MISSING",
     "TRADE_PATH_REASON_TEACHER_UNAVAILABLE",
     "TRADE_PATH_REASON_UNFILLED_DATA_END",
+    "TRADE_PATH_REASON_UNFILLED_HORIZON",
+    "TRADE_PATH_REASON_HORIZON_SELL_BLOCKED",
+    "TRADE_PATH_REASON_HORIZON_SAME_DAY_FILL",
     "TRADE_PATH_REASON_UNFILLED_SUPERSEDED",
     "TRADE_PATH_REASON_UNFILLED_TERMINATED",
     "TradePathLabelResult",

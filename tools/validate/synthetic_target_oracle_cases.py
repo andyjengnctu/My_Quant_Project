@@ -485,7 +485,8 @@ class OracleAuditContractCases(TestCase):
                  patch.object(oracle, "price_inventory_sha256", return_value="b" * 64), \
                  patch.object(oracle, "_run_scenario", side_effect=fake_replay), \
                  patch.object(oracle, "_metrics", side_effect=fake_metrics), \
-                 patch("services.audit.min_trade40_target.run_validation", return_value={"status": "COMPLETED"}) as event_validation:
+                 patch("services.audit.min_trade40_target.build_seed_oracle_scores",
+                       side_effect=AssertionError("Legacy Oracle REUSE must not build seed-event truth")) as event_validation:
                 first = oracle.run_formal_audit(self.definition, project_root=root, quiet=True)
                 self.assertEqual(len(outcomes), 40)
                 event_validation.assert_not_called()
@@ -766,6 +767,29 @@ class OracleAuditContractCases(TestCase):
             result = oracle._load_truth(self.definition, ROOT, provider, cutoff="2026-03-02")
         self.assertEqual(len(result), 1)
         self.assertEqual(result.ticker.iloc[0], "2330")
+
+    def test_ssot_golden_is_strict_across_windows_line_endings(self):
+        from tools.validate.ssot_regression_guard import (
+            APPROVED_GOLDEN_SHA256, read_approved_baseline,
+        )
+        import hashlib
+
+        original = (ROOT / "tools/validate/baselines/ssot_regression.json").read_bytes()
+        lf = original.replace(b"\r\n", b"\n")
+        crlf = lf.replace(b"\n", b"\r\n")
+        self.assertEqual(hashlib.sha256(lf).hexdigest(), APPROVED_GOLDEN_SHA256)
+        self.assertEqual(
+            read_approved_baseline(ROOT, raw_bytes=lf),
+            read_approved_baseline(ROOT, raw_bytes=crlf),
+        )
+        for changed in (lf + b" ", crlf + b" "):
+            with self.assertRaisesRegex(ValueError, "Golden hash mismatch"):
+                read_approved_baseline(ROOT, raw_bytes=changed)
+        # A real JSON value mutation must still fail, regardless of line ending.
+        changed = lf.replace(b'"schema_version": 1', b'"schema_version": 2', 1)
+        self.assertNotEqual(changed, lf)
+        with self.assertRaisesRegex(ValueError, "Golden hash mismatch"):
+            read_approved_baseline(ROOT, raw_bytes=changed)
 
     def test_retired_history_never_required_for_current_report_or_oracle_reuse(self):
         from core.report_contract_versions import (

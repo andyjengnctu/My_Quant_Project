@@ -635,6 +635,9 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
         TRADE_PATH_REASON_REALIZED_NET_NONPOSITIVE,
         TRADE_PATH_REASON_REALIZED_NET_PROFIT,
         TRADE_PATH_REASON_UNFILLED_DATA_END,
+        TRADE_PATH_REASON_UNFILLED_HORIZON,
+        TRADE_PATH_REASON_HORIZON_SELL_BLOCKED,
+        TRADE_PATH_REASON_HORIZON_SAME_DAY_FILL,
         TRADE_PATH_RESEARCH_FILTER_ID,
         build_trade_path_excluded_event_update,
         simulate_realized_trade_path_label,
@@ -1004,6 +1007,36 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
                 ),
     )
 
+    # Shared A2 execution primitive must retain the optional, signal-anchored
+    # expiry used by normal MinTrade40 Oracle ranking. Its net accounting is
+    # identical to the original end-of-data closeout; only the reason changes.
+    capped_result = simulate_realized_trade_path_label(
+        data_end_frame, ticker="2330", signal_pos=2, params=params,
+        teacher_effective_date="2020-01-01",
+        precomputed_signals=(data_end_atr, data_end_buy, data_end_sell, data_end_limits),
+        horizon_end_date=data_end_frame.index[-1],
+    )
+    check(
+        "trade_path_optional_market_session_deadline_reuses_canonical_net_accounting",
+        ("HORIZON_CLOSEOUT", data_end_result.exit_date,
+         data_end_result.realized_net_pnl, data_end_result.realized_net_r),
+        (capped_result.exit_reason, capped_result.exit_date,
+         capped_result.realized_net_pnl, capped_result.realized_net_r),
+    )
+    blocked_frame = data_end_frame.copy()
+    blocked_frame.iloc[-1, blocked_frame.columns.get_loc("Volume")] = 0.0
+    blocked_result = simulate_realized_trade_path_label(
+        blocked_frame, ticker="2330", signal_pos=2, params=params,
+        teacher_effective_date="2020-01-01",
+        precomputed_signals=(data_end_atr, data_end_buy, data_end_sell, data_end_limits),
+        horizon_end_date=data_end_frame.index[-1],
+    )
+    check(
+        "trade_path_deadline_unexecutable_sale_never_fabricates_realized_r",
+        (TRADE_PATH_REASON_HORIZON_SELL_BLOCKED, TRADE_PATH_LABEL_STATUS_EXCLUDED, None),
+        (blocked_result.reason, blocked_result.status, blocked_result.realized_net_r),
+    )
+
     unfilled_frame = data_end_frame.copy()
     unfilled_frame[["Open", "High", "Low", "Close"]] = [
         [95.0, 97.0, 94.0, 96.0],
@@ -1049,9 +1082,16 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
     )
     check(
         "trade_path_reason_registry_covers_all_terminal_statuses_and_builder_exclusions",
-        (11, {"PASS", "REJECT", "EXCLUDED"}, LABEL_INVALID, "EXCLUDED"),
+        (True, {"PASS", "REJECT", "EXCLUDED"}, LABEL_INVALID, "EXCLUDED"),
         (
-                    len(TRADE_PATH_LABEL_REASON_STATUS),
+                    len(TRADE_PATH_LABEL_REASON_STATUS) >= 11 and all(
+                        TRADE_PATH_LABEL_REASON_STATUS.get(reason) == "EXCLUDED"
+                        for reason in (
+                            TRADE_PATH_REASON_UNFILLED_HORIZON,
+                            TRADE_PATH_REASON_HORIZON_SELL_BLOCKED,
+                            TRADE_PATH_REASON_HORIZON_SAME_DAY_FILL,
+                        )
+                    ),
                     set(TRADE_PATH_LABEL_REASON_STATUS.values()),
                     excluded_update["label"],
                     excluded_update["label_status"],

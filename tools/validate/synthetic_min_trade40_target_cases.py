@@ -80,7 +80,8 @@ class MinTrade40ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(target.MinTrade40BlockedError, '身分'):
             target._target_spec(SimpleNamespace(source=bad))
         self.assertEqual(spec['cohort'], 'p16_min_signal_events')
-        self.assertEqual(require_approved_report_contract(target.REPORT_ID).version, 1)
+        self.assertEqual(require_approved_report_contract("audit.target_oracle_romd").report_id,
+                         "audit.target_oracle_romd")
         comparison = next(row for row in self.definition.source['oracle_comparisons']
                           if row['target'] == target.TARGET_NAME)
         self.assertEqual(comparison['score'], 'trade_path_realized_net_r')
@@ -215,7 +216,7 @@ class MinTrade40ContractTests(unittest.TestCase):
             with self.assertRaisesRegex(target.MinTrade40BlockedError, '身分／內容衝突'):
                 target._load_seed_cache(path, first)
 
-    def test_event_report_consumes_injected_p16_context_with_unchanged_cache_identity(self):
+    def test_oracle_score_producer_reuses_injected_p16_context_and_never_publishes_separate_report(self):
         spec = target._target_spec(self.definition)
         evidence = {'seed': 11, 'param_sha256': 'b' * 64, 'param_path': 'test/p16.json'}
         ctx = target.MinTrade40P16Context(
@@ -235,7 +236,8 @@ class MinTrade40ContractTests(unittest.TestCase):
             'mean_net_r': 0.5, 'median_net_r': 0.5,
             'p10_net_r': 0.5, 'p90_net_r': 0.5,
             'min_signal_date': '2021-01-04', 'max_signal_date': '2021-01-04',
-            'reasons': {'completed': 1}, 'events': [{'ticker': '2330'}],
+            'reasons': {'completed': 1},
+            'events': [{'ticker': '2330', 'signal_date': '2021-01-04', 'realized_net_r': 0.5}],
         }
         calls = []
         with tempfile.TemporaryDirectory() as tmp:
@@ -248,13 +250,17 @@ class MinTrade40ContractTests(unittest.TestCase):
                     resolve_p16_context=lambda: (calls.append('resolved') or ctx),
                     quiet=True,
                 )
-                target.run_validation(
+                seed_scores, score_evidence = target.build_seed_oracle_scores(
                     self.definition, project_root=root,
                     resolve_p16_context=lambda: (calls.append('resolved') or ctx),
                     quiet=True,
                 )
-                self.assertTrue((root / 'outputs/audit' / target.OUTPUT_SUBDIR / 'latest' / 'audit.md').is_file())
+                self.assertFalse((root / 'outputs/audit' / target.OUTPUT_SUBDIR / 'latest').exists(),
+                                 'MinTrade40 is one normal Oracle treatment, not a separate report')
         self.assertEqual(calls, ['resolved', 'resolved'])
+        self.assertTrue(math.isfinite(seed_scores[11][('2330', '2021-01-04')]))
+        self.assertEqual(score_evidence[11]['completed_trades'], 1)
+        self.assertEqual(score_evidence[11]['score_key_mode'], 'signal_origin_date')
         self.assertEqual(report['cache_decisions'], {11: 'REUSE'})
         self.assertEqual(report['benchmark_id'], ctx.benchmark_id)
         self.assertEqual(report['parameter_artifacts'], [evidence])
