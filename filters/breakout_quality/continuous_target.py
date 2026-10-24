@@ -22,6 +22,7 @@ from core.breakout_quality_runtime import (
     DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID,
     DAILY_TERMINAL_R40_TARGET_ID,
     DAILY_TERMINAL_MAE_GATED_T40_TARGET_ID,
+    DAILY_FULL_HORIZON_MAE_GATED_MFE_T40_TARGET_ID,
     DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
     DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
     DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
@@ -52,6 +53,21 @@ def full_horizon_mae_safety_r_from_minimum_low_return(
     if bool(np.any(np.isfinite(minimum) & (minimum <= -1.0))):
         raise ValueError("minimum low return implies a nonpositive future low")
     return np.minimum(minimum, 0.0) / r
+
+
+def full_horizon_mae_gated_reward_r(reward_r: np.ndarray, safety_r: np.ndarray) -> np.ndarray:
+    """Canonical T-style reward gate for terminal-R or full-path MFE in fixed R.
+
+    ``safety_r`` is -max(0,MAE_R); a 1R-or-greater adverse path maps to -1R.
+    Both training-label production and read-only Oracle consume this primitive.
+    """
+    reward = np.asarray(reward_r, dtype=np.float64)
+    safety = np.asarray(safety_r, dtype=np.float64)
+    if (reward.shape != safety.shape or not np.isfinite(reward).all()
+            or not np.isfinite(safety).all() or (safety > 0).any()):
+        raise ValueError("MAE-gated reward needs finite matched R vectors and nonpositive safety")
+    m = np.clip(-safety, 0.0, 1.0)
+    return (1.0 - m) * reward - m
 
 TARGET_RAW_FILENAME = "group_target_raw_r.npy"
 TARGET_FAVORABLE_RETURN_FILENAME = "group_favorable_return.npy"
@@ -644,6 +660,23 @@ def build_daily_terminal_mae_gated_t40_contract(policy: BreakoutQualityLabelPoli
     return contract
 
 
+def build_daily_full_horizon_mae_gated_mfe_t40_contract(
+    policy: BreakoutQualityLabelPolicy,
+) -> dict[str, object]:
+    """T40-MFE=(1-min(MAE40_R,1))*MFE40_R-min(MAE40_R,1)."""
+    contract = build_daily_full_horizon_pure_mfe_contract(policy)
+    contract.update({
+        "target_id": DAILY_FULL_HORIZON_MAE_GATED_MFE_T40_TARGET_ID,
+        "objective_family": "daily_cross_sectional_full_horizon_mae_gated_mfe",
+        "formula": "(1-min(MAE40_R,1))*MFE40_R-min(MAE40_R,1)",
+        "adverse_scope": "minimum Low of every future bar versus anchor Close; nonnegative MAE in fixed R",
+        "adverse_penalty_included": True,
+        "risk_rule": "MAE40 >= 1R sets T40-MFE to -1R, regardless of MFE40",
+        "clipping": "MAE clamp at 1R; signed full-path MFE reward is not clipped",
+    })
+    return contract
+
+
 def build_daily_full_horizon_mfe_minus_d40_contract(
     policy: BreakoutQualityLabelPolicy,
 ) -> dict[str, object]:
@@ -1222,6 +1255,8 @@ __all__ = [
     "build_daily_full_horizon_pure_mfe_contract",
     "build_daily_terminal_r40_contract",
     "build_daily_terminal_mae_gated_t40_contract",
+    "build_daily_full_horizon_mae_gated_mfe_t40_contract",
+    "full_horizon_mae_gated_reward_r",
     "build_daily_first_risk_breach_pure_mfe_contract",
     "build_daily_full_horizon_low_adverse_contract",
     "build_daily_full_horizon_equal_rank_mfe_low_adverse_contract",

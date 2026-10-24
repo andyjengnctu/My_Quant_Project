@@ -199,7 +199,10 @@ class OracleReplayStore:
     def _path(self, identity: Mapping[str, Any]) -> Path:
         seed = int(identity["seed"])
         target = str(identity["target"])
-        if not target.replace("_", "").isalnum():
+        # Public Oracle target labels may contain a hyphen (e.g. T40-MFE).
+        # Only single filename-safe labels are admitted; path traversal and
+        # separators remain invalid, without maintaining a target allowlist.
+        if not target.replace("_", "").replace("-", "").isalnum():
             raise ValueError("Oracle invalid cache target")
         return self.cache_root / str(seed) / f"{target}_{canonical_json_sha256(identity)}.json"
 

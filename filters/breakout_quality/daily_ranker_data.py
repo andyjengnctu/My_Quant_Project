@@ -45,6 +45,7 @@ from filters.breakout_quality.continuous_target import (
     DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID,
     DAILY_TERMINAL_R40_TARGET_ID,
     DAILY_TERMINAL_MAE_GATED_T40_TARGET_ID,
+    DAILY_FULL_HORIZON_MAE_GATED_MFE_T40_TARGET_ID,
     DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
     DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
     DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID,
@@ -55,6 +56,8 @@ from filters.breakout_quality.continuous_target import (
     build_daily_full_horizon_mfe_minus_d40_contract,
     build_daily_terminal_r40_contract,
     build_daily_terminal_mae_gated_t40_contract,
+    build_daily_full_horizon_mae_gated_mfe_t40_contract,
+    full_horizon_mae_gated_reward_r,
     full_horizon_mae_safety_r_from_minimum_low_return,
     build_daily_first_risk_breach_pure_mfe_contract,
     build_daily_full_horizon_low_adverse_contract,
@@ -768,6 +771,7 @@ def compute_daily_opportunity_target_batch(
         DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID,
         DAILY_TERMINAL_R40_TARGET_ID,
         DAILY_TERMINAL_MAE_GATED_T40_TARGET_ID,
+        DAILY_FULL_HORIZON_MAE_GATED_MFE_T40_TARGET_ID,
         DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
         DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
     }:
@@ -857,8 +861,14 @@ def compute_daily_opportunity_target_batch(
         if target_id == DAILY_TERMINAL_R40_TARGET_ID:
             selected_target = terminal_r
         else:
-            m = np.minimum(mae_r, 1.0)
-            selected_target = (1.0 - m) * terminal_r - m
+            selected_target = full_horizon_mae_gated_reward_r(terminal_r, -mae_r)
+    elif target_id == DAILY_FULL_HORIZON_MAE_GATED_MFE_T40_TARGET_ID:
+        selected_target = full_horizon_mae_gated_reward_r(
+            selected_favorable / risk_budget,
+            full_horizon_mae_safety_r_from_minimum_low_return(
+                minimum_low_return_valid, risk_budget_return=risk_budget,
+            ),
+        )
     elif target_id == DAILY_FULL_HORIZON_MFE_MINUS_D40_TARGET_ID:
         # Canonical full-horizon Safety helper = -D40/R; no peak-time deduction.
         # Signed U40 may be negative.  Do not clip the prediction target.
@@ -1011,6 +1021,7 @@ def _build_daily_target_contract(
         "daily_full_horizon_mfe_minus_d40": build_daily_full_horizon_mfe_minus_d40_contract,
         "daily_terminal_r40": build_daily_terminal_r40_contract,
         "daily_terminal_mae_gated_t40": build_daily_terminal_mae_gated_t40_contract,
+        "daily_full_horizon_mae_gated_mfe_t40": build_daily_full_horizon_mae_gated_mfe_t40_contract,
         "daily_first_risk_breach_pure_mfe": build_daily_first_risk_breach_pure_mfe_contract,
         "daily_full_horizon_low_adverse": build_daily_full_horizon_low_adverse_contract,
         "daily_full_horizon_equal_rank_mfe_low_adverse": (

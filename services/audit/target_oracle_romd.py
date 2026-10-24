@@ -34,6 +34,7 @@ from filters.breakout_quality.workflow_io import discover_dataset_csv_inputs, lo
 from filters.breakout_quality.continuous_target import (
     StrategyAlignedContinuousTargetSpec,
     full_horizon_mae_safety_r_from_minimum_low_return,
+    full_horizon_mae_gated_reward_r,
 )
 from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY
 from filters.breakout_quality.mfe_safety_geometry import (
@@ -77,7 +78,7 @@ from core.research_report_contract import (
 from services.audit.reusable_report import format_comparison_rows
 
 SUPPORTED_AUDIT_TYPE = "target_ground_truth_strategy_romd"
-ORACLE_REPORT_SCHEMA_VERSION = 6
+ORACLE_REPORT_SCHEMA_VERSION = 7
 # Current report's Oracle strategies. Direct is the existing canonical No-K/No-R0
 # selector applied to the SAME score truth; not a new Target formula.
 # For backward-compatible external call sites only. The runtime reads the
@@ -89,7 +90,7 @@ ORACLE_TARGETS = tuple((item["target"], item["description"]) for item in _ORACLE
 
 # Recipe implementation is stable; WHICH recipes and providers are needed is
 # resolved from the selected comparisons, never from a second target allowlist.
-_ORACLE_SCORE_RECIPES = frozenset(("equal_rank_mfe_safety", "mfe", "terminal_r", "terminal_mae_gate"))
+_ORACLE_SCORE_RECIPES = frozenset(("equal_rank_mfe_safety", "mfe", "terminal_r", "terminal_mae_gate", "mfe_mae_gate"))
 _PROVIDER_COHORT_IDS = {
     "pure_mfe40_provider": "40d", "mfe20_d20_provider": "20d",
     "first_breach_provider": "first_breach",
@@ -509,8 +510,7 @@ def _terminal_mae_gate_r(r40: pd.Series, safety_mae40: pd.Series, *, horizon: in
         raise OracleBlockedError(
             f"T{horizon} requires finite R{horizon} and nonnegative MAE{horizon} in canonical R"
         )
-    m = np.clip(-safety, 0.0, 1.0)
-    return pd.Series((1.0 - m) * terminal - m, index=r40.index, dtype=float)
+    return pd.Series(full_horizon_mae_gated_reward_r(terminal, safety), index=r40.index, dtype=float)
 
 
 def _build_oracle_score_panels(
@@ -590,6 +590,8 @@ def _build_oracle_score_panels(
                 value = (percentile(col("mfe")) + percentile(safety)) / 2
             elif recipe == "terminal_mae_gate":
                 value = _terminal_mae_gate_r(col("terminal_r"), safety)
+            elif recipe == "mfe_mae_gate":
+                value = _terminal_mae_gate_r(col("mfe"), safety)
             else:
                 raise OracleBlockedError(f"Oracle未授權的score recipe：{recipe}")
         raw[name] = pd.Series(value, index=joint.index)
@@ -1237,6 +1239,7 @@ def build_report(
             "No best-target fitting from iterative OOS; multi-target search is exploratory.",
             "R40 is the future 40th session Close return, not Portfolio Replay exit return.",
             "T40 uses full-path nonnegative MAE and clamps to -1R at 1R adverse movement.",
+            "T40-MFE replaces only terminal R40 by full-path MFE40_R; the identical MAE gate remains.",
             "1R is the fixed research Label risk budget, NOT the actual executed ATR stop-loss.",
         ],
     }
@@ -1263,6 +1266,7 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
         f'{len(report["oracles"])} (40D, Exact + Direct); not Standard SOP',
         'Ranking: Exact K/R0 or Direct No-K/No-R0; same Broker-Cash, seed/P16 and future scores.',
         'T40: (1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 >= 1R -> T40 = -1R.',
+        'T40-MFE: (1 - min(MAE40, 1R)) * MFE40_R - min(MAE40, 1R); MAE40 >= 1R -> -1R.',
         'CG = equal-rank 50/50 geometry PROXY, not a neural-network model head.',
     ]
     if target == "console":

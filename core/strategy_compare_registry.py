@@ -130,17 +130,23 @@ STRATEGY_COMPARE_SUITES = {
     "broker_cash_dl_conversion_v1": {
         "filter_by_current_model_list": True,
         # Single scientific matrix shared by OOS/Rolling and multi-seed robustness.
-        # All DL arms reuse C96/P16; only DL score source and allocator differ.
+        # All DL arms reuse C96/P16; current AK/CG/CI/CJ/CK use Exact K/R0.
+        # Historical AO/CH/Direct arms remain registered but filtered by the
+        # canonical Model Compare list; C104 is explicitly retired from this suite.
         "arm_ids": (
-            "C96", "C97", "C98", "C99", "C100", "C101", "C102", "C103", "C104",
+            "C96", "C97", "C98", "C99", "C100", "C101", "C102", "C103",
+            "C105", "C106", "C107", "C108",
         ),
-        # A compact connected contrast graph supports all six-vs-C96, AO/CG/CH,
-        # and Exact-vs-Direct differences without generating redundant reports.
+        # A compact connected contrast graph supports each selected model
+        # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
+        # contrasts remain registered and filter out with their inactive arms.
         "contrast_ids": (
             "C97-C96", "C98-C97", "C98-C96",
             "C99-C96", "C101-C96",
-            "C100-C99", "C103-C99", "C102-C101", "C104-C101",
-            "C99-C101", "C100-C102", "C103-C104",
+            "C100-C99", "C103-C99", "C102-C101",
+            "C99-C101", "C100-C102",
+            "C103-C96", "C105-C96", "C106-C96", "C107-C96", "C108-C96",
+            "C108-C107",
         ),
         "display_name_bases": {
             "C96": "Min Base-Finalist-Best / Broker-Cash",
@@ -151,7 +157,10 @@ STRATEGY_COMPARE_SUITES = {
             "C101": "Min MR-13AO No-K No-R0 / Broker-Cash",
             "C102": "Min MR-13CH No-K No-R0 / Broker-Cash",
             "C103": "Min MR-13CG Exact K/R0 / Broker-Cash",
-            "C104": "Min MR-13CG No-K No-R0 / Broker-Cash",
+            "C105": "Min MR-13AK Exact K/R0 / Broker-Cash",
+            "C106": "Min MR-13CI Exact K/R0 / Broker-Cash",
+            "C107": "Min MR-13CJ Exact K/R0 / Broker-Cash",
+            "C108": "Min MR-13CK T40-MFE Exact K/R0 / Broker-Cash",
         },
     },
     "non_dl_c85_same_signal_revalidation_v1": {
@@ -969,8 +978,9 @@ for _mode in ("oos", "rolling"):
         **_baseline_profile,
         "label": f"Broker-Cash DL Conversion | {_mode.upper() if _mode == 'oos' else 'Rolling'} Test",
         "description": (
-            "C96/P16 broker-cash adjusted-price Min control plus AO/CG/CH "
-            "Exact K/R0 and No-K/No-R0; C97/P17 and C98/P15 remain reference arms."
+            "C96/P16 broker-cash Min control plus configured model-list "
+            "DL score conversions (current AK/CG/CI/CJ/CK Exact K/R0); "
+            "C97/P17 and C98/P15 remain reference arms."
         ),
         "display_alignment_group": "broker_cash_dl_conversion_v1",
         "suite_id": "broker_cash_dl_conversion_v1",
@@ -2147,6 +2157,39 @@ STRATEGY_DL_SOURCES = {
             "options": {"resume": True, "allow_stale_source": False},
         },
     },
+    "CONT13CI_ROLL": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_terminal_r40_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "single_seed_strategy_conversion_authorized": True,
+        "description": "MR-13CI R40 canonical PIT score; research-only controlled P16 Exact conversion, not Trading.",
+        "forward_scores_builder": {"enabled": True, "builder_type": "selection_pit_from_existing_folds",
+                                   "options": {"resume": True, "allow_stale_source": False}},
+    },
+    "CONT13CJ_ROLL": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "single_seed_strategy_conversion_authorized": True,
+        "description": "MR-13CJ terminal T40 canonical PIT score; research-only P16 Exact conversion, not Trading.",
+        "forward_scores_builder": {"enabled": True, "builder_type": "selection_pit_from_existing_folds",
+                                   "options": {"resume": True, "allow_stale_source": False}},
+    },
+    "CONT13CK_ROLL": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_full_horizon_mae_gated_mfe_t40_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "single_seed_strategy_conversion_authorized": True,
+        "description": "MR-13CK T40-MFE canonical PIT score; research-only P16 Exact conversion, not Trading.",
+        "forward_scores_builder": {"enabled": True, "builder_type": "selection_pit_from_existing_folds",
+                                   "options": {"resume": True, "allow_stale_source": False}},
+    },
 }
 
 # =============================================================================
@@ -2264,6 +2307,46 @@ STRATEGY_COMPARE_ARMS = {
             "selection_order": "model_score_desc_then_canonical_tie_v1",
             "selection_only": True,
         },
+        "robustness_role": "off",
+    },
+    "C105": {
+        "name": "Min MR-13AK Exact K/R0 / Broker-Cash",
+        "description": "SR-C105: AK shared Safety/MFE PIT score, fixed P16 Min broker-cash; Exact K/R0.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13AK_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {"preserve_k_r0": True, "constrained_solver": "exact_branch_and_bound_v1", "selection_only": True},
+        "robustness_role": "off",
+    },
+    "C106": {
+        "name": "Min MR-13CI Exact K/R0 / Broker-Cash",
+        "description": "SR-C106: CI terminal R40 PIT score, fixed P16 Min broker-cash; Exact K/R0.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CI_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {"preserve_k_r0": True, "constrained_solver": "exact_branch_and_bound_v1", "selection_only": True},
+        "robustness_role": "off",
+    },
+    "C107": {
+        "name": "Min MR-13CJ Exact K/R0 / Broker-Cash",
+        "description": "SR-C107: CJ terminal T40 PIT score, fixed P16 Min broker-cash; Exact K/R0.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CJ_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {"preserve_k_r0": True, "constrained_solver": "exact_branch_and_bound_v1", "selection_only": True},
+        "robustness_role": "off",
+    },
+    "C108": {
+        "name": "Min MR-13CK T40-MFE Exact K/R0 / Broker-Cash",
+        "description": "SR-C108: CK full-path T40-MFE PIT score, fixed P16 Min broker-cash; Exact K/R0.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CK_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {"preserve_k_r0": True, "constrained_solver": "exact_branch_and_bound_v1", "selection_only": True},
         "robustness_role": "off",
     },
     "C95": {
@@ -2667,6 +2750,12 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C101-C96": {"left": "C101", "right": "C96", "description": "AO No-K/No-R0 vs same-P16 broker-cash DL-off control"},
     "C100-C99": {"left": "C100", "right": "C99", "description": "CH vs AO under identical P16/Exact K/R0 and broker-cash economics"},
     "C103-C99": {"left": "C103", "right": "C99", "description": "CG vs AO under identical P16/Exact K/R0 and broker-cash economics"},
+    "C103-C96": {"left": "C103", "right": "C96", "description": "CG Exact K/R0 vs same-P16 broker-cash DL-off control"},
+    "C105-C96": {"left": "C105", "right": "C96", "description": "AK Exact K/R0 vs same-P16 broker-cash DL-off control"},
+    "C106-C96": {"left": "C106", "right": "C96", "description": "CI Exact K/R0 vs same-P16 broker-cash DL-off control"},
+    "C107-C96": {"left": "C107", "right": "C96", "description": "CJ Exact K/R0 vs same-P16 broker-cash DL-off control"},
+    "C108-C96": {"left": "C108", "right": "C96", "description": "CK Exact K/R0 vs same-P16 broker-cash DL-off control"},
+    "C108-C107": {"left": "C108", "right": "C107", "description": "CK T40-MFE vs CJ T40, matched P16/Exact; only label/score source differs"},
     "C102-C101": {"left": "C102", "right": "C101", "description": "CH vs AO under identical P16/No-K/No-R0 and broker-cash economics"},
     "C104-C101": {"left": "C104", "right": "C101", "description": "CG vs AO under identical P16/No-K/No-R0 and broker-cash economics"},
     "C99-C101": {"left": "C99", "right": "C101", "description": "AO Exact K/R0 vs AO No-K/No-R0 with the same PIT score"},

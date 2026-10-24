@@ -730,15 +730,15 @@ _TARGET_ORACLE_ROMD_PRIOR_REPORT = PersistentReportContract(
     ),
 )
 
-# v1-v5 stay immutable. v6 promotes the read-only Target validation work type
-# to Research [1] and introduces canonical best/worst display semantics.
+# v1-v6 stay immutable. v7 adds the user-authorized T40-MFE Exact treatment
+# and updates the visible Target Definitions inventory without changing metrics.
 TARGET_ORACLE_ROMD_REPORT = PersistentReportContract(
-    report_id="audit.target_oracle_romd", version=6,
+    report_id="audit.target_oracle_romd", version=7,
     role="persistent_reusable_hindsight_non_pit",
     menu_path=("Research", "Target 驗證"),
     sections=(
         _TARGET_ORACLE_ROMD_PRIOR_REPORT.sections[0],
-        S("target_definitions", 2, "Target Definitions (4 × Exact / 3 × Direct, 40D)"),
+        S("target_definitions", 2, "Target Definitions (5 × Exact / 3 × Direct, 40D)"),
         *_TARGET_ORACLE_ROMD_PRIOR_REPORT.sections[2:],
     ),
 )

@@ -112,6 +112,7 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     {"target": "MFE40_Control", "description": "40D MFE only (control, not target recommendation)", "score": "mfe", "provider": "pure_mfe40_provider", "selector": "exact"},
                     {"target": "R40", "description": "40D close-to-close terminal return divided by canonical risk budget R", "score": "terminal_r", "provider": "pure_mfe40_provider", "selector": "exact"},
                     {"target": "T40", "description": "(1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 is nonnegative in R", "score": "terminal_mae_gate", "provider": "pure_mfe40_provider", "selector": "exact"},
+                    {"target": "T40-MFE", "description": "(1 - min(MAE40_R,1)) * MFE40_R - min(MAE40_R,1); full 40D path", "score": "mfe_mae_gate", "provider": "pure_mfe40_provider", "selector": "exact"},
                     {"target": "MFE40_Direct", "description": "Same MFE40_Control score; canonical No-K/No-R0 direct allocation", "score_source": "MFE40_Control", "selector": "direct"},
                     {"target": "R40_Direct", "description": "Same R40 score; canonical No-K/No-R0 direct allocation", "score_source": "R40", "selector": "direct"},
                     {"target": "T40_Direct", "description": "Same T40 score; canonical No-K/No-R0 direct allocation", "score_source": "T40", "selector": "direct"},

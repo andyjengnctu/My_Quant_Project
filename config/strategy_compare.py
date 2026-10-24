@@ -10,9 +10,9 @@ from __future__ import annotations
 
 # Current work-stage selection. Stable menu work types live in apps/research.py;
 # only the current scientific profiles/bindings change here.
-# Current broker-cash conversion suite: historical No-DL C96/P16, C97/P17,
-# C98/P15 plus AO/CG/CH Exact and Direct strategy arms.  The former No-DL
-# suite and all historical fee-economics evidence remain immutable.
+# Current broker-cash conversion suite derives active models from the shared
+# Model Compare/Test list: C96/C97/C98 non-DL controls and model-specific
+# Exact K/R0 arms. Historical AO/CH/Direct catalog entries remain immutable.
 STRATEGY_COMPARE_CURRENT_OOS_PROFILE = "broker_cash_dl_conversion_oos"
 STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE = "broker_cash_dl_conversion_rolling"
 STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS = STRATEGY_COMPARE_CURRENT_OOS_PROFILE
