@@ -22,6 +22,7 @@ from core.breakout_quality_policy import (
 from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0,
     SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES,
 )
 
@@ -148,8 +149,12 @@ def audit_oracle_ranking_policy_context(
     *, ranking_policy: str, ranking_options: Mapping[str, Any] | None = None,
 ) -> Iterator[BreakoutQualityRankingSourceContext]:
     """Research-only hindsight context; never a production/PIT score source."""
-    if ranking_policy != BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL:
-        raise ValueError("Oracle Audit只允許正式Exact K/R0 ranking policy")
+    allowed = {
+        BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
+        BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0,
+    }
+    if ranking_policy not in allowed:
+        raise ValueError("Oracle Audit只允許canonical Exact K/R0 或 No-K/No-R0 ranking policy")
     context = BreakoutQualityRankingSourceContext(
         score_source=SCORE_SOURCE_AUDIT_ORACLE_FUTURE_TRUTH,
         ranking_policy=ranking_policy,

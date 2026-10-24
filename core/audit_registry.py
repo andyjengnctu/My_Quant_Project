@@ -90,11 +90,12 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
         "target_oracle_romd": {
             "enabled": True,
             "report_type": "target_ground_truth_strategy_romd",
-            "description": "Reusable hindsight target truth -> Exact K/R0 Broker-Cash RoMD (NON-PIT)",
+            "description": "Reusable hindsight target truth -> Exact / Direct Broker-Cash RoMD (NON-PIT)",
             "source": {
                 "strategy_profile_id": "broker_cash_dl_conversion_rolling",
                 "baseline_arm_id": "C96",
                 "exact_arm_id": "C100",
+                "direct_arm_id": "C101",
                 "filter_id": BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
                 "model_architecture": BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
                 "pure_mfe40_provider": DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,

@@ -1,7 +1,7 @@
 """Reusable hindsight target economics Audit; NEVER a legal prediction source.
 
 This audit compares future-outcome stock-day rankings by running the same frozen
-Broker-Cash P16 Exact K/R0 portfolio replay. All historical truths are *ex post*.
+Broker-Cash P16 portfolio replay (Exact K/R0 or canonical No-K/No-R0). All truths are *ex post*.
 No model training, PIT score publication, optimizer, or trading state is touched.
 """
 
@@ -77,23 +77,26 @@ from core.research_report_contract import (
 from services.audit.reusable_report import format_contract_row
 
 SUPPORTED_AUDIT_TYPE = "target_ground_truth_strategy_romd"
-ORACLE_REPORT_SCHEMA_VERSION = 4
+ORACLE_REPORT_SCHEMA_VERSION = 5
+# Current report's Oracle strategies. Direct is the existing canonical No-K/No-R0
+# selector applied to the SAME score truth; not a new Target formula.
 ORACLE_TARGETS = (
     ("AO40_EqualRank", "40D MFE + adverse-to-peak Safety, 50/50 daily rank"),
     ("CG40_EqualRank", "40D MFE + full D40 Safety, 50/50 daily rank"),
-    ("CH20_EqualRank", "20D MFE + full D20 Safety, 50/50 daily rank"),
     ("U40", "40D MFE - D40, canonical R"),
     ("FirstBreach_NetR", "MFE before first risk breach - adverse to that peak, R"),
     ("MFE40_Control", "40D MFE only (control, not target recommendation)"),
     ("R40", "40D close-to-close terminal return divided by canonical risk budget R"),
     ("T40", "(1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 is nonnegative in R"),
+    ("MFE40_Direct", "Same MFE40_Control score; canonical No-K/No-R0 direct allocation"),
+    ("R40_Direct", "Same R40 score; canonical No-K/No-R0 direct allocation"),
+    ("T40_Direct", "Same T40 score; canonical No-K/No-R0 direct allocation"),
 )
-ORACLE_SIXTY_TARGETS = (
-    ("MFE60", "60D maximum favorable excursion divided by canonical risk budget R"),
-    ("R60", "60th future trading-session Close return divided by canonical risk budget R"),
-    ("T60", "(1 - min(MAE60, 1R)) * R60 - min(MAE60, 1R); MAE60 is nonnegative in R"),
-)
-_SIXTY_TRUTH_FIELD = "sixty_day_oracle"
+ORACLE_DIRECT_SCORE_SOURCES = {
+    "MFE40_Direct": "MFE40_Control",
+    "R40_Direct": "R40",
+    "T40_Direct": "T40",
+}
 
 
 class OracleBlockedError(RuntimeError):
@@ -122,7 +125,26 @@ def _contract(definition) -> tuple[Any, Any, Any]:
         raise OracleBlockedError("Broker-Cash C96/C100 Exact K/R0 control contract已漂移")
     if base.param_policy != "base-finalist-best":
         raise OracleBlockedError("Oracle Audit需要canonical P16 Base-Finalist-Best")
+    # The direct arm is declared by canonical Strategy Compare, not generated
+    # locally. This prevents an Audit-specific No-K/No-R0 selector fork.
+    _direct_arm(definition, settings, base, exact)
     return settings, base, exact
+
+
+def _direct_arm(definition, settings, base, exact):
+    source = definition.source
+    arm_id = str(source["direct_arm_id"])
+    direct = settings.arms[arm_id]
+    options = dict(direct.dl_runtime_options or {})
+    if (not direct.dl_enabled or direct.param_source != base.param_source
+            or direct.param_policy != base.param_policy or direct.rule_policy != "all_off"
+            or direct.dl_runtime_mode != "resource-aware-continuous-score-no-k-no-r0"
+            or options.get("preserve_k") is not False
+            or options.get("preserve_r0") is not False
+            or options.get("selection_order") != "model_score_desc_then_canonical_tie_v1"
+            or options.get("selection_only") is not True):
+        raise OracleBlockedError("Broker-Cash Oracle Direct No-K/No-R0 contract已漂移")
+    return direct
 
 
 def _robustness_artifacts(definition, root: Path):
@@ -198,7 +220,7 @@ _ORACLE_PROVIDER_FIELDS = ("pure_mfe40_provider", "mfe20_d20_provider", "first_b
 
 
 def _market_truth_for_oracle(
-    definition, root: Path, *, cutoff: str, include_sixty: bool = False,
+    definition, root: Path, *, cutoff: str,
 ) -> tuple[dict[str, pd.DataFrame], dict[str, Any]]:
     """Materialize ex-post truth for the *replay* price universe, not DL samples.
 
@@ -258,15 +280,6 @@ def _market_truth_for_oracle(
     score_start = prior[-1]
     limit = pd.Timestamp(cutoff)
     chunks = {field: [] for field in _ORACLE_PROVIDER_FIELDS}
-    if include_sixty:
-        # No new learned-model provider or research profile is required for a
-        # read-only 60-bar Oracle: materialize the already-approved full-path
-        # pure-MFE primitive at horizon 60 over sanitized Research OHLCV.
-        base_spec, _maturity, pure_mfe_target_id = specs["pure_mfe40_provider"]
-        specs[_SIXTY_TRUTH_FIELD] = (
-            replace(base_spec, horizon_bars=60), 60, pure_mfe_target_id,
-        )
-        chunks[_SIXTY_TRUTH_FIELD] = []
     skipped = {}
     valid_counts = {field: 0 for field in _ORACLE_PROVIDER_FIELDS}
     for ticker, path in paths.items():
@@ -310,7 +323,7 @@ def _market_truth_for_oracle(
             # R40 uses the *40th future trading bar Close*, not the peak High,
             # fixed-day MAE or realized Portfolio Replay exit. The canonical
             # price path and mature 40D positions are shared with MFE40.
-            if field in ("pure_mfe40_provider", _SIXTY_TRUTH_FIELD):
+            if field == "pure_mfe40_provider":
                 terminal_r = (closes[eligible + int(spec.horizon_bars)] / closes[eligible] - 1.0) / risk
                 valid &= np.isfinite(terminal_r)
             if not valid.any():
@@ -325,7 +338,7 @@ def _market_truth_for_oracle(
                 "min_low": values[valid, 2],
                 "raw": values[valid, 3],
             }
-            if field in ("pure_mfe40_provider", _SIXTY_TRUTH_FIELD):
+            if field == "pure_mfe40_provider":
                 columns["terminal_r"] = terminal_r[valid]
             chunks[field].append(pd.DataFrame(columns))
     truth = {}
@@ -427,12 +440,12 @@ def _terminal_mae_gate_r(r40: pd.Series, safety_mae40: pd.Series, *, horizon: in
 
 
 def _build_oracle_score_panels(
-    definition, *, project_root: Path, cutoff: str, include_sixty: bool = False,
-) -> tuple[dict[str, dict[tuple[str, str], float]], dict[str, Any], dict[str, Any] | None]:
+    definition, *, project_root: Path, cutoff: str,
+) -> tuple[dict[str, dict[tuple[str, str], float]], dict[str, Any]]:
     """Canonical hindsight truth; preserve existing 40D cohort for completed replay reuse."""
     root = Path(project_root).resolve()
     market, market_evidence = _market_truth_for_oracle(
-        definition, root, cutoff=cutoff, include_sixty=include_sixty,
+        definition, root, cutoff=cutoff,
     )
     provider_truth = {
         field: _load_truth(definition, root, field, cutoff=cutoff)
@@ -479,11 +492,10 @@ def _build_oracle_score_panels(
         return result["percentile"]
 
     # The 50/50 equal-rank combination is the pre-existing canonical MR-13N
-    # aggregation. The AO/CG/CH names indicate geometry, NOT an AO/CG/CH model head.
+    # aggregation. AO/CG describe geometry, NOT a learned model head.
     raw = {
         "AO40_EqualRank": (percentile(joint["mfe40"]) + percentile(joint["safety_peak40"])) / 2,
         "CG40_EqualRank": (percentile(joint["mfe40"]) + percentile(joint["safety_d40"])) / 2,
-        "CH20_EqualRank": (percentile(joint["mfe20"]) + percentile(joint["safety_d20"])) / 2,
         "U40": joint["mfe40"] + joint["safety_d40"],
         "FirstBreach_NetR": joint["rawfb"] - joint["peak_adversefb"],
         "MFE40_Control": joint["mfe40"],
@@ -491,7 +503,7 @@ def _build_oracle_score_panels(
         "T40": _terminal_mae_gate_r(joint["terminal_r40"], joint["safety_d40"]),
     }
     expected = {target for target, _ in ORACLE_TARGETS}
-    if set(raw) != expected:
+    if set(raw) | set(ORACLE_DIRECT_SCORE_SOURCES) != expected:
         raise OracleBlockedError("Oracle target inventory不一致")
     keys = list(zip(joint["ticker"].astype(str), joint["date"].astype(str)))
     scores: dict[str, dict[tuple[str, str], float]] = {}
@@ -500,6 +512,9 @@ def _build_oracle_score_panels(
         if not np.isfinite(ranking.to_numpy(dtype=float)).all():
             raise OracleBlockedError(f"Oracle {name}存在非有限rank score")
         scores[name] = dict(zip(keys, ranking.to_numpy(dtype=float)))
+    # A Direct treatment changes ONLY the selector/allocator, never the truth.
+    for direct_name, exact_name in ORACLE_DIRECT_SCORE_SOURCES.items():
+        scores[direct_name] = scores[exact_name]
     evidence = {
         "cohort_rows": len(keys),
         "first_common_day": min(joint["date"]),
@@ -522,70 +537,14 @@ def _build_oracle_score_panels(
         "market_truth": market_evidence,
         "rows_outside_dl_training_provider_by_source": extra_rows,
     }
-    sixty = None
-    if include_sixty:
-        sixty_market = market.get(_SIXTY_TRUTH_FIELD)
-        if sixty_market is None or sixty_market.empty:
-            raise OracleBlockedError("60D完整未來價格真值不存在，禁止以40D代替")
-        # The 60D ranks use their *own* strictly mature same-date stock-day
-        # population; they are never attached to the old 40D Replay period.
-        joint60 = joint[["ticker", "date"]].merge(
-            sixty_market, on=["ticker", "date"], how="inner", validate="one_to_one",
-        )
-        if joint60.empty or joint60.duplicated(["ticker", "date"]).any():
-            raise OracleBlockedError("60D Oracle沒有完整且唯一的成熟共同母體")
-        adverse60 = full_horizon_mae_safety_r_from_minimum_low_return(
-            joint60["min_low"].to_numpy(dtype=float), risk_budget_return=risk,
-        )
-        safety60 = pd.Series(adverse60, index=joint60.index, dtype=float)
-        if not np.isfinite(safety60.to_numpy()).all():
-            raise OracleBlockedError("60D Oracle MAE含非有限值")
-        raw60 = {
-            "MFE60": joint60["mfe"],
-            "R60": joint60["terminal_r"],
-            "T60": _terminal_mae_gate_r(joint60["terminal_r"], safety60, horizon=60),
-        }
-        if set(raw60) != {name for name, _ in ORACLE_SIXTY_TARGETS}:
-            raise OracleBlockedError("60D Oracle target inventory不一致")
-        keys60 = list(zip(joint60["ticker"].astype(str), joint60["date"].astype(str)))
-        scores60 = {}
-        for name, values in raw60.items():
-            rank = percentile(pd.Series(values, index=joint60.index), dates=joint60["date"])
-            if not np.isfinite(rank.to_numpy(dtype=float)).all():
-                raise OracleBlockedError(f"Oracle {name}存在非有限rank score")
-            scores60[name] = dict(zip(keys60, rank.to_numpy(dtype=float)))
-        cohort60 = {
-            "cohort_rows": len(keys60),
-            "first_common_day": min(joint60["date"]),
-            "last_common_day": max(joint60["date"]),
-            "research_cutoff": cutoff,
-            "risk_budget_return": risk,
-            "providers": {
-                "60d": "Research OHLCV / canonical daily pure MFE target calculator / horizon=60",
-                "40d_common_eligibility": definition.source["pure_mfe40_provider"],
-                "20d_common_eligibility": definition.source["mfe20_d20_provider"],
-                "first_breach_common_eligibility": definition.source["first_breach_provider"],
-            },
-            "scoring": "All targets final-ranked by average_zero_based percentile within 60D-mature common-day universe",
-            "oracle_only": True,
-            "market_truth": {
-                "truth_source": market_evidence["truth_source"],
-                "score_start": market_evidence["score_start"],
-                "price_ticker_count": market_evidence["price_ticker_count"],
-                "unreadable_tickers": market_evidence["unreadable_tickers"],
-                "mature_rows_60d": int(len(sixty_market)),
-            },
-        }
-        sixty = {"scores": scores60, "cohort": cohort60}
-    return scores, evidence, sixty
+    return scores, evidence
 
 
 def build_oracle_score_tables(definition, *, project_root: Path, cutoff: str) -> tuple[dict[str, dict[tuple[str, str], float]], dict[str, Any]]:
-    """Stable existing 40D score interface for Audit consumers and historical tests."""
-    scores, cohort, _sixty = _build_oracle_score_panels(
+    """Stable 40D score interface; unchanged cohort for historical replay REUSE."""
+    return _build_oracle_score_panels(
         definition, project_root=project_root, cutoff=cutoff,
     )
-    return scores, cohort
 
 
 def _metrics(replay: dict[str, Any], *, target: str) -> dict[str, Any]:
@@ -643,16 +602,14 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
     if status["status"] != "READY":
         raise OracleBlockedError(status["reason"])
     robustness, parameter_paths = _robustness_artifacts(definition, root)
-    scores40, cohort40, sixty = _build_oracle_score_panels(
-        definition, project_root=root, cutoff=str(settings.end_date), include_sixty=True,
+    scores40, cohort40 = _build_oracle_score_panels(
+        definition, project_root=root, cutoff=str(settings.end_date),
     )
-    if sixty is None:
-        raise OracleBlockedError("60D Oracle cohort must be completely mature")
+    direct_arm = _direct_arm(definition, settings, base_arm, exact_arm)
     start = str(settings.start_date)
     end40 = min(str(settings.end_date), str(cohort40["last_common_day"]))
-    end60 = min(str(settings.end_date), str(sixty["cohort"]["last_common_day"]))
-    if end60 <= start or end40 <= start or end60 > end40:
-        raise OracleBlockedError("40D／60D成熟樣本期間不合法")
+    if end40 <= start:
+        raise OracleBlockedError("40D成熟樣本期間不合法")
     data_dir = Path(get_dataset_dir(str(root), settings.dataset)).resolve()
     try:
         price_sha = price_inventory_sha256(root, settings.dataset)
@@ -661,8 +618,8 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
         raise OracleBlockedError(str(exc)) from exc
     cache = OracleReplayStore(root, definition.output_subdir)
 
-    # Identical scientific producer; independent maturity panels ensure the
-    # 40D original report is reusable while 60D arms get their *own* paired C96.
+    # Existing single mature 40D panel; Exact and Direct consume the same truth.
+    # Every treatment carries its own canonical ranking/allocator policy identity.
     def run_panel(*, end: str, cohort: dict[str, Any], scores: dict[str, dict],
                   targets: tuple[tuple[str, str], ...], label: str) -> dict[str, Any]:
         if set(scores) != {name for name, _ in targets}:
@@ -761,16 +718,20 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
                 print(f"[Oracle Audit {label}] seed={seed}: verify C96 + {len(targets)} Oracle results")
 
             def load_or_run(target: str, runner):
+                is_direct = target in ORACLE_DIRECT_SCORE_SOURCES
+                arm = direct_arm if is_direct else exact_arm
+                arm_replay_policy = (dict(replay_policy, direct_arm=str(definition.source["direct_arm_id"]))
+                                     if is_direct else replay_policy)
                 identity = replay_identity(
                     dataset=settings.dataset, dataset_sha256=price_sha,
                     target=target, definition=definitions_with_base,
                     settings_fingerprint=comparison_sha, start=start, end=end,
                     benchmark=str(robustness.benchmark_id), param_sha256=param_sha,
                     seed=seed, cohort=cohort,
-                    ranking_policy=str(exact_arm.dl_runtime_mode),
-                    ranking_options=dict(exact_arm.dl_runtime_options),
+                    ranking_policy=str(arm.dl_runtime_mode),
+                    ranking_options=dict(arm.dl_runtime_options),
                     evaluation_mode=str(definition.dimensions["evaluation_mode"]),
-                    max_positions=settings.max_positions, replay_policy=replay_policy,
+                    max_positions=settings.max_positions, replay_policy=arm_replay_policy,
                 )
                 try:
                     record = cache.read(identity)
@@ -805,10 +766,11 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
             observations["C96"].append(baseline)
             for target, _description in targets:
                 def run_oracle(target=target):
+                    arm = direct_arm if target in ORACLE_DIRECT_SCORE_SOURCES else exact_arm
                     with audit_oracle_truth_score_context(
                         scores[target],
-                        ranking_policy=str(exact_arm.dl_runtime_mode),
-                        ranking_options=exact_arm.dl_runtime_options,
+                        ranking_policy=str(arm.dl_runtime_mode),
+                        ranking_options=arm.dl_runtime_options,
                     ):
                         return _run_scenario(
                             name=f"Oracle {target} seed={seed}", params=oracle_params,
@@ -844,10 +806,6 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
         end=end40, cohort=cohort40, scores=scores40,
         targets=ORACLE_TARGETS, label="40D",
     )
-    extra = run_panel(
-        end=end60, cohort=sixty["cohort"], scores=sixty["scores"],
-        targets=ORACLE_SIXTY_TARGETS, label="60D",
-    )
     return {
         "schema_version": ORACLE_REPORT_SCHEMA_VERSION,
         "status": "COMPLETED", "read_only": True,
@@ -857,66 +815,48 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
         "seeds": [seed for seed, _ in parameter_paths],
         "dataset": settings.dataset,
         **base,
-        "additional_panels": {"60d": extra},
         "limitations": [
             "Ex-post future targets are NOT predictions, not PIT-legal, and never a deployable strategy.",
-            "AO/CG/CH EqualRank are fixed 50/50 geometry proxies, not learned model-head fusion.",
-            "40D and 60D results have DIFFERENT mature windows; their mean RoMD must not be compared directly.",
-            "Each maturity panel has its own same-window C96 and four same-seed P16 strategy replays.",
-            "N=4 paired end-to-end parameter seeds; oracle scores have no trainable seed.",
+            "AO/CG EqualRank are fixed 50/50 geometry proxies, not learned model-head fusion.",
+            "Exact and Direct pairs share identical future truth; only canonical K/R0 allocation changes.",
+            "Direct means canonical No-K/No-R0, NOT direct raw-R regression or executable prediction.",
+            "C96 is the same-seed Min/Broker-Cash control for both selectors; paired deltas use that baseline.",
+            "N=4 paired end-to-end parameter seeds; Oracle scores have no trainable seed.",
             "No best-target fitting from iterative OOS; multi-target search is exploratory.",
-            "R40/R60 are exact terminal future-day Close returns, not Portfolio Replay exit returns.",
-            "T40/T60 use full-path nonnegative MAE and clamp to -1R after a 1R adverse move.",
+            "R40 is the future 40th session Close return, not Portfolio Replay exit return.",
+            "T40 uses full-path nonnegative MAE and clamps to -1R at 1R adverse movement.",
             "1R is the fixed research Label risk budget, NOT the actual executed ATR stop-loss.",
         ],
     }
 
 
 def render_result(report: Mapping[str, Any], *, target: str) -> str:
-    # Persistent reusable report columns/order/precision are owned by the
-    # approved machine-readable contract; no parallel headings live here.
+    # Persistent report columns/order/precision are owned by its approved contract.
     contract = report_contract("audit.target_oracle_romd")
     sections = contract.sections
     perf_table = sections[0].tables[0]
     yearly_table = sections[2].tables[0]
     paired_table = sections[3].tables[0]
-    sixty_table, sixty_yearly, sixty_paired = sections[5].tables
-    sixty = report["additional_panels"]["60d"]
     baseline = dict(report["baseline"])
     items = [dict(baseline, target="C96 Same-Window", delta_romd_vs_c96=0.0, wins="-"),
              *[dict(item, wins=f'{item["positive_seed_count"]}/{item["seeds"]}')
                for item in report["oracles"]]]
     rows = [format_contract_row(perf_table, item) for item in items]
-    sixty_base = dict(sixty["baseline"])
-    sixty_items = [
-        dict(sixty_base, target="C96 Same-Window (60D)", delta_romd_vs_c96=0.0, wins="-"),
-        *[dict(item, wins=f'{item["positive_seed_count"]}/{item["seeds"]}')
-          for item in sixty["oracles"]],
-    ]
-    sixty_rows = [format_contract_row(sixty_table, item) for item in sixty_items]
     intro = [
         "Target Ground Truth -> Strategy RoMD (HINDSIGHT ORACLE / NOT PIT)",
         f'Period: {report["start_date"]} ~ {report["end_date"]} (40D-mature common window)',
         f'Common stock-day cohort: {report["common_cohort"]["cohort_rows"]:,}',
         f'Benchmark: {report["benchmark_id"]}, same-seed pairs N={len(report["seeds"])}',
         f'Report schema: {report["schema_version"]}, Oracle treatments: '
-        f'{len(report["oracles"])} (40D) + {len(sixty["oracles"])} (60D); not Standard SOP',
-        'Ranking: Exact K/R0, Broker-Cash, same seed/P16; future truth changes ranking only.',
+        f'{len(report["oracles"])} (40D, Exact + Direct); not Standard SOP',
+        'Ranking: Exact K/R0 or Direct No-K/No-R0; same Broker-Cash, seed/P16 and future scores.',
         'T40: (1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 >= 1R -> T40 = -1R.',
-        'AO/CG/CH = equal-rank 50/50 geometry PROXIES, not neural-network model heads.',
-    ]
-    sixty_intro = [
-        f'60D separate mature window: {sixty["start_date"]} ~ {sixty["end_date"]}',
-        f'60D common stock-day cohort: {sixty["common_cohort"]["cohort_rows"]:,}',
-        'T60 = (1-min(MAE60,1R))*R60-min(MAE60,1R); MAE60>=1R -> T60=-1R.',
-        'Do NOT compare 40D and 60D RoMD directly: their backtest end dates differ.',
+        'AO/CG = equal-rank 50/50 geometry PROXIES, not neural-network model heads.',
     ]
     if target == "console":
         return "\n\n".join((
             render_title(intro[0]), "\n".join(intro[1:]),
             render_table(perf_table.headers, rows),
-            "\n".join(sixty_intro),
-            render_table(sixty_table.headers, sixty_rows),
             "NOTICE: Future labels are hindsight only; not legal for PIT/Trading.",
         ))
     lines = [f"# {intro[0]}", *[f"- {line}" for line in intro[1:]], "",
@@ -925,8 +865,7 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
              "|" + "|".join("---" for _ in perf_table.headers) + "|"]
     lines.extend("| " + " | ".join(row) + " |" for row in rows)
     lines.extend(["", f"## {sections[1].display_title}",
-                  *[f"- **{key}** - {desc.replace('D40', 'MAE40').replace('D20', 'MAE20')}" for key, desc in ORACLE_TARGETS],
-                  *[f"- **{key}** - {desc}" for key, desc in ORACLE_SIXTY_TARGETS],
+                  *[f"- **{key}** - {desc.replace('D40', 'MAE40')}" for key, desc in ORACLE_TARGETS],
                   "", f"## {sections[2].display_title}"])
     for item in items:
         lines.append(f'### {item["target"]}')
@@ -944,32 +883,6 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
             lines.append("| " + " | ".join(format_contract_row(paired_table, row)) + " |")
     lines.extend(["", f"## {sections[4].display_title}",
                   *[f"- {limitation}" for limitation in report["limitations"]]])
-    lines.extend([
-        "", f"## {sections[5].display_title}",
-        *[f"- {line}" for line in sixty_intro], "",
-        "| " + " | ".join(sixty_table.headers) + " |",
-        "|" + "|".join("---" for _ in sixty_table.headers) + "|",
-    ])
-    lines.extend("| " + " | ".join(row) + " |" for row in sixty_rows)
-    lines.append("\n### 60D Yearly Stability")
-    for item in sixty_items:
-        lines.extend((
-            f'#### {item["target"]}',
-            "| " + " | ".join(sixty_yearly.headers) + " |",
-            "|" + "|".join("---" for _ in sixty_yearly.headers) + "|",
-        ))
-        for year in item["yearly"]:
-            lines.append("| " + " | ".join(format_contract_row(sixty_yearly, year)) + " |")
-    lines.extend([
-        "\n### 60D Same-Seed Paired RoMD",
-        "| " + " | ".join(sixty_paired.headers) + " |",
-        "|" + "|".join("---" for _ in sixty_paired.headers) + "|",
-    ])
-    sixty_baselines = {int(x["seed"]): float(x["romd"]) for x in sixty_base["seed_observations"]}
-    for item in sixty["oracles"]:
-        for obs in item["seed_observations"]:
-            row = dict(obs, target=item["target"], c96_romd=sixty_baselines[int(obs["seed"])])
-            lines.append("| " + " | ".join(format_contract_row(sixty_paired, row)) + " |")
     return "\n".join(lines)
 
 
@@ -996,6 +909,6 @@ def run_formal_audit(definition, *, project_root: Path, quiet: bool = False) -> 
 
 
 __all__ = [
-    "SUPPORTED_AUDIT_TYPE", "ORACLE_TARGETS", "ORACLE_SIXTY_TARGETS", "OracleBlockedError",
+    "SUPPORTED_AUDIT_TYPE", "ORACLE_TARGETS", "ORACLE_DIRECT_SCORE_SOURCES", "OracleBlockedError",
     "collect_status", "build_oracle_score_tables", "build_report", "render_result", "run_formal_audit",
 ]

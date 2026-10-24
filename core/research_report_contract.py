@@ -730,22 +730,16 @@ _TARGET_ORACLE_ROMD_PRIOR_REPORT = PersistentReportContract(
     ),
 )
 
-# The v2 section definitions remain a frozen source representation. A new
-# approved v3 retains all 40D tables and appends an independently matured
-# 60D panel with the SAME metric/fee/statistics columns and a separate C96.
+# v1-v3 remain frozen in their immutable definition files. User-approved
+# v4 removes active 20D/60D comparisons and adds Direct allocator controls.
 TARGET_ORACLE_ROMD_REPORT = PersistentReportContract(
-    report_id="audit.target_oracle_romd", version=3,
+    report_id="audit.target_oracle_romd", version=4,
     role="persistent_reusable_hindsight_non_pit",
     menu_path=_TARGET_ORACLE_ROMD_PRIOR_REPORT.menu_path,
     sections=(
         _TARGET_ORACLE_ROMD_PRIOR_REPORT.sections[0],
-        S("target_definitions", 2, "Target Definitions (8 × 40D / 3 × 60D)"),
+        S("target_definitions", 2, "Target Definitions (7 × Exact / 3 × Direct, 40D)"),
         *_TARGET_ORACLE_ROMD_PRIOR_REPORT.sections[2:],
-        S("sixty_day_comparison", 6, "60D Mature Oracle / Independent Same-Window C96", tables=(
-            T("performance_60d", _TARGET_ORACLE_ROMD_PRIOR_REPORT.sections[0].tables[0].columns),
-            T("yearly_60d", _TARGET_ORACLE_ROMD_PRIOR_REPORT.sections[2].tables[0].columns),
-            T("paired_60d", _TARGET_ORACLE_ROMD_PRIOR_REPORT.sections[3].tables[0].columns),
-        )),
     ),
 )
 
