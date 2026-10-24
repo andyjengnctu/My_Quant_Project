@@ -40,8 +40,14 @@ from services.audit import target_oracle_romd as oracle
 
 # Historical stock-day Oracle regressions must not instantiate a P16 path
 # provider in a temporary no-market fixture. The active suite is tested below.
+_ACTIVE_ORACLE_DEFINITION = next(
+    d for d in get_reusable_audit_definitions("breakout_quality")
+    if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE
+)
+_SEED_SCORE_TARGETS = frozenset(oracle._oracle_comparison_plan(
+    _ACTIVE_ORACLE_DEFINITION)["seed_sources"])
 LEGACY_ORACLE_TARGETS = tuple(
-    item for item in oracle.ORACLE_TARGETS if item[0] != "MinTrade40_NetR"
+    item for item in oracle.ORACLE_TARGETS if item[0] not in _SEED_SCORE_TARGETS
 )
 from services.audit.runner import collect_audit_menu_state, collect_audit_status
 from services.audit.catalog import get_audit_methods
@@ -53,7 +59,7 @@ def _legacy_definition():
                   if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
     return replace(active, source={**active.source, "oracle_comparisons": tuple(
         item for item in active.source["oracle_comparisons"]
-        if item["target"] != "MinTrade40_NetR")})
+        if item["target"] not in _SEED_SCORE_TARGETS)})
 
 
 def _mock_panels(common40):
@@ -100,6 +106,7 @@ class OracleAuditContractCases(TestCase):
         self.assertEqual(oracle.ORACLE_DIRECT_SCORE_SOURCES, {
             "MFE40_Direct": "MFE40_Control", "R40_Direct": "R40", "T40_Direct": "T40",
             "T40-MFE_Direct": "T40-MFE",
+            "MinTrade40_NetR_Direct": "MinTrade40_NetR",
         })
         self.assertEqual(self.definition.output_subdir, "breakout_quality/reusable/target_oracle_romd")
         with tempfile.TemporaryDirectory() as tmp:
@@ -390,7 +397,8 @@ class OracleAuditContractCases(TestCase):
         self.assertEqual(scores["R40"][key("2317")], 1.0)
         self.assertEqual(scores["T40"][key("2330")], 0.5)  # All three reach MAE>=1R.
         for direct_name, exact_name in oracle.ORACLE_DIRECT_SCORE_SOURCES.items():
-            self.assertIs(scores[direct_name], scores[exact_name], "Direct must reuse identical truth")
+            if exact_name in scores:
+                self.assertIs(scores[direct_name], scores[exact_name], "Direct must reuse identical truth")
         self.assertTrue(all(0.0 <= v <= 1.0 for table in scores.values() for v in table.values()))
 
     def test_selected_score_providers_do_not_run_retired_truth_dependencies(self):
@@ -894,7 +902,8 @@ class OracleAuditContractCases(TestCase):
             latest = base / "outputs/audit" / self.definition.output_subdir / "latest"
             body = (latest / "audit.md").read_text(encoding="utf-8")
             for name in oracle.ORACLE_DIRECT_SCORE_SOURCES:
-                self.assertIn("**" + name + "**", body)
+                if name in dict(LEGACY_ORACLE_TARGETS):
+                    self.assertIn("**" + name + "**", body)
             self.assertIn("**R40**", body)
             self.assertIn("**T40**", body)
             self.assertIn("**T40-MFE**", body)
@@ -1008,7 +1017,13 @@ class ActiveMinTrade40OracleComparisonCases(TestCase):
         plan = oracle._oracle_comparison_plan(definition)
         self.assertIn("MinTrade40_NetR", dict(plan["targets"]))
         self.assertIn("MinTrade40_NetR", plan["seed_recipes"])
-        self.assertEqual(len(plan["targets"]), 10)
+        self.assertEqual(plan["seed_sources"], {
+            "MinTrade40_NetR": "MinTrade40_NetR",
+            "MinTrade40_NetR_Direct": "MinTrade40_NetR",
+        })
+        self.assertEqual(plan["aliases"]["MinTrade40_NetR_Direct"], "MinTrade40_NetR")
+        self.assertEqual(len(plan["targets"]), 11)
+        exact_policy = oracle._contract(definition)[2].dl_runtime_mode
         seeds = (693545351, 2014432738, 104504529, 762252050)
         class Benchmark:
             benchmark_id = "end_to_end_v1"
@@ -1031,7 +1046,12 @@ class ActiveMinTrade40OracleComparisonCases(TestCase):
                 )
                 self.assertAlmostEqual(ranked["score"], score_by_seed[seed][("2330", origin)])
                 self.assertEqual(ranked["score_date"], origin)
-                actual_source.append((seed, ranked["score"]))
+                context = get_breakout_quality_ranking_source_context()
+                self.assertEqual(context.ranking_policy, (
+                    "resource-aware-continuous-score-no-k-no-r0"
+                    if "_Direct" in name else exact_policy
+                ))
+                actual_source.append((seed, "_Direct" in name, ranked["score"]))
             elif name.startswith("Oracle"):
                 ranked = resolve_breakout_quality_candidate_rank(
                     ticker="2330", signal_date=origin, information_date=origin,
@@ -1043,7 +1063,7 @@ class ActiveMinTrade40OracleComparisonCases(TestCase):
             seed = int(replay["name"].split("seed=")[1].split()[0])
             return {"target": target, "total_return_pct": 100.0,
                     "annualized_return_pct": 15.0, "mdd_pct": 12.0,
-                    "romd": 8.0 + (2.0 if target == "MinTrade40_NetR" else 0.0),
+                    "romd": 8.0 + (2.0 if target.startswith("MinTrade40_NetR") else 0.0),
                     "ev_a_r": 0.4, "trades": 50, "exposure_pct": 70.0,
                     "yearly": [{"year": 2025, "strategy_return_pct": 5.0, "is_full_year": True}]}
         common = {"cohort_rows": 100, "first_common_day": "2021-01-01",
@@ -1055,7 +1075,8 @@ class ActiveMinTrade40OracleComparisonCases(TestCase):
         score_fixture = {name: {("2330", origin): 0.8}
                          for name in plan["recipes"]}
         for name, source in plan["aliases"].items():
-            score_fixture[name] = score_fixture[source]
+            if source in score_fixture:
+                score_fixture[name] = score_fixture[source]
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
@@ -1074,21 +1095,46 @@ class ActiveMinTrade40OracleComparisonCases(TestCase):
                        return_value=(score_by_seed, evidence)) as build_labels, \
                  patch.object(oracle, "_run_scenario", side_effect=scenario) as replay, \
                  patch.object(oracle, "_metrics", side_effect=metrics):
-                published = oracle.run_formal_audit(definition, project_root=root, quiet=True)
-                self.assertEqual(len(actual_source), 4)
+                # First freeze the existing Exact + stock-day panel. Adding a
+                # Direct selector later must only RUN four new seed replays.
+                old_definition = replace(definition, source={
+                    **definition.source, "oracle_comparisons": tuple(
+                        item for item in definition.source["oracle_comparisons"]
+                        if item["target"] != "MinTrade40_NetR_Direct"
+                    ),
+                })
+                old_plan = oracle._oracle_comparison_plan(old_definition)
+                self.assertEqual(
+                    oracle._arm_replay_policy(old_definition, plan=old_plan,
+                                              target="MinTrade40_NetR", replay_policy={}),
+                    oracle._arm_replay_policy(definition, plan=plan,
+                                              target="MinTrade40_NetR", replay_policy={}),
+                )
+                old_report = oracle.run_formal_audit(old_definition, project_root=root, quiet=True)
                 self.assertEqual(replay.call_count, 44)
-                self.assertEqual(build_labels.call_count, 1)
-                self.assertEqual(len(published["oracles"]), 10)
-                self.assertEqual(published["oracles"][-1]["target"], "MinTrade40_NetR")
-                self.assertEqual(published["oracles"][-1]["positive_seed_count"], 4)
-                self.assertEqual(published["oracles"][-1]["delta_romd_vs_c96"], 2.0)
+                self.assertEqual(len(old_report["oracles"]), 10)
+                published = oracle.run_formal_audit(definition, project_root=root, quiet=True)
+                self.assertEqual(len(actual_source), 8)
+                for seed in seeds:
+                    exact = next(v for s, direct, v in actual_source if s == seed and not direct)
+                    other = next(v for s, direct, v in actual_source if s == seed and direct)
+                    self.assertEqual(exact, other, "Exact/Direct must reuse the SAME seed score")
+                self.assertEqual(replay.call_count, 48, "only the four new Direct units may RUN")
+                self.assertEqual(build_labels.call_count, 2,
+                                 "both visits consume the same one-label producer")
+                self.assertEqual(len(published["oracles"]), 11)
+                self.assertEqual([row["target"] for row in published["oracles"]][-2:],
+                                 ["MinTrade40_NetR", "MinTrade40_NetR_Direct"])
+                for row in published["oracles"][-2:]:
+                    self.assertEqual(row["positive_seed_count"], 4)
+                    self.assertEqual(row["delta_romd_vs_c96"], 2.0)
                 self.assertEqual(len(published["seed_target_evidence"]), 4)
                 self.assertIn("MinTrade40_NetR", (root / "outputs/audit" / definition.output_subdir / "latest" / "audit.md").read_text(encoding="utf-8"))
                 self.assertFalse((root / "outputs/audit/breakout_quality/reusable/min_trade40_netr/latest").exists())
                 second = oracle.run_formal_audit(definition, project_root=root, quiet=True)
                 self.assertEqual(second["oracles"], published["oracles"])
-                self.assertEqual(replay.call_count, 44, "all finished arms must REUSE")
-                self.assertEqual(build_labels.call_count, 1, "completed report skips re-materialization")
+                self.assertEqual(replay.call_count, 48, "all finished arms must REUSE")
+                self.assertEqual(build_labels.call_count, 2, "completed report skips re-materialization")
             self.assertNotEqual(get_breakout_quality_ranking_source_context().score_source,
                                 SCORE_SOURCE_AUDIT_ORACLE_FUTURE_TRUTH)
 
@@ -1473,7 +1519,8 @@ class OracleReplayEvidenceReuseCases(TestCase):
         old_definitions = dict(definitions)
         old_definitions.pop("T40-MFE")  # two new treatments did not exist in v3
         for name in oracle.ORACLE_DIRECT_SCORE_SOURCES:
-            old_definitions.pop(name)
+            if name in old_definitions:
+                old_definitions.pop(name)
         old_definitions.update({name: self._old_definitions()[name]
                                 for name in ("AO40_EqualRank", "U40", "FirstBreach_NetR", "CH20_EqualRank")})
         common = {"cohort_rows": 4, "first_common_day": "2021-01-01",

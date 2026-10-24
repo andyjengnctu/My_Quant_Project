@@ -155,6 +155,22 @@ class MinTrade40ContractTests(unittest.TestCase):
                           if row['target'] == target.TARGET_NAME)
         self.assertEqual(comparison['score'], 'trade_path_realized_net_r')
         self.assertEqual(comparison['selector'], 'exact')
+        direct = next(row for row in self.definition.source['oracle_comparisons']
+                      if row['target'] == 'MinTrade40_NetR_Direct')
+        self.assertEqual(direct['score_source'], target.TARGET_NAME)
+        self.assertEqual(direct['selector'], 'direct')
+        direct_policy = _arm_replay_policy(
+            self.definition, plan=_oracle_comparison_plan(self.definition),
+            target=direct['target'], replay_policy={},
+        )
+        self.assertEqual(direct_policy['hindsight_label_spec'],
+                         arm_policy['hindsight_label_spec'])
+        self.assertEqual(direct_policy['hindsight_score_key_mode'],
+                         'signal_origin_date')
+        self.assertEqual(direct_policy['excluded_score_policy'],
+                         'rank_last_no_realized_r_imputation')
+        self.assertEqual(direct_policy['direct_arm'],
+                         self.definition.source['direct_arm_id'])
         self.assertNotEqual(self.definition.output_subdir, target.OUTPUT_SUBDIR)
 
     def test_excluded_signals_rank_last_without_fabricated_realized_r(self):

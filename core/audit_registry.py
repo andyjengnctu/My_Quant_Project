@@ -133,6 +133,7 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     {"target": "T40_Direct", "description": "Same T40 score; canonical No-K/No-R0 direct allocation", "score_source": "T40", "selector": "direct"},
                     {"target": "T40-MFE_Direct", "description": "Same T40-MFE score; canonical No-K/No-R0 direct allocation", "score_source": "T40-MFE", "selector": "direct"},
                     {"target": "MinTrade40_NetR", "description": "P16 Min signal-origin realized broker-net R; first stop/indicator exit or 40 market sessions, unfilled ranked last without invented R", "score": "trade_path_realized_net_r", "provider": "event_targets", "selector": "exact"},
+                    {"target": "MinTrade40_NetR_Direct", "description": "Same per-seed MinTrade40_NetR signal-origin score; canonical No-K/No-R0 direct allocation", "score_source": "MinTrade40_NetR", "selector": "direct"},
                 ),
             },
             "dimensions": {

@@ -132,7 +132,7 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
             )
         if entry.get("score_source"):
             source = str(entry["score_source"])
-            if source not in recipes or selector != "direct":
+            if (source not in recipes and source not in seed_recipes) or selector != "direct":
                 raise OracleBlockedError(f"Oracle Direct score來源必須先由Exact宣告：{name} -> {source}")
             aliases[name] = source
         else:
@@ -156,10 +156,14 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
                 raise OracleBlockedError(f"Oracle未授權的score recipe：{recipe}")
         definitions.append((name, desc))
         selectors[name] = selector
+    seed_sources = {name: name for name in seed_recipes}
+    seed_sources.update({name: source for name, source in aliases.items()
+                         if source in seed_recipes})
     if not recipes:
         raise OracleBlockedError("Oracle comparison缺少獨立真值score")
     return {"targets": tuple(definitions), "recipes": recipes,
-            "seed_recipes": seed_recipes, "aliases": aliases,
+            "seed_recipes": seed_recipes, "seed_sources": seed_sources,
+            "aliases": aliases,
             "selectors": selectors, "providers": tuple(provider_fields)}
 
 
@@ -616,8 +620,9 @@ def _build_oracle_score_panels(
             raise OracleBlockedError(f"Oracle {name}存在非有限rank score")
         scores[name] = dict(zip(keys, ranking.to_numpy(dtype=float)))
     for direct, source in plan["aliases"].items():
-        scores[direct] = scores[source]
-    if set(scores) | set(plan["seed_recipes"]) != {name for name, _desc in plan["targets"]}:
+        if source in scores:
+            scores[direct] = scores[source]
+    if set(scores) | set(plan["seed_sources"]) != {name for name, _desc in plan["targets"]}:
         raise OracleBlockedError("Oracle比較清單／分數工件依賴不一致")
 
     # Backward-compatible evidence keys retain their original scientific
@@ -864,8 +869,8 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
     policy = dict(replay_policy)
     if plan["selectors"].get(target) == "direct":
         policy["direct_arm"] = str(definition.source["direct_arm_id"])
-    if target in plan["seed_recipes"]:
-        recipe, provider = plan["seed_recipes"][target]
+    if target in plan["seed_sources"]:
+        recipe, provider = plan["seed_recipes"][plan["seed_sources"][target]]
         declared = [dict(row) for row in definition.source[provider] if row.get("enabled", True)]
         policy["hindsight_score_recipe"] = recipe
         policy["hindsight_score_key_mode"] = "signal_origin_date"
@@ -1072,7 +1077,7 @@ def build_report(
     # Every treatment carries its own canonical ranking/allocator policy identity.
     def run_panel(*, end: str, cohort: dict[str, Any], scores: dict[str, dict],
                   targets: tuple[tuple[str, str], ...], label: str) -> dict[str, Any]:
-        if set(scores) | set(plan["seed_recipes"]) != {name for name, _ in targets}:
+        if set(scores) | set(plan["seed_sources"]) != {name for name, _ in targets}:
             raise OracleBlockedError(f"Oracle {label}計算與報表Target清單不一致")
         if plan["seed_recipes"] and set(seed_scores) != {seed for seed, _ in parameter_paths}:
             raise OracleBlockedError("Oracle P16逐seed交易路徑真值不完整")
@@ -1226,13 +1231,13 @@ def build_report(
             for target, _description in targets:
                 def run_oracle(target=target):
                     arm = direct_arm if plan["selectors"].get(target) == "direct" else exact_arm
-                    score_map = (seed_scores[seed][target] if target in plan["seed_recipes"]
-                                 else scores[target])
+                    score_map = (seed_scores[seed][plan["seed_sources"][target]]
+                                 if target in plan["seed_sources"] else scores[target])
                     with audit_oracle_truth_score_context(
                         score_map,
                         ranking_policy=str(arm.dl_runtime_mode),
                         ranking_options=arm.dl_runtime_options,
-                        key_mode=("signal_origin_date" if target in plan["seed_recipes"]
+                        key_mode=("signal_origin_date" if target in plan["seed_sources"]
                                   else "information_date"),
                     ):
                         return _run_scenario(
