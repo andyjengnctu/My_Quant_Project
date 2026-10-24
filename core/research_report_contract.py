@@ -730,15 +730,15 @@ _TARGET_ORACLE_ROMD_PRIOR_REPORT = PersistentReportContract(
     ),
 )
 
-# v1-v6 stay immutable. v7 adds the user-authorized T40-MFE Exact treatment
-# and updates the visible Target Definitions inventory without changing metrics.
+# v1-v7 stay immutable. v8 adds the user-authorized T40-MFE Direct replay,
+# sharing the exact same score truth and changing only canonical allocation.
 TARGET_ORACLE_ROMD_REPORT = PersistentReportContract(
-    report_id="audit.target_oracle_romd", version=7,
+    report_id="audit.target_oracle_romd", version=8,
     role="persistent_reusable_hindsight_non_pit",
     menu_path=("Research", "Target 驗證"),
     sections=(
         _TARGET_ORACLE_ROMD_PRIOR_REPORT.sections[0],
-        S("target_definitions", 2, "Target Definitions (5 × Exact / 3 × Direct, 40D)"),
+        S("target_definitions", 2, "Target Definitions (5 × Exact / 4 × Direct, 40D)"),
         *_TARGET_ORACLE_ROMD_PRIOR_REPORT.sections[2:],
     ),
 )

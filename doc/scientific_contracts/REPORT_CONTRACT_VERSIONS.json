@@ -73,6 +73,13 @@
           "fingerprint": "c4c24459cc133aae",
           "definition_path": "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v7.json",
           "definition_sha256": "a0ab79295d2e569005b38cbc92f53b07ee7519fcf7edf09f6d11000bea4e5e80"
+        },
+        {
+          "contract_id": "audit.target_oracle_romd@v8",
+          "version": 8,
+          "fingerprint": "ffacec7ba5e7b476",
+          "definition_path": "doc/scientific_contracts/AUDIT_TARGET_ORACLE_ROMD_v8.json",
+          "definition_sha256": "5f6d2d0032a9f0b2327f5f1bbe19ff8b25e3f4238ef0c1d4259560f401b7fa60"
         }
       ]
     },

@@ -78,7 +78,7 @@ from core.research_report_contract import (
 from services.audit.reusable_report import format_comparison_rows
 
 SUPPORTED_AUDIT_TYPE = "target_ground_truth_strategy_romd"
-ORACLE_REPORT_SCHEMA_VERSION = 7
+ORACLE_REPORT_SCHEMA_VERSION = 8
 # Current report's Oracle strategies. Direct is the existing canonical No-K/No-R0
 # selector applied to the SAME score truth; not a new Target formula.
 # For backward-compatible external call sites only. The runtime reads the
