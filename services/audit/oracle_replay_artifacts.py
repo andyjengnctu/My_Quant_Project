@@ -130,9 +130,14 @@ class OracleReplayStore:
                 peer = payload["identity"]
                 if (payload.get("cache_schema") != _CACHE_SCHEMA
                         or not isinstance(peer, dict)
-                        or peer.get("target") != identity["target"]
                         or int(peer.get("seed", -1)) != int(identity["seed"])):
                     raise ValueError("Oracle sibling replay cache identity malformed")
+                # A shorter target name can prefix a different valid target
+                # (R40_*.json also matches R40_Direct_*.json).
+                if peer.get("target") != identity["target"]:
+                    if not candidate.name.startswith(f"{peer.get('target')}_"):
+                        raise ValueError("Oracle sibling replay cache target/path mismatch")
+                    continue
                 peer_cohort = peer.get("cohort") or {}
                 if not isinstance(peer_cohort, dict):
                     raise ValueError("Oracle sibling replay cache cohort malformed")
@@ -205,6 +210,8 @@ class HistoricalOracleIndex:
 
     def __init__(self, project_root: Path):
         output_root = Path(project_root).resolve() / AUDIT_OUTPUT_ROOT / "breakout_quality"
+        self._output_root = output_root
+        self._project_root = Path(project_root).resolve()
         # The append-only report ledger verifies presentation provenance; a
         # future report version must not force identical science to be replayed.
         versions = load_report_contract_versions().get("audit.target_oracle_romd", ())
@@ -256,72 +263,115 @@ class HistoricalOracleIndex:
                     panel_payload.update(panel)
                     self.snapshots.append((origin, path, panel_payload))
 
-    def _compatible(self, payload: Mapping[str, Any], *, context: Mapping[str, Any], origin: str) -> bool:
-        if (payload.get("status") != "COMPLETED" or payload.get("hindsight_non_pit") is not True
-                or payload.get("read_only") is not True
-                or payload.get("benchmark_id") != context["benchmark"]
-                or payload.get("strategy_profile_id") != context["strategy_profile_id"]
-                or payload.get("dataset") != context["dataset"]
-                or payload.get("start_date") != context["start_date"]
-                or payload.get("end_date") != context["end_date"]
-                or list(payload.get("seeds") or []) != list(context["seeds"])
-                or not isinstance(payload.get("baseline"), dict)
-                or not isinstance(payload.get("oracles"), list)):
-            return False
+    def _compatibility_issues(self, payload: Mapping[str, Any], *,
+                              context: Mapping[str, Any], origin: str) -> tuple[str, ...]:
+        """Explain the same validation used for admission; never weaken reuse."""
+        issues: list[str] = []
+        for key, expected in (
+            ("status", "COMPLETED"), ("hindsight_non_pit", True),
+            ("read_only", True), ("benchmark_id", context["benchmark"]),
+            ("strategy_profile_id", context["strategy_profile_id"]),
+            ("dataset", context["dataset"]),
+            ("start_date", context["start_date"]),
+            ("end_date", context["end_date"]),
+        ):
+            if payload.get(key) != expected:
+                issues.append(key)
+        if list(payload.get("seeds") or []) != list(context["seeds"]):
+            issues.append("seeds")
+        if not isinstance(payload.get("baseline"), dict):
+            issues.append("baseline")
+        if not isinstance(payload.get("oracles"), list):
+            issues.append("oracles")
         if payload.get("report_type") not in (None, "target_ground_truth_strategy_romd"):
-            return False
-        # Presentation identity is separate from per-target scientific identity.
-        # Reusable reports must have a ledger-approved report contract.
+            issues.append("report_type")
         if origin == "one_time":
             if payload.get("report_id") not in (None, "AUD-target-ground-truth-romd"):
-                return False
+                issues.append("report_id")
         elif origin == "reusable":
-            if (payload.get("report_id") != "target_oracle_romd"
-                    or payload.get("report_type") != "target_ground_truth_strategy_romd"
-                    or not isinstance(payload.get("schema_version"), int)
-                    or payload["schema_version"] < 2
-                    or payload.get("report_contract_fingerprint") != self._approved_report_versions.get(
-                        payload.get("report_contract_id")
-                    )):
-                return False
+            if payload.get("report_id") != "target_oracle_romd":
+                issues.append("report_id")
+            if payload.get("report_type") != "target_ground_truth_strategy_romd":
+                issues.append("report_type")
+            version = payload.get("schema_version")
+            if type(version) is not int or version < 2:
+                issues.append("schema_version")
+            if payload.get("report_contract_fingerprint") != self._approved_report_versions.get(
+                payload.get("report_contract_id")
+            ):
+                issues.append("report_contract_id/fingerprint")
         else:
-            return False
+            issues.append("origin")
         cohort = payload.get("common_cohort")
         if not isinstance(cohort, dict):
-            return False
-        wanted = context["cohort"]
-        for field in ("cohort_rows", "first_common_day", "last_common_day", "research_cutoff",
-                      "risk_budget_return", "providers", "scoring", "market_truth",
-                      "rows_outside_dl_training_provider_by_source"):
-            if cohort.get(field) != wanted.get(field):
-                return False
-        # Source-defined supplemental evidence is validated when present, but
-        # an older report need not possess fields introduced in newer schemas.
-        # Unknown source fields cannot silently redefine the current cohort.
-        if any(key not in wanted or wanted[key] != value for key, value in cohort.items()):
-            return False
+            issues.append("common_cohort")
+        else:
+            wanted = context["cohort"]
+            for field in (
+                "cohort_rows", "first_common_day", "last_common_day",
+                "research_cutoff", "risk_budget_return", "providers",
+                "scoring", "market_truth", "rows_outside_dl_training_provider_by_source",
+            ):
+                if cohort.get(field) != wanted.get(field):
+                    issues.append(f"common_cohort.{field}")
+            for key, value in cohort.items():
+                if key not in wanted or wanted[key] != value:
+                    name = f"common_cohort.{key}"
+                    if name not in issues:
+                        issues.append(name)
         definitions = payload.get("definitions")
         if (not isinstance(definitions, dict) or not definitions
                 or any(not isinstance(name, str) or not name
                        or not isinstance(description, str) or not description
                        for name, description in definitions.items())):
-            return False
-        param_rows = payload.get("param_artifacts") or []
+            issues.append("definitions")
+        param_rows = payload.get("param_artifacts")
         if not isinstance(param_rows, list) or len(param_rows) != len(context["seeds"]):
-            return False
-        archived = {int(item["seed"]): str(item["param_sha256"])
-                    for item in param_rows
-                    if isinstance(item, dict) and "seed" in item and "param_sha256" in item}
-        if archived != context["param_sha_by_seed"] or not all(is_sha256_hex(v) for v in archived.values()):
-            return False
-        targets = {row.get("target") for row in payload["oracles"] if isinstance(row, dict)}
-        # A completed report must be internally consistent, regardless of its
-        # historical number of targets. Matching the *requested* definition
-        # is performed in lookup(), not via a hardcoded report inventory.
-        if (len(targets) != len(payload["oracles"])
-                or targets != set(definitions)):
-            return False
-        return True
+            issues.append("param_artifacts")
+        else:
+            try:
+                archived = {int(item["seed"]): str(item["param_sha256"])
+                            for item in param_rows
+                            if isinstance(item, dict) and "seed" in item and "param_sha256" in item}
+            except (ValueError, TypeError, OverflowError):
+                archived = {}
+            if archived != context["param_sha_by_seed"] or not all(
+                is_sha256_hex(value) for value in archived.values()
+            ):
+                issues.append("param_artifacts.param_sha256")
+        if isinstance(payload.get("oracles"), list) and isinstance(definitions, dict):
+            try:
+                targets = {row.get("target") for row in payload["oracles"] if isinstance(row, dict)}
+                if len(targets) != len(payload["oracles"]) or targets != set(definitions):
+                    issues.append("oracles/definitions inventory")
+            except (TypeError, ValueError):
+                issues.append("oracles/definitions inventory")
+        return tuple(dict.fromkeys(issues))
+
+    def _compatible(self, payload: Mapping[str, Any], *, context: Mapping[str, Any], origin: str) -> bool:
+        return not self._compatibility_issues(payload, context=context, origin=origin)
+
+    def diagnose_missing(self, *, target: str, context: Mapping[str, Any]) -> tuple[str, ...]:
+        """Explain related completed local results rejected by strict identity.
+
+        Other maturities and reports without this target are not evidence that
+        the requested new arm was previously computed.
+        """
+        explanations: list[str] = []
+        for origin, path, payload in self.snapshots:
+            if any(payload.get(key) != context[key] for key in ("dataset", "start_date", "end_date")):
+                continue
+            definitions = payload.get("definitions")
+            if target != "C96" and isinstance(definitions, dict) and target not in definitions:
+                continue
+            problems = list(self._compatibility_issues(payload, context=context, origin=origin))
+            if target != "C96" and payload["definitions"].get(target) != context["definitions"].get(target):
+                problems.append(f"definitions.{target}")
+            if not problems:
+                problems.append("missing complete same-seed observations")
+            short_path = path.relative_to(self._project_root).as_posix()
+            explanations.append(f"{short_path}: {', '.join(problems)}")
+        return tuple(explanations)
 
     def lookup(self, *, target: str, seed: int, context: Mapping[str, Any]) -> dict[str, Any] | None:
         observations = []

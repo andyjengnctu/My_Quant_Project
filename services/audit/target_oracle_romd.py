@@ -715,11 +715,14 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
         }
         observations: dict[str, list[dict[str, Any]]] = {"C96": []}
         observations.update({target: [] for target, _ in targets})
-        for seed, param_sha, kind, base_params, oracle_params in prepared:
-            if not quiet:
-                print(f"[Oracle Audit {label}] seed={seed}: verify C96 + {len(targets)} Oracle results")
 
-            def load_or_run(target: str, runner):
+        # Resolve EVERY completed identity before starting any replay. A local
+        # completed report with mismatched evidence is BLOCKED, not interpreted
+        # as permission to silently spend hours computing the same arm again.
+        # This plan is derived from on-disk artifacts, not a historic target list.
+        completed_plan: dict[tuple[int, str], tuple[dict[str, Any], dict[str, Any] | None, str]] = {}
+        for seed, param_sha, _kind, _base_params, _oracle_params in prepared:
+            for target in ("C96", *(name for name, _ in targets)):
                 is_direct = target in ORACLE_DIRECT_SCORE_SOURCES
                 arm = direct_arm if is_direct else exact_arm
                 arm_replay_policy = (dict(replay_policy, direct_arm=str(definition.source["direct_arm_id"]))
@@ -738,19 +741,50 @@ def build_report(definition, *, project_root: Path, quiet: bool = False) -> dict
                 try:
                     record = cache.read(identity)
                     origin = "verified per-arm cache"
-                    if record is None and not cache.has_other_identity(identity):
+                    if record is None:
+                        if cache.has_other_identity(identity):
+                            raise ValueError(
+                                f"same-window replay_cache has a DIFFERENT identity for "
+                                f"{target} seed={seed}; inspect cached data/param/settings/cohort/policy "
+                                f"before explicitly authorizing a new replay"
+                            )
                         record = archived.lookup(target=target, seed=seed, context=legacy_context)
                         origin = "compatible completed Oracle report"
-                        if record is not None:
-                            cache.write(identity, record, origin="historical_report")
-                    if record is not None:
-                        if not quiet:
-                            print(f"[REUSE] {label} seed={seed} {target} | {origin}")
-                        return record
+                        if record is None:
+                            rejected = archived.diagnose_missing(target=target, context=legacy_context)
+                            if rejected:
+                                raise ValueError(
+                                    f"completed Oracle result exists but is INCOMPATIBLE for "
+                                    f"{target} seed={seed}; " + " | ".join(rejected[:5])
+                                )
+                    completed_plan[(seed, target)] = (identity, record, origin)
                 except ValueError as exc:
-                    raise OracleBlockedError(str(exc)) from exc
+                    raise OracleBlockedError(f"Oracle {label} REUSE preflight BLOCKED: {exc}") from exc
+        if not quiet:
+            reused = sum(item[1] is not None for item in completed_plan.values())
+            print(f"[Oracle Audit {label} preflight] {reused} REUSE / "
+                  f"{len(completed_plan) - reused} genuinely missing RUN; "
+                  f"no replay started during preflight")
+
+        for seed, param_sha, kind, base_params, oracle_params in prepared:
+            if not quiet:
+                print(f"[Oracle Audit {label}] seed={seed}: verify C96 + {len(targets)} Oracle results")
+
+            def load_or_run(target: str, runner):
+                identity, record, origin = completed_plan[(seed, target)]
+                if record is not None:
+                    try:
+                        # An older completed report is promoted to a strict
+                        # per-arm cache only after its provenance was checked.
+                        if origin == "compatible completed Oracle report":
+                            cache.write(identity, record, origin="historical_report")
+                    except ValueError as exc:
+                        raise OracleBlockedError(str(exc)) from exc
+                    if not quiet:
+                        print(f"[REUSE] {label} seed={seed} {target} | {origin}")
+                    return record
                 if not quiet:
-                    print(f"[RUN] {label} seed={seed} {target} | missing completed identity")
+                    print(f"[RUN] {label} seed={seed} {target} | no completed local result")
                 record = _metrics(runner(), target=target)
                 record["seed"] = seed
                 if target != "C96":

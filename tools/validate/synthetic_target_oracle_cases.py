@@ -518,6 +518,12 @@ class OracleAuditContractCases(TestCase):
                 self.assertEqual(len(seen), original_calls, "identical replay must REUSE all arms")
                 self.assertEqual(reused["baseline"], report["baseline"])
                 self.assertEqual(reused["oracles"], report["oracles"])
+                # A scientifically different replay identity is NOT permission
+                # to silently run it again when matching-panel cache exists.
+                with patch.object(oracle, "price_inventory_sha256", return_value="c" * 64):
+                    with self.assertRaisesRegex(oracle.OracleBlockedError, "DIFFERENT identity"):
+                        oracle.build_report(self.definition, project_root=Path(tmp), quiet=True)
+                self.assertEqual(len(seen), original_calls)
         self.assertEqual(len(seen), len(seeds) * (1 + len(oracle.ORACLE_TARGETS)))
         self.assertEqual(report["seeds"], list(seeds))
         self.assertEqual(report["schema_version"], 6)
@@ -683,6 +689,14 @@ class OracleReplayEvidenceReuseCases(TestCase):
             location.write_text(json.dumps(raw), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "corrupt"):
                 cache.read(identity)
+
+    def test_prefix_distinct_targets_are_not_cache_conflicts(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        with tempfile.TemporaryDirectory() as tmp:
+            store = OracleReplayStore(Path(tmp), "breakout_quality/reusable/target_oracle_romd")
+            direct = self._identity(target="R40_Direct")
+            store.write(direct, self._observation("R40_Direct", 1), origin="canonical_replay")
+            self.assertFalse(store.has_other_identity(self._identity(target="R40")))
 
     def test_history_reuses_only_completed_matching_seven_target_seed_records(self):
         from services.audit.oracle_replay_artifacts import HistoricalOracleIndex
@@ -885,6 +899,60 @@ class OracleReplayEvidenceReuseCases(TestCase):
         self.assertFalse(seen, "historical v4 compatible results must never be replayed")
         self.assertEqual([x["target"] for x in rebuilt["oracles"]], list(definitions))
         self.assertEqual(rebuilt["schema_version"], 6)
+
+    def test_incompatible_completed_v4_report_blocks_before_any_replay(self):
+        from core.report_contract_versions import load_report_contract_versions
+        from core.audit_policy import get_reusable_audit_definitions
+        seeds = (11, 22, 33, 44)
+        class Benchmark:
+            benchmark_id = "end_to_end_v1"
+        common = {"cohort_rows": 4, "last_common_day": "2025-12-22"}
+        definitions = dict(oracle.ORACLE_TARGETS)
+        report = {
+            "schema_version": 5, "status": "COMPLETED", "read_only": True,
+            "hindsight_non_pit": True, "report_id": "target_oracle_romd",
+            "report_type": oracle.SUPPORTED_AUDIT_TYPE,
+            "report_contract_id": "audit.target_oracle_romd@v4",
+            "report_contract_fingerprint": load_report_contract_versions()["audit.target_oracle_romd"][3]["fingerprint"],
+            "strategy_profile_id": "broker_cash_dl_conversion_rolling",
+            "benchmark_id": Benchmark.benchmark_id, "dataset": "full",
+            "start_date": "2021-01-01", "end_date": "2025-12-22",
+            "seeds": list(seeds), "common_cohort": common,
+            "param_artifacts": [{"seed": seed, "param_sha256": "c" * 64} for seed in seeds],
+            "definitions": definitions,
+            "baseline": oracle._aggregate([self._observation("C96", seed) for seed in seeds], target="C96"),
+            "oracles": [oracle._aggregate([self._observation(name, seed) for seed in seeds], target=name)
+                        for name in definitions],
+        }
+        definition = next(d for d in get_reusable_audit_definitions("breakout_quality")
+                          if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
+        seen = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            directory = root / "outputs/audit/breakout_quality/reusable/target_oracle_romd/20261024T110500Z"
+            directory.mkdir(parents=True)
+            (directory / "audit.json").write_text(json.dumps(report), encoding="utf-8")
+            with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
+                 patch.object(oracle, "_robustness_artifacts", return_value=(Benchmark(), [(seed, Path(f"seed_{seed}.json")) for seed in seeds])), \
+                 patch.object(oracle, "_build_oracle_score_panels", return_value=_mock_panels(common)), \
+                 patch.object(oracle, "load_strategy_param_evaluation_view", return_value=({"kind": "rolling_active_param_ensemble", "payload": {}}, "a" * 64)), \
+                 patch.object(oracle, "_validate_requested_param_policy"), \
+                 patch.object(oracle, "get_active_param_ensemble_date_range", return_value=("2020-01-01", "2026-03-02")), \
+                 patch.object(oracle, "_build_controlled_param_source_pair", return_value=("rolling_active_param_ensemble", "base", "oracle", None, None, None)), \
+                 patch.object(oracle, "price_inventory_sha256", return_value="b" * 64), \
+                 patch.object(oracle, "_run_scenario", side_effect=lambda *, name, **kwargs: seen.append(name)):
+                with self.assertRaisesRegex(oracle.OracleBlockedError, "param_artifacts.param_sha256"):
+                    oracle.build_report(definition, project_root=root, quiet=True)
+                # A later Target-definition mismatch must also abort before
+                # starting the earlier, otherwise runnable C96 arm.
+                report["param_artifacts"] = [
+                    {"seed": seed, "param_sha256": "a" * 64} for seed in seeds
+                ]
+                report["definitions"] = {**definitions, "R40": "changed science"}
+                (directory / "audit.json").write_text(json.dumps(report), encoding="utf-8")
+                with self.assertRaisesRegex(oracle.OracleBlockedError, "definitions.R40"):
+                    oracle.build_report(definition, project_root=root, quiet=True)
+        self.assertEqual(seen, [], "a mismatched completed arm must never trigger any replay")
 
     def test_partial_replay_is_saved_before_later_failure_and_resumes(self):
         seeds = (11, 22, 33, 44)
