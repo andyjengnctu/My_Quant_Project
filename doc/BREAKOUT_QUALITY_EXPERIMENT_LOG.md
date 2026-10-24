@@ -13434,3 +13434,40 @@ Decision: `ENGINEERING_CHECKPOINT_FIRST_REUSE / HISTORICAL_AK_EVIDENCE_PRESERVED
 - **Confirmed code defect**: `load_or_run()` formerly interpreted both `HistoricalOracleIndex.lookup() == None` and `OracleReplayStore.has_other_identity() == True` as a generic cache miss, then immediately executed a new replay. An existing but incompatible completed report was silently discarded by `_compatible()`, without a field-level reason. This is an execution-reuse failure, not a license to change a scientific identity or redo finished economics.
 - **Corrective behavior**: Resolve all current Target x Seed combinations before starting any replay. Strict same-identity per-arm cache has priority; next check ledger-approved completed historic reports. When same-window existing cache identities conflict, or a completed same-window report containing the requested Target differs in cohort, source, parameter hashes, report version, or target definition, stop with `REUSE preflight BLOCKED` and a local relative report path plus mismatched field names. Only genuinely absent matching results can be `RUN`. The historical validation predicates remain the single owner of compatibility decisions. Similar target names (R40 versus R40_Direct) are now kept distinct when scanning cache siblings.
 - **Verification scope**: Oracle 28/28 independent synthetic tests PASS, covering existing archive reuse, full preflight before replay, changed parameter SHA, changed target description, shared target filename prefixes, cache-content divergence, interrupted execution resume; Audit Framework 24/24, Report Contract 75/75, SSOT Regression Guard 16/16 PASS. Formal Windows double check and actual Windows output provenance remain unverified. No Oracle market replay, DL FIT, Strategy Replay, PIT or Trading modification; no scientific/report contract version change.
+
+## 2026-10-24 - MR-13CI / MR-13CJ six-fold Rolling OOS result (user-supplied)
+
+- **Status**: `USER_REPORTED_ROLLING_OOS_RESULT_AVAILABLE / REUSE_READY / ITERATIVE_OOS / NO_MODEL_GATE_VERDICT_SUPPLIED / NO_FOUR_SEED_MODEL_ROBUSTNESS / NO_PROMOTION` for both `MR-13CI` and `MR-13CJ`; this is **not** a declaration of production eligibility, formal Model Gate PASS/FAIL, or independently recomputed model-quality evidence.
+- **Evidence baseline**: source project ZIP `test-branch-1_20261024_152949_62ab80a7.zip`, SHA256 `63c6541279f6fb610c75dfc11df1ef8d360ba4370892fcaf239ab3fc46e8c42f`; user-provided Research console `貼上的文字 (1)(20261024-073244).txt`, SHA256 `a61fc1f07ee6ff88469f3ea1ee37cad6bdc9471ec0a7a90e53dd637e725400d8`. `Research → [2] 模型訓練／驗證 → [4] Rolling OOS 模型比較` reported `REUSE READY` for AK/CG/CI/CJ and listed existing shared standard comparison JSON/Markdown at `outputs/filters/breakout_quality/breakout_quality_v1/standard_model_comparison/rolling_oos/`; the source ZIP **does not include `outputs/`**. GPT did not run ML training or independent full-market validation, and cannot certify local checkpoint manifest/score provenance or physical report contents.
+- **Frozen scientific contrast**: `MR-13CI` learns terminal `R40`, while `MR-13CJ` learns original MAE-gated terminal `T40=(1-min(MAE40_R,1))*R40-min(MAE40_R,1)`; same 40D maturity/stock-day universe, adjusted 300x10 stock+0050 single-head InceptionTime, Adam, full-list Delta-NDCG ranking, fit/split/Validation selection, and configured research seed `42`. AK/CG are contextual baselines with different shared-two-head objectives, **not** an otherwise-identical Target-only comparison. No label, profile, training code, selector, report schema, Strategy Compare or Trading change was authorized by recording this evidence.
+- **Reported comparison scope**: Rolling OOS `6` folds, `12M` cadence, `5` valid years; Global group count `608,204`, Breakout `17,346`. The Oracle's earlier `643,617` common mature stock-days and hindsight future scores belong to a **different evaluation cohort and scientific purpose**, so Oracle RoMD cannot be treated as a direct model effect.
+
+  | Scope | Model | Daily rho | Global rho | Pair | Top 10% Target | Bottom 10% Target | Top−Bottom Target |
+  |---|---|---:|---:|---:|---:|---:|---:|
+  | Global | AK | +0.3844 | +0.3203 | 63.26% | +2.3123 | +0.6138 | +1.6985 |
+  | Global | CG | +0.4044 | +0.3095 | 64.01% | +2.6722 | +0.8323 | +1.8399 |
+  | Global | CI (R40) | +0.0181 | −0.0410 | 50.69% | +0.4386 | +0.4693 | −0.0306 |
+  | Global | CJ (T40) | +0.2194 | +0.1081 | 58.04% | −0.2125 | −0.1163 | −0.0961 |
+  | Breakout | AK | +0.3633 | +0.3927 | 64.07% | +2.9314 | +0.5434 | +2.3880 |
+  | Breakout | CG | +0.3881 | +0.3979 | 65.35% | +3.3048 | +0.6216 | +2.6832 |
+  | Breakout | CI (R40) | −0.0138 | −0.0288 | 50.40% | +0.4998 | +0.7994 | −0.2996 |
+  | Breakout | CJ (T40) | +0.1941 | +0.1308 | 57.56% | −0.1802 | −0.0442 | −0.1360 |
+
+  **Comparison caveat**: Target magnitudes and Top−Bottom Target cannot be directly ranked across different target definitions; compare each model's self-target learnability and separately compare **shared actual MFE/MAE** on the same cohort.
+
+  | Scope | Model | Score→MFE rho | Score→Safety rho | Top10 MFE | Top10 MAE magnitude |
+  |---|---|---:|---:|---:|---:|
+  | Global | AK | +0.3844 | −0.3351 | 23.55% | 5.70% |
+  | Global | CG | +0.4044 | −0.3548 | 26.47% | 6.09% |
+  | Global | CI | +0.0562 | −0.0382 | 14.79% | 3.77% |
+  | Global | CJ | −0.2598 | +0.2530 | 8.38% | 2.04% |
+  | Breakout | AK | +0.3633 | −0.3077 | 27.60% | 5.57% |
+  | Breakout | CG | +0.3881 | −0.3441 | 30.48% | 5.77% |
+  | Breakout | CI | +0.0188 | −0.0038 | 15.41% | 3.57% |
+  | Breakout | CJ | −0.2567 | +0.2339 | 9.74% | 2.28% |
+
+- **Unavailable legacy Selection fields**: The supplied Continuous Rolling Standard SOP does not print legacy binary PASS, PASS Precision, Precision Lift, PASS Recall, Accuracy, or average Selection Score. These values are **not supplied**, not zero and not inferred from the continuous Target/rho metrics. The independent formal Model Gate verdict is also absent.
+- **Generalization and yearly stability (reported)**: CI Validation→OOS `Δ Daily rho=−0.1410`, `Δ Pair=−4.71pp`, `Δ Top−Bottom=−0.4378`, positive-rho years `0/5`, positive-spread years `1/5`, max adjacent score-mean drift `1.3157 pooled σ`, drift flag `YES`. CJ respective changes `−0.0520`, `−2.26pp`, `−0.4271`; positive-rho years `5/5`, positive-spread `2/5`, drift `0.7922 pooled σ`, flag `NO`. CG's Validation→OOS change was `−0.0035` Daily rho, `−0.06pp` Pair, `+0.1123` Top−Bottom; `5/5` positive rho and spread years but drift `YES`. These are descriptive Rolling observations, **not** DL multi-seed robustness.
+- **Interpretation/decision bound**: CI terminal R40 supervision shows little useful ranking power, particularly Breakout near-random Pair (`50.40%`) and negative self-target Top−Bottom (`−0.2996`). CJ T40 supervision learns some overall ranking structure but high-ranked selections favor much smaller adverse excursions and markedly lower realized MFE; Breakout Top10 MFE `9.74%` versus CG `30.48%`, with CJ negative self-target Top−Bottom (`−0.1360`) and only `2/5` positive-spread years. Evidence does not support replacing AK/CG with CI/CJ or promoting CI/CJ into PIT Strategy/Trading. No CI/CJ broker-cash strategy replay was supplied; the console's C96/C97/C98/C103/C104 are **not** CI/CJ conversion results. Forward results, CI/CJ four-seed model robustness, full scored sidecars and formal Gate status were not provided; report them as unverified, not as FAIL or PASS.
+- **Follow-up hypothesis is not an executed study**: Replacing `R40` with `MFE40_R` in T40 would change its scientific Target to `(1-m)*MFE40_R-m`. It would need a separately approved new Target and `MR-*` identity, preserving original CJ and historical Oracle, and it should be compared to both CG and historical direct MFE−MAE/U40 controls (CE/CF). This request is currently a discussion of a possible single-variable treatment, **not** evidence, an implemented identity or authority to rewrite existing results.
+
