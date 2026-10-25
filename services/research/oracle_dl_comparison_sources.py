@@ -14,7 +14,10 @@ import pandas as pd
 
 from core.audit_policy import get_reusable_audit_definitions
 from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
-from core.file_integrity import load_json_object_or_none, require_sha256_hex
+from core.file_integrity import (
+    atomic_write_json, atomic_write_text, canonical_json_sha256,
+    load_json_object_or_none, require_sha256_hex,
+)
 from core.strategy_compare_policy import (
     get_strategy_comparison_settings,
     get_strategy_multi_seed_robustness_settings,
@@ -220,9 +223,145 @@ def collect_matched_oracle_dl_readiness(
     }
 
 
+
+def _matched_research_output_root(root: Path, settings, arm_id: str) -> Path:
+    # Dedicated historical research evidence beneath the existing Strategy Compare domain.
+    # No Standard SOP renderer, second Replay producer, or latest pointer.
+    safe_arm = str(arm_id)
+    if not safe_arm or not safe_arm.replace("_", "").isalnum():
+        raise ValueError("matched research arm identity is not path-safe")
+    return (Path(root).resolve() / str(settings.output_root) /
+            "oracle_dl_matched_research" / safe_arm)
+
+
+def _read_completed_matched_evidence(directory: Path, identity: dict) -> dict | None:
+    """A same-identity completed result is reusable only with intact published bytes."""
+    from core.file_integrity import load_json_strict
+    manifest_path = directory / "manifest.json"
+    if not manifest_path.exists():
+        if directory.exists():
+            raise RuntimeError("P1-P3相同研究身分存在未完成工件；保留證據並BLOCK，不覆寫")
+        return None
+    manifest = load_json_strict(manifest_path)
+    if (not isinstance(manifest, dict) or manifest.get("status") != "COMPLETED"
+            or manifest.get("identity") != identity):
+        raise RuntimeError("P1-P3完成工件身分衝突；不得REUSE或覆寫")
+    for filename, expected in (("result.json", "result_sha256"),
+                               ("result.md", "markdown_sha256")):
+        path = directory / filename
+        if not path.is_file() or compute_file_sha256(path) != manifest.get(expected):
+            raise RuntimeError("P1-P3已完成工件內容與Hash不一致；禁止覆寫")
+    payload = load_json_strict(directory / "result.json")
+    if (not isinstance(payload, dict) or payload.get("identity") != identity
+            or not isinstance(payload.get("result"), dict)
+            or payload["result"].get("status") != "COMPARABLE"
+            or payload["result"].get("scientific_contract_id") != MATCHED_RESEARCH_CONTRACT_ID):
+        raise RuntimeError("P1-P3歷史研究結果契約不一致")
+    return dict(payload["result"])
+
+
+def _matched_research_readable(result: Mapping[str, Any]) -> str:
+    """Compact read-only research evidence; not a Standard SOP report."""
+    rows = list(result.get("same_seed") or ())
+    if not rows:
+        raise ValueError("P1-P3配對結果缺少各Seed RoMD")
+    lines = ["# Oracle / PIT DL matched research evidence (NON-PIT Oracle)", "",
+             f"- Status: {result['status']}",
+             f"- Contract: {result['scientific_contract_id']}",
+             f"- Research arm: {result['research_arm']}",
+             f"- Oracle Target: {result['oracle_target']}",
+             f"- Evaluation window: {result['evaluation_period']['start']} ～ {result['evaluation_period']['end']}",
+             "- Score: same daily information date / shared feature-history eligibility / canonical percentile",
+             "- Same four P16 seeds / Exact K-R0 / broker-cash portfolio rules",
+             "- This is controlled hindsight research, never PIT-legal Oracle trading evidence.", "",
+             "| Seed | No-DL RoMD | Oracle RoMD | PIT DL RoMD | Oracle-DL |",
+             "|---|---:|---:|---:|---:|"]
+    for row in rows:
+        lines.append(f"| {int(row['seed'])} | {float(row['no_dl_romd']):.4f} | "
+                     f"{float(row['oracle_romd']):.4f} | {float(row['dl_romd']):.4f} | "
+                     f"{float(row['oracle_minus_dl']):+.4f} |")
+    lines.extend(["", f"- Mean Oracle-DL RoMD gap: {float(result['oracle_minus_dl_romd_mean']):+.4f}",
+                  "- Raw identity, score coverage and per-seed provenance are retained in result.json.", ""])
+    return "\n".join(lines)
+
+
+def _publish_completed_matched_evidence(directory: Path, identity: dict, result: dict) -> None:
+    """Create an immutable same-identity result; never replace a completed history."""
+    # No directory is created until all expensive and scientific checks have passed.
+    if directory.exists():
+        existing = _read_completed_matched_evidence(directory, identity)
+        if existing is not None:
+            return
+    directory.mkdir(parents=True, exist_ok=False)
+    payload = {"identity": identity, "result": result}
+    try:
+        atomic_write_json(directory / "result.json", payload)
+        atomic_write_text(directory / "result.md", _matched_research_readable(result))
+        atomic_write_json(directory / "manifest.json", {
+            "status": "COMPLETED", "identity": identity,
+            "result_sha256": compute_file_sha256(directory / "result.json"),
+            "markdown_sha256": compute_file_sha256(directory / "result.md"),
+        })
+    except Exception:
+        # Partial state intentionally remains for operator inspection; never silently
+        # replace an incomplete or identity-conflicted research result.
+        raise
+
+
+def render_matched_research_plan(readiness: Mapping[str, Any]) -> str:
+    """Show the same planning source used by the actual Research dispatcher."""
+    pairs = tuple(readiness.get("pairs") or ())
+    if not pairs:
+        return ""
+    from core.report_style import styled_workflow_status
+    lines = ["[P1-P3 | Oracle / PIT DL 配對｜Research-only]", "正式策略比較維持原有RUN/REUSE；以下不會改寫正式報表："]
+    for pair in pairs:
+        action = "BLOCKED" if pair.get("status") == "BLOCKED" else "RUN"
+        suffix = (str(pair.get("reason") or readiness.get("reason") or "")
+                  if action == "BLOCKED" else "RUN前核對完整身份；相同已完成工件將REUSE")
+        lines.append(f"- {styled_workflow_status(action)} {pair['arm_id']} ↔ {pair['oracle_target']} | {suffix}")
+    return "\n".join(lines)
+
+
+def run_matched_research_from_strategy_compare(
+    *, project_root: Path, profile_id: str, readiness: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """One optional same-profile research action; missing sources don't block Standard SOP.
+
+    Execution is authorized by the current compare-suite arm-to-target mapping;
+    score/benchmark identity conflicts are always explicit BLOCKED, never fallback.
+    """
+    state = dict(readiness) if readiness is not None else collect_matched_oracle_dl_readiness(
+        project_root=project_root, profile_id=profile_id,
+    )
+    outcomes: list[dict[str, str]] = []
+    for pair in state.get("pairs", ()):
+        arm = str(pair["arm_id"])
+        target = str(pair["oracle_target"])
+        if pair.get("status") == "BLOCKED":
+            reason = str(pair.get("reason") or state.get("reason") or "P1-P3來源缺失")
+            print(f"[P1-P3 BLOCKED] {arm} ↔ {target} | {reason}")
+            outcomes.append({"arm_id": arm, "oracle_target": target, "action": "BLOCKED", "reason": reason})
+            continue
+        try:
+            result = run_verified_matched_oracle_dl_comparison(
+                project_root=project_root, profile_id=profile_id, arm_id=arm,
+                quiet=True, persist_evidence=True,
+            )
+            action = str(result.get("artifact_action") or "RUN")
+            print(f"[P1-P3 {action}] {arm} ↔ {target} | Oracle-DL ΔRoMD={result['oracle_minus_dl_romd_mean']:+.4f}"
+                  f" | {result.get('evidence_path', '研究結果未發佈')}")
+            outcomes.append({"arm_id": arm, "oracle_target": target, "action": action})
+        except (OSError, ValueError, RuntimeError, KeyError) as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+            print(f"[P1-P3 BLOCKED] {arm} ↔ {target} | {reason}")
+            outcomes.append({"arm_id": arm, "oracle_target": target, "action": "BLOCKED", "reason": reason})
+    return {"status": "COMPLETED" if outcomes and all(x["action"] != "BLOCKED" for x in outcomes)
+            else "BLOCKED", "arms": tuple(outcomes)}
+
 def run_verified_matched_oracle_dl_comparison(
     *, project_root: Path, profile_id: str, arm_id: str,
-    quiet: bool = True,
+    quiet: bool = True, persist_evidence: bool = False,
 ) -> dict[str, Any]:
     """Replay a READY same-target four-seed No-DL/Oracle/PIT-DL matched case.
 
@@ -332,16 +471,50 @@ def run_verified_matched_oracle_dl_comparison(
             "eligibility_manifest_sha256": item["manifest_sha256"],
         }
     exact = settings.arms[str(definition.source["exact_arm_id"])]
-    result = run_matched_oracle_dl_replays(
+    dataset_sha = price_inventory_sha256(root, settings.dataset)
+    # A completed result can be reused only after *current* source, dataset,
+    # feature eligibility, P16, PIT and future-truth identities are verified.
+    digest = canonical_json_sha256({
+        "cohort": sorted((str(t), str(d)) for t, d in cohort.tolist()),
+    })
+    identity = {
+        "scientific_contract_id": MATCHED_RESEARCH_CONTRACT_ID,
+        "profile_id": str(profile_id), "research_arm": str(arm_id),
+        "oracle_target": str(pair["oracle_target"]),
+        "model_profile": str(pair["experiment_profile"]),
+        "continuous_target_id": str(pair["continuous_target_id"]),
+        "period": {"start": first, "end": last, "score_start": warmup},
+        "dataset_sha256": dataset_sha,
+        "broker_policy": str(BROKER_ACCOUNTING_POLICY_ID),
+        "selector": str(exact.dl_runtime_mode),
+        "ranking_options": dict(exact.dl_runtime_options or {}),
+        "max_positions": int(settings.max_positions), "rotation": False,
+        "alignment": "daily_average_zero_based_v1",
+        "eligible_cohort_sha256": digest,
+        "future_truth_sha256": truth_hash.hexdigest(),
+        "seed_sources": [{
+            "seed": int(seed), "param_sha256": str(panels[seed]["param_sha256"]),
+            "pit_score_sha256": str(panels[seed]["pit_score_sha256"]),
+            "pit_manifest_sha256": str(panels[seed]["eligibility_manifest_sha256"]),
+        } for seed in sorted(panels)],
+    }
+    output_directory = (_matched_research_output_root(root, settings, arm_id) /
+                        canonical_json_sha256(identity, length=24))
+    if persist_evidence:
+        cached = _read_completed_matched_evidence(output_directory, identity)
+        if cached is not None:
+            cached["artifact_action"] = "REUSE"
+            return cached
+    result = dict(run_matched_oracle_dl_replays(
         seed_panels=panels, start_date=first, end_date=last,
         score_start_date=warmup,
         data_dir=str(get_dataset_dir(str(root), settings.dataset)),
-        dataset_sha256=price_inventory_sha256(root, settings.dataset),
+        dataset_sha256=dataset_sha,
         broker_policy=str(BROKER_ACCOUNTING_POLICY_ID),
         selector_policy=str(exact.dl_runtime_mode),
         ranking_options=dict(exact.dl_runtime_options or {}),
         max_positions=int(settings.max_positions), rotation=False, quiet=quiet,
-    )
+    ))
     result["research_arm"] = str(arm_id)
     result["oracle_target"] = pair["oracle_target"]
     result["scientific_contract_id"] = MATCHED_RESEARCH_CONTRACT_ID
@@ -355,4 +528,11 @@ def run_verified_matched_oracle_dl_comparison(
     result["scientific_status"] = "RESEARCH_NON_PIT_ORACLE_VS_PIT_DL"
     result["source_verified_seeds"] = len(panels)
     result["read_only"] = True
+    if persist_evidence:
+        if (result.get("status") != "COMPARABLE"
+                or int(result.get("matched_seeds", -1)) != len(panels)):
+            raise ValueError("P1-P3必須完成全部四Seed一致性驗證後才能發布研究證據")
+        result["evidence_path"] = str((output_directory / "result.md").relative_to(root)).replace("\\", "/")
+        _publish_completed_matched_evidence(output_directory, identity, result)
+        result["artifact_action"] = "RUN"
     return result

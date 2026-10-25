@@ -247,6 +247,19 @@ def resolve_strategy_comparison_execution(profile_id: str):
         settings=settings,
         status=resolved_plan.status_dict(),
     )
+    # The matched Oracle/PIT DL stage is tied to the SAME Compare Suite and
+    # only claims readiness for validated *retained* four-seed inputs.
+    from services.research.oracle_dl_comparison_sources import (
+        collect_matched_oracle_dl_readiness, render_matched_research_plan,
+        resolve_matched_oracle_dl_pairs,
+    )
+    if resolve_matched_oracle_dl_pairs(settings.profile_id):
+        state = collect_matched_oracle_dl_readiness(
+            project_root=resolved_plan.project_root, profile_id=settings.profile_id,
+        )
+        matched_plan = render_matched_research_plan(state)
+        if matched_plan:
+            rendered_plan += "\n\n" + matched_plan
     return settings, resolved_plan, rendered_plan
 
 
@@ -260,13 +273,29 @@ def execute_strategy_comparison(
 
     from services.research.strategy_comparison import run_strategy_comparison
 
-    return run_strategy_comparison(
+    standard_result = run_strategy_comparison(
         resolved_plan=resolved_plan,
         auto_prepare=True,
         settings=settings,
         quiet=True,
         producer_handlers=dict(producer_handlers or {}),
     )
+    from services.research.oracle_dl_comparison_sources import (
+        collect_matched_oracle_dl_readiness, resolve_matched_oracle_dl_pairs,
+        run_matched_research_from_strategy_compare,
+    )
+    if resolve_matched_oracle_dl_pairs(settings.profile_id):
+        # Recheck after any authorized upstream preparation. A missing retained
+        # PIT score blocks only the matched research, never the existing SOP.
+        readiness = collect_matched_oracle_dl_readiness(
+            project_root=resolved_plan.project_root, profile_id=settings.profile_id,
+        )
+        print("\n[P1-P3] Oracle／PIT DL 同口徑比較")
+        run_matched_research_from_strategy_compare(
+            project_root=resolved_plan.project_root,
+            profile_id=settings.profile_id, readiness=readiness,
+        )
+    return standard_result
 
 
 def show_strategy_comparison_profile_status(*, profile_id: str) -> None:

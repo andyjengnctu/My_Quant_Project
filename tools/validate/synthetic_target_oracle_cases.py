@@ -2367,5 +2367,163 @@ class MatchedOracleDlCanonicalSourceCases(TestCase):
                 )
             truth.assert_not_called()
 
+class MatchedOracleDlFormalDispatchCases(TestCase):
+    """Shared Research entry/REUSE checks without formal Windows Test Suite."""
+
+    def test_existing_comparison_completes_before_matched_stage_and_keeps_payload(self):
+        from services.research import strategy_compare_application as app
+        from services.research import oracle_dl_comparison_sources as sources
+        root = Path("/tmp/test_p123_mock")
+        state = {"status": "BLOCKED", "pairs": ({"arm_id": "C107", "oracle_target": "T40", "status": "BLOCKED", "reason": "missing seed PIT"},)}
+        payload = {"status": "COMPLETED", "scenarios": {"C96": {"romd": 8.36}}}
+        plan = SimpleNamespace(project_root=root)
+        settings = SimpleNamespace(profile_id="broker_cash_dl_conversion_rolling")
+        with patch("services.research.strategy_comparison.run_strategy_comparison", return_value=payload) as standard, \
+             patch.object(sources, "resolve_matched_oracle_dl_pairs", return_value=(state["pairs"][0],)), \
+             patch.object(sources, "collect_matched_oracle_dl_readiness", return_value=state), \
+             patch.object(sources, "run_verified_matched_oracle_dl_comparison") as replay, \
+             redirect_stdout(io.StringIO()) as console:
+            actual = app.execute_strategy_comparison(resolved_plan=plan, settings=settings)
+        self.assertIs(actual, payload)
+        standard.assert_called_once()
+        replay.assert_not_called()
+        self.assertIn("[P1-P3 BLOCKED]", console.getvalue())
+
+    def test_strategy_failure_does_not_start_second_comparison(self):
+        from services.research import strategy_compare_application as app
+        from services.research import oracle_dl_comparison_sources as sources
+        with patch("services.research.strategy_comparison.run_strategy_comparison", side_effect=RuntimeError("standard failed")), \
+             patch.object(sources, "collect_matched_oracle_dl_readiness") as collect, \
+             self.assertRaisesRegex(RuntimeError, "standard failed"):
+            app.execute_strategy_comparison(
+                resolved_plan=SimpleNamespace(project_root=Path("/tmp/p123")),
+                settings=SimpleNamespace(profile_id="broker_cash_dl_conversion_rolling"),
+            )
+        collect.assert_not_called()
+
+    def test_ready_runs_same_source_owner_and_blocked_never_replays(self):
+        from services.research import oracle_dl_comparison_sources as owner
+        states = {"pairs": (
+            {"arm_id": "C107", "oracle_target": "T40", "status": "SOURCE_READY"},
+            {"arm_id": "C108", "oracle_target": "T40-MFE", "status": "BLOCKED", "reason": "PIT seed absent"},
+        )}
+        with patch.object(owner, "run_verified_matched_oracle_dl_comparison", return_value={
+            "artifact_action": "REUSE", "oracle_minus_dl_romd_mean": 1.25,
+            "evidence_path": "outputs/strategy_compare/example/result.md",
+        }) as run, redirect_stdout(io.StringIO()) as console:
+            result = owner.run_matched_research_from_strategy_compare(
+                project_root=Path("/tmp/p123"), profile_id="broker_cash_dl_conversion_rolling", readiness=states,
+            )
+        run.assert_called_once()
+        self.assertEqual(run.call_args.kwargs["arm_id"], "C107")
+        self.assertTrue(run.call_args.kwargs["persist_evidence"])
+        self.assertEqual([x["action"] for x in result["arms"]], ["REUSE", "BLOCKED"])
+        self.assertIn("PIT seed absent", console.getvalue())
+        self.assertIn("P1-P3 REUSE", console.getvalue())
+
+    def test_same_identity_reuses_immutable_evidence_and_rejects_tampering(self):
+        from services.research import oracle_dl_comparison_sources as owner
+        result = {
+            "status": "COMPARABLE", "scientific_contract_id": owner.MATCHED_RESEARCH_CONTRACT_ID,
+            "research_arm": "C107", "oracle_target": "T40",
+            "evaluation_period": {"start": "2021-01-01", "end": "2025-12-22"},
+            "oracle_minus_dl_romd_mean": 2.5,
+            "same_seed": [{"seed": 1, "no_dl_romd": 8.0, "oracle_romd": 20.0,
+                           "dl_romd": 17.5, "oracle_minus_dl": 2.5}],
+        }
+        identity = {"science": owner.MATCHED_RESEARCH_CONTRACT_ID, "p16_sha": "a" * 64,
+                    "seed_sources": [{"seed": 1, "pit_score_sha256": "c" * 64}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp) / "oracle_dl_matched_research" / "C107" / "abc"
+            self.assertIsNone(owner._read_completed_matched_evidence(destination, identity))
+            owner._publish_completed_matched_evidence(destination, identity, result)
+            self.assertEqual(owner._read_completed_matched_evidence(destination, identity), result)
+            with self.assertRaisesRegex(RuntimeError, "身分衝突"):
+                owner._read_completed_matched_evidence(destination, {**identity, "p16_sha": "b" * 64})
+            (destination / "result.md").write_text("tampered", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "Hash"):
+                owner._read_completed_matched_evidence(destination, identity)
+            with self.assertRaisesRegex(RuntimeError, "Hash"):
+                owner._publish_completed_matched_evidence(destination, identity, result)
+
+    def test_full_source_binding_reuses_same_seed_identity_and_rebuilds_changed_score(self):
+        from services.research import oracle_dl_comparison_sources as owner
+        from core.strategy_compare_policy import get_strategy_multi_seed_robustness_settings
+        profile = "broker_cash_dl_conversion_rolling"
+        pair = owner.resolve_matched_oracle_dl_pairs(profile)[0]
+        seeds = tuple(get_strategy_multi_seed_robustness_settings(profile).resolved_seeds)
+        keys = pd.MultiIndex.from_tuples([
+            ("2330", "2020-12-31"), ("2330", "2021-01-04"),
+        ], names=["ticker", "date"])
+        score_table = pd.DataFrame({"breakout_quality_score": [0.25, 0.75]}, index=keys)
+        verified = {int(seed): {
+            "table": score_table, "score_sha256": "a" * 64,
+            "manifest_sha256": "b" * 64, "available_from": "2020-12-31",
+            "available_through": "2026-03-02",
+        } for seed in seeds}
+        params = [(int(seed), "c" * 64, "rolling_active_param_ensemble", {}, {}) for seed in seeds]
+        truth = {pair["oracle_target"]: {
+            ("2330", "2020-12-31"): 0.3, ("2330", "2021-01-04"): 0.7,
+        }}
+        evidence = {"last_common_day": "2021-01-04", "market_truth": {"score_start": "2020-12-31"}}
+        bundle = SimpleNamespace(group_table=pd.DataFrame({
+            "ticker": ["2330", "2330"],
+            "date": pd.to_datetime(["2020-12-31", "2021-01-04"]),
+        }), target_valid=[True, False])
+        fake_result = {
+            "status": "COMPARABLE", "matched_seeds": len(seeds),
+            "same_seed": [{"seed": int(seed), "no_dl_romd": 8.0, "oracle_romd": 20.0,
+                           "dl_romd": 12.0, "oracle_minus_dl": 8.0}
+                          for seed in seeds],
+            "oracle_minus_dl_romd_mean": 8.0,
+            "evaluation_period": {"start": "2021-01-01", "end": "2021-01-04"},
+        }
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(oracle, "_robustness_artifacts", return_value=(object(), [(s, Path("params")) for s in seeds])), \
+             patch.object(oracle, "_prepare_oracle_parameters", return_value=(params, [])), \
+             patch.object(oracle, "build_oracle_score_tables", return_value=(truth, evidence)), \
+             patch.object(owner, "load_verified_seed_pit_scores", return_value=verified), \
+             patch("filters.breakout_quality.profile_ranker_data.load_profile_continuous_ranker_data", return_value=bundle), \
+             patch("core.dataset_profiles.get_dataset_dir", return_value=Path("fake-market")), \
+             patch("services.audit.oracle_replay_artifacts.price_inventory_sha256", return_value="d" * 64), \
+             patch("services.research.oracle_dl_comparison_contract.run_matched_oracle_dl_replays", return_value=fake_result) as replay:
+            root = Path(tmp)
+            first = owner.run_verified_matched_oracle_dl_comparison(
+                project_root=root, profile_id=profile, arm_id=pair["arm_id"], persist_evidence=True,
+            )
+            self.assertEqual(first["artifact_action"], "RUN")
+            path = root / first["evidence_path"]
+            self.assertTrue(path.is_file())
+            second = owner.run_verified_matched_oracle_dl_comparison(
+                project_root=root, profile_id=profile, arm_id=pair["arm_id"], persist_evidence=True,
+            )
+            self.assertEqual(second["artifact_action"], "REUSE")
+            replay.assert_called_once()
+            verified[seeds[0]]["score_sha256"] = "e" * 64
+            changed = owner.run_verified_matched_oracle_dl_comparison(
+                project_root=root, profile_id=profile, arm_id=pair["arm_id"], persist_evidence=True,
+            )
+            self.assertEqual(changed["artifact_action"], "RUN")
+            self.assertEqual(replay.call_count, 2)
+            self.assertNotEqual(changed["evidence_path"], first["evidence_path"])
+
+    def test_formal_plan_shows_source_block_as_own_stage(self):
+        from services.research import strategy_compare_application as app
+        from services.research import oracle_dl_comparison_sources as owner
+        state = {"status": "BLOCKED", "pairs": ({"arm_id": "C107", "oracle_target": "T40", "status": "BLOCKED", "reason": "need four PIT seeds"},)}
+        fake_plan = SimpleNamespace(project_root=Path("/tmp/p123_mock"), status_dict=lambda: {})
+        fake_settings = SimpleNamespace(profile_id="broker_cash_dl_conversion_rolling")
+        with patch.object(app, "get_strategy_comparison_settings", return_value=fake_settings), \
+             patch("services.research.strategy_comparison.resolve_comparison_plan", return_value=fake_plan), \
+             patch("services.research.strategy_comparison.render_execution_plan", return_value="original plan"), \
+             patch.object(owner, "resolve_matched_oracle_dl_pairs", return_value=state["pairs"]), \
+             patch.object(owner, "collect_matched_oracle_dl_readiness", return_value=state):
+            _, actual_plan, rendered = app.resolve_strategy_comparison_execution(fake_settings.profile_id)
+        self.assertIs(actual_plan, fake_plan)
+        self.assertIn("original plan", rendered)
+        self.assertIn("need four PIT seeds", rendered)
+        self.assertIn("P1-P3", rendered)
+
+
 if __name__ == "__main__":
     main(verbosity=2)
