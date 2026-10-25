@@ -111,7 +111,7 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                 # Oracle *comparison arm*. The seed-dependent label producer
                 # stays separate from the universal price-truth provider; both
                 # are evaluated by the SAME canonical Broker-Cash replay.
-                "daily_trade40_profile": "daily_universal_counterfactual_mintrade40_netr_full_list_ndcg_pairwise",
+                "daily_trade40_profile": "daily_universal_full_horizon_mae_gated_mfe_t40_full_list_ndcg_pairwise",
                 "event_targets": (
                     {
                         "target": "MinTrade40_NetR",
@@ -135,8 +135,8 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     {"target": "T40-MFE_Direct", "description": "Same T40-MFE score; canonical No-K/No-R0 direct allocation", "score_source": "T40-MFE", "selector": "direct"},
                     {"target": "MinTrade40_NetR", "description": "P16 Min signal-origin realized broker-net R; first stop/indicator exit or 40 market sessions, unfilled ranked last without invented R", "score": "trade_path_realized_net_r", "provider": "event_targets", "selector": "exact"},
                     {"target": "MinTrade40_NetR_Direct", "description": "Same per-seed MinTrade40_NetR signal-origin score; canonical No-K/No-R0 direct allocation", "score_source": "MinTrade40_NetR", "selector": "direct"},
-                    {"target": "DailyUniversal_MinTrade40_NetR", "description": "MR-13CL hypothetical fresh Min trade at every feature-eligible stock-day; 40 exchange sessions and canonical ledger-net R, hindsight ranking", "score": "daily_trade_path_net_r", "provider": "daily_trade40_profile", "selector": "exact"},
-                    {"target": "DailyUniversal_MinTrade40_NetR_Direct", "description": "Same MR-13CL daily-universal truth and ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade40_NetR", "selector": "direct"},
+                    {"target": "DailyUniversal_MinTrade40_NetR", "description": "Formal per-seed Min ROOS hypothetical stock-day Net-R, 40 exchange-session horizon, hindsight ranking", "score": "daily_trade_path_net_r", "provider": "daily_trade40_profile", "selector": "exact"},
+                    {"target": "DailyUniversal_MinTrade40_NetR_Direct", "description": "Same formal per-seed Min ROOS daily truth and ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade40_NetR", "selector": "direct"},
                 ),
             },
             "dimensions": {

@@ -109,12 +109,13 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 # MR-13CG: keep AO's shared two-head training/inference contract while changing
 # the Safety supervised outcome AND the true-HS Conditional-MFE cohort to full D40.
 # Original AO/CC, CG and direct U40 CE/CF fitting identities remain frozen.
-# Current training focus: MR-13CL counterfactual Daily MinTrade40 NetR.
-# CJ/CK remain frozen model controls; no automatic Trading promotion.
-# All historical MR profiles, model checkpoints, and artifacts remain intact.
+# MR-13CL label was retired: it used a separate P2/P16 parameter teacher, not
+# the same per-seed formal Min ROOS execution truth being compared by Oracle.
+# Restore the last approved valid research profile without changing its identity.
+# All historical MR checkpoints and audit results remain intact.
 BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE = (
-    "MR-13CL",
-    "daily_universal_counterfactual_mintrade40_netr_full_list_ndcg_pairwise",
+    "MR-13CK",
+    "daily_universal_full_horizon_mae_gated_mfe_t40_full_list_ndcg_pairwise",
 )
 # Compatibility alias for call sites that only need the executable profile slug.
 BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = (

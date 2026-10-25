@@ -84,12 +84,6 @@ from filters.breakout_quality.predicted_safety_context import (
 from core.breakout_quality_registry import (
     get_predicted_safety_pure_mfe_contract,
 )
-from filters.breakout_quality.daily_trade40_target import (
-    load_historical_min_execution_schedule,
-    collect_canonical_exchange_sessions,
-    compute_counterfactual_trade40_batch,
-    counterfactual_trade40_contract,
-)
 from filters.breakout_quality.risk_normalized_target import (
     DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID,
     RISK_GEOMETRY_CONTEXT_FEATURES,
@@ -1246,10 +1240,14 @@ def load_daily_universal_ranker_data(
     use_predicted_safety_pair_weight_context = context_policy.has_role(
         CONTINUOUS_RANKER_CONTEXT_ROLE_PAIR_WEIGHT
     )
+    # Historical MR-13CL remains registered for lineage inspection, but its
+    # P2/P16 training label is not the formal Min ROOS per-seed truth.
+    # Fail before reading prices or touching any model/teacher artifact.
+    if target_policy.materialization_mode == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH:
+        raise ValueError("MR-13CL target retired: old historical Min teacher is not formal per-seed Min ROOS")
     if target_policy.materialization_mode not in {
         CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
         CONTINUOUS_RANKER_TARGET_MATERIALIZATION_RISK_NORMALIZED,
-        CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
     }:
         raise ValueError(
             "daily universal ranker需要daily target materialization capability: "
@@ -1345,15 +1343,7 @@ def load_daily_universal_ranker_data(
         feature_window_bars=input_window_bars,
     )
     if oracle_evaluation_start_date is not None:
-        # Evaluation-only view uses the SAME stock-day eligibility and label
-        # owner. Only its date window narrows; no pre-2021 teacher is relevant.
-        if target_policy.materialization_mode != CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH:
-            raise ValueError("Oracle date scope only supported by daily trade-path target")
-        from filters.breakout_quality.daily_trade40_target import P16_HANDOFF_DATE
-        start = pd.Timestamp(oracle_evaluation_start_date).normalize()
-        if start < P16_HANDOFF_DATE:
-            raise ValueError("Oracle OOS view requires 2021+ P16 effective period")
-        sample_start = max(sample_start, start)
+        raise ValueError("Retired Oracle-only MR-13CL loader scope is no longer executable")
     if bool(extend_score_eligibility_to_source_tail):
         source_tail = pd.Timestamp(benchmark_index.max()).normalize()
         if source_tail > sample_end:
@@ -1385,18 +1375,6 @@ def load_daily_universal_ranker_data(
             get_strategy_comparison_settings("selection_pit").param_policy
         ).strip()
         risk_schedule = load_min_roos_risk_schedule(root, param_policy=risk_param_policy)
-    # New target primitive owns the hypothetical execution rules. The generic
-    # loader continues to own the daily stock-day sample and PIT maturity gate.
-    counterfactual_schedule = None
-    counterfactual_provenance = None
-    counterfactual_exchange_calendar = None
-    if target_policy.materialization_mode == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH:
-        counterfactual_schedule, counterfactual_provenance = load_historical_min_execution_schedule(
-            root, evaluation_start_date=oracle_evaluation_start_date,
-        )
-        counterfactual_exchange_calendar = collect_canonical_exchange_sessions(
-            csv_inputs, benchmark_ticker=benchmark_ticker,
-        )
     tickers: list[str] = []
     frames: list[pd.DataFrame] = []
 
@@ -1480,33 +1458,7 @@ def load_daily_universal_ranker_data(
         local_first_breach_bar = np.full(len(local_positions), -1, dtype=np.int16)
         local_minimum_low_return = np.full(len(local_positions), np.nan, dtype=np.float32)
         local_label_end_dates = None
-        if target_policy.materialization_mode == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH:
-            completed_batch = compute_counterfactual_trade40_batch(
-                frame, local_positions, ticker=ticker,
-                schedule=counterfactual_schedule, exchange_calendar=counterfactual_exchange_calendar,
-            )
-            local_targets = completed_batch.target_raw_r
-            local_target_valid = completed_batch.valid_mask
-            local_label_end_dates = completed_batch.maturity_dates
-            # Retain existing common 40-stock-bar MFE/MAE diagnostics when
-            # independently observable; these NEVER replace broker-net R labels
-            # or determine training/score eligibility for this new target.
-            diagnostic_mask = local_target_valid & (
-                local_positions + int(spec.horizon_bars) < len(frame)
-            )
-            if bool(diagnostic_mask.any()):
-                diagnostic_indexes = np.flatnonzero(diagnostic_mask)
-                diagnostic = compute_daily_opportunity_target_batch(
-                    frame, local_positions[diagnostic_mask],
-                    spec=spec, target_id=DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
-                )
-                diagnostic_indexes = diagnostic_indexes[diagnostic.valid_mask]
-                local_favorable[diagnostic_indexes] = diagnostic.favorable_return[diagnostic.valid_mask]
-                local_adverse[diagnostic_indexes] = diagnostic.adverse_return_to_peak[diagnostic.valid_mask]
-                local_opportunity_bar[diagnostic_indexes] = diagnostic.opportunity_bar[diagnostic.valid_mask]
-                local_first_breach_bar[diagnostic_indexes] = diagnostic.first_risk_breach_bar[diagnostic.valid_mask]
-                local_minimum_low_return[diagnostic_indexes] = diagnostic.minimum_low_return[diagnostic.valid_mask]
-        elif (
+        if (
             target_policy.materialization_mode
             == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT
         ):
@@ -1962,17 +1914,10 @@ def load_daily_universal_ranker_data(
         policy=input_policy,
     )
     validate_model_sequence_length(model_spec, int(feature_bank.shape[1]))
-    target_contract = (
-        counterfactual_trade40_contract(
-            provenance=counterfactual_provenance,
-            exchange_calendar=counterfactual_exchange_calendar,
-        )
-        if counterfactual_schedule is not None
-        else _build_daily_target_contract(
-            target_policy.contract_kind,
-            spec=spec,
-            risk_param_policy=risk_param_policy,
-        )
+    target_contract = _build_daily_target_contract(
+        target_policy.contract_kind,
+        spec=spec,
+        risk_param_policy=risk_param_policy,
     )
     if target_policy.horizon_bars is not None:
         # The declarative target identity includes horizon; do not persist a

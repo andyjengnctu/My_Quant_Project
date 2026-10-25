@@ -3301,8 +3301,8 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         metric_scope="all_stock_days_counterfactual_mintrade40_netr",
         score_semantic_id="daily_counterfactual_mintrade40_netr_rank_percentile",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-        selection_pit_authorized=True,
-        current_time_validation_authorized=True,
+        selection_pit_authorized=False,
+        current_time_validation_authorized=False,
     ),
     DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE: ContinuousRankerResearchSpec(
         profile_name=DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE,

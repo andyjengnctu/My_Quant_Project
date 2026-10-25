@@ -183,7 +183,7 @@ class OracleAuditContractCases(TestCase):
                 self.assertIn("REUSE 40 / RUN（需計算）0", text)
                 self.assertIn("REUSE", text)
                 self.assertIn("R40_Direct", text)
-                self.assertIn("按 Enter 後依正式資料與 P16 身分核准", text)
+                self.assertIn("正式 REUSE 須核對原始資料、參數、期間及分數身分", text)
                 # AI: The preview must consume the same semantic status palette
                 # as other Research plans; never hard-code ANSI in Oracle.
                 from core.display_common import C_GREEN, C_RED, C_GRAY, C_RESET

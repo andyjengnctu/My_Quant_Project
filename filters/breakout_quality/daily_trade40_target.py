@@ -17,33 +17,24 @@ from __future__ import annotations
 
 from bisect import bisect_right
 from dataclasses import dataclass
-from hashlib import sha256
-import json
 import math
-from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
 
-from config.execution_policy import DEFAULT_FIXED_RISK
-from core.portfolio_param_runtime import load_portfolio_param_source_from_json
 from core.price_utils import adjust_long_buy_limit_array
+from core.portfolio_param_runtime import build_portfolio_params_signature
 from core.strategy_params import V16StrategyParams
-from filters.breakout_quality.artifacts import compute_file_sha256
-from filters.breakout_quality.strategy_compare_sources import PARAM_POLICY_SPECS
 from filters.breakout_quality.trade_path_label import (
     build_signal_cache,
     simulate_realized_trade_path_label,
 )
 from filters.breakout_quality.workflow_io import load_dataset_frame
 
-TARGET_ID = "daily_universal_counterfactual_mintrade40_netr_v1"
-LABEL_ID = "LABEL-daily_universal_counterfactual_mintrade40_netr_v1"
+# The scientific Target/label identity belongs to the Oracle adapter.
+# This module owns ONLY the canonical single-stock execution primitive.
 HORIZON_SESSIONS = 40
-SOURCE_IDS = ("selection_min_roos", "min_best_broker_cash_rolling_experiment")
-P16_HANDOFF_DATE = pd.Timestamp("2021-01-01")
-SCHEMA = 1
 
 
 @dataclass(frozen=True)
@@ -63,117 +54,51 @@ class CounterfactualTrade40Batch:
     reasons: tuple[str, ...]
 
 
-def resolve_historical_min_teacher_paths(
-    root: str | Path, *, settings=None,
-) -> dict[str, Path]:
-    """Resolve both teachers from the same Strategy Compare source SSOT as the label."""
-    if settings is None:
-        from core.strategy_compare_policy import get_strategy_comparison_settings
-        settings = get_strategy_comparison_settings("selection_pit")
-    policy = str(settings.param_policy).strip()
-    specification = PARAM_POLICY_SPECS.get(policy)
-    if policy == "auto" or not isinstance(specification, dict):
-        raise ValueError("Counterfactual Trade40 requires resolved canonical Min param policy")
-    filename = str(specification["filename"])
-    paths: dict[str, Path] = {}
-    for source_id in SOURCE_IDS:
-        source = settings.parameter_sources.get(source_id)
-        if source is None or not str(source.path_template or "").strip():
-            raise ValueError(f"Counterfactual Trade40 missing canonical source {source_id}")
-        paths[source_id] = Path(root).resolve() / str(source.path_template).format(
-            param_filename=filename,
-        )
-    return paths
-
-
-def load_historical_min_execution_schedule(
-    root: str | Path, *, settings=None, evaluation_start_date: str | None = None,
+def build_formal_min_execution_schedule(
+    records: Iterable[dict[str, Any]], *, seed: int, param_sha256: str,
 ) -> tuple[tuple[ExecutableMinPeriod, ...], dict[str, Any]]:
-    """Resolve PIT-effective historical Min teachers without fabricating P16 history.
+    """Adapt the SAME resolved per-seed Min records consumed by Portfolio Replay.
 
-    Earlier supervised rows can use independently archived P2 Min parameters.
-    Starting in 2021 the teacher MUST switch to the canonical P16 Min source
-    used by the Research portfolio; missing years stay unlabeled, never backfilled.
-    A read-only Oracle evaluation starting in 2021 only consumes P16.
-    Full-history training still requires both P2 and P16 sources.
+    No independent parameter file, training teacher, optimizer or year switch is
+    permitted in the Oracle. Effective dates describe the NEXT executable
+    ticker session, not the information bar that produced the ranking.
     """
-    if settings is None:
-        from core.strategy_compare_policy import get_strategy_comparison_settings
-        settings = get_strategy_comparison_settings("selection_pit")
-    root = Path(root).resolve()
-    paths = resolve_historical_min_teacher_paths(root, settings=settings)
-    evaluation_start = (None if evaluation_start_date is None
-                        else pd.Timestamp(evaluation_start_date).normalize())
-    if evaluation_start is not None and evaluation_start < P16_HANDOFF_DATE:
-        raise ValueError("Counterfactual Trade40 OOS-only view cannot omit pre-2021 P2 truth")
-    if evaluation_start is not None:
-        # The 2021+ Oracle never consumes pre-2021 labels. Resolve only
-        # the P16 source for that date range; do not alter training truth.
-        paths = {SOURCE_IDS[1]: paths[SOURCE_IDS[1]]}
-    periods: list[ExecutableMinPeriod] = []
-    provenance: dict[str, Any] = {"policy": str(settings.param_policy).strip(), "sources": []}
-    if evaluation_start is not None:
-        provenance["oracle_evaluation_start_date"] = str(evaluation_start.date())
-    for source_id, path in paths.items():
-        if not path.is_file():
-            raise FileNotFoundError(f"Counterfactual Trade40 historical Min params missing: {source_id}: {path}")
-        loaded = load_portfolio_param_source_from_json(path, fixed_risk=DEFAULT_FIXED_RISK)
-        records = list(loaded.get("schedule") or ())
-        if not records:
-            raise ValueError(f"Counterfactual Trade40 missing historical effective Min schedule: {source_id}")
-        for record in records:
-            members = list(record.get("members") or ())
-            if members:
-                if len(members) != 1:
-                    raise ValueError("Counterfactual Trade40 requires one canonical Min finalist, not consensus")
-                params = members[0]["params_obj"]
-                signature = str(members[0]["params_signature"])
-            else:
-                params = record["params_obj"]
-                signature = str(record["params_signature"])
-            if params.use_breakout_quality_filter or params.use_breakout_quality_ranking:
-                raise ValueError("Counterfactual Trade40 teacher must be DL-off historical Min")
-            start_raw = record.get("effective_date_text") or record.get("effective_date")
-            end_raw = record.get("effective_end_date_text") or record.get("effective_end_date")
-            if start_raw is None:
-                raise ValueError("Counterfactual Trade40 historical Min effective date missing")
-            start = pd.Timestamp(start_raw).normalize()
-            end = None if end_raw in (None, "") else pd.Timestamp(end_raw).normalize()
-            if end is not None and end < start:
-                raise ValueError("Counterfactual Trade40 Min param period ends before start")
-            # The P2 teacher is a legally historical training approximation,
-            # NOT the P16 strategy that must be used for 2021+ OOS comparisons.
-            if source_id == SOURCE_IDS[0]:
-                if start >= P16_HANDOFF_DATE:
-                    continue
-                end = min(end, P16_HANDOFF_DATE - pd.Timedelta(days=1)) if end is not None else P16_HANDOFF_DATE - pd.Timedelta(days=1)
-            else:
-                if end is not None and end < P16_HANDOFF_DATE:
-                    continue
-                start = max(start, P16_HANDOFF_DATE)
-            periods.append(ExecutableMinPeriod(start, end, params, source_id, signature))
-        provenance["sources"].append({
-            "source_id": source_id,
-            "relative_path": path.relative_to(root).as_posix(),
-            "sha256": compute_file_sha256(path),
-        })
-    periods.sort(key=lambda period: (period.start, period.source_id))
-    for left, right in zip(periods, periods[1:]):
-        # A newer effective year can supersede a previous open-ended archive.
-        # Same-day conflicting truths are always illegal, not silently preferred.
-        if left.start == right.start and left.params_signature != right.params_signature:
-            raise ValueError("Counterfactual Trade40 Min sources have conflicting effective-date params")
-        if (left.source_id == right.source_id and left.end is not None
-                and right.start <= left.end):
-            raise ValueError("Counterfactual Trade40 overlapping Min periods in one source")
-    if not periods or not any(p.source_id == SOURCE_IDS[1] for p in periods):
-        raise ValueError("Counterfactual Trade40 has no effective canonical P16 Min parameters for 2021+")
-    provenance["periods"] = [
-        {"start": str(period.start.date()),
-         "end": None if period.end is None else str(period.end.date()),
-         "source_id": period.source_id, "params_signature": period.params_signature}
-        for period in periods
-    ]
+    if len(param_sha256) != 64 or any(c not in "0123456789abcdef" for c in param_sha256.lower()):
+        raise ValueError("Formal Min Oracle missing canonical parameter identity")
+    periods = []
+    for record in records:
+        params = record["params_obj"]
+        if bool(params.use_breakout_quality_filter) or bool(params.use_breakout_quality_ranking):
+            raise ValueError("Formal Min Oracle must consume DL-off baseline parameters")
+        signature = build_portfolio_params_signature(params)
+        if signature != str(record["params_signature"]):
+            raise ValueError("Formal Min Oracle parameter signature disagrees with executable settings")
+        start = pd.Timestamp(record["effective_date"]).normalize()
+        end_raw = record.get("effective_end_date")
+        end = None if end_raw is None else pd.Timestamp(end_raw).normalize()
+        if end is not None and end < start:
+            raise ValueError("Formal Min Oracle has reversed parameter period")
+        periods.append(ExecutableMinPeriod(
+            start=start, end=end, params=params,
+            source_id="formal_min_roos_seed", params_signature=str(record["params_signature"]),
+        ))
+    periods.sort(key=lambda record: record.start)
+    if not periods or [item.start for item in periods] != sorted({item.start for item in periods}):
+        raise ValueError("Formal Min Oracle requires a unique ordered rolling Min schedule")
+    if any(a.end is None or a.end >= b.start for a, b in zip(periods, periods[1:])):
+        raise ValueError("Formal Min Oracle rolling periods overlap or lack a close date")
+    provenance = {
+        "origin": "formal_min_roos_rolling_per_seed",
+        "seed": int(seed),
+        "param_identity_sha256": str(param_sha256),
+        "sources": [{"source_id": "formal_min_roos_seed", "sha256": str(param_sha256)}],
+        "periods": [
+            {"start": str(item.start.date()),
+             "end": None if item.end is None else str(item.end.date()),
+             "source_id": item.source_id, "params_signature": item.params_signature}
+            for item in periods
+        ],
+    }
     return tuple(periods), provenance
 
 
@@ -219,33 +144,6 @@ def collect_canonical_exchange_sessions(
     return pd.DatetimeIndex(sorted(calendar)).normalize()
 
 
-def counterfactual_trade40_contract(
-    *, provenance: dict[str, Any], exchange_calendar: pd.DatetimeIndex,
-) -> dict[str, Any]:
-    days = pd.DatetimeIndex(exchange_calendar).normalize()
-    if days.empty or days.has_duplicates or not days.is_monotonic_increasing:
-        raise ValueError("Counterfactual Trade40 exchange calendar invalid")
-    digest = sha256("\n".join(days.strftime("%Y-%m-%d")).encode("ascii")).hexdigest()
-    return {
-        "schema_version": SCHEMA, "target_id": TARGET_ID, "label_id": LABEL_ID,
-        "sample_scope": "daily_eligible_stock_days",
-        "target_semantics": "hypothetical_fresh_min_setup_each_stock_day",
-        "horizon_sessions": HORIZON_SESSIONS,
-        "calendar_policy": "union_of_canonical_sanitized_portfolio_stock_sessions",
-        "exchange_calendar_sha256": digest,
-        "teacher": provenance,
-        "historical_teacher_handoff": "P2 before 2021-01-01; canonical P16 Min from 2021-01-01",
-        **({"oracle_evaluation_start_date": provenance["oracle_evaluation_start_date"]}
-           if "oracle_evaluation_start_date" in provenance else {}),
-        "entry": "decision_date_close_plus_ATR_times_canonical_Min_tolerance_rounded_by_price_utils",
-        "execution": "canonical_A2_trade_path_ledger_net_with_40th_exchange_session_closeout",
-        "censored_labels": "no_fill_or_unexecutable_or_unmatured_is_null_not_zero",
-        "inference_scope": "daily_eligible_all_stock_days_even_if_target_censored",
-        "portfolio_state_inputs": False,
-        "oos_fitted_parameters": False,
-    }
-
-
 def compute_counterfactual_trade40_batch(
     frame: pd.DataFrame, positions: np.ndarray, *, ticker: str,
     schedule: tuple[ExecutableMinPeriod, ...], exchange_calendar: pd.DatetimeIndex,
@@ -258,6 +156,8 @@ def compute_counterfactual_trade40_batch(
     if calendar.empty or calendar.has_duplicates or not calendar.is_monotonic_increasing:
         raise ValueError("counterfactual Trade40 requires strictly sorted exchange sessions")
     dates = pd.DatetimeIndex(frame.index).normalize()
+    if (positions < 0).any() or (positions >= len(dates)).any():
+        raise ValueError("counterfactual Trade40 positions outside sanitized price dates")
     calendar_index = calendar.get_indexer(dates.take(positions))
     result = np.full(len(positions), np.nan, dtype=np.float32)
     valid = np.zeros(len(positions), dtype=bool)
@@ -270,7 +170,19 @@ def compute_counterfactual_trade40_batch(
             continue
         expiry = calendar[calendar_pos + HORIZON_SESSIONS]
         maturity_dates[row] = expiry.to_datetime64().astype("datetime64[D]")
-        period = resolve_historical_min_period(schedule, dates[position])
+        # The Portfolio assigns its Min parameter by the candidate ORDER day.
+        # A suspended ticker's next actual bar may be later than the next
+        # exchange session; always follow its executable ticker calendar.
+        if position + 1 >= len(dates):
+            reasons.append("no_next_executable_ticker_session")
+            continue
+        # The formal Min schedule applies to the order's executable session,
+        # not the previous information bar; there is no alternative date mode.
+        effective_day = dates[position + 1]
+        if effective_day > expiry:
+            reasons.append("no_executable_ticker_order_within_40_sessions")
+            continue
+        period = resolve_historical_min_period(schedule, effective_day)
         if period is None:
             reasons.append("no_historical_effective_Min_param")
             continue
@@ -309,10 +221,7 @@ def compute_counterfactual_trade40_batch(
 
 
 __all__ = [
-    "TARGET_ID", "LABEL_ID", "HORIZON_SESSIONS", "SOURCE_IDS", "P16_HANDOFF_DATE",
-    "ExecutableMinPeriod", "CounterfactualTrade40Batch",
-    "resolve_historical_min_teacher_paths", "load_historical_min_execution_schedule",
-    "resolve_historical_min_period",
-    "collect_canonical_exchange_sessions", "counterfactual_trade40_contract",
-    "compute_counterfactual_trade40_batch",
+    "HORIZON_SESSIONS", "ExecutableMinPeriod", "CounterfactualTrade40Batch",
+    "build_formal_min_execution_schedule", "resolve_historical_min_period",
+    "collect_canonical_exchange_sessions", "compute_counterfactual_trade40_batch",
 ]

@@ -279,124 +279,6 @@ def _robustness_artifacts(definition, root: Path):
     return robustness, records
 
 
-def _daily_teacher_source_settings(definition, source_id: str):
-    """P2's authorized historical selection scope vs P16's Research scope."""
-    from core.strategy_compare_policy import get_strategy_comparison_settings
-    from filters.breakout_quality.daily_trade40_target import SOURCE_IDS
-
-    if source_id not in SOURCE_IDS:
-        raise OracleBlockedError(f"Unknown Daily-universal Min teacher source: {source_id}")
-    # AI: These are the existing source-consuming profiles, not new research
-    # identities; the target owner resolves the actual physical path/policy.
-    profile_id = (
-        "selection_pit" if source_id == SOURCE_IDS[0]
-        else str(definition.source["strategy_profile_id"])
-    )
-    return get_strategy_comparison_settings(profile_id)
-
-
-def _missing_daily_teacher_source(definition, *, root: Path, evaluation_start: str) -> dict[str, Any] | None:
-    """Check both teacher inputs against the canonical parameter planner.
-
-    This is pure read-only inspection: even a legitimate BUILD action in the
-    Optimizer's *own* plan is BLOCKED here. No Audit may initiate that work.
-    """
-    from filters.breakout_quality.daily_trade40_target import (
-        SOURCE_IDS, P16_HANDOFF_DATE, resolve_historical_min_teacher_paths,
-        load_historical_min_execution_schedule,
-    )
-    from core.console_report import project_relative_display_path
-    from services.research.strategy_compare_preparation_status import (
-        collect_preparation_status, resolve_param_source_path,
-    )
-
-    paths = resolve_historical_min_teacher_paths(root)
-    # Only required effective parameter dates belong in this Oracle preflight.
-    # Research strategy evaluation begins in 2021, so the pre-2021 P2 teacher
-    # is a DL-training dependency, not an Oracle replay dependency.
-    start = pd.Timestamp(evaluation_start).normalize()
-    if start >= P16_HANDOFF_DATE:
-        paths = {SOURCE_IDS[1]: paths[SOURCE_IDS[1]]}
-    missing: list[dict[str, Any]] = []
-    expected_builders = {
-        SOURCE_IDS[0]: "selection_historical_p2",
-        SOURCE_IDS[1]: "optimizer_fixed_multiseed_strategy_params",
-    }
-    # Check *both* inputs without BUILD: a stale P16 still BLOCKs
-    # even when a missing P2 otherwise has an authorized producer.
-    for source_id in paths:
-        path = paths[source_id]
-        relative = project_relative_display_path(path, project_root=root)
-        settings = _daily_teacher_source_settings(definition, source_id)
-        source = settings.parameter_sources.get(source_id)
-        builder = None if source is None else source.builder
-        expected_builder = expected_builders[source_id]
-        if (
-            builder is None or not builder.enabled
-            or builder.builder_type != expected_builder
-            or str(settings.param_policy).strip() != "base-finalist-best"
-        ):
-            raise OracleBlockedError(
-                f"Daily-universal {source_id} 未獲 canonical Min Producer 授權"
-            )
-        producer_path = resolve_param_source_path(root, settings, source_id)
-        if producer_path != path:
-            raise OracleBlockedError(
-                f"Daily-universal {source_id} teacher path differs from canonical Producer: "
-                f"{relative}"
-            )
-        if path.exists() and not path.is_file():
-            raise OracleBlockedError(f"Daily-universal teacher path is not a file: {relative}")
-        try:
-            producer_status = collect_preparation_status(project_root=root, settings=settings)
-        except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
-            raise OracleBlockedError(
-                f"Daily-universal {source_id} canonical Producer status unavailable: "
-                f"{type(exc).__name__}: {exc}"
-            ) from exc
-        row = (producer_status.get("parameters") or {}).get(source_id)
-        actions = [
-            action for action in producer_status["preparation_plan"].actions
-            if action.artifact_key == f"param:{source_id}"
-        ]
-        if not isinstance(row, dict) or len(actions) != 1:
-            raise OracleBlockedError(
-                f"Daily-universal {source_id} not governed by canonical parameter plan"
-            )
-        action = actions[0]
-        if path.is_file():
-            if not bool(row.get("ready")) or row.get("action") != "REUSE" or action.action != "REUSE":
-                raise OracleBlockedError(
-                    f"Daily-universal {source_id} existing teacher identity/coverage "
-                    f"not READY: {row.get('status')} (action={row.get('action')}); "
-                    f"preserve artifact, do not overwrite: {relative}"
-                )
-        else:
-            # The Producer may be able to BUILD this input in its own workflow.
-            # That permission never transfers to the read-only Target audit.
-            missing.append({"source_id": source_id, "relative": relative})
-
-    if missing:
-        paths = ", ".join(f"{row['source_id']}: {row['relative']}" for row in missing)
-        return {
-            "status": "BLOCKED", "reason": (
-                f"Daily-universal Target 缺少 canonical Min teacher: {paths}；"
-                "請先在既有策略參數最佳化流程建立來源；Target 驗證不得自動訓練"
-            ),
-            "source": {
-                "display": "Full Research Dataset + 4-seed canonical P16 + daily target truth",
-                "path": missing[0]["relative"], "preparable": False,
-                "missing_teacher_source_id": missing[0]["source_id"],
-            },
-        }
-    # The target owner also verifies chronological teacher/parameter semantics;
-    # a technically READY artifact can still violate the combined P2->P16 handoff.
-    load_historical_min_execution_schedule(
-        root, evaluation_start_date=str(start.date()) if start >= P16_HANDOFF_DATE else None,
-    )
-    return None
-
-
 def collect_status(definition, *, project_root: Path) -> dict[str, Any]:
     """Read-only 4-seed P16 and daily Target prerequisite preflight."""
     root = Path(project_root).resolve()
@@ -411,14 +293,8 @@ def collect_status(definition, *, project_root: Path) -> dict[str, Any]:
         if not truth_root.is_dir():
             raise OracleBlockedError("缺少validated breakout-quality Dataset bundle；Audit不得代替Producer建置")
         robustness, records = _robustness_artifacts(definition, root)
-        # AI: Read-only preflight must not materialize labels, Replay or params.
-        # Missing teachers are BLOCKED; never substitute future P16 or zero-R.
-        if _oracle_comparison_plan(definition)["daily_recipes"]:
-            missing = _missing_daily_teacher_source(
-                definition, root=root, evaluation_start=str(settings.start_date),
-            )
-            if missing is not None:
-                return missing
+        # No separate DL teacher/optimizer is a precondition for Oracle truth.
+        # The 4 verified per-seed Min artifacts above are the ONLY param source.
         return {
             "status": "READY", "reason": "", "source": {
                 "display": display, "preparable": False,
@@ -868,7 +744,7 @@ def render_replay_preflight(
     ))
 
 
-def render_existing_artifact_inventory(definition, *, project_root: Path) -> str:
+def _existing_artifact_inventory(definition, *, project_root: Path) -> tuple[str, dict[tuple[int, str], str]]:
     """Show cached evidence before any market truth or P16 materialization.
 
     This is ONLY an existence/integrity inventory, NOT a replay dependency
@@ -921,10 +797,15 @@ def render_existing_artifact_inventory(definition, *, project_root: Path) -> str
         "Seed：" + "  ".join(f"S{i + 1}={seed}" for i, seed in enumerate(seeds)),
         render_table(headers, rows),
         f"REUSE {counts['REUSE']} / RUN（需計算）{counts['RUN']} / BLOCKED {counts['BLOCKED']}",
-        "註：既有結果先列 REUSE；按 Enter 後依正式資料與 P16 身分核准。衝突將 BLOCK，不覆寫歷史證據。共同資訊日窗口如改變，舊 REUSE 會改列 RUN；未輸入 RUN 不執行 Replay。",
+        "註：此表僅盤點工件是否存在；正式 REUSE 須核對原始資料、參數、期間及分數身分。新增 Target 不改變舊 Target 的回放期間；未輸入 RUN 不執行 Replay。",
     ))
-    return inventory
+    return inventory, actions
 
+
+def render_existing_artifact_inventory(definition, *, project_root: Path) -> str:
+    """Existing-cache display and quick preliminary plan share one inventory owner."""
+    inventory, _decisions = _existing_artifact_inventory(definition, project_root=project_root)
+    return inventory
 
 
 def _prepare_oracle_parameters(
@@ -1175,31 +1056,6 @@ def _reusable_completed_oracle_report(
     return None
 
 
-def _resolve_oracle_replay_start(
-    *, requested_start: str, daily_evidence: Mapping[str, Any] | None,
-) -> str:
-    """Choose ONE legal replay window for baseline and EVERY comparison arm.
-
-    The Research portfolio orders on day t from the last completed bar before
-    t. A daily Target with first information date d is not known on d in that
-    decision timeline, even for a hindsight Oracle: its first orderable date
-    is the first exchange session strictly AFTER d. Keep the requested start
-    when the comparison has no daily-universal source. Never invent a P2 label
-    or compare different start dates for existing vs new targets.
-    """
-    requested = pd.Timestamp(requested_start).normalize()
-    if daily_evidence is None:
-        return str(requested.date())
-    try:
-        first_score = pd.Timestamp(daily_evidence["first_date"]).normalize()
-        first_replay = pd.Timestamp(daily_evidence["first_replay_trade_date"]).normalize()
-    except (KeyError, ValueError, TypeError) as exc:
-        raise OracleBlockedError("Daily-universal Oracle replay start evidence missing") from exc
-    if first_score < requested or first_replay <= first_score:
-        raise OracleBlockedError("Daily-universal Oracle information-date alignment is invalid")
-    return str(max(requested, first_replay).date())
-
-
 def build_report(
     definition, *, project_root: Path, quiet: bool = False,
     before_replay: Callable[[str], None] | None = None,
@@ -1214,6 +1070,22 @@ def build_report(
     if status["status"] != "READY":
         raise OracleBlockedError(status["reason"])
     robustness, parameter_paths = _robustness_artifacts(definition, root)
+    # This is a tentative identity-independent inventory, never a certificate
+    # for REUSE. Approve the potentially costly daily truth calculation FIRST;
+    # the strict per-arm replay plan may not exceed that initial RUN budget
+    # without an independent, explicit second authorization.
+    authorized_run_budget = None
+    if plan["daily_recipes"] and before_replay is not None:
+        _inventory, tentative = _existing_artifact_inventory(definition, project_root=root)
+        authorized_run_budget = sum(action == "RUN" for action in tentative.values())
+        if any(action == "BLOCKED" for action in tentative.values()):
+            raise OracleBlockedError("Existing Oracle cache contains invalid evidence; no Target calculation started")
+        before_replay(
+            "[Target 驗證｜計算授權] 每日全母體40日真值需實際計算，非快速工件盤點。\n"
+            f"暫估 REUSE {sum(v == 'REUSE' for v in tentative.values())} / "
+            f"RUN {authorized_run_budget}；僅授權不超過這個 RUN 數量。\n"
+            "不訓練模型、不最佳化策略；若正式核對後需更多 Replay，將另行請求授權。"
+        )
     fast = None if plan["daily_recipes"] else _reusable_completed_oracle_report(
         definition, root=root, settings=settings, base_arm=base_arm,
         exact_arm=exact_arm,
@@ -1231,41 +1103,63 @@ def build_report(
     # Validate the new trade-path Target BEFORE materializing the legacy price
     # providers or starting any portfolio Replay. Only the approved Audit
     # progress text changes; no report sections/columns or Trading path change.
-    daily_score_evidence: dict[str, Any] | None = None
-    daily_score_tables: dict[str, dict[tuple[str, str], float]] = {}
+    daily_seed_scores: dict[int, dict[str, dict[tuple[str, str], float]]] = {}
+    daily_seed_evidence: dict[int, dict[str, Any]] = {}
     if plan["daily_recipes"]:
-        # MR-13CL's daily stock-day truth has its OWN feature eligibility;
-        # never join it into legacy price-only cohort or alter old cache keys.
         if len(plan["daily_recipes"]) != 1:
-            raise OracleBlockedError("Daily-universal Oracle must have a single canonical Exact score source")
+            raise OracleBlockedError("Daily-universal Oracle must have a single Exact score source")
+        from filters.breakout_quality.daily_trade40_target import build_formal_min_execution_schedule
+        from services.audit.min_trade40_target import _schedule as canonical_min_schedule
         from services.audit.daily_trade40_oracle import (
-            DailyTrade40OracleBlockedError,
-            build_daily_universal_trade40_oracle_scores,
+            DailyTrade40OracleBlockedError, build_daily_universal_trade40_oracle_scores,
         )
         source_name, (_recipe, provider) = next(iter(plan["daily_recipes"].items()))
-        try:
-            daily_scores, daily_score_evidence = build_daily_universal_trade40_oracle_scores(
-                project_root=root, dataset=str(settings.dataset),
-                filter_id=str(definition.source["filter_id"]),
-                profile_id=str(definition.source[provider]),
-                cutoff=str(settings.end_date), evaluation_start=str(settings.start_date),
-            )
-        except DailyTrade40OracleBlockedError as exc:
-            raise OracleBlockedError(str(exc)) from exc
-        daily_score_tables[source_name] = daily_scores
-        for alias, score_source in plan["aliases"].items():
-            if score_source == source_name:
-                daily_score_tables[alias] = daily_scores
-        if not quiet:
-            progress("Daily-universal NetR target verified: "
-                     f"eligible mature {daily_score_evidence['mature_eligible_rows']:,}; "
-                     f"settled {daily_score_evidence['settled_net_r_rows']:,}; "
-                     f"censored (ranking only) {daily_score_evidence['censored_rank_last_rows']:,}")
+        # Use the identical resolved param view as C96/Min Portfolio.
+        prepared_for_scores, _ = _prepare_oracle_parameters(
+            definition, root=root, parameter_paths=parameter_paths,
+            start=str(settings.start_date), end=str(settings.end_date), base_arm=base_arm,
+        )
+        for seed, param_sha, kind, base_params, _oracle_params in prepared_for_scores:
+            try:
+                canonical_records = canonical_min_schedule(kind, base_params)
+                schedule, _provenance = build_formal_min_execution_schedule(
+                    canonical_records, seed=seed, param_sha256=param_sha,
+                )
+                daily_scores, evidence = build_daily_universal_trade40_oracle_scores(
+                    project_root=root, dataset=str(settings.dataset),
+                    filter_id=str(definition.source["filter_id"]),
+                    profile_id=str(definition.source[provider]),
+                    cutoff=str(settings.end_date), evaluation_start=str(settings.start_date),
+                    seed=seed, param_sha256=param_sha, canonical_schedule=schedule,
+                    progress_callback=(lambda message: progress(f"seed={seed} {message}")) if not quiet else None,
+                )
+            except (DailyTrade40OracleBlockedError, ValueError) as exc:
+                raise OracleBlockedError(f"Formal Min seed={seed} target blocked: {exc}") from exc
+            teacher = dict(evidence.get("teacher") or {})
+            if (teacher.get("seed") != seed
+                    or teacher.get("param_identity_sha256") != param_sha
+                    or evidence.get("profile_id") != str(definition.source[provider])):
+                raise OracleBlockedError(f"Daily-universal seed={seed} not based on this formal Min parameter view")
+            daily_seed_evidence[int(seed)] = evidence
+            daily_seed_scores[int(seed)] = {source_name: daily_scores}
+            for alias, original in plan["aliases"].items():
+                if original == source_name:
+                    daily_seed_scores[int(seed)][alias] = daily_scores
+            if not quiet:
+                progress(f"Daily-universal formal Min seed={seed}: "
+                         f"{evidence['mature_eligible_rows']:,} mature, "
+                         f"{evidence['settled_net_r_rows']:,} settled")
+        expected_seeds = {seed for seed, _ in parameter_paths}
+        if set(daily_seed_scores) != expected_seeds:
+            raise OracleBlockedError("Daily-universal per-seed scores incomplete")
+        for evidence in daily_seed_evidence.values():
+            if (str(evidence["first_date"]) >= str(settings.start_date)
+                    or str(evidence["first_replay_trade_date"]) < str(settings.start_date)):
+                raise OracleBlockedError("Daily-universal first legal information/trade boundary mismatch")
     scores40, cohort40 = _build_oracle_score_panels(
         definition, project_root=root, cutoff=str(settings.end_date),
         progress=None if quiet else progress,
     )
-    scores40.update(daily_score_tables)
     if not quiet:
         progress("真值及共同樣本完成；檢查價格 SHA、P16 與 Replay Cache")
     seed_scores: dict[int, dict[str, dict[tuple[str, str], float]]] = {}
@@ -1281,14 +1175,7 @@ def build_report(
         for seed, score in path_scores.items():
             seed_scores[int(seed)] = {name: score for name in plan["seed_recipes"]}
     direct_arm = _direct_arm(definition, settings, base_arm, exact_arm)
-    start = _resolve_oracle_replay_start(
-        requested_start=str(settings.start_date), daily_evidence=daily_score_evidence,
-    )
-    if start != str(settings.start_date) and not quiet:
-        progress(
-            "共同交易視窗依最早合法 information_date 對齊："
-            f"{settings.start_date} -> {start}；舊不同期間 Replay 不可 REUSE"
-        )
+    start = str(settings.start_date)  # Formal Min Replay start NEVER depends on a new Target.
     end40 = min(str(settings.end_date), str(cohort40["last_common_day"]))
     if end40 <= start:
         raise OracleBlockedError("40D成熟樣本期間不合法")
@@ -1304,7 +1191,7 @@ def build_report(
     # Every treatment carries its own canonical ranking/allocator policy identity.
     def run_panel(*, end: str, cohort: dict[str, Any], scores: dict[str, dict],
                   targets: tuple[tuple[str, str], ...], label: str) -> dict[str, Any]:
-        if set(scores) | set(plan["seed_sources"]) != {name for name, _ in targets}:
+        if set(scores) | set(plan["seed_sources"]) | set(plan["daily_sources"]) != {name for name, _ in targets}:
             raise OracleBlockedError(f"Oracle {label}計算與報表Target清單不一致")
         if plan["seed_recipes"] and set(seed_scores) != {seed for seed, _ in parameter_paths}:
             raise OracleBlockedError("Oracle P16逐seed交易路徑真值不完整")
@@ -1352,7 +1239,7 @@ def build_report(
                 arm = direct_arm if is_direct else exact_arm
                 arm_replay_policy = _arm_replay_policy(
                     definition, plan=plan, target=target, replay_policy=replay_policy,
-                    daily_evidence=daily_score_evidence,
+                    daily_evidence=daily_seed_evidence.get(seed),
                 )
                 identity = replay_identity(
                     dataset=settings.dataset, dataset_sha256=price_sha,
@@ -1409,10 +1296,9 @@ def build_report(
                 f"Oracle {label} REUSE preflight BLOCKED: "
                 f"{len(blocked)} conflict(s); " + " | ".join(details[:3])
             )
-        if before_replay is not None:
-            # AI: Authorization is requested only AFTER the completed plan is
-            # AI: visible, but BEFORE any cache promotion, Replay or report write.
-            # AI: The same verified identity/records continue into execution.
+        run_count = sum(status == "RUN" for status in decisions.values())
+        if before_replay is not None and (authorized_run_budget is None
+                                          or run_count > authorized_run_budget):
             before_replay(preview)
 
         for seed, param_sha, kind, base_params, oracle_params in prepared:
@@ -1460,7 +1346,9 @@ def build_report(
                 def run_oracle(target=target):
                     arm = direct_arm if plan["selectors"].get(target) == "direct" else exact_arm
                     score_map = (seed_scores[seed][plan["seed_sources"][target]]
-                                 if target in plan["seed_sources"] else scores[target])
+                                 if target in plan["seed_sources"] else
+                                 daily_seed_scores[seed][plan["daily_sources"][target]]
+                                 if target in plan["daily_sources"] else scores[target])
                     with audit_oracle_truth_score_context(
                         score_map,
                         ranking_policy=str(arm.dl_runtime_mode),

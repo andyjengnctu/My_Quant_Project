@@ -1,248 +1,201 @@
-"""Read-only Oracle adapter for MR-13CL's canonical daily-universal Net-R target.
+"""Hindsight daily-universal Min trade-path score source for the formal Oracle.
 
-One existing daily ranker target provider supplies BOTH Exact K/R0 and Direct
-No-K/No-R0.  Neither selector gets a second label or a special replay path.
-This source is hindsight only, never a legal PIT/Trading score publication.
+Feature eligibility comes from the existing generic daily model dataset, NOT
+from the retired MR-13CL label. Each seed's counterfactual 40-session trades
+consume the identical DL-off parameters used by that seed's Min Portfolio.
+Exact/Direct selectors read the same per-seed score table; neither can train.
 """
-
 from __future__ import annotations
 
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
 
-from core.breakout_quality_registry import get_breakout_quality_experiment_profile
-from core.breakout_quality_runtime import (
-    CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
+from core.breakout_quality_registry import (
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    get_breakout_quality_experiment_profile,
 )
-from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
 from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY
 from filters.breakout_quality.daily_trade40_target import (
-    HORIZON_SESSIONS, LABEL_ID, TARGET_ID, SOURCE_IDS, P16_HANDOFF_DATE,
-    collect_canonical_exchange_sessions,
+    HORIZON_SESSIONS, ExecutableMinPeriod, collect_canonical_exchange_sessions,
+    compute_counterfactual_trade40_batch,
 )
 from filters.breakout_quality.mfe_safety_geometry import normalize_ticker
 from filters.breakout_quality.profile_ranker_data import load_profile_continuous_ranker_data
-from filters.breakout_quality.workflow_io import discover_dataset_csv_inputs
+from filters.breakout_quality.workflow_io import discover_dataset_csv_inputs, load_dataset_frame
 from services.audit.min_trade40_target import rank_trade40_outcome_frame
+
+# Old MR-13CL's P2/P16 single-teacher label is a distinct retired scientific
+# identity; no new result may masquerade as its supervised-label artifact.
+TARGET_ID = "daily_universal_formal_min_roos_trade40_netr_v1"
+LABEL_ID = "LABEL-daily_universal_formal_min_roos_trade40_netr_v1"
 
 
 class DailyTrade40OracleBlockedError(ValueError):
-    """Missing or inconsistent canonical target/feature/maturity evidence."""
+    """A source, maturity or per-seed formal Min identity failed verification."""
 
 
 def build_daily_universal_trade40_oracle_scores(
     *, project_root: Path, dataset: str, filter_id: str,
-    profile_id: str, cutoff: str, evaluation_start: str | None = None,
+    profile_id: str, cutoff: str, evaluation_start: str,
+    seed: int, param_sha256: str,
+    canonical_schedule: tuple[ExecutableMinPeriod, ...],
+    progress_callback: Callable[[str], None] | None = None,
 ) -> tuple[dict[tuple[str, str], float], dict[str, Any]]:
-    """Return all-feature-eligible, sufficiently mature ex-post daily ranks.
+    """Compute all feature-eligible stock-day outcomes from a formal Min seed.
 
-    The official MR-13CL dataset owner computes the *actual* counterfactual
-    ledger Net-R; this adapter checks it, rather than implementing a second
-    execution/fee/P16 teacher. Invalid but mature labels are ranked *last*,
-    solely for the hindsight selector. Their underlying Net-R remains NULL.
-    No scores are invented for non-mature stock-days or absent features.
+    The first decision date is the exchange bar BEFORE the OOS trading start.
+    For each hypothetical entry, Min parameters become effective on the next
+    observed *ticker* order date, matching Min signal->order semantics. Only
+    the 40-session horizon is imposed on the otherwise canonical trade path.
     """
     root = Path(project_root).resolve()
+    if not canonical_schedule or len(param_sha256) != 64:
+        raise DailyTrade40OracleBlockedError("Missing verified formal Min parameters for this seed")
+    if any(p.source_id != "formal_min_roos_seed" for p in canonical_schedule):
+        raise DailyTrade40OracleBlockedError("Oracle parameter source is not the formal Min Portfolio")
     profile = get_breakout_quality_experiment_profile(profile_id)
-    recipe = get_continuous_ranker_execution_recipe(profile_id)
-    if (str(profile.continuous_target_id) != TARGET_ID
-            or str(recipe.continuous_target_id) != TARGET_ID
-            or recipe.target_policy.materialization_mode
-            != CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
-            or int(recipe.target_policy.horizon_bars or 0) != HORIZON_SESSIONS):
-        raise DailyTrade40OracleBlockedError("Daily-universal Oracle profile/target/horizon identity mismatch")
+    if (profile.training_sample_scope != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+            or profile.model_architecture != "inception_time_v1"
+            or str(profile.continuous_target_id) == "daily_universal_counterfactual_mintrade40_netr_v1"):
+        raise DailyTrade40OracleBlockedError("Feature-universe source must be a generic active daily profile")
+    cutoff_day = pd.Timestamp(cutoff).normalize()
+    start_day = pd.Timestamp(evaluation_start).normalize()
+    if start_day > cutoff_day:
+        raise DailyTrade40OracleBlockedError("Invalid Oracle trading period")
     try:
+        if progress_callback is not None:
+            progress_callback("取得正式每日合格股票日母體")
         bundle = load_profile_continuous_ranker_data(
             filter_id=filter_id, model_architecture=str(profile.model_architecture),
             experiment_profile=profile_id, preload_feature_bank=False,
             allow_stale_source=False, project_root=root,
-            oracle_evaluation_start_date=evaluation_start,
         )
         summary = dict(bundle.summary or {})
-        if (str(summary.get("dataset") or "") != str(dataset)
-                or str(summary.get("filter_id") or "") != str(filter_id)
-                or str(summary.get("sample_scope") or "") != "daily_eligible_stock_days"):
-            raise DailyTrade40OracleBlockedError("Daily-universal Oracle source dataset/filter/feature universe mismatch")
-        manifest = dict(bundle.target_manifest or {})
-        contract = dict(manifest.get("target_contract") or {})
-        if (str(manifest.get("target_id")) != TARGET_ID
-                or str(contract.get("target_id")) != TARGET_ID
-                or str(contract.get("label_id")) != LABEL_ID
-                or int(contract.get("horizon_sessions") or 0) != HORIZON_SESSIONS
-                or str(contract.get("sample_scope")) != "daily_eligible_stock_days"
-                or contract.get("portfolio_state_inputs") is not False):
-            raise DailyTrade40OracleBlockedError("Daily-universal Oracle canonical target manifest mismatch")
-        # The target is historical P2 -> legally effective P16, not the P16
-        # signal-event sample. Never swap in a per-portfolio-seed event target.
-        teacher = dict(contract.get("teacher") or {})
-        if contract.get("historical_teacher_handoff") != (
-            "P2 before 2021-01-01; canonical P16 Min from 2021-01-01"
-        ):
-            raise DailyTrade40OracleBlockedError("Daily-universal Oracle historical teacher handoff mismatch")
-        # Provenance is produced by the sole historical Min schedule owner.
-        # Both source hashes and each PIT-effective period must be attributable;
-        # otherwise a missing historical teacher could silently rank as a loss.
-        sources = teacher.get("sources")
-        periods = teacher.get("periods")
-        if not isinstance(sources, list) or not isinstance(periods, list):
-            raise DailyTrade40OracleBlockedError("Daily-universal Oracle teacher provenance incomplete")
-        source_by_id = {
-            str(row.get("source_id")): row for row in sources
-            if isinstance(row, Mapping) and row.get("source_id")
-        }
-        # A 2021+ *evaluation view* is allowed to omit the pre-2021 P2
-        # teacher. Full-history training/score providers still require both.
-        view_start = contract.get("oracle_evaluation_start_date")
-        if view_start is None:
-            expected_sources = set(SOURCE_IDS)
-        else:
-            view_day = pd.Timestamp(view_start).normalize()
-            if evaluation_start is None or view_day != pd.Timestamp(evaluation_start).normalize():
-                raise DailyTrade40OracleBlockedError("Daily-universal Oracle evaluation scope mismatch")
-            if view_day < P16_HANDOFF_DATE:
-                raise DailyTrade40OracleBlockedError("Daily-universal Oracle pre-2021 view cannot omit P2")
-            expected_sources = {SOURCE_IDS[1]}
-        if ((view_start is None and teacher.get("oracle_evaluation_start_date") is not None)
-                or (view_start is not None
-                    and str(teacher.get("oracle_evaluation_start_date") or "") != str(view_start))):
-            raise DailyTrade40OracleBlockedError("Daily-universal Oracle teacher/evaluation view provenance mismatch")
-        if len(source_by_id) != len(sources) or set(source_by_id) != expected_sources:
-            raise DailyTrade40OracleBlockedError("Daily-universal Oracle required teacher identity incomplete")
-        if any(not isinstance(source_by_id[source].get("sha256"), str)
-               or len(source_by_id[source]["sha256"]) != 64
-               or any(char not in "0123456789abcdef" for char in source_by_id[source]["sha256"].lower())
-               for source in expected_sources):
-            raise DailyTrade40OracleBlockedError("Daily-universal Oracle P2/P16 source SHA invalid")
-        covered_periods = set()
-        for period in periods:
-            if not isinstance(period, Mapping) or period.get("source_id") not in source_by_id:
-                raise DailyTrade40OracleBlockedError("Daily-universal Oracle teacher period/source mismatch")
-            try:
-                start = pd.Timestamp(period["start"]).normalize()
-                end = (pd.Timestamp(period["end"]).normalize()
-                       if period.get("end") is not None else None)
-            except (KeyError, TypeError, ValueError) as exc:
-                raise DailyTrade40OracleBlockedError("Daily-universal Oracle invalid teacher period dates") from exc
-            if (str(period["source_id"]) == SOURCE_IDS[0]
-                    and (start >= P16_HANDOFF_DATE or end is None or end >= P16_HANDOFF_DATE)):
-                raise DailyTrade40OracleBlockedError("Daily-universal Oracle P2 historical teacher overlaps P16 period")
-            if str(period["source_id"]) == SOURCE_IDS[1] and start < P16_HANDOFF_DATE:
-                raise DailyTrade40OracleBlockedError("Daily-universal Oracle P16 teacher is backfilled before 2021")
-            if end is not None and end < start:
-                raise DailyTrade40OracleBlockedError("Daily-universal Oracle reversed teacher period")
-            covered_periods.add(str(period["source_id"]))
-        if covered_periods != expected_sources:
-            raise DailyTrade40OracleBlockedError("Daily-universal Oracle required teacher has missing effective periods")
+        group = pd.DataFrame(bundle.group_table).reset_index(drop=True)
+        if (summary.get("dataset") != dataset or summary.get("filter_id") != filter_id
+                or summary.get("sample_scope") != "daily_eligible_stock_days"
+                or int(summary.get("score_eligible_sample_count", -1)) != len(group)
+                or not {"ticker", "date"}.issubset(group.columns)):
+            raise DailyTrade40OracleBlockedError("Generic daily feature-universe identity mismatch")
+        if progress_callback is not None:
+            progress_callback(f"已取得 {len(group):,} 筆股票日，盤點共同交易日曆")
         csv_inputs, duplicates = discover_dataset_csv_inputs(root, dataset)
         if duplicates:
-            raise DailyTrade40OracleBlockedError("Daily-universal Oracle duplicate source ticker")
+            raise DailyTrade40OracleBlockedError("Duplicate canonical price ticker source")
         exchange = collect_canonical_exchange_sessions(
             csv_inputs, benchmark_ticker=str(DEFAULT_LABEL_POLICY.benchmark_ticker),
         )
-        digest = sha256("\n".join(exchange.strftime("%Y-%m-%d")).encode("ascii")).hexdigest()
-        if digest != str(contract.get("exchange_calendar_sha256") or ""):
-            raise DailyTrade40OracleBlockedError("Daily-universal Oracle exchange calendar changed since target materialization")
+        prior = exchange[exchange < start_day]
+        if prior.empty:
+            raise DailyTrade40OracleBlockedError("No legal pre-OOS information session")
+        first_info = prior[-1]
+        first_pos = int(exchange.get_indexer([first_info])[0])
+        if first_pos + 1 >= len(exchange):
+            raise DailyTrade40OracleBlockedError("No execution session after pre-OOS information")
+        first_trade = exchange[first_pos + 1]
+        if first_trade < start_day:
+            raise DailyTrade40OracleBlockedError("Incorrect OOS trade start")
+        source_paths = {normalize_ticker(ticker): Path(path) for ticker, path in csv_inputs}
+        if len(source_paths) != len(csv_inputs):
+            raise DailyTrade40OracleBlockedError("Duplicate normalized stock ticker")
+        group["ticker"] = group["ticker"].map(normalize_ticker)
+        group["date"] = pd.to_datetime(group["date"], errors="raise").dt.normalize()
+        group = group.loc[(group["date"] >= first_info) & (group["date"] <= cutoff_day)].reset_index(drop=True)
+        if group.empty or group.duplicated(["ticker", "date"]).any():
+            raise DailyTrade40OracleBlockedError("No unique feature-eligible daily stock-days")
+        if not bool((group["date"] == first_info).any()):
+            raise DailyTrade40OracleBlockedError("Pre-OOS information date absent from daily feature universe")
+        daily_calendar_pos = exchange.get_indexer(pd.DatetimeIndex(group["date"]))
+        if (daily_calendar_pos < 0).any():
+            raise DailyTrade40OracleBlockedError("Feature stock-day absent from canonical exchange calendar")
+        eligible = daily_calendar_pos + HORIZON_SESSIONS < len(exchange)
+        maturity = np.full(len(group), np.datetime64("NaT"), dtype="datetime64[D]")
+        mature_positions = daily_calendar_pos[eligible] + HORIZON_SESSIONS
+        maturity[eligible] = exchange.take(mature_positions).to_numpy(dtype="datetime64[D]")
+        mature = eligible & (maturity <= np.datetime64(cutoff_day.date()))
+        group = group.loc[mature].copy()
+        if group.empty:
+            raise DailyTrade40OracleBlockedError("No 40-session mature feature stock-days")
+        records: list[pd.DataFrame] = []
+        groups = group.groupby("ticker", sort=True)
+        total_tickers = group["ticker"].nunique()
+        if progress_callback is not None:
+            progress_callback(f"開始逐股正式交易路徑（0/{total_tickers}）")
+        for tick_index, (ticker, selected) in enumerate(groups, 1):
+            path = source_paths.get(ticker)
+            if path is None:
+                raise DailyTrade40OracleBlockedError(f"Feature-universe ticker missing price source: {ticker}")
+            frame = load_dataset_frame(path, ticker, min_rows=1)
+            positions = pd.DatetimeIndex(frame.index).normalize().get_indexer(
+                pd.DatetimeIndex(selected["date"])
+            )
+            if (positions < 0).any():
+                raise DailyTrade40OracleBlockedError(f"Feature stock-day missing sanitized price: {ticker}")
+            batch = compute_counterfactual_trade40_batch(
+                frame, positions, ticker=ticker, schedule=canonical_schedule,
+                exchange_calendar=exchange,
+            )
+            expected_deadlines = np.asarray(maturity[selected.index], dtype="datetime64[D]")
+            if not np.array_equal(batch.maturity_dates, expected_deadlines):
+                raise DailyTrade40OracleBlockedError("40-session mature deadline disagrees with Min target path")
+            raw = np.asarray(batch.target_raw_r, dtype=np.float64)
+            valid = np.asarray(batch.valid_mask, dtype=bool)
+            if ((valid & ~np.isfinite(raw)).any() or ((~valid) & np.isfinite(raw)).any()):
+                raise DailyTrade40OracleBlockedError("NULL/valid Net-R contract invalid")
+            records.append(pd.DataFrame({
+                "ticker": ticker,
+                "date": selected["date"].dt.strftime("%Y-%m-%d").to_numpy(),
+                "realized_net_r": np.where(valid, raw, np.nan),
+            }))
+            if progress_callback is not None and (tick_index % 100 == 0 or tick_index == total_tickers):
+                progress_callback(f"逐股交易路徑 {tick_index}/{total_tickers}")
+        outcome = pd.concat(records, ignore_index=True).sort_values(["date", "ticker"], kind="stable")
+        if outcome.empty or not outcome["realized_net_r"].notna().any():
+            raise DailyTrade40OracleBlockedError("No completed valid formal-Min Net-R outcomes")
+        if outcome.groupby("date")["realized_net_r"].count().eq(0).any():
+            raise DailyTrade40OracleBlockedError("At least one information date has no settled path")
+        scores = rank_trade40_outcome_frame(outcome)
+        if len(scores) != len(outcome):
+            raise DailyTrade40OracleBlockedError("Oracle daily scores missing feature-eligible rows")
+        raw_sha = sha256(outcome.to_csv(index=False, na_rep="NULL", float_format="%.10g").encode("utf-8")).hexdigest()
+        rank_sha = sha256("".join(f"{t}|{d}|{scores[t,d]:.17g}\n" for t,d in sorted(scores)).encode("ascii")).hexdigest()
+        cal_sha = sha256("\n".join(exchange.strftime("%Y-%m-%d")).encode("ascii")).hexdigest()
+        teacher = {
+            "origin": "formal_min_roos_rolling_per_seed", "seed": int(seed),
+            "param_identity_sha256": str(param_sha256),
+            "periods": [{"start": str(p.start.date()),
+                         "end": None if p.end is None else str(p.end.date()),
+                         "params_signature": p.params_signature} for p in canonical_schedule],
+        }
+        evidence = {
+            "label_id": LABEL_ID, "target_id": TARGET_ID,
+            "profile_id": profile_id, "key_mode": "information_date",
+            "cohort": "daily_eligible_stock_days_formal_min_40_exchange_sessions_mature",
+            "mature_eligible_rows": len(outcome),
+            "settled_net_r_rows": int(outcome["realized_net_r"].notna().sum()),
+            "censored_rank_last_rows": int(outcome["realized_net_r"].isna().sum()),
+            "first_date": outcome["date"].min(), "last_date": outcome["date"].max(),
+            "first_replay_trade_date": str(first_trade.date()),
+            "research_cutoff": str(cutoff_day.date()),
+            "rank_sha256": rank_sha, "raw_label_sha256": raw_sha,
+            "calendar_sha256": cal_sha, "teacher": teacher,
+            "rank_policy": "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",
+            "oracle_evaluation_start_date": str(start_day.date()),
+            "oracle_hindsight_only": True,
+        }
+        return scores, evidence
     except (OSError, KeyError, TypeError, ValueError) as exc:
         if isinstance(exc, DailyTrade40OracleBlockedError):
             raise
         raise DailyTrade40OracleBlockedError(
-            "Daily-universal Oracle canonical target source unavailable/incompatible: "
-            f"{type(exc).__name__}: {str(exc).replace(str(root), '.').replace(chr(92), '/')}"
+            f"Daily-universal formal Min source blocked: {type(exc).__name__}: "
+            f"{str(exc).replace(str(root), '.')}"
         ) from exc
 
-    group = pd.DataFrame(bundle.group_table).reset_index(drop=True)
-    count = len(group)
-    if (int(summary.get("score_eligible_sample_count", -1)) != count
-            or int(manifest.get("score_eligible_sample_count", -1)) != count):
-        raise DailyTrade40OracleBlockedError("Daily-universal Oracle feature-eligible stock-day count mismatch")
-    raw = np.asarray(bundle.raw_target, dtype=np.float64)
-    valid = np.asarray(bundle.target_valid, dtype=bool)
-    if (not count or len(raw) != count or len(valid) != count
-            or not {"ticker", "date", "label_eval_end_date"}.issubset(group.columns)
-            or (valid & ~np.isfinite(raw)).any()
-            or ((~valid) & np.isfinite(raw)).any()):
-        raise DailyTrade40OracleBlockedError("Daily-universal Oracle raw target/validity/stock-day shape or NULL contract invalid")
-    dates = pd.DatetimeIndex(pd.to_datetime(group["date"], errors="raise")).normalize()
-    if evaluation_start is not None and (dates < pd.Timestamp(evaluation_start).normalize()).any():
-        raise DailyTrade40OracleBlockedError("Daily-universal Oracle evaluation view contains pre-start scores")
-    positions = exchange.get_indexer(dates)
-    if (positions < 0).any():
-        raise DailyTrade40OracleBlockedError("Daily-universal Oracle stock-day absent from verified exchange calendar")
-    usable_calendar = positions + HORIZON_SESSIONS < len(exchange)
-    expiry = pd.DatetimeIndex([exchange[pos + HORIZON_SESSIONS]
-                               if mature else pd.NaT
-                               for pos, mature in zip(positions, usable_calendar)])
-    cutoff_day = pd.Timestamp(cutoff).normalize()
-    matured = np.asarray(usable_calendar & (expiry <= cutoff_day), dtype=bool)
-    if bool((valid & matured).any()):
-        stored_deadline = pd.DatetimeIndex(pd.to_datetime(group["label_eval_end_date"], errors="raise")).normalize()
-        if not stored_deadline[valid & matured].equals(expiry[valid & matured]):
-            raise DailyTrade40OracleBlockedError("Daily-universal Oracle valid-label 40-session maturity mismatch")
-    # Includes *all* eligible stock-days, including censored ones, in each
-    # date's denominator. An invalid label's NULL is never a fake 0R.
-    usable = matured & (dates <= cutoff_day)
-    if not bool(usable.any()):
-        raise DailyTrade40OracleBlockedError("Daily-universal Oracle has no 40-session mature stock-days")
-    names = group.loc[usable, "ticker"].map(normalize_ticker).tolist()
-    day_strings = dates[usable].strftime("%Y-%m-%d").tolist()
-    keys = list(zip(names, day_strings))
-    if len(set(keys)) != len(keys):
-        raise DailyTrade40OracleBlockedError("Daily-universal Oracle duplicate feature-eligible ticker/date")
-    selected_valid = valid[usable]
-    selected_raw = raw[usable]
-    if not selected_valid.any():
-        raise DailyTrade40OracleBlockedError("Daily-universal Oracle has no settled Net-R outcomes")
-    daily_counts = pd.DataFrame({"date": day_strings, "valid": selected_valid}).groupby("date")["valid"].sum()
-    if (daily_counts == 0).any():
-        raise DailyTrade40OracleBlockedError("Daily-universal Oracle at least one mature day has no settled Net-R outcomes")
-    # Reuse the event Oracle's identical percentile + excluded-last ranking
-    # capability; it is ordering-only and cannot mutate original NULL labels.
-    scores = rank_trade40_outcome_frame(pd.DataFrame({
-        "ticker": names, "date": day_strings,
-        "realized_net_r": np.where(selected_valid, selected_raw, np.nan),
-    }))
-    if set(scores) != set(keys) or not all(np.isfinite(value) for value in scores.values()):
-        raise DailyTrade40OracleBlockedError("Daily-universal Oracle daily ranks incomplete")
-    # A portfolio order on its first replay session can rank only the LAST
-    # COMPLETED information bar.  An Oracle view starting on a P16 signal day
-    # therefore cannot execute on that SAME day; otherwise the first trade
-    # would request a pre-2021 (P2) score and break the common-time contract.
-    first_score_day = pd.Timestamp(min(day_strings)).normalize()
-    first_score_pos = int(exchange.get_indexer([first_score_day])[0])
-    if first_score_pos < 0 or first_score_pos + 1 >= len(exchange):
-        raise DailyTrade40OracleBlockedError("Daily-universal Oracle has no next-session replay start")
-    first_replay_session = exchange[first_score_pos + 1]
-    if first_replay_session > cutoff_day:
-        raise DailyTrade40OracleBlockedError("Daily-universal Oracle has no replay session after first score")
-    raw_digest = sha256(raw.tobytes() + valid.tobytes()).hexdigest()
-    rank_sha = sha256()
-    for ticker, day in sorted(scores):
-        rank_sha.update(f"{ticker}|{day}|{scores[(ticker, day)]:.17g}\n".encode("ascii"))
-    evidence = {
-        "label_id": LABEL_ID, "target_id": TARGET_ID,
-        "profile_id": profile_id, "key_mode": "information_date",
-        "cohort": "daily_eligible_stock_days_40_exchange_session_mature",
-        "mature_eligible_rows": len(keys),
-        "settled_net_r_rows": int(selected_valid.sum()),
-        "censored_rank_last_rows": int((~selected_valid).sum()),
-        "unmatured_excluded_rows": int((~matured).sum()),
-        "first_date": min(day_strings), "last_date": max(day_strings),
-        "first_replay_trade_date": str(first_replay_session.date()),
-        "research_cutoff": str(cutoff_day.date()),
-        "rank_sha256": rank_sha.hexdigest(),
-        "raw_label_sha256": raw_digest,
-        "calendar_sha256": digest,
-        "teacher": teacher,
-        **({"oracle_evaluation_start_date": evaluation_start}
-           if evaluation_start is not None else {}),
-        "rank_policy": "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",
-        "oracle_hindsight_only": True,
-    }
-    return scores, evidence
 
-
-__all__ = ["DailyTrade40OracleBlockedError", "build_daily_universal_trade40_oracle_scores"]
+__all__ = ["TARGET_ID", "LABEL_ID", "DailyTrade40OracleBlockedError",
+           "build_daily_universal_trade40_oracle_scores"]

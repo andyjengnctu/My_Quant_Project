@@ -188,7 +188,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         "target_verification_shows_reuse_before_execution_enter",
         len(prompts) == 4 and not prompts[0][1] and prompts[1][1]
         and "按 Enter 核對正式 REUSE/RUN/BLOCKED 計畫" in prompts[1][0]
-        and "輸入 RUN 執行 Replay" in prompts[2][0]
+        and "輸入 RUN 授權本階段計算" in prompts[2][0]
         and root_text.index("候選 REUSE 32") < root_text.index("身分核對完成")
         and root_text.index("身分核對完成") < root_text.index("正式 Replay 計畫")
         and "只核對正式" not in root_text and "完整驗證＋" not in root_text,
@@ -207,8 +207,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and "候選 REUSE 32" in cancellation.getvalue(),
     )
 
-    # A new legal common window may invalidate the initial 48 REUSE candidates.
-    # A user must see the verified plan and explicitly authorize 56 Replay jobs.
+    # A larger-than-estimated plan must never run after a cancellation.
+    # Current scientific semantics no longer shift the common window merely
+    # because another Target has a different first observed information bar.
     changed_window_console = io.StringIO()
     cancelled_plan = []
     def replay_plan_only(*args, **kwargs):
@@ -219,20 +220,17 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
          patch.object(research_app, "run_enabled_audits", side_effect=replay_plan_only), \
          patch.object(research_app, "render_latest_audit_summary") as no_summary, \
          redirect_stdout(changed_window_console):
-        refused = ""
-        try:
-            research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
-        except RuntimeError as error:
-            refused = str(error)
+        refused = research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
     check_true(
         "changed_replay_window_never_executes_unapproved_56_arms",
-        "未獲授權" in refused and "RUN 56" in changed_window_console.getvalue()
+        refused == 0 and "RUN 56" in changed_window_console.getvalue()
+        and "Target 驗證已取消" in changed_window_console.getvalue()
         and not cancelled_plan and not no_summary.called,
     )
 
     # Entry-point integration belongs to the existing app/menu contract, not
     # the domain Target synthetic. Exercise the *real* Audit runner on Enter.
-    # The domain-level Teacher tests separately verify canonical P2/P16 status.
+    # The domain-level tests separately verify canonical per-seed Min parameters.
     with TemporaryDirectory(prefix="synthetic_target_entry_no_fit_") as test_root:
         isolated_root = Path(test_root)
         missing_teacher_status = {
@@ -244,11 +242,11 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                 "enabled": True,
                 "audit_id": "target_oracle_romd",
                 "status": "BLOCKED",
-                "reason": "selection_min_roos historical Teacher missing",
+                "reason": "formal Min seed parameter source missing",
                 "source": {
-                    "path": "models/missing_p2.json",
-                    "preparable": True,
-                    "builder_type": "selection_historical_p2",
+                    "path": "models/missing_seed.json",
+                    "preparable": False,
+                    "builder_type": "optimizer_fixed_multiseed_strategy_params",
                 },
             }],
         }
@@ -268,14 +266,14 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             except RuntimeError as error:
                 blocked_text = str(error)
         check_true(
-            "research_target_enter_missing_teacher_is_blocked_without_optimizer_or_replay",
+            "research_target_enter_missing_param_source_is_blocked_without_optimizer_or_replay",
             "BLOCKED" in blocked_text
-            and "selection_min_roos" in blocked_text
+            and "formal Min seed" in blocked_text
             and "Target 驗證" in entry_console.getvalue()
             and optimizer.call_count == 0
             and replay.call_count == 0
             and latest.call_count == 0
-            and not (isolated_root / "models" / "missing_p2.json").exists(),
+            and not (isolated_root / "models" / "missing_seed.json").exists(),
         )
 
     reusable_defs = get_reusable_audit_definitions("breakout_quality")
