@@ -2278,7 +2278,8 @@ class MatchedOracleDlCanonicalSourceCases(TestCase):
                 continuous_target_id=pair["continuous_target_id"],
                 available_from="2020-12-31", available_through="2026-03-02",
             )
-        with patch.object(owner, "load_selection_point_in_time_score_source_contract", side_effect=validated), \
+        with patch.object(owner, "_historical_seed_score_hashes", return_value={int(seed): "a" * 64 for seed in owner.get_strategy_multi_seed_robustness_settings(profile).resolved_seeds}), \
+             patch.object(owner, "load_selection_point_in_time_score_source_contract", side_effect=validated), \
              patch.object(owner, "load_selection_point_in_time_score_table_from_path", return_value=pd.DataFrame({
                  "breakout_quality_score": [0.5],
              }, index=pd.MultiIndex.from_tuples([("2330", "2021-01-01")], names=["ticker", "date"]))), \
@@ -2293,12 +2294,93 @@ class MatchedOracleDlCanonicalSourceCases(TestCase):
         self.assertTrue(all(record["score_sha256"] == "a" * 64 for record in verified.values()))
         def missing(*args, **kwargs):
             raise FileNotFoundError("aggregate score retention pruned")
-        with patch.object(owner, "load_selection_point_in_time_score_source_contract", side_effect=missing), \
+        with patch.object(owner, "_historical_seed_score_hashes", return_value={int(seed): "a" * 64 for seed in owner.get_strategy_multi_seed_robustness_settings(profile).resolved_seeds}), \
+             patch.object(owner, "_retained_model_robustness_pit_dir", side_effect=ValueError("model robust not retained")), \
+             patch.object(owner, "load_selection_point_in_time_score_source_contract", side_effect=missing), \
              self.assertRaisesRegex(ValueError, "BLOCKED.*不可拿完成的策略RoMD"):
             owner.load_verified_seed_pit_scores(
                 project_root=root, profile_id=profile, match=pair,
                 model_root_override=root / "seed_models",
             )
+
+    def test_pruned_strategy_score_recovers_only_identical_model_robustness_source(self):
+        from services.research import oracle_dl_comparison_sources as owner
+        profile = "broker_cash_dl_conversion_rolling"
+        pair = owner.resolve_matched_oracle_dl_pairs(profile)[0]
+        seeds = tuple(owner.get_strategy_multi_seed_robustness_settings(profile).resolved_seeds)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            alt_root = root / "model_robustness_retained"
+            calls = []
+            def source_contract(*args, **kwargs):
+                seed = int(kwargs["expected_seed"])
+                path = Path(kwargs["point_in_time_dir_override"])
+                calls.append((seed, path))
+                if path != alt_root:
+                    raise FileNotFoundError("isolated seed score pruned")
+                return SimpleNamespace(
+                    score_path=alt_root / f"score_{seed}.csv",
+                    manifest_path=alt_root / f"manifest_{seed}.json",
+                    seed=seed, continuous_target_id=pair["continuous_target_id"],
+                    available_from="2020-12-31", available_through="2026-03-02",
+                )
+            frame = pd.DataFrame({
+                "breakout_quality_score": [0.5],
+            }, index=pd.MultiIndex.from_tuples([("2330", "2021-01-01")], names=["ticker", "date"]))
+            with patch.object(owner, "_historical_seed_score_hashes", return_value={int(seed): "a" * 64 for seed in seeds}), \
+                 patch.object(owner, "_retained_model_robustness_pit_dir", return_value=alt_root) as alternate, \
+                 patch.object(owner, "load_selection_point_in_time_score_source_contract", side_effect=source_contract), \
+                 patch.object(owner, "load_selection_point_in_time_score_table_from_path", return_value=frame), \
+                 patch.object(owner, "compute_file_sha256", return_value="a" * 64):
+                verified = owner.load_verified_seed_pit_scores(
+                    project_root=root, profile_id=profile, match=pair,
+                    model_root_override=root / "isolated_robustness",
+                )
+            self.assertEqual(set(verified), set(seeds))
+            self.assertEqual(alternate.call_count, len(seeds))
+            self.assertEqual(len(calls), len(seeds) * 2)
+            self.assertTrue(all(item["score_sha256"] == "a" * 64 for item in verified.values()))
+            with patch.object(owner, "_historical_seed_score_hashes", return_value={int(seed): "b" * 64 for seed in seeds}), \
+                 patch.object(owner, "_retained_model_robustness_pit_dir", return_value=alt_root), \
+                 patch.object(owner, "load_selection_point_in_time_score_source_contract", side_effect=source_contract), \
+                 patch.object(owner, "compute_file_sha256", return_value="a" * 64), \
+                 self.assertRaisesRegex(ValueError, "歷史策略結果SHA不符"):
+                owner.load_verified_seed_pit_scores(
+                    project_root=root, profile_id=profile, match=pair,
+                    model_root_override=root / "isolated_robustness",
+                )
+
+    def test_historical_score_hashes_use_robustness_owner_and_reject_unverified(self):
+        from services.research import oracle_dl_comparison_sources as owner
+        from services.research import strategy_multi_seed_robustness as producer
+        profile = "broker_cash_dl_conversion_rolling"
+        pair = owner.resolve_matched_oracle_dl_pairs(profile)[0]
+        cfg = owner.get_strategy_multi_seed_robustness_settings(profile)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_root = root / cfg.output_root / ("b" * 16)
+            run_root.mkdir(parents=True)
+            (run_root.parent / "latest.json").write_text(json.dumps({"fingerprint": "b" * 16}), encoding="utf-8")
+            contract = {
+                "fingerprint": "b" * 16, "profile_id": profile,
+                "robustness_id": cfg.robustness_id, "benchmark_id": cfg.benchmark_id,
+                "resolved_seeds": list(cfg.resolved_seeds),
+            }
+            rows = pd.DataFrame([{"arm_id": pair["arm_id"], "seed": int(seed), "score_sha256": "a" * 64}
+                                 for seed in cfg.resolved_seeds])
+            evidence = {"contract": contract, "manifest": {"durable_artifacts": {"seed_results": {"sha256": "b" * 64}}},
+                        "seed_frame": rows}
+            with patch.object(producer, "_validate_completed_run", return_value=evidence) as checked:
+                actual = owner._historical_seed_score_hashes(project_root=root, profile_id=profile, arm_id=pair["arm_id"])
+            checked.assert_called_once_with(run_root.resolve(), backfill_integrity=False)
+            self.assertEqual(actual, {int(seed): "a" * 64 for seed in cfg.resolved_seeds})
+            with patch.object(producer, "_validate_completed_run", return_value=None), \
+                 self.assertRaisesRegex(ValueError, "未通過原Producer驗證"):
+                owner._historical_seed_score_hashes(project_root=root, profile_id=profile, arm_id=pair["arm_id"])
+            evidence["manifest"] = {"durable_artifacts": {}}
+            with patch.object(producer, "_validate_completed_run", return_value=evidence), \
+                 self.assertRaisesRegex(ValueError, "缺少原Producer核准"):
+                owner._historical_seed_score_hashes(project_root=root, profile_id=profile, arm_id=pair["arm_id"])
 
     def test_ready_sources_bind_to_canonical_comparison_engine_without_publishing(self):
         from services.research import oracle_dl_comparison_sources as owner

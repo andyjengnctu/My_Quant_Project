@@ -132,6 +132,88 @@ def _validated_robustness_model_root(project_root: Path, profile_id: str) -> Pat
     return (root / str(cfg.model_work_root) / model_fingerprint).resolve()
 
 
+
+def _historical_seed_score_hashes(
+    *, project_root: Path, profile_id: str, arm_id: str,
+) -> dict[int, str]:
+    """Use the robustness producer's verified completed seed observations.
+
+    Result REUSE does not retain transient score files, but the official
+    scientific observation still pins each seed's original score SHA256.
+    """
+    from services.research.strategy_multi_seed_robustness import _validate_completed_run
+    root = Path(project_root).resolve()
+    cfg = get_strategy_multi_seed_robustness_settings(str(profile_id))
+    output_root = (root / str(cfg.output_root)).resolve()
+    pointer = load_json_object_or_none(output_root / "latest.json")
+    if not isinstance(pointer, dict):
+        raise ValueError("Robustness缺少正式completed latest")
+    fingerprint = str(pointer.get("fingerprint") or "").strip().lower()
+    if len(fingerprint) != 16 or any(c not in "0123456789abcdef" for c in fingerprint):
+        raise ValueError("Robustness完成指紋非法")
+    run_root = (output_root / fingerprint).resolve()
+    if run_root.parent != output_root:
+        raise ValueError("Robustness證據路徑不合法")
+    validated = _validate_completed_run(run_root, backfill_integrity=False)
+    if validated is None:
+        raise ValueError("Robustness已完成Seed證據未通過原Producer驗證")
+    contract = dict(validated["contract"])
+    if (str(contract.get("fingerprint")) != fingerprint
+            or str(contract.get("profile_id")) != str(profile_id)
+            or str(contract.get("robustness_id")) != str(cfg.robustness_id)
+            or str(contract.get("benchmark_id")) != str(cfg.benchmark_id)
+            or tuple(int(s) for s in contract.get("resolved_seeds") or ()) != tuple(cfg.resolved_seeds)):
+        raise ValueError("Robustness完成Seed契約與本次研究不一致")
+    if not dict(dict(validated["manifest"]).get("durable_artifacts") or {}).get("seed_results"):
+        raise ValueError("Robustness完成Seed證據缺少原Producer核准的檔案SHA")
+    frame = validated["seed_frame"]
+    required = {"arm_id", "seed", "score_sha256"}
+    if not required.issubset(frame.columns):
+        raise ValueError("Robustness歷史Seed觀察沒有完整的score provenance")
+    rows = frame.loc[frame["arm_id"].astype(str) == str(arm_id)]
+    result = {}
+    for row in rows.to_dict("records"):
+        seed = int(row["seed"])
+        score_sha = require_sha256_hex(row["score_sha256"], field="historical PIT score SHA256")
+        if seed in result:
+            raise ValueError("Robustness歷史Seed觀察重複")
+        result[seed] = score_sha
+    if set(result) != set(int(s) for s in cfg.resolved_seeds):
+        raise ValueError("Robustness歷史Seed觀察不完整或與benchmark不一致")
+    return result
+
+
+def _retained_model_robustness_pit_dir(
+    *, project_root: Path, profile_id: str, source: Any, seed: int,
+) -> Path:
+    """Resolve an independently retained model source via its canonical owner.
+
+    A completed *report* alone never authorizes reuse. This helper returns a
+    physical score only after the official model/fit/score/audit checks pass.
+    """
+    from core.breakout_quality_policy import get_breakout_quality_workflow_settings
+    from services.research.strategy_compare_training import (
+        inspect_reusable_model_research_rolling_score,
+    )
+    settings = get_strategy_comparison_settings(str(profile_id))
+    reusable, reason = inspect_reusable_model_research_rolling_score(
+        project_root=project_root,
+        source=source,
+        workflow=get_breakout_quality_workflow_settings(experiment_profile=str(source.experiment_profile)),
+        seed=int(seed),
+        comparison_start=str(settings.start_date),
+        comparison_end=str(settings.end_date),
+    )
+    if reusable is None:
+        raise ValueError(f"模型Robustness同Seed PIT Score也不可重用：{reason}")
+    score_path = Path(str(reusable["score"])).resolve()
+    try:
+        score_path.relative_to(Path(project_root).resolve())
+    except ValueError as exc:
+        raise ValueError("模型Robustness Score不在專案資料夾內") from exc
+    return score_path.parent
+
+
 def load_verified_seed_pit_scores(
     *, project_root: Path, profile_id: str, match: Mapping[str, str],
     model_root_override: Path | None = None,
@@ -151,6 +233,9 @@ def load_verified_seed_pit_scores(
     dl_id = str(match["dl_id"])
     source = get_strategy_comparison_settings(profile_id).dl_sources[dl_id]
     verified: dict[int, dict[str, Any]] = {}
+    historical_hashes = _historical_seed_score_hashes(
+        project_root=root, profile_id=profile_id, arm_id=str(match["arm_id"]),
+    )
     for seed in cfg.resolved_seeds:
         model_dir = model_root / f"{dl_id}__seed_{int(seed)}" / "model"
         try:
@@ -159,11 +244,40 @@ def load_verified_seed_pit_scores(
                 str(source.experiment_profile), point_in_time_dir_override=model_dir,
                 expected_seed=int(seed), allow_stale_source=False,
             )
+        except FileNotFoundError as pruned:
+            # The configured robustness retention removes transient scores.
+            # Reuse the model's separate published Rolling evidence only if its
+            # canonical producer validated it; never import another seed or
+            # silently regenerate a different prediction series.
+            try:
+                model_dir = _retained_model_robustness_pit_dir(
+                    project_root=root, profile_id=profile_id,
+                    source=source, seed=int(seed),
+                )
+                contract = load_selection_point_in_time_score_source_contract(
+                    root, str(oracle.source["filter_id"]), str(source.model_architecture),
+                    str(source.experiment_profile), point_in_time_dir_override=model_dir,
+                    expected_seed=int(seed), allow_stale_source=False,
+                )
+            except (OSError, ValueError, KeyError) as fallback_exc:
+                raise ValueError(
+                    f"P1-P3 BLOCKED: {dl_id} seed={seed}策略暫存PIT Score已清理；"
+                    f"模型Robustness來源亦無相同正式分數：{fallback_exc}; "
+                    "不可拿完成的策略RoMD或其他Seed分數替代"
+                ) from pruned
         except (OSError, ValueError) as exc:
             raise ValueError(
-                f"P1-P3 BLOCKED: {dl_id} seed={seed} PIT SCORE未保留或驗證失敗：{exc}; "
+                f"P1-P3 BLOCKED: {dl_id} seed={seed} PIT SCORE驗證失敗：{exc}; "
                 "不可拿完成的策略RoMD或其他Seed分數替代"
             ) from exc
+        # A source is comparable to the completed strategy observation only
+        # when its physical score bytes equal the original seed's score SHA.
+        actual = compute_file_sha256(contract.score_path).lower()
+        if actual != historical_hashes[int(seed)]:
+            raise ValueError(
+                f"P1-P3 BLOCKED: {dl_id} seed={seed} PIT Score與歷史策略結果SHA不符；"
+                "不能將不同分數當成原策略的Oracle／DL對照"
+            )
         if str(contract.continuous_target_id) != str(match["continuous_target_id"]):
             raise ValueError(f"seed={seed} PIT Target與Oracle配對身分不一致")
         score_hash = compute_file_sha256(contract.score_path)
