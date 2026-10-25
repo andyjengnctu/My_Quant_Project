@@ -723,7 +723,7 @@ def render_replay_preflight(
     targets: list[str],
     decisions: Mapping[tuple[int, str], str],
 ) -> str:
-    """Read-only full-workload identity status before Broker-Cash replay starts.
+    """Read-only full-workload plan before any Broker-Cash replay starts.
 
     Display is bounded by target count, not seeds x targets. Source data,
     training and result identities are never inferred from color/status.
@@ -744,94 +744,68 @@ def render_replay_preflight(
     ))
 
 
+def _existing_artifact_inventory(definition, *, project_root: Path) -> tuple[str, dict[tuple[int, str], str]]:
+    """Show cached evidence before any market truth or P16 materialization.
 
-def render_initial_replay_inventory(definition, *, project_root: Path) -> str:
-    """Show existing replay evidence BEFORE the only execution confirmation.
-
-    Deliberately no per-stock label materialization, Replay or strategy fitting.
-    CHECK means an intact same-window completed-result CANDIDATE, never a
-    scientific REUSE decision. The full identity owner remains run_panel.
+    This is ONLY an existence/integrity inventory, NOT a replay dependency
+    planner.  The full preflight in build_report() remains the sole authority
+    for canonical REUSE/RUN/BLOCKED decisions and Replay authorization.
     """
+    settings, _base, _exact = _contract(definition)
+    benchmark = get_strategy_multi_seed_robustness_settings(settings.profile_id)
+    seeds = tuple(int(seed) for seed in benchmark.resolved_seeds)
+    if (not benchmark.enabled or not seeds or len(seeds) != benchmark.seed_count
+            or len(set(seeds)) != len(seeds)):
+        raise OracleBlockedError("Target benchmark Seed 設定不完整；無法列出候選工件")
+    targets = (str(definition.source["baseline_arm_id"]),
+               *(name for name, _description in _oracle_comparison_plan(definition)["targets"]))
     root = Path(project_root).resolve()
-    plan = _oracle_comparison_plan(definition)
-    settings, base_arm, _exact_arm = _contract(definition)
-    ready = collect_status(definition, project_root=root)
-    if ready["status"] != "READY":
-        raise OracleBlockedError("Target 驗證來源 BLOCKED（唯讀）: " + ready["reason"])
-    robustness, paths = _robustness_artifacts(definition, root)
-    prepared, evidence = _prepare_oracle_parameters(
-        definition, root=root, parameter_paths=paths,
-        start=str(settings.start_date), end=str(settings.end_date), base_arm=base_arm,
-    )
-    seed_sha = {int(item["seed"]): item["param_sha256"] for item in evidence}
-    seeds = [int(seed) for seed, _path in paths]
-    names = [str(definition.source["baseline_arm_id"]),
-             *(name for name, _desc in plan["targets"])]
-    store = OracleReplayStore(root, definition.output_subdir)
-    archived = HistoricalOracleIndex(root)
-    # A historical report can also hold complete per-seed evidence before the
-    # per-arm cache was introduced. Use its existing compatibility owner, not
-    # an independent second archive acceptance rule.
-    contexts = []
-    for _origin, _path, payload in archived.snapshots:
-        period_end = str(payload.get("end_date") or "")
-        cohort = payload.get("common_cohort")
-        if (payload.get("status") != "COMPLETED"
-                or payload.get("dataset") != settings.dataset
-                or payload.get("strategy_profile_id") != settings.profile_id
-                or payload.get("benchmark_id") != robustness.benchmark_id
-                or payload.get("start_date") != str(settings.start_date)
-                or not (str(settings.start_date) < period_end <= str(settings.end_date))
-                or not isinstance(cohort, dict)
-                or cohort.get("research_cutoff") != str(settings.end_date)):
-            continue
-        providers = cohort.get("providers")
-        if (not isinstance(providers, dict) or any(
-                providers.get(_PROVIDER_COHORT_IDS.get(field, field)) != definition.source[field]
-                for field in plan["providers"])):
-            continue
-        contexts.append({
-            "benchmark": robustness.benchmark_id,
-            "strategy_profile_id": settings.profile_id,
-            "dataset": settings.dataset,
-            "start_date": str(settings.start_date), "end_date": period_end,
-            "seeds": seeds, "param_sha_by_seed": seed_sha,
-            "cohort": cohort, "definitions": dict(plan["targets"]),
-        })
-
-    decisions: dict[tuple[int, str], str] = {}
-    for seed, _sha, _kind, _base_params, _oracle_params in prepared:
-        for name in names:
-            # CHECK is ONLY a byte-valid stored-result presence signal. Do not
-            # duplicate the full execution/Target identity policy here: only
-            # run_panel has enough evidence to decide REUSE vs RUN/BLOCKED.
-            candidate = any(
-                identity.get("dataset") == settings.dataset
-                and identity.get("seed") == seed
-                and identity.get("start_date") == str(settings.start_date)
-                and (str(settings.start_date) < str(identity.get("end_date") or "")
-                     <= str(settings.end_date))
-                for identity in store.existing_completed_identities(seed=seed, target=name)
-            )
-            if not candidate:
-                for context in contexts:
-                    if archived.lookup(target=name, seed=seed, context=context) is not None:
-                        candidate = True
-                        break
-            decisions[(seed, name)] = "CHECK" if candidate else "RUN"
-
-    check_count = sum(x == "CHECK" for x in decisions.values())
-    run_count = sum(x == "RUN" for x in decisions.values())
-    return "\n".join((
-        "[Target 驗證｜現有 Replay 工件（唯讀，尚未執行）]",
+    try:
+        scope = {
+            "dataset": settings.dataset, "start_date": str(settings.start_date),
+            "requested_end": str(settings.end_date), "benchmark": benchmark.benchmark_id,
+        }
+        per_arm = OracleReplayStore(root, definition.output_subdir).preview_candidates(
+            seeds=seeds, targets=targets, **scope,
+        )
+        historical = HistoricalOracleIndex(root).preview_candidates(
+            seeds=seeds, targets=targets, **scope,
+            strategy_profile_id=settings.profile_id,
+        )
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise OracleBlockedError(f"Target 歷史工件盤點無法完成：{exc}") from exc
+    actions: dict[tuple[int, str], str] = {}
+    for key, presence in per_arm.items():
+        if presence == "INVALID":
+            actions[key] = "BLOCKED"
+        elif presence in {"CACHE", "MULTIPLE"} or key in historical:
+            actions[key] = "REUSE"
+        else:
+            actions[key] = "RUN"
+    headers = ("Target", *(f"S{i + 1}" for i in range(len(seeds))))
+    # AI: Both the fast inventory and the strict preflight use the shared
+    # workflow palette (REUSE green, BLOCKED red, RUN neutral). No local ANSI
+    # rules or duplicate status classification belong in the Oracle renderer.
+    rows = [
+        (target, *(styled_workflow_status(actions[(seed, target)]) for seed in seeds))
+        for target in targets
+    ]
+    counts = {state: list(actions.values()).count(state)
+              for state in ("REUSE", "RUN", "BLOCKED")}
+    inventory = "\n".join((
+        "[Target 驗證 | 既有 Replay 工件]",
         "Seed：" + "  ".join(f"S{i + 1}={seed}" for i, seed in enumerate(seeds)),
-        render_table(("Target", *(f"S{i + 1}" for i in range(len(seeds)))), [
-            (name, *(styled_workflow_status(decisions[(seed, name)]) for seed in seeds))
-            for name in names
-        ]),
-        f"REUSE 候選（CHECK）{check_count} / 未見同期間工件 {run_count}",
-        "CHECK = 已存完成結果，可能 REUSE 或有身分衝突；按 Enter 後才正式核對 REUSE／RUN／BLOCKED。",
+        render_table(headers, rows),
+        f"REUSE {counts['REUSE']} / RUN（需計算）{counts['RUN']} / BLOCKED {counts['BLOCKED']}",
+        "註：此表僅盤點工件是否存在；正式 REUSE 須核對原始資料、參數、期間及分數身分。新增 Target 不改變舊 Target 的回放期間；未輸入 RUN 不執行 Replay。",
     ))
+    return inventory, actions
+
+
+def render_existing_artifact_inventory(definition, *, project_root: Path) -> str:
+    """Existing-cache display and quick preliminary plan share one inventory owner."""
+    inventory, _decisions = _existing_artifact_inventory(definition, project_root=project_root)
+    return inventory
 
 
 def _prepare_oracle_parameters(
@@ -950,6 +924,7 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
 def _reusable_completed_oracle_report(
     definition, *, root: Path, settings, base_arm, exact_arm, direct_arm,
     robustness, parameter_paths, plan, quiet: bool,
+    before_replay: Callable[[str], None] | None = None,
 ) -> dict[str, Any] | None:
     """Fast path: certify an entire completed report WITHOUT materializing targets.
 
@@ -1056,6 +1031,15 @@ def _reusable_completed_oracle_report(
             if not quiet:
                 print(f"[Target 驗證｜身分核對完成] REUSE {len(seeds) * (len(wanted_targets) + 1)} / "
                       "RUN（需計算）0 / BLOCKED 0；未重新產生Ground Truth或Replay", flush=True)
+            if before_replay is not None:
+                # The one canonical authorization hook still runs before
+                # publication, including an all-REUSE or narrowed report.
+                before_replay(render_replay_preflight(
+                    label="40D", seeds=seeds,
+                    targets=[str(definition.source["baseline_arm_id"]), *wanted_targets],
+                    decisions={(seed, name): "REUSE" for seed in seeds
+                               for name in (str(definition.source["baseline_arm_id"]), *wanted_targets)},
+                ))
             # Removing a comparison cannot invalidate a retained per-arm
             # Replay. A strictly verified historical superset can supply a
             # smaller CURRENT report; all original evidence stays immutable.
@@ -1074,6 +1058,7 @@ def _reusable_completed_oracle_report(
 
 def build_report(
     definition, *, project_root: Path, quiet: bool = False,
+    before_replay: Callable[[str], None] | None = None,
     preflight_display: str = "full",
 ) -> dict[str, Any]:
     if preflight_display not in {"full", "summary"}:
@@ -1085,12 +1070,28 @@ def build_report(
     if status["status"] != "READY":
         raise OracleBlockedError(status["reason"])
     robustness, parameter_paths = _robustness_artifacts(definition, root)
+    # This is a tentative identity-independent inventory, never a certificate
+    # for REUSE. Approve the potentially costly daily truth calculation FIRST;
+    # the strict per-arm replay plan may not exceed that initial RUN budget
+    # without an independent, explicit second authorization.
+    authorized_run_budget = None
+    if plan["daily_recipes"] and before_replay is not None:
+        _inventory, tentative = _existing_artifact_inventory(definition, project_root=root)
+        authorized_run_budget = sum(action == "RUN" for action in tentative.values())
+        if any(action == "BLOCKED" for action in tentative.values()):
+            raise OracleBlockedError("Existing Oracle cache contains invalid evidence; no Target calculation started")
+        before_replay(
+            "[Target 驗證｜計算授權] 每日全母體40日真值需實際計算，非快速工件盤點。\n"
+            f"暫估 REUSE {sum(v == 'REUSE' for v in tentative.values())} / "
+            f"RUN {authorized_run_budget}；僅授權不超過這個 RUN 數量。\n"
+            "不訓練模型、不最佳化策略；若正式核對後需更多 Replay，將另行請求授權。"
+        )
     fast = None if plan["daily_recipes"] else _reusable_completed_oracle_report(
         definition, root=root, settings=settings, base_arm=base_arm,
         exact_arm=exact_arm,
         direct_arm=_direct_arm(definition, settings, base_arm, exact_arm),
         robustness=robustness, parameter_paths=parameter_paths,
-        plan=plan, quiet=quiet,
+        plan=plan, quiet=quiet, before_replay=before_replay,
     )
     if fast is not None:
         return fast
@@ -1281,9 +1282,13 @@ def build_report(
             decisions=decisions,
         )
         if not quiet:
-            # Show the FINAL validated decision matrix in both display modes.
-            # Summary suppresses noisy per-arm progress, not the REUSE status.
-            print("\n" + preview, flush=True)
+            if blocked or preflight_display == "full":
+                print("\n" + preview, flush=True)
+            else:
+                reuse_count = sum(value == "REUSE" for value in decisions.values())
+                run_count = sum(value == "RUN" for value in decisions.values())
+                print(f"[Target 驗證｜身分核對完成] REUSE {reuse_count} / "
+                      f"RUN（需計算）{run_count} / BLOCKED 0", flush=True)
         if blocked:
             details = [f"{target} seed={seed}: {reason}"
                        for (seed, target), reason in blocked.items()]
@@ -1292,6 +1297,10 @@ def build_report(
                 f"{len(blocked)} conflict(s); " + " | ".join(details[:3])
             )
         run_count = sum(status == "RUN" for status in decisions.values())
+        if before_replay is not None and (authorized_run_budget is None
+                                          or run_count > authorized_run_budget):
+            before_replay(preview)
+
         for seed, param_sha, kind, base_params, oracle_params in prepared:
             if not quiet and preflight_display == "full":
                 print(f"[Oracle Audit {label}] seed={seed}: verify C96 + {len(targets)} Oracle results")
@@ -1506,13 +1515,14 @@ def _resolve_min_trade40_p16_context(definition, *, project_root: Path):
 
 def run_formal_audit(
     definition, *, project_root: Path, quiet: bool = False,
+    before_replay: Callable[[str], None] | None = None,
     preflight_display: str = "full",
 ) -> dict[str, Any]:
     # Authorization, frozen schema, and historical snapshot must be checked
     # before initiating the costly hindsight-only portfolio replays.
     approved = require_approved_report_contract("audit.target_oracle_romd")
     payload = dict(build_report(
-        definition, project_root=project_root, quiet=quiet,
+        definition, project_root=project_root, quiet=quiet, before_replay=before_replay,
         preflight_display=preflight_display,
     ))
     payload["report_contract_id"] = f"{approved.report_id}@v{approved.version}"
@@ -1535,5 +1545,6 @@ def run_formal_audit(
 __all__ = [
     "SUPPORTED_AUDIT_TYPE", "ORACLE_TARGETS", "ORACLE_DIRECT_SCORE_SOURCES", "OracleBlockedError",
     "collect_status", "build_oracle_score_tables", "render_replay_preflight",
+    "render_existing_artifact_inventory",
     "build_report", "render_result", "run_formal_audit",
 ]

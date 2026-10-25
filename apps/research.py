@@ -43,9 +43,9 @@ from services.research.strategy_compare_application import (
     show_strategy_multi_seed_robustness_status,
 )
 from services.audit.catalog import get_audit_methods, get_audit_method
-from services.audit.target_oracle_romd import render_initial_replay_inventory
 from services.audit.runner import (
     collect_audit_menu_state,
+    render_audit_artifact_inventory,
     render_audit_status,
     render_latest_audit_summary,
     run_enabled_audits,
@@ -359,20 +359,15 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
         print("目前沒有啟用此Reusable module的參數設定；保留固定選單但本次不執行。")
         return 0
     if method.menu_location == "research_root":
-        # AI: A read-only inventory precedes the sole execution confirmation.
-        # AI: CHECK is a completion candidate, not canonical scientific REUSE.
-        # AI: The existing Audit runner alone owns final identity resolution.
-        from core.audit_policy import get_reusable_audit_definitions
-        from services.audit.catalog import get_definition_method_id
-        definitions = tuple(d for d in get_reusable_audit_definitions(module_id)
-                            if d.enabled and get_definition_method_id(d) == method_id)
-        if len(definitions) != 1:
-            raise RuntimeError("Target 驗證正式定義缺失或重複")
-        print("\n" + render_initial_replay_inventory(
-            definitions[0], project_root=PROJECT_ROOT,
-        ))
+        # AI: One normal Research action: show the *existing* evidence quickly,
+        # AI: then confirm ONCE before expensive scientific validation/replay.
+        # AI: This list is tentative until the canonical owner verifies identity.
+        print("[Target 驗證] 正在盤點既有 Replay 工件…", flush=True)
+        print("\n" + render_audit_artifact_inventory(
+            module_id, project_root=PROJECT_ROOT, method_id=method_id,
+        ), flush=True)
         try:
-            confirm = input("👉 按 Enter 執行正式 REUSE／RUN；輸入 0 返回：").strip().lower()
+            confirm = input("👉 按 Enter 核對正式 REUSE/RUN/BLOCKED 計畫（尚不執行 Replay）；輸入 0 返回：").strip().lower()
         except EOFError:
             return 0
         if confirm in {"0", "q", "quit", "exit"}:
@@ -380,10 +375,30 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
         if confirm not in {"", "1"}:
             print("選項無效，本次不執行。")
             return 0
-        run_enabled_audits(
-            module_id, project_root=PROJECT_ROOT, method_id=method_id,
-            preflight_display="summary",
-        )
+        # AI: Inventory is tentative; the canonical owner verifies sources,
+        # AI: effective dates and per-arm replay identities BEFORE any replay.
+        # AI: This single capability owns the verified authorization callback.
+        class _AuditCancelled(Exception):
+            """User declined optional expensive target/replay computation."""
+
+        def approve_verified_replay(plan: str) -> None:
+            print("\n" + plan, flush=True)
+            try:
+                approval = input("👉 輸入 RUN 授權本階段計算；輸入 0 返回：").strip()
+            except EOFError:
+                approval = "0"
+            if approval != "RUN":
+                raise _AuditCancelled()
+
+        try:
+            run_enabled_audits(
+                module_id, project_root=PROJECT_ROOT, method_id=method_id,
+                before_replay=approve_verified_replay,
+                preflight_display="summary",
+            )
+        except _AuditCancelled:
+            print("Target 驗證已取消；未執行未授權計算或 Replay。")
+            return 0
     else:
         print("\n" + render_audit_status(
             module_id, project_root=PROJECT_ROOT, method_id=method_id,

@@ -150,81 +150,24 @@ class FormalMinDailyOracleCases(TestCase):
         self.assertFalse(hasattr(primitive,"counterfactual_trade40_contract"))
         self.assertFalse(hasattr(oracle,"_missing_daily_teacher_source"))
 
-    def test_initial_inventory_precedes_confirm_without_fabricating_reuse(self):
-        d = definition()
-        plan = oracle._oracle_comparison_plan(d)
-        settings, base_arm, exact_arm = oracle._contract(d)
-        seed = 693545351
-        params_sha = "a" * 64
-        replay_policy = oracle._canonical_oracle_replay_policy(d, base_arm=base_arm)
-        identity = oracle.replay_identity(
-            dataset=settings.dataset, dataset_sha256="b" * 64,
-            target="C96", definition={"C96":"Canonical same-window Min P16 Base-Finalist-Best"},
-            start=str(settings.start_date), end="2026-01-02",
-            benchmark="synthetic", param_sha256=params_sha, seed=seed,
-            cohort={"research_cutoff":str(settings.end_date)},
-            ranking_policy=str(exact_arm.dl_runtime_mode),
-            ranking_options=dict(exact_arm.dl_runtime_options),
-            evaluation_mode=str(d.dimensions["evaluation_mode"]),
-            max_positions=settings.max_positions,
-            replay_policy=oracle._arm_replay_policy(
-                d,plan=plan,target="C96",replay_policy=replay_policy),
-        )
-        fake_robust = SimpleNamespace(benchmark_id="synthetic")
-        from services.audit.oracle_replay_artifacts import OracleReplayStore
-        with patch.object(oracle,"collect_status",return_value={"status":"READY"}), \
-             patch.object(oracle,"_robustness_artifacts",return_value=(fake_robust,[(seed,Path("p.json"))])), \
-             patch.object(oracle,"_prepare_oracle_parameters",return_value=(
-                 [(seed,params_sha,"rolling_active_param_ensemble", "base", "oracle")],
-                 [{"seed":seed,"param_sha256":params_sha}])), \
-             patch.object(OracleReplayStore,"existing_completed_identities",autospec=True,
-                          side_effect=lambda self,*,seed,target: (identity,) if target=="C96" else ()) as inventory, \
-             patch.object(oracle,"_build_oracle_score_panels",side_effect=AssertionError("expensive price truth")) as truth, \
-             patch.object(oracle,"_run_scenario",side_effect=AssertionError("Replay")) as replay, \
-             TemporaryDirectory() as tmp:
-            table=oracle.render_initial_replay_inventory(d,project_root=Path(tmp))
-        self.assertEqual(inventory.call_count, len(plan["targets"])+1)
-        self.assertIn("REUSE 候選（CHECK）1",table)
-        self.assertIn("未見同期間工件 13",table)
-        self.assertIn("CHECK",table)
-        self.assertIn("按 Enter 後才正式核對",table)
-        truth.assert_not_called()
-        replay.assert_not_called()
-
-    def test_initial_inventory_blocks_missing_formal_min_without_replay(self):
+    def test_user_confirmation_precedes_daily_label_computation_and_replay(self):
         d=definition()
-        with patch.object(oracle,"collect_status",return_value={
-                 "status":"BLOCKED", "reason":"formal Min seed missing"}), \
-             patch.object(oracle,"_run_scenario",side_effect=AssertionError("Replay")) as replay:
-            with self.assertRaisesRegex(oracle.OracleBlockedError,"formal Min seed missing"):
-                oracle.render_initial_replay_inventory(d,project_root=Path("/isolated"))
-        replay.assert_not_called()
-
-    def test_daily_truth_runs_from_canonical_producer_without_permission_budget(self):
-        # A missing Target must start its real producer; it cannot be blocked by
-        # the unrelated tentative-inventory estimate used by the old UI.
-        d=definition()
+        class Cancel(Exception): pass
+        messages=[]
+        def deny(message):
+            messages.append(message)
+            raise Cancel()
         fake_robust=SimpleNamespace(benchmark_id="synthetic")
-        seed=693545351
-        evidence={
-            "teacher":{"seed":seed,"param_identity_sha256":"a"*64},
-            "profile_id":str(d.source["daily_trade40_profile"]),
-            "mature_eligible_rows":3,"settled_net_r_rows":2,
-            "first_date":"2020-12-31","first_replay_trade_date":"2021-01-04",
-        }
         with patch.object(oracle,"collect_status",return_value={"status":"READY"}), \
-             patch.object(oracle,"_robustness_artifacts",return_value=(fake_robust,[(seed,Path("p.json"))])), \
-             patch.object(oracle,"_prepare_oracle_parameters",return_value=([(seed,"a"*64,"rolling_active_param_ensemble","base","oracle")], [])), \
-             patch("services.audit.min_trade40_target._schedule",return_value=["canonical_schedule"]), \
-             patch("filters.breakout_quality.daily_trade40_target.build_formal_min_execution_schedule",return_value=(("period",), {})), \
-             patch("services.audit.daily_trade40_oracle.build_daily_universal_trade40_oracle_scores",return_value=({("2330","2020-12-31"):0.5},evidence)) as daily, \
-             patch.object(oracle,"_build_oracle_score_panels",side_effect=RuntimeError("stopped after daily producer")) as truth, \
+             patch.object(oracle,"_robustness_artifacts",return_value=(fake_robust,[(693545351,Path("p.json"))])), \
+             patch.object(oracle,"_existing_artifact_inventory",return_value=("",{
+                 (693545351,EXACT):"RUN",(693545351,DIRECT):"RUN",(693545351,"C96"):"REUSE"})), \
+             patch.object(oracle,"_build_oracle_score_panels") as truth, \
              patch.object(oracle,"_run_scenario") as replay:
-            with self.assertRaisesRegex(RuntimeError,"stopped after daily producer"):
-                oracle.build_report(d,project_root=Path("/isolated"),quiet=True)
-        daily.assert_called_once()
-        truth.assert_called_once()
-        replay.assert_not_called()
+            with self.assertRaises(Cancel):
+                oracle.build_report(d,project_root=Path("/isolated"),before_replay=deny,quiet=True)
+        truth.assert_not_called();replay.assert_not_called()
+        self.assertIn("RUN 2",messages[0])
 
     def test_cache_identity_is_per_target_and_same_period_no_global_shift(self):
         from services.audit.oracle_replay_artifacts import replay_identity

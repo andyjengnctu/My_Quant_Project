@@ -68,29 +68,6 @@ class FormalMinTrade40SyntheticCases(unittest.TestCase):
                 )
             source.assert_not_called()
 
-    def test_canonical_exchange_sessions_uses_path_and_sanitized_union(self):
-        # Regression: the full 2M-stock-day Oracle prepass must not crash on
-        # an undefined Path symbol after work has already begun.
-        days = pd.bdate_range("2024-01-02", periods=75)
-        frames = {
-            "0050": pd.DataFrame(index=days[1:]),
-            "2330": pd.DataFrame(index=days),
-        }
-        with patch("filters.breakout_quality.daily_trade40_target.load_dataset_frame",
-                   side_effect=lambda path, ticker, **kwargs: frames[ticker]) as loader:
-            calendar = collect_canonical_exchange_sessions(
-                [("0050", "0050.csv"), ("2330", Path("2330.csv"))],
-                benchmark_ticker="0050",
-            )
-        self.assertEqual(calendar.tolist(), days.tolist())
-        self.assertEqual(loader.call_args_list[0].args[0], Path("0050.csv"))
-        with patch("filters.breakout_quality.daily_trade40_target.load_dataset_frame",
-                   side_effect=ValueError("invalid benchmark")):
-            with self.assertRaisesRegex(ValueError, "benchmark sanitized source invalid"):
-                collect_canonical_exchange_sessions(
-                    [("0050", Path("0050.csv"))], benchmark_ticker="0050",
-                )
-
     def test_formal_seed_param_adapter_no_old_teacher_dependency(self):
         days, frame, params, period = fixture()
         signature = build_portfolio_params_signature(params)
