@@ -1010,108 +1010,258 @@ class OracleAuditContractCases(TestCase):
 
 
     def test_oracle_and_daily_pit_reuse_identical_portfolio_rank_input_contract(self):
-        """With identical numeric scores, sources cannot alter candidate ranking.
+        """Verify the same candidate/selector contract in every configured time mode.
 
-        Exercise the real Portfolio candidate score resolver, including a
-        continued signal whose prediction is refreshed on the next completed
-        information date. No market artifacts or report changes are required.
+        Source replacement alone must not change the signal-date policy, daily
+        refresh, score ordering or constrained-selector numeric objective. This
+        is NOT a claim that archived Oracle percentiles equal raw DL scores.
         """
         from core.portfolio_candidates import _resolve_candidate_quality_ranking
         from core.portfolio_entry_selection_max_dl import (
             _max_dl_score_order, _max_dl_basket_quality_key,
         )
-        from core.strategy_compare_policy import get_strategy_comparison_settings
+        from core.strategy_compare_policy import (
+            get_strategy_comparison_settings, get_strategy_multi_seed_robustness_settings,
+        )
+        from core.strategy_compare_registry import STRATEGY_COMPARE_ROLLING_TEST_MODES
         from core.extended_signals import attach_breakout_quality_rank
         from filters.breakout_quality.ranking_score_store import SCORE_SOURCE_SELECTION_POINT_IN_TIME
-        settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
-        base = settings.arms["C96"]
-        oracle_exact = settings.arms[str(self.active_definition.source["exact_arm_id"])]
-        # Discover eligible Daily-universal Exact arms via the canonical suite,
-        # not another hard-coded model-name or arm-registration table.
-        matched = []
-        for arm in settings.enabled_arms:
-            if (arm.dl_enabled and arm.dl_id
+
+        oracle_exact = oracle._contract(self.active_definition)[2]
+        oracle_benchmark = get_strategy_multi_seed_robustness_settings(
+            str(self.active_definition.source["strategy_profile_id"])
+        )
+        modes_checked = set()
+        checked_arms = set()
+        for mode in STRATEGY_COMPARE_ROLLING_TEST_MODES:
+            profile_id = str(mode["profile_id"])
+            settings = get_strategy_comparison_settings(profile_id)
+            benchmark = get_strategy_multi_seed_robustness_settings(profile_id)
+            self.assertEqual(benchmark.benchmark_id, oracle_benchmark.benchmark_id)
+            self.assertEqual(tuple(benchmark.resolved_seeds), tuple(oracle_benchmark.resolved_seeds))
+            base = settings.arms[str(self.active_definition.source["baseline_arm_id"])]
+            matched = [
+                arm for arm in settings.enabled_arms
+                if (arm.dl_enabled and arm.dl_id
                     and arm.param_source == base.param_source
                     and arm.param_policy == base.param_policy
                     and arm.rule_policy == "all_off"
                     and arm.dl_runtime_mode == oracle_exact.dl_runtime_mode
-                    and dict(arm.dl_runtime_options or {}) == dict(oracle_exact.dl_runtime_options or {})):
-                matched.append(arm)
-        self.assertTrue(matched, "Active Daily-universal DL must share Oracle's Exact selector")
-        for arm in matched:
-            with self.subTest(arm_id=arm.arm_id):
-                arm = matched[0]
-                source = settings.dl_sources[str(arm.dl_id)]
-                self.assertEqual(source.score_source, SCORE_SOURCE_SELECTION_POINT_IN_TIME)
-                self.assertEqual(
-                    oracle_exact.dl_runtime_options, arm.dl_runtime_options,
-                    "Oracle/Research Exact K/R0 selector is a shared canonical policy",
-                )
-                params = SimpleNamespace(
-                    use_breakout_quality_ranking=True,
-                    breakout_quality_filter_id=str(source.filter_id), high_len=260,
-                )
-                score_map = {
-                    (ticker, day): score
-                    for ticker, first, second in (("2330", 0.21, 0.91), ("2317", 0.85, 0.16))
-                    for day, score in (("2025-02-03", first), ("2025-02-04", second))
-                }
-
-                def fake_pit_lookup(*, ticker, signal_date, filter_id, **_kwargs):
-                    day = pd.Timestamp(signal_date).strftime("%Y-%m-%d")
-                    value = score_map[(ticker, day)]
-                    return {
-                        "score": value, "score_date": day, "available": True,
-                        "unavailable_reason": "", "filter_id": filter_id,
-                        "score_source": SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+                    and dict(arm.dl_runtime_options or {}) == dict(oracle_exact.dl_runtime_options or {}))
+            ]
+            self.assertTrue(matched, f"{profile_id}: no current Daily-universal Exact arm")
+            modes_checked.add(str(mode["mode_id"]))
+            for arm in matched:
+                with self.subTest(mode=profile_id, arm_id=arm.arm_id):
+                    checked_arms.add((profile_id, arm.arm_id))
+                    source = settings.dl_sources[str(arm.dl_id)]
+                    self.assertEqual(source.score_source, SCORE_SOURCE_SELECTION_POINT_IN_TIME)
+                    self.assertEqual(oracle_exact.dl_runtime_options, arm.dl_runtime_options)
+                    params = SimpleNamespace(
+                        use_breakout_quality_ranking=True,
+                        breakout_quality_filter_id=str(source.filter_id), high_len=260,
+                    )
+                    score_map = {
+                        (ticker, day): score
+                        for ticker, first, second in (
+                            ("2330", 0.21, 0.91), ("2317", 0.85, 0.16),
+                        )
+                        for day, score in (
+                            ("2025-02-03", first), ("2025-02-04", second),
+                        )
                     }
 
-                def run_source(use_oracle):
-                    if use_oracle:
-                        context = audit_oracle_truth_score_context(
-                            score_map, ranking_policy=oracle_exact.dl_runtime_mode,
-                            ranking_options=oracle_exact.dl_runtime_options,
-                            key_mode="information_date",
-                        )
-                    else:
-                        context = breakout_quality_ranking_source_context(
-                            score_source=SCORE_SOURCE_SELECTION_POINT_IN_TIME,
-                            model_architecture=str(source.model_architecture),
-                            experiment_profile=str(source.experiment_profile),
-                            ranking_policy=arm.dl_runtime_mode,
-                            ranking_options=arm.dl_runtime_options,
-                        )
-                    with context, patch("filters.breakout_quality.runtime.lookup_selection_point_in_time_candidate_score",
-                                        side_effect=fake_pit_lookup) as pit_lookup:
-                        signals = {}
-                        history = []
-                        for info_date in ("2025-02-03", "2025-02-04"):
-                            candidates = []
-                            for ticker in ("2330", "2317"):
-                                signal_state = signals.setdefault(ticker, {})
-                                rank = _resolve_candidate_quality_ranking(
-                                    params=params, ticker=ticker,
-                                    signal_date="2025-02-03", information_date=info_date,
-                                    signal_state=signal_state,
-                                )
-                                attach_breakout_quality_rank(signal_state, rank)
-                                self.assertEqual(rank["score_date"], info_date)
-                                candidates.append({
-                                    "ticker": ticker, "breakout_quality_score": rank["score"],
-                                    "breakout_quality_rank": rank,
-                                })
-                            base_rank = {id(row): i for i, row in enumerate(candidates)}
-                            order = _max_dl_score_order(candidates, base_rank=base_rank)
-                            objective = _max_dl_basket_quality_key(order, base_rank=base_rank)
-                            history.append((tuple((r["ticker"], r["breakout_quality_score"])
-                                                   for r in order), objective))
-                        if use_oracle:
-                            pit_lookup.assert_not_called()
-                        else:
-                            self.assertEqual(pit_lookup.call_count, 4)
-                        return history
+                    def fake_pit_lookup(*, ticker, signal_date, filter_id, **_kwargs):
+                        day = pd.Timestamp(signal_date).strftime("%Y-%m-%d")
+                        return {
+                            "score": score_map[(ticker, day)], "score_date": day,
+                            "available": True, "unavailable_reason": "",
+                            "filter_id": filter_id, "score_source": SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+                        }
 
-                self.assertEqual(run_source(True), run_source(False))
+                    def run_source(use_oracle):
+                        context = (
+                            audit_oracle_truth_score_context(
+                                score_map, ranking_policy=oracle_exact.dl_runtime_mode,
+                                ranking_options=oracle_exact.dl_runtime_options,
+                                key_mode="information_date",
+                            ) if use_oracle else breakout_quality_ranking_source_context(
+                                score_source=SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+                                model_architecture=str(source.model_architecture),
+                                experiment_profile=str(source.experiment_profile),
+                                ranking_policy=arm.dl_runtime_mode,
+                                ranking_options=arm.dl_runtime_options,
+                            )
+                        )
+                        with context, patch(
+                            "filters.breakout_quality.runtime.lookup_selection_point_in_time_candidate_score",
+                            side_effect=fake_pit_lookup,
+                        ) as pit_lookup:
+                            signals = {}
+                            history = []
+                            for info_date in ("2025-02-03", "2025-02-04"):
+                                candidates = []
+                                for ticker in ("2330", "2317"):
+                                    signal_state = signals.setdefault(ticker, {})
+                                    rank = _resolve_candidate_quality_ranking(
+                                        params=params, ticker=ticker,
+                                        signal_date="2025-02-03", information_date=info_date,
+                                        signal_state=signal_state,
+                                    )
+                                    attach_breakout_quality_rank(signal_state, rank)
+                                    self.assertEqual(rank["score_date"], info_date)
+                                    candidates.append({
+                                        "ticker": ticker, "breakout_quality_score": rank["score"],
+                                        "breakout_quality_rank": rank,
+                                    })
+                                base_rank = {id(row): i for i, row in enumerate(candidates)}
+                                order = _max_dl_score_order(candidates, base_rank=base_rank)
+                                objective = _max_dl_basket_quality_key(order, base_rank=base_rank)
+                                ordered_scores = tuple(
+                                    (r["ticker"], r["breakout_quality_score"]) for r in order
+                                )
+                                history.append((ordered_scores, objective))
+                            if use_oracle:
+                                pit_lookup.assert_not_called()
+                            else:
+                                self.assertEqual(pit_lookup.call_count, 4)
+                            return history
+
+                    oracle_history, dl_history = run_source(True), run_source(False)
+                    self.assertEqual(oracle_history, dl_history)
+                    self.assertNotEqual(
+                        oracle_history[0][0], oracle_history[1][0],
+                        "Daily-universal continued signals must refresh rankings",
+                    )
+        self.assertGreaterEqual(len(modes_checked), 2)
+        self.assertGreaterEqual(len(checked_arms), len(modes_checked))
+
+    def test_exact_score_sum_is_not_merely_a_rank_order(self):
+        """Retain the historical numeric objective; never silently change its scale.
+
+        Two score sets can have exactly the same stock order but different
+        optimal fixed-K baskets. A new common-percentile research comparison
+        would therefore require its own scientific identity and evidence.
+        """
+        from core.portfolio_entry_selection_max_dl import _max_dl_basket_quality_key
+
+        def quality(scores, selected):
+            rows = [
+                {"ticker": str(i), "breakout_quality_score": float(score),
+                 "breakout_quality_rank": {"available": True, "score": float(score)}}
+                for i, score in enumerate(scores)
+            ]
+            rank = {id(row): i for i, row in enumerate(rows)}
+            return _max_dl_basket_quality_key([rows[i] for i in selected], base_rank=rank)
+
+        tight = (0.99, 0.70, 0.69, 0.10)
+        spread = (0.99, 0.20, 0.19, 0.10)
+        self.assertTrue(quality(tight, (1, 2)) > quality(tight, (0, 3)))
+        self.assertTrue(quality(spread, (0, 3)) > quality(spread, (1, 2)))
+
+    def test_oracle_and_pit_identical_scores_produce_identical_broker_cash_replay(self):
+        """Exercise the real Min candidate/Exact selector/broker accounting path.
+
+        The two score sources share *numeric input* and differ only by their
+        research-safe score supplier. Changing the supplier must not change
+        trades, execution, fees, equity or drawdown. Reversing scores must
+        actually change the selected ticker so this is not a vacuous test.
+        """
+        from core.strategy_params import V16StrategyParams
+        from core.strategy_compare_policy import get_strategy_comparison_settings
+        from core.strategy_compare_registry import STRATEGY_COMPARE_ROLLING_TEST_MODES
+        from filters.breakout_quality.ranking_score_store import SCORE_SOURCE_SELECTION_POINT_IN_TIME
+        from tools.validate.synthetic_portfolio_common import (
+            build_synthetic_competing_candidates_case, run_portfolio_core_check_for_dir,
+        )
+        from tools.validate.synthetic_frame_utils import write_synthetic_csv_bundle
+
+        case = build_synthetic_competing_candidates_case(V16StrategyParams())
+        params = case["params"]
+        params.use_breakout_quality_ranking = True
+        params.breakout_quality_filter_id = str(self.active_definition.source["filter_id"])
+        exact = oracle._contract(self.active_definition)[2]
+        with tempfile.TemporaryDirectory() as tmp:
+            write_synthetic_csv_bundle(tmp, case["frames"])
+            selected_tickers = set()
+            for mode in STRATEGY_COMPARE_ROLLING_TEST_MODES:
+                settings = get_strategy_comparison_settings(str(mode["profile_id"]))
+                base = settings.arms[str(self.active_definition.source["baseline_arm_id"])]
+                arms = [
+                    arm for arm in settings.enabled_arms
+                    if (arm.dl_enabled and arm.dl_id
+                        and arm.param_source == base.param_source
+                        and arm.param_policy == base.param_policy
+                        and arm.rule_policy == "all_off"
+                        and arm.dl_runtime_mode == exact.dl_runtime_mode
+                        and dict(arm.dl_runtime_options or {}) == dict(exact.dl_runtime_options or {}))
+                ]
+                self.assertTrue(arms)
+                # The execution policy is identical across these arms. Test one
+                # full Replay per mode; source/model combinations are checked above.
+                arm = arms[0]
+                source = settings.dl_sources[str(arm.dl_id)]
+                for winner in case["frames"]:
+                    score_map = {
+                        (ticker, day): (0.9 if ticker == winner else 0.1)
+                        for ticker, frame in case["frames"].items()
+                        for day in frame["Date"].to_list()
+                    }
+
+                    def fake_pit_lookup(*, ticker, signal_date, filter_id, **_kwargs):
+                        date = pd.Timestamp(signal_date).strftime("%Y-%m-%d")
+                        return {
+                            "score": score_map[(ticker, date)], "score_date": date,
+                            "available": True, "unavailable_reason": "",
+                            "filter_id": filter_id, "score_source": SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+                        }
+
+                    def execute(use_oracle):
+                        context = (
+                            audit_oracle_truth_score_context(
+                                score_map, ranking_policy=exact.dl_runtime_mode,
+                                ranking_options=exact.dl_runtime_options,
+                                key_mode="information_date",
+                            ) if use_oracle else breakout_quality_ranking_source_context(
+                                score_source=SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+                                model_architecture=str(source.model_architecture),
+                                experiment_profile=str(source.experiment_profile),
+                                ranking_policy=arm.dl_runtime_mode,
+                                ranking_options=arm.dl_runtime_options,
+                            )
+                        )
+                        with context, patch(
+                            "filters.breakout_quality.runtime.lookup_selection_point_in_time_candidate_score",
+                            side_effect=fake_pit_lookup,
+                        ):
+                            return run_portfolio_core_check_for_dir(
+                                tmp, params, max_positions=case["max_positions"],
+                                enable_rotation=case["enable_rotation"],
+                                start_year=case["start_year"],
+                                benchmark_ticker=case["benchmark_ticker"],
+                            )
+
+                    oracle_result, dl_result = execute(True), execute(False)
+                    with self.subTest(mode=mode["mode_id"], winner=winner):
+                        for field in (
+                            "total_return", "mdd", "final_eq", "trade_count",
+                            "win_rate", "pf_ev", "pf_payoff", "filled_buy_count",
+                            "avg_exp", "max_exp", "reserved_buy_fill_rate",
+                        ):
+                            self.assertEqual(oracle_result[field], dl_result[field], field)
+                        pd.testing.assert_frame_equal(
+                            oracle_result["df_trades"], dl_result["df_trades"],
+                        )
+                        self.assertEqual(
+                            oracle_result["portfolio_completed_trades"],
+                            dl_result["portfolio_completed_trades"],
+                        )
+                        bought = oracle_result["df_trades"].loc[
+                            oracle_result["df_trades"]["Type"].str.startswith("買進"), "Ticker"
+                        ].tolist()
+                        self.assertEqual(bought, [winner])
+                        selected_tickers.add(winner)
+            self.assertEqual(selected_tickers, set(case["frames"]))
 
 
 class ActiveMinTrade40OracleComparisonCases(TestCase):
