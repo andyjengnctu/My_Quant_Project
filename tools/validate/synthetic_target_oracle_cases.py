@@ -1163,12 +1163,11 @@ class OracleAuditContractCases(TestCase):
         self.assertTrue(quality(spread, (0, 3)) > quality(spread, (1, 2)))
 
     def test_oracle_and_pit_identical_scores_produce_identical_broker_cash_replay(self):
-        """Exercise the real Min candidate/Exact selector/broker accounting path.
+        """One actual Broker-Cash engine for both score sources, Exact AND Direct.
 
-        The two score sources share *numeric input* and differ only by their
-        research-safe score supplier. Changing the supplier must not change
-        trades, execution, fees, equity or drawdown. Reversing scores must
-        actually change the selected ticker so this is not a vacuous test.
+        This is behavioral evidence, not a mock _run_scenario. Reversing two
+        stock rankings must change the actual filled ticker; with identical
+        scores each policy must agree on all canonical trade/equity outputs.
         """
         from core.strategy_params import V16StrategyParams
         from core.strategy_compare_policy import get_strategy_comparison_settings
@@ -1183,10 +1182,11 @@ class OracleAuditContractCases(TestCase):
         params = case["params"]
         params.use_breakout_quality_ranking = True
         params.breakout_quality_filter_id = str(self.active_definition.source["filter_id"])
-        exact = oracle._contract(self.active_definition)[2]
+        settings, baseline, exact = oracle._contract(self.active_definition)
+        direct = oracle._direct_arm(self.active_definition, settings, baseline, exact)
+        policies = {"exact": exact, "direct": direct}
         with tempfile.TemporaryDirectory() as tmp:
             write_synthetic_csv_bundle(tmp, case["frames"])
-            selected_tickers = set()
             for mode in STRATEGY_COMPARE_ROLLING_TEST_MODES:
                 settings = get_strategy_comparison_settings(str(mode["profile_id"]))
                 base = settings.arms[str(self.active_definition.source["baseline_arm_id"])]
@@ -1200,71 +1200,74 @@ class OracleAuditContractCases(TestCase):
                         and dict(arm.dl_runtime_options or {}) == dict(exact.dl_runtime_options or {}))
                 ]
                 self.assertTrue(arms)
-                # The execution policy is identical across these arms. Test one
-                # full Replay per mode; source/model combinations are checked above.
-                arm = arms[0]
-                source = settings.dl_sources[str(arm.dl_id)]
-                for winner in case["frames"]:
-                    score_map = {
-                        (ticker, day): (0.9 if ticker == winner else 0.1)
-                        for ticker, frame in case["frames"].items()
-                        for day in frame["Date"].to_list()
-                    }
-
-                    def fake_pit_lookup(*, ticker, signal_date, filter_id, **_kwargs):
-                        date = pd.Timestamp(signal_date).strftime("%Y-%m-%d")
-                        return {
-                            "score": score_map[(ticker, date)], "score_date": date,
-                            "available": True, "unavailable_reason": "",
-                            "filter_id": filter_id, "score_source": SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+                # Pick one real registered PIT score provider per evaluation
+                # mode. The separate Direct policy comes from canonical config,
+                # not an Audit-specific selector or an invented new DL arm.
+                source = settings.dl_sources[str(arms[0].dl_id)]
+                for policy_name, policy in policies.items():
+                    selected_tickers = set()
+                    for winner in case["frames"]:
+                        score_map = {
+                            (ticker, day): (0.9 if ticker == winner else 0.1)
+                            for ticker, frame in case["frames"].items()
+                            for day in frame["Date"].to_list()
                         }
 
-                    def execute(use_oracle):
-                        context = (
-                            audit_oracle_truth_score_context(
-                                score_map, ranking_policy=exact.dl_runtime_mode,
-                                ranking_options=exact.dl_runtime_options,
-                                key_mode="information_date",
-                            ) if use_oracle else breakout_quality_ranking_source_context(
-                                score_source=SCORE_SOURCE_SELECTION_POINT_IN_TIME,
-                                model_architecture=str(source.model_architecture),
-                                experiment_profile=str(source.experiment_profile),
-                                ranking_policy=arm.dl_runtime_mode,
-                                ranking_options=arm.dl_runtime_options,
-                            )
-                        )
-                        with context, patch(
-                            "filters.breakout_quality.runtime.lookup_selection_point_in_time_candidate_score",
-                            side_effect=fake_pit_lookup,
-                        ):
-                            return run_portfolio_core_check_for_dir(
-                                tmp, params, max_positions=case["max_positions"],
-                                enable_rotation=case["enable_rotation"],
-                                start_year=case["start_year"],
-                                benchmark_ticker=case["benchmark_ticker"],
-                            )
+                        def fake_pit_lookup(*, ticker, signal_date, filter_id, **_kwargs):
+                            date = pd.Timestamp(signal_date).strftime("%Y-%m-%d")
+                            return {
+                                "score": score_map[(ticker, date)], "score_date": date,
+                                "available": True, "unavailable_reason": "",
+                                "filter_id": filter_id,
+                                "score_source": SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+                            }
 
-                    oracle_result, dl_result = execute(True), execute(False)
-                    with self.subTest(mode=mode["mode_id"], winner=winner):
-                        for field in (
-                            "total_return", "mdd", "final_eq", "trade_count",
-                            "win_rate", "pf_ev", "pf_payoff", "filled_buy_count",
-                            "avg_exp", "max_exp", "reserved_buy_fill_rate",
-                        ):
-                            self.assertEqual(oracle_result[field], dl_result[field], field)
-                        pd.testing.assert_frame_equal(
-                            oracle_result["df_trades"], dl_result["df_trades"],
-                        )
-                        self.assertEqual(
-                            oracle_result["portfolio_completed_trades"],
-                            dl_result["portfolio_completed_trades"],
-                        )
-                        bought = oracle_result["df_trades"].loc[
-                            oracle_result["df_trades"]["Type"].str.startswith("買進"), "Ticker"
-                        ].tolist()
-                        self.assertEqual(bought, [winner])
-                        selected_tickers.add(winner)
-            self.assertEqual(selected_tickers, set(case["frames"]))
+                        def execute(use_oracle):
+                            context = (
+                                audit_oracle_truth_score_context(
+                                    score_map, ranking_policy=policy.dl_runtime_mode,
+                                    ranking_options=policy.dl_runtime_options,
+                                    key_mode="information_date",
+                                ) if use_oracle else breakout_quality_ranking_source_context(
+                                    score_source=SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+                                    model_architecture=str(source.model_architecture),
+                                    experiment_profile=str(source.experiment_profile),
+                                    ranking_policy=policy.dl_runtime_mode,
+                                    ranking_options=policy.dl_runtime_options,
+                                )
+                            )
+                            with context, patch(
+                                "filters.breakout_quality.runtime.lookup_selection_point_in_time_candidate_score",
+                                side_effect=fake_pit_lookup,
+                            ):
+                                return run_portfolio_core_check_for_dir(
+                                    tmp, params, max_positions=case["max_positions"],
+                                    enable_rotation=case["enable_rotation"],
+                                    start_year=case["start_year"],
+                                    benchmark_ticker=case["benchmark_ticker"],
+                                )
+
+                        oracle_result, dl_result = execute(True), execute(False)
+                        with self.subTest(mode=mode["mode_id"], policy=policy_name, winner=winner):
+                            for field in (
+                                "total_return", "mdd", "final_eq", "trade_count",
+                                "win_rate", "pf_ev", "pf_payoff", "filled_buy_count",
+                                "avg_exp", "max_exp", "reserved_buy_fill_rate",
+                            ):
+                                self.assertEqual(oracle_result[field], dl_result[field], field)
+                            pd.testing.assert_frame_equal(
+                                oracle_result["df_trades"], dl_result["df_trades"],
+                            )
+                            self.assertEqual(
+                                oracle_result["portfolio_completed_trades"],
+                                dl_result["portfolio_completed_trades"],
+                            )
+                            bought = oracle_result["df_trades"].loc[
+                                oracle_result["df_trades"]["Type"].str.startswith("買進"), "Ticker"
+                            ].tolist()
+                            self.assertEqual(bought, [winner])
+                            selected_tickers.add(winner)
+                    self.assertEqual(selected_tickers, set(case["frames"]))
 
 
 class ActiveMinTrade40OracleComparisonCases(TestCase):

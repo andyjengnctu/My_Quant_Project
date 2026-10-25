@@ -429,7 +429,7 @@ class DailyTeacherDependencyCases(TestCase):
         paths = resolve_historical_min_teacher_paths(root)
         return root, paths
 
-    def test_p2_missing_is_preparable_by_registered_optimizer_not_replay(self):
+    def test_p2_missing_is_blocked_without_optimizer_delegation(self):
         from filters.breakout_quality.daily_trade40_target import SOURCE_IDS
         from services.audit.runner import collect_audit_preparation_plan, collect_audit_status
         with tempfile.TemporaryDirectory() as temp:
@@ -445,7 +445,8 @@ class DailyTeacherDependencyCases(TestCase):
                 status = oracle.collect_status(definition(), project_root=root)
                 self.assertEqual(status['status'], 'BLOCKED')
                 self.assertEqual(status['source']['missing_teacher_source_id'], SOURCE_IDS[0])
-                self.assertTrue(status['source']['preparable'])
+                self.assertFalse(status['source']['preparable'])
+                self.assertIn('不得自動訓練', status['reason'])
                 self.assertEqual(status['source']['path'], paths[SOURCE_IDS[0]].relative_to(root).as_posix())
                 loader.assert_not_called()
                 snapshot = collect_audit_status('breakout_quality', project_root=root, method_id=oracle.SUPPORTED_AUDIT_TYPE)
@@ -453,38 +454,122 @@ class DailyTeacherDependencyCases(TestCase):
                     'breakout_quality', project_root=root, method_id=oracle.SUPPORTED_AUDIT_TYPE,
                     status_snapshot=snapshot,
                 )
-                self.assertEqual(plan.overall_status, 'PREPARABLE')
-                self.assertEqual(plan.actions[0].action, 'BUILD')
+                self.assertEqual(plan.overall_status, 'BLOCKED')
+                self.assertEqual(plan.actions[0].action, 'BLOCKED')
+                self.assertIsNone(plan.actions[0].builder_type)
+                self.assertIsNone(plan.actions[0].producer_work_type)
 
-    def test_audit_runner_delegates_both_missing_teachers_and_replans_only_once_each(self):
+    def test_missing_p2_p16_never_invoke_optimizer_or_write_sources(self):
+        """An actual Audit runner call must fail closed even with auto-prepare ON.
+
+        A status plan is insufficient: the prior regression test *expected* the
+        Optimizer call, and wrongly declared success. Check concrete side effects.
+        """
         from filters.breakout_quality.daily_trade40_target import SOURCE_IDS
         from services.audit.runner import run_enabled_audits
         with tempfile.TemporaryDirectory() as temp:
             root, paths = self._status_fixture(temp)
-            builds = []
-            def canonical_prepare(*, project_root, settings, status, required_source_ids):
-                sid = required_source_ids[0]
-                builds.append((sid, settings.profile_id, paths[sid].exists()))
-                target = paths[sid]
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text('canonical fixture', encoding='utf-8')
-                return {'status': 'READY'}
+            with patch.object(oracle, 'get_dataset_dir', return_value=str(root / 'dataset')), \
+                 patch('filters.breakout_quality.paths.resolve_filter_output_dir', return_value=root / 'filter_output'), \
+                 patch.object(oracle, '_robustness_artifacts', return_value=(SimpleNamespace(benchmark_id='fixture'), [(1, Path('p16_seed.json'))])), \
+                 patch('services.research.strategy_compare_preparation_status.collect_preparation_status', side_effect=self._fake_registered_status(paths)), \
+                 patch('services.research.strategy_compare_preparation.prepare_strategy_parameter_artifacts', side_effect=AssertionError('Optimizer must never run')) as producer, \
+                 patch.object(oracle, 'run_formal_audit') as audit:
+                status = oracle.collect_status(definition(), project_root=root)
+                self.assertEqual(status['status'], 'BLOCKED')
+                self.assertTrue(all(source_id in status['reason'] for source_id in SOURCE_IDS))
+                self.assertFalse(status['source']['preparable'])
+                with self.assertRaisesRegex(RuntimeError, 'BLOCKED'):
+                    run_enabled_audits('breakout_quality', project_root=root,
+                                       method_id=oracle.SUPPORTED_AUDIT_TYPE,
+                                       preflight_display='summary')
+                producer.assert_not_called()
+                audit.assert_not_called()
+                self.assertTrue(all(not path.exists() for path in paths.values()))
+
+    def test_research_target_menu_enter_cannot_fit_missing_teachers(self):
+        """Exercise the real Research [1] -> runner route, not merely a helper."""
+        from contextlib import redirect_stdout
+        from io import StringIO
+        import apps.research as research_app
+        from filters.breakout_quality.daily_trade40_target import SOURCE_IDS
+        with tempfile.TemporaryDirectory() as temp:
+            root, paths = self._status_fixture(temp)
+            captured = StringIO()
+            with patch.object(research_app, 'PROJECT_ROOT', root), \
+                 patch('builtins.input', return_value=''), \
+                 patch.object(research_app, 'render_audit_artifact_inventory', return_value='C96 REUSE / Daily RUN'), \
+                 patch.object(oracle, 'get_dataset_dir', return_value=str(root / 'dataset')), \
+                 patch('filters.breakout_quality.paths.resolve_filter_output_dir', return_value=root / 'filter_output'), \
+                 patch.object(oracle, '_robustness_artifacts', return_value=(SimpleNamespace(benchmark_id='fixture'), [(1, Path('p16_seed.json'))])), \
+                 patch('services.research.strategy_compare_preparation_status.collect_preparation_status', side_effect=self._fake_registered_status(paths)), \
+                 patch('services.research.strategy_compare_preparation.prepare_strategy_parameter_artifacts', side_effect=AssertionError('No Optimizer in Research [1]')) as producer, \
+                 patch.object(oracle, 'run_formal_audit') as replay, \
+                 redirect_stdout(captured):
+                with self.assertRaisesRegex(RuntimeError, 'BLOCKED'):
+                    research_app._run_reusable_audit_method('breakout_quality', oracle.SUPPORTED_AUDIT_TYPE)
+            self.assertIn('Target 驗證', captured.getvalue())
+            producer.assert_not_called()
+            replay.assert_not_called()
+            self.assertTrue(all(not path.exists() for path in paths.values()))
+
+    def test_ready_teachers_allow_only_audit_replay_without_parameter_preparation(self):
+        from services.audit.runner import run_enabled_audits
+        from filters.breakout_quality.daily_trade40_target import SOURCE_IDS
+        with tempfile.TemporaryDirectory() as temp:
+            root, paths = self._status_fixture(temp)
+            for path in paths.values():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('mock-valid-lineage', encoding='utf-8')
+            snapshot = {sid: path.read_bytes() for sid, path in paths.items()}
             with patch.object(oracle, 'get_dataset_dir', return_value=str(root / 'dataset')), \
                  patch('filters.breakout_quality.paths.resolve_filter_output_dir', return_value=root / 'filter_output'), \
                  patch.object(oracle, '_robustness_artifacts', return_value=(SimpleNamespace(benchmark_id='fixture'), [(1, Path('p16_seed.json'))])), \
                  patch('filters.breakout_quality.daily_trade40_target.load_historical_min_execution_schedule', return_value=((), {})) as loader, \
                  patch('services.research.strategy_compare_preparation_status.collect_preparation_status', side_effect=self._fake_registered_status(paths)), \
-                 patch('services.research.strategy_compare_preparation.prepare_strategy_parameter_artifacts', side_effect=canonical_prepare) as producer, \
-                 patch.object(oracle, 'run_formal_audit', return_value={'status': 'COMPLETED'}) as audit:
-                outcome = run_enabled_audits('breakout_quality', project_root=root,
-                                              method_id=oracle.SUPPORTED_AUDIT_TYPE)
-                self.assertEqual(len(outcome), 1)
-                self.assertEqual([x[0] for x in builds], list(SOURCE_IDS))
-                self.assertEqual([x[1] for x in builds], ['selection_pit', 'broker_cash_dl_conversion_rolling'])
-                self.assertTrue(all(not x[2] for x in builds))
-                self.assertEqual(producer.call_count, 2)
-                self.assertEqual(audit.call_count, 1)
-                self.assertGreaterEqual(loader.call_count, 1)
+                 patch('services.research.strategy_compare_preparation.prepare_strategy_parameter_artifacts', side_effect=AssertionError('No Optimizer for READY sources')) as producer, \
+                 patch.object(oracle, 'run_formal_audit', return_value={'status':'COMPLETED'}) as replay:
+                result = run_enabled_audits('breakout_quality', project_root=root,
+                                           method_id=oracle.SUPPORTED_AUDIT_TYPE)
+                self.assertEqual(result['target_oracle_romd']['status'], 'COMPLETED')
+                self.assertEqual(loader.call_count, 1)
+                replay.assert_called_once()
+                producer.assert_not_called()
+                self.assertEqual({sid: path.read_bytes() for sid, path in paths.items()}, snapshot)
+
+    def test_generic_audit_plan_ignores_builder_hints_and_global_auto_prepare(self):
+        """READ-only authority is enforced by the runner, not a source hint."""
+        from services.audit.runner import collect_audit_preparation_plan
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            snapshot = {
+                "module_id": "breakout_quality",
+                "method_id": oracle.SUPPORTED_AUDIT_TYPE,
+                "audit_id": None,
+                "rows": [{
+                    "enabled": True, "audit_id": "target_oracle_romd",
+                    "status": "BLOCKED", "reason": "canonical Teacher missing",
+                    "source": {
+                        "path": "models/missing.json", "preparable": True,
+                        "builder_type": "optimizer_fixed_multiseed_strategy_params",
+                    },
+                }],
+            }
+            plan = collect_audit_preparation_plan(
+                "breakout_quality", project_root=root,
+                method_id=oracle.SUPPORTED_AUDIT_TYPE,
+                status_snapshot=snapshot,
+            )
+            self.assertEqual([a.action for a in plan.actions], ["BLOCKED"])
+            self.assertIsNone(plan.actions[0].builder_type)
+            self.assertIsNone(plan.actions[0].producer_work_type)
+            self.assertFalse((root / "models/missing.json").exists())
+
+    def test_formal_audit_catalog_has_no_upstream_producer_capability(self):
+        from services.audit.catalog import AUDIT_CATALOG, AuditCatalogEntry
+        from dataclasses import fields
+        self.assertNotIn('preparation_function', {field.name for field in fields(AuditCatalogEntry)})
+        self.assertTrue(all(entry.read_only for entry in AUDIT_CATALOG.values() if entry.formal))
 
     def test_existing_corrupt_teacher_is_blocked_and_never_rebuilt(self):
         from filters.breakout_quality.daily_trade40_target import SOURCE_IDS

@@ -20,11 +20,12 @@ class AuditCatalogEntry:
     mode: str
     description: str
     read_only: bool
+    # Formal Audits have NO upstream artifact producer/optimizer capability.
+    # READ-ONLY status is REUSE or BLOCKED, never automatic BUILD/RESUME.
     method_id: str | None = None
     status_function: str | None = None
     run_function: str | None = None
     cli_command: str | None = None
-    preparation_function: str | None = None
     preflight_confirmation: bool = False
     inventory_function: str | None = None
 
@@ -55,17 +56,6 @@ class AuditCatalogEntry:
         if not callable(handler):
             raise TypeError(f"Audit工件快覽不可呼叫: {self.module}.{self.inventory_function}")
         return handler
-
-    def load_preparation_handler(self) -> RunHandler:
-        if not self.preparation_function:
-            raise ValueError(f"Audit沒有canonical source preparer: {self.audit_type}")
-        handler = getattr(import_module(self.module), self.preparation_function)
-        if not callable(handler):
-            raise TypeError(
-                f"Audit source preparer不可呼叫: {self.module}.{self.preparation_function}"
-            )
-        return handler
-
 
 @dataclass(frozen=True)
 class AuditMethodEntry:
@@ -165,7 +155,6 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         status_function="collect_status", run_function="run_formal_audit",
         preflight_confirmation=True,
         inventory_function="render_existing_artifact_inventory",
-        preparation_function="prepare_canonical_daily_trade40_teacher_source",
     ),
     "portfolio_drawdown_attribution": AuditCatalogEntry(
         audit_type="portfolio_drawdown_attribution",

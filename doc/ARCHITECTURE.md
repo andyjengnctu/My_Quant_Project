@@ -250,6 +250,7 @@ project/
 
 ### Target 驗證正式流程與報表呈現（2026-10-24，使用者核准）
 
+- **Research [1] = read-only source consumption (2026-10-25 fix)**：正式 Target 驗證只執行完整來源合法性檢查與必要的 hindsight Oracle Broker-Cash Replay，不負責 `FIT`、`BUILD/REBUILD/RESUME` 上游模型／歷史策略參數。`services/audit/catalog.py::AuditCatalogEntry` 無 Producer handler／委派介面，`services/audit/runner.py` 的通用 plan 強制只有 `REUSE / BLOCKED`；P2/P16 缺件或不相容時保留工件並 `BLOCKED`，由使用者在原有策略最佳化工作類型獨立授權上游建置，不得在 Audit 選單自動啟動 Rolling Optimizer。取得合法輸入後 Oracle 和正式 Research DL 只以 Ranking Score Source（真值 vs PIT 預測）不同，兩者由 `services/research/strategy_compare_replay.py::_run_scenario` 經正式 Portfolio Core 執行，Exact／Direct 只切換既有 Selector；不複製 Portfolio／費稅／Target 算法。Target 驗證的初始 `REUSE/RUN` 快覽不是 upstream Ready 或真實 Replay PASS。
 - Research 根選單 `[1] Target 驗證 (Enter)` 為唯一正式互動入口；原 `[1]`～`[8]` 順延成 `[2]`～`[9]`，Audit 子選單不再重複出現 Oracle，但仍重用 `services/audit/catalog.py` 與同一 canonical runner。非互動指令 `python apps/research.py target run|status|latest` 對應相同 owner，無第二套計算或快取身分。
 - Oracle 必須在開始任何 Broker-Cash portfolio replay 前，以真實每 Target × benchmark Seed 完成快取身分驗證，列印 `REUSE / RUN（需計算）/ BLOCKED` 矩陣及各狀態總數；只要存在身份衝突整批 fail-closed，禁止先計算其他 target 再回報衝突。這份 preflight 是 replay plan，不表示上游 Target truth 建構可免除；歷史快取沿用仍須通過 v2/legacy 身分與數值證據完整性檢查。
 - 可比較的績效欄位按既有 `core/research_report_contract.py` metric preference 並由 `core/report_style.py` 唯一的 best/worst + palette owner 顯示最佳綠、最差紅；ties/missing 無強制著色，年度績效僅比較同一年、seed 回報僅比較同 seed。Report ID 不變，發行 `audit.target_oracle_romd@v6`，v5 及以下 snapshot 永不改寫；呈現改版不得污染 scientific replay identity，亦不得導致已完成回放重算。

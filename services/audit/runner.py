@@ -11,13 +11,11 @@ from core.audit_policy import (
     get_audit_module_ids,
     get_reusable_audit_definitions,
 )
-from core.research_policy import get_research_artifact_preparation_policy
 from core.research_orchestration import (
     ResearchArtifactAction,
     ResearchArtifactPlan,
     resolve_research_artifact_action,
 )
-from services.research.artifact_orchestrator import run_research_artifact_preparation
 from core.console_report import (
     project_relative_display_path,
     render_key_values,
@@ -170,11 +168,11 @@ def collect_audit_preparation_plan(
     audit_id: str | None = None,
     status_snapshot: dict[str, Any] | None = None,
 ) -> ResearchArtifactPlan:
-    """Map enabled read-only Audit sources to the shared Research dependency contract.
+    """Plan read-only Audit consumption using the shared Research action vocabulary.
 
-    Audit implementations remain read-only.  If an Audit catalog entry declares a
-    canonical source preparer, orchestration may invoke that producer before the Audit;
-    otherwise a missing source is a true BLOCKED research dependency.
+    Unlike model/parameter training workflows, an Audit has no authorization
+    to BUILD, REBUILD or RESUME its upstream sources. Missing or incompatible
+    upstream evidence must be BLOCKED, never silently passed to an Optimizer.
     """
 
     root = Path(project_root).resolve()
@@ -200,15 +198,12 @@ def collect_audit_preparation_plan(
         if item.enabled
     }
     actions: list[ResearchArtifactAction] = []
-    policy = get_research_artifact_preparation_policy()
     for row in status["rows"]:
         if not row["enabled"]:
             continue
         definition = definitions[str(row["audit_id"])]
-        spec = get_audit_handler(definition)
         ready = str(row.get("status") or "").upper() == "READY"
         source = dict(row.get("source") or {})
-        has_preparer = bool(spec.preparation_function) and bool(source.get("preparable", True))
         raw_path = source.get("path")
         source_path = None if raw_path in (None, "") else Path(str(raw_path))
         if source_path is not None and not source_path.is_absolute():
@@ -217,11 +212,11 @@ def collect_audit_preparation_plan(
         action = resolve_research_artifact_action(
             ready=ready,
             artifact_exists=path_exists,
-            has_builder=has_preparer,
-            auto_prepare=bool(policy.auto_prepare),
-            reuse_ready_artifacts=bool(policy.reuse_ready_artifacts),
-            rebuild_stale_artifacts=bool(policy.rebuild_stale_artifacts),
-            resume_partial_artifacts=bool(policy.resume_partial_artifacts),
+            has_builder=False,
+            auto_prepare=False,
+            reuse_ready_artifacts=True,
+            rebuild_stale_artifacts=False,
+            resume_partial_artifacts=False,
             resumable=False,
         )
         path = str(source.get("path") or source.get("display") or "-")
@@ -230,9 +225,7 @@ def collect_audit_preparation_plan(
                 action_id=f"audit-source:{definition.audit_id}",
                 artifact_key=f"audit-source:{definition.audit_id}",
                 action=action,
-                builder_type=(
-                    None if ready else f"audit_source:{definition.audit_type}" if has_preparer else None
-                ),
+                builder_type=None,
                 description=(
                     "重用Audit只讀來源工件"
                     if ready
@@ -240,9 +233,7 @@ def collect_audit_preparation_plan(
                 ),
                 path=path,
                 dependencies=(),
-                producer_work_type=(
-                    "existing_artifact" if ready else "audit_source_provider" if has_preparer else None
-                ),
+                producer_work_type="existing_artifact" if ready else None,
                 execution_priority=10,
             )
         )
@@ -375,40 +366,17 @@ def run_enabled_audits(
         audit_id=audit_id,
     )
     if status["overall_status"] != "READY":
-        policy = get_research_artifact_preparation_policy()
-        if not policy.auto_prepare:
-            raise RuntimeError("目前Research artifact auto_prepare已關閉，Audit來源尚未就緒")
-        definitions_by_id = {item.audit_id: item for item in definitions}
-
-        def _refresh_plan() -> ResearchArtifactPlan:
-            return collect_audit_preparation_plan(
-                module_id,
-                project_root=root,
-                method_id=method_id,
-                audit_id=audit_id,
-            )
-
-        def _execute(action: ResearchArtifactAction) -> None:
-            audit_id = action.artifact_key.split(":", 1)[1]
-            definition = definitions_by_id[audit_id]
-            spec = get_audit_handler(definition)
-            result = spec.load_preparation_handler()(definition, project_root=root)
-            if isinstance(result, int) and int(result) != 0:
-                raise RuntimeError(f"Audit source preparer失敗: returncode={result}")
-
-        run_research_artifact_preparation(
-            plan_refresher=_refresh_plan,
-            action_executor=_execute,
-            failure_prefix="Audit前置",
+        # The runner must have no callable producer path. A Target audit is
+        # authorized to compute its own hindsight Replay, not fit missing
+        # historical parameter truth or repair upstream model artifacts.
+        blocked = [
+            f"{row['audit_id']}: {row.get('reason') or 'canonical source not READY'}"
+            for row in status["rows"] if row["enabled"] and row["status"] != "READY"
+        ]
+        raise RuntimeError(
+            "Audit 來源 BLOCKED（只讀驗證，不自動訓練／最佳化）："
+            + " | ".join(blocked)
         )
-        status = collect_audit_status(
-            module_id,
-            project_root=root,
-            method_id=method_id,
-            audit_id=audit_id,
-        )
-        if status["overall_status"] != "READY":
-            raise RuntimeError("Audit canonical source preparer完成後狀態仍非READY")
     outputs: dict[str, Any] = {}
     for definition in definitions:
         spec = get_audit_handler(definition)

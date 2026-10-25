@@ -296,11 +296,10 @@ def _daily_teacher_source_settings(definition, source_id: str):
 
 
 def _missing_daily_teacher_source(definition, *, root: Path) -> dict[str, Any] | None:
-    """Fail closed on existing lineage before authorizing any missing teacher BUILD.
+    """Check both teacher inputs against the canonical parameter planner.
 
-    All artifact identity and coverage decisions belong to the registered
-    Strategy Compare parameter planner; this Audit must not infer READY from
-    file existence or accidentally run a canonical producer for stale truth.
+    This is pure read-only inspection: even a legitimate BUILD action in the
+    Optimizer's *own* plan is BLOCKED here. No Audit may initiate that work.
     """
     from filters.breakout_quality.daily_trade40_target import (
         SOURCE_IDS, resolve_historical_min_teacher_paths,
@@ -317,7 +316,7 @@ def _missing_daily_teacher_source(definition, *, root: Path) -> dict[str, Any] |
         SOURCE_IDS[0]: "selection_historical_p2",
         SOURCE_IDS[1]: "optimizer_fixed_multiseed_strategy_params",
     }
-    # Validate *both* inputs before BUILD: a stale existing P16 must block
+    # Check *both* inputs without BUILD: a stale P16 still BLOCKs
     # even when a missing P2 otherwise has an authorized producer.
     for source_id in SOURCE_IDS:
         path = paths[source_id]
@@ -367,26 +366,21 @@ def _missing_daily_teacher_source(definition, *, root: Path) -> dict[str, Any] |
                     f"preserve artifact, do not overwrite: {relative}"
                 )
         else:
-            if (row.get("action") != "BUILD" or action.action != "BUILD"
-                    or action.builder_type != expected_builder):
-                raise OracleBlockedError(
-                    f"Daily-universal {source_id} missing teacher cannot be built by "
-                    f"authorized canonical Producer: {row.get('status')} "
-                    f"(action={row.get('action')}): {relative}"
-                )
+            # The Producer may be able to BUILD this input in its own workflow.
+            # That permission never transfers to the read-only Target audit.
             missing.append({"source_id": source_id, "relative": relative})
 
     if missing:
-        source_id, relative = missing[0]["source_id"], missing[0]["relative"]
+        paths = ", ".join(f"{row['source_id']}: {row['relative']}" for row in missing)
         return {
             "status": "BLOCKED", "reason": (
-                f"Daily-universal Target 缺少 canonical {source_id} Min teacher: "
-                f"{relative}；交由已註冊 Optimizer Producer 建立／接續"
+                f"Daily-universal Target 缺少 canonical Min teacher: {paths}；"
+                "請先在既有策略參數最佳化流程建立來源；Target 驗證不得自動訓練"
             ),
             "source": {
                 "display": "Full Research Dataset + 4-seed canonical P16 + daily target truth",
-                "path": relative, "preparable": True,
-                "missing_teacher_source_id": source_id,
+                "path": missing[0]["relative"], "preparable": False,
+                "missing_teacher_source_id": missing[0]["source_id"],
             },
         }
     # The target owner also verifies chronological teacher/parameter semantics;
@@ -409,9 +403,8 @@ def collect_status(definition, *, project_root: Path) -> dict[str, Any]:
         if not truth_root.is_dir():
             raise OracleBlockedError("缺少validated breakout-quality Dataset bundle；Audit不得代替Producer建置")
         robustness, records = _robustness_artifacts(definition, root)
-        # AI: Do not materialize target labels or replay during this preflight.
-        # A missing registered teacher is a preparable upstream dependency, not
-        # a reason to silently replace P2 with the future P16 or NULL/zero-R.
+        # AI: Read-only preflight must not materialize labels, Replay or params.
+        # Missing teachers are BLOCKED; never substitute future P16 or zero-R.
         if _oracle_comparison_plan(definition)["daily_recipes"]:
             missing = _missing_daily_teacher_source(definition, root=root)
             if missing is not None:
@@ -428,34 +421,6 @@ def collect_status(definition, *, project_root: Path) -> dict[str, Any]:
             "status": "BLOCKED", "reason": str(exc),
             "source": {"display": display, "preparable": False},
         }
-
-
-def prepare_canonical_daily_trade40_teacher_source(
-    definition, *, project_root: Path,
-) -> dict[str, Any]:
-    """Delegate just the missing teacher to the registered Optimizer producer."""
-    root = Path(project_root).resolve()
-    status = collect_status(definition, project_root=root)
-    source = dict(status.get("source") or {})
-    source_id = str(source.get("missing_teacher_source_id") or "")
-    if status["status"] == "READY":
-        return {"status": "REUSE"}
-    if not source_id or not source.get("preparable"):
-        raise OracleBlockedError(str(status.get("reason") or "Teacher source not authorized"))
-    settings = _daily_teacher_source_settings(definition, source_id)
-    from services.research.strategy_compare_preparation_status import collect_preparation_status
-    from services.research.strategy_compare_preparation import prepare_strategy_parameter_artifacts
-
-    # AI: All fitting/resume/reuse/identity rules stay in the existing canonical
-    # strategy-parameter preparation service. The Audit itself creates no params.
-    preparation = collect_preparation_status(project_root=root, settings=settings)
-    result = prepare_strategy_parameter_artifacts(
-        project_root=root, settings=settings, status=preparation,
-        required_source_ids=(source_id,),
-    )
-    return result
-
-
 
 
 
