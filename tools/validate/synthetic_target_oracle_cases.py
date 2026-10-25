@@ -44,10 +44,12 @@ _ACTIVE_ORACLE_DEFINITION = next(
     d for d in get_reusable_audit_definitions("breakout_quality")
     if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE
 )
-_SEED_SCORE_TARGETS = frozenset(oracle._oracle_comparison_plan(
-    _ACTIVE_ORACLE_DEFINITION)["seed_sources"])
+_NON_PRICE_SCORE_TARGETS = frozenset(
+    set(oracle._oracle_comparison_plan(_ACTIVE_ORACLE_DEFINITION)["seed_sources"])
+    | set(oracle._oracle_comparison_plan(_ACTIVE_ORACLE_DEFINITION)["daily_sources"])
+)
 LEGACY_ORACLE_TARGETS = tuple(
-    item for item in oracle.ORACLE_TARGETS if item[0] not in _SEED_SCORE_TARGETS
+    item for item in oracle.ORACLE_TARGETS if item[0] not in _NON_PRICE_SCORE_TARGETS
 )
 from services.audit.runner import collect_audit_menu_state, collect_audit_status
 from services.audit.catalog import get_audit_methods
@@ -59,7 +61,7 @@ def _legacy_definition():
                   if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
     return replace(active, source={**active.source, "oracle_comparisons": tuple(
         item for item in active.source["oracle_comparisons"]
-        if item["target"] not in _SEED_SCORE_TARGETS)})
+        if item["target"] not in _NON_PRICE_SCORE_TARGETS)})
 
 
 def _mock_panels(common40):
@@ -107,6 +109,7 @@ class OracleAuditContractCases(TestCase):
             "MFE40_Direct": "MFE40_Control", "R40_Direct": "R40", "T40_Direct": "T40",
             "T40-MFE_Direct": "T40-MFE",
             "MinTrade40_NetR_Direct": "MinTrade40_NetR",
+            "DailyUniversal_MinTrade40_NetR_Direct": "DailyUniversal_MinTrade40_NetR",
         })
         self.assertEqual(self.definition.output_subdir, "breakout_quality/reusable/target_oracle_romd")
         with tempfile.TemporaryDirectory() as tmp:
@@ -1270,6 +1273,9 @@ class ActiveMinTrade40OracleComparisonCases(TestCase):
     def test_current_seed_path_ranks_origin_on_same_seed_p16_and_reuses_arm(self):
         definition = next(d for d in get_reusable_audit_definitions("breakout_quality")
                           if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
+        definition = replace(definition, source={**definition.source,
+            "oracle_comparisons": tuple(row for row in definition.source["oracle_comparisons"]
+                if row["target"] not in oracle._oracle_comparison_plan(definition)["daily_sources"])})
         plan = oracle._oracle_comparison_plan(definition)
         self.assertIn("MinTrade40_NetR", dict(plan["targets"]))
         self.assertIn("MinTrade40_NetR", plan["seed_recipes"])

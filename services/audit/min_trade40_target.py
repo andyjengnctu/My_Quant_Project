@@ -334,43 +334,49 @@ def _seed_identity(*, spec: Mapping[str, Any], dataset: str, price_sha: str,
     }
 
 
-def _rank_seed_events(events: list[Mapping[str, Any]]) -> dict[tuple[str, str], float]:
-    """Produce daily hindsight ranks; EXCLUDED has *no* PnL, always lowest.
+def rank_trade40_outcome_frame(frame: pd.DataFrame) -> dict[tuple[str, str], float]:
+    """Hindsight-only stock-day Net-R ranks shared by event and daily targets.
 
-    Completed events order by actual ledger-net R; excluded/unfilled events
-    share a lower *ranking-only* value, not an invented realized R. The score
-    lookup uses the original signal date also for continuation orders.
+    Censored/unfilled rows remain actual NULL Net-R values in the official
+    target provider. A lower-than-completed rank is a selector-only ordering
+    convention, NOT a fabricated economic label, trade or loss.
     """
-    if not events:
+    if frame.empty or not {"ticker", "date", "realized_net_r"}.issubset(frame):
         raise MinTrade40BlockedError("MinTrade40_NetR沒有可排名的已成熟訊號")
+    if frame.duplicated(["ticker", "date"]).any():
+        raise MinTrade40BlockedError("MinTrade40_NetR ticker/signal-date重複")
     from filters.breakout_quality.mfe_safety_geometry import ensure_daily_percentile
 
-    keys = [(str(row["ticker"]), str(row["signal_date"])) for row in events]
-    if len(set(keys)) != len(keys):
-        raise MinTrade40BlockedError("MinTrade40_NetR ticker/signal-date重複")
-    ranks = pd.DataFrame({"ticker": [key[0] for key in keys],
-                          "date": [key[1] for key in keys],
-                          "realized": [row.get("realized_net_r") for row in events]})
-    is_filled = ranks["realized"].notna()
-    numeric = pd.to_numeric(ranks["realized"], errors="raise")
+    is_filled = frame["realized_net_r"].notna()
+    numeric = pd.to_numeric(frame["realized_net_r"], errors="raise").astype(float)
     if not np.isfinite(numeric.loc[is_filled].to_numpy(dtype=float)).all():
         raise MinTrade40BlockedError("MinTrade40_NetR完成交易含無效淨R")
     if not is_filled.any():
         raise MinTrade40BlockedError("MinTrade40_NetR沒有已成交的真值")
-    daily_min = numeric.groupby(ranks["date"]).transform("min").fillna(0.0)
-    # This sentinel exists ONLY inside ranking. The underlying events retain
-    # realized_net_r=None for every unfilled/unexecutable event.
+    daily_min = numeric.groupby(frame["date"]).transform("min").fillna(0.0)
     numeric.loc[~is_filled] = daily_min.loc[~is_filled] - (1.0 + daily_min.loc[~is_filled].abs())
     if not np.isfinite(numeric.to_numpy(dtype=float)).all():
         raise MinTrade40BlockedError("MinTrade40_NetR ranking sentinel不合法")
     ranked, _ = ensure_daily_percentile(
-        pd.DataFrame({"date": ranks["date"], "value": numeric}),
+        pd.DataFrame({"date": frame["date"], "value": numeric}),
         method="average_zero_based",
     )
     scores = ranked["percentile"].to_numpy(dtype=float)
     if not np.isfinite(scores).all():
         raise MinTrade40BlockedError("MinTrade40_NetR每日rank非有限")
+    keys = list(zip(frame["ticker"].astype(str), frame["date"].astype(str)))
     return dict(zip(keys, scores.tolist()))
+
+
+def _rank_seed_events(events: list[Mapping[str, Any]]) -> dict[tuple[str, str], float]:
+    """Original P16 signal-event adapter; its ranking semantics are unchanged."""
+    if not events:
+        raise MinTrade40BlockedError("MinTrade40_NetR沒有可排名的已成熟訊號")
+    return rank_trade40_outcome_frame(pd.DataFrame({
+        "ticker": [str(row["ticker"]) for row in events],
+        "date": [str(row["signal_date"]) for row in events],
+        "realized_net_r": [row.get("realized_net_r") for row in events],
+    }))
 
 
 def build_seed_oracle_scores(
@@ -489,5 +495,5 @@ def build_report(
 
 __all__ = [
     "TARGET_ID", "TARGET_NAME", "MinTrade40BlockedError", "MinTrade40P16Context",
-    "build_seed_oracle_scores", "build_report",
+    "build_seed_oracle_scores", "build_report", "rank_trade40_outcome_frame",
 ]

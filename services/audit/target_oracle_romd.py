@@ -92,6 +92,7 @@ ORACLE_TARGETS = tuple((item["target"], item["description"]) for item in _ORACLE
 # resolved from the selected comparisons, never from a second target allowlist.
 _ORACLE_SCORE_RECIPES = frozenset(("equal_rank_mfe_safety", "mfe", "terminal_r", "terminal_mae_gate", "mfe_mae_gate"))
 _ORACLE_SEED_SCORE_RECIPES = frozenset(("trade_path_realized_net_r",))
+_ORACLE_DAILY_SCORE_RECIPES = frozenset(("daily_trade_path_net_r",))
 _PROVIDER_COHORT_IDS = {
     "pure_mfe40_provider": "40d", "mfe20_d20_provider": "20d",
     "first_breach_provider": "first_breach",
@@ -108,6 +109,7 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
     definitions: list[tuple[str, str]] = []
     recipes: dict[str, tuple[str, str]] = {}
     seed_recipes: dict[str, tuple[str, str]] = {}
+    daily_recipes: dict[str, tuple[str, str]] = {}
     aliases: dict[str, str] = {}
     selectors: dict[str, str] = {}
     provider_fields: list[str] = []
@@ -132,7 +134,7 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
             )
         if entry.get("score_source"):
             source = str(entry["score_source"])
-            if (source not in recipes and source not in seed_recipes) or selector != "direct":
+            if (source not in recipes and source not in seed_recipes and source not in daily_recipes) or selector != "direct":
                 raise OracleBlockedError(f"Oracle Direct score來源必須先由Exact宣告：{name} -> {source}")
             aliases[name] = source
         else:
@@ -148,6 +150,10 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
                 if len(declared) != 1 or declared[0].get("target") != name:
                     raise OracleBlockedError("Oracle交易路徑label身分必須與比較清單相同")
                 seed_recipes[name] = (recipe, provider)
+            elif recipe in _ORACLE_DAILY_SCORE_RECIPES:
+                if provider != "daily_trade40_profile":
+                    raise OracleBlockedError(f"Oracle {name} Daily-universal provider is not canonical: {provider}")
+                daily_recipes[name] = (recipe, provider)
             elif recipe in _ORACLE_SCORE_RECIPES:
                 recipes[name] = (recipe, provider)
                 if provider not in provider_fields:
@@ -159,10 +165,14 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
     seed_sources = {name: name for name in seed_recipes}
     seed_sources.update({name: source for name, source in aliases.items()
                          if source in seed_recipes})
+    daily_sources = {name: name for name in daily_recipes}
+    daily_sources.update({name: source for name, source in aliases.items()
+                          if source in daily_recipes})
     if not recipes:
         raise OracleBlockedError("Oracle comparison缺少獨立真值score")
     return {"targets": tuple(definitions), "recipes": recipes,
             "seed_recipes": seed_recipes, "seed_sources": seed_sources,
+            "daily_recipes": daily_recipes, "daily_sources": daily_sources,
             "aliases": aliases,
             "selectors": selectors, "providers": tuple(provider_fields)}
 
@@ -622,7 +632,7 @@ def _build_oracle_score_panels(
     for direct, source in plan["aliases"].items():
         if source in scores:
             scores[direct] = scores[source]
-    if set(scores) | set(plan["seed_sources"]) != {name for name, _desc in plan["targets"]}:
+    if set(scores) | set(plan["seed_sources"]) | set(plan["daily_sources"]) != {name for name, _desc in plan["targets"]}:
         raise OracleBlockedError("Oracle比較清單／分數工件依賴不一致")
 
     # Backward-compatible evidence keys retain their original scientific
@@ -864,7 +874,8 @@ def _canonical_oracle_replay_policy(definition, *, base_arm) -> dict[str, Any]:
 
 
 def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
-                       replay_policy: Mapping[str, Any]) -> dict[str, Any]:
+                       replay_policy: Mapping[str, Any],
+                       daily_evidence: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """One target-scoped economic/score identity for fast and normal REUSE."""
     policy = dict(replay_policy)
     if plan["selectors"].get(target) == "direct":
@@ -876,6 +887,30 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
         policy["hindsight_score_key_mode"] = "signal_origin_date"
         policy["hindsight_label_spec"] = declared[0]
         policy["excluded_score_policy"] = "rank_last_no_realized_r_imputation"
+    if target in plan["daily_sources"]:
+        # New target identity is validated against the actual label values and
+        # rank table, independently of legacy price-only Oracle cohort/cache.
+        # The same evidence goes into both Exact and Direct replay identities.
+        if daily_evidence is None:
+            raise OracleBlockedError("Daily-universal Oracle missing verified target lineage")
+        source = plan["daily_sources"][target]
+        recipe, provider = plan["daily_recipes"][source]
+        policy["hindsight_score_recipe"] = recipe
+        policy["hindsight_score_key_mode"] = "information_date"
+        policy["hindsight_target_contract"] = {
+            "label_id": daily_evidence["label_id"],
+            "target_id": daily_evidence["target_id"],
+            "profile_id": str(definition.source[provider]),
+            "rank_policy": daily_evidence["rank_policy"],
+            "rank_sha256": daily_evidence["rank_sha256"],
+            "raw_label_sha256": daily_evidence["raw_label_sha256"],
+            "calendar_sha256": daily_evidence["calendar_sha256"],
+            "teacher": daily_evidence["teacher"],
+            "mature_eligible_rows": daily_evidence["mature_eligible_rows"],
+            "settled_net_r_rows": daily_evidence["settled_net_r_rows"],
+            "censored_rank_last_rows": daily_evidence["censored_rank_last_rows"],
+            "research_cutoff": daily_evidence["research_cutoff"],
+        }
     return policy
 
 
@@ -1028,7 +1063,7 @@ def build_report(
     if status["status"] != "READY":
         raise OracleBlockedError(status["reason"])
     robustness, parameter_paths = _robustness_artifacts(definition, root)
-    fast = _reusable_completed_oracle_report(
+    fast = None if plan["daily_recipes"] else _reusable_completed_oracle_report(
         definition, root=root, settings=settings, base_arm=base_arm,
         exact_arm=exact_arm,
         direct_arm=_direct_arm(definition, settings, base_arm, exact_arm),
@@ -1042,10 +1077,44 @@ def build_report(
 
     if not quiet:
         progress("建立完整 REUSE/RUN/BLOCKED 計畫（未執行 Replay）")
+    # Validate the new trade-path Target BEFORE materializing the legacy price
+    # providers or starting any portfolio Replay. Only the approved Audit
+    # progress text changes; no report sections/columns or Trading path change.
+    daily_score_evidence: dict[str, Any] | None = None
+    daily_score_tables: dict[str, dict[tuple[str, str], float]] = {}
+    if plan["daily_recipes"]:
+        # MR-13CL's daily stock-day truth has its OWN feature eligibility;
+        # never join it into legacy price-only cohort or alter old cache keys.
+        if len(plan["daily_recipes"]) != 1:
+            raise OracleBlockedError("Daily-universal Oracle must have a single canonical Exact score source")
+        from services.audit.daily_trade40_oracle import (
+            DailyTrade40OracleBlockedError,
+            build_daily_universal_trade40_oracle_scores,
+        )
+        source_name, (_recipe, provider) = next(iter(plan["daily_recipes"].items()))
+        try:
+            daily_scores, daily_score_evidence = build_daily_universal_trade40_oracle_scores(
+                project_root=root, dataset=str(settings.dataset),
+                filter_id=str(definition.source["filter_id"]),
+                profile_id=str(definition.source[provider]),
+                cutoff=str(settings.end_date),
+            )
+        except DailyTrade40OracleBlockedError as exc:
+            raise OracleBlockedError(str(exc)) from exc
+        daily_score_tables[source_name] = daily_scores
+        for alias, score_source in plan["aliases"].items():
+            if score_source == source_name:
+                daily_score_tables[alias] = daily_scores
+        if not quiet:
+            progress("Daily-universal NetR target verified: "
+                     f"eligible mature {daily_score_evidence['mature_eligible_rows']:,}; "
+                     f"settled {daily_score_evidence['settled_net_r_rows']:,}; "
+                     f"censored (ranking only) {daily_score_evidence['censored_rank_last_rows']:,}")
     scores40, cohort40 = _build_oracle_score_panels(
         definition, project_root=root, cutoff=str(settings.end_date),
         progress=None if quiet else progress,
     )
+    scores40.update(daily_score_tables)
     if not quiet:
         progress("真值及共同樣本完成；檢查價格 SHA、P16 與 Replay Cache")
     seed_scores: dict[int, dict[str, dict[tuple[str, str], float]]] = {}
@@ -1125,6 +1194,7 @@ def build_report(
                 arm = direct_arm if is_direct else exact_arm
                 arm_replay_policy = _arm_replay_policy(
                     definition, plan=plan, target=target, replay_policy=replay_policy,
+                    daily_evidence=daily_score_evidence,
                 )
                 identity = replay_identity(
                     dataset=settings.dataset, dataset_sha256=price_sha,
