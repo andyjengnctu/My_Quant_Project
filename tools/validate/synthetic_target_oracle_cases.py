@@ -1496,6 +1496,24 @@ class OracleReplayEvidenceReuseCases(TestCase):
             with self.assertRaisesRegex(ValueError, "corrupt"):
                 cache.read(identity)
 
+    def test_read_only_existing_identity_inventory_rejects_corrupted_record(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        with tempfile.TemporaryDirectory() as tmp:
+            store=OracleReplayStore(Path(tmp), "breakout_quality/reusable/target_oracle_romd")
+            identity=self._identity(target="C96")
+            observation=self._observation("C96", 1)
+            store.write(identity, observation, origin="canonical_replay")
+            self.assertEqual(
+                store.existing_completed_identities(seed=1,target="C96"), (identity,)
+            )
+            self.assertEqual(store.existing_completed_identities(seed=2,target="C96"), ())
+            path=store._path(identity)
+            payload=json.loads(path.read_text(encoding="utf-8"))
+            payload["observation"]["romd"] += 1.0
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError,"inventory is corrupt"):
+                store.existing_completed_identities(seed=1,target="C96")
+
     def test_conflict_reports_exact_fields_and_relative_cache_path_without_replay(self):
         from services.audit.oracle_replay_artifacts import OracleReplayStore
         with tempfile.TemporaryDirectory() as tmp:
@@ -2092,8 +2110,8 @@ class OracleReplayEvidenceReuseCases(TestCase):
                     oracle.build_report(definition, project_root=root, quiet=False,
                                         preflight_display="summary")
                 self.assertEqual(len(recorded), 48)
-                self.assertIn("身分核對完成] REUSE 40 / RUN（需計算）0 / BLOCKED 0", console.getvalue())
-                self.assertNotIn("Replay preflight（執行前）", console.getvalue())
+                self.assertIn("REUSE 40 / RUN（需計算）0 / BLOCKED 0", console.getvalue())
+                self.assertIn("Replay preflight（執行前）", console.getvalue())
                 self.assertNotIn("[REUSE]", console.getvalue())
 
     def test_completed_schema7_reuses_all_36_old_units_and_runs_only_mfe_direct(self):

@@ -329,6 +329,35 @@ class OracleReplayStore:
         """Compatibility probe; explanation and matching have a single owner."""
         return self.explain_other_identity(identity) is not None
 
+    def existing_completed_identities(self, *, seed: int, target: str) -> tuple[dict[str, Any], ...]:
+        """Inventory *verified stored bytes*, not current scientific REUSE eligibility.
+
+        A preview may use this to show existing completion candidates without
+        materializing expensive future labels. Final RUN/REUSE/BLOCKED decisions
+        must still be made by resolve_completed with the FULL replay identity.
+        """
+        if not target.replace("_", "").replace("-", "").isalnum():
+            raise ValueError("Oracle invalid cache target")
+        results: list[dict[str, Any]] = []
+        for path in sorted((self.cache_root / str(int(seed))).glob(f"{target}_*.json")):
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                identity = raw["identity"]
+                if not isinstance(identity, dict):
+                    raise ValueError("Oracle cached identity is not a mapping")
+                # A shorter target prefix may also match its Direct counterpart.
+                if identity.get("target") != target:
+                    continue
+                if self._path(identity) != path or self.read(identity) is None:
+                    raise ValueError("Oracle cache name or completed observation is invalid")
+            except (OSError, KeyError, TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(
+                    "Oracle stored replay cache inventory is corrupt: "
+                    + path.relative_to(self.project_root).as_posix()
+                ) from exc
+            results.append(identity)
+        return tuple(results)
+
     def read(self, identity: Mapping[str, Any]) -> dict[str, Any] | None:
         path = self._path(identity)
         if not path.is_file():

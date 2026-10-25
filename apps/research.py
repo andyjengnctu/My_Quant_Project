@@ -43,6 +43,7 @@ from services.research.strategy_compare_application import (
     show_strategy_multi_seed_robustness_status,
 )
 from services.audit.catalog import get_audit_methods, get_audit_method
+from services.audit.target_oracle_romd import render_initial_replay_inventory
 from services.audit.runner import (
     collect_audit_menu_state,
     render_audit_status,
@@ -358,11 +359,20 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
         print("目前沒有啟用此Reusable module的參數設定；保留固定選單但本次不執行。")
         return 0
     if method.menu_location == "research_root":
-        # AI: Target validation uses the same single Enter -> canonical
-        # AI: REUSE/RUN/BLOCKED execution as other Research comparisons.
-        # AI: No tentative inventory, independent RUN budget or second approval.
+        # AI: A read-only inventory precedes the sole execution confirmation.
+        # AI: CHECK is a completion candidate, not canonical scientific REUSE.
+        # AI: The existing Audit runner alone owns final identity resolution.
+        from core.audit_policy import get_reusable_audit_definitions
+        from services.audit.catalog import get_definition_method_id
+        definitions = tuple(d for d in get_reusable_audit_definitions(module_id)
+                            if d.enabled and get_definition_method_id(d) == method_id)
+        if len(definitions) != 1:
+            raise RuntimeError("Target 驗證正式定義缺失或重複")
+        print("\n" + render_initial_replay_inventory(
+            definitions[0], project_root=PROJECT_ROOT,
+        ))
         try:
-            confirm = input("👉 按 Enter 執行（自動 REUSE／RUN）；輸入 0 返回：").strip().lower()
+            confirm = input("👉 按 Enter 執行正式 REUSE／RUN；輸入 0 返回：").strip().lower()
         except EOFError:
             return 0
         if confirm in {"0", "q", "quit", "exit"}:

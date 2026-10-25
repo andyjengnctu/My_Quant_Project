@@ -744,6 +744,96 @@ def render_replay_preflight(
     ))
 
 
+
+def render_initial_replay_inventory(definition, *, project_root: Path) -> str:
+    """Show existing replay evidence BEFORE the only execution confirmation.
+
+    Deliberately no per-stock label materialization, Replay or strategy fitting.
+    CHECK means an intact same-window completed-result CANDIDATE, never a
+    scientific REUSE decision. The full identity owner remains run_panel.
+    """
+    root = Path(project_root).resolve()
+    plan = _oracle_comparison_plan(definition)
+    settings, base_arm, _exact_arm = _contract(definition)
+    ready = collect_status(definition, project_root=root)
+    if ready["status"] != "READY":
+        raise OracleBlockedError("Target 驗證來源 BLOCKED（唯讀）: " + ready["reason"])
+    robustness, paths = _robustness_artifacts(definition, root)
+    prepared, evidence = _prepare_oracle_parameters(
+        definition, root=root, parameter_paths=paths,
+        start=str(settings.start_date), end=str(settings.end_date), base_arm=base_arm,
+    )
+    seed_sha = {int(item["seed"]): item["param_sha256"] for item in evidence}
+    seeds = [int(seed) for seed, _path in paths]
+    names = [str(definition.source["baseline_arm_id"]),
+             *(name for name, _desc in plan["targets"])]
+    store = OracleReplayStore(root, definition.output_subdir)
+    archived = HistoricalOracleIndex(root)
+    # A historical report can also hold complete per-seed evidence before the
+    # per-arm cache was introduced. Use its existing compatibility owner, not
+    # an independent second archive acceptance rule.
+    contexts = []
+    for _origin, _path, payload in archived.snapshots:
+        period_end = str(payload.get("end_date") or "")
+        cohort = payload.get("common_cohort")
+        if (payload.get("status") != "COMPLETED"
+                or payload.get("dataset") != settings.dataset
+                or payload.get("strategy_profile_id") != settings.profile_id
+                or payload.get("benchmark_id") != robustness.benchmark_id
+                or payload.get("start_date") != str(settings.start_date)
+                or not (str(settings.start_date) < period_end <= str(settings.end_date))
+                or not isinstance(cohort, dict)
+                or cohort.get("research_cutoff") != str(settings.end_date)):
+            continue
+        providers = cohort.get("providers")
+        if (not isinstance(providers, dict) or any(
+                providers.get(_PROVIDER_COHORT_IDS.get(field, field)) != definition.source[field]
+                for field in plan["providers"])):
+            continue
+        contexts.append({
+            "benchmark": robustness.benchmark_id,
+            "strategy_profile_id": settings.profile_id,
+            "dataset": settings.dataset,
+            "start_date": str(settings.start_date), "end_date": period_end,
+            "seeds": seeds, "param_sha_by_seed": seed_sha,
+            "cohort": cohort, "definitions": dict(plan["targets"]),
+        })
+
+    decisions: dict[tuple[int, str], str] = {}
+    for seed, _sha, _kind, _base_params, _oracle_params in prepared:
+        for name in names:
+            # CHECK is ONLY a byte-valid stored-result presence signal. Do not
+            # duplicate the full execution/Target identity policy here: only
+            # run_panel has enough evidence to decide REUSE vs RUN/BLOCKED.
+            candidate = any(
+                identity.get("dataset") == settings.dataset
+                and identity.get("seed") == seed
+                and identity.get("start_date") == str(settings.start_date)
+                and (str(settings.start_date) < str(identity.get("end_date") or "")
+                     <= str(settings.end_date))
+                for identity in store.existing_completed_identities(seed=seed, target=name)
+            )
+            if not candidate:
+                for context in contexts:
+                    if archived.lookup(target=name, seed=seed, context=context) is not None:
+                        candidate = True
+                        break
+            decisions[(seed, name)] = "CHECK" if candidate else "RUN"
+
+    check_count = sum(x == "CHECK" for x in decisions.values())
+    run_count = sum(x == "RUN" for x in decisions.values())
+    return "\n".join((
+        "[Target 驗證｜現有 Replay 工件（唯讀，尚未執行）]",
+        "Seed：" + "  ".join(f"S{i + 1}={seed}" for i, seed in enumerate(seeds)),
+        render_table(("Target", *(f"S{i + 1}" for i in range(len(seeds)))), [
+            (name, *(styled_workflow_status(decisions[(seed, name)]) for seed in seeds))
+            for name in names
+        ]),
+        f"REUSE 候選（CHECK）{check_count} / 未見同期間工件 {run_count}",
+        "CHECK = 已存完成結果，可能 REUSE 或有身分衝突；按 Enter 後才正式核對 REUSE／RUN／BLOCKED。",
+    ))
+
+
 def _prepare_oracle_parameters(
     definition, *, root: Path, parameter_paths, start: str, end: str, base_arm,
 ):
@@ -1191,13 +1281,9 @@ def build_report(
             decisions=decisions,
         )
         if not quiet:
-            if blocked or preflight_display == "full":
-                print("\n" + preview, flush=True)
-            else:
-                reuse_count = sum(value == "REUSE" for value in decisions.values())
-                run_count = sum(value == "RUN" for value in decisions.values())
-                print(f"[Target 驗證｜身分核對完成] REUSE {reuse_count} / "
-                      f"RUN（需計算）{run_count} / BLOCKED 0", flush=True)
+            # Show the FINAL validated decision matrix in both display modes.
+            # Summary suppresses noisy per-arm progress, not the REUSE status.
+            print("\n" + preview, flush=True)
         if blocked:
             details = [f"{target} seed={seed}: {reason}"
                        for (seed, target), reason in blocked.items()]

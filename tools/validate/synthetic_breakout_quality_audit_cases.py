@@ -152,10 +152,13 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
     route_console = io.StringIO()
     prompts = []
+    preview_visible_before_input = []
     answers = iter(["", "", "0"])
 
     def input_once(prompt):
         prompts.append(prompt)
+        if len(prompts) == 2:
+            preview_visible_before_input.append("REUSE 候選（CHECK）" in route_console.getvalue())
         return next(answers)
 
     def fake_target_runner(*args, **kwargs):
@@ -164,6 +167,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         return {}
 
     with patch("builtins.input", side_effect=input_once), \
+         patch.object(research_app, "render_initial_replay_inventory", return_value="REUSE 候選（CHECK）48 / 未見同期間工件 8") as preview, \
          patch.object(research_app, "render_audit_status") as expensive_status, \
          patch.object(research_app, "run_enabled_audits", side_effect=fake_target_runner) as oracle_runner, \
          patch.object(research_app, "render_latest_audit_summary", return_value="LATEST"), \
@@ -172,7 +176,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     root_text = route_console.getvalue()
     check_true(
         "target_validation_single_enter_runs_canonical_planner_once",
-        route_rc == 0 and oracle_runner.call_count == 1
+        route_rc == 0 and oracle_runner.call_count == 1 and preview.call_count == 1
         and oracle_runner.call_args.kwargs.get("method_id") == oracle_method_id
         and oracle_runner.call_args.kwargs.get("preflight_display") == "summary"
         and "before_replay" not in oracle_runner.call_args.kwargs
@@ -183,10 +187,12 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and "[9]" in root_text and "策略升格" in root_text,
     )
     check_true(
-        "target_validation_has_no_tentative_inventory_or_second_run_authorization",
+        "target_validation_shows_candidate_reuse_before_single_execution_confirmation",
         len(prompts) == 3
-        and "按 Enter 執行（自動 REUSE／RUN）" in prompts[1]
+        and preview_visible_before_input == [True]
+        and "按 Enter 執行正式 REUSE／RUN" in prompts[1]
         and "RUN" not in prompts[2]
+        and "REUSE 候選（CHECK）48 / 未見同期間工件 8" in root_text
         and "REUSE 48 / RUN（需計算）8" in root_text
         and "暫估" not in root_text
         and "輸入 RUN" not in root_text
@@ -194,6 +200,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
     cancellation = io.StringIO()
     with patch("builtins.input", return_value="0"), \
+         patch.object(research_app, "render_initial_replay_inventory", return_value="REUSE 候選（CHECK）48") as preview, \
          patch.object(research_app, "render_audit_status") as status, \
          patch.object(research_app, "run_enabled_audits", side_effect=fake_target_runner) as cancelled_runner, \
          patch.object(research_app, "render_latest_audit_summary") as latest, \
@@ -201,7 +208,8 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
     check_true(
         "target_cancel_before_enter_has_no_side_effect",
-        not cancelled_runner.called and not latest.called and not status.called,
+        not cancelled_runner.called and not latest.called and not status.called
+        and preview.call_count == 1 and "REUSE 候選（CHECK）48" in cancellation.getvalue(),
     )
 
     # Entry-point integration belongs to the existing app/menu contract, not
@@ -231,6 +239,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         from services.audit import target_oracle_romd as oracle_handler
         with patch.object(research_app, "PROJECT_ROOT", isolated_root), \
              patch("builtins.input", return_value=""), \
+             patch.object(research_app, "render_initial_replay_inventory", return_value="CHECK 0 / RUN 56"), \
              patch.object(audit_runner, "collect_audit_status", return_value=missing_teacher_status), \
              patch("services.research.strategy_compare_preparation.prepare_strategy_parameter_artifacts", side_effect=AssertionError("Optimizer invoked from Target validation")) as optimizer, \
              patch.object(oracle_handler, "run_formal_audit", side_effect=AssertionError("Replay invoked with missing Teacher")) as replay, \
