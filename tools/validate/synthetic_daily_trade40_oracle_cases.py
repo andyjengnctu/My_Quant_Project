@@ -91,6 +91,44 @@ class FormalMinDailyOracleCases(TestCase):
         self.assertEqual(d.source["daily_trade40_profile"],PROFILE)
         self.assertEqual(require_approved_report_contract("audit.target_oracle_romd").version,9)
 
+    def test_daily_oracle_real_csv_calendar_and_price_path(self):
+        """Exercise the production CSV -> sanitized exchange sessions -> Oracle path.
+
+        The other synthetic source fixture mocks the calendar collector and
+        therefore cannot detect a missing runtime import in that function.
+        """
+        trading, frames, bundle, schedule = source_fixture()
+        with TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            csv_inputs = []
+            for ticker, frame in (("0050", frames["2330"]),
+                                  ("2330", frames["2330"]),
+                                  ("2317", frames["2317"])):
+                path = temp / f"{ticker}.csv"
+                frame.to_csv(path, index_label="Date")
+                csv_inputs.append((ticker, path))
+            with patch(
+                "services.audit.daily_trade40_oracle.load_profile_continuous_ranker_data",
+                return_value=bundle,
+            ), patch(
+                "services.audit.daily_trade40_oracle.discover_dataset_csv_inputs",
+                return_value=(csv_inputs, []),
+            ):
+                # Do NOT patch collect_canonical_exchange_sessions or
+                # load_dataset_frame: both must execute their real code.
+                actual, evidence = build_daily_universal_trade40_oracle_scores(
+                    project_root=temp, dataset="full", filter_id="breakout_quality_v1",
+                    profile_id=PROFILE, cutoff="2021-05-15", evaluation_start="2021-01-01",
+                    seed=693545351, param_sha256="a" * 64,
+                    canonical_schedule=schedule,
+                )
+        expected, reference = run_source()
+        self.assertEqual(actual, expected)
+        for key in ("first_replay_trade_date", "calendar_sha256",
+                    "raw_label_sha256", "rank_sha256", "settled_net_r_rows"):
+            self.assertEqual(evidence[key], reference[key])
+        self.assertEqual(evidence["first_replay_trade_date"], "2021-01-04")
+
     def test_first_legal_information_day_is_previous_year_and_trade_is_jan4(self):
         scores,evidence=run_source()
         self.assertIn(("2330","2020-12-31"),scores)

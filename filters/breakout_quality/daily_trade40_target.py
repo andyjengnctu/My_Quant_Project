@@ -18,6 +18,7 @@ from __future__ import annotations
 from bisect import bisect_right
 from dataclasses import dataclass
 import math
+from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
