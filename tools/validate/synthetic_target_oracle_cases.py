@@ -217,6 +217,12 @@ class OracleAuditContractCases(TestCase):
             self.assertEqual(observed[(11, "R40")], "MISSING")
             self.assertEqual(observed[(11, "R40_Direct")], "MISSING")
             self.assertEqual(store.preview_candidates(seeds=(11,), targets=("T40-MFE", "T40-MFE_Direct"))[(11, "T40-MFE_Direct")], "MISSING")
+            # A corrupt Direct cache must not poison its distinct base target.
+            direct = store.cache_root / "11" / ("R40_Direct_" + "a" * 64 + ".json")
+            direct.write_text("not-json", encoding="utf-8")
+            scoped = store.preview_candidates(seeds=(11,), targets=("R40", "R40_Direct"))
+            self.assertEqual(scoped[(11, "R40")], "MISSING")
+            self.assertEqual(scoped[(11, "R40_Direct")], "INVALID")
 
     def test_summary_display_is_forwarded_only_to_declared_formal_oracle(self):
         from services.audit import runner
@@ -231,6 +237,31 @@ class OracleAuditContractCases(TestCase):
                 runner.run_enabled_audits(
                     "breakout_quality", project_root=Path(tmp),
                     method_id="opportunity_selection_attribution", preflight_display="summary")
+
+    def test_target_inventory_runner_delegates_without_expensive_source_checks(self):
+        """Keep the Audit service preview wired without importing the app layer."""
+        from services.audit import runner
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(oracle, "render_existing_artifact_inventory",
+                          return_value="C96 REUSE / Daily RUN") as inventory, \
+             patch.object(runner, "collect_audit_status",
+                          side_effect=AssertionError("expensive preflight in inventory")) as full, \
+             patch.object(runner, "run_enabled_audits",
+                          side_effect=AssertionError("Replay in inventory")) as replay:
+            result = runner.render_audit_artifact_inventory(
+                "breakout_quality", project_root=Path(tmp),
+                method_id=oracle.SUPPORTED_AUDIT_TYPE,
+            )
+            self.assertEqual(result, "C96 REUSE / Daily RUN")
+            inventory.assert_called_once_with(self.active_definition,
+                                             project_root=Path(tmp).resolve())
+            full.assert_not_called()
+            replay.assert_not_called()
+            with self.assertRaisesRegex(ValueError, "快速工件盤點"):
+                runner.render_audit_artifact_inventory(
+                    "breakout_quality", project_root=Path(tmp),
+                    method_id="opportunity_selection_attribution",
+                )
 
     def test_formal_runner_forwards_preflight_approval_only_to_declared_canonical_owner(self):
         from services.audit import runner

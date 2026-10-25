@@ -27,6 +27,8 @@ class AuditCatalogEntry:
     run_function: str | None = None
     cli_command: str | None = None
     preflight_summary: bool = False
+    # Optional canonical read-only preview used before costly source checks.
+    inventory_function: str | None = None
 
     @property
     def formal(self) -> bool:
@@ -46,6 +48,14 @@ class AuditCatalogEntry:
         handler = getattr(import_module(self.module), self.run_function)
         if not callable(handler):
             raise TypeError(f"Audit run handler不可呼叫: {self.module}.{self.run_function}")
+        return handler
+
+    def load_inventory_handler(self) -> Callable[..., str]:
+        if not self.formal or not self.preflight_summary or not self.inventory_function:
+            raise ValueError(f"Audit沒有正式快速工件盤點能力: {self.audit_type}")
+        handler = getattr(import_module(self.module), self.inventory_function, None)
+        if not callable(handler):
+            raise TypeError(f"Audit inventory handler不可呼叫: {self.module}.{self.inventory_function}")
         return handler
 
 @dataclass(frozen=True)
@@ -144,7 +154,7 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         description="Reusable hindsight Oracle Ground Truth -> Broker-Cash RoMD (NON-PIT)",
         read_only=True, method_id="target_ground_truth_strategy_romd",
         status_function="collect_status", run_function="run_formal_audit",
-        preflight_summary=True,
+        preflight_summary=True, inventory_function="render_existing_artifact_inventory",
     ),
     "portfolio_drawdown_attribution": AuditCatalogEntry(
         audit_type="portfolio_drawdown_attribution",
@@ -220,6 +230,10 @@ def validate_audit_catalog(definitions: tuple[AuditDefinition, ...] = ()) -> Non
             raise ValueError(f"Formal Audit catalog contract不完整: {key}")
         if entry.preflight_summary and (not entry.formal or not entry.method_id):
             raise ValueError(f"簡要Replay狀態只能宣告於正式Audit: {key}")
+        if entry.inventory_function and (not entry.formal or not entry.preflight_summary):
+            raise ValueError(f"快速工件盤點必須由正式Replay能力宣告: {key}")
+        if entry.preflight_summary and not entry.inventory_function:
+            raise ValueError(f"正式Replay前置確認缺少快速工件盤點: {key}")
         if entry.formal:
             if not entry.method_id:
                 raise ValueError(f"Formal Audit必須綁定method_id: {key}")

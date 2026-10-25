@@ -329,6 +329,39 @@ class OracleReplayStore:
         """Compatibility probe; explanation and matching have a single owner."""
         return self.explain_other_identity(identity) is not None
 
+    def preview_candidates(
+        self, *, seeds, targets, dataset: str | None = None,
+        start_date: str | None = None, requested_end: str | None = None,
+        benchmark: str | None = None,
+    ) -> dict[tuple[int, str], str]:
+        """Inventory validated local bytes without certifying scientific REUSE.
+
+        The complete replay identity, including parameter/price/cohort hashes,
+        is intentionally checked later by ``resolve_completed``. A corrupt
+        candidate is never presented as a reusable artifact.
+        """
+        result: dict[tuple[int, str], str] = {}
+        for seed in seeds:
+            for target in targets:
+                key = (int(seed), str(target))
+                try:
+                    identities = self.existing_completed_identities(seed=key[0], target=key[1])
+                except (OSError, ValueError, KeyError, TypeError, OverflowError):
+                    result[key] = "INVALID"
+                    continue
+                matching = [identity for identity in identities if (
+                    (dataset is None or identity.get("dataset") == dataset)
+                    and (start_date is None or identity.get("start_date") == start_date)
+                    and (requested_end is None or
+                         (identity.get("cohort") or {}).get("research_cutoff") == requested_end)
+                    and (benchmark is None or identity.get("benchmark") == benchmark)
+                )]
+                result[key] = (
+                    "MULTIPLE" if len(matching) > 1 else
+                    "CACHE" if matching else "MISSING"
+                )
+        return result
+
     def existing_completed_identities(self, *, seed: int, target: str) -> tuple[dict[str, Any], ...]:
         """Inventory *verified stored bytes*, not current scientific REUSE eligibility.
 
@@ -340,6 +373,10 @@ class OracleReplayStore:
             raise ValueError("Oracle invalid cache target")
         results: list[dict[str, Any]] = []
         for path in sorted((self.cache_root / str(int(seed))).glob(f"{target}_*.json")):
+            # A prefix like R40_ also matches R40_Direct_ in a glob; only
+            # accept the canonical <target>_<SHA256>.json filename shape.
+            if not is_sha256_hex(path.stem[len(target) + 1:]):
+                continue
             try:
                 raw = json.loads(path.read_text(encoding="utf-8"))
                 identity = raw["identity"]
@@ -472,6 +509,56 @@ class HistoricalOracleIndex:
                     panel_payload = dict(payload)
                     panel_payload.update(panel)
                     self.snapshots.append((origin, path, panel_payload))
+
+    def preview_candidates(
+        self, *, seeds, targets, dataset: str | None = None,
+        start_date: str | None = None, requested_end: str | None = None,
+        benchmark: str | None = None, strategy_profile_id: str | None = None,
+    ) -> set[tuple[int, str]]:
+        """Inventory archived seed observations, not scientific reuse approval.
+
+        Report versions and different target collections do not control the
+        inventory. ``lookup`` remains the only strict historical REUSE owner.
+        """
+        requested = {(int(seed), str(target)) for seed in seeds for target in targets}
+        found: set[tuple[int, str]] = set()
+        for _origin, _path, payload in self.snapshots:
+            if (dataset is not None and payload.get("dataset") != dataset
+                    or start_date is not None and payload.get("start_date") != start_date
+                    or benchmark is not None and payload.get("benchmark_id") != benchmark
+                    or strategy_profile_id is not None and payload.get("strategy_profile_id") != strategy_profile_id):
+                continue
+            # A completed report's final matured bar can predate the requested
+            # research cutoff by 40 sessions; it cannot lie beyond the cutoff.
+            if requested_end is not None and (
+                not isinstance(payload.get("end_date"), str)
+                or payload["end_date"] > requested_end
+            ):
+                continue
+            groups = [payload.get("baseline")]
+            if isinstance(payload.get("oracles"), list):
+                groups.extend(payload["oracles"])
+            for group in groups:
+                if not isinstance(group, dict):
+                    continue
+                target = str(group.get("target") or "")
+                if group is payload.get("baseline"):
+                    target = "C96"
+                if target not in {item[1] for item in requested}:
+                    continue
+                observations = group.get("seed_observations")
+                if not isinstance(observations, list):
+                    continue
+                for observation in observations:
+                    if not isinstance(observation, dict):
+                        continue
+                    try:
+                        key = (int(observation["seed"]), target)
+                    except (KeyError, ValueError, TypeError, OverflowError):
+                        continue
+                    if key in requested:
+                        found.add(key)
+        return found
 
     def _compatibility_issues(self, payload: Mapping[str, Any], *,
                               context: Mapping[str, Any], origin: str) -> tuple[str, ...]:

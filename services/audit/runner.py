@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from config.audit import AUDIT_OUTPUT_ROOT
 from core.audit_policy import (
@@ -304,6 +304,29 @@ def render_audit_status(
     )
 
 
+def render_audit_artifact_inventory(
+    module_id: str,
+    *,
+    project_root: Path = PROJECT_ROOT,
+    method_id: str | None = None,
+    audit_id: str | None = None,
+) -> str:
+    """Lightweight cache-presence preview; never computes Target or grants REUSE.
+
+    The catalog advertises the single canonical inventory provider. Full
+    identity checks and Replay authorization remain with that Audit owner.
+    """
+    definitions = tuple(
+        item for item in _definitions_for_method(module_id, method_id, audit_id)
+        if item.enabled
+    )
+    if len(definitions) != 1:
+        raise ValueError("快速 Replay 工件盤點只支援單一已啟用的正式 Audit")
+    definition = definitions[0]
+    handler = get_audit_handler(definition).load_inventory_handler()
+    return str(handler(definition, project_root=Path(project_root).resolve()))
+
+
 def run_enabled_audits(
     module_id: str,
     *,
@@ -311,6 +334,7 @@ def run_enabled_audits(
     quiet: bool = False,
     method_id: str | None = None,
     audit_id: str | None = None,
+    before_replay: Callable[[str], None] | None = None,
     preflight_display: str = "full",
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
@@ -328,6 +352,11 @@ def run_enabled_audits(
         or not get_audit_handler(definitions[0]).preflight_summary
     ):
         raise ValueError("簡要 Replay preflight 僅供正式 Target 驗證使用")
+    if before_replay is not None and (
+        len(definitions) != 1
+        or not get_audit_handler(definitions[0]).preflight_summary
+    ):
+        raise ValueError("執行前 Replay 確認只允許正式 Target 驗證的唯一 owner")
     validate_audit_catalog(
         (*get_audit_definitions(module_id), *get_reusable_audit_definitions(module_id))
     )
@@ -355,6 +384,8 @@ def run_enabled_audits(
         kwargs: dict[str, Any] = {"project_root": root, "quiet": quiet}
         if preflight_display != "full":
             kwargs["preflight_display"] = preflight_display
+        if before_replay is not None:
+            kwargs["before_replay"] = before_replay
         outputs[definition.audit_id] = spec.load_run_handler()(definition, **kwargs)
     return outputs
 
@@ -417,6 +448,7 @@ __all__ = [
     "collect_audit_status",
     "collect_project_audit_status",
     "render_audit_status",
+    "render_audit_artifact_inventory",
     "render_latest_audit_summary",
     "run_enabled_audits",
 ]
