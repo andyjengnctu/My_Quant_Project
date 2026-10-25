@@ -30,6 +30,7 @@ from core.breakout_quality_runtime import (
     get_continuous_ranker_training_policy,
 )
 
+from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets
 from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.pit_fold_provenance import (
     pit_fold_file_signatures, validate_pit_fold_evidence,
@@ -68,6 +69,35 @@ from core.breakout_quality_ranking_context import (
 CONTINUOUS_RANKER_SCORE_FILENAME = "continuous_ranker_scores.csv"
 CONTINUOUS_RANKER_REPORT_FILENAME = "continuous_ranker_report.json"
 DAILY_RANKER_OOS_SCORE_FILENAME = "daily_ranker_oos_scores.csv.gz"
+
+
+def normalize_portfolio_score_scale(
+    frame: pd.DataFrame, *, experiment_profile: str, score_column: str,
+) -> pd.DataFrame:
+    """Apply the model's declared selector scale after immutable score validation.
+
+    Same-date percentile normalization is computed across all scored daily
+    stocks; never just today's orderable Min events or future target survivors.
+    Historical experiment profiles default to untouched raw scores.
+    """
+    profile = get_breakout_quality_experiment_profile(str(experiment_profile))
+    if profile.portfolio_score_scale == "raw":
+        return frame
+    if profile.portfolio_score_scale != "daily_percentile":
+        raise ValueError("Unsupported portfolio score scale")
+    if frame.duplicated(["ticker", "date"]).any():
+        raise ValueError("Cannot scale duplicate stock-day scores")
+    values = pd.to_numeric(frame[score_column], errors="raise").to_numpy(dtype=np.float64)
+    if not np.isfinite(values).all():
+        raise ValueError("Cannot percentile-normalize missing or nonfinite model scores")
+    # Reuse the existing canonical daily percentile primitive; the invariant
+    # below compares its output with Oracle's average_zero_based contract.
+    scaled = build_same_date_percentile_targets(
+        values, np.ones(len(frame), dtype=bool), frame["date"],
+    )
+    normalized = frame.copy()
+    normalized[score_column] = scaled.astype(float)
+    return normalized
 
 
 def resolve_continuous_ranker_oos_score_path(
@@ -981,6 +1011,11 @@ def _load_selection_point_in_time_score_table_from_path_cached(
         raise ValueError(
             f"Selection PIT score row count與manifest不一致: expected={expected_count}, actual={len(table)}"
         )
+    if experiment_profile:
+        table = normalize_portfolio_score_scale(
+            table, experiment_profile=str(experiment_profile),
+            score_column="breakout_quality_score",
+        )
     indexed = table.set_index(["ticker", "date"]).sort_index()
     indexed.attrs["available_from"] = available_from or str(table["date"].min())
     indexed.attrs["available_through"] = available_through or str(table["date"].max())
@@ -1507,6 +1542,9 @@ def _load_continuous_ranker_oos_score_table_from_path_cached(
         raise ValueError("Continuous ranker OOS score同ticker/date必須唯一")
     available_from = str(frame["date"].min())
     available_through = str(frame["date"].max())
+    frame = normalize_portfolio_score_scale(
+        frame, experiment_profile=str(experiment_profile), score_column="model_score",
+    )
     indexed = frame.set_index(["ticker", "date"]).sort_index()
     indexed.attrs["available_from"] = available_from
     indexed.attrs["available_through"] = available_through

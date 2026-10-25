@@ -429,6 +429,7 @@ def simulate_realized_trade_path_label(
     precomputed_signals,
     sizing_capital: float | None = None,
     horizon_end_date: str | pd.Timestamp | None = None,
+    counterfactual_entry_limit: float | None = None,
 ) -> TradePathLabelResult:
     """A2 canonical execution path; an optional ex-post deadline is isolated.
 
@@ -446,7 +447,7 @@ def simulate_realized_trade_path_label(
     atr, buy_condition, sell_condition, buy_limits = precomputed_signals
     signal_date = stock_df.index[signal_pos]
     eval_start_date = _date_text(stock_df.index[signal_pos + 1])
-    if not bool(buy_condition[signal_pos]) or not math.isfinite(float(atr[signal_pos])):
+    if (counterfactual_entry_limit is None and not bool(buy_condition[signal_pos])) or not math.isfinite(float(atr[signal_pos])):
         return _excluded_result(
             TRADE_PATH_REASON_NOT_FORMAL_SETUP,
             start_date=eval_start_date,
@@ -454,8 +455,21 @@ def simulate_realized_trade_path_label(
             teacher_effective_date=teacher_effective_date,
         )
 
+    # Only the hypothetical decision-date entry intent differs. All future
+    # original signals, fills, stops, exits and fees stay canonical.
+    entry_limit = (
+        float(buy_limits[signal_pos])
+        if counterfactual_entry_limit is None
+        else float(counterfactual_entry_limit)
+    )
+    if not math.isfinite(entry_limit) or entry_limit <= 0.0:
+        return _excluded_result(
+            TRADE_PATH_REASON_INVALID_ENTRY_PLAN,
+            start_date=eval_start_date, end_date=_date_text(signal_date),
+            teacher_effective_date=teacher_effective_date,
+        )
     signal_state = create_signal_tracking_state(
-        buy_limits[signal_pos],
+        entry_limit,
         atr[signal_pos],
         params,
         ticker=ticker,
@@ -569,7 +583,7 @@ def simulate_realized_trade_path_label(
 
         if current_pos == signal_pos + 1:
             entry_plan = build_normal_entry_plan(
-                buy_limits[signal_pos],
+                entry_limit,
                 atr[signal_pos],
                 resolved_sizing_capital,
                 params,

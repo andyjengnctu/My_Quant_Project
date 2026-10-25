@@ -396,6 +396,7 @@ DAILY_UNIVERSAL_SHARED_FULL_D20_SAFETY_HS_CONDITIONAL_MFE_PROFILE = (
 DAILY_UNIVERSAL_TERMINAL_R40_PAIRWISE_PROFILE = "daily_universal_terminal_r40_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PAIRWISE_PROFILE = "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_FULL_HORIZON_MAE_GATED_MFE_T40_PAIRWISE_PROFILE = "daily_universal_full_horizon_mae_gated_mfe_t40_full_list_ndcg_pairwise"
+DAILY_UNIVERSAL_COUNTERFACTUAL_MINTRADE40_NETR_PAIRWISE_PROFILE = "daily_universal_counterfactual_mintrade40_netr_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE = "daily_universal_joint_mfe_d40_quadrant_cross_entropy"
 DAILY_UNIVERSAL_DIRECT_U40_HUBER_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_huber"
 DAILY_UNIVERSAL_DIRECT_U40_PAIRWISE_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_full_list_ndcg_pairwise"
@@ -627,6 +628,9 @@ class BreakoutQualityExperimentProfile:
     training_weight_reduction: str = TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM
     training_objective: str = TRAINING_OBJECTIVE_BINARY_CLASSIFICATION
     continuous_target_id: str | None = None
+    # A new science contract may project raw PIT scores to a common per-date
+    # selector scale. Historical profiles keep the default raw score unchanged.
+    portfolio_score_scale: str = "raw"
     loss_name: str = "cross_entropy"
     epoch_selection_metric: str = "validation_loss"
     training_label_scope: str = TRAINING_LABEL_SCOPE_ALL
@@ -692,6 +696,8 @@ class BreakoutQualityExperimentProfile:
             get_breakout_quality_encoder_pretraining_profile(
                 self.encoder_pretraining_profile
             )
+        if self.portfolio_score_scale not in {"raw", "daily_percentile"}:
+            raise ValueError("unsupported portfolio score scale")
         if self.training_objective == TRAINING_OBJECTIVE_BINARY_CLASSIFICATION:
             if self.continuous_target_id is not None:
                 raise ValueError("binary classification profile 不得指定 continuous_target_id")
@@ -812,6 +818,8 @@ class BreakoutQualityExperimentProfile:
             })
             if self.raw_r_huber_delta_r is not None:
                 payload["raw_r_huber_delta_r"] = float(self.raw_r_huber_delta_r)
+            if self.portfolio_score_scale != "raw":
+                payload["portfolio_score_scale"] = self.portfolio_score_scale
             # The event-group scope is the historical continuous-ranker default.
             # Omit it so existing MR-12 artifact identities remain byte-for-byte
             # compatible; only new non-default sample scopes are explicit.
@@ -1660,6 +1668,19 @@ _EXPERIMENT_PROFILES = {
         training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
         training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
         continuous_target_id="daily_full_horizon_mae_gated_mfe_t40_v1",
+        loss_name="pairwise_logistic",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_v1",
+    ),
+    DAILY_UNIVERSAL_COUNTERFACTUAL_MINTRADE40_NETR_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_COUNTERFACTUAL_MINTRADE40_NETR_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        continuous_target_id="daily_universal_counterfactual_mintrade40_netr_v1",
+        portfolio_score_scale="daily_percentile",
         loss_name="pairwise_logistic",
         epoch_selection_metric="mean_daily_spearman",
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
@@ -3255,6 +3276,30 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         ),
         metric_scope="all_stock_days_full_horizon_mae_gated_mfe_t40",
         score_semantic_id="daily_full_horizon_mae_gated_mfe_t40_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        selection_pit_authorized=True,
+        current_time_validation_authorized=True,
+    ),
+    DAILY_UNIVERSAL_COUNTERFACTUAL_MINTRADE40_NETR_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_COUNTERFACTUAL_MINTRADE40_NETR_PAIRWISE_PROFILE,
+        model_research_id="MR-13CL",
+        experiment_name="MR-13CL Counterfactual Daily MinTrade40 NetR Full-list Ranker",
+        phase="13CL",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "all eligible stock-days: hypothetical Min buy at next legal session, "
+            "canonical filled trade broker-net R, horizon capped at 40 exchange sessions; "
+            "non-executable/unmatured labels censored rather than zeroed"
+        ),
+        objective_description=(
+            "Matched CJ/CK inception_time_v1 single-head 300x10, full-list Delta-NDCG "
+            "and legal PIT folds; solely the counterfactual trade-path target changes. "
+            "Pre-2021 historical Min teacher and 2021+ canonical P16, no future backfill. "
+            "Daily percentile selector scale is a separate declared model research identity; "
+            "same raw-score historical CJ/CK artifacts stay immutable. Research-only."
+        ),
+        metric_scope="all_stock_days_counterfactual_mintrade40_netr",
+        score_semantic_id="daily_counterfactual_mintrade40_netr_rank_percentile",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         selection_pit_authorized=True,
         current_time_validation_authorized=True,
