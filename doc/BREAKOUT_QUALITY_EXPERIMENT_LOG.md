@@ -13597,3 +13597,11 @@ Decision: `ENGINEERING_CHECKPOINT_FIRST_REUSE / HISTORICAL_AK_EVIDENCE_PRESERVED
 - **使用者更正**：Oracle／Research DL 的需求是交易執行契約一致，只有未來真值與合法 PIT 預測分數來源不同；P1–P3 的 Score 工件診斷屬內部實作與測試，不得未經正式報表授權插入 Rolling 計畫／Console／狀態頁。先前只在一般 Rolling 顯示、Robustness 不顯示，是錯誤的正式 workflow 變更，並不表示 Rolling 較其他 mode 多一份核准 SOP。
 - **處理**：恢復 `services/research/strategy_compare_application.py` 原本的 plan／execute／status 單一 canonical Strategy Compare dispatch；所有 mode 的原正式執行入口、七組 arm、結果、REUSE、報表 schema、renderer、P16、模型 Score 與 Trading 不變。取消 P1–P3 在正式選單流程中的自動三方 replay 與診斷輸出，避免因 artifact-retention 產生與使用者目標無關的 BLOCKED 顯示或隱性工作。
 - **保留**：先前受控對照 service 與專項合成驗證暫保留為非正式、不自動執行的研究程式，並非目前 Standard SOP、Trading 或正式比較工作；其四 Seed 真實市場驗收仍未完成。歷史研究紀錄與既有工件不刪改。新正式比較語意或人讀報表改版必須另外取得授權。
+
+
+## 2026-10-25 — Oracle 與 Daily-universal DL 共用排名時點契約；退役未採用的 P1–P3 工程分支
+
+- **使用者要求**：Oracle 和正式 Research DL 僅使用不同分數來源（未來真值／PIT 預測），候選、K/R0 Selector、P16、Broker-Cash 均依既有正式核心；內部 source／工件診斷不可新增於 Rolling／Robustness 的使用者計畫、Console 或 Standard SOP。沿用 `test-branch-1_20261025_122714_d0c7f4cb.zip`，保留既有科學與報表身分。
+- **工程收斂**：`filters/breakout_quality/runtime.py` 的 Oracle／正式 PIT／正式 canonical runtime，統一以 `_candidate_score_lookup_date` 解析最新資訊日與原始訊號日。Daily-universal Oracle 與 PIT 預設取最新合法 information_date，MinTrade40_NetR 訊號事件 Oracle 仍固定原始訊號日；保持既有缺分數／未合法取得資料時的 fail-closed 行為及回傳欄位不變。Portfolio candidate、K/R0、P16、券商費稅、進出場、正式報表皆不改。
+- **退役**：上輪 P1–P3 三方受控比較的 `score_comparison_alignment.py`、`oracle_dl_comparison_contract.py`、`oracle_dl_comparison_sources.py` 在撤回正式 dispatch 後無正式呼叫者，故退役三份一次性工程模組與 `synthetic_target_oracle_cases.py` 中其專用測試類別；替換為小範圍同分數輸入的 Oracle vs PIT 候選更新時點、Selector 排名與目標值等價回歸。此前討論、證據、已完成 Result 與歷史身份均保留，不當成新正式科研結果。
+- **科學邊界**：舊價格 Oracle 以每日真值百分位、既有 DL 以持久模型 Score 作為 Selector 數值，Exact K/R0 的分數尺度不保證天然可比；此外 Oracle 40D 成熟窗與舊 DL 全期結果不同。因此只能宣稱**執行路徑共用**，不能在未核准新 scientific identity 或取得同窗配對工件前宣稱兩者 RoMD 差距全來自可預測性，也不修改舊策略 Score、歷史工件、報表版本或排序尺度。

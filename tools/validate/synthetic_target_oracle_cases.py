@@ -1008,6 +1008,112 @@ class OracleAuditContractCases(TestCase):
                             SCORE_SOURCE_AUDIT_ORACLE_FUTURE_TRUTH)
 
 
+
+    def test_oracle_and_daily_pit_reuse_identical_portfolio_rank_input_contract(self):
+        """With identical numeric scores, sources cannot alter candidate ranking.
+
+        Exercise the real Portfolio candidate score resolver, including a
+        continued signal whose prediction is refreshed on the next completed
+        information date. No market artifacts or report changes are required.
+        """
+        from core.portfolio_candidates import _resolve_candidate_quality_ranking
+        from core.portfolio_entry_selection_max_dl import (
+            _max_dl_score_order, _max_dl_basket_quality_key,
+        )
+        from core.strategy_compare_policy import get_strategy_comparison_settings
+        from core.extended_signals import attach_breakout_quality_rank
+        from filters.breakout_quality.ranking_score_store import SCORE_SOURCE_SELECTION_POINT_IN_TIME
+        settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
+        base = settings.arms["C96"]
+        oracle_exact = settings.arms[str(self.active_definition.source["exact_arm_id"])]
+        # Discover eligible Daily-universal Exact arms via the canonical suite,
+        # not another hard-coded model-name or arm-registration table.
+        matched = []
+        for arm in settings.enabled_arms:
+            if (arm.dl_enabled and arm.dl_id
+                    and arm.param_source == base.param_source
+                    and arm.param_policy == base.param_policy
+                    and arm.rule_policy == "all_off"
+                    and arm.dl_runtime_mode == oracle_exact.dl_runtime_mode
+                    and dict(arm.dl_runtime_options or {}) == dict(oracle_exact.dl_runtime_options or {})):
+                matched.append(arm)
+        self.assertTrue(matched, "Active Daily-universal DL must share Oracle's Exact selector")
+        for arm in matched:
+            with self.subTest(arm_id=arm.arm_id):
+                arm = matched[0]
+                source = settings.dl_sources[str(arm.dl_id)]
+                self.assertEqual(source.score_source, SCORE_SOURCE_SELECTION_POINT_IN_TIME)
+                self.assertEqual(
+                    oracle_exact.dl_runtime_options, arm.dl_runtime_options,
+                    "Oracle/Research Exact K/R0 selector is a shared canonical policy",
+                )
+                params = SimpleNamespace(
+                    use_breakout_quality_ranking=True,
+                    breakout_quality_filter_id=str(source.filter_id), high_len=260,
+                )
+                score_map = {
+                    (ticker, day): score
+                    for ticker, first, second in (("2330", 0.21, 0.91), ("2317", 0.85, 0.16))
+                    for day, score in (("2025-02-03", first), ("2025-02-04", second))
+                }
+
+                def fake_pit_lookup(*, ticker, signal_date, filter_id, **_kwargs):
+                    day = pd.Timestamp(signal_date).strftime("%Y-%m-%d")
+                    value = score_map[(ticker, day)]
+                    return {
+                        "score": value, "score_date": day, "available": True,
+                        "unavailable_reason": "", "filter_id": filter_id,
+                        "score_source": SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+                    }
+
+                def run_source(use_oracle):
+                    if use_oracle:
+                        context = audit_oracle_truth_score_context(
+                            score_map, ranking_policy=oracle_exact.dl_runtime_mode,
+                            ranking_options=oracle_exact.dl_runtime_options,
+                            key_mode="information_date",
+                        )
+                    else:
+                        context = breakout_quality_ranking_source_context(
+                            score_source=SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+                            model_architecture=str(source.model_architecture),
+                            experiment_profile=str(source.experiment_profile),
+                            ranking_policy=arm.dl_runtime_mode,
+                            ranking_options=arm.dl_runtime_options,
+                        )
+                    with context, patch("filters.breakout_quality.runtime.lookup_selection_point_in_time_candidate_score",
+                                        side_effect=fake_pit_lookup) as pit_lookup:
+                        signals = {}
+                        history = []
+                        for info_date in ("2025-02-03", "2025-02-04"):
+                            candidates = []
+                            for ticker in ("2330", "2317"):
+                                signal_state = signals.setdefault(ticker, {})
+                                rank = _resolve_candidate_quality_ranking(
+                                    params=params, ticker=ticker,
+                                    signal_date="2025-02-03", information_date=info_date,
+                                    signal_state=signal_state,
+                                )
+                                attach_breakout_quality_rank(signal_state, rank)
+                                self.assertEqual(rank["score_date"], info_date)
+                                candidates.append({
+                                    "ticker": ticker, "breakout_quality_score": rank["score"],
+                                    "breakout_quality_rank": rank,
+                                })
+                            base_rank = {id(row): i for i, row in enumerate(candidates)}
+                            order = _max_dl_score_order(candidates, base_rank=base_rank)
+                            objective = _max_dl_basket_quality_key(order, base_rank=base_rank)
+                            history.append((tuple((r["ticker"], r["breakout_quality_score"])
+                                                   for r in order), objective))
+                        if use_oracle:
+                            pit_lookup.assert_not_called()
+                        else:
+                            self.assertEqual(pit_lookup.call_count, 4)
+                        return history
+
+                self.assertEqual(run_source(True), run_source(False))
+
+
 class ActiveMinTrade40OracleComparisonCases(TestCase):
     """Current Target is a regular Broker-Cash comparison, not a second report."""
 
@@ -2021,607 +2127,6 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 self.assertEqual(len(recorded), previous)
                 self.assertEqual(again["oracles"], report["oracles"])
 
-
-class OracleDLAlignedComparisonCases(TestCase):
-    """New comparative capability without changing legacy Oracle/Strategy identity."""
-
-    @staticmethod
-    def _cohort():
-        return pd.MultiIndex.from_tuples(
-            [("A", "2025-01-02"), ("B", "2025-01-02"),
-             ("C", "2025-01-03")], names=["ticker", "date"],
-        )
-
-    def test_same_day_percentile_is_canonical_and_singletons_are_neutral(self):
-        from filters.breakout_quality.score_comparison_alignment import rank_daily_stock_days
-        idx = self._cohort()
-        out = rank_daily_stock_days(
-            pd.DataFrame({"score": [2.0, 1.0, 18.0]}, index=idx),
-            score_column="score", start="2025-01-02", end="2025-01-03", cohort=idx,
-        )
-        self.assertEqual([float(v) for v in out], [1.0, 0.0, 0.5])
-        tie = rank_daily_stock_days(
-            pd.DataFrame({"score": [1.0, 1.0, 1.0]}, index=idx),
-            score_column="score", start="2025-01-02", end="2025-01-03", cohort=idx,
-        )
-        self.assertEqual([float(v) for v in tie], [0.5, 0.5, 0.5])
-
-    def test_common_legal_population_cannot_be_invented_by_intersection(self):
-        from filters.breakout_quality.score_comparison_alignment import common_stock_day_cohort
-        idx = self._cohort()
-        ora = pd.DataFrame({"score": [3, 2, 1]}, index=idx)
-        dl = ora.drop(("B", "2025-01-02"))
-        with self.assertRaisesRegex(ValueError, "獨立合法母體"):
-            common_stock_day_cohort(ora, dl, start="2025-01-02", end="2025-01-03")
-        with self.assertRaisesRegex(ValueError, "覆蓋不足"):
-            common_stock_day_cohort(ora, dl, start="2025-01-02", end="2025-01-03",
-                                    declared_eligible=idx)
-
-    def test_matched_pair_refuses_fallback_period_and_param_mismatch(self):
-        from services.research.oracle_dl_comparison_contract import verify_paired_oracle_dl_result
-        idx = self._cohort()
-        contract = {
-            "start_date": "2025-01-02", "end_date": "2025-01-03",
-            "dataset_sha256": "raw-bytes", "param_sha256": "p16-hash", "seed": 7,
-            "selector": self._canonical_selector(), "broker_policy": "broker_cash_v1",
-            "max_positions": 10, "rotation": False,
-            "score_refresh": "daily_information_date", "score_cohort_sha256": "same-eligible",
-        }
-        base = {7: {**contract, "romd": 8.0}}
-        oracle_row = {7: {**contract, "romd": 20.0, "score_origin": "future_truth"}}
-        dl_row = {7: {**contract, "romd": 11.0, "score_origin": "pit_prediction"}}
-        good = verify_paired_oracle_dl_result(
-            baseline=base, oracle=oracle_row, dl=dl_row,
-            eligible_score_keys=idx, orderable_keys=idx[:2],
-        )
-        self.assertEqual(good["oracle_minus_dl_romd_mean"], 9.0)
-        extra = pd.MultiIndex.from_tuples([("Z", "2025-01-02")], names=idx.names)
-        with self.assertRaisesRegex(ValueError, "缺少1筆Score"):
-            verify_paired_oracle_dl_result(
-                baseline=base, oracle=oracle_row, dl=dl_row,
-                eligible_score_keys=idx, orderable_keys=extra,
-            )
-        with self.assertRaisesRegex(ValueError, "共同契約"):
-            verify_paired_oracle_dl_result(
-                baseline=base, oracle=oracle_row,
-                dl={7: {**dl_row[7], "end_date": "2026-03-02"}},
-                eligible_score_keys=idx, orderable_keys=idx,
-            )
-
-    def test_score_warmup_must_cover_previous_information_day(self):
-        from services.research.oracle_dl_comparison_contract import run_matched_oracle_dl_replays
-        index = pd.MultiIndex.from_tuples(
-            [("A", "2020-12-31"), ("A", "2021-01-04")], names=["ticker", "date"],
-        )
-        entry = {
-            "oracle": pd.DataFrame({"score": [0.5, 0.8]}, index=index),
-            "dl": pd.DataFrame({"score": [0.4, 0.7]}, index=index),
-            "eligible": index, "param_sha256": "p16-identity",
-            "kind": "rolling_active_param_ensemble",
-            "baseline_params": "base", "scored_params": "scored",
-            "pit_score_sha256": "pit", "oracle_truth_sha256": "future",
-            "eligibility_source": "feature_history_only",
-            "eligibility_manifest_sha256": "feature-manifest",
-        }
-        arguments = dict(
-            seed_panels={7: entry}, start_date="2021-01-04", end_date="2021-01-04",
-            data_dir="unused", dataset_sha256="prices", broker_policy="cash",
-            selector_policy=self._canonical_selector(), ranking_options={}, max_positions=10,
-        )
-        # The common score cohort is allowed to start before the portfolio period,
-        # because opening-day pending orders can refer to a prior trading day.
-        with self.assertRaisesRegex(ValueError, "不在共同評估期間"):
-            run_matched_oracle_dl_replays(**arguments)
-        def fake_replay(*, name, **kwargs):
-            if not name.startswith("No-DL"):
-                kwargs["replay_counts"]["A"] = {"orderable_rows": [{
-                    "ticker": "A", "breakout_quality_score_date": "2020-12-31",
-                }]}
-            return {"return_over_max_drawdown": 7.0}
-        with patch("services.research.strategy_compare_replay._run_scenario", side_effect=fake_replay):
-            report = run_matched_oracle_dl_replays(
-                **arguments, score_start_date="2020-12-31",
-            )
-        self.assertEqual(report["score_window"]["start"], "2020-12-31")
-        self.assertEqual(report["observed_orderable_score_coverage"], 1.0)
-
-    @staticmethod
-    def _canonical_selector():
-        from core.buy_sort import BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL
-        return BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL
-
-    def test_three_arm_matched_replay_shares_daily_scoring_and_economic_context(self):
-        from services.research.oracle_dl_comparison_contract import run_matched_oracle_dl_replays
-        idx = self._cohort()
-        source = {
-            "oracle": pd.DataFrame({"score": [0.1, 0.9, 0.4]}, index=idx),
-            "dl": pd.DataFrame({"score": [0.4, 0.5, 0.8]}, index=idx),
-            "eligible": idx, "param_sha256": "p16-identity",
-            "kind": "rolling_active_param_ensemble",
-            "baseline_params": "base", "scored_params": "scored",
-            "pit_score_sha256": "pit-canonical", "oracle_truth_sha256": "future-canonical",
-            "eligibility_source": "feature_history_only", "eligibility_manifest_sha256": "feature-manifest",
-        }
-        seen = []
-        def fake_replay(*, name, **kwargs):
-            seen.append((name, kwargs["params"], kwargs["end_date"]))
-            if name.startswith(("future_truth", "pit_prediction")):
-                kwargs["replay_counts"]["A"] = {"orderable_rows": [{
-                    "ticker": "A", "breakout_quality_score_date": "2025-01-02",
-                }]}
-            if name.startswith("No-DL"):
-                return {"return_over_max_drawdown": 8.0}
-            rank = resolve_breakout_quality_candidate_rank(
-                ticker="A", signal_date="2025-01-02",
-                information_date="2025-01-02", high_len=260,
-            )
-            self.assertTrue(rank["available"])
-            if name.startswith("future_truth"):
-                self.assertEqual(rank["score"], 0.0)
-                return {"return_over_max_drawdown": 20.0}
-            self.assertEqual(rank["score"], 0.0)
-            return {"return_over_max_drawdown": 11.0}
-        with patch("services.research.strategy_compare_replay._run_scenario", side_effect=fake_replay):
-            report = run_matched_oracle_dl_replays(
-                seed_panels={7: source}, start_date="2025-01-02", end_date="2025-01-03",
-                data_dir="unused", dataset_sha256="prices", broker_policy="broker_cash_v1",
-                selector_policy=self._canonical_selector(),
-                ranking_options={"preserve_k_r0": True}, max_positions=10,
-            )
-        self.assertEqual(report["status"], "COMPARABLE")
-        self.assertEqual(report["oracle_minus_dl_romd_mean"], 9.0)
-        self.assertEqual(len(seen), 3)
-        self.assertEqual([x[1] for x in seen], ["base", "scored", "scored"])
-        self.assertEqual(report["observed_orderable_score_coverage"], 1.0)
-        self.assertEqual(report["orderable_trace_by_seed"][7]["future_truth"]["orderable_rows"], 1)
-
-    def test_eligibility_must_be_feature_only_and_lookup_uses_observed_trace(self):
-        from services.research.oracle_dl_comparison_contract import run_matched_oracle_dl_replays
-        idx = self._cohort()
-        source = {
-            "oracle": pd.DataFrame({"score": [0.1, 0.9, 0.4]}, index=idx),
-            "dl": pd.DataFrame({"score": [0.4, 0.5, 0.8]}, index=idx),
-            "eligible": idx, "param_sha256": "p16-identity",
-            "kind": "rolling_active_param_ensemble",
-            "baseline_params": "base", "scored_params": "scored",
-            "pit_score_sha256": "pit", "oracle_truth_sha256": "future",
-            "eligibility_source": "derived_from_oracle_target_valid",
-            "eligibility_manifest_sha256": "feature-manifest",
-        }
-        kwargs = dict(seed_panels={7: source}, start_date="2025-01-02", end_date="2025-01-03",
-                      data_dir="unused", dataset_sha256="prices", broker_policy="cash",
-                      selector_policy=self._canonical_selector(), ranking_options={},
-                      max_positions=10)
-        with self.assertRaisesRegex(ValueError, "feature-history-only"):
-            run_matched_oracle_dl_replays(**kwargs)
-        source["eligibility_source"] = "feature_history_only"
-        def fake_replay(*, name, **kwargs):
-            if name.startswith("No-DL"):
-                return {"return_over_max_drawdown": 8.0}
-            kwargs["replay_counts"]["A"] = {"orderable_rows": [{
-                "ticker": "A", "breakout_quality_score_date": "2025-01-01",
-            }]}
-            return {"return_over_max_drawdown": 10.0}
-        with patch("services.research.strategy_compare_replay._run_scenario", side_effect=fake_replay):
-            with self.assertRaisesRegex(ValueError, "不在共同Score母體"):
-                run_matched_oracle_dl_replays(**kwargs)
-
-
-
-class MatchedOracleDlCanonicalSourceCases(TestCase):
-    """Producer-bound and fail-closed Source Preflight; no market data needed."""
-
-    def test_current_suite_matches_scientific_target_and_selector_not_model_names(self):
-        from services.research.oracle_dl_comparison_sources import (
-            resolve_matched_oracle_dl_pairs,
-        )
-        from core.strategy_compare_policy import get_strategy_comparison_settings
-        matches = resolve_matched_oracle_dl_pairs("broker_cash_dl_conversion_rolling")
-        self.assertTrue(matches)
-        settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
-        selected = {arm.arm_id for arm in settings.enabled_arms}
-        recipes = oracle._oracle_comparison_plan(_ACTIVE_ORACLE_DEFINITION)
-        for item in matches:
-            self.assertIn(item["arm_id"], selected)
-            self.assertEqual(item["selector"], "exact")
-            self.assertIn(item["oracle_target"], recipes["recipes"])
-            self.assertEqual(item["score_source"], "selection_point_in_time")
-        self.assertEqual(len({row["arm_id"] for row in matches}), len(matches))
-        self.assertFalse(resolve_matched_oracle_dl_pairs("broker_cash_dl_conversion_oos"))
-
-    def test_canonical_seed_root_uses_validated_latest_manifest_only(self):
-        from services.research.oracle_dl_comparison_sources import (
-            _validated_robustness_model_root,
-        )
-        from core.strategy_compare_policy import get_strategy_multi_seed_robustness_settings
-        cfg = get_strategy_multi_seed_robustness_settings("broker_cash_dl_conversion_rolling")
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            with self.assertRaisesRegex(FileNotFoundError, "latest"):
-                _validated_robustness_model_root(root, cfg.profile_id)
-            out = root / cfg.output_root
-            fp = "a" * 16
-            (out / fp).mkdir(parents=True)
-            (out / "latest.json").write_text(json.dumps({"fingerprint": fp}), encoding="utf-8")
-            contract = {
-                "fingerprint": fp, "profile_id": cfg.profile_id,
-                "robustness_id": cfg.robustness_id,
-                "benchmark_id": cfg.benchmark_id,
-                "resolved_seeds": list(cfg.resolved_seeds),
-                "model_artifact_fingerprint": "b" * 16,
-            }
-            (out / fp / "manifest.json").write_text(json.dumps({
-                "status": "COMPLETED", "contract": contract,
-            }), encoding="utf-8")
-            expected = (root / cfg.model_work_root / ("b" * 16)).resolve()
-            self.assertEqual(_validated_robustness_model_root(root, cfg.profile_id), expected)
-            contract["resolved_seeds"] = list(cfg.resolved_seeds[:-1])
-            (out / fp / "manifest.json").write_text(json.dumps({
-                "status": "COMPLETED", "contract": contract,
-            }), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "四Seed"):
-                _validated_robustness_model_root(root, cfg.profile_id)
-
-    def test_isolated_pit_scores_require_each_seed_manifest_and_sha(self):
-        from services.research import oracle_dl_comparison_sources as owner
-        profile = "broker_cash_dl_conversion_rolling"
-        pair = owner.resolve_matched_oracle_dl_pairs(profile)[0]
-        root = Path("/tmp/research_mock_legal_root")
-        seen = []
-        def validated(*args, **kwargs):
-            seed = int(kwargs["expected_seed"])
-            seen.append((seed, str(kwargs["point_in_time_dir_override"])))
-            return SimpleNamespace(
-                score_path=Path(f"seed_{seed}.csv"),
-                manifest_path=Path(f"seed_{seed}.json"),
-                seed=seed,
-                continuous_target_id=pair["continuous_target_id"],
-                available_from="2020-12-31", available_through="2026-03-02",
-            )
-        with patch.object(owner, "_historical_seed_score_hashes", return_value={int(seed): "a" * 64 for seed in owner.get_strategy_multi_seed_robustness_settings(profile).resolved_seeds}), \
-             patch.object(owner, "load_selection_point_in_time_score_source_contract", side_effect=validated), \
-             patch.object(owner, "load_selection_point_in_time_score_table_from_path", return_value=pd.DataFrame({
-                 "breakout_quality_score": [0.5],
-             }, index=pd.MultiIndex.from_tuples([("2330", "2021-01-01")], names=["ticker", "date"]))), \
-             patch.object(owner, "compute_file_sha256", return_value="a" * 64):
-            verified = owner.load_verified_seed_pit_scores(
-                project_root=root, profile_id=profile, match=pair,
-                model_root_override=root / "seed_models",
-            )
-        self.assertEqual(len(seen), len(verified))
-        self.assertEqual(len({seed for seed, _ in seen}), len(seen))
-        self.assertTrue(all(f"seed_{seed}" in model_dir for seed, model_dir in seen))
-        self.assertTrue(all(record["score_sha256"] == "a" * 64 for record in verified.values()))
-        def missing(*args, **kwargs):
-            raise FileNotFoundError("aggregate score retention pruned")
-        with patch.object(owner, "_historical_seed_score_hashes", return_value={int(seed): "a" * 64 for seed in owner.get_strategy_multi_seed_robustness_settings(profile).resolved_seeds}), \
-             patch.object(owner, "_retained_model_robustness_pit_dir", side_effect=ValueError("model robust not retained")), \
-             patch.object(owner, "load_selection_point_in_time_score_source_contract", side_effect=missing), \
-             self.assertRaisesRegex(ValueError, "BLOCKED.*不可拿完成的策略RoMD"):
-            owner.load_verified_seed_pit_scores(
-                project_root=root, profile_id=profile, match=pair,
-                model_root_override=root / "seed_models",
-            )
-
-    def test_pruned_strategy_score_recovers_only_identical_model_robustness_source(self):
-        from services.research import oracle_dl_comparison_sources as owner
-        profile = "broker_cash_dl_conversion_rolling"
-        pair = owner.resolve_matched_oracle_dl_pairs(profile)[0]
-        seeds = tuple(owner.get_strategy_multi_seed_robustness_settings(profile).resolved_seeds)
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            alt_root = root / "model_robustness_retained"
-            calls = []
-            def source_contract(*args, **kwargs):
-                seed = int(kwargs["expected_seed"])
-                path = Path(kwargs["point_in_time_dir_override"])
-                calls.append((seed, path))
-                if path != alt_root:
-                    raise FileNotFoundError("isolated seed score pruned")
-                return SimpleNamespace(
-                    score_path=alt_root / f"score_{seed}.csv",
-                    manifest_path=alt_root / f"manifest_{seed}.json",
-                    seed=seed, continuous_target_id=pair["continuous_target_id"],
-                    available_from="2020-12-31", available_through="2026-03-02",
-                )
-            frame = pd.DataFrame({
-                "breakout_quality_score": [0.5],
-            }, index=pd.MultiIndex.from_tuples([("2330", "2021-01-01")], names=["ticker", "date"]))
-            with patch.object(owner, "_historical_seed_score_hashes", return_value={int(seed): "a" * 64 for seed in seeds}), \
-                 patch.object(owner, "_retained_model_robustness_pit_dir", return_value=alt_root) as alternate, \
-                 patch.object(owner, "load_selection_point_in_time_score_source_contract", side_effect=source_contract), \
-                 patch.object(owner, "load_selection_point_in_time_score_table_from_path", return_value=frame), \
-                 patch.object(owner, "compute_file_sha256", return_value="a" * 64):
-                verified = owner.load_verified_seed_pit_scores(
-                    project_root=root, profile_id=profile, match=pair,
-                    model_root_override=root / "isolated_robustness",
-                )
-            self.assertEqual(set(verified), set(seeds))
-            self.assertEqual(alternate.call_count, len(seeds))
-            self.assertEqual(len(calls), len(seeds) * 2)
-            self.assertTrue(all(item["score_sha256"] == "a" * 64 for item in verified.values()))
-            with patch.object(owner, "_historical_seed_score_hashes", return_value={int(seed): "b" * 64 for seed in seeds}), \
-                 patch.object(owner, "_retained_model_robustness_pit_dir", return_value=alt_root), \
-                 patch.object(owner, "load_selection_point_in_time_score_source_contract", side_effect=source_contract), \
-                 patch.object(owner, "compute_file_sha256", return_value="a" * 64), \
-                 self.assertRaisesRegex(ValueError, "歷史策略結果SHA不符"):
-                owner.load_verified_seed_pit_scores(
-                    project_root=root, profile_id=profile, match=pair,
-                    model_root_override=root / "isolated_robustness",
-                )
-
-    def test_historical_score_hashes_use_robustness_owner_and_reject_unverified(self):
-        from services.research import oracle_dl_comparison_sources as owner
-        from services.research import strategy_multi_seed_robustness as producer
-        profile = "broker_cash_dl_conversion_rolling"
-        pair = owner.resolve_matched_oracle_dl_pairs(profile)[0]
-        cfg = owner.get_strategy_multi_seed_robustness_settings(profile)
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            run_root = root / cfg.output_root / ("b" * 16)
-            run_root.mkdir(parents=True)
-            (run_root.parent / "latest.json").write_text(json.dumps({"fingerprint": "b" * 16}), encoding="utf-8")
-            contract = {
-                "fingerprint": "b" * 16, "profile_id": profile,
-                "robustness_id": cfg.robustness_id, "benchmark_id": cfg.benchmark_id,
-                "resolved_seeds": list(cfg.resolved_seeds),
-            }
-            rows = pd.DataFrame([{"arm_id": pair["arm_id"], "seed": int(seed), "score_sha256": "a" * 64}
-                                 for seed in cfg.resolved_seeds])
-            evidence = {"contract": contract, "manifest": {"durable_artifacts": {"seed_results": {"sha256": "b" * 64}}},
-                        "seed_frame": rows}
-            with patch.object(producer, "_validate_completed_run", return_value=evidence) as checked:
-                actual = owner._historical_seed_score_hashes(project_root=root, profile_id=profile, arm_id=pair["arm_id"])
-            checked.assert_called_once_with(run_root.resolve(), backfill_integrity=False)
-            self.assertEqual(actual, {int(seed): "a" * 64 for seed in cfg.resolved_seeds})
-            with patch.object(producer, "_validate_completed_run", return_value=None), \
-                 self.assertRaisesRegex(ValueError, "未通過原Producer驗證"):
-                owner._historical_seed_score_hashes(project_root=root, profile_id=profile, arm_id=pair["arm_id"])
-            evidence["manifest"] = {"durable_artifacts": {}}
-            with patch.object(producer, "_validate_completed_run", return_value=evidence), \
-                 self.assertRaisesRegex(ValueError, "缺少原Producer核准"):
-                owner._historical_seed_score_hashes(project_root=root, profile_id=profile, arm_id=pair["arm_id"])
-
-    def test_ready_sources_bind_to_canonical_comparison_engine_without_publishing(self):
-        from services.research import oracle_dl_comparison_sources as owner
-        profile = "broker_cash_dl_conversion_rolling"
-        pair = owner.resolve_matched_oracle_dl_pairs(profile)[0]
-        from core.strategy_compare_policy import get_strategy_multi_seed_robustness_settings
-        seeds = tuple(get_strategy_multi_seed_robustness_settings(profile).resolved_seeds)
-        keys = pd.MultiIndex.from_tuples([
-            ("2330", "2020-12-31"), ("2330", "2021-01-04"),
-        ], names=["ticker", "date"])
-        table = pd.DataFrame({"breakout_quality_score": [0.2, 0.8]}, index=keys)
-        verified = {int(seed): {
-            "table": table, "score_sha256": "a" * 64,
-            "manifest_sha256": "b" * 64,
-            "available_from": "2020-12-31", "available_through": "2026-03-02",
-        } for seed in seeds}
-        params = [(int(seed), "c" * 64, "rolling_active_param_ensemble", {"base": 1}, {"scored": 1})
-                  for seed in seeds]
-        bundle = SimpleNamespace(
-            group_table=pd.DataFrame({
-                "ticker": ["2330", "2330"],
-                "date": pd.to_datetime(["2020-12-31", "2021-01-04"]),
-            }), target_valid=[True, False],
-        )
-        ranked = {pair["oracle_target"]: {
-            ("2330", "2020-12-31"): 0.4,
-            ("2330", "2021-01-04"): 0.9,
-        }}
-        evidence = {"last_common_day": "2021-01-04",
-                    "market_truth": {"score_start": "2020-12-31"}}
-        with tempfile.TemporaryDirectory() as tmp, \
-             patch.object(oracle, "_robustness_artifacts", return_value=(object(), [(s, Path("params")) for s in seeds])), \
-             patch.object(oracle, "_prepare_oracle_parameters", return_value=(params, [])), \
-             patch.object(oracle, "build_oracle_score_tables", return_value=(ranked, evidence)), \
-             patch.object(owner, "load_verified_seed_pit_scores", return_value=verified), \
-             patch("filters.breakout_quality.profile_ranker_data.load_profile_continuous_ranker_data", return_value=bundle), \
-             patch("core.dataset_profiles.get_dataset_dir", return_value=Path("fake-market")), \
-             patch("services.audit.oracle_replay_artifacts.price_inventory_sha256", return_value="d" * 64), \
-             patch("services.research.oracle_dl_comparison_contract.run_matched_oracle_dl_replays", return_value={"status": "COMPARABLE"}) as replay:
-            result = owner.run_verified_matched_oracle_dl_comparison(
-                project_root=Path(tmp), profile_id=profile, arm_id=pair["arm_id"],
-            )
-        self.assertEqual(result["status"], "COMPARABLE")
-        self.assertEqual(result["source_verified_seeds"], len(seeds))
-        self.assertEqual(result["oracle_target"], pair["oracle_target"])
-        params = replay.call_args.kwargs
-        self.assertEqual(params["score_start_date"], "2020-12-31")
-        self.assertEqual(params["end_date"], "2021-01-04")
-        self.assertEqual(set(params["seed_panels"]), set(seeds))
-        self.assertTrue(all(
-            item["eligibility_manifest_sha256"] == "b" * 64
-            and len(item["eligible"]) == 2
-            for item in params["seed_panels"].values()
-        ))
-
-    def test_absent_p16_blocks_before_ground_truth_or_replay(self):
-        from services.research import oracle_dl_comparison_sources as owner
-        pair = owner.resolve_matched_oracle_dl_pairs("broker_cash_dl_conversion_rolling")[0]
-        with tempfile.TemporaryDirectory() as tmp, \
-             patch.object(oracle, "_robustness_artifacts", side_effect=ValueError("no canonical P16")), \
-             patch.object(oracle, "build_oracle_score_tables") as truth:
-            with self.assertRaisesRegex(ValueError, "canonical P16"):
-                owner.run_verified_matched_oracle_dl_comparison(
-                    project_root=Path(tmp), profile_id="broker_cash_dl_conversion_rolling",
-                    arm_id=pair["arm_id"],
-                )
-            truth.assert_not_called()
-
-class MatchedOracleDlFormalDispatchCases(TestCase):
-    """Shared Research entry/REUSE checks without formal Windows Test Suite."""
-
-    def test_formal_comparison_preserves_canonical_result_and_no_diagnostic_dispatch(self):
-        from services.research import strategy_compare_application as app
-        from services.research import oracle_dl_comparison_sources as sources
-        payload = {"status": "COMPLETED", "scenarios": {"C96": {"romd": 8.36}}}
-        plan = SimpleNamespace(project_root=Path("/tmp/p123_mock"))
-        settings = SimpleNamespace(profile_id="broker_cash_dl_conversion_rolling")
-        with patch("services.research.strategy_comparison.run_strategy_comparison", return_value=payload) as standard, \
-             patch.object(sources, "resolve_matched_oracle_dl_pairs") as matched, \
-             patch.object(sources, "collect_matched_oracle_dl_readiness") as collect, \
-             patch.object(sources, "run_matched_research_from_strategy_compare") as replay, \
-             redirect_stdout(io.StringIO()) as console:
-            actual = app.execute_strategy_comparison(resolved_plan=plan, settings=settings)
-        self.assertIs(actual, payload)
-        standard.assert_called_once()
-        matched.assert_not_called()
-        collect.assert_not_called()
-        replay.assert_not_called()
-        self.assertEqual(console.getvalue(), "")
-
-    def test_strategy_failure_does_not_trigger_diagnostic_dispatch(self):
-        from services.research import strategy_compare_application as app
-        from services.research import oracle_dl_comparison_sources as sources
-        with patch("services.research.strategy_comparison.run_strategy_comparison", side_effect=RuntimeError("standard failed")), \
-             patch.object(sources, "collect_matched_oracle_dl_readiness") as collect, \
-             patch.object(sources, "run_matched_research_from_strategy_compare") as replay, \
-             self.assertRaisesRegex(RuntimeError, "standard failed"):
-            app.execute_strategy_comparison(
-                resolved_plan=SimpleNamespace(project_root=Path("/tmp/p123")),
-                settings=SimpleNamespace(profile_id="broker_cash_dl_conversion_rolling"),
-            )
-        collect.assert_not_called()
-        replay.assert_not_called()
-
-    def test_ready_runs_same_source_owner_and_blocked_never_replays(self):
-        from services.research import oracle_dl_comparison_sources as owner
-        states = {"pairs": (
-            {"arm_id": "C107", "oracle_target": "T40", "status": "SOURCE_READY"},
-            {"arm_id": "C108", "oracle_target": "T40-MFE", "status": "BLOCKED", "reason": "PIT seed absent"},
-        )}
-        with patch.object(owner, "run_verified_matched_oracle_dl_comparison", return_value={
-            "artifact_action": "REUSE", "oracle_minus_dl_romd_mean": 1.25,
-            "evidence_path": "outputs/strategy_compare/example/result.md",
-        }) as run, redirect_stdout(io.StringIO()) as console:
-            result = owner.run_matched_research_from_strategy_compare(
-                project_root=Path("/tmp/p123"), profile_id="broker_cash_dl_conversion_rolling", readiness=states,
-            )
-        run.assert_called_once()
-        self.assertEqual(run.call_args.kwargs["arm_id"], "C107")
-        self.assertTrue(run.call_args.kwargs["persist_evidence"])
-        self.assertEqual([x["action"] for x in result["arms"]], ["REUSE", "BLOCKED"])
-        self.assertIn("PIT seed absent", console.getvalue())
-        self.assertIn("P1-P3 REUSE", console.getvalue())
-
-    def test_same_identity_reuses_immutable_evidence_and_rejects_tampering(self):
-        from services.research import oracle_dl_comparison_sources as owner
-        result = {
-            "status": "COMPARABLE", "scientific_contract_id": owner.MATCHED_RESEARCH_CONTRACT_ID,
-            "research_arm": "C107", "oracle_target": "T40",
-            "evaluation_period": {"start": "2021-01-01", "end": "2025-12-22"},
-            "oracle_minus_dl_romd_mean": 2.5,
-            "same_seed": [{"seed": 1, "no_dl_romd": 8.0, "oracle_romd": 20.0,
-                           "dl_romd": 17.5, "oracle_minus_dl": 2.5}],
-        }
-        identity = {"science": owner.MATCHED_RESEARCH_CONTRACT_ID, "p16_sha": "a" * 64,
-                    "seed_sources": [{"seed": 1, "pit_score_sha256": "c" * 64}]}
-        with tempfile.TemporaryDirectory() as tmp:
-            destination = Path(tmp) / "oracle_dl_matched_research" / "C107" / "abc"
-            self.assertIsNone(owner._read_completed_matched_evidence(destination, identity))
-            owner._publish_completed_matched_evidence(destination, identity, result)
-            self.assertEqual(owner._read_completed_matched_evidence(destination, identity), result)
-            with self.assertRaisesRegex(RuntimeError, "身分衝突"):
-                owner._read_completed_matched_evidence(destination, {**identity, "p16_sha": "b" * 64})
-            (destination / "result.md").write_text("tampered", encoding="utf-8")
-            with self.assertRaisesRegex(RuntimeError, "Hash"):
-                owner._read_completed_matched_evidence(destination, identity)
-            with self.assertRaisesRegex(RuntimeError, "Hash"):
-                owner._publish_completed_matched_evidence(destination, identity, result)
-
-    def test_full_source_binding_reuses_same_seed_identity_and_rebuilds_changed_score(self):
-        from services.research import oracle_dl_comparison_sources as owner
-        from core.strategy_compare_policy import get_strategy_multi_seed_robustness_settings
-        profile = "broker_cash_dl_conversion_rolling"
-        pair = owner.resolve_matched_oracle_dl_pairs(profile)[0]
-        seeds = tuple(get_strategy_multi_seed_robustness_settings(profile).resolved_seeds)
-        keys = pd.MultiIndex.from_tuples([
-            ("2330", "2020-12-31"), ("2330", "2021-01-04"),
-        ], names=["ticker", "date"])
-        score_table = pd.DataFrame({"breakout_quality_score": [0.25, 0.75]}, index=keys)
-        verified = {int(seed): {
-            "table": score_table, "score_sha256": "a" * 64,
-            "manifest_sha256": "b" * 64, "available_from": "2020-12-31",
-            "available_through": "2026-03-02",
-        } for seed in seeds}
-        params = [(int(seed), "c" * 64, "rolling_active_param_ensemble", {}, {}) for seed in seeds]
-        truth = {pair["oracle_target"]: {
-            ("2330", "2020-12-31"): 0.3, ("2330", "2021-01-04"): 0.7,
-        }}
-        evidence = {"last_common_day": "2021-01-04", "market_truth": {"score_start": "2020-12-31"}}
-        bundle = SimpleNamespace(group_table=pd.DataFrame({
-            "ticker": ["2330", "2330"],
-            "date": pd.to_datetime(["2020-12-31", "2021-01-04"]),
-        }), target_valid=[True, False])
-        fake_result = {
-            "status": "COMPARABLE", "matched_seeds": len(seeds),
-            "same_seed": [{"seed": int(seed), "no_dl_romd": 8.0, "oracle_romd": 20.0,
-                           "dl_romd": 12.0, "oracle_minus_dl": 8.0}
-                          for seed in seeds],
-            "oracle_minus_dl_romd_mean": 8.0,
-            "evaluation_period": {"start": "2021-01-01", "end": "2021-01-04"},
-        }
-        with tempfile.TemporaryDirectory() as tmp, \
-             patch.object(oracle, "_robustness_artifacts", return_value=(object(), [(s, Path("params")) for s in seeds])), \
-             patch.object(oracle, "_prepare_oracle_parameters", return_value=(params, [])), \
-             patch.object(oracle, "build_oracle_score_tables", return_value=(truth, evidence)), \
-             patch.object(owner, "load_verified_seed_pit_scores", return_value=verified), \
-             patch("filters.breakout_quality.profile_ranker_data.load_profile_continuous_ranker_data", return_value=bundle), \
-             patch("core.dataset_profiles.get_dataset_dir", return_value=Path("fake-market")), \
-             patch("services.audit.oracle_replay_artifacts.price_inventory_sha256", return_value="d" * 64), \
-             patch("services.research.oracle_dl_comparison_contract.run_matched_oracle_dl_replays", return_value=fake_result) as replay:
-            root = Path(tmp)
-            first = owner.run_verified_matched_oracle_dl_comparison(
-                project_root=root, profile_id=profile, arm_id=pair["arm_id"], persist_evidence=True,
-            )
-            self.assertEqual(first["artifact_action"], "RUN")
-            path = root / first["evidence_path"]
-            self.assertTrue(path.is_file())
-            second = owner.run_verified_matched_oracle_dl_comparison(
-                project_root=root, profile_id=profile, arm_id=pair["arm_id"], persist_evidence=True,
-            )
-            self.assertEqual(second["artifact_action"], "REUSE")
-            replay.assert_called_once()
-            verified[seeds[0]]["score_sha256"] = "e" * 64
-            changed = owner.run_verified_matched_oracle_dl_comparison(
-                project_root=root, profile_id=profile, arm_id=pair["arm_id"], persist_evidence=True,
-            )
-            self.assertEqual(changed["artifact_action"], "RUN")
-            self.assertEqual(replay.call_count, 2)
-            self.assertNotEqual(changed["evidence_path"], first["evidence_path"])
-
-    def test_formal_plan_is_unchanged_for_all_profile_types(self):
-        from services.research import strategy_compare_application as app
-        from services.research import oracle_dl_comparison_sources as owner
-        fake_plan = SimpleNamespace(project_root=Path("/tmp/p123_mock"), status_dict=lambda: {})
-        for profile_id in ("broker_cash_dl_conversion_rolling", "broker_cash_dl_conversion_forward"):
-            with self.subTest(profile_id=profile_id):
-                fake_settings = SimpleNamespace(profile_id=profile_id)
-                with patch.object(app, "get_strategy_comparison_settings", return_value=fake_settings), \
-                     patch("services.research.strategy_comparison.resolve_comparison_plan", return_value=fake_plan), \
-                     patch("services.research.strategy_comparison.render_execution_plan", return_value="original plan") as renderer, \
-                     patch.object(owner, "resolve_matched_oracle_dl_pairs") as matched, \
-                     patch.object(owner, "collect_matched_oracle_dl_readiness") as collect:
-                    _, actual_plan, rendered = app.resolve_strategy_comparison_execution(profile_id)
-                self.assertIs(actual_plan, fake_plan)
-                self.assertEqual(rendered, "original plan")
-                renderer.assert_called_once()
-                matched.assert_not_called()
-                collect.assert_not_called()
-
-    def test_formal_status_is_only_canonical_renderer(self):
-        from services.research import strategy_compare_application as app
-        from services.research import oracle_dl_comparison_sources as owner
-        settings = SimpleNamespace(profile_id="broker_cash_dl_conversion_rolling")
-        with patch.object(app, "get_strategy_comparison_settings", return_value=settings), \
-             patch("services.research.strategy_comparison.show_strategy_comparison_status", side_effect=lambda **_kwargs: print("canonical status")) as canonical, \
-             patch.object(owner, "collect_matched_oracle_dl_readiness") as collect, \
-             redirect_stdout(io.StringIO()) as console:
-            app.show_strategy_comparison_profile_status(profile_id=settings.profile_id)
-        self.assertEqual(console.getvalue().strip(), "canonical status")
-        canonical.assert_called_once_with(settings=settings)
-        collect.assert_not_called()
 
 
 if __name__ == "__main__":

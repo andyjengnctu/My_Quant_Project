@@ -159,6 +159,23 @@ _ORACLE_TRUTH_KEY_MODE: ContextVar[str] = ContextVar(
 )
 
 
+def _candidate_score_lookup_date(
+    *, signal_date, information_date, use_information_date: bool,
+    missing_information_date_message: str,
+):
+    """One decision-date rule for Oracle truth and formal PIT ranking.
+
+    Score source may differ; the latest completed-bar versus original-signal
+    decision is shared.  Event-anchored hindsight labels remain explicitly
+    signal-origin based and do not change Daily-universal score semantics.
+    """
+    if use_information_date:
+        if information_date is None:
+            raise ValueError(missing_information_date_message)
+        return information_date
+    return signal_date
+
+
 @contextmanager
 def audit_oracle_truth_score_context(
     scores: Mapping[tuple[str, str], float],
@@ -235,8 +252,11 @@ def resolve_breakout_quality_candidate_rank(
         truth = _ORACLE_TRUTH_SCORES.get()
         if truth is None or information_date is None:
             raise RuntimeError("Oracle Audit來源或information_date缺失；禁止降級為正式PIT score")
-        lookup_day = (signal_date if _ORACLE_TRUTH_KEY_MODE.get() == "signal_origin_date"
-                      else information_date)
+        lookup_day = _candidate_score_lookup_date(
+            signal_date=signal_date, information_date=information_date,
+            use_information_date=_ORACLE_TRUTH_KEY_MODE.get() != "signal_origin_date",
+            missing_information_date_message="Oracle Audit來源或information_date缺失；禁止降級為正式PIT score",
+        )
         if lookup_day is None:
             raise RuntimeError("Oracle Audit缺少原始signal date；禁止不明來源fallback")
         date = pd.Timestamp(lookup_day).strftime("%Y-%m-%d")
@@ -250,13 +270,13 @@ def resolve_breakout_quality_candidate_rank(
             "score_source": SCORE_SOURCE_AUDIT_ORACLE_FUTURE_TRUTH,
         }
     if context.score_source == SCORE_SOURCE_CANONICAL_RUNTIME:
-        lookup_date = signal_date
-        if breakout_quality_ranking_uses_daily_information_date():
-            if information_date is None:
-                raise ValueError(
-                    "daily-universal canonical runtime必須提供最新已完成交易日 information_date"
-                )
-            lookup_date = information_date
+        lookup_date = _candidate_score_lookup_date(
+            signal_date=signal_date, information_date=information_date,
+            use_information_date=breakout_quality_ranking_uses_daily_information_date(),
+            missing_information_date_message=(
+                "daily-universal canonical runtime必須提供最新已完成交易日 information_date"
+            ),
+        )
         if context.model_architecture and context.experiment_profile:
             payload = lookup_workflow_runtime_candidate_score(
                 project_root=root,
@@ -286,13 +306,13 @@ def resolve_breakout_quality_candidate_rank(
         primary_score_column = str(
             options.get("primary_score_column") or ""
         ).strip() or None
-        lookup_date = signal_date
-        if breakout_quality_ranking_uses_daily_information_date():
-            if information_date is None:
-                raise ValueError(
-                    "daily-universal ranking source必須提供最新已完成交易日 information_date"
-                )
-            lookup_date = information_date
+        lookup_date = _candidate_score_lookup_date(
+            signal_date=signal_date, information_date=information_date,
+            use_information_date=breakout_quality_ranking_uses_daily_information_date(),
+            missing_information_date_message=(
+                "daily-universal ranking source必須提供最新已完成交易日 information_date"
+            ),
+        )
         if context.score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
             payload = lookup_selection_point_in_time_candidate_score(
                 project_root=root,
