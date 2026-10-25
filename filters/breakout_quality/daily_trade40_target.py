@@ -87,22 +87,33 @@ def resolve_historical_min_teacher_paths(
 
 
 def load_historical_min_execution_schedule(
-    root: str | Path, *, settings=None,
+    root: str | Path, *, settings=None, evaluation_start_date: str | None = None,
 ) -> tuple[tuple[ExecutableMinPeriod, ...], dict[str, Any]]:
     """Resolve PIT-effective historical Min teachers without fabricating P16 history.
 
     Earlier supervised rows can use independently archived P2 Min parameters.
     Starting in 2021 the teacher MUST switch to the canonical P16 Min source
     used by the Research portfolio; missing years stay unlabeled, never backfilled.
-    Both canonical input files and every effective year enter target lineage.
+    A read-only Oracle evaluation starting in 2021 only consumes P16.
+    Full-history training still requires both P2 and P16 sources.
     """
     if settings is None:
         from core.strategy_compare_policy import get_strategy_comparison_settings
         settings = get_strategy_comparison_settings("selection_pit")
     root = Path(root).resolve()
     paths = resolve_historical_min_teacher_paths(root, settings=settings)
+    evaluation_start = (None if evaluation_start_date is None
+                        else pd.Timestamp(evaluation_start_date).normalize())
+    if evaluation_start is not None and evaluation_start < P16_HANDOFF_DATE:
+        raise ValueError("Counterfactual Trade40 OOS-only view cannot omit pre-2021 P2 truth")
+    if evaluation_start is not None:
+        # The 2021+ Oracle never consumes pre-2021 labels. Resolve only
+        # the P16 source for that date range; do not alter training truth.
+        paths = {SOURCE_IDS[1]: paths[SOURCE_IDS[1]]}
     periods: list[ExecutableMinPeriod] = []
     provenance: dict[str, Any] = {"policy": str(settings.param_policy).strip(), "sources": []}
+    if evaluation_start is not None:
+        provenance["oracle_evaluation_start_date"] = str(evaluation_start.date())
     for source_id, path in paths.items():
         if not path.is_file():
             raise FileNotFoundError(f"Counterfactual Trade40 historical Min params missing: {source_id}: {path}")
@@ -224,6 +235,8 @@ def counterfactual_trade40_contract(
         "exchange_calendar_sha256": digest,
         "teacher": provenance,
         "historical_teacher_handoff": "P2 before 2021-01-01; canonical P16 Min from 2021-01-01",
+        **({"oracle_evaluation_start_date": provenance["oracle_evaluation_start_date"]}
+           if "oracle_evaluation_start_date" in provenance else {}),
         "entry": "decision_date_close_plus_ATR_times_canonical_Min_tolerance_rounded_by_price_utils",
         "execution": "canonical_A2_trade_path_ledger_net_with_40th_exchange_session_closeout",
         "censored_labels": "no_fill_or_unexecutable_or_unmatured_is_null_not_zero",

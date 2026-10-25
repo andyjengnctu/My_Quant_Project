@@ -367,7 +367,7 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
             module_id, project_root=PROJECT_ROOT, method_id=method_id,
         ), flush=True)
         try:
-            confirm = input("👉 按 Enter 驗證並執行需要計算的項目；輸入 0 返回：").strip().lower()
+            confirm = input("👉 按 Enter 核對正式 REUSE/RUN/BLOCKED 計畫（尚不執行 Replay）；輸入 0 返回：").strip().lower()
         except EOFError:
             return 0
         if confirm in {"0", "q", "quit", "exit"}:
@@ -375,13 +375,21 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
         if confirm not in {"", "1"}:
             print("選項無效，本次不執行。")
             return 0
-        # AI: The verified preflight in the canonical producer is the ONLY
-        # authority for REUSE/RUN/BLOCKED.  It automatically reuses compatible
-        # observations, runs missing work and rejects conflicting evidence.
-        # AI: Display only its verified counts here: the inventory matrix is
-        # already on screen.  On a conflict the owner prints the full matrix.
+        # AI: Inventory is tentative; the canonical owner verifies sources,
+        # AI: effective dates and per-arm replay identities BEFORE any replay.
+        # AI: This single capability owns the verified authorization callback.
+        def approve_verified_replay(plan: str) -> None:
+            print("\n" + plan, flush=True)
+            try:
+                approval = input("👉 正式計畫核對後，輸入 RUN 執行 Replay；輸入 0 返回：").strip()
+            except EOFError:
+                approval = "0"
+            if approval != "RUN":
+                raise RuntimeError("Target 驗證已取消：正式 Replay 計畫未獲授權，未執行回放")
+
         run_enabled_audits(
             module_id, project_root=PROJECT_ROOT, method_id=method_id,
+            before_replay=approve_verified_replay,
             preflight_display="summary",
         )
     else:

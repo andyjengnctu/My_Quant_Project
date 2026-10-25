@@ -278,6 +278,40 @@ class DailyTrade40SyntheticCases(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 load_historical_min_execution_schedule(root, settings=settings)
 
+    def test_oos_only_schedule_does_not_need_p2_but_full_training_still_does(self):
+        from core.strategy_compare_policy import get_strategy_comparison_settings
+        from core.params_io import params_to_json_dict
+        from filters.breakout_quality.daily_trade40_target import SOURCE_IDS
+        params = fixture()[2]
+        settings = get_strategy_comparison_settings('selection_pit')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = settings.parameter_sources[SOURCE_IDS[1]]
+            path = root / source.path_template.format(param_filename='roos_base_best.json')
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({
+                'schema_type':'rolling_oos_param_set',
+                'params_by_oos_year': {'2021':params_to_json_dict(params)},
+            }), encoding='utf-8')
+            expected_sha = path.read_bytes()
+            schedule, evidence = load_historical_min_execution_schedule(
+                root, settings=settings, evaluation_start_date='2021-01-01')
+            self.assertEqual(len(schedule), 1)
+            self.assertEqual([x['source_id'] for x in evidence['sources']], [SOURCE_IDS[1]])
+            self.assertEqual(evidence['oracle_evaluation_start_date'], '2021-01-01')
+            self.assertIsNone(resolve_historical_min_period(schedule, '2020-12-31'))
+            self.assertIsNotNone(resolve_historical_min_period(schedule, '2021-06-15'))
+            self.assertEqual(path.read_bytes(), expected_sha)
+            with self.assertRaises(FileNotFoundError):
+                load_historical_min_execution_schedule(root, settings=settings)
+            with self.assertRaises(ValueError):
+                load_historical_min_execution_schedule(
+                    root, settings=settings, evaluation_start_date='2020-12-31')
+            path.unlink()
+            with self.assertRaises(FileNotFoundError):
+                load_historical_min_execution_schedule(
+                    root, settings=settings, evaluation_start_date='2021-01-01')
+
     def test_formal_pit_and_oos_score_loaders_respect_new_only_scale(self):
         from filters.breakout_quality.ranking_score_store import (
             load_selection_point_in_time_score_table_from_path,
@@ -365,6 +399,81 @@ class DailyTrade40SyntheticCases(unittest.TestCase):
         self.assertGreater(len(split.oos_ids),20)
         self.assertTrue((pd.to_datetime(bundle.group_table.iloc[split.inner_train_ids]['label_eval_end_date']) <
                          pd.Timestamp(split.report['inner_validation_start_date'])).all())
+
+    def test_oos_scoped_materializer_matches_full_history_in_2021_with_no_p2(self):
+        """Same canonical target/feature path, merely restrict scoring date range."""
+        import filters.breakout_quality.daily_ranker_data as loader
+        days = pd.bdate_range('2019-01-02', periods=860)
+        prices = np.arange(len(days), dtype=float)
+        def frame(slope):
+            close = 100. + slope * prices
+            return pd.DataFrame({
+                'Open': close, 'High': close+2, 'Low': close-2,
+                'Close': close, 'Volume': np.full(len(days), 1_000_000.),
+            }, index=days)
+        stocks = {'0050':frame(.05), '2330':frame(.13), '2317':frame(-.025)}
+        params = fixture()[2]
+        from dataclasses import replace
+        historical_params = replace(params, atr_buy_tol=params.atr_buy_tol + 2.0)
+        p2 = ExecutableMinPeriod(days[0],pd.Timestamp('2020-12-31'),historical_params,
+                                 'selection_min_roos','p2')
+        p16 = ExecutableMinPeriod(pd.Timestamp('2021-01-01'),None,params,
+                                  'min_best_broker_cash_rolling_experiment','p16')
+        full_lineage = {
+            'policy':'base-finalist-best',
+            'sources':[{'source_id':'selection_min_roos','sha256':'a'*64},
+                       {'source_id':'min_best_broker_cash_rolling_experiment','sha256':'b'*64}],
+            'periods':[{'start':str(days[0].date()),'end':'2020-12-31','source_id':'selection_min_roos'},
+                       {'start':'2021-01-01','end':None,'source_id':'min_best_broker_cash_rolling_experiment'}],
+        }
+        oos_lineage = {
+            'policy':'base-finalist-best',
+            'sources':[full_lineage['sources'][1]],
+            'periods':[full_lineage['periods'][1]],
+            'oracle_evaluation_start_date':'2021-01-01',
+        }
+        summary={'dataset':'full','source_data_date_range':{'start':str(days[0].date()),
+                                                            'end':str(days[-1].date())},
+                 'policy':{},'dataset_artifacts':{}}
+        outer={'effective_oos_end_date':str(days[-1].date()),
+               'selection_end_date':str(days[670].date()),
+               'oos_start_date':str(days[671].date()),
+               'oos_end_date':str(days[-1].date())}
+        def schedule(*_args, evaluation_start_date=None, **_kw):
+            return ((p16,), oos_lineage) if evaluation_start_date else ((p2,p16),full_lineage)
+        with patch.object(loader, 'load_validated_dataset_bundle',
+                          return_value=(summary,None,None,None,pd.DataFrame())), \
+             patch.object(loader,'resolve_breakout_quality_outer_policy',return_value=outer), \
+             patch.object(loader,'discover_dataset_csv_inputs',
+                          return_value=([(ticker,Path(ticker)) for ticker in stocks],None)), \
+             patch.object(loader,'load_dataset_frame',side_effect=lambda path,ticker,**k:stocks[ticker]), \
+             patch.object(loader,'load_historical_min_execution_schedule',side_effect=schedule) as source, \
+             patch.object(loader,'collect_canonical_exchange_sessions',return_value=days):
+            args=dict(filter_id='breakout_quality_v1',model_architecture='inception_time_v1',
+                      experiment_profile=PROFILE,preload_feature_bank=False,
+                      allow_stale_source=True,project_root=ROOT)
+            full=loader.load_daily_universal_ranker_data(**args)
+            scoped=loader.load_daily_universal_ranker_data(
+                **args,oracle_evaluation_start_date='2021-01-01')
+        self.assertEqual(source.call_count,2)
+        self.assertEqual(len(full.target_manifest['target_contract']['teacher']['sources']),2)
+        self.assertEqual(len(scoped.target_manifest['target_contract']['teacher']['sources']),1)
+        self.assertNotIn('oracle_evaluation_start_date',full.target_manifest['target_contract'])
+        self.assertEqual(scoped.target_manifest['target_contract']['oracle_evaluation_start_date'],'2021-01-01')
+        self.assertFalse((pd.to_datetime(scoped.group_table['date']) < pd.Timestamp('2021-01-01')).any())
+        def targets(bundle):
+            return {(str(t),str(pd.Timestamp(d).date())):(float(r),bool(v))
+                    for t,d,r,v in zip(bundle.group_table['ticker'],bundle.group_table['date'],
+                                       bundle.raw_target,bundle.target_valid)}
+        full_rows=targets(full)
+        scoped_rows=targets(scoped)
+        self.assertGreater(len(scoped_rows),100)
+        self.assertEqual(set(scoped_rows),{key for key in full_rows if key[1]>='2021-01-01'})
+        for key,value in scoped_rows.items():
+            original=full_rows[key]
+            self.assertEqual(value[1],original[1])
+            if value[1]:self.assertEqual(value[0],original[0])
+            else:self.assertTrue(np.isnan(value[0]) and np.isnan(original[0]))
 
     def test_percentile_score_on_all_scored_universe_not_min_candidates(self):
         data = pd.DataFrame({'ticker':['A','B','C','A','B'],

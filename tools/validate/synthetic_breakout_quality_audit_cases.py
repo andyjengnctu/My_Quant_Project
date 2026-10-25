@@ -152,16 +152,17 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
     route_console = io.StringIO()
     prompts = []
-    answers = iter(["", "", "0"])
+    answers = iter(["", "", "RUN", "0"])
 
     def input_after_plan(prompt):
         prompts.append((prompt, "候選 REUSE 32" in route_console.getvalue()))
         return next(answers)
 
     def fake_target_runner(*args, **kwargs):
-        # AI: This standard Research action needs no second confirmation.
-        # AI: The canonical producer will validate identities and auto-RUN misses.
-        print("[Target 驗證｜身分核對完成] REUSE 32 / RUN（需計算）0 / BLOCKED 0")
+        # AI: Simulate the canonical owner's verified preflight callback;
+        # AI: no replay is authorized merely by the tentative inventory.
+        print("[Target 驗證｜身分核對完成] REUSE 0 / RUN（需計算）56 / BLOCKED 0")
+        kwargs["before_replay"]("正式 Replay 計畫：REUSE 0 / RUN 56")
         return {}
 
     with patch("builtins.input", side_effect=input_after_plan), \
@@ -185,9 +186,11 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
     check_true(
         "target_verification_shows_reuse_before_execution_enter",
-        len(prompts) == 3 and not prompts[0][1] and prompts[1][1]
-        and "按 Enter 驗證並執行需要計算" in prompts[1][0]
+        len(prompts) == 4 and not prompts[0][1] and prompts[1][1]
+        and "按 Enter 核對正式 REUSE/RUN/BLOCKED 計畫" in prompts[1][0]
+        and "輸入 RUN 執行 Replay" in prompts[2][0]
         and root_text.index("候選 REUSE 32") < root_text.index("身分核對完成")
+        and root_text.index("身分核對完成") < root_text.index("正式 Replay 計畫")
         and "只核對正式" not in root_text and "完整驗證＋" not in root_text,
     )
     cancellation = io.StringIO()
@@ -202,6 +205,29 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         "target_preflight_cancel_does_not_claim_or_persist_report",
         not cancelled_runner.called and not latest.called and not status.called
         and "候選 REUSE 32" in cancellation.getvalue(),
+    )
+
+    # A new legal common window may invalidate the initial 48 REUSE candidates.
+    # A user must see the verified plan and explicitly authorize 56 Replay jobs.
+    changed_window_console = io.StringIO()
+    cancelled_plan = []
+    def replay_plan_only(*args, **kwargs):
+        kwargs["before_replay"]("共同視窗 2021-01-05；REUSE 0 / RUN 56")
+        cancelled_plan.append("replayed")
+    with patch("builtins.input", side_effect=["", "0"]), \
+         patch.object(research_app, "render_audit_artifact_inventory", return_value="舊期間候選 REUSE 48 / RUN 8"), \
+         patch.object(research_app, "run_enabled_audits", side_effect=replay_plan_only), \
+         patch.object(research_app, "render_latest_audit_summary") as no_summary, \
+         redirect_stdout(changed_window_console):
+        refused = ""
+        try:
+            research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
+        except RuntimeError as error:
+            refused = str(error)
+    check_true(
+        "changed_replay_window_never_executes_unapproved_56_arms",
+        "未獲授權" in refused and "RUN 56" in changed_window_console.getvalue()
+        and not cancelled_plan and not no_summary.called,
     )
 
     # Entry-point integration belongs to the existing app/menu contract, not

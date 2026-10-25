@@ -295,14 +295,14 @@ def _daily_teacher_source_settings(definition, source_id: str):
     return get_strategy_comparison_settings(profile_id)
 
 
-def _missing_daily_teacher_source(definition, *, root: Path) -> dict[str, Any] | None:
+def _missing_daily_teacher_source(definition, *, root: Path, evaluation_start: str) -> dict[str, Any] | None:
     """Check both teacher inputs against the canonical parameter planner.
 
     This is pure read-only inspection: even a legitimate BUILD action in the
     Optimizer's *own* plan is BLOCKED here. No Audit may initiate that work.
     """
     from filters.breakout_quality.daily_trade40_target import (
-        SOURCE_IDS, resolve_historical_min_teacher_paths,
+        SOURCE_IDS, P16_HANDOFF_DATE, resolve_historical_min_teacher_paths,
         load_historical_min_execution_schedule,
     )
     from core.console_report import project_relative_display_path
@@ -311,6 +311,12 @@ def _missing_daily_teacher_source(definition, *, root: Path) -> dict[str, Any] |
     )
 
     paths = resolve_historical_min_teacher_paths(root)
+    # Only required effective parameter dates belong in this Oracle preflight.
+    # Research strategy evaluation begins in 2021, so the pre-2021 P2 teacher
+    # is a DL-training dependency, not an Oracle replay dependency.
+    start = pd.Timestamp(evaluation_start).normalize()
+    if start >= P16_HANDOFF_DATE:
+        paths = {SOURCE_IDS[1]: paths[SOURCE_IDS[1]]}
     missing: list[dict[str, Any]] = []
     expected_builders = {
         SOURCE_IDS[0]: "selection_historical_p2",
@@ -318,7 +324,7 @@ def _missing_daily_teacher_source(definition, *, root: Path) -> dict[str, Any] |
     }
     # Check *both* inputs without BUILD: a stale P16 still BLOCKs
     # even when a missing P2 otherwise has an authorized producer.
-    for source_id in SOURCE_IDS:
+    for source_id in paths:
         path = paths[source_id]
         relative = project_relative_display_path(path, project_root=root)
         settings = _daily_teacher_source_settings(definition, source_id)
@@ -385,7 +391,9 @@ def _missing_daily_teacher_source(definition, *, root: Path) -> dict[str, Any] |
         }
     # The target owner also verifies chronological teacher/parameter semantics;
     # a technically READY artifact can still violate the combined P2->P16 handoff.
-    load_historical_min_execution_schedule(root)
+    load_historical_min_execution_schedule(
+        root, evaluation_start_date=str(start.date()) if start >= P16_HANDOFF_DATE else None,
+    )
     return None
 
 
@@ -406,7 +414,9 @@ def collect_status(definition, *, project_root: Path) -> dict[str, Any]:
         # AI: Read-only preflight must not materialize labels, Replay or params.
         # Missing teachers are BLOCKED; never substitute future P16 or zero-R.
         if _oracle_comparison_plan(definition)["daily_recipes"]:
-            missing = _missing_daily_teacher_source(definition, root=root)
+            missing = _missing_daily_teacher_source(
+                definition, root=root, evaluation_start=str(settings.start_date),
+            )
             if missing is not None:
                 return missing
         return {
@@ -911,7 +921,7 @@ def render_existing_artifact_inventory(definition, *, project_root: Path) -> str
         "Seed：" + "  ".join(f"S{i + 1}={seed}" for i, seed in enumerate(seeds)),
         render_table(headers, rows),
         f"REUSE {counts['REUSE']} / RUN（需計算）{counts['RUN']} / BLOCKED {counts['BLOCKED']}",
-        "註：既有結果先列 REUSE；按 Enter 後依正式資料與 P16 身分核准。衝突將 BLOCK，不覆寫歷史證據。",
+        "註：既有結果先列 REUSE；按 Enter 後依正式資料與 P16 身分核准。衝突將 BLOCK，不覆寫歷史證據。共同資訊日窗口如改變，舊 REUSE 會改列 RUN；未輸入 RUN 不執行 Replay。",
     ))
     return inventory
 
@@ -1024,6 +1034,8 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
             "settled_net_r_rows": daily_evidence["settled_net_r_rows"],
             "censored_rank_last_rows": daily_evidence["censored_rank_last_rows"],
             "research_cutoff": daily_evidence["research_cutoff"],
+            **({"oracle_evaluation_start_date": daily_evidence["oracle_evaluation_start_date"]}
+               if daily_evidence.get("oracle_evaluation_start_date") else {}),
         }
     return policy
 
@@ -1163,6 +1175,31 @@ def _reusable_completed_oracle_report(
     return None
 
 
+def _resolve_oracle_replay_start(
+    *, requested_start: str, daily_evidence: Mapping[str, Any] | None,
+) -> str:
+    """Choose ONE legal replay window for baseline and EVERY comparison arm.
+
+    The Research portfolio orders on day t from the last completed bar before
+    t. A daily Target with first information date d is not known on d in that
+    decision timeline, even for a hindsight Oracle: its first orderable date
+    is the first exchange session strictly AFTER d. Keep the requested start
+    when the comparison has no daily-universal source. Never invent a P2 label
+    or compare different start dates for existing vs new targets.
+    """
+    requested = pd.Timestamp(requested_start).normalize()
+    if daily_evidence is None:
+        return str(requested.date())
+    try:
+        first_score = pd.Timestamp(daily_evidence["first_date"]).normalize()
+        first_replay = pd.Timestamp(daily_evidence["first_replay_trade_date"]).normalize()
+    except (KeyError, ValueError, TypeError) as exc:
+        raise OracleBlockedError("Daily-universal Oracle replay start evidence missing") from exc
+    if first_score < requested or first_replay <= first_score:
+        raise OracleBlockedError("Daily-universal Oracle information-date alignment is invalid")
+    return str(max(requested, first_replay).date())
+
+
 def build_report(
     definition, *, project_root: Path, quiet: bool = False,
     before_replay: Callable[[str], None] | None = None,
@@ -1211,7 +1248,7 @@ def build_report(
                 project_root=root, dataset=str(settings.dataset),
                 filter_id=str(definition.source["filter_id"]),
                 profile_id=str(definition.source[provider]),
-                cutoff=str(settings.end_date),
+                cutoff=str(settings.end_date), evaluation_start=str(settings.start_date),
             )
         except DailyTrade40OracleBlockedError as exc:
             raise OracleBlockedError(str(exc)) from exc
@@ -1244,7 +1281,14 @@ def build_report(
         for seed, score in path_scores.items():
             seed_scores[int(seed)] = {name: score for name in plan["seed_recipes"]}
     direct_arm = _direct_arm(definition, settings, base_arm, exact_arm)
-    start = str(settings.start_date)
+    start = _resolve_oracle_replay_start(
+        requested_start=str(settings.start_date), daily_evidence=daily_score_evidence,
+    )
+    if start != str(settings.start_date) and not quiet:
+        progress(
+            "共同交易視窗依最早合法 information_date 對齊："
+            f"{settings.start_date} -> {start}；舊不同期間 Replay 不可 REUSE"
+        )
     end40 = min(str(settings.end_date), str(cohort40["last_common_day"]))
     if end40 <= start:
         raise OracleBlockedError("40D成熟樣本期間不合法")

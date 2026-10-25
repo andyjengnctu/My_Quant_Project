@@ -1219,6 +1219,7 @@ def load_daily_universal_ranker_data(
     preload_feature_bank: bool,
     allow_stale_source: bool,
     extend_score_eligibility_to_source_tail: bool = False,
+    oracle_evaluation_start_date: str | None = None,
     feature_price_source: dict[str, Any] | None = None,
     feature_trade_count_source: dict[str, Any] | None = None,
     project_root: str | Path = PROJECT_ROOT,
@@ -1343,6 +1344,16 @@ def load_daily_universal_ranker_data(
         benchmark_index,
         feature_window_bars=input_window_bars,
     )
+    if oracle_evaluation_start_date is not None:
+        # Evaluation-only view uses the SAME stock-day eligibility and label
+        # owner. Only its date window narrows; no pre-2021 teacher is relevant.
+        if target_policy.materialization_mode != CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH:
+            raise ValueError("Oracle date scope only supported by daily trade-path target")
+        from filters.breakout_quality.daily_trade40_target import P16_HANDOFF_DATE
+        start = pd.Timestamp(oracle_evaluation_start_date).normalize()
+        if start < P16_HANDOFF_DATE:
+            raise ValueError("Oracle OOS view requires 2021+ P16 effective period")
+        sample_start = max(sample_start, start)
     if bool(extend_score_eligibility_to_source_tail):
         source_tail = pd.Timestamp(benchmark_index.max()).normalize()
         if source_tail > sample_end:
@@ -1380,7 +1391,9 @@ def load_daily_universal_ranker_data(
     counterfactual_provenance = None
     counterfactual_exchange_calendar = None
     if target_policy.materialization_mode == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH:
-        counterfactual_schedule, counterfactual_provenance = load_historical_min_execution_schedule(root)
+        counterfactual_schedule, counterfactual_provenance = load_historical_min_execution_schedule(
+            root, evaluation_start_date=oracle_evaluation_start_date,
+        )
         counterfactual_exchange_calendar = collect_canonical_exchange_sessions(
             csv_inputs, benchmark_ticker=benchmark_ticker,
         )

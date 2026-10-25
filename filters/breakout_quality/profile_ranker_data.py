@@ -28,11 +28,14 @@ def load_profile_continuous_ranker_data(
     feature_price_source=None,
     feature_trade_count_source=None,
     progress_callback=None,
+    oracle_evaluation_start_date: str | None = None,
 ) -> ContinuousRankerDataBundle:
     """Load the canonical sample provider selected by the experiment profile."""
 
     profile = get_breakout_quality_experiment_profile(experiment_profile)
     if profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS:
+        if oracle_evaluation_start_date is not None:
+            raise ValueError("Oracle-only daily scope cannot be used by event profiles")
         return load_continuous_ranker_data(
             filter_id=filter_id,
             model_architecture=model_architecture,
@@ -52,6 +55,7 @@ def load_profile_continuous_ranker_data(
             progress_callback=progress_callback,
             feature_price_source=feature_price_source,
             feature_trade_count_source=feature_trade_count_source,
+            oracle_evaluation_start_date=oracle_evaluation_start_date,
         )
     raise ValueError(
         "不支援的continuous ranker sample scope: "

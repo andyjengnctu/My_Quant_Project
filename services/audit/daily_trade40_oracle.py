@@ -36,7 +36,7 @@ class DailyTrade40OracleBlockedError(ValueError):
 
 def build_daily_universal_trade40_oracle_scores(
     *, project_root: Path, dataset: str, filter_id: str,
-    profile_id: str, cutoff: str,
+    profile_id: str, cutoff: str, evaluation_start: str | None = None,
 ) -> tuple[dict[tuple[str, str], float], dict[str, Any]]:
     """Return all-feature-eligible, sufficiently mature ex-post daily ranks.
 
@@ -60,6 +60,7 @@ def build_daily_universal_trade40_oracle_scores(
             filter_id=filter_id, model_architecture=str(profile.model_architecture),
             experiment_profile=profile_id, preload_feature_bank=False,
             allow_stale_source=False, project_root=root,
+            oracle_evaluation_start_date=evaluation_start,
         )
         summary = dict(bundle.summary or {})
         if (str(summary.get("dataset") or "") != str(dataset)
@@ -93,12 +94,28 @@ def build_daily_universal_trade40_oracle_scores(
             str(row.get("source_id")): row for row in sources
             if isinstance(row, Mapping) and row.get("source_id")
         }
-        if len(source_by_id) != len(sources) or set(source_by_id) != set(SOURCE_IDS):
-            raise DailyTrade40OracleBlockedError("Daily-universal Oracle P2/P16 source identity incomplete")
+        # A 2021+ *evaluation view* is allowed to omit the pre-2021 P2
+        # teacher. Full-history training/score providers still require both.
+        view_start = contract.get("oracle_evaluation_start_date")
+        if view_start is None:
+            expected_sources = set(SOURCE_IDS)
+        else:
+            view_day = pd.Timestamp(view_start).normalize()
+            if evaluation_start is None or view_day != pd.Timestamp(evaluation_start).normalize():
+                raise DailyTrade40OracleBlockedError("Daily-universal Oracle evaluation scope mismatch")
+            if view_day < P16_HANDOFF_DATE:
+                raise DailyTrade40OracleBlockedError("Daily-universal Oracle pre-2021 view cannot omit P2")
+            expected_sources = {SOURCE_IDS[1]}
+        if ((view_start is None and teacher.get("oracle_evaluation_start_date") is not None)
+                or (view_start is not None
+                    and str(teacher.get("oracle_evaluation_start_date") or "") != str(view_start))):
+            raise DailyTrade40OracleBlockedError("Daily-universal Oracle teacher/evaluation view provenance mismatch")
+        if len(source_by_id) != len(sources) or set(source_by_id) != expected_sources:
+            raise DailyTrade40OracleBlockedError("Daily-universal Oracle required teacher identity incomplete")
         if any(not isinstance(source_by_id[source].get("sha256"), str)
                or len(source_by_id[source]["sha256"]) != 64
                or any(char not in "0123456789abcdef" for char in source_by_id[source]["sha256"].lower())
-               for source in SOURCE_IDS):
+               for source in expected_sources):
             raise DailyTrade40OracleBlockedError("Daily-universal Oracle P2/P16 source SHA invalid")
         covered_periods = set()
         for period in periods:
@@ -118,8 +135,8 @@ def build_daily_universal_trade40_oracle_scores(
             if end is not None and end < start:
                 raise DailyTrade40OracleBlockedError("Daily-universal Oracle reversed teacher period")
             covered_periods.add(str(period["source_id"]))
-        if covered_periods != set(SOURCE_IDS):
-            raise DailyTrade40OracleBlockedError("Daily-universal Oracle historical P2/P16 teacher has missing effective periods")
+        if covered_periods != expected_sources:
+            raise DailyTrade40OracleBlockedError("Daily-universal Oracle required teacher has missing effective periods")
         csv_inputs, duplicates = discover_dataset_csv_inputs(root, dataset)
         if duplicates:
             raise DailyTrade40OracleBlockedError("Daily-universal Oracle duplicate source ticker")
@@ -150,6 +167,8 @@ def build_daily_universal_trade40_oracle_scores(
             or ((~valid) & np.isfinite(raw)).any()):
         raise DailyTrade40OracleBlockedError("Daily-universal Oracle raw target/validity/stock-day shape or NULL contract invalid")
     dates = pd.DatetimeIndex(pd.to_datetime(group["date"], errors="raise")).normalize()
+    if evaluation_start is not None and (dates < pd.Timestamp(evaluation_start).normalize()).any():
+        raise DailyTrade40OracleBlockedError("Daily-universal Oracle evaluation view contains pre-start scores")
     positions = exchange.get_indexer(dates)
     if (positions < 0).any():
         raise DailyTrade40OracleBlockedError("Daily-universal Oracle stock-day absent from verified exchange calendar")
@@ -188,6 +207,17 @@ def build_daily_universal_trade40_oracle_scores(
     }))
     if set(scores) != set(keys) or not all(np.isfinite(value) for value in scores.values()):
         raise DailyTrade40OracleBlockedError("Daily-universal Oracle daily ranks incomplete")
+    # A portfolio order on its first replay session can rank only the LAST
+    # COMPLETED information bar.  An Oracle view starting on a P16 signal day
+    # therefore cannot execute on that SAME day; otherwise the first trade
+    # would request a pre-2021 (P2) score and break the common-time contract.
+    first_score_day = pd.Timestamp(min(day_strings)).normalize()
+    first_score_pos = int(exchange.get_indexer([first_score_day])[0])
+    if first_score_pos < 0 or first_score_pos + 1 >= len(exchange):
+        raise DailyTrade40OracleBlockedError("Daily-universal Oracle has no next-session replay start")
+    first_replay_session = exchange[first_score_pos + 1]
+    if first_replay_session > cutoff_day:
+        raise DailyTrade40OracleBlockedError("Daily-universal Oracle has no replay session after first score")
     raw_digest = sha256(raw.tobytes() + valid.tobytes()).hexdigest()
     rank_sha = sha256()
     for ticker, day in sorted(scores):
@@ -201,11 +231,14 @@ def build_daily_universal_trade40_oracle_scores(
         "censored_rank_last_rows": int((~selected_valid).sum()),
         "unmatured_excluded_rows": int((~matured).sum()),
         "first_date": min(day_strings), "last_date": max(day_strings),
+        "first_replay_trade_date": str(first_replay_session.date()),
         "research_cutoff": str(cutoff_day.date()),
         "rank_sha256": rank_sha.hexdigest(),
         "raw_label_sha256": raw_digest,
         "calendar_sha256": digest,
         "teacher": teacher,
+        **({"oracle_evaluation_start_date": evaluation_start}
+           if evaluation_start is not None else {}),
         "rank_policy": "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",
         "oracle_hindsight_only": True,
     }

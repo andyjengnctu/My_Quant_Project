@@ -135,6 +135,41 @@ class DailyTrade40OracleSourceCases(TestCase):
         self.assertEqual(evidence['label_id'], LABEL_ID)
         self.assertEqual(evidence['target_id'], TARGET_ID)
 
+    def test_oracle_oos_only_p16_view_preserves_daily_rank_and_blocks_legacy_scope_spoof(self):
+        days, bundle = fixture()
+        full, _ = load_synthetic(bundle, days)
+        from copy import deepcopy
+        scoped = deepcopy(bundle)
+        contract = scoped.target_manifest['target_contract']
+        contract['oracle_evaluation_start_date'] = '2021-01-01'
+        teacher = contract['teacher']
+        teacher['sources'] = [row for row in teacher['sources']
+                              if row['source_id'] == 'min_best_broker_cash_rolling_experiment']
+        teacher['periods'] = [row for row in teacher['periods']
+                              if row['source_id'] == 'min_best_broker_cash_rolling_experiment']
+        teacher['oracle_evaluation_start_date'] = '2021-01-01'
+        with patch('services.audit.daily_trade40_oracle.load_profile_continuous_ranker_data', return_value=scoped), \
+             patch('services.audit.daily_trade40_oracle.discover_dataset_csv_inputs', return_value=([('0050', Path('dummy.csv'))], [])), \
+             patch('services.audit.daily_trade40_oracle.collect_canonical_exchange_sessions', return_value=days):
+            kwargs = dict(project_root=Path('/tmp/isolated'), dataset='full',
+                          filter_id='breakout_quality_v1', profile_id=PROFILE,
+                          cutoff=str(days[60].date()))
+            scoped_scores, info = build_daily_universal_trade40_oracle_scores(
+                **kwargs, evaluation_start='2021-01-01')
+            self.assertEqual(scoped_scores, full)
+            self.assertEqual(info['oracle_evaluation_start_date'], '2021-01-01')
+            with self.assertRaisesRegex(DailyTrade40OracleBlockedError, 'evaluation scope mismatch'):
+                build_daily_universal_trade40_oracle_scores(
+                    **kwargs, evaluation_start='2022-01-01')
+            teacher['oracle_evaluation_start_date'] = '2022-01-01'
+            with self.assertRaisesRegex(DailyTrade40OracleBlockedError, 'teacher/evaluation view'):
+                build_daily_universal_trade40_oracle_scores(
+                    **kwargs, evaluation_start='2021-01-01')
+            teacher['oracle_evaluation_start_date'] = '2021-01-01'
+            contract['oracle_evaluation_start_date'] = None
+            with self.assertRaises(DailyTrade40OracleBlockedError):
+                build_daily_universal_trade40_oracle_scores(**kwargs)
+
     def test_invalid_manifest_finite_censored_or_wrong_maturity_blocks(self):
         days, bundle = fixture()
         for flaw in ('teacher', 'teacher_source', 'teacher_hash', 'teacher_handoff',
@@ -264,6 +299,11 @@ class DailyTrade40OracleSourceCases(TestCase):
         self.assertTrue(all(0<=rank<=1 for rank in scores.values()))
         self.assertEqual(evidence['teacher']['sources'],teacher_sources)
         self.assertEqual(evidence['research_cutoff'],str(days[-1].date()))
+        self.assertEqual(
+            pd.Timestamp(evidence['first_replay_trade_date']),
+            days[days.get_loc(pd.Timestamp(evidence['first_date'])) + 1],
+            'first tradable session must be AFTER the first information date',
+        )
 
     def test_missing_candidate_score_fails_closed_not_price_or_pit_fallback(self):
         days, bundle = fixture()
@@ -282,7 +322,7 @@ class DailyTrade40OracleSourceCases(TestCase):
 
 
 class DailyTrade40OracleReplayCases(TestCase):
-    def test_exact_direct_4seed_same_daily_scores_and_old_cache_reused(self):
+    def test_exact_direct_4seed_same_scores_and_correctly_replays_different_window(self):
         active = definition()
         earlier = replace(active, source={**active.source, 'oracle_comparisons':tuple(
             item for item in active.source['oracle_comparisons']
@@ -303,6 +343,7 @@ class DailyTrade40OracleReplayCases(TestCase):
             'teacher': {'sources':[{'sha256':'f'*64}], 'periods':[{'start':'2021-01-01'}]},
             'mature_eligible_rows':25, 'settled_net_r_rows':20,
             'censored_rank_last_rows':5, 'research_cutoff':'2026-03-02',
+            'first_date':'2021-01-04', 'first_replay_trade_date':'2021-01-05',
         }
         seeds=(693545351, 2014432738, 104504529, 762252050)
         benchmark=SimpleNamespace(benchmark_id='end_to_end_v1')
@@ -348,7 +389,18 @@ class DailyTrade40OracleReplayCases(TestCase):
             self.assertEqual(run.call_count,48)
             self.assertEqual(len(old_result['oracles']),11)
             active_result=oracle.run_formal_audit(active,project_root=root,quiet=True)
-            self.assertEqual(run.call_count,56,'only 4x2 new daily arms may run')
+            # The daily 2021-01-04 score becomes actionable 2021-01-05.
+            # The old 2021-01-01 window cannot be REUSEd in a different
+            # economic comparison; EVERY old and new arm is replayed together.
+            self.assertEqual(run.call_count,104,'48 archived + 56 new-window arms')
+            self.assertEqual(
+                {call.kwargs['start_date'] for call in run.call_args_list[:48]},
+                {'2021-01-01'},
+            )
+            self.assertEqual(
+                {call.kwargs['start_date'] for call in run.call_args_list[48:]},
+                {'2021-01-05'},
+            )
             self.assertEqual(len(active_result['oracles']),13)
             self.assertEqual(len(observed),8)
             self.assertTrue(all(score==0.625 and date=='2025-01-03' for _,score,date,_ in observed))
@@ -362,7 +414,7 @@ class DailyTrade40OracleReplayCases(TestCase):
             self.assertEqual(new_rows[EXACT]['delta_romd_vs_c96'],2.0)
             self.assertEqual(new_rows[DIRECT]['delta_romd_vs_c96'],-1.0)
             second=oracle.run_formal_audit(active,project_root=root,quiet=True)
-            self.assertEqual(run.call_count,56,'all existing arms must REUSE with exact same certified score')
+            self.assertEqual(run.call_count,104,'identical effective window must REUSE all 56 arms')
             self.assertEqual(second['oracles'],active_result['oracles'])
             self.assertEqual(source.call_count,2)
             # Different raw target lineage must force a different new score
@@ -371,7 +423,43 @@ class DailyTrade40OracleReplayCases(TestCase):
             source.return_value=(daily_scores,changed)
             with self.assertRaisesRegex(oracle.OracleBlockedError, 'DIFFERENT identity'):
                 oracle.run_formal_audit(active,project_root=root,quiet=True)
-            self.assertEqual(run.call_count,56, 'conflicting completed Target identity must BLOCK, not silently REBUILD')
+            self.assertEqual(run.call_count,104, 'conflicting completed Target identity must BLOCK, not silently REBUILD')
+
+    def test_first_information_day_is_not_tradable_and_all_arms_share_window(self):
+        current = definition()
+        arm = oracle._contract(current)[2]
+        scores = {('2330', '2021-01-04'): 0.75}
+        # Portfolio ranks the preceding completed information day, even when
+        # its execution clock has already entered the P16 OOS interval.
+        with audit_oracle_truth_score_context(
+            scores, ranking_policy=arm.dl_runtime_mode,
+            ranking_options=arm.dl_runtime_options,
+            key_mode='information_date',
+        ):
+            with self.assertRaisesRegex(ValueError, 'date=2020-12-31'):
+                resolve_breakout_quality_candidate_rank(
+                    ticker='2330', signal_date='2021-01-04',
+                    information_date='2020-12-31', high_len=260,
+                )
+            usable = resolve_breakout_quality_candidate_rank(
+                ticker='2330', signal_date='2021-01-05',
+                information_date='2021-01-04', high_len=260,
+            )
+        self.assertEqual(usable['score'], 0.75)
+        self.assertEqual(oracle._resolve_oracle_replay_start(
+            requested_start='2021-01-01', daily_evidence={
+                'first_date':'2021-01-04', 'first_replay_trade_date':'2021-01-05',
+            },
+        ), '2021-01-05')
+        self.assertEqual(oracle._resolve_oracle_replay_start(
+            requested_start='2021-01-01', daily_evidence=None,
+        ), '2021-01-01')
+        with self.assertRaisesRegex(oracle.OracleBlockedError, 'alignment is invalid'):
+            oracle._resolve_oracle_replay_start(
+                requested_start='2021-01-01', daily_evidence={
+                    'first_date':'2021-01-04', 'first_replay_trade_date':'2021-01-04',
+                },
+            )
 
     def test_target_source_blocked_before_any_portfolio_replay(self):
         current=definition()
@@ -429,7 +517,7 @@ class DailyTeacherDependencyCases(TestCase):
         paths = resolve_historical_min_teacher_paths(root)
         return root, paths
 
-    def test_p2_missing_is_blocked_without_optimizer_delegation(self):
+    def test_p2_missing_is_not_an_oos_oracle_dependency(self):
         from filters.breakout_quality.daily_trade40_target import SOURCE_IDS
         from services.audit.runner import collect_audit_preparation_plan, collect_audit_status
         with tempfile.TemporaryDirectory() as temp:
@@ -443,21 +531,16 @@ class DailyTeacherDependencyCases(TestCase):
                  patch('filters.breakout_quality.daily_trade40_target.load_historical_min_execution_schedule', return_value=((), {})) as loader, \
                  patch('services.research.strategy_compare_preparation_status.collect_preparation_status', side_effect=self._fake_registered_status(paths)):
                 status = oracle.collect_status(definition(), project_root=root)
-                self.assertEqual(status['status'], 'BLOCKED')
-                self.assertEqual(status['source']['missing_teacher_source_id'], SOURCE_IDS[0])
+                self.assertEqual(status['status'], 'READY')
                 self.assertFalse(status['source']['preparable'])
-                self.assertIn('不得自動訓練', status['reason'])
-                self.assertEqual(status['source']['path'], paths[SOURCE_IDS[0]].relative_to(root).as_posix())
-                loader.assert_not_called()
+                loader.assert_called_once_with(root, evaluation_start_date='2021-01-01')
                 snapshot = collect_audit_status('breakout_quality', project_root=root, method_id=oracle.SUPPORTED_AUDIT_TYPE)
                 plan = collect_audit_preparation_plan(
                     'breakout_quality', project_root=root, method_id=oracle.SUPPORTED_AUDIT_TYPE,
                     status_snapshot=snapshot,
                 )
-                self.assertEqual(plan.overall_status, 'BLOCKED')
-                self.assertEqual(plan.actions[0].action, 'BLOCKED')
-                self.assertIsNone(plan.actions[0].builder_type)
-                self.assertIsNone(plan.actions[0].producer_work_type)
+                self.assertEqual(plan.overall_status, 'READY')
+                self.assertTrue(all(a.action != 'BUILD' for a in plan.actions))
 
     def test_missing_p2_p16_never_invoke_optimizer_or_write_sources(self):
         """An actual Audit runner call must fail closed even with auto-prepare ON.
@@ -477,7 +560,8 @@ class DailyTeacherDependencyCases(TestCase):
                  patch.object(oracle, 'run_formal_audit') as audit:
                 status = oracle.collect_status(definition(), project_root=root)
                 self.assertEqual(status['status'], 'BLOCKED')
-                self.assertTrue(all(source_id in status['reason'] for source_id in SOURCE_IDS))
+                self.assertIn(SOURCE_IDS[1], status['reason'])
+                self.assertNotIn(SOURCE_IDS[0], status['reason'])
                 self.assertFalse(status['source']['preparable'])
                 with self.assertRaisesRegex(RuntimeError, 'BLOCKED'):
                     run_enabled_audits('breakout_quality', project_root=root,
@@ -487,15 +571,16 @@ class DailyTeacherDependencyCases(TestCase):
                 audit.assert_not_called()
                 self.assertTrue(all(not path.exists() for path in paths.values()))
 
-    def test_ready_teachers_allow_only_audit_replay_without_parameter_preparation(self):
+    def test_oos_p16_ready_without_p2_allows_replay_but_no_parameter_preparation(self):
         from services.audit.runner import run_enabled_audits
         from filters.breakout_quality.daily_trade40_target import SOURCE_IDS
         with tempfile.TemporaryDirectory() as temp:
             root, paths = self._status_fixture(temp)
-            for path in paths.values():
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text('mock-valid-lineage', encoding='utf-8')
-            snapshot = {sid: path.read_bytes() for sid, path in paths.items()}
+            p16 = paths[SOURCE_IDS[1]]
+            p16.parent.mkdir(parents=True, exist_ok=True)
+            p16.write_text('mock-valid-lineage', encoding='utf-8')
+            self.assertFalse(paths[SOURCE_IDS[0]].exists())
+            snapshot = p16.read_bytes()
             with patch.object(oracle, 'get_dataset_dir', return_value=str(root / 'dataset')), \
                  patch('filters.breakout_quality.paths.resolve_filter_output_dir', return_value=root / 'filter_output'), \
                  patch.object(oracle, '_robustness_artifacts', return_value=(SimpleNamespace(benchmark_id='fixture'), [(1, Path('p16_seed.json'))])), \
@@ -506,10 +591,11 @@ class DailyTeacherDependencyCases(TestCase):
                 result = run_enabled_audits('breakout_quality', project_root=root,
                                            method_id=oracle.SUPPORTED_AUDIT_TYPE)
                 self.assertEqual(result['target_oracle_romd']['status'], 'COMPLETED')
-                self.assertEqual(loader.call_count, 1)
+                loader.assert_called_once_with(root, evaluation_start_date='2021-01-01')
                 replay.assert_called_once()
                 producer.assert_not_called()
-                self.assertEqual({sid: path.read_bytes() for sid, path in paths.items()}, snapshot)
+                self.assertEqual(p16.read_bytes(), snapshot)
+                self.assertFalse(paths[SOURCE_IDS[0]].exists())
 
     def test_generic_audit_plan_ignores_builder_hints_and_global_auto_prepare(self):
         """READ-only authority is enforced by the runner, not a source hint."""
@@ -545,7 +631,7 @@ class DailyTeacherDependencyCases(TestCase):
         self.assertNotIn('preparation_function', {field.name for field in fields(AuditCatalogEntry)})
         self.assertTrue(all(entry.read_only for entry in AUDIT_CATALOG.values() if entry.formal))
 
-    def test_existing_corrupt_teacher_is_blocked_and_never_rebuilt(self):
+    def test_existing_corrupt_p16_teacher_is_blocked_and_never_rebuilt(self):
         from filters.breakout_quality.daily_trade40_target import SOURCE_IDS
         from services.audit.runner import run_enabled_audits
         with tempfile.TemporaryDirectory() as temp:
@@ -556,21 +642,21 @@ class DailyTeacherDependencyCases(TestCase):
             with patch.object(oracle, 'get_dataset_dir', return_value=str(root / 'dataset')), \
                  patch('filters.breakout_quality.paths.resolve_filter_output_dir', return_value=root / 'filter_output'), \
                  patch.object(oracle, '_robustness_artifacts', return_value=(SimpleNamespace(benchmark_id='fixture'), [(1, Path('p16_seed.json'))])), \
-                 patch('filters.breakout_quality.daily_trade40_target.load_historical_min_execution_schedule', side_effect=ValueError('P2 teacher provenance mismatch')), \
+                 patch('filters.breakout_quality.daily_trade40_target.load_historical_min_execution_schedule', side_effect=ValueError('P16 teacher provenance mismatch')), \
                  patch('services.research.strategy_compare_preparation_status.collect_preparation_status', side_effect=self._fake_registered_status(paths)), \
                  patch('services.research.strategy_compare_preparation.prepare_strategy_parameter_artifacts') as producer, \
                  patch.object(oracle, 'run_formal_audit') as audit:
                 status = oracle.collect_status(definition(), project_root=root)
                 self.assertEqual(status['status'], 'BLOCKED')
                 self.assertFalse(status['source']['preparable'])
-                self.assertIn('P2 teacher provenance mismatch', status['reason'])
+                self.assertIn('P16 teacher provenance mismatch', status['reason'])
                 with self.assertRaisesRegex(RuntimeError, 'BLOCKED'):
                     run_enabled_audits('breakout_quality', project_root=root,
                                         method_id=oracle.SUPPORTED_AUDIT_TYPE)
                 producer.assert_not_called()
                 audit.assert_not_called()
 
-    def test_existing_p16_with_invalid_identity_blocks_before_building_missing_p2(self):
+    def test_existing_p16_with_invalid_identity_blocks_independent_of_p2(self):
         from filters.breakout_quality.daily_trade40_target import SOURCE_IDS
         from services.audit.runner import run_enabled_audits
         with tempfile.TemporaryDirectory() as temp:
