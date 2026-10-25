@@ -2021,5 +2021,191 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 self.assertEqual(len(recorded), previous)
                 self.assertEqual(again["oracles"], report["oracles"])
 
+
+class OracleDLAlignedComparisonCases(TestCase):
+    """New comparative capability without changing legacy Oracle/Strategy identity."""
+
+    @staticmethod
+    def _cohort():
+        return pd.MultiIndex.from_tuples(
+            [("A", "2025-01-02"), ("B", "2025-01-02"),
+             ("C", "2025-01-03")], names=["ticker", "date"],
+        )
+
+    def test_same_day_percentile_is_canonical_and_singletons_are_neutral(self):
+        from filters.breakout_quality.score_comparison_alignment import rank_daily_stock_days
+        idx = self._cohort()
+        out = rank_daily_stock_days(
+            pd.DataFrame({"score": [2.0, 1.0, 18.0]}, index=idx),
+            score_column="score", start="2025-01-02", end="2025-01-03", cohort=idx,
+        )
+        self.assertEqual([float(v) for v in out], [1.0, 0.0, 0.5])
+        tie = rank_daily_stock_days(
+            pd.DataFrame({"score": [1.0, 1.0, 1.0]}, index=idx),
+            score_column="score", start="2025-01-02", end="2025-01-03", cohort=idx,
+        )
+        self.assertEqual([float(v) for v in tie], [0.5, 0.5, 0.5])
+
+    def test_common_legal_population_cannot_be_invented_by_intersection(self):
+        from filters.breakout_quality.score_comparison_alignment import common_stock_day_cohort
+        idx = self._cohort()
+        ora = pd.DataFrame({"score": [3, 2, 1]}, index=idx)
+        dl = ora.drop(("B", "2025-01-02"))
+        with self.assertRaisesRegex(ValueError, "獨立合法母體"):
+            common_stock_day_cohort(ora, dl, start="2025-01-02", end="2025-01-03")
+        with self.assertRaisesRegex(ValueError, "覆蓋不足"):
+            common_stock_day_cohort(ora, dl, start="2025-01-02", end="2025-01-03",
+                                    declared_eligible=idx)
+
+    def test_matched_pair_refuses_fallback_period_and_param_mismatch(self):
+        from services.research.oracle_dl_comparison_contract import verify_paired_oracle_dl_result
+        idx = self._cohort()
+        contract = {
+            "start_date": "2025-01-02", "end_date": "2025-01-03",
+            "dataset_sha256": "raw-bytes", "param_sha256": "p16-hash", "seed": 7,
+            "selector": self._canonical_selector(), "broker_policy": "broker_cash_v1",
+            "max_positions": 10, "rotation": False,
+            "score_refresh": "daily_information_date", "score_cohort_sha256": "same-eligible",
+        }
+        base = {7: {**contract, "romd": 8.0}}
+        oracle_row = {7: {**contract, "romd": 20.0, "score_origin": "future_truth"}}
+        dl_row = {7: {**contract, "romd": 11.0, "score_origin": "pit_prediction"}}
+        good = verify_paired_oracle_dl_result(
+            baseline=base, oracle=oracle_row, dl=dl_row,
+            eligible_score_keys=idx, orderable_keys=idx[:2],
+        )
+        self.assertEqual(good["oracle_minus_dl_romd_mean"], 9.0)
+        extra = pd.MultiIndex.from_tuples([("Z", "2025-01-02")], names=idx.names)
+        with self.assertRaisesRegex(ValueError, "缺少1筆Score"):
+            verify_paired_oracle_dl_result(
+                baseline=base, oracle=oracle_row, dl=dl_row,
+                eligible_score_keys=idx, orderable_keys=extra,
+            )
+        with self.assertRaisesRegex(ValueError, "共同契約"):
+            verify_paired_oracle_dl_result(
+                baseline=base, oracle=oracle_row,
+                dl={7: {**dl_row[7], "end_date": "2026-03-02"}},
+                eligible_score_keys=idx, orderable_keys=idx,
+            )
+
+    def test_score_warmup_must_cover_previous_information_day(self):
+        from services.research.oracle_dl_comparison_contract import run_matched_oracle_dl_replays
+        index = pd.MultiIndex.from_tuples(
+            [("A", "2020-12-31"), ("A", "2021-01-04")], names=["ticker", "date"],
+        )
+        entry = {
+            "oracle": pd.DataFrame({"score": [0.5, 0.8]}, index=index),
+            "dl": pd.DataFrame({"score": [0.4, 0.7]}, index=index),
+            "eligible": index, "param_sha256": "p16-identity",
+            "kind": "rolling_active_param_ensemble",
+            "baseline_params": "base", "scored_params": "scored",
+            "pit_score_sha256": "pit", "oracle_truth_sha256": "future",
+            "eligibility_source": "feature_history_only",
+            "eligibility_manifest_sha256": "feature-manifest",
+        }
+        arguments = dict(
+            seed_panels={7: entry}, start_date="2021-01-04", end_date="2021-01-04",
+            data_dir="unused", dataset_sha256="prices", broker_policy="cash",
+            selector_policy=self._canonical_selector(), ranking_options={}, max_positions=10,
+        )
+        # The common score cohort is allowed to start before the portfolio period,
+        # because opening-day pending orders can refer to a prior trading day.
+        with self.assertRaisesRegex(ValueError, "不在共同評估期間"):
+            run_matched_oracle_dl_replays(**arguments)
+        def fake_replay(*, name, **kwargs):
+            if not name.startswith("No-DL"):
+                kwargs["replay_counts"]["A"] = {"orderable_rows": [{
+                    "ticker": "A", "breakout_quality_score_date": "2020-12-31",
+                }]}
+            return {"return_over_max_drawdown": 7.0}
+        with patch("services.research.strategy_compare_replay._run_scenario", side_effect=fake_replay):
+            report = run_matched_oracle_dl_replays(
+                **arguments, score_start_date="2020-12-31",
+            )
+        self.assertEqual(report["score_window"]["start"], "2020-12-31")
+        self.assertEqual(report["observed_orderable_score_coverage"], 1.0)
+
+    @staticmethod
+    def _canonical_selector():
+        from core.buy_sort import BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL
+        return BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL
+
+    def test_three_arm_matched_replay_shares_daily_scoring_and_economic_context(self):
+        from services.research.oracle_dl_comparison_contract import run_matched_oracle_dl_replays
+        idx = self._cohort()
+        source = {
+            "oracle": pd.DataFrame({"score": [0.1, 0.9, 0.4]}, index=idx),
+            "dl": pd.DataFrame({"score": [0.4, 0.5, 0.8]}, index=idx),
+            "eligible": idx, "param_sha256": "p16-identity",
+            "kind": "rolling_active_param_ensemble",
+            "baseline_params": "base", "scored_params": "scored",
+            "pit_score_sha256": "pit-canonical", "oracle_truth_sha256": "future-canonical",
+            "eligibility_source": "feature_history_only", "eligibility_manifest_sha256": "feature-manifest",
+        }
+        seen = []
+        def fake_replay(*, name, **kwargs):
+            seen.append((name, kwargs["params"], kwargs["end_date"]))
+            if name.startswith(("future_truth", "pit_prediction")):
+                kwargs["replay_counts"]["A"] = {"orderable_rows": [{
+                    "ticker": "A", "breakout_quality_score_date": "2025-01-02",
+                }]}
+            if name.startswith("No-DL"):
+                return {"return_over_max_drawdown": 8.0}
+            rank = resolve_breakout_quality_candidate_rank(
+                ticker="A", signal_date="2025-01-02",
+                information_date="2025-01-02", high_len=260,
+            )
+            self.assertTrue(rank["available"])
+            if name.startswith("future_truth"):
+                self.assertEqual(rank["score"], 0.0)
+                return {"return_over_max_drawdown": 20.0}
+            self.assertEqual(rank["score"], 0.0)
+            return {"return_over_max_drawdown": 11.0}
+        with patch("services.research.strategy_compare_replay._run_scenario", side_effect=fake_replay):
+            report = run_matched_oracle_dl_replays(
+                seed_panels={7: source}, start_date="2025-01-02", end_date="2025-01-03",
+                data_dir="unused", dataset_sha256="prices", broker_policy="broker_cash_v1",
+                selector_policy=self._canonical_selector(),
+                ranking_options={"preserve_k_r0": True}, max_positions=10,
+            )
+        self.assertEqual(report["status"], "COMPARABLE")
+        self.assertEqual(report["oracle_minus_dl_romd_mean"], 9.0)
+        self.assertEqual(len(seen), 3)
+        self.assertEqual([x[1] for x in seen], ["base", "scored", "scored"])
+        self.assertEqual(report["observed_orderable_score_coverage"], 1.0)
+        self.assertEqual(report["orderable_trace_by_seed"][7]["future_truth"]["orderable_rows"], 1)
+
+    def test_eligibility_must_be_feature_only_and_lookup_uses_observed_trace(self):
+        from services.research.oracle_dl_comparison_contract import run_matched_oracle_dl_replays
+        idx = self._cohort()
+        source = {
+            "oracle": pd.DataFrame({"score": [0.1, 0.9, 0.4]}, index=idx),
+            "dl": pd.DataFrame({"score": [0.4, 0.5, 0.8]}, index=idx),
+            "eligible": idx, "param_sha256": "p16-identity",
+            "kind": "rolling_active_param_ensemble",
+            "baseline_params": "base", "scored_params": "scored",
+            "pit_score_sha256": "pit", "oracle_truth_sha256": "future",
+            "eligibility_source": "derived_from_oracle_target_valid",
+            "eligibility_manifest_sha256": "feature-manifest",
+        }
+        kwargs = dict(seed_panels={7: source}, start_date="2025-01-02", end_date="2025-01-03",
+                      data_dir="unused", dataset_sha256="prices", broker_policy="cash",
+                      selector_policy=self._canonical_selector(), ranking_options={},
+                      max_positions=10)
+        with self.assertRaisesRegex(ValueError, "feature-history-only"):
+            run_matched_oracle_dl_replays(**kwargs)
+        source["eligibility_source"] = "feature_history_only"
+        def fake_replay(*, name, **kwargs):
+            if name.startswith("No-DL"):
+                return {"return_over_max_drawdown": 8.0}
+            kwargs["replay_counts"]["A"] = {"orderable_rows": [{
+                "ticker": "A", "breakout_quality_score_date": "2025-01-01",
+            }]}
+            return {"return_over_max_drawdown": 10.0}
+        with patch("services.research.strategy_compare_replay._run_scenario", side_effect=fake_replay):
+            with self.assertRaisesRegex(ValueError, "不在共同Score母體"):
+                run_matched_oracle_dl_replays(**kwargs)
+
+
 if __name__ == "__main__":
     main(verbosity=2)
