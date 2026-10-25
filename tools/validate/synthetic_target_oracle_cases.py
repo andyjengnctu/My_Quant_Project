@@ -2452,36 +2452,38 @@ class MatchedOracleDlCanonicalSourceCases(TestCase):
 class MatchedOracleDlFormalDispatchCases(TestCase):
     """Shared Research entry/REUSE checks without formal Windows Test Suite."""
 
-    def test_existing_comparison_completes_before_matched_stage_and_keeps_payload(self):
+    def test_formal_comparison_preserves_canonical_result_and_no_diagnostic_dispatch(self):
         from services.research import strategy_compare_application as app
         from services.research import oracle_dl_comparison_sources as sources
-        root = Path("/tmp/test_p123_mock")
-        state = {"status": "BLOCKED", "pairs": ({"arm_id": "C107", "oracle_target": "T40", "status": "BLOCKED", "reason": "missing seed PIT"},)}
         payload = {"status": "COMPLETED", "scenarios": {"C96": {"romd": 8.36}}}
-        plan = SimpleNamespace(project_root=root)
+        plan = SimpleNamespace(project_root=Path("/tmp/p123_mock"))
         settings = SimpleNamespace(profile_id="broker_cash_dl_conversion_rolling")
         with patch("services.research.strategy_comparison.run_strategy_comparison", return_value=payload) as standard, \
-             patch.object(sources, "resolve_matched_oracle_dl_pairs", return_value=(state["pairs"][0],)), \
-             patch.object(sources, "collect_matched_oracle_dl_readiness", return_value=state), \
-             patch.object(sources, "run_verified_matched_oracle_dl_comparison") as replay, \
+             patch.object(sources, "resolve_matched_oracle_dl_pairs") as matched, \
+             patch.object(sources, "collect_matched_oracle_dl_readiness") as collect, \
+             patch.object(sources, "run_matched_research_from_strategy_compare") as replay, \
              redirect_stdout(io.StringIO()) as console:
             actual = app.execute_strategy_comparison(resolved_plan=plan, settings=settings)
         self.assertIs(actual, payload)
         standard.assert_called_once()
+        matched.assert_not_called()
+        collect.assert_not_called()
         replay.assert_not_called()
-        self.assertIn("[P1-P3 BLOCKED]", console.getvalue())
+        self.assertEqual(console.getvalue(), "")
 
-    def test_strategy_failure_does_not_start_second_comparison(self):
+    def test_strategy_failure_does_not_trigger_diagnostic_dispatch(self):
         from services.research import strategy_compare_application as app
         from services.research import oracle_dl_comparison_sources as sources
         with patch("services.research.strategy_comparison.run_strategy_comparison", side_effect=RuntimeError("standard failed")), \
              patch.object(sources, "collect_matched_oracle_dl_readiness") as collect, \
+             patch.object(sources, "run_matched_research_from_strategy_compare") as replay, \
              self.assertRaisesRegex(RuntimeError, "standard failed"):
             app.execute_strategy_comparison(
                 resolved_plan=SimpleNamespace(project_root=Path("/tmp/p123")),
                 settings=SimpleNamespace(profile_id="broker_cash_dl_conversion_rolling"),
             )
         collect.assert_not_called()
+        replay.assert_not_called()
 
     def test_ready_runs_same_source_owner_and_blocked_never_replays(self):
         from services.research import oracle_dl_comparison_sources as owner
@@ -2589,22 +2591,37 @@ class MatchedOracleDlFormalDispatchCases(TestCase):
             self.assertEqual(replay.call_count, 2)
             self.assertNotEqual(changed["evidence_path"], first["evidence_path"])
 
-    def test_formal_plan_shows_source_block_as_own_stage(self):
+    def test_formal_plan_is_unchanged_for_all_profile_types(self):
         from services.research import strategy_compare_application as app
         from services.research import oracle_dl_comparison_sources as owner
-        state = {"status": "BLOCKED", "pairs": ({"arm_id": "C107", "oracle_target": "T40", "status": "BLOCKED", "reason": "need four PIT seeds"},)}
         fake_plan = SimpleNamespace(project_root=Path("/tmp/p123_mock"), status_dict=lambda: {})
-        fake_settings = SimpleNamespace(profile_id="broker_cash_dl_conversion_rolling")
-        with patch.object(app, "get_strategy_comparison_settings", return_value=fake_settings), \
-             patch("services.research.strategy_comparison.resolve_comparison_plan", return_value=fake_plan), \
-             patch("services.research.strategy_comparison.render_execution_plan", return_value="original plan"), \
-             patch.object(owner, "resolve_matched_oracle_dl_pairs", return_value=state["pairs"]), \
-             patch.object(owner, "collect_matched_oracle_dl_readiness", return_value=state):
-            _, actual_plan, rendered = app.resolve_strategy_comparison_execution(fake_settings.profile_id)
-        self.assertIs(actual_plan, fake_plan)
-        self.assertIn("original plan", rendered)
-        self.assertIn("need four PIT seeds", rendered)
-        self.assertIn("P1-P3", rendered)
+        for profile_id in ("broker_cash_dl_conversion_rolling", "broker_cash_dl_conversion_forward"):
+            with self.subTest(profile_id=profile_id):
+                fake_settings = SimpleNamespace(profile_id=profile_id)
+                with patch.object(app, "get_strategy_comparison_settings", return_value=fake_settings), \
+                     patch("services.research.strategy_comparison.resolve_comparison_plan", return_value=fake_plan), \
+                     patch("services.research.strategy_comparison.render_execution_plan", return_value="original plan") as renderer, \
+                     patch.object(owner, "resolve_matched_oracle_dl_pairs") as matched, \
+                     patch.object(owner, "collect_matched_oracle_dl_readiness") as collect:
+                    _, actual_plan, rendered = app.resolve_strategy_comparison_execution(profile_id)
+                self.assertIs(actual_plan, fake_plan)
+                self.assertEqual(rendered, "original plan")
+                renderer.assert_called_once()
+                matched.assert_not_called()
+                collect.assert_not_called()
+
+    def test_formal_status_is_only_canonical_renderer(self):
+        from services.research import strategy_compare_application as app
+        from services.research import oracle_dl_comparison_sources as owner
+        settings = SimpleNamespace(profile_id="broker_cash_dl_conversion_rolling")
+        with patch.object(app, "get_strategy_comparison_settings", return_value=settings), \
+             patch("services.research.strategy_comparison.show_strategy_comparison_status", side_effect=lambda **_kwargs: print("canonical status")) as canonical, \
+             patch.object(owner, "collect_matched_oracle_dl_readiness") as collect, \
+             redirect_stdout(io.StringIO()) as console:
+            app.show_strategy_comparison_profile_status(profile_id=settings.profile_id)
+        self.assertEqual(console.getvalue().strip(), "canonical status")
+        canonical.assert_called_once_with(settings=settings)
+        collect.assert_not_called()
 
 
 if __name__ == "__main__":

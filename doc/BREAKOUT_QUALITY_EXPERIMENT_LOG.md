@@ -13590,3 +13590,10 @@ Decision: `ENGINEERING_CHECKPOINT_FIRST_REUSE / HISTORICAL_AK_EVIDENCE_PRESERVED
 - **基準與現象**：`test-branch-1_20261025_115708_e42b7534.zip`，SHA256 `338a4ea3a231ece5ee27cdc23b8c9afe80128d1ce49dbeffbf29fea8a4de60ea`。使用者正式 Research `[4]→[2]` 已執行既有七組策略並 REUSE，但 P1–P3 配對 `C107↔T40`、`C108↔T40-MFE` 因策略 robustness per-seed PIT Score 已清理而 BLOCKED；Model Rolling Robustness 所顯示 REUSE 不保證同分數實體檔存在。`STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES=False` 屬原有保留政策，不擅自變更。
 - **最小修正**：`oracle_dl_comparison_sources.py` 在原策略隔離 Score 已清理時，使用既有 `inspect_reusable_model_research_rolling_score` 驗證模型 Rolling Robustness 的同 Seed PIT source（模型／fold／PIT score／audit／來源）；不從報表或 RoMD 反推分數、不借用其他 Seed。使用正式 robustness producer `_validate_completed_run` 驗證歷史 per-seed 科學觀察，並逐 Seed 比對保留來源的 score SHA256 必須與原始策略 Robustness 所記錄之 `score_sha256` 完全相同，才允許進入後續三方 Replay；錯誤、缺件、不同 SHA 仍 BLOCKED。此修正只擴充讀取可合法 REUSE 的來源，不修改 FIT、PIT Score、Strategy Compare、Oracle／Trading、工件保留策略、歷史科研身分或正式報表。
 - **驗證與限制**：隔離合成回歸覆蓋已刪除隔離 Score 的有效同 Seed 回收、不同歷史 Score SHA 的阻擋、robustness 完成科學觀察不合法的阻擋，及原有來源／Replay 證據。GPT 隔離 ZIP 不包含使用者本機的模型／P16／PIT CSV 實體工件，故無法確定實際能否自模型 Rolling Robustness REUSE；若該來源也遭清除，必須由合法 canonical PIT producer 使用既有 verified fitting checkpoint 以 `checkpoint_only` 重建，任何必須重新 FIT 的缺口需 BLOCK／另行授權。**四 Seed 真實 P1–P3 RoMD 尚未驗收。**
+
+
+## 2026-10-25 — P1–P3 Strategy Compare 正式輸出越界修正（撤回入口掛載；歷史證據不改）
+
+- **使用者更正**：Oracle／Research DL 的需求是交易執行契約一致，只有未來真值與合法 PIT 預測分數來源不同；P1–P3 的 Score 工件診斷屬內部實作與測試，不得未經正式報表授權插入 Rolling 計畫／Console／狀態頁。先前只在一般 Rolling 顯示、Robustness 不顯示，是錯誤的正式 workflow 變更，並不表示 Rolling 較其他 mode 多一份核准 SOP。
+- **處理**：恢復 `services/research/strategy_compare_application.py` 原本的 plan／execute／status 單一 canonical Strategy Compare dispatch；所有 mode 的原正式執行入口、七組 arm、結果、REUSE、報表 schema、renderer、P16、模型 Score 與 Trading 不變。取消 P1–P3 在正式選單流程中的自動三方 replay 與診斷輸出，避免因 artifact-retention 產生與使用者目標無關的 BLOCKED 顯示或隱性工作。
+- **保留**：先前受控對照 service 與專項合成驗證暫保留為非正式、不自動執行的研究程式，並非目前 Standard SOP、Trading 或正式比較工作；其四 Seed 真實市場驗收仍未完成。歷史研究紀錄與既有工件不刪改。新正式比較語意或人讀報表改版必須另外取得授權。

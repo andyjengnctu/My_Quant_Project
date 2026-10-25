@@ -247,19 +247,6 @@ def resolve_strategy_comparison_execution(profile_id: str):
         settings=settings,
         status=resolved_plan.status_dict(),
     )
-    # The matched Oracle/PIT DL stage is tied to the SAME Compare Suite and
-    # only claims readiness for validated *retained* four-seed inputs.
-    from services.research.oracle_dl_comparison_sources import (
-        collect_matched_oracle_dl_readiness, render_matched_research_plan,
-        resolve_matched_oracle_dl_pairs,
-    )
-    if resolve_matched_oracle_dl_pairs(settings.profile_id):
-        state = collect_matched_oracle_dl_readiness(
-            project_root=resolved_plan.project_root, profile_id=settings.profile_id,
-        )
-        matched_plan = render_matched_research_plan(state)
-        if matched_plan:
-            rendered_plan += "\n\n" + matched_plan
     return settings, resolved_plan, rendered_plan
 
 
@@ -273,29 +260,13 @@ def execute_strategy_comparison(
 
     from services.research.strategy_comparison import run_strategy_comparison
 
-    standard_result = run_strategy_comparison(
+    return run_strategy_comparison(
         resolved_plan=resolved_plan,
         auto_prepare=True,
         settings=settings,
         quiet=True,
         producer_handlers=dict(producer_handlers or {}),
     )
-    from services.research.oracle_dl_comparison_sources import (
-        collect_matched_oracle_dl_readiness, resolve_matched_oracle_dl_pairs,
-        run_matched_research_from_strategy_compare,
-    )
-    if resolve_matched_oracle_dl_pairs(settings.profile_id):
-        # Recheck after any authorized upstream preparation. A missing retained
-        # PIT score blocks only the matched research, never the existing SOP.
-        readiness = collect_matched_oracle_dl_readiness(
-            project_root=resolved_plan.project_root, profile_id=settings.profile_id,
-        )
-        print("\n[P1-P3] Oracle／PIT DL 同口徑比較")
-        run_matched_research_from_strategy_compare(
-            project_root=resolved_plan.project_root,
-            profile_id=settings.profile_id, readiness=readiness,
-        )
-    return standard_result
 
 
 def show_strategy_comparison_profile_status(*, profile_id: str) -> None:
@@ -305,25 +276,6 @@ def show_strategy_comparison_profile_status(*, profile_id: str) -> None:
 
     settings = get_strategy_comparison_settings(str(profile_id))
     show_strategy_comparison_status(settings=settings)
-    # Read-only P1-P3 comparison readiness attached to the existing formal
-    # Strategy Compare status. It never changes the fixed menu or Standard SOP.
-    from services.research.oracle_dl_comparison_sources import (
-        collect_matched_oracle_dl_readiness,
-        resolve_matched_oracle_dl_pairs,
-    )
-    if resolve_matched_oracle_dl_pairs(settings.profile_id):
-        readiness = collect_matched_oracle_dl_readiness(
-            project_root=Path(__file__).resolve().parents[2],
-            profile_id=settings.profile_id,
-        )
-        print("\n[Oracle / PIT DL 可比性前置｜唯讀／不執行Replay]")
-        print("狀態：" + str(readiness["status"]))
-        for pair in readiness.get("pairs", ()):
-            label = f"{pair['arm_id']} ↔ {pair['oracle_target']}"
-            print(f"  {label}: {pair['status']}"
-                     + (f" | {pair['reason']}" if pair.get('reason') else ''))
-        if readiness.get("reason"):
-            print("原因：" + str(readiness["reason"]))
 
 
 def run_strategy_multi_seed_robustness(
