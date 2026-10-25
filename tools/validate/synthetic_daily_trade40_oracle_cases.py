@@ -487,32 +487,6 @@ class DailyTeacherDependencyCases(TestCase):
                 audit.assert_not_called()
                 self.assertTrue(all(not path.exists() for path in paths.values()))
 
-    def test_research_target_menu_enter_cannot_fit_missing_teachers(self):
-        """Exercise the real Research [1] -> runner route, not merely a helper."""
-        from contextlib import redirect_stdout
-        from io import StringIO
-        import apps.research as research_app
-        from filters.breakout_quality.daily_trade40_target import SOURCE_IDS
-        with tempfile.TemporaryDirectory() as temp:
-            root, paths = self._status_fixture(temp)
-            captured = StringIO()
-            with patch.object(research_app, 'PROJECT_ROOT', root), \
-                 patch('builtins.input', return_value=''), \
-                 patch.object(research_app, 'render_audit_artifact_inventory', return_value='C96 REUSE / Daily RUN'), \
-                 patch.object(oracle, 'get_dataset_dir', return_value=str(root / 'dataset')), \
-                 patch('filters.breakout_quality.paths.resolve_filter_output_dir', return_value=root / 'filter_output'), \
-                 patch.object(oracle, '_robustness_artifacts', return_value=(SimpleNamespace(benchmark_id='fixture'), [(1, Path('p16_seed.json'))])), \
-                 patch('services.research.strategy_compare_preparation_status.collect_preparation_status', side_effect=self._fake_registered_status(paths)), \
-                 patch('services.research.strategy_compare_preparation.prepare_strategy_parameter_artifacts', side_effect=AssertionError('No Optimizer in Research [1]')) as producer, \
-                 patch.object(oracle, 'run_formal_audit') as replay, \
-                 redirect_stdout(captured):
-                with self.assertRaisesRegex(RuntimeError, 'BLOCKED'):
-                    research_app._run_reusable_audit_method('breakout_quality', oracle.SUPPORTED_AUDIT_TYPE)
-            self.assertIn('Target 驗證', captured.getvalue())
-            producer.assert_not_called()
-            replay.assert_not_called()
-            self.assertTrue(all(not path.exists() for path in paths.values()))
-
     def test_ready_teachers_allow_only_audit_replay_without_parameter_preparation(self):
         from services.audit.runner import run_enabled_audits
         from filters.breakout_quality.daily_trade40_target import SOURCE_IDS

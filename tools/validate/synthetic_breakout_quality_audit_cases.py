@@ -204,6 +204,54 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and "候選 REUSE 32" in cancellation.getvalue(),
     )
 
+    # Entry-point integration belongs to the existing app/menu contract, not
+    # the domain Target synthetic. Exercise the *real* Audit runner on Enter.
+    # The domain-level Teacher tests separately verify canonical P2/P16 status.
+    with TemporaryDirectory(prefix="synthetic_target_entry_no_fit_") as test_root:
+        isolated_root = Path(test_root)
+        missing_teacher_status = {
+            "module_id": "breakout_quality",
+            "method_id": oracle_method_id,
+            "audit_id": None,
+            "overall_status": "BLOCKED",
+            "rows": [{
+                "enabled": True,
+                "audit_id": "target_oracle_romd",
+                "status": "BLOCKED",
+                "reason": "selection_min_roos historical Teacher missing",
+                "source": {
+                    "path": "models/missing_p2.json",
+                    "preparable": True,
+                    "builder_type": "selection_historical_p2",
+                },
+            }],
+        }
+        blocked_text = ""
+        entry_console = io.StringIO()
+        from services.audit import target_oracle_romd as oracle_handler
+        with patch.object(research_app, "PROJECT_ROOT", isolated_root), \
+             patch.object(research_app, "render_audit_artifact_inventory", return_value="C96 REUSE / Daily RUN"), \
+             patch("builtins.input", return_value=""), \
+             patch.object(audit_runner, "collect_audit_status", return_value=missing_teacher_status), \
+             patch("services.research.strategy_compare_preparation.prepare_strategy_parameter_artifacts", side_effect=AssertionError("Optimizer invoked from Target validation")) as optimizer, \
+             patch.object(oracle_handler, "run_formal_audit", side_effect=AssertionError("Replay invoked with missing Teacher")) as replay, \
+             patch.object(research_app, "render_latest_audit_summary") as latest, \
+             redirect_stdout(entry_console):
+            try:
+                research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
+            except RuntimeError as error:
+                blocked_text = str(error)
+        check_true(
+            "research_target_enter_missing_teacher_is_blocked_without_optimizer_or_replay",
+            "BLOCKED" in blocked_text
+            and "selection_min_roos" in blocked_text
+            and "Target 驗證" in entry_console.getvalue()
+            and optimizer.call_count == 0
+            and replay.call_count == 0
+            and latest.call_count == 0
+            and not (isolated_root / "models" / "missing_p2.json").exists(),
+        )
+
     reusable_defs = get_reusable_audit_definitions("breakout_quality")
     check_true(
         "reusable_audit_reports_are_registry_driven_and_not_scientific_aud_ids",
