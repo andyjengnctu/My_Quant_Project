@@ -165,6 +165,7 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         status_function="collect_status", run_function="run_formal_audit",
         preflight_confirmation=True,
         inventory_function="render_existing_artifact_inventory",
+        preparation_function="prepare_canonical_daily_trade40_teacher_source",
     ),
     "portfolio_drawdown_attribution": AuditCatalogEntry(
         audit_type="portfolio_drawdown_attribution",

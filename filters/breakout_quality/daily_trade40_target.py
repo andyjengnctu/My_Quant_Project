@@ -63,6 +63,29 @@ class CounterfactualTrade40Batch:
     reasons: tuple[str, ...]
 
 
+def resolve_historical_min_teacher_paths(
+    root: str | Path, *, settings=None,
+) -> dict[str, Path]:
+    """Resolve both teachers from the same Strategy Compare source SSOT as the label."""
+    if settings is None:
+        from core.strategy_compare_policy import get_strategy_comparison_settings
+        settings = get_strategy_comparison_settings("selection_pit")
+    policy = str(settings.param_policy).strip()
+    specification = PARAM_POLICY_SPECS.get(policy)
+    if policy == "auto" or not isinstance(specification, dict):
+        raise ValueError("Counterfactual Trade40 requires resolved canonical Min param policy")
+    filename = str(specification["filename"])
+    paths: dict[str, Path] = {}
+    for source_id in SOURCE_IDS:
+        source = settings.parameter_sources.get(source_id)
+        if source is None or not str(source.path_template or "").strip():
+            raise ValueError(f"Counterfactual Trade40 missing canonical source {source_id}")
+        paths[source_id] = Path(root).resolve() / str(source.path_template).format(
+            param_filename=filename,
+        )
+    return paths
+
+
 def load_historical_min_execution_schedule(
     root: str | Path, *, settings=None,
 ) -> tuple[tuple[ExecutableMinPeriod, ...], dict[str, Any]]:
@@ -76,19 +99,11 @@ def load_historical_min_execution_schedule(
     if settings is None:
         from core.strategy_compare_policy import get_strategy_comparison_settings
         settings = get_strategy_comparison_settings("selection_pit")
-    policy = str(settings.param_policy).strip()
-    specification = PARAM_POLICY_SPECS.get(policy)
-    if policy == "auto" or not isinstance(specification, dict):
-        raise ValueError("Counterfactual Trade40 requires resolved canonical Min param policy")
-    filename = str(specification["filename"])
-    root = Path(root)
+    root = Path(root).resolve()
+    paths = resolve_historical_min_teacher_paths(root, settings=settings)
     periods: list[ExecutableMinPeriod] = []
-    provenance: dict[str, Any] = {"policy": policy, "sources": []}
-    for source_id in SOURCE_IDS:
-        source = settings.parameter_sources.get(source_id)
-        if source is None or not str(source.path_template or "").strip():
-            raise ValueError(f"Counterfactual Trade40 missing canonical source {source_id}")
-        path = root / str(source.path_template).format(param_filename=filename)
+    provenance: dict[str, Any] = {"policy": str(settings.param_policy).strip(), "sources": []}
+    for source_id, path in paths.items():
         if not path.is_file():
             raise FileNotFoundError(f"Counterfactual Trade40 historical Min params missing: {source_id}: {path}")
         loaded = load_portfolio_param_source_from_json(path, fixed_risk=DEFAULT_FIXED_RISK)
@@ -283,7 +298,8 @@ def compute_counterfactual_trade40_batch(
 __all__ = [
     "TARGET_ID", "LABEL_ID", "HORIZON_SESSIONS", "SOURCE_IDS", "P16_HANDOFF_DATE",
     "ExecutableMinPeriod", "CounterfactualTrade40Batch",
-    "load_historical_min_execution_schedule", "resolve_historical_min_period",
+    "resolve_historical_min_teacher_paths", "load_historical_min_execution_schedule",
+    "resolve_historical_min_period",
     "collect_canonical_exchange_sessions", "counterfactual_trade40_contract",
     "compute_counterfactual_trade40_batch",
 ]

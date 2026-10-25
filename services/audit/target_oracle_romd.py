@@ -279,8 +279,124 @@ def _robustness_artifacts(definition, root: Path):
     return robustness, records
 
 
+def _daily_teacher_source_settings(definition, source_id: str):
+    """P2's authorized historical selection scope vs P16's Research scope."""
+    from core.strategy_compare_policy import get_strategy_comparison_settings
+    from filters.breakout_quality.daily_trade40_target import SOURCE_IDS
+
+    if source_id not in SOURCE_IDS:
+        raise OracleBlockedError(f"Unknown Daily-universal Min teacher source: {source_id}")
+    # AI: These are the existing source-consuming profiles, not new research
+    # identities; the target owner resolves the actual physical path/policy.
+    profile_id = (
+        "selection_pit" if source_id == SOURCE_IDS[0]
+        else str(definition.source["strategy_profile_id"])
+    )
+    return get_strategy_comparison_settings(profile_id)
+
+
+def _missing_daily_teacher_source(definition, *, root: Path) -> dict[str, Any] | None:
+    """Fail closed on existing lineage before authorizing any missing teacher BUILD.
+
+    All artifact identity and coverage decisions belong to the registered
+    Strategy Compare parameter planner; this Audit must not infer READY from
+    file existence or accidentally run a canonical producer for stale truth.
+    """
+    from filters.breakout_quality.daily_trade40_target import (
+        SOURCE_IDS, resolve_historical_min_teacher_paths,
+        load_historical_min_execution_schedule,
+    )
+    from core.console_report import project_relative_display_path
+    from services.research.strategy_compare_preparation_status import (
+        collect_preparation_status, resolve_param_source_path,
+    )
+
+    paths = resolve_historical_min_teacher_paths(root)
+    missing: list[dict[str, Any]] = []
+    expected_builders = {
+        SOURCE_IDS[0]: "selection_historical_p2",
+        SOURCE_IDS[1]: "optimizer_fixed_multiseed_strategy_params",
+    }
+    # Validate *both* inputs before BUILD: a stale existing P16 must block
+    # even when a missing P2 otherwise has an authorized producer.
+    for source_id in SOURCE_IDS:
+        path = paths[source_id]
+        relative = project_relative_display_path(path, project_root=root)
+        settings = _daily_teacher_source_settings(definition, source_id)
+        source = settings.parameter_sources.get(source_id)
+        builder = None if source is None else source.builder
+        expected_builder = expected_builders[source_id]
+        if (
+            builder is None or not builder.enabled
+            or builder.builder_type != expected_builder
+            or str(settings.param_policy).strip() != "base-finalist-best"
+        ):
+            raise OracleBlockedError(
+                f"Daily-universal {source_id} 未獲 canonical Min Producer 授權"
+            )
+        producer_path = resolve_param_source_path(root, settings, source_id)
+        if producer_path != path:
+            raise OracleBlockedError(
+                f"Daily-universal {source_id} teacher path differs from canonical Producer: "
+                f"{relative}"
+            )
+        if path.exists() and not path.is_file():
+            raise OracleBlockedError(f"Daily-universal teacher path is not a file: {relative}")
+        try:
+            producer_status = collect_preparation_status(project_root=root, settings=settings)
+        except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+            raise OracleBlockedError(
+                f"Daily-universal {source_id} canonical Producer status unavailable: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+        row = (producer_status.get("parameters") or {}).get(source_id)
+        actions = [
+            action for action in producer_status["preparation_plan"].actions
+            if action.artifact_key == f"param:{source_id}"
+        ]
+        if not isinstance(row, dict) or len(actions) != 1:
+            raise OracleBlockedError(
+                f"Daily-universal {source_id} not governed by canonical parameter plan"
+            )
+        action = actions[0]
+        if path.is_file():
+            if not bool(row.get("ready")) or row.get("action") != "REUSE" or action.action != "REUSE":
+                raise OracleBlockedError(
+                    f"Daily-universal {source_id} existing teacher identity/coverage "
+                    f"not READY: {row.get('status')} (action={row.get('action')}); "
+                    f"preserve artifact, do not overwrite: {relative}"
+                )
+        else:
+            if (row.get("action") != "BUILD" or action.action != "BUILD"
+                    or action.builder_type != expected_builder):
+                raise OracleBlockedError(
+                    f"Daily-universal {source_id} missing teacher cannot be built by "
+                    f"authorized canonical Producer: {row.get('status')} "
+                    f"(action={row.get('action')}): {relative}"
+                )
+            missing.append({"source_id": source_id, "relative": relative})
+
+    if missing:
+        source_id, relative = missing[0]["source_id"], missing[0]["relative"]
+        return {
+            "status": "BLOCKED", "reason": (
+                f"Daily-universal Target 缺少 canonical {source_id} Min teacher: "
+                f"{relative}；交由已註冊 Optimizer Producer 建立／接續"
+            ),
+            "source": {
+                "display": "Full Research Dataset + 4-seed canonical P16 + daily target truth",
+                "path": relative, "preparable": True,
+                "missing_teacher_source_id": source_id,
+            },
+        }
+    # The target owner also verifies chronological teacher/parameter semantics;
+    # a technically READY artifact can still violate the combined P2->P16 handoff.
+    load_historical_min_execution_schedule(root)
+    return None
+
+
 def collect_status(definition, *, project_root: Path) -> dict[str, Any]:
-    """Read-only 4-seed P16 manifest and full Dataset preflight."""
+    """Read-only 4-seed P16 and daily Target prerequisite preflight."""
     root = Path(project_root).resolve()
     display = "Full Research Dataset + 4-seed canonical P16 + daily target truth"
     try:
@@ -293,6 +409,13 @@ def collect_status(definition, *, project_root: Path) -> dict[str, Any]:
         if not truth_root.is_dir():
             raise OracleBlockedError("缺少validated breakout-quality Dataset bundle；Audit不得代替Producer建置")
         robustness, records = _robustness_artifacts(definition, root)
+        # AI: Do not materialize target labels or replay during this preflight.
+        # A missing registered teacher is a preparable upstream dependency, not
+        # a reason to silently replace P2 with the future P16 or NULL/zero-R.
+        if _oracle_comparison_plan(definition)["daily_recipes"]:
+            missing = _missing_daily_teacher_source(definition, root=root)
+            if missing is not None:
+                return missing
         return {
             "status": "READY", "reason": "", "source": {
                 "display": display, "preparable": False,
@@ -305,6 +428,32 @@ def collect_status(definition, *, project_root: Path) -> dict[str, Any]:
             "status": "BLOCKED", "reason": str(exc),
             "source": {"display": display, "preparable": False},
         }
+
+
+def prepare_canonical_daily_trade40_teacher_source(
+    definition, *, project_root: Path,
+) -> dict[str, Any]:
+    """Delegate just the missing teacher to the registered Optimizer producer."""
+    root = Path(project_root).resolve()
+    status = collect_status(definition, project_root=root)
+    source = dict(status.get("source") or {})
+    source_id = str(source.get("missing_teacher_source_id") or "")
+    if status["status"] == "READY":
+        return {"status": "REUSE"}
+    if not source_id or not source.get("preparable"):
+        raise OracleBlockedError(str(status.get("reason") or "Teacher source not authorized"))
+    settings = _daily_teacher_source_settings(definition, source_id)
+    from services.research.strategy_compare_preparation_status import collect_preparation_status
+    from services.research.strategy_compare_preparation import prepare_strategy_parameter_artifacts
+
+    # AI: All fitting/resume/reuse/identity rules stay in the existing canonical
+    # strategy-parameter preparation service. The Audit itself creates no params.
+    preparation = collect_preparation_status(project_root=root, settings=settings)
+    result = prepare_strategy_parameter_artifacts(
+        project_root=root, settings=settings, status=preparation,
+        required_source_ids=(source_id,),
+    )
+    return result
 
 
 
