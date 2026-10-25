@@ -276,6 +276,25 @@ def show_strategy_comparison_profile_status(*, profile_id: str) -> None:
 
     settings = get_strategy_comparison_settings(str(profile_id))
     show_strategy_comparison_status(settings=settings)
+    # Read-only P1-P3 comparison readiness attached to the existing formal
+    # Strategy Compare status. It never changes the fixed menu or Standard SOP.
+    from services.research.oracle_dl_comparison_sources import (
+        collect_matched_oracle_dl_readiness,
+        resolve_matched_oracle_dl_pairs,
+    )
+    if resolve_matched_oracle_dl_pairs(settings.profile_id):
+        readiness = collect_matched_oracle_dl_readiness(
+            project_root=Path(__file__).resolve().parents[2],
+            profile_id=settings.profile_id,
+        )
+        print("\n[Oracle / PIT DL 可比性前置｜唯讀／不執行Replay]")
+        print("狀態：" + str(readiness["status"]))
+        for pair in readiness.get("pairs", ()):
+            label = f"{pair['arm_id']} ↔ {pair['oracle_target']}"
+            print(f"  {label}: {pair['status']}"
+                     + (f" | {pair['reason']}" if pair.get('reason') else ''))
+        if readiness.get("reason"):
+            print("原因：" + str(readiness["reason"]))
 
 
 def run_strategy_multi_seed_robustness(

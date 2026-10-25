@@ -2207,5 +2207,165 @@ class OracleDLAlignedComparisonCases(TestCase):
                 run_matched_oracle_dl_replays(**kwargs)
 
 
+
+class MatchedOracleDlCanonicalSourceCases(TestCase):
+    """Producer-bound and fail-closed Source Preflight; no market data needed."""
+
+    def test_current_suite_matches_scientific_target_and_selector_not_model_names(self):
+        from services.research.oracle_dl_comparison_sources import (
+            resolve_matched_oracle_dl_pairs,
+        )
+        from core.strategy_compare_policy import get_strategy_comparison_settings
+        matches = resolve_matched_oracle_dl_pairs("broker_cash_dl_conversion_rolling")
+        self.assertTrue(matches)
+        settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
+        selected = {arm.arm_id for arm in settings.enabled_arms}
+        recipes = oracle._oracle_comparison_plan(_ACTIVE_ORACLE_DEFINITION)
+        for item in matches:
+            self.assertIn(item["arm_id"], selected)
+            self.assertEqual(item["selector"], "exact")
+            self.assertIn(item["oracle_target"], recipes["recipes"])
+            self.assertEqual(item["score_source"], "selection_point_in_time")
+        self.assertEqual(len({row["arm_id"] for row in matches}), len(matches))
+        self.assertFalse(resolve_matched_oracle_dl_pairs("broker_cash_dl_conversion_oos"))
+
+    def test_canonical_seed_root_uses_validated_latest_manifest_only(self):
+        from services.research.oracle_dl_comparison_sources import (
+            _validated_robustness_model_root,
+        )
+        from core.strategy_compare_policy import get_strategy_multi_seed_robustness_settings
+        cfg = get_strategy_multi_seed_robustness_settings("broker_cash_dl_conversion_rolling")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaisesRegex(FileNotFoundError, "latest"):
+                _validated_robustness_model_root(root, cfg.profile_id)
+            out = root / cfg.output_root
+            fp = "a" * 16
+            (out / fp).mkdir(parents=True)
+            (out / "latest.json").write_text(json.dumps({"fingerprint": fp}), encoding="utf-8")
+            contract = {
+                "fingerprint": fp, "profile_id": cfg.profile_id,
+                "robustness_id": cfg.robustness_id,
+                "benchmark_id": cfg.benchmark_id,
+                "resolved_seeds": list(cfg.resolved_seeds),
+                "model_artifact_fingerprint": "b" * 16,
+            }
+            (out / fp / "manifest.json").write_text(json.dumps({
+                "status": "COMPLETED", "contract": contract,
+            }), encoding="utf-8")
+            expected = (root / cfg.model_work_root / ("b" * 16)).resolve()
+            self.assertEqual(_validated_robustness_model_root(root, cfg.profile_id), expected)
+            contract["resolved_seeds"] = list(cfg.resolved_seeds[:-1])
+            (out / fp / "manifest.json").write_text(json.dumps({
+                "status": "COMPLETED", "contract": contract,
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "四Seed"):
+                _validated_robustness_model_root(root, cfg.profile_id)
+
+    def test_isolated_pit_scores_require_each_seed_manifest_and_sha(self):
+        from services.research import oracle_dl_comparison_sources as owner
+        profile = "broker_cash_dl_conversion_rolling"
+        pair = owner.resolve_matched_oracle_dl_pairs(profile)[0]
+        root = Path("/tmp/research_mock_legal_root")
+        seen = []
+        def validated(*args, **kwargs):
+            seed = int(kwargs["expected_seed"])
+            seen.append((seed, str(kwargs["point_in_time_dir_override"])))
+            return SimpleNamespace(
+                score_path=Path(f"seed_{seed}.csv"),
+                manifest_path=Path(f"seed_{seed}.json"),
+                seed=seed,
+                continuous_target_id=pair["continuous_target_id"],
+                available_from="2020-12-31", available_through="2026-03-02",
+            )
+        with patch.object(owner, "load_selection_point_in_time_score_source_contract", side_effect=validated), \
+             patch.object(owner, "load_selection_point_in_time_score_table_from_path", return_value=pd.DataFrame({
+                 "breakout_quality_score": [0.5],
+             }, index=pd.MultiIndex.from_tuples([("2330", "2021-01-01")], names=["ticker", "date"]))), \
+             patch.object(owner, "compute_file_sha256", return_value="a" * 64):
+            verified = owner.load_verified_seed_pit_scores(
+                project_root=root, profile_id=profile, match=pair,
+                model_root_override=root / "seed_models",
+            )
+        self.assertEqual(len(seen), len(verified))
+        self.assertEqual(len({seed for seed, _ in seen}), len(seen))
+        self.assertTrue(all(f"seed_{seed}" in model_dir for seed, model_dir in seen))
+        self.assertTrue(all(record["score_sha256"] == "a" * 64 for record in verified.values()))
+        def missing(*args, **kwargs):
+            raise FileNotFoundError("aggregate score retention pruned")
+        with patch.object(owner, "load_selection_point_in_time_score_source_contract", side_effect=missing), \
+             self.assertRaisesRegex(ValueError, "BLOCKED.*不可拿完成的策略RoMD"):
+            owner.load_verified_seed_pit_scores(
+                project_root=root, profile_id=profile, match=pair,
+                model_root_override=root / "seed_models",
+            )
+
+    def test_ready_sources_bind_to_canonical_comparison_engine_without_publishing(self):
+        from services.research import oracle_dl_comparison_sources as owner
+        profile = "broker_cash_dl_conversion_rolling"
+        pair = owner.resolve_matched_oracle_dl_pairs(profile)[0]
+        from core.strategy_compare_policy import get_strategy_multi_seed_robustness_settings
+        seeds = tuple(get_strategy_multi_seed_robustness_settings(profile).resolved_seeds)
+        keys = pd.MultiIndex.from_tuples([
+            ("2330", "2020-12-31"), ("2330", "2021-01-04"),
+        ], names=["ticker", "date"])
+        table = pd.DataFrame({"breakout_quality_score": [0.2, 0.8]}, index=keys)
+        verified = {int(seed): {
+            "table": table, "score_sha256": "a" * 64,
+            "manifest_sha256": "b" * 64,
+            "available_from": "2020-12-31", "available_through": "2026-03-02",
+        } for seed in seeds}
+        params = [(int(seed), "c" * 64, "rolling_active_param_ensemble", {"base": 1}, {"scored": 1})
+                  for seed in seeds]
+        bundle = SimpleNamespace(
+            group_table=pd.DataFrame({
+                "ticker": ["2330", "2330"],
+                "date": pd.to_datetime(["2020-12-31", "2021-01-04"]),
+            }), target_valid=[True, False],
+        )
+        ranked = {pair["oracle_target"]: {
+            ("2330", "2020-12-31"): 0.4,
+            ("2330", "2021-01-04"): 0.9,
+        }}
+        evidence = {"last_common_day": "2021-01-04",
+                    "market_truth": {"score_start": "2020-12-31"}}
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(oracle, "_robustness_artifacts", return_value=(object(), [(s, Path("params")) for s in seeds])), \
+             patch.object(oracle, "_prepare_oracle_parameters", return_value=(params, [])), \
+             patch.object(oracle, "build_oracle_score_tables", return_value=(ranked, evidence)), \
+             patch.object(owner, "load_verified_seed_pit_scores", return_value=verified), \
+             patch("filters.breakout_quality.profile_ranker_data.load_profile_continuous_ranker_data", return_value=bundle), \
+             patch("core.dataset_profiles.get_dataset_dir", return_value=Path("fake-market")), \
+             patch("services.audit.oracle_replay_artifacts.price_inventory_sha256", return_value="d" * 64), \
+             patch("services.research.oracle_dl_comparison_contract.run_matched_oracle_dl_replays", return_value={"status": "COMPARABLE"}) as replay:
+            result = owner.run_verified_matched_oracle_dl_comparison(
+                project_root=Path(tmp), profile_id=profile, arm_id=pair["arm_id"],
+            )
+        self.assertEqual(result["status"], "COMPARABLE")
+        self.assertEqual(result["source_verified_seeds"], len(seeds))
+        self.assertEqual(result["oracle_target"], pair["oracle_target"])
+        params = replay.call_args.kwargs
+        self.assertEqual(params["score_start_date"], "2020-12-31")
+        self.assertEqual(params["end_date"], "2021-01-04")
+        self.assertEqual(set(params["seed_panels"]), set(seeds))
+        self.assertTrue(all(
+            item["eligibility_manifest_sha256"] == "b" * 64
+            and len(item["eligible"]) == 2
+            for item in params["seed_panels"].values()
+        ))
+
+    def test_absent_p16_blocks_before_ground_truth_or_replay(self):
+        from services.research import oracle_dl_comparison_sources as owner
+        pair = owner.resolve_matched_oracle_dl_pairs("broker_cash_dl_conversion_rolling")[0]
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(oracle, "_robustness_artifacts", side_effect=ValueError("no canonical P16")), \
+             patch.object(oracle, "build_oracle_score_tables") as truth:
+            with self.assertRaisesRegex(ValueError, "canonical P16"):
+                owner.run_verified_matched_oracle_dl_comparison(
+                    project_root=Path(tmp), profile_id="broker_cash_dl_conversion_rolling",
+                    arm_id=pair["arm_id"],
+                )
+            truth.assert_not_called()
+
 if __name__ == "__main__":
     main(verbosity=2)
