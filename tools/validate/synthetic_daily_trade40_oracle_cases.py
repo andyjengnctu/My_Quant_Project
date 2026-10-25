@@ -150,11 +150,105 @@ class FormalMinDailyOracleCases(TestCase):
         e1=oracle._arm_replay_policy(d,plan=plan,target=EXACT,replay_policy=base,daily_evidence=evidence)
         e2=oracle._arm_replay_policy(d,plan=plan,target=DIRECT,replay_policy=base,daily_evidence=evidence)
         self.assertEqual(e1["hindsight_target_contract"],e2["hindsight_target_contract"])
+        self.assertEqual(
+            e1["hindsight_target_contract"]["missing_key_policy"],
+            "unavailable_outside_mature_feature_universe",
+        )
         self.assertNotIn("direct_arm",e1)
         self.assertIn("direct_arm",e2)
         self.assertEqual(e1["hindsight_target_contract"]["label_id"],LABEL_ID)
         self.assertNotIn("MR-13CL",str(e1))
         self.assertGreater(scores[("2330","2020-12-31")],scores[("2317","2020-12-31")])
+
+    def test_benchmark_is_not_a_daily_model_sample_and_stays_unscored_in_oracle(self):
+        """Reproduce 0050/2021-01-13: no fake R and no new candidate engine.
+
+        The daily model uses 0050 only as a feature benchmark. The Min Portfolio
+        can still present 0050 as a candidate. Its ranked availability must
+        behave exactly as a canonical PIT model with no ticker/date score.
+        """
+        from filters.breakout_quality.runtime import (
+            audit_oracle_truth_score_context, resolve_breakout_quality_candidate_rank,
+        )
+        from core.portfolio_entry_selection_max_dl import _max_dl_score_order
+        scores, _evidence = run_source()
+        self.assertIn(("2330", "2021-01-04"), scores)
+        self.assertNotIn(("0050", "2021-01-04"), scores)
+        settings, _base, exact = oracle._contract(definition())
+        direct = oracle._direct_arm(definition(), settings, _base, exact)
+        for arm in (exact, direct):
+            with self.subTest(selector=arm.dl_runtime_mode):
+                with audit_oracle_truth_score_context(
+                    scores, ranking_policy=arm.dl_runtime_mode,
+                    ranking_options=arm.dl_runtime_options,
+                    missing_key_policy="unavailable_outside_mature_feature_universe",
+                ):
+                    scored = resolve_breakout_quality_candidate_rank(
+                        ticker="2330", signal_date="2020-12-31",
+                        information_date="2021-01-04", high_len=260,
+                    )
+                    unscored = resolve_breakout_quality_candidate_rank(
+                        ticker="0050", signal_date="2020-12-31",
+                        information_date="2021-01-04", high_len=260,
+                    )
+                    self.assertTrue(scored["available"])
+                    self.assertIsInstance(scored["score"], float)
+                    self.assertEqual(unscored["score"], None)
+                    self.assertFalse(unscored["available"])
+                    self.assertEqual(unscored["unavailable_reason"], "missing_ticker_date_score")
+                    # The canonical DL selector keeps the same Min candidate,
+                    # but scores it after available candidates: no 0R imputation.
+                    rows = [
+                        {"ticker": "0050", "breakout_quality_rank": unscored,
+                         "breakout_quality_score": None},
+                        {"ticker": "2330", "breakout_quality_rank": scored,
+                         "breakout_quality_score": scored["score"]},
+                    ]
+                    sorted_rows = _max_dl_score_order(rows, base_rank={id(v): k for k, v in enumerate(rows)})
+                    self.assertEqual([x["ticker"] for x in sorted_rows], ["2330", "0050"])
+        # No new fallback is permitted for event or other strict Oracle sources.
+        with audit_oracle_truth_score_context(
+            scores, ranking_policy=exact.dl_runtime_mode,
+            ranking_options=exact.dl_runtime_options,
+        ):
+            with self.assertRaisesRegex(ValueError, "未覆蓋"):
+                resolve_breakout_quality_candidate_rank(
+                    ticker="0050", signal_date="2020-12-31",
+                    information_date="2021-01-04", high_len=260,
+                )
+
+    def test_daily_unscored_scope_rejects_nonfinite_truth_and_event_scope(self):
+        from filters.breakout_quality.runtime import (
+            audit_oracle_truth_score_context, resolve_breakout_quality_candidate_rank,
+        )
+        settings, _base, exact = oracle._contract(definition())
+        with self.assertRaisesRegex(ValueError, "Only the mature daily"):
+            with audit_oracle_truth_score_context(
+                {("2330", "2025-01-02"): 0.8}, ranking_policy=exact.dl_runtime_mode,
+                ranking_options=exact.dl_runtime_options,
+                key_mode="signal_origin_date",
+                missing_key_policy="unavailable_outside_mature_feature_universe",
+            ):
+                pass
+        with audit_oracle_truth_score_context(
+            {("2330", "2025-01-02"): float("nan")}, ranking_policy=exact.dl_runtime_mode,
+            ranking_options=exact.dl_runtime_options,
+            missing_key_policy="unavailable_outside_mature_feature_universe",
+        ):
+            with self.assertRaisesRegex(ValueError, "非有限真值"):
+                resolve_breakout_quality_candidate_rank(
+                    ticker="2330", signal_date="2025-01-02",
+                    information_date="2025-01-02", high_len=260,
+                )
+        with audit_oracle_truth_score_context(
+            {("2330", "2025-01-02"): 0.8}, ranking_policy=exact.dl_runtime_mode,
+            ranking_options=exact.dl_runtime_options,
+        ):
+            with self.assertRaisesRegex(ValueError, "未覆蓋"):
+                resolve_breakout_quality_candidate_rank(
+                    ticker="0050", signal_date="2025-01-02",
+                    information_date="2025-01-02", high_len=260,
+                )
 
     def test_wrong_dataset_or_missing_source_is_blocked_not_zero(self):
         with self.assertRaisesRegex(DailyTrade40OracleBlockedError,"identity mismatch"):

@@ -914,6 +914,10 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
             "mature_eligible_rows": daily_evidence["mature_eligible_rows"],
             "settled_net_r_rows": daily_evidence["settled_net_r_rows"],
             "censored_rank_last_rows": daily_evidence["censored_rank_last_rows"],
+            # Matches the canonical DL lookup: a candidate outside the
+            # feature-eligible mature score universe has no score, never 0R.
+            # Distinct replay identity prevents accidental historical reuse.
+            "missing_key_policy": "unavailable_outside_mature_feature_universe",
             "research_cutoff": daily_evidence["research_cutoff"],
             **({"oracle_evaluation_start_date": daily_evidence["oracle_evaluation_start_date"]}
                if daily_evidence.get("oracle_evaluation_start_date") else {}),
@@ -1323,6 +1327,10 @@ def build_report(
                         ranking_options=arm.dl_runtime_options,
                         key_mode=("signal_origin_date" if target in plan["seed_sources"]
                                   else "information_date"),
+                        missing_key_policy=(
+                            "unavailable_outside_mature_feature_universe"
+                            if target in plan["daily_sources"] else "block"
+                        ),
                     ):
                         return _run_scenario(
                             name=f"Oracle {target} seed={seed}", params=oracle_params,

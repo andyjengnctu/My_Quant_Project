@@ -157,6 +157,13 @@ _ORACLE_TRUTH_SCORES: ContextVar[Mapping[tuple[str, str], float] | None] = Conte
 _ORACLE_TRUTH_KEY_MODE: ContextVar[str] = ContextVar(
     "breakout_quality_audit_oracle_truth_key_mode", default="information_date",
 )
+# Only an explicitly verified daily-universal score source may treat an absent
+# feature-ineligible stock-day as an unavailable ranking. Other Oracle truth
+# sources still fail closed for missing keys; neither policy imputes a score.
+_ORACLE_TRUTH_MISSING_KEY_POLICY: ContextVar[str] = ContextVar(
+    "breakout_quality_audit_oracle_missing_key_policy", default="block",
+)
+_ORACLE_DAILY_UNSCORED_POLICY = "unavailable_outside_mature_feature_universe"
 
 
 def _candidate_score_lookup_date(
@@ -181,12 +188,24 @@ def audit_oracle_truth_score_context(
     scores: Mapping[tuple[str, str], float],
     *, ranking_policy: str, ranking_options: Mapping[str, object] | None = None,
     key_mode: str = "information_date",
+    missing_key_policy: str = "block",
 ) -> Iterator[None]:
-    """Bind hindsight scores only during one isolated Audit portfolio replay."""
+    """Bind verified hindsight scores during one isolated Audit replay.
+
+    The daily-universal producer certifies that its score map covers every
+    mature feature-eligible stock-day. An absent key therefore means this
+    portfolio candidate has no DL-score-eligible Target, exactly as in PIT
+    ranking; it remains a normal Min candidate with an unavailable DL rank.
+    Event and price Oracle score sources stay strict by default.
+    """
     if not scores:
         raise ValueError("Oracle Audit缺少成熟的Ground Truth scores")
     if key_mode not in {"information_date", "signal_origin_date"}:
         raise ValueError("Oracle Audit未知的 score key mode")
+    if missing_key_policy not in {"block", _ORACLE_DAILY_UNSCORED_POLICY}:
+        raise ValueError("Oracle Audit未知的 missing-key policy")
+    if missing_key_policy != "block" and key_mode != "information_date":
+        raise ValueError("Only the mature daily-stock-day Oracle may allow unavailable ranks")
     if _ORACLE_TRUTH_SCORES.get() is not None:
         raise RuntimeError("Oracle Audit不得巢狀覆寫未來真值score")
     with audit_oracle_ranking_policy_context(
@@ -194,9 +213,11 @@ def audit_oracle_truth_score_context(
     ):
         token = _ORACLE_TRUTH_SCORES.set(scores)
         key_token = _ORACLE_TRUTH_KEY_MODE.set(key_mode)
+        missing_token = _ORACLE_TRUTH_MISSING_KEY_POLICY.set(missing_key_policy)
         try:
             yield
         finally:
+            _ORACLE_TRUTH_MISSING_KEY_POLICY.reset(missing_token)
             _ORACLE_TRUTH_KEY_MODE.reset(key_token)
             _ORACLE_TRUTH_SCORES.reset(token)
 
@@ -261,9 +282,18 @@ def resolve_breakout_quality_candidate_rank(
             raise RuntimeError("Oracle Audit缺少原始signal date；禁止不明來源fallback")
         date = pd.Timestamp(lookup_day).strftime("%Y-%m-%d")
         key = (str(ticker), date)
-        value = truth.get(key)
-        if value is None or not math.isfinite(float(value)):
+        if key not in truth:
+            if _ORACLE_TRUTH_MISSING_KEY_POLICY.get() == _ORACLE_DAILY_UNSCORED_POLICY:
+                return {
+                    "score": None, "available": False,
+                    "unavailable_reason": "missing_ticker_date_score",
+                    "score_date": date, "filter_id": str(filter_id),
+                    "score_source": SCORE_SOURCE_AUDIT_ORACLE_FUTURE_TRUTH,
+                }
             raise ValueError(f"Oracle Audit未覆蓋可交易候選，停止回測: ticker={ticker}, date={date}")
+        value = truth[key]
+        if value is None or not math.isfinite(float(value)):
+            raise ValueError(f"Oracle Audit非有限真值分數，停止回測: ticker={ticker}, date={date}")
         return {
             "score": float(value), "available": True, "unavailable_reason": "",
             "score_date": date, "filter_id": str(filter_id),
