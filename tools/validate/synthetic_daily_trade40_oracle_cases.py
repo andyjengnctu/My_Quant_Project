@@ -150,24 +150,24 @@ class FormalMinDailyOracleCases(TestCase):
         self.assertFalse(hasattr(primitive,"counterfactual_trade40_contract"))
         self.assertFalse(hasattr(oracle,"_missing_daily_teacher_source"))
 
-    def test_user_confirmation_precedes_daily_label_computation_and_replay(self):
-        d=definition()
-        class Cancel(Exception): pass
-        messages=[]
-        def deny(message):
-            messages.append(message)
-            raise Cancel()
-        fake_robust=SimpleNamespace(benchmark_id="synthetic")
-        with patch.object(oracle,"collect_status",return_value={"status":"READY"}), \
-             patch.object(oracle,"_robustness_artifacts",return_value=(fake_robust,[(693545351,Path("p.json"))])), \
-             patch.object(oracle,"_existing_artifact_inventory",return_value=("",{
-                 (693545351,EXACT):"RUN",(693545351,DIRECT):"RUN",(693545351,"C96"):"REUSE"})), \
-             patch.object(oracle,"_build_oracle_score_panels") as truth, \
-             patch.object(oracle,"_run_scenario") as replay:
-            with self.assertRaises(Cancel):
-                oracle.build_report(d,project_root=Path("/isolated"),before_replay=deny,quiet=True)
-        truth.assert_not_called();replay.assert_not_called()
-        self.assertIn("RUN 2",messages[0])
+    def test_blocked_upstream_does_not_compute_daily_truth_or_start_optimizer(self):
+        d = definition()
+        with patch.object(oracle, "collect_status", return_value={
+                "status": "BLOCKED", "reason": "formal Min seed parameters unavailable",
+             }), \
+             patch.object(oracle, "_robustness_artifacts") as sources, \
+             patch.object(oracle, "_build_oracle_score_panels") as truth, \
+             patch.object(oracle, "_run_scenario") as replay, \
+             patch("builtins.input", side_effect=AssertionError("domain-level confirmation")) as prompt, \
+             patch("services.research.strategy_compare_preparation.prepare_strategy_parameter_artifacts",
+                   side_effect=AssertionError("unexpected Optimizer")) as optimizer:
+            with self.assertRaisesRegex(oracle.OracleBlockedError, "formal Min seed"):
+                oracle.build_report(d, project_root=Path("/isolated"), quiet=True)
+            sources.assert_not_called()
+            truth.assert_not_called()
+            replay.assert_not_called()
+            optimizer.assert_not_called()
+            prompt.assert_not_called()
 
     def test_cache_identity_is_per_target_and_same_period_no_global_shift(self):
         from services.audit.oracle_replay_artifacts import replay_identity

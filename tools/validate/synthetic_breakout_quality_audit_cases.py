@@ -152,17 +152,21 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
     route_console = io.StringIO()
     prompts = []
-    answers = iter(["", "", "RUN", "0"])
+    answers = iter(["", "", "0"])
 
     def input_after_plan(prompt):
         prompts.append((prompt, "候選 REUSE 32" in route_console.getvalue()))
         return next(answers)
 
     def fake_target_runner(*args, **kwargs):
-        # AI: Simulate the canonical owner's verified preflight callback;
-        # AI: no replay is authorized merely by the tentative inventory.
-        print("[Target 驗證｜身分核對完成] REUSE 0 / RUN（需計算）56 / BLOCKED 0")
-        kwargs["before_replay"]("正式 Replay 計畫：REUSE 0 / RUN 56")
+        # AI: A regression to the old callback would demand a second prompt;
+        # AI: simulate the old owner invoking it so this test fails decisively.
+        if "before_replay" in kwargs:
+            kwargs["before_replay"]("[Target 驗證｜計算授權] RUN 12")
+        # AI: Real identity checks run in the canonical Audit owner; the app
+        # AI: never prompts again, even when its tentative cache tally differs.
+        print("[Target 驗證｜身分核對完成] REUSE 44 / RUN（需計算）12 / BLOCKED 0")
+        print("[RUN] Target seed=11 | no completed local result")
         return {}
 
     with patch("builtins.input", side_effect=input_after_plan), \
@@ -178,6 +182,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         route_rc == 0 and oracle_runner.call_count == 1
         and oracle_runner.call_args.kwargs.get("method_id") == oracle_method_id
         and oracle_runner.call_args.kwargs.get("preflight_display") == "summary"
+        and "before_replay" not in oracle_runner.call_args.kwargs
         and not expensive_status.called
         and "[1]" in root_text and "Target 驗證" in root_text
         and "[2]" in root_text and "模型訓練／驗證" in root_text
@@ -185,16 +190,16 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and "[9]" in root_text and "策略升格" in root_text,
     )
     check_true(
-        "target_verification_shows_reuse_before_execution_enter",
-        len(prompts) == 4 and not prompts[0][1] and prompts[1][1]
-        and "按 Enter 核對正式 REUSE/RUN/BLOCKED 計畫" in prompts[1][0]
-        and "輸入 RUN 授權本階段計算" in prompts[2][0]
+        "target_validation_only_one_confirm_even_if_verified_run_count_changes",
+        len(prompts) == 3 and not prompts[0][1] and prompts[1][1]
+        and "按 Enter 執行 Target 驗證" in prompts[1][0]
+        and not any("輸入 RUN" in prompt for prompt, _ in prompts)
         and root_text.index("候選 REUSE 32") < root_text.index("身分核對完成")
-        and root_text.index("身分核對完成") < root_text.index("正式 Replay 計畫")
-        and "只核對正式" not in root_text and "完整驗證＋" not in root_text,
+        and root_text.index("身分核對完成") < root_text.index("[RUN] Target")
+        and "LATEST" in root_text,
     )
     cancellation = io.StringIO()
-    with patch("builtins.input", return_value="0"), \
+    with patch("builtins.input", return_value="0") as cancel_input, \
          patch.object(research_app, "render_audit_status") as status, \
          patch.object(research_app, "render_audit_artifact_inventory", return_value="候選 REUSE 32"), \
          patch.object(research_app, "run_enabled_audits", side_effect=fake_target_runner) as cancelled_runner, \
@@ -202,30 +207,32 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
          redirect_stdout(cancellation):
         research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
     check_true(
-        "target_preflight_cancel_does_not_claim_or_persist_report",
-        not cancelled_runner.called and not latest.called and not status.called
+        "target_single_enter_cancel_is_before_any_expensive_work",
+        cancel_input.call_count == 1
+        and not cancelled_runner.called and not latest.called and not status.called
         and "候選 REUSE 32" in cancellation.getvalue(),
     )
 
-    # A larger-than-estimated plan must never run after a cancellation.
-    # Current scientific semantics no longer shift the common window merely
-    # because another Target has a different first observed information bar.
-    changed_window_console = io.StringIO()
-    cancelled_plan = []
-    def replay_plan_only(*args, **kwargs):
-        kwargs["before_replay"]("共同視窗 2021-01-05；REUSE 0 / RUN 56")
-        cancelled_plan.append("replayed")
-    with patch("builtins.input", side_effect=["", "0"]), \
-         patch.object(research_app, "render_audit_artifact_inventory", return_value="舊期間候選 REUSE 48 / RUN 8"), \
-         patch.object(research_app, "run_enabled_audits", side_effect=replay_plan_only), \
-         patch.object(research_app, "render_latest_audit_summary") as no_summary, \
-         redirect_stdout(changed_window_console):
-        refused = research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
+    # The presence inventory can differ from the final identity-based plan;
+    # the same initial Enter authorizes whichever legitimate RUNs are missing.
+    changed_plan_console = io.StringIO()
+    verified_calls = []
+    def exact_plan(*args, **kwargs):
+        verified_calls.append(kwargs)
+        print("[Target 驗證｜身分核對完成] REUSE 48 / RUN（需計算）8 / BLOCKED 0")
+    with patch("builtins.input", return_value="") as single_input, \
+         patch.object(research_app, "render_audit_artifact_inventory", return_value="候選 REUSE 48 / RUN 8"), \
+         patch.object(research_app, "run_enabled_audits", side_effect=exact_plan), \
+         patch.object(research_app, "render_latest_audit_summary", return_value="LATEST"), \
+         redirect_stdout(changed_plan_console):
+        result = research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
     check_true(
-        "changed_replay_window_never_executes_unapproved_56_arms",
-        refused == 0 and "RUN 56" in changed_window_console.getvalue()
-        and "Target 驗證已取消" in changed_window_console.getvalue()
-        and not cancelled_plan and not no_summary.called,
+        "target_exact_verified_plan_runs_without_more_confirmation",
+        result == 0 and single_input.call_count == 1
+        and len(verified_calls) == 1
+        and "before_replay" not in verified_calls[0]
+        and "RUN（需計算）8" in changed_plan_console.getvalue()
+        and "LATEST" in changed_plan_console.getvalue(),
     )
 
     # Entry-point integration belongs to the existing app/menu contract, not

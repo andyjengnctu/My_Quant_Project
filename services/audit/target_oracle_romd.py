@@ -797,7 +797,7 @@ def _existing_artifact_inventory(definition, *, project_root: Path) -> tuple[str
         "Seed：" + "  ".join(f"S{i + 1}={seed}" for i, seed in enumerate(seeds)),
         render_table(headers, rows),
         f"REUSE {counts['REUSE']} / RUN（需計算）{counts['RUN']} / BLOCKED {counts['BLOCKED']}",
-        "註：此表僅盤點工件是否存在；正式 REUSE 須核對原始資料、參數、期間及分數身分。新增 Target 不改變舊 Target 的回放期間；未輸入 RUN 不執行 Replay。",
+        "註：此表僅盤點工件是否存在；正式 REUSE 須核對原始資料、參數、期間及分數身分。新增 Target 不改變舊 Target 的回放期間；按 Enter 後自動核對並執行必要 Replay。",
     ))
     return inventory, actions
 
@@ -924,7 +924,6 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
 def _reusable_completed_oracle_report(
     definition, *, root: Path, settings, base_arm, exact_arm, direct_arm,
     robustness, parameter_paths, plan, quiet: bool,
-    before_replay: Callable[[str], None] | None = None,
 ) -> dict[str, Any] | None:
     """Fast path: certify an entire completed report WITHOUT materializing targets.
 
@@ -1031,15 +1030,6 @@ def _reusable_completed_oracle_report(
             if not quiet:
                 print(f"[Target 驗證｜身分核對完成] REUSE {len(seeds) * (len(wanted_targets) + 1)} / "
                       "RUN（需計算）0 / BLOCKED 0；未重新產生Ground Truth或Replay", flush=True)
-            if before_replay is not None:
-                # The one canonical authorization hook still runs before
-                # publication, including an all-REUSE or narrowed report.
-                before_replay(render_replay_preflight(
-                    label="40D", seeds=seeds,
-                    targets=[str(definition.source["baseline_arm_id"]), *wanted_targets],
-                    decisions={(seed, name): "REUSE" for seed in seeds
-                               for name in (str(definition.source["baseline_arm_id"]), *wanted_targets)},
-                ))
             # Removing a comparison cannot invalidate a retained per-arm
             # Replay. A strictly verified historical superset can supply a
             # smaller CURRENT report; all original evidence stays immutable.
@@ -1058,7 +1048,6 @@ def _reusable_completed_oracle_report(
 
 def build_report(
     definition, *, project_root: Path, quiet: bool = False,
-    before_replay: Callable[[str], None] | None = None,
     preflight_display: str = "full",
 ) -> dict[str, Any]:
     if preflight_display not in {"full", "summary"}:
@@ -1070,28 +1059,12 @@ def build_report(
     if status["status"] != "READY":
         raise OracleBlockedError(status["reason"])
     robustness, parameter_paths = _robustness_artifacts(definition, root)
-    # This is a tentative identity-independent inventory, never a certificate
-    # for REUSE. Approve the potentially costly daily truth calculation FIRST;
-    # the strict per-arm replay plan may not exceed that initial RUN budget
-    # without an independent, explicit second authorization.
-    authorized_run_budget = None
-    if plan["daily_recipes"] and before_replay is not None:
-        _inventory, tentative = _existing_artifact_inventory(definition, project_root=root)
-        authorized_run_budget = sum(action == "RUN" for action in tentative.values())
-        if any(action == "BLOCKED" for action in tentative.values()):
-            raise OracleBlockedError("Existing Oracle cache contains invalid evidence; no Target calculation started")
-        before_replay(
-            "[Target 驗證｜計算授權] 每日全母體40日真值需實際計算，非快速工件盤點。\n"
-            f"暫估 REUSE {sum(v == 'REUSE' for v in tentative.values())} / "
-            f"RUN {authorized_run_budget}；僅授權不超過這個 RUN 數量。\n"
-            "不訓練模型、不最佳化策略；若正式核對後需更多 Replay，將另行請求授權。"
-        )
     fast = None if plan["daily_recipes"] else _reusable_completed_oracle_report(
         definition, root=root, settings=settings, base_arm=base_arm,
         exact_arm=exact_arm,
         direct_arm=_direct_arm(definition, settings, base_arm, exact_arm),
         robustness=robustness, parameter_paths=parameter_paths,
-        plan=plan, quiet=quiet, before_replay=before_replay,
+        plan=plan, quiet=quiet,
     )
     if fast is not None:
         return fast
@@ -1296,11 +1269,6 @@ def build_report(
                 f"Oracle {label} REUSE preflight BLOCKED: "
                 f"{len(blocked)} conflict(s); " + " | ".join(details[:3])
             )
-        run_count = sum(status == "RUN" for status in decisions.values())
-        if before_replay is not None and (authorized_run_budget is None
-                                          or run_count > authorized_run_budget):
-            before_replay(preview)
-
         for seed, param_sha, kind, base_params, oracle_params in prepared:
             if not quiet and preflight_display == "full":
                 print(f"[Oracle Audit {label}] seed={seed}: verify C96 + {len(targets)} Oracle results")
@@ -1515,14 +1483,13 @@ def _resolve_min_trade40_p16_context(definition, *, project_root: Path):
 
 def run_formal_audit(
     definition, *, project_root: Path, quiet: bool = False,
-    before_replay: Callable[[str], None] | None = None,
     preflight_display: str = "full",
 ) -> dict[str, Any]:
     # Authorization, frozen schema, and historical snapshot must be checked
     # before initiating the costly hindsight-only portfolio replays.
     approved = require_approved_report_contract("audit.target_oracle_romd")
     payload = dict(build_report(
-        definition, project_root=project_root, quiet=quiet, before_replay=before_replay,
+        definition, project_root=project_root, quiet=quiet,
         preflight_display=preflight_display,
     ))
     payload["report_contract_id"] = f"{approved.report_id}@v{approved.version}"

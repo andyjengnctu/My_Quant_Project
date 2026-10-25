@@ -263,25 +263,24 @@ class OracleAuditContractCases(TestCase):
                     method_id="opportunity_selection_attribution",
                 )
 
-    def test_formal_runner_forwards_preflight_approval_only_to_declared_canonical_owner(self):
+    def test_formal_runner_never_prompts_or_starts_optimizer_for_audit(self):
         from services.audit import runner
-        seen = []
-        callback = lambda plan: seen.append(plan)
         with tempfile.TemporaryDirectory() as tmp, \
              patch.object(runner, "collect_audit_status", return_value={"overall_status": "READY"}), \
+             patch("builtins.input", side_effect=AssertionError("second confirmation")) as user_input, \
+             patch("services.research.strategy_compare_preparation.prepare_strategy_parameter_artifacts",
+                   side_effect=AssertionError("unexpected Optimizer")) as optimizer, \
              patch.object(oracle, "run_formal_audit", return_value={"status": "COMPLETED"}) as execute:
             result = runner.run_enabled_audits(
                 "breakout_quality", project_root=Path(tmp),
-                method_id=oracle.SUPPORTED_AUDIT_TYPE, before_replay=callback,
+                method_id=oracle.SUPPORTED_AUDIT_TYPE, preflight_display="summary",
             )
             self.assertEqual(result["target_oracle_romd"]["status"], "COMPLETED")
-            self.assertIs(execute.call_args.kwargs["before_replay"], callback)
-            with self.assertRaisesRegex(ValueError, "執行前 Replay 確認"):
-                runner.run_enabled_audits(
-                    "breakout_quality", project_root=Path(tmp),
-                    method_id="opportunity_selection_attribution", before_replay=callback,
-                )
-            self.assertEqual(seen, [], "runner must not preapprove or call application input")
+            self.assertEqual(execute.call_count, 1)
+            self.assertEqual(execute.call_args.kwargs["preflight_display"], "summary")
+            self.assertNotIn("before_replay", execute.call_args.kwargs)
+            user_input.assert_not_called()
+            optimizer.assert_not_called()
 
     def test_preflight_action_matrix_and_canonical_best_worst_metric_colors(self):
         from core.research_report_contract import report_contract
@@ -544,16 +543,12 @@ class OracleAuditContractCases(TestCase):
                                  if item["target"] in {"MFE40_Control", "R40"})
                 subset = replace(self.definition, source={**self.definition.source,
                                                           "oracle_comparisons": selected})
-                approvals = []
-                reduced = oracle.build_report(subset, project_root=root, quiet=True,
-                                              before_replay=approvals.append)
+                reduced = oracle.build_report(subset, project_root=root, quiet=True)
                 self.assertEqual([row["target"] for row in reduced["oracles"]],
                                  ["MFE40_Control", "R40"])
                 self.assertEqual(len(reduced["definitions"]), 2)
                 self.assertEqual(len(outcomes), 40)
                 self.assertEqual(panels.call_count, 1)
-                self.assertEqual(len(approvals), 1)
-                self.assertIn("REUSE 12 / RUN", approvals[0])
                 with patch.object(oracle, "price_inventory_sha256", return_value="c" * 64):
                     with self.assertRaises(oracle.OracleBlockedError):
                         oracle.build_report(self.definition, project_root=root, quiet=True)
@@ -2138,33 +2133,13 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 self.assertEqual(json.loads(canonical_path.read_text(encoding="utf-8"))["origin"],
                                  "verified_legacy_replay_cache")
 
-    def test_before_replay_confirmation_is_after_full_preflight_and_before_any_side_effect(self):
-        # AI: The same verified 4-seed/9-target plan authorizes execution. A
-        # AI: user cancellation must not create a cache, run Broker-Cash or
-        # AI: persist a misleading current report.
+    def test_conflicting_replay_cache_blocks_before_any_trade_or_report(self):
+        # AI: Scientific identity checks, not additional user input, are the
+        # AI: only preflight Replay gate after the Research menu's one Enter.
         seeds = (11, 22, 33, 44)
         class Benchmark:
             benchmark_id = "end_to_end_v1"
-
-        class Cancelled(Exception):
-            pass
-
         definition = _legacy_definition()
-        events = []
-
-        def replay(*, name, **_kwargs):
-            events.append("replay")
-            return {"name": name}
-
-        def metrics(result, *, target):
-            seed = int(result["name"].split("seed=")[1].split()[0])
-            return self._observation(target, seed)
-
-        def refuse(preview):
-            self.assertIn("REUSE 0 / RUN（需計算）40 / BLOCKED 0", preview)
-            self.assertEqual(events, ["preflight"])
-            raise Cancelled
-
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
@@ -2175,28 +2150,17 @@ class OracleReplayEvidenceReuseCases(TestCase):
                  patch.object(oracle, "get_active_param_ensemble_date_range", return_value=("2020-01-01", "2026-03-02")), \
                  patch.object(oracle, "_build_controlled_param_source_pair", return_value=("rolling_active_param_ensemble", "base", "oracle", None, None, None)), \
                  patch.object(oracle, "price_inventory_sha256", return_value="b" * 64), \
-                 patch.object(oracle, "_run_scenario", side_effect=replay), \
-                 patch.object(oracle, "_metrics", side_effect=metrics), \
+                 patch.object(oracle.OracleReplayStore, "resolve_completed", side_effect=ValueError("incompatible cache identity")), \
+                 patch("builtins.input", side_effect=AssertionError("domain must not prompt")) as user_input, \
+                 patch.object(oracle, "_run_scenario") as replay, \
                  patch.object(oracle, "persist_reusable_report") as persist:
-                def before(preview):
-                    events.append("preflight")
-                    refuse(preview)
-                with self.assertRaises(Cancelled):
-                    oracle.run_formal_audit(definition, project_root=root, quiet=True, before_replay=before)
-                self.assertEqual(events, ["preflight"])
+                with self.assertRaisesRegex(oracle.OracleBlockedError, "BLOCKED"):
+                    oracle.run_formal_audit(definition, project_root=root, quiet=True)
                 self.assertEqual(panels.call_count, 1)
+                user_input.assert_not_called()
+                replay.assert_not_called()
                 persist.assert_not_called()
                 self.assertFalse((root / "outputs/audit").exists())
-
-                events.clear()
-                def accept(preview):
-                    events.append("preflight")
-                    self.assertIn("REUSE 0 / RUN（需計算）40 / BLOCKED 0", preview)
-                result = oracle.build_report(definition, project_root=root, quiet=True, before_replay=accept)
-                self.assertEqual(events[0], "preflight")
-                self.assertEqual(events.count("replay"), 40)
-                self.assertEqual(result["status"], "COMPLETED")
-                self.assertEqual(panels.call_count, 2)
 
     def test_completed_schema6_report_restores_32_old_units_and_only_runs_new_target(self):
         from core.report_contract_versions import load_report_contract_versions

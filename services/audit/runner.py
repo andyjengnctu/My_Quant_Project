@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from config.audit import AUDIT_OUTPUT_ROOT
 from core.audit_policy import (
@@ -334,7 +334,6 @@ def run_enabled_audits(
     quiet: bool = False,
     method_id: str | None = None,
     audit_id: str | None = None,
-    before_replay: Callable[[str], None] | None = None,
     preflight_display: str = "full",
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
@@ -352,11 +351,6 @@ def run_enabled_audits(
         or not get_audit_handler(definitions[0]).preflight_summary
     ):
         raise ValueError("簡要 Replay preflight 僅供正式 Target 驗證使用")
-    if before_replay is not None and (
-        len(definitions) != 1
-        or not get_audit_handler(definitions[0]).preflight_summary
-    ):
-        raise ValueError("執行前 Replay 確認只允許正式 Target 驗證的唯一 owner")
     validate_audit_catalog(
         (*get_audit_definitions(module_id), *get_reusable_audit_definitions(module_id))
     )
@@ -384,8 +378,6 @@ def run_enabled_audits(
         kwargs: dict[str, Any] = {"project_root": root, "quiet": quiet}
         if preflight_display != "full":
             kwargs["preflight_display"] = preflight_display
-        if before_replay is not None:
-            kwargs["before_replay"] = before_replay
         outputs[definition.audit_id] = spec.load_run_handler()(definition, **kwargs)
     return outputs
 

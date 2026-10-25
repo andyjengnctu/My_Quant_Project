@@ -359,15 +359,15 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
         print("目前沒有啟用此Reusable module的參數設定；保留固定選單但本次不執行。")
         return 0
     if method.menu_location == "research_root":
-        # AI: One normal Research action: show the *existing* evidence quickly,
-        # AI: then confirm ONCE before expensive scientific validation/replay.
-        # AI: This list is tentative until the canonical owner verifies identity.
+        # AI: Like Strategy Compare, one Enter authorizes this configured
+        # AI: evaluation. Inventory is a fast presence preview, not REUSE proof;
+        # AI: the Audit owner still certifies every source/cache before Replay.
         print("[Target 驗證] 正在盤點既有 Replay 工件…", flush=True)
         print("\n" + render_audit_artifact_inventory(
             module_id, project_root=PROJECT_ROOT, method_id=method_id,
         ), flush=True)
         try:
-            confirm = input("👉 按 Enter 核對正式 REUSE/RUN/BLOCKED 計畫（尚不執行 Replay）；輸入 0 返回：").strip().lower()
+            confirm = input("👉 按 Enter 執行 Target 驗證（自動 REUSE／RUN，不訓練）；輸入 0 返回：").strip().lower()
         except EOFError:
             return 0
         if confirm in {"0", "q", "quit", "exit"}:
@@ -375,30 +375,10 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
         if confirm not in {"", "1"}:
             print("選項無效，本次不執行。")
             return 0
-        # AI: Inventory is tentative; the canonical owner verifies sources,
-        # AI: effective dates and per-arm replay identities BEFORE any replay.
-        # AI: This single capability owns the verified authorization callback.
-        class _AuditCancelled(Exception):
-            """User declined optional expensive target/replay computation."""
-
-        def approve_verified_replay(plan: str) -> None:
-            print("\n" + plan, flush=True)
-            try:
-                approval = input("👉 輸入 RUN 授權本階段計算；輸入 0 返回：").strip()
-            except EOFError:
-                approval = "0"
-            if approval != "RUN":
-                raise _AuditCancelled()
-
-        try:
-            run_enabled_audits(
-                module_id, project_root=PROJECT_ROOT, method_id=method_id,
-                before_replay=approve_verified_replay,
-                preflight_display="summary",
-            )
-        except _AuditCancelled:
-            print("Target 驗證已取消；未執行未授權計算或 Replay。")
-            return 0
+        run_enabled_audits(
+            module_id, project_root=PROJECT_ROOT, method_id=method_id,
+            preflight_display="summary",
+        )
     else:
         print("\n" + render_audit_status(
             module_id, project_root=PROJECT_ROOT, method_id=method_id,
