@@ -152,32 +152,30 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
     route_console = io.StringIO()
     prompts = []
-    answers = iter(["", "", "RUN", "0"])
+    answers = iter(["", "", "0"])
 
-    def input_after_plan(prompt):
-        prompts.append((prompt, "候選 REUSE 32" in route_console.getvalue()))
+    def input_once(prompt):
+        prompts.append(prompt)
         return next(answers)
 
     def fake_target_runner(*args, **kwargs):
-        # AI: Simulate the canonical owner's verified preflight callback;
-        # AI: no replay is authorized merely by the tentative inventory.
-        print("[Target 驗證｜身分核對完成] REUSE 0 / RUN（需計算）56 / BLOCKED 0")
-        kwargs["before_replay"]("正式 Replay 計畫：REUSE 0 / RUN 56")
+        # AI: This already-verified plan is owned by the canonical producer.
+        print("[Target 驗證｜身分核對完成] REUSE 48 / RUN（需計算）8 / BLOCKED 0")
         return {}
 
-    with patch("builtins.input", side_effect=input_after_plan), \
+    with patch("builtins.input", side_effect=input_once), \
          patch.object(research_app, "render_audit_status") as expensive_status, \
-         patch.object(research_app, "render_audit_artifact_inventory", return_value="候選 REUSE 32 / 待計算 RUN 0"), \
          patch.object(research_app, "run_enabled_audits", side_effect=fake_target_runner) as oracle_runner, \
          patch.object(research_app, "render_latest_audit_summary", return_value="LATEST"), \
          redirect_stdout(route_console):
         route_rc = research_app._interactive_menu()
     root_text = route_console.getvalue()
     check_true(
-        "target_validation_runs_once_from_research_default_enter",
+        "target_validation_single_enter_runs_canonical_planner_once",
         route_rc == 0 and oracle_runner.call_count == 1
         and oracle_runner.call_args.kwargs.get("method_id") == oracle_method_id
         and oracle_runner.call_args.kwargs.get("preflight_display") == "summary"
+        and "before_replay" not in oracle_runner.call_args.kwargs
         and not expensive_status.called
         and "[1]" in root_text and "Target 驗證" in root_text
         and "[2]" in root_text and "模型訓練／驗證" in root_text
@@ -185,47 +183,25 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and "[9]" in root_text and "策略升格" in root_text,
     )
     check_true(
-        "target_verification_shows_reuse_before_execution_enter",
-        len(prompts) == 4 and not prompts[0][1] and prompts[1][1]
-        and "按 Enter 核對正式 REUSE/RUN/BLOCKED 計畫" in prompts[1][0]
-        and "輸入 RUN 授權本階段計算" in prompts[2][0]
-        and root_text.index("候選 REUSE 32") < root_text.index("身分核對完成")
-        and root_text.index("身分核對完成") < root_text.index("正式 Replay 計畫")
-        and "只核對正式" not in root_text and "完整驗證＋" not in root_text,
+        "target_validation_has_no_tentative_inventory_or_second_run_authorization",
+        len(prompts) == 3
+        and "按 Enter 執行（自動 REUSE／RUN）" in prompts[1]
+        and "RUN" not in prompts[2]
+        and "REUSE 48 / RUN（需計算）8" in root_text
+        and "暫估" not in root_text
+        and "輸入 RUN" not in root_text
+        and "計算授權" not in root_text,
     )
     cancellation = io.StringIO()
     with patch("builtins.input", return_value="0"), \
          patch.object(research_app, "render_audit_status") as status, \
-         patch.object(research_app, "render_audit_artifact_inventory", return_value="候選 REUSE 32"), \
          patch.object(research_app, "run_enabled_audits", side_effect=fake_target_runner) as cancelled_runner, \
          patch.object(research_app, "render_latest_audit_summary") as latest, \
          redirect_stdout(cancellation):
         research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
     check_true(
-        "target_preflight_cancel_does_not_claim_or_persist_report",
-        not cancelled_runner.called and not latest.called and not status.called
-        and "候選 REUSE 32" in cancellation.getvalue(),
-    )
-
-    # A larger-than-estimated plan must never run after a cancellation.
-    # Current scientific semantics no longer shift the common window merely
-    # because another Target has a different first observed information bar.
-    changed_window_console = io.StringIO()
-    cancelled_plan = []
-    def replay_plan_only(*args, **kwargs):
-        kwargs["before_replay"]("共同視窗 2021-01-05；REUSE 0 / RUN 56")
-        cancelled_plan.append("replayed")
-    with patch("builtins.input", side_effect=["", "0"]), \
-         patch.object(research_app, "render_audit_artifact_inventory", return_value="舊期間候選 REUSE 48 / RUN 8"), \
-         patch.object(research_app, "run_enabled_audits", side_effect=replay_plan_only), \
-         patch.object(research_app, "render_latest_audit_summary") as no_summary, \
-         redirect_stdout(changed_window_console):
-        refused = research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
-    check_true(
-        "changed_replay_window_never_executes_unapproved_56_arms",
-        refused == 0 and "RUN 56" in changed_window_console.getvalue()
-        and "Target 驗證已取消" in changed_window_console.getvalue()
-        and not cancelled_plan and not no_summary.called,
+        "target_cancel_before_enter_has_no_side_effect",
+        not cancelled_runner.called and not latest.called and not status.called,
     )
 
     # Entry-point integration belongs to the existing app/menu contract, not
@@ -254,7 +230,6 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         entry_console = io.StringIO()
         from services.audit import target_oracle_romd as oracle_handler
         with patch.object(research_app, "PROJECT_ROOT", isolated_root), \
-             patch.object(research_app, "render_audit_artifact_inventory", return_value="C96 REUSE / Daily RUN"), \
              patch("builtins.input", return_value=""), \
              patch.object(audit_runner, "collect_audit_status", return_value=missing_teacher_status), \
              patch("services.research.strategy_compare_preparation.prepare_strategy_parameter_artifacts", side_effect=AssertionError("Optimizer invoked from Target validation")) as optimizer, \

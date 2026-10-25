@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from config.audit import AUDIT_OUTPUT_ROOT
 from core.audit_policy import (
@@ -91,25 +91,6 @@ def collect_audit_menu_state(
         "enabled_count": enabled_count,
         "rows": rows,
     }
-
-
-def render_audit_artifact_inventory(
-    module_id: str,
-    *,
-    project_root: Path = PROJECT_ROOT,
-    method_id: str,
-) -> str:
-    """Catalog-routed, read-only completed-artifact inventory (not an execution plan)."""
-    definitions = tuple(
-        definition for definition in _definitions_for_method(module_id, method_id)
-        if definition.enabled
-    )
-    if len(definitions) != 1:
-        raise ValueError("執行前工件快覽必須對應唯一啟用中的正式 Audit")
-    definition = definitions[0]
-    return get_audit_handler(definition).load_inventory_handler()(
-        definition, project_root=Path(project_root).resolve(),
-    )
 
 
 def collect_audit_status(
@@ -330,7 +311,6 @@ def run_enabled_audits(
     quiet: bool = False,
     method_id: str | None = None,
     audit_id: str | None = None,
-    before_replay: Callable[[str], None] | None = None,
     preflight_display: str = "full",
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
@@ -341,19 +321,11 @@ def run_enabled_audits(
     )
     if not definitions:
         raise RuntimeError(f"config/audit.py沒有啟用任何{module_id} Audit")
-    # AI: A pre-replay approval belongs to the unique canonical producer, not
-    # AI: to a second Audit/UI execution path. Never confirm multiple jobs with
-    # AI: a single unseen plan, and never silently drop a requested callback.
-    if before_replay is not None and (
-        len(definitions) != 1
-        or not get_audit_handler(definitions[0]).preflight_confirmation
-    ):
-        raise ValueError("執行前 Replay 確認只能使用已宣告此能力的單一正式 Audit")
     if preflight_display not in {"full", "summary"}:
         raise ValueError("未知 Replay preflight 顯示方式")
     if preflight_display != "full" and (
         len(definitions) != 1
-        or not get_audit_handler(definitions[0]).preflight_confirmation
+        or not get_audit_handler(definitions[0]).preflight_summary
     ):
         raise ValueError("簡要 Replay preflight 僅供正式 Target 驗證使用")
     validate_audit_catalog(
@@ -381,8 +353,6 @@ def run_enabled_audits(
     for definition in definitions:
         spec = get_audit_handler(definition)
         kwargs: dict[str, Any] = {"project_root": root, "quiet": quiet}
-        if before_replay is not None:
-            kwargs["before_replay"] = before_replay
         if preflight_display != "full":
             kwargs["preflight_display"] = preflight_display
         outputs[definition.audit_id] = spec.load_run_handler()(definition, **kwargs)
