@@ -156,8 +156,11 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
             )
         if entry.get("score_source"):
             source = str(entry["score_source"])
-            if (source not in recipes and source not in daily_recipes) or selector != "direct":
-                raise OracleBlockedError(f"Oracle Direct score來源必須先由Exact宣告：{name} -> {source}")
+            if selector != "direct" or source in _ORACLE_RETIRED_TARGETS:
+                raise OracleBlockedError(f"Oracle Direct score來源非法：{name} -> {source}")
+            # A Direct arm consumes an existing approved score, but need not
+            # display or replay the corresponding Exact arm. Resolve any
+            # unselected source after processing the complete comparison list.
             aliases[name] = source
         else:
             recipe, provider = str(entry.get("score") or ""), str(entry.get("provider") or "")
@@ -177,7 +180,37 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
                 raise OracleBlockedError(f"Oracle未授權的score recipe：{recipe}")
         definitions.append((name, desc))
         selectors[name] = selector
-    daily_sources = {name: name for name in daily_recipes}
+    # Direct-only and Direct-before-Exact compare lists must not require a
+    # hidden Exact *Replay*. Their input truth is still derived from the same
+    # immutable Exact score recipe registered by the canonical Audit owner.
+    for direct_name, source_name in aliases.items():
+        if source_name in recipes or source_name in daily_recipes:
+            continue
+        source_entry = next(
+            (item for item in _ORACLE_DEFAULT_COMPARISONS
+             if item["target"] == source_name), None,
+        )
+        if (source_entry is None or source_name in _ORACLE_RETIRED_TARGETS
+                or source_entry.get("selector") != "exact"
+                or source_entry.get("score_source")):
+            raise OracleBlockedError(
+                f"Oracle Direct score缺少canonical來源：{direct_name} -> {source_name}"
+            )
+        recipe = str(source_entry.get("score") or "")
+        provider = str(source_entry.get("provider") or "")
+        if not definition.source.get(provider):
+            raise OracleBlockedError(f"Oracle Direct score來源缺少provider：{source_name}")
+        if recipe in _ORACLE_DAILY_SCORE_RECIPES:
+            if provider != "daily_trade40_profile":
+                raise OracleBlockedError(f"Oracle Direct daily來源非法：{source_name}")
+            daily_recipes[source_name] = (recipe, provider)
+        elif recipe in _ORACLE_SCORE_RECIPES:
+            recipes[source_name] = (recipe, provider)
+            if provider not in provider_fields:
+                provider_fields.append(provider)
+        else:
+            raise OracleBlockedError(f"Oracle Direct使用未授權的score recipe：{recipe}")
+    daily_sources = {name: name for name in daily_recipes if name in selectors}
     daily_sources.update({name: source for name, source in aliases.items()
                           if source in daily_recipes})
     if not recipes and not daily_recipes:
@@ -225,7 +258,7 @@ def _score_map_fingerprints(
         if name in price_scores and source in price_scores and price_scores[name] != price_scores[source]:
             raise OracleBlockedError("Oracle Direct score alias differs from canonical score source")
     price_shas = {name: _canonical_score_map_sha256(scores)
-                  for name, scores in price_scores.items() if name not in plan["aliases"]}
+                  for name, scores in price_scores.items()}
     daily_shas = {
         seed: {
             name: _canonical_score_map_sha256(score_map)
@@ -238,7 +271,7 @@ def _score_map_fingerprints(
         seed: {
             name: (daily_shas[seed][plan["daily_sources"][name]]
                    if name in plan["daily_sources"]
-                   else price_shas[plan["aliases"].get(name, name)])
+                   else price_shas[name])
             for name, _desc in plan["targets"]
         }
         for seed in seeds
@@ -278,6 +311,8 @@ def _contract(definition, *, settings=None) -> tuple[Any, Any, Any]:
     elif str(settings.profile_id) != str(source["strategy_profile_id"]):
         raise OracleBlockedError("CONTRACT_UNRESOLVED: Research selector profile identity mismatch")
     base = settings.arms[str(source["baseline_arm_id"])]
+    selected_modes = set(_oracle_comparison_plan(definition)["selectors"].values())
+    requires_exact = "exact" in selected_modes
     exact_candidates = [arm for arm in settings.enabled_arms if (
         arm.dl_enabled and arm.param_source == base.param_source
         and arm.param_policy == base.param_policy
@@ -288,19 +323,23 @@ def _contract(definition, *, settings=None) -> tuple[Any, Any, Any]:
         and (arm.dl_runtime_options or {}).get("selection_only") is True
     )]
     if (base.dl_enabled or base.param_policy != "base-finalist-best"
-            or base.rule_policy != "all_off" or not exact_candidates
+            or base.rule_policy != "all_off"
             or not settings.start_date or not settings.end_date
             or settings.dataset != "full" or settings.rotation != "off"):
-        raise OracleBlockedError("CONTRACT_UNRESOLVED: Research DL active Exact/Min P16 selector不唯一或缺失")
-    canonical = exact_candidates[0]
-    if any((arm.param_source, arm.param_policy, arm.rule_policy,
+        raise OracleBlockedError("CONTRACT_UNRESOLVED: Research Min P16 baseline contract mismatch")
+    if requires_exact and not exact_candidates:
+        raise OracleBlockedError("CONTRACT_UNRESOLVED: Research DL active Exact selector unavailable")
+    canonical = exact_candidates[0] if requires_exact else None
+    if requires_exact and any((arm.param_source, arm.param_policy, arm.rule_policy,
             arm.dl_runtime_mode, dict(arm.dl_runtime_options or {})) !=
            (canonical.param_source, canonical.param_policy, canonical.rule_policy,
             canonical.dl_runtime_mode, dict(canonical.dl_runtime_options or {}))
            for arm in exact_candidates[1:]):
         raise OracleBlockedError("CONTRACT_UNRESOLVED: 啟用的Research Exact arms不是同一選股契約")
-    if _oracle_requires_direct(definition):
+    if "direct" in selected_modes:
         _direct_arm(definition, settings, base, canonical)
+    # A Direct-only plan has no Exact reference. Never relabel a Direct arm
+    # as Exact merely to provide a baseline cache ranking policy.
     return settings, base, canonical
 
 
@@ -485,22 +524,31 @@ def _formal_dl_score_start(definition, settings) -> str:
     _settings, base, exact = _contract(definition, settings=settings)
     direct = (_direct_arm(definition, settings, base, exact)
               if _oracle_requires_direct(definition) else None)
-    # All enabled arms sharing the selected Exact execution contract have
-    # the same ability to consume a hypothetical perfect score. A different
-    # model source under that SAME contract must not silently shift the
-    # eligibility/score period; unrelated research selector modes are not
-    # inputs to this Oracle and must not block it.
-    reference_arms = [arm for arm in settings.enabled_arms if (
-        arm.dl_enabled
-        and (arm.param_source, arm.param_policy, arm.rule_policy,
-             arm.dl_runtime_mode, dict(arm.dl_runtime_options or {}))
-            == (exact.param_source, exact.param_policy, exact.rule_policy,
-                exact.dl_runtime_mode, dict(exact.dl_runtime_options or {}))
-    )]
-    if not reference_arms:
-        raise OracleBlockedError("CONTRACT_UNRESOLVED: Research Exact reference unavailable")
-    if direct is not None and all(arm.dl_id != direct.dl_id for arm in reference_arms):
-        reference_arms.append(direct)
+    # Validate only selectors consumed by the chosen comparisons. Direct-only
+    # is a registered formal selector, not an implicit request to validate or
+    # execute an unselected Exact arm. Compatible enabled references must
+    # agree on score eligibility/period and filter identity.
+    plan = _oracle_comparison_plan(definition)
+    selected_references = []
+    if "exact" in plan["selectors"].values():
+        selected_references.append(exact)
+    if direct is not None:
+        selected_references.append(direct)
+    reference_arms = []
+    for reference in selected_references:
+        signature = (reference.param_source, reference.param_policy,
+                     reference.rule_policy, reference.dl_runtime_mode,
+                     dict(reference.dl_runtime_options or {}))
+        compatible = [arm for arm in settings.enabled_arms if (
+            arm.dl_enabled and
+            (arm.param_source, arm.param_policy, arm.rule_policy,
+             arm.dl_runtime_mode, dict(arm.dl_runtime_options or {})) == signature
+        )]
+        if not compatible:
+            compatible = [reference]  # Registered, disabled canonical selector.
+        for arm in compatible:
+            if all(arm.dl_id != prior.dl_id for prior in reference_arms):
+                reference_arms.append(arm)
     starts = set()
     for arm in reference_arms:
         source = settings.dl_sources[str(arm.dl_id)]
@@ -889,7 +937,11 @@ def _build_oracle_score_panels(
     for direct, source in plan["aliases"].items():
         if source in scores:
             scores[direct] = scores[source]
-    if set(scores) | set(plan["daily_sources"]) != {name for name, _desc in plan["targets"]}:
+    # Hidden Exact truth providers are dependencies, not selected treatments.
+    # No unselected Exact arm may be replayed or published by a Direct-only run.
+    selected_names = {name for name, _description in plan["targets"]}
+    scores = {name: panel for name, panel in scores.items() if name in selected_names}
+    if set(scores) | (set(plan["daily_sources"]) & selected_names) != selected_names:
         raise OracleBlockedError("Oracle比較清單／分數工件依賴不一致")
 
     # Backward-compatible evidence keys retain their original scientific
@@ -1432,6 +1484,25 @@ def build_report(
             definition, root=root, parameter_paths=parameter_paths,
             start=start, end=end, base_arm=base_arm,
         )
+        # The formal-Min daily scores and the Portfolio Replay must consume
+        # the SAME effective rolling parameters. Both resolve the canonical
+        # source separately (40D truth and final Replay), so a source refresh
+        # between reads must fail before any completed-cache REUSE or trade.
+        if daily_seed_evidence:
+            prepared_seeds = {int(seed) for seed, *_ in prepared}
+            if prepared_seeds != set(daily_seed_evidence):
+                raise OracleBlockedError(
+                    "Daily-universal Target / Replay rolling P16 seed sets differ"
+                )
+            for seed, replay_sha, _kind, _base_params, _oracle_params in prepared:
+                teacher = daily_seed_evidence[int(seed)].get("teacher") or {}
+                if (teacher.get("seed") != seed
+                        or teacher.get("param_identity_sha256") != replay_sha):
+                    raise OracleBlockedError(
+                        f"Daily-universal seed={seed} rolling P16 parameters changed "
+                        "between Target truth materialization and Replay; "
+                        "cannot pair different strategy parameters"
+                    )
         definitions = dict(targets)
         definitions_with_base = {
             str(definition.source["baseline_arm_id"]): "Canonical same-window Min P16 Base-Finalist-Best",
@@ -1441,7 +1512,19 @@ def build_report(
         # AI: Strategy Compare arm enabled/name/description, comparison membership,
         # AI: source discovery paths and report inventory are NOT replay inputs.
         # AI: Per-seed P16 bytes, score policy, economic rules and price bytes are.
-        replay_policy = _canonical_oracle_replay_policy(definition, base_arm=base_arm, exact_arm=exact_arm)
+        # The unscored C96 Min Replay has no DL selector; retain its historical
+        # registered Exact cache signature regardless of selected Target modes.
+        # A Direct-only compare may have no enabled Exact model at all.
+        baseline_identity_arm = exact_arm or settings.arms[str(definition.source["exact_arm_id"])]
+        if (baseline_identity_arm.dl_runtime_mode !=
+                "resource-aware-continuous-score-constrained-optimal"
+                or (baseline_identity_arm.dl_runtime_options or {}).get("preserve_k_r0") is not True
+                or (baseline_identity_arm.dl_runtime_options or {}).get("constrained_solver") !=
+                        "exact_branch_and_bound_v1"
+                or (baseline_identity_arm.dl_runtime_options or {}).get("selection_only") is not True):
+            raise OracleBlockedError("CONTRACT_UNRESOLVED: C96 historical baseline cache selector identity changed")
+        replay_policy = _canonical_oracle_replay_policy(
+            definition, base_arm=base_arm, exact_arm=baseline_identity_arm)
         observations: dict[str, list[dict[str, Any]]] = {"C96": []}
         observations.update({target: [] for target, _ in targets})
 
@@ -1456,7 +1539,8 @@ def build_report(
         for seed, param_sha, _kind, _base_params, _oracle_params in prepared:
             for target in ("C96", *(name for name, _ in targets)):
                 is_direct = plan["selectors"].get(target) == "direct"
-                arm = direct_arm if is_direct else exact_arm
+                arm = (direct_arm if is_direct else
+                       baseline_identity_arm if target == "C96" else exact_arm)
                 arm_replay_policy = _arm_replay_policy(
                     definition, plan=plan, target=target, replay_policy=replay_policy,
                     daily_evidence=daily_seed_evidence.get(seed),

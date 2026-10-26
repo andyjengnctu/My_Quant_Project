@@ -295,6 +295,80 @@ class FormalMinDailyOracleCases(TestCase):
             run_source(schedule=(ExecutableMinPeriod(schedule[0].start,None,schedule[0].params,
                                                     "old_historical_teacher",schedule[0].params_signature),))
 
+    def test_missing_effective_min_parameter_is_blocked_not_ranked_as_worst(self):
+        """An absent parameter period is missing evidence, not a bad trade.
+
+        Previously one missing-parameter row was ranked last when a different
+        stock on the same date had a settled path, silently producing RoMD.
+        """
+        from filters.breakout_quality.daily_trade40_target import CounterfactualTrade40Batch
+        from services.audit import daily_trade40_oracle as provider
+
+        original = provider.compute_counterfactual_trade40_batch
+
+        def missing_one_parameter(*args, **kwargs):
+            result = original(*args, **kwargs)
+            if kwargs["ticker"] != "2317":
+                return result
+            values = np.asarray(result.target_raw_r, dtype=np.float32).copy()
+            valid = np.asarray(result.valid_mask, dtype=bool).copy()
+            reasons = list(result.reasons)
+            self.assertTrue(len(reasons))
+            values[0] = np.nan
+            valid[0] = False
+            reasons[0] = "no_historical_effective_Min_param"
+            return CounterfactualTrade40Batch(
+                values, valid, result.maturity_dates, tuple(reasons),
+            )
+
+        with patch.object(
+            provider, "compute_counterfactual_trade40_batch",
+            side_effect=missing_one_parameter,
+        ):
+            with self.assertRaisesRegex(
+                DailyTrade40OracleBlockedError,
+                "Formal Min rolling parameter schedule missing.*2317",
+            ):
+                run_source()
+
+    def test_real_min_schedule_gap_blocks_before_any_daily_rank(self):
+        """Exercise the canonical trade-path primitive, not a mocked reason."""
+        from dataclasses import replace
+        _calendar, _frames, _bundle, schedule = source_fixture()
+        future_only = (replace(schedule[0], start=pd.Timestamp("2021-03-01")),)
+        with self.assertRaisesRegex(
+            DailyTrade40OracleBlockedError, "rolling parameter schedule missing",
+        ):
+            run_source(schedule=future_only)
+
+    def test_normal_unfilled_counterfactual_remains_censored(self):
+        """A genuine unfilled order is still a legitimate ranked-last label."""
+        from filters.breakout_quality.daily_trade40_target import CounterfactualTrade40Batch
+        from services.audit import daily_trade40_oracle as provider
+
+        original = provider.compute_counterfactual_trade40_batch
+
+        def unfilled_one_order(*args, **kwargs):
+            result = original(*args, **kwargs)
+            if kwargs["ticker"] != "2317":
+                return result
+            values = np.asarray(result.target_raw_r, dtype=np.float32).copy()
+            valid = np.asarray(result.valid_mask, dtype=bool).copy()
+            reasons = list(result.reasons)
+            values[0] = np.nan
+            valid[0] = False
+            reasons[0] = "unfilled_limit_order"
+            return CounterfactualTrade40Batch(
+                values, valid, result.maturity_dates, tuple(reasons),
+            )
+
+        with patch.object(
+            provider, "compute_counterfactual_trade40_batch", side_effect=unfilled_one_order,
+        ):
+            scores, evidence = run_source()
+        self.assertEqual(len(scores), 4)
+        self.assertGreater(evidence["censored_rank_last_rows"], 0)
+
     def test_source_is_seed_specific_even_with_same_stock_days(self):
         _,_,_,s1=source_fixture()
         p=s1[0].params

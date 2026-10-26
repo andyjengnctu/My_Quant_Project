@@ -104,6 +104,115 @@ class OracleScoreParityContractCases(TestCase):
             self.assertEqual(mapping[name]["target_id"], TARGET_ID)
             self.assertNotIn("counterfactual_mintrade40", mapping[name]["target_id"])
 
+    def test_direct_only_price_and_daily_do_not_require_selected_exact_replay(self):
+        definition = _ACTIVE_ORACLE_DEFINITION
+        settings, _base, _exact = oracle._contract(definition)
+        for selected, provider, hidden_source in (
+            ("R40_Direct", "pure_mfe40_provider", "R40"),
+            ("DailyUniversal_MinTrade40_NetR_Direct", "daily_trade40_profile",
+             "DailyUniversal_MinTrade40_NetR"),
+        ):
+            restricted = replace(definition, source={**definition.source,
+                "oracle_comparisons": tuple(row for row in definition.source["oracle_comparisons"]
+                                            if row["target"] == selected)})
+            plan = oracle._oracle_comparison_plan(restricted)
+            resolved = oracle._resolve_oracle_target_score_contracts(restricted, settings, plan)
+            self.assertEqual(set(resolved), {selected})
+            self.assertEqual([name for name, _ in plan["targets"]], [selected])
+            self.assertTrue(plan["selectors"][selected] == "direct")
+            self.assertIn(hidden_source, plan["recipes"] or plan["daily_recipes"])
+            self.assertEqual(restricted.source[provider], definition.source[provider])
+            self.assertNotIn(hidden_source, resolved)
+            self.assertNotIn(hidden_source, plan["daily_sources"])
+
+    def test_direct_only_with_no_enabled_exact_uses_formal_direct_contract(self):
+        # Direct-only must not require an unrelated, disabled Exact selector.
+        # Historical C101 is explicitly registered for this controlled Audit.
+        definition = _ACTIVE_ORACLE_DEFINITION
+        settings, _base, _exact = oracle._contract(definition)
+        disabled_exact = replace(settings, arms={
+            name: replace(arm, enabled=False)
+            if arm.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
+            else arm for name, arm in settings.arms.items()
+        })
+        for target in ("R40_Direct", "DailyUniversal_MinTrade40_NetR_Direct"):
+            selected = replace(definition, source={**definition.source,
+                "oracle_comparisons": tuple(
+                    row for row in definition.source["oracle_comparisons"]
+                    if row["target"] == target)})
+            plan = oracle._oracle_comparison_plan(selected)
+            _settings, _base, exact = oracle._contract(selected, settings=disabled_exact)
+            self.assertIsNone(exact)  # No hidden Exact selector is required.
+            direct = oracle._direct_arm(selected, disabled_exact, _base, exact)
+            self.assertEqual(direct.dl_runtime_mode,
+                             "resource-aware-continuous-score-no-k-no-r0")
+            self.assertEqual(oracle._formal_dl_score_start(selected, disabled_exact),
+                             "2021-01-01")
+            contracts = oracle._resolve_oracle_target_score_contracts(
+                selected, disabled_exact, plan)
+            self.assertEqual(set(contracts), {target})
+            self.assertEqual(contracts[target]["selector"], "direct")
+        with self.assertRaisesRegex(oracle.OracleBlockedError,
+                                    "active Exact selector unavailable"):
+            oracle._contract(definition, settings=disabled_exact)
+
+    def test_direct_only_rejects_invalid_registered_direct_reference(self):
+        definition = _ACTIVE_ORACLE_DEFINITION
+        settings, _base, _exact = oracle._contract(definition)
+        selected = replace(definition, source={**definition.source,
+            "oracle_comparisons": tuple(
+                row for row in definition.source["oracle_comparisons"]
+                if row["target"] == "R40_Direct")})
+        without_exact = replace(settings, arms={
+            name: replace(arm, enabled=False)
+            if arm.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
+            else arm for name, arm in settings.arms.items()
+        })
+        direct = without_exact.arms[str(selected.source["direct_arm_id"])]
+        broken = replace(without_exact, arms={**without_exact.arms,
+            direct.arm_id: replace(direct, dl_runtime_options={
+                **direct.dl_runtime_options, "preserve_k": True})})
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "Direct selector contract"):
+            oracle._contract(selected, settings=broken)
+
+    def test_direct_first_exact_second_resolves_without_order_dependency(self):
+        definition = _ACTIVE_ORACLE_DEFINITION
+        wanted = ("R40_Direct", "R40")
+        comparison = tuple(next(row for row in definition.source["oracle_comparisons"]
+                                if row["target"] == name) for name in wanted)
+        changed = replace(definition, source={**definition.source,
+                                             "oracle_comparisons": comparison})
+        plan = oracle._oracle_comparison_plan(changed)
+        self.assertEqual([name for name, _ in plan["targets"]], list(wanted))
+        self.assertEqual(plan["recipes"]["R40"], ("terminal_r", "pure_mfe40_provider"))
+
+    def test_direct_only_price_materializes_only_selected_treatment(self):
+        definition = _ACTIVE_ORACLE_DEFINITION
+        selected = "R40_Direct"
+        restricted = replace(definition, source={**definition.source,
+            "oracle_comparisons": tuple(row for row in definition.source["oracle_comparisons"]
+                                        if row["target"] == selected)})
+        rows = pd.DataFrame({
+            "ticker": ["2330", "2317"], "date": ["2021-01-04"] * 2,
+            "mfe": [1.1, .4], "peak_adverse": [-.3, -.4],
+            "min_low": [-.02, -.04], "raw": [1.1, .4],
+            "terminal_r": [1.0, -.5],
+        })
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(oracle, "_load_truth", return_value=rows), \
+             patch.object(oracle, "_market_truth_for_oracle", return_value=(
+                 {"pure_mfe40_provider": rows},
+                 {"score_start":"2021-01-01", "mature_rows_by_provider": {}})), \
+             patch.object(oracle, "_reconcile_oracle_truth", return_value=(rows, 0)):
+            scores, _evidence = oracle.build_oracle_score_tables(
+                restricted, project_root=Path(directory), cutoff="2026-03-02")
+        self.assertEqual(set(scores), {selected})
+        self.assertEqual(set(scores[selected].values()), {0.0, 1.0})
+        plan = oracle._oracle_comparison_plan(restricted)
+        hashes = oracle._score_map_fingerprints(
+            plan, price_scores=scores, daily_scores={}, seeds=[42])
+        self.assertEqual(hashes[42][selected], oracle._canonical_score_map_sha256(scores[selected]))
+
     def test_target_score_contract_uses_provided_current_settings(self):
         # The caller-resolved settings are the only authorized selector input.
         # A second implicit settings fetch could pin the wrong Exact arm ID.
@@ -531,6 +640,103 @@ class OracleScoreParityContractCases(TestCase):
         self.assertEqual(len(observed), 3)
         self.assertTrue(all(start == "2021-01-01" and end == "2025-12-22"
                             for _name, start, end in observed))
+
+    def test_direct_only_daily_replays_only_c96_and_selected_direct(self):
+        from services.audit import daily_trade40_oracle as daily_owner
+        from filters.breakout_quality import daily_trade40_target as trade_owner
+        d = _ACTIVE_ORACLE_DEFINITION
+        direct = "DailyUniversal_MinTrade40_NetR_Direct"
+        exact = "DailyUniversal_MinTrade40_NetR"
+        definition = replace(d, source={**d.source, "oracle_comparisons": tuple(
+            row for row in d.source["oracle_comparisons"] if row["target"] == direct)})
+        seed, param_sha = 104504529, "c" * 64
+        scores = {("2330", "2021-01-04"): 0.9,
+                  ("2317", "2021-01-04"): 0.1,
+                  ("2330", "2025-12-22"): 0.6}
+        evidence = {
+            "label_id": daily_owner.LABEL_ID, "target_id": daily_owner.TARGET_ID,
+            "profile_id": definition.source["daily_trade40_profile"],
+            "teacher": {"seed": seed, "param_identity_sha256": param_sha,
+                        "periods": [{"start": "2021-01-01"}]},
+            "rank_policy": "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",
+            "rank_sha256": "1"*64, "raw_label_sha256": "2"*64, "calendar_sha256": "3"*64,
+            "mature_eligible_rows": len(scores), "settled_net_r_rows": len(scores),
+            "censored_rank_last_rows": 0, "research_cutoff": "2026-03-02",
+            "first_date": "2021-01-04", "last_date": "2025-12-22",
+            "first_replay_trade_date": "2021-01-04", "score_start_date": "2021-01-01",
+        }
+        called = []
+        def replay(*, name, **kwargs):
+            called.append(name)
+            return {"name": name}
+        def metrics(result, *, target):
+            return {"target": target, "total_return_pct": 40., "annualized_return_pct": 8.,
+                    "mdd_pct": 6., "romd": {"C96": 8., direct: 15.}[target],
+                    "ev_a_r": .6, "trades": 9, "exposure_pct": 30.,
+                    "yearly": [{"year": 2025, "strategy_return_pct": 5., "is_full_year": False}]}
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(oracle, "collect_status", return_value={"status":"READY"}), \
+             patch.object(oracle, "_robustness_artifacts", return_value=(
+                 SimpleNamespace(benchmark_id="end_to_end_v1"),
+                 [(seed, Path(directory)/"params.json")])), \
+             patch.object(oracle, "_prepare_oracle_parameters", return_value=(
+                 [(seed, param_sha, "rolling_active_param_ensemble", "baseline", "oracle")], [])), \
+             patch.object(trade_owner, "resolve_formal_min_param_records", return_value=()), \
+             patch.object(trade_owner, "build_formal_min_execution_schedule", return_value=((object(),), {})), \
+             patch.object(daily_owner, "build_daily_universal_trade40_oracle_scores", return_value=(scores, evidence)), \
+             patch.object(oracle, "_build_oracle_score_panels", side_effect=AssertionError("unused price")), \
+             patch.object(oracle, "price_inventory_sha256", return_value="f"*64), \
+             patch.object(oracle, "_run_scenario", side_effect=replay), \
+             patch.object(oracle, "_metrics", side_effect=metrics):
+            result = oracle.build_report(definition, project_root=Path(directory), quiet=True)
+            again = oracle.build_report(definition, project_root=Path(directory), quiet=True)
+        self.assertEqual([row["target"] for row in result["oracles"]], [direct])
+        self.assertEqual([row["target"] for row in again["oracles"]], [direct])
+        self.assertEqual(len(called), 2)
+        self.assertTrue(called[0].startswith("C96"))
+        self.assertIn(direct, called[1])
+        self.assertNotIn("Oracle " + exact, called)
+
+    def test_changed_formal_min_parameters_between_truth_and_replay_block(self):
+        """Different P16 snapshots must never pair daily truth with a new Replay."""
+        from services.audit import daily_trade40_oracle as daily_owner
+        from filters.breakout_quality import daily_trade40_target as trade_owner
+        definition = replace(_ACTIVE_ORACLE_DEFINITION, source={
+            **_ACTIVE_ORACLE_DEFINITION.source,
+            "oracle_comparisons": tuple(
+                item for item in _ACTIVE_ORACLE_DEFINITION.source["oracle_comparisons"]
+                if item["target"].startswith("DailyUniversal_")),
+        })
+        seed, truth_param_sha, changed_param_sha = 693545351, "a" * 64, "b" * 64
+        truth = {("2330", "2021-01-04"): 0.8, ("2317", "2021-01-04"): 0.2,
+                 ("2330", "2025-12-22"): 0.5}
+        evidence = {
+            "label_id": daily_owner.LABEL_ID, "target_id": daily_owner.TARGET_ID,
+            "profile_id": definition.source["daily_trade40_profile"],
+            "teacher": {"seed": seed, "param_identity_sha256": truth_param_sha},
+            "mature_eligible_rows": len(truth), "settled_net_r_rows": len(truth),
+            "first_date": "2021-01-04", "last_date": "2025-12-22",
+            "first_replay_trade_date": "2021-01-04", "score_start_date": "2021-01-01",
+        }
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
+             patch.object(oracle, "_robustness_artifacts", return_value=(
+                 SimpleNamespace(benchmark_id="end_to_end_v1"),
+                 [(seed, Path(directory) / "P16.json")],
+             )), \
+             patch.object(oracle, "_prepare_oracle_parameters", side_effect=[
+                 ([(seed, truth_param_sha, "rolling_active_param_ensemble", {}, {})], []),
+                 ([(seed, changed_param_sha, "rolling_active_param_ensemble", {}, {})], []),
+             ]), \
+             patch.object(trade_owner, "resolve_formal_min_param_records", return_value=()), \
+             patch.object(trade_owner, "build_formal_min_execution_schedule", return_value=((object(),), {})), \
+             patch.object(daily_owner, "build_daily_universal_trade40_oracle_scores",
+                          return_value=(truth, evidence)), \
+             patch.object(oracle, "price_inventory_sha256", return_value="c" * 64), \
+             patch.object(oracle, "_run_scenario", side_effect=AssertionError("replay must not run")) as replay:
+            with self.assertRaisesRegex(oracle.OracleBlockedError, "parameters changed"):
+                oracle.build_report(definition, project_root=Path(directory), quiet=True)
+            replay.assert_not_called()
 
     def test_retired_daily_target_identity_is_rejected_before_market_replay(self):
         from services.audit import daily_trade40_oracle as daily_owner
@@ -2295,6 +2501,58 @@ class OracleReplayEvidenceReuseCases(TestCase):
             self._write_legacy_cache(store, old, self._observation("C96", 1))
             with self.assertRaisesRegex(ValueError, "DIFFERENT identity"):
                 store.resolve_completed(current)
+
+    def test_same_scored_arm_reuses_across_comparison_provider_inventories(self):
+        # Switching from all targets to a Daily-only or single-price target
+        # changes report provider diagnostics, not the injected score or Replay.
+        from services.audit.oracle_replay_artifacts import replay_identity, OracleReplayStore
+        shared = dict(
+            dataset="full", dataset_sha256="a" * 64,
+            target="DailyUniversal_MinTrade40_NetR_Direct",
+            definition={"DailyUniversal_MinTrade40_NetR_Direct": "existing Target"},
+            start="2021-01-01", end="2025-12-22", benchmark="end_to_end_v1",
+            param_sha256="b" * 64, seed=1,
+            ranking_policy="resource-aware-continuous-score-no-k-no-r0",
+            ranking_options={"selection_only": True}, evaluation_mode="rolling",
+            max_positions=10, replay_policy={
+                "oracle_parity_implementation": oracle.ORACLE_PARITY_IMPLEMENTATION,
+                "perfect_score_sha256": "c" * 64,
+                "canonical_dl_score_contract": {
+                    "target_id": "daily_universal_formal_min_roos_trade40_netr_v1",
+                    "canonical_feature_eligible_keys_sha256": "d" * 64,
+                },
+            },
+        )
+        eligible = {"cohort_rows": 100, "first_common_day": "2021-01-04",
+                    "last_common_day": "2025-12-22", "research_cutoff": "2026-03-02",
+                    "risk_budget_return": 0.03, "oracle_only": True,
+                    "oracle_parity_implementation": oracle.ORACLE_PARITY_IMPLEMENTATION}
+        many = replay_identity(**shared, cohort={**eligible,
+            "providers": {"price": "A", "market_truth": "B"},
+            "market_truth": {"price_ticker_count": 2000}})
+        daily_only = replay_identity(**shared, cohort={**eligible,
+            "providers": {"daily_trade40": "B"},
+            "scoring": "another report description"})
+        self.assertEqual(many, daily_only)
+        with tempfile.TemporaryDirectory() as tmp:
+            store = OracleReplayStore(Path(tmp), "breakout_quality/reusable/target_oracle_romd")
+            result = self._observation(shared["target"], 1)
+            store.write(many, result, origin="canonical_replay")
+            self.assertEqual(store.resolve_completed(daily_only)[0], result)
+            # An earlier V2 cache retained the provider summary in its key.
+            old_v2 = dict(many, cohort={**eligible,
+                "providers": {"full_compare": "diagnostic only"},
+                "market_truth": {"ticker_count": 123}})
+            with tempfile.TemporaryDirectory() as old_tmp:
+                old_store = OracleReplayStore(Path(old_tmp), "breakout_quality/reusable/target_oracle_romd")
+                old_store.write(old_v2, result, origin="canonical_replay")
+                self.assertEqual(old_store.resolve_completed(daily_only)[0], result)
+                actual_score_change = dict(daily_only, replay_policy={
+                    **daily_only["replay_policy"], "perfect_score_sha256": "f" * 64})
+                with self.assertRaisesRegex(ValueError, "DIFFERENT identity"):
+                    old_store.resolve_completed(actual_score_change)
+                changed_period = dict(daily_only, end_date="2025-12-19")
+                self.assertIsNone(old_store.resolve_completed(changed_period)[0])
 
     def test_unrelated_maturity_panel_does_not_block_baseline_reuse(self):
         from services.audit.oracle_replay_artifacts import OracleReplayStore

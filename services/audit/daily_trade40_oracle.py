@@ -146,6 +146,25 @@ def build_daily_universal_trade40_oracle_scores(
                 frame, positions, ticker=ticker, schedule=canonical_schedule,
                 exchange_calendar=exchange,
             )
+            # No effective Min parameter is missing source truth, NOT an
+            # unfilled trade outcome. Ranking it last would fabricate an
+            # economic label for an unavailable rolling P16 parameter period.
+            # Fail the whole controlled Oracle before publishing any scores.
+            if len(batch.reasons) != len(selected):
+                raise DailyTrade40OracleBlockedError(
+                    f"Formal Min path result shape mismatch: {ticker}"
+                )
+            missing_param = next(
+                (i for i, reason in enumerate(batch.reasons)
+                 if reason == "no_historical_effective_Min_param"), None
+            )
+            if missing_param is not None:
+                information_day = selected.iloc[missing_param]["date"].strftime("%Y-%m-%d")
+                raise DailyTrade40OracleBlockedError(
+                    f"Formal Min rolling parameter schedule missing at "
+                    f"ticker={ticker} information_date={information_day}; "
+                    "cannot censor an unavailable parameter as an unfilled trade"
+                )
             expected_deadlines = np.asarray(maturity[selected.index], dtype="datetime64[D]")
             if not np.array_equal(batch.maturity_dates, expected_deadlines):
                 raise DailyTrade40OracleBlockedError("40-session mature deadline disagrees with Min target path")

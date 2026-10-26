@@ -13762,3 +13762,23 @@ Decision: `ENGINEERING_CHECKPOINT_FIRST_REUSE / HISTORICAL_AK_EVIDENCE_PRESERVED
 - **Bug 3（已獨立重現）**：Target→Score 契約解析一度忽略外層已確定的 Strategy Compare settings，重新查詢參照 arm，可能在同一個呼叫中混用兩份不同的 Exact 來源與 Target metadata。現在由入口同一份 canonical settings 注入，並加入停用首選 Exact、切換第二個 Exact 來源的隔離反例。
 - **Bug 4（已獨立重現）**：同一 Selector 的第二個已啟用 Exact arm 若引用不同 filter_id，舊 score start 檢查只驗證時間、feature scope，未阻擋相異候選母體。現在所有同契約 reference arms 都須符合 Oracle filter_id，真正不同 Selector 的研究來源不受此限制。
 - **回歸與邊界**：四項缺陷均由隔離反例覆蓋；Oracle／DailyTrade40 108/108 通過，另有 Portfolio Stats 47、Audit Framework 28、Portfolio Terminal 51 項獨立檢查通過；650 個 Python source AST 可解析。正式 Registry 11 個 treatment、C96、0050 missing-score、PIT information-date、Score SHA、逐 Target REUSE 與已退役名字的行為不變；沒有新的可證實退役程式。本輪來源無完整本機市場、四 Seed P16／Replay 工件，故不宣稱真實 RoMD／Windows Double Check PASS；舊 E13 不合法報表繼續不可視為有效研究結果。
+
+
+## 2026-10-26 — Target Oracle E13 正式 Min 參數缺口／雙讀身分一致性修復（工程 Bug Fix，無新 SC）
+
+- **本輪唯一工作基準**：`test-branch-1_20261026_130724_19868335.zip`，SHA256 `ca95e7936b184a0d3955934d714c3bba68f744316a4f8ac9b2f331084171b2b9`。遵守 `doc/PROJECT_SETTINGS.md` E13 與 C23：唯一許可變化為完美 Target 百分位分數，正式 DL Selector／P16／Broker-Cash 不變。
+- **Bug 1／已重現**：DailyUniversal 真值計算的 `compute_counterfactual_trade40_batch()` 對沒有合法生效 Min 參數的股票日回傳 `no_historical_effective_Min_param`；舊 adapter 將它當成可排名的未成交交易，在同日另有成功路徑時發布假的 censored-last 分數。現在在排名／score SHA／Replay 前拒絕此來源缺口，保留合法未成交路徑的既有 censored 行為。新增 mocked 與真實 primitive 的有效期缺口反例。
+- **Bug 2／已重現**：每日 Target 與 Portfolio Replay 分別解析正式 P16 參數。若期間來源資料更新，原路徑可能把 A 參數的真值與 B 參數的交易回放配對。現在在任何逐 Arm REUSE／RUN 前對四 Seed 逐一核對真值 teacher 與 Replay 的 canonical `param_identity_sha256`，不相同即 BLOCKED，不使用不相容快取。新增雙次讀取發生參數變更的端到端合成反例。
+- **Registry 防誤引**：`AUD-target-ground-truth-romd` 摘要的舊 7 Exact／6 Direct 更新為明確歷史配置，現行清單依正式 Audit Registry 為 6 Exact／5 Direct；兩個事件型 MinTrade40 已退役，歷史實驗／結果原文保留。沒有更改正式比較、Target 真值公式、報表欄位或版本。
+- **驗證與限制**：單元／合成回歸涵蓋新的 source-missing 與 P16 double-read guard、合法 censored 結果與原有 Exact／Direct／0050／時間／REUSE 條件；無 `data/full`、四 Seed 正式參數與市場 Replay，因此真實 4 Seed RoMD、Windows formal Double Check 尚不能獨立驗收。舊未通過 E13 的 Oracle 報表仍不可視為 current 有效研究績效。
+
+
+## 2026-10-26 — Oracle E13 第二次同基準獨立驗收／動態比較、Baseline Cache 與來源中性身分（工程修補）
+
+- **版本核對**：使用者本輪 `test-branch-1_20261026_130724_19868335(1).zip` SHA256 為 `ca95e7936b184a0d3955934d714c3bba68f744316a4f8ac9b2f331084171b2b9`，與上一輪修補前 13:07 ZIP 相同，**不含**先前交付的參數有效期缺口／兩次 P16 來源 SHA 修復。本次先在隔離副本重新合併前次 7 檔修補，再做新的反例檢查，避免 Bug 回退。
+- **Bug A，清單順序及 Direct-only**：`_oracle_comparison_plan` 將 Direct `score_source` 當成「必須先由清單中 Exact 產生」，導致 Direct-only 或 Direct-before-Exact 失敗。現在從正式 Registry 取得不變的來源 Target recipe，只在本輪產生必要真值；**不執行或輸出未選取 Exact Replay**。從 11 個正式 treatment 產生的所有 2,047 種非空清單子集合均完成 plan／score-contract 解析。
+- **Bug B，未選用 Exact 的模型依賴**：`_contract` 與 `_formal_dl_score_start` 曾在 Direct-only 時仍要求啟用 Exact 模型。改為只檢查本次選用的 selector 及具相同消費契約的來源；Direct 可依現有 Registry 的 C101 宣告取得同條件策略，不另立新 Arm；選用 Exact 而沒有合法啟用 Exact 則仍 BLOCKED。
+- **Bug C，C96 無模型分數的身分穩定性**：Direct-only 不得將 Direct 的 ranking mode 誤寫成無模型 C96 的 Cache policy。C96 一律保留正式已宣告的歷史 exact-mode 快取身分以維持 Replay 相容；其實際交易仍是相同 Min 基準，沒有 DL 分數注入。
+- **Bug D，比較清單的非執行性 cohort metadata 污染逐 Arm REUSE**：同一 Target、同一可評分股票日／分數 SHA、同一參數與期間，只因選擇其他 Target 造成 `providers`／`market_truth` 報表計數不同，舊快取會被辨識為不同 Replay 身分。單一 `OracleReplayStore` 現只將成熟日期界線、樣本數、研究截止、研究風險語意與 implementation identity 置於 cohort execution identity；各 Target 已有經驗證的真實 perfect-score SHA、feature eligibility SHA 與 provider Target contract，另有價格與 P16 SHA。舊 V2 僅在真實所有執行身分一致時允許只讀等價 REUSE；實際 score SHA／期間／行情／參數不同仍嚴格拒絕。
+- **Registry 校正**：現行 DailyUniversal 描述已不再把 OOS 分數起點前的 2020-12-31 說成具有正式 PIT 分數；現行比較數量為 11，而非歷史 14，RUN／REUSE 不以舊 48／8 固定數判定。保留歷史研究紀錄、Target 名稱及原報表 SC，並不變更實際 PIT 時序。
+- **驗證界線**：本輪已新增 Direct-only、Direct-before-Exact、完整 subset、快取參照證據等隔離回歸；各項執行結果以當輪 QA 文件為準。本 ZIP 不含完整本機行情、四 Seed 正式 P16 與既有 `outputs/`，因此未重新認證實際市場 RoMD；未執行 Windows formal Double Check；舊版未經 E13 驗收的績效不能被追認為 current。

@@ -34,14 +34,25 @@ _REQUIRED_METRICS = (
 _MISSING = object()
 
 
-def _execution_cohort(cohort: Mapping[str, Any]) -> dict[str, Any]:
-    """Retain computational/eligibility evidence, not display wording.
+_REPLAY_COHORT_FIELDS = frozenset((
+    "cohort_rows", "first_common_day", "last_common_day",
+    "research_cutoff", "risk_budget_return",
+    "oracle_parity_implementation", "oracle_only",
+))
 
-    The score-table SHA, research cutoff, sample count, providers, risk budget,
-    and maturity evidence remain in the identity. Only the report explanation
-    text is excluded; a genuine change to the score table still conflicts.
+
+def _execution_cohort(cohort: Mapping[str, Any]) -> dict[str, Any]:
+    """Retain replay-affecting cohort boundaries, not report provider inventories.
+
+    Comparison membership changes `providers`, `market_truth` counters and
+    diagnostic counts even when the *actual injected* target score table is
+    byte-identical. Such source descriptions are evidence in the report, not
+    extra portfolio inputs. The score/eligible-key SHA, target profile, price
+    inventory SHA, rolling P16 SHA and economic rules are independently
+    included in the target-specific identity. Baseline C96 consumes no score.
     """
-    return {key: value for key, value in cohort.items() if key != "scoring"}
+    return {key: value for key, value in cohort.items()
+            if key in _REPLAY_COHORT_FIELDS}
 
 
 # Research comparison arm IDs are evidence of which equivalent selector was
@@ -368,11 +379,9 @@ class OracleReplayStore:
                 continue
             if (peer.get("dataset") == identity["dataset"]
                     and peer.get("start_date") == identity["start_date"]
-                    and peer.get("end_date") == identity["end_date"]
-                    and (peer_cohort.get("providers") == requested_cohort.get("providers")
-                         or (isinstance(peer_cohort.get("providers"), Mapping)
-                             and isinstance(requested_cohort.get("providers"), Mapping)
-                             and set(requested_cohort["providers"]).issubset(peer_cohort["providers"])))):
+                    and peer.get("end_date") == identity["end_date"]):
+                # Comparison-inventory providers may differ; strict execution
+                # identity below (including actual score SHA) is authoritative.
                 candidate_identity = self._legacy_semantic_identity(peer, identity)
                 if candidate_identity is None:
                     candidate_identity = dict(peer)
