@@ -1462,7 +1462,8 @@ def build_report(
                     progress(f"Daily-universal {source_name} seed={seed}: "
                              f"{evidence['mature_eligible_rows']:,} score eligible, "
                              f"{evidence['settled_net_r_rows']:,} settled; "
-                             f"cutoff-truncated={evidence.get('cutoff_truncated_rows', 0):,}")
+                             f"horizon-beyond-cutoff={evidence.get('cutoff_truncated_rows', 0):,}; "
+                             f"cutoff-closeouts={evidence.get('research_cutoff_closeout_rows', 0):,}")
             for alias, original in plan["aliases"].items():
                 if original in plan["daily_recipes"]:
                     daily_seed_scores[int(seed)][alias] = daily_seed_scores[int(seed)][original]

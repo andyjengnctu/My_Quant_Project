@@ -9,6 +9,7 @@ import unittest
 from datetime import date
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -173,6 +174,59 @@ class FormalMinTrade40SyntheticCases(unittest.TestCase):
         self.assertFalse(barred.valid_mask[0])
         self.assertTrue(np.isnan(barred.target_raw_r[0]))
         self.assertEqual(barred.reasons[0], "no_future_executable_research_session")
+
+    def test_label_maturity_follows_natural_exit_not_horizon_or_research_cutoff(self):
+        from filters.breakout_quality import daily_trade40_target as owner
+        days, frame, _params, period = fixture(count=150)
+        signal = 75
+        natural_exit = days[80]
+        cutoff = days[120]
+        actual = SimpleNamespace(
+            realized_net_r=1.25, reason="realized_net_profit",
+            exit_date=str(natural_exit.date()), label_eval_end_date=str(natural_exit.date()),
+            forced_closeout=False,
+        )
+        with patch.object(owner, "simulate_realized_trade_path_label", return_value=actual):
+            batch = compute_counterfactual_trade40_batch(
+                frame, np.asarray([signal]), ticker="2330", schedule=(period,),
+                exchange_calendar=days, horizon_sessions=None, research_cutoff=cutoff,
+            )
+        self.assertTrue(batch.valid_mask[0])
+        self.assertEqual(batch.maturity_dates[0],
+                         natural_exit.to_datetime64().astype("datetime64[D]"))
+        # A horizon beyond the data cutoff is only potential truncation;
+        # natural early exits are not actual Research-cutoff closeouts.
+        self.assertEqual(batch.cutoff_truncated_rows, 1)
+        self.assertEqual(batch.research_cutoff_closeout_rows, 0)
+
+        censored_end = days[82]
+        superseded = SimpleNamespace(
+            realized_net_r=None, reason="unfilled_superseded_by_new_setup",
+            exit_date=None, label_eval_end_date=str(censored_end.date()),
+            forced_closeout=False,
+        )
+        with patch.object(owner, "simulate_realized_trade_path_label", return_value=superseded):
+            censored = compute_counterfactual_trade40_batch(
+                frame, np.asarray([signal]), ticker="2330", schedule=(period,),
+                exchange_calendar=days, horizon_sessions=None, research_cutoff=cutoff,
+            )
+        self.assertFalse(censored.valid_mask[0])
+        self.assertTrue(np.isnan(censored.target_raw_r[0]))
+        self.assertEqual(censored.maturity_dates[0],
+                         censored_end.to_datetime64().astype("datetime64[D]"))
+        self.assertEqual(censored.research_cutoff_closeout_rows, 0)
+
+        illegal = SimpleNamespace(
+            realized_net_r=1.0, reason="realized_net_profit",
+            exit_date=str(days[121].date()), label_eval_end_date=str(days[121].date()),
+            forced_closeout=False,
+        )
+        with patch.object(owner, "simulate_realized_trade_path_label", return_value=illegal):
+            with self.assertRaisesRegex(ValueError, "outside its legal observation window"):
+                compute_counterfactual_trade40_batch(
+                    frame, np.asarray([signal]), ticker="2330", schedule=(period,),
+                    exchange_calendar=days, horizon_sessions=None, research_cutoff=cutoff,
+                )
 
     def test_post_research_cutoff_quotes_cannot_affect_full_cycle_truth(self):
         days, frame, _params, period = fixture(count=150)

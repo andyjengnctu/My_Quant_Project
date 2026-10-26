@@ -32,6 +32,8 @@ from core.portfolio_param_runtime import (
 )
 from core.strategy_params import V16StrategyParams
 from filters.breakout_quality.trade_path_label import (
+    TRADE_PATH_REASON_UNFILLED_SUPERSEDED,
+    TRADE_PATH_REASON_UNFILLED_TERMINATED,
     build_signal_cache,
     simulate_realized_trade_path_label,
 )
@@ -53,6 +55,11 @@ class ExecutableMinPeriod:
 
 @dataclass(frozen=True)
 class CounterfactualTrade40Batch:
+    """An outcome's maturity date is its actual resolution date, if earlier.
+
+    cutoff_truncated_rows counts *potential* horizon-over-cutoff rows, not
+    forced closes. research_cutoff_closeout_rows counts actual forced closes.
+    """
     target_raw_r: np.ndarray
     valid_mask: np.ndarray
     maturity_dates: np.ndarray
@@ -256,6 +263,10 @@ def compute_counterfactual_trade40_batch(
         # The single research-cutoff deadline applies to every horizon.
         expiry = min(horizon_expiry, last_research_session) if horizon_expiry is not None else last_research_session
         cutoff_limited = horizon_expiry is None or horizon_expiry > last_research_session
+        # This counter means the *declared* horizon lies beyond the Research
+        # cutoff, NOT that the actual trade was forcibly closed there. Natural
+        # exits can finish earlier; research_cutoff_closeout_rows tracks the
+        # separate number of actual executed closeouts at the cutoff.
         if cutoff_limited:
             truncated += 1
         maturity_dates[row] = expiry.to_datetime64().astype("datetime64[D]")
@@ -297,6 +308,23 @@ def compute_counterfactual_trade40_batch(
             precomputed_signals=cache, horizon_end_date=expiry,
             counterfactual_entry_limit=limit,
         )
+        # The *deadline* and the date a label is actually known are different.
+        # A natural stop/indicator exit resolves the full-cycle or H-day label
+        # immediately; it must not be recorded as maturing at the later H /
+        # Research cutoff. An unfilled order superseded/terminated early is
+        # likewise known to be censored then, without fabricating an R value.
+        observed_end = (observation.exit_date if observation.realized_net_r is not None
+                        else observation.label_eval_end_date if observation.reason in (
+                            TRADE_PATH_REASON_UNFILLED_SUPERSEDED,
+                            TRADE_PATH_REASON_UNFILLED_TERMINATED,
+                        ) else None)
+        if observation.realized_net_r is not None and observed_end is None:
+            raise ValueError("completed formal Min trade path has no executable exit date")
+        if observed_end is not None:
+            observed_day = pd.Timestamp(observed_end).normalize()
+            if observed_day < dates[position] or observed_day > expiry:
+                raise ValueError("formal Min target completed outside its legal observation window")
+            maturity_dates[row] = observed_day.to_datetime64().astype("datetime64[D]")
         if observation.realized_net_r is None:
             reasons.append(str(observation.reason))
             continue

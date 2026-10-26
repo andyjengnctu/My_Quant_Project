@@ -13859,3 +13859,13 @@ Decision: `ENGINEERING_CHECKPOINT_FIRST_REUSE / HISTORICAL_AK_EVIDENCE_PRESERVED
 - **現行清單**：四 Seed，`C96` 加 **15 個 Target（8 Exact／7 Direct）**，其中既有 MinTrade40、MinTrade60，以及新增無期限 `DailyUniversal_MinTrade_NetR` 與 `DailyUniversal_MinTrade_NetR_Direct`。同 Seed Exact/Direct 真值來源、排名與分數 SHA 一致；Portfolio 持有期限、現金、K/R0 Selector、P16 有效期、掛單與費稅不因 Target 期限改動。任意 H（例如 87D）只需在 Registry 宣告新的合法 Target 名稱與 H，並不需加新的 Producer 分支。
 - **失效／追溯**：2026-10-26 先前 60D-mature 跨 Target 同窗結果及其縮短期間 40D Replay 是歷史不合規實作 evidence，不可視為現行同期間績效，也不得當成可用快取強行 REUSE；原始結果保留、標記為 `SUPERSEDED_BY_UNIFIED_CUTOFF_BUG_FIX`。此次現行 Output／Cache 必須按實際真值、評估日期、cohort、價格 SHA、Seed/P16 及 Selector 完整身分檢查，不能把舊答案直接重貼；**既有正確且同一實際身份的 40D 歷史工件應按原規則依法 REUSE**，其重算治理留在下一輪獨立處理。
 - **工程驗收**：獨立 Synthetic 驗證自然出場／H 期限／Research 期末結算，40／60／73／87／100／全週期單一演算法，晚於資料截止價格不得被使用，沒有可交易下一日不捏造結果；40D → 40+60D → 40+60D+完整週期三階段保持相同 Portfolio 期間／共同母體，僅新 Target Arm 需新增回放；Direct-only 可共用完整週期真值而不偷偷執行 Exact。相關 `unittest` **130/130 PASS**（獨立合成測試，非 Windows formal double check）。ZIP 未包含本機完整 `data/full`、全市場 P16 工件及完整 Portfolio Replay sidecars，故**尚未認證真實市場四 Seed RoMD 或逐日 E13 parity，也沒有產生新績效數字**。Report `audit.target_oracle_romd@v9`／payload schema 8 均維持既有正式欄位與格式。
+
+
+## 2026-10-26 — Oracle MinTrade 統一期限／資料截止後的獨立回歸核對（工程 Bug Fix）
+
+- **基準**：`test-branch-1_20261026_205912_7c7ec161.zip`，SHA256 `5dc41fbd983a7411bacd6ea1b53cd4f4446543d8bf1512507a5d7ac391a50248`。先讀 `doc/PROJECT_SETTINGS.md`，依序讀取 Experiment Registry 與本 Experiment Log；獨立解壓後比對原始／修補版。
+- **檢查結果**：固定 Oracle Portfolio evaluation `2021-01-01～2025-12-22` 與 Target truth research cutoff `2026-03-02` 的 owner／同窗流程未見需修改之分支；40／60／任意正整數／完整週期仍統一由正式 Min 單股模擬器與原 Broker-Cash portfolio 消費，未改動實際交易及價格型 Target 定義。
+- **實際缺陷**：`maturity_dates` 先填 H 或 Research 截止，即使自然出場早已完成，仍被記成較晚才成熟；未成交訊號提早失效的結束日也未反映。`cutoff_truncated_rows` 在交易已自然出場時仍增加，過去終端 `cutoff-truncated` 容易誤讀為「實際強制平倉」。
+- **修復**：在 canonical `compute_counterfactual_trade40_batch` 以真實 `exit_date` 或未成交提前終止的 `label_eval_end_date` 記錄實際完成日；驗證不得早於資訊日、晚於合法期限，完成的 NetR 不得缺出場日。保留 `cutoff_truncated_rows` 既有「期限可能越過截止」數值及 source／Replay evidence 身分，終端明確拆為 `horizon-beyond-cutoff` 與 `cutoff-closeouts`，後者才是實際截止平倉。
+- **回歸證據**：新增自然提前出場、未成交提前終止、超期假出場 fail-closed 的獨立 Synthetic Case。相關 Oracle／MinTrade `unittest` 131/131 PASS；補充 breakout-quality Audit 合約案例 28 assertions PASS、portfolio 終端 owner 合約案例 51 assertions PASS；全 651 個 `.py` 檔 `ast.parse` 無語法錯誤。原始及修補版在隔離的同一 synthetic source 下比較 40D、60D 與完整週期的 raw NetR SHA、每股票日 rank SHA、實際截止結算數，結果逐項一致；不更換 Target／Label／SC／Report／Replay 身分。
+- **尚未證實**：交付 ZIP 無完整正式 `data/full`、P16 四 Seed 與每臂 Portfolio Replay artifacts；故不宣稱完成 Windows 正式 Bundle、真實四 Seed RoMD 或逐日 E13 等價。Replay REUSE 判定與全價格檔 SHA 的治理屬使用者先前指定的下一階段，未在本次統一期限 Bug Fix 中另作重構。
