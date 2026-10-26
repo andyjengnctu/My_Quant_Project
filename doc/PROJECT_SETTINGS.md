@@ -64,6 +64,8 @@
 
 22. **Model topology／multi-head composition 單一註冊原則**：model architecture identity、family、head／pooling topology、context requirement、active eligibility 與 model-spec builder routing 必須由 canonical architecture descriptor／registry 派生；`active` dispatcher、spec resolver、model factory、trainer、renderer 與 tests 不得各自維護同一 architecture-ID 清單或為新 variant 同步增加 identity branch。可由 model spec 表達的 head topology 必須 declarative 化，model implementation 依 head contract／family 建構。多 head training 必須以 reusable composition contract 宣告 combined output、head widths、target mapping、每 head pair-weight、由哪一 head 產生 detached pair context、loss weights 與 semantics metadata；generic trainer／training contract／renderer只消費該 composition，不得為每個 training objective 新增專屬 loss handler／schema／report branch。若新增一個同 family architecture 或 multi-head objective 仍需同步修改 architecture list、active dispatcher、spec registry、trainer、training contract、renderer或 synthetic registration 多處，視為 modification-radius leakage，必須先擴充 canonical descriptor／composition seam；generic synthetic 必須自動遍歷 registry 並檢查 architecture identity 不重複滲入 consumer。
 
+23. **既有契約優先：Bug Fix 不得冒充科學變更（全專案）**：發現錯誤、行為差異或績效變動時，必須先查明使用者原始已核准需求、當時有效的 Scientific Contract／Registry／config／正式執行與報表契約及 Experiment Log 決策，並明列「預期行為、實際行為、可重現偏差」，先分類再修正。**實作偏離既有已核准契約即屬 Bug／契約符合性修復**，不因錯誤結果已有工件、曾通過測試、歷史沿用或修復後績效改變，就可事後包裝為另一個科學假說；不得為此新增或改號 SC、Target／Label、Model／Strategy／Research identity、Compare arm 或正式報表版本，亦不得反向修改原契約／測試期待以讓錯誤合法化。修復應回到原契約、由唯一 canonical owner 最小改動並新增對應回歸測試；受影響工件依完整依賴精準失效及重算，禁止錯誤 REUSE，不連帶重訓未受影響的正式模型。必要的 implementation／artifact fingerprint 更新只用來辨識修復前後工件，**不構成新的 scientific identity**；歷史原始結果與事故 evidence 仍保留，但須註明缺陷、影響範圍及不具現行有效證據資格。**只有使用者明確授權變更原本核准的研究問題或受控科學語意**，才按既有 Registry／SC 治理建立新科學身分；真正的報表呈現／schema 改版仍依 F5 取得授權，但恢復原已核准報表契約的 Bug Fix 不應藉改版另立定義。若原契約缺失、互相矛盾或不足以唯一決定修正方式，必須明確提出衝突並標示 `CONTRACT_UNRESOLVED`，不得自行猜測為 Bug 或新研究。Oracle 特例另依 E13，不能取代本項全專案原則。
+
 ## D. 交易與策略原則
 
 1. 杜絕未來函數：任何候選、掛單、成交、停損、停利、延續判斷與統計，都不得偷看當下尚未知的未來資料。
@@ -99,6 +101,15 @@
    - **Authorization / identity**：Scientific workflow 的執行資格必須由 canonical research identity／authorization contract 明確決定，且 authorization 優先於 dependency completeness。固定七項研究選單的顯示不得被授權、工件有無或模型名稱過濾；執行中的科學合法性檢查仍須保留，**不可把缺少可由合法 canonical Producer 建立的工件誤判為未授權而 BLOCKED**，也不得因前置依賴可建而繞過真正的 PIT／資料／Trading 授權。Logical evaluation source identity 可以表達不同 consumption semantics，但不得因此複製相同 physical truth。
 
 12. **Research／Trading EV(R) 特例（使用者明確授權維持）**：Research 策略層 EV(A)／初始風險 R，與 Trading 帳務中心「實績 EV(R)」（平均單筆淨損益 ÷ 平均實際虧損金額）是兩個有意不同的統計口徑。各自原有公式、欄位名稱、標籤、畫面、報表與計算方式必須維持不變；不得因一般 SSOT 收斂而合併、互相替代、重新命名、新增並列 EV 欄位或回推缺少的初始風險資料。未經使用者另行授權，不得將此項列為需要修正的 SSOT-05。
+
+13. **Research `[1] Target 驗證`／Hindsight Oracle 正式定義**（既有固定要求，跨 Target 與策略比較適用）：
+   - **唯一研究問題**：「假設 DL 能完美預測指定 Target，在與正式 Research DL 策略完全相同的選股與交易條件下，RoMD 可以達到多少？」Oracle 是此問題的 hindsight 反事實驗證，並非另行設計的最佳化策略，也不是可以自行放寬條件的研究變體。
+   - **唯一容許的反事實替換**：在正式 Research DL 的 canonical score consumption 邊界，用該 Target 的「完美預測分數」取代原本模型預測；未來 Target 真值僅允許透過此分數影響正式選股流程，不得另行改變候選資格、交易規則、參數訓練／選取或其他當日尚未知的輸入。Oracle 不 FIT 模型、不執行 Optimizer、不修改正式 Trading truth。
+   - **其他條件逐項相同**：必須沿用被比較 Research DL arm 的候選與 Universe、可評分股票日與特徵有效資格（含 0050 等缺分數候選的既有處理）、information date／score start／lag／更新與延續規則、Target 的有效性與成熟遮罩、score 的數值尺度／Head 組合／tie-break、Selector（Exact K/R0 與 Direct No-K/No-R0 僅能各自同條件對照）、逐 Seed／日期生效的正式策略參數、掛單／成交／出場／持股與現金限制、費稅／Broker-Cash、評估窗口及 RoMD 統計。不能因 Oracle 有未來真值而擴大 DL 可評分母體、補造缺失分數、前移首日或變更配置條件。
+   - **完美預測必須包含分數語意**：Target→Score 映射須從該正式 DL arm 的 canonical Target／model-output／score contract 唯一導出並留存 evidence；只有名次完全正確不代表 Exact 所需的數值分數完全正確，亦不得未經正式契約授權擅自採用每日百分位、原始 Target 值或替代 Head 融合。若無法唯一確定，應標示 `BLOCKED/CONTRACT_UNRESOLVED`，不得猜測並發布「完美 DL RoMD」。
+   - **端到端等價驗收**：使用同一份合法 perfect-score 測試表注入正式 DL 與 Oracle 的 score 入口，逐日比較評分資格／缺值、資訊日、排序與選股、掛單、成交、部位、現金、權益、Round-Trip 及 RoMD；須涵蓋首個 OOS 資訊日、跨年、0050／特徵不足、Seed／Rolling 參數有效期、Exact／Direct 與 40D 成熟邊界。共用同一 Replay engine 或僅 RoMD 相同，不足以證明符合本定義；受影響路徑不得在此驗收前標為正式有效 Oracle 結果。
+   - **Bug 與科學變更嚴格區分**：凡偏離上述已核准原始定義者屬實作／驗收缺陷，不得事後包裝為另一個合法科學假說，也**不得為修復 Bug 逐 Target 新增 SC、Label、research identity 或報表版本**。修復應回到原契約、最小修改唯一 owner；必須使受影響舊 Replay／報表結果失效且不得 REUSE、在原研究問題下重算。歷史原始結果與事故 evidence 保留供追溯，但須明確標為不符合／未通過 Oracle parity，從有效結果及策略比較中排除，不得刪除歷史紀錄或將錯誤績效當成 current truth。實作／artifact fingerprint 可因修正而更新以防錯誤重用，**不等於新 scientific identity**；只有使用者另行明確核准真正不同的研究假設時，才按既有 SC／report governance 建立新身分或版本。
+
 
 ## F. Scientific Contract／SOP／指標與報表治理
 

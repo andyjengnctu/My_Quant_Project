@@ -13694,3 +13694,10 @@ Decision: `ENGINEERING_CHECKPOINT_FIRST_REUSE / HISTORICAL_AK_EVIDENCE_PRESERVED
 - **0050 原因與既有語意**：canonical Daily-universal 模型資料來源把 `0050` 當特徵基準，明確排除其自身股票日；正式 Min Portfolio 仍可能出現 `0050` 候選，導致原 Oracle 缺值 guard 於 2021-01-13 報錯。修補只讓經完整成熟樣本及分數對齊驗證的 Daily-universal Oracle，把其分數表以外候選標記 `available=False / missing_ticker_date_score`，沿用正式 DL Selector 既有排序；不移除候選、不補 0R、不擴大模型 Target 母體，舊價格／事件 Oracle 仍對缺值 BLOCK。這項缺值政策寫入新 Target Replay identity，不能錯誤 REUSE 不同語意的歷史結果；正式報表 v9、Min/P16 參數、fee/ledger 沒有修改。
 - **歷史 Log 修復**：前輪 `Stock_Target_Single_Confirm_Fix_20261026.zip` 意外以 `doc/ARCHITECTURE.md` 類型的內容覆蓋本歷史研究日誌，導致 `13,684 → 917` 行。此輪以使用者先前提供的最後完整原始 ZIP `test-branch-1_20261026_001528_a8bea04c.zip` 之原始 Log bytes 作為不可變基底，後接縮減版本唯一新增的「Research [1] 移除重複授權」歷史段落，不編造也不更寫已完成研究結果。
 - **獨立驗證**：Daily Target／Oracle／MinTrade40／Audit／CSV 合成回歸含 0050 缺分數、Exact／Direct 一致、舊來源仍阻擋、非有限值阻擋、跨年首日、舊快取 REUSE 等情境，結果以本輪實際測試紀錄為準。未執行 Windows 正式 Double Check 或完整市場 Replay。
+
+## 2026-10-26 — Research [1] Oracle 原始定義確認／Parity 缺陷分類（使用者決策；尚未修復程式）
+
+- **原有固定研究問題**：使用者重申 Research `[1] Target 驗證` 從一開始就是「假設 DL 能完美預測 Target，在與正式 Research DL 策略完全相同的選股與交易條件下，RoMD 可以達到多少？」。正式長期治理條款已加入 `doc/PROJECT_SETTINGS.md` E13；各 Target 的真值定義不同，**不代表可自行改變 Oracle 與 DL 的評分資格、分數介面或交易條件**。
+- **本次發現與分類**：來源 ZIP `test-branch-1_20261026_015913_e8abe24e(1).zip`（SHA256 `2e108b26170fb8b696ea89c9152557fa0bd9aa9424673b1f6d3014daa80db8bf`）比對指出：舊價格型 Oracle 可評分股票日範圍與正式 Daily-universal DL 不一致；Oracle 預載 `2020-12-31` 資訊日但正式 DL 的 `score_start=2021-01-01` 不包含；Oracle 的每日百分位分數與部分正式 Exact DL raw-score 消費契約不同，尚未證明數值完美預測等價。這些屬偏離原始驗收定義的實作缺陷或契約未閉合，**不是新增的科學定義或另一套有效 Oracle 假說**；不得以既有合成測試 PASS 取代端到端 parity 驗收。
+- **既有結果狀態與處置**：本次使用者提供的四 Seed Oracle RoMD 表及任何受上述差異影響的舊快取，均暫列 `NOT_VALIDATED_AS_PERFECT_DL_ORACLE / PARITY_FIX_REQUIRED`；不得宣稱為同條件「完美 DL RoMD」、作為有效模型／Target 優劣結論或升格依據。歷史報表數字與原始工件只保留追溯，不在有效比較中 REUSE；修復後依原核准的科學問題、相同正式 Research DL arm 與正確 artifact identity 重算實際受影響 arms，不因本次缺陷逐 Target 發行新 SC／Label／report version，也不全面強制 DL 重訓。
+- **工作邊界**：本次僅補專案治理與 append-only 決策紀錄；未改 Target／Score／Replay 程式，未重新跑真實四 Seed 市場 Replay，亦未執行 Windows formal Double Check。原始報表是否每一個 arm 的實際 RoMD 都受到多少影響，仍須修復後由正式端到端比對及 Replay 證實。

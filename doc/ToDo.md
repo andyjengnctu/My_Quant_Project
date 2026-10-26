@@ -1,6 +1,6 @@
-- 刪除U20, MFE20, MAE20, MAE40, MFE40/D40
-- 加入R40，T40
 
+- bug
+    - 0050 cannot be selected by any DL
 
 - imrove DL learnability
     - aduit DL target vs. ROMD Correlation to improve DL 績效轉換率
