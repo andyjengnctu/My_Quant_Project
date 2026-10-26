@@ -25,7 +25,11 @@ import numpy as np
 import pandas as pd
 
 from core.price_utils import adjust_long_buy_limit_array
-from core.portfolio_param_runtime import build_portfolio_params_signature
+from core.portfolio_param_runtime import (
+    build_portfolio_params_signature,
+    build_active_param_ensemble_objects_from_payload,
+    build_active_param_objects_from_payload,
+)
 from core.strategy_params import V16StrategyParams
 from filters.breakout_quality.trade_path_label import (
     build_signal_cache,
@@ -102,6 +106,59 @@ def build_formal_min_execution_schedule(
     }
     return tuple(periods), provenance
 
+
+
+def resolve_formal_min_param_records(base_kind: str, base_params: Any) -> tuple[dict[str, Any], ...]:
+    """Resolve the SAME P16 Min active parameter records used in Portfolio Replay.
+
+    The retired event-only Oracle must not remain a dependency of the daily
+    counterfactual label. This adapter consumes the canonical parameter owner.
+    """
+    if base_kind == "rolling_active_param_ensemble":
+        records = build_active_param_ensemble_objects_from_payload(base_params)
+        for record in records:
+            members = record["members"]
+            if len(members) != 1:
+                raise ValueError("Formal Min P16 Base-Finalist-Best requires one member")
+            record["params_obj"] = members[0]["params_obj"]
+    elif base_kind == "rolling_oos_param_schedule":
+        records = build_active_param_objects_from_payload(base_params)
+    else:
+        raise ValueError(f"Formal Min needs rolling P16; invalid source: {base_kind}")
+    dates = [pd.Timestamp(row["effective_date"]).normalize() for row in records]
+    if not dates or dates != sorted(set(dates)):
+        raise ValueError("Formal Min effective schedule missing or duplicated")
+    return tuple(records)
+
+
+def rank_trade40_outcome_frame(frame: pd.DataFrame) -> dict[tuple[str, str], float]:
+    """Canonical daily hindsight ranking without fabricating censored economic R.
+
+    Unfilled outcomes remain NaN in the provider; only their relative selector
+    order is below actually executed outcomes. This helper is not an event
+    Target producer and cannot publish PIT scores or fit a DL model.
+    """
+    if frame.empty or not {"ticker", "date", "realized_net_r"}.issubset(frame):
+        raise ValueError("Daily Trade40 missing mature score rows")
+    if frame.duplicated(["ticker", "date"]).any():
+        raise ValueError("Daily Trade40 duplicate ticker/date")
+    from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets
+    filled = frame["realized_net_r"].notna()
+    numeric = pd.to_numeric(frame["realized_net_r"], errors="raise").astype(float)
+    if not np.isfinite(numeric.loc[filled].to_numpy(dtype=float)).all():
+        raise ValueError("Daily Trade40 executed Net-R is nonfinite")
+    if not filled.any():
+        raise ValueError("Daily Trade40 no executed Net-R truth")
+    daily_min = numeric.groupby(frame["date"]).transform("min").fillna(0.0)
+    numeric.loc[~filled] = daily_min.loc[~filled] - (1.0 + daily_min.loc[~filled].abs())
+    if not np.isfinite(numeric.to_numpy(dtype=float)).all():
+        raise ValueError("Daily Trade40 ranking sentinel nonfinite")
+    scores = build_same_date_percentile_targets(
+        numeric.to_numpy(dtype=float), np.ones(len(frame), dtype=bool), frame["date"],
+    ).astype(float)
+    if not np.isfinite(scores).all():
+        raise ValueError("Daily Trade40 nonfinite daily rank")
+    return dict(zip(zip(frame["ticker"].astype(str), frame["date"].astype(str)), scores.tolist()))
 
 def resolve_historical_min_period(
     schedule: tuple[ExecutableMinPeriod, ...], date: Any,

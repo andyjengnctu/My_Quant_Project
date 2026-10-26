@@ -269,6 +269,19 @@ class OracleReplayStore:
                     f"Oracle sibling replay cache is corrupt; fail closed: "
                     f"{candidate.relative_to(self.project_root).as_posix()}"
                 ) from exc
+            # An implementation-only Oracle parity bug fix invalidates all
+            # earlier hindsight score replays. Keep the old bytes as history,
+            # but do not let their incompatible same-window identities block
+            # the corrected result from being computed alongside them.
+            # This exemption never applies to C96 (the unscored baseline) or
+            # to two new-revision observations with differing semantics.
+            requested_policy = identity.get("replay_policy") or {}
+            peer_policy = peer.get("replay_policy") or {}
+            if (isinstance(requested_policy, Mapping)
+                    and isinstance(peer_policy, Mapping)
+                    and requested_policy.get("oracle_parity_implementation")
+                    and not peer_policy.get("oracle_parity_implementation")):
+                continue
             if (peer.get("dataset") == identity["dataset"]
                     and peer.get("start_date") == identity["start_date"]
                     and peer.get("end_date") == identity["end_date"]
@@ -333,6 +346,7 @@ class OracleReplayStore:
         self, *, seeds, targets, dataset: str | None = None,
         start_date: str | None = None, requested_end: str | None = None,
         benchmark: str | None = None,
+        required_oracle_revision: str | None = None,
     ) -> dict[tuple[int, str], str]:
         """Inventory validated local bytes without certifying scientific REUSE.
 
@@ -350,7 +364,10 @@ class OracleReplayStore:
                     result[key] = "INVALID"
                     continue
                 matching = [identity for identity in identities if (
-                    (dataset is None or identity.get("dataset") == dataset)
+                    (target == "C96" or required_oracle_revision is None
+                     or (identity.get("replay_policy") or {}).get("oracle_parity_implementation")
+                        == required_oracle_revision)
+                    and (dataset is None or identity.get("dataset") == dataset)
                     and (start_date is None or identity.get("start_date") == start_date)
                     and (requested_end is None or
                          (identity.get("cohort") or {}).get("research_cutoff") == requested_end)
@@ -514,6 +531,7 @@ class HistoricalOracleIndex:
         self, *, seeds, targets, dataset: str | None = None,
         start_date: str | None = None, requested_end: str | None = None,
         benchmark: str | None = None, strategy_profile_id: str | None = None,
+        required_oracle_revision: str | None = None,
     ) -> set[tuple[int, str]]:
         """Inventory archived seed observations, not scientific reuse approval.
 
@@ -545,6 +563,10 @@ class HistoricalOracleIndex:
                 if group is payload.get("baseline"):
                     target = "C96"
                 if target not in {item[1] for item in requested}:
+                    continue
+                if (target != "C96" and required_oracle_revision is not None
+                        and (payload.get("common_cohort") or {}).get("oracle_parity_implementation")
+                            != required_oracle_revision):
                     continue
                 observations = group.get("seed_observations")
                 if not isinstance(observations, list):

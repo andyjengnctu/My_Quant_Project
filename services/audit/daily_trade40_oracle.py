@@ -21,12 +21,11 @@ from core.breakout_quality_registry import (
 from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY
 from filters.breakout_quality.daily_trade40_target import (
     HORIZON_SESSIONS, ExecutableMinPeriod, collect_canonical_exchange_sessions,
-    compute_counterfactual_trade40_batch,
+    compute_counterfactual_trade40_batch, rank_trade40_outcome_frame,
 )
 from filters.breakout_quality.mfe_safety_geometry import normalize_ticker
 from filters.breakout_quality.profile_ranker_data import load_profile_continuous_ranker_data
 from filters.breakout_quality.workflow_io import discover_dataset_csv_inputs, load_dataset_frame
-from services.audit.min_trade40_target import rank_trade40_outcome_frame
 
 # Old MR-13CL's P2/P16 single-teacher label is a distinct retired scientific
 # identity; no new result may masquerade as its supervised-label artifact.
@@ -41,13 +40,16 @@ class DailyTrade40OracleBlockedError(ValueError):
 def build_daily_universal_trade40_oracle_scores(
     *, project_root: Path, dataset: str, filter_id: str,
     profile_id: str, cutoff: str, evaluation_start: str,
+    score_start: str | None = None,
     seed: int, param_sha256: str,
     canonical_schedule: tuple[ExecutableMinPeriod, ...],
     progress_callback: Callable[[str], None] | None = None,
 ) -> tuple[dict[tuple[str, str], float], dict[str, Any]]:
     """Compute all feature-eligible stock-day outcomes from a formal Min seed.
 
-    The first decision date is the exchange bar BEFORE the OOS trading start.
+    Only information dates covered by the canonical PIT DL source are scored;
+    the pre-OOS information bar may still be used to locate the first trade
+    session, but cannot acquire a hindsight score outside the PIT score period.
     For each hypothetical entry, Min parameters become effective on the next
     observed *ticker* order date, matching Min signal->order semantics. Only
     the 40-session horizon is imposed on the otherwise canonical trade path.
@@ -66,6 +68,13 @@ def build_daily_universal_trade40_oracle_scores(
     start_day = pd.Timestamp(evaluation_start).normalize()
     if start_day > cutoff_day:
         raise DailyTrade40OracleBlockedError("Invalid Oracle trading period")
+    # Source coverage is resolved from the actual Research PIT DL score contract.
+    # No extra pre-start Oracle score is valid merely because the target matured.
+    if not score_start:
+        raise DailyTrade40OracleBlockedError("Missing canonical PIT DL score start")
+    first_scored_day = pd.Timestamp(score_start).normalize()
+    if first_scored_day < start_day or first_scored_day > cutoff_day:
+        raise DailyTrade40OracleBlockedError("PIT DL score period outside Oracle evaluation")
     try:
         if progress_callback is not None:
             progress_callback("取得正式每日合格股票日母體")
@@ -104,11 +113,9 @@ def build_daily_universal_trade40_oracle_scores(
             raise DailyTrade40OracleBlockedError("Duplicate normalized stock ticker")
         group["ticker"] = group["ticker"].map(normalize_ticker)
         group["date"] = pd.to_datetime(group["date"], errors="raise").dt.normalize()
-        group = group.loc[(group["date"] >= first_info) & (group["date"] <= cutoff_day)].reset_index(drop=True)
+        group = group.loc[(group["date"] >= first_scored_day) & (group["date"] <= cutoff_day)].reset_index(drop=True)
         if group.empty or group.duplicated(["ticker", "date"]).any():
             raise DailyTrade40OracleBlockedError("No unique feature-eligible daily stock-days")
-        if not bool((group["date"] == first_info).any()):
-            raise DailyTrade40OracleBlockedError("Pre-OOS information date absent from daily feature universe")
         daily_calendar_pos = exchange.get_indexer(pd.DatetimeIndex(group["date"]))
         if (daily_calendar_pos < 0).any():
             raise DailyTrade40OracleBlockedError("Feature stock-day absent from canonical exchange calendar")
@@ -181,6 +188,7 @@ def build_daily_universal_trade40_oracle_scores(
             "first_date": outcome["date"].min(), "last_date": outcome["date"].max(),
             "first_replay_trade_date": str(first_trade.date()),
             "research_cutoff": str(cutoff_day.date()),
+            "score_start_date": str(first_scored_day.date()),
             "rank_sha256": rank_sha, "raw_label_sha256": raw_sha,
             "calendar_sha256": cal_sha, "teacher": teacher,
             "rank_policy": "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",

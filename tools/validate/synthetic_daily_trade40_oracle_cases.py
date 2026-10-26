@@ -74,7 +74,7 @@ def run_source(*, schedule=None, seed=693545351, dataset="full", group=None,
         return build_daily_universal_trade40_oracle_scores(
             project_root=Path("/isolated"),dataset=dataset,
             filter_id="breakout_quality_v1",profile_id=PROFILE,
-            cutoff=cutoff,evaluation_start=evaluation_start,seed=seed,
+            cutoff=cutoff,evaluation_start=evaluation_start,score_start="2021-01-01",seed=seed,
             param_sha256="a"*64,canonical_schedule=schedule or original,
         )
 
@@ -83,7 +83,7 @@ class FormalMinDailyOracleCases(TestCase):
     def test_existing_comparisons_are_preserved_and_report_contract_unchanged(self):
         d=definition()
         p=oracle._oracle_comparison_plan(d)
-        self.assertEqual(len(p["targets"]),13)
+        self.assertEqual(len(p["targets"]),11)
         self.assertEqual(p["daily_recipes"],{EXACT:("daily_trade_path_net_r","daily_trade40_profile")})
         self.assertEqual(p["daily_sources"],{EXACT:EXACT,DIRECT:EXACT})
         self.assertEqual(p["selectors"][EXACT],"exact")
@@ -119,7 +119,7 @@ class FormalMinDailyOracleCases(TestCase):
                 actual, evidence = build_daily_universal_trade40_oracle_scores(
                     project_root=temp, dataset="full", filter_id="breakout_quality_v1",
                     profile_id=PROFILE, cutoff="2021-05-15", evaluation_start="2021-01-01",
-                    seed=693545351, param_sha256="a" * 64,
+                    score_start="2021-01-01", seed=693545351, param_sha256="a" * 64,
                     canonical_schedule=schedule,
                 )
         expected, reference = run_source()
@@ -129,19 +129,20 @@ class FormalMinDailyOracleCases(TestCase):
             self.assertEqual(evidence[key], reference[key])
         self.assertEqual(evidence["first_replay_trade_date"], "2021-01-04")
 
-    def test_first_legal_information_day_is_previous_year_and_trade_is_jan4(self):
+    def test_first_legal_information_day_uses_formal_pit_score_start(self):
         scores,evidence=run_source()
-        self.assertIn(("2330","2020-12-31"),scores)
-        self.assertIn(("2317","2020-12-31"),scores)
+        self.assertNotIn(("2330","2020-12-31"),scores)
+        self.assertNotIn(("2317","2020-12-31"),scores)
         self.assertEqual(evidence["first_replay_trade_date"],"2021-01-04")
-        self.assertEqual(evidence["first_date"],"2020-12-31")
+        self.assertEqual(evidence["first_date"],"2021-01-04")
+        self.assertEqual(evidence["score_start_date"],"2021-01-01")
         self.assertEqual(evidence["label_id"],LABEL_ID)
         self.assertEqual(evidence["target_id"],TARGET_ID)
         self.assertEqual(evidence["teacher"]["seed"],693545351)
         self.assertEqual(evidence["teacher"]["param_identity_sha256"],"a"*64)
-        self.assertEqual(len(scores),6)
-        self.assertEqual(evidence["mature_eligible_rows"],6)
-        self.assertEqual(evidence["settled_net_r_rows"]+evidence["censored_rank_last_rows"],6)
+        self.assertEqual(len(scores),4)
+        self.assertEqual(evidence["mature_eligible_rows"],4)
+        self.assertEqual(evidence["settled_net_r_rows"]+evidence["censored_rank_last_rows"],4)
 
     def test_exact_direct_share_scores_but_not_selector(self):
         scores,evidence=run_source()
@@ -158,7 +159,7 @@ class FormalMinDailyOracleCases(TestCase):
         self.assertIn("direct_arm",e2)
         self.assertEqual(e1["hindsight_target_contract"]["label_id"],LABEL_ID)
         self.assertNotIn("MR-13CL",str(e1))
-        self.assertGreater(scores[("2330","2020-12-31")],scores[("2317","2020-12-31")])
+        self.assertGreater(scores[("2330","2021-01-04")],scores[("2317","2021-01-04")])
 
     def test_benchmark_is_not_a_daily_model_sample_and_stays_unscored_in_oracle(self):
         """Reproduce 0050/2021-01-13: no fake R and no new candidate engine.
@@ -338,8 +339,6 @@ class FormalMinReplayIntegrationCases(TestCase):
                 "providers":{"40d":active.source["pure_mfe40_provider"]}}
         seeds=(693545351,2014432738,104504529,762252050)
         benchmark=SimpleNamespace(benchmark_id="synthetic_same_source")
-        event_scores={seed:{("2330","2025-01-02"):0.6} for seed in seeds}
-        event_evidence={seed:{"label_id":"LABEL-mintrade40_realized_net_r_v1"} for seed in seeds}
         observed=[]
         def replay(*,name,**kwargs):
             if name.startswith("Oracle DailyUniversal_"):
@@ -361,7 +360,7 @@ class FormalMinReplayIntegrationCases(TestCase):
                     "yearly":[{"year":2025,"strategy_return_pct":5.,"is_full_year":True}]}
         formal=source_fixture()[3]
         def scores(*,seed,param_sha256,**kwargs):
-            score_map={("2330","2020-12-31"):0.5,("2330","2025-01-03"):0.625}
+            score_map={("2330","2025-01-03"):0.625}
             evidence={"label_id":LABEL_ID,"target_id":TARGET_ID,"profile_id":PROFILE,
                 "rank_policy":"average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",
                 "rank_sha256":"c"*64,"raw_label_sha256":"d"*64,
@@ -371,7 +370,7 @@ class FormalMinReplayIntegrationCases(TestCase):
                            "periods":[{"start":"2021-01-01","params_signature":"sig"}]},
                 "mature_eligible_rows":25,"settled_net_r_rows":20,
                 "censored_rank_last_rows":5,"research_cutoff":"2026-03-02",
-                "first_date":"2020-12-31","first_replay_trade_date":"2021-01-04"}
+                "first_date":"2021-01-04","first_replay_trade_date":"2021-01-04", "score_start_date":"2021-01-01"}
             return score_map,evidence
         with TemporaryDirectory() as tmp, \
              patch.object(oracle,"collect_status",return_value={"status":"READY"}), \
@@ -382,8 +381,7 @@ class FormalMinReplayIntegrationCases(TestCase):
              patch.object(oracle,"get_active_param_ensemble_date_range",return_value=("2020-01-01","2026-03-02")), \
              patch.object(oracle,"_build_controlled_param_source_pair",return_value=("rolling_active_param_ensemble","base","oracle",None,None,None)), \
              patch.object(oracle,"price_inventory_sha256",return_value="b"*64), \
-             patch("services.audit.min_trade40_target.build_seed_oracle_scores",return_value=(event_scores,event_evidence)), \
-             patch("services.audit.min_trade40_target._schedule",return_value=({
+             patch("filters.breakout_quality.daily_trade40_target.resolve_formal_min_param_records",return_value=({
                  "effective_date":"2021-01-01","params_obj":formal[0].params,
                  "params_signature":formal[0].params_signature,
              },)), \
@@ -392,12 +390,12 @@ class FormalMinReplayIntegrationCases(TestCase):
              patch.object(oracle,"_metrics",side_effect=metrics):
             root=Path(tmp)
             previous=oracle.run_formal_audit(old,project_root=root,quiet=True)
-            self.assertEqual(len(previous["oracles"]),11)
-            self.assertEqual(run.call_count,48)
+            self.assertEqual(len(previous["oracles"]),9)
+            self.assertEqual(run.call_count,40)
             updated=oracle.run_formal_audit(active,project_root=root,quiet=True)
-            self.assertEqual(run.call_count,56,"48 certified reuses + only 8 new replay runs")
+            self.assertEqual(run.call_count,48,"40 certified reuses + only 8 new replay runs")
             self.assertEqual({call.kwargs["start_date"] for call in run.call_args_list},{"2021-01-01"})
-            self.assertEqual(len(updated["oracles"]),13)
+            self.assertEqual(len(updated["oracles"]),11)
             self.assertEqual(len(observed),8)
             self.assertTrue(all(score==.625 and dt=="2025-01-03" for _,score,dt,_ in observed))
             exact_mode={mode for name,_,_,mode in observed if "_Direct" not in name}
@@ -408,7 +406,7 @@ class FormalMinReplayIntegrationCases(TestCase):
             self.assertEqual(rows[EXACT]["delta_romd_vs_c96"],2.0)
             self.assertEqual(rows[DIRECT]["delta_romd_vs_c96"],-1.0)
             oracle.run_formal_audit(active,project_root=root,quiet=True)
-            self.assertEqual(run.call_count,56,"second run must REUSE all 56")
+            self.assertEqual(run.call_count,48,"second run must REUSE all 48")
             self.assertEqual(source.call_count,8)
             # A changed Target hash cannot be silently accepted as the old truth.
             changed_hash="0"*64
@@ -419,7 +417,7 @@ class FormalMinReplayIntegrationCases(TestCase):
             source.side_effect=conflicting
             with self.assertRaisesRegex(oracle.OracleBlockedError,"(INCOMPATIBLE|DIFFERENT|identity)"):
                 oracle.run_formal_audit(active,project_root=root,quiet=True)
-            self.assertEqual(run.call_count,56)
+            self.assertEqual(run.call_count,48)
 
 
 if __name__=="__main__":

@@ -30,6 +30,7 @@ from core.strategy_compare_policy import (
     get_strategy_comparison_settings, get_strategy_multi_seed_robustness_settings,
 )
 from filters.breakout_quality.daily_ranker_data import compute_daily_opportunity_target_batch
+from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets
 from filters.breakout_quality.workflow_io import discover_dataset_csv_inputs, load_dataset_frame
 from filters.breakout_quality.continuous_target import (
     StrategyAlignedContinuousTargetSpec,
@@ -37,9 +38,7 @@ from filters.breakout_quality.continuous_target import (
     full_horizon_mae_gated_reward_r,
 )
 from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY
-from filters.breakout_quality.mfe_safety_geometry import (
-    ensure_daily_percentile, normalize_ticker,
-)
+from filters.breakout_quality.mfe_safety_geometry import normalize_ticker
 from filters.breakout_quality.profile_ranker_data import load_profile_continuous_ranker_data
 from filters.breakout_quality.runtime import audit_oracle_truth_score_context
 from filters.breakout_quality.strategy_compare_contracts import COMPARISON_MODE_SCORE_RANKING
@@ -79,6 +78,9 @@ from services.audit.reusable_report import format_comparison_rows
 
 SUPPORTED_AUDIT_TYPE = "target_ground_truth_strategy_romd"
 ORACLE_REPORT_SCHEMA_VERSION = 8
+# Engineering bug-fix marker: older price-universe / pre-PIT-start replays are invalid.
+# This is not a new scientific Target, Strategy arm, Report version or research choice.
+ORACLE_PARITY_IMPLEMENTATION = "original_oracle_contract_parity_bugfix_20261026"
 # Current report's Oracle strategies. Direct is the existing canonical No-K/No-R0
 # selector applied to the SAME score truth; not a new Target formula.
 # For backward-compatible external call sites only. The runtime reads the
@@ -91,7 +93,6 @@ ORACLE_TARGETS = tuple((item["target"], item["description"]) for item in _ORACLE
 # Recipe implementation is stable; WHICH recipes and providers are needed is
 # resolved from the selected comparisons, never from a second target allowlist.
 _ORACLE_SCORE_RECIPES = frozenset(("equal_rank_mfe_safety", "mfe", "terminal_r", "terminal_mae_gate", "mfe_mae_gate"))
-_ORACLE_SEED_SCORE_RECIPES = frozenset(("trade_path_realized_net_r",))
 _ORACLE_DAILY_SCORE_RECIPES = frozenset(("daily_trade_path_net_r",))
 _PROVIDER_COHORT_IDS = {
     "pure_mfe40_provider": "40d", "mfe20_d20_provider": "20d",
@@ -101,6 +102,17 @@ _PROVIDER_COHORT_IDS = {
 
 def _oracle_comparison_plan(definition) -> dict[str, Any]:
     """Canonical compare inventory -> score requirements -> provider graph."""
+    # The original Audit registry fixes the scalar perfect-score convention.
+    # Never silently change Exact's numerical objective from daily-percentile
+    # Target truth to a raw-R or arbitrarily calibrated pairwise score.
+    if (str(definition.dimensions.get("oracle_score_method"))
+            != "canonical_daily_truth_percentile_v2"
+            or str(definition.dimensions.get("percentile_method"))
+            != "average_zero_based"):
+        raise OracleBlockedError(
+            "CONTRACT_UNRESOLVED: Oracle perfect Target-to-Score mapping must "
+            "follow the original canonical daily-percentile contract"
+        )
     declared = tuple(definition.source.get("oracle_comparisons") or ())
     selected = tuple(item for item in declared
                      if not isinstance(item, Mapping) or item.get("enabled", True))
@@ -108,7 +120,6 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
         raise OracleBlockedError("Oracle comparison清單為空；請由正式Registry設定比較對象")
     definitions: list[tuple[str, str]] = []
     recipes: dict[str, tuple[str, str]] = {}
-    seed_recipes: dict[str, tuple[str, str]] = {}
     daily_recipes: dict[str, tuple[str, str]] = {}
     aliases: dict[str, str] = {}
     selectors: dict[str, str] = {}
@@ -134,7 +145,7 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
             )
         if entry.get("score_source"):
             source = str(entry["score_source"])
-            if (source not in recipes and source not in seed_recipes and source not in daily_recipes) or selector != "direct":
+            if (source not in recipes and source not in daily_recipes) or selector != "direct":
                 raise OracleBlockedError(f"Oracle Direct score來源必須先由Exact宣告：{name} -> {source}")
             aliases[name] = source
         else:
@@ -143,14 +154,7 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
                 raise OracleBlockedError(f"Oracle {name} score/provider缺少正式定義：{recipe}/{provider}")
             if selector != "exact":
                 raise OracleBlockedError(f"Oracle {name} 的新分數必須使用Exact；Direct僅能重用score來源")
-            if recipe in _ORACLE_SEED_SCORE_RECIPES:
-                if provider != "event_targets":
-                    raise OracleBlockedError(f"Oracle {name} seed-score provider不合法：{provider}")
-                declared = [row for row in definition.source[provider] if row.get("enabled", True)]
-                if len(declared) != 1 or declared[0].get("target") != name:
-                    raise OracleBlockedError("Oracle交易路徑label身分必須與比較清單相同")
-                seed_recipes[name] = (recipe, provider)
-            elif recipe in _ORACLE_DAILY_SCORE_RECIPES:
+            if recipe in _ORACLE_DAILY_SCORE_RECIPES:
                 if provider != "daily_trade40_profile":
                     raise OracleBlockedError(f"Oracle {name} Daily-universal provider is not canonical: {provider}")
                 daily_recipes[name] = (recipe, provider)
@@ -162,16 +166,12 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
                 raise OracleBlockedError(f"Oracle未授權的score recipe：{recipe}")
         definitions.append((name, desc))
         selectors[name] = selector
-    seed_sources = {name: name for name in seed_recipes}
-    seed_sources.update({name: source for name, source in aliases.items()
-                         if source in seed_recipes})
     daily_sources = {name: name for name in daily_recipes}
     daily_sources.update({name: source for name, source in aliases.items()
                           if source in daily_recipes})
     if not recipes:
         raise OracleBlockedError("Oracle comparison缺少獨立真值score")
     return {"targets": tuple(definitions), "recipes": recipes,
-            "seed_recipes": seed_recipes, "seed_sources": seed_sources,
             "daily_recipes": daily_recipes, "daily_sources": daily_sources,
             "aliases": aliases,
             "selectors": selectors, "providers": tuple(provider_fields)}
@@ -310,19 +310,43 @@ def collect_status(definition, *, project_root: Path) -> dict[str, Any]:
 
 
 
+def _formal_dl_score_start(settings) -> str:
+    """Read the score-coverage start from canonical Research DL sources.
+
+    Never invent a pre-OOS score for the first order. If active Research DL
+    sources disagree on availability, the Audit cannot infer a unique legal
+    score boundary, and must block instead of choosing its own dates.
+    """
+    starts = set()
+    for arm in settings.enabled_arms:
+        if not arm.dl_enabled:
+            continue
+        source = settings.dl_sources[str(arm.dl_id)]
+        if str(source.score_source) != "selection_point_in_time":
+            raise OracleBlockedError("Oracle只支援正式Research DL PIT score來源")
+        start = str(source.point_in_time_score_start_date or "").strip()
+        if not start:
+            raise OracleBlockedError("CONTRACT_UNRESOLVED: Research DL缺少正式score start")
+        starts.add(pd.Timestamp(start).strftime("%Y-%m-%d"))
+    if len(starts) != 1:
+        raise OracleBlockedError("CONTRACT_UNRESOLVED: Research DL score start不唯一")
+    return starts.pop()
+
+
 def _market_truth_for_oracle(
     definition, root: Path, *, cutoff: str,
     progress: Callable[[str], None] | None = None,
     provider_fields: tuple[str, ...] | None = None,
+    eligible_truth: Mapping[str, pd.DataFrame] | None = None,
 ) -> tuple[dict[str, pd.DataFrame], dict[str, Any]]:
-    """Materialize ex-post truth for the *replay* price universe, not DL samples.
+    """Verify official DL-eligible target rows against Research price paths.
 
-    The canonical daily-universal provider is deliberately feature-window and
-    benchmark restricted.  Neither restriction defines which stocks the
-    strategy can rank.  Reuse its canonical target calculator on each sanitized
-    Research price path, including newly listed stocks and the benchmark.
-    Invalid/unmatured paths never receive a score or a proxy value.
+    Only the canonical model's eligible/valid stock-days may receive scores.
+    The trading universe is NOT the score universe; no 0050 or incomplete
+    feature history can be added by a future-price calculation.
     """
+    if eligible_truth is None:
+        raise OracleBlockedError("Oracle缺少正式DL可評分樣本母體")
     settings, _baseline, _exact = _contract(definition)
     plan = _oracle_comparison_plan(definition)
     fields = (provider_fields if provider_fields is not None else plan["providers"])
@@ -366,15 +390,19 @@ def _market_truth_for_oracle(
     if benchmark not in paths:
         raise OracleBlockedError(f"Oracle缺少可交易Benchmark價格：{benchmark}")
 
-    # Portfolio simulation can request yesterday's information on its first day.
-    # Use the last actual benchmark trading day before the replay start; no
-    # arbitrary calendar lookback or DL feature-window cutoff is imposed.
+    # A score missing from the formal PIT coverage is unavailable, including
+    # the pre-start information bar for the first OOS order.
     bench_frame = load_dataset_frame(paths[benchmark], benchmark, min_rows=1)
-    historical_dates = pd.DatetimeIndex(bench_frame.index).normalize()
-    prior = historical_dates[historical_dates < pd.Timestamp(settings.start_date)]
-    if prior.empty:
-        raise OracleBlockedError("Oracle缺少策略起始日前的Benchmark交易日")
-    score_start = prior[-1]
+    score_start = pd.Timestamp(_formal_dl_score_start(settings))
+    eligible_keys = {}
+    for field in fields:
+        rows = eligible_truth.get(field)
+        if rows is None or not {"ticker", "date"}.issubset(rows):
+            raise OracleBlockedError(f"{field}缺少正式DL eligibility rows")
+        eligible_keys[field] = {
+            ticker: set(pd.to_datetime(group["date"]).dt.strftime("%Y-%m-%d"))
+            for ticker, group in rows.loc[rows["date"] >= str(score_start.date())].groupby("ticker")
+        }
     limit = pd.Timestamp(cutoff)
     chunks = {field: [] for field in fields}
     skipped = {}
@@ -392,11 +420,15 @@ def _market_truth_for_oracle(
             skipped[ticker] = f"{type(exc).__name__}: {reason}"
             continue
         dates = pd.DatetimeIndex(frame.index).normalize()
-        positions = np.flatnonzero((dates >= score_start) & (dates <= limit)).astype(np.int64)
-        if not positions.size:
-            continue
         closes = frame["Close"].to_numpy(dtype=np.float64, copy=False)
         for field, (spec, maturity, target_id) in specs.items():
+            requested = eligible_keys[field].get(ticker, set())
+            if not requested:
+                continue
+            positions = np.flatnonzero((dates >= score_start) & (dates <= limit)).astype(np.int64)
+            positions = positions[np.isin(dates.take(positions).strftime("%Y-%m-%d"), list(requested))]
+            if len(positions) != len(requested):
+                raise OracleBlockedError(f"{field}正式DL stock-day找不到Research價格：{ticker}")
             eligible = positions[positions + maturity < len(frame)]
             if not eligible.size:
                 continue
@@ -451,7 +483,7 @@ def _market_truth_for_oracle(
             raise OracleBlockedError(f"{field}的Research價格真值ticker/date重複")
         truth[field] = table
     return truth, {
-        "truth_source": "canonical full Research OHLCV via daily target calculator",
+        "truth_source": "official feature-eligible model cohort verified via canonical Research OHLCV",
         "score_start": str(score_start.date()),
         "price_ticker_count": len(paths),
         "unreadable_tickers": skipped,
@@ -462,7 +494,7 @@ def _market_truth_for_oracle(
 def _reconcile_oracle_truth(
     source: pd.DataFrame, market: pd.DataFrame, *, field: str, score_start: str,
 ) -> tuple[pd.DataFrame, int]:
-    """Ensure expanded trading universe agrees with official model truth."""
+    """Require the price verifier to match exactly the official DL score cohort."""
     old = source.loc[source["date"] >= score_start]
     check = old.merge(market, on=["ticker", "date"], how="left",
                       suffixes=("_provider", "_market"), validate="one_to_one", indicator=True)
@@ -477,7 +509,15 @@ def _reconcile_oracle_truth(
                            check[f"{name}_market"].to_numpy(dtype=float),
                            rtol=2e-5, atol=2e-5):
             raise OracleBlockedError(f"{field}的official target與Research價格重建真值不一致：{name}")
-    return market, len(market) - len(old)
+    if len(market) != len(old):
+        raise OracleBlockedError(f"{field}價格校驗母體不得擴張正式DL母體")
+    # Keep terminal close available for R40/T40 while preserving official model
+    # sample identity and precision for all other fields.
+    matched = old.copy()
+    if "terminal_r" in market:
+        matched = matched.merge(market[["ticker", "date", "terminal_r"]],
+                                on=["ticker", "date"], validate="one_to_one")
+    return matched, 0
 
 
 def _load_truth(definition, root: Path, source_field: str, *, cutoff: str) -> pd.DataFrame:
@@ -553,19 +593,35 @@ def _build_oracle_score_panels(
     plan = _oracle_comparison_plan(definition)
     fields = plan["providers"]
     root = Path(project_root).resolve()
+    official = {}
+    for field in fields:
+        if progress is not None:
+            progress(f"核對正式DL target provider：{field}")
+        official[field] = _load_truth(definition, root, field, cutoff=cutoff)
     market, market_evidence = _market_truth_for_oracle(
         definition, root, cutoff=cutoff, progress=progress,
-        provider_fields=fields,
+        provider_fields=fields, eligible_truth=official,
     )
     complete: dict[str, pd.DataFrame] = {}
     extra_rows: dict[str, int] = {}
     for field in fields:
-        if progress is not None:
-            progress(f"核對 canonical provider：{field}")
-        truth = _load_truth(definition, root, field, cutoff=cutoff)
         complete[field], extra_rows[field] = _reconcile_oracle_truth(
-            truth, market[field], field=field,
+            official[field], market[field], field=field,
             score_start=market_evidence["score_start"],
+        )
+    # A hidden provider intersection would remove otherwise PIT-score-eligible
+    # candidates, creating an Oracle-only universe. The currently selected
+    # 40D providers must resolve to one common formal cohort; if they do not,
+    # do not guess which model's stock-day eligibility should win.
+    provider_cohorts = {
+        field: set(zip(frame["ticker"].astype(str), frame["date"].astype(str)))
+        for field, frame in complete.items()
+    }
+    reference_cohort = next(iter(provider_cohorts.values()))
+    if any(keys != reference_cohort for keys in provider_cohorts.values()):
+        raise OracleBlockedError(
+            "CONTRACT_UNRESOLVED: Oracle Target providers有不同正式DL可評分股票日，"
+            "禁止使用交集縮小候選母體"
         )
     joint: pd.DataFrame | None = None
     for field in fields:
@@ -585,9 +641,14 @@ def _build_oracle_score_panels(
         raise OracleBlockedError("Oracle percentile必須採canonical average_zero_based")
 
     def percentile(values: pd.Series) -> pd.Series:
-        temporary = pd.DataFrame({"date": joint["date"], "value": values})
-        result, _ = ensure_daily_percentile(temporary, method=method)
-        return result["percentile"]
+        # Reuse the supervised DL label's exact daily percentile calculation
+        # including float32 target precision, rather than a second rounding
+        # convention that may change Exact K/R0 basket score sums.
+        ranking = build_same_date_percentile_targets(
+            np.asarray(values, dtype=np.float64),
+            np.ones(len(joint), dtype=bool), joint["date"],
+        )
+        return pd.Series(ranking, index=joint.index)
 
     raw: dict[str, pd.Series] = {}
     safety_by_provider: dict[str, pd.Series] = {}
@@ -632,7 +693,7 @@ def _build_oracle_score_panels(
     for direct, source in plan["aliases"].items():
         if source in scores:
             scores[direct] = scores[source]
-    if set(scores) | set(plan["seed_sources"]) | set(plan["daily_sources"]) != {name for name, _desc in plan["targets"]}:
+    if set(scores) | set(plan["daily_sources"]) != {name for name, _desc in plan["targets"]}:
         raise OracleBlockedError("Oracle比較清單／分數工件依賴不一致")
 
     # Backward-compatible evidence keys retain their original scientific
@@ -641,12 +702,13 @@ def _build_oracle_score_panels(
     mfe_ref = joint.get("pure_mfe40_provider__mfe")
     reference = reference if reference is not None else pd.Series(dtype=float)
     evidence = {
-        "cohort_rows": len(keys), "first_common_day": min(joint["date"]),
+        "cohort_rows": len(keys), "oracle_parity_implementation": ORACLE_PARITY_IMPLEMENTATION,
+        "first_common_day": min(joint["date"]),
         "last_common_day": max(joint["date"]), "research_cutoff": cutoff,
         "risk_budget_return": risk,
         "providers": {_PROVIDER_COHORT_IDS.get(field, field): definition.source[field]
                       for field in fields},
-        "scoring": "All targets final-ranked by average_zero_based percentile within common-day universe",
+        "scoring": "Perfect supervised daily-percentile label output, raw PIT DL score scale; source universe is feature-eligible only",
         "oracle_only": True,
         "ratio_zero_denominator_policy": "D40=0,MFE40>0 -> +infinity (highest rank); 0/0 -> 0; final score = finite daily percentile",
         "mfe40_over_d40_zero_downside_positive_upside_count": (
@@ -767,9 +829,11 @@ def _existing_artifact_inventory(definition, *, project_root: Path) -> tuple[str
         }
         per_arm = OracleReplayStore(root, definition.output_subdir).preview_candidates(
             seeds=seeds, targets=targets, **scope,
+            required_oracle_revision=ORACLE_PARITY_IMPLEMENTATION,
         )
         historical = HistoricalOracleIndex(root).preview_candidates(
             seeds=seeds, targets=targets, **scope,
+            required_oracle_revision=ORACLE_PARITY_IMPLEMENTATION,
             strategy_profile_id=settings.profile_id,
         )
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -797,7 +861,7 @@ def _existing_artifact_inventory(definition, *, project_root: Path) -> tuple[str
         "Seed：" + "  ".join(f"S{i + 1}={seed}" for i, seed in enumerate(seeds)),
         render_table(headers, rows),
         f"REUSE {counts['REUSE']} / RUN（需計算）{counts['RUN']} / BLOCKED {counts['BLOCKED']}",
-        "註：此表僅盤點工件是否存在；正式 REUSE 須核對原始資料、參數、期間及分數身分。新增 Target 不改變舊 Target 的回放期間；按 Enter 後自動核對並執行必要 Replay。",
+        "註：此表僅盤點現行 Oracle 實作版的候選工件；修復前結果不列入 REUSE。正式 REUSE 尚須核對資料、參數、期間及分數身分；Enter 後自動核對並執行必要 Replay。",
     ))
     return inventory, actions
 
@@ -883,15 +947,10 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
                        daily_evidence: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """One target-scoped economic/score identity for fast and normal REUSE."""
     policy = dict(replay_policy)
+    if target != str(definition.source["baseline_arm_id"]):
+        policy["oracle_parity_implementation"] = ORACLE_PARITY_IMPLEMENTATION
     if plan["selectors"].get(target) == "direct":
         policy["direct_arm"] = str(definition.source["direct_arm_id"])
-    if target in plan["seed_sources"]:
-        recipe, provider = plan["seed_recipes"][plan["seed_sources"][target]]
-        declared = [dict(row) for row in definition.source[provider] if row.get("enabled", True)]
-        policy["hindsight_score_recipe"] = recipe
-        policy["hindsight_score_key_mode"] = "signal_origin_date"
-        policy["hindsight_label_spec"] = declared[0]
-        policy["excluded_score_policy"] = "rank_last_no_realized_r_imputation"
     if target in plan["daily_sources"]:
         # New target identity is validated against the actual label values and
         # rank table, independently of legacy price-only Oracle cohort/cache.
@@ -912,6 +971,7 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
             "calendar_sha256": daily_evidence["calendar_sha256"],
             "teacher": daily_evidence["teacher"],
             "mature_eligible_rows": daily_evidence["mature_eligible_rows"],
+            "score_start_date": daily_evidence["score_start_date"],
             "settled_net_r_rows": daily_evidence["settled_net_r_rows"],
             "censored_rank_last_rows": daily_evidence["censored_rank_last_rows"],
             # Matches the canonical DL lookup: a candidate outside the
@@ -943,7 +1003,9 @@ def _reusable_completed_oracle_report(
                  and payload.get("start_date") == str(settings.start_date)
                  and payload.get("strategy_profile_id") == settings.profile_id
                  and payload.get("benchmark_id") == robustness.benchmark_id
-                 and payload.get("status") == "COMPLETED"]
+                 and payload.get("status") == "COMPLETED"
+                 and (payload.get("common_cohort") or {}).get("oracle_parity_implementation")
+                     == ORACLE_PARITY_IMPLEMENTATION]
     if not snapshots:
         return None
     wanted_targets = [name for name, _ in plan["targets"]]
@@ -1085,8 +1147,9 @@ def build_report(
     if plan["daily_recipes"]:
         if len(plan["daily_recipes"]) != 1:
             raise OracleBlockedError("Daily-universal Oracle must have a single Exact score source")
-        from filters.breakout_quality.daily_trade40_target import build_formal_min_execution_schedule
-        from services.audit.min_trade40_target import _schedule as canonical_min_schedule
+        from filters.breakout_quality.daily_trade40_target import (
+            build_formal_min_execution_schedule, resolve_formal_min_param_records,
+        )
         from services.audit.daily_trade40_oracle import (
             DailyTrade40OracleBlockedError, build_daily_universal_trade40_oracle_scores,
         )
@@ -1098,7 +1161,7 @@ def build_report(
         )
         for seed, param_sha, kind, base_params, _oracle_params in prepared_for_scores:
             try:
-                canonical_records = canonical_min_schedule(kind, base_params)
+                canonical_records = resolve_formal_min_param_records(kind, base_params)
                 schedule, _provenance = build_formal_min_execution_schedule(
                     canonical_records, seed=seed, param_sha256=param_sha,
                 )
@@ -1107,6 +1170,7 @@ def build_report(
                     filter_id=str(definition.source["filter_id"]),
                     profile_id=str(definition.source[provider]),
                     cutoff=str(settings.end_date), evaluation_start=str(settings.start_date),
+                    score_start=_formal_dl_score_start(settings),
                     seed=seed, param_sha256=param_sha, canonical_schedule=schedule,
                     progress_callback=(lambda message: progress(f"seed={seed} {message}")) if not quiet else None,
                 )
@@ -1130,27 +1194,15 @@ def build_report(
         if set(daily_seed_scores) != expected_seeds:
             raise OracleBlockedError("Daily-universal per-seed scores incomplete")
         for evidence in daily_seed_evidence.values():
-            if (str(evidence["first_date"]) >= str(settings.start_date)
+            if (str(evidence["first_date"]) < _formal_dl_score_start(settings)
                     or str(evidence["first_replay_trade_date"]) < str(settings.start_date)):
-                raise OracleBlockedError("Daily-universal first legal information/trade boundary mismatch")
+                raise OracleBlockedError("Daily-universal PIT score coverage boundary mismatch")
     scores40, cohort40 = _build_oracle_score_panels(
         definition, project_root=root, cutoff=str(settings.end_date),
         progress=None if quiet else progress,
     )
     if not quiet:
         progress("真值及共同樣本完成；檢查價格 SHA、P16 與 Replay Cache")
-    seed_scores: dict[int, dict[str, dict[tuple[str, str], float]]] = {}
-    seed_evidence: dict[int, dict[str, Any]] = {}
-    if plan["seed_recipes"]:
-        from services.audit.min_trade40_target import build_seed_oracle_scores
-        path_scores, seed_evidence = build_seed_oracle_scores(
-            definition, project_root=root, quiet=quiet,
-            resolve_p16_context=lambda: _resolve_min_trade40_p16_context(
-                definition, project_root=root,
-            ),
-        )
-        for seed, score in path_scores.items():
-            seed_scores[int(seed)] = {name: score for name in plan["seed_recipes"]}
     direct_arm = _direct_arm(definition, settings, base_arm, exact_arm)
     start = str(settings.start_date)  # Formal Min Replay start NEVER depends on a new Target.
     end40 = min(str(settings.end_date), str(cohort40["last_common_day"]))
@@ -1168,10 +1220,8 @@ def build_report(
     # Every treatment carries its own canonical ranking/allocator policy identity.
     def run_panel(*, end: str, cohort: dict[str, Any], scores: dict[str, dict],
                   targets: tuple[tuple[str, str], ...], label: str) -> dict[str, Any]:
-        if set(scores) | set(plan["seed_sources"]) | set(plan["daily_sources"]) != {name for name, _ in targets}:
+        if set(scores) | set(plan["daily_sources"]) != {name for name, _ in targets}:
             raise OracleBlockedError(f"Oracle {label}計算與報表Target清單不一致")
-        if plan["seed_recipes"] and set(seed_scores) != {seed for seed, _ in parameter_paths}:
-            raise OracleBlockedError("Oracle P16逐seed交易路徑真值不完整")
         replay_kwargs = {
             "data_dir": data_dir, "start_date": start, "end_date": end,
             "max_positions": settings.max_positions, "enable_rotation": False, "quiet": quiet,
@@ -1231,16 +1281,11 @@ def build_report(
                 )
                 try:
                     record, origin = cache.resolve_completed(identity)
-                    if record is None:
+                    if record is None and target == str(definition.source["baseline_arm_id"]):
+                        # Historical C96 is score-free; old Oracle outcomes are
+                        # invalid after the scoring-parity bug fix, not blockers.
                         record = archived.lookup(target=target, seed=seed, context=legacy_context)
-                        origin = "compatible completed Oracle report"
-                        if record is None:
-                            rejected = archived.diagnose_missing(target=target, context=legacy_context)
-                            if rejected:
-                                raise ValueError(
-                                    f"completed Oracle result exists but is INCOMPATIBLE for "
-                                    f"{target} seed={seed}; " + " | ".join(rejected[:5])
-                                )
+                        origin = "compatible completed baseline report"
                     completed_plan[(seed, target)] = (identity, record, origin)
                 except ValueError as exc:
                     # Continue read-only inspection so the user sees the full
@@ -1290,7 +1335,7 @@ def build_report(
                             if reread_origin != origin or reread != record:
                                 raise ValueError("Oracle legacy cache changed during preflight; fail closed")
                             cache.write(identity, record, origin="verified_legacy_replay_cache")
-                        elif origin == "compatible completed Oracle report":
+                        elif origin == "compatible completed baseline report":
                             cache.write(identity, record, origin="historical_report")
                     except ValueError as exc:
                         raise OracleBlockedError(str(exc)) from exc
@@ -1317,20 +1362,15 @@ def build_report(
             for target, _description in targets:
                 def run_oracle(target=target):
                     arm = direct_arm if plan["selectors"].get(target) == "direct" else exact_arm
-                    score_map = (seed_scores[seed][plan["seed_sources"][target]]
-                                 if target in plan["seed_sources"] else
-                                 daily_seed_scores[seed][plan["daily_sources"][target]]
+                    score_map = (daily_seed_scores[seed][plan["daily_sources"][target]]
                                  if target in plan["daily_sources"] else scores[target])
                     with audit_oracle_truth_score_context(
                         score_map,
                         ranking_policy=str(arm.dl_runtime_mode),
                         ranking_options=arm.dl_runtime_options,
-                        key_mode=("signal_origin_date" if target in plan["seed_sources"]
-                                  else "information_date"),
-                        missing_key_policy=(
-                            "unavailable_outside_mature_feature_universe"
-                            if target in plan["daily_sources"] else "block"
-                        ),
+                        key_mode="information_date",
+                        missing_key_policy="unavailable_outside_mature_feature_universe",
+                        score_start=_formal_dl_score_start(settings),
                     ):
                         return _run_scenario(
                             name=f"Oracle {target} seed={seed}", params=oracle_params,
@@ -1360,8 +1400,7 @@ def build_report(
             "baseline": baseline_summary, "oracles": rows,
             "definitions": definitions,
             "param_artifacts": param_evidence,
-            "seed_target_evidence": ({str(seed): row for seed, row in seed_evidence.items()}
-                                     if seed_evidence else {}),
+            "seed_target_evidence": {},
         }
 
     base = run_panel(
@@ -1389,11 +1428,6 @@ def build_report(
             "T40 uses full-path nonnegative MAE and clamps to -1R at 1R adverse movement.",
             "T40-MFE replaces only terminal R40 by full-path MFE40_R; the identical MAE gate remains.",
             "1R is the fixed research Label risk budget, NOT the actual executed ATR stop-loss.",
-            *( ["MinTrade40_NetR ranks each P16 Min signal by its 40-session canonical executed net R; "
-                "ex-post unfilled/unexecutable signals are ranked LAST without inventing R. "
-                "Its signal-origin cohort differs from price-only stock-day truths, but all "
-                "reported RoMD values use the same Broker-Cash portfolio Replay, seed/P16 and window."]
-               if plan["seed_recipes"] else [] ),
         ],
     }
 
@@ -1414,9 +1448,6 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
         "Target Ground Truth -> Strategy RoMD (HINDSIGHT ORACLE / NOT PIT)",
         f'Period: {report["start_date"]} ~ {report["end_date"]} (40D-mature common window)',
         f'Common stock-day cohort: {report["common_cohort"]["cohort_rows"]:,}',
-        *( ["MinTrade40_NetR: seed-specific P16 signal-event Net-R ranking; "
-            "not part of the stock-day truth cohort; RoMD uses the same portfolio Replay."]
-           if any(row["target"] in {"MinTrade40_NetR"} for row in report["oracles"]) else [] ),
         f'Benchmark: {report["benchmark_id"]}, same-seed pairs N={len(report["seeds"])}',
         f'Report schema: {report["schema_version"]}, Oracle treatments: '
         f'{len(report["oracles"])} (40D, Exact + Direct); not Standard SOP',
@@ -1468,25 +1499,6 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
     lines.extend(["", f"## {sections[4].display_title}",
                   *[f"- {limitation}" for limitation in report["limitations"]]])
     return "\n".join(lines)
-
-
-def _resolve_min_trade40_p16_context(definition, *, project_root: Path):
-    """Reuse the Oracle-owned legal P16 parameter resolution without a cycle."""
-    from services.audit.min_trade40_target import MinTrade40P16Context
-
-    root = Path(project_root).resolve()
-    settings, base_arm, _exact = _contract(definition)
-    benchmark, paths = _robustness_artifacts(definition, root)
-    start, end = str(settings.start_date), str(settings.end_date)
-    prepared, evidences = _prepare_oracle_parameters(
-        definition, root=root, parameter_paths=paths, start=start,
-        end=end, base_arm=base_arm,
-    )
-    return MinTrade40P16Context(
-        dataset=str(settings.dataset), start_date=start, cutoff_date=end,
-        benchmark_id=str(benchmark.benchmark_id),
-        prepared=tuple(prepared), parameter_evidence=tuple(evidences),
-    )
 
 
 def run_formal_audit(

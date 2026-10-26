@@ -53,6 +53,24 @@ def fixture(*, count=130, rising=True, start="2023-01-02"):
 
 
 class FormalMinTrade40SyntheticCases(unittest.TestCase):
+    def test_net_r_daily_truth_uses_canonical_dl_float32_rank(self):
+        from filters.breakout_quality.daily_trade40_target import rank_trade40_outcome_frame
+        from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets
+        sample = pd.DataFrame({
+            "ticker": ["2330", "2317", "2303", "2454", "2408"],
+            "date": ["2023-01-03"] * 5,
+            "realized_net_r": [2., 1., 1., None, 0.],
+        })
+        result = rank_trade40_outcome_frame(sample)
+        sentinel = -1.0
+        label = build_same_date_percentile_targets(
+            np.array([2., 1., 1., sentinel, 0.]),
+            np.ones(len(sample), dtype=bool), sample["date"],
+        )
+        for index, row in sample.iterrows():
+            self.assertEqual(result[(row["ticker"], row["date"])], float(label[index]))
+        self.assertTrue(pd.isna(sample.loc[3, "realized_net_r"]))
+
     def test_mr13cl_is_retired_and_historical_id_is_immutable(self):
         self.assertNotEqual(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE[0], "MR-13CL")
         spec = get_continuous_ranker_research_spec(OLD_PROFILE)
@@ -134,8 +152,30 @@ class FormalMinTrade40SyntheticCases(unittest.TestCase):
         np.testing.assert_allclose(paired.target_raw_r, batch.target_raw_r)
 
     def test_real_min_setup_and_hypothetical_override_use_same_ledger(self):
-        from tools.validate.synthetic_min_trade40_target_cases import fixture as event_fixture
-        params, frame, signals = event_fixture()
+        params = V16StrategyParams(
+            use_breakout_ema_filter=False, use_bb=False, use_kc=False,
+            use_vol=False, use_breakout_return_filter=False,
+            use_breakout_false_filter=False, use_history_threshold=False,
+            use_breakout_reclaim_reentry=False, use_breakout_quality_filter=False,
+            use_breakout_quality_ranking=False, high_len=3, atr_len=3,
+            atr_buy_tol=1.0, atr_times_init=2.0, atr_times_trail=2.0,
+            tp_percent=0.0, initial_capital=1_000_000.0,
+            fixed_risk=0.01, max_position_cap_pct=0.3,
+        )
+        dates = pd.date_range("2020-01-01", periods=9, freq="B")
+        frame = pd.DataFrame({
+            "Open": [95, 98, 100, 103, 101, 103, 104, 105, 1100],
+            "High": [97, 100, 102, 103.5, 102, 105, 105, 106, 1101],
+            "Low": [94, 97, 99, 102, 100, 102, 103, 104, 1099],
+            "Close": [96, 99, 101, 103, 101, 104, 104, 105, 1100],
+            "Volume": [1000.0] * 9,
+        }, index=dates)
+        signals = (
+            np.full(9, 2.0),
+            np.array([False, False, True] + [False] * 6),
+            np.zeros(9, dtype=bool),
+            np.array([np.nan, np.nan, 101.0] + [np.nan] * 6),
+        )
         original = simulate_realized_trade_path_label(
             frame, ticker="2330", signal_pos=2, params=params,
             teacher_effective_date="2020-01-01", precomputed_signals=signals,

@@ -164,6 +164,9 @@ _ORACLE_TRUTH_MISSING_KEY_POLICY: ContextVar[str] = ContextVar(
     "breakout_quality_audit_oracle_missing_key_policy", default="block",
 )
 _ORACLE_DAILY_UNSCORED_POLICY = "unavailable_outside_mature_feature_universe"
+_ORACLE_TRUTH_SCORE_START: ContextVar[str | None] = ContextVar(
+    "breakout_quality_audit_oracle_score_start", default=None,
+)
 
 
 def _candidate_score_lookup_date(
@@ -189,6 +192,7 @@ def audit_oracle_truth_score_context(
     *, ranking_policy: str, ranking_options: Mapping[str, object] | None = None,
     key_mode: str = "information_date",
     missing_key_policy: str = "block",
+    score_start: str | None = None,
 ) -> Iterator[None]:
     """Bind verified hindsight scores during one isolated Audit replay.
 
@@ -206,6 +210,10 @@ def audit_oracle_truth_score_context(
         raise ValueError("Oracle Audit未知的 missing-key policy")
     if missing_key_policy != "block" and key_mode != "information_date":
         raise ValueError("Only the mature daily-stock-day Oracle may allow unavailable ranks")
+    if score_start is not None:
+        score_start = pd.Timestamp(score_start).strftime("%Y-%m-%d")
+        if key_mode != "information_date":
+            raise ValueError("Oracle score start requires an information-date lookup")
     if _ORACLE_TRUTH_SCORES.get() is not None:
         raise RuntimeError("Oracle Audit不得巢狀覆寫未來真值score")
     with audit_oracle_ranking_policy_context(
@@ -214,9 +222,11 @@ def audit_oracle_truth_score_context(
         token = _ORACLE_TRUTH_SCORES.set(scores)
         key_token = _ORACLE_TRUTH_KEY_MODE.set(key_mode)
         missing_token = _ORACLE_TRUTH_MISSING_KEY_POLICY.set(missing_key_policy)
+        start_token = _ORACLE_TRUTH_SCORE_START.set(score_start)
         try:
             yield
         finally:
+            _ORACLE_TRUTH_SCORE_START.reset(start_token)
             _ORACLE_TRUTH_MISSING_KEY_POLICY.reset(missing_token)
             _ORACLE_TRUTH_KEY_MODE.reset(key_token)
             _ORACLE_TRUTH_SCORES.reset(token)
@@ -281,6 +291,14 @@ def resolve_breakout_quality_candidate_rank(
         if lookup_day is None:
             raise RuntimeError("Oracle Audit缺少原始signal date；禁止不明來源fallback")
         date = pd.Timestamp(lookup_day).strftime("%Y-%m-%d")
+        score_start = _ORACLE_TRUTH_SCORE_START.get()
+        if score_start is not None and date < score_start:
+            return {
+                "score": None, "available": False,
+                "unavailable_reason": "outside_score_period",
+                "score_date": date, "filter_id": str(filter_id),
+                "score_source": SCORE_SOURCE_AUDIT_ORACLE_FUTURE_TRUTH,
+            }
         key = (str(ticker), date)
         if key not in truth:
             if _ORACLE_TRUTH_MISSING_KEY_POLICY.get() == _ORACLE_DAILY_UNSCORED_POLICY:
