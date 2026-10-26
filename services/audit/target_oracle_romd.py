@@ -204,8 +204,10 @@ def _canonical_score_map_sha256(scores: Mapping[tuple[str, str], float]) -> str:
     digest = hashlib.sha256()
     for (ticker, day), value in sorted(scores.items()):
         val = float(value)
-        if not math.isfinite(val):
-            raise OracleBlockedError("Oracle perfect-score map contains nonfinite values")
+        if not math.isfinite(val) or val < 0.0 or val > 1.0:
+            raise OracleBlockedError(
+                "Oracle perfect-score map violates the approved finite [0,1] percentile scale"
+            )
         digest.update(str(ticker).encode("utf-8") + b"\x00")
         digest.update(str(day).encode("ascii") + b"\x00")
         digest.update(struct.pack("!d", val))
@@ -363,6 +365,10 @@ def _resolve_oracle_target_score_contracts(definition, settings, plan) -> dict[s
             raise OracleBlockedError(f"{name}: 來源不是正式Daily DL可評分母體")
         arm = direct if plan["selectors"][name] == "direct" else exact
         arm_source = settings.dl_sources[str(arm.dl_id)]
+        if str(arm_source.filter_id) != str(definition.source["filter_id"]):
+            raise OracleBlockedError(
+                f"CONTRACT_UNRESOLVED: {name} Research DL filter_id與Oracle候選來源不同"
+            )
         if str(arm_source.score_source) != "selection_point_in_time":
             raise OracleBlockedError(f"{name}: Research selector不是正式PIT score消費路徑")
         if str(arm_source.point_in_time_score_start_date or "") != start:
@@ -473,6 +479,14 @@ def _formal_dl_score_start(settings) -> str:
         source = settings.dl_sources[str(arm.dl_id)]
         if str(source.score_source) != "selection_point_in_time":
             raise OracleBlockedError("Oracle只支援正式Research DL PIT score來源")
+        profile = get_breakout_quality_experiment_profile(str(source.experiment_profile))
+        if (profile.training_sample_scope != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+                or (profile.model_architecture is not None
+                    and str(profile.model_architecture) != str(source.model_architecture))):
+            raise OracleBlockedError(
+                "CONTRACT_UNRESOLVED: Research DL reference的feature eligibility/architecture"
+                "不是可共用的Daily-universal分數契約"
+            )
         start = str(source.point_in_time_score_start_date or "").strip()
         if not start:
             raise OracleBlockedError("CONTRACT_UNRESOLVED: Research DL缺少正式score start")
@@ -967,6 +981,39 @@ def _metrics(replay: dict[str, Any], *, target: str) -> dict[str, Any]:
 def _aggregate(records: list[dict[str, Any]], *, target: str) -> dict[str, Any]:
     if not records:
         raise OracleBlockedError("Oracle robustness missing seed observations")
+    seeds = [int(row["seed"]) for row in records]
+    if len(set(seeds)) != len(seeds):
+        raise OracleBlockedError(f"Oracle {target} robustness has duplicate benchmark seeds")
+    # Every observed year must exist for *every* same-window seed. Otherwise
+    # a one-seed yearly result could appear as an N-seed Oracle comparison.
+    annual_rows: list[dict[str, dict[str, Any]]] = []
+    common_years: tuple[str, ...] | None = None
+    common_full_year: dict[str, bool] | None = None
+    for record in records:
+        yearly = record.get("yearly")
+        if not isinstance(yearly, list) or not yearly:
+            raise OracleBlockedError(f"Oracle {target} seed={record['seed']} missing annual evidence")
+        by_year = {str(row["year"]): row for row in yearly}
+        if len(by_year) != len(yearly):
+            raise OracleBlockedError(f"Oracle {target} seed={record['seed']} duplicated annual evidence")
+        years = tuple(sorted(by_year))
+        complete = {}
+        for year in years:
+            year_flag = by_year[year].get("is_full_year")
+            if not isinstance(year_flag, (bool, np.bool_)):
+                raise OracleBlockedError(
+                    f"Oracle {target} seed={record['seed']} year={year} "
+                    "missing/invalid full-year evidence"
+                )
+            complete[year] = bool(year_flag)
+        if common_years is None:
+            common_years, common_full_year = years, complete
+        elif years != common_years or complete != common_full_year:
+            raise OracleBlockedError(
+                f"Oracle {target} annual seed coverage/full-year metadata differs: "
+                f"seed={record['seed']}; expected years={common_years}, found={years}"
+            )
+        annual_rows.append(by_year)
     summary = {"target": target, "seeds": len(records)}
     fields = (
         "total_return_pct", "annualized_return_pct", "mdd_pct", "romd", "ev_a_r", "trades", "exposure_pct",
@@ -975,19 +1022,16 @@ def _aggregate(records: list[dict[str, Any]], *, target: str) -> dict[str, Any]:
         values = np.asarray([float(x[field]) for x in records], dtype=float)
         summary[field] = float(np.mean(values))
         summary[f"{field}_std"] = float(np.std(values, ddof=1)) if len(values) > 1 else 0.0
-    yearly = {}
-    for row in records:
-        for year_row in row["yearly"]:
-            year = str(year_row["year"])
-            yearly.setdefault(year, []).append(year_row)
     summary["yearly"] = [
         {
             "year": year,
-            "strategy_return_pct": float(np.mean([float(z["strategy_return_pct"]) for z in values])),
-            "n_seeds": len(values),
-            "is_full_year": all(bool(z.get("is_full_year", False)) for z in values),
+            "strategy_return_pct": float(np.mean([
+                float(rows[year]["strategy_return_pct"]) for rows in annual_rows
+            ])),
+            "n_seeds": len(records),
+            "is_full_year": bool(common_full_year[year]),
         }
-        for year, values in sorted(yearly.items())
+        for year in (common_years or ())
     ]
     summary["seed_observations"] = records
     return summary

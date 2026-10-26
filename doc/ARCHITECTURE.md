@@ -914,3 +914,6 @@ Direct-account BUY provenance is owned by `services/trading/account_trade_entry.
 - 已退役 `HistoricalOracleIndex`（整份舊 `audit.json` 搜尋／報表內逐 Seed observation 回收）及 `target_oracle_romd.build_report()` 的未使用 `legacy_context`；歷史報表只作不可改寫的研究證據，**不得**作為有效 Oracle Replay 的第二套 REUSE／狀態來源。歷史紀錄中提到「舊完整報表直接 REUSE」是當時的行為紀錄，不再適用於現行 E13 Oracle。
 - 現行 `OracleReplayStore` 仍可依**嚴格逐 Arm 身分等價**驗證舊版 replay-cache schema；此為單一 owner 內部的格式相容，不是重新啟用歷史報表索引。損壞／衝突快取維持 fail-closed；不允許移除歷史工件掩蓋衝突。
 - 本項為 C23／E13 的工程 Bug Fix／退役清理，沒有新 SC、Target、selector、模型訓練、報表 schema 或科學實驗身分。真實四 Seed Research Replay 與 Windows formal suite 尚未驗收。
+- **Replay 身分只含執行輸入**：Reference DL arm／Profile／Score-source ID 只是選定哪一個等價正式分數消費者的來源說明；實際 Selector／options、原完美分數 map SHA、共同 stock-day keys、P16、價格及期間均保持嚴格。切換等價參照 arm 不得使逐 Arm cache 產生另一份經濟身分；舊 V2 工件只有證明上述全部實際輸入相同才可相容 REUSE。
+- **年度證據必須逐 Seed 完整**：四 Seed 每一個可報告年度必須皆有合法統計及一致的 Full Year 旗標；缺年度、重複 Seed／年度或不一致的年度標記先 BLOCKED，禁止用單一 Seed 的年度報酬冒充四 Seed 比較。
+

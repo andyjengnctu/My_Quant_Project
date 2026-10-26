@@ -13744,3 +13744,12 @@ Decision: `ENGINEERING_CHECKPOINT_FIRST_REUSE / HISTORICAL_AK_EVIDENCE_PRESERVED
 - **P1：已退役 Target ID 防重新引用**：在唯一正式 `core/audit_registry.py` 保存 `MinTrade40_NetR`／`MinTrade40_NetR_Direct` 的 reserved historical identity；`_oracle_comparison_plan` 直接拒絕退役名稱或以退役名稱當來源，即使換成有效 DailyUniversal recipe 亦不允許重用。Registry 人讀狀態更新為 historical／retired，保留原研究身分及結果歷史。
 - **P1：共同母體完整性**：在 cache 與 Replay 之前，比對所有選定價格型、DailyUniversal 逐 Seed 及 Direct 的**完整 `(ticker, information_date)` 集合**；不同即標記 `CONTRACT_UNRESOLVED` 並提供雙向差集數量／例子，不因計數相同就通過，也不在缺少授權時以交集縮小候選。價格型-only 與 DailyUniversal-only 仍合法，不要求未選取的來源；成熟邊界如有真實資料差異，須維持 BLOCKED，不能發佈虛假的 common cohort。
 - **驗證邊界**：新增損壞跨前綴、metadata-only identity／V2 舊快取相容、SHA 真變更衝突、退役名稱重新指派、同數量不同 key 的跨 Target 反例；本輪工程測試結果與實際執行紀錄另外交付。來源 ZIP 不包含本機完整市場資料／P16／四 Seed replay，未聲稱真實 RoMD 或 Windows formal Double Check PASS。修補前不符合 E13 的 RoMD 報表仍不可作為正式結論。
+
+
+## 2026-10-26 — Oracle E13 快取參照身分與年度 same-seed 完整性修補（工程 Bug Fix，不新增 SC）
+
+- **基準／治理**：以 `test-branch-1_20261026_122948_ae3d0608.zip`（SHA256 `271038cd55bfe3c7e90a726198718d34bc5b4c2657655ea84edba369506ddc17`）為單一基準，依 E13／C23 保留既定 11 組 Oracle、每日 perfect Target 百分位、正式 Exact／Direct、P16／Broker-Cash、期別／報表 schema 與歷史科學身分；無新 Target、SC 或 Replay engine。
+- **發現／修正：等價 Reference DL arm 造成虛假 cache conflict**：`replay_identity` 曾將目前挑選的 Exact `arm_id` 與模型參照 `reference_arm_id`／`reference_score_source_id`／`reference_profile_id` 納入經濟身分；當同一套 Selector／score map／共同母體／參數／價格不變，從 C103 切換至等價的 C105 仍造成無必要的身份漂移。現於唯一 `OracleReplayStore` 身分 owner 排除這些非執行性參照名稱，完整保留真正執行欄位及分數／樣本 SHA。只讀舊 V2 僅在真正執行輸入與 hash 完全相符時接受相容 REUSE，實際分數、參數、Selector 或資料變更仍 fail-closed。
+- **發現／修正：年度 Seed 證據缺失被掩蓋**：`_aggregate` 曾讓只含部分 Seed 的年度列照樣輸出 `n_seeds=1`，其餘 overall 卻由四 Seed 統計，容易造成不完整的年度穩健性比較。現在先驗證同一 Target 逐 Seed 唯一、年度集合完全相同、年度不重複且 `is_full_year` 標記一致，否則 BLOCKED；合法非完整年度仍依原統計口徑保留。
+- **同鏈健全性檢查**：再加強正式 DL 來源的 feature-eligible scope／filter identity 驗證，確保 Reference DL 不會改成另一個樣本／候選來源；完美百分位 SHA 只接受有限 `[0,1]` 分數。只修改 canonical Oracle identity／target evaluator 及其合成 invariant tests，不新增另一套參照清單。歷史 Log 原文與原始研究結果均完整保留。
+- **驗收邊界**：獨立合成及靜態檢查結果另附本輪 QA；來源 ZIP 不含完整四 Seed 市場行情、P16 與 Replay 工件，故不能宣稱真實 RoMD 或使用者 Windows 正式 Double Check 已通過。先前不符合 E13 的 RoMD 仍不得直接作為有效結果。

@@ -104,6 +104,31 @@ class OracleScoreParityContractCases(TestCase):
             self.assertEqual(mapping[name]["target_id"], TARGET_ID)
             self.assertNotIn("counterfactual_mintrade40", mapping[name]["target_id"])
 
+    def test_reference_dl_must_be_daily_feature_eligible(self):
+        definition = _ACTIVE_ORACLE_DEFINITION
+        settings, _base, _exact = oracle._contract(definition)
+        from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+        original = get_breakout_quality_experiment_profile
+        def source_profile(profile_id):
+            profile = original(profile_id)
+            return replace(profile, training_sample_scope="breakout_event_groups")
+        with patch.object(oracle, "get_breakout_quality_experiment_profile", side_effect=source_profile):
+            with self.assertRaisesRegex(oracle.OracleBlockedError, "feature eligibility"):
+                oracle._formal_dl_score_start(settings)
+
+    def test_reference_dl_filter_must_match_oracle_candidate_universe(self):
+        definition = _ACTIVE_ORACLE_DEFINITION
+        settings, _base, exact = oracle._contract(definition)
+        source = settings.dl_sources[exact.dl_id]
+        invalid_source = replace(source, filter_id="different_filter")
+        changed_settings = replace(settings, dl_sources={
+            **settings.dl_sources, exact.dl_id: invalid_source,
+        })
+        plan = oracle._oracle_comparison_plan(definition)
+        with patch.object(oracle, "get_strategy_comparison_settings", return_value=changed_settings):
+            with self.assertRaisesRegex(oracle.OracleBlockedError, "filter_id"):
+                oracle._resolve_oracle_target_score_contracts(definition, changed_settings, plan)
+
     def test_unapproved_score_mapping_still_fails_closed(self):
         altered = replace(_ACTIVE_ORACLE_DEFINITION, dimensions={
             **_ACTIVE_ORACLE_DEFINITION.dimensions, "oracle_score_method": "arbitrary_logits",
@@ -121,6 +146,15 @@ class OracleScoreParityContractCases(TestCase):
         later[("2330", "2025-01-02")] = 0.35
         self.assertNotEqual(oracle._canonical_score_map_sha256(earlier),
                             oracle._canonical_score_map_sha256(later))
+
+    def test_perfect_score_sha_requires_approved_percentile_numerical_range(self):
+        key = ("2330", "2021-01-04")
+        self.assertEqual(len(oracle._canonical_score_map_sha256({key: 0.0})), 64)
+        self.assertEqual(len(oracle._canonical_score_map_sha256({key: 1.0})), 64)
+        for invalid in (-0.01, 1.01, float("inf"), float("nan")):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                    oracle.OracleBlockedError, "percentile scale"):
+                oracle._canonical_score_map_sha256({key: invalid})
 
     def test_no_model_gate_or_fitted_pit_file_is_required_for_hypothetical_coverage(self):
         # Score eligibility is independently verified by each canonical daily
@@ -1695,6 +1729,55 @@ class RemovedMinTrade40OracleComparisonCases(TestCase):
             oracle._oracle_comparison_plan(replace(current, source=source))
 
 
+class OracleSameWindowEvidenceInvariantCases(TestCase):
+    @staticmethod
+    def _observation(seed, years=(2021, 2022), *, flags=(True, True)):
+        return {
+            "seed": seed, "target": "T40", "total_return_pct": 13.0,
+            "annualized_return_pct": 4.0, "mdd_pct": 3.0, "romd": 4.0,
+            "ev_a_r": 0.4, "trades": 10, "exposure_pct": 40.0,
+            "yearly": [{"year": year, "strategy_return_pct": 12.0,
+                        "is_full_year": full}
+                       for year, full in zip(years, flags)],
+        }
+
+    def test_rejects_a_year_missing_from_one_seed(self):
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "annual seed coverage"):
+            oracle._aggregate([
+                self._observation(1), self._observation(2, (2021,), flags=(True,)),
+            ], target="T40")
+
+    def test_rejects_duplicate_seed_and_duplicate_year(self):
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "duplicate benchmark seeds"):
+            oracle._aggregate([self._observation(1), self._observation(1)], target="T40")
+        duplicate_year = self._observation(2, (2021, 2021))
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "duplicated annual evidence"):
+            oracle._aggregate([self._observation(1), duplicate_year], target="T40")
+
+    def test_rejects_inconsistent_full_year_flags(self):
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "annual seed coverage"):
+            oracle._aggregate([
+                self._observation(1), self._observation(2, flags=(True, False)),
+            ], target="T40")
+
+    def test_rejects_missing_or_non_boolean_full_year_evidence(self):
+        for malformed in (None, "False", 0):
+            first = self._observation(1)
+            first["yearly"][0]["is_full_year"] = malformed
+            with self.subTest(malformed=malformed), self.assertRaisesRegex(
+                    oracle.OracleBlockedError, "invalid full-year evidence"):
+                oracle._aggregate([first, self._observation(2)], target="T40")
+
+    def test_full_and_partial_years_with_four_seeds_are_kept(self):
+        records = [self._observation(seed, flags=(True, False)) for seed in (11, 22, 33, 44)]
+        result = oracle._aggregate(records, target="T40")
+        self.assertEqual(result["seeds"], 4)
+        self.assertEqual(result["yearly"], [
+            {"year": "2021", "strategy_return_pct": 12.0, "n_seeds": 4, "is_full_year": True},
+            {"year": "2022", "strategy_return_pct": 12.0, "n_seeds": 4, "is_full_year": False},
+        ])
+
+
 class OracleReplayEvidenceReuseCases(TestCase):
     """Exact-identity per-arm REUSE and data-driven local report discovery."""
 
@@ -1821,6 +1904,54 @@ class OracleReplayEvidenceReuseCases(TestCase):
             another = dict(corrected, dataset_sha256="f"*64)
             with self.assertRaisesRegex(ValueError, "DIFFERENT identity"):
                 store.resolve_completed(another)
+
+    def test_equivalent_reference_dl_arm_does_not_change_replay_identity(self):
+        from services.audit.oracle_replay_artifacts import replay_identity
+        def make(arm_name, score_source, reference_profile):
+            return replay_identity(
+                dataset="full", dataset_sha256="a" * 64, target="T40",
+                definition={"T40": "immutable Target"}, start="2021-01-01",
+                end="2025-12-22", benchmark="end_to_end_v1",
+                param_sha256="b" * 64, seed=1,
+                cohort={"cohort_rows": 99, "research_cutoff": "2026-03-02"},
+                ranking_policy="resource-aware-continuous-score-constrained-optimal",
+                ranking_options={"preserve_k_r0": True},
+                evaluation_mode="rolling", max_positions=10,
+                replay_policy={"exact_arm": arm_name, "fixed_risk": 0.03,
+                    "perfect_score_sha256": "c" * 64,
+                    "canonical_dl_score_contract": {
+                        "reference_arm_id": arm_name,
+                        "reference_score_source_id": score_source,
+                        "reference_profile_id": reference_profile,
+                        "source_target_id": "canonical_t40",
+                        "canonical_feature_eligible_keys_sha256": "d" * 64,
+                        "perfect_score_mapping": "canonical_daily_truth_percentile_v2",
+                    }},
+            )
+        first = make("C103", "CONT13CG_ROLL", "model_cg")
+        second = make("C105", "CONT13AK_ROLL", "model_ak")
+        self.assertEqual(first, second)
+        self.assertNotIn("exact_arm", first["replay_policy"])
+        self.assertNotIn("reference_arm_id",
+                         first["replay_policy"]["canonical_dl_score_contract"])
+        with tempfile.TemporaryDirectory() as tmp:
+            store = oracle.OracleReplayStore(Path(tmp),
+                "breakout_quality/reusable/target_oracle_romd")
+            stored = dict(first, replay_policy={**first["replay_policy"],
+                "exact_arm": "C103", "canonical_dl_score_contract": {
+                    **first["replay_policy"]["canonical_dl_score_contract"],
+                    "reference_arm_id": "C103",
+                    "reference_score_source_id": "CONT13CG_ROLL",
+                    "reference_profile_id": "model_cg",
+                }})
+            record = self._observation("T40", 1)
+            store.write(stored, record, origin="old_v2_reference_fixture")
+            self.assertEqual(store.resolve_completed(second)[0], record)
+            # A changed actual score is not reference-only metadata.
+            changed = dict(second, replay_policy={**second["replay_policy"],
+                "perfect_score_sha256": "f" * 64})
+            with self.assertRaisesRegex(ValueError, "DIFFERENT identity"):
+                store.resolve_completed(changed)
 
     def test_corrupt_direct_target_does_not_block_exact_with_shared_prefix(self):
         from services.audit.oracle_replay_artifacts import OracleReplayStore

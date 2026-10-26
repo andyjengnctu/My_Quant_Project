@@ -44,30 +44,63 @@ def _execution_cohort(cohort: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in cohort.items() if key != "scoring"}
 
 
-def _v2_presentation_identity(stored: Mapping[str, Any], expected: Mapping[str, Any]) -> dict[str, Any]:
-    """Interpret verified V2 display-only cache drift without altering bytes.
+# Research comparison arm IDs are evidence of which equivalent selector was
+# inspected, not computational replay inputs. The actual selector is already
+# identified by ranking_policy/options, while the injected stock-day values
+# and feature eligibility are certified by the score/keys SHA256 fingerprints.
+_REFERENCE_ONLY_SCORE_FIELDS = frozenset((
+    "reference_arm_id", "reference_score_source_id", "reference_profile_id",
+))
 
-    Older V2 identities hashed target descriptions and cohort.scoring. A
-    non-C96 cache is only eligible for this compatibility path when both
-    identities independently contain the exact same actual perfect-score SHA
-    and canonical score contract. Other scientific/economic keys must match.
-    Schema V1 remains subject to its existing strict legacy migration rule.
+
+def _execution_score_contract(contract: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in contract.items()
+            if key not in _REFERENCE_ONLY_SCORE_FIELDS}
+
+
+def _execution_replay_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
+    result = dict(policy)
+    # No dependency may infer or reconstruct the selected model from this key;
+    # the formal Exact selection mode and options are recorded independently.
+    result.pop("exact_arm", None)
+    score_contract = result.get("canonical_dl_score_contract")
+    if isinstance(score_contract, Mapping):
+        result["canonical_dl_score_contract"] = _execution_score_contract(score_contract)
+    return result
+
+
+def _v2_presentation_identity(stored: Mapping[str, Any], expected: Mapping[str, Any]) -> dict[str, Any]:
+    """Verify old V2 presentation-only drift without rewriting historical bytes.
+
+    The old snapshot carried the first enabled Exact arm ID and its model
+    reference names in the replay identity. Changing which equivalent model
+    is enabled must not invalidate the very same executed score/selector.
+    Actual target source, score values and stock-day eligibility SHA, dates,
+    parameter/price bytes and all other economic inputs remain strict.
     """
     result = dict(stored)
     if result.get("cache_schema") != _CACHE_SCHEMA or expected.get("cache_schema") != _CACHE_SCHEMA:
         return result
     if result.get("target") != expected.get("target"):
         return result
+    previous_policy = result.get("replay_policy")
+    wanted_policy = expected.get("replay_policy")
+    if not isinstance(previous_policy, Mapping) or not isinstance(wanted_policy, Mapping):
+        return result
     if result.get("target") != "C96":
-        prev_policy, next_policy = result.get("replay_policy"), expected.get("replay_policy")
-        if not isinstance(prev_policy, Mapping) or not isinstance(next_policy, Mapping):
-            return result
-        score_sha = next_policy.get("perfect_score_sha256")
+        score_sha = wanted_policy.get("perfect_score_sha256")
+        previous_contract = previous_policy.get("canonical_dl_score_contract")
+        wanted_contract = wanted_policy.get("canonical_dl_score_contract")
         if (not is_sha256_hex(score_sha)
-                or prev_policy.get("perfect_score_sha256") != score_sha
-                or not isinstance(next_policy.get("canonical_dl_score_contract"), Mapping)
-                or prev_policy.get("canonical_dl_score_contract") != next_policy["canonical_dl_score_contract"]):
+                or previous_policy.get("perfect_score_sha256") != score_sha
+                or not isinstance(previous_contract, Mapping)
+                or not isinstance(wanted_contract, Mapping)
+                or _execution_score_contract(previous_contract) !=
+                        _execution_score_contract(wanted_contract)):
             return result
+    # This transform may only erase fields already proven non-executable;
+    # the complete normalized identity must still match in _inspect_siblings.
+    result["replay_policy"] = _execution_replay_policy(previous_policy)
     if isinstance(result.get("target_definition"), str):
         result["target_definition"] = expected.get("target_definition")
     if isinstance(result.get("cohort"), Mapping):
@@ -152,7 +185,7 @@ def replay_identity(*, dataset: str, dataset_sha256: str, target: str,
         "evaluation_mode": str(evaluation_mode),
         "ranking_policy": str(ranking_policy),
         "ranking_options": dict(ranking_options),
-        "replay_policy": dict(replay_policy),
+        "replay_policy": _execution_replay_policy(replay_policy),
         "cohort": _execution_cohort(cohort),
     }
 
