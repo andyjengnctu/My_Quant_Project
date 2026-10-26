@@ -20,6 +20,7 @@ from filters.breakout_quality.daily_trade40_target import (
 from services.audit import target_oracle_romd as oracle
 from services.audit.daily_trade40_oracle import (
     DailyTrade40OracleBlockedError, build_daily_universal_trade40_oracle_scores,
+    truth_producer_fingerprint,
     TARGET_ID, LABEL_ID,
 )
 from tools.validate.synthetic_daily_trade40_cases import fixture
@@ -674,6 +675,7 @@ class FormalMinReplayIntegrationCases(TestCase):
             evidence={"label_id":LABEL_ID,"target_id":TARGET_ID,"profile_id":PROFILE,
                 "rank_policy":"average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",
                 "rank_sha256":"c"*64,"raw_label_sha256":"d"*64,
+                "truth_source_sha256": truth_producer_fingerprint(),
                 "calendar_sha256":"e"*64,
                 "teacher":{"origin":"formal_min_roos_rolling_per_seed",
                            "seed":int(seed),"param_identity_sha256":str(param_sha256),
@@ -771,6 +773,7 @@ class FormalMinReplayIntegrationCases(TestCase):
             evidence = {"label_id": label, "target_id": target, "profile_id": PROFILE,
                 "rank_policy": "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",
                 "rank_sha256": "c" * 64, "raw_label_sha256": "d" * 64,
+                "truth_source_sha256": truth_producer_fingerprint(),
                 "calendar_sha256": "e" * 64,
                 "teacher": {"origin": "formal_min_roos_rolling_per_seed",
                             "seed": int(seed), "param_identity_sha256": str(param_sha256),

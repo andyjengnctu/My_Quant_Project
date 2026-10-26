@@ -1544,6 +1544,9 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
         # The same evidence goes into both Exact and Direct replay identities.
         if daily_evidence is None:
             raise OracleBlockedError("Daily-universal Oracle missing verified target lineage")
+        from services.audit.daily_trade40_oracle import truth_producer_fingerprint
+        if daily_evidence.get("truth_source_sha256") != truth_producer_fingerprint():
+            raise OracleBlockedError("Oracle Target truth has no verified executing producer lineage")
         source = plan["daily_sources"][target]
         recipe, provider, horizon = plan["daily_recipes"][source]
         policy["hindsight_score_recipe"] = recipe
@@ -1557,6 +1560,7 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
             "rank_policy": daily_evidence["rank_policy"],
             "rank_sha256": daily_evidence["rank_sha256"],
             "raw_label_sha256": daily_evidence["raw_label_sha256"],
+            "truth_source_sha256": daily_evidence["truth_source_sha256"],
             "calendar_sha256": daily_evidence["calendar_sha256"],
             "teacher": daily_evidence["teacher"],
             "mature_eligible_rows": daily_evidence["mature_eligible_rows"],
@@ -2215,6 +2219,10 @@ def _replay_attested_score_keys(
     match. The later per-arm full-identity verification is still mandatory.
     """
     from core.file_integrity import is_sha256_hex
+    from services.audit.daily_trade40_oracle import truth_producer_fingerprint
+    # Source code hashes are small, read-only provenance checks: NO outcomes,
+    # DL labels, 558-ticker simulation or Portfolio are materialized here.
+    producer_sha = truth_producer_fingerprint() if plan["daily_recipes"] else None
     proofs: dict[tuple[str, bool], tuple[str, int, str, str]] = {}
     start = str(settings.start_date)
     for seed, param_sha, *_unused in prepared:
@@ -2229,6 +2237,15 @@ def _replay_attested_score_keys(
                         saved.get("benchmark") != robustness.benchmark_id):
                     continue
                 policy = saved.get("replay_policy") or {}
+                # A historical perfect-score SHA proves the *old* score bytes,
+                # not that the current Target producer has the same semantics.
+                # This capability check applies to every declared MinTrade
+                # horizon and Exact/Direct, without a target-name allowlist.
+                if target in plan["daily_sources"]:
+                    lineage = policy.get("hindsight_target_contract") or {}
+                    if (not isinstance(lineage, Mapping) or
+                            lineage.get("truth_source_sha256") != producer_sha):
+                        continue
                 cohort = saved.get("cohort") or {}
                 source_contract = policy.get("canonical_dl_score_contract") or {}
                 if (not isinstance(policy, Mapping) or
@@ -2286,7 +2303,9 @@ def _certified_saved_oracle_identity(
     A mismatched or incomplete historical receipt must BLOCK, not silently RUN.
     """
     from services.audit.oracle_replay_artifacts import replay_identity
-    from services.audit.daily_trade40_oracle import target_identity_for_horizon
+    from services.audit.daily_trade40_oracle import (
+        target_identity_for_horizon, truth_producer_fingerprint,
+    )
     policy = saved.get("replay_policy")
     cohort = saved.get("cohort")
     if not isinstance(policy, Mapping) or not isinstance(cohort, Mapping):
@@ -2335,6 +2354,8 @@ def _certified_saved_oracle_identity(
         recorded = policy.get("hindsight_target_contract")
         if not isinstance(recorded, Mapping) or not rolling_periods:
             raise ValueError("historical daily-truth lineage missing")
+        if recorded.get("truth_source_sha256") != truth_producer_fingerprint():
+            raise ValueError("historical Target outcome producer semantics not certified")
         actual_id, label_id = target_identity_for_horizon(horizon)
         teacher = recorded.get("teacher")
         if (recorded.get("target_id") != actual_id
@@ -2611,6 +2632,7 @@ def _run_single_stage_oracle(
     already-attested perfect-score SHA. No archived report authorizes reuse.
     """
     from services.audit.oracle_replay_artifacts import OracleReplayStore, replay_identity
+    from services.audit.daily_trade40_oracle import truth_producer_fingerprint
     from filters.breakout_quality.daily_trade40_target import (
         build_formal_min_execution_schedule, resolve_formal_min_param_records,
     )
@@ -2674,6 +2696,11 @@ def _run_single_stage_oracle(
         prepared_parameters=prepared, price_sha=price_sha,
         evaluation_end=end, certified_identity_out=baseline_certified,
     )
+    # Compare signed provenance before considering a cached perfect-score
+    # SHA. Legacy receipts without the producer closure fingerprint cannot
+    # claim unchanged outcome semantics after the canonical cutoff bug fix.
+    current_daily_producer_sha = (truth_producer_fingerprint()
+                                  if plan["daily_recipes"] else None)
     # Read the current canonical input manifest once; every stored score
     # receipt is checked against that same source and fixed evaluation scope.
     # No existing scored witness means every scored cell is a genuine RUN.
@@ -2705,8 +2732,14 @@ def _run_single_stage_oracle(
             current_candidates = [item for item in candidates
                                   if item.get("start_date") == start and item.get("end_date") == end
                                   and (item.get("replay_policy") or {}).get(
-                                      "oracle_parity_implementation") == ORACLE_PARITY_IMPLEMENTATION]
+                                      "oracle_parity_implementation") == ORACLE_PARITY_IMPLEMENTATION
+                                  and (target not in plan["daily_sources"] or
+                                       ((item.get("replay_policy") or {}).get(
+                                           "hindsight_target_contract") or {}).get(
+                                               "truth_source_sha256") == current_daily_producer_sha)]
             if not current_candidates:
+                # Old outcomes are preserved as historical evidence. Only
+                # this missing *current* producer identity needs new truth.
                 decisions[key] = "RUN"
                 continue
             if len(current_candidates) > 1:

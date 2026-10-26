@@ -8,6 +8,7 @@ Exact/Direct selectors read the same per-seed score table; neither can train.
 from __future__ import annotations
 
 from hashlib import sha256
+from functools import lru_cache
 import json
 import os
 import tempfile
@@ -101,6 +102,17 @@ def _truth_source_sha(root: Path) -> str:
     return digest.hexdigest()
 
 
+@lru_cache(maxsize=1)
+def truth_producer_fingerprint() -> str:
+    """Fingerprint the executing canonical outcome producer without any label RUN.
+
+    This is the same source closure used by the durable truth-cache identity.
+    The imported module root (not a data project_root) identifies the code
+    actually executing; hashing this small source closure never simulates trades.
+    """
+    return _truth_source_sha(Path(__file__).resolve().parents[2])
+
+
 def _ranked_score_sha(scores: Mapping[tuple[str, str], float]) -> str:
     digest = sha256()
     for (ticker, day), value in sorted(scores.items()):
@@ -141,6 +153,7 @@ def _truth_cache_read(path: Path, identity: Mapping[str, Any]):
         teacher = dict(evidence["teacher"])
         if (evidence["target_id"] != identity["target_id"] or
                 evidence["profile_id"] != identity["profile_id"] or
+                evidence.get("truth_source_sha256") != identity["truth_source_sha256"] or
                 evidence["research_cutoff"] != identity["research_cutoff"] or
                 evidence["score_start_date"] != identity["score_start"] or
                 teacher.get("seed") != identity["seed"] or
@@ -302,7 +315,7 @@ def build_daily_universal_trade40_oracle_scores(
                 "horizon_sessions": horizon_sessions,
                 "price_sha256": str(price_sha256),
                 "feature_eligible_keys_sha256": group_sha,
-                "truth_source_sha256": _truth_source_sha(root),
+                "truth_source_sha256": truth_producer_fingerprint(),
             }
             cache_path = Path(cache_root) / str(seed) / (
                 f"{target_id}_{canonical_json_sha256(cache_identity)}.npz"
@@ -439,6 +452,7 @@ def build_daily_universal_trade40_oracle_scores(
             "first_replay_trade_date": str(first_trade.date()),
             "research_cutoff": str(cutoff_day.date()),
             "score_start_date": str(first_scored_day.date()),
+            "truth_source_sha256": truth_producer_fingerprint(),
             "rank_sha256": rank_sha, "raw_label_sha256": raw_sha,
             "calendar_sha256": cal_sha, "teacher": teacher,
             "rank_policy": "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",
@@ -458,4 +472,4 @@ def build_daily_universal_trade40_oracle_scores(
 
 
 __all__ = ["TARGET_ID", "LABEL_ID", "target_identity_for_horizon", "DailyTrade40OracleBlockedError",
-           "build_daily_universal_trade40_oracle_scores"]
+           "build_daily_universal_trade40_oracle_scores", "truth_producer_fingerprint"]

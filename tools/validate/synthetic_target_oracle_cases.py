@@ -624,6 +624,7 @@ class OracleScoreParityContractCases(TestCase):
             "teacher": {"origin": "formal_min_roos_rolling_per_seed", "seed": seed,
                         "param_identity_sha256": param_sha, "periods": [{"start": "2021-01-01"}]},
             "rank_policy": "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",
+            "truth_source_sha256": daily_owner.truth_producer_fingerprint(),
             "rank_sha256": "1"*64, "raw_label_sha256": "2"*64, "calendar_sha256": "3"*64,
             "mature_eligible_rows": len(truth), "settled_net_r_rows": len(truth),
             "censored_rank_last_rows": 0, "research_cutoff": "2026-03-02",
@@ -684,6 +685,7 @@ class OracleScoreParityContractCases(TestCase):
             "teacher": {"seed": seed, "param_identity_sha256": param_sha,
                         "periods": [{"start": "2021-01-01"}]},
             "rank_policy": "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",
+            "truth_source_sha256": daily_owner.truth_producer_fingerprint(),
             "rank_sha256": "1"*64, "raw_label_sha256": "2"*64, "calendar_sha256": "3"*64,
             "mature_eligible_rows": len(scores), "settled_net_r_rows": len(scores),
             "censored_rank_last_rows": 0, "research_cutoff": "2026-03-02",
@@ -3585,14 +3587,16 @@ class OracleOnePlanRealCacheCases(TestCase):
             self.assertEqual(store.existing_completed_identities(seed=seed, target="R40"), ())
 
     def test_formal_daily_40d_historical_receipt_reuses_before_truth_producer(self):
-        """A signed old 40D receipt is fully certifiable, not PENDING/BUILD.
+        """A signed same-producer receipt survives diagnostic-only schema drift.
 
-        The prior bug added two diagnostic-only counters to the identity and
-        blocked these already-completed scientific results. The current
-        score/teacher/selector SHA and feature eligibility remain strict.
+        This signed receipt includes current producer lineage; another legacy
+        receipt lacking producer lineage must NOT be reused after a behavior
+        change even if score bytes and user-facing Target name look identical.
         """
         from services.audit.oracle_replay_artifacts import OracleReplayStore, replay_identity
-        from services.audit.daily_trade40_oracle import target_identity_for_horizon
+        from services.audit.daily_trade40_oracle import (
+            target_identity_for_horizon, truth_producer_fingerprint,
+        )
         import hashlib
         target = "DailyUniversal_MinTrade40_NetR"
         definition = replace(_ACTIVE_ORACLE_DEFINITION, source={
@@ -3616,6 +3620,7 @@ class OracleOnePlanRealCacheCases(TestCase):
             "profile_id": str(definition.source["daily_trade40_profile"]),
             "rank_policy": "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",
             "rank_sha256": "1"*64, "raw_label_sha256": "2"*64,
+            "truth_source_sha256": truth_producer_fingerprint(),
             "calendar_sha256": "3"*64, "teacher": teacher,
             "score_start_date": contract["score_start_date"],
             "mature_eligible_rows": 1, "settled_net_r_rows": 1,
@@ -3697,6 +3702,146 @@ class OracleOnePlanRealCacheCases(TestCase):
                     settings=settings, robustness=benchmark, base_policy=base_policy,
                     arm=exact_arm, rolling_periods=periods, evaluation_end="2025-12-22",
                 )
+
+    def test_outcome_producer_revision_is_generic_and_does_not_force_precompute(self):
+        """A signed old receipt never certifies a new producer just by score SHA.
+
+        Target labels and horizons deliberately are arbitrary. The policy uses
+        only the producer's signed implementation receipt, not a 40/60D list.
+        """
+        from services.audit.oracle_replay_artifacts import OracleReplayStore, replay_identity
+        with tempfile.TemporaryDirectory() as tmp:
+            store = OracleReplayStore(Path(tmp), "breakout_quality/reusable/target_oracle_romd")
+            for suffix in ("Seven", "Forty", "Sixty", "Unbounded"):
+                target = "Synthetic_" + suffix
+                kwargs = dict(dataset="full", dataset_sha256="a"*64,
+                              target=target, definition={target: target},
+                              start="2021-01-01", end="2025-12-22",
+                              benchmark="end_to_end_v1", param_sha256="b"*64,
+                              seed=11, cohort={"cohort_rows": 10},
+                              ranking_policy="exact", ranking_options={},
+                              evaluation_mode="rolling", max_positions=10)
+                policy = {"oracle_parity_implementation": oracle.ORACLE_PARITY_IMPLEMENTATION,
+                          "hindsight_target_contract": {"target_id": target, "raw_label_sha256": "e"*64}}
+                old = replay_identity(**kwargs, replay_policy=policy)
+                receipt = {"target": target, "seed": 11, "total_return_pct": 50.,
+                           "annualized_return_pct": 10., "mdd_pct": 10., "romd": 5.,
+                           "ev_a_r": 0.5, "trades": 22, "exposure_pct": 50.,
+                           "delta_romd_vs_c96": 1.,
+                           "yearly": _synthetic_full_window_yearly()}
+                store.write(old, receipt, origin="historical_producer")
+                new_policy = {**policy, "hindsight_target_contract": {
+                    **policy["hindsight_target_contract"], "truth_source_sha256": "f"*64}}
+                new = replay_identity(**kwargs, replay_policy=new_policy)
+                self.assertEqual(store.plan_execution({(11, target): new}).action(11, target), "RUN")
+                self.assertIsNotNone(store.read(old), "Historical evidence must remain intact")
+                store.write(new, receipt, origin="corrected_producer")
+                self.assertEqual(store.plan_execution({(11, target): new}).action(11, target), "REUSE")
+                self.assertEqual(len(store.existing_completed_identities(seed=11, target=target)), 2)
+                mutated = replay_identity(**kwargs, replay_policy={**new_policy,
+                    "hindsight_target_contract": {**new_policy["hindsight_target_contract"],
+                                                     "raw_label_sha256": "0"*64}})
+                self.assertEqual(store.plan_execution({(11, target): mutated}).action(11, target),
+                                 "BLOCKED", "Same producer with different raw truth must fail closed")
+
+    def test_formal_planner_rejects_legacy_mintrade_receipt_without_truth_build(self):
+        """Certified price/C96 remain REUSE; obsolete Min outcome becomes RUN only.
+
+        This test uses real signed cache JSON, no fake preflight results. The
+        historical-score receipt has matching price/P16/score SHA, but no
+        current outcome producer attestation. It must not claim REUSE, and the
+        user must see the entire decision table BEFORE any 558-ticker work.
+        """
+        from services.audit.oracle_replay_artifacts import OracleReplayStore, replay_identity
+        from services.audit.daily_trade40_oracle import (
+            target_identity_for_horizon, truth_producer_fingerprint,
+        )
+        from filters.breakout_quality import daily_trade40_target as trade_owner
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            definition, bench, seed, price_sha, param_sha, proof, sample = self._fixture(root)
+            from_source = _ACTIVE_ORACLE_DEFINITION.source
+            requested = "DailyUniversal_MinTrade40_NetR"
+            definition = replace(definition, source={**definition.source,
+                "oracle_comparisons": tuple(row for row in from_source["oracle_comparisons"]
+                                            if row["target"] in {"R40", requested})})
+            settings, base, exact = oracle._contract(definition)
+            plan = oracle._oracle_comparison_plan(definition)
+            contract = oracle._resolve_oracle_target_score_contracts(definition, settings, plan)[requested]
+            source_id, label_id = target_identity_for_horizon(40)
+            period = {"start": "2021-01-01", "end": "2026-01-01", "params_signature": "P16"}
+            evidence = {
+                "target_id": source_id, "label_id": label_id,
+                "profile_id": str(definition.source["daily_trade40_profile"]),
+                "rank_policy": "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",
+                "rank_sha256": "1"*64, "raw_label_sha256": "2"*64,
+                "calendar_sha256": "3"*64, "teacher": {
+                    "origin": "formal_min_roos_rolling_per_seed", "seed": seed,
+                    "param_identity_sha256": param_sha, "periods": [period]},
+                "score_start_date": contract["score_start_date"],
+                "mature_eligible_rows": proof[1], "settled_net_r_rows": proof[1],
+                "censored_rank_last_rows": 0, "research_cutoff": str(settings.end_date),
+                "oracle_evaluation_start_date": str(settings.start_date),
+                "truth_source_sha256": truth_producer_fingerprint(),
+            }
+            common = oracle._canonical_oracle_replay_policy(
+                definition, base_arm=base, exact_arm=exact)
+            full_score = {**contract, "canonical_feature_eligible_keys_sha256": proof[0],
+                          "oracle_scored_rows": proof[1],
+                          "source_evidence": "validated_generic_daily_feature_universe_and_formal_target_maturity"}
+            current_policy = oracle._arm_replay_policy(
+                definition, plan=plan, target=requested, replay_policy=common,
+                daily_evidence=evidence, score_sha256="4"*64, score_contract=full_score)
+            prior_policy = {**current_policy, "hindsight_target_contract": {
+                key: value for key, value in current_policy["hindsight_target_contract"].items()
+                if key != "truth_source_sha256"}}
+            cohort = {"cohort_rows": proof[1], "first_common_day": proof[2],
+                      "last_common_day": proof[3], "research_cutoff": settings.end_date,
+                      "risk_budget_return": float(oracle.StrategyAlignedContinuousTargetSpec.from_label_policy(
+                          oracle.DEFAULT_LABEL_POLICY).risk_budget_return),
+                      "oracle_parity_implementation": oracle.ORACLE_PARITY_IMPLEMENTATION,
+                      "oracle_only": True}
+            def receipt_identity(policy):
+                return replay_identity(
+                    dataset=settings.dataset, dataset_sha256=price_sha,
+                    target=requested, definition={requested: requested},
+                    start=str(settings.start_date), end=str(definition.dimensions["oracle_evaluation_end_date"]),
+                    benchmark=bench.benchmark_id, param_sha256=param_sha, seed=seed,
+                    cohort=cohort, ranking_policy=str(exact.dl_runtime_mode),
+                    ranking_options=dict(exact.dl_runtime_options),
+                    evaluation_mode=str(definition.dimensions["evaluation_mode"]),
+                    max_positions=settings.max_positions, replay_policy=policy)
+            store = OracleReplayStore(root, definition.output_subdir)
+            old = receipt_identity(prior_policy)
+            store.write(old, sample(requested, 19., 11.), origin="pre_cutoff_bugfix")
+            display = []
+            schedule = (SimpleNamespace(start=pd.Timestamp("2021-01-01"),
+                                        end=pd.Timestamp("2026-01-01"),
+                                        params_signature="P16"),)
+            def preflight():
+                with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
+                     patch.object(oracle, "_robustness_artifacts", return_value=(
+                         bench, [(seed, root/"p16.json")])), \
+                     patch.object(oracle, "_prepare_oracle_parameters", return_value=(
+                         [(seed, param_sha, "synthetic", None, None)], {})), \
+                     patch.object(oracle, "price_inventory_sha256", return_value=price_sha), \
+                     patch.object(trade_owner, "resolve_formal_min_param_records", return_value=()), \
+                     patch.object(trade_owner, "build_formal_min_execution_schedule", return_value=(schedule, {})), \
+                     patch.object(oracle, "_read_only_score_keys", side_effect=AssertionError(
+                         "No DL/617 price producer before first confirmation")), \
+                     patch.object(oracle, "_execute_single_stage_missing", side_effect=AssertionError(
+                         "No MinTrade/Portfolio producer before first confirmation")):
+                    return oracle.build_report(
+                        definition, project_root=root, quiet=True,
+                        preflight_approval=lambda table: display.append(table) or False)
+            self.assertEqual(preflight()["status"], "CANCELLED")
+            self.assertEqual(len(display), 1)
+            self.assertIn("REUSE 2 / RUN（需回放）1 / BLOCKED 0", display[-1])
+            self.assertEqual(store.existing_completed_identities(seed=seed, target=requested), (old,))
+            store.write(receipt_identity(current_policy), sample(requested, 19., 11.),
+                        origin="current_producer")
+            self.assertEqual(preflight()["status"], "CANCELLED")
+            self.assertIn("REUSE 3 / RUN（需回放）0 / BLOCKED 0", display[-1])
 
     def test_diagnostic_only_counters_do_not_block_saved_trading_result(self):
         from services.audit.oracle_replay_artifacts import OracleReplayStore, replay_identity

@@ -448,6 +448,20 @@ class OracleReplayStore:
                          or requested_policy.get("oracle_parity_implementation")
                          != peer_policy.get("oracle_parity_implementation"))):
                 continue
+            # Independently attested Target-outcome producers can coexist in
+            # the same evaluation window. An earlier receipt with no current
+            # producer proof (or a different proof) remains intact as history,
+            # but cannot block the authorized corrected RUN. This is a generic
+            # source capability, NOT a 40D/60D/name-specific exception.
+            wanted_truth = requested_policy.get("hindsight_target_contract") if isinstance(
+                requested_policy, Mapping) else None
+            previous_truth = peer_policy.get("hindsight_target_contract") if isinstance(
+                peer_policy, Mapping) else None
+            if isinstance(wanted_truth, Mapping) and is_sha256_hex(
+                    wanted_truth.get("truth_source_sha256")) and (
+                    not isinstance(previous_truth, Mapping) or
+                    previous_truth.get("truth_source_sha256") != wanted_truth["truth_source_sha256"]):
+                continue
             if (peer.get("dataset") == identity["dataset"]
                     and peer.get("start_date") == identity["start_date"]
                     and peer.get("end_date") == identity["end_date"]):
