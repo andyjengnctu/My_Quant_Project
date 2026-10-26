@@ -178,6 +178,7 @@ def resolve_historical_min_period(
 
 def collect_canonical_exchange_sessions(
     csv_inputs: Iterable[tuple[str, Path]], *, benchmark_ticker: str,
+    horizon_sessions: int = HORIZON_SESSIONS,
 ) -> pd.DatetimeIndex:
     """Union the same *sanitized* stock quote sessions used by portfolio replay.
 
@@ -197,7 +198,9 @@ def collect_canonical_exchange_sessions(
         if ticker == benchmark_ticker:
             found_benchmark = True
         calendar.update(pd.DatetimeIndex(frame.index).normalize().tolist())
-    if not found_benchmark or len(calendar) <= HORIZON_SESSIONS:
+    if not isinstance(horizon_sessions, int) or isinstance(horizon_sessions, bool) or horizon_sessions <= 0:
+        raise ValueError("Counterfactual Min horizon must be positive exchange sessions")
+    if not found_benchmark or len(calendar) <= horizon_sessions:
         raise ValueError("Counterfactual Trade40 missing usable consolidated exchange calendar")
     return pd.DatetimeIndex(sorted(calendar)).normalize()
 
@@ -205,8 +208,11 @@ def collect_canonical_exchange_sessions(
 def compute_counterfactual_trade40_batch(
     frame: pd.DataFrame, positions: np.ndarray, *, ticker: str,
     schedule: tuple[ExecutableMinPeriod, ...], exchange_calendar: pd.DatetimeIndex,
+    horizon_sessions: int = HORIZON_SESSIONS,
 ) -> CounterfactualTrade40Batch:
     """Compute continuous net R with *real* execution primitives, never proxy PnL."""
+    if not isinstance(horizon_sessions, int) or isinstance(horizon_sessions, bool) or horizon_sessions <= 0:
+        raise ValueError("Counterfactual Min horizon must be positive exchange sessions")
     positions = np.asarray(positions, dtype=np.int64)
     if positions.ndim != 1:
         raise ValueError("counterfactual Trade40 positions must be 1D")
@@ -223,10 +229,10 @@ def compute_counterfactual_trade40_batch(
     reasons: list[str] = []
     signal_caches: dict[str, Any] = {}
     for row, (position, calendar_pos) in enumerate(zip(positions, calendar_index)):
-        if calendar_pos < 0 or calendar_pos + HORIZON_SESSIONS >= len(calendar):
+        if calendar_pos < 0 or calendar_pos + horizon_sessions >= len(calendar):
             reasons.append("unmatured_or_missing_exchange_session")
             continue
-        expiry = calendar[calendar_pos + HORIZON_SESSIONS]
+        expiry = calendar[calendar_pos + horizon_sessions]
         maturity_dates[row] = expiry.to_datetime64().astype("datetime64[D]")
         # The Portfolio assigns its Min parameter by the candidate ORDER day.
         # A suspended ticker's next actual bar may be later than the next
@@ -238,7 +244,7 @@ def compute_counterfactual_trade40_batch(
         # not the previous information bar; there is no alternative date mode.
         effective_day = dates[position + 1]
         if effective_day > expiry:
-            reasons.append("no_executable_ticker_order_within_40_sessions")
+            reasons.append(f"no_executable_ticker_order_within_{horizon_sessions}_sessions")
             continue
         period = resolve_historical_min_period(schedule, effective_day)
         if period is None:

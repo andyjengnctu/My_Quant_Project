@@ -60,6 +60,16 @@ from services.audit.runner import collect_audit_menu_state, collect_audit_status
 from services.audit.catalog import get_audit_methods
 
 
+def _forty_only(definition):
+    """Scope old fixed-40D fixtures without changing the active Registry."""
+    return replace(definition, source={**definition.source, "oracle_comparisons": tuple(
+        item for item in definition.source["oracle_comparisons"]
+        if item["target"] not in {
+            "DailyUniversal_MinTrade60_NetR",
+            "DailyUniversal_MinTrade60_NetR_Direct",
+        })})
+
+
 def _legacy_definition():
     """Historical fixed-nine fixtures, independent of currently active Target rows."""
     active = next(d for d in get_reusable_audit_definitions("breakout_quality")
@@ -92,13 +102,13 @@ def _fixture_certify_score_eligibility(_definition, *, contracts, plan,
 
 
 class OracleScoreParityContractCases(TestCase):
-    def test_hypothetical_oracle_resolves_11_targets_without_existing_target_models(self):
+    def test_hypothetical_oracle_resolves_registered_targets_without_existing_target_models(self):
         # This is the *actual* canonical Registry, no mocked contract resolver.
         definition = _ACTIVE_ORACLE_DEFINITION
         settings, _base, exact = oracle._contract(definition)
         plan = oracle._oracle_comparison_plan(definition)
         mapping = oracle._resolve_oracle_target_score_contracts(definition, settings, plan)
-        self.assertEqual(len(mapping), 11)
+        self.assertEqual(len(mapping), len(_ACTIVE_ORACLE_DEFINITION.source["oracle_comparisons"]))
         self.assertEqual(mapping["T40"]["reference_arm_id"], exact.arm_id)
         self.assertEqual(mapping["CG40_EqualRank"]["perfect_score_mapping"],
                          "canonical_daily_truth_percentile_v2")
@@ -400,7 +410,7 @@ class OracleScoreParityContractCases(TestCase):
     def test_no_model_gate_or_fitted_pit_file_is_required_for_hypothetical_coverage(self):
         # Score eligibility is independently verified by each canonical daily
         # feature/target producer; a matching future *model* may not exist.
-        definition = _ACTIVE_ORACLE_DEFINITION
+        definition = _forty_only(_ACTIVE_ORACLE_DEFINITION)
         settings, _base, _exact = oracle._contract(definition)
         plan = oracle._oracle_comparison_plan(definition)
         contracts = oracle._resolve_oracle_target_score_contracts(definition, settings, plan)
@@ -428,7 +438,7 @@ class OracleScoreParityContractCases(TestCase):
                 definition, contracts=contracts, plan=plan, price_scores=prices, daily_scores=daily)
 
     def test_cross_target_scored_cohort_must_be_identical_not_just_same_count(self):
-        definition = _ACTIVE_ORACLE_DEFINITION
+        definition = _forty_only(_ACTIVE_ORACLE_DEFINITION)
         settings, _base, _exact = oracle._contract(definition)
         plan = oracle._oracle_comparison_plan(definition)
         contracts = oracle._resolve_oracle_target_score_contracts(definition, settings, plan)
@@ -465,7 +475,7 @@ class OracleScoreParityContractCases(TestCase):
             self.assertEqual(len(certified), len(selected))
 
     def test_cross_target_cohort_rejects_different_keys_in_a_price_alias(self):
-        definition = _ACTIVE_ORACLE_DEFINITION
+        definition = _forty_only(_ACTIVE_ORACLE_DEFINITION)
         settings, _, _ = oracle._contract(definition)
         plan = oracle._oracle_comparison_plan(definition)
         contracts = oracle._resolve_oracle_target_score_contracts(definition, settings, plan)
@@ -484,7 +494,7 @@ class OracleScoreParityContractCases(TestCase):
         from services.audit import daily_trade40_oracle as daily_owner
         from services.audit.daily_trade40_oracle import TARGET_ID, LABEL_ID
         from filters.breakout_quality import daily_trade40_target as trade_owner
-        definition = _ACTIVE_ORACLE_DEFINITION
+        definition = _forty_only(_ACTIVE_ORACLE_DEFINITION)
         seed, param_sha = 693545351, "a" * 64
         plan = oracle._oracle_comparison_plan(definition)
         price_row, daily_row = ("2330", "2021-01-04"), ("2317", "2021-01-04")
@@ -589,10 +599,10 @@ class OracleScoreParityContractCases(TestCase):
         from services.audit.daily_trade40_oracle import TARGET_ID
         from services.audit import daily_trade40_oracle as daily_owner
         from filters.breakout_quality import daily_trade40_target as trade_owner
-        definition = replace(_ACTIVE_ORACLE_DEFINITION, source={
+        definition = replace(_forty_only(_ACTIVE_ORACLE_DEFINITION), source={
             **_ACTIVE_ORACLE_DEFINITION.source,
             "oracle_comparisons": tuple(item for item in _ACTIVE_ORACLE_DEFINITION.source["oracle_comparisons"]
-                                        if item["target"].startswith("DailyUniversal_")),
+                                        if "MinTrade40" in item["target"]),
         })
         seed, param_sha = 104504529, "c" * 64
         source = "DailyUniversal_MinTrade40_NetR"
@@ -707,11 +717,11 @@ class OracleScoreParityContractCases(TestCase):
         """Different P16 snapshots must never pair daily truth with a new Replay."""
         from services.audit import daily_trade40_oracle as daily_owner
         from filters.breakout_quality import daily_trade40_target as trade_owner
-        definition = replace(_ACTIVE_ORACLE_DEFINITION, source={
+        definition = replace(_forty_only(_ACTIVE_ORACLE_DEFINITION), source={
             **_ACTIVE_ORACLE_DEFINITION.source,
             "oracle_comparisons": tuple(
                 item for item in _ACTIVE_ORACLE_DEFINITION.source["oracle_comparisons"]
-                if item["target"].startswith("DailyUniversal_")),
+                if "MinTrade40" in item["target"]),
         })
         seed, truth_param_sha, changed_param_sha = 693545351, "a" * 64, "b" * 64
         truth = {("2330", "2021-01-04"): 0.8, ("2317", "2021-01-04"): 0.2,
@@ -747,7 +757,7 @@ class OracleScoreParityContractCases(TestCase):
     def test_retired_daily_target_identity_is_rejected_before_market_replay(self):
         from services.audit import daily_trade40_oracle as daily_owner
         from filters.breakout_quality import daily_trade40_target as trade_owner
-        definition = replace(_ACTIVE_ORACLE_DEFINITION, source={
+        definition = replace(_forty_only(_ACTIVE_ORACLE_DEFINITION), source={
             **_ACTIVE_ORACLE_DEFINITION.source,
             "oracle_comparisons": tuple(item for item in _ACTIVE_ORACLE_DEFINITION.source["oracle_comparisons"]
                                         if item["target"].startswith("DailyUniversal_")),
@@ -828,13 +838,14 @@ class OracleAuditContractCases(TestCase):
             {"CG40_EqualRank", "MFE40_Control", "R40", "T40",
              "T40-MFE", "MFE40_Direct", "R40_Direct", "T40_Direct", "T40-MFE_Direct"},
         )
-        self.assertEqual(len(oracle._oracle_comparison_plan(self.active_definition)["targets"]), 11)
+        self.assertEqual(len(oracle._oracle_comparison_plan(self.active_definition)["targets"]), 13)
         self.assertNotIn("MinTrade40_NetR", dict(oracle._oracle_comparison_plan(self.active_definition)["targets"]))
         self.assertNotIn("MinTrade40_NetR_Direct", dict(oracle._oracle_comparison_plan(self.active_definition)["targets"]))
         self.assertEqual(oracle.ORACLE_DIRECT_SCORE_SOURCES, {
             "MFE40_Direct": "MFE40_Control", "R40_Direct": "R40", "T40_Direct": "T40",
             "T40-MFE_Direct": "T40-MFE",
             "DailyUniversal_MinTrade40_NetR_Direct": "DailyUniversal_MinTrade40_NetR",
+            "DailyUniversal_MinTrade60_NetR_Direct": "DailyUniversal_MinTrade60_NetR",
         })
         self.assertEqual(self.definition.output_subdir, "breakout_quality/reusable/target_oracle_romd")
         with tempfile.TemporaryDirectory() as tmp:
@@ -927,7 +938,7 @@ class OracleAuditContractCases(TestCase):
             archived.write_text('{malformed archived report', encoding='utf-8')
             summary = _strip_ansi(oracle.render_existing_artifact_inventory(
                 _ACTIVE_ORACLE_DEFINITION, project_root=Path(tmp)))
-            self.assertIn('REUSE 0 / RUN（需計算）48 / BLOCKED 0', summary)
+            self.assertIn('REUSE 0 / RUN（需計算）56 / BLOCKED 0', summary)
             self.assertIn('舊報表不作 REUSE 來源', summary)
 
     def test_fast_inventory_never_treats_corrupt_cache_as_reuse(self):
@@ -2052,7 +2063,7 @@ class RemovedMinTrade40OracleComparisonCases(TestCase):
         current = _ACTIVE_ORACLE_DEFINITION
         planned = oracle._oracle_comparison_plan(current)
         names = {name for name, _ in planned["targets"]}
-        self.assertEqual(len(names), 11)
+        self.assertEqual(len(names), 13)
         self.assertNotIn("MinTrade40_NetR", names)
         self.assertNotIn("MinTrade40_NetR_Direct", names)
         self.assertIn("DailyUniversal_MinTrade40_NetR", names)

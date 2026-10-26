@@ -86,6 +86,50 @@ class FormalMinTrade40SyntheticCases(unittest.TestCase):
                 )
             source.assert_not_called()
 
+    def test_60_exchange_sessions_change_only_maturity_and_forced_exit(self):
+        from unittest.mock import patch
+        from filters.breakout_quality import daily_trade40_target as owner
+        days, frame, _params, period = fixture(count=150)
+        schedule = (period,)
+        with patch.object(owner, "simulate_realized_trade_path_label",
+                          wraps=simulate_realized_trade_path_label) as ledger:
+            forty = compute_counterfactual_trade40_batch(
+                frame, np.array([75]), ticker="2330", schedule=schedule,
+                exchange_calendar=days,
+            )
+            sixty = compute_counterfactual_trade40_batch(
+                frame, np.array([75]), ticker="2330", schedule=schedule,
+                exchange_calendar=days, horizon_sessions=60,
+            )
+        self.assertTrue(forty.valid_mask[0])
+        self.assertTrue(sixty.valid_mask[0])
+        self.assertEqual(forty.maturity_dates[0],
+                         days[115].to_datetime64().astype("datetime64[D]"))
+        self.assertEqual(sixty.maturity_dates[0],
+                         days[135].to_datetime64().astype("datetime64[D]"))
+        self.assertEqual([call.kwargs["horizon_end_date"] for call in ledger.call_args_list],
+                         [days[115], days[135]])
+        self.assertEqual([call.kwargs["params"] for call in ledger.call_args_list],
+                         [period.params, period.params])
+        self.assertEqual(ledger.call_count, 2)
+        # A valid 40D label must not be copied to an immature 60D sample.
+        forty_late = compute_counterfactual_trade40_batch(
+            frame, np.array([90]), ticker="2330", schedule=schedule,
+            exchange_calendar=days,
+        )
+        sixty_late = compute_counterfactual_trade40_batch(
+            frame, np.array([90]), ticker="2330", schedule=schedule,
+            exchange_calendar=days, horizon_sessions=60,
+        )
+        self.assertFalse(sixty_late.valid_mask[0])
+        self.assertEqual(sixty_late.reasons[0], "unmatured_or_missing_exchange_session")
+        self.assertTrue(forty_late.valid_mask[0])
+        with self.assertRaisesRegex(ValueError, "positive exchange sessions"):
+            compute_counterfactual_trade40_batch(
+                frame, np.array([10]), ticker="2330", schedule=schedule,
+                exchange_calendar=days, horizon_sessions=0,
+            )
+
     def test_formal_seed_param_adapter_no_old_teacher_dependency(self):
         days, frame, params, period = fixture()
         signature = build_portfolio_params_signature(params)

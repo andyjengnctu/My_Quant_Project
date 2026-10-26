@@ -1,7 +1,7 @@
 """Hindsight daily-universal Min trade-path score source for the formal Oracle.
 
 Feature eligibility comes from the existing generic daily model dataset, NOT
-from the retired MR-13CL label. Each seed's counterfactual 40-session trades
+from the retired MR-13CL label. Each seed's horizon-specific trades
 consume the identical DL-off parameters used by that seed's Min Portfolio.
 Exact/Direct selectors read the same per-seed score table; neither can train.
 """
@@ -33,6 +33,13 @@ TARGET_ID = "daily_universal_formal_min_roos_trade40_netr_v1"
 LABEL_ID = "LABEL-daily_universal_formal_min_roos_trade40_netr_v1"
 
 
+def target_identity_for_horizon(horizon_sessions: int) -> tuple[str, str]:
+    if not isinstance(horizon_sessions, int) or isinstance(horizon_sessions, bool) or horizon_sessions <= 0:
+        raise DailyTrade40OracleBlockedError("Invalid formal Min Oracle session horizon")
+    target = f"daily_universal_formal_min_roos_trade{horizon_sessions}_netr_v1"
+    return target, f"LABEL-{target}"
+
+
 class DailyTrade40OracleBlockedError(ValueError):
     """A source, maturity or per-seed formal Min identity failed verification."""
 
@@ -43,6 +50,7 @@ def build_daily_universal_trade40_oracle_scores(
     score_start: str | None = None,
     seed: int, param_sha256: str,
     canonical_schedule: tuple[ExecutableMinPeriod, ...],
+    horizon_sessions: int = HORIZON_SESSIONS,
     progress_callback: Callable[[str], None] | None = None,
 ) -> tuple[dict[tuple[str, str], float], dict[str, Any]]:
     """Compute all feature-eligible stock-day outcomes from a formal Min seed.
@@ -52,8 +60,9 @@ def build_daily_universal_trade40_oracle_scores(
     session, but cannot acquire a hindsight score outside the PIT score period.
     For each hypothetical entry, Min parameters become effective on the next
     observed *ticker* order date, matching Min signal->order semantics. Only
-    the 40-session horizon is imposed on the otherwise canonical trade path.
+    the declared session horizon is imposed on the canonical trade path.
     """
+    target_id, label_id = target_identity_for_horizon(horizon_sessions)
     root = Path(project_root).resolve()
     if not canonical_schedule or len(param_sha256) != 64:
         raise DailyTrade40OracleBlockedError("Missing verified formal Min parameters for this seed")
@@ -97,6 +106,7 @@ def build_daily_universal_trade40_oracle_scores(
             raise DailyTrade40OracleBlockedError("Duplicate canonical price ticker source")
         exchange = collect_canonical_exchange_sessions(
             csv_inputs, benchmark_ticker=str(DEFAULT_LABEL_POLICY.benchmark_ticker),
+            horizon_sessions=horizon_sessions,
         )
         prior = exchange[exchange < start_day]
         if prior.empty:
@@ -119,14 +129,14 @@ def build_daily_universal_trade40_oracle_scores(
         daily_calendar_pos = exchange.get_indexer(pd.DatetimeIndex(group["date"]))
         if (daily_calendar_pos < 0).any():
             raise DailyTrade40OracleBlockedError("Feature stock-day absent from canonical exchange calendar")
-        eligible = daily_calendar_pos + HORIZON_SESSIONS < len(exchange)
+        eligible = daily_calendar_pos + horizon_sessions < len(exchange)
         maturity = np.full(len(group), np.datetime64("NaT"), dtype="datetime64[D]")
-        mature_positions = daily_calendar_pos[eligible] + HORIZON_SESSIONS
+        mature_positions = daily_calendar_pos[eligible] + horizon_sessions
         maturity[eligible] = exchange.take(mature_positions).to_numpy(dtype="datetime64[D]")
         mature = eligible & (maturity <= np.datetime64(cutoff_day.date()))
         group = group.loc[mature].copy()
         if group.empty:
-            raise DailyTrade40OracleBlockedError("No 40-session mature feature stock-days")
+            raise DailyTrade40OracleBlockedError(f"No {horizon_sessions}-session mature feature stock-days")
         records: list[pd.DataFrame] = []
         groups = group.groupby("ticker", sort=True)
         total_tickers = group["ticker"].nunique()
@@ -144,7 +154,7 @@ def build_daily_universal_trade40_oracle_scores(
                 raise DailyTrade40OracleBlockedError(f"Feature stock-day missing sanitized price: {ticker}")
             batch = compute_counterfactual_trade40_batch(
                 frame, positions, ticker=ticker, schedule=canonical_schedule,
-                exchange_calendar=exchange,
+                exchange_calendar=exchange, horizon_sessions=horizon_sessions,
             )
             # No effective Min parameter is missing source truth, NOT an
             # unfilled trade outcome. Ranking it last would fabricate an
@@ -167,7 +177,7 @@ def build_daily_universal_trade40_oracle_scores(
                 )
             expected_deadlines = np.asarray(maturity[selected.index], dtype="datetime64[D]")
             if not np.array_equal(batch.maturity_dates, expected_deadlines):
-                raise DailyTrade40OracleBlockedError("40-session mature deadline disagrees with Min target path")
+                raise DailyTrade40OracleBlockedError(f"{horizon_sessions}-session mature deadline disagrees with Min target path")
             raw = np.asarray(batch.target_raw_r, dtype=np.float64)
             valid = np.asarray(batch.valid_mask, dtype=bool)
             if ((valid & ~np.isfinite(raw)).any() or ((~valid) & np.isfinite(raw)).any()):
@@ -200,9 +210,9 @@ def build_daily_universal_trade40_oracle_scores(
                          "params_signature": p.params_signature} for p in canonical_schedule],
         }
         evidence = {
-            "label_id": LABEL_ID, "target_id": TARGET_ID,
+            "label_id": label_id, "target_id": target_id,
             "profile_id": profile_id, "key_mode": "information_date",
-            "cohort": "daily_eligible_stock_days_formal_min_40_exchange_sessions_mature",
+            "cohort": f"daily_eligible_stock_days_formal_min_{horizon_sessions}_exchange_sessions_mature",
             "mature_eligible_rows": len(outcome),
             "settled_net_r_rows": int(outcome["realized_net_r"].notna().sum()),
             "censored_rank_last_rows": int(outcome["realized_net_r"].isna().sum()),
@@ -226,5 +236,5 @@ def build_daily_universal_trade40_oracle_scores(
         ) from exc
 
 
-__all__ = ["TARGET_ID", "LABEL_ID", "DailyTrade40OracleBlockedError",
+__all__ = ["TARGET_ID", "LABEL_ID", "target_identity_for_horizon", "DailyTrade40OracleBlockedError",
            "build_daily_universal_trade40_oracle_scores"]

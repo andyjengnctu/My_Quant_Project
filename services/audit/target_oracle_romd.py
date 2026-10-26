@@ -34,6 +34,7 @@ from core.path_utils import project_relative_display_path
 from core.strategy_compare_policy import (
     get_strategy_comparison_settings, get_strategy_multi_seed_robustness_settings,
 )
+from filters.breakout_quality.daily_trade40_target import HORIZON_SESSIONS
 from filters.breakout_quality.daily_ranker_data import compute_daily_opportunity_target_batch
 from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets
 from filters.breakout_quality.workflow_io import discover_dataset_csv_inputs, load_dataset_frame
@@ -127,7 +128,7 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
         raise OracleBlockedError("Oracle comparison清單為空；請由正式Registry設定比較對象")
     definitions: list[tuple[str, str]] = []
     recipes: dict[str, tuple[str, str]] = {}
-    daily_recipes: dict[str, tuple[str, str]] = {}
+    daily_recipes: dict[str, tuple[str, str, int]] = {}
     aliases: dict[str, str] = {}
     selectors: dict[str, str] = {}
     provider_fields: list[str] = []
@@ -148,9 +149,11 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
         # reused for a different recipe or score source by changing the list.
         historical = next((item for item in _ORACLE_DEFAULT_COMPARISONS
                            if item["target"] == name), None)
-        if historical is not None and any(
-                str(entry.get(key) or "") != str(historical.get(key) or "")
-                for key in ("selector", "score", "provider", "score_source")):
+        if historical is not None and (
+                any(str(entry.get(key) or "") != str(historical.get(key) or "")
+                    for key in ("selector", "score", "provider", "score_source"))
+                or entry.get("horizon_sessions", HORIZON_SESSIONS) !=
+                   historical.get("horizon_sessions", HORIZON_SESSIONS)) :
             raise OracleBlockedError(
                 f"Oracle {name} 的score/selector身分已變更；須建立新Target科學ID，禁止沿用舊快取"
             )
@@ -169,9 +172,12 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
             if selector != "exact":
                 raise OracleBlockedError(f"Oracle {name} 的新分數必須使用Exact；Direct僅能重用score來源")
             if recipe in _ORACLE_DAILY_SCORE_RECIPES:
+                horizon = entry.get("horizon_sessions", HORIZON_SESSIONS)
+                if not isinstance(horizon, int) or isinstance(horizon, bool) or horizon <= 0:
+                    raise OracleBlockedError(f"Oracle {name} daily horizon must be positive sessions")
                 if provider != "daily_trade40_profile":
                     raise OracleBlockedError(f"Oracle {name} Daily-universal provider is not canonical: {provider}")
-                daily_recipes[name] = (recipe, provider)
+                daily_recipes[name] = (recipe, provider, horizon)
             elif recipe in _ORACLE_SCORE_RECIPES:
                 recipes[name] = (recipe, provider)
                 if provider not in provider_fields:
@@ -203,7 +209,10 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
         if recipe in _ORACLE_DAILY_SCORE_RECIPES:
             if provider != "daily_trade40_profile":
                 raise OracleBlockedError(f"Oracle Direct daily來源非法：{source_name}")
-            daily_recipes[source_name] = (recipe, provider)
+            horizon = source_entry.get("horizon_sessions", HORIZON_SESSIONS)
+            if not isinstance(horizon, int) or isinstance(horizon, bool) or horizon <= 0:
+                raise OracleBlockedError(f"Oracle Direct {source_name} horizon invalid")
+            daily_recipes[source_name] = (recipe, provider, horizon)
         elif recipe in _ORACLE_SCORE_RECIPES:
             recipes[source_name] = (recipe, provider)
             if provider not in provider_fields:
@@ -404,12 +413,12 @@ def _resolve_oracle_target_score_contracts(definition, settings, plan) -> dict[s
                 raise OracleBlockedError(f"{name}: formal feature/target provider缺少Target ID")
             target_identity = origin  # Existing Oracle target name, never a model/SC ID.
         else:
-            recipe, provider = plan["daily_recipes"][origin]
+            recipe, provider, horizon = plan["daily_recipes"][origin]
             profile_id = str(definition.source[provider])
             profile = get_breakout_quality_experiment_profile(profile_id)
-            from services.audit.daily_trade40_oracle import TARGET_ID
+            from services.audit.daily_trade40_oracle import target_identity_for_horizon
             source_target = str(profile.continuous_target_id)
-            target_identity = TARGET_ID  # Only the formal per-seed Min target owner.
+            target_identity, _label_id = target_identity_for_horizon(horizon)
         if profile.training_sample_scope != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
             raise OracleBlockedError(f"{name}: 來源不是正式Daily DL可評分母體")
         arm = direct if plan["selectors"][name] == "direct" else exact
@@ -1323,13 +1332,14 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
         if daily_evidence is None:
             raise OracleBlockedError("Daily-universal Oracle missing verified target lineage")
         source = plan["daily_sources"][target]
-        recipe, provider = plan["daily_recipes"][source]
+        recipe, provider, horizon = plan["daily_recipes"][source]
         policy["hindsight_score_recipe"] = recipe
         policy["hindsight_score_key_mode"] = "information_date"
         policy["hindsight_target_contract"] = {
             "label_id": daily_evidence["label_id"],
             "target_id": daily_evidence["target_id"],
             "profile_id": str(definition.source[provider]),
+            **({"horizon_sessions": horizon} if horizon != HORIZON_SESSIONS else {}),
             "rank_policy": daily_evidence["rank_policy"],
             "rank_sha256": daily_evidence["rank_sha256"],
             "raw_label_sha256": daily_evidence["raw_label_sha256"],
@@ -1378,75 +1388,88 @@ def build_report(
     # providers or starting any portfolio Replay. Only the approved Audit
     # progress text changes; no report sections/columns or Trading path change.
     daily_seed_scores: dict[int, dict[str, dict[tuple[str, str], float]]] = {}
-    daily_seed_evidence: dict[int, dict[str, Any]] = {}
+    daily_seed_evidence: dict[int, dict[str, dict[str, Any]]] = {}
+    common_horizon = max(
+        (horizon for _recipe, _provider, horizon in plan["daily_recipes"].values()),
+        default=HORIZON_SESSIONS,
+    )
     if plan["daily_recipes"]:
-        if len(plan["daily_recipes"]) != 1:
-            raise OracleBlockedError("Daily-universal Oracle must have a single Exact score source")
         from filters.breakout_quality.daily_trade40_target import (
             build_formal_min_execution_schedule, resolve_formal_min_param_records,
         )
         from services.audit.daily_trade40_oracle import (
-            TARGET_ID as FORMAL_MIN_TRADE40_TARGET_ID,
-            LABEL_ID as FORMAL_MIN_TRADE40_LABEL_ID,
             DailyTrade40OracleBlockedError, build_daily_universal_trade40_oracle_scores,
+            target_identity_for_horizon,
         )
-        source_name, (_recipe, provider) = next(iter(plan["daily_recipes"].items()))
-        # Use the identical resolved param view as C96/Min Portfolio.
         prepared_for_scores, _ = _prepare_oracle_parameters(
             definition, root=root, parameter_paths=parameter_paths,
             start=str(settings.start_date), end=str(settings.end_date), base_arm=base_arm,
         )
         for seed, param_sha, kind, base_params, _oracle_params in prepared_for_scores:
-            try:
-                canonical_records = resolve_formal_min_param_records(kind, base_params)
-                schedule, _provenance = build_formal_min_execution_schedule(
-                    canonical_records, seed=seed, param_sha256=param_sha,
-                )
-                daily_scores, evidence = build_daily_universal_trade40_oracle_scores(
-                    project_root=root, dataset=str(settings.dataset),
-                    filter_id=str(definition.source["filter_id"]),
-                    profile_id=str(definition.source[provider]),
-                    cutoff=str(settings.end_date), evaluation_start=str(settings.start_date),
-                    score_start=_formal_dl_score_start(definition, settings),
-                    seed=seed, param_sha256=param_sha, canonical_schedule=schedule,
-                    progress_callback=(lambda message: progress(f"seed={seed} {message}")) if not quiet else None,
-                )
-            except (DailyTrade40OracleBlockedError, ValueError) as exc:
-                raise OracleBlockedError(f"Formal Min seed={seed} target blocked: {exc}") from exc
-            teacher = dict(evidence.get("teacher") or {})
-            if (teacher.get("seed") != seed
-                    or teacher.get("param_identity_sha256") != param_sha
-                    or evidence.get("profile_id") != str(definition.source[provider])
-                    or evidence.get("target_id") != FORMAL_MIN_TRADE40_TARGET_ID
-                    or evidence.get("label_id") != FORMAL_MIN_TRADE40_LABEL_ID):
-                raise OracleBlockedError(f"Daily-universal seed={seed} not based on this formal Min parameter view")
-            daily_seed_evidence[int(seed)] = evidence
-            daily_seed_scores[int(seed)] = {source_name: daily_scores}
+            canonical_records = resolve_formal_min_param_records(kind, base_params)
+            schedule, _provenance = build_formal_min_execution_schedule(
+                canonical_records, seed=seed, param_sha256=param_sha,
+            )
+            daily_seed_scores[int(seed)] = {}
+            daily_seed_evidence[int(seed)] = {}
+            for source_name, (_recipe, provider, horizon) in plan["daily_recipes"].items():
+                try:
+                    daily_scores, evidence = build_daily_universal_trade40_oracle_scores(
+                        project_root=root, dataset=str(settings.dataset),
+                        filter_id=str(definition.source["filter_id"]),
+                        profile_id=str(definition.source[provider]),
+                        cutoff=str(settings.end_date), evaluation_start=str(settings.start_date),
+                        score_start=_formal_dl_score_start(definition, settings),
+                        seed=seed, param_sha256=param_sha, canonical_schedule=schedule,
+                        **({"horizon_sessions": horizon} if horizon != HORIZON_SESSIONS else {}),
+                        progress_callback=(lambda message, name=source_name: progress(
+                            f"seed={seed} {name} {message}")) if not quiet else None,
+                    )
+                except (DailyTrade40OracleBlockedError, ValueError) as exc:
+                    raise OracleBlockedError(
+                        f"Formal Min seed={seed} {source_name} target blocked: {exc}"
+                    ) from exc
+                target_id, label_id = target_identity_for_horizon(horizon)
+                teacher = dict(evidence.get("teacher") or {})
+                if (teacher.get("seed") != seed
+                        or teacher.get("param_identity_sha256") != param_sha
+                        or evidence.get("profile_id") != str(definition.source[provider])
+                        or evidence.get("target_id") != target_id
+                        or evidence.get("label_id") != label_id):
+                    raise OracleBlockedError(
+                        f"Daily-universal seed={seed} {source_name} not based on this formal Min parameter view"
+                    )
+                daily_seed_evidence[int(seed)][source_name] = evidence
+                daily_seed_scores[int(seed)][source_name] = daily_scores
+                if not quiet:
+                    progress(f"Daily-universal {source_name} seed={seed}: "
+                             f"{evidence['mature_eligible_rows']:,} mature, "
+                             f"{evidence['settled_net_r_rows']:,} settled")
             for alias, original in plan["aliases"].items():
-                if original == source_name:
-                    daily_seed_scores[int(seed)][alias] = daily_scores
-            if not quiet:
-                progress(f"Daily-universal formal Min seed={seed}: "
-                         f"{evidence['mature_eligible_rows']:,} mature, "
-                         f"{evidence['settled_net_r_rows']:,} settled")
-        expected_seeds = {seed for seed, _ in parameter_paths}
-        if set(daily_seed_scores) != expected_seeds:
+                if original in plan["daily_recipes"]:
+                    daily_seed_scores[int(seed)][alias] = daily_seed_scores[int(seed)][original]
+        if set(daily_seed_scores) != {seed for seed, _ in parameter_paths}:
             raise OracleBlockedError("Daily-universal per-seed scores incomplete")
-        for evidence in daily_seed_evidence.values():
-            if (str(evidence["first_date"]) < _formal_dl_score_start(definition, settings)
-                    or str(evidence["first_replay_trade_date"]) < str(settings.start_date)):
-                raise OracleBlockedError("Daily-universal PIT score coverage boundary mismatch")
+        for seed_evidence in daily_seed_evidence.values():
+            if set(seed_evidence) != set(plan["daily_recipes"]):
+                raise OracleBlockedError("Daily-universal per-source truth incomplete")
+            for evidence in seed_evidence.values():
+                if (str(evidence["first_date"]) < _formal_dl_score_start(definition, settings)
+                        or str(evidence["first_replay_trade_date"]) < str(settings.start_date)):
+                    raise OracleBlockedError("Daily-universal PIT score coverage boundary mismatch")
     if plan["providers"]:
         scores40, cohort40 = _build_oracle_score_panels(
             definition, project_root=root, cutoff=str(settings.end_date),
             progress=None if quiet else progress,
         )
     else:
-        # All selected score sources are per-seed daily truth. The label owner
-        # has already independently verified stock-day eligibility and maturity.
+        # The longest selected Target defines the common maturity boundary.
+        # This is an explicit cross-horizon comparison, NOT an intersection
+        # of inconsistent per-target feature eligibility.
         scores40 = {}
-        source_name = next(iter(plan["daily_recipes"]))
-        seed_keys = [set(scores[source_name]) for scores in daily_seed_scores.values()]
+        reference_name = max(plan["daily_recipes"],
+                             key=lambda name: plan["daily_recipes"][name][2])
+        seed_keys = [set(scores[reference_name]) for scores in daily_seed_scores.values()]
         if not seed_keys or any(keys != seed_keys[0] for keys in seed_keys[1:]) or not seed_keys[0]:
             raise OracleBlockedError("Daily-universal per-seed score cohorts are incomplete/incompatible")
         first_day = min(day for _ticker, day in seed_keys[0])
@@ -1458,10 +1481,46 @@ def build_report(
             "research_cutoff": str(settings.end_date),
             "risk_budget_return": float(StrategyAlignedContinuousTargetSpec.from_label_policy(
                 DEFAULT_LABEL_POLICY).risk_budget_return),
-            "providers": {"daily_trade40": str(definition.source[plan["daily_recipes"][source_name][1]])},
+            "providers": {f"daily_trade{horizon}": str(definition.source[provider])
+                          for _recipe, provider, horizon in plan["daily_recipes"].values()},
             "scoring": "Canonical daily target percentile on formal feature-eligible daily cohort",
             "oracle_only": True,
         }
+    if common_horizon > HORIZON_SESSIONS:
+        # A 60-session outcome cannot receive hindsight truth on a day where
+        # only 40 sessions have matured. Compare all selected arms on the same
+        # *dated* 60D-mature window; preserve the untouched 40D-only path and
+        # its completed Replay caches if the 60D treatments are disabled.
+        mature_ends = [evidence["last_date"]
+                       for records in daily_seed_evidence.values()
+                       for source, evidence in records.items()
+                       if plan["daily_recipes"][source][2] == common_horizon]
+        if not mature_ends:
+            raise OracleBlockedError("Long-horizon Oracle maturity boundary missing")
+        common_end = min(str(cohort40["last_common_day"]), *(str(day) for day in mature_ends))
+        if common_end <= str(settings.start_date):
+            raise OracleBlockedError("Long-horizon Oracle evaluation window has no mature sessions")
+        scores40 = {name: {key: value for key, value in table.items() if key[1] <= common_end}
+                    for name, table in scores40.items()}
+        for seed, tables in daily_seed_scores.items():
+            daily_seed_scores[seed] = {
+                name: {key: value for key, value in table.items() if key[1] <= common_end}
+                for name, table in tables.items()
+            }
+        # Only remove whole information dates, never cherry-pick individual
+        # stocks or re-rank a cropped subset of the day's candidates.
+        reference = (next(iter(scores40.values())) if scores40 else
+                     daily_seed_scores[next(iter(daily_seed_scores))][
+                         max(plan["daily_recipes"], key=lambda name: plan["daily_recipes"][name][2])])
+        if not reference:
+            raise OracleBlockedError("Long-horizon common stock-day cohort is empty")
+        cohort40 = dict(cohort40)
+        cohort40.update(
+            cohort_rows=len(reference),
+            first_common_day=min(day for _, day in reference),
+            last_common_day=max(day for _, day in reference),
+            comparison_maturity_sessions=common_horizon,
+        )
     # Verify the hypothetical scored stock-days against their canonical
     # feature/target sources BEFORE considering any completed Replay cache.
     resolved_score_contracts = _certify_oracle_score_eligibility(
@@ -1475,7 +1534,7 @@ def build_report(
     start = str(settings.start_date)  # Formal Min Replay start NEVER depends on a new Target.
     end40 = min(str(settings.end_date), str(cohort40["last_common_day"]))
     if end40 <= start:
-        raise OracleBlockedError("40D成熟樣本期間不合法")
+        raise OracleBlockedError("Target成熟樣本期間不合法")
     data_dir = Path(get_dataset_dir(str(root), settings.dataset)).resolve()
     try:
         price_sha = price_inventory_sha256(root, settings.dataset)
@@ -1515,14 +1574,15 @@ def build_report(
                     "Daily-universal Target / Replay rolling P16 seed sets differ"
                 )
             for seed, replay_sha, _kind, _base_params, _oracle_params in prepared:
-                teacher = daily_seed_evidence[int(seed)].get("teacher") or {}
-                if (teacher.get("seed") != seed
-                        or teacher.get("param_identity_sha256") != replay_sha):
-                    raise OracleBlockedError(
-                        f"Daily-universal seed={seed} rolling P16 parameters changed "
-                        "between Target truth materialization and Replay; "
-                        "cannot pair different strategy parameters"
-                    )
+                for source_name, source_evidence in daily_seed_evidence[int(seed)].items():
+                    teacher = source_evidence.get("teacher") or {}
+                    if (teacher.get("seed") != seed
+                            or teacher.get("param_identity_sha256") != replay_sha):
+                        raise OracleBlockedError(
+                            f"Daily-universal seed={seed} {source_name} rolling P16 parameters "
+                            "changed between Target truth materialization and Replay; "
+                            "cannot pair different strategy parameters"
+                        )
         definitions = dict(targets)
         definitions_with_base = {
             str(definition.source["baseline_arm_id"]): "Canonical same-window Min P16 Base-Finalist-Best",
@@ -1563,7 +1623,8 @@ def build_report(
                        baseline_identity_arm if target == "C96" else exact_arm)
                 arm_replay_policy = _arm_replay_policy(
                     definition, plan=plan, target=target, replay_policy=replay_policy,
-                    daily_evidence=daily_seed_evidence.get(seed),
+                    daily_evidence=daily_seed_evidence.get(seed, {}).get(
+                        plan["daily_sources"][target]) if target in plan["daily_sources"] else None,
                     score_sha256=(score_fingerprints[seed][target] if target != "C96" else None),
                     score_contract=(resolved_score_contracts[target] if target != "C96" else None),
                 )
@@ -1703,7 +1764,7 @@ def build_report(
 
     base = run_panel(
         end=end40, cohort=cohort40, scores=scores40,
-        targets=plan["targets"], label="40D",
+        targets=plan["targets"], label=f"{common_horizon}D",
     )
     return {
         "schema_version": ORACLE_REPORT_SCHEMA_VERSION,
@@ -1744,11 +1805,15 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
     rows = format_comparison_rows(perf_table, items, target=target)
     intro = [
         "Target Ground Truth -> Strategy RoMD (HINDSIGHT ORACLE / NOT PIT)",
-        f'Period: {report["start_date"]} ~ {report["end_date"]} (40D-mature common window)',
+        f'Period: {report["start_date"]} ~ {report["end_date"]} '
+        f'({report["common_cohort"].get("comparison_maturity_sessions", 40)}D-mature common window)',
         f'Common stock-day cohort: {report["common_cohort"]["cohort_rows"]:,}',
         f'Benchmark: {report["benchmark_id"]}, same-seed pairs N={len(report["seeds"])}',
-        f'Report schema: {report["schema_version"]}, Oracle treatments: '
-        f'{len(report["oracles"])} (40D, Exact + Direct); not Standard SOP',
+        (f'Report schema: {report["schema_version"]}, Oracle treatments: '
+         + (f'{len(report["oracles"])} (40D, Exact + Direct); not Standard SOP'
+            if report["common_cohort"].get("comparison_maturity_sessions", 40) == 40 else
+            f'{len(report["oracles"])} (40D + '
+            f'{report["common_cohort"]["comparison_maturity_sessions"]}D, Exact + Direct); not Standard SOP')),
         'Ranking: Exact K/R0 or Direct No-K/No-R0; same Broker-Cash, seed/P16 and future scores.',
         'T40: (1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 >= 1R -> T40 = -1R.',
         'T40-MFE: (1 - min(MAE40, 1R)) * MFE40_R - min(MAE40, 1R); MAE40 >= 1R -> -1R.',

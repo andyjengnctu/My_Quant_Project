@@ -108,8 +108,8 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                 # provider workload; historical provider profiles stay in the
                 # catalog for read-only provenance.
                 # AI: Retired Min signal-event ranking is not selectable.
-                # The remaining DailyUniversal Net-R truth uses the formal
-                # per-seed Min path on the DL-eligible stock-day universe.
+                # The DailyUniversal Net-R truth uses one formal per-seed
+                # Min path capability with a declared session horizon.
                 "daily_trade40_profile": "daily_universal_full_horizon_mae_gated_mfe_t40_full_list_ndcg_pairwise",
                 # Historical comparison slots: immutable names retained by the
                 # canonical Registry, never executable and never reassignable.
@@ -130,6 +130,8 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     {"target": "T40-MFE_Direct", "description": "Same T40-MFE score; canonical No-K/No-R0 direct allocation", "score_source": "T40-MFE", "selector": "direct"},
                     {"target": "DailyUniversal_MinTrade40_NetR", "description": "Formal per-seed Min ROOS hypothetical stock-day Net-R, 40 exchange-session horizon, hindsight ranking", "score": "daily_trade_path_net_r", "provider": "daily_trade40_profile", "selector": "exact"},
                     {"target": "DailyUniversal_MinTrade40_NetR_Direct", "description": "Same formal per-seed Min ROOS daily truth and ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade40_NetR", "selector": "direct"},
+                    {"target": "DailyUniversal_MinTrade60_NetR", "description": "Formal per-seed Min ROOS hypothetical stock-day Net-R, 60 consolidated exchange sessions, hindsight ranking", "score": "daily_trade_path_net_r", "provider": "daily_trade40_profile", "horizon_sessions": 60, "selector": "exact"},
+                    {"target": "DailyUniversal_MinTrade60_NetR_Direct", "description": "Same formal 60-session Min ROOS daily truth and ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade60_NetR", "selector": "direct"},
                 ),
             },
             "dimensions": {
