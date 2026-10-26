@@ -128,7 +128,7 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
         raise OracleBlockedError("Oracle comparison清單為空；請由正式Registry設定比較對象")
     definitions: list[tuple[str, str]] = []
     recipes: dict[str, tuple[str, str]] = {}
-    daily_recipes: dict[str, tuple[str, str, int]] = {}
+    daily_recipes: dict[str, tuple[str, str, int | None]] = {}
     aliases: dict[str, str] = {}
     selectors: dict[str, str] = {}
     provider_fields: list[str] = []
@@ -153,7 +153,9 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
                 any(str(entry.get(key) or "") != str(historical.get(key) or "")
                     for key in ("selector", "score", "provider", "score_source"))
                 or entry.get("horizon_sessions", HORIZON_SESSIONS) !=
-                   historical.get("horizon_sessions", HORIZON_SESSIONS)) :
+                   historical.get("horizon_sessions", HORIZON_SESSIONS)
+                or entry.get("horizon_mode", "fixed_sessions") !=
+                   historical.get("horizon_mode", "fixed_sessions")) :
             raise OracleBlockedError(
                 f"Oracle {name} 的score/selector身分已變更；須建立新Target科學ID，禁止沿用舊快取"
             )
@@ -172,9 +174,15 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
             if selector != "exact":
                 raise OracleBlockedError(f"Oracle {name} 的新分數必須使用Exact；Direct僅能重用score來源")
             if recipe in _ORACLE_DAILY_SCORE_RECIPES:
-                horizon = entry.get("horizon_sessions", HORIZON_SESSIONS)
-                if not isinstance(horizon, int) or isinstance(horizon, bool) or horizon <= 0:
-                    raise OracleBlockedError(f"Oracle {name} daily horizon must be positive sessions")
+                mode = entry.get("horizon_mode", "fixed_sessions")
+                horizon = (None if mode == "full_trade_cycle" else
+                           entry.get("horizon_sessions", HORIZON_SESSIONS))
+                if mode not in {"fixed_sessions", "full_trade_cycle"} or (
+                    mode == "full_trade_cycle" and "horizon_sessions" in entry
+                ) or (horizon is not None and (
+                    not isinstance(horizon, int) or isinstance(horizon, bool) or horizon <= 0
+                )):
+                    raise OracleBlockedError(f"Oracle {name} invalid session horizon/mode")
                 if provider != "daily_trade40_profile":
                     raise OracleBlockedError(f"Oracle {name} Daily-universal provider is not canonical: {provider}")
                 daily_recipes[name] = (recipe, provider, horizon)
@@ -209,8 +217,11 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
         if recipe in _ORACLE_DAILY_SCORE_RECIPES:
             if provider != "daily_trade40_profile":
                 raise OracleBlockedError(f"Oracle Direct daily來源非法：{source_name}")
-            horizon = source_entry.get("horizon_sessions", HORIZON_SESSIONS)
-            if not isinstance(horizon, int) or isinstance(horizon, bool) or horizon <= 0:
+            horizon = (None if source_entry.get("horizon_mode") == "full_trade_cycle" else
+                       source_entry.get("horizon_sessions", HORIZON_SESSIONS))
+            if horizon is not None and (
+                not isinstance(horizon, int) or isinstance(horizon, bool) or horizon <= 0
+            ):
                 raise OracleBlockedError(f"Oracle Direct {source_name} horizon invalid")
             daily_recipes[source_name] = (recipe, provider, horizon)
         elif recipe in _ORACLE_SCORE_RECIPES:
@@ -996,7 +1007,8 @@ def _certify_oracle_score_eligibility(
 
     Each price score is computed from a validated feature-eligible canonical
     daily bundle. The per-seed Min score source separately verifies that same
-    generic feature universe and its 40-session maturity. A hypothetical new
+    generic feature universe and its common information-date eligibility;
+    only the target's economic closeout deadline varies. A hypothetical new
     Target cannot have a PIT *model* manifest; requiring such a file wrongly
     makes the original experiment depend on prior model training. The real DL
     score lookup, availability policy and selector are parity-tested at the
@@ -1339,18 +1351,21 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
             "label_id": daily_evidence["label_id"],
             "target_id": daily_evidence["target_id"],
             "profile_id": str(definition.source[provider]),
-            **({"horizon_sessions": horizon} if horizon != HORIZON_SESSIONS else {}),
+            **({"horizon_mode": "full_trade_cycle"} if horizon is None else
+               {"horizon_sessions": horizon} if horizon != HORIZON_SESSIONS else {}),
             "rank_policy": daily_evidence["rank_policy"],
             "rank_sha256": daily_evidence["rank_sha256"],
             "raw_label_sha256": daily_evidence["raw_label_sha256"],
             "calendar_sha256": daily_evidence["calendar_sha256"],
             "teacher": daily_evidence["teacher"],
             "mature_eligible_rows": daily_evidence["mature_eligible_rows"],
+            "research_cutoff_closeout_rows": daily_evidence.get("research_cutoff_closeout_rows", 0),
+            "cutoff_truncated_rows": daily_evidence.get("cutoff_truncated_rows", 0),
             "score_start_date": daily_evidence["score_start_date"],
             "settled_net_r_rows": daily_evidence["settled_net_r_rows"],
             "censored_rank_last_rows": daily_evidence["censored_rank_last_rows"],
             # Matches the canonical DL lookup: a candidate outside the
-            # feature-eligible mature score universe has no score, never 0R.
+            # feature-eligible score universe has no score, never 0R.
             # Distinct replay identity prevents accidental historical reuse.
             "missing_key_policy": "unavailable_outside_mature_feature_universe",
             "research_cutoff": daily_evidence["research_cutoff"],
@@ -1389,10 +1404,11 @@ def build_report(
     # progress text changes; no report sections/columns or Trading path change.
     daily_seed_scores: dict[int, dict[str, dict[tuple[str, str], float]]] = {}
     daily_seed_evidence: dict[int, dict[str, dict[str, Any]]] = {}
-    common_horizon = max(
-        (horizon for _recipe, _provider, horizon in plan["daily_recipes"].values()),
-        default=HORIZON_SESSIONS,
-    )
+    # A target never controls portfolio replay time. Evaluation is owned by
+    # the canonical Oracle/Research DL window, independently of comparison rows.
+    evaluation_end = str(definition.dimensions.get("oracle_evaluation_end_date") or "")
+    if not evaluation_end or not (str(settings.start_date) < evaluation_end <= str(settings.end_date)):
+        raise OracleBlockedError("Oracle fixed evaluation-end contract is missing/invalid")
     if plan["daily_recipes"]:
         from filters.breakout_quality.daily_trade40_target import (
             build_formal_min_execution_schedule, resolve_formal_min_param_records,
@@ -1419,6 +1435,7 @@ def build_report(
                         filter_id=str(definition.source["filter_id"]),
                         profile_id=str(definition.source[provider]),
                         cutoff=str(settings.end_date), evaluation_start=str(settings.start_date),
+                        evaluation_end=evaluation_end,
                         score_start=_formal_dl_score_start(definition, settings),
                         seed=seed, param_sha256=param_sha, canonical_schedule=schedule,
                         **({"horizon_sessions": horizon} if horizon != HORIZON_SESSIONS else {}),
@@ -1443,8 +1460,9 @@ def build_report(
                 daily_seed_scores[int(seed)][source_name] = daily_scores
                 if not quiet:
                     progress(f"Daily-universal {source_name} seed={seed}: "
-                             f"{evidence['mature_eligible_rows']:,} mature, "
-                             f"{evidence['settled_net_r_rows']:,} settled")
+                             f"{evidence['mature_eligible_rows']:,} score eligible, "
+                             f"{evidence['settled_net_r_rows']:,} settled; "
+                             f"cutoff-truncated={evidence.get('cutoff_truncated_rows', 0):,}")
             for alias, original in plan["aliases"].items():
                 if original in plan["daily_recipes"]:
                     daily_seed_scores[int(seed)][alias] = daily_seed_scores[int(seed)][original]
@@ -1463,12 +1481,10 @@ def build_report(
             progress=None if quiet else progress,
         )
     else:
-        # The longest selected Target defines the common maturity boundary.
-        # This is an explicit cross-horizon comparison, NOT an intersection
-        # of inconsistent per-target feature eligibility.
+        # Daily-only comparisons use the SAME fixed evaluation cutoff as the
+        # full mixed comparison. They never derive a date from the selected H.
         scores40 = {}
-        reference_name = max(plan["daily_recipes"],
-                             key=lambda name: plan["daily_recipes"][name][2])
+        reference_name = next(iter(plan["daily_recipes"]))
         seed_keys = [set(scores[reference_name]) for scores in daily_seed_scores.values()]
         if not seed_keys or any(keys != seed_keys[0] for keys in seed_keys[1:]) or not seed_keys[0]:
             raise OracleBlockedError("Daily-universal per-seed score cohorts are incomplete/incompatible")
@@ -1486,41 +1502,32 @@ def build_report(
             "scoring": "Canonical daily target percentile on formal feature-eligible daily cohort",
             "oracle_only": True,
         }
-    if common_horizon > HORIZON_SESSIONS:
-        # A 60-session outcome cannot receive hindsight truth on a day where
-        # only 40 sessions have matured. Compare all selected arms on the same
-        # *dated* 60D-mature window; preserve the untouched 40D-only path and
-        # its completed Replay caches if the 60D treatments are disabled.
-        mature_ends = [evidence["last_date"]
-                       for records in daily_seed_evidence.values()
-                       for source, evidence in records.items()
-                       if plan["daily_recipes"][source][2] == common_horizon]
-        if not mature_ends:
-            raise OracleBlockedError("Long-horizon Oracle maturity boundary missing")
-        common_end = min(str(cohort40["last_common_day"]), *(str(day) for day in mature_ends))
-        if common_end <= str(settings.start_date):
-            raise OracleBlockedError("Long-horizon Oracle evaluation window has no mature sessions")
-        scores40 = {name: {key: value for key, value in table.items() if key[1] <= common_end}
-                    for name, table in scores40.items()}
-        for seed, tables in daily_seed_scores.items():
-            daily_seed_scores[seed] = {
-                name: {key: value for key, value in table.items() if key[1] <= common_end}
-                for name, table in tables.items()
-            }
-        # Only remove whole information dates, never cherry-pick individual
-        # stocks or re-rank a cropped subset of the day's candidates.
-        reference = (next(iter(scores40.values())) if scores40 else
-                     daily_seed_scores[next(iter(daily_seed_scores))][
-                         max(plan["daily_recipes"], key=lambda name: plan["daily_recipes"][name][2])])
-        if not reference:
-            raise OracleBlockedError("Long-horizon common stock-day cohort is empty")
-        cohort40 = dict(cohort40)
-        cohort40.update(
-            cohort_rows=len(reference),
-            first_common_day=min(day for _, day in reference),
-            last_common_day=max(day for _, day in reference),
-            comparison_maturity_sessions=common_horizon,
-        )
+    # Only the independent, registry-declared evaluation date can clip the
+    # replay population. Crop WHOLE dates, not any one target's samples.
+    # The daily provider has already calculated every eligible row through
+    # this date, and its future path may close at the research cutoff.
+    scores40 = {name: {key: value for key, value in table.items()
+                       if key[1] <= evaluation_end} for name, table in scores40.items()}
+    if plan["providers"] and (
+            not scores40 or min(max(day for _, day in table) for table in scores40.values()) < evaluation_end):
+        raise OracleBlockedError("Oracle fixed evaluation end lacks validated price truth")
+    for seed, tables in daily_seed_scores.items():
+        daily_seed_scores[seed] = {
+            name: {key: value for key, value in table.items() if key[1] <= evaluation_end}
+            for name, table in tables.items()
+        }
+    reference = (next(iter(scores40.values())) if scores40 else
+                 daily_seed_scores[next(iter(daily_seed_scores))][next(iter(plan["daily_recipes"]))])
+    if not reference or max(day for _, day in reference) < evaluation_end:
+        raise OracleBlockedError("Oracle fixed evaluation end lacks eligible score rows")
+    cohort40 = dict(cohort40)
+    cohort40.update(
+        cohort_rows=len(reference),
+        first_common_day=min(day for _, day in reference),
+        last_common_day=max(day for _, day in reference),
+        evaluation_window_policy="target_independent_fixed_research_dl",
+        target_truth_closeout_policy="min_natural_exit_horizon_research_cutoff",
+    )
     # Verify the hypothetical scored stock-days against their canonical
     # feature/target sources BEFORE considering any completed Replay cache.
     resolved_score_contracts = _certify_oracle_score_eligibility(
@@ -1532,9 +1539,9 @@ def build_report(
     direct_arm = (_direct_arm(definition, settings, base_arm, exact_arm)
                   if "direct" in plan["selectors"].values() else None)
     start = str(settings.start_date)  # Formal Min Replay start NEVER depends on a new Target.
-    end40 = min(str(settings.end_date), str(cohort40["last_common_day"]))
+    end40 = evaluation_end
     if end40 <= start:
-        raise OracleBlockedError("Target成熟樣本期間不合法")
+        raise OracleBlockedError("Oracle fixed evaluation period invalid")
     data_dir = Path(get_dataset_dir(str(root), settings.dataset)).resolve()
     try:
         price_sha = price_inventory_sha256(root, settings.dataset)
@@ -1549,7 +1556,7 @@ def build_report(
         plan, price_scores=scores40, daily_scores=daily_seed_scores,
         seeds=[seed for seed, _path in parameter_paths],
     )
-    # Existing single mature 40D panel; Exact and Direct consume the same truth.
+    # One fixed-evaluation panel; Exact and Direct consume the same truth.
     # Every treatment carries its own canonical ranking/allocator policy identity.
     def run_panel(*, end: str, cohort: dict[str, Any], scores: dict[str, dict],
                   targets: tuple[tuple[str, str], ...], label: str) -> dict[str, Any]:
@@ -1764,7 +1771,7 @@ def build_report(
 
     base = run_panel(
         end=end40, cohort=cohort40, scores=scores40,
-        targets=plan["targets"], label=f"{common_horizon}D",
+        targets=plan["targets"], label="Fixed",
     )
     return {
         "schema_version": ORACLE_REPORT_SCHEMA_VERSION,
@@ -1806,14 +1813,11 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
     intro = [
         "Target Ground Truth -> Strategy RoMD (HINDSIGHT ORACLE / NOT PIT)",
         f'Period: {report["start_date"]} ~ {report["end_date"]} '
-        f'({report["common_cohort"].get("comparison_maturity_sessions", 40)}D-mature common window)',
+        '(fixed evaluation window; MinTrade research-cutoff closeout)',
         f'Common stock-day cohort: {report["common_cohort"]["cohort_rows"]:,}',
         f'Benchmark: {report["benchmark_id"]}, same-seed pairs N={len(report["seeds"])}',
-        (f'Report schema: {report["schema_version"]}, Oracle treatments: '
-         + (f'{len(report["oracles"])} (40D, Exact + Direct); not Standard SOP'
-            if report["common_cohort"].get("comparison_maturity_sessions", 40) == 40 else
-            f'{len(report["oracles"])} (40D + '
-            f'{report["common_cohort"]["comparison_maturity_sessions"]}D, Exact + Direct); not Standard SOP')),
+        f'Report schema: {report["schema_version"]}, Oracle treatments: '
+        f'{len(report["oracles"])} (Exact + Direct); not Standard SOP',
         'Ranking: Exact K/R0 or Direct No-K/No-R0; same Broker-Cash, seed/P16 and future scores.',
         'T40: (1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 >= 1R -> T40 = -1R.',
         'T40-MFE: (1 - min(MAE40, 1R)) * MFE40_R - min(MAE40, 1R); MAE40 >= 1R -> -1R.',

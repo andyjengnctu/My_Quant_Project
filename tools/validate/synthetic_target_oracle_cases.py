@@ -67,6 +67,8 @@ def _forty_only(definition):
         if item["target"] not in {
             "DailyUniversal_MinTrade60_NetR",
             "DailyUniversal_MinTrade60_NetR_Direct",
+            "DailyUniversal_MinTrade_NetR",
+            "DailyUniversal_MinTrade_NetR_Direct",
         })})
 
 
@@ -81,7 +83,8 @@ def _legacy_definition():
 
 def _mock_panels(common40):
     """Canonical one-window fixture: Exact and Direct share the identical daily truth."""
-    return ({name: {("2330", "2025-01-02"): 0.8}
+    return ({name: {("2330", "2025-01-02"): 0.8,
+                    ("2330", "2025-12-22"): 0.8}
              for name, _ in LEGACY_ORACLE_TARGETS}, common40)
 
 
@@ -495,6 +498,11 @@ class OracleScoreParityContractCases(TestCase):
         from services.audit.daily_trade40_oracle import TARGET_ID, LABEL_ID
         from filters.breakout_quality import daily_trade40_target as trade_owner
         definition = _forty_only(_ACTIVE_ORACLE_DEFINITION)
+        # This test isolates cohort membership, not the fixed evaluation-end
+        # boundary. Supply a matching synthetic single-day evaluation contract.
+        definition = replace(definition, dimensions={
+            **definition.dimensions, "oracle_evaluation_end_date": "2021-01-04",
+        })
         seed, param_sha = 693545351, "a" * 64
         plan = oracle._oracle_comparison_plan(definition)
         price_row, daily_row = ("2330", "2021-01-04"), ("2317", "2021-01-04")
@@ -838,7 +846,7 @@ class OracleAuditContractCases(TestCase):
             {"CG40_EqualRank", "MFE40_Control", "R40", "T40",
              "T40-MFE", "MFE40_Direct", "R40_Direct", "T40_Direct", "T40-MFE_Direct"},
         )
-        self.assertEqual(len(oracle._oracle_comparison_plan(self.active_definition)["targets"]), 13)
+        self.assertEqual(len(oracle._oracle_comparison_plan(self.active_definition)["targets"]), 15)
         self.assertNotIn("MinTrade40_NetR", dict(oracle._oracle_comparison_plan(self.active_definition)["targets"]))
         self.assertNotIn("MinTrade40_NetR_Direct", dict(oracle._oracle_comparison_plan(self.active_definition)["targets"]))
         self.assertEqual(oracle.ORACLE_DIRECT_SCORE_SOURCES, {
@@ -846,6 +854,7 @@ class OracleAuditContractCases(TestCase):
             "T40-MFE_Direct": "T40-MFE",
             "DailyUniversal_MinTrade40_NetR_Direct": "DailyUniversal_MinTrade40_NetR",
             "DailyUniversal_MinTrade60_NetR_Direct": "DailyUniversal_MinTrade60_NetR",
+            "DailyUniversal_MinTrade_NetR_Direct": "DailyUniversal_MinTrade_NetR",
         })
         self.assertEqual(self.definition.output_subdir, "breakout_quality/reusable/target_oracle_romd")
         with tempfile.TemporaryDirectory() as tmp:
@@ -938,7 +947,7 @@ class OracleAuditContractCases(TestCase):
             archived.write_text('{malformed archived report', encoding='utf-8')
             summary = _strip_ansi(oracle.render_existing_artifact_inventory(
                 _ACTIVE_ORACLE_DEFINITION, project_root=Path(tmp)))
-            self.assertIn('REUSE 0 / RUN（需計算）56 / BLOCKED 0', summary)
+            self.assertIn('REUSE 0 / RUN（需計算）64 / BLOCKED 0', summary)
             self.assertIn('舊報表不作 REUSE 來源', summary)
 
     def test_fast_inventory_never_treats_corrupt_cache_as_reuse(self):
@@ -1753,7 +1762,7 @@ class OracleAuditContractCases(TestCase):
         self.assertEqual(report["seeds"], list(seeds))
         self.assertEqual(report["schema_version"], 8)
         self.assertEqual(len(report["oracles"]), len(LEGACY_ORACLE_TARGETS))
-        self.assertEqual(report["end_date"], "2025-12-31")
+        self.assertEqual(report["end_date"], "2025-12-22")
         self.assertNotIn("additional_panels", report)
         self.assertEqual(report["baseline"]["romd_std"], report["oracles"][0]["romd_std"])
         self.assertEqual(report["oracles"][0]["delta_romd_vs_c96"], 1.5)
@@ -2063,7 +2072,7 @@ class RemovedMinTrade40OracleComparisonCases(TestCase):
         current = _ACTIVE_ORACLE_DEFINITION
         planned = oracle._oracle_comparison_plan(current)
         names = {name for name, _ in planned["targets"]}
-        self.assertEqual(len(names), 13)
+        self.assertEqual(len(names), 15)
         self.assertNotIn("MinTrade40_NetR", names)
         self.assertNotIn("MinTrade40_NetR_Direct", names)
         self.assertIn("DailyUniversal_MinTrade40_NetR", names)

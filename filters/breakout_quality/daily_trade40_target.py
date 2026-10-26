@@ -3,12 +3,12 @@
 For each eligible stock/date, pretend a fresh Min setup originated at that
 close.  Its normal limit is the canonical rounded close + ATR*tolerance;
 thereafter the official A2 single-stock execution path owns order continuation,
-fees, realized risk, stops, exits and the forced 40th exchange-session close.
+fees, realized risk, stops, exits and the earliest legal closeout deadline.
 The hypothetical *originating signal* is NOT a real Min breakout signal and
 must never be used to create executable candidates or production orders.
 
 No holding/cash/K/R0/selector state enters a training label. Unfilled,
-unexecutable, immature and uncovered dates have a NULL supervised R; they are
+unexecutable or uncovered dates have a NULL realized R; they are
 not transformed into a fake loss or zero return. The score-eligible universe
 remains daily-universal even when a future training label is unavailable.
 """
@@ -57,6 +57,8 @@ class CounterfactualTrade40Batch:
     valid_mask: np.ndarray
     maturity_dates: np.ndarray
     reasons: tuple[str, ...]
+    cutoff_truncated_rows: int = 0
+    research_cutoff_closeout_rows: int = 0
 
 
 def build_formal_min_execution_schedule(
@@ -139,7 +141,7 @@ def rank_trade40_outcome_frame(frame: pd.DataFrame) -> dict[tuple[str, str], flo
     Target producer and cannot publish PIT scores or fit a DL model.
     """
     if frame.empty or not {"ticker", "date", "realized_net_r"}.issubset(frame):
-        raise ValueError("Daily Trade40 missing mature score rows")
+        raise ValueError("Daily MinTrade missing scoreable stock-day rows")
     if frame.duplicated(["ticker", "date"]).any():
         raise ValueError("Daily Trade40 duplicate ticker/date")
     from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets
@@ -178,7 +180,7 @@ def resolve_historical_min_period(
 
 def collect_canonical_exchange_sessions(
     csv_inputs: Iterable[tuple[str, Path]], *, benchmark_ticker: str,
-    horizon_sessions: int = HORIZON_SESSIONS,
+    horizon_sessions: int | None = HORIZON_SESSIONS,
 ) -> pd.DatetimeIndex:
     """Union the same *sanitized* stock quote sessions used by portfolio replay.
 
@@ -198,20 +200,27 @@ def collect_canonical_exchange_sessions(
         if ticker == benchmark_ticker:
             found_benchmark = True
         calendar.update(pd.DatetimeIndex(frame.index).normalize().tolist())
-    if not isinstance(horizon_sessions, int) or isinstance(horizon_sessions, bool) or horizon_sessions <= 0:
+    if horizon_sessions is not None and (
+            not isinstance(horizon_sessions, int) or isinstance(horizon_sessions, bool) or horizon_sessions <= 0):
         raise ValueError("Counterfactual Min horizon must be positive exchange sessions")
-    if not found_benchmark or len(calendar) <= horizon_sessions:
-        raise ValueError("Counterfactual Trade40 missing usable consolidated exchange calendar")
+    if not found_benchmark or len(calendar) <= 1:
+        raise ValueError("Counterfactual Min missing usable consolidated exchange calendar")
     return pd.DatetimeIndex(sorted(calendar)).normalize()
 
 
 def compute_counterfactual_trade40_batch(
     frame: pd.DataFrame, positions: np.ndarray, *, ticker: str,
     schedule: tuple[ExecutableMinPeriod, ...], exchange_calendar: pd.DatetimeIndex,
-    horizon_sessions: int = HORIZON_SESSIONS,
+    horizon_sessions: int | None = HORIZON_SESSIONS,
+    research_cutoff: str | pd.Timestamp | None = None,
 ) -> CounterfactualTrade40Batch:
-    """Compute continuous net R with *real* execution primitives, never proxy PnL."""
-    if not isinstance(horizon_sessions, int) or isinstance(horizon_sessions, bool) or horizon_sessions <= 0:
+    """One Min path for 40/60/any H and full-cycle; cutoff is an exit deadline.
+
+    Neither the target horizon nor the study-end boundary changes portfolio
+    trades.  Missing executable closing quotes stay censored, never invented.
+    """
+    if horizon_sessions is not None and (
+            not isinstance(horizon_sessions, int) or isinstance(horizon_sessions, bool) or horizon_sessions <= 0):
         raise ValueError("Counterfactual Min horizon must be positive exchange sessions")
     positions = np.asarray(positions, dtype=np.int64)
     if positions.ndim != 1:
@@ -223,16 +232,32 @@ def compute_counterfactual_trade40_batch(
     if (positions < 0).any() or (positions >= len(dates)).any():
         raise ValueError("counterfactual Trade40 positions outside sanitized price dates")
     calendar_index = calendar.get_indexer(dates.take(positions))
+    cutoff = (calendar[-1] if research_cutoff is None else
+              pd.Timestamp(research_cutoff).normalize())
+    eligible_sessions = calendar[calendar <= cutoff]
+    if not len(eligible_sessions):
+        raise ValueError("Counterfactual Min research cutoff has no exchange sessions")
+    last_research_session = eligible_sessions[-1]
     result = np.full(len(positions), np.nan, dtype=np.float32)
     valid = np.zeros(len(positions), dtype=bool)
     maturity_dates = np.full(len(positions), np.datetime64("NaT"), dtype="datetime64[D]")
     reasons: list[str] = []
     signal_caches: dict[str, Any] = {}
+    truncated = 0
+    cutoff_closeouts = 0
     for row, (position, calendar_pos) in enumerate(zip(positions, calendar_index)):
-        if calendar_pos < 0 or calendar_pos + horizon_sessions >= len(calendar):
-            reasons.append("unmatured_or_missing_exchange_session")
+        if calendar_pos < 0 or dates[position] >= last_research_session:
+            reasons.append("no_future_executable_research_session")
             continue
-        expiry = calendar[calendar_pos + horizon_sessions]
+        horizon_expiry = (None if horizon_sessions is None or
+                          calendar_pos + horizon_sessions >= len(calendar) else
+                          calendar[calendar_pos + horizon_sessions])
+        # An unavailable H-th session is NOT grounds to delete the stock-day.
+        # The single research-cutoff deadline applies to every horizon.
+        expiry = min(horizon_expiry, last_research_session) if horizon_expiry is not None else last_research_session
+        cutoff_limited = horizon_expiry is None or horizon_expiry > last_research_session
+        if cutoff_limited:
+            truncated += 1
         maturity_dates[row] = expiry.to_datetime64().astype("datetime64[D]")
         # The Portfolio assigns its Min parameter by the candidate ORDER day.
         # A suspended ticker's next actual bar may be later than the next
@@ -244,7 +269,7 @@ def compute_counterfactual_trade40_batch(
         # not the previous information bar; there is no alternative date mode.
         effective_day = dates[position + 1]
         if effective_day > expiry:
-            reasons.append(f"no_executable_ticker_order_within_{horizon_sessions}_sessions")
+            reasons.append("no_executable_ticker_order_before_closeout_deadline")
             continue
         period = resolve_historical_min_period(schedule, effective_day)
         if period is None:
@@ -275,13 +300,17 @@ def compute_counterfactual_trade40_batch(
         if observation.realized_net_r is None:
             reasons.append(str(observation.reason))
             continue
+        if cutoff_limited and observation.forced_closeout:
+            cutoff_closeouts += 1
         value = float(observation.realized_net_r)
         if not math.isfinite(value):
             raise ValueError("canonical trade path produced nonfinite realized R")
         result[row] = value
         valid[row] = True
         reasons.append("filled_executed_net_R")
-    return CounterfactualTrade40Batch(result, valid, maturity_dates, tuple(reasons))
+    return CounterfactualTrade40Batch(
+        result, valid, maturity_dates, tuple(reasons), truncated, cutoff_closeouts,
+    )
 
 
 __all__ = [

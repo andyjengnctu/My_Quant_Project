@@ -112,7 +112,8 @@ class FormalMinTrade40SyntheticCases(unittest.TestCase):
         self.assertEqual([call.kwargs["params"] for call in ledger.call_args_list],
                          [period.params, period.params])
         self.assertEqual(ledger.call_count, 2)
-        # A valid 40D label must not be copied to an immature 60D sample.
+        # The same stock-day remains eligible for 60D. When the dataset
+        # ends first, it is explicitly closed out at Research-data cutoff.
         forty_late = compute_counterfactual_trade40_batch(
             frame, np.array([90]), ticker="2330", schedule=schedule,
             exchange_calendar=days,
@@ -121,14 +122,74 @@ class FormalMinTrade40SyntheticCases(unittest.TestCase):
             frame, np.array([90]), ticker="2330", schedule=schedule,
             exchange_calendar=days, horizon_sessions=60,
         )
-        self.assertFalse(sixty_late.valid_mask[0])
-        self.assertEqual(sixty_late.reasons[0], "unmatured_or_missing_exchange_session")
+        self.assertTrue(sixty_late.valid_mask[0])
         self.assertTrue(forty_late.valid_mask[0])
+        self.assertEqual(sixty_late.maturity_dates[0], days[-1].to_datetime64().astype("datetime64[D]"))
+        self.assertEqual(sixty_late.cutoff_truncated_rows, 1)
+        self.assertEqual(sixty_late.research_cutoff_closeout_rows, 1)
         with self.assertRaisesRegex(ValueError, "positive exchange sessions"):
             compute_counterfactual_trade40_batch(
                 frame, np.array([10]), ticker="2330", schedule=schedule,
                 exchange_calendar=days, horizon_sessions=0,
             )
+
+    def test_any_horizon_and_full_cycle_use_one_earliest_settlement_rule(self):
+        from filters.breakout_quality import daily_trade40_target as owner
+        days, frame, _params, period = fixture(count=150)
+        position = 75
+        research_end = days[120]
+        deadlines = []
+        values = {}
+        with patch.object(owner, "simulate_realized_trade_path_label",
+                          wraps=simulate_realized_trade_path_label) as canonical_path:
+            for horizon in (40, 60, 73, 100, None):
+                batch = compute_counterfactual_trade40_batch(
+                    frame, np.asarray([position]), ticker="2330", schedule=(period,),
+                    exchange_calendar=days, horizon_sessions=horizon,
+                    research_cutoff=research_end,
+                )
+                self.assertTrue(batch.valid_mask[0], f"horizon={horizon}")
+                expected_end = days[115] if horizon == 40 else research_end
+                self.assertEqual(batch.maturity_dates[0],
+                                 expected_end.to_datetime64().astype("datetime64[D]"))
+                self.assertEqual(batch.cutoff_truncated_rows, int(horizon != 40))
+                self.assertEqual(batch.research_cutoff_closeout_rows, int(horizon != 40))
+                values[horizon] = float(batch.target_raw_r[0])
+                deadlines.append(canonical_path.call_args.kwargs["horizon_end_date"])
+            self.assertEqual(canonical_path.call_count, 5)
+        self.assertEqual(deadlines, [days[115], research_end, research_end,
+                                     research_end, research_end])
+        self.assertEqual(values[60], values[100])
+        self.assertEqual(values[60], values[None])
+        self.assertNotEqual(values[40], values[60])
+
+        # An information bar on the last available Research session cannot
+        # create a hypothetical next-day fill by borrowing post-cutoff data.
+        barred = compute_counterfactual_trade40_batch(
+            frame, np.asarray([120]), ticker="2330", schedule=(period,),
+            exchange_calendar=days, horizon_sessions=None,
+            research_cutoff=research_end,
+        )
+        self.assertFalse(barred.valid_mask[0])
+        self.assertTrue(np.isnan(barred.target_raw_r[0]))
+        self.assertEqual(barred.reasons[0], "no_future_executable_research_session")
+
+    def test_post_research_cutoff_quotes_cannot_affect_full_cycle_truth(self):
+        days, frame, _params, period = fixture(count=150)
+        cutoff = days[110]
+        kwargs = dict(ticker="2330", schedule=(period,), exchange_calendar=days,
+                      research_cutoff=cutoff, horizon_sessions=None)
+        before = compute_counterfactual_trade40_batch(frame, np.asarray([70]), **kwargs)
+        altered = frame.copy()
+        after_end = altered.index > cutoff
+        altered.loc[after_end, ["Open", "High", "Low", "Close"]] *= 7
+        altered.loc[after_end, "Volume"] = 0
+        after = compute_counterfactual_trade40_batch(altered, np.asarray([70]), **kwargs)
+        self.assertEqual(before.valid_mask.tolist(), after.valid_mask.tolist())
+        self.assertTrue(before.valid_mask[0])
+        np.testing.assert_allclose(before.target_raw_r, after.target_raw_r, rtol=0, atol=0)
+        np.testing.assert_array_equal(before.maturity_dates, after.maturity_dates)
+        self.assertEqual(before.research_cutoff_closeout_rows, 1)
 
     def test_formal_seed_param_adapter_no_old_teacher_dependency(self):
         days, frame, params, period = fixture()
@@ -266,7 +327,7 @@ class FormalMinTrade40SyntheticCases(unittest.TestCase):
             schedule=(period,), exchange_calendar=days,
         )
         self.assertFalse(batch.valid_mask[0]); self.assertTrue(np.isnan(batch.target_raw_r[0]))
-        self.assertEqual(batch.reasons[0], "unmatured_or_missing_exchange_session")
+        self.assertEqual(batch.reasons[0], "no_future_executable_research_session")
 
     def test_no_prior_parameter_is_not_backfilled(self):
         days, frame, params, period = fixture()

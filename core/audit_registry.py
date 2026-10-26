@@ -128,15 +128,23 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     {"target": "R40_Direct", "description": "Same R40 score; canonical No-K/No-R0 direct allocation", "score_source": "R40", "selector": "direct"},
                     {"target": "T40_Direct", "description": "Same T40 score; canonical No-K/No-R0 direct allocation", "score_source": "T40", "selector": "direct"},
                     {"target": "T40-MFE_Direct", "description": "Same T40-MFE score; canonical No-K/No-R0 direct allocation", "score_source": "T40-MFE", "selector": "direct"},
-                    {"target": "DailyUniversal_MinTrade40_NetR", "description": "Formal per-seed Min ROOS hypothetical stock-day Net-R, 40 exchange-session horizon, hindsight ranking", "score": "daily_trade_path_net_r", "provider": "daily_trade40_profile", "selector": "exact"},
+                    {"target": "DailyUniversal_MinTrade40_NetR", "description": "Formal Min ROOS Net-R, natural exit / 40 sessions / Research cutoff (earliest), hindsight ranking", "score": "daily_trade_path_net_r", "provider": "daily_trade40_profile", "selector": "exact"},
                     {"target": "DailyUniversal_MinTrade40_NetR_Direct", "description": "Same formal per-seed Min ROOS daily truth and ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade40_NetR", "selector": "direct"},
-                    {"target": "DailyUniversal_MinTrade60_NetR", "description": "Formal per-seed Min ROOS hypothetical stock-day Net-R, 60 consolidated exchange sessions, hindsight ranking", "score": "daily_trade_path_net_r", "provider": "daily_trade40_profile", "horizon_sessions": 60, "selector": "exact"},
+                    {"target": "DailyUniversal_MinTrade60_NetR", "description": "Formal Min ROOS Net-R, natural exit / 60 sessions / Research cutoff (earliest), hindsight ranking", "score": "daily_trade_path_net_r", "provider": "daily_trade40_profile", "horizon_sessions": 60, "selector": "exact"},
                     {"target": "DailyUniversal_MinTrade60_NetR_Direct", "description": "Same formal 60-session Min ROOS daily truth and ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade60_NetR", "selector": "direct"},
+                    {"target": "DailyUniversal_MinTrade_NetR", "description": "Formal per-seed Min ROOS stock-day Net-R through natural exit or Research-data-end closeout; no session cap", "score": "daily_trade_path_net_r", "provider": "daily_trade40_profile", "horizon_mode": "full_trade_cycle", "selector": "exact"},
+                    {"target": "DailyUniversal_MinTrade_NetR_Direct", "description": "Same full-cycle Min Net-R target and ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade_NetR", "selector": "direct"},
                 ),
             },
             "dimensions": {
                 "percentile_method": "average_zero_based",
-                "oracle_cohort": "common_40bar_mature_stock_days",
+                # AI: Independent of selected target horizons. The currently approved
+                # The canonical Oracle/Research-DL evaluation boundary is
+                # independent of Target horizon. Research truth may observe
+                # future prices to the existing 2026-03-02 data cutoff.
+                # The separate research cutoff provides future observations.
+                "oracle_evaluation_end_date": "2025-12-22",
+                "oracle_cohort": "canonical_feature_eligible_oracle_stock_days",
                 "oracle_score_method": "canonical_daily_truth_percentile_v2",
                 "evaluation_mode": "rolling",
                 "iterative_oos_evidence": True,

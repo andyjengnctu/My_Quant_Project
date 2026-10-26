@@ -31,9 +31,17 @@ _ORIGINAL_SCORE_CONTRACT_RESOLVER = oracle._resolve_oracle_target_score_contract
 _ORIGINAL_SCORE_ELIGIBILITY_CERTIFIER = oracle._certify_oracle_score_eligibility
 
 
-def definition():
-    return next(d for d in get_reusable_audit_definitions("breakout_quality")
-                if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
+def definition(*, full_cycle: bool = False):
+    active = next(d for d in get_reusable_audit_definitions("breakout_quality")
+                  if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
+    if full_cycle:
+        return active
+    # Prior 40D/60D behavioral fixtures isolate existing targets. Dedicated
+    # full-cycle tests below cover the added capability on the actual catalog.
+    return replace(active, source={**active.source, "oracle_comparisons": tuple(
+        entry for entry in active.source["oracle_comparisons"]
+        if entry["target"] not in {"DailyUniversal_MinTrade_NetR",
+                                   "DailyUniversal_MinTrade_NetR_Direct"})})
 
 
 def source_fixture():
@@ -163,15 +171,80 @@ class FormalMinDailyOracleCases(TestCase):
         self.assertEqual((e60["target_id"], e60["label_id"]),
                          target_identity_for_horizon(60))
         self.assertNotEqual(e60["target_id"], e40["target_id"])
-        self.assertIn("60_exchange_sessions", e60["cohort"])
+        self.assertIn("research_cutoff_closeout", e60["cohort"])
         self.assertEqual(e60["calendar_sha256"], e40["calendar_sha256"])
         self.assertEqual(e60["teacher"], e40["teacher"])
         self.assertEqual(e60["first_replay_trade_date"], e40["first_replay_trade_date"])
-        # 40D has already matured, 60D has not: no synthetic score or 0R.
-        a40, _ = run_source(horizon_sessions=40, cutoff="2021-03-15")
-        self.assertTrue(a40)
-        with self.assertRaisesRegex(DailyTrade40OracleBlockedError, "No 60-session mature"):
-            run_source(horizon_sessions=60, cutoff="2021-03-15")
+        # Both periods retain the SAME feature rows. An H=60 observation
+        # without 60 available sessions is settled at the Research cutoff,
+        # not excluded or given a fabricated zero R.
+        a40, e40_short = run_source(horizon_sessions=40, cutoff="2021-03-15")
+        a60, e60_short = run_source(horizon_sessions=60, cutoff="2021-03-15")
+        self.assertEqual(set(a40), set(a60))
+        self.assertTrue(a60)
+        self.assertGreater(e60_short["cutoff_truncated_rows"], 0)
+        self.assertGreaterEqual(e60_short["cutoff_truncated_rows"], e40_short["cutoff_truncated_rows"])
+
+    def test_all_declared_min_horizons_share_feature_universe_and_cutoff_policy(self):
+        from services.audit.daily_trade40_oracle import target_identity_for_horizon
+        full = definition(full_cycle=True)
+        self.assertEqual(len(full.source["oracle_comparisons"]), 15)
+        plan = oracle._oracle_comparison_plan(full)
+        self.assertEqual({name: horizon for name, (_, _, horizon) in plan["daily_recipes"].items()}, {
+            "DailyUniversal_MinTrade40_NetR": 40,
+            "DailyUniversal_MinTrade60_NetR": 60,
+            "DailyUniversal_MinTrade_NetR": None,
+        })
+        self.assertEqual(plan["daily_sources"]["DailyUniversal_MinTrade_NetR_Direct"],
+                         "DailyUniversal_MinTrade_NetR")
+        self.assertEqual(len(plan["targets"]), 15)
+        settings, _base, _exact = oracle._contract(full)
+        contracts = _ORIGINAL_SCORE_CONTRACT_RESOLVER(full, settings, plan)
+        self.assertEqual(contracts["DailyUniversal_MinTrade_NetR"]["target_id"],
+                         target_identity_for_horizon(None)[0])
+        self.assertEqual(contracts["DailyUniversal_MinTrade_NetR_Direct"]["target_id"],
+                         target_identity_for_horizon(None)[0])
+
+        evidence = {}
+        scored = {}
+        for horizon in (40, 60, 87, 100, None):
+            scored[horizon], evidence[horizon] = run_source(
+                horizon_sessions=horizon, cutoff="2021-03-15",
+            )
+        keys = set(scored[40])
+        self.assertTrue(keys)
+        self.assertTrue(all(set(scores) == keys for scores in scored.values()))
+        self.assertTrue(all(row["cutoff_truncated_rows"] > 0
+                            for key, row in evidence.items() if key != 40))
+        self.assertTrue(all(row["research_cutoff"] == "2021-03-15"
+                            for row in evidence.values()))
+        self.assertEqual(len({v["target_id"] for v in evidence.values()}), 5)
+
+        # Direct can consume full-cycle truth without replaying an unselected
+        # full-cycle Exact arm, or requiring a second Target producer.
+        only_direct = replace(full, source={**full.source,
+            "oracle_comparisons": tuple(item for item in full.source["oracle_comparisons"]
+                if item["target"] == "DailyUniversal_MinTrade_NetR_Direct")})
+        direct_plan = oracle._oracle_comparison_plan(only_direct)
+        self.assertEqual(list(direct_plan["daily_recipes"]), ["DailyUniversal_MinTrade_NetR"])
+        self.assertEqual(list(direct_plan["selectors"]), ["DailyUniversal_MinTrade_NetR_Direct"])
+
+    def test_new_positive_integer_horizon_needs_only_registry_declaration(self):
+        full = definition(full_cycle=True)
+        name = "DailyUniversal_MinTrade87_NetR"
+        additional = {"target": name, "description": "87-session hypothetical formal Min NetR",
+                      "score": "daily_trade_path_net_r", "provider": "daily_trade40_profile",
+                      "horizon_sessions": 87, "selector": "exact"}
+        augmented = replace(full, source={**full.source,
+            "oracle_comparisons": (*full.source["oracle_comparisons"], additional)})
+        plan = oracle._oracle_comparison_plan(augmented)
+        self.assertEqual(plan["daily_recipes"][name][2], 87)
+        for invalid in (0, -3, True):
+            changed = replace(augmented, source={**augmented.source,
+                "oracle_comparisons": (*full.source["oracle_comparisons"],
+                    {**additional, "horizon_sessions": invalid})})
+            with self.assertRaisesRegex(oracle.OracleBlockedError, "horizon/mode"):
+                oracle._oracle_comparison_plan(changed)
 
     def test_60_exact_direct_only_reuses_one_source_and_no_hidden_exact(self):
         from services.audit.daily_trade40_oracle import target_identity_for_horizon
@@ -564,7 +637,8 @@ class FormalMinReplayIntegrationCases(TestCase):
             item for item in active.source["oracle_comparisons"]
             if item["target"] not in (EXACT,DIRECT))})
         plan=oracle._oracle_comparison_plan(old)
-        price_scores={name:{("2330","2025-01-03"):0.8} for name in plan["recipes"]}
+        price_scores={name:{("2330","2025-01-03"):0.8,
+                            ("2330","2025-12-22"):0.8} for name in plan["recipes"]}
         for name,source in plan["aliases"].items():
             if source in price_scores:
                 price_scores[name]=price_scores[source]
@@ -595,7 +669,8 @@ class FormalMinReplayIntegrationCases(TestCase):
                               for year in range(2021,2026)]}
         formal=source_fixture()[3]
         def scores(*,seed,param_sha256,**kwargs):
-            score_map={("2330","2025-01-03"):0.625}
+            score_map={("2330","2025-01-03"):0.625,
+                       ("2330","2025-12-22"):0.625}
             evidence={"label_id":LABEL_ID,"target_id":TARGET_ID,"profile_id":PROFILE,
                 "rank_policy":"average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",
                 "rank_sha256":"c"*64,"raw_label_sha256":"d"*64,
@@ -656,21 +731,23 @@ class FormalMinReplayIntegrationCases(TestCase):
 
 
     def test_60_mixed_40_window_replays_and_preserves_prior_caches(self):
-        """Both maturity horizons share a scored *date* set, not a silent intersection.
+        """The registry-fixed evaluation end is independent of requested horizons.
 
-        Comparing 60D changes the whole-panel end, so the previously valid
-        40D Replay identity must not be reused for an earlier end. Turning the
-        60D rows off restores the original 40D cache without invalidating it.
+        Adding 60D must not alter the baseline or invalidate 40D identities.
+        No shortened maturity cohort and no hidden intersection are allowed.
         """
         from filters.breakout_quality.runtime import resolve_breakout_quality_candidate_rank
         from services.audit.daily_trade40_oracle import target_identity_for_horizon
 
         full = definition()
+        first = ("2330", "2025-11-25")
+        second = ("2330", "2025-12-01")
+        full = replace(full, dimensions={
+            **full.dimensions, "oracle_evaluation_end_date": second[1],
+        })
         forty = replace(full, source={**full.source,
             "oracle_comparisons": tuple(x for x in full.source["oracle_comparisons"]
                                         if "MinTrade60" not in x["target"])})
-        first = ("2330", "2025-11-25")
-        second = ("2330", "2025-12-01")
         price_plan = oracle._oracle_comparison_plan(forty)
         price = {name: {first: .25, second: .75} for name in price_plan["recipes"]}
         for alias, original in price_plan["aliases"].items():
@@ -689,7 +766,7 @@ class FormalMinReplayIntegrationCases(TestCase):
 
         def source(*, seed, param_sha256, horizon_sessions=40, **kwargs):
             target, label = target_identity_for_horizon(horizon_sessions)
-            values = {first: .625, second: .875} if horizon_sessions == 40 else {first: .625}
+            values = {first: .625, second: .875}
             source_observations.append((horizon_sessions, tuple(values)))
             evidence = {"label_id": label, "target_id": target, "profile_id": PROFILE,
                 "rank_policy": "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",
@@ -754,37 +831,57 @@ class FormalMinReplayIntegrationCases(TestCase):
             self.assertEqual(source_mock.call_count, 1)
 
             mixed = oracle.run_formal_audit(full, project_root=root, quiet=True)
-            self.assertEqual(mixed["end_date"], first[1])
-            self.assertEqual(mixed["common_cohort"]["cohort_rows"], 1)
-            self.assertEqual(mixed["common_cohort"]["comparison_maturity_sessions"], 60)
+            self.assertEqual(mixed["end_date"], second[1])
+            self.assertEqual(mixed["common_cohort"]["cohort_rows"], 2)
             self.assertEqual(len(mixed["oracles"]), 13)
             markdown = oracle.render_result(mixed, target="markdown")
-            self.assertIn("60D-mature common window", markdown)
+            self.assertIn("fixed evaluation window", markdown)
             self.assertIn("DailyUniversal_MinTrade60_NetR_Direct", markdown)
-            self.assertIn("13 (40D + 60D, Exact + Direct)", markdown)
-            self.assertEqual(runner.call_count, 26, "60D mixed panel cannot reuse different-end 40D outcomes")
-            self.assertEqual(source_mock.call_count, 3, "40D and 60D scored once per seed")
+            self.assertEqual(runner.call_count, 14, "old 40D and baseline results reuse: only 60D exact/direct run")
+            self.assertEqual(source_mock.call_count, 3, "40D and 60D truth is prepared separately")
             self.assertEqual(source_observations, [
-                (40, (first, second)), (40, (first, second)), (60, (first,))])
+                (40, (first, second)), (40, (first, second)), (60, (first, second))])
             self.assertTrue(all((record[2], record[3]) ==
                                 ((.625 if "DailyUniversal" in record[0] else .25), first[1])
                                 for record in score_observations))
-            self.assertEqual({end for _, end, _, _ in score_observations}, {first[1], second[1]})
+            self.assertEqual({end for _, end, _, _ in score_observations}, {second[1]})
             self.assertEqual({row["target"] for row in mixed["oracles"]},
                              {row["target"] for row in full.source["oracle_comparisons"]})
             oracle.run_formal_audit(full, project_root=root, quiet=True)
-            self.assertEqual(runner.call_count, 26, "same 60D mature-window identities REUSE")
+            self.assertEqual(runner.call_count, 14, "identical fixed-evaluation identities REUSE")
             self.assertEqual(source_mock.call_count, 5)
             oracle.run_formal_audit(forty, project_root=root, quiet=True)
-            self.assertEqual(runner.call_count, 26, "40D-only completed identities remain reusable")
+            self.assertEqual(runner.call_count, 14, "40D-only completed identities remain reusable")
             sixty = replace(full, source={**full.source, "oracle_comparisons": tuple(
                 row for row in full.source["oracle_comparisons"]
                 if "MinTrade60" in row["target"])})
             sixty_only = oracle.run_formal_audit(sixty, project_root=root, quiet=True)
             self.assertEqual(len(sixty_only["oracles"]), 2)
-            self.assertEqual(sixty_only["end_date"], first[1])
-            self.assertEqual(runner.call_count, 26,
-                             "60D-only consumes the already-completed 60D mixed cache")
+            self.assertEqual(sixty_only["end_date"], second[1])
+            self.assertEqual(runner.call_count, 14,
+                             "60D-only consumes completed 60D mixed cache")
+
+            full_cycle = definition(full_cycle=True)
+            full_cycle = replace(full_cycle, dimensions={
+                **full_cycle.dimensions, "oracle_evaluation_end_date": second[1],
+            })
+            expanded = oracle.run_formal_audit(full_cycle, project_root=root, quiet=True)
+            self.assertEqual(expanded["end_date"], second[1])
+            self.assertEqual(expanded["common_cohort"]["cohort_rows"], 2)
+            self.assertEqual(len(expanded["oracles"]), 15)
+            self.assertEqual(runner.call_count, 16,
+                             "adding full-cycle retains 40D and 60D Replay identities")
+            self.assertEqual(source_mock.call_count, 10)
+            oracle.run_formal_audit(full_cycle, project_root=root, quiet=True)
+            self.assertEqual(runner.call_count, 16, "all fixed-end arms re-use on repeat")
+            full_only = replace(full_cycle, source={**full_cycle.source,
+                "oracle_comparisons": tuple(row for row in full_cycle.source["oracle_comparisons"]
+                                            if row["target"].startswith("DailyUniversal_MinTrade_") )})
+            alone = oracle.run_formal_audit(full_only, project_root=root, quiet=True)
+            self.assertEqual(len(alone["oracles"]), 2)
+            self.assertEqual(alone["end_date"], second[1])
+            self.assertEqual(runner.call_count, 16,
+                             "full-cycle-only reuses without altering period or other targets")
 
 
 if __name__=="__main__":
