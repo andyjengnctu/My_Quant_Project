@@ -12,6 +12,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Mapping
 import math
+import hashlib
+import struct
 
 import numpy as np
 import pandas as pd
@@ -41,6 +43,10 @@ from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY
 from filters.breakout_quality.mfe_safety_geometry import normalize_ticker
 from filters.breakout_quality.profile_ranker_data import load_profile_continuous_ranker_data
 from filters.breakout_quality.runtime import audit_oracle_truth_score_context
+from filters.breakout_quality.ranking_score_store import (
+    load_selection_point_in_time_ranking_contract,
+)
+from core.file_integrity import compute_file_sha256
 from filters.breakout_quality.strategy_compare_contracts import COMPARISON_MODE_SCORE_RANKING
 from filters.breakout_quality.strategy_compare_reporting import _scenario_summary, _yearly_frame, _to_json_native
 from filters.breakout_quality.strategy_compare_sources import (
@@ -80,7 +86,8 @@ SUPPORTED_AUDIT_TYPE = "target_ground_truth_strategy_romd"
 ORACLE_REPORT_SCHEMA_VERSION = 8
 # Engineering bug-fix marker: older price-universe / pre-PIT-start replays are invalid.
 # This is not a new scientific Target, Strategy arm, Report version or research choice.
-ORACLE_PARITY_IMPLEMENTATION = "original_oracle_contract_parity_bugfix_20261026"
+ORACLE_PARITY_IMPLEMENTATION = "original_oracle_contract_parity_bugfix_20261026_scores_sha_pit_v2"
+PERIOD_STATS_IMPLEMENTATION = "full_year_calendar_verified_20261026"
 # Current report's Oracle strategies. Direct is the existing canonical No-K/No-R0
 # selector applied to the SAME score truth; not a new Target formula.
 # For backward-compatible external call sites only. The runtime reads the
@@ -102,9 +109,9 @@ _PROVIDER_COHORT_IDS = {
 
 def _oracle_comparison_plan(definition) -> dict[str, Any]:
     """Canonical compare inventory -> score requirements -> provider graph."""
-    # The original Audit registry fixes the scalar perfect-score convention.
-    # Never silently change Exact's numerical objective from daily-percentile
-    # Target truth to a raw-R or arbitrarily calibrated pairwise score.
+    # Preserve the existing Audit catalogue score representation, but this
+    # catalogue alone does not prove a unique perfect DL model output.
+    # _resolve_oracle_target_score_contracts certifies that separately.
     if (str(definition.dimensions.get("oracle_score_method"))
             != "canonical_daily_truth_percentile_v2"
             or str(definition.dimensions.get("percentile_method"))
@@ -181,6 +188,57 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
 ORACLE_DISPLAY_NAMES = {"MFE40_Control": "MFE40"}
 
 
+def _canonical_score_map_sha256(scores: Mapping[tuple[str, str], float]) -> str:
+    """Hash actual scored stock-day keys AND numerical values before any cache lookup.
+
+    The independently verified Oracle source is the same object injected into
+    the canonical score lookup. Display names, row counts, and source-provider
+    summaries are NOT a substitute for these bytes.
+    """
+    if not scores:
+        raise OracleBlockedError("Oracle perfect-score map is empty")
+    digest = hashlib.sha256()
+    for (ticker, day), value in sorted(scores.items()):
+        val = float(value)
+        if not math.isfinite(val):
+            raise OracleBlockedError("Oracle perfect-score map contains nonfinite values")
+        digest.update(str(ticker).encode("utf-8") + b"\x00")
+        digest.update(str(day).encode("ascii") + b"\x00")
+        digest.update(struct.pack("!d", val))
+    return digest.hexdigest()
+
+
+def _score_map_fingerprints(
+    plan: Mapping[str, Any],
+    *, price_scores: Mapping[str, Mapping[tuple[str, str], float]],
+    daily_scores: Mapping[int, Mapping[str, Mapping[tuple[str, str], float]]],
+    seeds: list[int],
+) -> dict[int, dict[str, str]]:
+    """Hash once per unique source; aliases reuse the EXACT injected value."""
+    for name, source in plan["aliases"].items():
+        if name in price_scores and source in price_scores and price_scores[name] != price_scores[source]:
+            raise OracleBlockedError("Oracle Direct score alias differs from canonical score source")
+    price_shas = {name: _canonical_score_map_sha256(scores)
+                  for name, scores in price_scores.items() if name not in plan["aliases"]}
+    daily_shas = {
+        seed: {
+            name: _canonical_score_map_sha256(score_map)
+            for name, score_map in table.items()
+            if name not in plan["aliases"]
+        }
+        for seed, table in daily_scores.items()
+    }
+    return {
+        seed: {
+            name: (daily_shas[seed][plan["daily_sources"][name]]
+                   if name in plan["daily_sources"]
+                   else price_shas[plan["aliases"].get(name, name)])
+            for name, _desc in plan["targets"]
+        }
+        for seed in seeds
+    }
+
+
 def _oracle_display_name(name: str) -> str:
     return ORACLE_DISPLAY_NAMES.get(str(name), str(name))
 
@@ -196,37 +254,57 @@ class OracleBlockedError(RuntimeError):
 
 
 def _contract(definition) -> tuple[Any, Any, Any]:
+    """Resolve the currently enabled canonical Research selector, not a retired C100.
+
+    The historical Audit settings still name C100/C101 for provenance; they
+    cannot authorize selecting an inactive DL model as the current reference.
+    """
     source = definition.source
     if definition.audit_type != SUPPORTED_AUDIT_TYPE:
         raise ValueError("Oracle Audit identity不一致")
     settings = get_strategy_comparison_settings(str(source["strategy_profile_id"]))
     base = settings.arms[str(source["baseline_arm_id"])]
-    exact = settings.arms[str(source["exact_arm_id"])]
-    if (
-        base.dl_enabled or not exact.dl_enabled
-        or base.param_source != exact.param_source
-        or base.param_policy != exact.param_policy
-        or base.rule_policy != "all_off" or exact.rule_policy != "all_off"
-        or not settings.start_date or not settings.end_date
-        or settings.dataset != "full" or settings.rotation != "off"
-        or not exact.dl_runtime_options
-        or not exact.dl_runtime_options.get("preserve_k_r0")
-        or exact.dl_runtime_options.get("constrained_solver") != "exact_branch_and_bound_v1"
-        or not exact.dl_runtime_options.get("selection_only")
-    ):
-        raise OracleBlockedError("Broker-Cash C96/C100 Exact K/R0 control contract已漂移")
-    if base.param_policy != "base-finalist-best":
-        raise OracleBlockedError("Oracle Audit需要canonical P16 Base-Finalist-Best")
-    # The direct arm is declared by canonical Strategy Compare, not generated
-    # locally. This prevents an Audit-specific No-K/No-R0 selector fork.
-    _direct_arm(definition, settings, base, exact)
-    return settings, base, exact
+    exact_candidates = [arm for arm in settings.enabled_arms if (
+        arm.dl_enabled and arm.param_source == base.param_source
+        and arm.param_policy == base.param_policy
+        and arm.rule_policy == "all_off"
+        and arm.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
+        and (arm.dl_runtime_options or {}).get("preserve_k_r0") is True
+        and (arm.dl_runtime_options or {}).get("constrained_solver") == "exact_branch_and_bound_v1"
+        and (arm.dl_runtime_options or {}).get("selection_only") is True
+    )]
+    if (base.dl_enabled or base.param_policy != "base-finalist-best"
+            or base.rule_policy != "all_off" or not exact_candidates
+            or not settings.start_date or not settings.end_date
+            or settings.dataset != "full" or settings.rotation != "off"):
+        raise OracleBlockedError("CONTRACT_UNRESOLVED: Research DL active Exact/Min P16 selector不唯一或缺失")
+    canonical = exact_candidates[0]
+    if any((arm.param_source, arm.param_policy, arm.rule_policy,
+            arm.dl_runtime_mode, dict(arm.dl_runtime_options or {})) !=
+           (canonical.param_source, canonical.param_policy, canonical.rule_policy,
+            canonical.dl_runtime_mode, dict(canonical.dl_runtime_options or {}))
+           for arm in exact_candidates[1:]):
+        raise OracleBlockedError("CONTRACT_UNRESOLVED: 啟用的Research Exact arms不是同一選股契約")
+    _direct_arm(definition, settings, base, canonical)
+    return settings, base, canonical
 
 
 def _direct_arm(definition, settings, base, exact):
-    source = definition.source
-    arm_id = str(source["direct_arm_id"])
-    direct = settings.arms[arm_id]
+    """Read a registered DL Direct arm; never synthesize a new selector."""
+    compatible = [arm for arm in settings.enabled_arms if (
+        arm.dl_enabled and arm.param_source == base.param_source
+        and arm.param_policy == base.param_policy and arm.rule_policy == "all_off"
+        and arm.dl_runtime_mode == "resource-aware-continuous-score-no-k-no-r0"
+        and (arm.dl_runtime_options or {}).get("preserve_k") is False
+        and (arm.dl_runtime_options or {}).get("preserve_r0") is False
+        and (arm.dl_runtime_options or {}).get("selection_order") == "model_score_desc_then_canonical_tie_v1"
+        and (arm.dl_runtime_options or {}).get("selection_only") is True
+    )]
+    if not compatible:
+        # Direct is a formally declared controlled selector in this Audit,
+        # even when all Direct Strategy Compare rows are currently disabled.
+        compatible = [settings.arms[str(definition.source["direct_arm_id"])]]
+    direct = compatible[0]
     options = dict(direct.dl_runtime_options or {})
     if (not direct.dl_enabled or direct.param_source != base.param_source
             or direct.param_policy != base.param_policy or direct.rule_policy != "all_off"
@@ -234,9 +312,107 @@ def _direct_arm(definition, settings, base, exact):
             or options.get("preserve_k") is not False
             or options.get("preserve_r0") is not False
             or options.get("selection_order") != "model_score_desc_then_canonical_tie_v1"
-            or options.get("selection_only") is not True):
-        raise OracleBlockedError("Broker-Cash Oracle Direct No-K/No-R0 contract已漂移")
+            or options.get("selection_only") is not True
+            or any((arm.param_source, arm.param_policy, arm.rule_policy,
+                    arm.dl_runtime_mode, dict(arm.dl_runtime_options or {})) !=
+                   (direct.param_source, direct.param_policy, direct.rule_policy,
+                    direct.dl_runtime_mode, options)
+                   for arm in compatible[1:])):
+        raise OracleBlockedError("CONTRACT_UNRESOLVED: Research DL Direct selector contract不唯一或漂移")
     return direct
+
+
+# The label identifiers below are existing Target identities, not new scientific
+# contracts. An Oracle formula must match an actual Research model-output Target
+# before one can assert that it is that model's perfect prediction.
+_ORACLE_RECIPE_TARGET_IDS = {
+    "mfe": "daily_full_horizon_pure_mfe_r_v1",
+    "terminal_r": "daily_terminal_r40_v1",
+    "terminal_mae_gate": "daily_terminal_mae_gated_t40_v1",
+    "mfe_mae_gate": "daily_full_horizon_mae_gated_mfe_t40_v1",
+    "daily_trade_path_net_r": "daily_universal_counterfactual_mintrade40_netr_v1",
+}
+
+
+def _resolve_oracle_target_score_contracts(definition, settings, plan) -> dict[str, dict[str, Any]]:
+    """Prove a perfect-score numerical mapping from an enabled Research DL arm.
+
+    Raw pairwise logits identify an ORDER, not a unique Exact score SUM.
+    Never legitimize an arbitrary percentile as Exact's unique optimum. A
+    direct selector is rank-only, but its model Target and head must still be
+    identified; no target receives an invented PIT model identity.
+    """
+    eligible = []
+    for arm in settings.enabled_arms:
+        if not arm.dl_enabled:
+            continue
+        source = settings.dl_sources[str(arm.dl_id)]
+        profile = get_breakout_quality_experiment_profile(source.experiment_profile)
+        if str(source.score_source) != "selection_point_in_time":
+            continue
+        eligible.append((arm, source, profile))
+    result = {}
+    issues = []
+    for name, _description in plan["targets"]:
+        recipe_name = plan["aliases"].get(name, name)
+        if recipe_name in plan["recipes"]:
+            recipe = plan["recipes"][recipe_name][0]
+        else:
+            recipe = plan["daily_recipes"][recipe_name][0]
+        target_id = _ORACLE_RECIPE_TARGET_IDS.get(recipe)
+        if not target_id:
+            issues.append(f"{name}: {recipe} 是幾何PROXY，沒有對應的DL perfect Head")
+            continue
+        # No multi-head fusion, loss or postprocessing is guessed from a
+        # coincidentally identical label ID. Existing scalar head semantics only.
+        matches = [(arm, source, profile) for arm, source, profile in eligible if (
+            profile.continuous_target_id == target_id
+            and profile.training_objective in {"daily_pairwise_ranking", "daily_percentile_regression"}
+        )]
+        if not matches:
+            issues.append(f"{name}: Target {target_id} 沒有啟用且具唯一scalar score contract的Research DL arm")
+            continue
+        contracts = {(source.experiment_profile, profile.portfolio_score_scale,
+                      profile.training_objective) for _arm, source, profile in matches}
+        if len(contracts) != 1:
+            issues.append(f"{name}: 多個啟用DL arm的score/head contract不一致")
+            continue
+        arm, source, profile = matches[0]
+        selector = plan["selectors"][name]
+        objective = str(profile.training_objective)
+        scale = str(profile.portfolio_score_scale)
+        if scale == "daily_percentile":
+            mapping = "canonical_daily_target_percentile"
+        elif objective == "daily_percentile_regression" and scale == "raw":
+            mapping = "canonical_supervised_label_percentile"
+        elif selector == "direct" and objective == "daily_pairwise_ranking" and scale == "raw":
+            # In the canonical Direct selector, only relative rank matters.
+            # Scores are represented as percentiles solely for deterministic
+            # ordering, NOT as a claim about pairwise numerical logits.
+            mapping = "canonical_rank_only_direct"
+        else:
+            issues.append(
+                f"{name}: {arm.arm_id} 使用 {objective}/{scale}；"
+                "raw pairwise logit沒有唯一完美數值，Exact不能假定為每日百分位"
+            )
+            continue
+        result[name] = {
+            "reference_arm_id": str(arm.arm_id),
+            "dl_source_id": str(arm.dl_id),
+            "profile_id": str(source.experiment_profile),
+            "model_architecture": str(source.model_architecture),
+            "target_id": target_id,
+            "model_objective": objective, "portfolio_score_scale": scale,
+            "perfect_score_mapping": mapping,
+            "score_start_date": str(source.point_in_time_score_start_date or ""),
+            "score_source": str(source.score_source),
+        }
+    if issues:
+        raise OracleBlockedError(
+            "CONTRACT_UNRESOLVED: Oracle/Research DL score parity:\n- " + "\n- ".join(issues)
+        )
+    return result
+
 
 
 def _robustness_artifacts(definition, root: Path):
@@ -285,6 +461,9 @@ def collect_status(definition, *, project_root: Path) -> dict[str, Any]:
     display = "Full Research Dataset + 4-seed canonical P16 + daily target truth"
     try:
         settings, _base, _exact = _contract(definition)
+        # Fail before checking large market/P16 artifacts: a scalar perfect DL
+        # output not implied by the actual enabled model is not executable.
+        _resolve_oracle_target_score_contracts(definition, settings, _oracle_comparison_plan(definition))
         data_dir = Path(get_dataset_dir(str(root), settings.dataset)).resolve()
         if not data_dir.is_dir() or not next(data_dir.rglob("*.csv"), None):
             raise OracleBlockedError("缺少完整研究價格資料（full dataset）")
@@ -730,6 +909,84 @@ def build_oracle_score_tables(definition, *, project_root: Path, cutoff: str) ->
     )
 
 
+def _certify_oracle_pit_score_coverage(
+    definition, *, project_root: Path, contracts: Mapping[str, Mapping[str, Any]],
+    plan: Mapping[str, Any], price_scores: Mapping[str, Mapping[tuple[str, str], float]],
+    daily_scores: Mapping[int, Mapping[str, Mapping[tuple[str, str], float]]],
+) -> dict[str, dict[str, Any]]:
+    """Certify every injected key actually has an eligible formal PIT model row.
+
+    Uses the existing PIT score manifest, SHA and FIT/fold provenance validators,
+    not a second Oracle interpretation of model inference eligibility. Past
+    model SCORE values are not used as perfect predictions. No FIT is triggered.
+    """
+    root = Path(project_root).resolve()
+    validated: dict[tuple[str, str, str], tuple[set[tuple[str, str]], dict[str, str]]] = {}
+    certified = {}
+    for name, contract in contracts.items():
+        identity = (str(definition.source["filter_id"]), str(contract["model_architecture"]),
+                    str(contract["profile_id"]))
+        if identity not in validated:
+            try:
+                # Same validated PIT ranking source the real DL selector uses,
+                # including its model-validation PASS gate and FIT/fold lineage.
+                pit = load_selection_point_in_time_ranking_contract(root, *identity)
+                if str(pit.continuous_target_id) != str(contract["target_id"]):
+                    raise ValueError("PIT model Target identity does not match Oracle Target")
+                table = pd.read_csv(
+                    pit.score_path, usecols=["ticker", "date", "fold_id", "model_information_cutoff"],
+                    dtype={"ticker": str, "date": str, "fold_id": str,
+                           "model_information_cutoff": str},
+                )
+                if table.empty or table.isna().any().any() or table.duplicated(["ticker", "date"]).any():
+                    raise ValueError("PIT physical score coverage missing/duplicate")
+                table["date"] = pd.to_datetime(table["date"], errors="raise").dt.strftime("%Y-%m-%d")
+                table["model_information_cutoff"] = pd.to_datetime(
+                    table["model_information_cutoff"], errors="raise"
+                ).dt.strftime("%Y-%m-%d")
+                if (table["model_information_cutoff"] >= table["date"]).any():
+                    raise ValueError("PIT score row has an illegal information cutoff")
+                if ((table["date"] < str(pit.available_from)).any()
+                        or (table["date"] > str(pit.available_through)).any()):
+                    raise ValueError("PIT score date outside verified manifest")
+                keys = set(zip(table["ticker"].astype(str), table["date"].astype(str)))
+                digest = hashlib.sha256()
+                for row in table.sort_values(["ticker", "date"], kind="stable").itertuples(index=False):
+                    digest.update("|".join(str(value) for value in row).encode("utf-8") + b"\n")
+                evidence = {
+                    "pit_score_start": str(pit.available_from),
+                    "pit_score_end": str(pit.available_through),
+                    "pit_eligible_keys_sha256": hashlib.sha256(
+                        "".join(f"{t}|{d}\n" for t, d in sorted(keys)).encode("utf-8")
+                    ).hexdigest(),
+                    "pit_fold_coverage_sha256": digest.hexdigest(),
+                    "pit_score_manifest_sha256": compute_file_sha256(pit.manifest_path),
+                    "pit_coverage_manifest_sha256": compute_file_sha256(pit.coverage_path),
+                }
+                validated[identity] = keys, evidence
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                raise OracleBlockedError(
+                    f"PIT_SCORE_EVIDENCE_BLOCKED: {identity[2]}: {type(exc).__name__}: {exc}"
+                ) from exc
+        keys, evidence = validated[identity]
+        if evidence["pit_score_start"] != str(contract["score_start_date"]):
+            raise OracleBlockedError(f"{name}: PIT manifest score start differs from Research DL arm")
+        if name in plan["daily_sources"]:
+            source_name = plan["daily_sources"][name]
+            candidates = {key for per_seed in daily_scores.values() for key in per_seed[source_name]}
+        else:
+            candidates = set(price_scores[name])
+        absent = candidates - keys
+        if absent:
+            example = sorted(absent)[0]
+            raise OracleBlockedError(
+                f"{name}: 正式PIT score fold未覆蓋{len(absent):,}個Oracle可評分股票日；example={example}"
+            )
+        certified[name] = {**dict(contract), **evidence,
+                           "oracle_scored_rows": len(candidates)}
+    return certified
+
+
 def _metrics(replay: dict[str, Any], *, target: str) -> dict[str, Any]:
     summary = _scenario_summary(replay)
     required = ("total_return_pct", "max_drawdown_pct", "return_over_max_drawdown", "expected_value_r", "trade_count", "avg_exposure_pct")
@@ -814,6 +1071,7 @@ def _existing_artifact_inventory(definition, *, project_root: Path) -> tuple[str
     for canonical REUSE/RUN/BLOCKED decisions and Replay authorization.
     """
     settings, _base, _exact = _contract(definition)
+    _resolve_oracle_target_score_contracts(definition, settings, _oracle_comparison_plan(definition))
     benchmark = get_strategy_multi_seed_robustness_settings(settings.profile_id)
     seeds = tuple(int(seed) for seed in benchmark.resolved_seeds)
     if (not benchmark.enabled or not seeds or len(seeds) != benchmark.seed_count
@@ -911,11 +1169,11 @@ def _prepare_oracle_parameters(
     return prepared, param_evidence
 
 
-def _canonical_oracle_replay_policy(definition, *, base_arm) -> dict[str, Any]:
+def _canonical_oracle_replay_policy(definition, *, base_arm, exact_arm=None) -> dict[str, Any]:
     """Shared economic identity for full Replay and fast verified REUSE."""
     replay_policy = {
         "baseline_arm": str(definition.source["baseline_arm_id"]),
-        "exact_arm": str(definition.source["exact_arm_id"]),
+        "exact_arm": str(exact_arm.arm_id) if exact_arm is not None else str(definition.source["exact_arm_id"]),
         "filter_id": str(definition.source["filter_id"]),
         "param_policy": str(base_arm.param_policy),
         "comparison_mode": COMPARISON_MODE_SCORE_RANKING,
@@ -944,13 +1202,21 @@ def _canonical_oracle_replay_policy(definition, *, base_arm) -> dict[str, Any]:
 
 def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
                        replay_policy: Mapping[str, Any],
-                       daily_evidence: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                       daily_evidence: Mapping[str, Any] | None = None,
+                       score_sha256: str | None = None,
+                       score_contract: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """One target-scoped economic/score identity for fast and normal REUSE."""
     policy = dict(replay_policy)
+    policy["period_stats_implementation"] = PERIOD_STATS_IMPLEMENTATION
     if target != str(definition.source["baseline_arm_id"]):
         policy["oracle_parity_implementation"] = ORACLE_PARITY_IMPLEMENTATION
     if plan["selectors"].get(target) == "direct":
         policy["direct_arm"] = str(definition.source["direct_arm_id"])
+    if target != str(definition.source["baseline_arm_id"]):
+        if not score_sha256 or len(score_sha256) != 64 or not score_contract:
+            raise OracleBlockedError("Oracle per-target score SHA and canonical DL score contract required")
+        policy["perfect_score_sha256"] = str(score_sha256)
+        policy["canonical_dl_score_contract"] = dict(score_contract)
     if target in plan["daily_sources"]:
         # New target identity is validated against the actual label values and
         # rank table, independently of legacy price-only Oracle cohort/cache.
@@ -985,133 +1251,6 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
     return policy
 
 
-def _reusable_completed_oracle_report(
-    definition, *, root: Path, settings, base_arm, exact_arm, direct_arm,
-    robustness, parameter_paths, plan, quiet: bool,
-) -> dict[str, Any] | None:
-    """Fast path: certify an entire completed report WITHOUT materializing targets.
-
-    Only used if EVERY selected Target × Seed has a byte-verified per-arm
-    Replay and the saved completed report independently agrees with all those
-    observations and the current price/P16/economic inputs. Missing evidence
-    falls back to normal dependency planning; mismatched evidence BLOCKS.
-    """
-    archived = HistoricalOracleIndex(root)
-    snapshots = [payload for origin, _path, payload in archived.snapshots
-                 if origin == "reusable"
-                 and payload.get("dataset") == settings.dataset
-                 and payload.get("start_date") == str(settings.start_date)
-                 and payload.get("strategy_profile_id") == settings.profile_id
-                 and payload.get("benchmark_id") == robustness.benchmark_id
-                 and payload.get("status") == "COMPLETED"
-                 and (payload.get("common_cohort") or {}).get("oracle_parity_implementation")
-                     == ORACLE_PARITY_IMPLEMENTATION]
-    if not snapshots:
-        return None
-    wanted_targets = [name for name, _ in plan["targets"]]
-    target_definitions = dict(plan["targets"])
-    seeds = [int(seed) for seed, _ in parameter_paths]
-    cache = OracleReplayStore(root, definition.output_subdir)
-    # Price data SHA is an input certificate; no price-path Target calculator.
-    price_sha = price_inventory_sha256(root, settings.dataset)
-    replay_policy = _canonical_oracle_replay_policy(definition, base_arm=base_arm)
-    for payload in reversed(snapshots):
-        archived_definitions = payload.get("definitions")
-        archived_rows = payload.get("oracles")
-        if (not isinstance(archived_definitions, dict)
-                or not isinstance(archived_rows, list)
-                or any(archived_definitions.get(name) != description
-                       for name, description in target_definitions.items())
-                or len({row.get("target") for row in archived_rows if isinstance(row, dict)})
-                   != len(archived_rows)
-                or not set(wanted_targets).issubset(
-                    {row.get("target") for row in archived_rows if isinstance(row, dict)})
-                or list(payload.get("seeds") or []) != seeds
-                or payload.get("schema_version") != ORACLE_REPORT_SCHEMA_VERSION):
-            continue
-        end = str(payload.get("end_date") or "")
-        if not (str(settings.start_date) < end <= str(settings.end_date)):
-            continue
-        cohort = payload.get("common_cohort")
-        if not isinstance(cohort, dict) or cohort.get("research_cutoff") != str(settings.end_date):
-            continue
-        providers = cohort.get("providers")
-        if not isinstance(providers, dict) or any(
-                providers.get(_PROVIDER_COHORT_IDS.get(field, field)) != definition.source[field]
-                for field in plan["providers"]):
-            continue
-        prepared, evidence = _prepare_oracle_parameters(
-            definition, root=root, parameter_paths=parameter_paths,
-            start=str(settings.start_date), end=end, base_arm=base_arm,
-        )
-        context = {
-            "benchmark": robustness.benchmark_id,
-            "strategy_profile_id": settings.profile_id,
-            "dataset": settings.dataset,
-            "start_date": str(settings.start_date), "end_date": end,
-            "seeds": seeds,
-            "param_sha_by_seed": {int(item["seed"]): item["param_sha256"] for item in evidence},
-            "cohort": cohort,
-            "definitions": target_definitions,
-        }
-        # The verified historical report and every current per-arm cache must
-        # agree. A mere file listing can NEVER authorize fast REUSE.
-        if not archived._compatible(payload, context=context, origin="reusable"):
-            continue
-        complete = True
-        for seed, param_sha, _kind, _base_params, _oracle_params in prepared:
-            for target in (str(definition.source["baseline_arm_id"]), *wanted_targets):
-                direct = plan["selectors"].get(target) == "direct"
-                arm = direct_arm if direct else exact_arm
-                arm_policy = _arm_replay_policy(
-                    definition, plan=plan, target=target, replay_policy=replay_policy,
-                )
-                identity = replay_identity(
-                    dataset=settings.dataset, dataset_sha256=price_sha,
-                    target=target,
-                    definition={str(definition.source["baseline_arm_id"]):
-                                "Canonical same-window Min P16 Base-Finalist-Best", **target_definitions},
-                    start=str(settings.start_date), end=end,
-                    benchmark=str(robustness.benchmark_id), param_sha256=param_sha,
-                    seed=seed, cohort=cohort, ranking_policy=str(arm.dl_runtime_mode),
-                    ranking_options=dict(arm.dl_runtime_options),
-                    evaluation_mode=str(definition.dimensions["evaluation_mode"]),
-                    max_positions=settings.max_positions, replay_policy=arm_policy,
-                )
-                try:
-                    observation, _origin = cache.resolve_completed(identity)
-                except ValueError as exc:
-                    raise OracleBlockedError(f"Oracle fast REUSE身分衝突：{target} seed={seed}: {exc}") from exc
-                if observation is None:
-                    complete = False
-                    break
-                reported = archived.lookup(target=target, seed=seed, context=context)
-                if reported is None or reported != observation:
-                    raise OracleBlockedError(
-                        f"Oracle fast REUSE報表／cache內容衝突：{target} seed={seed}"
-                    )
-            if not complete:
-                break
-        if complete:
-            if not quiet:
-                print(f"[Target 驗證｜身分核對完成] REUSE {len(seeds) * (len(wanted_targets) + 1)} / "
-                      "RUN（需計算）0 / BLOCKED 0；未重新產生Ground Truth或Replay", flush=True)
-            # Removing a comparison cannot invalidate a retained per-arm
-            # Replay. A strictly verified historical superset can supply a
-            # smaller CURRENT report; all original evidence stays immutable.
-            # Preserve the historical verified cohort; no claim is made that
-            # its retired providers were rebuilt as 40D-only.
-            rows = {row["target"]: row for row in archived_rows}
-            return {
-                **{key: value for key, value in payload.items()
-                   if key not in {"report_id", "report_type", "report_contract_id",
-                                  "report_contract_fingerprint", "output_subdir"}},
-                "definitions": target_definitions,
-                "oracles": [rows[name] for name in wanted_targets],
-            }
-    return None
-
-
 def build_report(
     definition, *, project_root: Path, quiet: bool = False,
     preflight_display: str = "full",
@@ -1121,19 +1260,17 @@ def build_report(
     root = Path(project_root).resolve()
     plan = _oracle_comparison_plan(definition)
     settings, base_arm, exact_arm = _contract(definition)
+    # Fail before expensive 40D materialization and before any partial Replay.
+    # A mapping that cannot be deduced is not a new science identity or a
+    # license to emit another unverified "perfect DL" return number.
+    resolved_score_contracts = _resolve_oracle_target_score_contracts(definition, settings, plan)
     status = collect_status(definition, project_root=root)
     if status["status"] != "READY":
         raise OracleBlockedError(status["reason"])
     robustness, parameter_paths = _robustness_artifacts(definition, root)
-    fast = None if plan["daily_recipes"] else _reusable_completed_oracle_report(
-        definition, root=root, settings=settings, base_arm=base_arm,
-        exact_arm=exact_arm,
-        direct_arm=_direct_arm(definition, settings, base_arm, exact_arm),
-        robustness=robustness, parameter_paths=parameter_paths,
-        plan=plan, quiet=quiet,
-    )
-    if fast is not None:
-        return fast
+    # The old fast path could certify the report before recomputing the actual
+    # perfect-score bytes or proving its formal PIT coverage. E13 forbids that
+    # inference. Verified per-arm REUSE remains available after score materialization.
     def progress(message: str) -> None:
         print(f"[Target 驗證｜前置] {message}", flush=True)
 
@@ -1201,8 +1338,14 @@ def build_report(
         definition, project_root=root, cutoff=str(settings.end_date),
         progress=None if quiet else progress,
     )
+    # A formal model's PIT eligibility and fold coverage are separate from the
+    # daily feature-universe provider. Verify both BEFORE declaring cache REUSE.
+    resolved_score_contracts = _certify_oracle_pit_score_coverage(
+        definition, project_root=root, contracts=resolved_score_contracts,
+        plan=plan, price_scores=scores40, daily_scores=daily_seed_scores,
+    )
     if not quiet:
-        progress("真值及共同樣本完成；檢查價格 SHA、P16 與 Replay Cache")
+        progress("真值、PIT fold覆蓋與共同樣本完成；檢查價格 SHA、P16 與 Replay Cache")
     direct_arm = _direct_arm(definition, settings, base_arm, exact_arm)
     start = str(settings.start_date)  # Formal Min Replay start NEVER depends on a new Target.
     end40 = min(str(settings.end_date), str(cohort40["last_common_day"]))
@@ -1216,6 +1359,13 @@ def build_report(
         raise OracleBlockedError(str(exc)) from exc
     cache = OracleReplayStore(root, definition.output_subdir)
 
+    # Replay cache identity is derived from the actual injectible score bytes.
+    # The first computation intentionally invalidates historical unverified
+    # price-score replays; subsequent runs with identical truth can REUSE.
+    score_fingerprints = _score_map_fingerprints(
+        plan, price_scores=scores40, daily_scores=daily_seed_scores,
+        seeds=[seed for seed, _path in parameter_paths],
+    )
     # Existing single mature 40D panel; Exact and Direct consume the same truth.
     # Every treatment carries its own canonical ranking/allocator policy identity.
     def run_panel(*, end: str, cohort: dict[str, Any], scores: dict[str, dict],
@@ -1250,7 +1400,7 @@ def build_report(
             "cohort": cohort,
             "definitions": definitions,
         }
-        replay_policy = _canonical_oracle_replay_policy(definition, base_arm=base_arm)
+        replay_policy = _canonical_oracle_replay_policy(definition, base_arm=base_arm, exact_arm=exact_arm)
         observations: dict[str, list[dict[str, Any]]] = {"C96": []}
         observations.update({target: [] for target, _ in targets})
 
@@ -1267,6 +1417,8 @@ def build_report(
                 arm_replay_policy = _arm_replay_policy(
                     definition, plan=plan, target=target, replay_policy=replay_policy,
                     daily_evidence=daily_seed_evidence.get(seed),
+                    score_sha256=(score_fingerprints[seed][target] if target != "C96" else None),
+                    score_contract=(resolved_score_contracts[target] if target != "C96" else None),
                 )
                 identity = replay_identity(
                     dataset=settings.dataset, dataset_sha256=price_sha,
@@ -1281,11 +1433,6 @@ def build_report(
                 )
                 try:
                     record, origin = cache.resolve_completed(identity)
-                    if record is None and target == str(definition.source["baseline_arm_id"]):
-                        # Historical C96 is score-free; old Oracle outcomes are
-                        # invalid after the scoring-parity bug fix, not blockers.
-                        record = archived.lookup(target=target, seed=seed, context=legacy_context)
-                        origin = "compatible completed baseline report"
                     completed_plan[(seed, target)] = (identity, record, origin)
                 except ValueError as exc:
                     # Continue read-only inspection so the user sees the full
@@ -1335,8 +1482,6 @@ def build_report(
                             if reread_origin != origin or reread != record:
                                 raise ValueError("Oracle legacy cache changed during preflight; fail closed")
                             cache.write(identity, record, origin="verified_legacy_replay_cache")
-                        elif origin == "compatible completed baseline report":
-                            cache.write(identity, record, origin="historical_report")
                     except ValueError as exc:
                         raise OracleBlockedError(str(exc)) from exc
                     if not quiet and preflight_display == "full":
@@ -1364,6 +1509,8 @@ def build_report(
                     arm = direct_arm if plan["selectors"].get(target) == "direct" else exact_arm
                     score_map = (daily_seed_scores[seed][plan["daily_sources"][target]]
                                  if target in plan["daily_sources"] else scores[target])
+                    if _canonical_score_map_sha256(score_map) != score_fingerprints[seed][target]:
+                        raise OracleBlockedError("Oracle injected scores changed after cache preflight")
                     with audit_oracle_truth_score_context(
                         score_map,
                         ranking_policy=str(arm.dl_runtime_mode),

@@ -341,7 +341,7 @@ def calc_curve_stats(eq_list):
 
 
 # # (AI註: 只用完整年度做 min{r_y} > 0 的檢查；不把起始殘年與當前未完整年度算進去)
-def build_full_year_return_stats(sorted_dates, year_start_equity, year_end_equity, year_first_sim_date, year_last_sim_date):
+def build_full_year_return_stats(sorted_dates, year_start_equity, year_end_equity, year_first_sim_date, year_last_sim_date, *, reference_sessions=None):
     yearly_return_rows = []
     year_market_bounds = {}
 
@@ -351,6 +351,25 @@ def build_full_year_return_stats(sorted_dates, year_start_equity, year_end_equit
             year_market_bounds[year] = {"first": dt, "last": dt}
         else:
             year_market_bounds[year]["last"] = dt
+
+    # A clipped simulation calendar cannot certify its own December endpoint.
+    # Prefer the source exchange benchmark sessions (including sessions after
+    # the replay end) rather than treating the last replay bar as year-end.
+    reference_bounds = {}
+    reference_has_next_year = set()
+    if reference_sessions is not None:
+        for session in reference_sessions:
+            day = pd.Timestamp(session)
+            if day.year not in reference_bounds:
+                reference_bounds[day.year] = {"first": day, "last": day}
+            else:
+                if day < reference_bounds[day.year]["first"]:
+                    reference_bounds[day.year]["first"] = day
+                if day > reference_bounds[day.year]["last"]:
+                    reference_bounds[day.year]["last"] = day
+        if reference_bounds:
+            last_available_year = max(reference_bounds)
+            reference_has_next_year = {year for year in reference_bounds if year < last_available_year}
 
     for year in sorted(year_start_equity.keys()):
         start_equity = float(year_start_equity.get(year, 0.0))
@@ -363,12 +382,24 @@ def build_full_year_return_stats(sorted_dates, year_start_equity, year_end_equit
             continue
 
         year_return_pct = (end_equity / start_equity - 1.0) * 100.0
-        # # (AI註: clipped replay 的最後可用日不等於完整曆年；完整年度必須同時涵蓋一月與十二月。)
+        # AI: A last bar on December 22 is NOT proof of a full year. An
+        # authoritative exchange calendar must reach the next year, or the
+        # last observed date must be December 31. Without that evidence, fail
+        # closed rather than including a partial year in the hard gate.
+        reference = reference_bounds.get(year)
+        if reference is not None:
+            source_complete = (year in reference_has_next_year
+                               or (reference["last"].month == 12 and reference["last"].day == 31))
+            starts_at_year_open = first_sim_date == reference["first"]
+            ends_at_year_close = last_sim_date == reference["last"]
+        else:
+            source_complete = last_sim_date.month == 12 and last_sim_date.day == 31
+            starts_at_year_open = first_sim_date.month == 1
+            ends_at_year_close = True
         is_full_year = (
-            (first_sim_date == market_bounds["first"])
-            and (last_sim_date == market_bounds["last"])
-            and (int(first_sim_date.month) == 1)
-            and (int(last_sim_date.month) == 12)
+            first_sim_date == market_bounds["first"]
+            and last_sim_date == market_bounds["last"]
+            and starts_at_year_open and ends_at_year_close and source_complete
         )
 
         yearly_return_rows.append({

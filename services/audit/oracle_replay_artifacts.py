@@ -279,8 +279,10 @@ class OracleReplayStore:
             peer_policy = peer.get("replay_policy") or {}
             if (isinstance(requested_policy, Mapping)
                     and isinstance(peer_policy, Mapping)
-                    and requested_policy.get("oracle_parity_implementation")
-                    and not peer_policy.get("oracle_parity_implementation")):
+                    and (requested_policy.get("period_stats_implementation")
+                         != peer_policy.get("period_stats_implementation")
+                         or requested_policy.get("oracle_parity_implementation")
+                         != peer_policy.get("oracle_parity_implementation"))):
                 continue
             if (peer.get("dataset") == identity["dataset"]
                     and peer.get("start_date") == identity["start_date"]

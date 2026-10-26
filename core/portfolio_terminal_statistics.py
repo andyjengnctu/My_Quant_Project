@@ -120,7 +120,12 @@ def build_portfolio_period_reports(
     quarter_start_equity, quarter_end_equity, quarter_first_sim_date, quarter_last_sim_date,
     benchmark_period_stats, benchmark_data,
 ) -> PortfolioPeriodReports:
+    from core.portfolio_fast_data import get_fast_dates
+    # The full benchmark session index survives a shortened Oracle replay;
+    # the replay's own sorted_dates does not prove a complete final year.
+    reference_sessions = get_fast_dates(benchmark_data) if benchmark_data is not None else None
     yearly_stats = build_full_year_return_stats(
+        reference_sessions=reference_sessions,
         sorted_dates=sorted_dates,
         year_start_equity=year_start_equity,
         year_end_equity=year_end_equity,

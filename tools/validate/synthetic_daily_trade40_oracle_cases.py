@@ -79,7 +79,38 @@ def run_source(*, schedule=None, seed=693545351, dataset="full", group=None,
         )
 
 
+def synthetic_perfect_score_contracts(_definition, _settings, plan):
+    """Authorized synthetic score maps only, never production PIT evidence."""
+    return {name: {
+        "reference_arm_id": "synthetic_authorized",
+        "score_start_date": "2021-01-01",
+        "target_id": "synthetic_target",
+    } for name, _ in plan["targets"]}
+
+
+def synthetic_pit_coverage(_definition, *, project_root, contracts, plan,
+                           price_scores, daily_scores):
+    return {name: {**contract, "pit_eligible_keys_sha256": "a" * 64}
+            for name, contract in contracts.items()}
+
+
+def synthetic_score_parity_setup(testcase):
+    # Replay-integrity fixtures must not pretend to train a legitimate real
+    # scalar model. Unmocked production CONTRACT_UNRESOLVED tests live in
+    # synthetic_target_oracle_cases.py.
+    for name, action in (
+        ("_resolve_oracle_target_score_contracts", synthetic_perfect_score_contracts),
+        ("_certify_oracle_pit_score_coverage", synthetic_pit_coverage),
+    ):
+        guard = patch.object(oracle, name, side_effect=action)
+        guard.start()
+        testcase.addCleanup(guard.stop)
+
+
 class FormalMinDailyOracleCases(TestCase):
+    def setUp(self):
+        synthetic_score_parity_setup(self)
+
     def test_existing_comparisons_are_preserved_and_report_contract_unchanged(self):
         d=definition()
         p=oracle._oracle_comparison_plan(d)
@@ -148,8 +179,12 @@ class FormalMinDailyOracleCases(TestCase):
         scores,evidence=run_source()
         d=definition();plan=oracle._oracle_comparison_plan(d)
         base={"fixed_risk":.025,"ranking_policy":"canonical"}
-        e1=oracle._arm_replay_policy(d,plan=plan,target=EXACT,replay_policy=base,daily_evidence=evidence)
-        e2=oracle._arm_replay_policy(d,plan=plan,target=DIRECT,replay_policy=base,daily_evidence=evidence)
+        evidence_sha=oracle._canonical_score_map_sha256(scores)
+        contract={"reference_arm_id":"synthetic_authorized", "target_id":TARGET_ID}
+        e1=oracle._arm_replay_policy(d,plan=plan,target=EXACT,replay_policy=base,daily_evidence=evidence,
+                                     score_sha256=evidence_sha,score_contract=contract)
+        e2=oracle._arm_replay_policy(d,plan=plan,target=DIRECT,replay_policy=base,daily_evidence=evidence,
+                                     score_sha256=evidence_sha,score_contract=contract)
         self.assertEqual(e1["hindsight_target_contract"],e2["hindsight_target_contract"])
         self.assertEqual(
             e1["hindsight_target_contract"]["missing_key_policy"],
@@ -319,6 +354,9 @@ class FormalMinDailyOracleCases(TestCase):
 
 
 class FormalMinReplayIntegrationCases(TestCase):
+    def setUp(self):
+        synthetic_score_parity_setup(self)
+
     def test_four_seed_existing_48_reuse_new_8_runs_same_2021_window(self):
         # An exact replay-cache regression: adding a stock-day target must NOT
         # change the original time window or force old 48 treatments to RUN.

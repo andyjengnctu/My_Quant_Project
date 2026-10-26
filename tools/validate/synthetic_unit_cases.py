@@ -703,6 +703,22 @@ def validate_portfolio_stats_unit_case(_base_params):
         year_first_sim_date={2025: clipped_year_dates[0], 2026: clipped_year_dates[2]},
         year_last_sim_date={2025: clipped_year_dates[1], 2026: clipped_year_dates[3]},
     )
+    truncated_december = list(pd.to_datetime(["2025-01-02", "2025-12-22"]))
+    truncated_result = build_full_year_return_stats(
+        truncated_december, {2025: 100.0}, {2025: 110.0},
+        {2025: truncated_december[0]}, {2025: truncated_december[-1]},
+        reference_sessions=pd.to_datetime(["2025-01-02", "2025-12-22", "2025-12-31", "2026-01-02"]),
+    )
+    check("december_22_is_not_full_year", False,
+          truncated_result["yearly_return_rows"][0]["is_full_year"])
+    complete_december = list(pd.to_datetime(["2025-01-02", "2025-12-31"]))
+    complete_result = build_full_year_return_stats(
+        complete_december, {2025: 100.0}, {2025: 110.0},
+        {2025: complete_december[0]}, {2025: complete_december[-1]},
+        reference_sessions=pd.to_datetime(["2025-01-02", "2025-12-31", "2026-01-02"]),
+    )
+    check("complete_exchange_year_retained", True,
+          complete_result["yearly_return_rows"][0]["is_full_year"])
     month_sorted_dates = list(pd.to_datetime([
         "2024-01-02",
         "2024-01-31",
