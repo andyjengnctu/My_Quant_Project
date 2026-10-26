@@ -208,10 +208,16 @@ def collect_canonical_exchange_sessions(
 def compute_counterfactual_trade40_batch(
     frame: pd.DataFrame, positions: np.ndarray, *, ticker: str,
     schedule: tuple[ExecutableMinPeriod, ...], exchange_calendar: pd.DatetimeIndex,
-    horizon_sessions: int = HORIZON_SESSIONS,
+    horizon_sessions: int | None = HORIZON_SESSIONS,
 ) -> CounterfactualTrade40Batch:
-    """Compute continuous net R with *real* execution primitives, never proxy PnL."""
-    if not isinstance(horizon_sessions, int) or isinstance(horizon_sessions, bool) or horizon_sessions <= 0:
+    """Compute canonical Net-R; None means full cycle through the Research cutoff.
+
+    A trade still open at the last *valid* market bar receives the identical
+    backtest-end closeout as the formal Research Portfolio, not a 40/60D stop.
+    A ticker with an older last quote cannot fabricate that closeout.
+    """
+    if horizon_sessions is not None and (
+            not isinstance(horizon_sessions, int) or isinstance(horizon_sessions, bool) or horizon_sessions <= 0):
         raise ValueError("Counterfactual Min horizon must be positive exchange sessions")
     positions = np.asarray(positions, dtype=np.int64)
     if positions.ndim != 1:
@@ -229,10 +235,11 @@ def compute_counterfactual_trade40_batch(
     reasons: list[str] = []
     signal_caches: dict[str, Any] = {}
     for row, (position, calendar_pos) in enumerate(zip(positions, calendar_index)):
-        if calendar_pos < 0 or calendar_pos + horizon_sessions >= len(calendar):
+        if calendar_pos < 0 or (horizon_sessions is not None and
+                                calendar_pos + horizon_sessions >= len(calendar)):
             reasons.append("unmatured_or_missing_exchange_session")
             continue
-        expiry = calendar[calendar_pos + horizon_sessions]
+        expiry = calendar[-1] if horizon_sessions is None else calendar[calendar_pos + horizon_sessions]
         maturity_dates[row] = expiry.to_datetime64().astype("datetime64[D]")
         # The Portfolio assigns its Min parameter by the candidate ORDER day.
         # A suspended ticker's next actual bar may be later than the next
@@ -244,7 +251,8 @@ def compute_counterfactual_trade40_batch(
         # not the previous information bar; there is no alternative date mode.
         effective_day = dates[position + 1]
         if effective_day > expiry:
-            reasons.append(f"no_executable_ticker_order_within_{horizon_sessions}_sessions")
+            reasons.append("no_executable_ticker_order_by_research_end" if horizon_sessions is None
+                           else f"no_executable_ticker_order_within_{horizon_sessions}_sessions")
             continue
         period = resolve_historical_min_period(schedule, effective_day)
         if period is None:
@@ -269,9 +277,16 @@ def compute_counterfactual_trade40_batch(
         observation = simulate_realized_trade_path_label(
             frame, ticker=ticker, signal_pos=int(position), params=params,
             teacher_effective_date=str(period.start.date()),
-            precomputed_signals=cache, horizon_end_date=expiry,
+            precomputed_signals=cache,
+            horizon_end_date=(expiry if horizon_sessions is not None else None),
             counterfactual_entry_limit=limit,
         )
+        if (horizon_sessions is None and observation.forced_closeout and
+                pd.Timestamp(dates[-1]).normalize() < expiry):
+            # A suspended/delisted ticker with no cutoff-date quote cannot be
+            # assigned a synthetic exit at an earlier stale closing price.
+            reasons.append("unsettled_open_position_without_research_end_quote")
+            continue
         if observation.realized_net_r is None:
             reasons.append(str(observation.reason))
             continue

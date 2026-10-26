@@ -14,6 +14,8 @@ from typing import Any, Callable, Mapping
 import math
 import hashlib
 import struct
+import inspect
+import json
 
 import numpy as np
 import pandas as pd
@@ -31,6 +33,7 @@ from core.console_report import render_table, render_title
 from core.report_style import styled_workflow_status
 from core.dataset_profiles import get_dataset_dir
 from core.path_utils import project_relative_display_path
+from config.audit import AUDIT_OUTPUT_ROOT
 from core.strategy_compare_policy import (
     get_strategy_comparison_settings, get_strategy_multi_seed_robustness_settings,
 )
@@ -57,6 +60,9 @@ from filters.breakout_quality.strategy_compare_sources import (
 )
 from filters.breakout_quality.strategy_rule_policies import ALL_RULE_FILTERS_OFF_OVERRIDES
 from services.audit.reusable_report import persist_reusable_report
+from services.audit.oracle_score_artifacts import (
+    OraclePriceScoreStore, price_score_source_identity,
+)
 from services.audit.oracle_replay_artifacts import (
     OracleReplayStore, price_inventory_sha256, replay_identity,
 )
@@ -153,7 +159,9 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
                 any(str(entry.get(key) or "") != str(historical.get(key) or "")
                     for key in ("selector", "score", "provider", "score_source"))
                 or entry.get("horizon_sessions", HORIZON_SESSIONS) !=
-                   historical.get("horizon_sessions", HORIZON_SESSIONS)) :
+                   historical.get("horizon_sessions", HORIZON_SESSIONS)
+                or entry.get("horizon_mode", "fixed_sessions") !=
+                   historical.get("horizon_mode", "fixed_sessions")) :
             raise OracleBlockedError(
                 f"Oracle {name} 的score/selector身分已變更；須建立新Target科學ID，禁止沿用舊快取"
             )
@@ -172,11 +180,17 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
             if selector != "exact":
                 raise OracleBlockedError(f"Oracle {name} 的新分數必須使用Exact；Direct僅能重用score來源")
             if recipe in _ORACLE_DAILY_SCORE_RECIPES:
-                horizon = entry.get("horizon_sessions", HORIZON_SESSIONS)
-                if not isinstance(horizon, int) or isinstance(horizon, bool) or horizon <= 0:
+                horizon = (None if entry.get("horizon_mode") == "full_trade_cycle"
+                           else entry.get("horizon_sessions", HORIZON_SESSIONS))
+                if horizon is not None and (not isinstance(horizon, int) or
+                                            isinstance(horizon, bool) or horizon <= 0):
                     raise OracleBlockedError(f"Oracle {name} daily horizon must be positive sessions")
                 if provider != "daily_trade40_profile":
                     raise OracleBlockedError(f"Oracle {name} Daily-universal provider is not canonical: {provider}")
+                if horizon is None and "horizon_sessions" in entry:
+                    raise OracleBlockedError("Full-cycle Target must not impose a session horizon")
+                if horizon is not None and entry.get("horizon_mode", "fixed_sessions") != "fixed_sessions":
+                    raise OracleBlockedError("Unknown daily Target horizon mode")
                 daily_recipes[name] = (recipe, provider, horizon)
             elif recipe in _ORACLE_SCORE_RECIPES:
                 recipes[name] = (recipe, provider)
@@ -209,8 +223,10 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
         if recipe in _ORACLE_DAILY_SCORE_RECIPES:
             if provider != "daily_trade40_profile":
                 raise OracleBlockedError(f"Oracle Direct daily來源非法：{source_name}")
-            horizon = source_entry.get("horizon_sessions", HORIZON_SESSIONS)
-            if not isinstance(horizon, int) or isinstance(horizon, bool) or horizon <= 0:
+            horizon = (None if source_entry.get("horizon_mode") == "full_trade_cycle"
+                       else source_entry.get("horizon_sessions", HORIZON_SESSIONS))
+            if horizon is not None and (not isinstance(horizon, int) or
+                                        isinstance(horizon, bool) or horizon <= 0):
                 raise OracleBlockedError(f"Oracle Direct {source_name} horizon invalid")
             daily_recipes[source_name] = (recipe, provider, horizon)
         elif recipe in _ORACLE_SCORE_RECIPES:
@@ -980,6 +996,93 @@ def _build_oracle_score_panels(
     return scores, evidence
 
 
+def _price_score_algorithm_sha256() -> str:
+    """Hash ONLY canonical price-truth implementation, not menu/report code."""
+    functions = (
+        _oracle_comparison_plan, _formal_dl_score_start,
+        _build_oracle_score_panels, _load_truth, _market_truth_for_oracle,
+        _reconcile_oracle_truth, _terminal_mae_gate_r,
+        _canonical_score_map_sha256,
+    )
+    digest = hashlib.sha256()
+    for func in functions:
+        digest.update(func.__qualname__.encode("utf-8") + b"\0")
+        digest.update(inspect.getsource(func).encode("utf-8") + b"\n")
+    return digest.hexdigest()
+
+
+def _load_or_build_oracle_price_scores(
+    definition, *, project_root: Path, cutoff: str, price_sha: str,
+    progress: Callable[[str], None] | None = None,
+    source_status_callback: Callable[[str], None] | None = None,
+) -> tuple[dict[str, dict[tuple[str, str], float]], dict[str, Any]]:
+    """One source-verified cache for all selected price-only Oracle scores.
+
+    The daily trade horizon changes neither its score inputs nor its source
+    identity. Existing 40D perfect-price ranks therefore survive adding a
+    60D or full-trade-cycle comparison, and are cropped later by whole days.
+    """
+    plan = _oracle_comparison_plan(definition)
+    if not plan["providers"]:
+        raise OracleBlockedError("Price-score producer cannot run for daily-only comparisons")
+    root = Path(project_root).resolve()
+    settings, _base, _exact = _contract(definition)
+    providers = {field: str(definition.source[field]) for field in plan["providers"]}
+    from filters.breakout_quality.dataset_store import resolve_dataset_paths
+    from filters.breakout_quality.paths import resolve_filter_output_dir
+    manifest = resolve_dataset_paths(
+        resolve_filter_output_dir(root, str(definition.source["filter_id"]))
+    ).summary
+    if not manifest.is_file():
+        # Without official source evidence there can be no cache reuse; the
+        # canonical producer alone decides whether data is available.
+        if source_status_callback is not None:
+            source_status_callback("BUILD")
+        return _build_oracle_score_panels(
+            definition, project_root=root, cutoff=cutoff, progress=progress,
+        )
+    try:
+        identity = price_score_source_identity(
+            root=root, dataset=str(settings.dataset),
+            filter_id=str(definition.source["filter_id"]), price_sha256=price_sha,
+            providers=providers, recipes=plan["recipes"],
+            score_start=_formal_dl_score_start(definition, settings), cutoff=cutoff,
+            score_algorithm_sha256=_price_score_algorithm_sha256(),
+            label_policy=DEFAULT_LABEL_POLICY.as_manifest_payload(),
+        )
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise OracleBlockedError(f"Oracle price Target provenance BLOCKED: {exc}") from exc
+    if identity is None:
+        # The ordinary canonical producer diagnoses the missing Dataset.
+        # Never claim score REUSE without an independently verifiable source.
+        if source_status_callback is not None:
+            source_status_callback("BUILD")
+        return _build_oracle_score_panels(
+            definition, project_root=root, cutoff=cutoff, progress=progress,
+        )
+    store = OraclePriceScoreStore(root / AUDIT_OUTPUT_ROOT /
+                                  definition.output_subdir / "truth_cache")
+    try:
+        cached = store.read(identity, score_sha=_canonical_score_map_sha256)
+        if cached is not None:
+            if source_status_callback is not None:
+                source_status_callback("REUSE")
+            if progress:
+                progress("Price Target scores REUSE（完整來源／分數身分已驗證）")
+            return cached
+        if source_status_callback is not None:
+            source_status_callback("BUILD")
+        if progress:
+            progress("Price Target scores BUILD（缺少相同身分真值工件）")
+        scores, cohort = _build_oracle_score_panels(
+            definition, project_root=root, cutoff=cutoff, progress=progress,
+        )
+        store.write(identity, scores, cohort, score_sha=_canonical_score_map_sha256)
+        return scores, cohort
+    except ValueError as exc:
+        raise OracleBlockedError(f"Oracle price Target artifact BLOCKED: {exc}") from exc
+
+
 def build_oracle_score_tables(definition, *, project_root: Path, cutoff: str) -> tuple[dict[str, dict[tuple[str, str], float]], dict[str, Any]]:
     """Selected-score interface; provider selection is owned by the comparison plan."""
     return _build_oracle_score_panels(
@@ -1156,10 +1259,11 @@ def render_replay_preflight(
     targets: list[str],
     decisions: Mapping[tuple[int, str], str],
 ) -> str:
-    """Read-only full-workload plan before any Broker-Cash replay starts.
+    """One authoritative full-workflow status grid (truth source + portfolio).
 
-    Display is bounded by target count, not seeds x targets. Source data,
-    training and result identities are never inferred from color/status.
+    REUSE means that neither perfect Target truth nor Portfolio Replay was
+    recomputed for this target/seed. A BUILD source is RUN in this grid even
+    if its independently verified historic Portfolio result is reused.
     """
     counts = {action: sum(action == value for value in decisions.values())
               for action in ("REUSE", "RUN", "BLOCKED")}
@@ -1169,11 +1273,12 @@ def render_replay_preflight(
         for target in targets
     ]
     return "\n".join((
-        f"[Target 驗證 {label} | Replay preflight（執行前）]",
+        f"[Target 驗證 {label} | 真值＋Replay 正式執行狀態]",
         "Seed：" + "  ".join(f"S{i + 1}={seed}" for i, seed in enumerate(seeds)),
         render_table(headers, rows),
         f"REUSE {counts['REUSE']} / RUN（需計算）{counts['RUN']} / "
-        f"BLOCKED {counts['BLOCKED']}；本階段尚未執行任何 Replay",
+        f"BLOCKED {counts['BLOCKED']}；RUN 表示本輪 Target 真值曾 BUILD，"
+        "或 Portfolio 尚須執行；此時尚未執行任何 Portfolio Replay",
     ))
 
 
@@ -1204,36 +1309,34 @@ def _existing_artifact_inventory(definition, *, project_root: Path) -> tuple[str
         )
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise OracleBlockedError(f"Target 歷史工件盤點無法完成：{exc}") from exc
-    actions: dict[tuple[int, str], str] = {}
-    for key, presence in per_arm.items():
-        if presence == "INVALID":
-            actions[key] = "BLOCKED"
-        elif presence in {"CACHE", "MULTIPLE"}:
-            actions[key] = "REUSE"
-        else:
-            actions[key] = "RUN"
+    # File presence is NOT a valid REUSE/RUN decision.  This diagnostic must
+    # not emit official execution statuses even when an old cache JSON exists.
+    # The only action plan lives in OracleReplayStore.plan_execution().
+    statuses: dict[tuple[int, str], str] = {
+        key: {"CACHE": "PRESENT", "MULTIPLE": "MULTIPLE",
+              "MISSING": "MISSING", "INVALID": "INVALID"}.get(value, "INVALID")
+        for key, value in per_arm.items()
+    }
     headers = ("Target", *(f"S{i + 1}" for i in range(len(seeds))))
-    # AI: Both the fast inventory and the strict preflight use the shared
-    # workflow palette (REUSE green, BLOCKED red, RUN neutral). No local ANSI
-    # rules or duplicate status classification belong in the Oracle renderer.
     rows = [
-        (target, *(styled_workflow_status(actions[(seed, target)]) for seed in seeds))
+        (target, *(statuses[(seed, target)] for seed in seeds))
         for target in targets
     ]
-    counts = {state: list(actions.values()).count(state)
-              for state in ("REUSE", "RUN", "BLOCKED")}
+    counts = {state: list(statuses.values()).count(state)
+              for state in ("PRESENT", "MISSING", "INVALID", "MULTIPLE")}
     inventory = "\n".join((
-        "[Target 驗證 | 既有 Replay 工件]",
+        "[Target 驗證 | 歷史 Replay 檔案盤點（非執行計畫）]",
         "Seed：" + "  ".join(f"S{i + 1}={seed}" for i, seed in enumerate(seeds)),
         render_table(headers, rows),
-        f"REUSE {counts['REUSE']} / RUN（需計算）{counts['RUN']} / BLOCKED {counts['BLOCKED']}",
-        "註：只盤點逐 Arm Replay 快取；舊報表不作 REUSE 來源。盤點 REUSE 為候選，正式核對仍須確認價格、參數、期間及分數身分。",
+        " / ".join(f"{name} {counts[name]}" for name in counts),
+        "只表示檔案存在與否，不能宣告 REUSE／RUN。正式身分及期間由 Research [1] "
+        "唯一執行計畫驗證；舊報表不作 REUSE 來源。",
     ))
-    return inventory, actions
+    return inventory, statuses
 
 
 def render_existing_artifact_inventory(definition, *, project_root: Path) -> str:
-    """Existing-cache display and quick preliminary plan share one inventory owner."""
+    """Read-only physical-file preview; never an execution decision."""
     inventory, _decisions = _existing_artifact_inventory(definition, project_root=project_root)
     return inventory
 
@@ -1339,7 +1442,8 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
             "label_id": daily_evidence["label_id"],
             "target_id": daily_evidence["target_id"],
             "profile_id": str(definition.source[provider]),
-            **({"horizon_sessions": horizon} if horizon != HORIZON_SESSIONS else {}),
+            **({"full_trade_cycle": True} if horizon is None else
+               {"horizon_sessions": horizon} if horizon != HORIZON_SESSIONS else {}),
             "rank_policy": daily_evidence["rank_policy"],
             "rank_sha256": daily_evidence["rank_sha256"],
             "raw_label_sha256": daily_evidence["raw_label_sha256"],
@@ -1383,14 +1487,22 @@ def build_report(
         print(f"[Target 驗證｜前置] {message}", flush=True)
 
     if not quiet:
-        progress("建立完整 REUSE/RUN/BLOCKED 計畫（未執行 Replay）")
+        progress("核對 Target 真值來源與快取；完成後才公布正式 Replay REUSE/RUN/BLOCKED 計畫")
+    # Hash canonical price bytes once, before daily Target source REUSE/BUILD.
+    # Replay and Target truth must certify the very same data inventory.
+    try:
+        price_sha = price_inventory_sha256(root, settings.dataset)
+    except ValueError as exc:
+        raise OracleBlockedError(str(exc)) from exc
     # Validate the new trade-path Target BEFORE materializing the legacy price
     # providers or starting any portfolio Replay. Only the approved Audit
     # progress text changes; no report sections/columns or Trading path change.
     daily_seed_scores: dict[int, dict[str, dict[tuple[str, str], float]]] = {}
     daily_seed_evidence: dict[int, dict[str, dict[str, Any]]] = {}
+    feature_cohort_cache: dict[tuple[str, ...], tuple[pd.DataFrame, str]] = {}
     common_horizon = max(
-        (horizon for _recipe, _provider, horizon in plan["daily_recipes"].values()),
+        (horizon for _recipe, _provider, horizon in plan["daily_recipes"].values()
+         if horizon is not None),
         default=HORIZON_SESSIONS,
     )
     if plan["daily_recipes"]:
@@ -1421,6 +1533,10 @@ def build_report(
                         cutoff=str(settings.end_date), evaluation_start=str(settings.start_date),
                         score_start=_formal_dl_score_start(definition, settings),
                         seed=seed, param_sha256=param_sha, canonical_schedule=schedule,
+                        price_sha256=price_sha,
+                        cache_root=(root / AUDIT_OUTPUT_ROOT /
+                                    definition.output_subdir / "truth_cache"),
+                        feature_cohort_cache=feature_cohort_cache,
                         **({"horizon_sessions": horizon} if horizon != HORIZON_SESSIONS else {}),
                         progress_callback=(lambda message, name=source_name: progress(
                             f"seed={seed} {name} {message}")) if not quiet else None,
@@ -1457,10 +1573,18 @@ def build_report(
                 if (str(evidence["first_date"]) < _formal_dl_score_start(definition, settings)
                         or str(evidence["first_replay_trade_date"]) < str(settings.start_date)):
                     raise OracleBlockedError("Daily-universal PIT score coverage boundary mismatch")
+    price_truth_action = "NOT_REQUIRED"
+    def record_price_truth_action(action: str) -> None:
+        nonlocal price_truth_action
+        if action not in {"BUILD", "REUSE"}:
+            raise OracleBlockedError("Oracle price truth source returned an invalid status")
+        price_truth_action = action
+
     if plan["providers"]:
-        scores40, cohort40 = _build_oracle_score_panels(
+        scores40, cohort40 = _load_or_build_oracle_price_scores(
             definition, project_root=root, cutoff=str(settings.end_date),
-            progress=None if quiet else progress,
+            price_sha=price_sha, progress=None if quiet else progress,
+            source_status_callback=record_price_truth_action,
         )
     else:
         # The longest selected Target defines the common maturity boundary.
@@ -1468,7 +1592,7 @@ def build_report(
         # of inconsistent per-target feature eligibility.
         scores40 = {}
         reference_name = max(plan["daily_recipes"],
-                             key=lambda name: plan["daily_recipes"][name][2])
+                             key=lambda name: plan["daily_recipes"][name][2] or 0)
         seed_keys = [set(scores[reference_name]) for scores in daily_seed_scores.values()]
         if not seed_keys or any(keys != seed_keys[0] for keys in seed_keys[1:]) or not seed_keys[0]:
             raise OracleBlockedError("Daily-universal per-seed score cohorts are incomplete/incompatible")
@@ -1481,22 +1605,31 @@ def build_report(
             "research_cutoff": str(settings.end_date),
             "risk_budget_return": float(StrategyAlignedContinuousTargetSpec.from_label_policy(
                 DEFAULT_LABEL_POLICY).risk_budget_return),
-            "providers": {f"daily_trade{horizon}": str(definition.source[provider])
-                          for _recipe, provider, horizon in plan["daily_recipes"].values()},
+            "providers": {
+                (f"daily_trade{horizon}" if horizon is not None else "daily_full_trade_cycle"):
+                str(definition.source[provider])
+                for _recipe, provider, horizon in plan["daily_recipes"].values()
+            },
             "scoring": "Canonical daily target percentile on formal feature-eligible daily cohort",
             "oracle_only": True,
         }
-    if common_horizon > HORIZON_SESSIONS:
-        # A 60-session outcome cannot receive hindsight truth on a day where
-        # only 40 sessions have matured. Compare all selected arms on the same
-        # *dated* 60D-mature window; preserve the untouched 40D-only path and
-        # its completed Replay caches if the 60D treatments are disabled.
+    has_full_cycle = any(horizon is None for _recipe, _provider, horizon
+                         in plan["daily_recipes"].values())
+    has_fixed_window = (bool(plan["providers"]) or
+                        any(horizon is not None for _recipe, _provider, horizon
+                            in plan["daily_recipes"].values()))
+    if common_horizon > HORIZON_SESSIONS or (has_full_cycle and has_fixed_window):
+        # Each chosen fixed-horizon source establishes a maturity boundary.
+        # Full-cycle truth may cover *later* information days, but its
+        # comparison scores must be cropped by whole dates to the selected
+        # fixed-horizon window (40D or 60D). The full-cycle-only selection
+        # retains its research-end window without artificial 40D truncation.
         mature_ends = [evidence["last_date"]
                        for records in daily_seed_evidence.values()
                        for source, evidence in records.items()
                        if plan["daily_recipes"][source][2] == common_horizon]
-        if not mature_ends:
-            raise OracleBlockedError("Long-horizon Oracle maturity boundary missing")
+        if not mature_ends and not (has_full_cycle and plan["providers"]):
+            raise OracleBlockedError("Fixed-horizon Oracle maturity boundary missing")
         common_end = min(str(cohort40["last_common_day"]), *(str(day) for day in mature_ends))
         if common_end <= str(settings.start_date):
             raise OracleBlockedError("Long-horizon Oracle evaluation window has no mature sessions")
@@ -1511,7 +1644,7 @@ def build_report(
         # stocks or re-rank a cropped subset of the day's candidates.
         reference = (next(iter(scores40.values())) if scores40 else
                      daily_seed_scores[next(iter(daily_seed_scores))][
-                         max(plan["daily_recipes"], key=lambda name: plan["daily_recipes"][name][2])])
+                         max(plan["daily_recipes"], key=lambda name: plan["daily_recipes"][name][2] or 0)])
         if not reference:
             raise OracleBlockedError("Long-horizon common stock-day cohort is empty")
         cohort40 = dict(cohort40)
@@ -1520,6 +1653,14 @@ def build_report(
             first_common_day=min(day for _, day in reference),
             last_common_day=max(day for _, day in reference),
             comparison_maturity_sessions=common_horizon,
+        )
+    if has_full_cycle:
+        cohort40 = dict(cohort40)
+        cohort40["comparison_includes_full_trade_cycle"] = True
+        cohort40["comparison_included_fixed_horizons"] = sorted(
+            {horizon for _recipe, _provider, horizon in plan["daily_recipes"].values()
+             if horizon is not None} |
+            ({HORIZON_SESSIONS} if plan["providers"] else set())
         )
     # Verify the hypothetical scored stock-days against their canonical
     # feature/target sources BEFORE considering any completed Replay cache.
@@ -1536,10 +1677,6 @@ def build_report(
     if end40 <= start:
         raise OracleBlockedError("Target成熟樣本期間不合法")
     data_dir = Path(get_dataset_dir(str(root), settings.dataset)).resolve()
-    try:
-        price_sha = price_inventory_sha256(root, settings.dataset)
-    except ValueError as exc:
-        raise OracleBlockedError(str(exc)) from exc
     cache = OracleReplayStore(root, definition.output_subdir)
 
     # Replay cache identity is derived from the actual injectible score bytes.
@@ -1614,8 +1751,10 @@ def build_report(
         # evidence is BLOCKED, not interpreted
         # as permission to silently spend hours computing the same arm again.
         # This plan is derived from on-disk artifacts, not a historic target list.
-        completed_plan: dict[tuple[int, str], tuple[dict[str, Any], dict[str, Any] | None, str]] = {}
-        blocked: dict[tuple[int, str], str] = {}
+        # Final plan is resolved exactly once, by the canonical artifact owner.
+        # It is not the earlier file-presence inventory: scores, eligibility,
+        # 40D/60D/full-cycle common window, prices and P16 are now certified.
+        requested_identities: dict[tuple[int, str], dict[str, Any]] = {}
         for seed, param_sha, _kind, _base_params, _oracle_params in prepared:
             for target in ("C96", *(name for name, _ in targets)):
                 is_direct = plan["selectors"].get(target) == "direct"
@@ -1628,7 +1767,7 @@ def build_report(
                     score_sha256=(score_fingerprints[seed][target] if target != "C96" else None),
                     score_contract=(resolved_score_contracts[target] if target != "C96" else None),
                 )
-                identity = replay_identity(
+                requested_identities[(seed, target)] = replay_identity(
                     dataset=settings.dataset, dataset_sha256=price_sha,
                     target=target, definition=definitions_with_base,
                     start=start, end=end,
@@ -1639,19 +1778,32 @@ def build_report(
                     evaluation_mode=str(definition.dimensions["evaluation_mode"]),
                     max_positions=settings.max_positions, replay_policy=arm_replay_policy,
                 )
-                try:
-                    record, origin = cache.resolve_completed(identity)
-                    completed_plan[(seed, target)] = (identity, record, origin)
-                except ValueError as exc:
-                    # Continue read-only inspection so the user sees the full
-                    # REUSE/RUN/BLOCKED matrix; do not replay a partial cohort.
-                    blocked[(seed, target)] = str(exc)
-        decisions = {
-            (seed, name): "BLOCKED" if (seed, name) in blocked else
-            "REUSE" if completed_plan[(seed, name)][1] is not None else "RUN"
-            for seed, _path in parameter_paths
-            for name in ("C96", *(name for name, _desc in targets))
-        }
+        execution_plan = cache.plan_execution(requested_identities)
+        replay_actions = execution_plan.actions()
+        blocked = execution_plan.blocked()
+        # The user-visible REUSE contract covers *the whole required work*
+        # for this target/seed, not merely its existing Portfolio JSON. A
+        # legacy Replay may be REUSE while its source score still had to BUILD.
+        # Such a target must display RUN, never a misleading REUSE. The
+        # executable Replay action remains distinct and is never upgraded to
+        # RUN just because the source truth required work.
+        decisions = {}
+        for (seed, target), replay_action in replay_actions.items():
+            if replay_action == "BLOCKED":
+                decisions[(seed, target)] = "BLOCKED"
+                continue
+            if target == "C96":
+                truth_action = "REUSE"  # unscored formal Min benchmark
+            elif target in plan["daily_sources"]:
+                source = plan["daily_sources"][target]
+                truth_action = daily_seed_evidence[int(seed)][source].get("source_reuse_status", "BUILD")
+            else:
+                truth_action = price_truth_action
+            if truth_action not in {"BUILD", "REUSE"}:
+                raise OracleBlockedError(f"Target {target} missing certified source truth action")
+            decisions[(seed, target)] = (
+                "REUSE" if replay_action == "REUSE" and truth_action == "REUSE" else "RUN"
+            )
         preview = render_replay_preflight(
             label=label,
             seeds=[seed for seed, _path in parameter_paths],
@@ -1659,57 +1811,50 @@ def build_report(
             decisions=decisions,
         )
         if not quiet:
-            if blocked or preflight_display == "full":
-                print("\n" + preview, flush=True)
-            else:
-                reuse_count = sum(value == "REUSE" for value in decisions.values())
-                run_count = sum(value == "RUN" for value in decisions.values())
-                print(f"[Target 驗證｜身分核對完成] REUSE {reuse_count} / "
-                      f"RUN（需計算）{run_count} / BLOCKED 0", flush=True)
-        if blocked:
-            details = [f"{target} seed={seed}: {reason}"
-                       for (seed, target), reason in blocked.items()]
-            raise OracleBlockedError(
-                f"Oracle {label} REUSE preflight BLOCKED: "
-                f"{len(blocked)} conflict(s); " + " | ".join(details[:3])
-            )
+            # This is the ONLY REUSE/RUN/BLOCKED table shown on the standard
+            # Research [1] path, covering Source truth and Portfolio. All raw
+            # prices, score bytes, mature cohort,
+            # rolling P16 parameters, Selector and execution inputs have now
+            # been validated against the precise common replay window.
+            print(f"[Target 驗證｜完整身分核對] 共同回放期間 {start} ～ {end}; "
+                  "只有完整相同身分可 REUSE", flush=True)
+            print("\n" + preview, flush=True)
+        try:
+            execution_plan.require_ready()
+        except ValueError as exc:
+            raise OracleBlockedError(f"Oracle {label} {exc}") from exc
         for seed, param_sha, kind, base_params, oracle_params in prepared:
+            # Both selectors/targets use one frozen seed's market/P16 context.
+            # Only preparation is reused; _run_scenario still independently
+            # replays each required arm against that arm's injected score.
+            seed_replay_kwargs = {**replay_kwargs, "replay_preparation_cache": {}}
             if not quiet and preflight_display == "full":
                 print(f"[Oracle Audit {label}] seed={seed}: verify C96 + {len(targets)} Oracle results")
 
             def load_or_run(target: str, runner):
-                identity, record, origin = completed_plan[(seed, target)]
-                if record is not None:
-                    try:
-                        # AI: An older completed report is promoted to a strict
-                        # AI: per-arm cache only after its provenance was checked.
-                        if origin.startswith("verified legacy replay cache"):
-                            # AI: Recheck the source immediately before promotion;
-                            # AI: old completed bytes remain immutable and readable.
-                            reread, reread_origin = cache.resolve_completed(identity)
-                            if reread_origin != origin or reread != record:
-                                raise ValueError("Oracle legacy cache changed during preflight; fail closed")
-                            cache.write(identity, record, origin="verified_legacy_replay_cache")
-                    except ValueError as exc:
-                        raise OracleBlockedError(str(exc)) from exc
-                    if not quiet and preflight_display == "full":
-                        print(f"[REUSE] {label} seed={seed} {target} | {origin}")
+                # A REUSE row cannot reach runner(), _metrics(), any Portfolio
+                # replay preparation, or any scientific recomputation. Only the sealed
+                # full-identity execution plan can authorize those actions.
+                action = execution_plan.action(seed, target)
+                def produce():
+                    record = _metrics(runner(), target=target)
+                    record["seed"] = seed
+                    if target != "C96":
+                        record["delta_romd_vs_c96"] = (
+                            record["romd"] - observations["C96"][-1]["romd"]
+                        )
                     return record
-                if not quiet:
-                    print(f"[RUN] {label} seed={seed} {target} | no completed local result")
-                record = _metrics(runner(), target=target)
-                record["seed"] = seed
-                if target != "C96":
-                    record["delta_romd_vs_c96"] = record["romd"] - observations["C96"][-1]["romd"]
                 try:
-                    cache.write(identity, record, origin="canonical_replay")
+                    result, origin = execution_plan.execute(seed, target, produce)
                 except ValueError as exc:
                     raise OracleBlockedError(str(exc)) from exc
-                return record
+                if not quiet and action == "RUN":
+                    print(f"[RUN] {label} seed={seed} {target} | completed")
+                return result
 
             baseline = load_or_run("C96", lambda: _run_scenario(
                 name=f"C96 {label} seed={seed} same-window", params=base_params,
-                param_source_kind=kind, **replay_kwargs,
+                param_source_kind=kind, **seed_replay_kwargs,
             ))
             observations["C96"].append(baseline)
             for target, _description in targets:
@@ -1729,7 +1874,7 @@ def build_report(
                     ):
                         return _run_scenario(
                             name=f"Oracle {target} seed={seed}", params=oracle_params,
-                            param_source_kind=kind, **replay_kwargs,
+                            param_source_kind=kind, **seed_replay_kwargs,
                         )
                 record = load_or_run(target, run_oracle)
                 if not math.isclose(
@@ -1764,7 +1909,10 @@ def build_report(
 
     base = run_panel(
         end=end40, cohort=cohort40, scores=scores40,
-        targets=plan["targets"], label=f"{common_horizon}D",
+        targets=plan["targets"],
+        label=("Full-cycle" if cohort40.get("comparison_includes_full_trade_cycle")
+               and not cohort40.get("comparison_included_fixed_horizons")
+               and not plan["providers"] else f"{common_horizon}D"),
     )
     return {
         "schema_version": ORACLE_REPORT_SCHEMA_VERSION,
@@ -1787,6 +1935,10 @@ def build_report(
             "T40 uses full-path nonnegative MAE and clamps to -1R at 1R adverse movement.",
             "T40-MFE replaces only terminal R40 by full-path MFE40_R; the identical MAE gate remains.",
             "1R is the fixed research Label risk budget, NOT the actual executed ATR stop-loss.",
+            *(["Full-cycle Min Net-R follows canonical exits through the frozen research cutoff; "
+               "remaining positions close at the formal backtest end, with stale unexecutable "
+               "quotes censored; this is not an unlimited future path."]
+              if cohort40.get("comparison_includes_full_trade_cycle") else []),
         ],
     }
 
@@ -1803,17 +1955,23 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
              *[dict(item, target=_oracle_display_name(item["target"]), wins=f'{item["positive_seed_count"]}/{item["seeds"]}')
                for item in report["oracles"]]]
     rows = format_comparison_rows(perf_table, items, target=target)
+    cohort = report["common_cohort"]
+    if cohort.get("comparison_includes_full_trade_cycle"):
+        fixed = list(cohort.get("comparison_included_fixed_horizons") or [])
+        comparison_scope = " + ".join([*(f"{horizon}D" for horizon in fixed), "Full-cycle"])
+        common_window = (f'{cohort.get("comparison_maturity_sessions", 40)}D-mature common window'
+                         if fixed else 'Full-cycle research-end common window')
+    else:
+        comparison_scope = ("40D" if cohort.get("comparison_maturity_sessions", 40) == 40
+                            else f'40D + {cohort["comparison_maturity_sessions"]}D')
+        common_window = f'{cohort.get("comparison_maturity_sessions", 40)}D-mature common window'
     intro = [
         "Target Ground Truth -> Strategy RoMD (HINDSIGHT ORACLE / NOT PIT)",
-        f'Period: {report["start_date"]} ~ {report["end_date"]} '
-        f'({report["common_cohort"].get("comparison_maturity_sessions", 40)}D-mature common window)',
-        f'Common stock-day cohort: {report["common_cohort"]["cohort_rows"]:,}',
+        f'Period: {report["start_date"]} ~ {report["end_date"]} ({common_window})',
+        f'Common stock-day cohort: {cohort["cohort_rows"]:,}',
         f'Benchmark: {report["benchmark_id"]}, same-seed pairs N={len(report["seeds"])}',
-        (f'Report schema: {report["schema_version"]}, Oracle treatments: '
-         + (f'{len(report["oracles"])} (40D, Exact + Direct); not Standard SOP'
-            if report["common_cohort"].get("comparison_maturity_sessions", 40) == 40 else
-            f'{len(report["oracles"])} (40D + '
-            f'{report["common_cohort"]["comparison_maturity_sessions"]}D, Exact + Direct); not Standard SOP')),
+        f'Report schema: {report["schema_version"]}, Oracle treatments: '
+        f'{len(report["oracles"])} ({comparison_scope}, Exact + Direct); not Standard SOP',
         'Ranking: Exact K/R0 or Direct No-K/No-R0; same Broker-Cash, seed/P16 and future scores.',
         'T40: (1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 >= 1R -> T40 = -1R.',
         'T40-MFE: (1 - min(MAE40, 1R)) * MFE40_R - min(MAE40, 1R); MAE40 >= 1R -> -1R.',

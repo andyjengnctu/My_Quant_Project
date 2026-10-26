@@ -8,12 +8,20 @@ Exact/Direct selectors read the same per-seed score table; neither can train.
 from __future__ import annotations
 
 from hashlib import sha256
+import json
+import os
+import tempfile
+import zipfile
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 import numpy as np
 import pandas as pd
 
+from core.file_integrity import (
+    canonical_json_sha256, compute_file_sha256, is_sha256_hex,
+    atomic_replace_with_retry, exclusive_file_lock,
+)
 from core.breakout_quality_registry import (
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_experiment_profile,
@@ -33,7 +41,10 @@ TARGET_ID = "daily_universal_formal_min_roos_trade40_netr_v1"
 LABEL_ID = "LABEL-daily_universal_formal_min_roos_trade40_netr_v1"
 
 
-def target_identity_for_horizon(horizon_sessions: int) -> tuple[str, str]:
+def target_identity_for_horizon(horizon_sessions: int | None) -> tuple[str, str]:
+    if horizon_sessions is None:
+        target = "daily_universal_formal_min_roos_fulltrade_netr_v1"
+        return target, f"LABEL-{target}"
     if not isinstance(horizon_sessions, int) or isinstance(horizon_sessions, bool) or horizon_sessions <= 0:
         raise DailyTrade40OracleBlockedError("Invalid formal Min Oracle session horizon")
     target = f"daily_universal_formal_min_roos_trade{horizon_sessions}_netr_v1"
@@ -44,13 +55,150 @@ class DailyTrade40OracleBlockedError(ValueError):
     """A source, maturity or per-seed formal Min identity failed verification."""
 
 
+# This is a persistent Target-truth cache, never a Replay or model score cache.
+# Every key covers actual price bytes, feature-eligible ticker/date membership,
+# formal rolling P16 parameters, horizon, PIT date bounds and source code lineage.
+# Missing old truth artifacts must be computed once; a Replay observation alone
+# cannot reconstruct or independently certify the underlying perfect scores.
+_TRUTH_CACHE_SCHEMA = 1
+_TRUTH_SOURCE_MODULES = (
+    "services/audit/daily_trade40_oracle.py",
+    "filters/breakout_quality/daily_trade40_target.py",
+    "filters/breakout_quality/trade_path_label.py",
+    "filters/breakout_quality/profile_ranker_data.py",
+    "filters/breakout_quality/continuous_ranker_data.py",
+    "filters/breakout_quality/workflow_io.py",
+    "filters/breakout_quality/runtime.py",
+    "core/backtest_finalize.py",
+    "core/position_step.py",
+    "core/entry_plans.py",
+    "core/extended_signals.py",
+    "core/exact_accounting.py",
+    "core/price_utils.py",
+    "core/strategy_params.py",
+    "core/signal_utils.py",
+    "core/portfolio_param_runtime.py",
+    "core/capital_policy.py",
+    "config/broker_accounting.py",
+    "config/execution_policy.py",
+    "config/trading.py",
+)
+
+
+def _truth_source_sha(root: Path) -> str:
+    digest = sha256()
+    for relative in _TRUTH_SOURCE_MODULES:
+        path = root / relative
+        if not path.is_file():
+            raise DailyTrade40OracleBlockedError(f"Oracle truth source lineage missing: {relative}")
+        digest.update(relative.encode("utf-8") + b"\0")
+        digest.update(compute_file_sha256(path).encode("ascii") + b"\n")
+    return digest.hexdigest()
+
+
+def _ranked_score_sha(scores: Mapping[tuple[str, str], float]) -> str:
+    digest = sha256()
+    for (ticker, day), value in sorted(scores.items()):
+        score = float(value)
+        if not np.isfinite(score) or score < 0.0 or score > 1.0:
+            raise DailyTrade40OracleBlockedError("Oracle cached score is outside finite [0,1]")
+        digest.update(f"{ticker}|{day}|{score:.17g}\n".encode("ascii"))
+    return digest.hexdigest()
+
+
+def _truth_cache_read(path: Path, identity: Mapping[str, Any]):
+    if not path.is_file():
+        return None
+    try:
+        with np.load(path, allow_pickle=False) as archive:
+            if set(archive.files) != {"metadata", "tickers", "days", "scores"}:
+                raise ValueError("unexpected cached truth payload fields")
+            meta = json.loads(str(archive["metadata"].item()))
+            tickers = archive["tickers"]
+            days = archive["days"]
+            values = archive["scores"]
+        if meta.get("schema") != _TRUTH_CACHE_SCHEMA or meta.get("identity") != dict(identity):
+            raise ValueError("truth cache identity mismatch")
+        # The raw Net-R outcomes cannot be recovered from percentile scores.
+        # Preserve their evidence as a single immutable, checksummed payload;
+        # never allow a valid rank table with altered provenance to REUSE.
+        payload = {name: meta.get(name) for name in ("schema", "identity", "evidence", "score_sha256")}
+        if meta.get("payload_sha256") != canonical_json_sha256(payload):
+            raise ValueError("truth cache evidence payload SHA mismatch")
+        if (tickers.ndim != 1 or days.ndim != 1 or values.ndim != 1 or
+                not len(values) or len(tickers) != len(values) or len(days) != len(values)):
+            raise ValueError("truth cache data shape mismatch")
+        if (tickers.dtype.kind != "U" or days.dtype.kind != "U" or
+                values.dtype.kind != "f"):
+            raise ValueError("truth cache data type mismatch")
+        scores = dict(zip(zip(tickers.tolist(), days.tolist()), values.tolist()))
+        evidence = meta["evidence"]
+        teacher = dict(evidence["teacher"])
+        if (evidence["target_id"] != identity["target_id"] or
+                evidence["profile_id"] != identity["profile_id"] or
+                evidence["research_cutoff"] != identity["research_cutoff"] or
+                evidence["score_start_date"] != identity["score_start"] or
+                teacher.get("seed") != identity["seed"] or
+                teacher.get("param_identity_sha256") != identity["param_sha256"] or
+                len(scores) != len(values) or
+                len(scores) != int(evidence["mature_eligible_rows"]) or
+                _ranked_score_sha(scores) != evidence["rank_sha256"] or
+                meta.get("score_sha256") != evidence["rank_sha256"]):
+            raise ValueError("truth cache value/lineage SHA/row count mismatch")
+        return scores, {**evidence, "source_reuse_status": "REUSE"}
+    except (OSError, ValueError, KeyError, TypeError, IndexError, EOFError, zipfile.BadZipFile) as exc:
+        raise DailyTrade40OracleBlockedError(
+            f"Oracle Target-truth cache is corrupt and cannot be REUSE: {path.name}: {exc}"
+        ) from exc
+
+
+def _truth_cache_write(path: Path, identity: Mapping[str, Any],
+                       scores: Mapping[tuple[str, str], float], evidence: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    evidence = {k: v for k, v in evidence.items() if k != "source_reuse_status"}
+    if _ranked_score_sha(scores) != evidence["rank_sha256"]:
+        raise DailyTrade40OracleBlockedError("Oracle truth source rank hash not reproducible")
+    payload = {
+        "schema": _TRUTH_CACHE_SCHEMA, "identity": identity,
+        "evidence": evidence, "score_sha256": evidence["rank_sha256"],
+    }
+    metadata = json.dumps({**payload, "payload_sha256": canonical_json_sha256(payload)},
+                          ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    keys = sorted(scores)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.stem}.", suffix=".npz", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            np.savez_compressed(
+                stream, metadata=np.asarray(metadata),
+                tickers=np.asarray([ticker for ticker, _ in keys]),
+                days=np.asarray([day for _, day in keys]),
+                scores=np.asarray([scores[key] for key in keys], dtype=np.float64),
+            )
+            stream.flush()
+            os.fsync(stream.fileno())
+        with exclusive_file_lock(path.parent / ".truth_cache.publish.lock"):
+            previous = _truth_cache_read(path, identity)
+            if previous is not None:
+                if previous[0] != dict(scores) or {
+                        k: v for k, v in previous[1].items() if k != "source_reuse_status"
+                    } != evidence:
+                    raise DailyTrade40OracleBlockedError("Oracle same-identity truth evidence or scores differ")
+            else:
+                atomic_replace_with_retry(temp_name, path)
+    finally:
+        if os.path.exists(temp_name):
+            os.unlink(temp_name)
+
+
 def build_daily_universal_trade40_oracle_scores(
     *, project_root: Path, dataset: str, filter_id: str,
     profile_id: str, cutoff: str, evaluation_start: str,
     score_start: str | None = None,
     seed: int, param_sha256: str,
     canonical_schedule: tuple[ExecutableMinPeriod, ...],
-    horizon_sessions: int = HORIZON_SESSIONS,
+    horizon_sessions: int | None = HORIZON_SESSIONS,
+    price_sha256: str | None = None, cache_root: Path | None = None,
+    feature_cohort_cache: dict[tuple[str, ...], tuple[pd.DataFrame, str]] | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> tuple[dict[tuple[str, str], float], dict[str, Any]]:
     """Compute all feature-eligible stock-day outcomes from a formal Min seed.
@@ -85,20 +233,74 @@ def build_daily_universal_trade40_oracle_scores(
     if first_scored_day < start_day or first_scored_day > cutoff_day:
         raise DailyTrade40OracleBlockedError("PIT DL score period outside Oracle evaluation")
     try:
-        if progress_callback is not None:
-            progress_callback("取得正式每日合格股票日母體")
-        bundle = load_profile_continuous_ranker_data(
-            filter_id=filter_id, model_architecture=str(profile.model_architecture),
-            experiment_profile=profile_id, preload_feature_bank=False,
-            allow_stale_source=False, project_root=root,
-        )
-        summary = dict(bundle.summary or {})
-        group = pd.DataFrame(bundle.group_table).reset_index(drop=True)
-        if (summary.get("dataset") != dataset or summary.get("filter_id") != filter_id
-                or summary.get("sample_scope") != "daily_eligible_stock_days"
-                or int(summary.get("score_eligible_sample_count", -1)) != len(group)
-                or not {"ticker", "date"}.issubset(group.columns)):
-            raise DailyTrade40OracleBlockedError("Generic daily feature-universe identity mismatch")
+        # A given Research [1] run has one frozen feature-eligibility source.
+        # Re-reading its multi-million-row group for every seed/horizon is
+        # unnecessary: retain one process-local verified view, while the
+        # on-disk truth cache still certifies full source/score identity.
+        cohort_key = (str(root), str(dataset), str(filter_id), str(profile_id),
+                      str(first_scored_day.date()), str(cutoff_day.date()))
+        snapshot = (feature_cohort_cache.get(cohort_key)
+                    if feature_cohort_cache is not None else None)
+        if snapshot is not None:
+            group, group_sha = snapshot
+            if progress_callback is not None:
+                progress_callback(f"每日合格股票日母體 REUSE（{len(group):,} 筆）")
+        else:
+            if progress_callback is not None:
+                progress_callback("取得正式每日合格股票日母體")
+            bundle = load_profile_continuous_ranker_data(
+                filter_id=filter_id, model_architecture=str(profile.model_architecture),
+                experiment_profile=profile_id, preload_feature_bank=False,
+                allow_stale_source=False, project_root=root,
+            )
+            summary = dict(bundle.summary or {})
+            group = pd.DataFrame(bundle.group_table).reset_index(drop=True)
+            if (summary.get("dataset") != dataset or summary.get("filter_id") != filter_id
+                    or summary.get("sample_scope") != "daily_eligible_stock_days"
+                    or int(summary.get("score_eligible_sample_count", -1)) != len(group)
+                    or not {"ticker", "date"}.issubset(group.columns)):
+                raise DailyTrade40OracleBlockedError("Generic daily feature-universe identity mismatch")
+            group["ticker"] = group["ticker"].map(normalize_ticker)
+            group["date"] = pd.to_datetime(group["date"], errors="raise").dt.normalize()
+            group = group.loc[(group["date"] >= first_scored_day) &
+                              (group["date"] <= cutoff_day)].reset_index(drop=True)
+            if group.empty or group.duplicated(["ticker", "date"]).any():
+                raise DailyTrade40OracleBlockedError("No unique feature-eligible daily stock-days")
+            group_sha = sha256(group[["ticker", "date"]].sort_values(
+                ["ticker", "date"], kind="stable").to_csv(index=False).encode("utf-8")).hexdigest()
+            if feature_cohort_cache is not None:
+                feature_cohort_cache[cohort_key] = (group, group_sha)
+        cache_path = None
+        cache_identity = None
+        if cache_root is not None:
+            if not is_sha256_hex(price_sha256):
+                raise DailyTrade40OracleBlockedError("Oracle truth REUSE requires real price SHA256")
+            cache_identity = {
+                "schema": _TRUTH_CACHE_SCHEMA,
+                "target_id": target_id, "dataset": str(dataset),
+                "filter_id": str(filter_id), "profile_id": str(profile_id),
+                "evaluation_start": str(start_day.date()),
+                "score_start": str(first_scored_day.date()),
+                "research_cutoff": str(cutoff_day.date()),
+                "seed": int(seed), "param_sha256": str(param_sha256),
+                "rolling_params": [{
+                    "start": str(item.start.date()),
+                    "end": None if item.end is None else str(item.end.date()),
+                    "signature": item.params_signature,
+                } for item in canonical_schedule],
+                "horizon_sessions": horizon_sessions,
+                "price_sha256": str(price_sha256),
+                "feature_eligible_keys_sha256": group_sha,
+                "truth_source_sha256": _truth_source_sha(root),
+            }
+            cache_path = Path(cache_root) / str(seed) / (
+                f"{target_id}_{canonical_json_sha256(cache_identity)}.npz"
+            )
+            cached = _truth_cache_read(cache_path, cache_identity)
+            if cached is not None:
+                if progress_callback is not None:
+                    progress_callback(f"Target 真值 REUSE ({len(cached[0]):,} 個已驗證分數)")
+                return cached
         if progress_callback is not None:
             progress_callback(f"已取得 {len(group):,} 筆股票日，盤點共同交易日曆")
         csv_inputs, duplicates = discover_dataset_csv_inputs(root, dataset)
@@ -106,8 +308,12 @@ def build_daily_universal_trade40_oracle_scores(
             raise DailyTrade40OracleBlockedError("Duplicate canonical price ticker source")
         exchange = collect_canonical_exchange_sessions(
             csv_inputs, benchmark_ticker=str(DEFAULT_LABEL_POLICY.benchmark_ticker),
-            horizon_sessions=horizon_sessions,
+            horizon_sessions=(horizon_sessions if horizon_sessions is not None else 1),
         )
+        if horizon_sessions is None:
+            # Full-cycle oracle may consume no quotes after the frozen research
+            # cutoff, including quotes belonging to the next Market Data refresh.
+            exchange = exchange[exchange <= cutoff_day]
         prior = exchange[exchange < start_day]
         if prior.empty:
             raise DailyTrade40OracleBlockedError("No legal pre-OOS information session")
@@ -121,22 +327,27 @@ def build_daily_universal_trade40_oracle_scores(
         source_paths = {normalize_ticker(ticker): Path(path) for ticker, path in csv_inputs}
         if len(source_paths) != len(csv_inputs):
             raise DailyTrade40OracleBlockedError("Duplicate normalized stock ticker")
-        group["ticker"] = group["ticker"].map(normalize_ticker)
-        group["date"] = pd.to_datetime(group["date"], errors="raise").dt.normalize()
-        group = group.loc[(group["date"] >= first_scored_day) & (group["date"] <= cutoff_day)].reset_index(drop=True)
-        if group.empty or group.duplicated(["ticker", "date"]).any():
-            raise DailyTrade40OracleBlockedError("No unique feature-eligible daily stock-days")
         daily_calendar_pos = exchange.get_indexer(pd.DatetimeIndex(group["date"]))
         if (daily_calendar_pos < 0).any():
             raise DailyTrade40OracleBlockedError("Feature stock-day absent from canonical exchange calendar")
-        eligible = daily_calendar_pos + horizon_sessions < len(exchange)
         maturity = np.full(len(group), np.datetime64("NaT"), dtype="datetime64[D]")
-        mature_positions = daily_calendar_pos[eligible] + horizon_sessions
-        maturity[eligible] = exchange.take(mature_positions).to_numpy(dtype="datetime64[D]")
-        mature = eligible & (maturity <= np.datetime64(cutoff_day.date()))
+        if horizon_sessions is None:
+            # The canonical formal Research closeout is the terminal maturity
+            # boundary for a trade with no earlier stop/indicator exit. A final
+            # information day without a next executable bar remains unfilled.
+            mature = daily_calendar_pos >= 0
+            maturity[mature] = np.datetime64(exchange[-1].date())
+        else:
+            eligible = daily_calendar_pos + horizon_sessions < len(exchange)
+            mature_positions = daily_calendar_pos[eligible] + horizon_sessions
+            maturity[eligible] = exchange.take(mature_positions).to_numpy(dtype="datetime64[D]")
+            mature = eligible & (maturity <= np.datetime64(cutoff_day.date()))
         group = group.loc[mature].copy()
         if group.empty:
-            raise DailyTrade40OracleBlockedError(f"No {horizon_sessions}-session mature feature stock-days")
+            raise DailyTrade40OracleBlockedError(
+                "No full-cycle legal feature stock-days" if horizon_sessions is None else
+                f"No {horizon_sessions}-session mature feature stock-days"
+            )
         records: list[pd.DataFrame] = []
         groups = group.groupby("ticker", sort=True)
         total_tickers = group["ticker"].nunique()
@@ -147,6 +358,8 @@ def build_daily_universal_trade40_oracle_scores(
             if path is None:
                 raise DailyTrade40OracleBlockedError(f"Feature-universe ticker missing price source: {ticker}")
             frame = load_dataset_frame(path, ticker, min_rows=1)
+            if horizon_sessions is None:
+                frame = frame.loc[frame.index <= exchange[-1]].copy()
             positions = pd.DatetimeIndex(frame.index).normalize().get_indexer(
                 pd.DatetimeIndex(selected["date"])
             )
@@ -177,7 +390,8 @@ def build_daily_universal_trade40_oracle_scores(
                 )
             expected_deadlines = np.asarray(maturity[selected.index], dtype="datetime64[D]")
             if not np.array_equal(batch.maturity_dates, expected_deadlines):
-                raise DailyTrade40OracleBlockedError(f"{horizon_sessions}-session mature deadline disagrees with Min target path")
+                raise DailyTrade40OracleBlockedError(
+                    f"{horizon_sessions or 'full-cycle'} mature deadline disagrees with Min target path")
             raw = np.asarray(batch.target_raw_r, dtype=np.float64)
             valid = np.asarray(batch.valid_mask, dtype=bool)
             if ((valid & ~np.isfinite(raw)).any() or ((~valid) & np.isfinite(raw)).any()):
@@ -212,7 +426,11 @@ def build_daily_universal_trade40_oracle_scores(
         evidence = {
             "label_id": label_id, "target_id": target_id,
             "profile_id": profile_id, "key_mode": "information_date",
-            "cohort": f"daily_eligible_stock_days_formal_min_{horizon_sessions}_exchange_sessions_mature",
+            "cohort": (
+                "daily_eligible_stock_days_formal_min_full_trade_cycle_research_closeout"
+                if horizon_sessions is None else
+                f"daily_eligible_stock_days_formal_min_{horizon_sessions}_exchange_sessions_mature"
+            ),
             "mature_eligible_rows": len(outcome),
             "settled_net_r_rows": int(outcome["realized_net_r"].notna().sum()),
             "censored_rank_last_rows": int(outcome["realized_net_r"].isna().sum()),
@@ -226,6 +444,9 @@ def build_daily_universal_trade40_oracle_scores(
             "oracle_evaluation_start_date": str(start_day.date()),
             "oracle_hindsight_only": True,
         }
+        if cache_path is not None and cache_identity is not None:
+            _truth_cache_write(cache_path, cache_identity, scores, evidence)
+            evidence = {**evidence, "source_reuse_status": "BUILD"}
         return scores, evidence
     except (OSError, KeyError, TypeError, ValueError) as exc:
         if isinstance(exc, DailyTrade40OracleBlockedError):

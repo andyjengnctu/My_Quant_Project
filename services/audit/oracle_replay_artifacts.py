@@ -7,6 +7,9 @@ be read as observations only after an explicit strict compatibility check.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Callable
+
 import hashlib
 import json
 import math
@@ -275,6 +278,84 @@ def oracle_cohorts_compatible(saved: Mapping[str, Any], current: Mapping[str, An
     return True
 
 
+@dataclass(frozen=True)
+class OracleReplayDecision:
+    """Full-identity decision, never a file-presence or provisional status."""
+
+    action: str
+    identity: Mapping[str, Any]
+    observation: Mapping[str, Any] | None
+    origin: str
+    reason: str = ""
+
+
+class OracleReplayExecutionPlan:
+    """Immutable plan enforcing read-only REUSE and RUN-only producers.
+
+    The caller must resolve *every* arm against its complete identity before
+    allowing any replay. The execution path cannot reinterpret a plan status
+    or silently fall back from REUSE to RUN. A corrupt/conflicting cache
+    blocks the whole batch, before the first portfolio timeline runs.
+    """
+
+    def __init__(self, store: "OracleReplayStore", decisions: Mapping[tuple[int, str], OracleReplayDecision]):
+        self._store = store
+        self._decisions = dict(decisions)
+        self._completed_runs: set[tuple[int, str]] = set()
+
+    def action(self, seed: int, target: str) -> str:
+        return self._decisions[(int(seed), str(target))].action
+
+    def actions(self) -> dict[tuple[int, str], str]:
+        return {key: row.action for key, row in self._decisions.items()}
+
+    def blocked(self) -> dict[tuple[int, str], str]:
+        return {key: row.reason for key, row in self._decisions.items()
+                if row.action == "BLOCKED"}
+
+    def require_ready(self) -> None:
+        if self.blocked():
+            samples = [f"{target} seed={seed}: {reason}"
+                       for (seed, target), reason in self.blocked().items()]
+            raise ValueError(
+                f"Oracle complete-identity preflight BLOCKED: "
+                f"{len(samples)} conflict(s); " + " | ".join(samples[:3])
+            )
+
+    def execute(self, seed: int, target: str,
+                producer: Callable[[], Mapping[str, Any]]) -> tuple[dict[str, Any], str]:
+        """Return verified completed observation, or run *only* a planned RUN.
+
+        The source truth producer and all score verification must precede
+        this plan. No REUSE branch invokes the producer, touches portfolio
+        preparation, rewrites history, or silently changes its action.
+        """
+        self.require_ready()
+        key = (int(seed), str(target))
+        row = self._decisions[key]
+        if row.action == "REUSE":
+            if row.observation is None:
+                raise ValueError("Oracle REUSE missing certified result")
+            # Canonicalize a verified historical alias without running a
+            # producer. This is a single integrity-checked artifact copy, not
+            # a new target, price, market, parameter or portfolio computation.
+            if row.origin.startswith("verified legacy replay cache"):
+                again, origin = self._store.resolve_completed(row.identity)
+                if origin != row.origin or again != dict(row.observation):
+                    raise ValueError("Oracle verified historical alias changed after preflight")
+                self._store.write(row.identity, row.observation,
+                                  origin="verified_legacy_replay_cache")
+            return dict(row.observation), row.origin
+        if row.action != "RUN" or row.observation is not None:
+            raise ValueError("Oracle invalid finalized replay execution decision")
+        if key in self._completed_runs:
+            raise ValueError("Oracle finalized RUN unit has already completed in this execution plan")
+        observation = dict(producer())
+        self._store.write(row.identity, observation, origin="canonical_replay")
+        self._completed_runs.add(key)
+        return observation, "newly completed"
+
+
 class OracleReplayStore:
     """Durable per-arm cache; no producer-side recomputation on a cache hit."""
 
@@ -430,6 +511,33 @@ class OracleReplayStore:
             return record, f"verified legacy replay cache ({source})"
         return None, "none"
 
+    def plan_execution(self, identities: Mapping[tuple[int, str], Mapping[str, Any]]) -> OracleReplayExecutionPlan:
+        """Single owner of final REUSE/RUN/BLOCKED for an entire comparison.
+
+        This method performs no source truth computation or portfolio replay.
+        A previous cache with a different date window is not an eligible
+        REUSE; it is a genuinely missing *current-identity* observation.
+        """
+        if not identities:
+            raise ValueError("Oracle replay execution plan is empty")
+        resolved: dict[tuple[int, str], OracleReplayDecision] = {}
+        for key, identity in identities.items():
+            seed, target = int(key[0]), str(key[1])
+            if int(identity.get("seed", -1)) != seed or identity.get("target") != target:
+                raise ValueError("Oracle plan key/identity mismatch")
+            try:
+                observation, origin = self.resolve_completed(identity)
+                resolved[(seed, target)] = OracleReplayDecision(
+                    action="REUSE" if observation is not None else "RUN",
+                    identity=dict(identity), observation=observation, origin=origin,
+                )
+            except ValueError as exc:
+                resolved[(seed, target)] = OracleReplayDecision(
+                    action="BLOCKED", identity=dict(identity),
+                    observation=None, origin="none", reason=str(exc),
+                )
+        return OracleReplayExecutionPlan(self, resolved)
+
     def explain_other_identity(self, identity: Mapping[str, Any]) -> str | None:
         """Explain genuine replay differences; legacy UI-only drift is compatible."""
         _legacy, conflict = self._inspect_siblings(identity)
@@ -562,5 +670,5 @@ class OracleReplayStore:
 
 __all__ = [
     "OracleReplayStore", "price_inventory_sha256", "replay_identity",
-    "oracle_cohorts_compatible",
+    "oracle_cohorts_compatible", "OracleReplayDecision", "OracleReplayExecutionPlan",
 ]

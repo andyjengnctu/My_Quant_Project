@@ -130,6 +130,19 @@ class FormalMinTrade40SyntheticCases(unittest.TestCase):
                 exchange_calendar=days, horizon_sessions=0,
             )
 
+    def test_full_cycle_consumes_canonical_exit_without_40_60_horizon(self):
+        from filters.breakout_quality import daily_trade40_target as owner
+        days, frame, params, period = fixture(count=150)
+        with patch.object(owner, "simulate_realized_trade_path_label",
+                          wraps=simulate_realized_trade_path_label) as simulator:
+            outcome = compute_counterfactual_trade40_batch(
+                frame, np.array([75]), ticker="2330", schedule=(period,),
+                exchange_calendar=days, horizon_sessions=None)
+        self.assertTrue(outcome.valid_mask[0])
+        self.assertEqual(outcome.maturity_dates[0],
+                         days[-1].to_datetime64().astype("datetime64[D]"))
+        self.assertIsNone(simulator.call_args.kwargs["horizon_end_date"])
+
     def test_formal_seed_param_adapter_no_old_teacher_dependency(self):
         days, frame, params, period = fixture()
         signature = build_portfolio_params_signature(params)

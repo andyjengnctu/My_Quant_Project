@@ -45,7 +45,6 @@ from services.research.strategy_compare_application import (
 from services.audit.catalog import get_audit_methods, get_audit_method
 from services.audit.runner import (
     collect_audit_menu_state,
-    render_audit_artifact_inventory,
     render_audit_status,
     render_latest_audit_summary,
     run_enabled_audits,
@@ -359,13 +358,10 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
         print("目前沒有啟用此Reusable module的參數設定；保留固定選單但本次不執行。")
         return 0
     if method.menu_location == "research_root":
-        # AI: Like Strategy Compare, one Enter authorizes this configured
-        # AI: evaluation. Inventory is a fast presence preview, not REUSE proof;
-        # AI: the Audit owner still certifies every source/cache before Replay.
-        print("[Target 驗證] 正在盤點既有 Replay 工件…", flush=True)
-        print("\n" + render_audit_artifact_inventory(
-            module_id, project_root=PROJECT_ROOT, method_id=method_id,
-        ), flush=True)
+        # AI: An existence-only inventory can claim 48 REUSE and then show
+        # AI: zero REUSE after a changed common maturity window. Only the
+        # AI: canonical full-identity planner may call an arm REUSE or RUN.
+        # AI: Keep the single existing Enter, with no misleading preview.
         try:
             confirm = input("👉 按 Enter 執行 Target 驗證（自動 REUSE／RUN，不訓練）；輸入 0 返回：").strip().lower()
         except EOFError:

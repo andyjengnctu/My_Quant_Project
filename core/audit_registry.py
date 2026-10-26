@@ -132,6 +132,8 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     {"target": "DailyUniversal_MinTrade40_NetR_Direct", "description": "Same formal per-seed Min ROOS daily truth and ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade40_NetR", "selector": "direct"},
                     {"target": "DailyUniversal_MinTrade60_NetR", "description": "Formal per-seed Min ROOS hypothetical stock-day Net-R, 60 consolidated exchange sessions, hindsight ranking", "score": "daily_trade_path_net_r", "provider": "daily_trade40_profile", "horizon_sessions": 60, "selector": "exact"},
                     {"target": "DailyUniversal_MinTrade60_NetR_Direct", "description": "Same formal 60-session Min ROOS daily truth and ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade60_NetR", "selector": "direct"},
+                    {"target": "DailyUniversal_MinTrade_NetR", "description": "Formal per-seed Min ROOS daily universal Net-R through the complete executable trade cycle (normal exit or canonical research end closeout), no 40/60-session forced exit", "score": "daily_trade_path_net_r", "provider": "daily_trade40_profile", "horizon_mode": "full_trade_cycle", "selector": "exact"},
+                    {"target": "DailyUniversal_MinTrade_NetR_Direct", "description": "Same full-trade-cycle per-seed Min Net-R truth and daily ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade_NetR", "selector": "direct"},
                 ),
             },
             "dimensions": {
