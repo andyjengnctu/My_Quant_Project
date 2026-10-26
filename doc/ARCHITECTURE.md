@@ -947,8 +947,17 @@ Direct-account BUY provenance is owned by `services/trading/account_trade_entry.
 - No Windows formal suite or full real-market E13 parity is claimed by these isolated repairs. The above source/replay distinction is essential for legacy results that lack independently verifiable per-stock-day perfect-score artifacts: no algorithm can honestly certify their Replay REUSE from file existence and metrics alone without first establishing score provenance.
 
 
-### 2026-10-26 — Target Oracle 冷啟動：Portfolio 與 Truth 分層授權
+### 2026-10-26 — Target Oracle 冷啟動：Portfolio 與 Truth 分層授權（歷史流程，已退役）
 
 - Oracle Score Truth 缺件時，不可將缺少的 `N` 份分數來源乘以 Target×Seed 直接宣稱有 `N` 個 Portfolio `RUN`，也不得將已有 Replay 的 `PRESENT` 冒稱 `REUSE`。首次表格的 Portfolio 欄使用 `REUSE/RUN/PENDING/BLOCKED`，Truth 欄使用 `REUSE/BUILD/—`。只有 `OracleReplayStore.plan_execution` 的完整身份裁決可使 scored-Target Portfolio 從 PENDING 轉 REUSE；C96 不消費 Target 真值，允許單獨以已註冊的正式策略回放參數、價格、窗口與保存身份認證。
 - 若 Truth 缺件，第一次確認只授權缺件真值 BUILD；取得分數真值後顯示正式 Portfolio REUSE/RUN/BLOCKED 及第二次執行確認。若 Truth 全數已有，仍以一次正式表格與一次確認執行。確認前不得執行任何交易模擬；Portfolio REUSE 分支零回放，不受此前真值剛 BUILD 影響；BLOCKED 時停止下游工作。
 - 此修正不更動 Target、P16、OHLCV、帳務、selector、日期、任何歷史 Replay bytes 或報表契約；純 UI/依賴規劃更動不得另造新的 replay-science identity。
+
+
+### 2026-10-27 — Research [1] 單一正式 REUSE 計畫與零科學前置（現行，取代兩階段流程）
+
+- Research `[1]` 在第一次 Enter 前，由 `services/audit/target_oracle_romd.py::_run_single_stage_oracle()` **唯讀**解析正式比較清單、價格原始 bytes SHA、P16 身分及已完成逐 Arm Replay 的完整 signed receipts。來源工件內已有 `perfect_score_sha256`、Target producer/revision、通用 DL 可評分股票日 SHA、來源 Profile、研究截止／評估期間與參數 lineage，且和目前有效輸入完全相符時，直接在初始矩陣認證 `REUSE`；不得因新獨立 truth cache 缺檔而先重建 Target 或重算已完成 Replay。
+- `_replay_attested_score_keys()` 僅消費完整且來源相容的已完成 Replay 工件，用來取得之前經驗證的 eligible-key SHA；不執行 `load_profile_continuous_ranker_data()`、`compute_counterfactual_trade40_batch()`、價格型 40D 標籤計算或 Broker-Cash Replay。這是從已完成結果的**可驗證來源收據**重用科學證據，不是由績效摘要猜分數，亦不允許在沒有來源／Score/Key SHA 證據時冒充 REUSE。Price／P16 的 SHA 唯讀查核仍有必要 I/O，但不屬於 Target／Portfolio 科學重算。
+- **只確認一次**。`REUSE` 直接消費舊結果，`RUN` 僅對實際缺失的 Seed×Target 計算所需的 Target 真值和 Portfolio；已存在但來源證據不足、價格／P16／score mismatch、同身分衝突或損毀必須 `BLOCKED`，不能強制重跑或退回 `CHECK/PENDING`。沒有任何可認證的 scored Replay 收據時，原本昂貴的 DL eligible-key／40D label materialization **只能在確認後作為 RUN 依賴**，不得在執行前為了畫矩陣偷偷呼叫。
+- Source 的同 Target Exact／Direct 共用 Producer，但同 Seed 的已認證 REUSE 不會被其他缺件觸發重建；RUN 的排名 SHA、eligible-key SHA 仍須與已認證的共同母體比對，異常 fail-closed。改動僅涉及執行規劃／cache interpretation，維持 E13 Oracle、固定 `2025-12-22` 評估截止、`2026-03-02` 真值截止、Broker-Cash、P16、既有 Score／Report／SC／Target 定義不變。
+- 舊版「先 BUILD 真值，後決定 Replay REUSE」與兩次 Enter 的說明僅為歷史事故證據，本節為目前 Research `[1]` 的唯一正式流程；歷史原始工件與 Experiment Log 保留。Windows formal Bundle、真實四 Seed 既有快取命中率及逐日 E13 Parity 尚未在本環境實測，不得以 synthetic PASS 代替。

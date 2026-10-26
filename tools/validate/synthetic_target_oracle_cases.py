@@ -3226,55 +3226,23 @@ class OracleUnifiedReuseArchitectureCases(TestCase):
         with self.assertRaisesRegex(oracle.OracleBlockedError, "source-complete"):
             oracle.render_truth_miss_preflight(definition, project_root=Path("/tmp"), missing={})
 
-    def test_missing_truth_preflight_can_cancel_before_any_build(self):
-        with patch.object(oracle, "_build_report_once",
-                          side_effect=oracle.OracleTruthBuildRequired(
-                              "certified price scores missing",
-                              missing={(None, "price"): "certified price scores missing"},
-                          )) as engine:
-            previews = []
-            result = oracle.build_report(
-                _ACTIVE_ORACLE_DEFINITION, project_root=Path("/tmp"), quiet=True,
-                preflight_approval=lambda text: previews.append(text) or False,
-            )
-            self.assertEqual(result["status"], "CANCELLED")
-            self.assertEqual(engine.call_count, 1, "Cancel must not authorize truth BUILD")
-            self.assertEqual(len(previews), 1)
-            self.assertIn("執行前工作表", previews[0])
-            self.assertIn("RUN/BUILD", previews[0])
-            self.assertIn("RUN/REUSE", previews[0])
-            self.assertIn("price: shared", previews[0])
-            self.assertIn("真值完成後會展示正式 Portfolio", previews[0])
-            self.assertEqual(result["truth_build_required"], "certified price scores missing")
-
-    def test_truth_miss_requires_new_approval_before_portfolio_execution(self):
-        """First approval permits truth BUILD, not an unseen Portfolio RUN plan."""
+    def test_formal_single_stage_dispatch_has_one_approval(self):
         calls = []
-        def execute(_definition, **kwargs):
-            calls.append(dict(kwargs))
-            if len(calls) == 1:
-                raise oracle.OracleTruthBuildRequired(
-                    "R60 seed=11 needs truth BUILD",
-                    missing={(693545351, "DailyUniversal_MinTrade60_NetR"): "R60 seed=11 needs truth BUILD"},
-                )
-            self.assertTrue(kwargs.get("_approved_after_truth_miss"))
-            self.assertIsNotNone(kwargs.get("preflight_approval"))
-            if not kwargs["preflight_approval"]("certified Replay matrix"):
-                return {"status": "CANCELLED", "read_only": True}
-            return {"status": "COMPLETED", "read_only": True}
-        approvals = []
-        with patch.object(oracle, "_build_report_once", side_effect=execute):
+        def planned(_definition, **kwargs):
+            calls.append(kwargs)
+            self.assertTrue(kwargs["preflight_approval"]("FORMAL REUSE/RUN/BLOCKED"))
+            return {"status": "COMPLETED"}
+        with patch.object(oracle, "_run_single_stage_oracle", side_effect=planned), \
+             patch.object(oracle, "_build_report_once", side_effect=AssertionError(
+                 "Research [1] must not invoke old truth-first orchestration")):
+            displays = []
             result = oracle.build_report(
                 _ACTIVE_ORACLE_DEFINITION, project_root=Path("/tmp"), quiet=True,
-                preflight_approval=lambda text: approvals.append(text) or True,
+                preflight_approval=lambda view: displays.append(view) or True,
             )
         self.assertEqual(result["status"], "COMPLETED")
-        self.assertEqual(len(approvals), 2)
-        self.assertEqual(len(calls), 2)
-        self.assertIn("DailyUniversal_MinTrade60_NetR: S1", approvals[0])
-        self.assertIn("RUN/BUILD", approvals[0])
-        self.assertEqual(approvals[1], "certified Replay matrix")
-        self.assertNotIn("REUSE 0 / RUN（需計算）", approvals[0])
+        self.assertEqual(displays, ["FORMAL REUSE/RUN/BLOCKED"])
+        self.assertEqual(len(calls), 1)
 
     def test_c96_can_be_certified_before_truth_using_real_cache_identity(self):
         from types import SimpleNamespace
@@ -3326,44 +3294,17 @@ class OracleUnifiedReuseArchitectureCases(TestCase):
             # A scored target is never authorized by this C96 proof.
             self.assertEqual(set(mapped), {seed})
 
-    def test_blocked_preflight_never_authorizes_trading_or_truth_build(self):
-        seed = 693545351
-        plans = []
-        def impossible_approval(text):
-            plans.append(text)
-            raise AssertionError("BLOCKED may not prompt or build")
-        with patch.object(oracle, "_build_report_once", side_effect=
-                          oracle.OracleTruthBuildRequired(
-                              "missing source", missing={(None, "price"): "need truth"},
-                              baseline_actions={seed: "BLOCKED"})) as engine:
-            with self.assertRaisesRegex(oracle.OracleBlockedError, "BLOCKED replay artifact"):
+    def test_formal_blocked_preflight_never_requests_authorization(self):
+        def blocked(_definition, **kwargs):
+            raise oracle.OracleBlockedError("source identity BLOCKED")
+        with patch.object(oracle, "_run_single_stage_oracle", side_effect=blocked), \
+             patch.object(oracle, "_build_report_once", side_effect=AssertionError(
+                 "obsolete two-stage flow must not run")):
+            with self.assertRaisesRegex(oracle.OracleBlockedError, "BLOCKED"):
                 oracle.build_report(
                     _ACTIVE_ORACLE_DEFINITION, project_root=Path("/tmp"), quiet=True,
-                    preflight_approval=impossible_approval,
+                    preflight_approval=lambda _view: self.fail("BLOCKED must not request approval"),
                 )
-        self.assertEqual(engine.call_count, 1)
-        self.assertFalse(plans)
-
-    def test_truth_build_does_not_grant_automatic_portfolio_run(self):
-        calls = []
-        def fake_engine(_definition, **kwargs):
-            calls.append(kwargs)
-            if len(calls) == 1:
-                raise oracle.OracleTruthBuildRequired(
-                    "missing source", missing={(None, "price"): "need truth"})
-            self.assertTrue(kwargs["_approved_after_truth_miss"])
-            self.assertFalse(kwargs["preflight_approval"]("FULLY CERTIFIED Replay matrix"))
-            return {"status": "CANCELLED", "read_only": True}
-        previews = []
-        with patch.object(oracle, "_build_report_once", side_effect=fake_engine):
-            result = oracle.build_report(
-                _ACTIVE_ORACLE_DEFINITION, project_root=Path("/tmp"), quiet=True,
-                preflight_approval=lambda message: previews.append(message) or len(previews) == 1,
-            )
-        self.assertEqual(result["status"], "CANCELLED")
-        self.assertEqual(len(previews), 2)
-        self.assertIn("BUILD", previews[0])
-        self.assertEqual(previews[1], "FULLY CERTIFIED Replay matrix")
 
     def test_unscored_c96_is_not_hidden_by_missing_scored_truth(self):
         definition = _ACTIVE_ORACLE_DEFINITION
@@ -3405,6 +3346,395 @@ class OracleUnifiedReuseArchitectureCases(TestCase):
             self.assertEqual(seen, [True])
             self.assertEqual(result["target_oracle_romd"]["status"], "CANCELLED")
 
+
+
+class OracleOnePlanRealCacheCases(TestCase):
+    """Actual signed replay receipts, a single pre-execution table and NO truth on reuse."""
+
+    def _fixture(self, root):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore, replay_identity
+        original = _ACTIVE_ORACLE_DEFINITION
+        definition = replace(original, source={**original.source, "oracle_comparisons": tuple(
+            row for row in original.source["oracle_comparisons"]
+            if row["target"] in {"R40", "T40"})})
+        settings, base, exact = oracle._contract(definition)
+        plan = oracle._oracle_comparison_plan(definition)
+        contracts = oracle._resolve_oracle_target_score_contracts(definition, settings, plan)
+        bench = SimpleNamespace(benchmark_id="end_to_end_v1")
+        seed, price_sha, param_sha = 693545351, "a" * 64, "b" * 64
+        start, end = str(settings.start_date), str(definition.dimensions["oracle_evaluation_end_date"])
+        source_proof = ("c" * 64, 20, start, end)
+        cohort = {
+            "cohort_rows": 20, "first_common_day": start,
+            "last_common_day": end, "research_cutoff": settings.end_date,
+            "risk_budget_return": float(oracle.StrategyAlignedContinuousTargetSpec.from_label_policy(
+                oracle.DEFAULT_LABEL_POLICY).risk_budget_return),
+            "oracle_parity_implementation": oracle.ORACLE_PARITY_IMPLEMENTATION,
+            "oracle_only": True,
+        }
+        common = oracle._canonical_oracle_replay_policy(
+            definition, base_arm=base, exact_arm=exact,
+        )
+        store = OracleReplayStore(root, definition.output_subdir)
+        sample = lambda target, romd, diff=None: {
+            "target": target, "seed": seed,
+            "total_return_pct": 100.0, "annualized_return_pct": 16.0,
+            "mdd_pct": 12.0, "romd": romd, "ev_a_r": 0.7,
+            "trades": 100, "exposure_pct": 75.0,
+            "yearly": _synthetic_full_window_yearly(return_pct=14.0),
+            **({} if diff is None else {"delta_romd_vs_c96": diff}),
+        }
+        for target, romd in (("C96", 8.0), ("R40", 18.0)):
+            args = {} if target == "C96" else dict(
+                score_sha256="d" * 64,
+                score_contract={**contracts[target],
+                                "canonical_feature_eligible_keys_sha256": source_proof[0],
+                                "oracle_scored_rows": source_proof[1],
+                                "source_evidence": "validated_generic_daily_feature_universe_and_formal_target_maturity"},
+            )
+            arm_policy = oracle._arm_replay_policy(
+                definition, plan=plan, target=target, replay_policy=common, **args,
+            )
+            identity = replay_identity(
+                dataset=settings.dataset, dataset_sha256=price_sha,
+                target=target, definition={target: target},
+                start=start, end=end, benchmark=bench.benchmark_id,
+                param_sha256=param_sha, seed=seed, cohort=cohort,
+                ranking_policy=str(exact.dl_runtime_mode),
+                ranking_options=dict(exact.dl_runtime_options),
+                evaluation_mode=definition.dimensions["evaluation_mode"],
+                max_positions=settings.max_positions, replay_policy=arm_policy,
+            )
+            store.write(identity, sample(target, romd, 10.0 if target != "C96" else None),
+                        origin="synthetic_certified_existing_replay")
+        return definition, bench, seed, price_sha, param_sha, source_proof, sample
+
+    def test_before_first_enter_certifies_reuse_and_only_run_missing_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            definition, bench, seed, price_sha, param_sha, proof, sample = self._fixture(root)
+            prompts = []
+            planned = []
+            with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
+                 patch.object(oracle, "_robustness_artifacts", return_value=(bench, [(seed, root/"p16.json")])), \
+                 patch.object(oracle, "_prepare_oracle_parameters", return_value=(
+                     [(seed, param_sha, "synthetic", None, None)], {})), \
+                 patch.object(oracle, "price_inventory_sha256", return_value=price_sha), \
+                 patch.object(oracle, "_read_only_score_keys", side_effect=AssertionError(
+                     "REUSE and warm missing-only planning must NOT recalculate 617 price labels")), \
+                 patch.object(oracle, "load_profile_continuous_ranker_data", side_effect=AssertionError(
+                     "REUSE must not build Daily DL target labels")), \
+                 patch.object(oracle, "_execute_single_stage_missing", side_effect=lambda *a, **kw:
+                     planned.append(kw["decisions"].copy()) or {(seed,"T40"): sample("T40", 20., 12.)}), \
+                 patch.object(oracle, "build_oracle_score_tables", side_effect=AssertionError(
+                     "No price/target producer before authorization")):
+                cancelled = oracle.build_report(
+                    definition, project_root=root, quiet=True,
+                    preflight_approval=lambda view: prompts.append(view) or False,
+                )
+                self.assertEqual(cancelled["status"], "CANCELLED")
+                self.assertEqual(len(prompts), 1)
+                self.assertEqual(planned, [])
+                self.assertIn("REUSE 2 / RUN（需回放）1 / BLOCKED 0", prompts[0])
+                self.assertIn("R40", prompts[0])
+                self.assertIn("T40", prompts[0])
+                result = oracle.build_report(
+                    definition, project_root=root, quiet=True,
+                    preflight_approval=lambda view: prompts.append(view) or True,
+                )
+            self.assertEqual(len(prompts), 2, "One confirmation each invocation")
+            self.assertEqual(planned, [{(seed, "C96"): "REUSE", (seed, "R40"): "REUSE",
+                                        (seed, "T40"): "RUN"}])
+            self.assertEqual(result["status"], "COMPLETED")
+            self.assertEqual([row["target"] for row in result["oracles"]], ["R40", "T40"])
+            self.assertEqual(result["baseline"]["romd"], 8.)
+            self.assertEqual(result["oracles"][1]["romd"], 20.)
+            self.assertIsInstance(result["limitations"], list)
+
+    def test_approved_all_reuse_avoids_every_target_and_portfolio_producer(self):
+        # Completed results may predate a standalone truth-cache migration.
+        # A signed Replay receipt is enough to certify the same executed
+        # score/selector with unchanged source inputs; do not backfill truth.
+        from services.audit import oracle_replay_artifacts as artifacts
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            definition, bench, seed, price_sha, param_sha, proof, _sample = self._fixture(root)
+            definition = replace(definition, source={
+                **definition.source,
+                "oracle_comparisons": tuple(item for item in definition.source["oracle_comparisons"]
+                                            if item["target"] == "R40"),
+            })
+            shown=[]
+            with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
+                 patch.object(oracle, "_robustness_artifacts", return_value=(bench, [(seed, root/"p16.json")])), \
+                 patch.object(oracle, "_prepare_oracle_parameters", return_value=(
+                     [(seed, param_sha, "synthetic", None, None)], {})), \
+                 patch.object(oracle, "price_inventory_sha256", return_value=price_sha), \
+                 patch.object(artifacts, "price_inventory_sha256", return_value=price_sha), \
+                 patch.object(oracle, "_read_only_score_keys", side_effect=AssertionError(
+                     "Full REUSE must not calculate price Target or DL 40D labels")), \
+                 patch.object(oracle, "load_profile_continuous_ranker_data", side_effect=AssertionError(
+                     "Full REUSE must not call model data loader")), \
+                 patch.object(oracle, "_run_scenario", side_effect=AssertionError(
+                     "Full REUSE must not run a Broker-Cash portfolio")), \
+                 patch.object(oracle, "_load_or_build_oracle_price_scores", side_effect=AssertionError(
+                     "Full REUSE must not materialize any price score")):
+                result=oracle.build_report(
+                    definition, project_root=root, quiet=True,
+                    preflight_approval=lambda table: shown.append(table) or True,
+                )
+            self.assertEqual(len(shown),1)
+            self.assertIn("REUSE 2 / RUN（需回放）0 / BLOCKED 0", shown[0])
+            self.assertEqual(result["status"],"COMPLETED")
+            self.assertEqual(result["baseline"]["romd"],8.)
+            self.assertEqual(result["oracles"][0]["romd"],18.)
+
+    def test_first_run_cancel_before_any_price_label_or_trade_producer(self):
+        definition = replace(_ACTIVE_ORACLE_DEFINITION, source={
+            **_ACTIVE_ORACLE_DEFINITION.source,
+            "oracle_comparisons": tuple(item for item in _ACTIVE_ORACLE_DEFINITION.source["oracle_comparisons"]
+                                        if item["target"] in {"R40", "T40"}),
+        })
+        settings, _base, _exact = oracle._contract(definition)
+        bench = SimpleNamespace(benchmark_id="end_to_end_v1")
+        seed, param_sha, price_sha = 693545351, "b" * 64, "a" * 64
+        preflights = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
+                 patch.object(oracle, "_robustness_artifacts", return_value=(bench, [(seed, root/"p16.json")])), \
+                 patch.object(oracle, "_prepare_oracle_parameters", return_value=(
+                     [(seed, param_sha, "synthetic", None, None)], {})), \
+                 patch.object(oracle, "price_inventory_sha256", return_value=price_sha), \
+                 patch.object(oracle, "_read_only_score_keys", side_effect=AssertionError(
+                     "No eligibility producer before approval")), \
+                 patch.object(oracle, "load_profile_continuous_ranker_data", side_effect=AssertionError(
+                     "No DL label computation before approval")), \
+                 patch.object(oracle, "_load_or_build_oracle_price_scores", side_effect=AssertionError(
+                     "No Oracle price score before approval")), \
+                 patch.object(oracle, "_execute_single_stage_missing", side_effect=AssertionError(
+                     "No Replay before approval")):
+                result = oracle.build_report(
+                    definition, project_root=root, quiet=True,
+                    preflight_approval=lambda table: preflights.append(table) or False,
+                )
+        self.assertEqual(result["status"], "CANCELLED")
+        self.assertEqual(len(preflights), 1)
+        self.assertIn("REUSE 0 / RUN（需回放）3 / BLOCKED 0", preflights[0])
+
+    def test_authorized_single_missing_arm_runs_only_that_portfolio(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        import hashlib
+        definition = replace(_ACTIVE_ORACLE_DEFINITION, source={
+            **_ACTIVE_ORACLE_DEFINITION.source,
+            "oracle_comparisons": tuple(entry for entry in _ACTIVE_ORACLE_DEFINITION.source["oracle_comparisons"]
+                                        if entry["target"] in {"R40", "T40"}),
+        })
+        settings, baseline, exact = oracle._contract(definition)
+        plan = oracle._oracle_comparison_plan(definition)
+        contracts = oracle._resolve_oracle_target_score_contracts(definition, settings, plan)
+        seed, price_sha, param_sha = 693545351, "a" * 64, "b" * 64
+        scores = {("0050", "2021-01-01"): 0.2, ("1101", "2025-12-22"): 0.8}
+        digest = hashlib.sha256()
+        for ticker, day in sorted(scores):
+            digest.update(f"{ticker}|{day}\n".encode("utf-8"))
+        cohort_keys = (digest.hexdigest(), 2, "2021-01-01", "2025-12-22")
+        current_keys = {"R40": cohort_keys, "T40": cohort_keys}
+        prepared = [(seed, param_sha, "synthetic", "base", "oracle")]
+        benchmark = SimpleNamespace(benchmark_id="end_to_end_v1")
+        decisions = {(seed, "C96"): "REUSE", (seed, "R40"): "REUSE", (seed, "T40"): "RUN"}
+        baseline_row = {"target": "C96", "seed": seed, "romd": 8.0}
+        calls = []
+        def economic_replay(*, name, **kwargs):
+            calls.append(name)
+            return {"name": name}
+        def convert(replay, *, target):
+            return {"target": target, "romd": 20.0, "seed": seed,
+                    "yearly": _synthetic_full_window_yearly(),
+                    "total_return_pct": 250., "annualized_return_pct": 25.,
+                    "mdd_pct": 12.5, "ev_a_r": 1.5, "trades": 200,
+                    "exposure_pct": 85.}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = OracleReplayStore(root, definition.output_subdir)
+            with patch("services.audit.oracle_replay_artifacts.price_inventory_sha256", return_value=price_sha), \
+                 patch.object(oracle, "_robustness_artifacts", return_value=(
+                     benchmark, [(seed, root/"p16.json")])), \
+                 patch.object(oracle, "_prepare_oracle_parameters", return_value=(prepared, {})), \
+                 patch.object(oracle, "_load_or_build_oracle_price_scores", return_value=(
+                     {"T40": scores}, {"cohort_rows": 2})) as price_producer, \
+                 patch.object(oracle, "_run_scenario", side_effect=economic_replay) as replay_producer, \
+                 patch.object(oracle, "_metrics", side_effect=convert):
+                result = oracle._execute_single_stage_missing(
+                    definition, project_root=root, quiet=True,
+                    plan=plan, contracts=contracts, current_keys=current_keys,
+                    settings=settings, robustness=benchmark, price_sha=price_sha,
+                    prepared=prepared, decisions=decisions,
+                    preflight_cached={(seed, "C96"): baseline_row},
+                    start="2021-01-01", end="2025-12-22", base_arm=baseline,
+                    exact_arm=exact, direct_arm=None,
+                    base_policy=oracle._canonical_oracle_replay_policy(
+                        definition, base_arm=baseline, exact_arm=exact), cache=store,
+                )
+            self.assertEqual(set(result), {(seed, "T40")})
+            self.assertEqual(result[(seed,"T40")]["delta_romd_vs_c96"], 12.)
+            self.assertEqual(replay_producer.call_count, 1)
+            self.assertEqual(price_producer.call_count, 1)
+            self.assertEqual(calls, [f"Oracle T40 seed={seed}"])
+            self.assertIsNotNone(store.existing_completed_identities(seed=seed, target="T40"))
+            self.assertEqual(store.existing_completed_identities(seed=seed, target="R40"), ())
+
+    def test_formal_daily_40d_historical_receipt_reuses_before_truth_producer(self):
+        """A signed old 40D receipt is fully certifiable, not PENDING/BUILD.
+
+        The prior bug added two diagnostic-only counters to the identity and
+        blocked these already-completed scientific results. The current
+        score/teacher/selector SHA and feature eligibility remain strict.
+        """
+        from services.audit.oracle_replay_artifacts import OracleReplayStore, replay_identity
+        from services.audit.daily_trade40_oracle import target_identity_for_horizon
+        import hashlib
+        target = "DailyUniversal_MinTrade40_NetR"
+        definition = replace(_ACTIVE_ORACLE_DEFINITION, source={
+            **_ACTIVE_ORACLE_DEFINITION.source,
+            "oracle_comparisons": tuple(entry for entry in _ACTIVE_ORACLE_DEFINITION.source["oracle_comparisons"]
+                                        if entry["target"] == target),
+        })
+        settings, base_arm, exact_arm = oracle._contract(definition)
+        plan = oracle._oracle_comparison_plan(definition)
+        contract = oracle._resolve_oracle_target_score_contracts(definition, settings, plan)[target]
+        seed, param_sha, price_sha = 693545351, "b"*64, "a"*64
+        evidence_key = ("0050", "2021-01-04")
+        digest = hashlib.sha256((evidence_key[0] + "|" + evidence_key[1] + "\n").encode()).hexdigest()
+        cohort_keys = (digest, 1, evidence_key[1], evidence_key[1])
+        periods = [{"start": "2021-01-01", "end": "2021-12-31", "params_signature": "p16-a"}]
+        tgt_id, label_id = target_identity_for_horizon(40)
+        teacher = {"origin": "formal_min_roos_rolling_per_seed", "seed": seed,
+                   "param_identity_sha256": param_sha, "periods": periods}
+        record = {
+            "target_id": tgt_id, "label_id": label_id,
+            "profile_id": str(definition.source["daily_trade40_profile"]),
+            "rank_policy": "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",
+            "rank_sha256": "1"*64, "raw_label_sha256": "2"*64,
+            "calendar_sha256": "3"*64, "teacher": teacher,
+            "score_start_date": contract["score_start_date"],
+            "mature_eligible_rows": 1, "settled_net_r_rows": 1,
+            "censored_rank_last_rows": 0,
+            "research_cutoff": str(settings.end_date),
+            "oracle_evaluation_start_date": str(settings.start_date),
+        }
+        score_contract = {**contract, "canonical_feature_eligible_keys_sha256": digest,
+                          "oracle_scored_rows": 1,
+                          "source_evidence": "validated_generic_daily_feature_universe_and_formal_target_maturity"}
+        base_policy = oracle._canonical_oracle_replay_policy(
+            definition, base_arm=base_arm, exact_arm=exact_arm)
+        policy = oracle._arm_replay_policy(
+            definition, plan=plan, target=target, replay_policy=base_policy,
+            daily_evidence=record, score_sha256="4"*64, score_contract=score_contract)
+        # Old signed provenance has no newer diagnostic counters.
+        old_policy = {**policy, "hindsight_target_contract": {
+            key: value for key, value in policy["hindsight_target_contract"].items()
+            if key not in ("cutoff_truncated_rows", "research_cutoff_closeout_rows")}}
+        benchmark = SimpleNamespace(benchmark_id="end_to_end_v1")
+        kwargs = dict(
+            dataset=settings.dataset, dataset_sha256=price_sha,
+            target=target, definition={target: target}, start=str(settings.start_date),
+            end="2025-12-22", benchmark=benchmark.benchmark_id,
+            param_sha256=param_sha, seed=seed,
+            cohort={"cohort_rows": 1, "first_common_day": evidence_key[1],
+                    "last_common_day": evidence_key[1], "research_cutoff": str(settings.end_date)},
+            ranking_policy=str(exact_arm.dl_runtime_mode),
+            ranking_options=dict(exact_arm.dl_runtime_options),
+            evaluation_mode=str(definition.dimensions["evaluation_mode"]),
+            max_positions=settings.max_positions)
+        observation = {"target": target, "seed": seed, "total_return_pct": 55.,
+                       "annualized_return_pct": 12., "mdd_pct": 10., "romd": 5.5,
+                       "ev_a_r": 1.0, "trades": 12, "exposure_pct": 75.,
+                       "delta_romd_vs_c96": 1.0, "yearly": _synthetic_full_window_yearly()}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = OracleReplayStore(root, definition.output_subdir)
+            legacy = replay_identity(**kwargs, replay_policy=old_policy)
+            store.write(legacy, observation, origin="synthetic_historical")
+            signed = store.existing_completed_identities(seed=seed, target=target)
+            self.assertEqual(len(signed), 1)
+            keys_from_receipt = oracle._replay_attested_score_keys(
+                store=store, contracts={target: contract}, plan=plan,
+                prepared=[(seed, param_sha, "synthetic", None, None)],
+                price_sha=price_sha, settings=settings, robustness=benchmark,
+                evaluation_end="2025-12-22",
+            )
+            self.assertEqual(keys_from_receipt, {target: cohort_keys},
+                             "Old completed MinTrade score membership must be reusable without a trade-path BUILD")
+            self.assertEqual(oracle._replay_attested_score_keys(
+                store=store, contracts={target: contract}, plan=plan,
+                prepared=[(seed, param_sha, "synthetic", None, None)],
+                price_sha="e" * 64, settings=settings, robustness=benchmark,
+                evaluation_end="2025-12-22"), {},
+                "Changed price bytes must not certify a historical witness")
+            expected = oracle._certified_saved_oracle_identity(
+                definition, project_root=root, store=store, saved=signed[0],
+                plan=plan, contract=contract, keys=cohort_keys,
+                param_sha=param_sha, price_sha=price_sha, seed=seed, target=target,
+                settings=settings, robustness=benchmark, base_policy=base_policy,
+                arm=exact_arm, rolling_periods=periods, evaluation_end="2025-12-22",
+            )
+            self.assertEqual(store.plan_execution({(seed,target):expected}).action(seed,target), "REUSE")
+            self.assertEqual(expected, legacy)
+            with self.assertRaises(ValueError):
+                oracle._certified_saved_oracle_identity(
+                    definition, project_root=root, store=store, saved=signed[0],
+                    plan=plan, contract=contract, keys=cohort_keys,
+                    param_sha="e"*64, price_sha=price_sha, seed=seed, target=target,
+                    settings=settings, robustness=benchmark, base_policy=base_policy,
+                    arm=exact_arm, rolling_periods=periods, evaluation_end="2025-12-22",
+                )
+            with self.assertRaises(ValueError):
+                oracle._certified_saved_oracle_identity(
+                    definition, project_root=root, store=store, saved=signed[0],
+                    plan=plan, contract=contract, keys=("f"*64, 1, evidence_key[1], evidence_key[1]),
+                    param_sha=param_sha, price_sha=price_sha, seed=seed, target=target,
+                    settings=settings, robustness=benchmark, base_policy=base_policy,
+                    arm=exact_arm, rolling_periods=periods, evaluation_end="2025-12-22",
+                )
+
+    def test_diagnostic_only_counters_do_not_block_saved_trading_result(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore, replay_identity
+        with tempfile.TemporaryDirectory() as tmp:
+            store = OracleReplayStore(Path(tmp), "breakout_quality/reusable/target_oracle_romd")
+            policy = {"oracle_parity_implementation": oracle.ORACLE_PARITY_IMPLEMENTATION,
+                      "period_stats_implementation": oracle.PERIOD_STATS_IMPLEMENTATION,
+                      "perfect_score_sha256": "c"*64,
+                      "canonical_dl_score_contract": {
+                          "target_id": "daily40", "canonical_feature_eligible_keys_sha256": "d"*64},
+                      "hindsight_target_contract": {
+                          "label_id": "netr40", "raw_label_sha256": "e"*64,
+                          "rank_sha256": "f"*64, "cutoff_truncated_rows": 0,
+                          "research_cutoff_closeout_rows": 0}}
+            kwargs = dict(dataset="full", dataset_sha256="a"*64,
+                          target="DailyUniversal_MinTrade40_NetR",
+                          definition={"DailyUniversal_MinTrade40_NetR": "description"},
+                          start="2021-01-01", end="2025-12-22", benchmark="end_to_end_v1",
+                          param_sha256="b"*64, seed=11, cohort={"cohort_rows": 10},
+                          ranking_policy="exact", ranking_options={}, evaluation_mode="rolling",
+                          max_positions=10)
+            # Historical code stored the extra counters; scientific score SHA
+            # and every economic input are identical to the new identity.
+            previous_policy = {**policy,
+                               "hindsight_target_contract": {
+                                   k: v for k, v in policy["hindsight_target_contract"].items()
+                                   if k not in ("cutoff_truncated_rows", "research_cutoff_closeout_rows")}}
+            old = replay_identity(**kwargs, replay_policy=previous_policy)
+            store.write(old, {"target": kwargs["target"], "seed": 11,
+                              "total_return_pct": 50., "annualized_return_pct": 10.,
+                              "mdd_pct": 10., "romd": 5., "ev_a_r": 0.5,
+                              "trades": 22, "exposure_pct": 50.,
+                              "delta_romd_vs_c96": 1.,
+                              "yearly": _synthetic_full_window_yearly()}, origin="synthetic")
+            current = replay_identity(**kwargs, replay_policy=policy)
+            self.assertEqual(current, old)
+            self.assertEqual(store.plan_execution({(11, kwargs["target"]):current}).action(
+                11, kwargs["target"]), "REUSE")
 
 
 class OracleReuseMenuAndPreparationCases(TestCase):

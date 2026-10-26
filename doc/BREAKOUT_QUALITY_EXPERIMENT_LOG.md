@@ -13897,3 +13897,12 @@ Decision: `ENGINEERING_CHECKPOINT_FIRST_REUSE / HISTORICAL_AK_EVIDENCE_PRESERVED
 - **正式計畫／授權**：若原本真值齊備，入口維持一次正式 Portfolio `REUSE／RUN／BLOCKED` 矩陣與一次授權；若有真值缺件，第一次授權**只建立必要真值、不執行 Portfolio**，完成後列出真正的 Portfolio 矩陣，由使用者**第二次確認**才允許 Portfolio RUN；任何已知 `BLOCKED` 都不得先做前置 BUILD。`OracleReplayStore.plan_execution()` 仍是唯一正式 Portfolio 計畫來源；本次真值 BUILD 不能把已認證的 Portfolio REUSE 誤顯示為 RUN。這項冷啟動兩階段是資料證據與 authorization 的必要邊界，不新增額外科學契約。
 - **不變項**：40D／60D／完整週期真值定義、2025-12-22 固定 Portfolio 窗口、2026-03-02 研究真值截止、P16/4 seeds、正式 Exact／Direct Selector、Broker-Cash、Target 分數、Replay fingerprint、報表 schema 與所有歷史績效皆不變。僅補強來源不足時的互動證據與 C96 正式 REUSE，無下載的本機 `outputs/`，故**不能預先宣稱使用者的 56 個現存 observation 都可合法 REUSE**；其歸類以使用者本機認證結果為準。
 - **獨立驗證**：Oracle/MinTrade 回歸、Audit application 入口、source import boundary、C96 既有結果正反身份驗證與取消不交易皆另外測試；這些不是正式 Windows `apps/run_bundle.py` 或四 Seed 市場級 E13 parity。
+
+
+## 2026-10-27 — Research [1] REUSE 科學前置重算根因修復（工程變更）
+
+- **基準與原始證據**：`test-branch-1_20261027_000945_69578a20.zip`（SHA256 `7aa546e325e61b1aca02c2bda8cb10f2b8d694b1afdddc667d29769f6b022c7d`）；本輪日誌 `貼上的文字 (1)(20261026-180812).txt` 再證明舊流程確認後才逐一產生 4 Seed × 3 MinTrade horizons 的 558 檔逐股真值，另建 617 檔價格真值後才核對真正 REUSE，造成最昂貴工作重做。
+- **同鏈根因**：先前兩階段移至單階段後，規劃器仍無條件呼叫 `_read_only_score_keys`；此函式使用正式 Daily DL provider，而其實際載入會計算每股 40D price Target。即使 Portfolio 全 REUSE，仍存在隱藏的高成本 label producer。不能用「不再出現 MinTrade 558/558」就視作零科學前置。
+- **修復**：新的 `_replay_attested_score_keys` 利用現有已完成 Replay 的完整 signed provenance（來源 Profile、價格 SHA、P16 SHA、Parity revision、score SHA、已驗證 eligibility key SHA／數量／邊界），從收據直接認證 REUSE；無需重建 40D／60D／完整週期 Target、617 檔 40D 標籤或 Broker-Cash Replay。舊工件即使沒有後來新增的獨立真值工件，也可在完整身分合法時直接認證。單一初始 `REUSE／RUN／BLOCKED` 表格與一次確認；只有 RUN 才消費 Producer。完全冷啟動無可認證 eligibility 收據時，可能昂貴的來源建置延後至確認後，不能先算後判定。無合法來源收據不得猜測成 REUSE；資料或參數身分漂移 fail-closed。
+- **測試**：與使用者原始 ZIP 隔離比對，增加 completed Replay 的混合 REUSE／RUN、無真值快取的 40D 舊收據、價格 SHA 失配、全冷啟動取消後零 DL provider/Producer 等回歸；所有 warm preflight 的 `_read_only_score_keys`、`load_profile_continuous_ranker_data`、Oracle score／Replay Producer 被實際故障注入禁止呼叫。Oracle／DailyTrade 共 138 項 unittest PASS、Audit 入口 30 項與 Portfolio 結算 51 項檢查 PASS。未執行使用者 Windows `apps/run_bundle.py` 與正式市場四 Seed replay；不能保證未上傳的 local Replay artifacts 都能 REUSE。
+- **範圍**：不改 40D／60D／完整週期 NetR、固定期間與 cutoff、Perfect-score percentile、E13、PIT、Broker-Cash、Report Schema/SC、歷史經濟結果與 Trading truth。歷史事故資料不刪除。仍需價格輸入／P16 的唯讀 Hash 核對，不能將讀取成本說成零 I/O。

@@ -2103,16 +2103,15 @@ def _build_report_once(
         end=end40, cohort=cohort40, scores=scores40,
         targets=plan["targets"], label="Fixed",
     )
-    return {
-        "schema_version": ORACLE_REPORT_SCHEMA_VERSION,
-        "status": "COMPLETED", "read_only": True,
-        "hindsight_non_pit": True, "iterative_oos_evidence": True,
-        "strategy_profile_id": settings.profile_id,
-        "benchmark_id": robustness.benchmark_id,
-        "seeds": [seed for seed, _ in parameter_paths],
-        "dataset": settings.dataset,
-        **base,
-        "limitations": [
+    return _oracle_report_envelope(
+        settings=settings, robustness=robustness,
+        seeds=[seed for seed, _ in parameter_paths], base=base,
+    )
+
+
+def _oracle_limitations() -> list[str]:
+    """One science statement across canonical RUN and certified REUSE reports."""
+    return [
             "Ex-post future targets are NOT predictions, not PIT-legal, and never a deployable strategy.",
             "CG EqualRank is a fixed 50/50 geometry proxy, not a learned model-head fusion.",
             "Exact and Direct pairs share identical future truth; only canonical K/R0 allocation changes.",
@@ -2124,8 +2123,700 @@ def _build_report_once(
             "T40 uses full-path nonnegative MAE and clamps to -1R at 1R adverse movement.",
             "T40-MFE replaces only terminal R40 by full-path MFE40_R; the identical MAE gate remains.",
             "1R is the fixed research Label risk budget, NOT the actual executed ATR stop-loss.",
-        ],
+        ]
+
+
+def _oracle_report_envelope(*, settings, robustness, seeds, base: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": ORACLE_REPORT_SCHEMA_VERSION,
+        "status": "COMPLETED", "read_only": True,
+        "hindsight_non_pit": True, "iterative_oos_evidence": True,
+        "strategy_profile_id": settings.profile_id,
+        "benchmark_id": robustness.benchmark_id,
+        "seeds": list(seeds), "dataset": settings.dataset,
+        **base, "limitations": _oracle_limitations(),
     }
+
+
+def _read_only_score_keys(
+    definition, *, project_root: Path, contracts: Mapping[str, Mapping[str, Any]],
+    plan: Mapping[str, Any], evaluation_end: str, cutoff: str,
+) -> dict[str, tuple[str, int, str, str]]:
+    """Materialize eligible input keys for an authorized cold-start RUN.
+
+    The canonical DL provider also computes ordinary supervised 40D labels
+    while loading its universe. This is NOT a lightweight REUSE preflight;
+    warm preflight must use _replay_attested_score_keys instead. Only a RUN
+    without a certified historical membership witness may call this owner.
+    """
+    cache: dict[tuple[str, bool], tuple[str, int, str, str]] = {}
+    result: dict[str, tuple[str, int, str, str]] = {}
+    for target, contract in contracts.items():
+        is_daily = target in plan["daily_sources"]
+        profile_id = str(contract["source_profile_id"])
+        key = (profile_id, is_daily)
+        if key not in cache:
+            profile = get_breakout_quality_experiment_profile(profile_id)
+            bundle = load_profile_continuous_ranker_data(
+                filter_id=str(definition.source["filter_id"]),
+                model_architecture=str(profile.model_architecture),
+                experiment_profile=profile_id, preload_feature_bank=False,
+                allow_stale_source=False, project_root=project_root,
+            )
+            summary = dict(bundle.summary or {})
+            group = pd.DataFrame(bundle.group_table).reset_index(drop=True)
+            if (summary.get("filter_id") != str(definition.source["filter_id"])
+                    or not {"ticker", "date"}.issubset(group)):
+                raise OracleBlockedError(f"{target}: canonical feature cohort source mismatch")
+            date = pd.to_datetime(group["date"], errors="raise")
+            valid = ((date >= pd.Timestamp(contract["score_start_date"])) &
+                     (date <= pd.Timestamp(evaluation_end))).to_numpy()
+            if not is_daily:
+                if (len(bundle.target_valid) != len(group)
+                        or "label_eval_end_date" not in group
+                        or len(bundle.raw_target) != len(group)):
+                    raise OracleBlockedError(f"{target}: price target source evidence incomplete")
+                mature = (pd.to_datetime(group["label_eval_end_date"], errors="raise") <=
+                          pd.Timestamp(cutoff)).to_numpy()
+                # Price recipe also requires the source's complete numerical label.
+                values = group[["target_favorable_r", "target_adverse_r",
+                                "target_minimum_low_return"]].apply(pd.to_numeric, errors="coerce")
+                finite = np.isfinite(values.to_numpy(dtype=float)).all(axis=1)
+                finite &= np.isfinite(np.asarray(bundle.raw_target, dtype=float))
+                valid &= np.asarray(bundle.target_valid, dtype=bool) & mature & finite
+            keys = sorted(zip(group.loc[valid, "ticker"].map(normalize_ticker),
+                              date.loc[valid].dt.strftime("%Y-%m-%d")))
+            if not keys or len(set(keys)) != len(keys):
+                raise OracleBlockedError(f"{target}: duplicate/empty source eligibility")
+            digest = hashlib.sha256()
+            for ticker, day in keys:
+                digest.update(f"{ticker}|{day}\n".encode("utf-8"))
+            cache[key] = (digest.hexdigest(), len(keys), min(d for _t, d in keys),
+                          max(d for _t, d in keys))
+        result[target] = cache[key]
+    # The same stock days, not only a common count, are mandatory for E13.
+    if len({part[0] for part in result.values()}) != 1:
+        raise OracleBlockedError("CONTRACT_UNRESOLVED: different certified stock-day populations")
+    return result
+
+
+def _replay_attested_score_keys(
+    *, store, contracts: Mapping[str, Mapping[str, Any]],
+    plan: Mapping[str, Any], prepared, price_sha: str,
+    settings, robustness, evaluation_end: str,
+) -> dict[str, tuple[str, int, str, str]]:
+    """Recover certified score *membership* from completed Replay receipts.
+
+    This is a pure signed-artifact and current-source-identity probe. It does
+    NOT open the Daily DL sample producer (which calculates historical 40D
+    labels), nor does it run a MinTrade path or a price Target producer.
+    A receipt is usable as a membership witness only if its economic/feature
+    inputs, parity revision, profile, parameter SHA, and date bounds still
+    match. The later per-arm full-identity verification is still mandatory.
+    """
+    from core.file_integrity import is_sha256_hex
+    proofs: dict[tuple[str, bool], tuple[str, int, str, str]] = {}
+    start = str(settings.start_date)
+    for seed, param_sha, *_unused in prepared:
+        for target, expected in contracts.items():
+            group = (str(expected["source_profile_id"]), target in plan["daily_sources"])
+            for saved in store.existing_completed_identities(seed=seed, target=target):
+                if (saved.get("start_date") != start or
+                        saved.get("end_date") != evaluation_end or
+                        saved.get("dataset") != settings.dataset or
+                        saved.get("dataset_sha256") != price_sha or
+                        saved.get("param_sha256") != param_sha or
+                        saved.get("benchmark") != robustness.benchmark_id):
+                    continue
+                policy = saved.get("replay_policy") or {}
+                cohort = saved.get("cohort") or {}
+                source_contract = policy.get("canonical_dl_score_contract") or {}
+                if (not isinstance(policy, Mapping) or
+                        not isinstance(cohort, Mapping) or
+                        not isinstance(source_contract, Mapping) or
+                        policy.get("oracle_parity_implementation") != ORACLE_PARITY_IMPLEMENTATION or
+                        policy.get("period_stats_implementation") != PERIOD_STATS_IMPLEMENTATION or
+                        cohort.get("research_cutoff") != str(settings.end_date) or
+                        not is_sha256_hex(policy.get("perfect_score_sha256"))):
+                    continue
+                for field, value in expected.items():
+                    if field in {"reference_arm_id", "reference_score_source_id", "reference_profile_id"}:
+                        continue
+                    if source_contract.get(field) != value:
+                        break
+                else:
+                    if source_contract.get("source_evidence") != (
+                            "validated_generic_daily_feature_universe_and_formal_target_maturity"):
+                        continue
+                    digest = source_contract.get("canonical_feature_eligible_keys_sha256")
+                    number = source_contract.get("oracle_scored_rows")
+                    first = cohort.get("first_common_day")
+                    last = cohort.get("last_common_day")
+                    if (not is_sha256_hex(digest) or type(number) is not int or number <= 0 or
+                            number != cohort.get("cohort_rows") or
+                            not isinstance(first, str) or not isinstance(last, str) or
+                            not (start <= first <= last <= evaluation_end)):
+                        continue
+                    proof = (digest, number, first, last)
+                    prior = proofs.get(group)
+                    if prior is not None and prior != proof:
+                        raise OracleBlockedError(
+                            "Oracle same-source signed Replay receipts disagree on stock-day membership; "
+                            "BLOCKED without any Target calculation"
+                        )
+                    proofs[group] = proof
+    return {target: proofs[(str(contract["source_profile_id"]), target in plan["daily_sources"])]
+            for target, contract in contracts.items()
+            if (str(contract["source_profile_id"]), target in plan["daily_sources"]) in proofs}
+
+
+def _certified_saved_oracle_identity(
+    definition, *, project_root: Path, store, saved: Mapping[str, Any],
+    plan: Mapping[str, Any], contract: Mapping[str, Any],
+    keys: tuple[str, int, str, str], param_sha: str,
+    price_sha: str, seed: int, target: str, settings, robustness,
+    base_policy: Mapping[str, Any], arm, rolling_periods: list[dict[str, Any]] | None,
+    evaluation_end: str,
+) -> dict[str, Any]:
+    """Attest a completed replay from signed source/score lineage; no Producer.
+
+    This is NOT file-existence reuse. The historical score SHA is accepted only
+    when its producing revision, complete source bytes, P16 lineage, current
+    feature keys and immutable score consumption contract are all certified.
+    A mismatched or incomplete historical receipt must BLOCK, not silently RUN.
+    """
+    from services.audit.oracle_replay_artifacts import replay_identity
+    from services.audit.daily_trade40_oracle import target_identity_for_horizon
+    policy = saved.get("replay_policy")
+    cohort = saved.get("cohort")
+    if not isinstance(policy, Mapping) or not isinstance(cohort, Mapping):
+        raise ValueError("completed Replay has no full source/replay evidence")
+    if policy.get("oracle_parity_implementation") != ORACLE_PARITY_IMPLEMENTATION:
+        raise ValueError("past replay uses an unapproved Oracle implementation")
+    if (policy.get("period_stats_implementation") != PERIOD_STATS_IMPLEMENTATION
+            or saved.get("dataset_sha256") != price_sha
+            or saved.get("param_sha256") != param_sha
+            or saved.get("start_date") != str(settings.start_date)
+            or saved.get("end_date") != evaluation_end
+            or saved.get("dataset") != settings.dataset
+            or saved.get("benchmark") != robustness.benchmark_id):
+        raise ValueError("current price/P16/evaluation contract differs from historical replay")
+    key_sha, n, first, last = keys
+    if (cohort.get("cohort_rows") != n
+            or cohort.get("first_common_day") != first
+            or cohort.get("last_common_day") != last
+            or cohort.get("research_cutoff") != str(settings.end_date)):
+        raise ValueError("current stock-day population differs from historical replay")
+    source_contract = policy.get("canonical_dl_score_contract")
+    if not isinstance(source_contract, Mapping):
+        raise ValueError("completed replay missing certified hypothetical score interface")
+    expected_score = dict(contract)
+    expected_score.update(
+        canonical_feature_eligible_keys_sha256=key_sha, oracle_scored_rows=n,
+        source_evidence="validated_generic_daily_feature_universe_and_formal_target_maturity",
+    )
+    # Arm/model labels are evidence of the reference selector, not its executable
+    # score. The actual runtime ranking policy/options remain strictly checked.
+    for field, value in expected_score.items():
+        if field in {"reference_arm_id", "reference_score_source_id", "reference_profile_id"}:
+            continue
+        if source_contract.get(field) != value:
+            raise ValueError(f"historical perfect-score contract mismatch: {field}")
+    if set(source_contract) - set(expected_score):
+        raise ValueError("historical score contract contains unknown executable fields")
+    score_sha = policy.get("perfect_score_sha256")
+    from core.file_integrity import is_sha256_hex
+    if not is_sha256_hex(score_sha):
+        raise ValueError("historical perfect-score SHA evidence missing")
+    source = plan["daily_sources"].get(target)
+    daily_evidence = None
+    if source:
+        recipe, provider, horizon = plan["daily_recipes"][source]
+        recorded = policy.get("hindsight_target_contract")
+        if not isinstance(recorded, Mapping) or not rolling_periods:
+            raise ValueError("historical daily-truth lineage missing")
+        actual_id, label_id = target_identity_for_horizon(horizon)
+        teacher = recorded.get("teacher")
+        if (recorded.get("target_id") != actual_id
+                or recorded.get("label_id") != label_id
+                or recorded.get("rank_policy") !=
+                    "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation"
+                or recorded.get("research_cutoff") != str(settings.end_date)
+                or recorded.get("score_start_date") != contract["score_start_date"]
+                or not isinstance(teacher, Mapping)
+                or teacher.get("seed") != seed
+                or teacher.get("param_identity_sha256") != param_sha
+                or teacher.get("periods") != rolling_periods):
+            raise ValueError("current MinTrade Target/teacher policy differs")
+        if any(not is_sha256_hex(recorded.get(field)) for field in
+               ("rank_sha256", "raw_label_sha256", "calendar_sha256")):
+            raise ValueError("historical daily outcome or ranking SHA missing")
+        if int(recorded.get("mature_eligible_rows", -1)) != n:
+            raise ValueError("historical MinTrade score population differs")
+        if int(recorded.get("settled_net_r_rows", -1)) + int(
+                recorded.get("censored_rank_last_rows", -1)) != n:
+            raise ValueError("historical MinTrade settled/unfilled accounting differs")
+        # Canonical policy builder validates all explicit policy and selector
+        # fields. Cutoff closeout *counts* are excluded from replay identity.
+        daily_evidence = dict(recorded)
+    reconstructed = _arm_replay_policy(
+        definition, plan=plan, target=target, replay_policy=base_policy,
+        daily_evidence=daily_evidence, score_sha256=score_sha,
+        score_contract=expected_score,
+    )
+    expected = replay_identity(
+        dataset=settings.dataset, dataset_sha256=price_sha,
+        target=target, definition={target: target},
+        start=str(settings.start_date), end=evaluation_end,
+        benchmark=str(robustness.benchmark_id), param_sha256=param_sha,
+        seed=seed, cohort=cohort,
+        ranking_policy=str(arm.dl_runtime_mode),
+        ranking_options=dict(arm.dl_runtime_options),
+        evaluation_mode=str(definition.dimensions["evaluation_mode"]),
+        max_positions=settings.max_positions, replay_policy=reconstructed,
+    )
+    return expected
+
+
+def _execute_single_stage_missing(
+    definition, *, project_root: Path, quiet: bool,
+    plan: Mapping[str, Any], contracts: Mapping[str, Mapping[str, Any]],
+    current_keys: Mapping[str, tuple[str, int, str, str]], settings, robustness,
+    price_sha: str, prepared, decisions: Mapping[tuple[int, str], str],
+    preflight_cached: Mapping[tuple[int, str], Mapping[str, Any]],
+    start: str, end: str, base_arm, exact_arm, direct_arm,
+    base_policy: Mapping[str, Any], cache,
+) -> dict[tuple[int, str], dict[str, Any]]:
+    """Run ONLY the missing Seed x Target cells in the certified one-shot plan.
+
+    Target truth is materialized only for sources consumed by a RUN cell.
+    Exact/Direct consume one identical source, but a cached sibling never
+    causes a second producer invocation. The canonical Broker-Cash Replay
+    engine remains the sole economic execution owner.
+    """
+    from services.audit.oracle_replay_artifacts import replay_identity, price_inventory_sha256
+    from services.audit.daily_trade40_oracle import (
+        build_daily_universal_trade40_oracle_scores,
+        DailyTrade40OracleBlockedError,
+    )
+    from filters.breakout_quality.daily_trade40_target import (
+        build_formal_min_execution_schedule, resolve_formal_min_param_records,
+    )
+    # Do not consume preflight decisions if any material input was edited
+    # during the interactive confirmation prompt.
+    if price_inventory_sha256(project_root, settings.dataset) != price_sha:
+        raise OracleBlockedError("Oracle price inputs changed after approved preflight")
+    current_params, _ = _prepare_oracle_parameters(
+        definition, root=project_root,
+        parameter_paths=[(seed, path) for seed, path in _robustness_artifacts(
+            definition, project_root)[1]],
+        start=start, end=end, base_arm=base_arm,
+    )
+    if [(p[0], p[1]) for p in current_params] != [(p[0], p[1]) for p in prepared]:
+        raise OracleBlockedError("Oracle P16 inputs changed after approved preflight")
+    out: dict[tuple[int, str], dict[str, Any]] = {}
+    required = {key for key, action in decisions.items() if action == "RUN"}
+    if not required:
+        return out
+    all_cohorts = set(current_keys.values())
+    if len(all_cohorts) > 1:
+        raise OracleBlockedError("Oracle RUN has incompatible stock-day cohort")
+    # A completely cold source has no historical score-key witness. Its
+    # one-time data/eligibility materialization is a RUN dependency, after
+    # explicit approval; it is never a REUSE verification dependency.
+    if not all_cohorts:
+        current_keys = _read_only_score_keys(
+            definition, project_root=project_root, contracts=contracts,
+            plan=plan, evaluation_end=end, cutoff=str(settings.end_date),
+        )
+        all_cohorts = set(current_keys.values())
+        if len(all_cohorts) != 1:
+            raise OracleBlockedError("Oracle first-run score sources have unequal eligibility")
+    cohort_keys = next(iter(all_cohorts))
+    cohort = {
+        "cohort_rows": cohort_keys[1], "first_common_day": cohort_keys[2],
+        "last_common_day": cohort_keys[3],
+        "oracle_parity_implementation": ORACLE_PARITY_IMPLEMENTATION,
+        "research_cutoff": str(settings.end_date),
+        "risk_budget_return": float(StrategyAlignedContinuousTargetSpec.from_label_policy(
+            DEFAULT_LABEL_POLICY).risk_budget_return), "oracle_only": True,
+    }
+    # Source truth is independent of the recipient selector. Build only
+    # necessary price recipes; do not materialize unused price providers.
+    required_price = {target for (_seed, target) in required
+                      if target != "C96" and target not in plan["daily_sources"]}
+    price_scores: dict[str, dict[tuple[str, str], float]] = {}
+    if required_price:
+        source = {**definition.source,
+                  "oracle_comparisons": tuple(entry for entry in definition.source["oracle_comparisons"]
+                                              if entry["target"] in required_price)}
+        price_def = replace(definition, source=source)
+        price_scores, _evidence = _load_or_build_oracle_price_scores(
+            price_def, project_root=project_root, cutoff=str(settings.end_date),
+            price_sha=price_sha, progress=None if quiet else
+            lambda msg: print(f"[Target RUN price] {msg}", flush=True),
+        )
+        price_scores = {
+            name: {key: value for key, value in scores.items() if key[1] <= end}
+            for name, scores in price_scores.items()
+        }
+    feature_cohort_cache: dict[tuple[str, ...], tuple[pd.DataFrame, str]] = {}
+    truth_cache: dict[tuple[int, str], tuple[dict[tuple[str, str], float], dict[str, Any]]] = {}
+    data_dir = Path(get_dataset_dir(str(project_root), settings.dataset)).resolve()
+    for seed, param_sha, kind, base_params, oracle_params in prepared:
+        seed_run = [target for target in ("C96", *(name for name, _ in plan["targets"]))
+                    if (seed, target) in required]
+        if not seed_run:
+            continue
+        schedule = None
+        preparation = {}
+        for target in seed_run:
+            key = (seed, target)
+            if target == "C96":
+                arm = exact_arm or settings.arms[str(definition.source["exact_arm_id"])]
+                score_map = None
+                evidence = None
+                policy = _arm_replay_policy(
+                    definition, plan=plan, target="C96", replay_policy=base_policy,
+                )
+            else:
+                arm = direct_arm if plan["selectors"][target] == "direct" else exact_arm
+                if target in plan["daily_sources"]:
+                    source_name = plan["daily_sources"][target]
+                    source_key = (seed, source_name)
+                    if source_key not in truth_cache:
+                        if schedule is None:
+                            schedule, _ = build_formal_min_execution_schedule(
+                                resolve_formal_min_param_records(kind, base_params),
+                                seed=seed, param_sha256=param_sha,
+                            )
+                        _recipe, provider, horizon = plan["daily_recipes"][source_name]
+                        try:
+                            truth_cache[source_key] = build_daily_universal_trade40_oracle_scores(
+                                project_root=project_root, dataset=str(settings.dataset),
+                                filter_id=str(definition.source["filter_id"]),
+                                profile_id=str(definition.source[provider]),
+                                cutoff=str(settings.end_date), evaluation_start=start,
+                                evaluation_end=end,
+                                score_start=_formal_dl_score_start(definition, settings),
+                                seed=seed, param_sha256=param_sha,
+                                canonical_schedule=schedule, horizon_sessions=horizon,
+                                price_sha256=price_sha,
+                                cache_root=project_root / AUDIT_OUTPUT_ROOT /
+                                           definition.output_subdir / "truth_cache",
+                                feature_cohort_cache=feature_cohort_cache,
+                                progress_callback=None if quiet else
+                                    lambda msg, name=source_name: print(
+                                        f"[Target RUN seed={seed} {name}] {msg}", flush=True),
+                            )
+                        except (DailyTrade40OracleBlockedError, ValueError) as exc:
+                            raise OracleBlockedError(
+                                f"Oracle missing truth {source_name} seed={seed} BLOCKED: {exc}"
+                            ) from exc
+                    score_map, evidence = truth_cache[source_key]
+                    teacher = evidence.get("teacher") or {}
+                    if (teacher.get("seed") != seed
+                            or teacher.get("param_identity_sha256") != param_sha):
+                        raise OracleBlockedError("Oracle RUN Target and P16 teacher differ")
+                else:
+                    score_map = price_scores.get(target)
+                    evidence = None
+                if score_map is None or not score_map:
+                    raise OracleBlockedError(f"Oracle missing RUN score: {target} seed={seed}")
+                proof_sha, n, _first, _last = current_keys.get(target, cohort_keys)
+                digest = hashlib.sha256()
+                for ticker, day in sorted(score_map):
+                    digest.update(f"{ticker}|{day}\n".encode("utf-8"))
+                if len(score_map) != n or digest.hexdigest() != proof_sha:
+                    raise OracleBlockedError(f"Oracle {target} producer score eligibility differs from preflight")
+                full_contract = dict(contracts[target])
+                full_contract.update(
+                    canonical_feature_eligible_keys_sha256=proof_sha,
+                    oracle_scored_rows=n,
+                    source_evidence="validated_generic_daily_feature_universe_and_formal_target_maturity",
+                )
+                policy = _arm_replay_policy(
+                    definition, plan=plan, target=target, replay_policy=base_policy,
+                    daily_evidence=evidence,
+                    score_sha256=_canonical_score_map_sha256(score_map),
+                    score_contract=full_contract,
+                )
+            identity = replay_identity(
+                dataset=settings.dataset, dataset_sha256=price_sha,
+                target=target, definition={target: target},
+                start=start, end=end, benchmark=str(robustness.benchmark_id),
+                param_sha256=param_sha, seed=seed, cohort=cohort,
+                ranking_policy=str(arm.dl_runtime_mode),
+                ranking_options=dict(arm.dl_runtime_options),
+                evaluation_mode=str(definition.dimensions["evaluation_mode"]),
+                max_positions=settings.max_positions, replay_policy=policy,
+            )
+            action = cache.plan_execution({key: identity})
+            action.require_ready()
+            if action.action(seed, target) != "RUN":
+                raise OracleBlockedError(
+                    f"Oracle {target} seed={seed} changed after preflight; refusing silent replanning"
+                )
+            replay_kwargs = dict(
+                data_dir=data_dir, start_date=start, end_date=end,
+                max_positions=settings.max_positions, enable_rotation=False,
+                quiet=quiet, replay_preparation_cache=preparation,
+            )
+            def produce():
+                if target == "C96":
+                    played = _run_scenario(
+                        name=f"C96 Fixed seed={seed} same-window",
+                        params=base_params, param_source_kind=kind, **replay_kwargs,
+                    )
+                else:
+                    with audit_oracle_truth_score_context(
+                        score_map,
+                        ranking_policy=str(arm.dl_runtime_mode),
+                        ranking_options=arm.dl_runtime_options,
+                        key_mode="information_date",
+                        missing_key_policy="unavailable_outside_mature_feature_universe",
+                        score_start=_formal_dl_score_start(definition, settings),
+                    ):
+                        played = _run_scenario(
+                            name=f"Oracle {target} seed={seed}",
+                            params=oracle_params, param_source_kind=kind, **replay_kwargs,
+                        )
+                result = _metrics(played, target=target)
+                result["seed"] = seed
+                if target != "C96":
+                    baseline = out.get((seed, "C96")) or preflight_cached.get((seed, "C96"))
+                    if baseline is None:
+                        raise OracleBlockedError("Oracle RUN missing paired C96 benchmark")
+                    result["delta_romd_vs_c96"] = result["romd"] - baseline["romd"]
+                return result
+            result, origin = action.execute(seed, target, produce)
+            if origin != "newly completed":
+                raise OracleBlockedError("Oracle RUN unexpectedly reused a different receipt")
+            out[key] = result
+            if not quiet:
+                print(f"[RUN] seed={seed} {target} | completed", flush=True)
+    if set(out) != required:
+        raise OracleBlockedError("Oracle missing-only execution did not complete every RUN cell")
+    return out
+
+
+def _run_single_stage_oracle(
+    definition, *, project_root: Path, quiet: bool,
+    preflight_approval: Callable[[str], bool],
+) -> dict[str, Any]:
+    """Exactly one pre-authorization certified matrix. Only RUNs create truth.
+
+    A provenance-backed historical replay is a completed scientific result;
+    it does not require replaying the label producer merely to rediscover an
+    already-attested perfect-score SHA. No archived report authorizes reuse.
+    """
+    from services.audit.oracle_replay_artifacts import OracleReplayStore, replay_identity
+    from filters.breakout_quality.daily_trade40_target import (
+        build_formal_min_execution_schedule, resolve_formal_min_param_records,
+    )
+    root = Path(project_root).resolve()
+    plan = _oracle_comparison_plan(definition)
+    settings, base_arm, exact_arm = _contract(definition)
+    contracts = _resolve_oracle_target_score_contracts(definition, settings, plan)
+    status = collect_status(definition, project_root=root)
+    if status["status"] != "READY":
+        raise OracleBlockedError(status["reason"])
+    robustness, paths = _robustness_artifacts(definition, root)
+    end = str(definition.dimensions.get("oracle_evaluation_end_date") or "")
+    start = str(settings.start_date)
+    if not (start < end <= str(settings.end_date)):
+        raise OracleBlockedError("Oracle fixed evaluation window invalid")
+    try:
+        price_sha = price_inventory_sha256(root, settings.dataset)
+    except ValueError as exc:
+        raise OracleBlockedError(f"Oracle price provenance BLOCKED: {exc}") from exc
+    prepared, param_evidence = _prepare_oracle_parameters(
+        definition, root=root, parameter_paths=paths,
+        start=start, end=end, base_arm=base_arm,
+    )
+    cache = OracleReplayStore(root, definition.output_subdir)
+    baseline_arm = exact_arm or settings.arms[str(definition.source["exact_arm_id"])]
+    direct_arm = (_direct_arm(definition, settings, base_arm, exact_arm)
+                  if "direct" in plan["selectors"].values() else None)
+    baseline_policy = _canonical_oracle_replay_policy(
+        definition, base_arm=base_arm, exact_arm=baseline_arm,
+    )
+    # Artifact-only score-universe proof. A full DL data-provider call here
+    # silently recomputed hundreds of 40D price labels even on 100% REUSE.
+    keys = _replay_attested_score_keys(
+        store=cache, contracts=contracts, plan=plan, prepared=prepared,
+        price_sha=price_sha, settings=settings, robustness=robustness,
+        evaluation_end=end,
+    )
+    seed_set = [seed for seed, _ in paths]
+    targets = ("C96", *(name for name, _ in plan["targets"]))
+    decisions: dict[tuple[int, str], str] = {}
+    cached: dict[tuple[int, str], dict[str, Any]] = {}
+    identities: dict[tuple[int, str], dict[str, Any]] = {}
+    blocked: dict[tuple[int, str], str] = {}
+    # Reconstruct canonical Min rolling schedule metadata once per seed, not
+    # a single stock's historical trade path or future Target outcome.
+    schedules: dict[int, list[dict[str, Any]]] = {}
+    if plan["daily_recipes"]:
+        for seed, sha, kind, base_params, _ in prepared:
+            schedule, _ = build_formal_min_execution_schedule(
+                resolve_formal_min_param_records(kind, base_params),
+                seed=seed, param_sha256=sha,
+            )
+            schedules[seed] = [{"start": str(p.start.date()),
+                                "end": None if p.end is None else str(p.end.date()),
+                                "params_signature": p.params_signature}
+                               for p in schedule]
+    baseline_certified: dict[int, dict[str, Any]] = {}
+    _certify_unscored_baseline_before_truth(
+        definition, project_root=root, settings=settings, base_arm=base_arm,
+        exact_arm=baseline_arm, robustness=robustness,
+        prepared_parameters=prepared, price_sha=price_sha,
+        evaluation_end=end, certified_identity_out=baseline_certified,
+    )
+    # Read the current canonical input manifest once; every stored score
+    # receipt is checked against that same source and fixed evaluation scope.
+    # No existing scored witness means every scored cell is a genuine RUN.
+    # Expensive feature/price label construction is deferred until approved
+    # RUN execution, NEVER performed merely to display the matrix.
+    if len(set(keys.values())) > 1:
+        raise OracleBlockedError("Oracle signed Replay witnesses disagree on common score cohort")
+    for seed, param_sha, _kind, _base_params, _oracle_params in prepared:
+        for target in targets:
+            key = (seed, target)
+            if target == "C96":
+                c96 = baseline_certified.get(seed)
+                if c96 is not None:
+                    identity = c96
+                    obs, _ = cache.resolve_completed(identity)
+                    if obs is None:
+                        raise OracleBlockedError("C96 evidence disappeared during preflight")
+                    decisions[key], cached[key], identities[key] = "REUSE", obs, identity
+                else:
+                    # Missing C96 may be computed directly without any Target truth.
+                    candidates = cache.existing_completed_identities(seed=seed, target=target)
+                    if candidates:
+                        blocked[key] = "C96 same-window cache requires certified identity"
+                        decisions[key] = "BLOCKED"
+                    else:
+                        decisions[key] = "RUN"
+                continue
+            candidates = cache.existing_completed_identities(seed=seed, target=target)
+            current_candidates = [item for item in candidates
+                                  if item.get("start_date") == start and item.get("end_date") == end
+                                  and (item.get("replay_policy") or {}).get(
+                                      "oracle_parity_implementation") == ORACLE_PARITY_IMPLEMENTATION]
+            if not current_candidates:
+                decisions[key] = "RUN"
+                continue
+            if len(current_candidates) > 1:
+                decisions[key] = "BLOCKED"
+                blocked[key] = "multiple same-window scored replays require source conflict resolution"
+                continue
+            arm = direct_arm if plan["selectors"][target] == "direct" else exact_arm
+            try:
+                if target not in keys:
+                    raise ValueError("historical score key receipt cannot be certified from current inputs")
+                expected = _certified_saved_oracle_identity(
+                    definition, project_root=root, store=cache,
+                    saved=current_candidates[0], plan=plan, contract=contracts[target],
+                    keys=keys[target], param_sha=param_sha, price_sha=price_sha,
+                    seed=seed, target=target, settings=settings, robustness=robustness,
+                    base_policy=baseline_policy, arm=arm,
+                    rolling_periods=schedules.get(seed), evaluation_end=end,
+                )
+                approved_plan = cache.plan_execution({key: expected})
+                approved_plan.require_ready()
+                if approved_plan.action(seed, target) != "REUSE":
+                    raise ValueError("stored score receipt not reproducible from current source identity")
+                obs, _ = cache.resolve_completed(expected)
+                if obs is None:
+                    raise ValueError("certified historical replay disappeared")
+                decisions[key], cached[key], identities[key] = "REUSE", obs, expected
+            except (OSError, ValueError, KeyError, TypeError, OracleBlockedError) as exc:
+                decisions[key] = "BLOCKED"
+                blocked[key] = str(exc)
+    preflight = render_replay_preflight(
+        label="Fixed", seeds=seed_set, targets=list(targets), decisions=decisions,
+    )
+    if not quiet:
+        print("\n" + preflight, flush=True)
+    if blocked:
+        problems = [f"{target} seed={seed}: {reason}"
+                    for (seed, target), reason in blocked.items()]
+        raise OracleBlockedError("Oracle full-identity BLOCKED; no Target producer or Portfolio "
+                                 "ran: " + " | ".join(problems[:3]))
+    if not preflight_approval(preflight):
+        return {"status": "CANCELLED", "read_only": True, "preflight": decisions}
+    # Cold-start eligibility is needed only to produce genuinely missing arms.
+    # Performing this DL provider load before the user's approval was the
+    # original hidden 617-price-path preflight rerun.
+    if not keys and "RUN" in decisions.values():
+        keys = _read_only_score_keys(
+            definition, project_root=root, contracts=contracts, plan=plan,
+            evaluation_end=end, cutoff=str(settings.end_date),
+        )
+        if len(set(keys.values())) != 1:
+            raise OracleBlockedError("Oracle first-run score sources have unequal eligibility")
+    common_key = next(iter(keys.values())) if keys else None
+    if common_key is None:
+        raise OracleBlockedError("Oracle completed Replay missing score-universe evidence")
+    # The same immutable matrix governs both the Target producer and Portfolio:
+    # a missing arm never authorizes rebuilding any other (seed, target) cell.
+    newly_completed = _execute_single_stage_missing(
+        definition, project_root=root, quiet=quiet, plan=plan,
+        contracts=contracts, current_keys=keys, settings=settings,
+        robustness=robustness, price_sha=price_sha, prepared=prepared,
+        decisions=decisions, preflight_cached=cached, start=start, end=end,
+        base_arm=base_arm, exact_arm=exact_arm, direct_arm=direct_arm,
+        base_policy=baseline_policy, cache=cache,
+    )
+    for key, record in newly_completed.items():
+        if decisions[key] != "RUN" or key in cached:
+            raise OracleBlockedError("Oracle Producer escaped the certified RUN cells")
+        cached[key] = record
+    observations: dict[str, list[dict[str, Any]]] = {target: [] for target in targets}
+    for seed in seed_set:
+        for target in targets:
+            if (seed, target) not in cached:
+                raise OracleBlockedError(f"Oracle planned {target} seed={seed} has no completed observation")
+            observations[target].append(dict(cached[(seed, target)]))
+    baseline_by_seed = {int(row["seed"]): float(row["romd"])
+                        for row in observations["C96"]}
+    for name in targets[1:]:
+        for row in observations[name]:
+            seed = int(row["seed"])
+            if not math.isclose(float(row["delta_romd_vs_c96"]),
+                                float(row["romd"]) - baseline_by_seed[seed],
+                                rel_tol=1e-9, abs_tol=1e-9):
+                raise OracleBlockedError(f"Oracle {name} seed={seed} C96 mismatch")
+    ref: dict[str, Any] = {}
+    cohort = {
+            "cohort_rows": common_key[1], "first_common_day": common_key[2],
+            "last_common_day": common_key[3],
+            "research_cutoff": str(settings.end_date),
+            "risk_budget_return": float(StrategyAlignedContinuousTargetSpec.from_label_policy(
+                DEFAULT_LABEL_POLICY).risk_budget_return),
+            "oracle_parity_implementation": ORACLE_PARITY_IMPLEMENTATION,
+            "oracle_only": True,
+            "evaluation_window_policy": "target_independent_fixed_research_dl",
+            "target_truth_closeout_policy": "min_natural_exit_horizon_research_cutoff",
+        }
+    baseline = _aggregate(observations["C96"], target="C96", period_start=start, period_end=end)
+    oracles = []
+    for name in targets[1:]:
+        item = _aggregate(observations[name], target=name, period_start=start, period_end=end)
+        diffs = np.array([row["delta_romd_vs_c96"] for row in observations[name]], dtype=float)
+        item.update(delta_romd_vs_c96=float(np.mean(diffs)),
+                    delta_romd_std=float(np.std(diffs, ddof=1)) if len(diffs) > 1 else 0.0,
+                    positive_seed_count=int((diffs > 0).sum()))
+        oracles.append(item)
+    result = {**ref, "start_date": start, "end_date": end,
+              "common_cohort": cohort, "baseline": baseline, "oracles": oracles,
+              "definitions": dict(plan["targets"]), "param_artifacts": param_evidence,
+              "seed_target_evidence": {}}
+    return _oracle_report_envelope(settings=settings, robustness=robustness,
+                                   seeds=seed_set, base=result)
 
 
 def build_report(
@@ -2133,50 +2824,20 @@ def build_report(
     preflight_display: str = "full",
     preflight_approval: Callable[[str], bool] | None = None,
 ) -> dict[str, Any]:
-    """Authorize missing truth and Portfolio Replay in separate certified phases.
+    """One Research [1] work plan, one approval, zero science before approval.
 
-    With complete truth, the user confirms only once. With missing truth,
-    no producer runs before the first approval; after BUILD the real replay
-    plan is shown and must be separately approved before any Portfolio RUN.
+    The formal UI uses the one-stage read-only, provenance-attested plan.
+    Independent non-interactive Audit callers retain the canonical producer.
     """
     if preflight_approval is None:
         return _build_report_once(
             definition, project_root=project_root, quiet=quiet,
             preflight_display=preflight_display,
         )
-    try:
-        return _build_report_once(
-            definition, project_root=project_root, quiet=quiet,
-            preflight_display=preflight_display,
-            preflight_approval=preflight_approval,
-        )
-    except OracleTruthBuildRequired as exc:
-        # One missing truth source is NOT evidence that all Portfolio arms
-        # need RUN. Nor can a cached Replay be called REUSE until its perfect
-        # scores are certified. Do not manufacture an all-RUN matrix here.
-        # The approval authorizes only the canonical missing-truth BUILD and
-        # downstream work selected by the subsequently certified Replay plan.
-        counts: dict[str, int] = {}
-        preview = render_truth_miss_preflight(
-            definition, project_root=project_root, missing=exc.missing,
-            baseline_actions=exc.baseline_actions, counts_out=counts,
-        )
-        if not quiet:
-            print("\n" + preview, flush=True)
-        if counts.get("BLOCKED", 0):
-            raise OracleBlockedError(
-                f"Oracle read-only preflight found {counts['BLOCKED']} BLOCKED replay artifact(s); "
-                "do not BUILD truth or run Portfolio until the identity conflict is resolved"
-            )
-        if not preflight_approval(preview):
-            return {"status": "CANCELLED", "read_only": True,
-                    "truth_build_required": str(exc)}
-        return _build_report_once(
-            definition, project_root=project_root, quiet=quiet,
-            preflight_display=preflight_display,
-            preflight_approval=preflight_approval,
-            _approved_after_truth_miss=True,
-        )
+    return _run_single_stage_oracle(
+        definition, project_root=Path(project_root), quiet=quiet,
+        preflight_approval=preflight_approval,
+    )
 
 
 def render_result(report: Mapping[str, Any], *, target: str) -> str:

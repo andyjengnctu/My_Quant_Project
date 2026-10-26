@@ -77,6 +77,16 @@ def _execution_replay_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
     # No dependency may infer or reconstruct the selected model from this key;
     # the formal Exact selection mode and options are recorded independently.
     result.pop("exact_arm", None)
+    # These counts describe the already executed label producer; they do not
+    # affect the submitted score, stock-day eligibility or Broker-Cash Replay.
+    # Historical records legitimately omit them. Keep their original bytes,
+    # while excluding the non-executable counters from the execution identity.
+    daily = result.get("hindsight_target_contract")
+    if isinstance(daily, Mapping):
+        daily = dict(daily)
+        daily.pop("cutoff_truncated_rows", None)
+        daily.pop("research_cutoff_closeout_rows", None)
+        result["hindsight_target_contract"] = daily
     score_contract = result.get("canonical_dl_score_contract")
     if isinstance(score_contract, Mapping):
         result["canonical_dl_score_contract"] = _execution_score_contract(score_contract)

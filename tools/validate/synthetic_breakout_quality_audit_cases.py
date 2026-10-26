@@ -155,11 +155,11 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     route_console = io.StringIO()
     prompts = []
     preview = (
-        "[Target 驗證 Fixed | 真值＋Portfolio 正式計畫]\n"
+        "[Target 驗證 Fixed | Portfolio Replay 正式計畫]\n"
         "Target                S1     S2\n"
         "C96                   REUSE  REUSE\n"
         "DailyUniversal40      RUN    REUSE\n"
-        "REUSE 3 / RUN（需計算）1 / BLOCKED 0"
+        "REUSE 3 / RUN（需回放）1 / BLOCKED 0"
     )
     executions = []
     answers = iter(["", "", "0"])
@@ -203,7 +203,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     check_true(
         "target_validation_only_one_confirm_even_if_verified_run_count_changes",
         len(prompts) == 3 and not prompts[0][1] and prompts[1][1]
-        and "依正式 REUSE／RUN 計畫" in prompts[1][0]
+        and "執行正式 REUSE／RUN 計畫" in prompts[1][0]
         and all("輸入 RUN" not in prompt for prompt, _ in prompts)
         and root_text.count(preview) == 1
         and root_text.index(preview) < root_text.index("[RUN] Target")
@@ -235,7 +235,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     # both the displayed matrix and execution after the same approval.
     changed_plan_console = io.StringIO()
     verified_calls = []
-    final_matrix = preview.replace("REUSE 3 / RUN（需計算）1", "REUSE 2 / RUN（需計算）2")
+    final_matrix = preview.replace("REUSE 3 / RUN（需回放）1", "REUSE 2 / RUN（需回放）2")
     def exact_plan(*args, **kwargs):
         verified_calls.append(kwargs)
         print(final_matrix)
@@ -252,90 +252,91 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         result == 0 and single_input.call_count == 1
         and len(verified_calls) == 1 and not inventory.called
         and "before_replay" not in verified_calls[0]
-        and "RUN（需計算）2" in changed_plan_console.getvalue()
+        and "RUN（需回放）2" in changed_plan_console.getvalue()
         and changed_plan_console.getvalue().count(final_matrix) == 1
         and "LATEST" in changed_plan_console.getvalue(),
     )
 
-    # Actual missing-truth branch: first authorization must follow a visible
-    # four-seed dependency table, with no speculative Portfolio REUSE claim.
-    # A separate second authorization is needed only if truth was missing.
+    # Regression for the real one-stage contract: no intermediate truth BUILD,
+    # PENDING or second confirmation. A complete REUSE/RUN matrix MUST be
+    # printed before the *first* approval, even with no persisted truth sidecar.
     from services.audit import target_oracle_romd as oracle_handler
     missing_truth_view = io.StringIO()
     truth_prompts = []
-    canonical_def = next(item for item in get_reusable_audit_definitions("breakout_quality")
-                         if item.audit_type == oracle_handler.SUPPORTED_AUDIT_TYPE)
-    planned_targets = ("C96", *(target for target, _ in
-                                  oracle_handler._oracle_comparison_plan(canonical_def)["targets"]))
-    from core.strategy_compare_policy import get_strategy_multi_seed_robustness_settings
-    benchmark = get_strategy_multi_seed_robustness_settings(
-        str(canonical_def.source["strategy_profile_id"])
+    certified_matrix = (
+        "[Target 驗證 Fixed | Portfolio Replay 正式計畫]\n"
+        "Target                        S1     S2     S3     S4\n"
+        "C96                           REUSE  REUSE  REUSE  REUSE\n"
+        "DailyUniversal_MinTrade40    REUSE  REUSE  REUSE  REUSE\n"
+        "DailyUniversal_MinTrade      RUN    RUN    RUN    RUN\n"
+        "REUSE 8 / RUN（需回放）4 / BLOCKED 0"
     )
-    candidate_presence = {(int(seed), target): "CACHE"
-                          for seed in benchmark.resolved_seeds for target in planned_targets}
-    def missing_source_run(_module_id, *, project_root, method_id, preflight_approval):
+
+    def approved_matrix_plan(_definition, **kwargs):
+        print(certified_matrix)
+        if not kwargs["preflight_approval"](certified_matrix):
+            return {"status": "CANCELLED", "read_only": True}
+        raise AssertionError("cancelled one-stage plan executed a Producer")
+
+    def abort_after_matrix(prompt):
+        truth_prompts.append((prompt, certified_matrix in missing_truth_view.getvalue()))
+        return "0"
+
+    def simulate_real_research_runner(_module_id, *, project_root, method_id,
+                                      preflight_approval):
         return {"target_oracle_romd": oracle_handler.build_report(
-            canonical_def, project_root=project_root, quiet=False,
+            object(), project_root=project_root, quiet=False,
             preflight_approval=preflight_approval,
         )}
-    def cancel_after_matrix(prompt):
-        truth_prompts.append((prompt, "執行前工作表" in missing_truth_view.getvalue()))
-        return "0"
+
     with patch.object(research_app, "collect_audit_menu_state", return_value={"configured": True}), \
-         patch.object(research_app, "run_enabled_audits", side_effect=missing_source_run), \
+         patch.object(research_app, "run_enabled_audits", side_effect=simulate_real_research_runner), \
          patch.object(research_app, "render_latest_audit_summary") as premature_report, \
-         patch.object(oracle_handler, "_build_report_once", side_effect=
-                      oracle_handler.OracleTruthBuildRequired(
-                          "missing price-source truth", missing={(None, "price"): "missing price-source truth"},
-                      )) as source_probe, \
-         patch.object(oracle_handler.OracleReplayStore, "preview_candidates",
-                      return_value=candidate_presence), \
-         patch("builtins.input", side_effect=cancel_after_matrix), \
+         patch.object(oracle_handler, "_run_single_stage_oracle", side_effect=approved_matrix_plan) as planner, \
+         patch.object(oracle_handler, "_build_report_once") as legacy_two_stage, \
+         patch.object(oracle_handler, "_execute_single_stage_missing") as expensive_producer, \
+         patch("builtins.input", side_effect=abort_after_matrix), \
          redirect_stdout(missing_truth_view):
         research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
     check_true(
-        "target_missing_truth_shows_all_targets_before_first_approval_and_cancel_builds_nothing",
+        "target_missing_truth_shows_certified_reuse_run_matrix_before_first_and_only_approval",
         len(truth_prompts) == 1 and truth_prompts[0][1]
-        and "執行前工作表" in missing_truth_view.getvalue()
-        and "PENDING/BUILD" in missing_truth_view.getvalue()
-        and "PENDING/—" in missing_truth_view.getvalue()
-        and "僅建立缺少的 Target 真值" in truth_prompts[0][0]
-        and "price: shared" in missing_truth_view.getvalue()
-        and missing_truth_view.getvalue().index("執行前工作表")
+        and "執行正式 REUSE／RUN 計畫" in truth_prompts[0][0]
+        and "PENDING" not in missing_truth_view.getvalue()
+        and "BUILD" not in missing_truth_view.getvalue()
+        and missing_truth_view.getvalue().count(certified_matrix) == 1
+        and missing_truth_view.getvalue().index(certified_matrix)
             < missing_truth_view.getvalue().index("未授權執行")
-        and source_probe.call_count == 1 and not premature_report.called,
+        and planner.call_count == 1 and not legacy_two_stage.called
+        and not expensive_producer.called and not premature_report.called,
     )
 
-    # With missing truth, approval #1 MUST NOT also authorize an unseen
-    # Portfolio plan. Approval #2 is tied to the certified status matrix.
-    two_stage = io.StringIO()
-    stage_prompts = []
-    def two_stage_input(prompt):
-        stage_prompts.append(prompt)
+    # Accept one matrix and assert exactly one approval, then RUN only the
+    # specifically authorized missing arm; the app may not second-guess the
+    # scientific Owner or request another staged approval.
+    one_stage = io.StringIO()
+    approvals = []
+    def one_stage_input(prompt):
+        approvals.append((prompt, certified_matrix in one_stage.getvalue()))
         return ""
-    def two_stage_runner(*args, **kwargs):
-        approval = kwargs["preflight_approval"]
-        first = "[Target 驗證 | 執行前工作表：Portfolio／真值]\nPENDING/BUILD\n真值完成後會展示正式 Portfolio REUSE／RUN／BLOCKED 表"
-        last = "[Target 驗證 Fixed | Portfolio Replay 正式計畫]\nPortfolio REUSE 56 / RUN 8"
-        print(first)
-        assert approval(first)
-        print(last)
-        assert approval(last)
+    def one_stage_runner(*args, **kwargs):
+        print(certified_matrix)
+        assert kwargs["preflight_approval"](certified_matrix)
         print("[RUN] only missing Portfolio")
         return {"target_oracle_romd": {"status": "COMPLETED"}}
-    with patch("builtins.input", side_effect=two_stage_input), \
-         patch.object(research_app, "run_enabled_audits", side_effect=two_stage_runner), \
+    with patch("builtins.input", side_effect=one_stage_input), \
+         patch.object(research_app, "run_enabled_audits", side_effect=one_stage_runner), \
          patch.object(research_app, "render_latest_audit_summary", return_value="LATEST"), \
-         redirect_stdout(two_stage):
+         redirect_stdout(one_stage):
         research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
     check_true(
-        "target_truth_build_and_portfolio_run_require_separate_explicit_approvals",
-        len(stage_prompts) == 2
-        and "僅建立缺少的 Target 真值" in stage_prompts[0]
-        and "依正式 REUSE／RUN 計畫執行" in stage_prompts[1]
-        and two_stage.getvalue().index("PENDING/BUILD")
-            < two_stage.getvalue().index("Portfolio REUSE 56")
-            < two_stage.getvalue().index("[RUN] only missing Portfolio"),
+        "target_truth_and_portfolio_are_owned_by_one_certified_approval_only",
+        len(approvals) == 1 and approvals[0][1]
+        and "執行正式 REUSE／RUN 計畫" in approvals[0][0]
+        and "PENDING" not in one_stage.getvalue()
+        and one_stage.getvalue().count(certified_matrix) == 1
+        and one_stage.getvalue().index(certified_matrix)
+            < one_stage.getvalue().index("[RUN] only missing Portfolio"),
     )
 
     # Entry-point integration belongs to the existing app/menu contract, not
