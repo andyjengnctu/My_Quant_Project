@@ -13791,3 +13791,50 @@ Decision: `ENGINEERING_CHECKPOINT_FIRST_REUSE / HISTORICAL_AK_EVIDENCE_PRESERVED
 - **Bug B（已重現／修正）**：DailyUniversal 原本把「任何單一資訊日全部掛單未成交」視為整段 Target 缺少已實現經濟真值而 BLOCKED，與既定 `censored_rank_last` 規則不一致。現在只有合法無成交的當日 cohort 允許同分最後（當日全數未成交時 rank=0.5），不虛構 Net-R；全來源完全沒有可實現資料仍保留既有嚴格阻擋。若真正缺少生效的 Min 參數，仍必須在排名前 BLOCKED，不能混作未成交。
 - **執行前置與回歸**：沿用正式 11 個 Target（6 Exact／5 Direct）、已退役兩個事件型 Target、正式 0050 缺分數／score start、可用股票日、P16 雙讀 SHA、逐 Arm REUSE、唯一 Broker-Cash Replay；11 個 Target 的全部 2,047 種非空比較清單組合及反序解析 PASS，Oracle／DailyTrade40 121/121 unit tests PASS。合成測試並非真實四 Seed 市場回放或 Windows formal double check，不以它們宣稱 E13 市場驗收已完成。
 - **停止規則／維護性**：本輪只修復有確定反例且可從原 E13 唯一推導的兩處既有 owner，沒有建立額外獨立 Validator、報表、研究 ID、Target 或 Cache。後續只有真實本機工件、完整測試或新的可重現反例證明契約偏離，才有理由重新開啟相應缺陷；不以不斷尋找假設性邊界當作已要求的無限重構。
+
+## 2026-10-26 — Research [1] Target Oracle E13 改版後四 Seed 結果登錄及與修復前歷史對照（使用者實際報表）
+
+- **本輪來源／基準**：使用者提供 `貼上的 Markdown(2).md`（SHA256 `34e28902ef5455927912abb5d29a314cd5269fee590083ccc562a9c75849fce7`）及 `test-branch-1_20261026_144657_6c957189(2).zip`（SHA256 `586de78fff77ab0fec2c92cb3dec0a6ee65c953ce2a34e3480cfddfeba8a571d`），原 ZIP `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md` 共 13,793 行；本紀錄僅追加，不替換 2026-10-23～26 既有歷史與結果。依序核對 `doc/PROJECT_SETTINGS.md`、Registry、Log；這是接收使用者回報的真實市場報表，而非 GPT 重新跑全市場 Replay。
+- **研究／報表條件**：Research `[1] Target 驗證`，`audit.target_oracle_romd@v9`（source payload `schema_version=8`），11 Oracle treatments（6 Exact K/R0 + 5 Direct No-K/No-R0），另有 same-window C96；Period=`2021-01-01～2025-12-22`；`end_to_end_v1`；四個正式 P16 策略參數 Seed=`693545351/2014432738/104504529/762252050`；40D mature、已核准 perfect Target daily-percentile score、Portfolio Broker-Cash。2025 截止日早於年底，`Full Year=False`，不能視為完整年度。
+- **最重要的樣本口徑變更**：修復前 2026-10-24 Oracle V8 報表 common cohort=`643,617`，本報表=`608,204` stock-days，減少 `35,413`（`5.50%`）。當前程式以正式 feature-eligible DL stock-day 與 score start 遮罩價格真值，不能額外給不可評分股票日 Oracle 分數；C96、DailyUniversal 的舊／新 RoMD 恰相同，對應「未消費改變之價格型分數」的預期，但僅總和相同**不能**取代逐筆 Cache SHA／交易等價證明。修復前數值為歷史 `PARITY_FIX_REQUIRED`，不能和新值當作同一有效科學契約的 controlled outcome 比較。
+- **逐 Target 4-seed aggregate，改前 RoMD 為歷史使用者報表，改後 8 欄來自本次使用者提供 Markdown**（Return/MDD 皆為百分比；Delta 是新 RoMD − 舊 RoMD）：
+
+  | Target | Old RoMD | New Return | New Ann. | New MDD | New RoMD | Δ RoMD | New SD | New EV(A) |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|
+  | C96 Same-Window | 8.14 | +122.24% | +17.42% | 15.05% | 8.14 | +0.00 | 0.44 | +0.81 R |
+  | CG40_EqualRank | 18.32 | +258.95% | +29.01% | 13.41% | 19.33 | +1.01 | 5.92 | +1.39 R |
+  | MFE40 | 19.65 | +263.90% | +29.50% | 14.07% | 18.69 | -0.96 | 3.61 | +1.43 R |
+  | R40 | 19.69 | +242.16% | +28.09% | 13.27% | 18.26 | -1.43 | 1.21 | +1.34 R |
+  | T40 | 20.33 | +268.66% | +29.86% | 12.77% | 21.02 | +0.69 | 3.87 | +1.40 R |
+  | T40-MFE | 18.79 | +235.43% | +27.49% | 12.79% | 18.37 | -0.42 | 2.59 | +1.39 R |
+  | MFE40_Direct | 80.02 | +1014.92% | +60.61% | 14.36% | 75.05 | -4.97 | 41.26 | +2.18 R |
+  | R40_Direct | 77.66 | +966.00% | +59.46% | 12.83% | 74.83 | -2.83 | 31.80 | +2.33 R |
+  | T40_Direct | 96.67 | +1099.12% | +62.88% | 11.71% | 91.88 | -4.79 | 39.07 | +3.01 R |
+  | T40-MFE_Direct | 100.13 | +1242.04% | +65.57% | 13.12% | 93.21 | -6.92 | 53.78 | +3.07 R |
+  | DailyUniversal_MinTrade40_NetR | 20.32 | +269.60% | +29.73% | 13.46% | 20.32 | +0.00 | 6.97 | +1.56 R |
+  | DailyUniversal_MinTrade40_NetR_Direct | 122.23 | +1486.69% | +71.50% | 12.02% | 122.23 | +0.00 | 71.21 | +3.83 R |
+
+- **完整四 Seed RoMD 觀測**（依序 S1/S2/S3/S4；C96 baseline S1/S2/S3/S4=`8.38/8.18/8.48/7.51`；其餘 11 Target 對同 Seed C96 均為 `4/4`，但這**不**表示 Target 兩兩比較也是 4/4）：
+
+  | Target | S1 | S2 | S3 | S4 |
+  |---|---:|---:|---:|---:|
+  | C96 Same-Window | 8.38 | 8.18 | 8.48 | 7.51 |
+  | CG40_EqualRank | 27.88 | 14.32 | 16.96 | 18.18 |
+  | MFE40 | 23.45 | 15.54 | 19.53 | 16.26 |
+  | R40 | 18.08 | 16.63 | 19.31 | 19.02 |
+  | T40 | 26.32 | 19.48 | 21.08 | 17.20 |
+  | T40-MFE | 21.90 | 16.19 | 18.69 | 16.70 |
+  | MFE40_Direct | 126.97 | 30.52 | 85.50 | 57.19 |
+  | R40_Direct | 117.82 | 42.15 | 75.35 | 64.01 |
+  | T40_Direct | 146.16 | 55.30 | 91.33 | 74.72 |
+  | T40-MFE_Direct | 169.32 | 42.65 | 80.63 | 80.24 |
+  | DailyUniversal_MinTrade40_NetR | 29.72 | 16.28 | 21.28 | 14.01 |
+  | DailyUniversal_MinTrade40_NetR_Direct | 227.35 | 69.32 | 95.18 | 97.07 |
+
+- **主要結果與統計穩健性**：Exact 新 RoMD 最佳 `T40=21.02 ± 3.87`（Return=`+268.66%`，MDD=`12.77%`），次高 `DailyUniversal_MinTrade40_NetR=20.32 ± 6.97`（Return=`+269.60%`，MDD=`13.46%`）；價格型 `R40` 從 `19.69` 下降到 `18.26`，`CG40_EqualRank` 從 `18.32 ± 1.40` 升為 `19.33 ± 5.92`（Seed dispersion 明顯擴大）。Direct 最佳 `DailyUniversal_MinTrade40_NetR_Direct=122.23 ± 71.21`（Return=`+1486.69%`，MDD=`12.02%`），次高 `T40-MFE_Direct=93.21 ± 53.78`。DailyUniversal Direct 同四 Seed 為 `227.35/69.32/95.18/97.07`；Direct 減同 Target Exact 的逐 Seed RoMD 差為 `+197.63/+53.04/+73.90/+83.06`（平均 `+101.91`），不應宣稱是同配置的獨立 Target 提升。
+- **同 Selector 的 same-seed 配對**：Exact `T40` 對 `DailyUniversal_MinTrade40_NetR` 新 RoMD 平均僅 `+0.70`，四 Seed 中 **2/4** 勝（不等於 `Win/Seed=4/4`，後者只與 C96 比）；Direct `DailyUniversal_MinTrade40_NetR_Direct` 對次高 `T40-MFE_Direct` 平均 `+29.02`，**4/4** Seed 勝。前者的「Exact 最佳」僅四 Seed 平均排名，後者雖同 Seed 皆勝，仍有高 SD 與 hindsight 不可預測限制。
+- **年度穩健性**：2022 C96=`-1.26%`、T40 Exact=`+8.62%`、DailyUniversal Exact=`+4.81%`、T40 Direct=`+23.32%`、DailyUniversal Direct=`+22.92%`；2023 DailyUniversal Direct=`+183.65%`；2025 全部 Target `Full Year=False`，其中 DailyUniversal Direct=`+44.00%` 僅是至 12/22 的部分年度觀測，非完整年度。
+- **與修復前對照的來源邊界**：舊 CG/MFE/R/T/T40-MFE 等歷史 RoMD 來自本 Log 2026-10-23／24 的 V8 user-reported evidence；DailyUniversal 舊 Exact/Direct `20.32/122.23` 為 2026-10-26 稍早對話中使用者報表的既有回報（非此原 ZIP 內獨立 replay sidecar）。C96 舊同窗 4-seed 也是本 Log 歷史數值。舊的 broader price oracle results 已因 E13 parity bug 標記無效，保留原文供追溯；本紀錄不回填舊 Return/MDD 缺失值。
+- **解讀與資格**：Exact／Direct 沿用同一 Broker-Cash portfolio（現金、倉位、費稅、P16），Direct 更動的是既有 selector 的 K/R0 約束；資金可由已實現損益滾動複利，但報表**未提供逐日現金利用率、部位、成交頻次或持股差異歸因**，因此不得把 Direct 大幅差距全歸於資金變多。C96 為 Min no-DL 原 selector control，並非 Direct 的同配置 no-DL 純分數效果控制。全表均為 hindsight future truth、NON-PIT、迭代 OOS，並非可學性、可部署上限或 Trading 升格。
+- **驗收與不改動範圍**：已用本次 Markdown 的 44 筆 paired seed 資料獨立核對 11 組 RoMD Mean／sample SD（顯示精度容差）、四 Seed 集合、12 組 aggregate、年度 2025 False，全部算術一致。提供的 ZIP 不含正式 `outputs/` per-arm JSON、完整 `data/full/`、`models/` 與本機執行 QA，不能獨立認證原始四 Seed Replay SHA、逐日評分／持倉／現金 parity 或 Windows double check。狀態=`USER_REPORTED_POST_E13_FOUR_SEED_RESULT_AVAILABLE / AGGREGATE_ARITHMETIC_VERIFIED / PHYSICAL_REPLAY_PARITY_NOT_IN_UPLOAD / HINDSIGHT_NON_PIT / ITERATIVE_OOS / NO_PROMOTION`。僅登錄新觀測並更新 Registry 結果狀態；不改 SC、模型、策略、runtime、report contract、任何原始已存結果或 Golden。
+
