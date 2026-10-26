@@ -364,7 +364,10 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
         # A file inventory cannot claim REUSE and is not an execution plan.
         def approve_oracle(_preview: str) -> bool:
             try:
-                answer = input("👉 按 Enter 執行上述正式計畫；輸入 0 返回：").strip().lower()
+                prompt = ("👉 按 Enter 僅建立缺少的 Target 真值；輸入 0 返回："
+                          if "真值完成後會展示正式 Portfolio" in _preview else
+                          "👉 按 Enter 依正式 REUSE／RUN 計畫執行；輸入 0 返回：")
+                answer = input(prompt).strip().lower()
             except EOFError:
                 return False
             return answer in {"", "1"}

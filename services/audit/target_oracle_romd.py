@@ -330,9 +330,13 @@ class OracleTruthBuildRequired(RuntimeError):
     never used to certify a Portfolio REUSE: that requires actual score bytes.
     """
 
-    def __init__(self, message: str, *, missing: Mapping[tuple[int | None, str], str] | None = None):
+    def __init__(self, message: str, *, missing: Mapping[tuple[int | None, str], str] | None = None,
+                 baseline_actions: Mapping[int, str] | None = None):
         super().__init__(message)
         self.missing = dict(missing or {})
+        # Only the unscored baseline can be certified without a Target truth.
+        # A cached scored replay still needs its perfect-score evidence.
+        self.baseline_actions = dict(baseline_actions or {})
 
 
 def _contract(definition, *, settings=None) -> tuple[Any, Any, Any]:
@@ -1294,13 +1298,13 @@ def render_replay_preflight(
         for target in targets
     ]
     return "\n".join((
-        (f"[Target 驗證 {label} | 真值＋Portfolio 正式計畫]" if certified else
+        (f"[Target 驗證 {label} | Portfolio Replay 正式計畫]" if certified else
          f"[Target 驗證 {label} | 真值 BUILD 授權計畫；Replay 待真值驗證]"),
         "Seed：" + "  ".join(f"S{i + 1}={seed}" for i, seed in enumerate(seeds)),
         render_table(headers, rows),
-        f"REUSE {counts['REUSE']} / RUN（需計算）{counts['RUN']} / "
-        f"BLOCKED {counts['BLOCKED']}；REUSE=真值與Portfolio均未重算，"
-        "RUN=本輪真值BUILD或Portfolio需RUN；尚未執行Portfolio Replay",
+        f"Portfolio REUSE {counts['REUSE']} / RUN（需回放）{counts['RUN']} / "
+        f"BLOCKED {counts['BLOCKED']}；REUSE=零Portfolio交易重算，"
+        "RUN=經完整身分核對後確實缺少合法Portfolio結果；尚未開始回放",
     ))
 
 
@@ -1362,15 +1366,15 @@ def render_existing_artifact_inventory(definition, *, project_root: Path) -> str
 def render_truth_miss_preflight(
     definition, *, project_root: Path,
     missing: Mapping[tuple[int | None, str], str],
+    baseline_actions: Mapping[int, str] | None = None,
+    counts_out: dict[str, int] | None = None,
 ) -> str:
-    """Full read-only matrix BEFORE approval; no speculative Replay REUSE.
+    """Actual pre-authorization workload; never call file presence REUSE.
 
-    The Truth status is certified by the canonical source producer's read-only
-    probe.  Replay file presence is explicitly NOT scientific REUSE.  This is
-    a conditional one-approval execution plan: BUILD only the missing truth,
-    then certify each Replay and RUN only genuine misses.  Incomplete legacy
-    score artifacts make a full Portfolio REUSE assertion impossible without
-    scientific reconstruction, so we do not fabricate one.
+    Replay PENDING means a completed local observation exists but its
+    perfect-score identity is not yet independently verifiable. A RUN here is
+    strictly a missing Portfolio artifact, not an inferred rerun of one of the
+    existing caches. Only unscored C96 may be fully certified in this phase.
     """
     if not missing:
         raise OracleBlockedError(
@@ -1390,29 +1394,35 @@ def render_truth_miss_preflight(
         required_oracle_revision=ORACLE_PARITY_IMPLEMENTATION,
     )
     rows = []
-    source_build = 0
-    source_reuse = 0
+    replay_counts = {status: 0 for status in ("REUSE", "RUN", "PENDING", "BLOCKED")}
+    truth_build_cells = 0
     portfolio_present = 0
+    baseline_actions = dict(baseline_actions or {})
     for target in targets:
         per_seed = []
         for seed in seeds:
             source = plan["daily_sources"].get(target)
-            needs_source = bool(
+            needs_truth = (
                 (int(seed), source) in missing if source is not None else
                 (None, "price") in missing if target != "C96" else False
             )
-            # Baseline C96 consumes no perfect Target truth; it cannot be
-            # counted as a Target-source REUSE just because no BUILD is needed.
-            state = "NONE" if target == "C96" else "RUN" if needs_source else "REUSE"
-            source_build += int(needs_source)
-            source_reuse += int(state == "REUSE")
+            truth = "—" if target == "C96" else "BUILD" if needs_truth else "REUSE"
+            truth_build_cells += int(needs_truth)
             artifact = presence[(seed, target)]
             portfolio_present += int(artifact in {"CACHE", "MULTIPLE"})
-            evidence = ("PRESENT" if artifact in {"CACHE", "MULTIPLE"} else
-                        "BLOCKED" if artifact == "INVALID" else "MISSING")
-            formatted = styled_workflow_status(state) if state != "NONE" else state
-            per_seed.append(f"{formatted}/{evidence}")
+            if artifact == "INVALID":
+                replay = "BLOCKED"
+            elif target == "C96" and seed in baseline_actions:
+                replay = baseline_actions[seed]
+            elif artifact == "MISSING":
+                replay = "RUN"
+            else:
+                replay = "PENDING"
+            replay_counts[replay] += 1
+            per_seed.append(f"{styled_workflow_status(replay)}/{truth}")
         rows.append((target, *per_seed))
+    if counts_out is not None:
+        counts_out.update(replay_counts)
     missing_by_source: dict[str, list[str]] = {}
     for (seed, source), reason in missing.items():
         missing_by_source.setdefault(source, []).append(
@@ -1424,18 +1434,19 @@ def render_truth_miss_preflight(
         for source in sorted(missing_by_source)
     ]
     return "\n".join((
-        "[Target 驗證 | 執行前完整工作表：真值／既有Replay工件]",
+        "[Target 驗證 | 執行前工作表：Portfolio／真值]",
         "Seed：" + "  ".join(f"S{i + 1}={seed}" for i, seed in enumerate(seeds)),
         render_table(("Target", *(f"S{i + 1}" for i in range(len(seeds)))), rows),
-        f"真值 REUSE {source_reuse} / RUN（受影響 Target×Seed）{source_build} / "
-        f"實際待建真值來源 {len(missing)} / C96免真值 {len(seeds)} / "
-        f"Replay工件存在 {portfolio_present}",
-        "每格 = 真值狀態／Replay工件狀態；NONE=C96不消費Target真值。"
-        "真值 REUSE 只代表真值已驗證，不代表Portfolio REUSE；",
-        "PRESENT 只代表既有 Replay 工件通過檔案完整性檢查，仍須在真值補齊後依實際分數 SHA、P16、價格、期間核對。",
-        "按 Enter 僅授權真值缺件 BUILD，之後直接執行同一份條件計畫：Portfolio 真正 REUSE 零交易重算；"
-        "只有身分完整驗證為 RUN 的缺件才回放，衝突 BLOCKED 立即停止。",
-        "缺少真值來源（各來源只 BUILD 一次，Exact／Direct 共用）：",
+        "Portfolio：" + " / ".join(f"{status} {replay_counts[status]}" for status in replay_counts),
+        f"真值：BUILD 來源 {len(missing)}（影響 {truth_build_cells} 格） / "
+        f"Replay 完整工件 {portfolio_present} 格",
+        "每格 = Portfolio 狀態／Target 真值狀態。",
+        "REUSE=已完成正式身分驗證、零交易重算；RUN=沒有有效的本地 Replay；",
+        "PENDING=已有完整 Replay，但其 Target 真值缺少可驗證證據，不能宣稱 REUSE 或 RUN；",
+        "BLOCKED=工件損壞或來源衝突；BUILD=只建立缺少的真值（非 Portfolio Replay）。",
+        "本階段按 Enter 只授權缺少的 Target 真值 BUILD，不會執行 Portfolio Replay。",
+        "真值完成後會展示正式 Portfolio REUSE／RUN／BLOCKED 表，須再次確認才執行 Replay。",
+        "缺少真值來源（每來源只 BUILD 一次，Exact／Direct 共用）：",
         *missing_summary,
     ))
 
@@ -1565,6 +1576,78 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
     return policy
 
 
+def _certify_unscored_baseline_before_truth(
+    definition, *, project_root: Path, settings, base_arm, exact_arm,
+    robustness, prepared_parameters, price_sha: str, evaluation_end: str,
+    certified_identity_out: dict[int, dict[str, Any]] | None = None,
+) -> dict[int, str]:
+    """Certify C96 directly from its actual economic inputs, not Target scores.
+
+    C96 does NOT consume any Target score. Its historically saved cohort is
+    report-only metadata; reusing that cohort to reconstruct an expected
+    identity cannot authorize reuse of a scored Oracle arm. Price, P16,
+    selector, dates, fees, execution and report-period policy are all checked
+    by the SAME OracleReplayStore.plan_execution owner as a normal replay.
+    """
+    identity_arm = exact_arm or settings.arms[str(definition.source["exact_arm_id"])]
+    if (identity_arm.dl_runtime_mode != "resource-aware-continuous-score-constrained-optimal"
+            or (identity_arm.dl_runtime_options or {}).get("preserve_k_r0") is not True
+            or (identity_arm.dl_runtime_options or {}).get("constrained_solver") !=
+                "exact_branch_and_bound_v1"
+            or (identity_arm.dl_runtime_options or {}).get("selection_only") is not True):
+        raise OracleBlockedError("CONTRACT_UNRESOLVED: C96 baseline selector changed")
+    root = Path(project_root).resolve()
+    store = OracleReplayStore(root, definition.output_subdir)
+    common_policy = _canonical_oracle_replay_policy(
+        definition, base_arm=base_arm, exact_arm=identity_arm,
+    )
+    baseline_policy = _arm_replay_policy(
+        definition, plan={"selectors": {}, "daily_sources": {}}, target=str(definition.source["baseline_arm_id"]),
+        replay_policy=common_policy,
+    )
+    baseline = str(definition.source["baseline_arm_id"])
+    result: dict[int, str] = {}
+    for seed, param_sha, _kind, _base_params, _oracle_params in prepared_parameters:
+        try:
+            candidates = store.existing_completed_identities(seed=int(seed), target=baseline)
+            if not candidates:
+                result[int(seed)] = "RUN"
+                continue
+            decisions = []
+            reusable_identities = []
+            for candidate in candidates:
+                cohort = candidate.get("cohort")
+                if not isinstance(cohort, Mapping):
+                    raise ValueError("C96 saved cohort must be a mapping")
+                identity = replay_identity(
+                    dataset=settings.dataset, dataset_sha256=price_sha,
+                    target=baseline, definition={baseline: "Canonical same-window Min P16 Base-Finalist-Best"},
+                    start=str(settings.start_date), end=evaluation_end,
+                    benchmark=str(robustness.benchmark_id), param_sha256=param_sha,
+                    seed=int(seed), cohort=cohort,
+                    ranking_policy=str(identity_arm.dl_runtime_mode),
+                    ranking_options=dict(identity_arm.dl_runtime_options),
+                    evaluation_mode=str(definition.dimensions["evaluation_mode"]),
+                    max_positions=settings.max_positions, replay_policy=baseline_policy,
+                )
+                action = store.plan_execution({(int(seed), baseline): identity}).action(seed, baseline)
+                decisions.append(action)
+                if action == "REUSE":
+                    reusable_identities.append(identity)
+            # Multiple incompatible candidates are never silently collapsed
+            # to the first match. Conflicts fail closed before any Replay.
+            result[int(seed)] = (
+                "BLOCKED" if "BLOCKED" in decisions else
+                "REUSE" if len(reusable_identities) == 1 else
+                "BLOCKED" if len(reusable_identities) > 1 else "RUN"
+            )
+            if result[int(seed)] == "REUSE" and certified_identity_out is not None:
+                certified_identity_out[int(seed)] = reusable_identities[0]
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            result[int(seed)] = "BLOCKED"
+    return result
+
+
 def _build_report_once(
     definition, *, project_root: Path, quiet: bool = False,
     preflight_display: str = "full",
@@ -1600,9 +1683,9 @@ def _build_report_once(
         price_sha = price_inventory_sha256(root, settings.dataset)
     except ValueError as exc:
         raise OracleBlockedError(str(exc)) from exc
+    prepared_for_scores = None
     daily_seed_scores: dict[int, dict[str, dict[tuple[str, str], float]]] = {}
     daily_seed_evidence: dict[int, dict[str, dict[str, Any]]] = {}
-    source_actions: dict[tuple[int, str], str] = {}
     feature_cohort_cache: dict[tuple[str, ...], tuple[pd.DataFrame, str]] = {}
     # In read-only preflight, probe ALL canonical truth sources and accumulate
     # their actual missing dependencies; never abort the matrix at the first
@@ -1646,7 +1729,7 @@ def _build_report_once(
                         price_sha256=price_sha,
                         cache_root=root / AUDIT_OUTPUT_ROOT / definition.output_subdir / "truth_cache",
                         feature_cohort_cache=feature_cohort_cache,
-                        allow_build=preflight_approval is None,
+                        allow_build=(preflight_approval is None or _approved_after_truth_miss),
                         progress_callback=(lambda message, name=source_name: progress(
                             f"seed={seed} {name} {message}")) if not quiet else None,
                     )
@@ -1654,7 +1737,6 @@ def _build_report_once(
                     if preflight_approval is None:
                         raise OracleTruthBuildRequired(str(exc)) from exc
                     truth_misses[(int(seed), source_name)] = str(exc)
-                    source_actions[(int(seed), source_name)] = "BUILD"
                     continue
                 except (DailyTrade40OracleBlockedError, ValueError) as exc:
                     raise OracleBlockedError(
@@ -1670,7 +1752,6 @@ def _build_report_once(
                     raise OracleBlockedError(
                         f"Daily-universal seed={seed} {source_name} not based on this formal Min parameter view"
                     )
-                source_actions[(int(seed), source_name)] = evidence.get("source_reuse_status", "BUILD")
                 daily_seed_evidence[int(seed)][source_name] = evidence
                 daily_seed_scores[int(seed)][source_name] = daily_scores
                 if not quiet:
@@ -1691,23 +1772,17 @@ def _build_report_once(
                 if (str(evidence["first_date"]) < _formal_dl_score_start(definition, settings)
                         or str(evidence["first_replay_trade_date"]) < str(settings.start_date)):
                     raise OracleBlockedError("Daily-universal PIT score coverage boundary mismatch")
-    price_source_action = "REUSE"
     if plan["providers"]:
-        def source_status(action: str) -> None:
-            nonlocal price_source_action
-            price_source_action = action
         try:
             scores40, cohort40 = _load_or_build_oracle_price_scores(
                 definition, project_root=root, cutoff=str(settings.end_date),
                 price_sha=price_sha, progress=None if quiet else progress,
-                source_status_callback=source_status,
-                allow_build=preflight_approval is None,
+                allow_build=(preflight_approval is None or _approved_after_truth_miss),
             )
         except OracleTruthBuildRequired as exc:
             if preflight_approval is None:
                 raise
             truth_misses[(None, "price")] = str(exc)
-            price_source_action = "BUILD"
             scores40, cohort40 = {}, {}
     else:
         # Daily-only comparisons use the SAME fixed evaluation cutoff as the
@@ -1733,11 +1808,23 @@ def _build_report_once(
             "oracle_only": True,
             }
     if truth_misses:
-        # After every source has been probed, return ONE full dependency table
-        # before the first user input.  This exception never claims a cached
-        # economic Replay is certified from a file-presence inventory.
+        # Price/parameter evidence permits an independent full-identity C96
+        # decision without constructing any Target truth. Never apply the same
+        # shortcut to a scored Target: its actual score SHA is indispensable.
+        if prepared_for_scores is None:
+            prepared_for_scores, _ = _prepare_oracle_parameters(
+                definition, root=root, parameter_paths=parameter_paths,
+                start=str(settings.start_date), end=evaluation_end, base_arm=base_arm,
+            )
+        baseline_actions = _certify_unscored_baseline_before_truth(
+            definition, project_root=root, settings=settings,
+            base_arm=base_arm, exact_arm=exact_arm, robustness=robustness,
+            prepared_parameters=prepared_for_scores, price_sha=price_sha,
+            evaluation_end=evaluation_end,
+        )
         raise OracleTruthBuildRequired(
             "; ".join(truth_misses.values()), missing=truth_misses,
+            baseline_actions=baseline_actions,
         )
     # Only the independent, registry-declared evaluation date can clip the
     # replay population. Crop WHOLE dates, not any one target's samples.
@@ -1855,8 +1942,22 @@ def _build_report_once(
         # as permission to silently spend hours computing the same arm again.
         # This plan is derived from on-disk artifacts, not a historic target list.
         requested_identities: dict[tuple[int, str], dict[str, Any]] = {}
+        verified_c96_identities: dict[int, dict[str, Any]] = {}
+        _certify_unscored_baseline_before_truth(
+            definition, project_root=root, settings=settings,
+            base_arm=base_arm, exact_arm=baseline_identity_arm,
+            robustness=robustness, prepared_parameters=prepared,
+            price_sha=price_sha, evaluation_end=end,
+            certified_identity_out=verified_c96_identities,
+        )
         for seed, param_sha, _kind, _base_params, _oracle_params in prepared:
             for target in ("C96", *(name for name, _ in targets)):
+                if target == "C96" and int(seed) in verified_c96_identities:
+                    # The unscored baseline is independent of Target-cohort
+                    # report metadata. Use its independently certified full
+                    # replay identity, not a newly materialized score cohort.
+                    requested_identities[(seed, target)] = verified_c96_identities[int(seed)]
+                    continue
                 is_direct = plan["selectors"].get(target) == "direct"
                 arm = (direct_arm if is_direct else
                        baseline_identity_arm if target == "C96" else exact_arm)
@@ -1881,22 +1982,10 @@ def _build_report_once(
         execution_plan = cache.plan_execution(requested_identities)
         replay_decisions = execution_plan.actions()
         blocked = execution_plan.blocked()
-        # One row action describes the ENTIRE workload, not just Portfolio.
-        # A truth BUILD may be followed by a verified historic Replay REUSE,
-        # but may never be displayed as a zero-work overall REUSE.
-        decisions = {
-            (seed, target): (
-                "BLOCKED" if replay_decisions[(seed, target)] == "BLOCKED" else
-                "RUN" if (replay_decisions[(seed, target)] == "RUN" or
-                          (target in plan["daily_sources"] and source_actions.get(
-                              (seed, plan["daily_sources"][target])) != "REUSE") or
-                          (target not in plan["daily_sources"] and target != "C96" and
-                           price_source_action != "REUSE")) else
-                "REUSE"
-            )
-            for seed, _path in parameter_paths
-            for target in ("C96", *(name for name, _desc in targets))
-        }
+        # Truth BUILD is a separate dependency phase. The formal execution
+        # matrix describes Portfolio Replay ONLY. A newly built truth MUST NOT
+        # transform a fully certified cached portfolio into a fake RUN.
+        decisions = dict(replay_decisions)
         preview = render_replay_preflight(
             label=label,
             seeds=[seed for seed, _path in parameter_paths],
@@ -2044,13 +2133,11 @@ def build_report(
     preflight_display: str = "full",
     preflight_approval: Callable[[str], bool] | None = None,
 ) -> dict[str, Any]:
-    """One read-only approval gate before ANY missing Target truth is built.
+    """Authorize missing truth and Portfolio Replay in separate certified phases.
 
-    When every certified truth artifact exists, the full Replay decision is
-    shown directly from its complete identity, and the same sealed plan runs.
-    On the first run without truth, no expensive producer may execute before
-    approval. The conservative RUN status means truth BUILD is required; a
-    historical Portfolio may still be independently REUSE after that BUILD.
+    With complete truth, the user confirms only once. With missing truth,
+    no producer runs before the first approval; after BUILD the real replay
+    plan is shown and must be separately approved before any Portfolio RUN.
     """
     if preflight_approval is None:
         return _build_report_once(
@@ -2069,17 +2156,25 @@ def build_report(
         # scores are certified. Do not manufacture an all-RUN matrix here.
         # The approval authorizes only the canonical missing-truth BUILD and
         # downstream work selected by the subsequently certified Replay plan.
+        counts: dict[str, int] = {}
         preview = render_truth_miss_preflight(
             definition, project_root=project_root, missing=exc.missing,
+            baseline_actions=exc.baseline_actions, counts_out=counts,
         )
         if not quiet:
             print("\n" + preview, flush=True)
+        if counts.get("BLOCKED", 0):
+            raise OracleBlockedError(
+                f"Oracle read-only preflight found {counts['BLOCKED']} BLOCKED replay artifact(s); "
+                "do not BUILD truth or run Portfolio until the identity conflict is resolved"
+            )
         if not preflight_approval(preview):
             return {"status": "CANCELLED", "read_only": True,
                     "truth_build_required": str(exc)}
         return _build_report_once(
             definition, project_root=project_root, quiet=quiet,
             preflight_display=preflight_display,
+            preflight_approval=preflight_approval,
             _approved_after_truth_miss=True,
         )
 

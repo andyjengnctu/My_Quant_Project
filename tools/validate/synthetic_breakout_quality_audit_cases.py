@@ -203,7 +203,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     check_true(
         "target_validation_only_one_confirm_even_if_verified_run_count_changes",
         len(prompts) == 3 and not prompts[0][1] and prompts[1][1]
-        and "上述正式計畫" in prompts[1][0]
+        and "依正式 REUSE／RUN 計畫" in prompts[1][0]
         and all("輸入 RUN" not in prompt for prompt, _ in prompts)
         and root_text.count(preview) == 1
         and root_text.index(preview) < root_text.index("[RUN] Target")
@@ -257,8 +257,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and "LATEST" in changed_plan_console.getvalue(),
     )
 
-    # Actual missing-truth branch: the first and ONLY user prompt must follow
-    # a visible four-seed Target matrix, not the old text-only BUILD warning.
+    # Actual missing-truth branch: first authorization must follow a visible
+    # four-seed dependency table, with no speculative Portfolio REUSE claim.
+    # A separate second authorization is needed only if truth was missing.
     from services.audit import target_oracle_romd as oracle_handler
     missing_truth_view = io.StringIO()
     truth_prompts = []
@@ -278,7 +279,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             preflight_approval=preflight_approval,
         )}
     def cancel_after_matrix(prompt):
-        truth_prompts.append((prompt, "執行前完整工作表" in missing_truth_view.getvalue()))
+        truth_prompts.append((prompt, "執行前工作表" in missing_truth_view.getvalue()))
         return "0"
     with patch.object(research_app, "collect_audit_menu_state", return_value={"configured": True}), \
          patch.object(research_app, "run_enabled_audits", side_effect=missing_source_run), \
@@ -295,13 +296,46 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     check_true(
         "target_missing_truth_shows_all_targets_before_first_approval_and_cancel_builds_nothing",
         len(truth_prompts) == 1 and truth_prompts[0][1]
-        and "執行前完整工作表" in missing_truth_view.getvalue()
-        and "REUSE/PRESENT" in missing_truth_view.getvalue()
-        and "RUN/PRESENT" in missing_truth_view.getvalue()
+        and "執行前工作表" in missing_truth_view.getvalue()
+        and "PENDING/BUILD" in missing_truth_view.getvalue()
+        and "PENDING/—" in missing_truth_view.getvalue()
+        and "僅建立缺少的 Target 真值" in truth_prompts[0][0]
         and "price: shared" in missing_truth_view.getvalue()
-        and missing_truth_view.getvalue().index("執行前完整工作表")
+        and missing_truth_view.getvalue().index("執行前工作表")
             < missing_truth_view.getvalue().index("未授權執行")
         and source_probe.call_count == 1 and not premature_report.called,
+    )
+
+    # With missing truth, approval #1 MUST NOT also authorize an unseen
+    # Portfolio plan. Approval #2 is tied to the certified status matrix.
+    two_stage = io.StringIO()
+    stage_prompts = []
+    def two_stage_input(prompt):
+        stage_prompts.append(prompt)
+        return ""
+    def two_stage_runner(*args, **kwargs):
+        approval = kwargs["preflight_approval"]
+        first = "[Target 驗證 | 執行前工作表：Portfolio／真值]\nPENDING/BUILD\n真值完成後會展示正式 Portfolio REUSE／RUN／BLOCKED 表"
+        last = "[Target 驗證 Fixed | Portfolio Replay 正式計畫]\nPortfolio REUSE 56 / RUN 8"
+        print(first)
+        assert approval(first)
+        print(last)
+        assert approval(last)
+        print("[RUN] only missing Portfolio")
+        return {"target_oracle_romd": {"status": "COMPLETED"}}
+    with patch("builtins.input", side_effect=two_stage_input), \
+         patch.object(research_app, "run_enabled_audits", side_effect=two_stage_runner), \
+         patch.object(research_app, "render_latest_audit_summary", return_value="LATEST"), \
+         redirect_stdout(two_stage):
+        research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
+    check_true(
+        "target_truth_build_and_portfolio_run_require_separate_explicit_approvals",
+        len(stage_prompts) == 2
+        and "僅建立缺少的 Target 真值" in stage_prompts[0]
+        and "依正式 REUSE／RUN 計畫執行" in stage_prompts[1]
+        and two_stage.getvalue().index("PENDING/BUILD")
+            < two_stage.getvalue().index("Portfolio REUSE 56")
+            < two_stage.getvalue().index("[RUN] only missing Portfolio"),
     )
 
     # Entry-point integration belongs to the existing app/menu contract, not

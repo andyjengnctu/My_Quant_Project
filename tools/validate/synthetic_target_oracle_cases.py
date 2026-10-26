@@ -1049,7 +1049,7 @@ class OracleAuditContractCases(TestCase):
         plain = _strip_ansi(plan)
         self.assertIn("S1=11", plain)
         self.assertIn("S2=22", plain)
-        self.assertIn("REUSE 3 / RUN（需計算）2 / BLOCKED 1", plain)
+        self.assertIn("Portfolio REUSE 3 / RUN（需回放）2 / BLOCKED 1", plain)
         self.assertLess(plain.index("C96"), plain.index("R40"))
         self.assertLess(plain.index("R40"), plain.index("T40"))
 
@@ -2972,7 +2972,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
                     oracle.build_report(definition, project_root=root, quiet=False,
                                         preflight_display="summary")
                 self.assertEqual(len(recorded), 80)
-                self.assertIn("身分核對完成] REUSE 4 / RUN（需計算）36 / BLOCKED 0", console.getvalue())
+                self.assertIn("身分核對完成] REUSE 40 / RUN（需計算）0 / BLOCKED 0", console.getvalue())
                 self.assertNotIn("Replay preflight（執行前）", console.getvalue())
                 self.assertNotIn("[REUSE]", console.getvalue())
 
@@ -3214,12 +3214,12 @@ class OracleUnifiedReuseArchitectureCases(TestCase):
             )
         lines = view.splitlines()
         target_line, = (line for line in lines if line.startswith(target + " "))
-        self.assertIn("RUN/MISSING", target_line)
-        self.assertIn("REUSE/PRESENT", target_line)
+        self.assertIn("RUN/BUILD", target_line)
+        self.assertIn("PENDING/REUSE", target_line)
         self.assertIn("DailyUniversal_MinTrade60_NetR: S1", view)
-        self.assertIn("真值 REUSE 只代表真值已驗證，不代表Portfolio REUSE", view)
-        self.assertIn("PRESENT 只代表既有 Replay 工件", view)
-        self.assertNotIn("Replay REUSE 64", view)
+        self.assertIn("PENDING=已有完整 Replay", view)
+        self.assertIn("真值：BUILD 來源 1", view)
+        self.assertNotIn("Portfolio：REUSE 64", view)
         inventory.assert_called_once()
         # A malformed/unstructured source deficit is NOT permission to label
         # all rows REUSE.  Fail-closed instead of reviving fake status.
@@ -3240,15 +3240,15 @@ class OracleUnifiedReuseArchitectureCases(TestCase):
             self.assertEqual(result["status"], "CANCELLED")
             self.assertEqual(engine.call_count, 1, "Cancel must not authorize truth BUILD")
             self.assertEqual(len(previews), 1)
-            self.assertIn("執行前完整工作表", previews[0])
-            self.assertIn("RUN/MISSING", previews[0])
-            self.assertIn("REUSE/MISSING", previews[0])
+            self.assertIn("執行前工作表", previews[0])
+            self.assertIn("RUN/BUILD", previews[0])
+            self.assertIn("RUN/REUSE", previews[0])
             self.assertIn("price: shared", previews[0])
-            self.assertNotIn("REUSE 0 / RUN（需計算）64", previews[0])
+            self.assertIn("真值完成後會展示正式 Portfolio", previews[0])
             self.assertEqual(result["truth_build_required"], "certified price scores missing")
 
-    def test_truth_miss_approval_only_runs_one_certified_second_pass(self):
-        """Missing source cannot force an all-RUN plan or a second approval."""
+    def test_truth_miss_requires_new_approval_before_portfolio_execution(self):
+        """First approval permits truth BUILD, not an unseen Portfolio RUN plan."""
         calls = []
         def execute(_definition, **kwargs):
             calls.append(dict(kwargs))
@@ -3258,7 +3258,9 @@ class OracleUnifiedReuseArchitectureCases(TestCase):
                     missing={(693545351, "DailyUniversal_MinTrade60_NetR"): "R60 seed=11 needs truth BUILD"},
                 )
             self.assertTrue(kwargs.get("_approved_after_truth_miss"))
-            self.assertIsNone(kwargs.get("preflight_approval"))
+            self.assertIsNotNone(kwargs.get("preflight_approval"))
+            if not kwargs["preflight_approval"]("certified Replay matrix"):
+                return {"status": "CANCELLED", "read_only": True}
             return {"status": "COMPLETED", "read_only": True}
         approvals = []
         with patch.object(oracle, "_build_report_once", side_effect=execute):
@@ -3267,11 +3269,123 @@ class OracleUnifiedReuseArchitectureCases(TestCase):
                 preflight_approval=lambda text: approvals.append(text) or True,
             )
         self.assertEqual(result["status"], "COMPLETED")
-        self.assertEqual(len(approvals), 1)
+        self.assertEqual(len(approvals), 2)
         self.assertEqual(len(calls), 2)
         self.assertIn("DailyUniversal_MinTrade60_NetR: S1", approvals[0])
-        self.assertIn("RUN/MISSING", approvals[0])
-        self.assertNotIn("REUSE 0 / RUN", approvals[0])
+        self.assertIn("RUN/BUILD", approvals[0])
+        self.assertEqual(approvals[1], "certified Replay matrix")
+        self.assertNotIn("REUSE 0 / RUN（需計算）", approvals[0])
+
+    def test_c96_can_be_certified_before_truth_using_real_cache_identity(self):
+        from types import SimpleNamespace
+        from services.audit.oracle_replay_artifacts import OracleReplayStore, replay_identity
+        definition = _ACTIVE_ORACLE_DEFINITION
+        settings, base_arm, exact_arm = oracle._contract(definition)
+        seed, price_sha, param_sha = 693545351, "a" * 64, "b" * 64
+        identity_arm = exact_arm or settings.arms[definition.source["exact_arm_id"]]
+        policy = oracle._arm_replay_policy(
+            definition, plan={"selectors": {}, "daily_sources": {}}, target="C96",
+            replay_policy=oracle._canonical_oracle_replay_policy(
+                definition, base_arm=base_arm, exact_arm=identity_arm,
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            identity = replay_identity(
+                dataset=settings.dataset, dataset_sha256=price_sha,
+                target="C96", definition={"C96": "Canonical same-window Min P16 Base-Finalist-Best"},
+                start=settings.start_date, end=definition.dimensions["oracle_evaluation_end_date"],
+                benchmark="end_to_end_v1", param_sha256=param_sha, seed=seed,
+                cohort={"cohort_rows": 608204, "research_cutoff": settings.end_date},
+                ranking_policy=identity_arm.dl_runtime_mode,
+                ranking_options=dict(identity_arm.dl_runtime_options),
+                evaluation_mode=definition.dimensions["evaluation_mode"],
+                max_positions=settings.max_positions, replay_policy=policy,
+            )
+            OracleReplayStore(root, definition.output_subdir).write(
+                identity, {
+                    "target": "C96", "seed": seed, "total_return_pct": 100.0,
+                    "annualized_return_pct": 16.0, "mdd_pct": 12.0, "romd": 8.0,
+                    "ev_a_r": 0.7, "trades": 100, "exposure_pct": 75.0,
+                    "yearly": _synthetic_full_window_yearly(return_pct=14.0),
+                }, origin="synthetic_baseline_fixture",
+            )
+            args = dict(
+                project_root=root, settings=settings, base_arm=base_arm, exact_arm=exact_arm,
+                robustness=SimpleNamespace(benchmark_id="end_to_end_v1"),
+                prepared_parameters=[(seed, param_sha, "synthetic", None, None)],
+                evaluation_end=definition.dimensions["oracle_evaluation_end_date"],
+            )
+            mapped = {}
+            self.assertEqual(oracle._certify_unscored_baseline_before_truth(
+                definition, price_sha=price_sha, certified_identity_out=mapped, **args),
+                {seed: "REUSE"})
+            self.assertEqual(mapped[seed], identity)
+            self.assertEqual(oracle._certify_unscored_baseline_before_truth(
+                definition, price_sha="f" * 64, **args), {seed: "BLOCKED"})
+            # A scored target is never authorized by this C96 proof.
+            self.assertEqual(set(mapped), {seed})
+
+    def test_blocked_preflight_never_authorizes_trading_or_truth_build(self):
+        seed = 693545351
+        plans = []
+        def impossible_approval(text):
+            plans.append(text)
+            raise AssertionError("BLOCKED may not prompt or build")
+        with patch.object(oracle, "_build_report_once", side_effect=
+                          oracle.OracleTruthBuildRequired(
+                              "missing source", missing={(None, "price"): "need truth"},
+                              baseline_actions={seed: "BLOCKED"})) as engine:
+            with self.assertRaisesRegex(oracle.OracleBlockedError, "BLOCKED replay artifact"):
+                oracle.build_report(
+                    _ACTIVE_ORACLE_DEFINITION, project_root=Path("/tmp"), quiet=True,
+                    preflight_approval=impossible_approval,
+                )
+        self.assertEqual(engine.call_count, 1)
+        self.assertFalse(plans)
+
+    def test_truth_build_does_not_grant_automatic_portfolio_run(self):
+        calls = []
+        def fake_engine(_definition, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise oracle.OracleTruthBuildRequired(
+                    "missing source", missing={(None, "price"): "need truth"})
+            self.assertTrue(kwargs["_approved_after_truth_miss"])
+            self.assertFalse(kwargs["preflight_approval"]("FULLY CERTIFIED Replay matrix"))
+            return {"status": "CANCELLED", "read_only": True}
+        previews = []
+        with patch.object(oracle, "_build_report_once", side_effect=fake_engine):
+            result = oracle.build_report(
+                _ACTIVE_ORACLE_DEFINITION, project_root=Path("/tmp"), quiet=True,
+                preflight_approval=lambda message: previews.append(message) or len(previews) == 1,
+            )
+        self.assertEqual(result["status"], "CANCELLED")
+        self.assertEqual(len(previews), 2)
+        self.assertIn("BUILD", previews[0])
+        self.assertEqual(previews[1], "FULLY CERTIFIED Replay matrix")
+
+    def test_unscored_c96_is_not_hidden_by_missing_scored_truth(self):
+        definition = _ACTIVE_ORACLE_DEFINITION
+        seeds = (693545351, 2014432738, 104504529, 762252050)
+        statuses = {(seed, name): "CACHE" for seed in seeds
+                    for name in ("C96", *(name for name, _ in oracle._oracle_comparison_plan(definition)["targets"]))}
+        with patch.object(oracle.OracleReplayStore, "preview_candidates", return_value=statuses):
+            table = oracle.render_truth_miss_preflight(
+                definition, project_root=Path("/tmp"),
+                missing={(None, "price"): "need price truth"},
+                baseline_actions={seed: "REUSE" for seed in seeds},
+            )
+        baseline_line, = (line for line in table.splitlines() if line.startswith("C96 "))
+        self.assertEqual(baseline_line.count("REUSE/—"), 4)
+        self.assertIn("Portfolio：REUSE 4", table)
+        # Without a certified action the baseline is NOT guessed to REUSE.
+        with patch.object(oracle.OracleReplayStore, "preview_candidates", return_value=statuses):
+            uncertain = oracle.render_truth_miss_preflight(
+                definition, project_root=Path("/tmp"), missing={(None, "price"): "need"},
+            )
+        self.assertNotIn("REUSE/—", uncertain)
+        self.assertIn("PENDING/—", uncertain)
 
     def test_formal_preflight_approval_passes_once_and_keeps_one_plan(self):
         from services.audit import runner
