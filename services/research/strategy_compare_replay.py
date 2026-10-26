@@ -107,9 +107,12 @@ def _run_scenario(
     *, name, data_dir, param_source_kind, params, start_date, end_date,
     max_positions, enable_rotation, quiet, replay_counts=None,
     replay_execution_rows=None, replay_selector_trace_rows=None, ranking_source=None, filter_source=None,
+    replay_preparation_cache=None,
 ):
     if not quiet:
-        print(f"\n[{name}] 建立市場與訊號快取")
+        action = ("核對／共用本輪市場與參數準備" if replay_preparation_cache is not None
+                  else "建立市場與訊號快取")
+        print(f"\n[{name}] {action}")
     with ExitStack() as stack:
         if ranking_source:
             stack.enter_context(breakout_quality_ranking_source_context(**ranking_source))
@@ -121,12 +124,14 @@ def _run_scenario(
             max_positions=max_positions, enable_rotation=enable_rotation, quiet=quiet,
             replay_counts=replay_counts, replay_execution_rows=replay_execution_rows,
             replay_selector_trace_rows=replay_selector_trace_rows,
+            replay_preparation_cache=replay_preparation_cache,
         )
 
 def _run_scenario_inside_source_context(
     *, name, data_dir, param_source_kind, params, start_date, end_date,
     max_positions, enable_rotation, quiet, replay_counts=None,
     replay_execution_rows=None, replay_selector_trace_rows=None,
+    replay_preparation_cache=None,
 ):
     if param_source_kind == "single_param":
         context = load_portfolio_market_context(str(data_dir), params, verbose=not quiet)
@@ -153,6 +158,7 @@ def _run_scenario_inside_source_context(
             fixed_risk=None, verbose=not quiet, replay_counts=replay_counts,
             replay_execution_rows=replay_execution_rows,
             replay_selector_trace_rows=replay_selector_trace_rows,
+            replay_preparation_cache=replay_preparation_cache,
         )
     elif param_source_kind == "rolling_oos_param_schedule":
         if not quiet:
@@ -165,6 +171,7 @@ def _run_scenario_inside_source_context(
             fixed_risk=None, verbose=not quiet, replay_counts=replay_counts,
             replay_execution_rows=replay_execution_rows,
             replay_selector_trace_rows=replay_selector_trace_rows,
+            replay_preparation_cache=replay_preparation_cache,
         )
     else:
         raise ValueError(f"不支援的參數來源類型: {param_source_kind}")

@@ -14,6 +14,8 @@ from typing import Any, Callable, Mapping
 import math
 import hashlib
 import struct
+import inspect
+import json
 
 import numpy as np
 import pandas as pd
@@ -57,6 +59,10 @@ from filters.breakout_quality.strategy_compare_sources import (
 )
 from filters.breakout_quality.strategy_rule_policies import ALL_RULE_FILTERS_OFF_OVERRIDES
 from services.audit.reusable_report import persist_reusable_report
+from services.audit.oracle_score_artifacts import (
+    OraclePriceScoreStore, price_score_source_identity,
+)
+from config.audit import AUDIT_OUTPUT_ROOT
 from services.audit.oracle_replay_artifacts import (
     OracleReplayStore, price_inventory_sha256, replay_identity,
 )
@@ -315,6 +321,10 @@ ORACLE_DIRECT_SCORE_SOURCES = {
 
 class OracleBlockedError(RuntimeError):
     """Insufficient or incompatible historical truth; do not publish a result."""
+
+
+class OracleTruthBuildRequired(RuntimeError):
+    """Read-only workflow cannot certify a missing truth artifact before authorization."""
 
 
 def _contract(definition, *, settings=None) -> tuple[Any, Any, Any]:
@@ -991,6 +1001,100 @@ def _build_oracle_score_panels(
     return scores, evidence
 
 
+def _price_score_algorithm_sha256() -> str:
+    """Hash ONLY canonical price-truth implementation, not menu/report code."""
+    functions = (
+        _oracle_comparison_plan, _formal_dl_score_start,
+        _build_oracle_score_panels, _load_truth, _market_truth_for_oracle,
+        _reconcile_oracle_truth, _terminal_mae_gate_r,
+        _canonical_score_map_sha256,
+    )
+    digest = hashlib.sha256()
+    for func in functions:
+        digest.update(func.__qualname__.encode("utf-8") + b"\0")
+        digest.update(inspect.getsource(func).encode("utf-8") + b"\n")
+    return digest.hexdigest()
+
+
+def _load_or_build_oracle_price_scores(
+    definition, *, project_root: Path, cutoff: str, price_sha: str,
+    progress: Callable[[str], None] | None = None,
+    source_status_callback: Callable[[str], None] | None = None,
+    allow_build: bool = True,
+) -> tuple[dict[str, dict[tuple[str, str], float]], dict[str, Any]]:
+    """One source-verified cache for all selected price-only Oracle scores.
+
+    The daily trade horizon changes neither its score inputs nor its source
+    identity. Existing 40D perfect-price ranks therefore survive adding a
+    60D or full-trade-cycle comparison, and are cropped later by whole days.
+    """
+    plan = _oracle_comparison_plan(definition)
+    if not plan["providers"]:
+        raise OracleBlockedError("Price-score producer cannot run for daily-only comparisons")
+    root = Path(project_root).resolve()
+    settings, _base, _exact = _contract(definition)
+    providers = {field: str(definition.source[field]) for field in plan["providers"]}
+    from filters.breakout_quality.dataset_store import resolve_dataset_paths
+    from filters.breakout_quality.paths import resolve_filter_output_dir
+    manifest = resolve_dataset_paths(
+        resolve_filter_output_dir(root, str(definition.source["filter_id"]))
+    ).summary
+    if not manifest.is_file():
+        # Without official source evidence there can be no cache reuse; the
+        # canonical producer alone decides whether data is available.
+        if not allow_build:
+            raise OracleTruthBuildRequired("Price Target needs certified truth BUILD")
+        if source_status_callback is not None:
+            source_status_callback("BUILD")
+        return _build_oracle_score_panels(
+            definition, project_root=root, cutoff=cutoff, progress=progress,
+        )
+    try:
+        identity = price_score_source_identity(
+            root=root, dataset=str(settings.dataset),
+            filter_id=str(definition.source["filter_id"]), price_sha256=price_sha,
+            providers=providers, recipes=plan["recipes"],
+            score_start=_formal_dl_score_start(definition, settings), cutoff=cutoff,
+            score_algorithm_sha256=_price_score_algorithm_sha256(),
+            label_policy=DEFAULT_LABEL_POLICY.as_manifest_payload(),
+        )
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise OracleBlockedError(f"Oracle price Target provenance BLOCKED: {exc}") from exc
+    if identity is None:
+        # The ordinary canonical producer diagnoses the missing Dataset.
+        # Never claim score REUSE without an independently verifiable source.
+        if not allow_build:
+            raise OracleTruthBuildRequired("Price Target needs certified truth BUILD")
+        if source_status_callback is not None:
+            source_status_callback("BUILD")
+        return _build_oracle_score_panels(
+            definition, project_root=root, cutoff=cutoff, progress=progress,
+        )
+    store = OraclePriceScoreStore(root / AUDIT_OUTPUT_ROOT /
+                                  definition.output_subdir / "truth_cache")
+    try:
+        cached = store.read(identity, score_sha=_canonical_score_map_sha256)
+        if cached is not None:
+            if source_status_callback is not None:
+                source_status_callback("REUSE")
+            if progress:
+                progress("Price Target scores REUSE（完整來源／分數身分已驗證）")
+            return cached
+        if not allow_build:
+            raise OracleTruthBuildRequired("Price Target score panel needs BUILD")
+        if source_status_callback is not None:
+            source_status_callback("BUILD")
+        if progress:
+            progress("Price Target scores BUILD（缺少相同身分真值工件）")
+        scores, cohort = _build_oracle_score_panels(
+            definition, project_root=root, cutoff=cutoff, progress=progress,
+        )
+        store.write(identity, scores, cohort, score_sha=_canonical_score_map_sha256)
+        return scores, cohort
+    except ValueError as exc:
+        raise OracleBlockedError(f"Oracle price Target artifact BLOCKED: {exc}") from exc
+
+
 def build_oracle_score_tables(definition, *, project_root: Path, cutoff: str) -> tuple[dict[str, dict[tuple[str, str], float]], dict[str, Any]]:
     """Selected-score interface; provider selection is owned by the comparison plan."""
     return _build_oracle_score_panels(
@@ -1167,8 +1271,9 @@ def render_replay_preflight(
     seeds: list[int],
     targets: list[str],
     decisions: Mapping[tuple[int, str], str],
+    certified: bool = True,
 ) -> str:
-    """Read-only full-workload plan before any Broker-Cash replay starts.
+    """Read-only plan; indicate when missing truth prevents complete Replay certification.
 
     Display is bounded by target count, not seeds x targets. Source data,
     training and result identities are never inferred from color/status.
@@ -1181,11 +1286,13 @@ def render_replay_preflight(
         for target in targets
     ]
     return "\n".join((
-        f"[Target 驗證 {label} | Replay preflight（執行前）]",
+        (f"[Target 驗證 {label} | 真值＋Portfolio 正式計畫]" if certified else
+         f"[Target 驗證 {label} | 真值 BUILD 授權計畫；Replay 待真值驗證]"),
         "Seed：" + "  ".join(f"S{i + 1}={seed}" for i, seed in enumerate(seeds)),
         render_table(headers, rows),
         f"REUSE {counts['REUSE']} / RUN（需計算）{counts['RUN']} / "
-        f"BLOCKED {counts['BLOCKED']}；本階段尚未執行任何 Replay",
+        f"BLOCKED {counts['BLOCKED']}；REUSE=真值與Portfolio均未重算，"
+        "RUN=本輪真值BUILD或Portfolio需RUN；尚未執行Portfolio Replay",
     ))
 
 
@@ -1216,30 +1323,24 @@ def _existing_artifact_inventory(definition, *, project_root: Path) -> tuple[str
         )
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise OracleBlockedError(f"Target 歷史工件盤點無法完成：{exc}") from exc
-    actions: dict[tuple[int, str], str] = {}
-    for key, presence in per_arm.items():
-        if presence == "INVALID":
-            actions[key] = "BLOCKED"
-        elif presence in {"CACHE", "MULTIPLE"}:
-            actions[key] = "REUSE"
-        else:
-            actions[key] = "RUN"
-    headers = ("Target", *(f"S{i + 1}" for i in range(len(seeds))))
-    # AI: Both the fast inventory and the strict preflight use the shared
-    # workflow palette (REUSE green, BLOCKED red, RUN neutral). No local ANSI
-    # rules or duplicate status classification belong in the Oracle renderer.
+    # A file-presence inventory MUST NOT be labelled REUSE/RUN/BLOCKED.
+    # It remains a read-only artifact diagnostic for existing callers only;
+    # the Research [1] user interface uses the single formal Replay plan.
+    actions = {key: ("INVALID" if presence == "INVALID" else
+                     "PRESENT" if presence in {"CACHE", "MULTIPLE"} else "MISSING")
+               for key, presence in per_arm.items()}
     rows = [
-        (target, *(styled_workflow_status(actions[(seed, target)]) for seed in seeds))
+        (target, *(actions[(seed, target)] for seed in seeds))
         for target in targets
     ]
-    counts = {state: list(actions.values()).count(state)
-              for state in ("REUSE", "RUN", "BLOCKED")}
+    counts = {state: sum(value == state for value in actions.values())
+              for state in ("PRESENT", "MISSING", "INVALID")}
     inventory = "\n".join((
-        "[Target 驗證 | 既有 Replay 工件]",
+        "[Target 驗證 | 歷史工件盤點（非正式執行計畫）]",
         "Seed：" + "  ".join(f"S{i + 1}={seed}" for i, seed in enumerate(seeds)),
-        render_table(headers, rows),
-        f"REUSE {counts['REUSE']} / RUN（需計算）{counts['RUN']} / BLOCKED {counts['BLOCKED']}",
-        "註：只盤點逐 Arm Replay 快取；舊報表不作 REUSE 來源。盤點 REUSE 為候選，正式核對仍須確認價格、參數、期間及分數身分。",
+        render_table(("Target", *(f"S{i + 1}" for i in range(len(seeds)))), rows),
+        f"PRESENT {counts['PRESENT']} / MISSING {counts['MISSING']} / INVALID {counts['INVALID']}",
+        "僅代表工件存在；不可授權重用。正式狀態須核對價格、P16、分數及期間。",
     ))
     return inventory, actions
 
@@ -1375,9 +1476,11 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
     return policy
 
 
-def build_report(
+def _build_report_once(
     definition, *, project_root: Path, quiet: bool = False,
     preflight_display: str = "full",
+    preflight_approval: Callable[[str], bool] | None = None,
+    _approved_after_truth_miss: bool = False,
 ) -> dict[str, Any]:
     if preflight_display not in {"full", "summary"}:
         raise ValueError("未知 Target Replay preflight 顯示方式")
@@ -1402,8 +1505,16 @@ def build_report(
     # Validate the new trade-path Target BEFORE materializing the legacy price
     # providers or starting any portfolio Replay. Only the approved Audit
     # progress text changes; no report sections/columns or Trading path change.
+    # Price snapshot is checked once for source-truth and Portfolio identities.
+    # A changed source cannot quietly reuse either kind of result.
+    try:
+        price_sha = price_inventory_sha256(root, settings.dataset)
+    except ValueError as exc:
+        raise OracleBlockedError(str(exc)) from exc
     daily_seed_scores: dict[int, dict[str, dict[tuple[str, str], float]]] = {}
     daily_seed_evidence: dict[int, dict[str, dict[str, Any]]] = {}
+    source_actions: dict[tuple[int, str], str] = {}
+    feature_cohort_cache: dict[tuple[str, ...], tuple[pd.DataFrame, str]] = {}
     # A target never controls portfolio replay time. Evaluation is owned by
     # the canonical Oracle/Research DL window, independently of comparison rows.
     evaluation_end = str(definition.dimensions.get("oracle_evaluation_end_date") or "")
@@ -1414,8 +1525,8 @@ def build_report(
             build_formal_min_execution_schedule, resolve_formal_min_param_records,
         )
         from services.audit.daily_trade40_oracle import (
-            DailyTrade40OracleBlockedError, build_daily_universal_trade40_oracle_scores,
-            target_identity_for_horizon,
+            DailyTrade40OracleBlockedError, DailyTrade40TruthBuildRequired,
+            build_daily_universal_trade40_oracle_scores, target_identity_for_horizon,
         )
         prepared_for_scores, _ = _prepare_oracle_parameters(
             definition, root=root, parameter_paths=parameter_paths,
@@ -1439,9 +1550,15 @@ def build_report(
                         score_start=_formal_dl_score_start(definition, settings),
                         seed=seed, param_sha256=param_sha, canonical_schedule=schedule,
                         **({"horizon_sessions": horizon} if horizon != HORIZON_SESSIONS else {}),
+                        price_sha256=price_sha,
+                        cache_root=root / AUDIT_OUTPUT_ROOT / definition.output_subdir / "truth_cache",
+                        feature_cohort_cache=feature_cohort_cache,
+                        allow_build=preflight_approval is None,
                         progress_callback=(lambda message, name=source_name: progress(
                             f"seed={seed} {name} {message}")) if not quiet else None,
                     )
+                except DailyTrade40TruthBuildRequired as exc:
+                    raise OracleTruthBuildRequired(str(exc)) from exc
                 except (DailyTrade40OracleBlockedError, ValueError) as exc:
                     raise OracleBlockedError(
                         f"Formal Min seed={seed} {source_name} target blocked: {exc}"
@@ -1456,6 +1573,7 @@ def build_report(
                     raise OracleBlockedError(
                         f"Daily-universal seed={seed} {source_name} not based on this formal Min parameter view"
                     )
+                source_actions[(int(seed), source_name)] = evidence.get("source_reuse_status", "BUILD")
                 daily_seed_evidence[int(seed)][source_name] = evidence
                 daily_seed_scores[int(seed)][source_name] = daily_scores
                 if not quiet:
@@ -1476,10 +1594,16 @@ def build_report(
                 if (str(evidence["first_date"]) < _formal_dl_score_start(definition, settings)
                         or str(evidence["first_replay_trade_date"]) < str(settings.start_date)):
                     raise OracleBlockedError("Daily-universal PIT score coverage boundary mismatch")
+    price_source_action = "REUSE"
     if plan["providers"]:
-        scores40, cohort40 = _build_oracle_score_panels(
+        def source_status(action: str) -> None:
+            nonlocal price_source_action
+            price_source_action = action
+        scores40, cohort40 = _load_or_build_oracle_price_scores(
             definition, project_root=root, cutoff=str(settings.end_date),
-            progress=None if quiet else progress,
+            price_sha=price_sha, progress=None if quiet else progress,
+            source_status_callback=source_status,
+            allow_build=preflight_approval is None,
         )
     else:
         # Daily-only comparisons use the SAME fixed evaluation cutoff as the
@@ -1544,10 +1668,6 @@ def build_report(
     if end40 <= start:
         raise OracleBlockedError("Oracle fixed evaluation period invalid")
     data_dir = Path(get_dataset_dir(str(root), settings.dataset)).resolve()
-    try:
-        price_sha = price_inventory_sha256(root, settings.dataset)
-    except ValueError as exc:
-        raise OracleBlockedError(str(exc)) from exc
     cache = OracleReplayStore(root, definition.output_subdir)
 
     # Replay cache identity is derived from the actual injectible score bytes.
@@ -1622,8 +1742,7 @@ def build_report(
         # evidence is BLOCKED, not interpreted
         # as permission to silently spend hours computing the same arm again.
         # This plan is derived from on-disk artifacts, not a historic target list.
-        completed_plan: dict[tuple[int, str], tuple[dict[str, Any], dict[str, Any] | None, str]] = {}
-        blocked: dict[tuple[int, str], str] = {}
+        requested_identities: dict[tuple[int, str], dict[str, Any]] = {}
         for seed, param_sha, _kind, _base_params, _oracle_params in prepared:
             for target in ("C96", *(name for name, _ in targets)):
                 is_direct = plan["selectors"].get(target) == "direct"
@@ -1636,7 +1755,7 @@ def build_report(
                     score_sha256=(score_fingerprints[seed][target] if target != "C96" else None),
                     score_contract=(resolved_score_contracts[target] if target != "C96" else None),
                 )
-                identity = replay_identity(
+                requested_identities[(seed, target)] = replay_identity(
                     dataset=settings.dataset, dataset_sha256=price_sha,
                     target=target, definition=definitions_with_base,
                     start=start, end=end,
@@ -1647,18 +1766,24 @@ def build_report(
                     evaluation_mode=str(definition.dimensions["evaluation_mode"]),
                     max_positions=settings.max_positions, replay_policy=arm_replay_policy,
                 )
-                try:
-                    record, origin = cache.resolve_completed(identity)
-                    completed_plan[(seed, target)] = (identity, record, origin)
-                except ValueError as exc:
-                    # Continue read-only inspection so the user sees the full
-                    # REUSE/RUN/BLOCKED matrix; do not replay a partial cohort.
-                    blocked[(seed, target)] = str(exc)
+        execution_plan = cache.plan_execution(requested_identities)
+        replay_decisions = execution_plan.actions()
+        blocked = execution_plan.blocked()
+        # One row action describes the ENTIRE workload, not just Portfolio.
+        # A truth BUILD may be followed by a verified historic Replay REUSE,
+        # but may never be displayed as a zero-work overall REUSE.
         decisions = {
-            (seed, name): "BLOCKED" if (seed, name) in blocked else
-            "REUSE" if completed_plan[(seed, name)][1] is not None else "RUN"
+            (seed, target): (
+                "BLOCKED" if replay_decisions[(seed, target)] == "BLOCKED" else
+                "RUN" if (replay_decisions[(seed, target)] == "RUN" or
+                          (target in plan["daily_sources"] and source_actions.get(
+                              (seed, plan["daily_sources"][target])) != "REUSE") or
+                          (target not in plan["daily_sources"] and target != "C96" and
+                           price_source_action != "REUSE")) else
+                "REUSE"
+            )
             for seed, _path in parameter_paths
-            for name in ("C96", *(name for name, _desc in targets))
+            for target in ("C96", *(name for name, _desc in targets))
         }
         preview = render_replay_preflight(
             label=label,
@@ -1667,57 +1792,60 @@ def build_report(
             decisions=decisions,
         )
         if not quiet:
+            if _approved_after_truth_miss:
+                # First approval already authorized truth materialization and
+                # the execution of its subsequently certified Replay plan.
+                # Now display the ACTUAL plan, never the previously unknown
+                # portfolio actions inferred from a missing truth source.
+                print("[Target 驗證｜真值建置後的正式執行計畫]", flush=True)
             if blocked or preflight_display == "full":
                 print("\n" + preview, flush=True)
             else:
                 reuse_count = sum(value == "REUSE" for value in decisions.values())
                 run_count = sum(value == "RUN" for value in decisions.values())
                 print(f"[Target 驗證｜身分核對完成] REUSE {reuse_count} / "
-                      f"RUN（需計算）{run_count} / BLOCKED 0", flush=True)
-        if blocked:
-            details = [f"{target} seed={seed}: {reason}"
-                       for (seed, target), reason in blocked.items()]
-            raise OracleBlockedError(
-                f"Oracle {label} REUSE preflight BLOCKED: "
-                f"{len(blocked)} conflict(s); " + " | ".join(details[:3])
-            )
+                      f"RUN（需計算）{run_count} / BLOCKED 0 | "
+                      f"本次共同回放期間 {start} ～ {end}; "
+                      "僅相同期間及完整身分可 REUSE", flush=True)
+        try:
+            execution_plan.require_ready()
+        except ValueError as exc:
+            raise OracleBlockedError(f"Oracle {label} {exc}") from exc
+        if preflight_approval is not None:
+            # No second identity pass. The user's approval authorizes exactly
+            # this immutable plan and never an independent RUN/REUSE guess.
+            if not preflight_approval(preview):
+                return {"status": "CANCELLED", "read_only": True,
+                        "preflight": decisions}
         for seed, param_sha, kind, base_params, oracle_params in prepared:
+            # Both selectors/targets use one frozen seed's market/P16 context.
+            # Only preparation is reused; _run_scenario still independently
+            # replays each required arm against that arm's injected score.
+            seed_replay_kwargs = {**replay_kwargs, "replay_preparation_cache": {}}
             if not quiet and preflight_display == "full":
                 print(f"[Oracle Audit {label}] seed={seed}: verify C96 + {len(targets)} Oracle results")
 
             def load_or_run(target: str, runner):
-                identity, record, origin = completed_plan[(seed, target)]
-                if record is not None:
-                    try:
-                        # AI: An older completed report is promoted to a strict
-                        # AI: per-arm cache only after its provenance was checked.
-                        if origin.startswith("verified legacy replay cache"):
-                            # AI: Recheck the source immediately before promotion;
-                            # AI: old completed bytes remain immutable and readable.
-                            reread, reread_origin = cache.resolve_completed(identity)
-                            if reread_origin != origin or reread != record:
-                                raise ValueError("Oracle legacy cache changed during preflight; fail closed")
-                            cache.write(identity, record, origin="verified_legacy_replay_cache")
-                    except ValueError as exc:
-                        raise OracleBlockedError(str(exc)) from exc
-                    if not quiet and preflight_display == "full":
-                        print(f"[REUSE] {label} seed={seed} {target} | {origin}")
+                replay_action = execution_plan.action(seed, target)
+                def produce():
+                    record = _metrics(runner(), target=target)
+                    record["seed"] = seed
+                    if target != "C96":
+                        record["delta_romd_vs_c96"] = (
+                            record["romd"] - observations["C96"][-1]["romd"]
+                        )
                     return record
-                if not quiet:
-                    print(f"[RUN] {label} seed={seed} {target} | no completed local result")
-                record = _metrics(runner(), target=target)
-                record["seed"] = seed
-                if target != "C96":
-                    record["delta_romd_vs_c96"] = record["romd"] - observations["C96"][-1]["romd"]
                 try:
-                    cache.write(identity, record, origin="canonical_replay")
+                    record, origin = execution_plan.execute(seed, target, produce)
                 except ValueError as exc:
                     raise OracleBlockedError(str(exc)) from exc
+                if not quiet and preflight_display == "full":
+                    print(f"[{replay_action}] {label} seed={seed} {target} | {origin}", flush=True)
                 return record
 
             baseline = load_or_run("C96", lambda: _run_scenario(
                 name=f"C96 {label} seed={seed} same-window", params=base_params,
-                param_source_kind=kind, **replay_kwargs,
+                param_source_kind=kind, **seed_replay_kwargs,
             ))
             observations["C96"].append(baseline)
             for target, _description in targets:
@@ -1737,7 +1865,7 @@ def build_report(
                     ):
                         return _run_scenario(
                             name=f"Oracle {target} seed={seed}", params=oracle_params,
-                            param_source_kind=kind, **replay_kwargs,
+                            param_source_kind=kind, **seed_replay_kwargs,
                         )
                 record = load_or_run(target, run_oracle)
                 if not math.isclose(
@@ -1797,6 +1925,55 @@ def build_report(
             "1R is the fixed research Label risk budget, NOT the actual executed ATR stop-loss.",
         ],
     }
+
+
+def build_report(
+    definition, *, project_root: Path, quiet: bool = False,
+    preflight_display: str = "full",
+    preflight_approval: Callable[[str], bool] | None = None,
+) -> dict[str, Any]:
+    """One read-only approval gate before ANY missing Target truth is built.
+
+    When every certified truth artifact exists, the full Replay decision is
+    shown directly from its complete identity, and the same sealed plan runs.
+    On the first run without truth, no expensive producer may execute before
+    approval. The conservative RUN status means truth BUILD is required; a
+    historical Portfolio may still be independently REUSE after that BUILD.
+    """
+    if preflight_approval is None:
+        return _build_report_once(
+            definition, project_root=project_root, quiet=quiet,
+            preflight_display=preflight_display,
+        )
+    try:
+        return _build_report_once(
+            definition, project_root=project_root, quiet=quiet,
+            preflight_display=preflight_display,
+            preflight_approval=preflight_approval,
+        )
+    except OracleTruthBuildRequired as exc:
+        # One missing truth source is NOT evidence that all Portfolio arms
+        # need RUN. Nor can a cached Replay be called REUSE until its perfect
+        # scores are certified. Do not manufacture an all-RUN matrix here.
+        # The approval authorizes only the canonical missing-truth BUILD and
+        # downstream work selected by the subsequently certified Replay plan.
+        preview = "\n".join((
+            "[Target 驗證｜真值缺件；Replay 尚未完成身分核對]",
+            f"缺件來源：{exc}",
+            "目前無法判定完整 REUSE／RUN／BLOCKED；不得由檔案存在或真值缺件推定投組需要重算。",
+            "按 Enter 將只建立實際缺失的真值；完成後顯示正式矩陣，"
+            "由該矩陣直接決定需 RUN 的 Portfolio（同一授權，不另詢問）。",
+        ))
+        if not quiet:
+            print("\n" + preview, flush=True)
+        if not preflight_approval(preview):
+            return {"status": "CANCELLED", "read_only": True,
+                    "truth_build_required": str(exc)}
+        return _build_report_once(
+            definition, project_root=project_root, quiet=quiet,
+            preflight_display=preflight_display,
+            _approved_after_truth_miss=True,
+        )
 
 
 def render_result(report: Mapping[str, Any], *, target: str) -> str:
@@ -1872,6 +2049,7 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
 def run_formal_audit(
     definition, *, project_root: Path, quiet: bool = False,
     preflight_display: str = "full",
+    preflight_approval: Callable[[str], bool] | None = None,
 ) -> dict[str, Any]:
     # Authorization, frozen schema, and historical snapshot must be checked
     # before initiating the costly hindsight-only portfolio replays.
@@ -1879,7 +2057,10 @@ def run_formal_audit(
     payload = dict(build_report(
         definition, project_root=project_root, quiet=quiet,
         preflight_display=preflight_display,
+        preflight_approval=preflight_approval,
     ))
+    if payload.get("status") == "CANCELLED":
+        return payload
     payload["report_contract_id"] = f"{approved.report_id}@v{approved.version}"
     payload["report_contract_fingerprint"] = persistent_report_contract_fingerprint(approved.report_id)
     console = render_result(payload, target="console")

@@ -150,28 +150,38 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and research_method_ids == [oracle_method_id]
         and oracle_method_id not in audit_method_ids,
     )
+    # A validated, final identity plan must appear BEFORE the only approval.
+    # This synthetic owns the Research UI contract (not an existence inventory).
     route_console = io.StringIO()
     prompts = []
+    preview = (
+        "[Target 驗證 Fixed | 真值＋Portfolio 正式計畫]\n"
+        "Target                S1     S2\n"
+        "C96                   REUSE  REUSE\n"
+        "DailyUniversal40      RUN    REUSE\n"
+        "REUSE 3 / RUN（需計算）1 / BLOCKED 0"
+    )
+    executions = []
     answers = iter(["", "", "0"])
 
     def input_after_plan(prompt):
-        prompts.append((prompt, "候選 REUSE 32" in route_console.getvalue()))
+        prompts.append((prompt, preview in route_console.getvalue()))
         return next(answers)
 
     def fake_target_runner(*args, **kwargs):
-        # AI: A regression to the old callback would demand a second prompt;
-        # AI: simulate the old owner invoking it so this test fails decisively.
-        if "before_replay" in kwargs:
-            kwargs["before_replay"]("[Target 驗證｜計算授權] RUN 12")
-        # AI: Real identity checks run in the canonical Audit owner; the app
-        # AI: never prompts again, even when its tentative cache tally differs.
-        print("[Target 驗證｜身分核對完成] REUSE 44 / RUN（需計算）12 / BLOCKED 0")
+        # Audit runner owns certification AND scientific execution. The app
+        # cannot print a preliminary existence-based REUSE table or redecide.
+        print(preview)
+        approval = kwargs["preflight_approval"](preview)
+        if not approval:
+            return {"target_oracle_romd": {"status": "CANCELLED"}}
+        executions.append("replayed missing arms")
         print("[RUN] Target seed=11 | no completed local result")
-        return {}
+        return {"target_oracle_romd": {"status": "COMPLETED"}}
 
     with patch("builtins.input", side_effect=input_after_plan), \
          patch.object(research_app, "render_audit_status") as expensive_status, \
-         patch.object(research_app, "render_audit_artifact_inventory", return_value="候選 REUSE 32 / 待計算 RUN 0"), \
+         patch.object(research_app, "render_audit_artifact_inventory") as false_inventory, \
          patch.object(research_app, "run_enabled_audits", side_effect=fake_target_runner) as oracle_runner, \
          patch.object(research_app, "render_latest_audit_summary", return_value="LATEST"), \
          redirect_stdout(route_console):
@@ -181,9 +191,10 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         "target_validation_runs_once_from_research_default_enter",
         route_rc == 0 and oracle_runner.call_count == 1
         and oracle_runner.call_args.kwargs.get("method_id") == oracle_method_id
-        and oracle_runner.call_args.kwargs.get("preflight_display") == "summary"
+        and callable(oracle_runner.call_args.kwargs.get("preflight_approval"))
+        and "preflight_display" not in oracle_runner.call_args.kwargs
         and "before_replay" not in oracle_runner.call_args.kwargs
-        and not expensive_status.called
+        and not false_inventory.called and not expensive_status.called
         and "[1]" in root_text and "Target 驗證" in root_text
         and "[2]" in root_text and "模型訓練／驗證" in root_text
         and "[5]" in root_text and "Audit／診斷" in root_text
@@ -192,16 +203,21 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     check_true(
         "target_validation_only_one_confirm_even_if_verified_run_count_changes",
         len(prompts) == 3 and not prompts[0][1] and prompts[1][1]
-        and "按 Enter 執行 Target 驗證" in prompts[1][0]
-        and not any("輸入 RUN" in prompt for prompt, _ in prompts)
-        and root_text.index("候選 REUSE 32") < root_text.index("身分核對完成")
-        and root_text.index("身分核對完成") < root_text.index("[RUN] Target")
+        and "上述正式計畫" in prompts[1][0]
+        and all("輸入 RUN" not in prompt for prompt, _ in prompts)
+        and root_text.count(preview) == 1
+        and root_text.index(preview) < root_text.index("[RUN] Target")
+        and executions == ["replayed missing arms"]
         and "LATEST" in root_text,
     )
+
+    # Cancel must still build the read-only plan, but never produce/commit any
+    # scientific result, even if a cached target score source is missing.
     cancellation = io.StringIO()
+    executions.clear()
     with patch("builtins.input", return_value="0") as cancel_input, \
          patch.object(research_app, "render_audit_status") as status, \
-         patch.object(research_app, "render_audit_artifact_inventory", return_value="候選 REUSE 32"), \
+         patch.object(research_app, "render_audit_artifact_inventory") as false_inventory, \
          patch.object(research_app, "run_enabled_audits", side_effect=fake_target_runner) as cancelled_runner, \
          patch.object(research_app, "render_latest_audit_summary") as latest, \
          redirect_stdout(cancellation):
@@ -209,19 +225,24 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     check_true(
         "target_single_enter_cancel_is_before_any_expensive_work",
         cancel_input.call_count == 1
-        and not cancelled_runner.called and not latest.called and not status.called
-        and "候選 REUSE 32" in cancellation.getvalue(),
+        and cancelled_runner.call_count == 1 and not executions
+        and not latest.called and not status.called and not false_inventory.called
+        and cancellation.getvalue().count(preview) == 1
+        and "未授權執行" in cancellation.getvalue(),
     )
 
-    # The presence inventory can differ from the final identity-based plan;
-    # the same initial Enter authorizes whichever legitimate RUNs are missing.
+    # The exact official status, not a preliminary file-existence guess, owns
+    # both the displayed matrix and execution after the same approval.
     changed_plan_console = io.StringIO()
     verified_calls = []
+    final_matrix = preview.replace("REUSE 3 / RUN（需計算）1", "REUSE 2 / RUN（需計算）2")
     def exact_plan(*args, **kwargs):
         verified_calls.append(kwargs)
-        print("[Target 驗證｜身分核對完成] REUSE 48 / RUN（需計算）8 / BLOCKED 0")
+        print(final_matrix)
+        assert kwargs["preflight_approval"](final_matrix)
+        return {"target_oracle_romd": {"status": "COMPLETED"}}
     with patch("builtins.input", return_value="") as single_input, \
-         patch.object(research_app, "render_audit_artifact_inventory", return_value="候選 REUSE 48 / RUN 8"), \
+         patch.object(research_app, "render_audit_artifact_inventory") as inventory, \
          patch.object(research_app, "run_enabled_audits", side_effect=exact_plan), \
          patch.object(research_app, "render_latest_audit_summary", return_value="LATEST"), \
          redirect_stdout(changed_plan_console):
@@ -229,9 +250,10 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     check_true(
         "target_exact_verified_plan_runs_without_more_confirmation",
         result == 0 and single_input.call_count == 1
-        and len(verified_calls) == 1
+        and len(verified_calls) == 1 and not inventory.called
         and "before_replay" not in verified_calls[0]
-        and "RUN（需計算）8" in changed_plan_console.getvalue()
+        and "RUN（需計算）2" in changed_plan_console.getvalue()
+        and changed_plan_console.getvalue().count(final_matrix) == 1
         and "LATEST" in changed_plan_console.getvalue(),
     )
 

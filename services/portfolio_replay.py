@@ -65,6 +65,46 @@ PORTFOLIO_DEFAULT_BENCHMARK_TICKER = "0050"
 PORTFOLIO_PREP_CACHE_SCHEMA_VERSION = 4
 
 
+# Replay preparation has no dependence on the changing daily score map. A caller
+# may elect to reuse it *within a single invocation*; all portfolio state, order
+# selection, cash, positions and reported results are still freshly simulated.
+# This is deliberately not a process-global cache or a persistent artifact.
+def _replay_preparation_key(
+    data_dir, records, *, ensemble: bool, raw_universe_required_min_rows,
+    keep_trade_logs: bool, use_prepared_cache, write_prepared_cache,
+    raw_data_loader=None,
+):
+    use_cache, write_cache = _prepared_cache_requested(use_prepared_cache, write_prepared_cache)
+    schedule = []
+    for record in records:
+        members = (record.get("members") or []) if ensemble else [record]
+        schedule.append((
+            str(record.get("effective_date_text") or ""),
+            str(record.get("effective_end_date_text") or ""),
+            tuple((str(member["params_signature"]), str(member.get("member_index") or ""))
+                  for member in members),
+        ))
+    return (
+        "portfolio-prep-session-v1", str(Path(data_dir).resolve()),
+        tuple(schedule), int(raw_universe_required_min_rows),
+        bool(keep_trade_logs), bool(use_cache), bool(write_cache),
+        None if raw_data_loader is None else id(raw_data_loader),
+    )
+
+
+def _load_session_replay_preparation(session_cache, key, build):
+    if session_cache is None:
+        return build()
+    if not isinstance(session_cache, dict):
+        raise ValueError("Replay session preparation cache must be a caller-owned dict")
+    if key in session_cache:
+        return session_cache[key]
+    prepared = build()
+    # Publish only a complete preparation. Failure must not poison later arms.
+    session_cache[key] = prepared
+    return prepared
+
+
 def _portfolio_prepared_cache_include_trade_logs() -> bool:
     return _env_flag("PORTFOLIO_SIM_PREPARED_CACHE_INCLUDE_TRADE_LOGS", False)
 
@@ -916,6 +956,7 @@ def run_portfolio_simulation_with_param_schedule(
     replay_counts=None,
     replay_execution_rows=None,
     replay_selector_trace_rows=None,
+    replay_preparation_cache=None,
 ):
     schedule_records = build_active_param_objects_from_payload(rolling_payload, fixed_risk=fixed_risk)
     raw_universe_required_min_rows = resolve_raw_universe_required_min_rows(rolling_payload)
@@ -938,13 +979,20 @@ def run_portfolio_simulation_with_param_schedule(
     if resolved_end_date < resolved_start_date:
         raise ValueError("active-param replay 日期區間無效：結束日早於開始日")
 
-    contexts_by_effective_date = _load_contexts_for_active_schedule(
-        data_dir,
-        schedule_records,
-        verbose=verbose,
-        use_prepared_cache=use_prepared_cache,
-        write_prepared_cache=write_prepared_cache,
+    preparation_key = _replay_preparation_key(
+        data_dir, schedule_records, ensemble=False,
         raw_universe_required_min_rows=raw_universe_required_min_rows,
+        keep_trade_logs=False, use_prepared_cache=use_prepared_cache,
+        write_prepared_cache=write_prepared_cache,
+    )
+    contexts_by_effective_date = _load_session_replay_preparation(
+        replay_preparation_cache, preparation_key,
+        lambda: _load_contexts_for_active_schedule(
+            data_dir, schedule_records, verbose=verbose,
+            use_prepared_cache=use_prepared_cache,
+            write_prepared_cache=write_prepared_cache,
+            raw_universe_required_min_rows=raw_universe_required_min_rows,
+        ),
     )
     merged_dates = _merge_context_market_dates(contexts_by_effective_date)
     resolved_sorted_dates = _filter_market_dates_by_date_range(
@@ -1058,6 +1106,7 @@ def run_portfolio_simulation_with_param_ensemble(
     replay_execution_rows=None,
     replay_selector_trace_rows=None,
     raw_data_loader=None,
+    replay_preparation_cache=None,
 ):
     schedule_records = build_active_param_ensemble_objects_from_payload(ensemble_payload, fixed_risk=fixed_risk)
     raw_universe_required_min_rows = resolve_raw_universe_required_min_rows(ensemble_payload)
@@ -1096,15 +1145,23 @@ def run_portfolio_simulation_with_param_ensemble(
     if resolved_end_date is not None and resolved_end_date < resolved_start_date:
         raise ValueError("active-param ensemble replay 日期區間無效：結束日早於開始日")
 
-    contexts_by_effective_date = _load_contexts_for_active_ensemble_schedule(
-        data_dir,
-        schedule_records,
-        verbose=verbose,
-        keep_trade_logs=return_context,
-        use_prepared_cache=use_prepared_cache,
-        write_prepared_cache=write_prepared_cache,
+    preparation_key = _replay_preparation_key(
+        data_dir, schedule_records, ensemble=True,
         raw_universe_required_min_rows=raw_universe_required_min_rows,
+        keep_trade_logs=return_context, use_prepared_cache=use_prepared_cache,
+        write_prepared_cache=write_prepared_cache,
         raw_data_loader=raw_data_loader,
+    )
+    contexts_by_effective_date = _load_session_replay_preparation(
+        replay_preparation_cache, preparation_key,
+        lambda: _load_contexts_for_active_ensemble_schedule(
+            data_dir, schedule_records, verbose=verbose,
+            keep_trade_logs=return_context,
+            use_prepared_cache=use_prepared_cache,
+            write_prepared_cache=write_prepared_cache,
+            raw_universe_required_min_rows=raw_universe_required_min_rows,
+            raw_data_loader=raw_data_loader,
+        ),
     )
     merged_dates = _merge_context_market_dates_from_ensemble(contexts_by_effective_date)
     resolved_sorted_dates = _filter_market_dates_by_date_range(

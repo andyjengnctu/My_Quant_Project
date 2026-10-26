@@ -532,11 +532,11 @@ class OracleScoreParityContractCases(TestCase):
              patch.object(oracle, "_build_oracle_score_panels", return_value=(
                  scores, {"cohort_rows": 1, "last_common_day": "2025-12-22"}
              )), \
-             patch.object(oracle, "price_inventory_sha256", side_effect=AssertionError("cache reached")) as inventory, \
+             patch.object(oracle, "price_inventory_sha256", return_value="f" * 64) as inventory, \
              patch.object(oracle, "_run_scenario", side_effect=AssertionError("replay reached")) as replay:
             with self.assertRaisesRegex(oracle.OracleBlockedError, "common scored stock-day cohort differs"):
                 oracle.build_report(definition, project_root=Path(tmp), quiet=True)
-        inventory.assert_not_called()
+        inventory.assert_called_once()
         replay.assert_not_called()
 
     def test_inventory_is_not_blocked_by_untrained_target_but_remains_read_only(self):
@@ -595,7 +595,8 @@ class OracleScoreParityContractCases(TestCase):
              patch.object(daily_owner, "build_daily_universal_trade40_oracle_scores", return_value=(truth, evidence)), \
              patch.object(oracle, "_build_oracle_score_panels", side_effect=AssertionError("price truth is unused")) as price_builder, \
              patch.object(oracle, "_certify_oracle_score_eligibility", wraps=oracle._certify_oracle_score_eligibility) as eligibility, \
-             patch.object(oracle, "price_inventory_sha256", side_effect=PriceInventoryReached("reached full replay inventory")):
+             patch.object(oracle, "price_inventory_sha256", return_value="f" * 64), \
+             patch.object(oracle, "_score_map_fingerprints", side_effect=PriceInventoryReached("reached full replay inventory")):
             with self.assertRaisesRegex(PriceInventoryReached, "reached full replay inventory"):
                 oracle.build_report(definition, project_root=Path(directory), quiet=True)
         price_builder.assert_not_called()
@@ -791,7 +792,8 @@ class OracleScoreParityContractCases(TestCase):
                  {("2330", "2021-01-04"): 0.7}, wrong,
              )), \
              patch.object(oracle, "_build_oracle_score_panels", side_effect=AssertionError("unused price")) as price_builder, \
-             patch.object(oracle, "_run_scenario", side_effect=AssertionError("cannot replay bad target")) as replay:
+             patch.object(oracle, "_run_scenario", side_effect=AssertionError("cannot replay bad target")) as replay, \
+             patch.object(oracle, "price_inventory_sha256", return_value="f"*64):
             with self.assertRaisesRegex(oracle.OracleBlockedError, "not based on this formal Min"):
                 oracle.build_report(definition, project_root=Path(directory), quiet=True)
         price_builder.assert_not_called()
@@ -895,7 +897,7 @@ class OracleAuditContractCases(TestCase):
                 with self.assertRaisesRegex(ValueError, "invalid cache target"):
                     store._path({**identity, "target": unsafe})
 
-    def test_fast_inventory_lists_existing_candidates_without_loading_prices_or_targets(self):
+    def test_fast_inventory_is_presence_only_and_never_claims_reuse(self):
         from core.display_common import _strip_ansi
         with tempfile.TemporaryDirectory() as tmp:
             candidates = {(seed, target): "CACHE" for seed in (11, 22, 33, 44)
@@ -911,34 +913,18 @@ class OracleAuditContractCases(TestCase):
                  patch.object(oracle, "price_inventory_sha256") as price:
                 text = _strip_ansi(oracle.render_existing_artifact_inventory(
                     self.definition, project_root=Path(tmp)))
-                self.assertIn("REUSE 40 / RUN（需計算）0", text)
-                self.assertIn("REUSE", text)
+                self.assertIn("PRESENT 40 / MISSING 0 / INVALID 0", text)
                 self.assertIn("R40_Direct", text)
-                self.assertIn("正式核對仍須確認價格、參數、期間及分數身分", text)
-                # AI: The preview must consume the same semantic status palette
-                # as other Research plans; never hard-code ANSI in Oracle.
-                from core.display_common import C_GREEN, C_RED, C_GRAY, C_RESET
+                self.assertNotIn("REUSE", text)
                 candidates[(11, "C96")] = "INVALID"
                 candidates[(22, "C96")] = "MISSING"
-                with patch("core.report_style.console_color_enabled", return_value=True):
-                    colored = oracle.render_existing_artifact_inventory(
-                        self.definition, project_root=Path(tmp))
-                self.assertIn(f"{C_GREEN}REUSE{C_RESET}", colored)
-                self.assertIn(f"{C_RED}BLOCKED{C_RESET}", colored)
-                self.assertIn(f"{C_GRAY}RUN{C_RESET}", colored)
-                self.assertIn("REUSE 38 / RUN（需計算）1 / BLOCKED 1", _strip_ansi(colored))
-                # ANSI must not affect tabular spacing or change the inventory.
-                with patch("core.report_style.console_color_enabled", return_value=False):
-                    uncolored = oracle.render_existing_artifact_inventory(
-                        self.definition, project_root=Path(tmp))
-                self.assertEqual(_strip_ansi(colored), uncolored)
+                colored = oracle.render_existing_artifact_inventory(self.definition, project_root=Path(tmp))
+                self.assertIn("PRESENT 38 / MISSING 1 / INVALID 1", _strip_ansi(colored))
+                self.assertNotIn("REUSE", _strip_ansi(colored))
                 score_truth.assert_not_called()
                 price.assert_not_called()
 
     def test_corrupt_archived_audit_json_cannot_poison_canonical_inventory(self):
-        # An old report is immutable historical evidence, not a current cache.
-        # A damaged historical audit.json must not BLOCK current per-arm
-        # inventory or be misreported as provisional REUSE.
         from core.display_common import _strip_ansi
         with tempfile.TemporaryDirectory() as tmp:
             archived = (Path(tmp) / 'outputs/audit/breakout_quality/reusable/'
@@ -947,8 +933,9 @@ class OracleAuditContractCases(TestCase):
             archived.write_text('{malformed archived report', encoding='utf-8')
             summary = _strip_ansi(oracle.render_existing_artifact_inventory(
                 _ACTIVE_ORACLE_DEFINITION, project_root=Path(tmp)))
-            self.assertIn('REUSE 0 / RUN（需計算）64 / BLOCKED 0', summary)
-            self.assertIn('舊報表不作 REUSE 來源', summary)
+            self.assertIn('PRESENT 0 / MISSING 64 / INVALID 0', summary)
+            self.assertNotIn('REUSE', summary)
+            self.assertIn('僅代表工件存在', summary)
 
     def test_fast_inventory_never_treats_corrupt_cache_as_reuse(self):
         from services.audit.oracle_replay_artifacts import OracleReplayStore
@@ -2985,7 +2972,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
                     oracle.build_report(definition, project_root=root, quiet=False,
                                         preflight_display="summary")
                 self.assertEqual(len(recorded), 80)
-                self.assertIn("身分核對完成] REUSE 40 / RUN（需計算）0 / BLOCKED 0", console.getvalue())
+                self.assertIn("身分核對完成] REUSE 4 / RUN（需計算）36 / BLOCKED 0", console.getvalue())
                 self.assertNotIn("Replay preflight（執行前）", console.getvalue())
                 self.assertNotIn("[REUSE]", console.getvalue())
 
@@ -3035,7 +3022,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 with patch.object(oracle, "get_strategy_multi_seed_robustness_settings", return_value=SimpleNamespace(
                     enabled=True, resolved_seeds=seeds, seed_count=4, benchmark_id=Benchmark.benchmark_id)):
                     preview = oracle.render_existing_artifact_inventory(definition, project_root=root)
-                self.assertIn("REUSE 0 / RUN（需計算）40 / BLOCKED 0", preview)
+                self.assertIn("PRESENT 0 / MISSING 40 / INVALID 0", preview)
                 previous = len(recorded)
                 report = oracle.build_report(definition, project_root=root, quiet=True)
                 self.assertEqual(len(recorded) - previous, 40)
@@ -3048,6 +3035,308 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 self.assertEqual(again["oracles"], report["oracles"])
 
 
+
+
+class OracleUnifiedReuseArchitectureCases(TestCase):
+    """Invariants required by the Research [1] single-plan REUSE contract."""
+
+    def test_execution_plan_seals_reuse_without_invoking_producer(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        store = OracleReplayStore(Path("/tmp/oracle_plan_synthetic"), "synthetic")
+        identities = {
+            (11, "C96"): {"seed": 11, "target": "C96"},
+            (11, "R40"): {"seed": 11, "target": "R40"},
+        }
+        observation = {"seed": 11, "target": "C96", "romd": 4.0}
+        with patch.object(store, "resolve_completed", side_effect=[
+                (observation, "verified per-arm cache"), (None, "none")]) as resolver, \
+             patch.object(store, "write") as writer:
+            plan = store.plan_execution(identities)
+            self.assertEqual(plan.actions(), {(11, "C96"): "REUSE", (11, "R40"): "RUN"})
+            self.assertEqual(resolver.call_count, 2)
+            cached, _ = plan.execute(11, "C96", lambda: self.fail("REUSE must not produce"))
+            self.assertEqual(cached, observation)
+            self.assertEqual(writer.call_count, 0)
+            fresh, _ = plan.execute(11, "R40", lambda: {"target": "R40", "seed": 11, "romd": 6.0})
+            self.assertEqual(fresh["romd"], 6.0)
+            self.assertEqual(writer.call_count, 1)
+            self.assertEqual(resolver.call_count, 2, "No re-decision at execution")
+
+    def test_execution_plan_blocks_all_runs_if_one_identity_is_conflicting(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        store = OracleReplayStore(Path("/tmp/oracle_plan_synthetic"), "synthetic")
+        with patch.object(store, "resolve_completed", side_effect=[
+                 (None, "none"), ValueError("scientific SHA conflict")]), \
+             patch.object(store, "write") as writer:
+            plan = store.plan_execution({
+                (11, "C96"): {"seed": 11, "target": "C96"},
+                (11, "R40"): {"seed": 11, "target": "R40"},
+            })
+            self.assertEqual(plan.action(11, "R40"), "BLOCKED")
+            with self.assertRaisesRegex(ValueError, "BLOCKED"):
+                plan.execute(11, "C96", lambda: self.fail("No partial batch Replay"))
+            writer.assert_not_called()
+
+    def test_daily_truth_build_requires_approval_and_cached_truth_skips_trade_path(self):
+        from services.audit import daily_trade40_oracle as src
+        from core.breakout_quality_registry import TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+        calendar = pd.DatetimeIndex(["2020-12-31", "2021-01-04", "2021-01-05"])
+        info_day = pd.Timestamp("2021-01-04")
+        group = pd.DataFrame({"ticker": ["2330"], "date": [info_day]})
+        profile = SimpleNamespace(
+            training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+            model_architecture="inception_time_v1", continuous_target_id="other",
+        )
+        bundle = SimpleNamespace(summary={"dataset": "full", "filter_id": "test",
+            "sample_scope": "daily_eligible_stock_days", "score_eligible_sample_count": 1},
+            group_table=group)
+        prices = pd.DataFrame({"Open": [100.0, 100.0, 100.0],
+            "High": [101.0, 101.0, 101.0], "Low": [99.0, 99.0, 99.0],
+            "Close": [100.0, 100.0, 100.0], "Volume": [1000000]*3}, index=calendar)
+        simulated = SimpleNamespace(
+            reasons=["settled"], maturity_dates=[pd.Timestamp("2021-01-05")],
+            target_raw_r=np.asarray([2.0]), valid_mask=np.asarray([True]),
+            cutoff_truncated_rows=0, research_cutoff_closeout_rows=0,
+        )
+        period = SimpleNamespace(
+            source_id="formal_min_roos_seed", start=pd.Timestamp("2021-01-01"),
+            end=None, params_signature="P16-test",
+        )
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(src, "get_breakout_quality_experiment_profile", return_value=profile), \
+             patch.object(src, "load_profile_continuous_ranker_data", return_value=bundle) as cohort_loader, \
+             patch.object(src, "_truth_source_sha", return_value="d"*64), \
+             patch.object(src, "discover_dataset_csv_inputs", return_value=([("2330", Path(temp)/"2330.csv")], [])), \
+             patch.object(src, "collect_canonical_exchange_sessions", return_value=calendar), \
+             patch.object(src, "load_dataset_frame", return_value=prices), \
+             patch.object(src, "compute_counterfactual_trade40_batch", return_value=simulated) as compute:
+            args = dict(project_root=Path(temp), dataset="full", filter_id="test",
+                profile_id="daily-example", cutoff="2021-01-05",
+                evaluation_start="2021-01-04", evaluation_end="2021-01-04",
+                score_start="2021-01-04", seed=11, param_sha256="a"*64,
+                canonical_schedule=(period,), horizon_sessions=40,
+                price_sha256="b"*64, cache_root=Path(temp)/"truth_cache",
+                feature_cohort_cache={},
+            )
+            with self.assertRaises(src.DailyTrade40TruthBuildRequired):
+                src.build_daily_universal_trade40_oracle_scores(**args, allow_build=False)
+            compute.assert_not_called()
+            first, evidence = src.build_daily_universal_trade40_oracle_scores(**args)
+            self.assertEqual(evidence["source_reuse_status"], "BUILD")
+            self.assertEqual(compute.call_count, 1)
+            cached, evidence2 = src.build_daily_universal_trade40_oracle_scores(**args, allow_build=False)
+            self.assertEqual(cached, first)
+            self.assertEqual(evidence2["source_reuse_status"], "REUSE")
+            self.assertEqual(compute.call_count, 1, "Certified truth REUSE must not trade")
+            self.assertEqual(cohort_loader.call_count, 1, "Feature cohort is shared per run")
+
+    def test_price_score_cache_reuses_certified_matrix_and_blocks_corruption(self):
+        from services.audit.oracle_score_artifacts import OraclePriceScoreStore
+        from services.audit.target_oracle_romd import _canonical_score_map_sha256
+        identity = {"schema": 1, "dataset": "full", "algorithm": "synthetic"}
+        panel = {"R40": {("2330", "2021-01-04"): 0.3,
+                          ("2317", "2021-01-04"): 0.9}}
+        cohort = {"cohort_rows": 2, "first_common_day": "2021-01-04",
+                  "last_common_day": "2021-01-04"}
+        with tempfile.TemporaryDirectory() as temp:
+            store = OraclePriceScoreStore(Path(temp))
+            self.assertIsNone(store.read(identity, score_sha=_canonical_score_map_sha256))
+            store.write(identity, panel, cohort, score_sha=_canonical_score_map_sha256)
+            self.assertEqual(store.read(identity, score_sha=_canonical_score_map_sha256), (panel, cohort))
+            with open(store._path(identity), "wb") as stream:
+                stream.write(b"corrupt scientific evidence")
+            with self.assertRaisesRegex(ValueError, "BLOCKED"):
+                store.read(identity, score_sha=_canonical_score_map_sha256)
+
+    def test_missing_truth_preflight_can_cancel_before_any_build(self):
+        with patch.object(oracle, "_build_report_once",
+                          side_effect=oracle.OracleTruthBuildRequired("certified price scores missing")) as engine, \
+             patch.object(oracle, "get_strategy_multi_seed_robustness_settings",
+                          return_value=SimpleNamespace(resolved_seeds=(11,22,33,44))):
+            previews = []
+            result = oracle.build_report(
+                _ACTIVE_ORACLE_DEFINITION, project_root=Path("/tmp"), quiet=True,
+                preflight_approval=lambda text: previews.append(text) or False,
+            )
+            self.assertEqual(result["status"], "CANCELLED")
+            self.assertEqual(engine.call_count, 1, "Cancel must not authorize truth BUILD")
+            self.assertEqual(len(previews), 1)
+            self.assertIn("真值缺件；Replay 尚未完成身分核對", previews[0])
+            self.assertIn("certified price scores missing", previews[0])
+            self.assertNotIn("REUSE 0 / RUN（需計算）64", previews[0])
+            self.assertEqual(result["truth_build_required"], "certified price scores missing")
+
+    def test_truth_miss_approval_only_runs_one_certified_second_pass(self):
+        """Missing source cannot force an all-RUN plan or a second approval."""
+        calls = []
+        def execute(_definition, **kwargs):
+            calls.append(dict(kwargs))
+            if len(calls) == 1:
+                raise oracle.OracleTruthBuildRequired("R60 seed=11 needs truth BUILD")
+            self.assertTrue(kwargs.get("_approved_after_truth_miss"))
+            self.assertIsNone(kwargs.get("preflight_approval"))
+            return {"status": "COMPLETED", "read_only": True}
+        approvals = []
+        with patch.object(oracle, "_build_report_once", side_effect=execute):
+            result = oracle.build_report(
+                _ACTIVE_ORACLE_DEFINITION, project_root=Path("/tmp"), quiet=True,
+                preflight_approval=lambda text: approvals.append(text) or True,
+            )
+        self.assertEqual(result["status"], "COMPLETED")
+        self.assertEqual(len(approvals), 1)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("R60 seed=11 needs truth BUILD", approvals[0])
+        self.assertNotIn("REUSE 0 / RUN", approvals[0])
+
+    def test_formal_preflight_approval_passes_once_and_keeps_one_plan(self):
+        from services.audit import runner
+        seen = []
+        def fake_audit(_definition, *, project_root, quiet, preflight_approval):
+            seen.append(preflight_approval("canonical matrix"))
+            return {"status": "CANCELLED"}
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(runner, "collect_audit_status", return_value={"overall_status": "READY"}), \
+             patch.object(oracle, "run_formal_audit", side_effect=fake_audit), \
+             patch("builtins.input", side_effect=AssertionError("Runner must not prompt")):
+            result = runner.run_enabled_audits(
+                "breakout_quality", project_root=Path(tmp),
+                method_id=oracle.SUPPORTED_AUDIT_TYPE,
+                preflight_approval=lambda text: text == "canonical matrix",
+            )
+            self.assertEqual(seen, [True])
+            self.assertEqual(result["target_oracle_romd"]["status"], "CANCELLED")
+
+
+
+class OracleReuseMenuAndPreparationCases(TestCase):
+    """User-facing menu and shared-input preparation; not mere status assertions."""
+
+    def test_research_menu_displays_formal_matrix_before_approval_without_inventory(self):
+        from apps import research as app
+        oracle_method = next(row for row in get_audit_methods()
+                             if row.menu_location == "research_root")
+        menu_state = {"configured": True}
+        approvals = []
+        matrix = "[Target 驗證 Fixed | 真值＋Portfolio 正式計畫]\nTarget S1 S2\nC96 REUSE REUSE\nT40 RUN REUSE"
+        def fake_run(module_id, *, project_root, method_id, preflight_approval):
+            self.assertEqual(module_id, "breakout_quality")
+            self.assertEqual(method_id, oracle_method.method_id)
+            print(matrix, flush=True)
+            approvals.append(preflight_approval(matrix))
+            return {"target_oracle_romd": {"status": "CANCELLED"}}
+        prompts = []
+        with patch.object(app, "collect_audit_menu_state", return_value=menu_state), \
+             patch.object(app, "run_enabled_audits", side_effect=fake_run) as runner, \
+             patch.object(app, "render_audit_artifact_inventory", side_effect=AssertionError("fake REUSE preview forbidden")) as inventory, \
+             patch.object(app, "render_latest_audit_summary", side_effect=AssertionError("CANCELLED cannot print completed result")) as latest, \
+             patch("builtins.input", side_effect=lambda prompt: prompts.append(prompt) or "0"), \
+             redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(app._run_reusable_audit_method("breakout_quality", oracle_method.method_id), 0)
+        self.assertEqual(approvals, [False])
+        self.assertEqual(len(prompts), 1)
+        self.assertIn("上述正式計畫", prompts[0])
+        self.assertEqual(output.getvalue().count(matrix), 1)
+        self.assertIn("REUSE REUSE", output.getvalue())
+        inventory.assert_not_called()
+        latest.assert_not_called()
+        runner.assert_called_once()
+
+    def test_replay_session_prepares_once_per_identical_seed_contract(self):
+        from services import portfolio_replay as replay
+        first = {"param_signature": "P16-a", "contexts": object()}
+        calls = []
+        def prepare(label):
+            calls.append(label)
+            return first
+        key = replay._replay_preparation_key(
+            "/tmp/research", [{"effective_date_text": "2021-01-01",
+                "effective_end_date_text": "2021-12-31",
+                "members": [{"params_signature": "P16-a", "member_index": 1}]}],
+            ensemble=True, raw_universe_required_min_rows=260,
+            keep_trade_logs=False, use_prepared_cache=False,
+            write_prepared_cache=False,
+        )
+        cache = {}
+        self.assertIs(replay._load_session_replay_preparation(cache, key, lambda: prepare("first")), first)
+        self.assertIs(replay._load_session_replay_preparation(cache, key, lambda: prepare("wrong")), first)
+        self.assertEqual(calls, ["first"])
+        self.assertIs(replay._load_session_replay_preparation(None, key, lambda: prepare("no-cache")), first)
+        self.assertEqual(calls, ["first", "no-cache"])
+        changed = replay._replay_preparation_key(
+            "/tmp/research", [{"effective_date_text": "2021-01-01",
+                "effective_end_date_text": "2021-12-31",
+                "members": [{"params_signature": "P16-b", "member_index": 1}]}],
+            ensemble=True, raw_universe_required_min_rows=260,
+            keep_trade_logs=False, use_prepared_cache=False,
+            write_prepared_cache=False,
+        )
+        self.assertNotEqual(changed, key)
+        self.assertIs(replay._load_session_replay_preparation(cache, changed, lambda: prepare("different-P16")), first)
+        self.assertEqual(calls[-1], "different-P16")
+
+    def test_target_scenario_passes_same_session_cache_only_to_run(self):
+        from services.research import strategy_compare_replay as scenario
+        observed = []
+        cache = {}
+        def fake_ensemble(*args, **kwargs):
+            observed.append(kwargs["replay_preparation_cache"])
+            return tuple([None] * len(scenario.PortfolioReplayResult._fields))
+        def fake_unpack(result):
+            return {"economic": 17.5}
+        with patch.object(scenario, "run_portfolio_simulation_with_param_ensemble", side_effect=fake_ensemble), \
+             patch.object(scenario, "_unpack_result", side_effect=fake_unpack):
+            for target in ("T40", "R40"):
+                result = scenario._run_scenario(
+                    name=target, data_dir=Path("/tmp/research"),
+                    param_source_kind="rolling_active_param_ensemble", params={},
+                    start_date="2021-01-01", end_date="2025-12-22", max_positions=10,
+                    enable_rotation=False, quiet=True, replay_preparation_cache=cache,
+                )
+                self.assertEqual(result, {"economic": 17.5})
+        self.assertEqual(len(observed), 2)
+        self.assertIs(observed[0], cache)
+        self.assertIs(observed[1], cache)
+
+
+    def test_separate_replay_calls_share_preparation_but_not_portfolio_timeline(self):
+        from services import portfolio_replay as replay
+        import datetime
+        date = pd.Timestamp("2021-01-04")
+        schedule = [{"effective_date_text": "2021-01-01",
+                     "effective_end_date_text": "2021-01-05",
+                     "effective_date": datetime.date(2021, 1, 1),
+                     "year": 2021, "members": [{"params_signature": "P16",
+                         "member_index": 1, "params_obj": object()}]}]
+        context = {"sorted_dates": [date, pd.Timestamp("2021-01-05")],
+                   "all_dfs_fast": {}, "all_trade_logs": {},
+                   "all_pit_stats_index": {}, "prep_wall_sec": 0.25}
+        source = {"2021-01-01": [context]}
+        seen = []
+        def simulate(*args, **kwargs):
+            seen.append(kwargs["active_context_ensemble_resolver"](date))
+            return f"independent-timeline-{len(seen)}"
+        with patch.object(replay, "build_active_param_ensemble_objects_from_payload", return_value=schedule), \
+             patch.object(replay, "resolve_raw_universe_required_min_rows", return_value=260), \
+             patch.object(replay, "get_active_param_ensemble_policy", return_value={"seed_count":1,"min_agree":1}), \
+             patch.object(replay, "resolve_active_param_ensemble_mode", return_value="rolling"), \
+             patch.object(replay, "get_active_param_ensemble_date_range", return_value=("2021-01-01","2021-01-05")), \
+             patch.object(replay, "_load_contexts_for_active_ensemble_schedule", return_value=source) as loader, \
+             patch.object(replay, "_apply_active_single_stock_score_stats"), \
+             patch.object(replay, "run_portfolio_timeline", side_effect=simulate) as simulator, \
+             patch.object(replay, "append_portfolio_replay_profile", side_effect=lambda result, profile: (result, profile)):
+            cache = {}
+            outcomes = []
+            for _ in range(2):
+                outcomes.append(replay.run_portfolio_simulation_with_param_ensemble(
+                    "/tmp/research", {"policy": "synthetic"}, start_date="2021-01-04",
+                    end_date="2021-01-05", replay_preparation_cache=cache,
+                    verbose=False,
+                ))
+        self.assertEqual(loader.call_count, 1, "Market and P16 preparation must occur once per run/seed")
+        self.assertEqual(simulator.call_count, 2, "Every RUN must simulate its own portfolio")
+        self.assertIs(seen[0], seen[1], "Immutable prepared context may be shared")
+        self.assertEqual([result for result, _ in outcomes],
+                         ["independent-timeline-1", "independent-timeline-2"])
 
 if __name__ == "__main__":
     main(verbosity=2)

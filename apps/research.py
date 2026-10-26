@@ -359,26 +359,23 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
         print("目前沒有啟用此Reusable module的參數設定；保留固定選單但本次不執行。")
         return 0
     if method.menu_location == "research_root":
-        # AI: Like Strategy Compare, one Enter authorizes this configured
-        # AI: evaluation. Inventory is a fast presence preview, not REUSE proof;
-        # AI: the Audit owner still certifies every source/cache before Replay.
-        print("[Target 驗證] 正在盤點既有 Replay 工件…", flush=True)
-        print("\n" + render_audit_artifact_inventory(
+        # The Audit owner certifies and prints ONE complete-identity matrix,
+        # and executes exactly the certified plan after one approval.
+        # A file inventory cannot claim REUSE and is not an execution plan.
+        def approve_oracle(_preview: str) -> bool:
+            try:
+                answer = input("👉 按 Enter 執行上述正式計畫；輸入 0 返回：").strip().lower()
+            except EOFError:
+                return False
+            return answer in {"", "1"}
+
+        result = run_enabled_audits(
             module_id, project_root=PROJECT_ROOT, method_id=method_id,
-        ), flush=True)
-        try:
-            confirm = input("👉 按 Enter 執行 Target 驗證（自動 REUSE／RUN，不訓練）；輸入 0 返回：").strip().lower()
-        except EOFError:
-            return 0
-        if confirm in {"0", "q", "quit", "exit"}:
-            return 0
-        if confirm not in {"", "1"}:
-            print("選項無效，本次不執行。")
-            return 0
-        run_enabled_audits(
-            module_id, project_root=PROJECT_ROOT, method_id=method_id,
-            preflight_display="summary",
+            preflight_approval=approve_oracle,
         )
+        if any(row.get("status") == "CANCELLED" for row in result.values()):
+            print("[Target 驗證] 未授權執行 Portfolio Replay，返回上一層。")
+            return 0
     else:
         print("\n" + render_audit_status(
             module_id, project_root=PROJECT_ROOT, method_id=method_id,
