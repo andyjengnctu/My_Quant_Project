@@ -257,6 +257,53 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and "LATEST" in changed_plan_console.getvalue(),
     )
 
+    # Actual missing-truth branch: the first and ONLY user prompt must follow
+    # a visible four-seed Target matrix, not the old text-only BUILD warning.
+    from services.audit import target_oracle_romd as oracle_handler
+    missing_truth_view = io.StringIO()
+    truth_prompts = []
+    canonical_def = next(item for item in get_reusable_audit_definitions("breakout_quality")
+                         if item.audit_type == oracle_handler.SUPPORTED_AUDIT_TYPE)
+    planned_targets = ("C96", *(target for target, _ in
+                                  oracle_handler._oracle_comparison_plan(canonical_def)["targets"]))
+    from core.strategy_compare_policy import get_strategy_multi_seed_robustness_settings
+    benchmark = get_strategy_multi_seed_robustness_settings(
+        str(canonical_def.source["strategy_profile_id"])
+    )
+    candidate_presence = {(int(seed), target): "CACHE"
+                          for seed in benchmark.resolved_seeds for target in planned_targets}
+    def missing_source_run(_module_id, *, project_root, method_id, preflight_approval):
+        return {"target_oracle_romd": oracle_handler.build_report(
+            canonical_def, project_root=project_root, quiet=False,
+            preflight_approval=preflight_approval,
+        )}
+    def cancel_after_matrix(prompt):
+        truth_prompts.append((prompt, "執行前完整工作表" in missing_truth_view.getvalue()))
+        return "0"
+    with patch.object(research_app, "collect_audit_menu_state", return_value={"configured": True}), \
+         patch.object(research_app, "run_enabled_audits", side_effect=missing_source_run), \
+         patch.object(research_app, "render_latest_audit_summary") as premature_report, \
+         patch.object(oracle_handler, "_build_report_once", side_effect=
+                      oracle_handler.OracleTruthBuildRequired(
+                          "missing price-source truth", missing={(None, "price"): "missing price-source truth"},
+                      )) as source_probe, \
+         patch.object(oracle_handler.OracleReplayStore, "preview_candidates",
+                      return_value=candidate_presence), \
+         patch("builtins.input", side_effect=cancel_after_matrix), \
+         redirect_stdout(missing_truth_view):
+        research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
+    check_true(
+        "target_missing_truth_shows_all_targets_before_first_approval_and_cancel_builds_nothing",
+        len(truth_prompts) == 1 and truth_prompts[0][1]
+        and "執行前完整工作表" in missing_truth_view.getvalue()
+        and "REUSE/PRESENT" in missing_truth_view.getvalue()
+        and "RUN/PRESENT" in missing_truth_view.getvalue()
+        and "price: shared" in missing_truth_view.getvalue()
+        and missing_truth_view.getvalue().index("執行前完整工作表")
+            < missing_truth_view.getvalue().index("未授權執行")
+        and source_probe.call_count == 1 and not premature_report.called,
+    )
+
     # Entry-point integration belongs to the existing app/menu contract, not
     # the domain Target synthetic. Exercise the *real* Audit runner on Enter.
     # The domain-level tests separately verify canonical per-seed Min parameters.

@@ -324,7 +324,15 @@ class OracleBlockedError(RuntimeError):
 
 
 class OracleTruthBuildRequired(RuntimeError):
-    """Read-only workflow cannot certify a missing truth artifact before authorization."""
+    """Read-only source probe found work that needs authorization.
+
+    ``missing`` records every required source, not only the first miss.  It is
+    never used to certify a Portfolio REUSE: that requires actual score bytes.
+    """
+
+    def __init__(self, message: str, *, missing: Mapping[tuple[int | None, str], str] | None = None):
+        super().__init__(message)
+        self.missing = dict(missing or {})
 
 
 def _contract(definition, *, settings=None) -> tuple[Any, Any, Any]:
@@ -1351,6 +1359,87 @@ def render_existing_artifact_inventory(definition, *, project_root: Path) -> str
     return inventory
 
 
+def render_truth_miss_preflight(
+    definition, *, project_root: Path,
+    missing: Mapping[tuple[int | None, str], str],
+) -> str:
+    """Full read-only matrix BEFORE approval; no speculative Replay REUSE.
+
+    The Truth status is certified by the canonical source producer's read-only
+    probe.  Replay file presence is explicitly NOT scientific REUSE.  This is
+    a conditional one-approval execution plan: BUILD only the missing truth,
+    then certify each Replay and RUN only genuine misses.  Incomplete legacy
+    score artifacts make a full Portfolio REUSE assertion impossible without
+    scientific reconstruction, so we do not fabricate one.
+    """
+    if not missing:
+        raise OracleBlockedError(
+            "Oracle read-only truth probe did not provide a source-complete deficit plan; "
+            "cannot assert REUSE before validating all sources"
+        )
+    settings, _base, _exact = _contract(definition)
+    plan = _oracle_comparison_plan(definition)
+    benchmark = get_strategy_multi_seed_robustness_settings(settings.profile_id)
+    seeds = tuple(int(seed) for seed in benchmark.resolved_seeds)
+    targets = (str(definition.source["baseline_arm_id"]),
+               *(target for target, _description in plan["targets"]))
+    presence = OracleReplayStore(Path(project_root), definition.output_subdir).preview_candidates(
+        seeds=seeds, targets=targets, dataset=settings.dataset,
+        start_date=str(settings.start_date), requested_end=str(settings.end_date),
+        benchmark=benchmark.benchmark_id,
+        required_oracle_revision=ORACLE_PARITY_IMPLEMENTATION,
+    )
+    rows = []
+    source_build = 0
+    source_reuse = 0
+    portfolio_present = 0
+    for target in targets:
+        per_seed = []
+        for seed in seeds:
+            source = plan["daily_sources"].get(target)
+            needs_source = bool(
+                (int(seed), source) in missing if source is not None else
+                (None, "price") in missing if target != "C96" else False
+            )
+            # Baseline C96 consumes no perfect Target truth; it cannot be
+            # counted as a Target-source REUSE just because no BUILD is needed.
+            state = "NONE" if target == "C96" else "RUN" if needs_source else "REUSE"
+            source_build += int(needs_source)
+            source_reuse += int(state == "REUSE")
+            artifact = presence[(seed, target)]
+            portfolio_present += int(artifact in {"CACHE", "MULTIPLE"})
+            evidence = ("PRESENT" if artifact in {"CACHE", "MULTIPLE"} else
+                        "BLOCKED" if artifact == "INVALID" else "MISSING")
+            formatted = styled_workflow_status(state) if state != "NONE" else state
+            per_seed.append(f"{formatted}/{evidence}")
+        rows.append((target, *per_seed))
+    missing_by_source: dict[str, list[str]] = {}
+    for (seed, source), reason in missing.items():
+        missing_by_source.setdefault(source, []).append(
+            "shared" if seed is None else "S" + str(seeds.index(int(seed)) + 1)
+            if int(seed) in seeds else f"seed={seed}"
+        )
+    missing_summary = [
+        f"  {source}: {', '.join(missing_by_source[source])}"
+        for source in sorted(missing_by_source)
+    ]
+    return "\n".join((
+        "[Target 驗證 | 執行前完整工作表：真值／既有Replay工件]",
+        "Seed：" + "  ".join(f"S{i + 1}={seed}" for i, seed in enumerate(seeds)),
+        render_table(("Target", *(f"S{i + 1}" for i in range(len(seeds)))), rows),
+        f"真值 REUSE {source_reuse} / RUN（受影響 Target×Seed）{source_build} / "
+        f"實際待建真值來源 {len(missing)} / C96免真值 {len(seeds)} / "
+        f"Replay工件存在 {portfolio_present}",
+        "每格 = 真值狀態／Replay工件狀態；NONE=C96不消費Target真值。"
+        "真值 REUSE 只代表真值已驗證，不代表Portfolio REUSE；",
+        "PRESENT 只代表既有 Replay 工件通過檔案完整性檢查，仍須在真值補齊後依實際分數 SHA、P16、價格、期間核對。",
+        "按 Enter 僅授權真值缺件 BUILD，之後直接執行同一份條件計畫：Portfolio 真正 REUSE 零交易重算；"
+        "只有身分完整驗證為 RUN 的缺件才回放，衝突 BLOCKED 立即停止。",
+        "缺少真值來源（各來源只 BUILD 一次，Exact／Direct 共用）：",
+        *missing_summary,
+    ))
+
+
 def _prepare_oracle_parameters(
     definition, *, root: Path, parameter_paths, start: str, end: str, base_arm,
 ):
@@ -1515,6 +1604,10 @@ def _build_report_once(
     daily_seed_evidence: dict[int, dict[str, dict[str, Any]]] = {}
     source_actions: dict[tuple[int, str], str] = {}
     feature_cohort_cache: dict[tuple[str, ...], tuple[pd.DataFrame, str]] = {}
+    # In read-only preflight, probe ALL canonical truth sources and accumulate
+    # their actual missing dependencies; never abort the matrix at the first
+    # stock-day source.  Scientific producers still require explicit approval.
+    truth_misses: dict[tuple[int | None, str], str] = {}
     # A target never controls portfolio replay time. Evaluation is owned by
     # the canonical Oracle/Research DL window, independently of comparison rows.
     evaluation_end = str(definition.dimensions.get("oracle_evaluation_end_date") or "")
@@ -1558,7 +1651,11 @@ def _build_report_once(
                             f"seed={seed} {name} {message}")) if not quiet else None,
                     )
                 except DailyTrade40TruthBuildRequired as exc:
-                    raise OracleTruthBuildRequired(str(exc)) from exc
+                    if preflight_approval is None:
+                        raise OracleTruthBuildRequired(str(exc)) from exc
+                    truth_misses[(int(seed), source_name)] = str(exc)
+                    source_actions[(int(seed), source_name)] = "BUILD"
+                    continue
                 except (DailyTrade40OracleBlockedError, ValueError) as exc:
                     raise OracleBlockedError(
                         f"Formal Min seed={seed} {source_name} target blocked: {exc}"
@@ -1583,12 +1680,12 @@ def _build_report_once(
                              f"horizon-beyond-cutoff={evidence.get('cutoff_truncated_rows', 0):,}; "
                              f"cutoff-closeouts={evidence.get('research_cutoff_closeout_rows', 0):,}")
             for alias, original in plan["aliases"].items():
-                if original in plan["daily_recipes"]:
+                if original in daily_seed_scores[int(seed)]:
                     daily_seed_scores[int(seed)][alias] = daily_seed_scores[int(seed)][original]
         if set(daily_seed_scores) != {seed for seed, _ in parameter_paths}:
             raise OracleBlockedError("Daily-universal per-seed scores incomplete")
         for seed_evidence in daily_seed_evidence.values():
-            if set(seed_evidence) != set(plan["daily_recipes"]):
+            if not truth_misses and set(seed_evidence) != set(plan["daily_recipes"]):
                 raise OracleBlockedError("Daily-universal per-source truth incomplete")
             for evidence in seed_evidence.values():
                 if (str(evidence["first_date"]) < _formal_dl_score_start(definition, settings)
@@ -1599,23 +1696,31 @@ def _build_report_once(
         def source_status(action: str) -> None:
             nonlocal price_source_action
             price_source_action = action
-        scores40, cohort40 = _load_or_build_oracle_price_scores(
-            definition, project_root=root, cutoff=str(settings.end_date),
-            price_sha=price_sha, progress=None if quiet else progress,
-            source_status_callback=source_status,
-            allow_build=preflight_approval is None,
-        )
+        try:
+            scores40, cohort40 = _load_or_build_oracle_price_scores(
+                definition, project_root=root, cutoff=str(settings.end_date),
+                price_sha=price_sha, progress=None if quiet else progress,
+                source_status_callback=source_status,
+                allow_build=preflight_approval is None,
+            )
+        except OracleTruthBuildRequired as exc:
+            if preflight_approval is None:
+                raise
+            truth_misses[(None, "price")] = str(exc)
+            price_source_action = "BUILD"
+            scores40, cohort40 = {}, {}
     else:
         # Daily-only comparisons use the SAME fixed evaluation cutoff as the
         # full mixed comparison. They never derive a date from the selected H.
         scores40 = {}
-        reference_name = next(iter(plan["daily_recipes"]))
-        seed_keys = [set(scores[reference_name]) for scores in daily_seed_scores.values()]
-        if not seed_keys or any(keys != seed_keys[0] for keys in seed_keys[1:]) or not seed_keys[0]:
-            raise OracleBlockedError("Daily-universal per-seed score cohorts are incomplete/incompatible")
-        first_day = min(day for _ticker, day in seed_keys[0])
-        last_day = max(day for _ticker, day in seed_keys[0])
-        cohort40 = {
+        if not truth_misses:
+            reference_name = next(iter(plan["daily_recipes"]))
+            seed_keys = [set(scores[reference_name]) for scores in daily_seed_scores.values()]
+            if not seed_keys or any(keys != seed_keys[0] for keys in seed_keys[1:]) or not seed_keys[0]:
+                raise OracleBlockedError("Daily-universal per-seed score cohorts are incomplete/incompatible")
+            first_day = min(day for _ticker, day in seed_keys[0])
+            last_day = max(day for _ticker, day in seed_keys[0])
+            cohort40 = {
             "cohort_rows": len(seed_keys[0]),
             "oracle_parity_implementation": ORACLE_PARITY_IMPLEMENTATION,
             "first_common_day": first_day, "last_common_day": last_day,
@@ -1626,7 +1731,14 @@ def _build_report_once(
                           for _recipe, provider, horizon in plan["daily_recipes"].values()},
             "scoring": "Canonical daily target percentile on formal feature-eligible daily cohort",
             "oracle_only": True,
-        }
+            }
+    if truth_misses:
+        # After every source has been probed, return ONE full dependency table
+        # before the first user input.  This exception never claims a cached
+        # economic Replay is certified from a file-presence inventory.
+        raise OracleTruthBuildRequired(
+            "; ".join(truth_misses.values()), missing=truth_misses,
+        )
     # Only the independent, registry-declared evaluation date can clip the
     # replay population. Crop WHOLE dates, not any one target's samples.
     # The daily provider has already calculated every eligible row through
@@ -1957,13 +2069,9 @@ def build_report(
         # scores are certified. Do not manufacture an all-RUN matrix here.
         # The approval authorizes only the canonical missing-truth BUILD and
         # downstream work selected by the subsequently certified Replay plan.
-        preview = "\n".join((
-            "[Target 驗證｜真值缺件；Replay 尚未完成身分核對]",
-            f"缺件來源：{exc}",
-            "目前無法判定完整 REUSE／RUN／BLOCKED；不得由檔案存在或真值缺件推定投組需要重算。",
-            "按 Enter 將只建立實際缺失的真值；完成後顯示正式矩陣，"
-            "由該矩陣直接決定需 RUN 的 Portfolio（同一授權，不另詢問）。",
-        ))
+        preview = render_truth_miss_preflight(
+            definition, project_root=project_root, missing=exc.missing,
+        )
         if not quiet:
             print("\n" + preview, flush=True)
         if not preflight_approval(preview):
