@@ -13782,3 +13782,12 @@ Decision: `ENGINEERING_CHECKPOINT_FIRST_REUSE / HISTORICAL_AK_EVIDENCE_PRESERVED
 - **Bug D，比較清單的非執行性 cohort metadata 污染逐 Arm REUSE**：同一 Target、同一可評分股票日／分數 SHA、同一參數與期間，只因選擇其他 Target 造成 `providers`／`market_truth` 報表計數不同，舊快取會被辨識為不同 Replay 身分。單一 `OracleReplayStore` 現只將成熟日期界線、樣本數、研究截止、研究風險語意與 implementation identity 置於 cohort execution identity；各 Target 已有經驗證的真實 perfect-score SHA、feature eligibility SHA 與 provider Target contract，另有價格與 P16 SHA。舊 V2 僅在真實所有執行身分一致時允許只讀等價 REUSE；實際 score SHA／期間／行情／參數不同仍嚴格拒絕。
 - **Registry 校正**：現行 DailyUniversal 描述已不再把 OOS 分數起點前的 2020-12-31 說成具有正式 PIT 分數；現行比較數量為 11，而非歷史 14，RUN／REUSE 不以舊 48／8 固定數判定。保留歷史研究紀錄、Target 名稱及原報表 SC，並不變更實際 PIT 時序。
 - **驗證界線**：本輪已新增 Direct-only、Direct-before-Exact、完整 subset、快取參照證據等隔離回歸；各項執行結果以當輪 QA 文件為準。本 ZIP 不含完整本機行情、四 Seed 正式 P16 與既有 `outputs/`，因此未重新認證實際市場 RoMD；未執行 Windows formal Double Check；舊版未經 E13 驗收的績效不能被追認為 current。
+
+
+## 2026-10-26 — Oracle E13 流程級回歸收斂：完整年度覆蓋與零成交交易日（工程 Bug Fix，無新 SC）
+
+- **工作基準與既有契約**：`test-branch-1_20261026_141442_a2aeb3ad.zip`（SHA256 `d85baeeb18d4506a28d6240b5db2660be84c58351333a5011f469e4aaca5e9af`）；依 `PROJECT_SETTINGS` C23／E13，仍為完美 Target 每日百分位、同條件 Research DL Selector／P16／Broker-Cash 的反事實驗證。使用完整來源鏈／八大契約面向一次核對，不將後續無證據猜測滾動增加新 SC／驗收 Gate。
+- **Bug A（已重現／修正）**：Oracle `_aggregate()` 先前只比對各 Seed 的年度列表是否一致，卻未驗證是否覆蓋本次 Replay 的整個年份範圍，導致四 Seed 同時缺少 2022～2025 年時仍可生成看似完整的年度績效。現在正式 `build_report()` 將實際 Replay `period_start`／`period_end` 注入同一聚合 owner，逐 Seed 比對完整年度集合；缺年、重複年度、不一致 Full-Year 標記均 BLOCKED。不要求 2025-12-22 截止的年度假裝是完整年度。
+- **Bug B（已重現／修正）**：DailyUniversal 原本把「任何單一資訊日全部掛單未成交」視為整段 Target 缺少已實現經濟真值而 BLOCKED，與既定 `censored_rank_last` 規則不一致。現在只有合法無成交的當日 cohort 允許同分最後（當日全數未成交時 rank=0.5），不虛構 Net-R；全來源完全沒有可實現資料仍保留既有嚴格阻擋。若真正缺少生效的 Min 參數，仍必須在排名前 BLOCKED，不能混作未成交。
+- **執行前置與回歸**：沿用正式 11 個 Target（6 Exact／5 Direct）、已退役兩個事件型 Target、正式 0050 缺分數／score start、可用股票日、P16 雙讀 SHA、逐 Arm REUSE、唯一 Broker-Cash Replay；11 個 Target 的全部 2,047 種非空比較清單組合及反序解析 PASS，Oracle／DailyTrade40 121/121 unit tests PASS。合成測試並非真實四 Seed 市場回放或 Windows formal double check，不以它們宣稱 E13 市場驗收已完成。
+- **停止規則／維護性**：本輪只修復有確定反例且可從原 E13 唯一推導的兩處既有 owner，沒有建立額外獨立 Validator、報表、研究 ID、Target 或 Cache。後續只有真實本機工件、完整測試或新的可重現反例證明契約偏離，才有理由重新開啟相應缺陷；不以不斷尋找假設性邊界當作已要求的無限重構。

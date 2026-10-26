@@ -182,8 +182,10 @@ def build_daily_universal_trade40_oracle_scores(
         outcome = pd.concat(records, ignore_index=True).sort_values(["date", "ticker"], kind="stable")
         if outcome.empty or not outcome["realized_net_r"].notna().any():
             raise DailyTrade40OracleBlockedError("No completed valid formal-Min Net-R outcomes")
-        if outcome.groupby("date")["realized_net_r"].count().eq(0).any():
-            raise DailyTrade40OracleBlockedError("At least one information date has no settled path")
+        # An information date with no filled path is still a valid censored
+        # cross-section: all its stocks tie for last place (canonical rank 0.5).
+        # No R is imputed. Missing rolling Min parameters are blocked above;
+        # genuine unfilled orders must not make the whole OOS window unusable.
         scores = rank_trade40_outcome_frame(outcome)
         if len(scores) != len(outcome):
             raise DailyTrade40OracleBlockedError("Oracle daily scores missing feature-eligible rows")

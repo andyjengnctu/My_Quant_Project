@@ -1061,12 +1061,24 @@ def _metrics(replay: dict[str, Any], *, target: str) -> dict[str, Any]:
     }
 
 
-def _aggregate(records: list[dict[str, Any]], *, target: str) -> dict[str, Any]:
+def _aggregate(
+    records: list[dict[str, Any]], *, target: str,
+    period_start: str | None = None, period_end: str | None = None,
+) -> dict[str, Any]:
     if not records:
         raise OracleBlockedError("Oracle robustness missing seed observations")
     seeds = [int(row["seed"]) for row in records]
     if len(set(seeds)) != len(seeds):
         raise OracleBlockedError(f"Oracle {target} robustness has duplicate benchmark seeds")
+    expected_years: tuple[str, ...] | None = None
+    if (period_start is None) != (period_end is None):
+        raise OracleBlockedError(f"Oracle {target} annual period boundaries are incomplete")
+    if period_start is not None:
+        first = pd.Timestamp(period_start)
+        last = pd.Timestamp(period_end)
+        if last < first:
+            raise OracleBlockedError(f"Oracle {target} annual period boundaries are reversed")
+        expected_years = tuple(str(year) for year in range(first.year, last.year + 1))
     # Every observed year must exist for *every* same-window seed. Otherwise
     # a one-seed yearly result could appear as an N-seed Oracle comparison.
     annual_rows: list[dict[str, dict[str, Any]]] = []
@@ -1080,6 +1092,14 @@ def _aggregate(records: list[dict[str, Any]], *, target: str) -> dict[str, Any]:
         if len(by_year) != len(yearly):
             raise OracleBlockedError(f"Oracle {target} seed={record['seed']} duplicated annual evidence")
         years = tuple(sorted(by_year))
+        # All seeds agreeing with one another is not enough: all of them may
+        # have silently lost the SAME year. The Replay period is authoritative.
+        if expected_years is not None and years != expected_years:
+            raise OracleBlockedError(
+                f"Oracle {target} seed={record['seed']} annual coverage does not "
+                f"match replay period {period_start}~{period_end}: "
+                f"expected={expected_years}, found={years}"
+            )
         complete = {}
         for year in years:
             year_flag = by_year[year].get("is_full_year")
@@ -1660,10 +1680,14 @@ def build_report(
                     )
                 observations[target].append(record)
 
-        baseline_summary = _aggregate(observations["C96"], target="C96")
+        baseline_summary = _aggregate(
+            observations["C96"], target="C96", period_start=start, period_end=end,
+        )
         rows: list[dict[str, Any]] = []
         for target, _description in targets:
-            item = _aggregate(observations[target], target=target)
+            item = _aggregate(
+                observations[target], target=target, period_start=start, period_end=end,
+            )
             diffs = np.array([record["delta_romd_vs_c96"] for record in observations[target]], dtype=float)
             item["delta_romd_vs_c96"] = float(np.mean(diffs))
             item["delta_romd_std"] = float(np.std(diffs, ddof=1)) if len(diffs) > 1 else 0.0

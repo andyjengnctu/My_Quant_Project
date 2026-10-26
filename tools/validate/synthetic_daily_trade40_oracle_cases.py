@@ -369,6 +369,47 @@ class FormalMinDailyOracleCases(TestCase):
         self.assertEqual(len(scores), 4)
         self.assertGreater(evidence["censored_rank_last_rows"], 0)
 
+    def test_date_with_all_unfilled_orders_is_a_valid_equal_last_tie(self):
+        """No filled trade on a date is not missing parameters or a fabricated R.
+
+        The approved censored-rank-last mapping has an unambiguous tied rank
+        even when every stock on that day is censored. Do not block a five-year
+        Oracle solely because one information date has no filled Min path.
+        """
+        from filters.breakout_quality.daily_trade40_target import CounterfactualTrade40Batch
+        from services.audit import daily_trade40_oracle as provider
+        original = provider.compute_counterfactual_trade40_batch
+
+        def unfilled_last_day(*args, **kwargs):
+            result = original(*args, **kwargs)
+            values = np.asarray(result.target_raw_r, dtype=np.float32).copy()
+            valid = np.asarray(result.valid_mask, dtype=bool).copy()
+            reasons = list(result.reasons)
+            # The first day still has a real executed outcome; the second
+            # day's entire cohort has zero fills, but valid Min parameters.
+            if kwargs["ticker"] == "2330":
+                values[0] = 1.5
+                valid[0] = True
+                reasons[0] = "filled_executed_net_R"
+            else:
+                values[0] = np.nan
+                valid[0] = False
+                reasons[0] = "unfilled_limit_order"
+            values[-1] = np.nan
+            valid[-1] = False
+            reasons[-1] = "unfilled_limit_order"
+            return CounterfactualTrade40Batch(
+                values, valid, result.maturity_dates, tuple(reasons),
+            )
+
+        with patch.object(provider, "compute_counterfactual_trade40_batch",
+                          side_effect=unfilled_last_day):
+            scores, evidence = run_source()
+        self.assertEqual(scores[("2330", "2021-01-05")], 0.5)
+        self.assertEqual(scores[("2317", "2021-01-05")], 0.5)
+        self.assertEqual(evidence["settled_net_r_rows"], 1)
+        self.assertEqual(evidence["censored_rank_last_rows"], 3)
+
     def test_source_is_seed_specific_even_with_same_stock_days(self):
         _,_,_,s1=source_fixture()
         p=s1[0].params
@@ -470,7 +511,8 @@ class FormalMinReplayIntegrationCases(TestCase):
             return {"target":target,"seed":seed,"total_return_pct":100.,
                     "annualized_return_pct":12.,"mdd_pct":10.,"romd":romd,
                     "ev_a_r":.5,"trades":25,"exposure_pct":60.,
-                    "yearly":[{"year":2025,"strategy_return_pct":5.,"is_full_year":True}]}
+                    "yearly":[{"year":year,"strategy_return_pct":5.,"is_full_year":year!=2025}
+                              for year in range(2021,2026)]}
         formal=source_fixture()[3]
         def scores(*,seed,param_sha256,**kwargs):
             score_map={("2330","2025-01-03"):0.625}

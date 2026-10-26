@@ -38,6 +38,12 @@ from filters.breakout_quality.runtime import (
 )
 from services.audit import target_oracle_romd as oracle
 
+
+def _synthetic_full_window_yearly(*, return_pct: float = 5.0) -> list[dict]:
+    """Complete 2021-2025 simulated replay evidence, not a one-year cache stub."""
+    return [{"year": year, "strategy_return_pct": float(return_pct),
+             "is_full_year": year != 2025} for year in range(2021, 2026)]
+
 # Historical stock-day Oracle regressions must not instantiate a P16 path
 # provider in a temporary no-market fixture. The active suite is tested below.
 _ACTIVE_ORACLE_DEFINITION = next(
@@ -613,7 +619,7 @@ class OracleScoreParityContractCases(TestCase):
             return {"target": target, "total_return_pct": 40., "annualized_return_pct": 8.,
                     "mdd_pct": 6., "romd": {"C96": 8., source: 12., direct: 15.}[target],
                     "ev_a_r": .6, "trades": 9, "exposure_pct": 30.,
-                    "yearly": [{"year": 2025, "strategy_return_pct": 5., "is_full_year": False}]}
+                    "yearly": _synthetic_full_window_yearly()}
         with tempfile.TemporaryDirectory() as directory, \
              patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
              patch.object(oracle, "_robustness_artifacts", return_value=(
@@ -673,7 +679,7 @@ class OracleScoreParityContractCases(TestCase):
             return {"target": target, "total_return_pct": 40., "annualized_return_pct": 8.,
                     "mdd_pct": 6., "romd": {"C96": 8., direct: 15.}[target],
                     "ev_a_r": .6, "trades": 9, "exposure_pct": 30.,
-                    "yearly": [{"year": 2025, "strategy_return_pct": 5., "is_full_year": False}]}
+                    "yearly": _synthetic_full_window_yearly()}
         with tempfile.TemporaryDirectory() as directory, \
              patch.object(oracle, "collect_status", return_value={"status":"READY"}), \
              patch.object(oracle, "_robustness_artifacts", return_value=(
@@ -1229,8 +1235,7 @@ class OracleAuditContractCases(TestCase):
                     "annualized_return_pct": 15.0, "mdd_pct": 12.0,
                     "romd": (8.0 if target == "C96" else 12.0) + seeds.index(seed) * 0.2,
                     "ev_a_r": 0.4, "trades": 50, "exposure_pct": 45.0,
-                    "yearly": [{"year": 2021, "strategy_return_pct": 4.0,
-                                "is_full_year": True}]}
+                    "yearly": _synthetic_full_window_yearly(return_pct=4.0)}
         def matching_panels(selected_definition, **_kwargs):
             complete, evidence = _mock_panels(full)
             selected = {str(item["target"]) for item in selected_definition.source["oracle_comparisons"]}
@@ -1708,7 +1713,7 @@ class OracleAuditContractCases(TestCase):
                 "target": target, "total_return_pct": 100.0, "annualized_return_pct": 15.0,
                 "mdd_pct": 12.0, "romd": base_romd if target == "C96" else base_romd + 1.5,
                 "ev_a_r": 0.3, "trades": 50, "exposure_pct": 75.0,
-                "yearly": [{"year": 2021, "strategy_return_pct": 4.0, "is_full_year": True}],
+                "yearly": _synthetic_full_window_yearly(return_pct=4.0),
             }
         with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
              patch.object(oracle, "_robustness_artifacts", return_value=(Benchmark(), [(seed, Path(f"seed_{seed}.json")) for seed in seeds])), \
@@ -2079,6 +2084,22 @@ class OracleSameWindowEvidenceInvariantCases(TestCase):
                 self._observation(1), self._observation(2, (2021,), flags=(True,)),
             ], target="T40")
 
+    def test_rejects_every_seed_missing_the_same_replay_years(self):
+        # Prior check only compared seeds with each other; all four could
+        # silently drop 2022-2025 and still publish a 'COMPLETED' report.
+        four = [self._observation(seed, years=(2021,), flags=(True,))
+                for seed in (11, 22, 33, 44)]
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "annual coverage does not match replay period"):
+            oracle._aggregate(four, target="T40",
+                              period_start="2021-01-01", period_end="2025-12-22")
+        complete = [self._observation(seed, years=(2021, 2022, 2023, 2024, 2025),
+                                      flags=(True, True, True, True, False))
+                    for seed in (11, 22, 33, 44)]
+        yearly = oracle._aggregate(complete, target="T40",
+                                   period_start="2021-01-01", period_end="2025-12-22")["yearly"]
+        self.assertEqual([row["year"] for row in yearly], [str(y) for y in range(2021, 2026)])
+        self.assertFalse(yearly[-1]["is_full_year"])
+
     def test_rejects_duplicate_seed_and_duplicate_year(self):
         with self.assertRaisesRegex(oracle.OracleBlockedError, "duplicate benchmark seeds"):
             oracle._aggregate([self._observation(1), self._observation(1)], target="T40")
@@ -2152,7 +2173,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
             "total_return_pct": 123.0, "annualized_return_pct": 16.0,
             "mdd_pct": 12.0, "romd": romd, "ev_a_r": 0.7,
             "trades": 100, "exposure_pct": 75.0,
-            "yearly": [{"year": 2021, "strategy_return_pct": 14.0, "is_full_year": True}],
+            "yearly": _synthetic_full_window_yearly(return_pct=14.0),
         }
         if target != "C96":
             observation["delta_romd_vs_c96"] = 2.0
