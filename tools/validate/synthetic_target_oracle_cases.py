@@ -152,6 +152,100 @@ class OracleScoreParityContractCases(TestCase):
             oracle._certify_oracle_score_eligibility(
                 definition, contracts=contracts, plan=plan, price_scores=prices, daily_scores=daily)
 
+    def test_cross_target_scored_cohort_must_be_identical_not_just_same_count(self):
+        definition = _ACTIVE_ORACLE_DEFINITION
+        settings, _base, _exact = oracle._contract(definition)
+        plan = oracle._oracle_comparison_plan(definition)
+        contracts = oracle._resolve_oracle_target_score_contracts(definition, settings, plan)
+        row = ("2330", "2021-01-04")
+        alternative = ("2317", "2021-01-04")
+        prices = {name: {row: 0.5} for name in plan["recipes"]}
+        for alias, source in plan["aliases"].items():
+            if source in prices:
+                prices[alias] = prices[source]
+        daily_name = "DailyUniversal_MinTrade40_NetR"
+        daily = {seed: {daily_name: {alternative: 0.8}}
+                 for seed in (693545351, 2014432738, 104504529, 762252050)}
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "common scored stock-day cohort differs"):
+            oracle._certify_oracle_score_eligibility(
+                definition, contracts=contracts, plan=plan,
+                price_scores=prices, daily_scores=daily)
+        daily = {seed: {daily_name: {row: 0.8}} for seed in daily}
+        certified = oracle._certify_oracle_score_eligibility(
+            definition, contracts=contracts, plan=plan,
+            price_scores=prices, daily_scores=daily)
+        self.assertEqual({x["canonical_feature_eligible_keys_sha256"] for x in certified.values()},
+                         {certified[daily_name]["canonical_feature_eligible_keys_sha256"]})
+        # Price-only comparisons and legitimate Daily-only comparisons do not
+        # require unselected providers to exist.
+        for selected in ({"T40", "T40-MFE"}, {daily_name, daily_name+"_Direct"}):
+            subset = replace(definition, source={**definition.source,
+                "oracle_comparisons": tuple(item for item in definition.source["oracle_comparisons"]
+                                            if item["target"] in selected)})
+            subplan = oracle._oracle_comparison_plan(subset)
+            subcontracts = oracle._resolve_oracle_target_score_contracts(subset, settings, subplan)
+            certified = oracle._certify_oracle_score_eligibility(
+                subset, contracts=subcontracts, plan=subplan,
+                price_scores=prices, daily_scores=daily)
+            self.assertEqual(len(certified), len(selected))
+
+    def test_cross_target_cohort_rejects_different_keys_in_a_price_alias(self):
+        definition = _ACTIVE_ORACLE_DEFINITION
+        settings, _, _ = oracle._contract(definition)
+        plan = oracle._oracle_comparison_plan(definition)
+        contracts = oracle._resolve_oracle_target_score_contracts(definition, settings, plan)
+        row = ("2330", "2021-01-04")
+        prices = {name: {row: 0.5} for name in plan["recipes"]}
+        for alias, source in plan["aliases"].items():
+            if source in prices:
+                prices[alias] = prices[source]
+        daily = {1: {"DailyUniversal_MinTrade40_NetR": {row: 0.9}}}
+        prices["R40_Direct"] = {("2317", "2021-01-04"): 0.5}
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "common scored stock-day cohort differs"):
+            oracle._certify_oracle_score_eligibility(
+                definition, contracts=contracts, plan=plan, price_scores=prices, daily_scores=daily)
+
+    def test_mixed_incompatible_mature_cohorts_block_before_cache_and_replay(self):
+        from services.audit import daily_trade40_oracle as daily_owner
+        from services.audit.daily_trade40_oracle import TARGET_ID, LABEL_ID
+        from filters.breakout_quality import daily_trade40_target as trade_owner
+        definition = _ACTIVE_ORACLE_DEFINITION
+        seed, param_sha = 693545351, "a" * 64
+        plan = oracle._oracle_comparison_plan(definition)
+        price_row, daily_row = ("2330", "2021-01-04"), ("2317", "2021-01-04")
+        scores = {name: {price_row: .7} for name in plan["recipes"]}
+        for alias, source in plan["aliases"].items():
+            if source in scores:
+                scores[alias] = scores[source]
+        evidence = {
+            "teacher": {"seed": seed, "param_identity_sha256": param_sha},
+            "profile_id": definition.source["daily_trade40_profile"],
+            "target_id": TARGET_ID, "label_id": LABEL_ID,
+            "first_date": "2021-01-04", "first_replay_trade_date": "2021-01-04",
+            "mature_eligible_rows": 1, "settled_net_r_rows": 1,
+        }
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
+             patch.object(oracle, "_robustness_artifacts", return_value=(
+                 SimpleNamespace(benchmark_id="end_to_end_v1"), [(seed, Path(tmp)/"params.json")]
+             )), \
+             patch.object(oracle, "_prepare_oracle_parameters", return_value=(
+                 [(seed, param_sha, "rolling_active_param_ensemble", {}, {})], []
+             )), \
+             patch.object(trade_owner, "resolve_formal_min_param_records", return_value=()), \
+             patch.object(trade_owner, "build_formal_min_execution_schedule", return_value=((object(),), {})), \
+             patch.object(daily_owner, "build_daily_universal_trade40_oracle_scores",
+                          return_value=({daily_row: .8}, evidence)), \
+             patch.object(oracle, "_build_oracle_score_panels", return_value=(
+                 scores, {"cohort_rows": 1, "last_common_day": "2025-12-22"}
+             )), \
+             patch.object(oracle, "price_inventory_sha256", side_effect=AssertionError("cache reached")) as inventory, \
+             patch.object(oracle, "_run_scenario", side_effect=AssertionError("replay reached")) as replay:
+            with self.assertRaisesRegex(oracle.OracleBlockedError, "common scored stock-day cohort differs"):
+                oracle.build_report(definition, project_root=Path(tmp), quiet=True)
+        inventory.assert_not_called()
+        replay.assert_not_called()
+
     def test_inventory_is_not_blocked_by_untrained_target_but_remains_read_only(self):
         with tempfile.TemporaryDirectory() as directory:
             status = oracle.collect_status(_ACTIVE_ORACLE_DEFINITION, project_root=Path(directory))
@@ -1555,6 +1649,34 @@ class OracleAuditContractCases(TestCase):
 class RemovedMinTrade40OracleComparisonCases(TestCase):
     """The obsolete signal-event arms are absent, not given a new science ID."""
 
+    def test_retired_target_names_stay_reserved_in_canonical_registry(self):
+        from core.audit_registry import AUDIT_REUSABLE_REPORTS
+        active = _ACTIVE_ORACLE_DEFINITION
+        catalog = AUDIT_REUSABLE_REPORTS["breakout_quality"]["target_oracle_romd"]["source"]
+        retired = catalog["retired_oracle_targets"]
+        self.assertEqual(set(retired), {"MinTrade40_NetR", "MinTrade40_NetR_Direct"})
+        original = catalog["oracle_comparisons"]
+        self.assertTrue(set(retired).isdisjoint({row["target"] for row in original}))
+        existing_daily_exact = next(x for x in original
+                                    if x["target"] == "DailyUniversal_MinTrade40_NetR")
+        existing_daily_direct = next(x for x in original
+                                     if x["target"] == "DailyUniversal_MinTrade40_NetR_Direct")
+        for old, template in (("MinTrade40_NetR", existing_daily_exact),
+                              ("MinTrade40_NetR_Direct", existing_daily_direct)):
+            altered = replace(active, source={**active.source, "oracle_comparisons": (
+                *original, {**template, "target": old},
+            )})
+            with self.subTest(old=old), self.assertRaisesRegex(oracle.OracleBlockedError,
+                                                              "retired Target identity"):
+                oracle._oracle_comparison_plan(altered)
+        # A non-retired Direct row cannot use a reserved old score source.
+        altered = replace(active, source={**active.source, "oracle_comparisons": (
+            *original, {"target": "Unrelated_Direct", "description": "bad source",
+                        "score_source": "MinTrade40_NetR", "selector": "direct"},
+        )})
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "retired Target identity"):
+            oracle._oracle_comparison_plan(altered)
+
     def test_retired_signal_event_target_is_not_selectable(self):
         current = _ACTIVE_ORACLE_DEFINITION
         planned = oracle._oracle_comparison_plan(current)
@@ -1569,7 +1691,7 @@ class RemovedMinTrade40OracleComparisonCases(TestCase):
             "target": "MinTrade40_NetR", "description": "retired", "score": "trade_path_realized_net_r",
             "provider": "event_targets", "selector": "exact",
         })}
-        with self.assertRaisesRegex(oracle.OracleBlockedError, "score/provider|未授權"):
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "retired Target identity"):
             oracle._oracle_comparison_plan(replace(current, source=source))
 
 
@@ -1699,6 +1821,83 @@ class OracleReplayEvidenceReuseCases(TestCase):
             another = dict(corrected, dataset_sha256="f"*64)
             with self.assertRaisesRegex(ValueError, "DIFFERENT identity"):
                 store.resolve_completed(another)
+
+    def test_corrupt_direct_target_does_not_block_exact_with_shared_prefix(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        with tempfile.TemporaryDirectory() as tmp:
+            store = OracleReplayStore(Path(tmp), "breakout_quality/reusable/target_oracle_romd")
+            direct = self._identity(target="R40_Direct")
+            store.write(direct, self._observation("R40_Direct", 1), origin="canonical_replay")
+            store._path(direct).write_text("{damaged", encoding="utf-8")
+            exact = self._identity(target="R40")
+            self.assertEqual(store.resolve_completed(exact), (None, "none"))
+            self.assertIsNone(store.explain_other_identity(exact))
+            self.assertEqual(store.existing_completed_identities(seed=1, target="R40"), ())
+            self.assertEqual(store.preview_candidates(seeds=(1,), targets=("R40",))[(1, "R40")],
+                             "MISSING")
+            with self.assertRaisesRegex(ValueError, "corrupt"):
+                store.resolve_completed(direct)
+
+    def test_canonical_identity_ignores_explanations_but_not_economic_input(self):
+        from services.audit.oracle_replay_artifacts import replay_identity
+        original = self._identity(target="R40")
+        changed = replay_identity(
+            dataset=original["dataset"], dataset_sha256=original["dataset_sha256"],
+            target="R40", definition={"R40": "Report wording changed only"},
+            start=original["start_date"], end=original["end_date"],
+            benchmark=original["benchmark"], param_sha256=original["param_sha256"],
+            seed=original["seed"],
+            cohort={**original["cohort"], "scoring": "new prose in report"},
+            ranking_policy=original["ranking_policy"],
+            ranking_options=original["ranking_options"],
+            evaluation_mode=original["evaluation_mode"],
+            max_positions=original["max_positions"], replay_policy=original["replay_policy"],
+        )
+        self.assertEqual(changed, original)
+        self.assertNotIn("scoring", changed["cohort"])
+        self.assertEqual(changed["target_definition"], "R40")
+        changed["cohort"]["cohort_rows"] += 1
+        self.assertNotEqual(changed, original)
+
+    def test_v2_display_only_identity_drifts_reuse_with_full_score_evidence(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        with tempfile.TemporaryDirectory() as tmp:
+            store = OracleReplayStore(Path(tmp), "breakout_quality/reusable/target_oracle_romd")
+            current = self._identity(target="R40")
+            current = dict(current, replay_policy={
+                **current["replay_policy"],
+                "perfect_score_sha256": "1" * 64,
+                "canonical_dl_score_contract": {"target_id": "R40", "score_start_date": "2021-01-01"},
+            })
+            old = dict(current, target_definition="40D target written for people",
+                       cohort={**current["cohort"], "scoring": "legacy rendered explanation"})
+            observation = self._observation("R40", 1)
+            store.write(old, observation, origin="canonical_replay")
+            old_path = store._path(old)
+            old_bytes = old_path.read_bytes()
+            reused, origin = store.resolve_completed(current)
+            self.assertEqual(reused, observation)
+            self.assertIn("legacy replay cache", origin)
+            self.assertEqual(old_path.read_bytes(), old_bytes)
+            # It is not enough to have the same description: score-value and
+            # portfolio-economics changes must remain strict conflicts.
+            changed = dict(current, replay_policy={**current["replay_policy"],
+                "perfect_score_sha256": "2" * 64})
+            with self.assertRaisesRegex(ValueError, "DIFFERENT identity"):
+                store.resolve_completed(changed)
+            changed_price = dict(current, dataset_sha256="3" * 64)
+            with self.assertRaisesRegex(ValueError, "DIFFERENT identity"):
+                store.resolve_completed(changed_price)
+
+    def test_v2_baseline_display_only_identity_does_not_require_model_score(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        with tempfile.TemporaryDirectory() as tmp:
+            store = OracleReplayStore(Path(tmp), "breakout_quality/reusable/target_oracle_romd")
+            baseline = self._identity(target="C96")
+            previous = dict(baseline, target_definition="Human baseline description",
+                            cohort={**baseline["cohort"], "scoring": "old user text"})
+            store.write(previous, self._observation("C96", 1), origin="canonical_replay")
+            self.assertEqual(store.resolve_completed(baseline)[0], self._observation("C96", 1))
 
     def test_partial_unit_cache_reuses_only_identical_input_identity(self):
         from services.audit.oracle_replay_artifacts import OracleReplayStore

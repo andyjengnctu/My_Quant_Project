@@ -111,6 +111,13 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                 # The remaining DailyUniversal Net-R truth uses the formal
                 # per-seed Min path on the DL-eligible stock-day universe.
                 "daily_trade40_profile": "daily_universal_full_horizon_mae_gated_mfe_t40_full_list_ndcg_pairwise",
+                # Historical comparison slots: immutable names retained by the
+                # canonical Registry, never executable and never reassignable.
+                # They are NOT part of the active comparison inventory.
+                "retired_oracle_targets": {
+                    "MinTrade40_NetR": "LABEL-mintrade40_realized_net_r_v1",
+                    "MinTrade40_NetR_Direct": "LABEL-mintrade40_realized_net_r_v1",
+                },
                 "oracle_comparisons": (
                     {"target": "CG40_EqualRank", "description": "40D MFE + full D40 Safety, 50/50 daily rank", "score": "equal_rank_mfe_safety", "provider": "pure_mfe40_provider", "selector": "exact"},
                     {"target": "MFE40_Control", "description": "40D MFE only (control, not target recommendation)", "score": "mfe", "provider": "pure_mfe40_provider", "selector": "exact"},

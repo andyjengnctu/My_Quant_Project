@@ -34,6 +34,47 @@ _REQUIRED_METRICS = (
 _MISSING = object()
 
 
+def _execution_cohort(cohort: Mapping[str, Any]) -> dict[str, Any]:
+    """Retain computational/eligibility evidence, not display wording.
+
+    The score-table SHA, research cutoff, sample count, providers, risk budget,
+    and maturity evidence remain in the identity. Only the report explanation
+    text is excluded; a genuine change to the score table still conflicts.
+    """
+    return {key: value for key, value in cohort.items() if key != "scoring"}
+
+
+def _v2_presentation_identity(stored: Mapping[str, Any], expected: Mapping[str, Any]) -> dict[str, Any]:
+    """Interpret verified V2 display-only cache drift without altering bytes.
+
+    Older V2 identities hashed target descriptions and cohort.scoring. A
+    non-C96 cache is only eligible for this compatibility path when both
+    identities independently contain the exact same actual perfect-score SHA
+    and canonical score contract. Other scientific/economic keys must match.
+    Schema V1 remains subject to its existing strict legacy migration rule.
+    """
+    result = dict(stored)
+    if result.get("cache_schema") != _CACHE_SCHEMA or expected.get("cache_schema") != _CACHE_SCHEMA:
+        return result
+    if result.get("target") != expected.get("target"):
+        return result
+    if result.get("target") != "C96":
+        prev_policy, next_policy = result.get("replay_policy"), expected.get("replay_policy")
+        if not isinstance(prev_policy, Mapping) or not isinstance(next_policy, Mapping):
+            return result
+        score_sha = next_policy.get("perfect_score_sha256")
+        if (not is_sha256_hex(score_sha)
+                or prev_policy.get("perfect_score_sha256") != score_sha
+                or not isinstance(next_policy.get("canonical_dl_score_contract"), Mapping)
+                or prev_policy.get("canonical_dl_score_contract") != next_policy["canonical_dl_score_contract"]):
+            return result
+    if isinstance(result.get("target_definition"), str):
+        result["target_definition"] = expected.get("target_definition")
+    if isinstance(result.get("cohort"), Mapping):
+        result["cohort"] = _execution_cohort(result["cohort"])
+    return result
+
+
 def _changed_identity_fields(stored: Mapping[str, Any], expected: Mapping[str, Any]) -> tuple[str, ...]:
     """Explain strict scientific identity inequality without relaxing the match."""
     changes: list[str] = []
@@ -95,7 +136,10 @@ def replay_identity(*, dataset: str, dataset_sha256: str, target: str,
         "cache_schema": _CACHE_SCHEMA,
         "science": "target_ground_truth_exact_broker_cash_v1",
         "target": str(target),
-        "target_definition": str(definition[target]),
+        # The immutable target/arm name, not editable report explanation,
+        # identifies the score treatment. Actual perfect-score and source
+        # fingerprints are embedded in replay_policy.
+        "target_definition": str(target),
         "dataset": str(dataset),
         "dataset_sha256": str(dataset_sha256),
         "benchmark": str(benchmark),
@@ -109,7 +153,7 @@ def replay_identity(*, dataset: str, dataset_sha256: str, target: str,
         "ranking_policy": str(ranking_policy),
         "ranking_options": dict(ranking_options),
         "replay_policy": dict(replay_policy),
-        "cohort": dict(cohort),
+        "cohort": _execution_cohort(cohort),
     }
 
 
@@ -244,6 +288,12 @@ class OracleReplayStore:
         for candidate in sorted(path.parent.glob(f"{identity['target']}_*.json")):
             if candidate == path:
                 continue
+            # A filename prefix is NOT an Oracle Target identity.  R40_* also
+            # matches R40_Direct_<sha>.  Do not open an unrelated file at all:
+            # even a corrupt sibling from another arm must not block this arm.
+            suffix = candidate.stem[len(str(identity["target"])) + 1:]
+            if not is_sha256_hex(suffix):
+                continue
             try:
                 payload = json.loads(candidate.read_text(encoding="utf-8"))
                 peer = payload["identity"]
@@ -293,6 +343,8 @@ class OracleReplayStore:
                 candidate_identity = self._legacy_semantic_identity(peer, identity)
                 if candidate_identity is None:
                     candidate_identity = dict(peer)
+                if peer.get("cache_schema") == _CACHE_SCHEMA:
+                    candidate_identity = _v2_presentation_identity(candidate_identity, identity)
                 if oracle_cohorts_compatible(candidate_identity.get("cohort") or {}, requested_cohort):
                     candidate_identity = dict(candidate_identity, cohort=dict(requested_cohort))
                 if candidate_identity == dict(identity):
@@ -303,6 +355,8 @@ class OracleReplayStore:
             examples: dict[str, str] = {}
             for _candidate, peer in conflicts:
                 normalized = self._legacy_semantic_identity(peer, identity) or peer
+                if peer.get("cache_schema") == _CACHE_SCHEMA:
+                    normalized = _v2_presentation_identity(normalized, identity)
                 for field in _changed_identity_fields(normalized, identity):
                     examples.setdefault(
                         field, f"{field} [cache={_identity_field_value(normalized, field)}, "

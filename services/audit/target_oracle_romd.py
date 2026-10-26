@@ -93,7 +93,9 @@ PERIOD_STATS_IMPLEMENTATION = "full_year_calendar_verified_20261026"
 # actual comparison inventory from the resolved Audit definition on each run.
 from core.audit_registry import AUDIT_REUSABLE_REPORTS
 
-_ORACLE_DEFAULT_COMPARISONS = AUDIT_REUSABLE_REPORTS["breakout_quality"]["target_oracle_romd"]["source"]["oracle_comparisons"]
+_ORACLE_CATALOG_SOURCE = AUDIT_REUSABLE_REPORTS["breakout_quality"]["target_oracle_romd"]["source"]
+_ORACLE_DEFAULT_COMPARISONS = _ORACLE_CATALOG_SOURCE["oracle_comparisons"]
+_ORACLE_RETIRED_TARGETS = frozenset(_ORACLE_CATALOG_SOURCE["retired_oracle_targets"])
 ORACLE_TARGETS = tuple((item["target"], item["description"]) for item in _ORACLE_DEFAULT_COMPARISONS)
 
 # Recipe implementation is stable; WHICH recipes and providers are needed is
@@ -136,6 +138,10 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
         selector = str(entry.get("selector") or "")
         if not name or not desc or name in selectors or name == str(definition.source["baseline_arm_id"]):
             raise OracleBlockedError(f"Oracle comparison name缺少、重複或非法：{name}")
+        # Historical identities are owned by the canonical Audit Registry.
+        # Removing a row does not free its name for a different recipe.
+        if name in _ORACLE_RETIRED_TARGETS or str(entry.get("score_source") or "") in _ORACLE_RETIRED_TARGETS:
+            raise OracleBlockedError(f"Oracle retired Target identity不得重新啟用或改作其他score：{name}")
         if selector not in {"exact", "direct"}:
             raise OracleBlockedError(f"Oracle comparison selector未支援：{name} {selector}")
         # Scientific target names are immutable. A previous name cannot be
@@ -891,6 +897,8 @@ def _certify_oracle_score_eligibility(
     common Replay boundary. No future truth becomes a PIT model artifact.
     """
     certified = {}
+    common_keys: set[tuple[str, str]] | None = None
+    common_source = ""
     for name, contract in contracts.items():
         if name in plan["daily_sources"]:
             source_name = plan["daily_sources"][name]
@@ -906,6 +914,25 @@ def _certify_oracle_score_eligibility(
         if any(day < score_start or not ticker or len(day) != 10
                for ticker, day in candidates):
             raise OracleBlockedError(f"{name}: Oracle score股票日超出正式DL score期間")
+        # The published common cohort must be a mathematically identical set
+        # of feature-eligible, mature information-date stock-days across ALL
+        # selected targets, not merely a matching count or daily/seed subset.
+        # A target-specific maturity mismatch must fail closed rather than
+        # silently use an intersection that changes the Research DL universe.
+        if common_keys is None:
+            common_keys, common_source = candidates, name
+        elif candidates != common_keys:
+            only_current = candidates - common_keys
+            only_reference = common_keys - candidates
+            current_example = min(only_current) if only_current else None
+            ref_example = min(only_reference) if only_reference else None
+            raise OracleBlockedError(
+                f"CONTRACT_UNRESOLVED: Oracle common scored stock-day cohort differs: "
+                f"{name} vs {common_source}; "
+                f"extra={len(only_current)} (e.g. {current_example}), "
+                f"missing={len(only_reference)} (e.g. {ref_example}); "
+                "Target maturity/feature eligibility must match, no silent intersection"
+            )
         evidence = hashlib.sha256(
             "".join(f"{ticker}|{day}\n" for ticker, day in sorted(candidates)).encode("utf-8")
         ).hexdigest()

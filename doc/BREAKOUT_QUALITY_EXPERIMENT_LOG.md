@@ -13734,3 +13734,13 @@ Decision: `ENGINEERING_CHECKPOINT_FIRST_REUSE / HISTORICAL_AK_EVIDENCE_PRESERVED
 - **實際偏差**：`target_oracle_romd.build_report()` 建立 `HistoricalOracleIndex` 與 `legacy_context` 卻完全未被正式 Replay／REUSE 消費；快速盤點卻曾另取歷史整份 `audit.json` 作 REUSE 候選，造成畫面 REUSE、正式實際 RUN 的分歧。損壞而無關的舊報表會在建構 Historical Index 時拋錯，可能阻斷正常正式 Replay，違背單一 canonical owner。
 - **修復／退役**：移除無使用者的 Historical Index 類別（含 archive discovery、preview、lookup、compatibility diagnostics）與未使用 context；快盤與正式驗證均只消費 `OracleReplayStore` 的逐 Arm 快取。正式完整身分的 Replay REUSE、嚴格舊版逐 Arm 快取等價辨識及衝突阻擋仍保留；歷史報表、研究 Registry、Log 與實際結果 bytes 不刪除、不重新定義為有效現行 Oracle。刪除兩個僅驗證已退役 Index 的測試，保留損壞歷史報表不影響正式 Replay、完整快取命中不重算與不合格舊結果失效的現行測試。
 - **驗收邊界**：GPT 隔離合成檢查已通過；未執行正式 Windows `apps/run_bundle.py`／`apps/test_suite.py`，沒有本機全市場與四 Seed 參數／Replay 工件，故不宣稱實際 RoMD 或端到端市場 parity 已通過。
+
+
+## 2026-10-26 — Oracle E13 四項快取／退役身分／共同母體 Bug Fix（工程，不增 SC）
+
+- **基準與治理**：`test-branch-1_20261026_120127_64643674.zip`（SHA256 `7c4a10bd02fb5b79e34e6381d08be1c7c809ffcbf8369f2b751799e535f0108d`）；依 `doc/PROJECT_SETTINGS.md` C23／E13，維持 11 項 Oracle、C96、原有 `canonical_daily_truth_percentile_v2`、正式 Exact／Direct、Min P16、Broker-Cash、報表契約與科學身分，不另立 Target／SC／Replay 引擎。
+- **P0：跨 Arm 快取污染**：正式 `OracleReplayStore._inspect_siblings` 曾使用 `{target}_*.json` 掃到 `R40_Direct` 再讀取；後者損壞時會誤擋無關的 `R40`。改成**讀取 JSON 前**僅接受精確 `<target>_<64-hex-sha256>.json` 的檔名；同一 Target 的損壞仍 fail-closed，正式 REUSE 與快速盤點共用精確檔名判定。
+- **P0：非執行性字句的快取身分污染**：新的 `replay_identity` 以不可重新指派的 Target name／實際經濟輸入／完美分數 SHA、評分契約、Seed、參數、價格、樣本集合、日期為身分，不再雜湊 `target_definition` 的報表說明或 `cohort.scoring`。已完成的舊 V2 快取僅在**實際分數 SHA 與 canonical score contract 一致、其餘執行欄位全等**（C96 依無模型分數的同一 Portfolio 身分）時允許只讀相容 REUSE；V1 仍採原嚴格相容驗證，原始 bytes 不改動，重大經濟／行情／參數差異維持 BLOCKED。
+- **P1：已退役 Target ID 防重新引用**：在唯一正式 `core/audit_registry.py` 保存 `MinTrade40_NetR`／`MinTrade40_NetR_Direct` 的 reserved historical identity；`_oracle_comparison_plan` 直接拒絕退役名稱或以退役名稱當來源，即使換成有效 DailyUniversal recipe 亦不允許重用。Registry 人讀狀態更新為 historical／retired，保留原研究身分及結果歷史。
+- **P1：共同母體完整性**：在 cache 與 Replay 之前，比對所有選定價格型、DailyUniversal 逐 Seed 及 Direct 的**完整 `(ticker, information_date)` 集合**；不同即標記 `CONTRACT_UNRESOLVED` 並提供雙向差集數量／例子，不因計數相同就通過，也不在缺少授權時以交集縮小候選。價格型-only 與 DailyUniversal-only 仍合法，不要求未選取的來源；成熟邊界如有真實資料差異，須維持 BLOCKED，不能發佈虛假的 common cohort。
+- **驗證邊界**：新增損壞跨前綴、metadata-only identity／V2 舊快取相容、SHA 真變更衝突、退役名稱重新指派、同數量不同 key 的跨 Target 反例；本輪工程測試結果與實際執行紀錄另外交付。來源 ZIP 不包含本機完整市場資料／P16／四 Seed replay，未聲稱真實 RoMD 或 Windows formal Double Check PASS。修補前不符合 E13 的 RoMD 報表仍不可作為正式結論。
