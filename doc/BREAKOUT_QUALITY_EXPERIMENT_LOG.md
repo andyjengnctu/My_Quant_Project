@@ -13726,3 +13726,11 @@ Decision: `ENGINEERING_CHECKPOINT_FIRST_REUSE / HISTORICAL_AK_EVIDENCE_PRESERVED
 - **修補**：從唯一 DailyTrade40 Target owner 讀取正式 Min ROOS Target ID；刪除 Oracle 專用 recipe→舊模型 Target ID 對照表。Target 不要求對應現存模型 Head，但必須使用原已授權的數值完美百分位情境、合法 generic feature-eligible daily 母體、score start、正式 Exact／Direct 分數消費／選股器、Seed/P16 和 Broker-Cash。取消對不存在的同 Target 物理 PIT model scores／validation PASS 的前置依賴，改由已驗證正式 Target／feature producer 認證股票日；每次 Replay 前仍 hash 真正注入的 score bytes 與完整母體／來源 evidence。沒有後門降級到其他模型、可交易新資訊、補 0050 或重訓。
 - **合法 DailyUniversal-only**：只含 DailyUniversal Exact／Direct 比較時不再強制價格型 `recipes`；使用逐 Seed 正式 Min 40-session 成熟股票日建立共用窗口與 replay cohort，不執行未選取的價格型 Provider。若不同 Seed 的完整可評分股票日不一致則 fail-closed。
 - **邊界／誠實標示**：這份 Oracle 是已核准「Target 每日百分位真值分數」的固定反事實情境，**不是所有正確 raw pairwise logit 向量的唯一 Exact 數值上限**，亦不是已訓練 DL 的可實現預測績效。尚無使用者本機四 Seed 真實 Research Dataset／P16／Portfolio 回放與正式 Double Check；舊 RoMD 不可直接 REUSE，需由修後完整身分重新核對／計算。
+
+
+## 2026-10-26 — Oracle 歷史報表第二套 REUSE 索引退役／快盤與正式執行 owner 收斂（工程 Bug Fix，無新 SC）
+
+- **本輪基準**：`test-branch-1_20261026_114437_ffadd14b.zip`；遵守 `doc/PROJECT_SETTINGS.md` 的 C23／E13。正式 Oracle 的完美 Target 百分位、11 組比較、C96、P16、Exact／Direct、Broker-Cash、Score identity 與 Report schema 不變。
+- **實際偏差**：`target_oracle_romd.build_report()` 建立 `HistoricalOracleIndex` 與 `legacy_context` 卻完全未被正式 Replay／REUSE 消費；快速盤點卻曾另取歷史整份 `audit.json` 作 REUSE 候選，造成畫面 REUSE、正式實際 RUN 的分歧。損壞而無關的舊報表會在建構 Historical Index 時拋錯，可能阻斷正常正式 Replay，違背單一 canonical owner。
+- **修復／退役**：移除無使用者的 Historical Index 類別（含 archive discovery、preview、lookup、compatibility diagnostics）與未使用 context；快盤與正式驗證均只消費 `OracleReplayStore` 的逐 Arm 快取。正式完整身分的 Replay REUSE、嚴格舊版逐 Arm 快取等價辨識及衝突阻擋仍保留；歷史報表、研究 Registry、Log 與實際結果 bytes 不刪除、不重新定義為有效現行 Oracle。刪除兩個僅驗證已退役 Index 的測試，保留損壞歷史報表不影響正式 Replay、完整快取命中不重算與不合格舊結果失效的現行測試。
+- **驗收邊界**：GPT 隔離合成檢查已通過；未執行正式 Windows `apps/run_bundle.py`／`apps/test_suite.py`，沒有本機全市場與四 Seed 參數／Replay 工件，故不宣稱實際 RoMD 或端到端市場 parity 已通過。

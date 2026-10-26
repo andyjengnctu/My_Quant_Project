@@ -907,3 +907,10 @@ Direct-account BUY provenance is owned by `services/trading/account_trade_entry.
 - **歷史 cohort 安全邊界**：已完成的舊 Oracle 32 組證據使用原三來源交集，且必須保留當時 `common_cohort` 與結果，不能把沿用舊報表宣稱為已重新建立的 40D-only 評估。新規劃只計算選中 providers 的新共同樣本；若嘗試在新樣本中引用舊 Replay，只在精確相等或能由舊 provider 行數、舊共同樣本數、現行來源與相同 execution/data identity **證明樣本完全等價**時 REUSE，否則 BLOCK。不得因減少 provider 就默許樣本擴大後混用歷史績效。Research v6 報表欄位、計量定義、BEST GREEN／WORST RED 共用配色、PIT/Non-PIT、Trading／P16 訓練均維持原契約。
 - **驗證邊界**：此為 Registry→dependency→cache→producer 的共用修正，不新增平行 Audit、手動模式或第二條 science 判定路徑。獨立合成測試涵蓋比較名單增減、自動 provider 推導、相容舊快取、多歷史版本盤點、非本期間過濾、32 筆已完成結果跳過全部真值計算、舊 cohort 等價性阻擋，以及完全相同 Seed／價格／P16 的科學身分；正式 Windows dataset 與歷史 `outputs/` 必須於使用者本機驗收。
 
+
+### 2026-10-26 — Research [1] Oracle REUSE 唯一執行來源（本輪現行結論）
+
+- `services/audit/oracle_replay_artifacts.py::OracleReplayStore` 的逐 Seed × Target replay cache 是執行 REUSE／RUN／BLOCKED 的唯一 owner；快盤僅預覽逐 Arm 快取存在及完整性，正式決策仍逐項核對資料、分數、參數、cohort 與執行身分。
+- 已退役 `HistoricalOracleIndex`（整份舊 `audit.json` 搜尋／報表內逐 Seed observation 回收）及 `target_oracle_romd.build_report()` 的未使用 `legacy_context`；歷史報表只作不可改寫的研究證據，**不得**作為有效 Oracle Replay 的第二套 REUSE／狀態來源。歷史紀錄中提到「舊完整報表直接 REUSE」是當時的行為紀錄，不再適用於現行 E13 Oracle。
+- 現行 `OracleReplayStore` 仍可依**嚴格逐 Arm 身分等價**驗證舊版 replay-cache schema；此為單一 owner 內部的格式相容，不是重新啟用歷史報表索引。損壞／衝突快取維持 fail-closed；不允許移除歷史工件掩蓋衝突。
+- 本項為 C23／E13 的工程 Bug Fix／退役清理，沒有新 SC、Target、selector、模型訓練、報表 schema 或科學實驗身分。真實四 Seed Research Replay 與 Windows formal suite 尚未驗收。

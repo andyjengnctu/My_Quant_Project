@@ -57,7 +57,7 @@ from filters.breakout_quality.strategy_compare_sources import (
 from filters.breakout_quality.strategy_rule_policies import ALL_RULE_FILTERS_OFF_OVERRIDES
 from services.audit.reusable_report import persist_reusable_report
 from services.audit.oracle_replay_artifacts import (
-    HistoricalOracleIndex, OracleReplayStore, price_inventory_sha256, replay_identity,
+    OracleReplayStore, price_inventory_sha256, replay_identity,
 )
 from services.optimizer.strategy_param_service import (
     inspect_fixed_multiseed_robustness_strategy_parameter_artifact,
@@ -995,11 +995,10 @@ def render_replay_preflight(
 
 
 def _existing_artifact_inventory(definition, *, project_root: Path) -> tuple[str, dict[tuple[int, str], str]]:
-    """Show cached evidence before any market truth or P16 materialization.
+    """Inventory ONLY per-arm cached observations; archives cannot authorize reuse.
 
-    This is ONLY an existence/integrity inventory, NOT a replay dependency
-    planner.  The full preflight in build_report() remains the sole authority
-    for canonical REUSE/RUN/BLOCKED decisions and Replay authorization.
+    This is an existence/integrity preview, not the full replay identity check.
+    The full preflight in build_report() is the only REUSE/RUN/BLOCKED authority.
     """
     settings, _base, _exact = _contract(definition)
     _resolve_oracle_target_score_contracts(definition, settings, _oracle_comparison_plan(definition))
@@ -1020,18 +1019,13 @@ def _existing_artifact_inventory(definition, *, project_root: Path) -> tuple[str
             seeds=seeds, targets=targets, **scope,
             required_oracle_revision=ORACLE_PARITY_IMPLEMENTATION,
         )
-        historical = HistoricalOracleIndex(root).preview_candidates(
-            seeds=seeds, targets=targets, **scope,
-            required_oracle_revision=ORACLE_PARITY_IMPLEMENTATION,
-            strategy_profile_id=settings.profile_id,
-        )
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise OracleBlockedError(f"Target 歷史工件盤點無法完成：{exc}") from exc
     actions: dict[tuple[int, str], str] = {}
     for key, presence in per_arm.items():
         if presence == "INVALID":
             actions[key] = "BLOCKED"
-        elif presence in {"CACHE", "MULTIPLE"} or key in historical:
+        elif presence in {"CACHE", "MULTIPLE"}:
             actions[key] = "REUSE"
         else:
             actions[key] = "RUN"
@@ -1050,7 +1044,7 @@ def _existing_artifact_inventory(definition, *, project_root: Path) -> tuple[str
         "Seed：" + "  ".join(f"S{i + 1}={seed}" for i, seed in enumerate(seeds)),
         render_table(headers, rows),
         f"REUSE {counts['REUSE']} / RUN（需計算）{counts['RUN']} / BLOCKED {counts['BLOCKED']}",
-        "註：此表僅盤點現行 Oracle 實作版的候選工件；修復前結果不列入 REUSE。正式 REUSE 尚須核對資料、參數、期間及分數身分；Enter 後自動核對並執行必要 Replay。",
+        "註：只盤點逐 Arm Replay 快取；舊報表不作 REUSE 來源。盤點 REUSE 為候選，正式核對仍須確認價格、參數、期間及分數身分。",
     ))
     return inventory, actions
 
@@ -1310,7 +1304,6 @@ def build_report(
     data_dir = Path(get_dataset_dir(str(root), settings.dataset)).resolve()
     try:
         price_sha = price_inventory_sha256(root, settings.dataset)
-        archived = HistoricalOracleIndex(root)
     except ValueError as exc:
         raise OracleBlockedError(str(exc)) from exc
     cache = OracleReplayStore(root, definition.output_subdir)
@@ -1345,23 +1338,14 @@ def build_report(
         # AI: Strategy Compare arm enabled/name/description, comparison membership,
         # AI: source discovery paths and report inventory are NOT replay inputs.
         # AI: Per-seed P16 bytes, score policy, economic rules and price bytes are.
-        legacy_context = {
-            "benchmark": robustness.benchmark_id,
-            "strategy_profile_id": settings.profile_id,
-            "dataset": settings.dataset,
-            "start_date": start,
-            "end_date": end,
-            "seeds": [seed for seed, _ in parameter_paths],
-            "param_sha_by_seed": {int(item["seed"]): item["param_sha256"] for item in param_evidence},
-            "cohort": cohort,
-            "definitions": definitions,
-        }
         replay_policy = _canonical_oracle_replay_policy(definition, base_arm=base_arm, exact_arm=exact_arm)
         observations: dict[str, list[dict[str, Any]]] = {"C96": []}
         observations.update({target: [] for target, _ in targets})
 
-        # Resolve EVERY completed identity before starting any replay. A local
-        # completed report with mismatched evidence is BLOCKED, not interpreted
+        # Resolve EVERY completed identity before starting any replay. Only
+        # per-arm caches participate; archived reports are historical evidence,
+        # never alternate REUSE sources. A local completed cache with mismatched
+        # evidence is BLOCKED, not interpreted
         # as permission to silently spend hours computing the same arm again.
         # This plan is derived from on-disk artifacts, not a historic target list.
         completed_plan: dict[tuple[int, str], tuple[dict[str, Any], dict[str, Any] | None, str]] = {}

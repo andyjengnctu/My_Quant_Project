@@ -421,7 +421,6 @@ class OracleAuditContractCases(TestCase):
                      enabled=True, benchmark_id="end_to_end_v1",
                      resolved_seeds=(11, 22, 33, 44), seed_count=4)), \
                  patch.object(oracle.OracleReplayStore, "preview_candidates", return_value=candidates), \
-                 patch.object(oracle.HistoricalOracleIndex, "preview_candidates", return_value=set()), \
                  patch.object(oracle, "_build_oracle_score_panels") as score_truth, \
                  patch.object(oracle, "price_inventory_sha256") as price:
                 text = _strip_ansi(oracle.render_existing_artifact_inventory(
@@ -429,7 +428,7 @@ class OracleAuditContractCases(TestCase):
                 self.assertIn("REUSE 40 / RUN（需計算）0", text)
                 self.assertIn("REUSE", text)
                 self.assertIn("R40_Direct", text)
-                self.assertIn("正式 REUSE 尚須核對資料、參數、期間及分數身分", text)
+                self.assertIn("正式核對仍須確認價格、參數、期間及分數身分", text)
                 # AI: The preview must consume the same semantic status palette
                 # as other Research plans; never hard-code ANSI in Oracle.
                 from core.display_common import C_GREEN, C_RED, C_GRAY, C_RESET
@@ -449,6 +448,21 @@ class OracleAuditContractCases(TestCase):
                 self.assertEqual(_strip_ansi(colored), uncolored)
                 score_truth.assert_not_called()
                 price.assert_not_called()
+
+    def test_corrupt_archived_audit_json_cannot_poison_canonical_inventory(self):
+        # An old report is immutable historical evidence, not a current cache.
+        # A damaged historical audit.json must not BLOCK current per-arm
+        # inventory or be misreported as provisional REUSE.
+        from core.display_common import _strip_ansi
+        with tempfile.TemporaryDirectory() as tmp:
+            archived = (Path(tmp) / 'outputs/audit/breakout_quality/reusable/'
+                        'target_oracle_romd/archived/audit.json')
+            archived.parent.mkdir(parents=True)
+            archived.write_text('{malformed archived report', encoding='utf-8')
+            summary = _strip_ansi(oracle.render_existing_artifact_inventory(
+                _ACTIVE_ORACLE_DEFINITION, project_root=Path(tmp)))
+            self.assertIn('REUSE 0 / RUN（需計算）48 / BLOCKED 0', summary)
+            self.assertIn('舊報表不作 REUSE 來源', summary)
 
     def test_fast_inventory_never_treats_corrupt_cache_as_reuse(self):
         from services.audit.oracle_replay_artifacts import OracleReplayStore
@@ -1592,65 +1606,6 @@ class OracleReplayEvidenceReuseCases(TestCase):
         source = {**retired, **active}
         return {name: source[name] for name in names}
 
-    def test_discovers_local_completed_reports_without_known_target_inventory_or_folder(self):
-        from services.audit.oracle_replay_artifacts import HistoricalOracleIndex
-        from core.report_contract_versions import load_report_contract_versions
-        seeds = [1, 2, 3, 4]
-        cohort = {"cohort_rows": 16, "first_common_day": "2021-01-01",
-                  "last_common_day": "2025-12-22", "research_cutoff": "2026-03-02",
-                  "risk_budget_return": 0.1, "providers": {}, "scoring": "percentile",
-                  "market_truth": {}, "rows_outside_dl_training_provider_by_source": {}}
-        definitions = dict(LEGACY_ORACLE_TARGETS)
-        unknown_retired = "RETIRED_UNKNOWN_TO_ENGINE"
-        local_definitions = {"U40": self._old_definitions()["U40"], unknown_retired: "historical test only"}
-        payload = {
-            "schema_version": 3, "status": "COMPLETED", "read_only": True,
-            "hindsight_non_pit": True,
-            "report_id": "target_oracle_romd", "report_type": oracle.SUPPORTED_AUDIT_TYPE,
-            "report_contract_id": "audit.target_oracle_romd@v2",
-            "report_contract_fingerprint": load_report_contract_versions()["audit.target_oracle_romd"][1]["fingerprint"],
-            "strategy_profile_id": "broker_cash_dl_conversion_rolling",
-            "benchmark_id": "end_to_end_v1", "dataset": "full",
-            "start_date": "2021-01-01", "end_date": "2025-12-22",
-            "seeds": seeds, "common_cohort": cohort,
-            "param_artifacts": [{"seed": seed, "param_sha256": "a" * 64} for seed in seeds],
-            "definitions": local_definitions,
-            "baseline": oracle._aggregate([self._observation("C96", seed) for seed in seeds], target="C96"),
-            "oracles": [oracle._aggregate([self._observation(name, seed) for seed in seeds], target=name)
-                        for name in local_definitions],
-        }
-        context = {
-            "benchmark": "end_to_end_v1", "strategy_profile_id": "broker_cash_dl_conversion_rolling",
-            "dataset": "full", "start_date": "2021-01-01", "end_date": "2025-12-22",
-            "seeds": seeds, "param_sha_by_seed": {seed: "a" * 64 for seed in seeds},
-            "cohort": cohort, "definitions": {**definitions, "U40": self._old_definitions()["U40"]},
-        }
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "outputs/audit/breakout_quality"
-            location = root / "archived_elsewhere/20261023"  # No fixed one_time/reusable folder.
-            location.mkdir(parents=True)
-            path = location / "audit.json"
-            path.write_text(json.dumps(payload), encoding="utf-8")
-            unrelated = root / "unrelated/latest"
-            unrelated.mkdir(parents=True)
-            (unrelated / "audit.json").write_text("broken unrelated audit", encoding="utf-8")
-            index = HistoricalOracleIndex(Path(tmp))
-            self.assertEqual(index.lookup(target="U40", seed=3, context=context),
-                             self._observation("U40", 3))
-            self.assertEqual(index.lookup(target="C96", seed=3, context=context),
-                             self._observation("C96", 3))
-            self.assertIsNone(index.lookup(target="T40", seed=3, context=context))
-            # A target-specific definition drift blocks only that target.
-            changed = dict(payload, definitions={**local_definitions, "U40": "different science"})
-            path.write_text(json.dumps(changed), encoding="utf-8")
-            index = HistoricalOracleIndex(Path(tmp))
-            self.assertIsNone(index.lookup(target="U40", seed=3, context=context))
-            self.assertIsNotNone(index.lookup(target="C96", seed=3, context=context))
-            # An unapproved report version must never be reused.
-            changed["report_contract_id"] = "audit.target_oracle_romd@v999"
-            path.write_text(json.dumps(changed), encoding="utf-8")
-            index = HistoricalOracleIndex(Path(tmp))
-            self.assertIsNone(index.lookup(target="C96", seed=3, context=context))
 
     @staticmethod
     def _observation(target, seed):
@@ -1768,7 +1723,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 cache.read(identity)
 
     def test_preview_requires_matching_research_scope_but_not_full_price_hash(self):
-        from services.audit.oracle_replay_artifacts import OracleReplayStore, HistoricalOracleIndex
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             store = OracleReplayStore(root, "breakout_quality/reusable/target_oracle_romd")
@@ -1781,19 +1736,6 @@ class OracleReplayEvidenceReuseCases(TestCase):
             self.assertEqual(store.preview_candidates(**{**wanted, "dataset": "other"})[(1, "C96")], "MISSING")
             self.assertEqual(store.preview_candidates(**{**wanted, "start_date": "2022-01-01"})[(1, "C96")], "MISSING")
             self.assertEqual(store.preview_candidates(**{**wanted, "requested_end": "2025-01-01"})[(1, "C96")], "MISSING")
-            index = HistoricalOracleIndex(root)
-            payload = {
-                "dataset": "full", "start_date": "2021-01-01", "end_date": "2025-12-22",
-                "benchmark_id": "end_to_end_v1", "strategy_profile_id": "test-profile",
-                "definitions": {"CG40_EqualRank": "description"},
-                "baseline": {"seed_observations": [self._observation("C96", 1)]},
-                "oracles": [],
-            }
-            index.snapshots = [("reusable", root / "audit.json", payload)]
-            self.assertEqual(index.preview_candidates(**wanted, strategy_profile_id="test-profile"), {(1, "C96")})
-            self.assertEqual(index.preview_candidates(**wanted, strategy_profile_id="another"), set())
-            self.assertEqual(index.preview_candidates(**{**wanted, "requested_end": "2025-01-01"},
-                                                      strategy_profile_id="test-profile"), set())
 
     def test_conflict_reports_exact_fields_and_relative_cache_path_without_replay(self):
         from services.audit.oracle_replay_artifacts import OracleReplayStore
@@ -1919,74 +1861,10 @@ class OracleReplayEvidenceReuseCases(TestCase):
             store.write(direct, self._observation("R40_Direct", 1), origin="canonical_replay")
             self.assertFalse(store.has_other_identity(self._identity(target="R40")))
 
-    def test_history_reuses_only_completed_matching_seven_target_seed_records(self):
-        from services.audit.oracle_replay_artifacts import HistoricalOracleIndex
-        seeds = [1, 2, 3, 4]
-        description = dict(LEGACY_ORACLE_TARGETS)
-        historical_descriptions = self._old_definitions()
-        first_seven = list(historical_descriptions)[:7]
-        cohort = {
-            "cohort_rows": 643617,
-            "first_common_day": "2020-12-31", "last_common_day": "2025-12-22",
-            "research_cutoff": "2026-03-02", "risk_budget_return": 0.03,
-            "providers": {"40d": "provider-a"}, "scoring": "shared percentile",
-            "market_truth": {"price_ticker_count": 556},
-            "rows_outside_dl_training_provider_by_source": {"40d": 5},
-        }
-        context = {
-            "benchmark": "end_to_end_v1", "strategy_profile_id": "broker_cash_dl_conversion_rolling",
-            "dataset": "full", "start_date": "2021-01-01", "end_date": "2025-12-22",
-            "seeds": seeds, "param_sha_by_seed": {seed: "a" * 64 for seed in seeds},
-            "cohort": cohort, "definitions": {**description, **{name: historical_descriptions[name]
-                                        for name in ("AO40_EqualRank", "U40", "FirstBreach_NetR")}},
-        }
-        historical = {
-            "schema_version": 1, "status": "COMPLETED", "read_only": True,
-            "hindsight_non_pit": True, "report_id": "AUD-target-ground-truth-romd",
-            "report_type": "target_ground_truth_strategy_romd",
-            "strategy_profile_id": context["strategy_profile_id"],
-            "benchmark_id": context["benchmark"], "dataset": "full",
-            "start_date": context["start_date"], "end_date": context["end_date"],
-            "seeds": seeds,
-            "param_artifacts": [{"seed": seed, "param_sha256": "a" * 64} for seed in seeds],
-            "common_cohort": cohort,
-            "definitions": {key: historical_descriptions[key] for key in first_seven},
-            "baseline": oracle._aggregate([self._observation("C96", seed) for seed in seeds], target="C96"),
-            "oracles": [oracle._aggregate([self._observation(key, seed) for seed in seeds], target=key)
-                        for key in first_seven],
-        }
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "outputs/audit/breakout_quality/one_time/target_oracle_romd/latest"
-            root.mkdir(parents=True)
-            path = root / "audit.json"
-            path.write_text(json.dumps(historical), encoding="utf-8")
-            index = HistoricalOracleIndex(Path(tmp))
-            self.assertEqual(index.lookup(target="C96", seed=3, context=context)["romd"], 3.0)
-            self.assertEqual(index.lookup(target="U40", seed=3, context=context)["romd"], 5.0)
-            self.assertIsNone(index.lookup(target="R40", seed=3, context=context))
-            mutated = {**context, "param_sha_by_seed": {seed: "b" * 64 for seed in seeds}}
-            self.assertIsNone(index.lookup(target="U40", seed=3, context=mutated))
-            mutated = {**context, "cohort": {**cohort, "cohort_rows": 999}}
-            self.assertIsNone(index.lookup(target="U40", seed=3, context=mutated))
-            altered = {**historical, "oracles": [dict(item) for item in historical["oracles"]]}
-            altered["oracles"][0]["romd"] += 1.0
-            path.write_text(json.dumps(altered), encoding="utf-8")
-            index = HistoricalOracleIndex(Path(tmp))
-            with self.assertRaisesRegex(ValueError, "incomplete / corrupted"):
-                index.lookup(target="AO40_EqualRank", seed=3, context=context)
 
-    def test_completed_v3_report_reuses_matching_exact_and_runs_only_missing_direct(self):
-        from services.audit.oracle_replay_artifacts import HistoricalOracleIndex
-        from core.report_contract_versions import load_report_contract_versions
+    def test_corrupt_archived_report_cannot_block_or_supply_canonical_replay(self):
         seeds = (11, 22, 33, 44)
         definitions = dict(LEGACY_ORACLE_TARGETS)
-        old_definitions = dict(definitions)
-        old_definitions.pop("T40-MFE")  # two new treatments did not exist in v3
-        for name in oracle.ORACLE_DIRECT_SCORE_SOURCES:
-            if name in old_definitions:
-                old_definitions.pop(name)
-        old_definitions.update({name: self._old_definitions()[name]
-                                for name in ("AO40_EqualRank", "U40", "FirstBreach_NetR", "CH20_EqualRank")})
         common = {"cohort_rows": 4, "first_common_day": "2021-01-01",
                   "last_common_day": "2025-12-22", "research_cutoff": "2026-03-02",
                   "risk_budget_return": 0.03, "providers": {}, "scoring": "test",
@@ -1996,30 +1874,6 @@ class OracleReplayEvidenceReuseCases(TestCase):
                   "mfe40_over_d40_zero_zero_count": 0}
         class Benchmark:
             benchmark_id = "end_to_end_v1"
-        old_report = {
-            "schema_version": 4, "status": "COMPLETED", "read_only": True,
-            "hindsight_non_pit": True, "report_id": "target_oracle_romd",
-            "report_type": oracle.SUPPORTED_AUDIT_TYPE,
-            "report_contract_id": "audit.target_oracle_romd@v3",
-            "report_contract_fingerprint": load_report_contract_versions()["audit.target_oracle_romd"][2]["fingerprint"],
-            "strategy_profile_id": "broker_cash_dl_conversion_rolling",
-            "benchmark_id": Benchmark.benchmark_id, "dataset": "full",
-            "start_date": "2021-01-01", "end_date": "2025-12-22",
-            "seeds": list(seeds), "common_cohort": common,
-            "param_artifacts": [{"seed": seed, "param_sha256": "a" * 64} for seed in seeds],
-            "definitions": old_definitions,
-            "baseline": oracle._aggregate([self._observation("C96", seed) for seed in seeds], target="C96"),
-            "oracles": [oracle._aggregate([self._observation(name, seed) for seed in seeds], target=name)
-                        for name in old_definitions],
-            "additional_panels": {"60d": {
-                "start_date": "2021-01-01", "end_date": "2025-11-24",
-                "common_cohort": {"cohort_rows": 3, "providers": {"60d": "test"}},
-                "definitions": {"MFE60": "old"},
-                "param_artifacts": [{"seed": seed, "param_sha256": "a" * 64} for seed in seeds],
-                "baseline": self._observation("C96", 11),
-                "oracles": [self._observation("MFE60", 11)],
-            }},
-        }
         seen = []
         def replay(*, name, **kwargs):
             seen.append(name)
@@ -2032,7 +1886,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
             root = Path(tmp)
             previous = root / "outputs/audit/breakout_quality/reusable/target_oracle_romd/20261023T223000Z"
             previous.mkdir(parents=True)
-            (previous / "audit.json").write_text(json.dumps(old_report), encoding="utf-8")
+            (previous / "audit.json").write_text("{corrupt archived report", encoding="utf-8")
             with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
                  patch.object(oracle, "_robustness_artifacts", return_value=(Benchmark(), [(seed, Path(f"seed_{seed}.json")) for seed in seeds])), \
                  patch.object(oracle, "_build_oracle_score_panels", return_value=_mock_panels(common)), \
@@ -2051,23 +1905,6 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 second = oracle.build_report(definition, project_root=root, quiet=True)
                 self.assertEqual(len(seen), 40, "corrected per-arm caches must be reused")
                 self.assertEqual(second["oracles"], result["oracles"])
-                # A wrong source definition must not be substituted for Exact.
-                index = HistoricalOracleIndex(root)
-                context = {
-                    "benchmark": Benchmark.benchmark_id,
-                    "strategy_profile_id": "broker_cash_dl_conversion_rolling",
-                    "dataset": "full", "start_date": "2021-01-01", "end_date": "2025-12-22",
-                    "seeds": list(seeds), "param_sha_by_seed": {seed: "a" * 64 for seed in seeds},
-                    "cohort": common, "definitions": definitions,
-                }
-                self.assertIsNotNone(index.lookup(target="CG40_EqualRank", seed=11, context=context))
-                self.assertIsNone(index.lookup(target="R40_Direct", seed=11, context=context))
-                self.assertIsNone(index.lookup(target="CG40_EqualRank", seed=11, context={
-                    **context, "param_sha_by_seed": {seed: "c" * 64 for seed in seeds},
-                }))
-                self.assertIsNone(index.lookup(target="CG40_EqualRank", seed=11, context={
-                    **context, "cohort": {**common, "cohort_rows": 9},
-                }))
 
     def test_completed_v4_ten_target_report_reuses_all_seven_current_arms(self):
         # Resizing the current study must never repeat seven scientifically
@@ -2378,11 +2215,12 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 snapshot.mkdir(parents=True)
                 (snapshot / "audit.json").write_text(json.dumps(report), encoding="utf-8")
                 shutil.rmtree(directory / "replay_cache")
-                from services.audit.oracle_replay_artifacts import HistoricalOracleIndex
-                candidates = HistoricalOracleIndex(root).preview_candidates(
+                cache = oracle.OracleReplayStore(root, definition.output_subdir)
+                candidates = cache.preview_candidates(
                     seeds=seeds, targets=("C96", *(name for name, _ in LEGACY_ORACLE_TARGETS)),
                 )
-                self.assertEqual(len(candidates), 32, "early inventory must discover history-only completed results")
+                self.assertTrue(all(status == "MISSING" for status in candidates.values()),
+                                "historical reports must not masquerade as replay cache")
                 rebuilt = oracle.build_report(definition, project_root=root, quiet=True)
                 self.assertEqual(len(recorded), 80, "old Oracle scores and baseline yearly statistics are invalid")
                 self.assertEqual([row for row in rebuilt["oracles"] if row["target"] not in new_targets], report["oracles"])
@@ -2442,7 +2280,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 with patch.object(oracle, "get_strategy_multi_seed_robustness_settings", return_value=SimpleNamespace(
                     enabled=True, resolved_seeds=seeds, seed_count=4, benchmark_id=Benchmark.benchmark_id)):
                     preview = oracle.render_existing_artifact_inventory(definition, project_root=root)
-                self.assertIn("REUSE 4 / RUN（需計算）36 / BLOCKED 0", preview)
+                self.assertIn("REUSE 0 / RUN（需計算）40 / BLOCKED 0", preview)
                 previous = len(recorded)
                 report = oracle.build_report(definition, project_root=root, quiet=True)
                 self.assertEqual(len(recorded) - previous, 40)
