@@ -245,6 +245,11 @@ def _score_map_fingerprints(
     }
 
 
+def _oracle_requires_direct(definition) -> bool:
+    """Resolve selector dependencies from the current canonical comparison list."""
+    return "direct" in _oracle_comparison_plan(definition)["selectors"].values()
+
+
 def _oracle_display_name(name: str) -> str:
     return ORACLE_DISPLAY_NAMES.get(str(name), str(name))
 
@@ -259,7 +264,7 @@ class OracleBlockedError(RuntimeError):
     """Insufficient or incompatible historical truth; do not publish a result."""
 
 
-def _contract(definition) -> tuple[Any, Any, Any]:
+def _contract(definition, *, settings=None) -> tuple[Any, Any, Any]:
     """Resolve the currently enabled canonical Research selector, not a retired C100.
 
     The historical Audit settings still name C100/C101 for provenance; they
@@ -268,7 +273,10 @@ def _contract(definition) -> tuple[Any, Any, Any]:
     source = definition.source
     if definition.audit_type != SUPPORTED_AUDIT_TYPE:
         raise ValueError("Oracle Audit identity不一致")
-    settings = get_strategy_comparison_settings(str(source["strategy_profile_id"]))
+    if settings is None:
+        settings = get_strategy_comparison_settings(str(source["strategy_profile_id"]))
+    elif str(settings.profile_id) != str(source["strategy_profile_id"]):
+        raise OracleBlockedError("CONTRACT_UNRESOLVED: Research selector profile identity mismatch")
     base = settings.arms[str(source["baseline_arm_id"])]
     exact_candidates = [arm for arm in settings.enabled_arms if (
         arm.dl_enabled and arm.param_source == base.param_source
@@ -291,7 +299,8 @@ def _contract(definition) -> tuple[Any, Any, Any]:
             canonical.dl_runtime_mode, dict(canonical.dl_runtime_options or {}))
            for arm in exact_candidates[1:]):
         raise OracleBlockedError("CONTRACT_UNRESOLVED: 啟用的Research Exact arms不是同一選股契約")
-    _direct_arm(definition, settings, base, canonical)
+    if _oracle_requires_direct(definition):
+        _direct_arm(definition, settings, base, canonical)
     return settings, base, canonical
 
 
@@ -340,9 +349,10 @@ def _resolve_oracle_target_score_contracts(definition, settings, plan) -> dict[s
     the formal score lookup boundary, with all portfolio rules unchanged.
     """
     _oracle_comparison_plan(definition)  # Assert immutable declared score method.
-    _settings, _base, exact = _contract(definition)
-    direct = _direct_arm(definition, settings, _base, exact)
-    start = _formal_dl_score_start(settings)
+    _settings, _base, exact = _contract(definition, settings=settings)
+    direct = (_direct_arm(definition, settings, _base, exact)
+              if "direct" in plan["selectors"].values() else None)
+    start = _formal_dl_score_start(definition, settings)
     result: dict[str, dict[str, Any]] = {}
     for name, _description in plan["targets"]:
         origin = plan["aliases"].get(name, name)
@@ -465,18 +475,39 @@ def collect_status(definition, *, project_root: Path) -> dict[str, Any]:
 
 
 
-def _formal_dl_score_start(settings) -> str:
-    """Read the score-coverage start from canonical Research DL sources.
+def _formal_dl_score_start(definition, settings) -> str:
+    """Resolve the start of the Exact/Direct Oracle reference sources only.
 
-    Never invent a pre-OOS score for the first order. If active Research DL
-    sources disagree on availability, the Audit cannot infer a unique legal
-    score boundary, and must block instead of choosing its own dates.
+    Other enabled DL research arms are not inputs to this controlled Oracle.
+    Their score periods, profile eligibility and architecture must not make
+    an unrelated comparison change the selected Exact/Direct score contract.
     """
+    _settings, base, exact = _contract(definition, settings=settings)
+    direct = (_direct_arm(definition, settings, base, exact)
+              if _oracle_requires_direct(definition) else None)
+    # All enabled arms sharing the selected Exact execution contract have
+    # the same ability to consume a hypothetical perfect score. A different
+    # model source under that SAME contract must not silently shift the
+    # eligibility/score period; unrelated research selector modes are not
+    # inputs to this Oracle and must not block it.
+    reference_arms = [arm for arm in settings.enabled_arms if (
+        arm.dl_enabled
+        and (arm.param_source, arm.param_policy, arm.rule_policy,
+             arm.dl_runtime_mode, dict(arm.dl_runtime_options or {}))
+            == (exact.param_source, exact.param_policy, exact.rule_policy,
+                exact.dl_runtime_mode, dict(exact.dl_runtime_options or {}))
+    )]
+    if not reference_arms:
+        raise OracleBlockedError("CONTRACT_UNRESOLVED: Research Exact reference unavailable")
+    if direct is not None and all(arm.dl_id != direct.dl_id for arm in reference_arms):
+        reference_arms.append(direct)
     starts = set()
-    for arm in settings.enabled_arms:
-        if not arm.dl_enabled:
-            continue
+    for arm in reference_arms:
         source = settings.dl_sources[str(arm.dl_id)]
+        if str(source.filter_id) != str(definition.source["filter_id"]):
+            raise OracleBlockedError(
+                "CONTRACT_UNRESOLVED: Research Exact/Direct reference filter_id mismatch"
+            )
         if str(source.score_source) != "selection_point_in_time":
             raise OracleBlockedError("Oracle只支援正式Research DL PIT score來源")
         profile = get_breakout_quality_experiment_profile(str(source.experiment_profile))
@@ -556,7 +587,7 @@ def _market_truth_for_oracle(
     # A score missing from the formal PIT coverage is unavailable, including
     # the pre-start information bar for the first OOS order.
     bench_frame = load_dataset_frame(paths[benchmark], benchmark, min_rows=1)
-    score_start = pd.Timestamp(_formal_dl_score_start(settings))
+    score_start = pd.Timestamp(_formal_dl_score_start(definition, settings))
     eligible_keys = {}
     for field in fields:
         rows = eligible_truth.get(field)
@@ -1304,7 +1335,7 @@ def build_report(
                     filter_id=str(definition.source["filter_id"]),
                     profile_id=str(definition.source[provider]),
                     cutoff=str(settings.end_date), evaluation_start=str(settings.start_date),
-                    score_start=_formal_dl_score_start(settings),
+                    score_start=_formal_dl_score_start(definition, settings),
                     seed=seed, param_sha256=param_sha, canonical_schedule=schedule,
                     progress_callback=(lambda message: progress(f"seed={seed} {message}")) if not quiet else None,
                 )
@@ -1330,7 +1361,7 @@ def build_report(
         if set(daily_seed_scores) != expected_seeds:
             raise OracleBlockedError("Daily-universal per-seed scores incomplete")
         for evidence in daily_seed_evidence.values():
-            if (str(evidence["first_date"]) < _formal_dl_score_start(settings)
+            if (str(evidence["first_date"]) < _formal_dl_score_start(definition, settings)
                     or str(evidence["first_replay_trade_date"]) < str(settings.start_date)):
                 raise OracleBlockedError("Daily-universal PIT score coverage boundary mismatch")
     if plan["providers"]:
@@ -1367,7 +1398,8 @@ def build_report(
     )
     if not quiet:
         progress("真值、PIT fold覆蓋與共同樣本完成；檢查價格 SHA、P16 與 Replay Cache")
-    direct_arm = _direct_arm(definition, settings, base_arm, exact_arm)
+    direct_arm = (_direct_arm(definition, settings, base_arm, exact_arm)
+                  if "direct" in plan["selectors"].values() else None)
     start = str(settings.start_date)  # Formal Min Replay start NEVER depends on a new Target.
     end40 = min(str(settings.end_date), str(cohort40["last_common_day"]))
     if end40 <= start:
@@ -1528,7 +1560,7 @@ def build_report(
                         ranking_options=arm.dl_runtime_options,
                         key_mode="information_date",
                         missing_key_policy="unavailable_outside_mature_feature_universe",
-                        score_start=_formal_dl_score_start(settings),
+                        score_start=_formal_dl_score_start(definition, settings),
                     ):
                         return _run_scenario(
                             name=f"Oracle {target} seed={seed}", params=oracle_params,

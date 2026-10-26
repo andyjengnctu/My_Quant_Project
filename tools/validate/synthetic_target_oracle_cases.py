@@ -104,6 +104,24 @@ class OracleScoreParityContractCases(TestCase):
             self.assertEqual(mapping[name]["target_id"], TARGET_ID)
             self.assertNotIn("counterfactual_mintrade40", mapping[name]["target_id"])
 
+    def test_target_score_contract_uses_provided_current_settings(self):
+        # The caller-resolved settings are the only authorized selector input.
+        # A second implicit settings fetch could pin the wrong Exact arm ID.
+        definition = _ACTIVE_ORACLE_DEFINITION
+        settings, _base, first_exact = oracle._contract(definition)
+        current_arms = {**settings.arms}
+        current_arms[first_exact.arm_id] = replace(first_exact, enabled=False)
+        changed_settings = replace(settings, arms=current_arms)
+        _current, _baseline, second_exact = oracle._contract(
+            definition, settings=changed_settings,
+        )
+        self.assertNotEqual(first_exact.arm_id, second_exact.arm_id)
+        resolved = oracle._resolve_oracle_target_score_contracts(
+            definition, changed_settings, oracle._oracle_comparison_plan(definition),
+        )
+        self.assertEqual(resolved["T40"]["reference_arm_id"], second_exact.arm_id)
+        self.assertEqual(resolved["T40"]["reference_score_source_id"], second_exact.dl_id)
+
     def test_reference_dl_must_be_daily_feature_eligible(self):
         definition = _ACTIVE_ORACLE_DEFINITION
         settings, _base, _exact = oracle._contract(definition)
@@ -114,7 +132,115 @@ class OracleScoreParityContractCases(TestCase):
             return replace(profile, training_sample_scope="breakout_event_groups")
         with patch.object(oracle, "get_breakout_quality_experiment_profile", side_effect=source_profile):
             with self.assertRaisesRegex(oracle.OracleBlockedError, "feature eligibility"):
-                oracle._formal_dl_score_start(settings)
+                oracle._formal_dl_score_start(definition, settings)
+
+    def test_irrelevant_enabled_dl_source_does_not_change_oracle_score_start(self):
+        # A concurrently enabled, differently-scoped model is NOT an input
+        # to the registered Exact/Direct Oracle selector. Previously the
+        # score-start resolver scanned every enabled model and blocked.
+        definition = _ACTIVE_ORACLE_DEFINITION
+        settings, _base, exact = oracle._contract(definition)
+        extra_arm = replace(
+            exact, arm_id="C_UNRELATED_SYNTHETIC", dl_id="DL_UNRELATED_SYNTHETIC",
+            dl_runtime_mode="independent_synthetic_ranking_mode",
+        )
+        extra_source = replace(
+            settings.dl_sources[exact.dl_id], dl_id="DL_UNRELATED_SYNTHETIC",
+            point_in_time_score_start_date="2022-01-01",
+        )
+        changed_settings = replace(settings,
+            arms={**settings.arms, extra_arm.arm_id: extra_arm},
+            dl_sources={**settings.dl_sources, extra_source.dl_id: extra_source},
+        )
+        self.assertEqual(
+            oracle._formal_dl_score_start(definition, changed_settings),
+            oracle._formal_dl_score_start(definition, settings),
+        )
+        # A drift of the actual selected Exact score period must still fail.
+        exact_source = settings.dl_sources[exact.dl_id]
+        invalid = replace(settings, dl_sources={
+            **settings.dl_sources, exact.dl_id: replace(
+                exact_source, point_in_time_score_start_date="2022-01-01",
+            ),
+        })
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "score start"):
+            oracle._formal_dl_score_start(definition, invalid)
+        # A second eligible Exact source, unlike the unrelated research arm,
+        # must not be allowed to define an incompatible score period.
+        matching_arm = replace(
+            exact, arm_id="C_SECOND_EXACT_SYNTHETIC", dl_id="DL_SECOND_EXACT_SYNTHETIC",
+        )
+        mismatched_source = replace(
+            settings.dl_sources[exact.dl_id], dl_id="DL_SECOND_EXACT_SYNTHETIC",
+            point_in_time_score_start_date="2022-01-01",
+        )
+        changed = replace(settings,
+            arms={**settings.arms, matching_arm.arm_id: matching_arm},
+            dl_sources={**settings.dl_sources,
+                        mismatched_source.dl_id: mismatched_source},
+        )
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "score start"):
+            oracle._formal_dl_score_start(definition, changed)
+
+    def test_other_eligible_exact_reference_cannot_use_another_filter_universe(self):
+        # A same-selector reference with different filter cannot silently
+        # redefine the PIT-eligible candidate population of the Oracle.
+        definition = _ACTIVE_ORACLE_DEFINITION
+        settings, _base, exact = oracle._contract(definition)
+        other_arm = replace(
+            exact, arm_id="C_OTHER_FILTER_SYNTHETIC", dl_id="DL_OTHER_FILTER_SYNTHETIC",
+        )
+        other_source = replace(
+            settings.dl_sources[exact.dl_id],
+            dl_id="DL_OTHER_FILTER_SYNTHETIC", filter_id="other-filter-identity",
+        )
+        changed = replace(settings,
+            arms={**settings.arms, other_arm.arm_id: other_arm},
+            dl_sources={**settings.dl_sources, other_source.dl_id: other_source},
+        )
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "filter_id mismatch"):
+            oracle._formal_dl_score_start(definition, changed)
+        # A genuinely unrelated selector source can have its own filter.
+        unrelated = replace(other_arm, dl_runtime_mode="other_ranking_mode")
+        unrelated_settings = replace(settings,
+            arms={**settings.arms, unrelated.arm_id: unrelated},
+            dl_sources={**settings.dl_sources, other_source.dl_id: other_source},
+        )
+        self.assertEqual(oracle._formal_dl_score_start(definition, unrelated_settings),
+                         oracle._formal_dl_score_start(definition, settings))
+
+    def test_exact_only_does_not_depend_on_unselected_direct_selector(self):
+        definition = _ACTIVE_ORACLE_DEFINITION
+        exact_only = replace(definition, source={
+            **definition.source,
+            "oracle_comparisons": tuple(
+                row for row in definition.source["oracle_comparisons"]
+                if row["selector"] == "exact"
+            ),
+        })
+        self.assertFalse(oracle._oracle_requires_direct(exact_only))
+        settings, _base, _exact = oracle._contract(definition)
+        direct_id = str(definition.source["direct_arm_id"])
+        invalid_direct = replace(
+            settings.arms[direct_id], dl_runtime_mode="retired_synthetic_mode",
+        )
+        modified = replace(settings, arms={
+            **settings.arms, direct_id: invalid_direct,
+        })
+        with patch.object(oracle, "get_strategy_comparison_settings", return_value=modified):
+            selected, _base, _exact = oracle._contract(exact_only)
+            self.assertEqual(selected.profile_id, modified.profile_id)
+            plan = oracle._oracle_comparison_plan(exact_only)
+            contracts = oracle._resolve_oracle_target_score_contracts(
+                exact_only, modified, plan,
+            )
+            self.assertEqual(set(contracts), {row["target"] for row in exact_only.source["oracle_comparisons"]})
+            self.assertEqual(
+                oracle._formal_dl_score_start(exact_only, modified), "2021-01-01",
+            )
+            # The same invalid Direct selector MUST fail if selected.
+            with self.assertRaisesRegex(oracle.OracleBlockedError, "Direct selector"):
+                oracle._contract(definition)
 
     def test_reference_dl_filter_must_match_oracle_candidate_universe(self):
         definition = _ACTIVE_ORACLE_DEFINITION

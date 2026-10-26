@@ -13753,3 +13753,12 @@ Decision: `ENGINEERING_CHECKPOINT_FIRST_REUSE / HISTORICAL_AK_EVIDENCE_PRESERVED
 - **發現／修正：年度 Seed 證據缺失被掩蓋**：`_aggregate` 曾讓只含部分 Seed 的年度列照樣輸出 `n_seeds=1`，其餘 overall 卻由四 Seed 統計，容易造成不完整的年度穩健性比較。現在先驗證同一 Target 逐 Seed 唯一、年度集合完全相同、年度不重複且 `is_full_year` 標記一致，否則 BLOCKED；合法非完整年度仍依原統計口徑保留。
 - **同鏈健全性檢查**：再加強正式 DL 來源的 feature-eligible scope／filter identity 驗證，確保 Reference DL 不會改成另一個樣本／候選來源；完美百分位 SHA 只接受有限 `[0,1]` 分數。只修改 canonical Oracle identity／target evaluator 及其合成 invariant tests，不新增另一套參照清單。歷史 Log 原文與原始研究結果均完整保留。
 - **驗收邊界**：獨立合成及靜態檢查結果另附本輪 QA；來源 ZIP 不含完整四 Seed 市場行情、P16 與 Replay 工件，故不能宣稱真實 RoMD 或使用者 Windows 正式 Double Check 已通過。先前不符合 E13 的 RoMD 仍不得直接作為有效結果。
+
+## 2026-10-26 — Oracle E13 參照 DL 來源邊界與 Exact-only 未用依賴修補（工程 Bug Fix，無新 SC）
+
+- **來源／遵循契約**：`test-branch-1_20261026_124628_47aa8279.zip`（SHA256 `d455097b8f8dda7e3274919eb9c9285be0cc0bd7f7799784ab4a4c79c4e72ec8`）；`PROJECT_SETTINGS` C23／E13，沿用原本已核准之完美 Target 百分位數值／同條件 Broker-Cash Replay，不新增科學研究身分。
+- **Bug 1（已獨立重現）**：`_formal_dl_score_start()` 曾遍歷所有 enabled DL arms。即使引入的是另一個不參與本 Oracle 的 DL ranking mode，只要其 score start 不同，就使 Target 驗證錯誤 `CONTRACT_UNRESOLVED`。已改以本 Oracle 的正式 Exact 及被選取的 Direct 參照來源決定分數期間，並核對同一 Exact 執行契約的其他已啟用來源不得相互矛盾；無關模型不再污染工作。
+- **Bug 2（已獨立重現）**：清單全部為 Exact 時，`_contract()`／Score resolver／Replay builder 仍強制檢查未使用的 Direct selector。當未選用的歷史 Direct arm 設定失效，合法 Exact-only Oracle 被錯誤 BLOCKED。現在只有清單實際包含 Direct 才解析該依賴；啟用 Direct 時仍執行嚴格唯一性與 Selector 驗證。
+- **Bug 3（已獨立重現）**：Target→Score 契約解析一度忽略外層已確定的 Strategy Compare settings，重新查詢參照 arm，可能在同一個呼叫中混用兩份不同的 Exact 來源與 Target metadata。現在由入口同一份 canonical settings 注入，並加入停用首選 Exact、切換第二個 Exact 來源的隔離反例。
+- **Bug 4（已獨立重現）**：同一 Selector 的第二個已啟用 Exact arm 若引用不同 filter_id，舊 score start 檢查只驗證時間、feature scope，未阻擋相異候選母體。現在所有同契約 reference arms 都須符合 Oracle filter_id，真正不同 Selector 的研究來源不受此限制。
+- **回歸與邊界**：四項缺陷均由隔離反例覆蓋；Oracle／DailyTrade40 108/108 通過，另有 Portfolio Stats 47、Audit Framework 28、Portfolio Terminal 51 項獨立檢查通過；650 個 Python source AST 可解析。正式 Registry 11 個 treatment、C96、0050 missing-score、PIT information-date、Score SHA、逐 Target REUSE 與已退役名字的行為不變；沒有新的可證實退役程式。本輪來源無完整本機市場、四 Seed P16／Replay 工件，故不宣稱真實 RoMD／Windows Double Check PASS；舊 E13 不合法報表繼續不可視為有效研究結果。
