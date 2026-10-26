@@ -70,101 +70,248 @@ def _mock_panels(common40):
 
 
 def _fixture_perfect_score_contracts(definition, settings, plan):
-    """Synthetic REPLAY fixtures use authorized injected test scores only.
-
-    They test cache/selector equivalence rather than attempting to authorize
-    real PIT models. Production CONTRACT_UNRESOLVED behavior is tested below
-    without any mock.
-    """
+    """Replay-only deterministic contract fixture, not used for real resolution."""
     return {name: {
         "reference_arm_id": "synthetic_authorized",
         "target_id": "synthetic_perfect_label",
-        "model_objective": "daily_percentile_regression",
-        "portfolio_score_scale": "raw",
-        "perfect_score_mapping": "canonical_supervised_label_percentile",
+        "perfect_score_mapping": "canonical_daily_truth_percentile_v2",
         "score_start_date": "2021-01-01",
     } for name, _ in plan["targets"]}
 
 
-def _fixture_certify_score_coverage(_definition, *, project_root, contracts, plan,
-                                     price_scores, daily_scores):
-    return {key: {**value, "pit_eligible_keys_sha256": "e" * 64}
+def _fixture_certify_score_eligibility(_definition, *, contracts, plan,
+                                       price_scores, daily_scores):
+    return {key: {**value, "canonical_feature_eligible_keys_sha256": "e" * 64}
             for key, value in contracts.items()}
 
 
-class OracleScoreParityFailClosedCases(TestCase):
-    def test_existing_raw_pairwise_exact_has_no_unique_perfect_numeric_logits(self):
-        from core.strategy_compare_policy import get_strategy_comparison_settings
+class OracleScoreParityContractCases(TestCase):
+    def test_hypothetical_oracle_resolves_11_targets_without_existing_target_models(self):
+        # This is the *actual* canonical Registry, no mocked contract resolver.
         definition = _ACTIVE_ORACLE_DEFINITION
-        settings = get_strategy_comparison_settings(definition.source["strategy_profile_id"])
+        settings, _base, exact = oracle._contract(definition)
         plan = oracle._oracle_comparison_plan(definition)
-        with self.assertRaisesRegex(oracle.OracleBlockedError, "CONTRACT_UNRESOLVED") as failure:
-            oracle._resolve_oracle_target_score_contracts(definition, settings, plan)
-        self.assertIn("T40", str(failure.exception))
-        self.assertIn("raw pairwise logit", str(failure.exception))
+        mapping = oracle._resolve_oracle_target_score_contracts(definition, settings, plan)
+        self.assertEqual(len(mapping), 11)
+        self.assertEqual(mapping["T40"]["reference_arm_id"], exact.arm_id)
+        self.assertEqual(mapping["CG40_EqualRank"]["perfect_score_mapping"],
+                         "canonical_daily_truth_percentile_v2")
+        self.assertFalse(any(x["model_fit_required"] for x in mapping.values()))
+        self.assertTrue(all("not_unique_raw_pairwise_logits" in x["score_semantics"]
+                            for x in mapping.values()))
+        from services.audit.daily_trade40_oracle import TARGET_ID
+        for name in ("DailyUniversal_MinTrade40_NetR", "DailyUniversal_MinTrade40_NetR_Direct"):
+            self.assertEqual(mapping[name]["target_id"], TARGET_ID)
+            self.assertNotIn("counterfactual_mintrade40", mapping[name]["target_id"])
+
+    def test_unapproved_score_mapping_still_fails_closed(self):
+        altered = replace(_ACTIVE_ORACLE_DEFINITION, dimensions={
+            **_ACTIVE_ORACLE_DEFINITION.dimensions, "oracle_score_method": "arbitrary_logits",
+        })
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "CONTRACT_UNRESOLVED"):
+            oracle._oracle_comparison_plan(altered)
+        with tempfile.TemporaryDirectory() as directory:
+            status = oracle.collect_status(altered, project_root=Path(directory))
+            self.assertIn("CONTRACT_UNRESOLVED", status["reason"])
 
     def test_score_value_changes_sha_even_when_candidate_set_does_not(self):
         earlier = {("2330", "2025-01-02"): 0.25,
                    ("2317", "2025-01-02"): 0.75}
-        later = dict(earlier, **{})
+        later = dict(earlier)
         later[("2330", "2025-01-02")] = 0.35
         self.assertNotEqual(oracle._canonical_score_map_sha256(earlier),
                             oracle._canonical_score_map_sha256(later))
 
-    def test_unresolved_real_score_contract_blocks_status_and_inventory_before_replay(self):
+    def test_no_model_gate_or_fitted_pit_file_is_required_for_hypothetical_coverage(self):
+        # Score eligibility is independently verified by each canonical daily
+        # feature/target producer; a matching future *model* may not exist.
+        definition = _ACTIVE_ORACLE_DEFINITION
+        settings, _base, _exact = oracle._contract(definition)
+        plan = oracle._oracle_comparison_plan(definition)
+        contracts = oracle._resolve_oracle_target_score_contracts(definition, settings, plan)
+        source_name = "DailyUniversal_MinTrade40_NetR"
+        key = ("2330", "2021-01-04")
+        daily = {1: {source_name: {key: 0.8}}, 2: {source_name: {key: 0.9}}}
+        prices = {name: {key: 0.5} for name in plan["recipes"]}
+        for direct, source in plan["aliases"].items():
+            if source in prices:
+                prices[direct] = prices[source]
+        certified = oracle._certify_oracle_score_eligibility(
+            definition, contracts=contracts, plan=plan, price_scores=prices, daily_scores=daily)
+        self.assertEqual(len(certified), 11)
+        self.assertEqual(certified[source_name]["oracle_scored_rows"], 1)
+        self.assertEqual(len(certified[source_name]["canonical_feature_eligible_keys_sha256"]), 64)
+        self.assertFalse(any("pit_score_manifest_sha256" in item for item in certified.values()))
+        daily[2][source_name][("2317", "2021-01-04")] = 0.2
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "Seeds"):
+            oracle._certify_oracle_score_eligibility(
+                definition, contracts=contracts, plan=plan, price_scores=prices, daily_scores=daily)
+        daily[2][source_name].pop(("2317", "2021-01-04"))
+        prices["MFE40_Control"][("2330", "2020-12-31")] = 0.4
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "score期間"):
+            oracle._certify_oracle_score_eligibility(
+                definition, contracts=contracts, plan=plan, price_scores=prices, daily_scores=daily)
+
+    def test_inventory_is_not_blocked_by_untrained_target_but_remains_read_only(self):
         with tempfile.TemporaryDirectory() as directory:
             status = oracle.collect_status(_ACTIVE_ORACLE_DEFINITION, project_root=Path(directory))
             self.assertEqual(status["status"], "BLOCKED")
-            self.assertIn("CONTRACT_UNRESOLVED", status["reason"])
-            with self.assertRaisesRegex(oracle.OracleBlockedError, "CONTRACT_UNRESOLVED"):
-                oracle.render_existing_artifact_inventory(_ACTIVE_ORACLE_DEFINITION, project_root=Path(directory))
+            self.assertIn("價格資料", status["reason"])
+            self.assertNotIn("CONTRACT_UNRESOLVED", status["reason"])
+            inventory = oracle.render_existing_artifact_inventory(
+                _ACTIVE_ORACLE_DEFINITION, project_root=Path(directory))
+            self.assertIn("DailyUniversal_MinTrade40_NetR", inventory)
 
-    def test_pit_coverage_requires_validated_formal_model_and_all_oracle_keys(self):
-        source = next(item for item in _ACTIVE_ORACLE_DEFINITION.source["oracle_comparisons"]
-                      if item["target"] == "MFE40_Control")
+    def test_daily_only_exact_direct_build_plan_does_not_need_price_target_providers(self):
+        from services.audit.daily_trade40_oracle import TARGET_ID
+        from services.audit import daily_trade40_oracle as daily_owner
+        from filters.breakout_quality import daily_trade40_target as trade_owner
         definition = replace(_ACTIVE_ORACLE_DEFINITION, source={
-            **_ACTIVE_ORACLE_DEFINITION.source, "oracle_comparisons": (source,),
+            **_ACTIVE_ORACLE_DEFINITION.source,
+            "oracle_comparisons": tuple(
+                item for item in _ACTIVE_ORACLE_DEFINITION.source["oracle_comparisons"]
+                if item["target"] in {
+                    "DailyUniversal_MinTrade40_NetR",
+                    "DailyUniversal_MinTrade40_NetR_Direct",
+                }
+            ),
         })
         plan = oracle._oracle_comparison_plan(definition)
-        name = "MFE40_Control"
-        identity = {"model_architecture": "synthetic_arch", "profile_id": "synthetic_profile",
-                    "target_id": "synthetic_mfe_target", "score_start_date": "2021-01-01"}
-        with tempfile.TemporaryDirectory() as directory:
-            folder = Path(directory)
-            csv = folder / "scores.csv"
-            manifest = folder / "manifest.json"
-            coverage = folder / "coverage.json"
-            manifest.write_text("{}", encoding="utf-8")
-            coverage.write_text("{}", encoding="utf-8")
-            source_rows = [{"ticker": "2330", "date": "2021-01-04",
-                            "fold_id": "fold_1", "model_information_cutoff": "2020-12-31"}]
-            pd.DataFrame(source_rows).to_csv(csv, index=False)
-            pit = SimpleNamespace(score_path=csv, manifest_path=manifest,
-                                  coverage_path=coverage, continuous_target_id="synthetic_mfe_target",
-                                  available_from="2021-01-01", available_through="2021-01-04")
-            kwargs = dict(project_root=folder, contracts={name: identity}, plan=plan,
-                          price_scores={name: {("2330", "2021-01-04"): 0.5}}, daily_scores={})
-            with patch.object(oracle, "load_selection_point_in_time_ranking_contract",
-                              return_value=pit) as loaded:
-                approved = oracle._certify_oracle_pit_score_coverage(definition, **kwargs)
-                loaded.assert_called_once()
-                self.assertEqual(approved[name]["oracle_scored_rows"], 1)
-                self.assertEqual(len(approved[name]["pit_fold_coverage_sha256"]), 64)
-                # Feature eligibility may not exceed actual validated PIT fold coverage.
-                kwargs["price_scores"][name][("2317", "2021-01-04")] = 0.3
-                with self.assertRaisesRegex(oracle.OracleBlockedError, "未覆蓋"):
-                    oracle._certify_oracle_pit_score_coverage(definition, **kwargs)
-                kwargs["price_scores"][name].pop(("2317", "2021-01-04"))
-                # Fold identity changes even with the same scored stock-days.
-                source_rows[0]["fold_id"] = "fold_2"
-                pd.DataFrame(source_rows).to_csv(csv, index=False)
-                revised = oracle._certify_oracle_pit_score_coverage(definition, **kwargs)
-                self.assertNotEqual(approved[name]["pit_fold_coverage_sha256"],
-                                    revised[name]["pit_fold_coverage_sha256"])
-                # An unrelated PIT model must never certify this Target.
-                pit.continuous_target_id = "wrong_target"
-                with self.assertRaisesRegex(oracle.OracleBlockedError, "PIT_SCORE_EVIDENCE_BLOCKED"):
-                    oracle._certify_oracle_pit_score_coverage(definition, **kwargs)
+        self.assertEqual(len(plan["targets"]), 2)
+        self.assertFalse(plan["providers"])
+        self.assertEqual(len(plan["daily_recipes"]), 1)
+        seed, param_sha = 693545351, "b" * 64
+        source = "DailyUniversal_MinTrade40_NetR"
+        truth = {("2330", "2021-01-04"): 0.9, ("2317", "2021-01-04"): 0.1,
+                 ("2330", "2025-12-22"): 0.5}
+        evidence = {
+            "label_id": "LABEL-" + TARGET_ID, "target_id": TARGET_ID,
+            "profile_id": definition.source["daily_trade40_profile"],
+            "teacher": {"seed": seed, "param_identity_sha256": param_sha},
+            "mature_eligible_rows": len(truth), "settled_net_r_rows": len(truth),
+            "first_date": "2021-01-04", "last_date": "2025-12-22",
+            "first_replay_trade_date": "2021-01-04", "score_start_date": "2021-01-01",
+        }
+        class PriceInventoryReached(RuntimeError):
+            pass
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
+             patch.object(oracle, "_robustness_artifacts", return_value=(
+                 SimpleNamespace(benchmark_id="end_to_end_v1"),
+                 [(seed, Path(directory) / "P16.json")],
+             )), \
+             patch.object(oracle, "_prepare_oracle_parameters", return_value=(
+                 [(seed, param_sha, "rolling_active_param_ensemble", {}, {})], []
+             )), \
+             patch.object(trade_owner, "resolve_formal_min_param_records", return_value=()), \
+             patch.object(trade_owner, "build_formal_min_execution_schedule", return_value=((object(),), {})), \
+             patch.object(daily_owner, "build_daily_universal_trade40_oracle_scores", return_value=(truth, evidence)), \
+             patch.object(oracle, "_build_oracle_score_panels", side_effect=AssertionError("price truth is unused")) as price_builder, \
+             patch.object(oracle, "_certify_oracle_score_eligibility", wraps=oracle._certify_oracle_score_eligibility) as eligibility, \
+             patch.object(oracle, "price_inventory_sha256", side_effect=PriceInventoryReached("reached full replay inventory")):
+            with self.assertRaisesRegex(PriceInventoryReached, "reached full replay inventory"):
+                oracle.build_report(definition, project_root=Path(directory), quiet=True)
+        price_builder.assert_not_called()
+        eligibility.assert_called_once()
+        self.assertEqual(set(eligibility.call_args.kwargs["contracts"]),
+                         {"DailyUniversal_MinTrade40_NetR", "DailyUniversal_MinTrade40_NetR_Direct"})
+
+    def test_daily_only_full_synthetic_replay_shares_score_and_uses_c96_window(self):
+        from services.audit.daily_trade40_oracle import TARGET_ID
+        from services.audit import daily_trade40_oracle as daily_owner
+        from filters.breakout_quality import daily_trade40_target as trade_owner
+        definition = replace(_ACTIVE_ORACLE_DEFINITION, source={
+            **_ACTIVE_ORACLE_DEFINITION.source,
+            "oracle_comparisons": tuple(item for item in _ACTIVE_ORACLE_DEFINITION.source["oracle_comparisons"]
+                                        if item["target"].startswith("DailyUniversal_")),
+        })
+        seed, param_sha = 104504529, "c" * 64
+        source = "DailyUniversal_MinTrade40_NetR"
+        direct = "DailyUniversal_MinTrade40_NetR_Direct"
+        truth = {("2330", "2021-01-04"): 0.9, ("2317", "2021-01-04"): 0.1,
+                 ("2330", "2025-12-22"): 0.6}
+        evidence = {
+            "label_id": "LABEL-" + TARGET_ID, "target_id": TARGET_ID,
+            "profile_id": definition.source["daily_trade40_profile"],
+            "teacher": {"origin": "formal_min_roos_rolling_per_seed", "seed": seed,
+                        "param_identity_sha256": param_sha, "periods": [{"start": "2021-01-01"}]},
+            "rank_policy": "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",
+            "rank_sha256": "1"*64, "raw_label_sha256": "2"*64, "calendar_sha256": "3"*64,
+            "mature_eligible_rows": len(truth), "settled_net_r_rows": len(truth),
+            "censored_rank_last_rows": 0, "research_cutoff": "2026-03-02",
+            "first_date": "2021-01-04", "last_date": "2025-12-22",
+            "first_replay_trade_date": "2021-01-04", "score_start_date": "2021-01-01",
+        }
+        observed = []
+        def fake_scenario(*, name, **kwargs):
+            observed.append((name, str(kwargs["start_date"]), str(kwargs["end_date"])))
+            return {"name": name}
+        def fake_metrics(result, *, target):
+            return {"target": target, "total_return_pct": 40., "annualized_return_pct": 8.,
+                    "mdd_pct": 6., "romd": {"C96": 8., source: 12., direct: 15.}[target],
+                    "ev_a_r": .6, "trades": 9, "exposure_pct": 30.,
+                    "yearly": [{"year": 2025, "strategy_return_pct": 5., "is_full_year": False}]}
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
+             patch.object(oracle, "_robustness_artifacts", return_value=(
+                 SimpleNamespace(benchmark_id="end_to_end_v1"), [(seed, Path(directory)/"params.json")],
+             )), \
+             patch.object(oracle, "_prepare_oracle_parameters", return_value=(
+                 [(seed, param_sha, "rolling_active_param_ensemble", "baseline", "oracle")],
+                 [{"seed": seed, "param_sha256": param_sha, "param_path": "params.json"}],
+             )), \
+             patch.object(trade_owner, "resolve_formal_min_param_records", return_value=()), \
+             patch.object(trade_owner, "build_formal_min_execution_schedule", return_value=((object(),), {})), \
+             patch.object(daily_owner, "build_daily_universal_trade40_oracle_scores", return_value=(truth, evidence)), \
+             patch.object(oracle, "price_inventory_sha256", return_value="f" * 64), \
+             patch.object(oracle, "_build_oracle_score_panels", side_effect=AssertionError("unused price provider")) as unused, \
+             patch.object(oracle, "_run_scenario", side_effect=fake_scenario), \
+             patch.object(oracle, "_metrics", side_effect=fake_metrics):
+            result = oracle.build_report(definition, project_root=Path(directory), quiet=True)
+        unused.assert_not_called()
+        self.assertEqual([row["target"] for row in result["oracles"]], [source, direct])
+        self.assertEqual(result["common_cohort"]["cohort_rows"], len(truth))
+        self.assertEqual([result["baseline"]["romd"],
+                          result["oracles"][0]["romd"], result["oracles"][1]["romd"]],
+                         [8., 12., 15.])
+        self.assertEqual(len(observed), 3)
+        self.assertTrue(all(start == "2021-01-01" and end == "2025-12-22"
+                            for _name, start, end in observed))
+
+    def test_retired_daily_target_identity_is_rejected_before_market_replay(self):
+        from services.audit import daily_trade40_oracle as daily_owner
+        from filters.breakout_quality import daily_trade40_target as trade_owner
+        definition = replace(_ACTIVE_ORACLE_DEFINITION, source={
+            **_ACTIVE_ORACLE_DEFINITION.source,
+            "oracle_comparisons": tuple(item for item in _ACTIVE_ORACLE_DEFINITION.source["oracle_comparisons"]
+                                        if item["target"].startswith("DailyUniversal_")),
+        })
+        seed, sha = 693545351, "e" * 64
+        wrong = {
+            "label_id": "LABEL-daily_universal_counterfactual_mintrade40_netr_v1",
+            "target_id": "daily_universal_counterfactual_mintrade40_netr_v1",
+            "profile_id": definition.source["daily_trade40_profile"],
+            "teacher": {"seed": seed, "param_identity_sha256": sha},
+        }
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
+             patch.object(oracle, "_robustness_artifacts", return_value=(
+                 SimpleNamespace(benchmark_id="end_to_end_v1"), [(seed, Path(directory)/"p.json")],
+             )), \
+             patch.object(oracle, "_prepare_oracle_parameters", return_value=(
+                 [(seed, sha, "rolling_active_param_ensemble", {}, {})], [],
+             )), \
+             patch.object(trade_owner, "resolve_formal_min_param_records", return_value=()), \
+             patch.object(trade_owner, "build_formal_min_execution_schedule", return_value=((object(),), {})), \
+             patch.object(daily_owner, "build_daily_universal_trade40_oracle_scores", return_value=(
+                 {("2330", "2021-01-04"): 0.7}, wrong,
+             )), \
+             patch.object(oracle, "_build_oracle_score_panels", side_effect=AssertionError("unused price")) as price_builder, \
+             patch.object(oracle, "_run_scenario", side_effect=AssertionError("cannot replay bad target")) as replay:
+            with self.assertRaisesRegex(oracle.OracleBlockedError, "not based on this formal Min"):
+                oracle.build_report(definition, project_root=Path(directory), quiet=True)
+        price_builder.assert_not_called()
+        replay.assert_not_called()
 
     def test_current_selector_is_from_enabled_research_arm(self):
         settings, base, exact = oracle._contract(_ACTIVE_ORACLE_DEFINITION)
@@ -179,7 +326,7 @@ class OracleAuditContractCases(TestCase):
         # score contract; they must not mask the real contract-fail-closed tests.
         for attribute, side_effect in (
             ("_resolve_oracle_target_score_contracts", _fixture_perfect_score_contracts),
-            ("_certify_oracle_pit_score_coverage", _fixture_certify_score_coverage),
+            ("_certify_oracle_score_eligibility", _fixture_certify_score_eligibility),
         ):
             patcher = patch.object(oracle, attribute, side_effect=side_effect)
             patcher.start()
@@ -1418,7 +1565,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
     def setUp(self):
         for attribute, side_effect in (
             ("_resolve_oracle_target_score_contracts", _fixture_perfect_score_contracts),
-            ("_certify_oracle_pit_score_coverage", _fixture_certify_score_coverage),
+            ("_certify_oracle_score_eligibility", _fixture_certify_score_eligibility),
         ):
             patcher = patch.object(oracle, attribute, side_effect=side_effect)
             patcher.start()

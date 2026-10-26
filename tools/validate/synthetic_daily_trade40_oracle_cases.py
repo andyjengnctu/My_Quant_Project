@@ -88,19 +88,20 @@ def synthetic_perfect_score_contracts(_definition, _settings, plan):
     } for name, _ in plan["targets"]}
 
 
-def synthetic_pit_coverage(_definition, *, project_root, contracts, plan,
+def synthetic_score_eligibility(_definition, *, contracts, plan,
                            price_scores, daily_scores):
-    return {name: {**contract, "pit_eligible_keys_sha256": "a" * 64}
+    return {name: {**contract, "canonical_feature_eligible_keys_sha256": "a" * 64}
             for name, contract in contracts.items()}
 
 
 def synthetic_score_parity_setup(testcase):
-    # Replay-integrity fixtures must not pretend to train a legitimate real
-    # scalar model. Unmocked production CONTRACT_UNRESOLVED tests live in
+    # Replay-integrity fixtures verify cached-score identity rather than
+    # reconstructing historical model PIT files. Original hypothetical score
+    # method and absence of a FIT dependency are tested without mocks in
     # synthetic_target_oracle_cases.py.
     for name, action in (
         ("_resolve_oracle_target_score_contracts", synthetic_perfect_score_contracts),
-        ("_certify_oracle_pit_score_coverage", synthetic_pit_coverage),
+        ("_certify_oracle_score_eligibility", synthetic_score_eligibility),
     ):
         guard = patch.object(oracle, name, side_effect=action)
         guard.start()

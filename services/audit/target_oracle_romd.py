@@ -18,7 +18,10 @@ import struct
 import numpy as np
 import pandas as pd
 
-from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+from core.breakout_quality_registry import (
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    get_breakout_quality_experiment_profile,
+)
 from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
     CONTINUOUS_RANKER_TARGET_POSTPROCESS_NONE,
@@ -43,10 +46,6 @@ from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY
 from filters.breakout_quality.mfe_safety_geometry import normalize_ticker
 from filters.breakout_quality.profile_ranker_data import load_profile_continuous_ranker_data
 from filters.breakout_quality.runtime import audit_oracle_truth_score_context
-from filters.breakout_quality.ranking_score_store import (
-    load_selection_point_in_time_ranking_contract,
-)
-from core.file_integrity import compute_file_sha256
 from filters.breakout_quality.strategy_compare_contracts import COMPARISON_MODE_SCORE_RANKING
 from filters.breakout_quality.strategy_compare_reporting import _scenario_summary, _yearly_frame, _to_json_native
 from filters.breakout_quality.strategy_compare_sources import (
@@ -86,7 +85,7 @@ SUPPORTED_AUDIT_TYPE = "target_ground_truth_strategy_romd"
 ORACLE_REPORT_SCHEMA_VERSION = 8
 # Engineering bug-fix marker: older price-universe / pre-PIT-start replays are invalid.
 # This is not a new scientific Target, Strategy arm, Report version or research choice.
-ORACLE_PARITY_IMPLEMENTATION = "original_oracle_contract_parity_bugfix_20261026_scores_sha_pit_v2"
+ORACLE_PARITY_IMPLEMENTATION = "original_oracle_contract_parity_bugfix_20261026_hypothetical_scores_v3"
 PERIOD_STATS_IMPLEMENTATION = "full_year_calendar_verified_20261026"
 # Current report's Oracle strategies. Direct is the existing canonical No-K/No-R0
 # selector applied to the SAME score truth; not a new Target formula.
@@ -109,9 +108,8 @@ _PROVIDER_COHORT_IDS = {
 
 def _oracle_comparison_plan(definition) -> dict[str, Any]:
     """Canonical compare inventory -> score requirements -> provider graph."""
-    # Preserve the existing Audit catalogue score representation, but this
-    # catalogue alone does not prove a unique perfect DL model output.
-    # _resolve_oracle_target_score_contracts certifies that separately.
+    # The registered daily-truth percentile is the pre-existing hypothetical
+    # perfect-score contract, not a claim about raw pairwise logits.
     if (str(definition.dimensions.get("oracle_score_method"))
             != "canonical_daily_truth_percentile_v2"
             or str(definition.dimensions.get("percentile_method"))
@@ -176,7 +174,7 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
     daily_sources = {name: name for name in daily_recipes}
     daily_sources.update({name: source for name, source in aliases.items()
                           if source in daily_recipes})
-    if not recipes:
+    if not recipes and not daily_recipes:
         raise OracleBlockedError("Oracle comparison缺少獨立真值score")
     return {"targets": tuple(definitions), "recipes": recipes,
             "daily_recipes": daily_recipes, "daily_sources": daily_sources,
@@ -322,97 +320,63 @@ def _direct_arm(definition, settings, base, exact):
     return direct
 
 
-# The label identifiers below are existing Target identities, not new scientific
-# contracts. An Oracle formula must match an actual Research model-output Target
-# before one can assert that it is that model's perfect prediction.
-_ORACLE_RECIPE_TARGET_IDS = {
-    "mfe": "daily_full_horizon_pure_mfe_r_v1",
-    "terminal_r": "daily_terminal_r40_v1",
-    "terminal_mae_gate": "daily_terminal_mae_gated_t40_v1",
-    "mfe_mae_gate": "daily_full_horizon_mae_gated_mfe_t40_v1",
-    "daily_trade_path_net_r": "daily_universal_counterfactual_mintrade40_netr_v1",
-}
-
-
 def _resolve_oracle_target_score_contracts(definition, settings, plan) -> dict[str, dict[str, Any]]:
-    """Prove a perfect-score numerical mapping from an enabled Research DL arm.
+    """Resolve the *already approved* perfect Target-score counterfactual.
 
-    Raw pairwise logits identify an ORDER, not a unique Exact score SUM.
-    Never legitimize an arbitrary percentile as Exact's unique optimum. A
-    direct selector is rank-only, but its model Target and head must still be
-    identified; no target receives an invented PIT model identity.
+    A hypothetical perfect predictor need not have been FIT. The research
+    comparison arm defines the score-consumption/selection interface, while
+    the authorized Audit catalogue defines the one injected numerical score:
+    within-day average-zero-based Target percentile. Pairwise raw logits do
+    not possess a unique perfect magnitude; this study does NOT claim their
+    unconstrained mathematical maximum. It makes one defined intervention at
+    the formal score lookup boundary, with all portfolio rules unchanged.
     """
-    eligible = []
-    for arm in settings.enabled_arms:
-        if not arm.dl_enabled:
-            continue
-        source = settings.dl_sources[str(arm.dl_id)]
-        profile = get_breakout_quality_experiment_profile(source.experiment_profile)
-        if str(source.score_source) != "selection_point_in_time":
-            continue
-        eligible.append((arm, source, profile))
-    result = {}
-    issues = []
+    _oracle_comparison_plan(definition)  # Assert immutable declared score method.
+    _settings, _base, exact = _contract(definition)
+    direct = _direct_arm(definition, settings, _base, exact)
+    start = _formal_dl_score_start(settings)
+    result: dict[str, dict[str, Any]] = {}
     for name, _description in plan["targets"]:
-        recipe_name = plan["aliases"].get(name, name)
-        if recipe_name in plan["recipes"]:
-            recipe = plan["recipes"][recipe_name][0]
+        origin = plan["aliases"].get(name, name)
+        if origin in plan["recipes"]:
+            recipe, provider = plan["recipes"][origin]
+            profile_id = str(definition.source[provider])
+            profile = get_breakout_quality_experiment_profile(profile_id)
+            source_target = str(profile.continuous_target_id)
+            if not source_target:
+                raise OracleBlockedError(f"{name}: formal feature/target provider缺少Target ID")
+            target_identity = origin  # Existing Oracle target name, never a model/SC ID.
         else:
-            recipe = plan["daily_recipes"][recipe_name][0]
-        target_id = _ORACLE_RECIPE_TARGET_IDS.get(recipe)
-        if not target_id:
-            issues.append(f"{name}: {recipe} 是幾何PROXY，沒有對應的DL perfect Head")
-            continue
-        # No multi-head fusion, loss or postprocessing is guessed from a
-        # coincidentally identical label ID. Existing scalar head semantics only.
-        matches = [(arm, source, profile) for arm, source, profile in eligible if (
-            profile.continuous_target_id == target_id
-            and profile.training_objective in {"daily_pairwise_ranking", "daily_percentile_regression"}
-        )]
-        if not matches:
-            issues.append(f"{name}: Target {target_id} 沒有啟用且具唯一scalar score contract的Research DL arm")
-            continue
-        contracts = {(source.experiment_profile, profile.portfolio_score_scale,
-                      profile.training_objective) for _arm, source, profile in matches}
-        if len(contracts) != 1:
-            issues.append(f"{name}: 多個啟用DL arm的score/head contract不一致")
-            continue
-        arm, source, profile = matches[0]
-        selector = plan["selectors"][name]
-        objective = str(profile.training_objective)
-        scale = str(profile.portfolio_score_scale)
-        if scale == "daily_percentile":
-            mapping = "canonical_daily_target_percentile"
-        elif objective == "daily_percentile_regression" and scale == "raw":
-            mapping = "canonical_supervised_label_percentile"
-        elif selector == "direct" and objective == "daily_pairwise_ranking" and scale == "raw":
-            # In the canonical Direct selector, only relative rank matters.
-            # Scores are represented as percentiles solely for deterministic
-            # ordering, NOT as a claim about pairwise numerical logits.
-            mapping = "canonical_rank_only_direct"
-        else:
-            issues.append(
-                f"{name}: {arm.arm_id} 使用 {objective}/{scale}；"
-                "raw pairwise logit沒有唯一完美數值，Exact不能假定為每日百分位"
-            )
-            continue
+            recipe, provider = plan["daily_recipes"][origin]
+            profile_id = str(definition.source[provider])
+            profile = get_breakout_quality_experiment_profile(profile_id)
+            from services.audit.daily_trade40_oracle import TARGET_ID
+            source_target = str(profile.continuous_target_id)
+            target_identity = TARGET_ID  # Only the formal per-seed Min target owner.
+        if profile.training_sample_scope != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+            raise OracleBlockedError(f"{name}: 來源不是正式Daily DL可評分母體")
+        arm = direct if plan["selectors"][name] == "direct" else exact
+        arm_source = settings.dl_sources[str(arm.dl_id)]
+        if str(arm_source.score_source) != "selection_point_in_time":
+            raise OracleBlockedError(f"{name}: Research selector不是正式PIT score消費路徑")
+        if str(arm_source.point_in_time_score_start_date or "") != start:
+            raise OracleBlockedError(f"{name}: Research DL score起始日不一致")
         result[name] = {
             "reference_arm_id": str(arm.arm_id),
-            "dl_source_id": str(arm.dl_id),
-            "profile_id": str(source.experiment_profile),
-            "model_architecture": str(source.model_architecture),
-            "target_id": target_id,
-            "model_objective": objective, "portfolio_score_scale": scale,
-            "perfect_score_mapping": mapping,
-            "score_start_date": str(source.point_in_time_score_start_date or ""),
-            "score_source": str(source.score_source),
+            "reference_score_source_id": str(arm.dl_id),
+            "reference_profile_id": str(arm_source.experiment_profile),
+            "source_profile_id": profile_id,
+            "source_target_id": source_target,
+            "target_id": target_identity,
+            "score_source": str(arm_source.score_source),
+            "score_start_date": start,
+            "perfect_score_mapping": str(definition.dimensions["oracle_score_method"]),
+            "percentile_method": str(definition.dimensions["percentile_method"]),
+            "score_semantics": "declared_hypothetical_perfect_target_percentile_not_unique_raw_pairwise_logits",
+            "selector": str(plan["selectors"][name]),
+            "model_fit_required": False,
         }
-    if issues:
-        raise OracleBlockedError(
-            "CONTRACT_UNRESOLVED: Oracle/Research DL score parity:\n- " + "\n- ".join(issues)
-        )
     return result
-
 
 
 def _robustness_artifacts(definition, root: Path):
@@ -771,6 +735,8 @@ def _build_oracle_score_panels(
     """
     plan = _oracle_comparison_plan(definition)
     fields = plan["providers"]
+    if not fields:
+        raise OracleBlockedError("Daily-only Target分數依賴正式Min per-seed參數，請由Research [1]執行")
     root = Path(project_root).resolve()
     official = {}
     for field in fields:
@@ -909,81 +875,46 @@ def build_oracle_score_tables(definition, *, project_root: Path, cutoff: str) ->
     )
 
 
-def _certify_oracle_pit_score_coverage(
-    definition, *, project_root: Path, contracts: Mapping[str, Mapping[str, Any]],
+def _certify_oracle_score_eligibility(
+    definition, *, contracts: Mapping[str, Mapping[str, Any]],
     plan: Mapping[str, Any], price_scores: Mapping[str, Mapping[tuple[str, str], float]],
     daily_scores: Mapping[int, Mapping[str, Mapping[tuple[str, str], float]]],
 ) -> dict[str, dict[str, Any]]:
-    """Certify every injected key actually has an eligible formal PIT model row.
+    """Check the injected-score period and population without requiring a FIT.
 
-    Uses the existing PIT score manifest, SHA and FIT/fold provenance validators,
-    not a second Oracle interpretation of model inference eligibility. Past
-    model SCORE values are not used as perfect predictions. No FIT is triggered.
+    Each price score is computed from a validated feature-eligible canonical
+    daily bundle. The per-seed Min score source separately verifies that same
+    generic feature universe and its 40-session maturity. A hypothetical new
+    Target cannot have a PIT *model* manifest; requiring such a file wrongly
+    makes the original experiment depend on prior model training. The real DL
+    score lookup, availability policy and selector are parity-tested at the
+    common Replay boundary. No future truth becomes a PIT model artifact.
     """
-    root = Path(project_root).resolve()
-    validated: dict[tuple[str, str, str], tuple[set[tuple[str, str]], dict[str, str]]] = {}
     certified = {}
     for name, contract in contracts.items():
-        identity = (str(definition.source["filter_id"]), str(contract["model_architecture"]),
-                    str(contract["profile_id"]))
-        if identity not in validated:
-            try:
-                # Same validated PIT ranking source the real DL selector uses,
-                # including its model-validation PASS gate and FIT/fold lineage.
-                pit = load_selection_point_in_time_ranking_contract(root, *identity)
-                if str(pit.continuous_target_id) != str(contract["target_id"]):
-                    raise ValueError("PIT model Target identity does not match Oracle Target")
-                table = pd.read_csv(
-                    pit.score_path, usecols=["ticker", "date", "fold_id", "model_information_cutoff"],
-                    dtype={"ticker": str, "date": str, "fold_id": str,
-                           "model_information_cutoff": str},
-                )
-                if table.empty or table.isna().any().any() or table.duplicated(["ticker", "date"]).any():
-                    raise ValueError("PIT physical score coverage missing/duplicate")
-                table["date"] = pd.to_datetime(table["date"], errors="raise").dt.strftime("%Y-%m-%d")
-                table["model_information_cutoff"] = pd.to_datetime(
-                    table["model_information_cutoff"], errors="raise"
-                ).dt.strftime("%Y-%m-%d")
-                if (table["model_information_cutoff"] >= table["date"]).any():
-                    raise ValueError("PIT score row has an illegal information cutoff")
-                if ((table["date"] < str(pit.available_from)).any()
-                        or (table["date"] > str(pit.available_through)).any()):
-                    raise ValueError("PIT score date outside verified manifest")
-                keys = set(zip(table["ticker"].astype(str), table["date"].astype(str)))
-                digest = hashlib.sha256()
-                for row in table.sort_values(["ticker", "date"], kind="stable").itertuples(index=False):
-                    digest.update("|".join(str(value) for value in row).encode("utf-8") + b"\n")
-                evidence = {
-                    "pit_score_start": str(pit.available_from),
-                    "pit_score_end": str(pit.available_through),
-                    "pit_eligible_keys_sha256": hashlib.sha256(
-                        "".join(f"{t}|{d}\n" for t, d in sorted(keys)).encode("utf-8")
-                    ).hexdigest(),
-                    "pit_fold_coverage_sha256": digest.hexdigest(),
-                    "pit_score_manifest_sha256": compute_file_sha256(pit.manifest_path),
-                    "pit_coverage_manifest_sha256": compute_file_sha256(pit.coverage_path),
-                }
-                validated[identity] = keys, evidence
-            except (OSError, ValueError, KeyError, TypeError) as exc:
-                raise OracleBlockedError(
-                    f"PIT_SCORE_EVIDENCE_BLOCKED: {identity[2]}: {type(exc).__name__}: {exc}"
-                ) from exc
-        keys, evidence = validated[identity]
-        if evidence["pit_score_start"] != str(contract["score_start_date"]):
-            raise OracleBlockedError(f"{name}: PIT manifest score start differs from Research DL arm")
         if name in plan["daily_sources"]:
             source_name = plan["daily_sources"][name]
-            candidates = {key for per_seed in daily_scores.values() for key in per_seed[source_name]}
+            per_seed_keys = [set(table[source_name]) for table in daily_scores.values()]
+            if not per_seed_keys or any(keys != per_seed_keys[0] for keys in per_seed_keys[1:]):
+                raise OracleBlockedError(f"{name}: formal Min Seeds的可評分股票日母體不同")
+            candidates = per_seed_keys[0]
         else:
             candidates = set(price_scores[name])
-        absent = candidates - keys
-        if absent:
-            example = sorted(absent)[0]
-            raise OracleBlockedError(
-                f"{name}: 正式PIT score fold未覆蓋{len(absent):,}個Oracle可評分股票日；example={example}"
-            )
-        certified[name] = {**dict(contract), **evidence,
-                           "oracle_scored_rows": len(candidates)}
+        if not candidates:
+            raise OracleBlockedError(f"{name}: 沒有合法完美分數股票日")
+        score_start = str(contract["score_start_date"])
+        if any(day < score_start or not ticker or len(day) != 10
+               for ticker, day in candidates):
+            raise OracleBlockedError(f"{name}: Oracle score股票日超出正式DL score期間")
+        evidence = hashlib.sha256(
+            "".join(f"{ticker}|{day}\n" for ticker, day in sorted(candidates)).encode("utf-8")
+        ).hexdigest()
+        certified[name] = {
+            **dict(contract),
+            "canonical_feature_eligible_keys_sha256": evidence,
+            "oracle_scored_rows": len(candidates),
+            "source_evidence": "validated_generic_daily_feature_universe_and_formal_target_maturity",
+        }
     return certified
 
 
@@ -1268,9 +1199,8 @@ def build_report(
     if status["status"] != "READY":
         raise OracleBlockedError(status["reason"])
     robustness, parameter_paths = _robustness_artifacts(definition, root)
-    # The old fast path could certify the report before recomputing the actual
-    # perfect-score bytes or proving its formal PIT coverage. E13 forbids that
-    # inference. Verified per-arm REUSE remains available after score materialization.
+    # Always materialize and hash the perfect-score bytes before Replay REUSE.
+    # A previously trained same-Target PIT model is not a precondition.
     def progress(message: str) -> None:
         print(f"[Target 驗證｜前置] {message}", flush=True)
 
@@ -1288,6 +1218,8 @@ def build_report(
             build_formal_min_execution_schedule, resolve_formal_min_param_records,
         )
         from services.audit.daily_trade40_oracle import (
+            TARGET_ID as FORMAL_MIN_TRADE40_TARGET_ID,
+            LABEL_ID as FORMAL_MIN_TRADE40_LABEL_ID,
             DailyTrade40OracleBlockedError, build_daily_universal_trade40_oracle_scores,
         )
         source_name, (_recipe, provider) = next(iter(plan["daily_recipes"].items()))
@@ -1316,7 +1248,9 @@ def build_report(
             teacher = dict(evidence.get("teacher") or {})
             if (teacher.get("seed") != seed
                     or teacher.get("param_identity_sha256") != param_sha
-                    or evidence.get("profile_id") != str(definition.source[provider])):
+                    or evidence.get("profile_id") != str(definition.source[provider])
+                    or evidence.get("target_id") != FORMAL_MIN_TRADE40_TARGET_ID
+                    or evidence.get("label_id") != FORMAL_MIN_TRADE40_LABEL_ID):
                 raise OracleBlockedError(f"Daily-universal seed={seed} not based on this formal Min parameter view")
             daily_seed_evidence[int(seed)] = evidence
             daily_seed_scores[int(seed)] = {source_name: daily_scores}
@@ -1334,15 +1268,37 @@ def build_report(
             if (str(evidence["first_date"]) < _formal_dl_score_start(settings)
                     or str(evidence["first_replay_trade_date"]) < str(settings.start_date)):
                 raise OracleBlockedError("Daily-universal PIT score coverage boundary mismatch")
-    scores40, cohort40 = _build_oracle_score_panels(
-        definition, project_root=root, cutoff=str(settings.end_date),
-        progress=None if quiet else progress,
-    )
-    # A formal model's PIT eligibility and fold coverage are separate from the
-    # daily feature-universe provider. Verify both BEFORE declaring cache REUSE.
-    resolved_score_contracts = _certify_oracle_pit_score_coverage(
-        definition, project_root=root, contracts=resolved_score_contracts,
-        plan=plan, price_scores=scores40, daily_scores=daily_seed_scores,
+    if plan["providers"]:
+        scores40, cohort40 = _build_oracle_score_panels(
+            definition, project_root=root, cutoff=str(settings.end_date),
+            progress=None if quiet else progress,
+        )
+    else:
+        # All selected score sources are per-seed daily truth. The label owner
+        # has already independently verified stock-day eligibility and maturity.
+        scores40 = {}
+        source_name = next(iter(plan["daily_recipes"]))
+        seed_keys = [set(scores[source_name]) for scores in daily_seed_scores.values()]
+        if not seed_keys or any(keys != seed_keys[0] for keys in seed_keys[1:]) or not seed_keys[0]:
+            raise OracleBlockedError("Daily-universal per-seed score cohorts are incomplete/incompatible")
+        first_day = min(day for _ticker, day in seed_keys[0])
+        last_day = max(day for _ticker, day in seed_keys[0])
+        cohort40 = {
+            "cohort_rows": len(seed_keys[0]),
+            "oracle_parity_implementation": ORACLE_PARITY_IMPLEMENTATION,
+            "first_common_day": first_day, "last_common_day": last_day,
+            "research_cutoff": str(settings.end_date),
+            "risk_budget_return": float(StrategyAlignedContinuousTargetSpec.from_label_policy(
+                DEFAULT_LABEL_POLICY).risk_budget_return),
+            "providers": {"daily_trade40": str(definition.source[plan["daily_recipes"][source_name][1]])},
+            "scoring": "Canonical daily target percentile on formal feature-eligible daily cohort",
+            "oracle_only": True,
+        }
+    # Verify the hypothetical scored stock-days against their canonical
+    # feature/target sources BEFORE considering any completed Replay cache.
+    resolved_score_contracts = _certify_oracle_score_eligibility(
+        definition, contracts=resolved_score_contracts, plan=plan,
+        price_scores=scores40, daily_scores=daily_seed_scores,
     )
     if not quiet:
         progress("真值、PIT fold覆蓋與共同樣本完成；檢查價格 SHA、P16 與 Replay Cache")
