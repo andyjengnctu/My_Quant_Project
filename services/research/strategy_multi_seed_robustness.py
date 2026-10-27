@@ -63,7 +63,6 @@ from services.research.strategy_compare_benchmark import (
 from core.breakout_quality_policy import (
     get_breakout_quality_workflow_settings,
 )
-from core.training_policy import resolve_robustness_benchmark_seeds
 from core.strategy_param_policy import (
     get_strategy_param_fitting_seed_protocol,
     get_strategy_param_training_profile,
@@ -554,17 +553,6 @@ def _build_common_report_payload(
             if key in enriched.columns
         },
     }
-
-
-def resolve_multi_seed_values(*, seed_count: int, generator_seed: int) -> tuple[int, ...]:
-    """Compatibility facade over the benchmark seed SSOT in training_policy."""
-
-    return tuple(
-        resolve_robustness_benchmark_seeds(
-            seed_count=int(seed_count),
-            generator_seed=int(generator_seed),
-        )
-    )
 
 
 def _robustness_arms(

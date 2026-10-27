@@ -26,7 +26,6 @@ from core.trading_account_state import (
     effective_trading_account_events,
 )
 from core.trading_identity import normalize_trading_date
-from core.trading_order_state import TRADING_ACTIVE_ORDER_STATUSES, TRADING_ORDER_SIDE_SELL
 from services.trading.entry_lifecycle_context import resolve_trading_confirmed_entry_seed
 from services.trading.account_state import (
     correct_trading_transaction,
@@ -42,7 +41,6 @@ from services.trading.state_lock import serialized_trading_state_mutation
 from services.trading.pending_entry_state import load_trading_pending_entry_state
 from services.trading.pending_entry_links import resolve_pending_entry_for_buy_event
 from services.trading.market_data_consumer import load_trading_v2_sanitized_ohlcv_frame, open_trading_v2_consumer_view
-from services.trading.order_state import get_trading_order_read_model
 from services.trading.scanner_state import (
     load_trading_candidate_snapshot_for_account, load_trading_scanner_runtime,
     resolve_trading_candidate_snapshot_path,
@@ -60,22 +58,6 @@ _BUY_MUTATIONS = {
     TRADE_MUTATION_STRATEGY_BUY,
     TRADE_MUTATION_STRATEGY_BUY_INCREMENT,
 }
-
-
-def list_active_sell_orders_for_ticker(project_root, ticker: object) -> dict:
-    """Legacy read-only helper retained for compatibility; the new UI does not use it."""
-    ticker_key = str(ticker or "").strip().upper()
-    snapshot = get_trading_order_read_model(project_root)
-    rows = []
-    for row in list(snapshot.get("orders") or []):
-        if str(row.get("ticker") or "").strip().upper() != ticker_key:
-            continue
-        if str(row.get("side") or "").strip().upper() != TRADING_ORDER_SIDE_SELL:
-            continue
-        if str(row.get("status") or "") not in TRADING_ACTIVE_ORDER_STATUSES:
-            continue
-        rows.append(dict(row))
-    return {"revision": snapshot.get("revision"), "orders": rows}
 
 
 def _resolve_current_scanner_candidate(project_root, *, ticker: str, candidate_reference: dict) -> dict:
@@ -645,7 +627,6 @@ def record_trading_account_inventory_sell(
 __all__ = [
     "build_manual_adopted_management_context",
     "correct_trading_account_transaction",
-    "list_active_sell_orders_for_ticker",
     "resolve_current_trading_scanner_candidate",
     "resolve_trading_direct_buy_source",
     "preview_trading_account_buy",

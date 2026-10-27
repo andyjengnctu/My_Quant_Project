@@ -161,35 +161,6 @@ def resolve_preferred_pending_order_date(
     return dates[-1]
 
 
-def resolve_next_pending_order_date(
-    project_root,
-    *,
-    information_date: object,
-    market_view: TradingMarketDataV2View | None = None,
-) -> str:
-    """Compatibility helper for legacy callers that need the next scheduled day.
-
-    New Workbench pending-entry flows do not use this helper; they use
-    ``list_trading_pending_order_dates`` bounded by finalized history.
-    """
-
-    root = Path(project_root).resolve()
-    info_date = normalize_trading_date(information_date, field_name="information_date", allow_none=False)
-    view = market_view or TradingMarketDataV2View.open(root)
-    frame = view.read_dataset_frame(
-        TRADING_ORDER_CALENDAR_DATASET,
-        columns=("date",),
-        start_date=info_date,
-    )
-    if frame.empty:
-        raise ValueError(f"{info_date} 之後沒有可用 TaiwanStockTradingDate")
-    values = pd.to_datetime(frame.get("date"), errors="coerce").dropna().dt.strftime("%Y-%m-%d")
-    future = sorted({value for value in values.tolist() if value > info_date})
-    if not future:
-        raise ValueError(f"{info_date} 之後沒有已知下一交易日")
-    return future[0]
-
-
 def validate_pending_order_trade_date(
     project_root,
     *,
@@ -448,7 +419,6 @@ __all__ = [
     "build_trading_actual_fill_form_constraints",
     "build_trading_pending_order_form_constraints",
     "list_trading_pending_order_dates",
-    "resolve_next_pending_order_date",
     "resolve_preferred_pending_order_date",
     "validate_pending_order_limit_price",
     "validate_pending_order_trade_date",

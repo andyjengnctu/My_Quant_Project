@@ -192,19 +192,6 @@ def resolve_single_stock_controls_rows(*, available_width, ordered_widths):
     return tuple(tuple(key for key, _width in row) for row in rows)
 
 
-def resolve_single_stock_controls_layout_mode(*, available_width, required_widths):
-    """Compatibility label for tests/diagnostics; actual placement is row-driven."""
-
-    rows = resolve_single_stock_controls_rows(
-        available_width=available_width,
-        ordered_widths=list(dict(required_widths or {}).items()),
-    )
-    if len(rows) <= 1:
-        return "wide"
-    if len(rows) == 2:
-        return "compact"
-    return "narrow"
-
 SCAN_DROPDOWN_KIND_LABELS = {
     "buy": "新訊號",
     "extended": "延續",

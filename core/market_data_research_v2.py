@@ -20,7 +20,6 @@ from core.market_data_contract import (
     FINMIND_RAW_PRICE_ARCHIVE_DATASET,
 )
 from core.market_data_research_freeze import ResearchV2RequiredCommonCompleteSummary
-from core.market_data_pit_universe import build_daily_pit_market_universe
 from core.market_data_dataset_registry import (
     PIT_ARCHIVE_ONLY,
     PIT_CURRENT_VINTAGE,
@@ -190,29 +189,6 @@ def validate_research_v2_required_cutoff(*, provider_as_of_date: str, required_c
 def _normalize_date_series(values) -> pd.Series:
     parsed = pd.to_datetime(values, errors="coerce")
     return parsed.dt.strftime("%Y-%m-%d")
-
-
-def build_daily_pit_universe(
-    raw_price_rows: pd.DataFrame,
-    *,
-    historical_instruments: Iterable[str],
-    transition_excluded_through: Mapping[str, str],
-    trading_dates: Iterable[str] | None = None,
-    provider_as_of_date: str | None = None,
-) -> pd.DataFrame:
-    """Compatibility alias for the neutral Market Data V2 PIT universe owner.
-
-    Research-specific callers retain this symbol so existing scientific/artifact
-    identities do not change during the V2 ownership migration.
-    """
-
-    return build_daily_pit_market_universe(
-        raw_price_rows,
-        historical_instruments=historical_instruments,
-        transition_excluded_through=transition_excluded_through,
-        trading_dates=trading_dates,
-        provider_as_of_date=provider_as_of_date,
-    )
 
 
 def summarize_exact_candidate_coverage_table(
@@ -397,7 +373,6 @@ __all__ = [
     "research_v2_dataset_assessment_fingerprint",
     "validate_research_v2_candidate_contract",
     "validate_research_v2_required_cutoff",
-    "build_daily_pit_universe",
     "summarize_exact_candidate_coverage_table",
     "build_exact_candidate_daily_coverage",
     "build_research_v2_candidate_identity_payload",

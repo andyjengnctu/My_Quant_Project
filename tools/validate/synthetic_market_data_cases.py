@@ -4331,7 +4331,6 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
     from core.market_data_research_v2 import (
         RESEARCH_V2_CANDIDATE_STATUS_NOT_READY,
         RESEARCH_V2_DATASET_STATUS_CURRENT_VINTAGE_BLOCKED,
-        build_daily_pit_universe,
         validate_research_v2_candidate_contract,
     )
     from core.market_data_storage_contract import (
@@ -4363,7 +4362,7 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
         research_cutoff = research_cutoff_date.isoformat()
         after_cutoff = (research_cutoff_date + timedelta(days=1)).isoformat()
         provider_as_of = (research_cutoff_date + timedelta(days=190)).isoformat()
-        primitive_universe = build_daily_pit_universe(
+        primitive_universe = build_daily_pit_market_universe(
             pd.DataFrame({
                 "date": [before_cutoff, research_cutoff],
                 "stock_id": ["2330", "2330"],
@@ -4375,21 +4374,6 @@ def validate_market_data_v2_research_candidate_contract_case(_base_params):
         )
         check("canonical_daily_pit_universe_primitive_requires_date_specific_market_state",
             [(research_cutoff, "2330")],
-            list(primitive_universe[["date", "stock_id"]].itertuples(index=False, name=None)),
-        )
-        neutral_primitive = build_daily_pit_market_universe(
-            pd.DataFrame({
-                "date": [before_cutoff, research_cutoff],
-                "stock_id": ["2330", "2330"],
-            }),
-            historical_instruments=("2330",),
-            transition_excluded_through={"2330": before_cutoff},
-            trading_dates=(before_cutoff, research_cutoff),
-            provider_as_of_date=research_cutoff,
-        )
-        check(
-            "research_daily_pit_compatibility_alias_reuses_neutral_v2_owner",
-            list(neutral_primitive[["date", "stock_id"]].itertuples(index=False, name=None)),
             list(primitive_universe[["date", "stock_id"]].itertuples(index=False, name=None)),
         )
         manifest_fingerprint = "7" * 64

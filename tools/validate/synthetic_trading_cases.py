@@ -7080,7 +7080,6 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     from services.workbench_ui import single_stock_inspector as single_stock_inspector_module
     from services.workbench_ui.single_stock_inspector import (
         SingleStockBacktestInspectorPanel,
-        resolve_single_stock_controls_layout_mode,
         resolve_single_stock_controls_rows,
     )
     class _SingleStockVarProbe:
@@ -7378,11 +7377,11 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         trading_rows_1680,
     )
     check(
-        "workbench_single_stock_trading_controls_label_wide_when_one_row_fits",
-        "wide",
-        resolve_single_stock_controls_layout_mode(
-            available_width=1680, required_widths=dict(trading_layout_widths)
-        ),
+        "workbench_single_stock_trading_controls_wrap_when_not_enough_width",
+        True,
+        len(resolve_single_stock_controls_rows(
+            available_width=1200, ordered_widths=trading_layout_widths
+        )) > 1,
     )
     research_layout_widths = [
         ("runtime", 150),

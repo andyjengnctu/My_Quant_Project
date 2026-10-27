@@ -14061,3 +14061,13 @@ Decision: `ENGINEERING_CHECKPOINT_FIRST_REUSE / HISTORICAL_AK_EVIDENCE_PRESERVED
 - **identity不變**：實際修改前後的Price formula SHA `d73b4ce20dd958cb75b094f49d6abac94d31e34ca7222fa5806675fd931964bd`、MinTrade truth SHA `cf46236712c396f415531baf4db4a1cf13dae56a1b1d2b5a06868a44d0a694a4`、現行Oracle report fingerprint `4f911292da243836` 完全相同；16比較項目×4個既有benchmark seeds的**64組合成Replay身分**逐位元組相同（非64次真實市場Replay）。程式僅退役兩個不產生成交、不參與真值計算的API，無current output schema／科學身分改版，**不引發合法已有結果重跑**。
 - **保留問題／界線**：`services/audit/daily_trade40_oracle.py` 的真值closure包含 `config/trading.py`，Trading-only修改可能造成不必要的MinTrade RUN；因移除該來源會使既有合法快取失效，本輪不混入。全市場實際四Seed P16、daily sidecars、Windows正式bundle未提供，無法宣稱E13全部市場逐筆驗收已完成；目前沒有發現新的可重現Target數值偏差。歷史Registry、既有Log研究結果及所有原始證據均保留。未執行 `apps/run_bundle.py` 或 `apps/test_suite.py`。
 - **狀態**：`ENGINEERING_OBSOLETE_IDENTITY_PROBES_RETIRED / CANONICAL_PLAN_ONLY / SOURCE_AND_REPORT_FINGERPRINTS_UNCHANGED / REAL_MARKET_E13_PENDING / NO_NEW_SCIENTIFIC_ID`。
+
+
+## 2026-10-27｜工程清理：無正式消費者之相容入口退役（231647 基準）
+
+- **範圍**：僅退役已不被正式程式引用的 `core/market_data_research_v2.py::build_daily_pit_universe` 與 Trading／Workbench／Robustness 的四個閒置舊介面，及 Optimizer 舊版 summary-score promote helper（正式 promotion 已採 same-window replay）。相關 synthetic 直接驗證唯一正式 Market Data V2 PIT owner 與 row-driven Workbench 版面。
+- **保留**：Market Data V2 的 `legacy_dataset` 判定、`core/market_data_pit_universe.py` 正式 builder、歷史 checkpoint／Compare／Model Extension／Oracle cache 的唯讀相容驗證、Registry 已使用 ID、歷史研究結果、原始工件與帳務 SSOT。
+- **不退役的原因**：`filters/breakout_quality/workflow_io.py::dataset_npz_path` 本身無正式呼叫者，但單純刪除會變動 MinTrade Producer SHA，迫使合法真值快取不必要 RUN；本輪完全恢復原檔，不更動來源身分閉包。
+- **科學與交易**：不更改 Target、MinTrade、策略參數、Seed、費稅、模型 fitting、OOS cutoff、REUSE 身分或正式選單；此為工程介面清理，不新建 scientific/report identity。若無完整市場工件，不能由 synthetic 取代真實逐筆驗收。
+- **本輪獨立檢查**：647 個 Python 來源語法解析通過；六個實作檔除待退役的函式與其專屬 import／export 外，其餘既有函式與類別的 AST 完全相同；Price Target、MinTrade Producer、Oracle 報表 fingerprint 及 16 Target × 4 Seed 的 64 組合成 Replay 身分在修改前後完全一致；Research V2 dataset assessment fingerprint 不變，canonical PIT universe、Workbench row layout、Trading tick constraints 直接驗證通過。
+- **尚未驗證**：Research V2 大型 synthetic 因執行環境缺少 `pyarrow` 而未完成 Parquet 寫入；這不是 PASS。未執行本機 `apps/run_bundle.py` 或 `apps/test_suite.py`，也未把上述合成檢查冒充真實市場端到端驗收。

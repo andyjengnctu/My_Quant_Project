@@ -1471,12 +1471,34 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         "search_train_end_year": 2024,
         "oos_start_year": 2025,
     }
-    should_promote_stale_policy, stale_policy_reason = optimizer_main._should_promote_candidate(
+    # Validate the same policy guard consumed by the actual same-window promotion path.
+    policy_compatible = optimizer_main._summaries_have_compatible_policy(
         candidate_summary=incompatible_candidate_summary,
         run_best_summary=stale_run_best_summary,
     )
-    check("optimizer_promote_rejects_stale_run_best_policy_baseline", False, should_promote_stale_policy)
-    check("optimizer_promote_reports_stale_run_best_policy_baseline", True, "effective policy" in stale_policy_reason)
+    check("optimizer_promote_rejects_stale_run_best_policy_baseline", False, policy_compatible)
+    # Exercise the real promotion entry: one candidate preview, no run_best replay,
+    # no persisted changes when the old policy is incompatible.
+    with patch.object(optimizer_main, "_load_candidate_params_payload_for_promote", return_value={"probe": 1}), \
+            patch.object(optimizer_main, "_load_params_summary_or_legacy_sidecar", side_effect=[
+                {**incompatible_candidate_summary, "mode": "trade"},
+                {**stale_run_best_summary, "mode": "trade"},
+            ]), \
+            patch.object(optimizer_main, "_resolve_trade_run_best_selector", return_value="base"), \
+            patch.object(optimizer_main, "_selector_score_from_summary", return_value=10.0), \
+            patch.object(optimizer_main, "_selector_score_is_valid", return_value=True), \
+            patch.object(optimizer_main, "_load_json_file_or_none", return_value={"probe": 2}), \
+            patch.object(optimizer_main, "_replay_payload_on_current_trade_window", return_value=15.0) as replay, \
+            patch.object(optimizer_main, "_write_json_file") as persisted, \
+            redirect_stdout(io.StringIO()):
+        promotion_result = optimizer_main._promote_candidate_to_run_best(
+            session=SimpleNamespace(), emit_output=False
+        )
+    check(
+        "optimizer_promote_uses_canonical_policy_gate_before_run_best_replay",
+        (0, 1, 0),
+        (promotion_result, replay.call_count, persisted.call_count),
+    )
 
     robustness = importlib.import_module("services.optimizer.robustness")
     training_policy = importlib.import_module("config.training_policy")
