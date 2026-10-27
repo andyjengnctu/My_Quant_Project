@@ -1269,9 +1269,8 @@ def render_replay_preflight(
     seeds: list[int],
     targets: list[str],
     decisions: Mapping[tuple[int, str], str],
-    certified: bool = True,
 ) -> str:
-    """Read-only plan; indicate when missing truth prevents complete Replay certification.
+    """Render the one complete identity-backed Replay authorization plan.
 
     Display is bounded by target count, not seeds x targets. Source data,
     training and result identities are never inferred from color/status.
@@ -1284,8 +1283,7 @@ def render_replay_preflight(
         for target in targets
     ]
     return "\n".join((
-        (f"[Target 驗證 {label} | Portfolio Replay 正式計畫]" if certified else
-         f"[Target 驗證 {label} | 真值 BUILD 授權計畫；Replay 待真值驗證]"),
+        f"[Target 驗證 {label} | Portfolio Replay 正式計畫]",
         "Seed：" + "  ".join(f"S{i + 1}={seed}" for i, seed in enumerate(seeds)),
         render_table(headers, rows),
         f"Portfolio REUSE {counts['REUSE']} / RUN（需回放）{counts['RUN']} / "
@@ -1293,63 +1291,6 @@ def render_replay_preflight(
         "RUN=舊執行身分過時或合法結果缺件，由系統只計算該項；"
         "BLOCKED=資料損毀或同一執行身分證據矛盾，須停止以避免覆寫；尚未開始回放",
     ))
-
-
-def _existing_artifact_inventory(definition, *, project_root: Path) -> tuple[str, dict[tuple[int, str], str]]:
-    """Inventory ONLY per-arm cached observations; archives cannot authorize reuse.
-
-    This is an existence/integrity preview, not the full replay identity check.
-    The full preflight in build_report() is the only REUSE/RUN/BLOCKED authority.
-    """
-    settings, _base, _exact = _contract(definition)
-    _resolve_oracle_target_score_contracts(definition, settings, _oracle_comparison_plan(definition))
-    benchmark = get_strategy_multi_seed_robustness_settings(settings.profile_id)
-    seeds = tuple(int(seed) for seed in benchmark.resolved_seeds)
-    if (not benchmark.enabled or not seeds or len(seeds) != benchmark.seed_count
-            or len(set(seeds)) != len(seeds)):
-        raise OracleBlockedError("Target benchmark Seed 設定不完整；無法列出候選工件")
-    targets = (str(definition.source["baseline_arm_id"]),
-               *(name for name, _description in _oracle_comparison_plan(definition)["targets"]))
-    root = Path(project_root).resolve()
-    try:
-        scope = {
-            "dataset": settings.dataset, "start_date": str(settings.start_date),
-            "requested_end": str(settings.end_date), "benchmark": benchmark.benchmark_id,
-        }
-        per_arm = OracleReplayStore(root, definition.output_subdir).preview_candidates(
-            seeds=seeds, targets=targets, **scope,
-            required_oracle_revision=ORACLE_PARITY_IMPLEMENTATION,
-        )
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        raise OracleBlockedError(f"Target 歷史工件盤點無法完成：{exc}") from exc
-    # A file-presence inventory MUST NOT be labelled REUSE/RUN/BLOCKED.
-    # It remains a read-only artifact diagnostic for existing callers only;
-    # the Research [1] user interface uses the single formal Replay plan.
-    actions = {key: ("INVALID" if presence == "INVALID" else
-                     "PRESENT" if presence in {"CACHE", "MULTIPLE"} else "MISSING")
-               for key, presence in per_arm.items()}
-    rows = [
-        (target, *(actions[(seed, target)] for seed in seeds))
-        for target in targets
-    ]
-    counts = {state: sum(value == state for value in actions.values())
-              for state in ("PRESENT", "MISSING", "INVALID")}
-    inventory = "\n".join((
-        "[Target 驗證 | 歷史工件盤點（非正式執行計畫）]",
-        "Seed：" + "  ".join(f"S{i + 1}={seed}" for i, seed in enumerate(seeds)),
-        render_table(("Target", *(f"S{i + 1}" for i in range(len(seeds)))), rows),
-        f"PRESENT {counts['PRESENT']} / MISSING {counts['MISSING']} / INVALID {counts['INVALID']}",
-        "僅代表工件存在；不可授權重用。正式狀態須核對價格、P16、分數及期間。",
-    ))
-    return inventory, actions
-
-
-def render_existing_artifact_inventory(definition, *, project_root: Path) -> str:
-    """Existing-cache display and quick preliminary plan share one inventory owner."""
-    inventory, _decisions = _existing_artifact_inventory(definition, project_root=project_root)
-    return inventory
-
-
 
 
 def _prepare_oracle_parameters(
@@ -2524,6 +2465,5 @@ def run_formal_audit(
 __all__ = [
     "SUPPORTED_AUDIT_TYPE", "OracleBlockedError",
     "collect_status", "render_replay_preflight",
-    "render_existing_artifact_inventory",
     "build_report", "render_result", "run_formal_audit",
 ]

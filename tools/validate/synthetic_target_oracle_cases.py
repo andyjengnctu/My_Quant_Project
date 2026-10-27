@@ -806,9 +806,6 @@ class OracleScoreParityContractCases(TestCase):
             self.assertEqual(status["status"], "BLOCKED")
             self.assertIn("價格資料", status["reason"])
             self.assertNotIn("CONTRACT_UNRESOLVED", status["reason"])
-            inventory = oracle.render_existing_artifact_inventory(
-                _ACTIVE_ORACLE_DEFINITION, project_root=Path(directory))
-            self.assertIn("DailyUniversal_MinTrade40_NetR", inventory)
 
     def test_daily_only_exact_direct_build_plan_does_not_need_price_target_providers(self):
         from services.audit.daily_trade40_oracle import TARGET_ID
@@ -1364,66 +1361,6 @@ class OracleAuditContractCases(TestCase):
                 with self.assertRaisesRegex(ValueError, "invalid cache target"):
                     store._path({**identity, "target": unsafe})
 
-    def test_fast_inventory_is_presence_only_and_never_claims_reuse(self):
-        from core.display_common import _strip_ansi
-        with tempfile.TemporaryDirectory() as tmp:
-            candidates = {(seed, target): "CACHE" for seed in (11, 22, 33, 44)
-                          for target in ("C96", *(name for name, _ in LEGACY_ORACLE_TARGETS))}
-            with patch.object(oracle, "_contract", return_value=(SimpleNamespace(
-                     profile_id="test", dataset="full", start_date="2021-01-01", end_date="2026-03-02"),
-                     None, None)), \
-                 patch.object(oracle, "get_strategy_multi_seed_robustness_settings", return_value=SimpleNamespace(
-                     enabled=True, benchmark_id="end_to_end_v1",
-                     resolved_seeds=(11, 22, 33, 44), seed_count=4)), \
-                 patch.object(oracle.OracleReplayStore, "preview_candidates", return_value=candidates), \
-                 patch.object(oracle, "_build_oracle_score_panels") as score_truth, \
-                 patch.object(oracle, "price_inventory_sha256") as price:
-                text = _strip_ansi(oracle.render_existing_artifact_inventory(
-                    self.definition, project_root=Path(tmp)))
-                self.assertIn("PRESENT 40 / MISSING 0 / INVALID 0", text)
-                self.assertIn("R40_Direct", text)
-                self.assertNotIn("REUSE", text)
-                candidates[(11, "C96")] = "INVALID"
-                candidates[(22, "C96")] = "MISSING"
-                colored = oracle.render_existing_artifact_inventory(self.definition, project_root=Path(tmp))
-                self.assertIn("PRESENT 38 / MISSING 1 / INVALID 1", _strip_ansi(colored))
-                self.assertNotIn("REUSE", _strip_ansi(colored))
-                score_truth.assert_not_called()
-                price.assert_not_called()
-
-    def test_corrupt_archived_audit_json_cannot_poison_canonical_inventory(self):
-        from core.display_common import _strip_ansi
-        with tempfile.TemporaryDirectory() as tmp:
-            archived = (Path(tmp) / 'outputs/audit/breakout_quality/reusable/'
-                        'target_oracle_romd/archived/audit.json')
-            archived.parent.mkdir(parents=True)
-            archived.write_text('{malformed archived report', encoding='utf-8')
-            summary = _strip_ansi(oracle.render_existing_artifact_inventory(
-                _ACTIVE_ORACLE_DEFINITION, project_root=Path(tmp)))
-            self.assertIn('PRESENT 0 / MISSING 64 / INVALID 0', summary)
-            self.assertNotIn('REUSE', summary)
-            self.assertIn('僅代表工件存在', summary)
-
-    def test_fast_inventory_never_treats_corrupt_cache_as_reuse(self):
-        from services.audit.oracle_replay_artifacts import OracleReplayStore
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            store = OracleReplayStore(root, self.definition.output_subdir)
-            corrupt = store.cache_root / "11" / ("C96_" + "a" * 64 + ".json")
-            corrupt.parent.mkdir(parents=True, exist_ok=True)
-            corrupt.write_text("not-json", encoding="utf-8")
-            observed = store.preview_candidates(seeds=(11,), targets=("C96", "R40", "R40_Direct"))
-            self.assertEqual(observed[(11, "C96")], "INVALID")
-            self.assertEqual(observed[(11, "R40")], "MISSING")
-            self.assertEqual(observed[(11, "R40_Direct")], "MISSING")
-            self.assertEqual(store.preview_candidates(seeds=(11,), targets=("T40-MFE", "T40-MFE_Direct"))[(11, "T40-MFE_Direct")], "MISSING")
-            # A corrupt Direct cache must not poison its distinct base target.
-            direct = store.cache_root / "11" / ("R40_Direct_" + "a" * 64 + ".json")
-            direct.write_text("not-json", encoding="utf-8")
-            scoped = store.preview_candidates(seeds=(11,), targets=("R40", "R40_Direct"))
-            self.assertEqual(scoped[(11, "R40")], "MISSING")
-            self.assertEqual(scoped[(11, "R40_Direct")], "INVALID")
-
     def test_summary_display_is_forwarded_only_to_declared_formal_oracle(self):
         from services.audit import runner
         with tempfile.TemporaryDirectory() as tmp, \
@@ -1438,30 +1375,6 @@ class OracleAuditContractCases(TestCase):
                     "breakout_quality", project_root=Path(tmp),
                     method_id="opportunity_selection_attribution", preflight_display="summary")
 
-    def test_target_inventory_runner_delegates_without_expensive_source_checks(self):
-        """Keep the Audit service preview wired without importing the app layer."""
-        from services.audit import runner
-        with tempfile.TemporaryDirectory() as tmp, \
-             patch.object(oracle, "render_existing_artifact_inventory",
-                          return_value="C96 REUSE / Daily RUN") as inventory, \
-             patch.object(runner, "collect_audit_status",
-                          side_effect=AssertionError("expensive preflight in inventory")) as full, \
-             patch.object(runner, "run_enabled_audits",
-                          side_effect=AssertionError("Replay in inventory")) as replay:
-            result = runner.render_audit_artifact_inventory(
-                "breakout_quality", project_root=Path(tmp),
-                method_id=oracle.SUPPORTED_AUDIT_TYPE,
-            )
-            self.assertEqual(result, "C96 REUSE / Daily RUN")
-            inventory.assert_called_once_with(self.active_definition,
-                                             project_root=Path(tmp).resolve())
-            full.assert_not_called()
-            replay.assert_not_called()
-            with self.assertRaisesRegex(ValueError, "快速工件盤點"):
-                runner.render_audit_artifact_inventory(
-                    "breakout_quality", project_root=Path(tmp),
-                    method_id="opportunity_selection_attribution",
-                )
 
     def test_formal_runner_never_prompts_or_starts_optimizer_for_audit(self):
         from services.audit import runner
@@ -2728,20 +2641,21 @@ class OracleReplayEvidenceReuseCases(TestCase):
             found, status = store.resolve_completed(corrected)
             self.assertIsNone(found)
             self.assertEqual(status, "none")
-            wanted = {"seeds": (1,), "targets": ("CG40_EqualRank",),
-                      "dataset": "full", "start_date": "2021-01-01",
-                      "requested_end": "2026-03-02", "benchmark": "end_to_end_v1"}
-            self.assertEqual(store.preview_candidates(**wanted,
-                required_oracle_revision=oracle.ORACLE_PARITY_IMPLEMENTATION)[(1,"CG40_EqualRank")],
-                "MISSING")
+            self.assertFalse(any(
+                (identity.get("replay_policy") or {}).get("oracle_parity_implementation")
+                    == oracle.ORACLE_PARITY_IMPLEMENTATION
+                for identity in store.existing_completed_identities(seed=1, target="CG40_EqualRank")
+            ))
             new_result = {**old_result, "romd": old_result["romd"]+1.0}
             store.write(corrected, new_result, origin="canonical_replay")
             self.assertEqual(store.resolve_completed(corrected)[0], new_result)
             self.assertEqual(original_path.read_bytes(), original_bytes)
             self.assertEqual(store.read(old), old_result)
-            self.assertEqual(store.preview_candidates(**wanted,
-                required_oracle_revision=oracle.ORACLE_PARITY_IMPLEMENTATION)[(1,"CG40_EqualRank")],
-                "CACHE")
+            self.assertTrue(any(
+                (identity.get("replay_policy") or {}).get("oracle_parity_implementation")
+                    == oracle.ORACLE_PARITY_IMPLEMENTATION
+                for identity in store.existing_completed_identities(seed=1, target="CG40_EqualRank")
+            ))
             # Same new revision, changed price SHA is a real conflict.
             another = dict(corrected, dataset_sha256="f"*64)
             with self.assertRaisesRegex(ValueError, "DIFFERENT identity"):
@@ -2806,8 +2720,6 @@ class OracleReplayEvidenceReuseCases(TestCase):
             self.assertEqual(store.resolve_completed(exact), (None, "none"))
             self.assertIsNone(store.explain_other_identity(exact))
             self.assertEqual(store.existing_completed_identities(seed=1, target="R40"), ())
-            self.assertEqual(store.preview_candidates(seeds=(1,), targets=("R40",))[(1, "R40")],
-                             "MISSING")
             with self.assertRaisesRegex(ValueError, "corrupt"):
                 store.resolve_completed(direct)
 
@@ -2894,20 +2806,6 @@ class OracleReplayEvidenceReuseCases(TestCase):
             with self.assertRaisesRegex(ValueError, "corrupt"):
                 cache.read(identity)
 
-    def test_preview_requires_matching_research_scope_but_not_full_price_hash(self):
-        from services.audit.oracle_replay_artifacts import OracleReplayStore
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            store = OracleReplayStore(root, "breakout_quality/reusable/target_oracle_romd")
-            old = self._identity(target="C96")
-            store.write(old, self._observation("C96", 1), origin="canonical_replay")
-            wanted = {"seeds": (1,), "targets": ("C96",),
-                      "dataset": "full", "start_date": "2021-01-01",
-                      "requested_end": "2026-03-02", "benchmark": "end_to_end_v1"}
-            self.assertEqual(store.preview_candidates(**wanted)[(1, "C96")], "CACHE")
-            self.assertEqual(store.preview_candidates(**{**wanted, "dataset": "other"})[(1, "C96")], "MISSING")
-            self.assertEqual(store.preview_candidates(**{**wanted, "start_date": "2022-01-01"})[(1, "C96")], "MISSING")
-            self.assertEqual(store.preview_candidates(**{**wanted, "requested_end": "2025-01-01"})[(1, "C96")], "MISSING")
 
     def test_conflict_reports_exact_fields_and_relative_cache_path_without_replay(self):
         from services.audit.oracle_replay_artifacts import OracleReplayStore
@@ -3441,11 +3339,11 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 (snapshot / "audit.json").write_text(json.dumps(report), encoding="utf-8")
                 shutil.rmtree(directory / "replay_cache")
                 cache = oracle.OracleReplayStore(root, definition.output_subdir)
-                candidates = cache.preview_candidates(
-                    seeds=seeds, targets=("C96", *(name for name, _ in LEGACY_ORACLE_TARGETS)),
-                )
-                self.assertTrue(all(status == "MISSING" for status in candidates.values()),
-                                "historical reports must not masquerade as replay cache")
+                self.assertTrue(all(
+                    not cache.existing_completed_identities(seed=seed, target=name)
+                    for seed in seeds
+                    for name in ("C96", *(item for item, _ in LEGACY_ORACLE_TARGETS))
+                ), "historical reports must not masquerade as replay cache")
                 rebuilt = oracle.build_report(definition, project_root=root, quiet=True)
                 self.assertEqual(len(recorded), 80, "old Oracle scores and baseline yearly statistics are invalid")
                 self.assertEqual([row for row in rebuilt["oracles"] if row["target"] not in new_targets], report["oracles"])
@@ -3502,10 +3400,13 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 (old_dir / "audit.json").write_text(json.dumps(old), encoding="utf-8")
                 cache_root = root / "outputs/audit/breakout_quality/reusable/target_oracle_romd/replay_cache"
                 shutil.rmtree(cache_root)
-                with patch.object(oracle, "get_strategy_multi_seed_robustness_settings", return_value=SimpleNamespace(
-                    enabled=True, resolved_seeds=seeds, seed_count=4, benchmark_id=Benchmark.benchmark_id)):
-                    preview = oracle.render_existing_artifact_inventory(definition, project_root=root)
-                self.assertIn("PRESENT 0 / MISSING 40 / INVALID 0", preview)
+                self.assertTrue(all(
+                    not oracle.OracleReplayStore(root, definition.output_subdir).existing_completed_identities(
+                        seed=seed, target=name,
+                    )
+                    for seed in seeds
+                    for name in ("C96", *(item for item, _ in LEGACY_ORACLE_TARGETS))
+                ))
                 previous = len(recorded)
                 report = oracle.build_report(definition, project_root=root, quiet=True)
                 self.assertEqual(len(recorded) - previous, 40)

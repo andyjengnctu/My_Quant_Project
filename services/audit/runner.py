@@ -304,27 +304,6 @@ def render_audit_status(
     )
 
 
-def render_audit_artifact_inventory(
-    module_id: str,
-    *,
-    project_root: Path = PROJECT_ROOT,
-    method_id: str | None = None,
-    audit_id: str | None = None,
-) -> str:
-    """Lightweight cache-presence preview; never computes Target or grants REUSE.
-
-    The catalog advertises the single canonical inventory provider. Full
-    identity checks and Replay authorization remain with that Audit owner.
-    """
-    definitions = tuple(
-        item for item in _definitions_for_method(module_id, method_id, audit_id)
-        if item.enabled
-    )
-    if len(definitions) != 1:
-        raise ValueError("快速 Replay 工件盤點只支援單一已啟用的正式 Audit")
-    definition = definitions[0]
-    handler = get_audit_handler(definition).load_inventory_handler()
-    return str(handler(definition, project_root=Path(project_root).resolve()))
 
 
 def run_enabled_audits(
@@ -449,7 +428,6 @@ __all__ = [
     "collect_audit_status",
     "collect_project_audit_status",
     "render_audit_status",
-    "render_audit_artifact_inventory",
     "render_latest_audit_summary",
     "run_enabled_audits",
 ]

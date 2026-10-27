@@ -45,7 +45,6 @@ from services.research.strategy_compare_application import (
 from services.audit.catalog import get_audit_methods, get_audit_method
 from services.audit.runner import (
     collect_audit_menu_state,
-    render_audit_artifact_inventory,
     render_audit_status,
     render_latest_audit_summary,
     run_enabled_audits,

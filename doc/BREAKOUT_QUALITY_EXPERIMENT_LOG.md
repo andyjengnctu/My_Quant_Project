@@ -14040,3 +14040,14 @@ Decision: `ENGINEERING_CHECKPOINT_FIRST_REUSE / HISTORICAL_AK_EVIDENCE_PRESERVED
 ### 狀態與下一步
 
 本輪修正的是cache routing、cold來源驗證與執行架構，沒有新SC／Target／Label／Report版號。若已用上一輪修正版完成合法current Replay，這輪不要求再次強制重算；合法source快取可跨Exact/Direct清單切換。最初貼出的修復前結果仍受上一輪60格重跑要求約束，不能因本輪identity不變而重新追認為有效。正式Windows Bundle、完整原始市場工件與真實四Seed E13逐日驗收仍需本機完成；有限合成檢查不宣稱所有市場工件已驗證。
+
+
+## 2026-10-27 — 22:05 基準 Oracle 舊快速工件盤點退役，單一正式計畫不變
+
+- **User request / baseline**：再次完整檢查 Target 是否正確、是否仍有可退役程式。唯一新基準 `test-branch-1_20261027_220548_e59a6888.zip`，SHA256 `63a55712f001022dbb77c8b83366b2da2d05a39c1cae34c9783a74bdc5090f58`；已先讀 PROJECT_SETTINGS／Experiment Registry／Experiment Log／current config。無新的真實市場逐筆 sidecar 或 Windows Bundle 輸入。
+- **現行算法路徑**：前輪已修正的 raw float32 Target、MinTrade date-effective P16 動態訊號、固定 H／完整週期結算、Exact／Direct 共用真值及 canonical Broker-Cash Replay 所在正式 owner 保持未改。Target/Min 回歸測試與 Audit 入口驗證通過；本輪沒有另找到可由提供的證據證明的新增數學／成交算法偏差，也不能因此宣稱實際全市場四 Seeds 已完全認證。
+- **補充舊分支**：`render_replay_preflight` 的無呼叫者 `certified=False` 兩階段文案分支已一併退役；`existing_completed_identities` 的說明不再承諾獨立預覽功能。正式矩陣 `certified=True` 原文字無改動。
+- **根因及工程退役**：早期 Research [1] 已不再調用檔案存在性盤點，但 `apps/research.py` 還遺留未使用的 `render_audit_artifact_inventory` import，generic runner/catalog/Target/Replay Store 仍保留 presence-only handler。已整條移除，不再可能繞過唯一完整身份 plan 提供 `PRESENT/MISSING/INVALID` 快速預覽。保留 `existing_completed_identities`、正式 signed replay、source/score SHA、舊 signed-cache 的合法相容核對、C96、A2/P2、retired target name fail-closed guards。未刪原始 evidence／Registry identity，不更動正式顏色／選單。
+- **Regression / non-rerun**：prepatch 172 項專項 unittest PASS，移除 5 項盤點專屬 tests 後 167 項 PASS；另 19 項策略／交易路徑 tests PASS、Audit framework 30 asserts PASS；647 Python AST PASS。Price `d73b4ce20dd958cb75b094f49d6abac94d31e34ca7222fa5806675fd931964bd`、Min `cf46236712c396f415531baf4db4a1cf13dae56a1b1d2b5a06868a44d0a694a4`、report `4f911292da243836` 的 fingerprint 證據與原 ZIP 一致。當前合法工件不因純架構清理重算；歷史修復前工件不因清理被追認。
+- **Non-blocking audit caveat**：`services/audit/daily_trade40_oracle.py` 的 source SHA closure 含 Research MinTrade 不引用的 `config/trading.py`，可能讓 Trading-only 修改造成不必要的新 RUN；這不是第二套 Target 算法，也沒有在本輪改 source closure，避免自己製造 MinTrade 真值全面失效。此類 identity migration 需單獨受控。
+- **Status**：`ENGINEERING_DEAD_PREVIEW_PATH_RETIRED / SINGLE_AUTHORIZED_REPLAY_PLAN_PRESERVED / TARGET_FORMULA_UNCHANGED / EXISTING_REUSE_IDENTITIES_UNCHANGED / USER_MARKET_E13_PENDING / NO_NEW_SCIENTIFIC_ID`。

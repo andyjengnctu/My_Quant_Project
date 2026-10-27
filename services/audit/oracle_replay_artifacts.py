@@ -641,49 +641,13 @@ class OracleReplayStore:
         """Compatibility probe; explanation and matching have a single owner."""
         return self.explain_other_identity(identity) is not None
 
-    def preview_candidates(
-        self, *, seeds, targets, dataset: str | None = None,
-        start_date: str | None = None, requested_end: str | None = None,
-        benchmark: str | None = None,
-        required_oracle_revision: str | None = None,
-    ) -> dict[tuple[int, str], str]:
-        """Inventory validated local bytes without certifying scientific REUSE.
-
-        The complete replay identity, including parameter/price/cohort hashes,
-        is intentionally checked later by ``resolve_completed``. A corrupt
-        candidate is never presented as a reusable artifact.
-        """
-        result: dict[tuple[int, str], str] = {}
-        for seed in seeds:
-            for target in targets:
-                key = (int(seed), str(target))
-                try:
-                    identities = self.existing_completed_identities(seed=key[0], target=key[1])
-                except (OSError, ValueError, KeyError, TypeError, OverflowError):
-                    result[key] = "INVALID"
-                    continue
-                matching = [identity for identity in identities if (
-                    (target == "C96" or required_oracle_revision is None
-                     or (identity.get("replay_policy") or {}).get("oracle_parity_implementation")
-                        == required_oracle_revision)
-                    and (dataset is None or identity.get("dataset") == dataset)
-                    and (start_date is None or identity.get("start_date") == start_date)
-                    and (requested_end is None or
-                         (identity.get("cohort") or {}).get("research_cutoff") == requested_end)
-                    and (benchmark is None or identity.get("benchmark") == benchmark)
-                )]
-                result[key] = (
-                    "MULTIPLE" if len(matching) > 1 else
-                    "CACHE" if matching else "MISSING"
-                )
-        return result
 
     def existing_completed_identities(self, *, seed: int, target: str) -> tuple[dict[str, Any], ...]:
         """Inventory *verified stored bytes*, not current scientific REUSE eligibility.
 
-        A preview may use this to show existing completion candidates without
-        materializing expensive future labels. Final RUN/REUSE/BLOCKED decisions
-        must still be made by resolve_completed with the FULL replay identity.
+        Current-source identity reconciliation may inspect signed completion
+        candidates without computing future labels. Only a FULL replay identity
+        resolved by the canonical planner may authorize REUSE/RUN/BLOCKED.
         """
         if not target.replace("_", "").replace("-", "").isalnum():
             raise ValueError("Oracle invalid cache target")

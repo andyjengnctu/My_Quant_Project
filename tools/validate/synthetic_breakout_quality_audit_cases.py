@@ -181,7 +181,6 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
 
     with patch("builtins.input", side_effect=input_after_plan), \
          patch.object(research_app, "render_audit_status") as expensive_status, \
-         patch.object(research_app, "render_audit_artifact_inventory") as false_inventory, \
          patch.object(research_app, "run_enabled_audits", side_effect=fake_target_runner) as oracle_runner, \
          patch.object(research_app, "render_latest_audit_summary", return_value="LATEST"), \
          redirect_stdout(route_console):
@@ -194,7 +193,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and callable(oracle_runner.call_args.kwargs.get("preflight_approval"))
         and "preflight_display" not in oracle_runner.call_args.kwargs
         and "before_replay" not in oracle_runner.call_args.kwargs
-        and not false_inventory.called and not expensive_status.called
+        and not expensive_status.called
         and "[1]" in root_text and "Target 驗證" in root_text
         and "[2]" in root_text and "模型訓練／驗證" in root_text
         and "[5]" in root_text and "Audit／診斷" in root_text
@@ -217,7 +216,6 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     executions.clear()
     with patch("builtins.input", return_value="0") as cancel_input, \
          patch.object(research_app, "render_audit_status") as status, \
-         patch.object(research_app, "render_audit_artifact_inventory") as false_inventory, \
          patch.object(research_app, "run_enabled_audits", side_effect=fake_target_runner) as cancelled_runner, \
          patch.object(research_app, "render_latest_audit_summary") as latest, \
          redirect_stdout(cancellation):
@@ -226,7 +224,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         "target_single_enter_cancel_is_before_any_expensive_work",
         cancel_input.call_count == 1
         and cancelled_runner.call_count == 1 and not executions
-        and not latest.called and not status.called and not false_inventory.called
+        and not latest.called and not status.called
         and cancellation.getvalue().count(preview) == 1
         and "未授權執行" in cancellation.getvalue(),
     )
@@ -242,7 +240,6 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         assert kwargs["preflight_approval"](final_matrix)
         return {"target_oracle_romd": {"status": "COMPLETED"}}
     with patch("builtins.input", return_value="") as single_input, \
-         patch.object(research_app, "render_audit_artifact_inventory") as inventory, \
          patch.object(research_app, "run_enabled_audits", side_effect=exact_plan), \
          patch.object(research_app, "render_latest_audit_summary", return_value="LATEST"), \
          redirect_stdout(changed_plan_console):
@@ -250,8 +247,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     check_true(
         "target_exact_verified_plan_runs_without_more_confirmation",
         result == 0 and single_input.call_count == 1
-        and len(verified_calls) == 1 and not inventory.called
-        and "before_replay" not in verified_calls[0]
+        and len(verified_calls) == 1 and "before_replay" not in verified_calls[0]
         and "RUN（需回放）2" in changed_plan_console.getvalue()
         and changed_plan_console.getvalue().count(final_matrix) == 1
         and "LATEST" in changed_plan_console.getvalue(),
@@ -365,7 +361,6 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         entry_console = io.StringIO()
         from services.audit import target_oracle_romd as oracle_handler
         with patch.object(research_app, "PROJECT_ROOT", isolated_root), \
-             patch.object(research_app, "render_audit_artifact_inventory", return_value="C96 REUSE / Daily RUN"), \
              patch("builtins.input", return_value=""), \
              patch.object(audit_runner, "collect_audit_status", return_value=missing_teacher_status), \
              patch("services.research.strategy_compare_preparation.prepare_strategy_parameter_artifacts", side_effect=AssertionError("Optimizer invoked from Target validation")) as optimizer, \
