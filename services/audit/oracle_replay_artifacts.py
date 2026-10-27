@@ -132,6 +132,57 @@ def _v2_presentation_identity(stored: Mapping[str, Any], expected: Mapping[str, 
     return result
 
 
+def _same_producer_different_score(previous: Mapping[str, Any],
+                                   expected: Mapping[str, Any]) -> bool:
+    """Distinguish impossible same-source score drift from a different RUN identity.
+
+    A score or raw/rank digest changing with *identical* price, P16,
+    eligibility, code lineage, Target contract and Replay inputs is a
+    determinism conflict. Different executable inputs/revisions are new
+    independent cache keys: preserve the old result, compute the new one.
+    This capability applies to any scored Target, without arm/period lists.
+    """
+    prev_policy = previous.get("replay_policy")
+    wanted_policy = expected.get("replay_policy")
+    if not isinstance(prev_policy, Mapping) or not isinstance(wanted_policy, Mapping):
+        return False
+    previous_lineage = prev_policy.get("hindsight_target_contract")
+    wanted_lineage = wanted_policy.get("hindsight_target_contract")
+    signed_scores = (is_sha256_hex(prev_policy.get("perfect_score_sha256")) and
+                     is_sha256_hex(wanted_policy.get("perfect_score_sha256")))
+    signed_outcome = (isinstance(previous_lineage, Mapping) and
+                      isinstance(wanted_lineage, Mapping) and
+                      is_sha256_hex(previous_lineage.get("truth_source_sha256")) and
+                      previous_lineage.get("truth_source_sha256") ==
+                          wanted_lineage.get("truth_source_sha256"))
+    if not (signed_scores or signed_outcome):
+        # Unscored controls have no Target-result digest to disagree on.
+        return False
+    def source_only(value: Mapping[str, Any]) -> dict[str, Any]:
+        result = dict(value)
+        # Old signed V2 receipts also carried presentation descriptions and
+        # reference-only model IDs. These are not changes to deterministic
+        # score production; normalize *before* testing impossible score drift.
+        result["target_definition"] = result.get("target")
+        cohort = result.get("cohort")
+        if isinstance(cohort, Mapping):
+            result["cohort"] = _execution_cohort(cohort)
+        policy = _execution_replay_policy(dict(result.get("replay_policy") or {}))
+        policy.pop("perfect_score_sha256", None)
+        lineage = policy.get("hindsight_target_contract")
+        if isinstance(lineage, Mapping):
+            lineage = dict(lineage)
+            # These are producer *results*, never source inputs. Source-code
+            # lineage, horizon, teacher, policy and cutoff must still match.
+            for name in ("rank_sha256", "raw_label_sha256"):
+                lineage.pop(name, None)
+            policy["hindsight_target_contract"] = lineage
+        result["replay_policy"] = policy
+        return result
+    return (source_only(previous) == source_only(expected) and
+            dict(previous) != dict(expected))
+
+
 def _changed_identity_fields(stored: Mapping[str, Any], expected: Mapping[str, Any]) -> tuple[str, ...]:
     """Explain strict scientific identity inequality without relaxing the match."""
     changes: list[str] = []
@@ -302,9 +353,11 @@ class OracleReplayDecision:
 class OracleReplayExecutionPlan:
     """One execution owner: REUSE cannot invoke any scientific producer."""
 
-    def __init__(self, store: "OracleReplayStore", decisions: Mapping[tuple[int, str], OracleReplayDecision]):
+    def __init__(self, store: "OracleReplayStore", decisions: Mapping[tuple[int, str], OracleReplayDecision],
+                 *, allow_historical_execution_input_drift: bool = False):
         self._store = store
         self._decisions = dict(decisions)
+        self._allow_historical_execution_input_drift = allow_historical_execution_input_drift
 
     def action(self, seed: int, target: str) -> str:
         return self._decisions[(int(seed), str(target))].action
@@ -334,7 +387,10 @@ class OracleReplayExecutionPlan:
             if row.origin.startswith("verified legacy replay cache"):
                 # Verify the alias again before publishing the canonical key.
                 # This is metadata promotion, NEVER a portfolio computation.
-                refreshed, origin = self._store.resolve_completed(row.identity)
+                refreshed, origin = self._store.resolve_completed(
+                    row.identity,
+                    allow_historical_execution_input_drift=self._allow_historical_execution_input_drift,
+                )
                 if refreshed != row.observation or origin != row.origin:
                     raise ValueError("Oracle historical replay changed after preflight")
                 self._store.write(row.identity, refreshed, origin="verified_legacy_replay_cache")
@@ -386,13 +442,16 @@ class OracleReplayStore:
         return normalized
 
     def _inspect_siblings(
-        self, identity: Mapping[str, Any]
+        self, identity: Mapping[str, Any], *,
+        allow_historical_execution_input_drift: bool = False,
     ) -> tuple[tuple[dict[str, Any], str] | None, str | None]:
-        """Single strict resolver for legacy-equivalent and conflicting caches.
+        """Resolve a signed cache against the current execution identity.
 
-        The legacy settings SHA is non-executable metadata; all other fields
-        must match exactly.  Never silently pick between inconsistent completed
-        observations, and never remove or overwrite historical evidence.
+        In explicitly authorized interactive plans, old *execution inputs*
+        are separate historical results and do not block a current-key RUN.
+        Strict read-only/noninteractive callers retain their prior policy.
+        Corruption and same-source contradictory observations always block;
+        no old cache is overwritten or inferred reusable.
         """
         path = self._path(identity)
         requested_cohort = identity.get("cohort") or {}
@@ -476,8 +535,15 @@ class OracleReplayStore:
                     candidate_identity = dict(candidate_identity, cohort=dict(requested_cohort))
                 if candidate_identity == dict(identity):
                     aliases.append((candidate, record))
-                else:
+                elif (not allow_historical_execution_input_drift or
+                      _same_producer_different_score(candidate_identity, identity)):
+                    # The interactive Research work plan can explicitly
+                    # authorize a new execution identity while preserving
+                    # signed old receipts. In other (read-only) workflows,
+                    # source/contract drift still blocks unapproved REPLAY.
+                    # A same-producer contradictory score always blocks.
                     conflicts.append((candidate, peer))
+
         if conflicts:
             examples: dict[str, str] = {}
             for _candidate, peer in conflicts:
@@ -500,12 +566,23 @@ class OracleReplayStore:
             return (aliases[0][1], source), None
         return None, None
 
-    def resolve_completed(self, identity: Mapping[str, Any]) -> tuple[dict[str, Any] | None, str]:
-        """Canonical current cache, or fully verified legacy semantic alias."""
+    def resolve_completed(
+        self, identity: Mapping[str, Any], *,
+        allow_historical_execution_input_drift: bool = False,
+    ) -> tuple[dict[str, Any] | None, str]:
+        """Canonical current cache or fully verified legacy-equivalent alias.
+
+        Authorized interactive execution may coexist with *different* signed
+        historical inputs. A source mismatch is never a REUSE: it returns
+        missing, so only the requested new identity gets RUN.
+        """
         current = self.read(identity)
         if current is not None:
             return current, "verified per-arm cache"
-        legacy, conflict = self._inspect_siblings(identity)
+        legacy, conflict = self._inspect_siblings(
+            identity,
+            allow_historical_execution_input_drift=allow_historical_execution_input_drift,
+        )
         if conflict is not None:
             raise ValueError(f"same-window replay_cache has a DIFFERENT identity for "
                              f"{identity['target']} seed={identity['seed']}; {conflict}; "
@@ -515,8 +592,11 @@ class OracleReplayStore:
             return record, f"verified legacy replay cache ({source})"
         return None, "none"
 
-    def plan_execution(self, identities: Mapping[tuple[int, str], Mapping[str, Any]]) -> OracleReplayExecutionPlan:
-        """Certify every arm once before running any Replay, with no guesswork."""
+    def plan_execution(
+        self, identities: Mapping[tuple[int, str], Mapping[str, Any]], *,
+        allow_historical_execution_input_drift: bool = False,
+    ) -> OracleReplayExecutionPlan:
+        """Certify once. Only an authorized RUN may coexist with old inputs."""
         if not identities:
             raise ValueError("Oracle empty replay comparison plan")
         result: dict[tuple[int, str], OracleReplayDecision] = {}
@@ -525,7 +605,10 @@ class OracleReplayStore:
             if identity.get("seed") != key[0] or identity.get("target") != key[1]:
                 raise ValueError("Oracle plan key and scientific identity differ")
             try:
-                observation, origin = self.resolve_completed(identity)
+                observation, origin = self.resolve_completed(
+                    identity,
+                    allow_historical_execution_input_drift=allow_historical_execution_input_drift,
+                )
                 result[key] = OracleReplayDecision(
                     "REUSE" if observation is not None else "RUN",
                     dict(identity), observation, origin,
@@ -534,7 +617,10 @@ class OracleReplayStore:
                 result[key] = OracleReplayDecision(
                     "BLOCKED", dict(identity), None, "none", str(exc),
                 )
-        return OracleReplayExecutionPlan(self, result)
+        return OracleReplayExecutionPlan(
+            self, result,
+            allow_historical_execution_input_drift=allow_historical_execution_input_drift,
+        )
 
     def explain_other_identity(self, identity: Mapping[str, Any]) -> str | None:
         """Explain genuine replay differences; legacy UI-only drift is compatible."""

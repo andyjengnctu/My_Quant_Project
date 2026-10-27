@@ -3291,8 +3291,10 @@ class OracleUnifiedReuseArchitectureCases(TestCase):
                 definition, price_sha=price_sha, certified_identity_out=mapped, **args),
                 {seed: "REUSE"})
             self.assertEqual(mapped[seed], identity)
+            # Changed price inputs are a new authorized execution identity;
+            # the old signed receipt remains historical, never falsely REUSE.
             self.assertEqual(oracle._certify_unscored_baseline_before_truth(
-                definition, price_sha="f" * 64, **args), {seed: "BLOCKED"})
+                definition, price_sha="f" * 64, **args), {seed: "RUN"})
             # A scored target is never authorized by this C96 proof.
             self.assertEqual(set(mapped), {seed})
 
@@ -3452,6 +3454,97 @@ class OracleOnePlanRealCacheCases(TestCase):
             self.assertEqual(result["baseline"]["romd"], 8.)
             self.assertEqual(result["oracles"][1]["romd"], 20.)
             self.assertIsInstance(result["limitations"], list)
+
+    def test_stale_c96_is_run_before_approval_without_recalculating_scored_reuse(self):
+        """Old C96 executions must not BLOCK the entire preflight.
+
+        Signed R40 (price target) remains reusable; the old C96 receipt is
+        preserved, a changed baseline economic input is a new authorized RUN.
+        This must require NO 558/617 price/label Producer before the prompt.
+        """
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            definition, bench, seed, price_sha, param_sha, _proof, _sample = self._fixture(root)
+            store = OracleReplayStore(root, definition.output_subdir)
+            baseline = store.existing_completed_identities(seed=seed, target="C96")[0]
+            original = store._path(baseline)
+            original_bytes = original.read_bytes()
+            # Reproduce a signed *different* C96 replay-policy source from an
+            # earlier execution, not a damaged or self-attested current cache.
+            prior_policy = {**baseline["replay_policy"],
+                            "execution_defaults": {"legacy": "different"}}
+            prior = dict(baseline, replay_policy=prior_policy)
+            previous = store.read(baseline)
+            original.unlink()
+            store.write(prior, previous, origin="historical_same_window_control")
+            prior_path = store._path(prior)
+            old_bytes = prior_path.read_bytes()
+            shown=[]
+            with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
+                 patch.object(oracle, "_robustness_artifacts", return_value=(bench, [(seed, root/"p16.json")])), \
+                 patch.object(oracle, "_prepare_oracle_parameters", return_value=(
+                     [(seed, param_sha, "synthetic", None, None)], {})), \
+                 patch.object(oracle, "price_inventory_sha256", return_value=price_sha), \
+                 patch.object(oracle, "_read_only_score_keys", side_effect=AssertionError(
+                     "Never precompute scores for a status matrix")), \
+                 patch.object(oracle, "_execute_single_stage_missing", side_effect=AssertionError(
+                     "No Portfolio/Target producer until user approval")):
+                result = oracle.build_report(definition, project_root=root, quiet=True,
+                    preflight_approval=lambda view: shown.append(view) or False)
+            self.assertEqual(result["status"], "CANCELLED")
+            self.assertIn("REUSE 1 / RUN（需回放）2 / BLOCKED 0", shown[0])
+            self.assertEqual(result["preflight"][(seed,"C96")], "RUN")
+            self.assertEqual(result["preflight"][(seed,"R40")], "REUSE")
+            self.assertEqual(result["preflight"][(seed,"T40")], "RUN")
+            self.assertEqual(prior_path.read_bytes(),old_bytes)
+            self.assertFalse(original.exists())
+
+    def test_signed_stale_receipt_is_not_corruption_but_corrupt_c96_still_blocks(self):
+        """Generic planner only downgrades signed old *input revisions*."""
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            definition, _bench, seed, _price, _param, _proof, _sample=self._fixture(root)
+            store=OracleReplayStore(root,definition.output_subdir)
+            current=store.existing_completed_identities(seed=seed,target="C96")[0]
+            different=dict(current, dataset_sha256="e"*64)
+            self.assertEqual(store.plan_execution({(seed,"C96"):different}).action(
+                seed,"C96"),"BLOCKED", "Read-only Audit cannot authorize a different input")
+            self.assertEqual(store.plan_execution({(seed,"C96"):different},
+                allow_historical_execution_input_drift=True).action(seed,"C96"),"RUN")
+            store._path(current).write_text('{broken',encoding="utf-8")
+            self.assertEqual(store.plan_execution({(seed,"C96"):different},
+                allow_historical_execution_input_drift=True).action(seed,"C96"),"BLOCKED")
+
+    def test_authorized_rebuild_keeps_stale_bytes_and_reuses_new_c96_on_next_run(self):
+        """Immutable old control, new key only; future preflight is direct REUSE."""
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            definition, _bench, seed, _price, _param, _proof, sample=self._fixture(root)
+            store=OracleReplayStore(root,definition.output_subdir)
+            historical=store.existing_completed_identities(seed=seed,target="C96")[0]
+            original_bytes=store._path(historical).read_bytes()
+            current=dict(historical, replay_policy={**historical["replay_policy"],
+                "execution_defaults": {"version": "new authoritatively configured"}})
+            policy=dict(seed=seed,target="C96")
+            blocked=store.plan_execution({(seed,"C96"):current})
+            self.assertEqual(blocked.action(seed,"C96"),"BLOCKED",
+                "Unauthorized noninteractive Audit may not silently recompute")
+            approved=store.plan_execution({(seed,"C96"):current},
+                allow_historical_execution_input_drift=True)
+            self.assertEqual(approved.action(seed,"C96"),"RUN")
+            produced=[]
+            result,_=approved.execute(seed,"C96",lambda: produced.append(1) or sample("C96",9.0))
+            self.assertEqual(produced,[1])
+            self.assertEqual(result["romd"],9.0)
+            self.assertEqual(store._path(historical).read_bytes(),original_bytes)
+            next_plan=store.plan_execution({(seed,"C96"):current},
+                allow_historical_execution_input_drift=True)
+            self.assertEqual(next_plan.action(seed,"C96"),"REUSE")
+            found,_=next_plan.execute(seed,"C96",lambda: self.fail("REUSE cannot run"))
+            self.assertEqual(found,result)
 
     def test_approved_all_reuse_avoids_every_target_and_portfolio_producer(self):
         # Completed results may predate a standalone truth-cache migration.

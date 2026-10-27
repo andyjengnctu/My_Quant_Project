@@ -1304,7 +1304,8 @@ def render_replay_preflight(
         render_table(headers, rows),
         f"Portfolio REUSE {counts['REUSE']} / RUN（需回放）{counts['RUN']} / "
         f"BLOCKED {counts['BLOCKED']}；REUSE=零Portfolio交易重算，"
-        "RUN=經完整身分核對後確實缺少合法Portfolio結果；尚未開始回放",
+        "RUN=舊執行身分過時或合法結果缺件，由系統只計算該項；"
+        "BLOCKED=資料損毀或同一執行身分證據矛盾，須停止以避免覆寫；尚未開始回放",
     ))
 
 
@@ -1584,6 +1585,7 @@ def _certify_unscored_baseline_before_truth(
     definition, *, project_root: Path, settings, base_arm, exact_arm,
     robustness, prepared_parameters, price_sha: str, evaluation_end: str,
     certified_identity_out: dict[int, dict[str, Any]] | None = None,
+    certified_cohort_keys: tuple[str, int, str, str] | None = None,
 ) -> dict[int, str]:
     """Certify C96 directly from its actual economic inputs, not Target scores.
 
@@ -1623,6 +1625,15 @@ def _certify_unscored_baseline_before_truth(
                 cohort = candidate.get("cohort")
                 if not isinstance(cohort, Mapping):
                     raise ValueError("C96 saved cohort must be a mapping")
+                if certified_cohort_keys is not None:
+                    # Saved report boundaries cannot certify a changed DL
+                    # scored universe. Use previously signed *current* score
+                    # membership; never compute labels just to plan a Replay.
+                    _digest, rows, first, last = certified_cohort_keys
+                    if (cohort.get("cohort_rows") != rows or
+                            cohort.get("first_common_day") != first or
+                            cohort.get("last_common_day") != last):
+                        continue
                 identity = replay_identity(
                     dataset=settings.dataset, dataset_sha256=price_sha,
                     target=baseline, definition={baseline: "Canonical same-window Min P16 Base-Finalist-Best"},
@@ -1634,7 +1645,10 @@ def _certify_unscored_baseline_before_truth(
                     evaluation_mode=str(definition.dimensions["evaluation_mode"]),
                     max_positions=settings.max_positions, replay_policy=baseline_policy,
                 )
-                action = store.plan_execution({(int(seed), baseline): identity}).action(seed, baseline)
+                action = store.plan_execution(
+                    {(int(seed), baseline): identity},
+                    allow_historical_execution_input_drift=True,
+                ).action(seed, baseline)
                 decisions.append(action)
                 if action == "REUSE":
                     reusable_identities.append(identity)
@@ -2572,7 +2586,10 @@ def _execute_single_stage_missing(
                 evaluation_mode=str(definition.dimensions["evaluation_mode"]),
                 max_positions=settings.max_positions, replay_policy=policy,
             )
-            action = cache.plan_execution({key: identity})
+            action = cache.plan_execution(
+                {key: identity},
+                allow_historical_execution_input_drift=True,
+            )
             action.require_ready()
             if action.action(seed, target) != "RUN":
                 raise OracleBlockedError(
@@ -2690,11 +2707,17 @@ def _run_single_stage_oracle(
                                 "params_signature": p.params_signature}
                                for p in schedule]
     baseline_certified: dict[int, dict[str, Any]] = {}
-    _certify_unscored_baseline_before_truth(
+    # Source signatures may certify the shared cohort without materializing
+    # any Target scores. If sources disagree, do not infer a C96 cohort.
+    if len(set(keys.values())) > 1:
+        raise OracleBlockedError("Oracle signed Replay witnesses disagree on common score cohort")
+    signed_cohort = next(iter(keys.values())) if keys else None
+    baseline_status = _certify_unscored_baseline_before_truth(
         definition, project_root=root, settings=settings, base_arm=base_arm,
         exact_arm=baseline_arm, robustness=robustness,
         prepared_parameters=prepared, price_sha=price_sha,
         evaluation_end=end, certified_identity_out=baseline_certified,
+        certified_cohort_keys=signed_cohort,
     )
     # Compare signed provenance before considering a cached perfect-score
     # SHA. Legacy receipts without the producer closure fingerprint cannot
@@ -2715,15 +2738,21 @@ def _run_single_stage_oracle(
                 c96 = baseline_certified.get(seed)
                 if c96 is not None:
                     identity = c96
-                    obs, _ = cache.resolve_completed(identity)
+                    obs, _ = cache.resolve_completed(
+                        identity, allow_historical_execution_input_drift=True,
+                    )
                     if obs is None:
                         raise OracleBlockedError("C96 evidence disappeared during preflight")
                     decisions[key], cached[key], identities[key] = "REUSE", obs, identity
                 else:
-                    # Missing C96 may be computed directly without any Target truth.
-                    candidates = cache.existing_completed_identities(seed=seed, target=target)
-                    if candidates:
-                        blocked[key] = "C96 same-window cache requires certified identity"
+                    # Historical C96 inputs/revisions are not scientific
+                    # conflicts. A stale result remains intact and the
+                    # corrected current identity becomes its own RUN. Only
+                    # corrupt receipts or genuinely contradictory evidence
+                    # remain blocked; neither can be repaired by guessing.
+                    state = baseline_status.get(seed, "BLOCKED")
+                    if state == "BLOCKED":
+                        blocked[key] = "C96 工件完整性或相同身分證據衝突；禁止自動覆寫"
                         decisions[key] = "BLOCKED"
                     else:
                         decisions[key] = "RUN"
@@ -2731,6 +2760,10 @@ def _run_single_stage_oracle(
             candidates = cache.existing_completed_identities(seed=seed, target=target)
             current_candidates = [item for item in candidates
                                   if item.get("start_date") == start and item.get("end_date") == end
+                                  and item.get("dataset") == settings.dataset
+                                  and item.get("dataset_sha256") == price_sha
+                                  and item.get("param_sha256") == param_sha
+                                  and item.get("benchmark") == robustness.benchmark_id
                                   and (item.get("replay_policy") or {}).get(
                                       "oracle_parity_implementation") == ORACLE_PARITY_IMPLEMENTATION
                                   and (target not in plan["daily_sources"] or
@@ -2758,11 +2791,16 @@ def _run_single_stage_oracle(
                     base_policy=baseline_policy, arm=arm,
                     rolling_periods=schedules.get(seed), evaluation_end=end,
                 )
-                approved_plan = cache.plan_execution({key: expected})
+                approved_plan = cache.plan_execution(
+                    {key: expected},
+                    allow_historical_execution_input_drift=True,
+                )
                 approved_plan.require_ready()
                 if approved_plan.action(seed, target) != "REUSE":
                     raise ValueError("stored score receipt not reproducible from current source identity")
-                obs, _ = cache.resolve_completed(expected)
+                obs, _ = cache.resolve_completed(
+                    expected, allow_historical_execution_input_drift=True,
+                )
                 if obs is None:
                     raise ValueError("certified historical replay disappeared")
                 decisions[key], cached[key], identities[key] = "REUSE", obs, expected
