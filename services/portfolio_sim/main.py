@@ -172,7 +172,8 @@ def main(argv=None, env=None):
         return 1
 
     from services.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
-    from services.portfolio_sim.runtime import ensure_runtime_dirs, load_strict_params, run_portfolio_simulation
+    from services.portfolio_replay_runtime import ensure_runtime_dirs, load_strict_params
+    from services.portfolio_replay import run_portfolio_simulation
     from services.portfolio_replay import run_portfolio_simulation_with_param_schedule
 
     params = None

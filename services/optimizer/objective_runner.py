@@ -18,7 +18,8 @@ from services.optimizer.objective_filters import apply_filter_rules
 from core.walk_forward_policy import filter_search_train_dates
 from services.optimizer.objective_profiles import build_initial_profile_row, build_trial_params
 from services.optimizer.param_cache import build_full_evaluation_cache_key, build_prep_cache_key
-from services.optimizer.prep import is_insufficient_data_message, prepare_trial_inputs
+from services.optimizer.raw_cache import is_insufficient_data_message
+from services.optimizer.trial_inputs import prepare_trial_inputs
 from services.optimizer.study_utils import (
     INVALID_TRIAL_VALUE,
     OBJECTIVE_MODE_LEGACY_BASE_SCORE,

@@ -20,10 +20,16 @@ def run_history_qualified_scanner(*args, **kwargs):
 
 
 def __getattr__(name):
-    if name in {"ensure_runtime_dirs", "is_insufficient_data_error", "load_strict_params", "process_single_stock", "resolve_scanner_max_workers"}:
-        from . import worker as worker_module
+    if name in {"ensure_runtime_dirs", "is_insufficient_data_error", "load_strict_params", "resolve_scanner_max_workers"}:
+        from . import runtime_common as runtime_module
 
-        value = getattr(worker_module, name)
+        value = getattr(runtime_module, name)
+        globals()[name] = value
+        return value
+    if name == "process_single_stock":
+        from . import stock_processor as processor_module
+
+        value = getattr(processor_module, name)
         globals()[name] = value
         return value
     if name in {"process_prepared_stock", "build_scanner_response_from_stats"}:

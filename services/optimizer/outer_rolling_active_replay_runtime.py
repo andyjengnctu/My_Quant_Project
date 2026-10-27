@@ -28,7 +28,7 @@ from services.optimizer.outer_rolling_active_replay import (
 from services.optimizer.outer_rolling_formatting import _fmt_duration, _period_label
 from services.optimizer.outer_rolling_plan import OuterRollingConfig
 from services.optimizer.outer_rolling_policy import CHAIN_POLICY_NAMES
-from services.optimizer.prep import prepare_trial_inputs
+from services.optimizer.trial_inputs import prepare_trial_inputs
 from services.optimizer.trial_inputs import _build_process_pool_executor
 
 def _load_active_replay_contexts_by_signature(

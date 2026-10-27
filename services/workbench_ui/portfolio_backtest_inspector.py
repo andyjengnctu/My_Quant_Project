@@ -28,7 +28,7 @@ from core.runtime_utils import parse_float_strict, parse_int_strict
 from core.log_utils import write_issue_log
 from core.walk_forward_policy import load_walk_forward_policy
 from services.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
-from services.portfolio_sim.runtime import ensure_runtime_dirs, load_strict_params
+from services.portfolio_replay_runtime import ensure_runtime_dirs, load_strict_params
 from core.params_io import build_params_from_mapping
 from core.portfolio_param_runtime import build_params_schedule_rows_from_payload
 from core.rolling_oos_params import build_active_param_schedule, format_rolling_oos_summary_lines, get_active_param_date_range, get_active_params_for_date, is_rolling_oos_param_set_file, load_rolling_oos_param_set

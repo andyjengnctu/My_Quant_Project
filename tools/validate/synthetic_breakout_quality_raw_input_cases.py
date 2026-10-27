@@ -50,8 +50,13 @@ class AlternatePriceInputTests(unittest.TestCase):
 
     def test_bw_registered_without_repurposing_old_identity(self):
         self.assertEqual(get_continuous_ranker_research_spec(self.raw_profile).model_research_id,'MR-13BW')
-        self.assertIn(('MR-13AO',self.ao_profile),BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
-        self.assertIn(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE,BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
+        # AI: Historical model identities stay registered even when the editable
+        # AI: current Model Compare selection no longer includes them.
+        self.assertEqual(get_continuous_ranker_research_spec(self.ao_profile).model_research_id, 'MR-13AO')
+        for model_id, profile in BREAKOUT_QUALITY_MODEL_TEST_PROFILES:
+            self.assertEqual(get_continuous_ranker_research_spec(profile).model_research_id, model_id)
+        current_id, current_profile = BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE
+        self.assertEqual(get_continuous_ranker_research_spec(current_profile).model_research_id, current_id)
 
     def test_architecture_preserves_ao_topology(self):
         self.assertTrue(get_architecture_descriptor(self.raw_arch).has_capability('raw_unadjusted_price_input'))

@@ -14,10 +14,16 @@ def __getattr__(name):
         value = getattr(reporting_module, name)
         globals()[name] = value
         return value
-    if name in {"ensure_runtime_dirs", "is_insufficient_data_error", "load_strict_params", "run_portfolio_simulation", "run_portfolio_simulation_with_param_ensemble", "load_portfolio_market_context", "run_portfolio_simulation_prepared"}:
-        from . import runtime as runtime_module
+    if name in {"ensure_runtime_dirs", "is_insufficient_data_error", "load_strict_params"}:
+        from services import portfolio_replay_runtime as runtime_module
 
         value = getattr(runtime_module, name)
+        globals()[name] = value
+        return value
+    if name in {"run_portfolio_simulation", "run_portfolio_simulation_with_param_ensemble", "load_portfolio_market_context", "run_portfolio_simulation_prepared"}:
+        from services import portfolio_replay as replay_module
+
+        value = getattr(replay_module, name)
         globals()[name] = value
         return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

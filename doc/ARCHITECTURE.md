@@ -973,3 +973,11 @@ Direct-account BUY provenance is owned by `services/trading/account_trade_entry.
 - **冷啟動架構解析（2026-10-27 修復）**：正式 Daily DL profile 的 `model_architecture=None` 是合法的「繼承 Oracle Registry `source.model_architecture`」設定，不是模型名稱 `"None"`。確認 RUN 之後的 `_read_only_score_keys()` 必須採用與現有 `_load_truth()` 相同的解析優先序；不得因這個設定在進入真值／Portfolio Producer 前中止。這只修正載入參數，不改正式 DL 架構、Target、eligible cohort、Replay 身分或價格 Target algorithm fingerprint。
 - **REUSE 與報表**：新截止日期、經濟 closeout 與 Oracle implementation fingerprint 都屬 Replay 身分；`2025-12-22` 歷史報表/Replay 不得以舊 RoMD 冒充新全期間結果。進入 `[1]` 必須在**第一次且唯一一次**授權前，以唯讀收據／source identity 列出真實 REUSE/RUN/BLOCKED；不准為了判定 REUSE 先跑 558 檔 MinTrade、617 檔價格真值或任何 Portfolio。確認後只計算新身分真正 RUN 的依賴，Exact/Direct 同一 Seed/Target 來源只建一次；`REUSE` 不重建任何科學結果。報表沿用 `audit.target_oracle_romd@v9`/schema 8，年度清單必有 2026 部分年度，缺一年要 fail-fast。
 - **驗收邊界**：本輪獨立合成回歸涵蓋研究截止價格截斷、截止後行情不可滲入、2026 尾端 inference-only feature rows、舊期間 Replay 失效、2026 年度缺件拒絕及 MinTrade 原交易等價。使用者 Windows 正式 Bundle、真實四 Seed Replay、E13 逐日分數／資金／交易 parity 尚待本機驗收；歷史 2025 截止經濟數字與 Experiment Log 原始記錄不刪除，但不得作現行全期間績效。
+
+
+### 2026-10-27 純轉接層退役（僅工程收斂，非科學改版）
+
+- `services/optimizer/objective.py`、`services/optimizer/prep.py` 已退役；Optimizer 各正式 consumer 直接呼叫 `services/optimizer/objective_runner.py`、`services/optimizer/raw_cache.py` 或 `services/optimizer/trial_inputs.py` 唯一實作 owner。
+- `services/portfolio_sim/runtime.py` 已退役；Portfolio Sim 和 Workbench 直接呼叫 `services/portfolio_replay_runtime.py`／`services/portfolio_replay.py`。`services/portfolio_sim/__init__.py` 原有公開函式名稱仍直接轉向這兩個 owner，不再經過獨立 runtime shim。
+- `services/scanner/worker.py` 已退役；Scanner package 既有公開函式名稱直接從 `runtime_common.py`／`stock_processor.py` 解析，無第二份 worker facade。
+- 上述清理不得引入第二套交易、PIT、Optimizer 或報表實作，也不更改任何現行科學身分與工件內容。`core/breakout_quality_runtime_resolver.py` 仍是既有 Oracle 價格真值來源指紋的一部分，不能只因程式薄就刪除；歷史 catalog／模型讀取／Oracle cache compatibility 繼續只讀保留。

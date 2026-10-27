@@ -5,7 +5,7 @@ from collections import OrderedDict
 from contextlib import contextmanager, nullcontext
 from services.optimizer.callbacks import run_optimizer_monitoring_callback
 from services.optimizer.dependency_stats import empty_local_min_dependency_stats as _empty_local_min_dependency_stats
-from services.optimizer.objective import run_optimizer_objective
+from services.optimizer.objective_runner import run_optimizer_objective
 from core.training_performance import (
     resolve_optimizer_full_evaluation_cache_max_items,
     resolve_optimizer_rolling_parallel_prep_cache_max_items_default,
@@ -555,7 +555,7 @@ class OptimizerSession:
     def load_raw_data(self, data_dir, *, load_all_raw_data, required_min_rows, verbose=True):
         if not callable(load_all_raw_data):
             raise TypeError(
-                "load_raw_data 需要接收 services.optimizer.prep.load_all_raw_data 函式；"
+                "load_raw_data 需要接收 services.optimizer.raw_cache.load_all_raw_data 函式；"
                 f"目前收到 {type(load_all_raw_data).__name__}"
             )
         raw_data_cache = load_all_raw_data(

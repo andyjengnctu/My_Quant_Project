@@ -34,7 +34,7 @@ from core.strategy_dashboard import (
     format_training_param_lines,
     print_optimizer_trial_console_dashboard,
 )
-from services.optimizer.prep import prepare_trial_inputs
+from services.optimizer.trial_inputs import prepare_trial_inputs
 from services.optimizer.study_utils import (
     OBJECTIVE_MODE_SPLIT_TRAIN_ROMD,
     is_qualified_trial_value,

@@ -679,7 +679,7 @@ def _promote_candidate_to_run_best(*, session=None, emit_output: bool = True):
 def generate_walk_forward_report_from_payload(*, session, params_payload, dataset_label, db_file, best_trial_number=None, walk_forward_policy: dict):
     from core.params_io import build_params_from_mapping
     from core.strategy_params import build_runtime_param_raw_value
-    from services.optimizer.prep import prepare_trial_inputs
+    from services.optimizer.trial_inputs import prepare_trial_inputs
     from services.optimizer.walk_forward import evaluate_walk_forward, write_walk_forward_report
 
     ai_params = build_params_from_mapping(params_payload)
@@ -2661,7 +2661,7 @@ def run_static_strategy_parameter_training(
         resolve_strategy_param_artifact_path,
         resolve_strategy_param_manifest_path,
     )
-    from services.optimizer.prep import load_all_raw_data as default_load_all_raw_data
+    from services.optimizer.raw_cache import load_all_raw_data as default_load_all_raw_data
     from services.optimizer.runtime import (
         create_optimizer_study,
         resolve_optimizer_single_fold_search_parallel_trials,
@@ -3115,7 +3115,7 @@ def main(argv=None, environ=None):
 
     from core.data_utils import discover_unique_csv_inputs
     from strategies.breakout.search_space import get_breakout_optimizer_required_min_rows
-    from services.optimizer.prep import load_all_raw_data
+    from services.optimizer.raw_cache import load_all_raw_data
     from services.optimizer.runtime import (
         create_optimizer_study,
         ensure_export_only_db_not_empty,

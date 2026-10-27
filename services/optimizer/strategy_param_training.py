@@ -111,7 +111,7 @@ from filters.breakout_quality.strategy_compare_sources import (
 )
 from services.research.strategy_compare_engine import run_comparison
 from services.optimizer.outer_rolling_oos import FOLD_FIXED_STRATEGY_OVERRIDES_KEY, run_outer_rolling_oos
-from services.optimizer.prep import load_all_raw_data
+from services.optimizer.raw_cache import load_all_raw_data
 from services.optimizer.runtime import create_optimizer_study
 from services.optimizer.session_factory import (
     build_optimizer_session,

@@ -419,7 +419,7 @@ from core.strategy_params import build_runtime_param_raw_value
 from core.strategy_param_artifacts import normalize_strategy_param_payload_for_persistence
 from core.walk_forward_policy import build_optimizer_runtime_policy
 from services.optimizer.param_cache import build_prep_cache_key
-from services.optimizer.prep import prepare_trial_inputs
+from services.optimizer.trial_inputs import prepare_trial_inputs
 from services.optimizer.robustness import (
     list_local_min_score_finalists,
 )
@@ -1631,7 +1631,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             configure_optuna_logging,
             ensure_study_effective_policy_compatible,
         )
-        from services.optimizer.prep import load_all_raw_data
+        from services.optimizer.raw_cache import load_all_raw_data
         from services.optimizer.runtime import create_optimizer_study
         from services.optimizer.session import close_study_storage
 

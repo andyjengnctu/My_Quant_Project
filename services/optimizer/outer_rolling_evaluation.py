@@ -18,7 +18,7 @@ from services.optimizer.outer_rolling_policy_replay import (
     _policy_metrics_from_ensemble_metrics,
 )
 from services.optimizer.param_cache import build_prep_cache_key
-from services.optimizer.prep import prepare_trial_inputs
+from services.optimizer.trial_inputs import prepare_trial_inputs
 from services.optimizer.walk_forward import evaluate_walk_forward
 
 def _prep_result_has_pit_index(prep_result) -> bool:

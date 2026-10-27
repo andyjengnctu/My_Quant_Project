@@ -33,7 +33,7 @@ from services.optimizer.objective_runner import (
     resolve_search_train_scope,
 )
 from services.optimizer.param_cache import build_full_evaluation_cache_key, build_prep_cache_key
-from services.optimizer.prep import prepare_trial_inputs
+from services.optimizer.trial_inputs import prepare_trial_inputs
 from services.optimizer.walk_forward import evaluate_walk_forward
 from services.optimizer.score_display import format_optimizer_score_for_display
 from services.optimizer.scientific_runtime import (
