@@ -29,7 +29,6 @@ EXACT = "DailyUniversal_MinTrade40_NetR"
 DIRECT = "DailyUniversal_MinTrade40_NetR_Direct"
 PROFILE = "daily_universal_full_horizon_mae_gated_mfe_t40_full_list_ndcg_pairwise"
 _ORIGINAL_SCORE_CONTRACT_RESOLVER = oracle._resolve_oracle_target_score_contracts
-_ORIGINAL_SCORE_ELIGIBILITY_CERTIFIER = oracle._certify_oracle_score_eligibility
 
 
 def definition(*, full_cycle: bool = False):
@@ -99,13 +98,107 @@ def synthetic_perfect_score_contracts(_definition, _settings, plan):
         "reference_arm_id": "synthetic_authorized",
         "score_start_date": "2021-01-01",
         "target_id": "synthetic_target",
+        "source_profile_id": str(_definition.source[
+            (plan["daily_recipes"][plan["daily_sources"][name]] if name in plan["daily_sources"]
+             else plan["recipes"][plan["aliases"].get(name, name)])[1]]),
     } for name, _ in plan["targets"]}
 
 
-def synthetic_score_eligibility(_definition, *, contracts, plan,
-                           price_scores, daily_scores):
-    return {name: {**contract, "canonical_feature_eligible_keys_sha256": "a" * 64}
-            for name, contract in contracts.items()}
+def score_key_proof(keys):
+    from hashlib import sha256
+    ordered = sorted(keys)
+    return (sha256("".join(f"{ticker}|{day}\n" for ticker, day in ordered).encode()).hexdigest(),
+            len(ordered), min(day for _, day in ordered), max(day for _, day in ordered))
+
+
+def synthetic_read_score_keys(_definition, *, contracts, **_kwargs):
+    proof = score_key_proof({("2330", "2025-01-03"), ("2330", "2025-12-22")})
+    return {name: proof for name in contracts}
+
+
+def synthetic_price_scores(definition, *, project_root, cutoff, **_kwargs):
+    panels, cohort = oracle._build_oracle_score_panels(
+        definition, project_root=project_root, cutoff=cutoff)
+    selected = {row["target"] for row in definition.source["oracle_comparisons"]}
+    return {name: scores for name, scores in panels.items() if name in selected}, cohort
+
+
+def execute_synthetic_score_fixture(definition, *, price_scores, daily_scores, keys,
+                                    evidence_overrides=None, replayed=None):
+    """Exercise the current executor gates with paired C96 and no market data.
+
+    The input-key proof is independent of injected outcome values. A real
+    Replay store verifies each produced identity; only economic execution and
+    external source loading are synthetic.
+    """
+    from services.audit import daily_trade40_oracle as daily_owner
+    from services.audit.oracle_replay_artifacts import OracleReplayStore
+    from filters.breakout_quality import daily_trade40_target as trade_owner
+    plan = oracle._oracle_comparison_plan(definition)
+    settings, base, exact = oracle._contract(definition)
+    contracts = _ORIGINAL_SCORE_CONTRACT_RESOLVER(definition, settings, plan)
+    direct = (oracle._direct_arm(definition, settings, base, exact)
+              if "direct" in plan["selectors"].values() else None)
+    baseline_arm = exact or settings.arms[str(definition.source["exact_arm_id"])]
+    base_policy = oracle._canonical_oracle_replay_policy(
+        definition, base_arm=base, exact_arm=baseline_arm)
+    seeds = tuple(daily_scores) or (1,)
+    prepared = [(seed, "a" * 64, "rolling_active_param_ensemble", {}, {}) for seed in seeds]
+    proof = score_key_proof(keys)
+    schedule = source_fixture()[3]
+    periods = [{"start": str(p.start.date()), "end": None if p.end is None else str(p.end.date()),
+                "params_signature": p.params_signature} for p in schedule]
+    observed = replayed if replayed is not None else []
+    def source(*, seed, param_sha256, horizon_sessions, **_kwargs):
+        name = next(name for name, row in plan["daily_recipes"].items() if row[2] == horizon_sessions)
+        values = daily_scores[seed][name]
+        target_id, label_id = daily_owner.target_identity_for_horizon(horizon_sessions)
+        evidence = {
+            "target_id": target_id, "label_id": label_id,
+            "profile_id": str(definition.source[plan["daily_recipes"][name][1]]),
+            "teacher": {"seed": seed, "param_identity_sha256": param_sha256, "periods": periods},
+            "truth_source_sha256": daily_owner.truth_producer_fingerprint(),
+            "dataset_summary_sha256": None,
+            "rank_policy": "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",
+            "rank_sha256": "1" * 64, "raw_label_sha256": "2" * 64, "calendar_sha256": "3" * 64,
+            "mature_eligible_rows": len(values), "settled_net_r_rows": len(values),
+            "censored_rank_last_rows": 0, "research_cutoff": str(settings.end_date),
+            "score_start_date": contracts[next(t for t, s in plan["daily_sources"].items() if s == name)]["score_start_date"],
+        }
+        if evidence_overrides:
+            evidence.update(evidence_overrides(seed, name, evidence))
+        return values, evidence
+    def scenario(*, name, **_kwargs):
+        observed.append(name)
+        return {"name": name}
+    end = str(definition.dimensions["oracle_evaluation_end_date"])
+    def metrics(_result, *, target):
+        return {"target": target, "total_return_pct": 5., "annualized_return_pct": 1.,
+                "mdd_pct": 1., "romd": 5., "ev_a_r": .5, "trades": 1, "exposure_pct": 5.,
+                "yearly": [{"year": year, "strategy_return_pct": 1.,
+                            "is_full_year": year < pd.Timestamp(end).year}
+                           for year in range(pd.Timestamp(settings.start_date).year, pd.Timestamp(end).year + 1)]}
+    with TemporaryDirectory() as directory, \
+         patch("services.audit.oracle_replay_artifacts.price_inventory_sha256", return_value="f" * 64), \
+         patch.object(oracle, "_prepare_oracle_parameters", return_value=(prepared, [])), \
+         patch.object(oracle, "_robustness_artifacts", return_value=(None, [(seed, Path("P16.json")) for seed in seeds])), \
+         patch.object(oracle, "_load_or_build_oracle_price_scores", return_value=(price_scores, {})), \
+         patch.object(oracle, "_price_score_algorithm_sha256", return_value="e" * 64), \
+         patch.object(trade_owner, "resolve_formal_min_param_records", return_value=()), \
+         patch.object(trade_owner, "build_formal_min_execution_schedule", return_value=(schedule, {})), \
+         patch.object(daily_owner, "build_daily_universal_trade40_oracle_scores", side_effect=source), \
+         patch.object(oracle, "_run_scenario", side_effect=scenario), \
+         patch.object(oracle, "_metrics", side_effect=metrics):
+        return oracle._execute_single_stage_missing(
+            definition, project_root=Path(directory), quiet=True, plan=plan,
+            contracts=contracts, current_keys={name: proof for name in contracts},
+            settings=settings, robustness=SimpleNamespace(benchmark_id="synthetic_current_executor"),
+            price_sha="f" * 64, prepared=prepared,
+            decisions={(seed, name): "RUN" for seed in seeds for name in contracts},
+            preflight_cached={(seed, "C96"): {"romd": 1.} for seed in seeds},
+            start=str(settings.start_date), end=end, base_arm=base, exact_arm=exact,
+            direct_arm=direct, base_policy=base_policy,
+            cache=OracleReplayStore(Path(directory), definition.output_subdir))
 
 
 def synthetic_score_parity_setup(testcase):
@@ -115,7 +208,8 @@ def synthetic_score_parity_setup(testcase):
     # synthetic_target_oracle_cases.py.
     for name, action in (
         ("_resolve_oracle_target_score_contracts", synthetic_perfect_score_contracts),
-        ("_certify_oracle_score_eligibility", synthetic_score_eligibility),
+        ("_read_only_score_keys", synthetic_read_score_keys),
+        ("_load_or_build_oracle_price_scores", synthetic_price_scores),
         # The integration cases inject a synthetic price-panel producer. Its
         # callable is a Mock, so attest that controlled stub explicitly instead
         # of asking production inspect.getsource to hash the Mock object.
@@ -124,6 +218,10 @@ def synthetic_score_parity_setup(testcase):
         guard = patch.object(oracle, name, side_effect=action)
         guard.start()
         testcase.addCleanup(guard.stop)
+    prices = patch("services.audit.oracle_replay_artifacts.price_inventory_sha256",
+                   side_effect=lambda *args: oracle.price_inventory_sha256(*args))
+    prices.start()
+    testcase.addCleanup(prices.stop)
 
 
 class FormalMinDailyOracleCases(TestCase):
@@ -284,7 +382,6 @@ class FormalMinDailyOracleCases(TestCase):
     def test_mixed_horizons_reject_incomplete_stock_day_not_silent_intersection(self):
         d = definition()
         plan = oracle._oracle_comparison_plan(d)
-        contracts = synthetic_perfect_score_contracts(d, None, plan)
         keys = {("2330", "2025-11-25"), ("2317", "2025-11-25")}
         price = {name: {key: .5 for key in keys}
                  for name, _ in plan["targets"] if name not in plan["daily_sources"]}
@@ -294,10 +391,8 @@ class FormalMinDailyOracleCases(TestCase):
             for source, (_recipe, _provider, horizon) in plan["daily_recipes"].items()
         }}
         with self.assertRaisesRegex(oracle.OracleBlockedError,
-                                    "common scored stock-day cohort differs"):
-            _ORIGINAL_SCORE_ELIGIBILITY_CERTIFIER(
-                d, contracts=contracts, plan=plan, price_scores=price,
-                daily_scores=daily)
+                                    "producer score eligibility differs"):
+            execute_synthetic_score_fixture(d, price_scores=price, daily_scores=daily, keys=keys)
 
     def test_60_source_has_distinct_approved_identity_and_maturity(self):
         from services.audit.daily_trade40_oracle import target_identity_for_horizon
@@ -823,10 +918,12 @@ class FormalMinReplayIntegrationCases(TestCase):
                 "calendar_sha256":"e"*64,
                 "teacher":{"origin":"formal_min_roos_rolling_per_seed",
                            "seed":int(seed),"param_identity_sha256":str(param_sha256),
-                           "periods":[{"start":"2021-01-01","params_signature":"sig"}]},
-                "mature_eligible_rows":25,"settled_net_r_rows":20,
-                "censored_rank_last_rows":5,"research_cutoff":"2026-03-02",
-                "first_date":"2021-01-04","first_replay_trade_date":"2021-01-04", "score_start_date":"2021-01-01"}
+                           "periods":[{"start":"2021-01-01", "end":None,
+                                       "params_signature":formal[0].params_signature}]},
+                "mature_eligible_rows":2,"settled_net_r_rows":2,
+                "censored_rank_last_rows":0,"research_cutoff":"2026-03-02",
+                "first_date":"2025-01-03","last_date":"2025-12-22",
+                "first_replay_trade_date":"2021-01-04", "score_start_date":"2021-01-01"}
             return score_map,evidence
         with TemporaryDirectory() as tmp, \
              patch.object(oracle,"collect_status",return_value={"status":"READY"}), \
@@ -863,17 +960,21 @@ class FormalMinReplayIntegrationCases(TestCase):
             self.assertEqual(rows[DIRECT]["delta_romd_vs_c96"],-1.0)
             oracle.run_formal_audit(active,project_root=root,quiet=True)
             self.assertEqual(run.call_count,48,"second run must REUSE all 48")
-            self.assertEqual(source.call_count,8)
-            # A changed Target hash cannot be silently accepted as the old truth.
+            self.assertEqual(source.call_count,4,"warm Replay never regenerates Min truth")
+            # A new producer revision must build its new truth and preserve the
+            # previous completed identities; unchanged warm receipts need no
+            # speculative producer call merely to rediscover their score SHA.
             changed_hash="0"*64
             def conflicting(*,seed,param_sha256,**kwargs):
                 x,y=scores(seed=seed,param_sha256=param_sha256,**kwargs)
                 y["raw_label_sha256"]=changed_hash
+                y["truth_source_sha256"]="f"*64
                 return x,y
             source.side_effect=conflicting
-            with self.assertRaisesRegex(oracle.OracleBlockedError,"(INCOMPATIBLE|DIFFERENT|identity)"):
+            with patch("services.audit.daily_trade40_oracle.truth_producer_fingerprint",return_value="f"*64):
                 oracle.run_formal_audit(active,project_root=root,quiet=True)
-            self.assertEqual(run.call_count,48)
+            self.assertEqual(run.call_count,56,"only changed Min source replays need RUN")
+            self.assertEqual(source.call_count,8)
 
 
     def test_60_mixed_40_window_replays_and_preserves_prior_caches(self):
@@ -922,7 +1023,8 @@ class FormalMinReplayIntegrationCases(TestCase):
                 "calendar_sha256": "e" * 64,
                 "teacher": {"origin": "formal_min_roos_rolling_per_seed",
                             "seed": int(seed), "param_identity_sha256": str(param_sha256),
-                            "periods": [{"start": "2021-01-01", "params_signature": "sig"}]},
+                            "periods": [{"start": "2021-01-01", "end": None,
+                                         "params_signature": formal[0].params_signature}]},
                 "mature_eligible_rows": len(values), "settled_net_r_rows": len(values),
                 "censored_rank_last_rows": 0, "research_cutoff": "2026-03-02",
                 "first_date": first[1], "last_date": max(k[1] for k in values),
@@ -949,8 +1051,9 @@ class FormalMinReplayIntegrationCases(TestCase):
                             "is_full_year": year != 2025} for year in range(2021, 2026)]}
 
         with TemporaryDirectory() as tmp, \
-             patch.object(oracle, "_certify_oracle_score_eligibility",
-                          side_effect=_ORIGINAL_SCORE_ELIGIBILITY_CERTIFIER), \
+             patch.object(oracle, "_read_only_score_keys",
+                          side_effect=lambda _d, *, contracts, **_kw: {
+                              name: score_key_proof({first, second}) for name in contracts}), \
              patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
              patch.object(oracle, "_robustness_artifacts",
                           return_value=(benchmark, [(seed, Path("seed.json"))])), \
@@ -986,9 +1089,9 @@ class FormalMinReplayIntegrationCases(TestCase):
             self.assertIn("fixed evaluation window", markdown)
             self.assertIn("DailyUniversal_MinTrade60_NetR_Direct", markdown)
             self.assertEqual(runner.call_count, 14, "old 40D and baseline results reuse: only 60D exact/direct run")
-            self.assertEqual(source_mock.call_count, 3, "40D and 60D truth is prepared separately")
+            self.assertEqual(source_mock.call_count, 2, "only newly added 60D truth is prepared")
             self.assertEqual(source_observations, [
-                (40, (first, second)), (40, (first, second)), (60, (first, second))])
+                (40, (first, second)), (60, (first, second))])
             self.assertTrue(all((record[2], record[3]) ==
                                 ((.625 if "DailyUniversal" in record[0] else .25), first[1])
                                 for record in score_observations))
@@ -997,7 +1100,7 @@ class FormalMinReplayIntegrationCases(TestCase):
                              {row["target"] for row in full.source["oracle_comparisons"]})
             oracle.run_formal_audit(full, project_root=root, quiet=True)
             self.assertEqual(runner.call_count, 14, "identical fixed-evaluation identities REUSE")
-            self.assertEqual(source_mock.call_count, 5)
+            self.assertEqual(source_mock.call_count, 2, "warm Replay does not build either source")
             oracle.run_formal_audit(forty, project_root=root, quiet=True)
             self.assertEqual(runner.call_count, 14, "40D-only completed identities remain reusable")
             sixty = replace(full, source={**full.source, "oracle_comparisons": tuple(
@@ -1019,7 +1122,7 @@ class FormalMinReplayIntegrationCases(TestCase):
             self.assertEqual(len(expanded["oracles"]), 15)
             self.assertEqual(runner.call_count, 16,
                              "adding full-cycle retains 40D and 60D Replay identities")
-            self.assertEqual(source_mock.call_count, 10)
+            self.assertEqual(source_mock.call_count, 3, "only new full-cycle source is built")
             oracle.run_formal_audit(full_cycle, project_root=root, quiet=True)
             self.assertEqual(runner.call_count, 16, "all fixed-end arms re-use on repeat")
             full_only = replace(full_cycle, source={**full_cycle.source,
@@ -1030,6 +1133,7 @@ class FormalMinReplayIntegrationCases(TestCase):
             self.assertEqual(alone["end_date"], second[1])
             self.assertEqual(runner.call_count, 16,
                              "full-cycle-only reuses without altering period or other targets")
+            self.assertEqual(source_mock.call_count, 3, "all repeated subsets reuse existing truth receipts")
 
 
 if __name__=="__main__":

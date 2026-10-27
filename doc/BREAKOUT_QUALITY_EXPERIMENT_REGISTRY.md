@@ -718,3 +718,16 @@ Decision：`B378_DONE / COMPARISON_GENERALIZATION_7_COLUMNS / COMPARISON_EVIDENC
 - **驗證狀態**：最終合併3個Target/MinTrade unittest modules 183/183 PASS；A2原路徑16/16 assertions PASS；獨立price公式2,402項、MinTrade Decimal/time/ranking15項全部PASS；rolling4種實際Portfolio差異案例及兩種P16 payload通過。Oracle與DL邊界同分數12組合成回放（292組每日狀態）一致，這不是本機4 Seeds全市場E13驗收。原ZIP647個Python AST PASS。附帶reduced9股／10,859成熟股票日抽查的4個scalar Target沒有rank變動，不能據合成反例推算全市場RoMD改變幅度。正式Windows Bundle與修復後全市場60組Replay待使用者本機驗收。
 
 Decision：`ENGINEERING_FIX / CANONICAL_RAW_TARGET_TIES / DATE_EFFECTIVE_MIN_SIGNALS / VERIFIED_CURRENT_SOURCE / HISTORICAL_RESULTS_RETAINED / POST_FIX_MARKET_REPLAY_PENDING`。
+
+
+### 2026-10-27 — 21:41 基準再確認：Oracle 單一執行 owner 與 Exact／Direct 真值快取收斂
+
+- **基準**：`test-branch-1_20261027_214149_cea9e135.zip`，SHA256 `86f8f66cc1276fe8bbf95a4e2c2e90849a4376a13b0cc8a41cd3f1006207ebb0`；本輪確認已包含上一輪price raw-label／Min rolling／來源證據修復。沒有新市場績效，前輪修復前USER_REPORTED結果仍保留歷史狀態。
+- **確定工程缺陷**：price source identity正確地不含Exact／Direct接收名稱，但舊快取保存當次selected panel名稱，造成合法R40→R40_Direct或反向切換命中相同真值後卻缺requested score而BLOCKED。現在唯一cache層保存canonical source keys、認證後正規化舊合法panel，再依本次plan aliases投影；同源矛盾拒絕，原bytes保留，不新增identity或重算相同真值。五個真實source/NPZ regression原版全FAIL、修後全PASS。
+- **確定退役**：`build_report()`所有合法互動／非互動caller統一走`_run_single_stage_oracle()`→`_execute_single_stage_missing()`。整段`_build_report_once`與專屬eligibility／score-matrix helper退役；兩階段truth-miss renderer/payload、無runtime caller的score wrapper、靜態comparison工程鏡像／render fallback一併移除。v9報表直接宣告current sections，移除v2組裝物件；現行payload／fingerprint／Console／Markdown輸出完全相同。
+- **共同保護**：非互動strict input-drift=False與互動既有授權True沿用同一ReplayStore判定。唯讀source probe只比較已驗證inputs，不能猜未產生score/cohort，更不能自行授權REUSE；完整identity仍由既有owner驗證。Daily profile/Target/Label與Seed/P16/current-source/summary/cohort在cold與warm共用邊界驗證，避免移除舊executor時丟失原保護。
+- **身份與REUSE保持**：7個price公式函式、28個shared Daily source與34個Min source owners逐bytes未變；16 arms×4 Seeds的64組合法合成metadata之policy／Replay identity逐值相同。已完成且來源相同的current工件不因本輪清理強制RUN；最初修復前結果仍須遵守前輪必要重算，不因本輪不改identity而被重新追認。無新SC／Target／Label／Report版號或模型重訓。
+- **複核結果**：最終Target/MinTrade三模組191/191 PASS（9.658s），Audit入口30/30 assertions PASS；新random seed的price手算2,402項PASS；MinTrade180條正式Portfolio differential（162完成、18NULL，含跨期／缺bars／零量）全部一致；647個Python AST PASS。正式程式淨減555行，沒有整檔刪除。Windows formal Bundle及完整四Seed市場E13逐日驗收尚未在GPT端執行。
+- **保留邊界**：已退役MinTrade event名稱與MR13CL的reserved identity／拒啟guard保留；A2/P2仍有正式callers；歷史signed-cache normalization、cohort equivalence與純工件存在盤點保留，它們不執行舊Target算法。scalar數學reference與低階非正式score-key選項不成為current producer，不能為純瘦身擴大真值來源失效；沒有新增queue或重新啟用已退役研究。
+
+Decision：`SINGLE_ORACLE_EXECUTOR / CANONICAL_SOURCE_SCORE_CACHE / LEGAL_IDENTITY_PRESERVED / DEAD_EXECUTION_PATHS_RETIRED / CURRENT_TARGET_FORMULAS_UNCHANGED`。

@@ -697,9 +697,11 @@ PORTFOLIO_DRAWDOWN_REPORT = PersistentReportContract(
     ),
 )
 
-_TARGET_ORACLE_ROMD_PRIOR_REPORT = PersistentReportContract(
-    report_id="audit.target_oracle_romd", version=2, role="persistent_reusable_hindsight_non_pit",
-    menu_path=("Research", "Audit／診斷", "可重複使用的原因分析", "Target Ground Truth → Strategy RoMD (Oracle)"),
+# The current schema is declared directly; historical identities remain in
+# the compact report ledger and are not executable presentation templates.
+TARGET_ORACLE_ROMD_REPORT = PersistentReportContract(
+    report_id="audit.target_oracle_romd", version=9, role="persistent_reusable_hindsight_non_pit",
+    menu_path=("Research", "Target 驗證"),
     sections=(
         S("oracle_performance", 1, "Oracle Performance (4-seed mean)", tables=(T("performance", (
             C("target", "Target", alignment="left"),
@@ -712,7 +714,7 @@ _TARGET_ORACLE_ROMD_PRIOR_REPORT = PersistentReportContract(
             C("wins", "Win/Seed", alignment="right"),
             C("ev_a_r", "EV(A) Mean", 2, " R", "higher", "signed_number"),
         )),)),
-        S("target_definitions", 2, "Target Definitions (8 active Oracle targets)"),
+        S("target_definitions", 2, "Target Definitions"),
         S("yearly_stability", 3, "Yearly Stability (same-window seed means)", tables=(T("yearly", (
             C("year", "Year", alignment="left"),
             C("strategy_return_pct", "Mean Return", 2, "%", "higher", "signed_pct"),
@@ -727,20 +729,6 @@ _TARGET_ORACLE_ROMD_PRIOR_REPORT = PersistentReportContract(
             C("delta_romd_vs_c96", "Paired Delta", 2, preference="higher", format_kind="signed_number"),
         )),)),
         S("constraints", 5, "Research Constraints"),
-    ),
-)
-
-# v1-v8 remain byte-frozen historical presentation contracts.  The approved
-# v9 migration separates stable report schema from mutable Oracle inventory:
-# comparison counts are runtime evidence, never a reason to bump a report ID.
-TARGET_ORACLE_ROMD_REPORT = PersistentReportContract(
-    report_id="audit.target_oracle_romd", version=9,
-    role="persistent_reusable_hindsight_non_pit",
-    menu_path=("Research", "Target 驗證"),
-    sections=(
-        _TARGET_ORACLE_ROMD_PRIOR_REPORT.sections[0],
-        S("target_definitions", 2, "Target Definitions"),
-        *_TARGET_ORACLE_ROMD_PRIOR_REPORT.sections[2:],
     ),
 )
 

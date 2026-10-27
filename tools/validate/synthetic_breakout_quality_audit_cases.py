@@ -293,7 +293,6 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
          patch.object(research_app, "run_enabled_audits", side_effect=simulate_real_research_runner), \
          patch.object(research_app, "render_latest_audit_summary") as premature_report, \
          patch.object(oracle_handler, "_run_single_stage_oracle", side_effect=approved_matrix_plan) as planner, \
-         patch.object(oracle_handler, "_build_report_once") as legacy_two_stage, \
          patch.object(oracle_handler, "_execute_single_stage_missing") as expensive_producer, \
          patch("builtins.input", side_effect=abort_after_matrix), \
          redirect_stdout(missing_truth_view):
@@ -307,7 +306,8 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and missing_truth_view.getvalue().count(certified_matrix) == 1
         and missing_truth_view.getvalue().index(certified_matrix)
             < missing_truth_view.getvalue().index("未授權執行")
-        and planner.call_count == 1 and not legacy_two_stage.called
+        and planner.call_count == 1
+        and planner.call_args.kwargs["allow_historical_execution_input_drift"] is True
         and not expensive_producer.called and not premature_report.called,
     )
 

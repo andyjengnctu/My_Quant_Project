@@ -183,6 +183,41 @@ def _same_producer_different_score(previous: Mapping[str, Any],
             dict(previous) != dict(expected))
 
 
+def _independent_source_revision(previous: Mapping[str, Any],
+                                 expected: Mapping[str, Any]) -> bool:
+    """Approved implementation/producer corrections retain a separate old result."""
+    previous_policy = previous.get("replay_policy") or {}
+    wanted_policy = expected.get("replay_policy") or {}
+    if not isinstance(previous_policy, Mapping) or not isinstance(wanted_policy, Mapping):
+        return False
+    if any(wanted_policy.get(field) != previous_policy.get(field) for field in
+           ("period_stats_implementation", "oracle_parity_implementation")):
+        return True
+    wanted_truth = wanted_policy.get("hindsight_target_contract")
+    previous_truth = previous_policy.get("hindsight_target_contract")
+    return (isinstance(wanted_truth, Mapping)
+            and is_sha256_hex(wanted_truth.get("truth_source_sha256"))
+            and (not isinstance(previous_truth, Mapping)
+                 or previous_truth.get("truth_source_sha256") != wanted_truth["truth_source_sha256"]))
+
+
+def _known_input_differences(stored: Mapping[str, Any],
+                             expected: Mapping[str, Any]) -> tuple[str, ...]:
+    """Compare only verified inputs; absent outcome/key hashes are not invented."""
+    differences: list[str] = []
+
+    def visit(previous: Any, current: Any, path: str) -> None:
+        if isinstance(current, Mapping) and isinstance(previous, Mapping):
+            for key, value in current.items():
+                visit(previous.get(key, _MISSING), value,
+                      f"{path}.{key}" if path else str(key))
+        elif previous != current:
+            differences.append(path)
+
+    visit(stored, expected, "")
+    return tuple(differences)
+
+
 def _changed_identity_fields(stored: Mapping[str, Any], expected: Mapping[str, Any]) -> tuple[str, ...]:
     """Explain strict scientific identity inequality without relaxing the match."""
     changes: list[str] = []
@@ -492,34 +527,9 @@ class OracleReplayStore:
                     f"Oracle sibling replay cache is corrupt; fail closed: "
                     f"{candidate.relative_to(self.project_root).as_posix()}"
                 ) from exc
-            # An implementation-only Oracle parity bug fix invalidates all
-            # earlier hindsight score replays. Keep the old bytes as history,
-            # but do not let their incompatible same-window identities block
-            # the corrected result from being computed alongside them.
-            # This exemption never applies to C96 (the unscored baseline) or
-            # to two new-revision observations with differing semantics.
-            requested_policy = identity.get("replay_policy") or {}
-            peer_policy = peer.get("replay_policy") or {}
-            if (isinstance(requested_policy, Mapping)
-                    and isinstance(peer_policy, Mapping)
-                    and (requested_policy.get("period_stats_implementation")
-                         != peer_policy.get("period_stats_implementation")
-                         or requested_policy.get("oracle_parity_implementation")
-                         != peer_policy.get("oracle_parity_implementation"))):
-                continue
-            # Independently attested Target-outcome producers can coexist in
-            # the same evaluation window. An earlier receipt with no current
-            # producer proof (or a different proof) remains intact as history,
-            # but cannot block the authorized corrected RUN. This is a generic
-            # source capability, NOT a 40D/60D/name-specific exception.
-            wanted_truth = requested_policy.get("hindsight_target_contract") if isinstance(
-                requested_policy, Mapping) else None
-            previous_truth = peer_policy.get("hindsight_target_contract") if isinstance(
-                peer_policy, Mapping) else None
-            if isinstance(wanted_truth, Mapping) and is_sha256_hex(
-                    wanted_truth.get("truth_source_sha256")) and (
-                    not isinstance(previous_truth, Mapping) or
-                    previous_truth.get("truth_source_sha256") != wanted_truth["truth_source_sha256"]):
+            # The same revision policy governs both the read-only source plan
+            # and final full-identity execution. Old evidence is never rewritten.
+            if _independent_source_revision(peer, identity):
                 continue
             if (peer.get("dataset") == identity["dataset"]
                     and peer.get("start_date") == identity["start_date"]
@@ -700,6 +710,42 @@ class OracleReplayStore:
                 ) from exc
             results.append(identity)
         return tuple(results)
+
+    def inspect_current_source(
+        self, *, seed: int, target: str, expected_inputs: Mapping[str, Any],
+        allow_historical_execution_input_drift: bool = False,
+    ) -> tuple[tuple[dict[str, Any], ...], str | None]:
+        """Find signed source candidates without producing any missing scores.
+
+        This cannot certify REUSE: the caller must still reconstruct and check
+        the complete replay identity. With no current candidate, known input
+        drift keeps the strict noninteractive policy; unknown score/key hashes
+        remain unknown. Approved producer revisions share the final cache rule.
+        """
+        candidates = self.existing_completed_identities(seed=seed, target=target)
+        expected = dict(expected_inputs)
+        if isinstance(expected.get("replay_policy"), Mapping):
+            expected["replay_policy"] = _execution_replay_policy(expected["replay_policy"])
+        normalized = []
+        for candidate in candidates:
+            inputs = dict(candidate)
+            if isinstance(inputs.get("replay_policy"), Mapping):
+                inputs["replay_policy"] = _execution_replay_policy(inputs["replay_policy"])
+            normalized.append((candidate, inputs))
+        current = tuple(candidate for candidate, inputs in normalized
+                        if not _known_input_differences(inputs, expected))
+        if current or allow_historical_execution_input_drift:
+            return current, None
+        for candidate, inputs in normalized:
+            if _independent_source_revision(candidate, expected):
+                continue
+            if all(candidate.get(field) == expected.get(field)
+                   for field in ("dataset", "start_date", "end_date")):
+                changed = _known_input_differences(inputs, expected)
+                if changed:
+                    return (), ("same-window replay_cache has a DIFFERENT identity for "
+                                f"{target} seed={seed}; changed fields: " + "; ".join(changed))
+        return (), None
 
     def read(self, identity: Mapping[str, Any]) -> dict[str, Any] | None:
         path = self._path(identity)

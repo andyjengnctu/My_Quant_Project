@@ -14004,3 +14004,39 @@ Decision: `ENGINEERING_CHECKPOINT_FIRST_REUSE / HISTORICAL_AK_EVIDENCE_PRESERVED
 | DailyUniversal_MinTrade_NetR | +336.92% | +32.70% | 13.53% | 25.40 | 8.23 | +16.23 | 4/4 | +1.74 R |
 
 | DailyUniversal_MinTrade_NetR_Direct | +1360.67% | +66.39% | 11.10% | 122.64 | 59.76 | +113.47 | 4/4 | +3.59 R |
+
+
+## 2026-10-27 — 21:41基準 Target 再確認／退役執行分岔／Exact-Direct cache修復
+
+### 基準與工作範圍
+
+- 基準ZIP：`test-branch-1_20261027_214149_cea9e135.zip`；SHA256 `86f8f66cc1276fe8bbf95a4e2c2e90849a4376a13b0cc8a41cd3f1006207ebb0`；全新解壓目錄`/workspace/scratch/b884d04c0e9f/target_review_20261027_214149`。先讀Project Settings，再讀Registry／Log當前決策與Architecture，檢查現行config／runtime；研究期仍2021-01-01～2026-03-02。
+- 此基準正式程式包含前輪修補。本輪沒有新市場結果，不修改前輪USER_REPORTED績效及其待重跑狀態。範圍為Target真值／來源／Replay／報表整鏈及直接依賴的退役檢查；未執行apps/run_bundle.py或apps/test_suite.py。
+
+### 預期、實際、修復
+
+1. **Exact／Direct共用真值卻拿不到requested panel**：相同R40 recipe的Exact-only、Direct-only與合併清單應共用相同price truth identity；舊cache以當次recipient名稱保存，R40 warm source被R40_Direct命中時只回R40，反向亦同，missing executor因缺requested score而BLOCKED。真實source identity＋NPZ Store五個反例修前5/5 FAIL。修後canonical source保存、舊合法panel認證後正規化、依當次plan投影；同源分數矛盾／錯來源拒絕、Exact/Direct共用score dict、舊bytes不變、零額外producer，5/5 PASS。這不是新price公式，也不表示已完成市場RoMD必然錯誤。
+2. **兩套正式executor仍同時存在**：互動callback走single-stage，但generic Audit／noninteractive run在None callback時實際進`_build_report_once`，仍有整批真值建立、第二份計畫與Replay實作。現在所有caller走同一owner；嚴格非互動與互動既有重建授權只作明確policy差異，完整身分／revision／corruption規則仍由同一OracleReplayStore持有。
+3. **cold/warm來源保護不對稱**：舊executor驗Daily profile/target/label，原single-stage cold主要驗teacher Seed/P16，warm才驗ID。統一時將三項放進既有`_arm_replay_policy`，以target_identity_for_horizon派生期待，完整合法lineage但錯ID/profile/Seed/P16必須在該scored Replay前拒絕。合法policy結果不變。
+4. **舊report工程物件依賴**：current v9原本借v2物件sections組裝。現在直接宣告同一v9 schema；compact歷史ledger不改，所有current payload／fingerprints與console/markdown rendering逐bytes相同。
+
+### 實際退役及保留
+
+已退役：`_build_report_once`、`_certify_oracle_score_eligibility`、`_score_map_fingerprints`、`render_truth_miss_preflight`、`build_oracle_score_tables`；舊truth-miss exception workflow payload；`ORACLE_TARGETS`／`ORACLE_DIRECT_SCORE_SOURCES`工程鏡像與renderer fallback；`_TARGET_ORACLE_ROMD_PRIOR_REPORT`。沒有以兼容alias再接回。正式程式3檔合計淨減555行：target_oracle_romd 3118→2529，oracle_replay_artifacts 758→804，research_report_contract 1204→1192。
+
+必要保留：舊MinTrade event名稱與MR13CL的reserved identity／fail-closed拒啟；A2 builder→canonical simulator及P2 teacher正式callers；純歷史signed-cache normalization／cohort等價證明與非REUSE的存在盤點；選中清單驅動的20D／First-Breach能力。低階signal_origin_date選項沒有正式Oracle caller（唯一executor硬指定information_date），非None oracle_evaluation_start_date仍明確拒絕；scalar數學reference仍供scalar-vector驗證。未為純瘦身修改這些truth source檔案而引發不必要重算，也不新增後續queue。
+
+### 本輪實際驗證
+
+- 最終合併三個Target/MinTrade unittest modules：191/191 PASS，9.658s。相較前輪183，移除3個純兩階段UI／truth-miss專屬tests，必要cohort/Seed/identity/cancel保護已遷至唯一owner；新cache及single-owner/strict等回歸加入，沒有放鬆correctness期待。
+- Audit framework原正式檢查函式直接執行：30/30 assertions PASS。涵蓋正式[1]路由、唯一確認、取消前零producer及來源缺口處理；不是formal suite。
+- Price重新以random seed214149獨立手算2,402項PASS：H1/2/7/40/60、MFE/R/T/T-MFE、information OHLC排除、峰後MAE、cutoff邊界。7個formula函式原始文字與ZIP完全相同。
+- MinTrade額外120條跨年隨機OHLCV／P16路徑，以及60條缺7個future ticker bars＋7天volume=0路徑，對真實generate_signals＋run_portfolio_timeline：162完成交易的float32 NetR／exit date完全相同、18 NULL相同，180/180、0偏差。Deadline有合法quote的合成corpus；不可結算／當沖等其他NULL保護由既有聚焦回歸涵蓋。
+- 原ZIP對current：16 arms×4正式配置Seeds＝64組合法合成metadata的_arm_replay_policy／replay_identity逐值完全相同。沒有mock新ID guard；使用正式horizon ID、schedule builder及rank/SHA。這是身份等價，不是64次市場回放。
+- Shared Daily 28 owners＋Min專屬34 owners＝62檔逐bytes未變；Price算法SHA `d73b4ce20dd958cb75b094f49d6abac94d31e34ca7222fa5806675fd931964bd`、Min truth SHA `cf46236712c396f415531baf4db4a1cf13dae56a1b1d2b5a06868a44d0a694a4`不變；Oracle報表fingerprint `4f911292da243836`不變。真實C96/R40已存receipt bytes保持，warm兩mode零producer。
+- Signed receipts負例：strict同revision價格/P16漂移在producer前拒絕；同source sibling矛盾不因另一份current receipt存在而被忽略；已核准producer revision可保存舊證據並RUN新來源；壞bytes不默默修成可用。
+- 647個Python AST PASS；沒有改apps/config、Target公式、Portfolio核心、Trading、Optimizer或fee config。歷史Registry/Log/Architecture原bytes完整保留，只追加本輪紀錄。無整檔刪除。
+
+### 狀態與下一步
+
+本輪修正的是cache routing、cold來源驗證與執行架構，沒有新SC／Target／Label／Report版號。若已用上一輪修正版完成合法current Replay，這輪不要求再次強制重算；合法source快取可跨Exact/Direct清單切換。最初貼出的修復前結果仍受上一輪60格重跑要求約束，不能因本輪identity不變而重新追認為有效。正式Windows Bundle、完整原始市場工件與真實四Seed E13逐日驗收仍需本機完成；有限合成檢查不宣稱所有市場工件已驗證。
