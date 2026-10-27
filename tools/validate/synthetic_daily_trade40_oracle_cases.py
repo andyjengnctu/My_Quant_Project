@@ -630,7 +630,14 @@ class FormalMinReplayIntegrationCases(TestCase):
         from dataclasses import replace
         from filters.breakout_quality.runtime import resolve_breakout_quality_candidate_rank
         from core.breakout_quality_ranking_context import get_breakout_quality_ranking_source_context
+        # Historical cache-reuse fixture deliberately uses the 2025-mature
+        # observation window. The *current* Oracle now runs through the full
+        # Research cutoff; this regression solely tests invariant per-arm
+        # identities while adding a comparison within one old window.
         all_targets = definition()
+        all_targets = replace(all_targets, dimensions={
+            **all_targets.dimensions, "oracle_evaluation_end_date": "2025-12-22",
+        })
         active = replace(all_targets, source={**all_targets.source,
             "oracle_comparisons": tuple(item for item in all_targets.source["oracle_comparisons"]
                                         if "MinTrade60" not in item["target"])})

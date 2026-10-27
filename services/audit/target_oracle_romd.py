@@ -92,7 +92,7 @@ SUPPORTED_AUDIT_TYPE = "target_ground_truth_strategy_romd"
 ORACLE_REPORT_SCHEMA_VERSION = 8
 # Engineering bug-fix marker: older price-universe / pre-PIT-start replays are invalid.
 # This is not a new scientific Target, Strategy arm, Report version or research choice.
-ORACLE_PARITY_IMPLEMENTATION = "original_oracle_contract_parity_bugfix_20261026_hypothetical_scores_v3"
+ORACLE_PARITY_IMPLEMENTATION = "original_oracle_contract_parity_bugfix_20261027_full_research_cutoff_v4"
 PERIOD_STATS_IMPLEMENTATION = "full_year_calendar_verified_20261026"
 # Current report's Oracle strategies. Direct is the existing canonical No-K/No-R0
 # selector applied to the SAME score truth; not a new Target formula.
@@ -713,50 +713,67 @@ def _market_truth_for_oracle(
             positions = positions[np.isin(dates.take(positions).strftime("%Y-%m-%d"), list(requested))]
             if len(positions) != len(requested):
                 raise OracleBlockedError(f"{field}正式DL stock-day找不到Research價格：{ticker}")
-            eligible = positions[positions + maturity < len(frame)]
-            if not eligible.size:
-                continue
-            eligible = eligible[dates.take(eligible + maturity) <= limit]
-            if not eligible.size:
-                continue
-            batch = compute_daily_opportunity_target_batch(
-                frame, eligible, spec=spec, target_id=target_id,
-            )
-            valid = np.asarray(batch.valid_mask, dtype=bool)
-            if maturity != int(spec.horizon_bars):
-                cohort = compute_daily_opportunity_target_batch(
-                    frame, eligible, spec=replace(spec, horizon_bars=maturity),
-                    target_id=target_id,
-                )
-                valid &= np.asarray(cohort.valid_mask, dtype=bool)
+            # A target's H is a closeout bound, NOT an eligibility/maturity
+            # screen. Historical training labels still require a full H;
+            # hindsight scores instead settle at min(H, research cutoff).
+            eligible = positions
+            horizon = int(spec.horizon_bars)
+            cutoff_index = int(dates.searchsorted(limit, side="right")) - 1
+            remaining = np.minimum(horizon, cutoff_index - eligible)
+            if (remaining < 0).any():
+                raise OracleBlockedError(f"{field}: information date after Research cutoff")
+            values = np.full((len(eligible), 4), np.nan, dtype=np.float64)
+            terminal_r = np.full(len(eligible), np.nan, dtype=np.float64)
+            valid = np.zeros(len(eligible), dtype=bool)
             risk = float(spec.risk_budget_return)
-            values = np.column_stack((
-                np.asarray(batch.favorable_return, dtype=float) / risk,
-                np.asarray(batch.adverse_return_to_peak, dtype=float) / risk,
-                np.asarray(batch.minimum_low_return, dtype=float),
-                np.asarray(batch.target_raw_r, dtype=float),
-            ))
+            for bars in np.unique(remaining):
+                selected = np.flatnonzero(remaining == bars)
+                anchor = closes[eligible[selected]]
+                if bars == 0:
+                    # At the final information close, a zero-length future
+                    # path has zero excursion and zero terminal return. The
+                    # last-day score cannot create a next-day Research trade.
+                    valid[selected] = np.isfinite(anchor) & (anchor > 0.0)
+                    values[selected, :] = 0.0
+                    terminal_r[selected] = 0.0
+                    continue
+                # The canonical batch routine supports a one-bar *observed*
+                # path; StrategyAligned spec validation applies only to the
+                # original full-horizon training spec, not this Oracle clip.
+                clipped = compute_daily_opportunity_target_batch(
+                    frame, eligible[selected],
+                    spec=replace(spec, horizon_bars=int(bars)), target_id=target_id,
+                )
+                valid[selected] = np.asarray(clipped.valid_mask, dtype=bool)
+                values[selected, :] = np.column_stack((
+                    np.asarray(clipped.favorable_return, dtype=float) / risk,
+                    np.asarray(clipped.adverse_return_to_peak, dtype=float) / risk,
+                    np.asarray(clipped.minimum_low_return, dtype=float),
+                    np.asarray(clipped.target_raw_r, dtype=float),
+                ))
+                terminal_r[selected] = (
+                    closes[eligible[selected] + int(bars)] / anchor - 1.0
+                ) / risk
             valid &= np.isfinite(values).all(axis=1)
-            # R40 uses the *40th future trading bar Close*, not the peak High,
-            # fixed-day MAE or realized Portfolio Replay exit. The canonical
-            # price path and mature 40D positions are shared with MFE40.
             if field in terminal_fields:
-                terminal_r = (closes[eligible + int(spec.horizon_bars)] / closes[eligible] - 1.0) / risk
                 valid &= np.isfinite(terminal_r)
-            if not valid.any():
-                continue
-            if field in valid_counts:
-                valid_counts[field] += int(valid.sum())
+            if not valid.all():
+                missing_day = str(dates[eligible[np.flatnonzero(~valid)[0]]].date())
+                raise OracleBlockedError(
+                    f"{field}: feature-eligible Oracle price path invalid at {ticker} {missing_day}; "
+                    "cannot silently remove scored candidates"
+                )
+            valid_counts[field] += len(eligible)
             columns = {
                 "ticker": ticker,
-                "date": dates.take(eligible[valid]).strftime("%Y-%m-%d"),
-                "mfe": values[valid, 0],
-                "peak_adverse": values[valid, 1],
-                "min_low": values[valid, 2],
-                "raw": values[valid, 3],
+                "date": dates.take(eligible).strftime("%Y-%m-%d"),
+                "mfe": values[:, 0],
+                "peak_adverse": values[:, 1],
+                "min_low": values[:, 2],
+                "raw": values[:, 3],
             }
             if field in terminal_fields:
-                columns["terminal_r"] = terminal_r[valid]
+                columns["terminal_r"] = terminal_r
             chunks[field].append(pd.DataFrame(columns))
     truth = {}
     for field in chunks:
@@ -778,7 +795,12 @@ def _market_truth_for_oracle(
 def _reconcile_oracle_truth(
     source: pd.DataFrame, market: pd.DataFrame, *, field: str, score_start: str,
 ) -> tuple[pd.DataFrame, int]:
-    """Require the price verifier to match exactly the official DL score cohort."""
+    """Match the whole legal score cohort; check already-mature DL truth.
+
+    Only Oracle tail rows get cutoff-clipped economic truth. Completed
+    supervised labels remain byte-for-byte the source of historical values,
+    with market OHLCV independently verifying the same economics.
+    """
     old = source.loc[source["date"] >= score_start]
     check = old.merge(market, on=["ticker", "date"], how="left",
                       suffixes=("_provider", "_market"), validate="one_to_one", indicator=True)
@@ -786,25 +808,45 @@ def _reconcile_oracle_truth(
     if missing.any():
         row = check.loc[missing, ["ticker", "date"]].iloc[0]
         raise OracleBlockedError(
-            f"{field}官方真值找不到相應Research價格成熟路徑：{row['ticker']} {row['date']}"
+            f"{field}: canonical score-eligible stock-day lacks Research price path: "
+            f"{row['ticker']} {row['date']}"
         )
-    for name in ("mfe", "peak_adverse", "min_low", "raw"):
-        if not np.allclose(check[f"{name}_provider"].to_numpy(dtype=float),
-                           check[f"{name}_market"].to_numpy(dtype=float),
-                           rtol=2e-5, atol=2e-5):
-            raise OracleBlockedError(f"{field}的official target與Research價格重建真值不一致：{name}")
     if len(market) != len(old):
-        raise OracleBlockedError(f"{field}價格校驗母體不得擴張正式DL母體")
-    # Keep terminal close available for R40/T40 while preserving official model
-    # sample identity and precision for all other fields.
-    matched = old.copy()
-    if "terminal_r" in market:
-        matched = matched.merge(market[["ticker", "date", "terminal_r"]],
-                                on=["ticker", "date"], validate="one_to_one")
-    return matched, 0
+        raise OracleBlockedError(f"{field}: Oracle prices must equal the complete eligible DL cohort")
+    # The canonical loader supplies an explicit maturity witness. Historical
+    # synthetic/evidence tables may instead contain only finite completed
+    # labels; preserve their original numeric reconciliation contract.
+    if "_oracle_provider_mature" in check:
+        completed = check["_oracle_provider_mature"].to_numpy(dtype=bool)
+    else:
+        completed = np.isfinite(check[[f"{name}_provider" for name in
+                                       ("mfe", "peak_adverse", "min_low", "raw")]].to_numpy(dtype=float)).all(axis=1)
+    columns = ("mfe", "peak_adverse", "min_low", "raw")
+    for name in columns:
+        if not np.allclose(
+            check.loc[completed, f"{name}_provider"].to_numpy(dtype=float),
+            check.loc[completed, f"{name}_market"].to_numpy(dtype=float),
+            rtol=2e-5, atol=2e-5,
+        ):
+            raise OracleBlockedError(f"{field}: mature DL target disagrees with OHLCV: {name}")
+    matched = check[["ticker", "date"]].copy()
+    for name in columns:
+        matched[name] = np.where(
+            completed, check[f"{name}_provider"], check[f"{name}_market"]
+        )
+    if "terminal_r" in check:
+        matched["terminal_r"] = check["terminal_r"]
+    return matched, int((~completed).sum())
 
 
 def _load_truth(definition, root: Path, source_field: str, *, cutoff: str) -> pd.DataFrame:
+    """Read the official *feature* cohort, not the supervised maturity mask.
+
+    Historical completed DL labels are an independent numerical parity witness.
+    Inference-only rows at the Research tail remain legally score eligible for
+    the hindsight Oracle; their clipped outcome is computed from OHLCV below.
+    Nothing here alters PIT training-label maturity or model fitting.
+    """
     profile_id = str(definition.source[source_field])
     profile = get_breakout_quality_experiment_profile(profile_id)
     architecture = str(profile.model_architecture or definition.source["model_architecture"])
@@ -818,17 +860,15 @@ def _load_truth(definition, root: Path, source_field: str, *, cutoff: str) -> pd
     )
     manifest_target = str(dict((bundle.target_manifest or {}).get("target_contract") or {}).get("target_id") or "")
     if manifest_target != str(profile.continuous_target_id):
-        raise OracleBlockedError(f"canonical target identity漂移：{source_field}")
+        raise OracleBlockedError(f"canonical target identity drift: {source_field}")
     group = pd.DataFrame(bundle.group_table).reset_index(drop=True)
-    required = {"ticker", "date", "label_eval_end_date", "target_favorable_r", "target_adverse_r", "target_minimum_low_return"}
-    if not required.issubset(group):
-        raise OracleBlockedError(f"{source_field}缺少官方daily future-path欄位：{sorted(required - set(group))}")
-    if len(group) != len(bundle.raw_target) or len(group) != len(bundle.target_valid):
-        raise OracleBlockedError(f"{source_field} group/target shape不一致")
-    mature = (
-        np.asarray(bundle.target_valid, dtype=bool)
-        & (pd.to_datetime(group["label_eval_end_date"], errors="raise") <= pd.Timestamp(cutoff)).to_numpy()
-    )
+    required = {"ticker", "date", "label_eval_end_date", "target_favorable_r",
+                "target_adverse_r", "target_minimum_low_return"}
+    if not required.issubset(group) or len(group) != len(bundle.raw_target) or len(group) != len(bundle.target_valid):
+        raise OracleBlockedError(f"{source_field}: incomplete canonical feature/label bundle")
+    observed_end = pd.to_datetime(group["label_eval_end_date"], errors="coerce")
+    completed = (np.asarray(bundle.target_valid, dtype=bool)
+                 & (observed_end <= pd.Timestamp(cutoff)).to_numpy())
     frame = pd.DataFrame({
         "ticker": group["ticker"].map(normalize_ticker),
         "date": pd.to_datetime(group["date"], errors="raise").dt.strftime("%Y-%m-%d"),
@@ -837,13 +877,11 @@ def _load_truth(definition, root: Path, source_field: str, *, cutoff: str) -> pd
         "min_low": pd.to_numeric(group["target_minimum_low_return"], errors="coerce"),
         "raw": np.asarray(bundle.raw_target, dtype=float),
     })
-    numeric = frame[["mfe", "peak_adverse", "min_low", "raw"]].to_numpy(dtype=float)
-    mature &= np.isfinite(numeric).all(axis=1)
-    frame = frame.loc[mature].copy()
-    if frame.empty:
-        raise OracleBlockedError(f"{source_field}沒有研究截止日前成熟且完整的共同樣本")
-    if frame.duplicated(["ticker", "date"]).any():
-        raise OracleBlockedError(f"{source_field}存在ticker/date重複")
+    completed &= np.isfinite(frame[["mfe", "peak_adverse", "min_low", "raw"]].to_numpy(dtype=float)).all(axis=1)
+    frame["_oracle_provider_mature"] = completed
+    frame = frame.loc[frame["date"] <= str(cutoff)].copy()
+    if frame.empty or frame.duplicated(["ticker", "date"]).any():
+        raise OracleBlockedError(f"{source_field}: empty/duplicated canonical eligible cohort")
     return frame
 
 
@@ -1174,7 +1212,7 @@ def _certify_oracle_score_eligibility(
             **dict(contract),
             "canonical_feature_eligible_keys_sha256": evidence,
             "oracle_scored_rows": len(candidates),
-            "source_evidence": "validated_generic_daily_feature_universe_and_formal_target_maturity",
+            "source_evidence": "validated_generic_daily_feature_universe_and_research_cutoff_closeout",
         }
     return certified
 
@@ -1867,7 +1905,7 @@ def _build_report_once(
         cohort_rows=len(reference),
         first_common_day=min(day for _, day in reference),
         last_common_day=max(day for _, day in reference),
-        evaluation_window_policy="target_independent_fixed_research_dl",
+        evaluation_window_policy="full_research_oos_to_research_cutoff",
         target_truth_closeout_policy="min_natural_exit_horizon_research_cutoff",
     )
     # Verify the hypothetical scored stock-days against their canonical
@@ -2189,19 +2227,9 @@ def _read_only_score_keys(
             date = pd.to_datetime(group["date"], errors="raise")
             valid = ((date >= pd.Timestamp(contract["score_start_date"])) &
                      (date <= pd.Timestamp(evaluation_end))).to_numpy()
-            if not is_daily:
-                if (len(bundle.target_valid) != len(group)
-                        or "label_eval_end_date" not in group
-                        or len(bundle.raw_target) != len(group)):
-                    raise OracleBlockedError(f"{target}: price target source evidence incomplete")
-                mature = (pd.to_datetime(group["label_eval_end_date"], errors="raise") <=
-                          pd.Timestamp(cutoff)).to_numpy()
-                # Price recipe also requires the source's complete numerical label.
-                values = group[["target_favorable_r", "target_adverse_r",
-                                "target_minimum_low_return"]].apply(pd.to_numeric, errors="coerce")
-                finite = np.isfinite(values.to_numpy(dtype=float)).all(axis=1)
-                finite &= np.isfinite(np.asarray(bundle.raw_target, dtype=float))
-                valid &= np.asarray(bundle.target_valid, dtype=bool) & mature & finite
+            if not is_daily and (len(bundle.target_valid) != len(group)
+                                    or len(bundle.raw_target) != len(group)):
+                raise OracleBlockedError(f"{target}: price feature source evidence incomplete")
             keys = sorted(zip(group.loc[valid, "ticker"].map(normalize_ticker),
                               date.loc[valid].dt.strftime("%Y-%m-%d")))
             if not keys or len(set(keys)) != len(keys):
@@ -2277,7 +2305,7 @@ def _replay_attested_score_keys(
                         break
                 else:
                     if source_contract.get("source_evidence") != (
-                            "validated_generic_daily_feature_universe_and_formal_target_maturity"):
+                            "validated_generic_daily_feature_universe_and_research_cutoff_closeout"):
                         continue
                     digest = source_contract.get("canonical_feature_eligible_keys_sha256")
                     number = source_contract.get("oracle_scored_rows")
@@ -2346,7 +2374,7 @@ def _certified_saved_oracle_identity(
     expected_score = dict(contract)
     expected_score.update(
         canonical_feature_eligible_keys_sha256=key_sha, oracle_scored_rows=n,
-        source_evidence="validated_generic_daily_feature_universe_and_formal_target_maturity",
+        source_evidence="validated_generic_daily_feature_universe_and_research_cutoff_closeout",
     )
     # Arm/model labels are evidence of the reference selector, not its executable
     # score. The actual runtime ranking policy/options remain strictly checked.
@@ -2568,7 +2596,7 @@ def _execute_single_stage_missing(
                 full_contract.update(
                     canonical_feature_eligible_keys_sha256=proof_sha,
                     oracle_scored_rows=n,
-                    source_evidence="validated_generic_daily_feature_universe_and_formal_target_maturity",
+                    source_evidence="validated_generic_daily_feature_universe_and_research_cutoff_closeout",
                 )
                 policy = _arm_replay_policy(
                     definition, plan=plan, target=target, replay_policy=base_policy,
@@ -2870,7 +2898,7 @@ def _run_single_stage_oracle(
                 DEFAULT_LABEL_POLICY).risk_budget_return),
             "oracle_parity_implementation": ORACLE_PARITY_IMPLEMENTATION,
             "oracle_only": True,
-            "evaluation_window_policy": "target_independent_fixed_research_dl",
+            "evaluation_window_policy": "full_research_oos_to_research_cutoff",
             "target_truth_closeout_policy": "min_natural_exit_horizon_research_cutoff",
         }
     baseline = _aggregate(observations["C96"], target="C96", period_start=start, period_end=end)

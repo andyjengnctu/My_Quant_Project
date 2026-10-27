@@ -62,7 +62,9 @@ from services.audit.catalog import get_audit_methods
 
 def _forty_only(definition):
     """Scope old fixed-40D fixtures without changing the active Registry."""
-    return replace(definition, source={**definition.source, "oracle_comparisons": tuple(
+    return replace(definition, dimensions={**definition.dimensions,
+        "oracle_evaluation_end_date": "2025-12-22"},
+        source={**definition.source, "oracle_comparisons": tuple(
         item for item in definition.source["oracle_comparisons"]
         if item["target"] not in {
             "DailyUniversal_MinTrade60_NetR",
@@ -76,7 +78,9 @@ def _legacy_definition():
     """Historical fixed-nine fixtures, independent of currently active Target rows."""
     active = next(d for d in get_reusable_audit_definitions("breakout_quality")
                   if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
-    return replace(active, source={**active.source, "oracle_comparisons": tuple(
+    return replace(active, dimensions={**active.dimensions,
+        "oracle_evaluation_end_date": "2025-12-22"},
+        source={**active.source, "oracle_comparisons": tuple(
         item for item in active.source["oracle_comparisons"]
         if item["target"] not in _NON_PRICE_SCORE_TARGETS)})
 
@@ -102,6 +106,141 @@ def _fixture_certify_score_eligibility(_definition, *, contracts, plan,
                                        price_scores, daily_scores):
     return {key: {**value, "canonical_feature_eligible_keys_sha256": "e" * 64}
             for key, value in contracts.items()}
+
+
+class OracleResearchCutoff2026Cases(TestCase):
+    """The active Oracle consumes full Research OOS, not 40D-mature labels."""
+
+    def test_active_oracle_evaluates_through_research_cutoff(self):
+        from config.market_data import RESEARCH_REQUIRED_CUTOFF
+        definition = _ACTIVE_ORACLE_DEFINITION
+        settings, _base, _exact = oracle._contract(definition)
+        self.assertEqual(str(definition.dimensions["oracle_evaluation_end_date"]),
+                         str(settings.end_date))
+        self.assertEqual(str(settings.end_date), RESEARCH_REQUIRED_CUTOFF)
+        self.assertGreaterEqual(int(settings.end_date[:4]), 2026)
+
+    def test_price_labels_keep_inference_only_tail_without_fitting_it(self):
+        provider = "pure_mfe40_provider"
+        from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+        profile = get_breakout_quality_experiment_profile(
+            str(_ACTIVE_ORACLE_DEFINITION.source[provider]))
+        old_day = "2026-02-26"
+        tail_day = "2026-03-02"
+        bundle = SimpleNamespace(
+            target_manifest={"target_contract": {"target_id": profile.continuous_target_id}},
+            group_table=pd.DataFrame({
+                "ticker": ["2330", "2330"], "date": [old_day, tail_day],
+                "label_eval_end_date": ["2026-03-02", pd.NaT],
+                "target_favorable_r": [0.5, np.nan],
+                "target_adverse_r": [0.2, np.nan],
+                "target_minimum_low_return": [-0.03, np.nan],
+            }),
+            raw_target=np.array([0.5, np.nan]),
+            target_valid=np.array([True, False]),
+        )
+        with patch.object(oracle, "load_profile_continuous_ranker_data", return_value=bundle):
+            official = oracle._load_truth(
+                _ACTIVE_ORACLE_DEFINITION, ROOT, provider, cutoff=tail_day)
+        self.assertEqual(set(official["date"]), {old_day, tail_day})
+        self.assertEqual(official["_oracle_provider_mature"].tolist(), [True, False])
+        market = pd.DataFrame({
+            "ticker": ["2330", "2330"], "date": [old_day, tail_day],
+            "mfe": [0.5, 0.0], "peak_adverse": [0.2, 0.0],
+            "min_low": [-0.03, 0.0], "raw": [0.5, 0.0],
+            "terminal_r": [0.1, 0.0],
+        })
+        matched, clipped_rows = oracle._reconcile_oracle_truth(
+            official, market, field=provider, score_start="2021-01-01")
+        self.assertEqual(len(matched), 2)
+        self.assertEqual(clipped_rows, 1)
+        self.assertEqual(float(matched.loc[matched["date"] == tail_day, "raw"].iloc[0]), 0.0)
+        # Training-label maturity cannot be retroactively changed to Oracle truth.
+        self.assertTrue(np.isnan(bundle.raw_target[-1]))
+        self.assertFalse(bundle.target_valid[-1])
+
+    def test_price_truth_clips_horizon_to_cutoff_and_ignores_later_bars(self):
+        dates = pd.to_datetime(["2026-02-25", "2026-02-26", "2026-02-27",
+                                "2026-03-02", "2026-03-03", "2026-03-04"])
+        prices = pd.DataFrame({
+            "Close": [100.0, 101.0, 102.0, 105.0, 900.0, 1200.0],
+            "High": [101.0, 102.0, 104.0, 110.0, 990.0, 1300.0],
+            "Low": [99.0, 100.0, 101.0, 103.0, 890.0, 1190.0],
+        }, index=dates)
+        provider = "pure_mfe40_provider"
+        keys = ["2026-02-26", "2026-02-27", "2026-03-02"]
+        eligible = {provider: pd.DataFrame({"ticker": ["2330"] * len(keys), "date": keys})}
+        def market_price(frame):
+            with patch.object(oracle, "discover_dataset_csv_inputs", return_value=(
+                         [("0050", Path("0050.csv")), ("2330", Path("2330.csv"))], [])), \
+                 patch.object(oracle, "load_dataset_frame", side_effect=lambda path, ticker, **kw: (
+                     prices if ticker == "0050" else frame)):
+                return oracle._market_truth_for_oracle(
+                    _ACTIVE_ORACLE_DEFINITION, ROOT, cutoff="2026-03-02",
+                    provider_fields=(provider,), eligible_truth=eligible)
+        truth, _evidence = market_price(prices)
+        by_day = truth[provider].set_index("date")
+        self.assertEqual(set(by_day.index), set(keys))
+        risk = oracle.StrategyAlignedContinuousTargetSpec.from_label_policy(
+            oracle.DEFAULT_LABEL_POLICY).risk_budget_return
+        self.assertAlmostEqual(float(by_day.loc["2026-02-27", "terminal_r"]),
+                               (105.0 / 102.0 - 1.0) / risk)
+        self.assertAlmostEqual(float(by_day.loc["2026-02-27", "mfe"]),
+                               (110.0 / 102.0 - 1.0) / risk)
+        self.assertEqual(float(by_day.loc["2026-03-02", "mfe"]), 0.0)
+        self.assertEqual(float(by_day.loc["2026-03-02", "terminal_r"]), 0.0)
+        changed = prices.copy()
+        changed.loc["2026-03-03":, ["High", "Low", "Close"]] = [40000., 0.01, 40000.]
+        changed_truth, _ = market_price(changed)
+        pd.testing.assert_frame_equal(
+            truth[provider].sort_values(["ticker", "date"]).reset_index(drop=True),
+            changed_truth[provider].sort_values(["ticker", "date"]).reset_index(drop=True),
+        )
+
+    def test_full_research_period_requires_2026_partial_year_per_seed(self):
+        # The Oracle must not merely use 2026 prices for Target truth while
+        # silently dropping 2026 portfolio performance from RoMD/yearly evidence.
+        records = []
+        for seed in (101, 202):
+            records.append({
+                "seed": seed, "target": "C96", "total_return_pct": 50.0,
+                "annualized_return_pct": 10.0, "mdd_pct": 10.0,
+                "romd": 5.0, "ev_a_r": 0.3, "trades": 10,
+                "exposure_pct": 70.0,
+                "yearly": [{"year": year, "strategy_return_pct": float(year - 2020),
+                            "is_full_year": year < 2026}
+                           for year in range(2021, 2027)],
+            })
+        full = oracle._aggregate(
+            records, target="C96", period_start="2021-01-01",
+            period_end="2026-03-02",
+        )
+        self.assertEqual([int(row["year"]) for row in full["yearly"]],
+                         list(range(2021, 2027)))
+        self.assertEqual(full["yearly"][-1]["strategy_return_pct"], 6.0)
+        self.assertFalse(full["yearly"][-1]["is_full_year"])
+        missing = [dict(row, yearly=row["yearly"][:-1]) for row in records]
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "annual coverage"):
+            oracle._aggregate(missing, target="C96", period_start="2021-01-01",
+                              period_end="2026-03-02")
+
+    def test_full_cutoff_rejects_old_end_date_cache_without_truth_precompute(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore, replay_identity
+        with tempfile.TemporaryDirectory() as tmp:
+            store = OracleReplayStore(Path(tmp), "breakout_quality/reusable/target_oracle_romd")
+            seed = 123
+            base = dict(dataset="full", dataset_sha256="a" * 64,
+                target="C96", definition={"C96": "C96"}, start="2021-01-01",
+                benchmark="end_to_end_v1", param_sha256="b" * 64, seed=seed,
+                cohort={"cohort_rows": 2, "research_cutoff": "2026-03-02"},
+                ranking_policy="exact", ranking_options={},
+                evaluation_mode="rolling", max_positions=10,
+                replay_policy={"oracle_parity_implementation": oracle.ORACLE_PARITY_IMPLEMENTATION})
+            old = replay_identity(**base, end="2025-12-22")
+            new = replay_identity(**base, end="2026-03-02")
+            self.assertNotEqual(old, new)
+            self.assertEqual(store.plan_execution({(seed, "C96"): new},
+                            allow_historical_execution_input_drift=True).action(seed, "C96"), "RUN")
 
 
 class OracleScoreParityContractCases(TestCase):
@@ -553,7 +692,10 @@ class OracleScoreParityContractCases(TestCase):
         from services.audit.daily_trade40_oracle import TARGET_ID
         from services.audit import daily_trade40_oracle as daily_owner
         from filters.breakout_quality import daily_trade40_target as trade_owner
-        definition = replace(_ACTIVE_ORACLE_DEFINITION, source={
+        definition = replace(_ACTIVE_ORACLE_DEFINITION,
+            dimensions={**_ACTIVE_ORACLE_DEFINITION.dimensions,
+                        "oracle_evaluation_end_date": "2025-12-22"},
+            source={
             **_ACTIVE_ORACLE_DEFINITION.source,
             "oracle_comparisons": tuple(
                 item for item in _ACTIVE_ORACLE_DEFINITION.source["oracle_comparisons"]
@@ -673,7 +815,9 @@ class OracleScoreParityContractCases(TestCase):
         d = _ACTIVE_ORACLE_DEFINITION
         direct = "DailyUniversal_MinTrade40_NetR_Direct"
         exact = "DailyUniversal_MinTrade40_NetR"
-        definition = replace(d, source={**d.source, "oracle_comparisons": tuple(
+        definition = replace(d, dimensions={**d.dimensions,
+            "oracle_evaluation_end_date": "2025-12-22"},
+            source={**d.source, "oracle_comparisons": tuple(
             row for row in d.source["oracle_comparisons"] if row["target"] == direct)})
         seed, param_sha = 104504529, "c" * 64
         scores = {("2330", "2021-01-04"): 0.9,
@@ -1408,7 +1552,7 @@ class OracleAuditContractCases(TestCase):
         # produce the same 40D-mature future path, stop instead of imputing it.
         with patch.object(oracle, "_load_truth", side_effect=lambda definition, root, source_field, cutoff: self._truth(source_field)), \
              patch.object(oracle, "_market_truth_for_oracle", return_value=self._mock_market(omit_first_breach_last=True)):
-            with self.assertRaisesRegex(oracle.OracleBlockedError, "官方真值找不到相應"):
+            with self.assertRaisesRegex(oracle.OracleBlockedError, "canonical score-eligible stock-day lacks Research price path"):
                 oracle.build_oracle_score_tables(
                     self.definition, project_root=ROOT, cutoff="2026-03-02",
                 )
@@ -1468,7 +1612,7 @@ class OracleAuditContractCases(TestCase):
                                  "min_low": [-0.08], "raw": [1.5]})
         market = pd.concat([official, official.assign(ticker="2211", mfe=2.0, raw=2.0)],
                            ignore_index=True)
-        with self.assertRaisesRegex(oracle.OracleBlockedError, "不得擴張"):
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "Oracle prices must equal the complete eligible DL cohort"):
             oracle._reconcile_oracle_truth(official, market, field="pure_mfe40_provider",
                                            score_start="2025-01-01")
         matched, extras = oracle._reconcile_oracle_truth(
@@ -1479,7 +1623,7 @@ class OracleAuditContractCases(TestCase):
         self.assertEqual(set(matched.ticker), {"2330"})
         self.assertEqual(float(matched.terminal_r.iloc[0]), 1.25)
         incompatible = official.assign(mfe=2.0)
-        with self.assertRaisesRegex(oracle.OracleBlockedError, "不一致"):
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "mature DL target disagrees with OHLCV"):
             oracle._reconcile_oracle_truth(official, incompatible,
                                            field="pure_mfe40_provider", score_start="2025-01-01")
 
@@ -3358,7 +3502,9 @@ class OracleOnePlanRealCacheCases(TestCase):
     def _fixture(self, root):
         from services.audit.oracle_replay_artifacts import OracleReplayStore, replay_identity
         original = _ACTIVE_ORACLE_DEFINITION
-        definition = replace(original, source={**original.source, "oracle_comparisons": tuple(
+        definition = replace(original, dimensions={**original.dimensions,
+            "oracle_evaluation_end_date": "2025-12-22"},
+            source={**original.source, "oracle_comparisons": tuple(
             row for row in original.source["oracle_comparisons"]
             if row["target"] in {"R40", "T40"})})
         settings, base, exact = oracle._contract(definition)
@@ -3394,7 +3540,7 @@ class OracleOnePlanRealCacheCases(TestCase):
                 score_contract={**contracts[target],
                                 "canonical_feature_eligible_keys_sha256": source_proof[0],
                                 "oracle_scored_rows": source_proof[1],
-                                "source_evidence": "validated_generic_daily_feature_universe_and_formal_target_maturity"},
+                                "source_evidence": "validated_generic_daily_feature_universe_and_research_cutoff_closeout"},
             )
             arm_policy = oracle._arm_replay_policy(
                 definition, plan=plan, target=target, replay_policy=common, **args,
@@ -3692,8 +3838,10 @@ class OracleOnePlanRealCacheCases(TestCase):
         )
         import hashlib
         target = "DailyUniversal_MinTrade40_NetR"
-        definition = replace(_ACTIVE_ORACLE_DEFINITION, source={
-            **_ACTIVE_ORACLE_DEFINITION.source,
+        definition = replace(_ACTIVE_ORACLE_DEFINITION,
+            dimensions={**_ACTIVE_ORACLE_DEFINITION.dimensions,
+                        "oracle_evaluation_end_date": "2025-12-22"},
+            source={**_ACTIVE_ORACLE_DEFINITION.source,
             "oracle_comparisons": tuple(entry for entry in _ACTIVE_ORACLE_DEFINITION.source["oracle_comparisons"]
                                         if entry["target"] == target),
         })
@@ -3723,7 +3871,7 @@ class OracleOnePlanRealCacheCases(TestCase):
         }
         score_contract = {**contract, "canonical_feature_eligible_keys_sha256": digest,
                           "oracle_scored_rows": 1,
-                          "source_evidence": "validated_generic_daily_feature_universe_and_formal_target_maturity"}
+                          "source_evidence": "validated_generic_daily_feature_universe_and_research_cutoff_closeout"}
         base_policy = oracle._canonical_oracle_replay_policy(
             definition, base_arm=base_arm, exact_arm=exact_arm)
         policy = oracle._arm_replay_policy(
@@ -3881,7 +4029,7 @@ class OracleOnePlanRealCacheCases(TestCase):
                 definition, base_arm=base, exact_arm=exact)
             full_score = {**contract, "canonical_feature_eligible_keys_sha256": proof[0],
                           "oracle_scored_rows": proof[1],
-                          "source_evidence": "validated_generic_daily_feature_universe_and_formal_target_maturity"}
+                          "source_evidence": "validated_generic_daily_feature_universe_and_research_cutoff_closeout"}
             current_policy = oracle._arm_replay_policy(
                 definition, plan=plan, target=requested, replay_policy=common,
                 daily_evidence=evidence, score_sha256="4"*64, score_contract=full_score)

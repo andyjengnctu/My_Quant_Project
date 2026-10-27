@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from config.market_data import RESEARCH_REQUIRED_CUTOFF
+
 from core.breakout_quality_registry import (
     DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
     DAILY_UNIVERSAL_FIRST_RISK_BREACH_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -138,12 +140,10 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
             },
             "dimensions": {
                 "percentile_method": "average_zero_based",
-                # AI: Independent of selected target horizons. The currently approved
-                # The canonical Oracle/Research-DL evaluation boundary is
-                # independent of Target horizon. Research truth may observe
-                # future prices to the existing 2026-03-02 data cutoff.
-                # The separate research cutoff provides future observations.
-                "oracle_evaluation_end_date": "2025-12-22",
+                # Oracle portfolios run through the same Research cutoff as
+                # canonical Research DL/Strategy Compare. Do not reserve label
+                # maturity days: all Oracle truth is settled at that cutoff.
+                "oracle_evaluation_end_date": RESEARCH_REQUIRED_CUTOFF,
                 "oracle_cohort": "canonical_feature_eligible_oracle_stock_days",
                 "oracle_score_method": "canonical_daily_truth_percentile_v2",
                 "evaluation_mode": "rolling",
