@@ -14051,3 +14051,13 @@ Decision: `ENGINEERING_CHECKPOINT_FIRST_REUSE / HISTORICAL_AK_EVIDENCE_PRESERVED
 - **Regression / non-rerun**：prepatch 172 項專項 unittest PASS，移除 5 項盤點專屬 tests 後 167 項 PASS；另 19 項策略／交易路徑 tests PASS、Audit framework 30 asserts PASS；647 Python AST PASS。Price `d73b4ce20dd958cb75b094f49d6abac94d31e34ca7222fa5806675fd931964bd`、Min `cf46236712c396f415531baf4db4a1cf13dae56a1b1d2b5a06868a44d0a694a4`、report `4f911292da243836` 的 fingerprint 證據與原 ZIP 一致。當前合法工件不因純架構清理重算；歷史修復前工件不因清理被追認。
 - **Non-blocking audit caveat**：`services/audit/daily_trade40_oracle.py` 的 source SHA closure 含 Research MinTrade 不引用的 `config/trading.py`，可能讓 Trading-only 修改造成不必要的新 RUN；這不是第二套 Target 算法，也沒有在本輪改 source closure，避免自己製造 MinTrade 真值全面失效。此類 identity migration 需單獨受控。
 - **Status**：`ENGINEERING_DEAD_PREVIEW_PATH_RETIRED / SINGLE_AUTHORIZED_REPLAY_PLAN_PRESERVED / TARGET_FORMULA_UNCHANGED / EXISTING_REUSE_IDENTITIES_UNCHANGED / USER_MARKET_E13_PENDING / NO_NEW_SCIENTIFIC_ID`。
+
+
+## 2026-10-27 — 22:47 基準 Oracle REUSE 弱身分查詢介面退役（不改科學結果）
+
+- **唯一基準**：`test-branch-1_20261027_224710_25179689.zip`；SHA256 `1d5174a693cd29207b532f6ee9cd9576513ed7530a72162ac1ba033ba5863d4f`；依序讀取 PROJECT_SETTINGS、Registry、Experiment Log，並核對 Architecture、現行設定及正式執行鏈。本輪無完整真實行情／四 Seed 逐日 Replay 工件；只進行可重現的工程審查。
+- **死碼依據**：`OracleReplayStore.explain_other_identity()`、`has_other_identity()` 在所有 `.py` 正式程式均無呼叫，僅 `tools/validate/synthetic_target_oracle_cases.py` 共九處測試斷言使用。這兩個弱身分探測入口可讓未來開發不經唯一 `plan_execution()` 的完整 `REUSE/RUN/BLOCKED` 決策，故連同測試的過時呼叫退役；保留 `_inspect_siblings()`、`resolve_completed()`、`plan_execution()`、`inspect_current_source()`、`existing_completed_identities()` 等正式或相容證據用能力，未退役歷史快取身分驗證。
+- **測試遷移**：九處測試斷言改驗 canonical `plan_execution(...).action()` 或 `.blocked()`，包含來源衝突、Legacy簽名重用、獨立目標及R40/Direct干擾；測試數維持167。Target／MinTrade／Audit三個unit模組 **167/167 PASS**；Audit入口獨立執行 **30/30 PASS**；**647** Python原始碼AST解析無錯。
+- **identity不變**：實際修改前後的Price formula SHA `d73b4ce20dd958cb75b094f49d6abac94d31e34ca7222fa5806675fd931964bd`、MinTrade truth SHA `cf46236712c396f415531baf4db4a1cf13dae56a1b1d2b5a06868a44d0a694a4`、現行Oracle report fingerprint `4f911292da243836` 完全相同；16比較項目×4個既有benchmark seeds的**64組合成Replay身分**逐位元組相同（非64次真實市場Replay）。程式僅退役兩個不產生成交、不參與真值計算的API，無current output schema／科學身分改版，**不引發合法已有結果重跑**。
+- **保留問題／界線**：`services/audit/daily_trade40_oracle.py` 的真值closure包含 `config/trading.py`，Trading-only修改可能造成不必要的MinTrade RUN；因移除該來源會使既有合法快取失效，本輪不混入。全市場實際四Seed P16、daily sidecars、Windows正式bundle未提供，無法宣稱E13全部市場逐筆驗收已完成；目前沒有發現新的可重現Target數值偏差。歷史Registry、既有Log研究結果及所有原始證據均保留。未執行 `apps/run_bundle.py` 或 `apps/test_suite.py`。
+- **狀態**：`ENGINEERING_OBSOLETE_IDENTITY_PROBES_RETIRED / CANONICAL_PLAN_ONLY / SOURCE_AND_REPORT_FINGERPRINTS_UNCHANGED / REAL_MARKET_E13_PENDING / NO_NEW_SCIENTIFIC_ID`。

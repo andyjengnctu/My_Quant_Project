@@ -2718,7 +2718,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
             store._path(direct).write_text("{damaged", encoding="utf-8")
             exact = self._identity(target="R40")
             self.assertEqual(store.resolve_completed(exact), (None, "none"))
-            self.assertIsNone(store.explain_other_identity(exact))
+            self.assertEqual(store.plan_execution({(1, "R40"): exact}).action(1, "R40"), "RUN")
             self.assertEqual(store.existing_completed_identities(seed=1, target="R40"), ())
             with self.assertRaisesRegex(ValueError, "corrupt"):
                 store.resolve_completed(direct)
@@ -2795,7 +2795,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
             self.assertEqual(cache.read(identity), record)
             cache.write(identity, record, origin="canonical_replay")  # idempotent
             self.assertIsNone(cache.read(self._identity(dataset_sha="c" * 64)))
-            self.assertTrue(cache.has_other_identity(self._identity(dataset_sha="c" * 64)))
+            self.assertEqual(cache.plan_execution({(1, identity["target"]): self._identity(dataset_sha="c" * 64)}).action(1, identity["target"]), "BLOCKED")
             self.assertIsNone(cache.read(self._identity(param_sha="d" * 64)))
             with self.assertRaisesRegex(ValueError, "conflict"):
                 cache.write(identity, {**record, "romd": 999}, origin="canonical_replay")
@@ -2821,8 +2821,9 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 "replay_policy": {**cached["replay_policy"], "exact_k_r0": False},
             }
             store.write(cached, self._observation("C96", 1), origin="canonical_replay")
-            message = store.explain_other_identity(requested)
-            self.assertIsNotNone(message)
+            planned = store.plan_execution({(1, "C96"): requested})
+            self.assertEqual(planned.action(1, "C96"), "BLOCKED")
+            message = planned.blocked()[(1, "C96")]
             for field in ("dataset_sha256", "param_sha256", "cohort.cohort_rows",
                           "replay_policy.exact_k_r0"):
                 self.assertIn(field, message)
@@ -2831,7 +2832,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
             self.assertIn("current=cccccccccccccccc...", message)
             self.assertIsNone(store.read(requested))
             self.assertEqual(store.read(cached), self._observation("C96", 1))
-            self.assertEqual(store.explain_other_identity(requested), message)
+            self.assertEqual(store.plan_execution({(1, "C96"): requested}).blocked()[(1, "C96")], message)
 
     def test_legacy_comparison_digest_only_can_reuse_and_preserve_old_evidence(self):
         from services.audit.oracle_replay_artifacts import OracleReplayStore
@@ -2846,7 +2847,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
             with self.assertRaisesRegex(ValueError, "read-only"):
                 store.write(old, record, origin="illegal_legacy_rewrite")
             self.assertIsNone(store.read(current))
-            self.assertIsNone(store.explain_other_identity(current))
+            self.assertEqual(store.plan_execution({(1, "C96"): current}).action(1, "C96"), "REUSE")
             reused, origin = store.resolve_completed(current)
             self.assertEqual(reused, record)
             self.assertIn("verified legacy replay cache", origin)
@@ -2885,7 +2886,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
                         ValueError, "DIFFERENT identity"
                     ):
                         store.resolve_completed(candidate)
-            self.assertFalse(store.has_other_identity(base))
+            self.assertEqual(store.plan_execution({(1, "C96"): base}).action(1, "C96"), "REUSE")
 
     def test_equivalent_legacy_caches_with_different_observations_fail_closed(self):
         from services.audit.oracle_replay_artifacts import OracleReplayStore
@@ -2972,8 +2973,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 "cohort": {**identity["cohort"], "providers": {"horizon": "60D"}},
             }
             store.write(different_panel, self._observation("C96", 1), origin="canonical_replay")
-            self.assertIsNone(store.explain_other_identity(identity))
-            self.assertFalse(store.has_other_identity(identity))
+            self.assertEqual(store.plan_execution({(1, "C96"): identity}).action(1, "C96"), "REUSE")
 
     def test_prefix_distinct_targets_are_not_cache_conflicts(self):
         from services.audit.oracle_replay_artifacts import OracleReplayStore
@@ -2981,7 +2981,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
             store = OracleReplayStore(Path(tmp), "breakout_quality/reusable/target_oracle_romd")
             direct = self._identity(target="R40_Direct")
             store.write(direct, self._observation("R40_Direct", 1), origin="canonical_replay")
-            self.assertFalse(store.has_other_identity(self._identity(target="R40")))
+            self.assertEqual(store.plan_execution({(1, "R40"): self._identity(target="R40")}).action(1, "R40"), "RUN")
 
 
     def test_corrupt_archived_report_cannot_block_or_supply_canonical_replay(self):

@@ -632,16 +632,6 @@ class OracleReplayStore:
             allow_historical_execution_input_drift=allow_historical_execution_input_drift,
         )
 
-    def explain_other_identity(self, identity: Mapping[str, Any]) -> str | None:
-        """Explain genuine replay differences; legacy UI-only drift is compatible."""
-        _legacy, conflict = self._inspect_siblings(identity)
-        return conflict
-
-    def has_other_identity(self, identity: Mapping[str, Any]) -> bool:
-        """Compatibility probe; explanation and matching have a single owner."""
-        return self.explain_other_identity(identity) is not None
-
-
     def existing_completed_identities(self, *, seed: int, target: str) -> tuple[dict[str, Any], ...]:
         """Inventory *verified stored bytes*, not current scientific REUSE eligibility.
 
