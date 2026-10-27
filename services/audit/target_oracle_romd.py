@@ -2215,7 +2215,7 @@ def _read_only_score_keys(
             profile = get_breakout_quality_experiment_profile(profile_id)
             bundle = load_profile_continuous_ranker_data(
                 filter_id=str(definition.source["filter_id"]),
-                model_architecture=str(profile.model_architecture),
+                model_architecture=str(profile.model_architecture or definition.source["model_architecture"]),
                 experiment_profile=profile_id, preload_feature_bank=False,
                 allow_stale_source=False, project_root=project_root,
             )

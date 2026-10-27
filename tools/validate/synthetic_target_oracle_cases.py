@@ -111,6 +111,57 @@ def _fixture_certify_score_eligibility(_definition, *, contracts, plan,
 class OracleResearchCutoff2026Cases(TestCase):
     """The active Oracle consumes full Research OOS, not 40D-mature labels."""
 
+    def test_oracle_cold_start_inherits_optional_profile_architecture(self):
+        """A None profile override is inherited, never passed as string 'None'."""
+        from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+        definition = _ACTIVE_ORACLE_DEFINITION
+        price_profile = get_breakout_quality_experiment_profile(
+            str(definition.source["pure_mfe40_provider"]))
+        self.assertIsNone(price_profile.model_architecture)
+
+        plan = oracle._oracle_comparison_plan(definition)
+        settings, _base, _exact = oracle._contract(definition)
+        all_contracts = oracle._resolve_oracle_target_score_contracts(
+            definition, settings, plan)
+        selected = ("R40", "DailyUniversal_MinTrade40_NetR")
+        contracts = {name: all_contracts[name] for name in selected}
+        group = pd.DataFrame({
+            "ticker": ["2330", "2330"],
+            "date": ["2021-01-04", "2026-03-02"],
+        })
+        bundle = SimpleNamespace(
+            summary={"filter_id": definition.source["filter_id"]},
+            group_table=group, target_valid=np.array([True, False]),
+            raw_target=np.array([0.5, np.nan]),
+        )
+        architectures = []
+        def load_data(**kwargs):
+            architectures.append(kwargs["model_architecture"])
+            return bundle
+        with patch.object(oracle, "load_profile_continuous_ranker_data",
+                          side_effect=load_data):
+            cohorts = oracle._read_only_score_keys(
+                definition, project_root=ROOT, contracts=contracts, plan=plan,
+                evaluation_end="2026-03-02", cutoff="2026-03-02",
+            )
+        self.assertEqual(architectures,
+                         [definition.source["model_architecture"]] * len(selected))
+        self.assertEqual(len({item[0] for item in cohorts.values()}), 1)
+        self.assertEqual(cohorts["R40"][1:], (2, "2021-01-04", "2026-03-02"))
+
+        overridden = replace(definition, source={**definition.source,
+            "model_architecture": "multiscale_cnn_v3"})
+        override_calls = []
+        with patch.object(oracle, "load_profile_continuous_ranker_data",
+                          side_effect=lambda **kw: override_calls.append(
+                              kw["model_architecture"]) or bundle):
+            oracle._read_only_score_keys(
+                overridden, project_root=ROOT,
+                contracts={"R40": contracts["R40"]}, plan=plan,
+                evaluation_end="2026-03-02", cutoff="2026-03-02",
+            )
+        self.assertEqual(override_calls, ["multiscale_cnn_v3"])
+
     def test_active_oracle_evaluates_through_research_cutoff(self):
         from config.market_data import RESEARCH_REQUIRED_CUTOFF
         definition = _ACTIVE_ORACLE_DEFINITION
