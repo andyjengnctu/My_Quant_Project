@@ -281,11 +281,6 @@ def capacity_summary(profile: dict[str, Any]) -> dict[str, Any]:
         })
     return summary
 
-def _capacity_summary(profile: dict[str, Any]) -> dict[str, Any]:
-    """Compatibility façade for historical imports; new consumers use capacity_summary()."""
-    return capacity_summary(profile)
-
-
 def _to_json_native(value: Any) -> Any:
     """Convert pandas/numpy scalars and timestamps to stable JSON-native values."""
 

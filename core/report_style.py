@@ -246,17 +246,6 @@ def signal_label(signal: str) -> str:
     return _SIGNAL_LABELS.get(str(signal), _SIGNAL_LABELS[SIGNAL_NEUTRAL])
 
 
-def signal_marker(signal: str, *, include_label: bool = True) -> str:
-    """Backward-compatible alias with icon-free semantics.
-
-    New renderers should prefer :func:`signal_label` and color the text/value
-    itself.  ``include_label=False`` intentionally returns an empty string so
-    legacy call sites can never re-introduce traffic-light glyphs.
-    """
-
-    return signal_label(signal) if include_label else ""
-
-
 def tone_for_signal(signal: str) -> str:
     return _SIGNAL_TONES.get(str(signal), _SIGNAL_TONES[SIGNAL_NEUTRAL])
 
@@ -344,7 +333,6 @@ __all__ = [
     "signal_for_auc",
     "best_worst_signals",
     "signal_label",
-    "signal_marker",
     "tone_for_signal",
     "terminal_color_for_signal",
     "terminal_signal",

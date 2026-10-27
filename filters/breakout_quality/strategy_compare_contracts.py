@@ -1,8 +1,8 @@
 """Stable Strategy Compare mode contracts shared by orchestration and reporting."""
 
 from __future__ import annotations
+from core.research_orchestration import ResearchArtifactAction
 
-from core.strategy_comparison import StrategyPreparationAction
 
 STRATEGY_COMPARE_SCHEMA_VERSION = 7
 
@@ -48,10 +48,10 @@ def build_strategy_preparation_action(
     dependencies: tuple[str, ...] = (),
     producer_work_type: str | None = None,
     execution_priority: int = 100,
-) -> StrategyPreparationAction:
+) -> ResearchArtifactAction:
     """Build one canonical preparation-plan action record."""
 
-    return StrategyPreparationAction(
+    return ResearchArtifactAction(
         action_id=action_id,
         artifact_key=artifact_key,
         action=action,

@@ -5,6 +5,7 @@ embedded in the config-driven application validator.
 """
 
 from __future__ import annotations
+from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
 
 from dataclasses import replace
 import io
@@ -16,7 +17,6 @@ from typing import Any
 from unittest.mock import patch
 import tempfile
 
-from core.strategy_comparison import StrategyPreparationAction, StrategyPreparationPlan
 from .synthetic_breakout_quality_support import add_check
 
 
@@ -67,7 +67,7 @@ def append_strategy_compare_preparation_contract_checks(
     )
 
     from services.research.artifact_orchestrator import run_research_artifact_preparation
-    dataset_build = StrategyPreparationAction(
+    dataset_build = ResearchArtifactAction(
         action_id="model-upstream:dataset_core",
         artifact_key="model-upstream:dataset_core",
         action="BUILD",
@@ -76,7 +76,7 @@ def append_strategy_compare_preparation_contract_checks(
         path="outputs/dataset_summary.json",
         execution_priority=10,
     )
-    param_waiting = StrategyPreparationAction(
+    param_waiting = ResearchArtifactAction(
         action_id="param:full_oos",
         artifact_key="param:full_oos",
         action="BUILD",
@@ -89,9 +89,9 @@ def append_strategy_compare_preparation_contract_checks(
     dataset_reuse = replace(dataset_build, action="REUSE", builder_type=None)
     param_reuse = replace(param_waiting, action="REUSE", builder_type=None)
     dependency_plans = iter((
-        StrategyPreparationPlan.from_actions((dataset_build, param_waiting)),
-        StrategyPreparationPlan.from_actions((dataset_reuse, param_waiting)),
-        StrategyPreparationPlan.from_actions((dataset_reuse, param_reuse)),
+        ResearchArtifactPlan.from_actions((dataset_build, param_waiting)),
+        ResearchArtifactPlan.from_actions((dataset_reuse, param_waiting)),
+        ResearchArtifactPlan.from_actions((dataset_reuse, param_reuse)),
     ))
     dependency_calls: list[str] = []
     with redirect_stdout(io.StringIO()):
@@ -446,7 +446,7 @@ def append_strategy_compare_preparation_contract_checks(
     )
 
     from services.research import strategy_compare_preparation as preparation_module
-    score_action = StrategyPreparationAction(
+    score_action = ResearchArtifactAction(
         action_id="dl:TP1:forward_scores",
         artifact_key="dl:TP1:forward_scores",
         action="BUILD",
@@ -454,7 +454,7 @@ def append_strategy_compare_preparation_contract_checks(
         description="build scores",
         path="models/scores.csv",
     )
-    p2_action = StrategyPreparationAction(
+    p2_action = ResearchArtifactAction(
         action_id="param:min_roos",
         artifact_key="param:min_roos",
         action="BUILD",
@@ -465,21 +465,21 @@ def append_strategy_compare_preparation_contract_checks(
     initial_wave_status = {
         "comparison_ready": False,
         "overall_status": "PREPARABLE",
-        "preparation_plan": StrategyPreparationPlan(
+        "preparation_plan": ResearchArtifactPlan(
             overall_status="PREPARABLE", actions=(score_action,)
         ),
     }
     second_wave_status = {
         "comparison_ready": False,
         "overall_status": "PREPARABLE",
-        "preparation_plan": StrategyPreparationPlan(
+        "preparation_plan": ResearchArtifactPlan(
             overall_status="PREPARABLE", actions=(p2_action,)
         ),
     }
     final_wave_status = {
         "comparison_ready": True,
         "overall_status": "READY",
-        "preparation_plan": StrategyPreparationPlan(
+        "preparation_plan": ResearchArtifactPlan(
             overall_status="READY", actions=tuple()
         ),
     }
@@ -508,7 +508,7 @@ def append_strategy_compare_preparation_contract_checks(
         ] == ["dl:TP1:forward_scores", "param:min_roos"],
     )
 
-    repeated_model_score = StrategyPreparationAction(
+    repeated_model_score = ResearchArtifactAction(
         action_id="dl:CONT13E_ROLL:forward_scores",
         artifact_key="dl:CONT13E_ROLL:forward_scores",
         action="RESUME",
@@ -517,7 +517,7 @@ def append_strategy_compare_preparation_contract_checks(
         path="models/filters/breakout_quality/selection_point_in_time_scores.csv",
         producer_work_type="model_training",
     )
-    repeated_model_audit = StrategyPreparationAction(
+    repeated_model_audit = ResearchArtifactAction(
         action_id="dl:CONT13E_ROLL:audit",
         artifact_key="dl:CONT13E_ROLL:audit",
         action="RESUME",
@@ -535,7 +535,7 @@ def append_strategy_compare_preparation_contract_checks(
                 "validation_error": "synthetic stale manifest",
             }
         },
-        "preparation_plan": StrategyPreparationPlan.from_actions((
+        "preparation_plan": ResearchArtifactPlan.from_actions((
             repeated_model_score, repeated_model_audit
         )),
     }
@@ -570,7 +570,7 @@ def append_strategy_compare_preparation_contract_checks(
     # consume the freshly re-planned period, never that stale snapshot.
     from core.strategy_compare_policy import get_strategy_comparison_settings as _get_compare_settings
     fresh_period_settings = _get_compare_settings("extending_window_oos")
-    fresh_param_action = StrategyPreparationAction(
+    fresh_param_action = ResearchArtifactAction(
         action_id="param:full_oos",
         artifact_key="param:full_oos",
         action="BUILD",
@@ -583,20 +583,20 @@ def append_strategy_compare_preparation_contract_checks(
         "comparison_ready": False,
         "overall_status": "PREPARABLE",
         "comparison_period": None,
-        "preparation_plan": StrategyPreparationPlan.from_actions((fresh_param_action,)),
+        "preparation_plan": ResearchArtifactPlan.from_actions((fresh_param_action,)),
     }
     fresh_param_status = {
         "comparison_ready": False,
         "overall_status": "PREPARABLE",
         "comparison_period": {"start": "2021-01-01", "end": "2026-03-02"},
-        "preparation_plan": StrategyPreparationPlan.from_actions((fresh_param_action,)),
+        "preparation_plan": ResearchArtifactPlan.from_actions((fresh_param_action,)),
     }
     final_param_status = {
         "comparison_ready": True,
         "overall_status": "READY",
         "comparison_period": {"start": "2021-01-01", "end": "2026-03-02"},
-        "preparation_plan": StrategyPreparationPlan.from_actions((
-            StrategyPreparationAction(
+        "preparation_plan": ResearchArtifactPlan.from_actions((
+            ResearchArtifactAction(
                 action_id="param:full_oos",
                 artifact_key="param:full_oos",
                 action="REUSE",
@@ -917,17 +917,17 @@ def append_strategy_compare_preparation_contract_checks(
             == "P4_EXTENDING",
     )
 
-    dependency_reuse = StrategyPreparationAction(
+    dependency_reuse = ResearchArtifactAction(
         action_id="dataset:truth", artifact_key="dataset:truth",
         action="REUSE", builder_type=None, description="reuse truth", path="outputs/dataset.json",
         producer_work_type="existing_artifact",
     )
-    dependency_build = StrategyPreparationAction(
+    dependency_build = ResearchArtifactAction(
         action_id="score:forward", artifact_key="score:forward",
         action="BUILD", builder_type="score_builder", description="build score", path="outputs/score.csv",
         dependencies=("dataset:truth",), producer_work_type="strategy_compare_deterministic_rebuild",
     )
-    dependency_plan = StrategyPreparationPlan.from_actions(
+    dependency_plan = ResearchArtifactPlan.from_actions(
         (dependency_build, dependency_reuse)
     )
     add_check(
@@ -943,12 +943,12 @@ def append_strategy_compare_preparation_contract_checks(
 
     dependency_cycle_rejected = False
     try:
-        StrategyPreparationPlan.from_actions((
-            StrategyPreparationAction(
+        ResearchArtifactPlan.from_actions((
+            ResearchArtifactAction(
                 action_id="a", artifact_key="a", action="BUILD", builder_type="x",
                 description="a", path="a", dependencies=("b",),
             ),
-            StrategyPreparationAction(
+            ResearchArtifactAction(
                 action_id="b", artifact_key="b", action="BUILD", builder_type="x",
                 description="b", path="b", dependencies=("a",),
             ),
@@ -964,8 +964,8 @@ def append_strategy_compare_preparation_contract_checks(
 
     unknown_dependency_rejected = False
     try:
-        StrategyPreparationPlan.from_actions((
-            StrategyPreparationAction(
+        ResearchArtifactPlan.from_actions((
+            ResearchArtifactAction(
                 action_id="score", artifact_key="score", action="BUILD", builder_type="x",
                 description="score", path="score", dependencies=("missing:truth",),
             ),
@@ -986,7 +986,7 @@ def append_strategy_compare_preparation_contract_checks(
     selection_settings = get_strategy_comparison_settings("selection_pit")
     auto_settings = replace(selection_settings, start_date=None, end_date=None)
     selection_source = auto_settings.parameter_sources["selection_min_roos"]
-    auto_action = StrategyPreparationAction(
+    auto_action = ResearchArtifactAction(
         action_id="param:selection_min_roos",
         artifact_key="param:selection_min_roos",
         action="REBUILD",
@@ -1023,7 +1023,7 @@ def append_strategy_compare_preparation_contract_checks(
 
     pit_source = selection_settings.dl_sources["CONT13E_PIT"]
     with tempfile.TemporaryDirectory() as raw_temp:
-        missing_actions: list[StrategyPreparationAction] = []
+        missing_actions: list[ResearchArtifactAction] = []
         missing_row, missing_ready = dl_artifacts_module._collect_selection_pit_source_status(
             root=Path(raw_temp),
             settings=auto_settings,

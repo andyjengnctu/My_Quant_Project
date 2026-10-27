@@ -1,4 +1,5 @@
 from __future__ import annotations
+from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
 
 from .checks import bind_synthetic_case, bind_checks
 
@@ -11,7 +12,6 @@ from unittest.mock import patch
 import pandas as pd
 
 from core.strategy_compare_policy import get_strategy_comparison_settings
-from core.strategy_comparison import StrategyPreparationAction, StrategyPreparationPlan
 from services.research import strategy_comparison as strategy_comparison_module
 from filters.breakout_quality.strategy_compare_plan import ResolvedComparisonPlan
 from .synthetic_breakout_quality_support import add_check, replace
@@ -19,7 +19,7 @@ from .synthetic_breakout_quality_support import add_check, replace
 
 def _blocked_continuous_source_status(*, dl_id: str) -> dict:
     actions = [
-        StrategyPreparationAction(
+        ResearchArtifactAction(
             action_id=f"dl:{dl_id}:{artifact_name}",
             artifact_key=f"dl:{dl_id}:{artifact_name}",
             action="BLOCKED",
@@ -53,7 +53,7 @@ def _blocked_continuous_source_status(*, dl_id: str) -> dict:
             }
         },
         "artifact_identities": {},
-        "preparation_plan": StrategyPreparationPlan.from_actions(actions),
+        "preparation_plan": ResearchArtifactPlan.from_actions(actions),
         "overall_status": "BLOCKED",
         "comparison_ready": False,
     }
@@ -335,7 +335,7 @@ def validate_strategy_compare_resolved_plan_transition_contract_case(_base_param
         observed_per_call: list[tuple[Path, ...]] = []
         status = {
             "comparison_period": {"start": "2021-01-01", "end": "2026-03-02"},
-            "preparation_plan": StrategyPreparationPlan.from_actions(()),
+            "preparation_plan": ResearchArtifactPlan.from_actions(()),
         }
         # Spy on all consumers, but never authorize REUSE from this incomplete
         # synthetic publication. Dedicated cache tests cover the real validators.

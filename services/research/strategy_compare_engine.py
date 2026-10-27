@@ -56,7 +56,6 @@ from filters.breakout_quality.strategy_score_projection import (
 from filters.breakout_quality.strategy_compare_reporting import (
     _assert_shared_benchmark,
     _build_yearly_comparison,
-    _capacity_summary,
     _delta,
     _format_metric,
     _load_existing_comparison_payload,
@@ -1063,7 +1062,7 @@ __all__ = [
     "canonical_strategy_compare_output_dir_names", "_first_existing_comparison_dir",
     "_assert_controlled_param_pair", "_assert_controlled_ensemble_pair",
     "_assert_controlled_payload_pair", "_build_controlled_param_source_pair",
-    "_load_param_source", "_capacity_summary", "_normalize_yearly_completeness",
+    "_load_param_source", "_normalize_yearly_completeness",
     "_to_json_native", "_resolve_comparison_period",
     "COMPARISON_MODE_HARD_FILTER", "COMPARISON_MODE_SCORE_RANKING",
     "BREAKOUT_QUALITY_RANKING_POLICY_SCORE",

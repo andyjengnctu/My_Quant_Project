@@ -565,10 +565,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     # Regression: Forward OOS may freeze one legal schedule member, so its
     # prerequisite producer must not eagerly build later annual refit folds.
-    from core.strategy_comparison import (
-        StrategyPreparationAction,
-        resolve_strategy_parameter_required_schedule_end,
-    )
+    from core.research_orchestration import ResearchArtifactAction
+    from core.strategy_comparison import resolve_strategy_parameter_required_schedule_end
     from services.research import strategy_compare_preparation as compare_preparation
     p5_oos_settings = strategy_config.get_strategy_comparison_settings(
         "non_dl_validation_budget_oos"
@@ -605,7 +603,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             capture.update(kwargs)
             return {"action": "BUILD"}
 
-        action = StrategyPreparationAction(
+        action = ResearchArtifactAction(
             action_id=f"param:{p5_oos_arm.param_source}",
             artifact_key=f"param:{p5_oos_arm.param_source}",
             action="BUILD",

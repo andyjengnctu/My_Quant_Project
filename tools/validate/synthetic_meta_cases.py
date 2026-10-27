@@ -2124,7 +2124,6 @@ def validate_portfolio_core_module_boundary_contract_case(_base_params):
     from core import portfolio_entry_selection_max_dl as selection_max_dl
     from core import portfolio_levels as levels
     from core import portfolio_replay_support as replay_support
-    from core.trade_plans import clone_shadow_position as canonical_clone_shadow_position
 
     required_paths = [
         "core/portfolio_benchmark.py",
@@ -2161,21 +2160,21 @@ def validate_portfolio_core_module_boundary_contract_case(_base_params):
         "benchmark": engine._get_benchmark_period_stats.__module__ == benchmark.__name__,
         "replay_snapshot": engine._candidate_replay_snapshot.__module__ == replay_support.__name__,
         "levels": engine._append_portfolio_active_level_rows.__module__ == levels.__name__,
-        "ensemble": engine._aggregate_ensemble_candidate_rows.__module__ == ensemble.__name__,
-        "entry_plan": entries.build_candidate_plan_seed.__module__ == entry_plans.__name__,
-        "selection_router": entries.reorder_candidates_for_resource_aware_quality.__module__ == selection.__name__,
-        "selection_common": entries._simulate_reserved_candidate_order.__module__ == selection_common.__name__,
-        "selection_max_dl": entries._reorder_resource_aware_continuous_max_dl.__module__ == selection_max_dl.__name__,
+        "ensemble": engine._build_daily_ensemble_candidates.__module__ == ensemble.__name__,
+        "entry_plan": entries._resolve_training_entry_plan is entry_plans._resolve_training_entry_plan,
+        "selection_router": engine.reorder_candidates_for_resource_aware_quality is selection.reorder_candidates_for_resource_aware_quality,
+        "selection_common": selection._simulate_reserved_candidate_order is selection_common._simulate_reserved_candidate_order,
+        "selection_max_dl": selection._reorder_resource_aware_continuous_max_dl is selection_max_dl._reorder_resource_aware_continuous_max_dl,
         "entry_execution": entries.execute_reserved_entries_for_day.__module__ == entries.__name__,
     }
     alias_expectations = {
         "engine_benchmark_alias": engine._get_benchmark_period_stats is benchmark._get_benchmark_period_stats,
-        "engine_ensemble_alias": engine._aggregate_ensemble_candidate_rows is ensemble._aggregate_ensemble_candidate_rows,
+        "retired_engine_ensemble_reexport": not hasattr(engine, "_aggregate_ensemble_candidate_rows"),
         "engine_replay_alias": engine._candidate_replay_snapshot is replay_support._candidate_replay_snapshot,
         "engine_levels_alias": engine._append_portfolio_active_level_rows is levels._append_portfolio_active_level_rows,
-        "entries_plan_alias": entries.build_candidate_plan_seed is entry_plans.build_candidate_plan_seed,
-        "entries_selection_alias": entries.reorder_candidates_for_resource_aware_quality is selection.reorder_candidates_for_resource_aware_quality,
-        "entries_clone_shadow_compat": entries.clone_shadow_position is canonical_clone_shadow_position,
+        "entries_do_not_reexport_entry_planner": not hasattr(entries, "build_candidate_plan_seed"),
+        "entries_do_not_reexport_selection_router": not hasattr(entries, "reorder_candidates_for_resource_aware_quality"),
+        "entries_do_not_reexport_shadow_clone": not hasattr(entries, "clone_shadow_position"),
     }
 
     forbidden_reverse_imports = []
@@ -2192,7 +2191,7 @@ def validate_portfolio_core_module_boundary_contract_case(_base_params):
     add_check(results, "meta_contract", case_id, "portfolio_engine_is_timeline_orchestrator_only", ["run_portfolio_timeline"], engine_defs)
     add_check(results, "meta_contract", case_id, "portfolio_entries_keeps_only_entry_state_transition_defs", expected_entries_defs, entries_defs)
     add_check(results, "meta_contract", case_id, "portfolio_split_canonical_owners_match_responsibility", True, all(owner_expectations.values()), note=str(owner_expectations))
-    add_check(results, "meta_contract", case_id, "portfolio_legacy_import_aliases_share_same_function_objects", True, all(alias_expectations.values()), note=str(alias_expectations))
+    add_check(results, "meta_contract", case_id, "portfolio_retired_compatibility_exports_are_absent", True, all(alias_expectations.values()), note=str(alias_expectations))
     add_check(results, "meta_contract", case_id, "portfolio_split_has_no_reverse_engine_or_entries_import", [], forbidden_reverse_imports)
 
     summary["required_module_count"] = len(required_paths)
@@ -2362,22 +2361,30 @@ def validate_core_trading_modules_in_coverage_targets_case(_base_params):
     missing_targets = sorted(path for path in expected_targets if path not in declared_targets)
     missing_files = sorted(path for path in expected_targets if not (PROJECT_ROOT / path).is_file())
 
-    module_export_expectations = {
-        "core.portfolio_ops": {"execute_reserved_entries_for_day", "settle_portfolio_positions", "closeout_open_positions"},
+    canonical_owner_symbols = {
+        "core.portfolio_entries": {"execute_reserved_entries_for_day", "cleanup_extended_signals_for_day"},
+        "core.portfolio_exits": {"settle_portfolio_positions", "closeout_open_positions"},
+    }
+    owner_import_failures, owner_symbol_failures, owner_modules = _probe_module_symbols(
+        canonical_owner_symbols, from_all=False
+    )
+    public_export_symbols = {
         "core.trade_plans": {"build_normal_candidate_plan", "execute_pre_market_entry_plan", "evaluate_history_candidate_metrics"},
     }
-    module_import_failures, module_export_failures, reloaded_modules = _probe_module_symbols(
-        module_export_expectations, from_all=True
+    public_import_failures, public_export_failures, public_modules = _probe_module_symbols(
+        public_export_symbols, from_all=True
     )
 
     add_check(results, "meta_coverage", case_id, "core_trading_coverage_targets_exist", [], missing_files)
     add_check(results, "meta_coverage", case_id, "core_trading_coverage_targets_declared", [], missing_targets)
-    add_check(results, "meta_coverage", case_id, "core_wrapper_modules_importable_for_coverage_probe", [], module_import_failures)
-    add_check(results, "meta_coverage", case_id, "core_wrapper_modules_export_expected_symbols", [], module_export_failures)
+    add_check(results, "meta_coverage", case_id, "canonical_trading_owners_importable_for_coverage_probe", [], owner_import_failures)
+    add_check(results, "meta_coverage", case_id, "canonical_trading_owners_expose_required_symbols", [], owner_symbol_failures)
+    add_check(results, "meta_coverage", case_id, "trade_plan_public_module_importable", [], public_import_failures)
+    add_check(results, "meta_coverage", case_id, "trade_plan_explicit_all_contract_intact", [], public_export_failures)
 
     summary["expected_target_count"] = len(expected_targets)
     summary["missing_targets"] = missing_targets
-    summary["reloaded_modules"] = reloaded_modules
+    summary["reloaded_modules"] = owner_modules + public_modules
     return results, summary
 
 

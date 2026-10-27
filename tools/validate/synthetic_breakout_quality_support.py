@@ -359,7 +359,8 @@ from core.breakout_reentry import (
 )
 from core.extended_signals import resolve_breakout_quality_rank
 from core.portfolio_candidates import _resolve_candidate_quality_ranking
-from core.portfolio_engine import _aggregate_ensemble_candidate_rows, _candidate_replay_snapshot
+from core.portfolio_ensemble import _aggregate_ensemble_candidate_rows
+from core.portfolio_replay_support import _candidate_replay_snapshot
 from core.portfolio_exits import _iter_reentry_watch_targets
 from core.strategy_params import V16StrategyParams
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
@@ -384,7 +385,6 @@ from services.research.strategy_compare_engine import (
     _assert_controlled_param_pair,
     _build_controlled_param_source_pair,
     _load_param_source,
-    _capacity_summary,
     _comparison_labels,
     _comparison_output_dir_name,
     _first_existing_comparison_dir,
@@ -395,6 +395,7 @@ from services.research.strategy_compare_engine import (
     _validate_requested_param_policy,
     _to_json_native,
 )
+from filters.breakout_quality.strategy_compare_reporting import capacity_summary
 from filters.breakout_quality.trade_attribution import build_trade_attribution
 from services.breakout_quality.train_continuous_ranker import (
     _scope_group_ids as continuous_ranker_scope_group_ids,

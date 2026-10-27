@@ -31,7 +31,7 @@ from .synthetic_breakout_quality_support import (
     _assert_controlled_ensemble_pair,
     _assert_controlled_param_pair,
     _build_controlled_param_source_pair,
-    _capacity_summary,
+    capacity_summary,
     _comparison_labels,
     _comparison_output_dir_name,
     _first_existing_comparison_dir,
@@ -292,7 +292,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         ),
     )
 
-    capacity = _capacity_summary({"portfolio_capacity_rows": [
+    capacity = capacity_summary({"portfolio_capacity_rows": [
         {"Orderable_Candidates": 3, "Candidate_Supply_Gap": 7, "End_Position_Gap": 8, "Post_Execution_Positions": 2},
         {"Orderable_Candidates": 0, "Candidate_Supply_Gap": 8, "End_Position_Gap": 8, "Post_Execution_Positions": 2},
     ]})

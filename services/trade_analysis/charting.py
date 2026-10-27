@@ -1886,21 +1886,6 @@ def _choose_annotation_shift(base_bbox, *, placement, occupied_bboxes, axes_bbox
     return 0.0, 0.0, base_bbox
 
 
-def _choose_annotation_vertical_shift(base_bbox, *, placement, occupied_bboxes, axes_bbox, margin_px=6.0, gap_px=7.0):
-    """Compatibility wrapper for vertical-only contract tests/callers."""
-    shift_x, shift_y, final_bbox = _choose_annotation_shift(
-        base_bbox,
-        placement=placement,
-        occupied_bboxes=occupied_bboxes,
-        axes_bbox=axes_bbox,
-        margin_px=margin_px,
-        gap_px=gap_px,
-    )
-    if abs(float(shift_x)) <= 1e-9:
-        return float(shift_y), final_bbox
-    return 0.0, base_bbox
-
-
 def _layout_chart_annotation_boxes(axis_price, artists, renderer, *, reserved_artists=(), obstacle_bboxes=()):
     if renderer is None:
         return False

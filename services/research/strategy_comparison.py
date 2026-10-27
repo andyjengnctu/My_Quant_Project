@@ -1,6 +1,7 @@
 """Config-driven Breakout Quality strategy performance comparison orchestration."""
 
 from __future__ import annotations
+from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
 
 from core.file_integrity import load_json_object_or_none as _read_json
 
@@ -45,8 +46,6 @@ from core.strategy_comparison import (
     StrategyComparisonArm,
     StrategyComparisonSettings,
     StrategyDLSource,
-    StrategyPreparationAction,
-    StrategyPreparationPlan,
     resolve_strategy_comparison_arm_param_policy,
     resolve_strategy_parameter_consumption_mode,
     strategy_comparison_fingerprint,
@@ -330,7 +329,7 @@ def render_status(
                 )
             )
     model_action_by_key = {}
-    if isinstance(plan, StrategyPreparationPlan):
+    if isinstance(plan, ResearchArtifactPlan):
         model_action_by_key = {item.artifact_key: item for item in plan.actions}
     for dl_id, row in current_status["dl_sources"].items():
         for key, file_row in row["files"].items():
@@ -435,7 +434,7 @@ def render_execution_plan(
     settings: StrategyComparisonSettings,
     status: dict[str, Any],
 ) -> str:
-    plan: StrategyPreparationPlan = status["preparation_plan"]
+    plan: ResearchArtifactPlan = status["preparation_plan"]
     ordered_actions = sorted(
         plan.actions,
         key=lambda item: (int(item.execution_priority), item.artifact_key),

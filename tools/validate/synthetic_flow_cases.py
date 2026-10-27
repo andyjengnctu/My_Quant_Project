@@ -1088,7 +1088,8 @@ def validate_synthetic_empty_backtest_df_contract_case(base_params):
 
 def validate_synthetic_ensemble_reentry_consensus_watchlist_case(base_params):
     from core.breakout_reentry import activate_breakout_reentry_signals_for_day
-    from core.portfolio_engine import _aggregate_ensemble_candidate_rows, _append_portfolio_extended_shadow_level_rows
+    from core.portfolio_ensemble import _aggregate_ensemble_candidate_rows
+    from core.portfolio_levels import _append_portfolio_extended_shadow_level_rows
     from core.portfolio_exits import settle_portfolio_positions
 
     case_id = "SYNTH_ENSEMBLE_REENTRY_CONSENSUS_WATCHLIST"
@@ -1290,7 +1291,7 @@ def _run_resource_aware_entry_selection_matrix_case(base_params):
     """Exercise every reusable resource-aware selector through the canonical router."""
 
     from core import portfolio_entry_selection_max_dl as max_dl
-    from core.portfolio_entries import (
+    from core.portfolio_entry_selection import (
         reorder_candidates_for_resource_aware_quality,
         select_resource_aware_action_candidates,
     )

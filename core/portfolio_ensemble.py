@@ -14,7 +14,7 @@ from core.buy_sort import (
 from core.capital_policy import resolve_portfolio_sizing_equity
 from core.config import get_buy_sort_method
 from core.portfolio_candidates import build_daily_candidates, track_normal_setup_signals_for_day
-from core.portfolio_ops import cleanup_extended_signals_for_day
+from core.portfolio_entries import cleanup_extended_signals_for_day
 from core.portfolio_replay_support import _print_slow_ensemble_phase_heartbeat
 
 

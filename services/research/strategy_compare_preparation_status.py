@@ -5,6 +5,7 @@ Builder execution stays in :mod:`strategy_compare_preparation`.
 """
 
 from __future__ import annotations
+from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
 
 from core.file_integrity import load_json_object_or_none as _read_json
 
@@ -24,13 +25,11 @@ from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT,
     StrategyComparisonSettings,
-    StrategyPreparationAction,
     resolve_strategy_comparison_arm_param_policy,
     resolve_strategy_parameter_consumption_mode,
     resolve_strategy_parameter_required_schedule_end,
     strategy_comparison_param_artifact_key,
     strategy_comparison_param_binding_key,
-    StrategyPreparationPlan,
 )
 from filters.breakout_quality.artifact_dependency_registry import (
     PRODUCER_EXISTING_ARTIFACT,
@@ -613,7 +612,7 @@ def _collect_expected_r_calibration_status(
     dl_rows: dict[str, Any],
     artifact_identities: dict[str, Any],
     runtime_periods: Mapping[str, tuple[str | None, str | None]],
-    actions: list[StrategyPreparationAction],
+    actions: list[ResearchArtifactAction],
 ):
     expected_r_rows: dict[str, Any] = {}
     for arm in settings.enabled_arms:
@@ -748,7 +747,7 @@ def _collect_expected_excess_r_calibration_status(
     settings: StrategyComparisonSettings,
     dl_rows: dict[str, Any],
     artifact_identities: dict[str, Any],
-    actions: list[StrategyPreparationAction],
+    actions: list[ResearchArtifactAction],
 ):
     expected_excess_r_rows: dict[str, Any] = {}
     for arm in settings.enabled_arms:
@@ -901,7 +900,7 @@ def _collect_parameter_artifact_status(
     dl_model_ready: dict[str, bool],
     comparison_period_dependencies: tuple[str, ...],
     artifact_identities: dict[str, Any],
-    actions: list[StrategyPreparationAction],
+    actions: list[ResearchArtifactAction],
 ):
     parameter_rows: dict[str, Any] = {}
     resolved_parameter_paths: dict[str, Path] = {}
@@ -1352,7 +1351,7 @@ def collect_preparation_status(
         comparison_end=comparison_end,
     )
 
-    plan = StrategyPreparationPlan.from_actions(actions)
+    plan = ResearchArtifactPlan.from_actions(actions)
     overall_status = plan.overall_status
     dataset_generation_identity = None
     if get_dataset_generation_namespace(root, settings.dataset) is not None:

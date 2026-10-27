@@ -1,6 +1,7 @@
 """Strategy Compare deterministic prerequisite builder/execution service."""
 
 from __future__ import annotations
+from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
 
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -10,8 +11,6 @@ from core.console_report import project_relative_display_path
 from core.strategy_compare_policy import resolve_strategy_comparison_result_search_roots
 from core.strategy_comparison import (
     StrategyComparisonSettings,
-    StrategyPreparationAction,
-    StrategyPreparationPlan,
     resolve_strategy_parameter_consumption_mode,
     resolve_strategy_parameter_required_schedule_end,
 )
@@ -51,7 +50,7 @@ def _execute_preparation_action(
     *,
     root: Path,
     settings: StrategyComparisonSettings,
-    action: StrategyPreparationAction,
+    action: ResearchArtifactAction,
     comparison_start_date: str | None = None,
     comparison_end_date: str | None = None,
 ) -> None:
@@ -396,7 +395,7 @@ def _run_preparation_plan(
     status_refresher: Callable[[], dict[str, Any]],
     required_artifact_keys: tuple[str, ...] | None,
     failure_prefix: str,
-    producer_handlers: Mapping[str, Callable[[StrategyPreparationAction], int | None]] | None = None,
+    producer_handlers: Mapping[str, Callable[[ResearchArtifactAction], int | None]] | None = None,
 ) -> dict[str, Any]:
     """Execute the shared Research dependency loop for Strategy Compare.
 
@@ -408,17 +407,17 @@ def _run_preparation_plan(
     root = Path(project_root).resolve()
     holder: dict[str, dict[str, Any]] = {}
 
-    def _refresh_plan() -> StrategyPreparationPlan:
+    def _refresh_plan() -> ResearchArtifactPlan:
         refreshed = status_refresher()
         holder["status"] = refreshed
         plan = refreshed.get("preparation_plan")
-        if not isinstance(plan, StrategyPreparationPlan):
+        if not isinstance(plan, ResearchArtifactPlan):
             raise TypeError("Strategy Compare status缺少合法preparation_plan")
         return plan
 
     supplied_plan = status.get("preparation_plan") if isinstance(status, dict) else None
     if (
-        isinstance(supplied_plan, StrategyPreparationPlan)
+        isinstance(supplied_plan, ResearchArtifactPlan)
         and supplied_plan.overall_status != "READY"
         and not settings.preparation.auto_prepare
     ):
@@ -427,13 +426,13 @@ def _run_preparation_plan(
     handlers = dict(producer_handlers or {})
     completed_external_scopes: set[tuple[str, str]] = set()
 
-    def _external_scope(action: StrategyPreparationAction) -> tuple[str, str]:
+    def _external_scope(action: ResearchArtifactAction) -> tuple[str, str]:
         return (
             str(action.producer_work_type or ""),
             str(action.builder_type or ""),
         )
 
-    def _execute(action: StrategyPreparationAction) -> None:
+    def _execute(action: ResearchArtifactAction) -> None:
         external = handlers.get(str(action.producer_work_type or ""))
         if external is not None:
             scope = _external_scope(action)
@@ -441,7 +440,7 @@ def _run_preparation_plan(
                 current = holder.get("status") or {}
                 current_plan = current.get("preparation_plan")
                 remaining: list[str] = []
-                if isinstance(current_plan, StrategyPreparationPlan):
+                if isinstance(current_plan, ResearchArtifactPlan):
                     remaining = [
                         item.artifact_key
                         for item in current_plan.actions
@@ -513,7 +512,7 @@ def prepare_strategy_parameter_artifacts(
     status: dict[str, Any],
     required_source_ids: tuple[str, ...] | list[str] | set[str],
     status_refresher: Callable[[], dict[str, Any]] | None = None,
-    producer_handlers: Mapping[str, Callable[[StrategyPreparationAction], int | None]] | None = None,
+    producer_handlers: Mapping[str, Callable[[ResearchArtifactAction], int | None]] | None = None,
 ) -> dict[str, Any]:
     """Prepare requested strategy parameters through the canonical dependency runner."""
 
@@ -546,7 +545,7 @@ def prepare_strategy_comparison_artifacts(
     settings: StrategyComparisonSettings,
     status: dict[str, Any],
     status_refresher: Callable[[], dict[str, Any]] | None = None,
-    producer_handlers: Mapping[str, Callable[[StrategyPreparationAction], int | None]] | None = None,
+    producer_handlers: Mapping[str, Callable[[ResearchArtifactAction], int | None]] | None = None,
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
     refresh_status = (

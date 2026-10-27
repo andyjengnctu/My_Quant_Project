@@ -1,6 +1,7 @@
 """Completed-pair cache, archived provenance, and frozen-score reuse owner."""
 
 from __future__ import annotations
+from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
 
 from core.file_integrity import (
     canonical_json_sha256,
@@ -30,8 +31,6 @@ from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT,
     StrategyComparisonArm,
     StrategyComparisonSettings,
-    StrategyPreparationAction,
-    StrategyPreparationPlan,
     resolve_strategy_comparison_arm_param_policy,
     resolve_strategy_parameter_consumption_mode,
     strategy_comparison_param_artifact_key,
@@ -1130,14 +1129,14 @@ def _collect_replay_cache_status(
     plan = status.get("preparation_plan")
     action_by_key = (
         plan.action_by_key
-        if isinstance(plan, StrategyPreparationPlan)
+        if isinstance(plan, ResearchArtifactPlan)
         else {}
     )
     arm_states: dict[str, Any] = {}
     for arm in settings.enabled_arms:
         parameter_dependency = action_by_key.get(f"param:{arm.param_source}")
         parameter_dependency_pending = (
-            isinstance(parameter_dependency, StrategyPreparationAction)
+            isinstance(parameter_dependency, ResearchArtifactAction)
             and parameter_dependency.action in RESEARCH_ARTIFACT_BUILD_ACTIONS
         )
         if arm.dl_enabled:
@@ -1190,7 +1189,7 @@ def _apply_completed_pair_dependency_waivers(
     """Do not require DL source artifacts when every dependent arm reuses a completed pair."""
 
     pairs = dict(replay_cache.get("pairs") or {})
-    plan: StrategyPreparationPlan = status["preparation_plan"]
+    plan: ResearchArtifactPlan = status["preparation_plan"]
     pending_param_dependencies = {
         dependency
         for action in plan.actions
@@ -1221,13 +1220,13 @@ def _apply_completed_pair_dependency_waivers(
         status["replay_cache"] = replay_cache
         return status
 
-    rewritten_actions: list[StrategyPreparationAction] = []
+    rewritten_actions: list[ResearchArtifactAction] = []
     for item in plan.actions:
         parts = item.artifact_key.split(":")
         dl_id = parts[1] if len(parts) >= 2 and parts[0] == "dl" else None
         if dl_id in waived_dl_ids:
             rewritten_actions.append(
-                StrategyPreparationAction(
+                ResearchArtifactAction(
                     action_id=item.action_id,
                     artifact_key=item.artifact_key,
                     action="REUSE",
@@ -1245,7 +1244,7 @@ def _apply_completed_pair_dependency_waivers(
         else:
             rewritten_actions.append(item)
 
-    rewritten_plan = StrategyPreparationPlan.from_actions(rewritten_actions)
+    rewritten_plan = ResearchArtifactPlan.from_actions(rewritten_actions)
     status = dict(status)
     status["preparation_plan"] = rewritten_plan
     status["overall_status"] = rewritten_plan.overall_status
@@ -1688,15 +1687,15 @@ def _apply_completed_pair_frozen_score_reuse(
     if not overrides and not reuse_diagnostics:
         return status
 
-    plan: StrategyPreparationPlan = status["preparation_plan"]
-    rewritten_actions: list[StrategyPreparationAction] = []
+    plan: ResearchArtifactPlan = status["preparation_plan"]
+    rewritten_actions: list[ResearchArtifactAction] = []
     for item in plan.actions:
         parts = item.artifact_key.split(":")
         dl_id = parts[1] if len(parts) >= 3 and parts[0] == "dl" else None
         artifact_name = parts[2] if len(parts) >= 3 and parts[0] == "dl" else None
         if dl_id in overrides and artifact_name in {"model", "manifest", "report"}:
             rewritten_actions.append(
-                StrategyPreparationAction(
+                ResearchArtifactAction(
                     action_id=item.action_id,
                     artifact_key=item.artifact_key,
                     action="NOT_REQUIRED",
@@ -1714,7 +1713,7 @@ def _apply_completed_pair_frozen_score_reuse(
         elif dl_id in overrides and artifact_name == "forward_scores":
             source_info = overrides[dl_id]
             rewritten_actions.append(
-                StrategyPreparationAction(
+                ResearchArtifactAction(
                     action_id=item.action_id,
                     artifact_key=item.artifact_key,
                     action="REUSE",
@@ -1735,7 +1734,7 @@ def _apply_completed_pair_frozen_score_reuse(
             unique_codes = tuple(dict.fromkeys(reuse_diagnostics[dl_id]))
             diagnostic_text = ",".join(unique_codes[:6]) or "UNKNOWN"
             rewritten_actions.append(
-                StrategyPreparationAction(
+                ResearchArtifactAction(
                     action_id=item.action_id,
                     artifact_key=item.artifact_key,
                     action=item.action,
@@ -1755,7 +1754,7 @@ def _apply_completed_pair_frozen_score_reuse(
         else:
             rewritten_actions.append(item)
 
-    rewritten_plan = StrategyPreparationPlan.from_actions(rewritten_actions)
+    rewritten_plan = ResearchArtifactPlan.from_actions(rewritten_actions)
     updated = dict(status)
     updated["preparation_plan"] = rewritten_plan
     updated["overall_status"] = rewritten_plan.overall_status

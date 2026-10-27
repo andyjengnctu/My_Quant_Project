@@ -41,73 +41,36 @@ from core.portfolio_terminal_reporting import (
 from core.breakout_reentry import activate_breakout_reentry_signals_for_day
 from core.config import get_ev_calc_method
 from core.portfolio_fast_data import (
-    build_score_single_stock_profile_fields,
     build_normal_setup_index,
     build_trade_stats_index,
-    calc_mark_to_market_equity,
     get_fast_close,
     get_fast_close_on_or_before,
     has_fast_date,
-    summarize_single_stock_trade_stats_from_pit_index,
 )
-from core.portfolio_stats import (
-    build_benchmark_full_month_return_stats,
-    build_benchmark_full_quarter_return_stats,
-    build_benchmark_full_year_return_stats,
-    build_full_month_return_stats,
-    build_full_quarter_return_stats,
-    build_full_year_return_stats,
-    calc_annual_return_pct,
-    calc_curve_stats,
-    calc_sim_years,
-    find_sim_start_idx,
-    summarize_closed_trade_entry_type_counts,
-    summarize_closed_trade_r_stats,
-)
-from core.portfolio_attribution import build_dominant_year_dependency_diagnostics
+from core.portfolio_stats import calc_curve_stats, find_sim_start_idx
 from core.portfolio_candidates import build_daily_candidates, track_normal_setup_signals_for_day
-from core.portfolio_ops import (
-    cleanup_extended_signals_for_day,
-    closeout_open_positions,
-    execute_reserved_entries_for_day,
+from core.portfolio_entries import cleanup_extended_signals_for_day
+from core.portfolio_entry_selection import (
     reorder_candidates_for_resource_aware_quality,
     select_resource_aware_action_candidates,
-    settle_portfolio_positions,
-    try_rotate_weakest_position,
 )
+from core.portfolio_exits import closeout_open_positions
 
-# Compatibility re-exports: canonical implementations live in focused portfolio modules.
-from core.portfolio_benchmark import (
-    BENCHMARK_PERIOD_STATS_CACHE_MAX_ITEMS,
-    _BENCHMARK_PERIOD_STATS_CACHE,
-    _BENCHMARK_PERIOD_STATS_CACHE_LOCK,
-    _build_benchmark_period_stats,
-    _get_benchmark_period_stats,
-    _make_benchmark_period_cache_key,
-)
+# Active portfolio primitives remain defined in their focused owner modules.
+from core.portfolio_benchmark import _get_benchmark_period_stats
 from core.portfolio_ensemble import (
     _activate_ensemble_reentry_signals_for_day,
-    _aggregate_ensemble_candidate_rows,
-    _annotate_ensemble_candidate,
     _build_daily_ensemble_candidates,
     _cleanup_ensemble_extended_signals_for_day,
     _flatten_ensemble_extended_signals,
-    _iter_ensemble_member_pairs,
-    _median_candidate_row,
-    _resolve_ensemble_member_key,
     _track_ensemble_normal_setup_signals_for_day,
 )
-from core.portfolio_levels import (
-    _append_portfolio_active_level_rows,
-    _append_portfolio_extended_shadow_level_rows,
-    _is_portfolio_shadow_level_visible_day,
-)
+from core.portfolio_levels import _append_portfolio_active_level_rows, _append_portfolio_extended_shadow_level_rows
 from core.portfolio_replay_support import (
     _candidate_execution_replay_snapshot,
     _candidate_replay_snapshot,
     _format_replay_date,
     _format_replay_elapsed,
-    _print_slow_ensemble_phase_heartbeat,
     _run_portfolio_replay_phase,
 )
 from core.portfolio_entry_selection_max_dl import (

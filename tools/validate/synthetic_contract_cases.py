@@ -2716,18 +2716,21 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
         layout_artists.append(artist)
     layout_canvas.draw()
     layout_renderer = layout_canvas.get_renderer()
-    choose_vertical_shift = getattr(charting_module, "_choose_annotation_vertical_shift")
+    choose_annotation_shift = getattr(charting_module, "_choose_annotation_shift")
     annotation_base_bbox = getattr(charting_module, "_annotation_base_bbox")
     first_bbox_before = layout_artists[0].get_window_extent(layout_renderer)
     second_base_bbox = annotation_base_bbox(layout_artists[1], layout_renderer, dpi=layout_figure.dpi)
-    minimal_shift_px, _ = choose_vertical_shift(
+    shift_x_px, minimal_shift_px, shifted_bbox = choose_annotation_shift(
         second_base_bbox,
         placement="above",
         occupied_bboxes=[first_bbox_before],
         axes_bbox=layout_axis.get_window_extent(layout_renderer),
     )
     expected_minimal_shift_px = float(first_bbox_before.y1) + 7.0 - float(second_base_bbox.y0)
-    check("trade_info_boxes_choose_nearest_clear_vertical_shift", True, abs(float(minimal_shift_px) - expected_minimal_shift_px) < 1e-6)
+    check("trade_info_boxes_choose_nearest_clear_vertical_shift", True,
+          abs(float(shift_x_px)) < 1e-6
+          and abs(float(minimal_shift_px) - expected_minimal_shift_px) < 1e-6
+          and not shifted_bbox.overlaps(first_bbox_before))
 
     changed = layout_chart_annotation_boxes(layout_axis, layout_artists, layout_renderer)
     first_positions = [tuple(float(value) for value in artist.get_position()) for artist in layout_artists]

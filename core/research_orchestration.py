@@ -216,12 +216,6 @@ class ResearchArtifactPlan:
         }
 
 
-# Backward-compatible names for Strategy Compare callers.  The generic Research
-# contract is the implementation SSOT; strategy modules only retain their public names.
-StrategyPreparationAction = ResearchArtifactAction
-StrategyPreparationPlan = ResearchArtifactPlan
-
-
 __all__ = [
     "RESEARCH_ARTIFACT_BUILD_ACTIONS",
     "RESEARCH_ARTIFACT_READY_ACTIONS",
@@ -229,6 +223,4 @@ __all__ = [
     "ResearchArtifactAction",
     "resolve_research_artifact_action",
     "ResearchArtifactPlan",
-    "StrategyPreparationAction",
-    "StrategyPreparationPlan",
 ]

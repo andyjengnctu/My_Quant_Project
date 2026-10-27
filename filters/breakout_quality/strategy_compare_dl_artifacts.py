@@ -6,6 +6,7 @@ or completed-pair reuse policy.
 """
 
 from __future__ import annotations
+from core.research_orchestration import ResearchArtifactAction
 
 from pathlib import Path
 from typing import Any
@@ -25,7 +26,6 @@ from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT,
     StrategyComparisonSettings,
-    StrategyPreparationAction,
 )
 from filters.breakout_quality.artifact_dependency_registry import (
     PRODUCER_EXISTING_ARTIFACT,
@@ -227,7 +227,7 @@ def _collect_model_upstream_dependencies(
     settings: StrategyComparisonSettings,
     source: Any,
     artifact_identities: dict[str, Any],
-    actions: list[StrategyPreparationAction],
+    actions: list[ResearchArtifactAction],
     cache: dict[tuple[str, str, str], tuple[str, ...]],
 ) -> tuple[str, ...]:
     upstream_identity = (
@@ -319,7 +319,7 @@ def _collect_selection_pit_source_status(
     source_upstream_dependencies: tuple[str, ...],
     runtime_required_dl_sources: set[str],
     artifact_identities: dict[str, Any],
-    actions: list[StrategyPreparationAction],
+    actions: list[ResearchArtifactAction],
     runtime_periods: dict[str, tuple[str, str]],
 ) -> tuple[dict[str, Any], bool]:
     pit_contract = None
@@ -497,7 +497,7 @@ def _collect_continuous_ranker_source_status(
     source_upstream_dependencies: tuple[str, ...],
     runtime_required_dl_sources: set[str],
     artifact_identities: dict[str, Any],
-    actions: list[StrategyPreparationAction],
+    actions: list[ResearchArtifactAction],
     runtime_periods: dict[str, tuple[str, str]],
 ) -> tuple[dict[str, Any], bool]:
     model_ready = False
@@ -637,7 +637,7 @@ def _collect_standard_model_source_status(
     source_upstream_dependencies: tuple[str, ...],
     runtime_required_dl_sources: set[str],
     artifact_identities: dict[str, Any],
-    actions: list[StrategyPreparationAction],
+    actions: list[ResearchArtifactAction],
     runtime_periods: dict[str, tuple[str, str]],
 ) -> tuple[dict[str, Any], bool]:
     model_ready = False
@@ -784,7 +784,7 @@ def collect_dl_artifact_status(
 ) -> tuple[
     dict[str, Any],
     dict[str, Any],
-    list[StrategyPreparationAction],
+    list[ResearchArtifactAction],
     dict[str, bool],
     dict[str, tuple[str, str]],
 ]:
@@ -792,7 +792,7 @@ def collect_dl_artifact_status(
 
     dl_rows: dict[str, Any] = {}
     artifact_identities: dict[str, Any] = {}
-    actions: list[StrategyPreparationAction] = []
+    actions: list[ResearchArtifactAction] = []
     dl_model_ready: dict[str, bool] = {}
     runtime_periods: dict[str, tuple[str, str]] = {}
     upstream_cache: dict[tuple[str, str, str], tuple[str, ...]] = {}

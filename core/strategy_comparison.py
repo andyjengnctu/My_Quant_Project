@@ -11,11 +11,6 @@ from typing import Any, Mapping
 from core import buy_sort as _buy_sort
 from core.file_integrity import canonical_json_sha256
 
-from core.research_orchestration import (
-    StrategyPreparationAction,
-    StrategyPreparationPlan,
-)
-
 
 STRATEGY_DL_RUNTIME_MODE_HARD_FILTER = 'hard-filter'
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY = _buy_sort.BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY
@@ -1522,8 +1517,6 @@ __all__ = [
     "StrategyComparisonSettings",
     "StrategyDLSource",
     "StrategyParameterSource",
-    "StrategyPreparationAction",
-    "StrategyPreparationPlan",
     "StrategyPreparationPolicy",
     "StrategyRuntimeIntegrationSettings",
     "resolve_strategy_comparison_arm_param_policy",

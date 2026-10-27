@@ -5,39 +5,8 @@ from core.exact_accounting import (
     restore_money_like_from_milli,
 )
 from core.portfolio_entry_plans import (
-    build_candidate_plan_seed,  # B200 same-object compatibility alias; canonical owner remains portfolio_entry_plans.
-    _build_candidate_full_entry_plan_if_affordable,
     _build_cash_capped_entry_plan_for_candidate,
     _resolve_training_entry_plan,
-)
-from core.portfolio_entry_selection import (
-    _candidate_binary_pass,
-    _candidate_continuous_score,
-    _selected_continuous_score_metrics,
-    _continuous_selected_quality_key,
-    _simulate_reserved_candidate_order,
-    _resource_aware_quality_policy,
-    _resource_aware_default_diag,
-    _resource_aware_diag_from_result,
-    _reorder_resource_aware_binary_greedy,
-    _resource_aware_trial_rank_key,
-    _reorder_resource_aware_binary_basket,
-    _reorder_resource_aware_continuous,
-    _capital_preserving_continuous_quality_key,
-    _preserves_min_roos_resource_geometry,
-    _reorder_resource_aware_continuous_capital_preserving,
-    _max_dl_score_order,
-    _max_dl_execution_order,
-    _max_dl_basket_quality_key,
-    _max_dl_resource_deficit,
-    _max_dl_basket_is_feasible,
-    _reorder_resource_aware_continuous_max_dl,
-    _candidate_date_value,
-    _stale_score_guard_max_age_days,
-    _candidate_has_stale_scored_signal,
-    _reorder_resource_aware_continuous_max_dl_feasible_ascent,
-    select_resource_aware_action_candidates,
-    reorder_candidates_for_resource_aware_quality,
 )
 from core.portfolio_fast_data import (
     get_fast_dates,
@@ -66,7 +35,6 @@ _NATIVE_LIVE_SHADOW_CACHED_BATCH_ENABLED = bool(
 )
 
 from core.trade_plans import (
-    clone_shadow_position,
     execute_pre_market_entry_plan,
     execute_pre_market_entry_plan_training,
     should_clear_extended_signal,

@@ -507,16 +507,6 @@ def correct_trading_transaction(
     )
 
 
-def delete_manual_trading_transaction(*args, **kwargs):
-    """Backward-compatible alias; strategy and manual trades are both supported."""
-    return delete_trading_transaction(*args, **kwargs)
-
-
-def correct_manual_trading_transaction(*args, **kwargs):
-    """Backward-compatible alias; strategy and manual trades are both supported."""
-    return correct_trading_transaction(*args, **kwargs)
-
-
 def rollforward_trading_strategy_management(
     project_root,
     *,
@@ -596,8 +586,6 @@ __all__ = [
     "record_manual_trading_sell",
     "delete_trading_transaction",
     "correct_trading_transaction",
-    "delete_manual_trading_transaction",
-    "correct_manual_trading_transaction",
     "rollforward_trading_strategy_management",
     "record_trading_strategy_management_sell_signals",
     "get_trading_account_read_model",

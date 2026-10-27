@@ -7,6 +7,7 @@ artifact building, or completed-pair discovery.
 """
 
 from __future__ import annotations
+from core.research_orchestration import ResearchArtifactPlan
 
 from copy import deepcopy
 from dataclasses import dataclass
@@ -14,7 +15,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from core.strategy_comparison import StrategyComparisonSettings, StrategyPreparationPlan
+from core.strategy_comparison import StrategyComparisonSettings
 
 
 class _FrozenList(tuple):
@@ -113,10 +114,10 @@ class ResolvedComparisonPlan:
         return raw if isinstance(raw, Mapping) else MappingProxyType({})
 
     @property
-    def preparation_plan(self) -> StrategyPreparationPlan:
+    def preparation_plan(self) -> ResearchArtifactPlan:
         plan = self._status.get("preparation_plan")
-        if not isinstance(plan, StrategyPreparationPlan):
-            raise RuntimeError("ResolvedComparisonPlan缺少StrategyPreparationPlan")
+        if not isinstance(plan, ResearchArtifactPlan):
+            raise RuntimeError("ResolvedComparisonPlan缺少ResearchArtifactPlan")
         return plan
 
     def status_dict(self) -> dict[str, Any]:
@@ -128,7 +129,7 @@ class ResolvedComparisonPlan:
         """Enforce invariants that must hold before status can claim READY."""
 
         plan = self._status.get("preparation_plan")
-        if not isinstance(plan, StrategyPreparationPlan):
+        if not isinstance(plan, ResearchArtifactPlan):
             raise RuntimeError("Strategy Compare resolved plan缺少preparation_plan")
         overall_status = str(self._status.get("overall_status") or "")
         if overall_status != plan.overall_status:

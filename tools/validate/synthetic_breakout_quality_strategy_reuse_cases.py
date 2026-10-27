@@ -150,8 +150,8 @@ def append_completed_pair_score_reuse_contract_checks(
     parent_param_sources = tuple(
         dict.fromkeys(arm.param_source for arm in parent_child_settings.enabled_arms)
     )
-    pending_plan = reuse_owner_module.StrategyPreparationPlan.from_actions(
-        reuse_owner_module.StrategyPreparationAction(
+    pending_plan = reuse_owner_module.ResearchArtifactPlan.from_actions(
+        reuse_owner_module.ResearchArtifactAction(
             action_id=f"param:{source_id}",
             artifact_key=f"param:{source_id}",
             action="REBUILD",
@@ -163,8 +163,8 @@ def append_completed_pair_score_reuse_contract_checks(
         )
         for source_id in parent_param_sources
     )
-    ready_plan = reuse_owner_module.StrategyPreparationPlan.from_actions(
-        reuse_owner_module.StrategyPreparationAction(
+    ready_plan = reuse_owner_module.ResearchArtifactPlan.from_actions(
+        reuse_owner_module.ResearchArtifactAction(
             action_id=f"param:{source_id}",
             artifact_key=f"param:{source_id}",
             action="REUSE",
@@ -219,8 +219,8 @@ def append_completed_pair_score_reuse_contract_checks(
     broker_settings = strategy_config.get_strategy_comparison_settings(
         "broker_cash_dl_conversion_rolling"
     )
-    broker_plan = reuse_owner_module.StrategyPreparationPlan.from_actions(
-        reuse_owner_module.StrategyPreparationAction(
+    broker_plan = reuse_owner_module.ResearchArtifactPlan.from_actions(
+        reuse_owner_module.ResearchArtifactAction(
             action_id=f"param:{source}",
             artifact_key=f"param:{source}",
             action="REUSE",
@@ -468,7 +468,7 @@ def append_completed_pair_score_reuse_contract_checks(
             )
         )
         archived_plan_actions = [
-            score_reuse_module.StrategyPreparationAction(
+            score_reuse_module.ResearchArtifactAction(
                 action_id=f"dl:CONT13E:{artifact_name}",
                 artifact_key=f"dl:CONT13E:{artifact_name}",
                 action="BLOCKED",
@@ -485,7 +485,7 @@ def append_completed_pair_score_reuse_contract_checks(
             for artifact_name in ("model", "manifest", "report", "forward_scores")
         ]
         archived_score_status["preparation_plan"] = (
-            score_reuse_module.StrategyPreparationPlan.from_actions(
+            score_reuse_module.ResearchArtifactPlan.from_actions(
                 archived_plan_actions
             )
         )

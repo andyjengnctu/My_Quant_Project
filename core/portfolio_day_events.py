@@ -8,11 +8,8 @@ from intraday exits must not fund a discretionary replacement order.
 import time
 from typing import NamedTuple
 
-from core.portfolio_ops import (
-    execute_reserved_entries_for_day,
-    settle_portfolio_positions,
-    try_rotate_weakest_position,
-)
+from core.portfolio_entries import execute_reserved_entries_for_day
+from core.portfolio_exits import settle_portfolio_positions, try_rotate_weakest_position
 from core.portfolio_replay_support import _run_portfolio_replay_phase
 
 

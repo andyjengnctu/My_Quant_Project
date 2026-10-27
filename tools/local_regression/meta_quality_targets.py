@@ -61,7 +61,6 @@ CORE_TRADING_COVERAGE_TARGETS = [
     "core/portfolio_entry_selection_common.py",
     "core/portfolio_entry_selection_max_dl.py",
     "core/portfolio_exits.py",
-    "core/portfolio_ops.py",
     "core/trade_plans.py",
     "core/entry_plans.py",
     "core/portfolio_candidates.py",
