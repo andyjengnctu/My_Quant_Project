@@ -1,17 +1,20 @@
-# Breakout Quality Filter 歷史實驗與研究決策紀錄
-
 ## 1. 用途與更新規則
 
 本文件是 `breakout_quality` **已實際執行研究、已取得 evidence 及當時決策**的歷史紀錄；已記錄的原始 scientific identity、negative results 與當時結論不可抹除。現行 Training Model、Compare/Test membership 與參數以 `config/breakout_quality.py` 等 canonical 設定及 Experiment Registry 的 current identity 為準；本文件中的舊「目前」「下一步」「Queue」屬當時歷史快照，**不得作為今天必須執行的研究待辦或建議優先序**。
 
-每次實際完成有科學意義的實驗或收到可追溯研究證據後，才在同一輪更新本文件，至少記錄：
+### 後續更新準則（只保留可稽核的研究增量）
 
-1. 日期與實驗狀態：`PLANNED`、`IMPLEMENTED`、`RESULT_AVAILABLE`、`ACCEPTED` 或 `REJECTED`。
-2. 程式基準：ZIP／commit／patch 名稱與 SHA256；未知時明確標示未知。
-3. 唯一變更、所有固定條件，以及是否需要重建 Dataset／重新 Label。
-4. Selection 與 OOS 的主要結果，至少包含原始 PASS、模型 PASS、PASS Precision、Precision Lift、PASS Recall、Accuracy、平均 Score。
-5. 與實驗當時正式基準的差異、結果判讀、是否採用及停止條件；當時提出的下一步只作歷史決策脈絡，不形成現行待辦。
-6. 尚未取得結果的實作只能標記為 `IMPLEMENTED`，不得先寫成有效或無效。未嘗試的討論構想不登錄為 PLANNED，純 engineering-only 修補不再追加到研究日誌，除非會改變 scientific identity、PIT、模型／策略結果或 evidence 可重建性；既有歷史文字保留不追改。
+僅在**實際開始受控研究、取得新研究證據、形成研究決策，或發現既有研究結果失效**時更新本文件；不因每次提交、修復、測試或打包而追加章節。每一筆新研究增量依適用性記錄：
+
+1. **身分／來源**：日期、Registry 所屬實驗 ID、`IMPLEMENTED`／`RESULT_AVAILABLE`／`ACCEPTED`／`REJECTED` 等實際狀態；已取得的程式 ZIP／commit 與 SHA256。身份狀態以 Registry 為準；不複製整份 Registry。
+2. **受控條件**：唯一科學變更、固定條件、PIT／資料／標的／區間、Seed 與 Target／模型／策略參數來源；必要時記明 Dataset／Label／checkpoint 應否重建。
+3. **原始證據**：只記與該實驗適用的 Selection、OOS、Rolling、Robustness、Oracle 或策略績效數值、對照及重要分布；保留原始失敗／負面結果及可追溯工件位置。不同研究不強制填入無關的分類指標。
+4. **判定**：與當時有效基準的差異、限制、GO／REJECT／尚未判定及理由；未取得正式輸出只能標記 `IMPLEMENTED`／結果待確認，不得把合成測試 PASS 寫成實際科研結果。
+5. **歷史失效更正**：若 Bug 影響已報告的數值、PIT、樣本身分、回測或合法 REUSE，保留原始數值與當時結論，另註明根因、受影響的實驗／Seed／期間／工件、原結果有效性及精準重跑範圍。不得直接覆寫舊績效，也不得將 Bug Fix 冒充新 scientific identity。
+
+**不另追加工程流水帳**：純介面、import、refactor、validator／synthetic、bundle、checklist 排序、測試覆蓋率、格式與重複除錯經過，交由既有 Git、測試輸出與 canonical implementation 追溯。必要的工程修復只在**影響研究有效性**時於所屬研究記錄補一則精簡更正；不以逐輪修補新增多筆研究章節。禁止複製整份 console／測試結果、相同設定表、檔案目錄或已存在於 canonical 工件中的數據；以明確的身分與來源引用即可。
+
+本文件第 5、6 節的舊待辦及執行順序僅屬**封存歷史**，不得再更新、執行或衍生新研究 Queue；未實施的構想不預占 ID。已留下的歷史研究結果、拒絕理由、原始用戶回報與實驗身分必須保留，不能依行數、日期或標題自動刪除。
 
 ### OOS 使用規則（2026-07-29 起）
 
@@ -2201,46 +2204,10 @@ T283新增正式PIT models root解析、active-param獨立輸出、Selection PIT
 
 ## 2026-08-03 — Ensemble partial Score availability保守fallback修正
 
-### 狀態
-
-`IMPLEMENTED / RESULT_NOT_AVAILABLE / FORMAL_RERUN_PENDING`
-
-本輪只修正Score Adapted fold diagnostics的ensemble Score聚合與錯誤重試分類；未完成7-fold rolling、四組Selection replay或正式OOS，不得預判Adapted有效。
-
-### 程式基準
-
-- ZIP：`test-branch-1_20260803_021601_c5bd4b2.zip`
-- SHA256：`cbef176743f6351bc6fa388ad6b1000cff37924861244d41b662a096c60c1998`
-- 全新解壓：本輪隔離暫存檢查目錄（不納入正式工件identity）
-
-### 問題
-
-使用者本機Score Adapted執行至fold diagnostics時，ticker `00655L`的ensemble共識members出現部分有Selection PIT Score、部分缺分，舊`_aggregate_ensemble_candidate_rows()`要求所有member availability完全一致，因此在`build_daily_ensemble_candidates`中拋出`同一 ticker 的 ensemble members Score availability不一致`。平行流程又把此deterministic契約錯誤當一般process失敗，進入必然同樣失敗的sequential fallback。
-
-### 根因
-
-ensemble以ticker聚合，但不同參數member可能在同一交易日承接不同原始normal／continuation／re-entry訊號，因此`score_date`可以不同。Selection PIT Score依`ticker／原始score_date`查詢；不同原始事件日期一邊有分、一邊缺分是合法partial availability，不代表同一PIT key回傳矛盾。
-
-### 修正
-
-- 只有全部共識members均有有效Score時，聚合候選才使用member Score中位數參與同票ranking。
-- 若不同原始score date造成partial availability，保留候選、保存完整`ensemble_member_quality_rank_by_key`，聚合rank標記`available=false`與`partial_ensemble_member_score_availability`，回退既有buy-sort；不得填0或排除候選。
-- 若全部members均缺分，維持既有缺分fallback。
-- 若同ticker且同一score date仍同時出現available與unavailable，視為真正資料／runtime契約分叉並fail-fast。
-- 聚合結果新增available／unavailable member數量、keys及`all_available / partial_available_fallback / none_available`診斷欄位。
-- deterministic ensemble ranking／Score source／score payload契約錯誤加入不可重試分類，不再啟動sequential fallback；一般process pool失敗仍保留fallback。
-
-### 既有執行與續跑
-
-本次已有4個fold完成diagnostics，其餘fold的SQLite studies已持久化接近或完成200 trials。套用修正後以相同runtime identity重新執行，應沿用既有studies、只補足缺少trials並重做未完成diagnostics；目前中斷輸出的OOS_AVG與部分fold表不得作正式結論。
-
-### 固定條件與結果邊界
-
-不改Dataset、Label、Continuous Target、PIT Scores、模型、Seed 42、fold schedule、trials、search space、objective、TP、fixed risk、position cap、max positions、rotation、Score排序鍵、交易／帳務、Future Target post-replay only或Selection／OOS邊界。單一Score Adapted訓練與Baseline／Sort Only／Param Only／Adapted四組回放契約不變。
-
-### 驗證
-
-T267新增不同score date partial availability保留候選、回退原排序、逐member rank保存及同score date分叉fail-fast案例；T283新增deterministic ensemble契約錯誤不進sequential fallback案例。正式`apps/test_suite.py`依專案規定由使用者本機執行。
+- **背景／根因**：ensemble以ticker聚合，但不同參數member可能在同一交易日承接不同原始normal／continuation／re-entry訊號，因此`score_date`可以不同。Selection PIT Score依`ticker／原始score_date`查詢；不同原始事件日期一邊有分、一邊缺分是合法partial availability，不代表同一PIT key回傳矛盾。
+- **修復／處置**：只有全部共識members均有有效Score時，聚合候選才使用member Score中位數參與同票ranking。
+- **修復補充**：若不同原始score date造成partial availability，保留候選、保存完整`ensemble_member_quality_rank_by_key`，聚合rank標記`available=false`與`partial_ensemble_member_score_availability`，回退既有buy-sort；不得填0或排除候選。
+- **結果／效力界線**：`IMPLEMENTED / RESULT_NOT_AVAILABLE / FORMAL_RERUN_PENDING`
 
 ## 2026-08-03 — Ranking × Parameter正式2×2結果與capital-aware ranking下一步
 
@@ -2948,46 +2915,10 @@ Binary hard-filter replay已完成Baseline與quality-filter兩組，但`strategy
 
 ## 2026-08-04 — Formal consistency／coverage synthetic 閉環修正
 
-### 狀態
-
-`IMPLEMENTED / INDEPENDENT_SYNTHETIC_PASS / LOCAL_FORMAL_RERUN_REQUIRED`
-
-### 程式與測試基準
-
-- 輸入程式ZIP：`test-branch-1_20260804_143233_f1d6807.zip`
-- 程式SHA256：`04e6bae036562c471b45d0ecbf00dd47f9ada3fec089b8b29fa0870e9d0db28b`
-- Formal bundle：`to_chatgpt_bundle_20260804_143322_bf24a8be.zip`
-- Bundle SHA256：`6bc34702d640a9d5503e190628268d7e925ccdec4b41f7656f08193ec327d893`
-- Bundle結果：quick gate PASS、chain checks PASS、ML smoke PASS；consistency 1項FAIL；meta quality 4項coverage FAIL。
-
-### 根因
-
-Consistency唯一失敗為synthetic suite在`validate_breakout_quality_strategy_adaptation_contract_case`中直接讀取目前正式Binary workflow；`strategy_adapt._validate_fixed_contract`正確拒絕Binary hard-filter identity，導致整個coverage synthetic suite提前中止。Meta quality的`coverage_synthetic_suite_runs_successfully`、line／branch minimum與key targets四項失敗均為同一中止事件的連鎖結果，不是實際coverage退步。
-
-完整registry往下執行另發現三類被首個例外遮蔽的測試問題：
-
-1. Continuous模型研究與strategy adaptation案例未使用隔離workflow override，會受目前Binary正式設定影響。
-2. Binary主選單新增子選單與訓練後正式策略驗證後，CLI fixture仍使用舊輸入序列、舊route、缺少`experiment_profile`及舊hard-filter argv。
-3. `strategy_filter_gate.py`與`strategy_dl_filter_gate.py`的broad exception handler雖原樣重拋，但未綁定例外名稱，不符合正式traceability meta contract。
-
-### 唯一變更
-
-- `validate_breakout_quality_strategy_adaptation_contract_case`在測試內隔離覆寫continuous profile及strategy auto欄位，直接驗證score-ranking／Selection PIT identity、CLI fixed risk與position cap；測試結束後正式Binary config保持原值。
-- `validate_dataset_cli_contract_case`將continuous流程改為隔離profile案例，並同步Binary子選單route、相對工件路徑、完整hard-filter identity及訓練後post-validation fixture。
-- 兩個研究Gate的`except Exception`改為綁定例外名稱，仍先輸出已捕捉console後原樣`raise`；錯誤處理語意不變。
-
-### 固定條件與工件需求
-
-- 正式workflow仍為`unique_group_sampling / binary_classification / hard-filter / canonical_runtime / original buy-sort`。
-- Continuous PIT ranking與strategy adaptation仍為CLI-only研究流程；runtime fixed contract沒有放寬。
-- 不修改Dataset、Label、model checkpoint、research／runtime Scores、threshold、rolling params、交易引擎或策略績效口徑。
-- 不需重訓模型、不需重新匯出Scores。
-
-### 獨立驗證
-
-- `validate_breakout_quality_strategy_adaptation_contract_case`：19／19 PASS。
-- 完整synthetic registry：242 validators、4,169 checks、0 FAIL。
-- 正式`apps/test_suite.py`依專案規定未由GPT執行；使用者套用patch後只需重跑本地formal suite，預期consistency與coverage meta quality恢復。
+- **背景／根因**：Consistency唯一失敗為synthetic suite在`validate_breakout_quality_strategy_adaptation_contract_case`中直接讀取目前正式Binary workflow；`strategy_adapt._validate_fixed_contract`正確拒絕Binary hard-filter identity，導致整個coverage synthetic suite提前中止。Meta quality的`coverage_synthetic_suite_runs_successfully`、line／branch minimum與key targets四項失敗均為同一中止事件的連鎖結果，不是實際coverage退步。
+- **修復／處置**：`validate_breakout_quality_strategy_adaptation_contract_case`在測試內隔離覆寫continuous profile及strategy auto欄位，直接驗證score-ranking／Selection PIT identity、CLI fixed risk與position cap；測試結束後正式Binary config保持原值。
+- **修復補充**：`validate_dataset_cli_contract_case`將continuous流程改為隔離profile案例，並同步Binary子選單route、相對工件路徑、完整hard-filter identity及訓練後post-validation fixture。
+- **結果／效力界線**：`IMPLEMENTED / INDEPENDENT_SYNTHETIC_PASS / LOCAL_FORMAL_RERUN_REQUIRED`
 
 ## 2026-08-04 — 9A Binary DL Hard Filter 正式 OOS 策略結果
 
@@ -3253,34 +3184,9 @@ PIT source同時傳入optimizer主process、fold session及平行workers，並�
 
 ## 2026-08-05 — 4×2 Binary DL Parameter Adaptation Formal Meta Quality 閉環
 
-### 狀態
-
-`IMPLEMENTED / FORMAL_QUICK_CONSISTENCY_CHAIN_ML_PASS / META_CHECKLIST_FIXED / LOCAL_FORMAL_RERUN_REQUIRED`
-
-### 程式與測試基準
-
-- 輸入程式ZIP：`test-branch-1_20260804_235803_1be64ec.zip`
-- 程式SHA256：`09142fb9c119bd3a59c7a86573956db8a9a5fecda9623152e15d633651a1c859`
-- Formal bundle：`to_chatgpt_bundle_20260804_235944_65c06eef.zip`
-- Bundle SHA256：`f4d7fea784bb08d47b581107554d0e36d5204ea135423363a2f9d0867787e52f`
-- Bundle結果：quick gate PASS、consistency PASS、chain checks PASS、ML smoke PASS；meta quality僅Checklist G兩項FAIL。
-
-### 根因與唯一變更
-
-- `B187`最新兩筆4×2 contract transition被附加在同日`T284`後方，違反Checklist G依日期再依ID排序。
-- `T284`另新增`DONE -> DONE`列，沒有實際狀態變更，違反收斂紀錄只能記錄真實transition的契約。
-- 本輪只將兩筆`B187` transition移回同日既有`B187`區塊，並移除`T284 DONE -> DONE` no-op列；不修改程式、Binary PIT、optimizer、Dataset、Label、model、Scores、策略參數或4×2報表。
-
-### 固定條件與結果邊界
-
-- 4種參數×DL關／開八操作點與P2／P3 optimizer實作維持不變。
-- `T284`最新有效狀態仍由既有`PARTIAL -> DONE`列表示；擴充coverage屬同一DONE契約的內容更新，不另創造狀態transition。
-- 本次只修正機械治理文件；不需重訓模型、重建Binary PIT或重跑4×2研究。
-
-### 驗證與下一步
-
-- GPT端獨立檢查須確認Checklist G排序、status chain、no-op guard、摘要映射與Markdown欄數全部通過。
-- 正式`apps/test_suite.py`依專案規定不由GPT執行；使用者套用patch後重跑本地formal suite，預期meta quality恢復PASS。
+- **問題**：Checklist G 中兩筆 `B187` transition 日期／ID 排序錯置，且 `T284` 留有無實際狀態變更的 `DONE -> DONE` 列，使 meta quality 失敗。
+- **修復**：把 `B187` 兩列移回同日正確位置，刪除 `T284` 的 no-op transition；實際有效狀態仍由既有 `PARTIAL -> DONE` 表示。
+- **結果／效力界線**：`IMPLEMENTED / FORMAL_QUICK_CONSISTENCY_CHAIN_ML_PASS / META_CHECKLIST_FIXED / LOCAL_FORMAL_RERUN_REQUIRED`；只修 Checklist，未改 4×2 研究、模型、PIT 或策略工件，無須重訓或重跑研究。
 
 ## 2026-08-05 — 4×2 Binary DL Result Source-Identity Correction
 
@@ -3742,125 +3648,31 @@ Label schema與已成交資料尾端終局已變更，既有trade-path Dataset�
 
 ## 2026-08-06 — TP1 Binary PIT mixed-label前置失敗修正
 
-### 狀態
-
-`IMPLEMENTED / P3_PREPARATION_RERUN_REQUIRED / DATASET_LABEL_MODEL_REUSE / PERFORMANCE_RESULT_PENDING`
-
-### 程式與錯誤基準
-
-- 使用者ZIP：`test-branch-1_20260806_175431_9167541.zip`
-- ZIP SHA256：`8db2f114c86c96623d9492413c31a3c006806ba9e3cec81189061059f83925aa`
-- 使用者已由`apps/strategy_compare.py`成功自動匯出TP1 forward-OOS scores；後續重建`Min-DL-TP1 ROOS`時，Binary PIT前置於`continuous ranker發現同group混合binary label`停止，因此尚未執行C1～C6績效比較。
-
-### 根因
-
-`tools/filters/breakout_quality/build_binary_point_in_time_scores.py`錯誤重用continuous-ranker的`_group_table()`。該helper要求同一feature group的所有event rows具有完全相同Label；但TP1 trade-path Dataset刻意保留同一`ticker/date`下的一筆teacher-active PASS／REJECT，以及其他`inactive_high_len_for_teacher` EXCLUDED rows。EXCLUDED並非binary target，不應被判定為PASS／REJECT衝突。
-
-### 唯一修正
-
-- Binary PIT改用專用group representative契約，不再依賴continuous-ranker helper。
-- 每個feature group優先選擇第一筆eligible PASS／REJECT作為訓練代表；若沒有eligible binary row，使用第一筆event row並標為非target。
-- EXCLUDED rows不再造成mixed-label失敗；若同group真正同時存在互相衝突的eligible PASS與REJECT，仍立即fail-fast。
-- Binary PIT schema升級為version 2，fold fingerprint與manifest記錄新的group representative contract，避免重用舊語意工件。
-- Binary DL參數適應synthetic contract新增TP1 PASS／REJECT＋EXCLUDED group案例，並將Binary PIT builder納入該validator的impacted modules。
-
-### Dataset／Label／模型影響
-
-不重建Dataset、不重新Label、不重新訓練TP1模型、不改threshold、forward-OOS scores或交易語意。使用者剛匯出的正式forward scores可直接沿用；只需重新由策略比較選單執行目前設定，程式會重建Binary PIT、接續P3 optimizer並在工件完整後執行C1～C6。
-
-### 採用判定與下一步
-
-本輪只關閉前置工件builder錯誤，尚無新策略績效結果，不得據此判定TP1有效。套用修正後由`python apps/strategy_compare.py`選擇`[1/Enter] 執行目前比較設定`；既有forward scores應顯示REUSE，Binary PIT與Min-DL參數依config自動建立／接續，完成後再產生正式比較報表。
+- **背景／根因**：`tools/filters/breakout_quality/build_binary_point_in_time_scores.py`錯誤重用continuous-ranker的`_group_table()`。該helper要求同一feature group的所有event rows具有完全相同Label；但TP1 trade-path Dataset刻意保留同一`ticker/date`下的一筆teacher-active PASS／REJECT，以及其他`inactive_high_len_for_teacher` EXCLUDED rows。EXCLUDED並非binary target，不應被判定為PASS／REJECT衝突。
+- **修復／處置**：Binary PIT改用專用group representative契約，不再依賴continuous-ranker helper。
+- **修復補充**：每個feature group優先選擇第一筆eligible PASS／REJECT作為訓練代表；若沒有eligible binary row，使用第一筆event row並標為非target。
+- **結果／效力界線**：`IMPLEMENTED / P3_PREPARATION_RERUN_REQUIRED / DATASET_LABEL_MODEL_REUSE / PERFORMANCE_RESULT_PENDING`
 
 ## 2026-08-06 — TP1 Binary PIT historical Selection coverage contract修正
 
-### 狀態
-
-`IMPLEMENTED / P3_PREPARATION_RERUN_REQUIRED / DATASET_LABEL_MODEL_REUSE / PERFORMANCE_RESULT_PENDING`
-
-### 程式與錯誤基準
-
-- 使用者ZIP：`test-branch-1_20260806_180934_7c85422.zip`
-- ZIP SHA256：`a20fb6f2bc38d0edb90f1cd7f33dc09f3c86a8b90242d19e0be84cb7e5e8d0e4`
-- 使用者已成功建立Binary PIT v2，合法score期間為`2016-03-01～2026-03-02`；P3前置隨後因validator要求完整覆蓋optimizer歷史Selection `2011-01-01～2025-12-31`而停止，尚未執行P3 optimizer或C1～C6績效比較。
-
-### 根因
-
-正式Binary PIT runtime原本就把score開始日前候選全部pass-through，語意等同DL-off；score期間內才依PIT score啟用hard filter，score尾端之後若出現候選則fail-fast。舊P3 preflight卻額外要求Binary PIT從120個月Selection最早日開始100%覆蓋，與runtime SSOT矛盾，也要求模型在尚無足夠Inner Train／Validation資料時產生不可能的歷史分數。
-
-### 唯一修正
-
-- P3不再要求不可能的完整歷史coverage；Binary PIT必須與optimizer Selection有實際重疊，且score尾端必須至少覆蓋最新Selection結束日。
-- PIT開始日前固定採`pass_through_dl_off`；PIT期間內無對應候選分數維持既有`conservative_reject`；PIT尾端過期維持`fail_on_candidate`。
-- 逐rolling fold輸出`bootstrap_fallback_only／partial_score_history／full_score_history`、Selection期間、PIT重疊期間與calendar coverage；本次`2016-03-01`起點相對2021～2026六個120月Selection folds皆為partial history，coverage約48.4%逐年提高至98.4%，加權約73.4%。
-- coverage policy、逐fold audit與score identity一併進入P3 runtime identity；P3目錄新增`binary_pit_optimizer_coverage.csv`，`rolling_preflight.json`與`rolling_optimizer_summary.json`保存同一coverage契約。
-- Binary PIT／TP1 Dataset、Label、模型權重、threshold、forward scores、交易規則與Full／Min ROOS均不修改。
-
-### 採用判定與下一步
-
-此修正只關閉前置契約矛盾，不能視為TP1有效。套用後由`apps/strategy_compare.py`選擇`[1/Enter] 執行目前比較設定`；既有Binary PIT應直接重用，P3 optimizer依config建立或接續，完成後才執行C1～C6並取得正式績效結果。
+- **背景／根因**：正式Binary PIT runtime原本就把score開始日前候選全部pass-through，語意等同DL-off；score期間內才依PIT score啟用hard filter，score尾端之後若出現候選則fail-fast。舊P3 preflight卻額外要求Binary PIT從120個月Selection最早日開始100%覆蓋，與runtime SSOT矛盾，也要求模型在尚無足夠Inner Train／Validation資料時產生不可能的歷史分數。
+- **修復／處置**：P3不再要求不可能的完整歷史coverage；Binary PIT必須與optimizer Selection有實際重疊，且score尾端必須至少覆蓋最新Selection結束日。
+- **修復補充**：PIT開始日前固定採`pass_through_dl_off`；PIT期間內無對應候選分數維持既有`conservative_reject`；PIT尾端過期維持`fail_on_candidate`。
+- **結果／效力界線**：`IMPLEMENTED / P3_PREPARATION_RERUN_REQUIRED / DATASET_LABEL_MODEL_REUSE / PERFORMANCE_RESULT_PENDING`
 
 ## 2026-08-06 — Strategy Compare前置完成後status contract修正
 
-### 狀態
-
-`IMPLEMENTED / C1_C6_REPLAY_RERUN_REQUIRED / P3_ARTIFACT_REUSE / PERFORMANCE_RESULT_PENDING`
-
-### 程式與錯誤基準
-
-- 使用者ZIP：`test-branch-1_20260806_183741_032ae37.zip`
-- ZIP SHA256：`2824d9d5d48422a81f9c0f8c88e71a3fbd80b872c0d96166e85e1882933239f4`
-- 使用者已成功完成Binary PIT與Min-DL參數前置，並輸出P3相關計畫／報表；其後正式C1～C6 replay尚未開始，即於`filters/breakout_quality/strategy_comparison.py`建立run directory前發生`KeyError: config_fingerprint`。
-
-### 根因
-
-`run_strategy_comparison()`最初取得的是正式orchestration status，包含`config_fingerprint`、`artifact_identities`與`resolved_parameter_paths`。當前置builder完成後，程式卻直接採用`strategy_compare_preparation.collect_artifact_status()`回傳的低階readiness payload；該payload刻意不負責config fingerprint，因此覆蓋正式status contract，直到後續讀取`status["config_fingerprint"]`才失敗。
-
-### 唯一修正
-
-- 前置builder完成後，不再把低階preparation payload直接當成正式orchestration status。
-- 新增正式post-preparation refresh：透過`filters/breakout_quality/strategy_comparison.collect_artifact_status()`重新計算目前工件identity與最終config fingerprint，並恢復resolved parameter paths。
-- refresh後必須同時具備`config_fingerprint`、`artifact_identities`、`resolved_parameter_paths`與`preparation_plan`，且整體狀態必須為`READY`；缺欄位或仍非READY時在portfolio replay前以可追蹤RuntimeError停止，不再出現延遲KeyError。
-- 保留首次執行計畫與requested fingerprint，正式輸出仍同時記錄requested／final preparation plan及前後fingerprint。
-- `validate_strategy_compare_config_driven_app_contract_case`新增直接post-preparation狀態交接案例，覆蓋完整欄位恢復與缺少fingerprint拒絕。
-
-### Dataset／Label／模型／參數影響
-
-不重建Dataset、不重新Label、不重新訓練TP1模型、不改threshold、Binary PIT、forward scores、交易規則或帳務。使用者本輪已完成的P3／Min-DL工件可直接重用；本次只修正前置完成後的狀態交接與輸出identity閉環。
-
-### 採用判定與下一步
-
-尚未取得C1～C6實際績效，不得判定TP1有效或無效。套用修正後由`python apps/strategy_compare.py`進入選單並執行目前比較設定；若P3工件identity完整，計畫應顯示REUSE並直接進入C1～C6 replay與正式報表。
+- **背景／根因**：`run_strategy_comparison()`最初取得的是正式orchestration status，包含`config_fingerprint`、`artifact_identities`與`resolved_parameter_paths`。當前置builder完成後，程式卻直接採用`strategy_compare_preparation.collect_artifact_status()`回傳的低階readiness payload；該payload刻意不負責config fingerprint，因此覆蓋正式status contract，直到後續讀取`status["config_fingerprint"]`才失敗。
+- **修復／處置**：前置builder完成後，不再把低階preparation payload直接當成正式orchestration status。
+- **修復補充**：新增正式post-preparation refresh：透過`filters/breakout_quality/strategy_comparison.collect_artifact_status()`重新計算目前工件identity與最終config fingerprint，並恢復resolved parameter paths。
+- **結果／效力界線**：`IMPLEMENTED / C1_C6_REPLAY_RERUN_REQUIRED / P3_ARTIFACT_REUSE / PERFORMANCE_RESULT_PENDING`
 
 ## 2026-08-06 — Strategy Compare execution-pair runtime contract修正
 
-### 狀態
-
-`IMPLEMENTED / C1_C6_REPLAY_RERUN_REQUIRED / ALL_PREREQUISITE_ARTIFACTS_REUSE / PERFORMANCE_RESULT_PENDING`
-
-### 程式與錯誤基準
-
-- 使用者ZIP：`test-branch-1_20260806_195324_e5bfab8.zip`
-- ZIP SHA256：`0752a7163153bd168d7cea473409a787d53f02704d0596c485604735bf8baf88`
-- 使用者狀態頁與執行計畫均為`READY`，TP1 model／manifest／forward scores、Full ROOS、Min ROOS與Min-DL-TP1 ROOS皆可重用；按下執行後，在第一個正式pair replay前發生`NameError: _execution_pairs is not defined`，因此尚未產生C1～C6績效結果。
-
-### 根因
-
-config-driven策略比較重構後，`run_strategy_comparison()`保留對`_execution_pairs(settings)`的呼叫，但正式orchestration模組遺漏該helper本體。既有validator只驗證config、前置計畫、status refresh與fingerprint，沒有實際建立execution pairs或走完整mocked replay orchestration，因此compile／import與前置契約均通過，直到真實READY路徑才發生NameError。
-
-### 唯一修正
-
-- 在`filters/breakout_quality/strategy_comparison.py`新增通用`_execution_pairs()`，只依目前啟用arms，以config順序建立每個`param_source／rule_policy`的canonical DL-off／DL-on pair。
-- runtime再次檢查同group不得重複DL狀態、不得缺少off／on任一側，且DL-on arm必須有`dl_id`；停用arm不會被隱性執行。
-- `validate_strategy_compare_config_driven_app_contract_case`新增兩層直接回歸：一是驗證目前config產生三個正確pair；二是mock正式`run_comparison()`走完整READY orchestration，確認每個pair各執行一次、六個enabled arms皆進入正式payload並成功寫出報表／JSON／manifest。
-
-### Dataset／Label／模型／參數影響
-
-不重建Dataset、不重新Label、不重新訓練TP1模型、不改threshold、Binary PIT、forward scores、交易規則、帳務、Full ROOS、Min ROOS或Min-DL-TP1 ROOS。使用者已完成的所有前置工件可直接重用；本輪只修正正式比較pair建立與測試覆蓋。
-
-### 採用判定與下一步
-
-尚未取得C1～C6實際績效，不得判定TP1有效或無效。套用修正後由`python apps/strategy_compare.py`進入選單並執行目前比較設定；計畫應維持全部`REUSE`，隨後直接進入三個canonical pair replay與正式報表。
+- **背景／根因**：config-driven策略比較重構後，`run_strategy_comparison()`保留對`_execution_pairs(settings)`的呼叫，但正式orchestration模組遺漏該helper本體。既有validator只驗證config、前置計畫、status refresh與fingerprint，沒有實際建立execution pairs或走完整mocked replay orchestration，因此compile／import與前置契約均通過，直到真實READY路徑才發生NameError。
+- **修復／處置**：在`filters/breakout_quality/strategy_comparison.py`新增通用`_execution_pairs()`，只依目前啟用arms，以config順序建立每個`param_source／rule_policy`的canonical DL-off／DL-on pair。
+- **修復補充**：runtime再次檢查同group不得重複DL狀態、不得缺少off／on任一側，且DL-on arm必須有`dl_id`；停用arm不會被隱性執行。
+- **結果／效力界線**：`IMPLEMENTED / C1_C6_REPLAY_RERUN_REQUIRED / ALL_PREREQUISITE_ARTIFACTS_REUSE / PERFORMANCE_RESULT_PENDING`
 
 ## 2026-08-06 — Strategy Compare Min ROOS forward-source與期間coverage preflight修正
 
@@ -4231,30 +4043,9 @@ Resource-aware盤前診斷：C11為`DL選股131日 / 資金利用優先563日 / 
 
 ## 2026-08-07 — Audit framework formal double-check例外契約修正
 
-### 狀態
-
-`AUDIT_FRAMEWORK_FORMAL_BLOCKER_FIXED / RESULT_PENDING`
-
-### Formal bundle根因
-
-使用者在`test-branch-1_20260807_205701_5d16129.zip`執行正式suite後，quick gate／chain checks／ml smoke通過；consistency唯一FAIL為`META_SPECIFIC_PASS_ONLY_EXCEPTION_TRACEABILITY_CONTRACT`，指出`tools/audit/breakout_quality/pass_quality.py`的`_json_native()`使用`except (TypeError, ValueError): pass`。meta quality的`coverage_synthetic_suite_runs_successfully`亦僅因同一synthetic FAIL連帶失敗；coverage本身不是不足。
-
-### 唯一修正
-
-`_json_native()`在`pd.isna(value)`無法判定特殊物件時，明確`return value`，保留原本「無法判空值就交給後續序列化」的control-flow語意，不再使用pass-only specific exception handler。Audit資料來源、PASS判定、candidate validity／DL quality／allocation契約、分組、Label／Realized R口徑、strategy runtime與模型全部不變。
-
-### Dataset／Label／模型重建需求
-
-- Dataset：不重建。
-- Label：不重建。
-- A9模型／threshold：不修改、不重訓。
-- Strategy replay：不重跑。
-- Audit真實資料結果：仍為`RESULT_PENDING`。
-
-### 下一步
-
-套用修正後以本地正式`apps/test_suite.py`做double check；預期consistency的specific pass-only exception synthetic與meta quality的coverage synthetic-run gate恢復PASS。之後才執行`[2] Audit／診斷`取得A9 PASS Quality正式結果。
-
+- **背景／根因**：使用者在`test-branch-1_20260807_205701_5d16129.zip`執行正式suite後，quick gate／chain checks／ml smoke通過；consistency唯一FAIL為`META_SPECIFIC_PASS_ONLY_EXCEPTION_TRACEABILITY_CONTRACT`，指出`tools/audit/breakout_quality/pass_quality.py`的`_json_native()`使用`except (TypeError, ValueError): pass`。meta quality的`coverage_synthetic_suite_runs_successfully`亦僅因同一synthetic FAIL連帶失敗；coverage本身不是不足。
+- **修復／處置**：`_json_native()`在`pd.isna(value)`無法判定特殊物件時，明確`return value`，保留原本「無法判空值就交給後續序列化」的control-flow語意，不再使用pass-only specific exception handler。Audit資料來源、PASS判定、candidate validity／DL quality／allocation契約、分組、Label／Realized R口徑、strategy runtime與模型全部不變。
+- **結果／效力界線**：`AUDIT_FRAMEWORK_FORMAL_BLOCKER_FIXED / RESULT_PENDING`
 
 ## 2026-08-07 — A9 PASS Quality正式Audit結果：Score整體單調性弱、Age cutoff不成立、下一步檢查PASS persistence amplification
 
@@ -4842,37 +4633,9 @@ MR-12A為模型研究CLI-only，先建立／確認Target，再訓練：
 
 ## 2026-08-08 — MR-12A formal synthetic isolation blocker修正
 
-### 狀態
-
-`MR-12A / DL-CONT12A / SR-C15 scientific semantics unchanged`；本輪只修正式synthetic validator污染。
-
-### 正式bundle
-
-- 使用者程式ZIP：`test-branch-1_20260808_010913_f46cb91.zip`；SHA256=`0b1b6d4bc2d5947247d954ed78197aeb6da057e47fe6c0b2eda6a3648657eeb2`。
-- Formal bundle：`to_chatgpt_bundle_20260808_011057_1aa1a900.zip`；SHA256=`c1890dea909fed18c4b2c7bd24408c105260c389d9cc12f996a8097a2c5d29da`。
-- consistency：2 FAIL；meta quality唯一FAIL=`coverage_synthetic_suite_runs_successfully`，由相同2個synthetic FAIL連帶造成。Coverage本身Line=`79.32%`、Branch=`61.54%`，均高於正式門檻。
-
-### Root cause
-
-MR-12A新增`STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE`時，`tools/validate/synthetic_breakout_quality_cases.py`有7處把該常數誤插在既有`STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE`之後。其中5處位於`patch.object(...)`，成為第4個positional `spec` argument；另外2處污染expected tuple。因`patch.object`實際仍只把workflow profile設為PASS-only，兩個expected卻多期待all-event profile，正式suite因此得到2個FAIL：
-
-- `strategy_filter_gate_keeps_continuous_ranker_identity_when_main_workflow_is_binary`
-- `strategy_adaptation_uses_isolated_continuous_workflow_without_mutating_config`
-
-這是synthetic test patch污染；MR-12A profile、CONT12A artifact contract、C15 runtime及strategy config本身沒有變更。
-
-### 修正
-
-- 移除全部7處相鄰誤插的all-event profile常數。
-- 既有PASS-only isolated workflow tests恢復單一`strategy_aligned_no_time_pass_magnitude_mse` override；MR-12A all-event測試仍由專用`validate_breakout_quality_all_event_no_time_ranker_contract_case`獨立覆蓋。
-- 獨立AST檢查確認該synthetic檔內`patch.object`不存在超過3個positional arguments。
-- 直接regression確認strategy filter gate預設identity仍為PASS-only continuous profile，strategy adaptation隔離override仍解析`score-ranking / selection_point_in_time`且離開context後不修改正式config。
-
-### 研究語意不變
-
-`MR-12A`仍為`IMPLEMENTED / ARTIFACT_PENDING`；`DL-CONT12A`仍為`ARTIFACT_PENDING`；`SR-C15`仍為`IMPLEMENTED / RESULT_PENDING`。本輪不訓練模型、不改Target、scope、architecture、resource gate或comparison matrix。
-
-
+- **問題**：MR-12A 新增 all-event profile 後，synthetic 中 7 處把該常數錯插入既有 PASS-only `patch.object` 與 expected tuple，導致兩項合成測試失敗；production scientific profile 不受影響。
+- **修復**：移除這 7 處插入，PASS-only 測試恢復獨立 override；MR-12A all-event 仍由專用 synthetic 覆蓋。
+- **效力界線**：`MR-12A / DL-CONT12A / SR-C15` scientific semantics 不變，仍屬 implementation／結果待取得；未重新訓練，也未取得新策略結果。
 
 ## 2026-08-08 — MR-12A / SR-C15 正式結果：All-event Continuous在相同capital-first runtime下明顯優於PASS-only，但尚不直接promote
 
@@ -5021,32 +4784,10 @@ metadata固定標示：`read_only=true`、`portfolio_replay_executed=false`、`t
 
 ## 2026-08-08 — Project-wide Audit migration formal-regression修正
 
-### 狀態
-
-`INFRASTRUCTURE_FIX / AUD-c15-strategy-attribution RESULT_PENDING`。
-
-### 程式基準
-
-- 使用者ZIP：`test-branch-1_20260808_115630_c38367d.zip`
-- SHA256：`360e9acfb464b7f8b14ba86a2fe8983605887bd15a04c3de69c885207781d1f7`
-- 本輪開始前已依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`。
-
-### 本機formal結果與根因
-
-使用者回報quick gate只有`dataset_cli::cli.py::--dataset bad`失敗，consistency與meta quality則因`missing_summary_file`失敗。獨立重現確認`tools/validate/cli.py --dataset bad`尚未進入dataset profile validation，就在lazy載入consistency synthetic時碰到Audit migration後未同步的legacy import：`tools.filters.breakout_quality.common`。同一synthetic檔另殘留已刪除的`export_scores`與`strategy_compare`舊入口，因此合法consistency執行也會在建立summary前中止；meta quality後續載入同一synthetic registry亦受影響。
-
-### 修正
-
-1. `tools/validate/synthetic_breakout_quality_cases.py`三個legacy引用改為canonical正式來源：`filters.breakout_quality.workflow_io`、`filters.breakout_quality.export_scores`、`filters.breakout_quality.strategy_compare_engine`；不恢復任何compatibility wrapper。
-2. `tools/validate/cli.py`把`--dataset`值的合法性驗證移至lazy import consistency implementation之前；非法dataset、缺值與空值皆在CLI boundary fail-fast，不再受synthetic/import狀態干擾。
-3. `AUD-c15-strategy-attribution`identity、runtime、模型、策略結果與`IMPLEMENTED / RESULT_PENDING`狀態均未改變；本輪沒有產生新的研究結果。
-
-### 獨立驗證
-
-- `--dataset bad`回傳1並輸出`不支援的資料集模式`；`--dataset`缺值與`--dataset=`空值亦分別以預期訊息fail-fast。
-- `tools.validate.synthetic_cases`完整import成功；所有本輪已刪除Breakout Quality legacy module的AST import引用=0。
-- 全專案282個Python檔AST parse與`compileall`通過；bare except=0、pass-only exception handler=0、internal import cycle=0、`core/filters → tools.audit`=0、legacy wrapper=0。
-- `apps/test_suite.py`僅做靜態可信度檢查，未由GPT執行；formal結果仍須由使用者本機重新執行確認。
+- **背景／根因**：使用者回報quick gate只有`dataset_cli::cli.py::--dataset bad`失敗，consistency與meta quality則因`missing_summary_file`失敗。獨立重現確認`tools/validate/cli.py --dataset bad`尚未進入dataset profile validation，就在lazy載入consistency synthetic時碰到Audit migration後未同步的legacy import：`tools.filters.breakout_quality.common`。同一synthetic檔另殘留已刪除的`export_scores`與`strategy_compare`舊入口，因此合法consistency執行也會在建立summary前中止；meta quality後續載入同一synthetic registry亦受影響。
+- **修復／處置**：`tools/validate/synthetic_breakout_quality_cases.py`三個legacy引用改為canonical正式來源：`filters.breakout_quality.workflow_io`、`filters.breakout_quality.export_scores`、`filters.breakout_quality.strategy_compare_engine`；不恢復任何compatibility wrapper。
+- **修復補充**：`tools/validate/cli.py`把`--dataset`值的合法性驗證移至lazy import consistency implementation之前；非法dataset、缺值與空值皆在CLI boundary fail-fast，不再受synthetic/import狀態干擾。
+- **結果／效力界線**：`INFRASTRUCTURE_FIX / AUD-c15-strategy-attribution RESULT_PENDING`。
 
 ## 2026-08-08 — Project-wide Audit migration consistency／coverage synthetic閉環修正
 
@@ -5107,35 +4848,9 @@ Audit migration後，production imports已改到`tools/audit/`，但`tools/valid
 
 ## 2026-08-08 — Formal synthetic metadata／Workbench documentation同步修正
 
-### 狀態
-
-`INFRASTRUCTURE_FIX / AUD-c15-strategy-attribution RESULT_PENDING`。
-
-### 程式基準
-
-- 使用者ZIP：`test-branch-1_20260808_122638_d04e5a1.zip`
-- SHA256：`7cdc074ea0f577d5ec8f71450a87cb9f45675fe55816775056bf3bc0db0d4507`
-- Formal bundle：`to_chatgpt_bundle_20260808_122824_661b56ee.zip`
-- 本輪開始前已依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`。
-
-### 使用者本機formal結果
-
-- quick gate：PASS。
-- consistency：FAIL 2；真實股票FAIL=0，兩個FAIL皆為synthetic/meta contract。
-- chain checks：PASS。
-- ml smoke：PASS。
-- meta quality：只剩`coverage_synthetic_suite_runs_successfully` FAIL；line=`79.32%`、branch=`61.44%`與key targets皆已通過。
-
-`coverage_run_info.json`顯示coverage synthetic已完整執行247個case，但`synthetic_fail_count=2`，與consistency兩個meta FAIL完全一致。因此本輪不修改coverage threshold或production runtime。
-
-### 根因與修正
-
-1. `META_GUI_WORKBENCH_DOCUMENTATION_SYNC`：Workbench實作與`doc/CMD.md`均已明確使用`交易明細`、`Console`兩個獨立tab；`doc/ARCHITECTURE.md`的`tools/workbench_ui`段亦已有相同描述，但`正式入口`的`apps/workbench.py`列未同步，造成跨文件契約FAIL。修正為在正式入口列明確補上`K 線檢視中的交易明細與 Console 改以獨立分頁承接`；不放寬validator。
-2. `META_SYNTHETIC_REGISTRY_METADATA`：`validate_breakout_quality_binary_dl_param_adaptation_contract_case`的`impacted_modules`將canonical `filters/breakout_quality/strategy_param_training.py`重複登記兩次。只移除重複metadata entry，不改validator與production code。
-
-### 研究狀態
-
-`MR-12A`、`DL-CONT12A`、`SR-C15`與`AUD-c15-strategy-attribution`的identity、策略結果與研究判定均不變；`AUD-c15-strategy-attribution`仍為`IMPLEMENTED / RESULT_PENDING`。本輪只修formal synthetic metadata與文件同步問題。
+- **背景／根因**：`META_GUI_WORKBENCH_DOCUMENTATION_SYNC`：Workbench實作與`doc/CMD.md`均已明確使用`交易明細`、`Console`兩個獨立tab；`doc/ARCHITECTURE.md`的`tools/workbench_ui`段亦已有相同描述，但`正式入口`的`apps/workbench.py`列未同步，造成跨文件契約FAIL。修正為在正式入口列明確補上`K 線檢視中的交易明細與 Console 改以獨立分頁承接`；不放寬validator。
+- **修復補充**：`META_SYNTHETIC_REGISTRY_METADATA`：`validate_breakout_quality_binary_dl_param_adaptation_contract_case`的`impacted_modules`將canonical `filters/breakout_quality/strategy_param_training.py`重複登記兩次。只移除重複metadata entry，不改validator與production code。
+- **結果／效力界線**：`INFRASTRUCTURE_FIX / AUD-c15-strategy-attribution RESULT_PENDING`。
 
 ## 2026-08-08 — AUD-c15-strategy-attribution正式結果：C15全期優勢由2024 over-compensate非2024劣勢，機制以portfolio geometry為主
 
@@ -5593,35 +5308,10 @@ Manifest/report明確保存pair scope、pair weighting、margin、whole-date bat
 
 ## 2026-08-08 — MR-12B formal consistency CLI regression closure
 
-### 狀態
-
-`MR-12B IMPLEMENTED / RESULT_PENDING` 不變；本輪只修formal synthetic CLI contract，未修改pairwise loss、whole-date batching、artifact semantics、C17/C18 selector或C19/C20策略矩陣。
-
-### 使用者正式bundle
-
-- 程式基準：`test-branch-1_20260808_162301_1defb21.zip`，SHA256=`d53c626ff7f8a34e921ed8eb3a7c8dba42ea4980726846b9a65c104fb878257b`。
-- Debug bundle：`to_chatgpt_bundle_20260808_162439_7a2ae34f.zip`，SHA256=`439a04c6af18538a8901b6e3428189e8deb73c5c815810f98847f2ae93797f4e`。
-- formal摘要：quick gate PASS、chain checks PASS、ml smoke PASS；consistency執行約91秒後因未產生summary被wrapper標記`missing_summary_file`；meta quality FAIL為`coverage_synthetic_suite_runs_successfully`、`coverage_key_targets_hit`與`performance_required_step_summaries_present`三項。
-
-### 根因
-
-`consistency.log`顯示真正第一個例外發生於`validate_dataset_cli_contract_case`：MR-12B實作後Continuous模型子選單正式將`[1/Enter]`定義為「訓練目前模型 → forward-OOS模型報表」，原synthetic仍使用歷史輸入`[Enter main, Enter submenu, 0]`並期待PIT route。第二個`0`實際被full-train確認提示消耗，返回主選單後mock input耗盡而拋`StopIteration`，因此`tools/validate/cli.py`未完成summary輸出。另同一validator的Workflow status expected仍硬編`unique_group_sampling / binary_classification`與Binary artifact表，與目前config-driven MR-12B continuous workflow不符。
-
-### 修正
-
-1. PIT route synthetic改為明確輸入`2`，確認後再返回主選單；不再依子選單預設項的歷史位置碰巧路由。
-2. 新增獨立案例直接驗證Continuous模型子選單`Enter`會進`_interactive_continuous_full_train`，因此full-train與PIT兩條正式入口都有直接contract。
-3. Missing-dataset PIT preparation案例同樣改為明確`2` route，保留`build-dataset → prepare-continuous-target → build-point-in-time-scores → audit-point-in-time-scores`原契約。
-4. Workflow status測項改由當前`get_breakout_quality_workflow_settings()`派生profile／training objective／scope；Binary與Continuous各驗自己的正式status surface，兩者共同禁止使用者本機絕對路徑。validator不再把目前config某個歷史值硬編成唯一合法答案。
-
-### 獨立驗證
-
-- `validate_dataset_cli_contract_case`：171/171 PASS。
-- MR-12B pairwise direct contract：7/7 PASS。
-- MR-12A regression：4/4 PASS。
-- PIT builder：22/22 PASS。
-- config-driven Strategy Compare：33/33 PASS。
-- 本輪未執行`apps/test_suite.py`或formal consistency/meta-quality step；正式閉環待使用者套patch後以單一正式入口重跑。
+- **背景／根因**：`consistency.log`顯示真正第一個例外發生於`validate_dataset_cli_contract_case`：MR-12B實作後Continuous模型子選單正式將`[1/Enter]`定義為「訓練目前模型 → forward-OOS模型報表」，原synthetic仍使用歷史輸入`[Enter main, Enter submenu, 0]`並期待PIT route。第二個`0`實際被full-train確認提示消耗，返回主選單後mock input耗盡而拋`StopIteration`，因此`tools/validate/cli.py`未完成summary輸出。另同一validator的Workflow status expected仍硬編`unique_group_sampling / binary_classification`與Binary artifact表，與目前config-driven MR-12B continuous workflow不符。
+- **修復／處置**：PIT route synthetic改為明確輸入`2`，確認後再返回主選單；不再依子選單預設項的歷史位置碰巧路由。
+- **修復補充**：新增獨立案例直接驗證Continuous模型子選單`Enter`會進`_interactive_continuous_full_train`，因此full-train與PIT兩條正式入口都有直接contract。
+- **結果／效力界線**：`MR-12B IMPLEMENTED / RESULT_PENDING` 不變；本輪只修formal synthetic CLI contract，未修改pairwise loss、whole-date batching、artifact semantics、C17/C18 selector或C19/C20策略矩陣。
 
 ## 2026-08-08 — Strategy Compare completed-pair／shared-baseline reuse infrastructure
 
@@ -5664,28 +5354,9 @@ C19與C20都重用同一C3 baseline；因此本輪只需執行兩條新的MR-12B
 
 ## 2026-08-08 — MR-12B formal consistency：4×2 validator config-sensitive profile closure
 
-### 狀態
-
-`MR-12B / DL-CONT12B / SR-C19 / SR-C20 IMPLEMENTED / RESULT_PENDING`不變；本輪只修formal synthetic expected，不修改pairwise loss、whole-date batching、artifact semantics、Strategy Compare cache、C17/C18 selector或C19/C20策略矩陣。
-
-### 使用者正式bundle
-
-- 程式基準：`test-branch-1_20260808_170549_2bd495e.zip`，SHA256=`9ec5af4554fd986fcefd9591c2687665d393c6f0c82edafaf767cf52468f233b`。
-- Debug bundle：`to_chatgpt_bundle_20260808_170738_8d95d831.zip`，SHA256=`3fd1670b7cf405ad481c4974cd36b518433a6cdae700af195ec087c888b2e1ef`。
-- formal摘要：quick gate PASS、chain checks PASS、ml smoke PASS；consistency FAIL僅1項；meta quality只剩`coverage_synthetic_suite_runs_successfully` FAIL。
-
-### 根因
-
-`consistency_failures_20260808_170733.csv`唯一失敗為`BREAKOUT_QUALITY_BINARY_DL_PARAM_ADAPTATION / binary_dl_four_by_two_risk_only_fold_contract`：validator expected tuple最後一欄固定為歷史`unique_group_sampling`，但`strategy_param_training._parse_args([])`依法讀取目前workflow設定，MR-12B active profile為`strategy_aligned_no_time_all_event_pairwise`。Runtime／parser行為正確，錯誤在synthetic把`config/`目前值硬編為唯一合法答案，違反`PROJECT_SETTINGS C8`。meta-quality coverage failure只是同一synthetic suite returncode=1的下游結果。
-
-### 修正
-
-4×2 risk-only synthetic先獨立讀取`get_breakout_quality_workflow_settings()`，expected profile改用`workflow_settings.experiment_profile`，再與`parse_dl_param_adapt_args([]).experiment_profile`比較；因此仍可攔截parser default未忠實跟隨config，但不限制使用者目前必須使用特定profile。`RISK_SEARCH_FIELDS`、P2/P3 DL off/on、optional filters all-off、all-rule filters all-off與fold runtime override等其餘contract維持exact比較。
-
-### GPT獨立驗證
-
-`validate_breakout_quality_binary_dl_param_adaptation_contract_case`直接執行9/9 PASS。另掃描`tools/validate/`內其餘`unique_group_sampling`引用，保留明確隔離的歷史／固定profile案例，不把合法固定fixture誤改為動態config。GPT未執行`apps/test_suite.py`或formal consistency/meta-quality step；正式閉環待使用者套patch後以單一正式入口重跑。
-
+- **背景／根因**：`consistency_failures_20260808_170733.csv`唯一失敗為`BREAKOUT_QUALITY_BINARY_DL_PARAM_ADAPTATION / binary_dl_four_by_two_risk_only_fold_contract`：validator expected tuple最後一欄固定為歷史`unique_group_sampling`，但`strategy_param_training._parse_args([])`依法讀取目前workflow設定，MR-12B active profile為`strategy_aligned_no_time_all_event_pairwise`。Runtime／parser行為正確，錯誤在synthetic把`config/`目前值硬編為唯一合法答案，違反`PROJECT_SETTINGS C8`。meta-quality coverage failure只是同一synthetic suite returncode=1的下游結果。
+- **修復／處置**：4×2 risk-only synthetic先獨立讀取`get_breakout_quality_workflow_settings()`，expected profile改用`workflow_settings.experiment_profile`，再與`parse_dl_param_adapt_args([]).experiment_profile`比較；因此仍可攔截parser default未忠實跟隨config，但不限制使用者目前必須使用特定profile。`RISK_SEARCH_FIELDS`、P2/P3 DL off/on、optional filters all-off、all-rule filters all-off與fold runtime override等其餘contract維持exact比較。
+- **結果／效力界線**：`MR-12B / DL-CONT12B / SR-C19 / SR-C20 IMPLEMENTED / RESULT_PENDING`不變；本輪只修formal synthetic expected，不修改pairwise loss、whole-date batching、artifact semantics、Strategy Compare cache、C17/C18 selector或C19/C20策略矩陣。
 
 ## 2026-08-08 — Breakout Quality策略層正式輸出簡易報表契約
 
@@ -5851,41 +5522,10 @@ Infrastructure completed；不占用新的`MR-*`／`DL-*`／`SR-C*`／`AUD-*` id
 
 ## 2026-08-08 — Research單一入口 formal consistency 閉環修正
 
-### 狀態
-
-Infrastructure fix completed；不占用新的`MR-*`／`DL-*`／`SR-C*`／`AUD-*` identity，Registry scientific identity與目前model／selector判定不變。
-
-### 程式與formal bundle基準
-
-- 使用者正式suite後ZIP：`test-branch-1_20260808_191745_a497f1c.zip`
-- ZIP SHA256：`1bc4f037f27f31aae40fb7121fc956c5ea1777165a97c4454d7f5dbb4d6050d5`
-- Formal bundle：`to_chatgpt_bundle_20260808_191933_7a62f740.zip`
-- Bundle SHA256：`ba4f4cbd39891e43aa33e2c7d37b0b3d102940f8b2961e187a3223012cc86257`
-
-### Formal結果與根因
-
-使用者本機formal double check：quick gate PASS、chain checks PASS、ml smoke PASS；consistency只有7個FAIL，全部來自`META_REGISTRY_CHECKLIST_ENTRY`的`B170/B182/B184/B188/B189/B190/B194_declared_entry_file_exists`。原因是Research單一入口遷移後，`doc/TEST_SUITE_CHECKLIST.md`現行B2主表仍把已刪除的`apps/breakout_quality.py`／`apps/strategy_compare.py`／`apps/audit.py`列為建議落點。Runtime、策略計算與模型流程沒有失敗。
-
-另發現meta checker原本每個DONE B-row只驗證第一個`apps/core/tools`路徑，因此B171等列後段殘留的舊Research wrapper未被本次7個FAIL揭露。
-
-### 修正
-
-- 現行B2主表所有Research舊wrapper引用改為`apps/research.py`，並同步更新B182/B184/B186/B188/B189/B190/B194的單一入口工作類型語意；歷史G紀錄與Experiment Log舊指令保留作歷史證據，不改寫。
-- `validate_registry_checklist_entry_consistency_case`改為逐列驗證建議落點中所有`apps/config/core/filters/tools/*.py`宣告，不再只取第一個path；失敗時note直接列出missing paths。
-- B23 checklist／registry／正式入口一致性契約同步補上「DONE主表列所有宣告Python路徑必須存在」。
-
-### 固定研究／runtime條件
-
-不修改Dataset／Label、MR-12B／MR-12C訓練目標、模型權重、PIT scores、Strategy Compare arms／fingerprint／cache、C17/C18 selector、策略參數、replay、sizing、accounting、execution或Audit算法。
-
-### 獨立驗證
-
-- `validate_registry_checklist_entry_consistency_case`：1217／1217 PASS；強化後同時檢出並修正原本被第一路徑遮蔽的B50／B172／B177現行stale declaration。
-- 受影響直接契約：Dataset／CLI 162／162 PASS、Strategy Compare config-driven app 39／39 PASS、Audit framework 8／8 PASS、Breakout Quality簡易報表6／6 PASS；合計1432項direct checks、0 failure。
-- `apps/research.py`、`model`、`optimizer`、`compare`、`audit` help route全部可正常解析；`optimizer`仍原樣轉交既有optimizer service。
-- 全專案282個Python檔AST parse／compile PASS；裸`except:`=0、pass-only exception handler=0、local import cycle=0、`core/`／`filters/`反向import `apps`或`tools.audit`=0；現行DONE checklist宣告Python path缺件=0，`PROJECT_SETTINGS.md`／`ARCHITECTURE.md`／`CMD.md`舊Research wrapper引用=0。
-- `G`表1461筆狀態鏈、日期／ID排序、重複`NEW`、no-op transition均為0異常，B23最新狀態為DONE；既有歷史列未改寫，只新增本輪B23兩筆收斂紀錄。
-- GPT未執行`apps/test_suite.py`或formal pipeline；formal suite結果須由使用者套用patch後於本機正式入口重跑確認。
+- **背景／根因**：使用者本機formal double check：quick gate PASS、chain checks PASS、ml smoke PASS；consistency只有7個FAIL，全部來自`META_REGISTRY_CHECKLIST_ENTRY`的`B170/B182/B184/B188/B189/B190/B194_declared_entry_file_exists`。原因是Research單一入口遷移後，`doc/TEST_SUITE_CHECKLIST.md`現行B2主表仍把已刪除的`apps/breakout_quality.py`／`apps/strategy_compare.py`／`apps/audit.py`列為建議落點。Runtime、策略計算與模型流程沒有失敗。
+- **修復／處置**：現行B2主表所有Research舊wrapper引用改為`apps/research.py`，並同步更新B182/B184/B186/B188/B189/B190/B194的單一入口工作類型語意；歷史G紀錄與Experiment Log舊指令保留作歷史證據，不改寫。
+- **修復補充**：`validate_registry_checklist_entry_consistency_case`改為逐列驗證建議落點中所有`apps/config/core/filters/tools/*.py`宣告，不再只取第一個path；失敗時note直接列出missing paths。
+- **結果／效力界線**：Infrastructure fix completed；不占用新的`MR-*`／`DL-*`／`SR-C*`／`AUD-*` identity，Registry scientific identity與目前model／selector判定不變。
 
 ## 2026-08-08 — Continuous ranker簡易報表P1口徑修正：Competition-day Top-K與Validation標示
 
@@ -5962,43 +5602,9 @@ Research model menu新增：`[4] 比較 MR-12A/B/C → paired／random／Dynamic
 
 ## 2026-08-09 — P2 config-driven menu／comparison identity infrastructure fix
 
-### 狀態
-
-Infrastructure/UI contract fix completed；不占用新的`MR-*`／`DL-*`／`SR-C*`／`AUD-*` identity，MR-12A/B/C frozen model identity、C17/C18 selector與P2診斷算法不變。
-
-### 程式基準
-
-- 使用者最新版完整ZIP：`test-branch-1_20260808_202244_4926c2c(1).zip`
-- ZIP SHA256：`0305b59118a41c81df2b3364e380476bfe763ec800af9fc7655f315690b6c8af`
-- 上輪P2 patch：`p2_paired_random_dynamic_k_patch_20260808.zip`
-- P2 patch SHA256：`199e575b1d7576c673378e24fe75994efea2d97713db5e017cdde3db0cf7ba39`
-- 本輪工作樹：以上完整ZIP全新解壓後覆蓋P2 patch，再進行config-driven修正。
-- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`。
-
-### 問題與修正
-
-P2初版正式model menu直接顯示`MR-12A/B/C`，App簡易摘要與比較renderer亦固定假設MR-12B為摘要模型、MR-12A為baseline、C17為Dynamic-K reference。這違反既有config-driven原則，也會讓後續只改config時UI／摘要與實際比較對象分叉。
-
-本輪修正：
-
-1. `doc/PROJECT_SETTINGS.md`新增永久條款：互動選單不得硬編碼特定experiment／model／arm／ID或目前設定值；可用項目、顯示label、reference、比較組合與摘要對象必須由`config/`／Registry／active settings驅動，validator不得鎖死目前config值。
-2. `config/breakout_quality.py`把continuous-ranker comparison完整移到USER SETTINGS：`enabled`、`menu label`、`model_profiles`、`reference_arm`、`summary_pair`，並提供集中驗證／解析getter。
-3. `tools/filters/breakout_quality/application.py`的`[4]`選單只顯示config提供的泛化label；enabled=false時不顯示。比較簡易報表的Profile、摘要模型與Δ比較名稱均由canonical comparison JSON/config動態生成，不再固定MR-12B／MR-12A。
-4. `compare_continuous_rankers.py`的model specs、Dynamic-K reference、console／Markdown標題與契約文字全部由config設定與canonical payload生成；不再硬編碼MR-12A/B/C或C17。
-5. synthetic validator改用隔離config override驗證runtime忠實採用設定，不再把目前MR/C ID或menu字串當唯一合法答案。
-
-### 固定研究／runtime條件
-
-不修改Dataset／Continuous Target、MR-12A MSE、MR-12B pairwise logistic、MR-12C ListNet、模型checkpoint／scores、PIT、Top-K／K-boundary公式、exact random baseline、Dynamic-K join語意、C17/C18 selector、Strategy Compare replay／fingerprint、策略參數、sizing、accounting或execution。
-
-### GPT獨立驗證
-
-- 全專案284個Python檔`py_compile`／AST parse PASS；裸`except:`=0、pass-only exception handler=0、`core/filters`反向依賴`apps`或`tools.audit`=0、local import cycle=0。
-- 全專案互動選單literal掃描：含`[n]`之menu項目中硬編`MR-*`／`DL-*`／`SR-C*`／`Cxx`／`Axx`數量=0。
-- 隔離config override直接驗證：menu label可改為任意泛化設定文字、comparison model IDs/order／reference arm／summary pair皆由`config/breakout_quality.py`解析；`enabled=False`時正式model menu不顯示比較項目；renderer亦只讀canonical payload identity。
-- `doc/TEST_SUITE_CHECKLIST.md` B16已補config-driven menu contract；主表B16狀態仍為DONE且與最近`PARTIAL -> DONE` transition一致，該列Markdown欄數合法。
-- formal synthetic registry仍註冊`validate_dataset_cli_contract_case`與`validate_breakout_quality_pairwise_ranker_contract_case`，可在使用者本機正式suite覆蓋本輪UI/config與P2比較契約。
-- GPT未執行`apps/test_suite.py`或formal pipeline；正式double check仍由使用者本機正式入口執行。
+- **問題**：P2 model menu、摘要與比較器硬編 `MR-12A/B/C`、`C17` 及 reference／summary arm；當設定修改後，UI 與比較對象可能分岔。
+- **修復**：比較 membership、menu label、reference、summary pair 由 `config/breakout_quality.py` 的 canonical getter 決定；Model App 與 compare renderer 消費相同設定與 canonical payload，synthetic 改驗證隔離 config override。
+- **效力界線**：純 UI／比較身分來源工程修正；不修改 Frozen model、Target、PIT、selector、Dynamic-K 計算、策略帳務及既有研究結果。
 
 ## 2026-08-09 — Config-driven UI follow-up：移除非選單使用者可見的研究 ID 殘留
 
@@ -6137,23 +5743,9 @@ MR-12B相對MR-12A在603個共同OOS competition days：NDCG `+0.0290`、Top-K L
 
 ## 2026-08-09 — P2 Dynamic-K K分層console renderer API閉環
 
-狀態：`IMPLEMENTED / LOCAL_RERUN_REQUIRED`。此為P2 read-only診斷輸出bug fix，不占用新的`MR-*`／`DL-*`／`SR-C*`／`AUD-*` identity，不修改Dataset、Label、模型權重、score、selector或strategy replay。
-
-### 程式基準與本機失敗
-
-- 輸入ZIP：`test-branch-1_20260809_034619_538614e.zip`；SHA256：`805cf0b8c7bf55a81c13145413ff51d2b84b8132221232700f75b385285f8a0d`。
-- 使用者由`apps/research.py → 模型訓練 → 比較設定中的 Continuous Rankers`執行P2時，計算已完成至console rendering，但新增`_render_dynamic_k_strata_table()`呼叫共用`core.console_report.render_table()`時誤用私有舊renderer的keyword `aligns=`，造成`TypeError: render_table() got an unexpected keyword argument 'aligns'`，因此本輪沒有產生可採用的新K-stratified結果。
-
-### 根因與修正
-
-- `core.console_report.render_table()`正式keyword為`alignments=`；`aligns=`只屬`tools/filters/breakout_quality/report.py`內部`_render_ascii_table()`，兩者API不同。
-- 將P2 K分層renderer改為`alignments=`，不改任何metric計算、candidate coverage、Dynamic-K sample或既有工件語意。
-- 在既有continuous-ranker synthetic contract中直接呼叫`_render_dynamic_k_strata_table()`並驗證標題欄位，避免未來只測metric payload而漏掉console renderer的API mismatch。
-
-### 下一步
-
-原樣重跑正式選單P2即可；不需重訓模型、不需重跑Strategy Compare。取得K=1/2/3/...分層與candidate coverage後，再依前節既定順序判斷top-prefix弱點或complete-case selection bias；在歸因完成前仍不建立MR-12D。
-
+- **問題**：P2 Dynamic-K 計算已完成，但 `_render_dynamic_k_strata_table()` 把私有 renderer 的 `aligns=` 傳給 `core.console_report.render_table()`，引發 TypeError，未取得可採用的新 K-stratified console 結果。
+- **修復**：改用正式 `alignments=`；加入 console renderer API 合成回歸。
+- **效力界線**：`IMPLEMENTED / LOCAL_RERUN_REQUIRED`；只需由 P2 正式入口重跑診斷輸出，無須重訓或重跑 Strategy Compare，績效及科學身分未改。
 
 ## 2026-08-09 — P2 Dynamic-K K分層結果：弱勢集中K=1；新增完整OOS prefix sweep
 
@@ -6977,37 +6569,10 @@ Audit只用既有Selection replay做解釋，不授權調22日cutoff、不授權
 
 ## 2026-08-09 — MR-13A Stage 1：daily lazy feature feeding效能修正
 
-### 狀態
-
-`IMPLEMENTED / PERFORMANCE_ONLY / SCIENTIFIC_CONTRACT_UNCHANGED / RESULT_PENDING`。
-
-### 程式基準與問題定位
-
-- 使用者本輪來源ZIP：`test-branch-1_20260809_182833_19839e6.zip`。
-- SHA256：`30c30900ddce00674ce8c853ef1bda76e50ffec56af84795c3eaca1d281fcad9`。
-- 使用者觀察：MR-13A full training耗時長，GPU utilization約20%。
-- 原MR-13A為避免建立巨大的`stock-day × 300 × 10` expanded feature artifact，採`LazyDailyFeatureBank`；但每個training／evaluation batch會在單一Python執行緒逐stock-day呼叫DataFrame版canonical feature builder。每筆均重做stock／0050 300-bar slicing、benchmark date lookup與OHLCV normalization；同一交易日的0050 window亦會被每支股票重算。GPU因此大量時間等待CPU feature materialization。
-- `ARCH-inception_time_v1`僅約473k trainable parameters；在RTX 5080等高階GPU上，此feeding bottleneck會比模型算力更早成為限制。
-
-### Performance-only實作
-
-1. `filters/breakout_quality/features.py`新增canonical `normalize_ohlcv_array_window()`，DataFrame builder與MR-13A NumPy lazy path共用同一數值實作，避免feature公式分叉。
-2. `LazyDailyFeatureBank`建立時只把canonical sanitized OHLCV轉為RAM中的NumPy arrays；不建立每個stock-day的expanded sequence bank。
-3. 每個stock-day只以NumPy slice materialize其300-bar stock window，不再逐sample執行Pandas `iloc`與benchmark index lookup。
-4. dataset建索引時同步保存每個sample的benchmark position；同一benchmark position的normalized 300×5 window在RAM cache只計算一次並跨batch／epoch重用。cache規模只隨benchmark交易日數成長，不隨ticker×date sample數成長。
-5. Continuous ranker新增config-driven `BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES=2`；單一背景CPU worker只依既定batch順序預先materialize後續features，GPU仍按原順序做完全相同optimizer steps。設為0可關閉。
-6. 不修改MR-13A sample universe、40-day target、daily percentile、whole-date batch ordering、pairwise loss、optimizer、LR、mixed precision、epoch selection、checkpoint、OOS Gate或持久工件內容。
-
-### 獨立等價／效能檢查
-
-- Synthetic 40 tickers × 3 dates，共120個300×10 sequence：新NumPy lazy path與原canonical `build_breakout_quality_sequence_feature()`逐值`array_equal=True`，最大絕對誤差=`0`。
-- Synthetic單日550 stocks materialization：原版約`0.22～0.32s/batch`（約`1.7k～2.5k stock-days/s`）；修正後約`0.05～0.06s/batch`（約`9.3k～10.8k stock-days/s`），此環境約4～5倍feeding加速。此benchmark只量feature materialization，不宣稱等比例縮短整體training wall time。
-- Prefetch pipeline synthetic 10-batch檢查（每批CPU materialization與GPU stand-in各30ms）：prefetch=0約`0.604s`、prefetch=2約`0.335s`，batch order完全一致；此測試只驗證pipeline overlap與順序契約，不代表正式GPU wall-time倍率。
-
-### 判定
-
-此修正不占用新的`MR-*` identity，因沒有改變模型權重語意、target、loss、architecture或training-data semantics；MR-13A仍為`RESULT_PENDING`。正式full forward-OOS需以修正版重新執行後，才能記錄實際epoch時間、GPU utilization與模型Gate結果。
-
+- **背景／根因**：使用者本輪來源ZIP：`test-branch-1_20260809_182833_19839e6.zip`。
+- **修復／處置**：Synthetic單日550 stocks materialization：原版約`0.22～0.32s/batch`（約`1.7k～2.5k stock-days/s`）；修正後約`0.05～0.06s/batch`（約`9.3k～10.8k stock-days/s`），此環境約4～5倍feeding加速。此benchmark只量feature materialization，不宣稱等比例縮短整體training wall time。
+- **修復補充**：此修正不占用新的`MR-*` identity，因沒有改變模型權重語意、target、loss、architecture或training-data semantics；MR-13A仍為`RESULT_PENDING`。正式full forward-OOS需以修正版重新執行後，才能記錄實際epoch時間、GPU utilization與模型Gate結果。
+- **結果／效力界線**：`IMPLEMENTED / PERFORMANCE_ONLY / SCIENTIFIC_CONTRACT_UNCHANGED / RESULT_PENDING`。
 
 ## 2026-08-09 — MR-13A Stage 1結果：Forward-OOS Gate通過，授權Stage 2 Selection PIT
 
@@ -7219,124 +6784,31 @@ Stage 3實作前曾預期future-independent score universe會使row數高於`778
 
 ## 2026-08-09 — Stage 3 Strategy Compare前置依賴自動化修正
 
-### 狀態
-
-`INFRASTRUCTURE_FIX / NO_SCIENTIFIC_CONDITION_CHANGE / SELECTION_COMPARE_STILL_PENDING`。
-
-### 使用者觀察
-
-在C23/C24/C25/C27/C28 Strategy Compare狀態頁，`CONT13A_PIT`已READY，但`CONT12B_PIT`三個top-level工件與`selection_min_roos`缺少時整體直接BLOCKED。使用者指出既有Strategy Compare原已實作「正式入口先規劃依賴，能由既有真理工件確定完成的前置自動建立／接續」契約。
-
-### 根因
-
-1. Selection歷史P2來源`selection_min_roos`在C23～C28研究設計時刻意設定`builder=None`，因此即使它屬策略參數工件、且已有正式rolling optimizer service，planner仍只能標BLOCKED。這與`PROJECT_SETTINGS`目前「策略比較可建立比較所需策略參數」的全專案契約不一致。
-2. Selection PIT source一律禁止builder，將「不得由Strategy Compare訓練PIT模型」錯誤擴張為「連既有fold score/checkpoint的純推論工件重建也禁止」。實際上專案契約允許策略比較匯出既有模型推論工件。
-3. PIT CLI argparse原先在解析`--experiment-profile`前就以目前model-research Active Profile填入fold／validation／seed等預設值；不同PIT source設定若未來分叉，checkpoint identity可能錯用另一profile的預設。
-
-### 修正
-
-- `selection_min_roos`新增config-driven `selection_historical_p2` builder；重用既有Selection baseline truth，只建立／接續2014～2020 P2_HISTORY risk-only active params，不建立Label、不啟用DL。
-- `CONT12B_PIT`與`CONT13A_PIT`新增`selection_pit_from_existing_folds` builder。Strategy Compare若PIT top-level工件缺少／無效，可自動重組既有fold scores，或從training identity完全一致的既有checkpoint重新推論，再執行PIT Audit。
-- PIT builder新增`--checkpoint-only`硬契約：任何fold無法由既有score/checkpoint合法重用時，在進入`_train_fold`前立即失敗，Strategy Compare不得因此訓練模型。
-- PIT parser先解析`--experiment-profile`，再由該profile取得PIT defaults，消除Active Profile隱性耦合。
-- 前置計畫對一個PIT source只建立一個bundle BUILD action，避免manifest／audit／scores三個檔各自重複執行builder；狀態頁仍逐檔顯示預計動作。
-
-### Scientific identity／判定
-
-MR-12B、MR-13A、DL-CONT12B-PIT、DL-CONT13A-PIT、SR-C23～C28的target、model weights、selector、策略參數語意與比較期間均未修改；本輪只修正前置工件 orchestration，不新增MR/SR ID。若既有PIT fold/checkpoint也不存在或identity不相容，仍必須BLOCK並由模型研究入口重建，不能為了自動化跨越「策略比較不得訓練模型」邊界。
+- **背景／根因**：Selection歷史P2來源`selection_min_roos`在C23～C28研究設計時刻意設定`builder=None`，因此即使它屬策略參數工件、且已有正式rolling optimizer service，planner仍只能標BLOCKED。這與`PROJECT_SETTINGS`目前「策略比較可建立比較所需策略參數」的全專案契約不一致。
+- **修復／處置**：`selection_min_roos`新增config-driven `selection_historical_p2` builder；重用既有Selection baseline truth，只建立／接續2014～2020 P2_HISTORY risk-only active params，不建立Label、不啟用DL。
+- **修復補充**：`CONT12B_PIT`與`CONT13A_PIT`新增`selection_pit_from_existing_folds` builder。Strategy Compare若PIT top-level工件缺少／無效，可自動重組既有fold scores，或從training identity完全一致的既有checkpoint重新推論，再執行PIT Audit。
+- **結果／效力界線**：`INFRASTRUCTURE_FIX / NO_SCIENTIFIC_CONDITION_CHANGE / SELECTION_COMPARE_STILL_PENDING`。
 
 ## 2026-08-09 — Stage 3 Strategy Compare archived comparator自動重用閉環
 
-### 狀態
-
-`INFRASTRUCTURE_FIX / NO_SCIENTIFIC_CONDITION_CHANGE / C24_C25_ARCHIVED_PAIR_REUSE_SUPPORTED / SELECTION_COMPARE_STILL_PENDING`。
-
-### 程式基準與使用者錯誤
-
-- 本輪來源ZIP：`test-branch-1_20260809_211141_5a2c093.zip`；SHA256=`08172f5433fc76cd2f0fa404cf1e03c71a8ebde1408f0b300ed9f538687175af`。
-- Strategy Compare已進入`PREPARABLE`並嘗試checkpoint-only重建`DL-CONT12B-PIT`，但在真正fold reuse前被缺少`outputs/filters/breakout_quality/breakout_quality_v1/continuous_targets/strategy_aligned_opportunity_no_time_r_v1/manifest.json`阻擋。
-- 該Continuous Target屬MR-12B模型研究上游；依專案契約，Strategy Compare不得為了補歷史comparator自行建立Target／Label。
-
-### 根因
-
-先前將「Selection PIT top-level工件缺失可由既有fold/checkpoint重建」泛化過度。MR-12B event provider在載入fold plan時仍需要Continuous Target以重建train／validation／refit identity，而PIT Audit也必須用Target重新計算Spearman／spread並驗證Target manifest hash。因此當Target artifact本身已被刪除時，不能合法地只靠checkpoint-only重建完整model-audit source。
-
-然而本輪C24/C25並不是待重跑的新arm：它們已有2014～2020正式completed Strategy Compare pair，且本次用途只是作C27/C28的固定歷史comparator。要求恢復已刪MR-12B Target只為重新產生不會被replay的C24/C25，是不必要的反向依賴。
-
-### 修正
-
-1. Strategy Compare新增狹義`archived_completed_pair` cache路徑，只允許Selection PIT類歷史source缺失時使用；它不把缺少的PIT source標為READY，也不重建Target／Audit。
-2. archived pair必須同時滿足：
-   - current historical P2 params已存在，且SHA256與completed run記錄完全一致；
-   - dataset、param policy、max positions、rotation、comparison period、param source identity、DL filter／architecture／profile／score source與off/on arm runtime contract全部一致；
-   - completed run當時記錄的PIT manifest／audit／forward-score identities皆有非空SHA；
-   - completed pair的正式JSON／Markdown／yearly／equity／trades／capacity／orderable／selected-buys等必要工件仍完整；
-   - pair engine schema仍與目前一致。
-3. 任一條件不符即不得使用archived reuse；若current param SHA不同，必須拒絕而不是把歷史結果搬到不同參數宇宙。
-4. 前置executor改為每次只完成一個BUILD／REBUILD後立即重新規劃，並優先建立`param:*`。因此本案例會先建立／接續`selection_min_roos`；若其SHA證明C24/C25 completed pairs可重用，下一波直接取消`CONT12B_PIT`重建依賴。若無可用completed pair，原checkpoint-only／BLOCKED安全邊界仍保留。
-5. 新run的pair execution manifest會標記`source_artifact_mode=archived_completed_pair`，保留「結果來自已完成歷史pair、不是目前source重新READY」的可稽核差異。
-
-### Scientific identity
-
-MR-12B、MR-13A、C23～C28的模型權重、Target、selector、historical P2語意、comparison period與策略會計均未修改；本輪只修正dependency orchestration與completed-result cache provenance，不新增MR／SR ID。C27/C28 Selection結果仍待正式執行。
-
+- **背景／根因**：先前將「Selection PIT top-level工件缺失可由既有fold/checkpoint重建」泛化過度。MR-12B event provider在載入fold plan時仍需要Continuous Target以重建train／validation／refit identity，而PIT Audit也必須用Target重新計算Spearman／spread並驗證Target manifest hash。因此當Target artifact本身已被刪除時，不能合法地只靠checkpoint-only重建完整model-audit source。
+- **修復／處置**：Strategy Compare新增狹義`archived_completed_pair` cache路徑，只允許Selection PIT類歷史source缺失時使用；它不把缺少的PIT source標為READY，也不重建Target／Audit。
+- **修復補充**：dataset、param policy、max positions、rotation、comparison period、param source identity、DL filter／architecture／profile／score source與off/on arm runtime contract全部一致；
+- **結果／效力界線**：`INFRASTRUCTURE_FIX / NO_SCIENTIFIC_CONDITION_CHANGE / C24_C25_ARCHIVED_PAIR_REUSE_SUPPORTED / SELECTION_COMPARE_STILL_PENDING`。
 
 ## 2026-08-09 — Stage 3 Strategy Compare historical P2 prerequisite閉環
 
-### 狀態
-
-`INFRASTRUCTURE_FIX / NO_SCIENTIFIC_CONDITION_CHANGE / AUTO_PREPARATION_CHAIN_COMPLETED / SELECTION_COMPARE_STILL_PENDING`。
-
-### 程式基準與使用者錯誤
-
-- 本輪來源ZIP：`test-branch-1_20260809_212916_6c122dc.zip`；SHA256=`7324bc96a9f6150b3aa30af03dc5f474f3dd306da767f182c0b4cd0c5b048ed5`。
-- Strategy Compare前置已正確把`param:selection_min_roos`排在舊`CONT12B_PIT`之前，但正式執行時因缺少`models/research/breakout_quality/selection_strategy_realization/roos_base_best.json`而停止。
-- 該檔不是外部不可重建資料；11I歷史契約本來就是以2014-01-01～2020-12-31、120個月fixed train window、12個月OOS，將canonical outer-rolling optimizer隔離輸出到`models/research/breakout_quality/selection_strategy_realization/`。
-
-### 根因
-
-Stage 3新增的`selection_historical_p2` builder只共用了P2 risk-only訓練服務，仍把11I historical rolling baseline當成「必須預先存在」的上游真理工件。這與`PROJECT_SETTINGS`的正式App依賴規則不一致：策略參數工件若可由正式optimizer service確定建立，Strategy Compare應在同一次auto-preparation內自動建立／接續，不應要求使用者先執行零散optimizer CLI。
-
-### 修正
-
-1. `selection_historical_p2` builder先搜尋既有completed Strategy Compare runs；若run的dataset、period、param policy、max positions、rotation均一致，且pair保存完整`no_filter_params`與原`params_file_sha256`，則以canonical P2 JSON writer重新序列化candidate。只有candidate SHA與舊run記錄**完全一致**且P2_HISTORY／rolling single-member／2014～2020 coverage contract全部通過時，才原樣恢復`selection_min_roos`。這條路徑不重新最佳化，也不從報表文字推測參數。
-2. 若沒有任何可驗證completed pair可恢復，builder自動呼叫canonical`run_outer_rolling_oos`建立／接續historical baseline；輸出固定隔離到`models/research/breakout_quality/selection_strategy_realization/`，不得污染正式`models/roos_*.json`。
-3. baseline optimizer的first/last OOS date由目前Strategy Compare期間傳入；train window、OOS horizon與baseline trials由`config/strategy_compare.py` builder options驅動，其中baseline trials直接引用`config.training_policy.OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT`，不新增trial magic number。
-4. historical baseline的2014～2020、120m／12m canonical defaults抽到`filters/breakout_quality/trade_path_label.py`，11I audit與historical P2 service共用；Strategy Compare仍可由config顯式覆蓋，避免UI或validator硬編目前設定。
-5. completed-pair recovery失敗時才進baseline＋P2 optimizer fallback；任何hash、period、policy或member contract不符均不得採用近似恢復。
-
-### Scientific identity
-
-MR-12B、MR-13A、DL-CONT12B-PIT、DL-CONT13A-PIT、SR-C23～C28的模型、Target、selector、historical P2定義、risk search fields、comparison period與策略會計均未改變；本輪只完成原有Strategy Compare auto-preparation dependency chain，不新增MR／SR ID。C27/C28 Selection結果仍待正式執行。
-
+- **背景／根因**：Stage 3新增的`selection_historical_p2` builder只共用了P2 risk-only訓練服務，仍把11I historical rolling baseline當成「必須預先存在」的上游真理工件。這與`PROJECT_SETTINGS`的正式App依賴規則不一致：策略參數工件若可由正式optimizer service確定建立，Strategy Compare應在同一次auto-preparation內自動建立／接續，不應要求使用者先執行零散optimizer CLI。
+- **修復／處置**：若沒有任何可驗證completed pair可恢復，builder自動呼叫canonical`run_outer_rolling_oos`建立／接續historical baseline；輸出固定隔離到`models/research/breakout_quality/selection_strategy_realization/`，不得污染正式`models/roos_*.json`。
+- **修復補充**：baseline optimizer的first/last OOS date由目前Strategy Compare期間傳入；train window、OOS horizon與baseline trials由`config/strategy_compare.py` builder options驅動，其中baseline trials直接引用`config.training_policy.OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT`，不新增trial magic number。
+- **結果／效力界線**：`INFRASTRUCTURE_FIX / NO_SCIENTIFIC_CONDITION_CHANGE / AUTO_PREPARATION_CHAIN_COMPLETED / SELECTION_COMPARE_STILL_PENDING`。
 
 ## 2026-08-09 — Stage 3 Strategy Compare Selection baseline programmatic argv 修正
 
-### 狀態
-
-`INFRASTRUCTURE_FIX / NO_SCIENTIFIC_CONDITION_CHANGE / FORMAL_SUITE_PRE_FIX_PASS / SELECTION_COMPARE_STILL_PENDING`。
-
-### 程式基準與使用者錯誤
-
-- 本輪來源ZIP：`test-branch-1_20260809_215948_7b98b09.zip`；SHA256=`b8b121d4e79d832375293e4ef8cba5a81ce6420cb595210aa1c581989b28eb97`。
-- 使用者在 Strategy Compare 自動 BUILD `param:selection_min_roos` 時，console 已正確顯示 `2014-01-01~2020-12-31 / train=120m / oos=12m / trials=300/fold`，但 canonical outer-rolling service 隨即拋出 `ValueError: first OOS date 不可晚於 last OOS date`。
-- 同一來源基準的正式 local regression bundle `to_chatgpt_bundle_20260809_220143_9cdf2b12.zip` 已全部 PASS（quick gate / consistency / chain checks / ml smoke / meta quality），表示此錯誤位於未被既有 formal case 覆蓋的 programmatic outer-rolling argv 邊界。
-
-### 根因
-
-`run_outer_rolling_oos()` 同時支援真實CLI `sys.argv` 與內部service呼叫。既有 `_extract_cli_value()` / `_has_cli_flag()` 固定從 `argv[1]` 掃描，假設 `argv[0]` 一定是program path；但 `strategy_param_training.py`、`strategy_optimizer_policy.py` 與既有 strategy adaptation service 都以 option-only list 呼叫，第一個token即 `--outer-first-oos-date`。因此 Selection baseline 的 first-OOS option 被忽略，first date回退到較晚的 base policy，而 last date仍讀到2020，形成反向區間。
-
-### 修正
-
-1. outer-rolling argv parser依第一個token是否為option判定掃描起點：option-only programmatic argv從index 0掃描，真實CLI argv仍從index 1掃描。
-2. `_extract_cli_value()` 與 `_has_cli_flag()` 共用相同起點語意，避免value option與flag option再度分叉。
-3. B179 synthetic contract新增雙路徑回歸：同一2014～2020 schedule分別以option-only argv與含program path的CLI argv解析，兩者必須得到相同 first/last OOS、120m train、12m OOS與trial數；fallback policy故意設為2021，確保第一個option若再被漏讀會立即失敗。
-4. 未修改MR-13A模型、PIT、C27/C28 selector、historical P2定義、optimizer objective、trial數、strategy accounting或comparison period。
-
-### Scientific identity
-
-MR-12B、MR-13A、DL-CONT12B-PIT、DL-CONT13A-PIT、SR-C23～C28均不變；C27/C28 Selection Strategy Compare仍待正式執行。
-
+- **背景／根因**：`run_outer_rolling_oos()` 同時支援真實CLI `sys.argv` 與內部service呼叫。既有 `_extract_cli_value()` / `_has_cli_flag()` 固定從 `argv[1]` 掃描，假設 `argv[0]` 一定是program path；但 `strategy_param_training.py`、`strategy_optimizer_policy.py` 與既有 strategy adaptation service 都以 option-only list 呼叫，第一個token即 `--outer-first-oos-date`。因此 Selection baseline 的 first-OOS option 被忽略，first date回退到較晚的 base policy，而 last date仍讀到2020，形成反向區間。
+- **修復／處置**：outer-rolling argv parser依第一個token是否為option判定掃描起點：option-only programmatic argv從index 0掃描，真實CLI argv仍從index 1掃描。
+- **修復補充**：`_extract_cli_value()` 與 `_has_cli_flag()` 共用相同起點語意，避免value option與flag option再度分叉。
+- **結果／效力界線**：`INFRASTRUCTURE_FIX / NO_SCIENTIFIC_CONDITION_CHANGE / FORMAL_SUITE_PRE_FIX_PASS / SELECTION_COMPARE_STILL_PENDING`。
 
 ## 2026-08-09 — Min ROOS五欄單階段Rolling與trial單一真理修正
 
@@ -7574,39 +7046,10 @@ Min/Full × DL-off/MR-12B/MR-13A六arm Forward-OOS矩陣切換到`DL-CONT12B`與
 
 ## 2026-08-10 — MR-13A Forward-OOS daily score artifact contract修正
 
-### 狀態
-
-`INFRASTRUCTURE_FIX / PROFILE_AWARE_FORWARD_SCORE_CONTRACT / EXISTING_MR13A_MODEL_REUSABLE / SCIENTIFIC_IDENTITY_UNCHANGED`。
-
-### 現象與程式基準
-
-- 輸入基準：`test-branch-1_20260810_141107_cb605c7.zip`；SHA256=`8217707a996c542f248418a5d32ad37b1c55b5af6c2c741a707a6b59cce4751f`。
-- 使用者由`[模型訓練] → [5] 準備策略比較所需模型工件`成功補建`CONT12B`與`CONT13A`。MR-12B event ranker輸出`continuous_ranker_scores.csv`；MR-13A daily ranker訓練亦PASS並正式輸出`daily_ranker_oos_scores.csv.gz`。
-- MR-13A訓練完成後的再次Forward-OOS contract驗證仍固定尋找`continuous_ranker_scores.csv`，因此拋出`FileNotFoundError`。模型、report與daily OOS scores本身已完成，失敗發生於下游artifact resolver／validator。
-
-### Root cause
-
-`load_continuous_ranker_oos_contract()`與`load_continuous_ranker_oos_score_table()`仍把所有`continuous_ranker_oos` source視為event-ranker schema：固定檔名`continuous_ranker_scores.csv`、固定要求`split`欄再過濾`split=oos`，且只認manifest/report的`scores`記錄。MR-13A trainer從設計起即使用daily專屬canonical artifact：`daily_ranker_oos_scores.csv.gz`，整份檔案就是OOS daily stock-day universe，manifest/report key為`oos_scores_gzip`，沒有event-only `split`欄。
-
-### 修正
-
-1. 新增唯一`resolve_continuous_ranker_oos_score_path()`：依experiment profile的`training_sample_scope`解析Forward-OOS score真理路徑；event維持`continuous_ranker_scores.csv`，daily使用`daily_ranker_oos_scores.csv.gz`。模型狀態頁、Strategy Compare preflight與runtime loader共用此resolver。
-2. `load_continuous_ranker_oos_contract()`改為profile-aware驗證manifest/report：daily使用`oos_scores_gzip` file identity與現有daily report `sample_scope`／pairwise contract；event原有training semantics、label scope與`scores` identity驗證不放寬。
-3. `load_continuous_ranker_oos_score_table()`對event仍要求`split`且只取`oos`；daily不要求`split`，直接驗證整份gzip中的`ticker/date/group_index/model_score`、0～1有限分數與ticker/date唯一性。Runtime仍依daily profile使用最新已完成交易日`information_date`查分，不改無前視語意。
-4. 為未來新daily artifact補上`training_label_scope`與`training_semantics`共通metadata；loader仍接受本次已訓練、尚未包含這兩個新欄位的既有MR-13A artifact，因此**不需重新訓練CONT13A**。
-
-### Scientific identity
-
-MR-13A architecture、daily sample universe、target、RankNet loss、selected epoch、模型權重、Forward-OOS scores內容、Selection PIT、feasible-ascent、Min/Full 2×3矩陣、ROOS參數與策略accounting全部不變。本輪只修正trainer與consumer之間的Forward-OOS artifact schema／path契約，不新增`MR-*`、`DL-*`或`SR-C*`。
-
-### GPT focused驗證
-
-- synthetic MR-13A trainer-format artifact（gzip、無`split`、`oos_scores_gzip` identity）可被Forward-OOS contract直接載入，2 rows完整保留。
-- `validate_breakout_quality_daily_pit_strategy_runtime_contract_case`：9 checks / 0 fail，新增daily Forward-OOS gzip contract直接驗證。
-- `validate_strategy_compare_config_driven_app_contract_case`：48 checks / 0 fail。
-- `validate_breakout_quality_listwise_ranker_contract_case`：8 checks / 0 fail，確認event continuous/listwise原有CSV＋split契約未被daily分支破壞。
-- 正式`apps/test_suite.py`未由GPT執行；仍由使用者本地formal double check。
-
+- **背景／根因**：MR-13A訓練完成後的再次Forward-OOS contract驗證仍固定尋找`continuous_ranker_scores.csv`，因此拋出`FileNotFoundError`。模型、report與daily OOS scores本身已完成，失敗發生於下游artifact resolver／validator。
+- **修復／處置**：新增唯一`resolve_continuous_ranker_oos_score_path()`：依experiment profile的`training_sample_scope`解析Forward-OOS score真理路徑；event維持`continuous_ranker_scores.csv`，daily使用`daily_ranker_oos_scores.csv.gz`。模型狀態頁、Strategy Compare preflight與runtime loader共用此resolver。
+- **修復補充**：`load_continuous_ranker_oos_contract()`改為profile-aware驗證manifest/report：daily使用`oos_scores_gzip` file identity與現有daily report `sample_scope`／pairwise contract；event原有training semantics、label scope與`scores` identity驗證不放寬。
+- **結果／效力界線**：`INFRASTRUCTURE_FIX / PROFILE_AWARE_FORWARD_SCORE_CONTRACT / EXISTING_MR13A_MODEL_REUSABLE / SCIENTIFIC_IDENTITY_UNCHANGED`。
 
 ## 2026-08-10 — Selection Full row與Strategy Compare雙階段profile固化
 
@@ -7752,23 +7195,9 @@ Forward-OOS模型訓練／model Gate亦沒有把OOS帶入gradient、epoch select
 
 ## 2026-08-10 — Formal consistency synthetic caller與Forward loader一次性I/O修正
 
-### Formal bundle現象
-
-- `quick gate`、`chain checks`、`ml smoke`皆PASS；`consistency`只有1個FAIL。
-- `SYNTHETIC_SUITE`在啟動coverage synthetic時拋出`TypeError: _validate_audit_source_artifact() missing 1 required keyword-only argument: project_root`，因此synthetic case count為0。
-- `meta quality`的coverage line／branch／key-target／critical-file六個FAIL均為同一次synthetic early-abort的連帶結果，不代表新增六個runtime regression。
-
-### Root cause與修正
-
-1. `ranking_score_store._validate_audit_source_artifact()`為符合使用者可見相對路徑契約已要求`project_root`；T280的Selection PIT audit source hash synthetic仍沿用舊signature。修正為使用該fixture自己的temporary artifact root，既驗證exact hash binding，也驗證修改後source必須被SHA mismatch拒絕；runtime validator參數與fail-fast語意不放寬。
-2. 同輪全專案檢查發現`load_continuous_ranker_oos_score_table_from_path()`首次載入同一Forward score CSV/GZIP時重複呼叫reader兩次；另`load_continuous_ranker_oos_contract()`在table已保存`available_from/available_through`後仍再次掃描MultiIndex date level。兩者移除後只降低一次性I/O/O(N)成本，不改score values、daily information-date refresh、selector、pair identity或策略結果。
-
-### 驗證
-
-- `validate_breakout_quality_selection_point_in_time_score_sort_contract_case`：10 checks／0 fail。
-- T294 daily Forward warm-cache效能契約維持：candidate lookup不重新掃描完整score index。
-- 本輪不改MR／DL／SR ID、不改Selection PIT／Forward score-universe scientific semantics、不產生新研究結果。
-
+- **問題**：Selection PIT audit source-hash synthetic 未傳新增的 `project_root` 參數，使 coverage synthetic 啟動前 TypeError；另 Forward score loader 重複讀取同一 CSV/GZIP 並重掃日期索引。
+- **修復**：fixture 傳入隔離的 temporary artifact root，維持 SHA mismatch fail-fast；移除 Forward loader 重複讀取與日期掃描。
+- **效力界線**：正式模型、score、PIT、strategy replay 與結果不變，僅修合成測試與一次性 I/O；未產生新科研結果。
 
 ## 2026-08-10 — Post-fix Forward-OOS controlled replay完成：MR-12B維持anchor、MR-13A未泛化
 
@@ -7869,24 +7298,9 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 
 ## 2026-08-10 — Formal double-check閉環：Strategy Compare model-upstream synthetic caller同步
 
-### 工作基準與formal bundle
-
-- 程式基準：`test-branch-1_20260810_234837_b825a83.zip`；SHA256 `94adde8910a8d8eca346b2cd25c0d598b391e6a27d951851210ee28474477717`。
-- Formal bundle：`to_chatgpt_bundle_20260810_234950_e975a4ff.zip`；SHA256 `b2d0be5aac68d79d75426006dfb5161c66f9460030e590dfac2736d229688b6b`。
-- 使用者本機結果：quick gate／chain checks／ml smoke均PASS；consistency唯一FAIL為synthetic suite ImportError；meta quality六個coverage FAIL均由同一次synthetic early-abort連帶造成。
-
-### Root cause與修正
-
-1. 前一輪將Strategy Compare與Multiple-seed共用的模型上游前置檢查泛化為公開`model_upstream_prerequisite_blockers()`後，`validate_strategy_compare_config_driven_app_contract_case`仍在function-local import舊private helper `_selection_pit_checkpoint_rebuild_blockers`，formal synthetic進入該case即ImportError；production runtime已使用新helper，並非策略／訓練回歸。
-2. Synthetic caller改為直接使用canonical `model_upstream_prerequisite_blockers()`，不把舊private helper加回production，避免形成第二套前置邏輯。
-3. 新helper對daily-universal profile除Dataset summary外也明確要求market-set artifacts，因此fixture預期由舊的1個blocker同步為2個：Dataset summary + market-set；event-group profile仍為Dataset summary + Continuous Target。
-4. 全專案靜態local-import symbol解析確認修正後沒有其他不存在的本地import；舊helper名稱已無殘留。
-
-### Scientific identity與後續
-
-- 不改`MR-*`／`DL-*`／`SR-C*` identity，不改Target、architecture、loss、seed policy、score、selector、K/R0、交易會計或Selection／Forward既有結果。
-- Multiple-seed robustness狀態仍為`IMPLEMENTED／RESULT_PENDING`；本輪沒有產生新策略結果。
-- Formal coverage的六個meta-quality FAIL應在synthetic suite可完整執行後重新計算；本輪不以GPT端執行formal suite替代使用者本機double check。
+- **問題**：上游依賴 helper 改名為公開 `model_upstream_prerequisite_blockers()` 後，Strategy Compare synthetic 仍 import 已移除的 private helper，造成 synthetic ImportError 與連帶 meta coverage FAIL；production runtime 未使用舊 helper。
+- **修復**：synthetic 改用 canonical 公開 helper，不恢復舊 private compatibility branch。
+- **效力界線**：無新研究結果，Multiple-seed robustness 仍為 `IMPLEMENTED / RESULT_PENDING`；模型、Seed、Score、PIT、交易與 Scientific identity 不變。
 
 ## 2026-08-11 — Multiple-seed Forward robustness首批結果：單一seed結論重開、報表matched-pair契約補齊
 
