@@ -250,6 +250,26 @@ def compute_counterfactual_trade40_batch(
     maturity_dates = np.full(len(positions), np.datetime64("NaT"), dtype="datetime64[D]")
     reasons: list[str] = []
     signal_caches: dict[str, Any] = {}
+
+    def active_signal_cache_for_date(day: pd.Timestamp):
+        # P16 Base-Finalist-Best has exactly one member. Both supported rolling
+        # payload kinds therefore use Portfolio's ordinary identity path:
+        # origin params own order/position rules, current params own signals.
+        active_period = resolve_historical_min_period(schedule, day)
+        if active_period is None:
+            # A gap during continuation/holding is missing source truth, never
+            # an economically censored trade and never permission to keep old
+            # or borrow future parameters.
+            raise ValueError(
+                "no_historical_effective_Min_param during trade path: "
+                f"ticker={ticker}, date={day.date()}"
+            )
+        active_cache = signal_caches.get(active_period.params_signature)
+        if active_cache is None:
+            active_cache = build_signal_cache(frame, active_period.params, ticker=ticker)
+            signal_caches[active_period.params_signature] = active_cache
+        return active_cache
+
     truncated = 0
     cutoff_closeouts = 0
     for row, (position, calendar_pos) in enumerate(zip(positions, calendar_index)):
@@ -287,10 +307,7 @@ def compute_counterfactual_trade40_batch(
             reasons.append("no_historical_effective_Min_param")
             continue
         params = period.params
-        cache = signal_caches.get(period.params_signature)
-        if cache is None:
-            cache = build_signal_cache(frame, params, ticker=ticker)
-            signal_caches[period.params_signature] = cache
+        cache = active_signal_cache_for_date(effective_day)
         atr = float(cache[0][position])
         close = float(frame["Close"].iloc[position])
         if not math.isfinite(atr) or atr <= 0.0 or not math.isfinite(close) or close <= 0.0:
@@ -307,6 +324,7 @@ def compute_counterfactual_trade40_batch(
             teacher_effective_date=str(period.start.date()),
             precomputed_signals=cache, horizon_end_date=expiry,
             counterfactual_entry_limit=limit,
+            active_signal_cache_resolver=active_signal_cache_for_date,
         )
         # The *deadline* and the date a label is actually known are different.
         # A natural stop/indicator exit resolves the full-cycle or H-day label

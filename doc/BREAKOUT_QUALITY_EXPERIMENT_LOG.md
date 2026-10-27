@@ -13937,3 +13937,70 @@ Decision: `ENGINEERING_CHECKPOINT_FIRST_REUSE / HISTORICAL_AK_EVIDENCE_PRESERVED
 - **根因**：`services/audit/target_oracle_romd.py::_read_only_score_keys()` 為正式授權的冷啟動 RUN 載入 price Target 的 Daily-universal feature cohort 時，直接 `str(profile.model_architecture)`；例如正式 `pure_mfe40_provider` 的 Profile 合法宣告 `model_architecture=None`，此語意表示繼承 Registry `definition.source["model_architecture"]`。字串化後被錯認為模型架構 `"None"`，在 `get_model_spec()` 前失敗。既有價格 Target `_load_truth()` 本來就已正確實作繼承解析。
 - **修正**：只在 `_read_only_score_keys()` 的資料載入呼叫改用 `str(profile.model_architecture or definition.source["model_architecture"])`，與已核准價格 Target 路徑一致。保留 `_load_truth()` 函式原始碼完全不變，以免僅為修正冷啟動而改動 `_price_score_algorithm_sha256()`，導致無關的價格型 Score Cache 失效。沒有切換模型、擴大 eligibility、變更任何 Source/Score/Replay identity 或恢復成熟窗口。
 - **獨立回歸**：新增 `test_oracle_cold_start_inherits_optional_profile_architecture`，用正式 Registry 的 `None` Profile 並覆寫合法 Registry 預設架構，實際呼叫冷啟動母體讀取鏈，驗證同一 2026 截止評分母體，不會傳遞字串 `"None"`；Oracle/MinTrade unittest 共 149/149 PASS。來源 byte comparison 證明 `_load_truth()` 和 `_price_score_algorithm_sha256()` 與本輪原 ZIP 相同。使用者 Windows Formal Bundle、全市場四 Seed Replay 與 E13 逐日 parity 尚未驗收；此修正不代表已取得新 RoMD。
+
+
+## 2026-10-27 — 全期間結果後 Target 算法獨立審查與修復（同一既有科學契約）
+
+### 基準、輸入與範圍
+
+- 唯一程式基準：`test-branch-1_20261027_211502_47952b65.zip`，SHA256 `b1726582530a636cea49f13dec3d1894514a55e91e17dc1b38eb3fbe12d2ccfe`；獨立解壓工作目錄 `/workspace/scratch/b884d04c0e9f/target_review_20261027_211502`。已依序讀取Project Settings、Registry、Experiment Log及相關Architecture/執行owner；本次只追加原始Log，未刪改舊bytes。
+- 使用者結果：`貼上的 Markdown(3).md`，SHA256 `15f88aa2050682c3e17d292cb62e7549c5bd44bef7acd30577523864935a557d`；評估2021-01-01～2026-03-02，common cohort630,589，4 Seeds（693545351、2014432738、104504529、762252050），15 Oracle treatments＋C96。ZIP沒有完整市場行情/P16/逐日Replay工件，僅附10檔reduced OHLCV，不能以貼出的summary重算真實drawdown、cash、trades或認證其source receipt。
+- 狀態：`USER_REPORTED_PRE_FIX`。以下數字為使用者貼出的歷史結果，不是本輪修復後重跑。60筆seed-paired RoMD、15組mean/sample SD/ddof=1/delta/wins在顯示rounding範圍內一致；16組年度表都覆蓋2021～2026、每年4 Seeds、2026為partial year。此算術檢查不等於逐日經濟驗收。
+
+### 已確認的錯誤、反例與修復
+
+1. **Price同分被重組浮點拆開**：正式T40/T40-MFE三條路徑均輸出float32 `0.25R`，正確percentile `[.5,.5,.5]`；原Oracle從已float32的components重組出`0.24999998137354806 / 0.2500000069849186 / 0.2499999999999991`，錯排`[0,1,.5]`。R/MFE也有獨立反例。改為直接使用正式canonical batch的`target_raw_r`，不用epsilon修名次或第二套公式；CG尾端component除法精度同步正式Daily loader，原50/50 geometry、First-Breach路徑保持。
+2. **MinTrade跨期訊號context凍結**：12/30原訊號、12/31未成交，1/1 P16 high_len由30改3；原Target仍把舊pending算成1/5買100、最終`+.3165886448R`，正式Portfolio已在1/2由新setup取代，原事件應為NULL且1/2成熟。該新setup的另一筆交易不能移接到舊標籤。另有current indicator清pending（原+.31659→NULL）、已成交indicator出場（原+.31659→-.1470411715R，淨損益-1470）、current ATR移停（原+.32249→-.1215694125R，淨損益-1214.6）四案。已以真實signals/Portfolio engine兩種single-member P16 payload比對；origin numeric params/entry geometry固定，逐session更新有效signal context，缺期fail closed。40/60/fullcycle同一owner，原A2無resolver行為不變。
+3. **Warm REUSE來源證據不完整**：price舊signed Replay在current formula SHA改變後仍REUSE；MinTrade source SHA未含position_management等實際owner；Dataset summary end由2026-03-02改2025-12-31時Daily Exact/Direct也仍REUSE。修正shared source closure及summary唯一witness，將price formula/label/source/summary與MinTrade實際owners/summary全程接通truth cache、共用feature cohort cache與Replay policy。修前反例先FAIL、修後PASS；無current witness的舊Target RUN，歷史bytes不變，C96依自己的有效身份REUSE，規劃期間沒有真值／Portfolio precompute；summary確認期間異動在producer前停止。
+
+### 獨立驗證與限制
+
+- 最終合併：`python3 -m unittest tools.validate.synthetic_target_oracle_cases tools.validate.synthetic_daily_trade40_oracle_cases tools.validate.synthetic_daily_trade40_cases -q`，183/183 PASS，6.729s。這不是`apps/run_bundle.py`或`apps/test_suite.py`，兩者均未執行。
+- 既有`validate_breakout_quality_trade_path_label_contract_case(None)`直接驗證16/16 assertions PASS：A2 continuation、partial TP、fee/risk、natural/forced exit、blocked/unfilled及optional deadline保持。
+- 獨立price手算2,402次精確float32比對PASS：H=1/2/7/40/60、四scalar formulas、排除information OHLC、峰後MAE、one-bar clip；不是將production函式當成expected。
+- 獨立MinTrade Decimal/time/ranking15項PASS：948股買100/stop90/賣103，淨損益2278、initial net risk9991、NetR=.22800520468421578；partial TP總淨損益6526、NetR=.653187869082174；自然stop=-1R、entry-day不能當沖、不可結算NULL、H40/60/87/100/None、cutoff後行情不影響、NULL-last/ties。另6組stock/ETF Decimal fee-min-tax案例PASS；現行raw fee=.001425，無自動6折/72%回饋，未變更fee config。
+- 真實Portfolio engine合成Oracle／DL score-boundary parity：3情境（首OOS資訊缺分、跨年effective參數、cutoff inference rows）×2獨立sizing fixtures×Exact/Direct＝12 pairs／24 replays；292組每日cash/positions/equity/params狀態、168筆execution配對、24筆trades配對一致。兩組fixtures不是本機真實4 Seeds的P16；僅排除刻意不同的score來源provenance欄位；無numba環境走既有reference fallback。
+- 原ZIP647個Python files AST parse PASS。附帶reduced9股（排0050）、10,859成熟stock-days的MFE/R/T/T-MFE新舊daily rank差異為0。這不涵蓋全市場630,589 feature cohort，也不含CG尾端；因此不能聲稱報表所有數值必變，更不能估計新RoMD。
+- 0050是feature benchmark、沒有DL score；Portfolio正式缺分fallback仍可選它，不能因Oracle自行排除。Exact/Direct共用同一Target分數，但Selector按各自既有契約；C96未加Direct語義或Target依賴。
+
+### 本輪決策與待驗收
+
+這是對既有Target算法／E13一致性及C23來源認證的工程修復，不新增SC、Target/Label、Report schema或實驗版本。原績效只保留作修復前歷史觀測，尚不能據此選定最佳Target。套用patch後由既有Research `[1] Target 驗證`重建9 price×4＋6 MinTrade×4＝60個scored Replay；C96的4格由自身價格/P16/cohort/交易完整身份決定REUSE/RUN，不強制重訓DL或跑Optimizer。正式Windows Bundle、全市場60個修復後Replay與真實4 Seeds E13逐日parity待本機驗收。沒有整檔刪除；PROJECT_SETTINGS、CMD、private ToDo/token、現行費率/比較清單/選單/模型與Portfolio engine未改。
+
+### 使用者回報的修復前聚合結果（完整16列，僅歷史證據）
+
+| Target | Return Mean | Ann. Mean | MDD Mean | RoMD Mean | RoMD SD | Delta RoMD | Win/Seed | EV(A) Mean |
+
+|---|---|---|---|---|---|---|---|---|
+
+| C96 Same-Window | +137.88% | +18.27% | 15.05% | 9.18 | 0.49 | +0.00 | - | +0.89 R |
+
+| CG40_EqualRank | +310.60% | +31.02% | 13.41% | 23.22 | 8.35 | +14.05 | 4/4 | +1.53 R |
+
+| MFE40 | +315.55% | +31.55% | 14.07% | 22.34 | 4.77 | +13.17 | 4/4 | +1.55 R |
+
+| R40 | +290.85% | +30.23% | 13.27% | 21.92 | 1.42 | +12.74 | 4/4 | +1.52 R |
+
+| T40 | +327.51% | +32.18% | 12.77% | 25.57 | 6.35 | +16.39 | 4/4 | +1.53 R |
+
+| T40-MFE | +277.63% | +29.21% | 12.79% | 21.63 | 3.86 | +12.45 | 4/4 | +1.54 R |
+
+| MFE40_Direct | +1339.25% | +65.59% | 14.36% | 98.76 | 56.20 | +89.58 | 4/4 | +2.41 R |
+
+| R40_Direct | +1312.01% | +65.07% | 12.83% | 101.49 | 47.97 | +92.32 | 4/4 | +2.62 R |
+
+| T40_Direct | +1398.61% | +66.78% | 11.71% | 116.71 | 51.78 | +107.53 | 4/4 | +3.32 R |
+
+| T40-MFE_Direct | +1644.24% | +70.44% | 13.12% | 123.34 | 77.07 | +114.17 | 4/4 | +3.40 R |
+
+| DailyUniversal_MinTrade40_NetR | +318.97% | +31.52% | 13.46% | 24.00 | 8.91 | +14.82 | 4/4 | +1.71 R |
+
+| DailyUniversal_MinTrade40_NetR_Direct | +1918.64% | +75.73% | 12.02% | 157.64 | 97.15 | +148.46 | 4/4 | +4.14 R |
+
+| DailyUniversal_MinTrade60_NetR | +321.21% | +31.93% | 13.28% | 24.25 | 5.52 | +15.07 | 4/4 | +1.77 R |
+
+| DailyUniversal_MinTrade60_NetR_Direct | +1741.22% | +74.05% | 11.77% | 146.51 | 63.57 | +137.33 | 4/4 | +4.02 R |
+
+| DailyUniversal_MinTrade_NetR | +336.92% | +32.70% | 13.53% | 25.40 | 8.23 | +16.23 | 4/4 | +1.74 R |
+
+| DailyUniversal_MinTrade_NetR_Direct | +1360.67% | +66.39% | 11.10% | 122.64 | 59.76 | +113.47 | 4/4 | +3.59 R |

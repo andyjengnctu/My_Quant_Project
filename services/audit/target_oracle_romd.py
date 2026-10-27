@@ -27,6 +27,11 @@ from core.breakout_quality_registry import (
 from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
     CONTINUOUS_RANKER_TARGET_POSTPROCESS_NONE,
+    DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+    DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
+    DAILY_TERMINAL_R40_TARGET_ID,
+    DAILY_TERMINAL_MAE_GATED_T40_TARGET_ID,
+    DAILY_FULL_HORIZON_MAE_GATED_MFE_T40_TARGET_ID,
 )
 from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
 from core.console_report import render_table, render_title
@@ -43,7 +48,6 @@ from filters.breakout_quality.workflow_io import discover_dataset_csv_inputs, lo
 from filters.breakout_quality.continuous_target import (
     StrategyAlignedContinuousTargetSpec,
     full_horizon_mae_safety_r_from_minimum_low_return,
-    full_horizon_mae_gated_reward_r,
 )
 from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY
 from filters.breakout_quality.mfe_safety_geometry import normalize_ticker
@@ -60,7 +64,8 @@ from filters.breakout_quality.strategy_compare_sources import (
 from filters.breakout_quality.strategy_rule_policies import ALL_RULE_FILTERS_OFF_OVERRIDES
 from services.audit.reusable_report import persist_reusable_report
 from services.audit.oracle_score_artifacts import (
-    OraclePriceScoreStore, price_score_source_identity,
+    OraclePriceScoreStore, price_score_source_identity, price_score_replay_lineage,
+    oracle_dataset_summary_sha256,
 )
 from config.audit import AUDIT_OUTPUT_ROOT
 from services.audit.oracle_replay_artifacts import (
@@ -634,8 +639,20 @@ def _market_truth_for_oracle(
     settings, _baseline, _exact = _contract(definition)
     plan = _oracle_comparison_plan(definition)
     fields = (provider_fields if provider_fields is not None else plan["providers"])
-    terminal_fields = {field for recipe, field in plan["recipes"].values()
-                       if recipe in ("terminal_r", "terminal_mae_gate")}
+    # Scalar Oracle targets consume the canonical label output itself.  Rebuilding
+    # T from float32 MFE/MAE components, or ranking an unrounded terminal return,
+    # can split exact float32 label ties and change the selected portfolio.
+    scalar_target_ids = {
+        "terminal_r": DAILY_TERMINAL_R40_TARGET_ID,
+        "terminal_mae_gate": DAILY_TERMINAL_MAE_GATED_T40_TARGET_ID,
+        "mfe_mae_gate": DAILY_FULL_HORIZON_MAE_GATED_MFE_T40_TARGET_ID,
+    }
+    scalar_recipes = {
+        field: {recipe: scalar_target_ids[recipe]
+                for recipe, provider in plan["recipes"].values()
+                if provider == field and recipe in scalar_target_ids}
+        for field in fields
+    }
     specs = {}
     for field in fields:
         profile_id = str(definition.source[field])
@@ -660,6 +677,17 @@ def _market_truth_for_oracle(
             maturity,
             str(policy.component_target_id),
         )
+        if any(recipe == "mfe" and provider == field
+               for recipe, provider in plan["recipes"].values()):
+            # Preserve the provider's approved path selection as well as H.
+            # First-breach MFE must not become a full-horizon MFE merely to
+            # obtain the canonical float32 label output.
+            if policy.component_target_id not in {
+                DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+                DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID,
+            }:
+                raise OracleBlockedError(f"{field}: scalar MFE requires a canonical pure-MFE provider")
+            scalar_recipes[field]["mfe"] = str(policy.component_target_id)
 
     csv_inputs, duplicates = discover_dataset_csv_inputs(root, settings.dataset)
     if duplicates:
@@ -723,7 +751,8 @@ def _market_truth_for_oracle(
             if (remaining < 0).any():
                 raise OracleBlockedError(f"{field}: information date after Research cutoff")
             values = np.full((len(eligible), 4), np.nan, dtype=np.float64)
-            terminal_r = np.full(len(eligible), np.nan, dtype=np.float64)
+            scalar_raw = {recipe: np.full(len(eligible), np.nan, dtype=np.float32)
+                          for recipe in scalar_recipes[field]}
             valid = np.zeros(len(eligible), dtype=bool)
             risk = float(spec.risk_budget_return)
             for bars in np.unique(remaining):
@@ -735,7 +764,8 @@ def _market_truth_for_oracle(
                     # last-day score cannot create a next-day Research trade.
                     valid[selected] = np.isfinite(anchor) & (anchor > 0.0)
                     values[selected, :] = 0.0
-                    terminal_r[selected] = 0.0
+                    for target_values in scalar_raw.values():
+                        target_values[selected] = 0.0
                     continue
                 # The canonical batch routine supports a one-bar *observed*
                 # path; StrategyAligned spec validation applies only to the
@@ -746,17 +776,24 @@ def _market_truth_for_oracle(
                 )
                 valid[selected] = np.asarray(clipped.valid_mask, dtype=bool)
                 values[selected, :] = np.column_stack((
-                    np.asarray(clipped.favorable_return, dtype=float) / risk,
-                    np.asarray(clipped.adverse_return_to_peak, dtype=float) / risk,
+                    np.asarray(clipped.favorable_return / risk, dtype=float),
+                    np.asarray(clipped.adverse_return_to_peak / risk, dtype=float),
                     np.asarray(clipped.minimum_low_return, dtype=float),
                     np.asarray(clipped.target_raw_r, dtype=float),
                 ))
-                terminal_r[selected] = (
-                    closes[eligible[selected] + int(bars)] / anchor - 1.0
-                ) / risk
+                for recipe, scalar_target_id in scalar_recipes[field].items():
+                    scalar_batch = clipped if scalar_target_id == target_id else (
+                        compute_daily_opportunity_target_batch(
+                            frame, eligible[selected],
+                            spec=replace(spec, horizon_bars=int(bars)),
+                            target_id=scalar_target_id,
+                        )
+                    )
+                    valid[selected] &= np.asarray(scalar_batch.valid_mask, dtype=bool)
+                    scalar_raw[recipe][selected] = scalar_batch.target_raw_r
             valid &= np.isfinite(values).all(axis=1)
-            if field in terminal_fields:
-                valid &= np.isfinite(terminal_r)
+            for target_values in scalar_raw.values():
+                valid &= np.isfinite(target_values)
             if not valid.all():
                 missing_day = str(dates[eligible[np.flatnonzero(~valid)[0]]].date())
                 raise OracleBlockedError(
@@ -772,8 +809,8 @@ def _market_truth_for_oracle(
                 "min_low": values[:, 2],
                 "raw": values[:, 3],
             }
-            if field in terminal_fields:
-                columns["terminal_r"] = terminal_r
+            columns.update({f"scalar_raw_{recipe}": target_values
+                            for recipe, target_values in scalar_raw.items()})
             chunks[field].append(pd.DataFrame(columns))
     truth = {}
     for field in chunks:
@@ -834,8 +871,9 @@ def _reconcile_oracle_truth(
         matched[name] = np.where(
             completed, check[f"{name}_provider"], check[f"{name}_market"]
         )
-    if "terminal_r" in check:
-        matched["terminal_r"] = check["terminal_r"]
+    for name in market.columns:
+        if name.startswith("scalar_raw_"):
+            matched[name] = check[name]
     return matched, int((~completed).sum())
 
 
@@ -883,22 +921,6 @@ def _load_truth(definition, root: Path, source_field: str, *, cutoff: str) -> pd
     if frame.empty or frame.duplicated(["ticker", "date"]).any():
         raise OracleBlockedError(f"{source_field}: empty/duplicated canonical eligible cohort")
     return frame
-
-
-def _terminal_mae_gate_r(r40: pd.Series, safety_mae40: pd.Series, *, horizon: int = 40) -> pd.Series:
-    """T_h = (1-m)*R_h-m, m=clip(MAE_h_R,0,1); at 1R stop T_h=-1R.
-
-    Oracle ranking label only: NOT a historical cash execution or ATR stop.
-    Full-horizon MAE is nonnegative; Safety is its negative signed form.
-    """
-    terminal = np.asarray(r40, dtype=np.float64)
-    safety = np.asarray(safety_mae40, dtype=np.float64)
-    if (terminal.shape != safety.shape or not np.isfinite(terminal).all()
-            or not np.isfinite(safety).all() or (safety > 0.0).any()):
-        raise OracleBlockedError(
-            f"T{horizon} requires finite R{horizon} and nonnegative MAE{horizon} in canonical R"
-        )
-    return pd.Series(full_horizon_mae_gated_reward_r(terminal, safety), index=r40.index, dtype=float)
 
 
 def _build_oracle_score_panels(
@@ -983,11 +1005,7 @@ def _build_oracle_score_panels(
                 raise OracleBlockedError(f"Oracle {name}缺少canonical欄位：{label}")
             return pd.to_numeric(joint[label], errors="raise")
 
-        if recipe == "mfe":
-            value = col("mfe")
-        elif recipe == "terminal_r":
-            value = col("terminal_r")
-        else:
+        if recipe == "equal_rank_mfe_safety":
             safety = safety_by_provider.get(provider)
             if safety is None:
                 safety = full_horizon_mae_safety_r_from_minimum_low_return(
@@ -997,14 +1015,11 @@ def _build_oracle_score_panels(
                 if not np.isfinite(safety.to_numpy(dtype=float)).all():
                     raise OracleBlockedError(f"Oracle {provider} MAE safety包含不合法值")
                 safety_by_provider[provider] = safety
-            if recipe == "equal_rank_mfe_safety":
-                value = (percentile(col("mfe")) + percentile(safety)) / 2
-            elif recipe == "terminal_mae_gate":
-                value = _terminal_mae_gate_r(col("terminal_r"), safety)
-            elif recipe == "mfe_mae_gate":
-                value = _terminal_mae_gate_r(col("mfe"), safety)
-            else:
-                raise OracleBlockedError(f"Oracle未授權的score recipe：{recipe}")
+            # CG is the approved geometry proxy of the formal MFE/Safety
+            # components, not the scalar pure-MFE label or a learned head.
+            value = (percentile(col("mfe")) + percentile(safety)) / 2
+        else:
+            value = col(f"scalar_raw_{recipe}")
         raw[name] = pd.Series(value, index=joint.index)
 
     keys = list(zip(joint["ticker"].astype(str), joint["date"].astype(str)))
@@ -1056,7 +1071,7 @@ def _price_score_algorithm_sha256() -> str:
     functions = (
         _oracle_comparison_plan, _formal_dl_score_start,
         _build_oracle_score_panels, _load_truth, _market_truth_for_oracle,
-        _reconcile_oracle_truth, _terminal_mae_gate_r,
+        _reconcile_oracle_truth,
         _canonical_score_map_sha256,
     )
     digest = hashlib.sha256()
@@ -1064,6 +1079,15 @@ def _price_score_algorithm_sha256() -> str:
         digest.update(func.__qualname__.encode("utf-8") + b"\0")
         digest.update(inspect.getsource(func).encode("utf-8") + b"\n")
     return digest.hexdigest()
+
+
+def _price_score_replay_lineage(definition, project_root: Path | None = None) -> dict[str, Any]:
+    return price_score_replay_lineage(
+        root=Path(project_root) if project_root is not None else Path(__file__).resolve().parents[2],
+        filter_id=str(definition.source["filter_id"]),
+        score_algorithm_sha256=_price_score_algorithm_sha256(),
+        label_policy=DEFAULT_LABEL_POLICY.as_manifest_payload(),
+    )
 
 
 def _load_or_build_oracle_price_scores(
@@ -1564,7 +1588,8 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
                        replay_policy: Mapping[str, Any],
                        daily_evidence: Mapping[str, Any] | None = None,
                        score_sha256: str | None = None,
-                       score_contract: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                       score_contract: Mapping[str, Any] | None = None,
+                       project_root: Path | None = None) -> dict[str, Any]:
     """One target-scoped economic/score identity for fast and normal REUSE."""
     policy = dict(replay_policy)
     policy["period_stats_implementation"] = PERIOD_STATS_IMPLEMENTATION
@@ -1586,6 +1611,13 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
         from services.audit.daily_trade40_oracle import truth_producer_fingerprint
         if daily_evidence.get("truth_source_sha256") != truth_producer_fingerprint():
             raise OracleBlockedError("Oracle Target truth has no verified executing producer lineage")
+        source_summary_sha = oracle_dataset_summary_sha256(
+            root=Path(project_root) if project_root is not None else Path(__file__).resolve().parents[2],
+            filter_id=str(definition.source["filter_id"]),
+        )
+        if ("dataset_summary_sha256" not in daily_evidence or
+                daily_evidence["dataset_summary_sha256"] != source_summary_sha):
+            raise OracleBlockedError("Oracle Target truth has no matching dataset-source evidence")
         source = plan["daily_sources"][target]
         recipe, provider, horizon = plan["daily_recipes"][source]
         policy["hindsight_score_recipe"] = recipe
@@ -1600,6 +1632,7 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
             "rank_sha256": daily_evidence["rank_sha256"],
             "raw_label_sha256": daily_evidence["raw_label_sha256"],
             "truth_source_sha256": daily_evidence["truth_source_sha256"],
+            "dataset_summary_sha256": daily_evidence["dataset_summary_sha256"],
             "calendar_sha256": daily_evidence["calendar_sha256"],
             "teacher": daily_evidence["teacher"],
             "mature_eligible_rows": daily_evidence["mature_eligible_rows"],
@@ -1615,6 +1648,15 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
             "research_cutoff": daily_evidence["research_cutoff"],
             **({"oracle_evaluation_start_date": daily_evidence["oracle_evaluation_start_date"]}
                if daily_evidence.get("oracle_evaluation_start_date") else {}),
+        }
+    elif target != str(definition.source["baseline_arm_id"]):
+        source = plan["aliases"].get(target, target)
+        recipe, provider = plan["recipes"][source]
+        policy["hindsight_target_contract"] = {
+            **_price_score_replay_lineage(definition, project_root),
+            "target_id": source,
+            "profile_id": str(definition.source[provider]),
+            "score_recipe": recipe,
         }
     return policy
 
@@ -2019,6 +2061,7 @@ def _build_report_once(
                        baseline_identity_arm if target == "C96" else exact_arm)
                 arm_replay_policy = _arm_replay_policy(
                     definition, plan=plan, target=target, replay_policy=replay_policy,
+                    project_root=root,
                     daily_evidence=daily_seed_evidence.get(seed, {}).get(
                         plan["daily_sources"][target]) if target in plan["daily_sources"] else None,
                     score_sha256=(score_fingerprints[seed][target] if target != "C96" else None),
@@ -2247,7 +2290,7 @@ def _read_only_score_keys(
 
 
 def _replay_attested_score_keys(
-    *, store, contracts: Mapping[str, Mapping[str, Any]],
+    *, definition, store, contracts: Mapping[str, Mapping[str, Any]],
     plan: Mapping[str, Any], prepared, price_sha: str,
     settings, robustness, evaluation_end: str,
 ) -> dict[str, tuple[str, int, str, str]]:
@@ -2265,6 +2308,10 @@ def _replay_attested_score_keys(
     # Source code hashes are small, read-only provenance checks: NO outcomes,
     # DL labels, 558-ticker simulation or Portfolio are materialized here.
     producer_sha = truth_producer_fingerprint() if plan["daily_recipes"] else None
+    price_producer_sha = (_price_score_replay_lineage(definition, store.project_root)["truth_source_sha256"]
+                          if plan["recipes"] else None)
+    dataset_summary_sha = oracle_dataset_summary_sha256(
+        root=store.project_root, filter_id=str(definition.source["filter_id"]))
     proofs: dict[tuple[str, bool], tuple[str, int, str, str]] = {}
     start = str(settings.start_date)
     for seed, param_sha, *_unused in prepared:
@@ -2281,13 +2328,18 @@ def _replay_attested_score_keys(
                 policy = saved.get("replay_policy") or {}
                 # A historical perfect-score SHA proves the *old* score bytes,
                 # not that the current Target producer has the same semantics.
-                # This capability check applies to every declared MinTrade
-                # horizon and Exact/Direct, without a target-name allowlist.
-                if target in plan["daily_sources"]:
-                    lineage = policy.get("hindsight_target_contract") or {}
-                    if (not isinstance(lineage, Mapping) or
-                            lineage.get("truth_source_sha256") != producer_sha):
-                        continue
+                # Both price and trade-path scores require current producer
+                # evidence; a warm Replay must not bypass its truth-cache SHA.
+                lineage = policy.get("hindsight_target_contract") or {}
+                current_producer_sha = (producer_sha if target in plan["daily_sources"]
+                                        else price_producer_sha)
+                if (not isinstance(lineage, Mapping) or
+                        lineage.get("truth_source_sha256") != current_producer_sha):
+                    continue
+                if target in plan["daily_sources"] and (
+                        "dataset_summary_sha256" not in lineage or
+                        lineage["dataset_summary_sha256"] != dataset_summary_sha):
+                    continue
                 cohort = saved.get("cohort") or {}
                 source_contract = policy.get("canonical_dl_score_contract") or {}
                 if (not isinstance(policy, Mapping) or
@@ -2398,6 +2450,10 @@ def _certified_saved_oracle_identity(
             raise ValueError("historical daily-truth lineage missing")
         if recorded.get("truth_source_sha256") != truth_producer_fingerprint():
             raise ValueError("historical Target outcome producer semantics not certified")
+        if ("dataset_summary_sha256" not in recorded or
+                recorded["dataset_summary_sha256"] != oracle_dataset_summary_sha256(
+                    root=project_root, filter_id=str(definition.source["filter_id"]))):
+            raise ValueError("historical daily Target dataset-source evidence differs")
         actual_id, label_id = target_identity_for_horizon(horizon)
         teacher = recorded.get("teacher")
         if (recorded.get("target_id") != actual_id
@@ -2425,8 +2481,10 @@ def _certified_saved_oracle_identity(
     reconstructed = _arm_replay_policy(
         definition, plan=plan, target=target, replay_policy=base_policy,
         daily_evidence=daily_evidence, score_sha256=score_sha,
-        score_contract=expected_score,
+        score_contract=expected_score, project_root=project_root,
     )
+    if not source and policy.get("hindsight_target_contract") != reconstructed.get("hindsight_target_contract"):
+        raise ValueError("historical price Target producer/source evidence differs")
     expected = replay_identity(
         dataset=settings.dataset, dataset_sha256=price_sha,
         target=target, definition={target: target},
@@ -2602,7 +2660,7 @@ def _execute_single_stage_missing(
                     definition, plan=plan, target=target, replay_policy=base_policy,
                     daily_evidence=evidence,
                     score_sha256=_canonical_score_map_sha256(score_map),
-                    score_contract=full_contract,
+                    score_contract=full_contract, project_root=project_root,
                 )
             identity = replay_identity(
                 dataset=settings.dataset, dataset_sha256=price_sha,
@@ -2711,7 +2769,7 @@ def _run_single_stage_oracle(
     # Artifact-only score-universe proof. A full DL data-provider call here
     # silently recomputed hundreds of 40D price labels even on 100% REUSE.
     keys = _replay_attested_score_keys(
-        store=cache, contracts=contracts, plan=plan, prepared=prepared,
+        definition=definition, store=cache, contracts=contracts, plan=plan, prepared=prepared,
         price_sha=price_sha, settings=settings, robustness=robustness,
         evaluation_end=end,
     )
@@ -2752,6 +2810,10 @@ def _run_single_stage_oracle(
     # claim unchanged outcome semantics after the canonical cutoff bug fix.
     current_daily_producer_sha = (truth_producer_fingerprint()
                                   if plan["daily_recipes"] else None)
+    current_price_producer_sha = (_price_score_replay_lineage(definition, root)["truth_source_sha256"]
+                                  if plan["recipes"] else None)
+    current_dataset_summary_sha = oracle_dataset_summary_sha256(
+        root=root, filter_id=str(definition.source["filter_id"]))
     # Read the current canonical input manifest once; every stored score
     # receipt is checked against that same source and fixed evaluation scope.
     # No existing scored witness means every scored cell is a genuine RUN.
@@ -2794,10 +2856,15 @@ def _run_single_stage_oracle(
                                   and item.get("benchmark") == robustness.benchmark_id
                                   and (item.get("replay_policy") or {}).get(
                                       "oracle_parity_implementation") == ORACLE_PARITY_IMPLEMENTATION
-                                  and (target not in plan["daily_sources"] or
-                                       ((item.get("replay_policy") or {}).get(
-                                           "hindsight_target_contract") or {}).get(
-                                               "truth_source_sha256") == current_daily_producer_sha)]
+                                  and ((item.get("replay_policy") or {}).get(
+                                      "hindsight_target_contract") or {}).get("truth_source_sha256")
+                                      == (current_daily_producer_sha if target in plan["daily_sources"]
+                                          else current_price_producer_sha)
+                                  and (target not in plan["daily_sources"] or (
+                                      "dataset_summary_sha256" in ((item.get("replay_policy") or {}).get(
+                                          "hindsight_target_contract") or {}) and
+                                      ((item.get("replay_policy") or {}).get("hindsight_target_contract") or {}).get(
+                                          "dataset_summary_sha256") == current_dataset_summary_sha))]
             if not current_candidates:
                 # Old outcomes are preserved as historical evidence. Only
                 # this missing *current* producer identity needs new truth.
@@ -2847,6 +2914,8 @@ def _run_single_stage_oracle(
                                  "ran: " + " | ".join(problems[:3]))
     if not preflight_approval(preflight):
         return {"status": "CANCELLED", "read_only": True, "preflight": decisions}
+    if oracle_dataset_summary_sha256(root=root, filter_id=str(definition.source["filter_id"])) != current_dataset_summary_sha:
+        raise OracleBlockedError("Oracle dataset-source metadata changed after approved preflight")
     # Cold-start eligibility is needed only to produce genuinely missing arms.
     # Performing this DL provider load before the user's approval was the
     # original hidden 617-price-path preflight rerun.

@@ -6,6 +6,7 @@ No formal Windows suite, fitting, optimizer, or real-market Replay is run here.
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -22,6 +23,7 @@ from filters.breakout_quality.daily_trade40_target import (
     HORIZON_SESSIONS, ExecutableMinPeriod, build_formal_min_execution_schedule,
     compute_counterfactual_trade40_batch, resolve_historical_min_period,
     collect_canonical_exchange_sessions,
+    resolve_formal_min_param_records,
 )
 from filters.breakout_quality.trade_path_label import (
     build_signal_cache, simulate_realized_trade_path_label,
@@ -392,6 +394,262 @@ class FormalMinTrade40SyntheticCases(unittest.TestCase):
         )
         self.assertFalse(batch.valid_mask[0])
         self.assertEqual(batch.reasons[0], "no_historical_effective_Min_param")
+
+
+class FormalMinRollingContextCases(unittest.TestCase):
+    """Differential witnesses against the real Portfolio loop, without mocks.
+
+    Both paths receive the same hypothetical originating setup. All subsequent
+    signals are produced by generate_signals and all fills use canonical core
+    execution. Portfolio cash/selector constraints do not bind this one trade.
+    """
+
+    @staticmethod
+    def _fixture(prices=(105, 106, 100, 102, 103, 104), *, tail_sessions=0):
+        days = pd.bdate_range(end="2025-12-30", periods=51).append(
+            pd.DatetimeIndex(["2025-12-31", "2026-01-02", "2026-01-05",
+                              "2026-01-06", "2026-01-07", "2026-01-08"])
+        )
+        if tail_sessions:
+            days = days.append(pd.bdate_range("2026-01-09", periods=tail_sessions))
+        close = np.full(len(days), 100.0)
+        close[30:38] = 120.0  # Old long breakout window still contains this high.
+        close[51:57] = prices
+        close[57:] = prices[-1]
+        frame = pd.DataFrame({
+            "Open": close.copy(), "High": close + 1, "Low": close - 1,
+            "Close": close, "Volume": np.full(len(days), 100_000.0),
+        }, index=days)
+        frame.attrs["ticker"] = "2330"
+        params = V16StrategyParams(
+            high_len=30, atr_len=3, atr_buy_tol=0.0,
+            atr_times_init=5.0, atr_times_trail=20.0,
+            tp_percent=0.0, min_entry_notional=0.0,
+            use_breakout_ema_filter=False, use_bb=False, use_kc=False,
+            use_vol=False, use_breakout_return_filter=False,
+            use_breakout_false_filter=False, use_history_threshold=False,
+            use_breakout_quality_filter=False, use_breakout_quality_ranking=False,
+        )
+        return frame, params
+
+    @staticmethod
+    def _schedule(frame, old_params, new_params, kind):
+        from core.params_io import params_to_json_dict
+        rows = {str(frame.index[0].date()): params_to_json_dict(old_params),
+                "2026-01-01": params_to_json_dict(new_params)}
+        if kind == "rolling_active_param_ensemble":
+            payload = {
+                "schema_type": "optimizer_active_param_ensemble", "mode": "rolling",
+                "params_ensemble_by_effective_date": {
+                    day: [{"member_index": 1, "seed": 1, "params": params}]
+                    for day, params in rows.items()
+                },
+            }
+        else:
+            payload = {"schema_type": "rolling_oos_param_set",
+                       "params_by_effective_date": rows}
+        payload["summary"] = {"oos_end_date": str(frame.index[-1].date())}
+        records = resolve_formal_min_param_records(kind, payload)
+        return build_formal_min_execution_schedule(
+            records, seed=1, param_sha256="a" * 64,
+        )[0]
+
+    @staticmethod
+    def _formal(frame, old_params, new_params, kind, *, cutoff=None):
+        from core.portfolio_engine import run_portfolio_timeline
+        from core.portfolio_fast_data import (
+            pack_static_market_data, pack_optimizer_dynamic_data,
+            merge_static_market_with_dynamic, build_normal_setup_index,
+            build_trade_stats_index,
+        )
+        old_cache = tuple(np.copy(value) for value in build_signal_cache(
+            frame, old_params, ticker="2330"))
+        # The daily Target's only counterfactual is this fresh original intent.
+        old_cache[1][50] = True
+        old_cache[3][50] = 100.0
+        new_cache = build_signal_cache(frame, new_params, ticker="2330")
+        static = pack_static_market_data(frame)
+
+        def context(cache):
+            fast = {"2330": merge_static_market_with_dynamic(
+                static, pack_optimizer_dynamic_data(cache))}
+            return {"all_dfs_fast": fast,
+                    "all_pit_stats_index": {"2330": build_trade_stats_index([])},
+                    "normal_setup_index": build_normal_setup_index(fast)}
+
+        old_context, new_context = context(old_cache), context(new_cache)
+        switch = pd.Timestamp("2026-01-01")
+        params_for_day = lambda day: new_params if day >= switch else old_params
+        context_for_day = lambda day: new_context if day >= switch else old_context
+        if kind == "rolling_active_param_ensemble":
+            callbacks = {
+                "active_param_ensemble_resolver": lambda day: [{
+                    "member_index": 1, "member_key": "1", "seed": 1,
+                    "params_obj": params_for_day(day),
+                    "params_signature": build_portfolio_params_signature(params_for_day(day)),
+                }],
+                "active_context_ensemble_resolver": lambda day: [context_for_day(day)],
+            }
+        else:
+            callbacks = {"active_params_resolver": params_for_day,
+                         "active_context_resolver": context_for_day}
+        profile = {"capture_equity_curve": True, "_timing_enabled": False}
+        end = frame.index[-1] if cutoff is None else cutoff
+        sessions = frame.index[51:][frame.index[51:] <= end].tolist()
+        result = run_portfolio_timeline(
+            old_context["all_dfs_fast"], {}, sessions, 2025, old_params, 10, False,
+            is_training=False, verbose=False, profile_stats=profile,
+            pit_stats_index=old_context["all_pit_stats_index"], **callbacks,
+        )
+        original = [row for row in profile["closed_trade_rows"]
+                    if row["signal_date"] == "2025-12-30"]
+        return original, result[1]
+
+    @staticmethod
+    def _legacy(frame, params):
+        return simulate_realized_trade_path_label(
+            frame, ticker="2330", signal_pos=50, params=params,
+            teacher_effective_date=str(frame.index[0].date()),
+            precomputed_signals=build_signal_cache(frame, params, ticker="2330"),
+            horizon_end_date=frame.index[-1], counterfactual_entry_limit=100.0,
+        )
+
+    def test_pending_rollover_supersedes_original_for_40_60_and_full_cycle(self):
+        frame, params = self._fixture(tail_sessions=70)
+        frame.loc["2025-12-31", "Open"] = 104.0
+        frame.loc["2026-01-02", "Open"] = 105.0
+        new_params = replace(params, high_len=3)
+        legacy = self._legacy(frame, params)
+        self.assertAlmostEqual(legacy.realized_net_r, 0.31658864482054977)
+        self.assertEqual(legacy.fill_date, "2026-01-05")
+        for kind in ("rolling_oos_param_schedule", "rolling_active_param_ensemble"):
+            with self.subTest(kind=kind):
+                schedule = self._schedule(frame, params, new_params, kind)
+                original, history = self._formal(frame, params, new_params, kind)
+                self.assertEqual(original, [])
+                # Formal Replay does buy a different origin; its loss is not
+                # the counterfactual 12/30 event's NULL outcome.
+                fills = history[history["Type"].str.startswith("買進")]
+                self.assertEqual(fills.iloc[0]["買訊日"], "2025-12-31")
+                self.assertEqual(fills.iloc[0]["Date"], "2026-01-02")
+                for horizon in (40, 60, None):
+                    actual = compute_counterfactual_trade40_batch(
+                        frame, np.asarray([50]), ticker="2330", schedule=schedule,
+                        exchange_calendar=frame.index, horizon_sessions=horizon,
+                    )
+                    self.assertFalse(actual.valid_mask[0])
+                    self.assertTrue(np.isnan(actual.target_raw_r[0]))
+                    self.assertEqual(actual.reasons, ("unfilled_superseded_by_new_setup",))
+                    self.assertEqual(str(actual.maturity_dates[0]), "2026-01-02")
+
+    def test_pending_cleanup_consumes_current_indicator_without_replacing_origin_params(self):
+        frame, params = self._fixture((105, 108, 104, 105, 100, 104))
+        new_params = replace(params, atr_times_trail=0.5)
+        self.assertEqual(self._legacy(frame, params).fill_date, "2026-01-07")
+        for kind in ("rolling_oos_param_schedule", "rolling_active_param_ensemble"):
+            with self.subTest(kind=kind):
+                schedule = self._schedule(frame, params, new_params, kind)
+                original, _ = self._formal(frame, params, new_params, kind)
+                self.assertEqual(original, [])
+                actual = compute_counterfactual_trade40_batch(
+                    frame, np.asarray([50]), ticker="2330", schedule=schedule,
+                    exchange_calendar=frame.index, horizon_sessions=None,
+                )
+                self.assertTrue(np.isnan(actual.target_raw_r[0]))
+                self.assertEqual(actual.reasons, ("unfilled_terminated",))
+                self.assertEqual(str(actual.maturity_dates[0]), "2026-01-06")
+
+    def test_filled_position_uses_current_sell_context_and_origin_numeric_rules(self):
+        frame, params = self._fixture((100, 105, 100, 99, 101, 104))
+        new_params = replace(params, atr_times_trail=0.5, fixed_risk=0.04)
+        self.assertGreater(self._legacy(frame, params).realized_net_r, 0.0)
+        for kind in ("rolling_oos_param_schedule", "rolling_active_param_ensemble"):
+            with self.subTest(kind=kind):
+                schedule = self._schedule(frame, params, new_params, kind)
+                original, _ = self._formal(frame, params, new_params, kind)
+                self.assertEqual(len(original), 1)
+                expected = original[0]
+                self.assertEqual(expected["entry_trade_date"], "2025-12-31")
+                self.assertEqual(expected["exit_date"], "2026-01-06")
+                self.assertEqual(expected["exit_price"], 99.0)
+                self.assertEqual(expected["pnl"], -1470.0)
+                actual = compute_counterfactual_trade40_batch(
+                    frame, np.asarray([50]), ticker="2330", schedule=schedule,
+                    exchange_calendar=frame.index, horizon_sessions=None,
+                )
+                self.assertTrue(actual.valid_mask[0])
+                self.assertEqual(actual.target_raw_r[0], np.float32(expected["r_mult"]))
+                self.assertEqual(str(actual.maturity_dates[0]), expected["exit_date"])
+
+    def test_filled_position_trailing_stop_consumes_current_atr(self):
+        frame, params = self._fixture((100, 105, 100, 99, 101, 104))
+        params = replace(params, atr_len=1, atr_times_trail=2.0)
+        new_params = replace(params, atr_len=3)
+        for current_params in (params, new_params):
+            self.assertFalse(build_signal_cache(frame, current_params, ticker="2330")[2][51:].any())
+        self.assertGreater(self._legacy(frame, params).realized_net_r, 0.0)
+        for kind in ("rolling_oos_param_schedule", "rolling_active_param_ensemble"):
+            with self.subTest(kind=kind):
+                schedule = self._schedule(frame, params, new_params, kind)
+                original, _ = self._formal(frame, params, new_params, kind)
+                self.assertEqual(len(original), 1)
+                expected = original[0]
+                self.assertEqual(expected["exit_date"], "2026-01-05")
+                self.assertEqual(expected["exit_price"], 99.3)
+                actual = compute_counterfactual_trade40_batch(
+                    frame, np.asarray([50]), ticker="2330", schedule=schedule,
+                    exchange_calendar=frame.index, horizon_sessions=40,
+                )
+                self.assertEqual(actual.target_raw_r[0], np.float32(expected["r_mult"]))
+                self.assertEqual(str(actual.maturity_dates[0]), expected["exit_date"])
+
+    def test_continuation_keeps_origin_entry_geometry_sizing_and_unchanged_path(self):
+        frame, params = self._fixture()
+        baseline = self._legacy(frame, params)
+        for kind in ("rolling_oos_param_schedule", "rolling_active_param_ensemble"):
+            for new_params in (params, replace(params, atr_times_init=1.0,
+                                               fixed_risk=0.04, atr_buy_tol=10.0)):
+                with self.subTest(kind=kind, params_changed=new_params != params):
+                    schedule = self._schedule(frame, params, new_params, kind)
+                    original, history = self._formal(frame, params, new_params, kind)
+                    self.assertEqual(len(original), 1)
+                    self.assertEqual(original[0]["entry_trade_date"], "2026-01-05")
+                    self.assertEqual(original[0]["entry_price"], 100.0)
+                    self.assertEqual(original[0]["pnl"], baseline.realized_net_pnl)
+                    self.assertEqual(original[0]["r_mult"], baseline.realized_net_r)
+                    fills = history[history["Type"].str.startswith("買進")]
+                    self.assertEqual(int(fills.iloc[0]["股數"]), 931)
+                    actual = compute_counterfactual_trade40_batch(
+                        frame, np.asarray([50]), ticker="2330", schedule=schedule,
+                        exchange_calendar=frame.index, horizon_sessions=None,
+                    )
+                    self.assertEqual(actual.target_raw_r[0], np.float32(baseline.realized_net_r))
+                    self.assertEqual(str(actual.maturity_dates[0]), baseline.exit_date)
+
+    def test_no_future_parameter_access_and_midpath_gap_fails_closed(self):
+        from filters.breakout_quality import daily_trade40_target as owner
+        for prices in ((105, 106, 100, 102, 103, 104), (100, 105, 100, 99, 101, 104)):
+            frame, params = self._fixture(prices)
+            schedule = self._schedule(frame, params, replace(params, high_len=3),
+                                      "rolling_oos_param_schedule")
+            with patch.object(owner, "build_signal_cache", wraps=build_signal_cache) as cache:
+                short = compute_counterfactual_trade40_batch(
+                    frame, np.asarray([50]), ticker="2330", schedule=schedule,
+                    exchange_calendar=frame.index, horizon_sessions=None,
+                    research_cutoff="2025-12-31",
+                )
+                self.assertFalse(short.valid_mask[0])
+                self.assertEqual(cache.call_count, 1)
+                self.assertIs(cache.call_args.args[1], schedule[0].params)
+            # Missing active params are invalid source truth, both while still
+            # pending and while holding. The next future period cannot fill it.
+            gap_schedule = (schedule[0], replace(schedule[1], start=pd.Timestamp("2026-01-05")))
+            with self.assertRaisesRegex(ValueError,
+                                        "no_historical_effective_Min_param.*2026-01-02"):
+                compute_counterfactual_trade40_batch(
+                    frame, np.asarray([50]), ticker="2330", schedule=gap_schedule,
+                    exchange_calendar=frame.index, horizon_sessions=None,
+                )
 
 
 if __name__ == "__main__":

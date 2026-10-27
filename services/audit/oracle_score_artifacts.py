@@ -27,24 +27,78 @@ from filters.breakout_quality.paths import resolve_filter_output_dir
 _PRICE_SCORE_CACHE_SCHEMA = 1
 # Includes pure-price and official daily-DL eligibility capabilities, but not
 # portfolio execution, menu, rendering or experiment report source code.
-_PRICE_SCORE_SOURCE_MODULES = (
+_DAILY_SCORE_SOURCE_MODULES = (
     "filters/breakout_quality/daily_ranker_data.py",
     "filters/breakout_quality/continuous_ranker_data.py",
     "filters/breakout_quality/continuous_target.py",
     "filters/breakout_quality/mfe_safety_geometry.py",
     "filters/breakout_quality/profile_ranker_data.py",
     "filters/breakout_quality/workflow_io.py",
+    "filters/breakout_quality/csv_io.py",
     "filters/breakout_quality/splits.py",
     "filters/breakout_quality/dataset_store.py",
     "filters/breakout_quality/dataset_readiness.py",
     "filters/breakout_quality/contract.py",
+    "filters/breakout_quality/features.py",
+    "filters/breakout_quality/models/architectures.py",
+    "filters/breakout_quality/models/spec.py",
+    "filters/breakout_quality/models/spec_contract.py",
+    "filters/breakout_quality/models/spec_registry.py",
+    "filters/breakout_quality/models/spec_builders.py",
+    "core/data_utils.py",
     "core/breakout_quality_registry.py",
+    "core/breakout_quality_policy.py",
     "core/breakout_quality_runtime.py",
     "core/breakout_quality_runtime_resolver.py",
     "core/dataset_profiles.py",
+    "core/walk_forward_policy.py",
     "config/breakout_quality.py",
     "config/research.py",
+    "config/training_policy.py",
+    "config/market_data.py",
 )
+
+
+def oracle_daily_source_fingerprint(root: Path | None = None) -> str:
+    """Shared daily feature/price primitive closure, without loading outcomes."""
+    root = Path(root) if root is not None else Path(__file__).resolve().parents[2]
+    source_digest = sha256()
+    for relative in _DAILY_SCORE_SOURCE_MODULES:
+        source_file = root / relative
+        if not source_file.is_file():
+            raise ValueError(f"Oracle price-score source implementation unavailable: {relative}")
+        source_digest.update(relative.encode("utf-8") + b"\0")
+        source_digest.update(compute_file_sha256(source_file).encode("ascii") + b"\n")
+    return source_digest.hexdigest()
+
+
+def oracle_dataset_summary_sha256(*, root: Path, filter_id: str) -> str | None:
+    """Shared readonly witness for the metadata used by daily score eligibility."""
+    summary = resolve_dataset_paths(resolve_filter_output_dir(Path(root), filter_id)).summary
+    return compute_file_sha256(summary) if summary.is_file() else None
+
+
+def price_score_replay_lineage(
+    *, root: Path, filter_id: str, score_algorithm_sha256: str,
+    label_policy: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Attest current price/feature production without constructing any Target.
+
+    Daily-universal samples are derived from the separately verified OHLCV
+    inventory; the Dataset summary also supplies their source cutoff/policy.
+    A historical score SHA alone cannot certify either the current formula or
+    that source metadata. Missing summary evidence has a distinct identity;
+    an actual cold RUN still requires the canonical provider to validate it.
+    """
+    if not is_sha256_hex(score_algorithm_sha256):
+        raise ValueError("Oracle price-score algorithm SHA required")
+    lineage = {
+        "source_code_sha256": oracle_daily_source_fingerprint(),
+        "score_algorithm_sha256": score_algorithm_sha256,
+        "dataset_summary_sha256": oracle_dataset_summary_sha256(root=root, filter_id=filter_id),
+        "label_policy": dict(label_policy),
+    }
+    return {**lineage, "truth_source_sha256": canonical_json_sha256(lineage)}
 
 
 def price_score_source_identity(
@@ -88,19 +142,12 @@ def price_score_source_identity(
                     or not path.is_file()
                     or compute_file_sha256(path) != stored["sha256"]):
                 raise ValueError(f"Oracle price-score upstream {field} SHA differs: {name}")
-    source_digest = sha256()
-    for relative in _PRICE_SCORE_SOURCE_MODULES:
-        source_file = root / relative
-        if not source_file.is_file():
-            raise ValueError(f"Oracle price-score source implementation unavailable: {relative}")
-        source_digest.update(relative.encode("utf-8") + b"\0")
-        source_digest.update(compute_file_sha256(source_file).encode("ascii") + b"\n")
     return {
         "schema": _PRICE_SCORE_CACHE_SCHEMA,
         "dataset": dataset, "filter_id": filter_id,
         "price_sha256": price_sha256,
         "dataset_summary_sha256": compute_file_sha256(paths.summary),
-        "source_code_sha256": source_digest.hexdigest(),
+        "source_code_sha256": oracle_daily_source_fingerprint(root),
         "score_algorithm_sha256": score_algorithm_sha256,
         "providers": dict(sorted(providers.items())),
         "recipes": {name: list(spec) for name, spec in sorted(recipes.items())},

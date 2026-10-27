@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import json
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -430,12 +430,20 @@ def simulate_realized_trade_path_label(
     sizing_capital: float | None = None,
     horizon_end_date: str | pd.Timestamp | None = None,
     counterfactual_entry_limit: float | None = None,
+    active_signal_cache_resolver: Callable[[pd.Timestamp], Any] | None = None,
 ) -> TradePathLabelResult:
     """A2 canonical execution path; an optional ex-post deadline is isolated.
 
     Without a deadline all historical A2 behavior is unchanged. When supplied,
     the caller owns the exchange-session calendar and target maturity rule;
     no fill, same-session round trip or blocked forced sale becomes a profit.
+
+    A formal single-member rolling Min caller may supply its date-effective
+    signal context. Pending orders and held positions retain the originating
+    numeric rule parameters, while new-setup supersession, ATR and indicator
+    sells consume the current session's context, exactly as Portfolio's
+    single-member identity path does. Historical A2 callers keep their fixed
+    signal cache when this resolver is absent.
     """
     if signal_pos < 0 or signal_pos >= len(stock_df) - 1:
         return _excluded_result(
@@ -445,6 +453,7 @@ def simulate_realized_trade_path_label(
             teacher_effective_date=teacher_effective_date,
         )
     atr, buy_condition, sell_condition, buy_limits = precomputed_signals
+    origin_signal_atr = atr[signal_pos]
     signal_date = stock_df.index[signal_pos]
     eval_start_date = _date_text(stock_df.index[signal_pos + 1])
     if (counterfactual_entry_limit is None and not bool(buy_condition[signal_pos])) or not math.isfinite(float(atr[signal_pos])):
@@ -518,6 +527,10 @@ def simulate_realized_trade_path_label(
     initial_missed_buy = False
 
     for current_pos in range(signal_pos + 1, last_evaluation_pos + 1):
+        if active_signal_cache_resolver is not None:
+            atr, buy_condition, sell_condition, _ = active_signal_cache_resolver(
+                pd.Timestamp(dates[current_pos]).normalize()
+            )
         if int(position.get("qty", 0) or 0) > 0:
             position, _freed_cash, _pnl, events = execute_bar_step(
                 position,
@@ -574,7 +587,11 @@ def simulate_realized_trade_path_label(
             return _excluded_result(
                 TRADE_PATH_REASON_UNFILLED_SUPERSEDED,
                 start_date=eval_start_date,
-                end_date=_date_text(dates[current_pos - 1]),
+                # A newly effective context can recognize a setup on the prior
+                # information bar. It supersedes the pending order only on
+                # today's decision session; do not backdate parameter access.
+                end_date=_date_text(dates[current_pos if active_signal_cache_resolver is not None
+                                          else current_pos - 1]),
                 teacher_effective_date=teacher_effective_date,
                 wait_bars=current_pos - signal_pos - 1,
                 initial_missed_buy=initial_missed_buy,
@@ -584,7 +601,7 @@ def simulate_realized_trade_path_label(
         if current_pos == signal_pos + 1:
             entry_plan = build_normal_entry_plan(
                 entry_limit,
-                atr[signal_pos],
+                origin_signal_atr,
                 resolved_sizing_capital,
                 params,
                 ticker=ticker,

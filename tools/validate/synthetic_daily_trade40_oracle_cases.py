@@ -116,6 +116,10 @@ def synthetic_score_parity_setup(testcase):
     for name, action in (
         ("_resolve_oracle_target_score_contracts", synthetic_perfect_score_contracts),
         ("_certify_oracle_score_eligibility", synthetic_score_eligibility),
+        # The integration cases inject a synthetic price-panel producer. Its
+        # callable is a Mock, so attest that controlled stub explicitly instead
+        # of asking production inspect.getsource to hash the Mock object.
+        ("_price_score_algorithm_sha256", lambda: "a" * 64),
     ):
         guard = patch.object(oracle, name, side_effect=action)
         guard.start()
@@ -125,6 +129,138 @@ def synthetic_score_parity_setup(testcase):
 class FormalMinDailyOracleCases(TestCase):
     def setUp(self):
         synthetic_score_parity_setup(self)
+
+    def test_truth_fingerprint_covers_delegated_execution_and_feature_owners(self):
+        """A wrapper's unchanged bytes cannot attest changed economic code."""
+        import inspect
+        import shutil
+        from services.audit import daily_trade40_oracle as source
+        from services.audit import oracle_score_artifacts as shared_source
+        from core.position_management import step_position_management
+        from core.exit_priority import resolve_stop_tp_hits
+        from core.order_lot_policy import apply_board_lot_preferred_qty_milli
+        from core.capital_policy import resolve_single_backtest_sizing_capital
+        from core.fee_rebate import validate_fee_rebate_settlement_basis
+        from core.breakout_false_filter import build_breakout_false_filter_pass_condition
+        from core.rolling_oos_params import build_active_param_schedule
+        from core.active_param_ensemble import build_active_param_ensemble_schedule
+        from core.params_io import build_params_from_mapping
+        from core.training_performance import is_optimizer_native_hotpath_kernels_enabled
+        from strategies.breakout.schema import validate_breakout_param_ranges
+        from config import broker_accounting, execution_policy
+        from core.data_utils import sanitize_ohlcv_dataframe
+        from filters.breakout_quality.daily_ranker_data import resolve_daily_training_universe_start
+        from filters.breakout_quality.models.spec_registry import get_model_spec
+        from filters.breakout_quality.features import normalize_ohlcv_array_windows
+        from core import native_optimizer_hotpath
+
+        source_root = Path(source.__file__).resolve().parents[2]
+        delegated_owners = {
+            Path(inspect.getsourcefile(owner)).resolve().relative_to(source_root).as_posix()
+            for owner in (
+                step_position_management, resolve_stop_tp_hits,
+                apply_board_lot_preferred_qty_milli, sanitize_ohlcv_dataframe,
+                resolve_daily_training_universe_start, get_model_spec,
+                normalize_ohlcv_array_windows,
+                resolve_single_backtest_sizing_capital, validate_fee_rebate_settlement_basis,
+                build_breakout_false_filter_pass_condition, build_active_param_schedule,
+                build_active_param_ensemble_schedule, build_params_from_mapping,
+                is_optimizer_native_hotpath_kernels_enabled, validate_breakout_param_ranges,
+                broker_accounting, execution_policy,
+            )
+        }
+        delegated_owners.add(native_optimizer_hotpath._SOURCE.relative_to(source_root).as_posix())
+        declared = set(source._TRUTH_SOURCE_MODULES) | set(shared_source._DAILY_SCORE_SOURCE_MODULES)
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            for relative in declared | delegated_owners:
+                destination = root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source_root / relative, destination)
+            original = source._truth_source_sha(root)
+            for relative in sorted(delegated_owners):
+                with self.subTest(owner=relative):
+                    path = root / relative
+                    previous = path.read_bytes()
+                    if relative.endswith("/position_management.py"):
+                        changed = previous.replace(
+                            b"is_stop_hit = price_to_milli(t_low) <= int(position['sl_milli'])",
+                            b"is_stop_hit = price_to_milli(t_low) < int(position['sl_milli'])",
+                        )
+                        self.assertNotEqual(changed, previous)
+                    else:
+                        changed = previous + (b"\n/* owner mutation fixture */\n" if path.suffix == ".c"
+                                              else b"\n# owner mutation fixture\n")
+                    path.write_bytes(changed)
+                    self.assertNotEqual(source._truth_source_sha(root), original)
+                    path.write_bytes(previous)
+                    self.assertEqual(source._truth_source_sha(root), original)
+            # Neither the requested horizon list nor renderer bytes are a
+            # second source of the primitive's scientific implementation.
+            unrelated = root / "doc" / "unrelated_report.md"
+            unrelated.parent.mkdir(parents=True, exist_ok=True)
+            unrelated.write_text("unrelated renderer evidence", encoding="utf-8")
+            self.assertEqual(source._truth_source_sha(root), original)
+
+    def test_warm_mintrade_receipt_rejects_changed_execution_owner_without_producing(self):
+        from hashlib import sha256
+        from services.audit import daily_trade40_oracle as source
+        from services.audit.oracle_replay_artifacts import OracleReplayStore, replay_identity
+
+        active = definition()
+        active = replace(active, source={**active.source, "oracle_comparisons": tuple(
+            row for row in active.source["oracle_comparisons"] if row["target"] == EXACT)})
+        settings, baseline, exact = oracle._contract(active)
+        plan = oracle._oracle_comparison_plan(active)
+        contracts = _ORIGINAL_SCORE_CONTRACT_RESOLVER(active, settings, plan)
+        scores, evidence = run_source(cutoff=str(settings.end_date))
+        keys = sorted(scores)
+        key_sha = sha256("".join(f"{ticker}|{day}\n" for ticker, day in keys).encode()).hexdigest()
+        proof = (key_sha, len(keys), min(day for _, day in keys), max(day for _, day in keys))
+        cohort = {
+            "cohort_rows": proof[1], "first_common_day": proof[2],
+            "last_common_day": proof[3], "research_cutoff": str(settings.end_date),
+        }
+        score_contract = {**contracts[EXACT],
+            "canonical_feature_eligible_keys_sha256": key_sha,
+            "oracle_scored_rows": len(keys),
+            "source_evidence": "validated_generic_daily_feature_universe_and_research_cutoff_closeout",
+        }
+        common = oracle._canonical_oracle_replay_policy(active, base_arm=baseline, exact_arm=exact)
+        policy = oracle._arm_replay_policy(
+            active, plan=plan, target=EXACT, replay_policy=common,
+            daily_evidence=evidence, score_sha256=oracle._canonical_score_map_sha256(scores),
+            score_contract=score_contract,
+        )
+        seed, price_sha, param_sha = 693545351, "b" * 64, "a" * 64
+        benchmark = SimpleNamespace(benchmark_id="synthetic_owner_provenance")
+        end = str(active.dimensions["oracle_evaluation_end_date"])
+        identity = replay_identity(
+            dataset=settings.dataset, dataset_sha256=price_sha, target=EXACT,
+            definition={EXACT: EXACT}, start=str(settings.start_date), end=end,
+            benchmark=benchmark.benchmark_id, param_sha256=param_sha, seed=seed,
+            cohort=cohort, ranking_policy=str(exact.dl_runtime_mode),
+            ranking_options=dict(exact.dl_runtime_options),
+            evaluation_mode=str(active.dimensions["evaluation_mode"]),
+            max_positions=settings.max_positions, replay_policy=policy,
+        )
+        observation = {"target": EXACT, "seed": seed, "romd": 1.,
+            "total_return_pct": 1., "annualized_return_pct": 1., "mdd_pct": 1.,
+            "ev_a_r": .1, "trades": 1, "exposure_pct": 1., "delta_romd_vs_c96": 0.,
+            "yearly": [{"year": year, "strategy_return_pct": 1., "is_full_year": year < 2026}
+                       for year in range(2021, 2027)]}
+        with TemporaryDirectory() as temp_dir:
+            store = OracleReplayStore(Path(temp_dir), active.output_subdir)
+            store.write(identity, observation, origin="synthetic_execution_owner_provenance")
+            arguments = dict(definition=active, store=store, contracts=contracts, plan=plan,
+                prepared=[(seed, param_sha, None, None, None)], price_sha=price_sha,
+                settings=settings, robustness=benchmark, evaluation_end=end)
+            with patch.object(source, "compute_counterfactual_trade40_batch", side_effect=AssertionError("no truth precompute")), \
+                 patch.object(oracle, "load_profile_continuous_ranker_data", side_effect=AssertionError("no DL labels")), \
+                 patch.object(oracle, "_run_scenario", side_effect=AssertionError("no Replay")):
+                self.assertEqual(oracle._replay_attested_score_keys(**arguments), {EXACT: proof})
+                with patch.object(source, "truth_producer_fingerprint", return_value="f" * 64):
+                    self.assertEqual(oracle._replay_attested_score_keys(**arguments), {})
 
     def test_existing_comparisons_are_preserved_and_report_contract_unchanged(self):
         d=definition()
@@ -683,6 +819,7 @@ class FormalMinReplayIntegrationCases(TestCase):
                 "rank_policy":"average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",
                 "rank_sha256":"c"*64,"raw_label_sha256":"d"*64,
                 "truth_source_sha256": truth_producer_fingerprint(),
+                "dataset_summary_sha256": None,
                 "calendar_sha256":"e"*64,
                 "teacher":{"origin":"formal_min_roos_rolling_per_seed",
                            "seed":int(seed),"param_identity_sha256":str(param_sha256),
@@ -781,6 +918,7 @@ class FormalMinReplayIntegrationCases(TestCase):
                 "rank_policy": "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",
                 "rank_sha256": "c" * 64, "raw_label_sha256": "d" * 64,
                 "truth_source_sha256": truth_producer_fingerprint(),
+                "dataset_summary_sha256": None,
                 "calendar_sha256": "e" * 64,
                 "teacher": {"origin": "formal_min_roos_rolling_per_seed",
                             "seed": int(seed), "param_identity_sha256": str(param_sha256),

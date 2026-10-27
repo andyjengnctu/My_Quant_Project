@@ -1,3 +1,4 @@
+假設 DL 能完美預測 Target，在與 Research DL 策略完全相同的選股與交易條件下，RoMD 可以達到多少？
 
 - bug
     - 0050 cannot be selected by any DL

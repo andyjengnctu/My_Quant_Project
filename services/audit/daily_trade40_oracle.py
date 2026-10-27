@@ -36,6 +36,9 @@ from filters.breakout_quality.daily_trade40_target import (
 from filters.breakout_quality.mfe_safety_geometry import normalize_ticker
 from filters.breakout_quality.profile_ranker_data import load_profile_continuous_ranker_data
 from filters.breakout_quality.workflow_io import discover_dataset_csv_inputs, load_dataset_frame
+from services.audit.oracle_score_artifacts import (
+    oracle_daily_source_fingerprint, oracle_dataset_summary_sha256,
+)
 
 # Old MR-13CL's P2/P16 single-teacher label is a distinct retired scientific
 # identity; no new result may masquerade as its supervised-label artifact.
@@ -71,28 +74,47 @@ _TRUTH_SOURCE_MODULES = (
     "services/audit/daily_trade40_oracle.py",
     "filters/breakout_quality/daily_trade40_target.py",
     "filters/breakout_quality/trade_path_label.py",
-    "filters/breakout_quality/profile_ranker_data.py",
-    "filters/breakout_quality/continuous_ranker_data.py",
-    "filters/breakout_quality/workflow_io.py",
     "filters/breakout_quality/runtime.py",
     "core/backtest_finalize.py",
     "core/position_step.py",
+    "core/position_management.py",
+    "core/exit_priority.py",
     "core/entry_plans.py",
     "core/extended_signals.py",
+    "core/order_lot_policy.py",
     "core/exact_accounting.py",
+    "core/fee_rebate.py",
     "core/price_utils.py",
     "core/strategy_params.py",
+    "strategies/breakout/schema.py",
+    "core/selection_policy.py",
     "core/signal_utils.py",
+    "core/breakout_false_filter.py",
+    "core/feature_bank.py",
+    "core/native_optimizer_hotpath.py",
+    "core/native_optimizer_hotpath.c",
+    "core/training_performance.py",
     "core/portfolio_param_runtime.py",
+    "core/params_io.py",
+    "core/active_param_ensemble.py",
+    "core/rolling_oos_params.py",
+    "core/seed_ensemble_policy.py",
     "core/capital_policy.py",
     "config/broker_accounting.py",
+    "config/breakout_policy.py",
     "config/execution_policy.py",
+    "config/training_performance_policy.py",
     "config/trading.py",
 )
 
 
 def _truth_source_sha(root: Path) -> str:
     digest = sha256()
+    # The daily feature/population closure has one owner shared with price
+    # Targets. Entry, management, sizing and ledger owners below add only the
+    # Min execution semantics, including their delegated Python/native code.
+    digest.update(b"canonical_daily_source\0")
+    digest.update(oracle_daily_source_fingerprint(root).encode("ascii") + b"\n")
     for relative in _TRUTH_SOURCE_MODULES:
         path = root / relative
         if not path.is_file():
@@ -154,6 +176,8 @@ def _truth_cache_read(path: Path, identity: Mapping[str, Any]):
         if (evidence["target_id"] != identity["target_id"] or
                 evidence["profile_id"] != identity["profile_id"] or
                 evidence.get("truth_source_sha256") != identity["truth_source_sha256"] or
+                "dataset_summary_sha256" not in evidence or
+                evidence["dataset_summary_sha256"] != identity["dataset_summary_sha256"] or
                 evidence["research_cutoff"] != identity["research_cutoff"] or
                 evidence["score_start_date"] != identity["score_start"] or
                 teacher.get("seed") != identity["seed"] or
@@ -260,8 +284,10 @@ def build_daily_universal_trade40_oracle_scores(
     try:
         # Feature eligibility is unchanged by the chosen holding horizon. One
         # invocation loads the certified multi-million-row cohort only once.
+        dataset_summary_sha = oracle_dataset_summary_sha256(root=root, filter_id=filter_id)
         cohort_key = (str(root), str(dataset), str(filter_id), str(profile_id),
-                      str(first_scored_day.date()), str(evaluation_end_day.date()))
+                      str(first_scored_day.date()), str(evaluation_end_day.date()),
+                      str(dataset_summary_sha))
         snapshot = (feature_cohort_cache.get(cohort_key)
                     if feature_cohort_cache is not None else None)
         if snapshot is None:
@@ -316,6 +342,7 @@ def build_daily_universal_trade40_oracle_scores(
                 "price_sha256": str(price_sha256),
                 "feature_eligible_keys_sha256": group_sha,
                 "truth_source_sha256": truth_producer_fingerprint(),
+                "dataset_summary_sha256": dataset_summary_sha,
             }
             cache_path = Path(cache_root) / str(seed) / (
                 f"{target_id}_{canonical_json_sha256(cache_identity)}.npz"
@@ -453,6 +480,7 @@ def build_daily_universal_trade40_oracle_scores(
             "research_cutoff": str(cutoff_day.date()),
             "score_start_date": str(first_scored_day.date()),
             "truth_source_sha256": truth_producer_fingerprint(),
+            "dataset_summary_sha256": dataset_summary_sha,
             "rank_sha256": rank_sha, "raw_label_sha256": raw_sha,
             "calendar_sha256": cal_sha, "teacher": teacher,
             "rank_policy": "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",
