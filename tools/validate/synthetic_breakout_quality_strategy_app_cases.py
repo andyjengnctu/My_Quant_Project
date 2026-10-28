@@ -1857,10 +1857,36 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "int(item.execution_priority)" in comparison_source,
     )
 
+    # AI: Validate resolved benchmark identity and single generator ownership,
+    # not which orchestrator happens to call the canonical resolver directly.
+    from core.training_policy import get_robustness_benchmark_policy_snapshot
+
+    benchmark_seed_spec = get_robustness_benchmark_policy_snapshot()
+    canonical_seeds = tuple(int(seed) for seed in benchmark_seed_spec["resolved_seeds"])
+    one_seed_owner = (
+        bool(current_robustness)
+        and all(
+            cfg.benchmark_id == benchmark_seed_spec["benchmark_id"]
+            and int(cfg.seed_count) == int(benchmark_seed_spec["seed_count"])
+            and int(cfg.seed_generator_seed) == int(benchmark_seed_spec["seed_generator_seed"])
+            and tuple(int(seed) for seed in cfg.resolved_seeds) == canonical_seeds
+            for cfg in current_robustness
+        )
+        and all(
+            "random.Random(" not in source
+            and "def _generate_robustness_benchmark_seeds(" not in source
+            for source in (
+                read_source_text(project_root / "core" / "strategy_compare_policy.py"),
+                robustness_source,
+                runtime_gate_source,
+            )
+        )
+    )
+
     run_bound_checks(
         check_true,
         (
-            ('robustness_seed_generation_has_one_training_policy_owner', 'resolve_robustness_benchmark_seeds(' in robustness_source and 'random.Random(' not in robustness_source and ('resolve_robustness_benchmark_seeds(' in runtime_gate_source) and ('from services.research.strategy_multi_seed_robustness import (' not in runtime_gate_source),),
+            ('robustness_seed_generation_has_one_training_policy_owner', one_seed_owner,),
             ('single_and_multi_seed_share_arm_model_dependency_resolver', 'def resolve_arm_runtime_dl_source_ids(' in dl_artifact_source and 'def resolve_arm_artifact_dl_source_ids(' in dl_artifact_source and ('resolve_arm_artifact_dl_source_ids(settings, arm)' in dl_artifact_source) and ('resolve_arm_runtime_dl_source_ids(settings, arm)' in robustness_source) and ('def _arm_training_dl_ids(' not in robustness_source),),
             ('strategy_compare_pit_ready_contract_has_one_owner', 'def load_validated_selection_pit_strategy_compare_contract(' in pit_contract_source and 'def validate_selection_pit_score_period(' in pit_contract_source and ('strategy_compare_pit_contract import' in dl_artifact_source) and ('strategy_compare_pit_contract import' in training_contract_source) and ('def _validate_selection_pit_score_period(' not in training_contract_source) and ('load_selection_point_in_time_ranking_contract(' not in training_contract_source),),
             ('pit_fold_schedule_is_shared_by_producer_and_robustness_workload', 'def build_point_in_time_fold_periods(' in pit_schedule_source and 'build_point_in_time_fold_periods' in pit_producer_source and ('build_point_in_time_fold_periods' in robustness_source) and ('def _pit_fold_count_for_period(' not in robustness_source),),
