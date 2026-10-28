@@ -1,21 +1,17 @@
-"""Daily-universal *counterfactual* Min 40/60/full-cycle net-outcome target.
+"""Formal Min signal-event 40/60/full-cycle broker-ledger outcome targets.
 
-For each eligible stock/date, pretend a fresh Min setup originated at that
-close.  Its normal limit is the canonical rounded close + ATR*tolerance;
-thereafter the official A2 single-stock execution path owns order continuation,
-fees, realized risk, stops, exits and the earliest legal closeout deadline.
-The hypothetical *originating signal* is NOT a real Min breakout signal and
-must never be used to create executable candidates or production orders.
-
-No holding/cash/K/R0/selector state enters a training label. Unfilled,
-unexecutable or uncovered dates have a NULL realized R; they are
-not transformed into a fake loss or zero return. The score-eligible universe
-remains daily-universal even when a future training label is unavailable.
+At each information date the single-stock *signal* lifecycle uses exactly the
+canonical new-setup/continuation/cleanup primitives. Each outcome is then
+simulated from that decision's executable signal state, not a fictitious new
+order at every close. Portfolio holdings, cash, K/R0 and selector remain outside
+this per-stock counterfactual. Missing setups/fills are NULL, never fake zeros.
+The DL score-eligible stock-day cohort is unchanged; missing truths rank last.
 """
 
 from __future__ import annotations
 
 from bisect import bisect_right
+from copy import deepcopy
 from dataclasses import dataclass
 import math
 from pathlib import Path
@@ -24,7 +20,8 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
-from core.price_utils import adjust_long_buy_limit_array
+from core.capital_policy import resolve_single_backtest_sizing_capital
+from core.extended_signals import create_signal_tracking_state, should_clear_extended_signal
 from core.portfolio_param_runtime import (
     build_portfolio_params_signature,
     build_active_param_ensemble_objects_from_payload,
@@ -279,6 +276,69 @@ def compute_counterfactual_trade40_batch(
             signal_caches[active_period.params_signature] = active_cache
         return active_cache
 
+    # Reconstruct the *single-stock* pending signal that Portfolio would have
+    # before ranking each candidate's next executable session. We deliberately
+    # do not assume a fill/selection on earlier dates (those are portfolio
+    # resource decisions). Both new setups and shadow continuation use the
+    # canonical signal-state owner. No new entry/stop/fee formula lives here.
+    requested = set(int(position) for position in positions)
+    decisions: dict[int, dict[str, Any]] = {}
+    pending: dict[str, Any] | None = None
+    open_values = frame["Open"].to_numpy(dtype=np.float64, copy=False)
+    high_values = frame["High"].to_numpy(dtype=np.float64, copy=False)
+    low_values = frame["Low"].to_numpy(dtype=np.float64, copy=False)
+    close_values = frame["Close"].to_numpy(dtype=np.float64, copy=False)
+    volume_values = frame["Volume"].to_numpy(dtype=np.float64, copy=False)
+    max_info_pos = int(max(requested)) if requested else -1
+    for information_pos in range(max_info_pos + 1):
+        executable_pos = information_pos + 1
+        if executable_pos >= len(dates) or dates[information_pos] >= cutoff:
+            continue
+        trade_day = dates[executable_pos]
+        active_period = resolve_historical_min_period(schedule, trade_day)
+        if active_period is None:
+            if trade_day >= schedule[0].start and trade_day <= last_research_session:
+                raise ValueError(
+                    "no_historical_effective_Min_param during signal lifecycle: "
+                    f"ticker={ticker}, date={trade_day.date()}"
+                )
+            pending = None
+            continue
+        cache = active_signal_cache_for_date(trade_day)
+        if bool(cache[1][information_pos]):
+            # The next executable date owns the signal formula and the order's
+            # originating P16 settings. Do not recalculate a new hypothetical
+            # Close+ATR order when only a continuation exists.
+            pending = create_signal_tracking_state(
+                cache[3][information_pos], cache[0][information_pos],
+                active_period.params, ticker=ticker,
+                security_profile=frame.attrs.get("security_profile"),
+                signal_date=dates[information_pos],
+            )
+        if information_pos in requested and pending is not None:
+            decisions[information_pos] = deepcopy(
+                pending, memo={id(pending["_params_obj"]): pending["_params_obj"]},
+            )
+        if pending is None or trade_day > last_research_session:
+            continue
+        origin_params = pending["_params_obj"]
+        sizing_capital = resolve_single_backtest_sizing_capital(
+            origin_params, origin_params.initial_capital,
+        )
+        if should_clear_extended_signal(
+            pending, low_values[executable_pos], high_values[executable_pos],
+            t_open=open_values[executable_pos],
+            t_close=close_values[executable_pos],
+            t_volume=volume_values[executable_pos],
+            y_close=close_values[information_pos],
+            y_high=high_values[information_pos],
+            y_atr=cache[0][information_pos],
+            y_ind_sell=cache[2][information_pos],
+            sizing_capital=sizing_capital, current_date=trade_day,
+            params=origin_params, copy_shadow_position=False,
+        ):
+            pending = None
+
     truncated = 0
     cutoff_closeouts = 0
     for row, (position, calendar_pos) in enumerate(zip(positions, calendar_index)):
@@ -299,40 +359,31 @@ def compute_counterfactual_trade40_batch(
         if cutoff_limited:
             truncated += 1
         maturity_dates[row] = expiry.to_datetime64().astype("datetime64[D]")
-        # The Portfolio assigns its Min parameter by the candidate ORDER day.
-        # A suspended ticker's next actual bar may be later than the next
-        # exchange session; always follow its executable ticker calendar.
-        if position + 1 >= len(dates):
-            reasons.append("no_next_executable_ticker_session")
-            continue
-        # The formal Min schedule applies to the order's executable session,
-        # not the previous information bar; there is no alternative date mode.
-        effective_day = dates[position + 1]
-        if effective_day > expiry:
-            reasons.append("no_executable_ticker_order_before_closeout_deadline")
-            continue
-        period = resolve_historical_min_period(schedule, effective_day)
-        if period is None:
+        # An actual normal setup or a still-live continuation is required.
+        # All other feature-eligible rows stay in the score cohort but have a
+        # censored (NULL) economic outcome; they are NOT artificial new buys.
+        if resolve_historical_min_period(schedule, dates[position + 1]) is None:
             reasons.append("no_historical_effective_Min_param")
             continue
-        params = period.params
-        cache = active_signal_cache_for_date(effective_day)
-        atr = float(cache[0][position])
-        close = float(frame["Close"].iloc[position])
-        if not math.isfinite(atr) or atr <= 0.0 or not math.isfinite(close) or close <= 0.0:
-            reasons.append("no_decision_time_ATR_or_close")
+        state = decisions.get(int(position))
+        if state is None:
+            reasons.append("no_formal_min_signal_or_continuation")
             continue
-        # Canonical generate_signals defines this same buy-limit formula on
-        # *real* setups. We override only the hypothetical initial setup.
-        limit = float(adjust_long_buy_limit_array(
-            np.asarray([close + atr * float(params.atr_buy_tol)], dtype=np.float64),
-            ticker=ticker,
-        )[0])
+        origin_day = pd.Timestamp(state["signal_date"]).normalize()
+        origin_pos = int(dates.get_indexer([origin_day])[0])
+        if origin_pos < 0 or origin_pos > int(position):
+            raise ValueError("Min Oracle signal origin not in the sanitized ticker calendar")
+        params = state["_params_obj"]
+        active_period = resolve_historical_min_period(schedule, dates[position + 1])
+        if active_period is None:
+            reasons.append("no_historical_effective_Min_param")
+            continue
         observation = simulate_realized_trade_path_label(
-            frame, ticker=ticker, signal_pos=int(position), params=params,
-            teacher_effective_date=str(period.start.date()),
-            precomputed_signals=cache, horizon_end_date=expiry,
-            counterfactual_entry_limit=limit,
+            frame, ticker=ticker, signal_pos=origin_pos, params=params,
+            teacher_effective_date=str(origin_day.date()),
+            precomputed_signals=active_signal_cache_for_date(dates[position + 1]),
+            horizon_end_date=expiry, decision_pos=int(position),
+            starting_signal_state=state,
             active_signal_cache_resolver=active_signal_cache_for_date,
         )
         # The *deadline* and the date a label is actually known are different.

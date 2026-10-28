@@ -57,6 +57,13 @@ def source_fixture():
         close = 100. + price_delta * np.arange(len(trading))
         for c in ("Open", "High", "Low", "Close"):
             frame[c] = close + ({"Open":0.,"High":2.,"Low":-2.,"Close":0.}[c])
+        # An actual Min breakout must originate on the pre-OOS information
+        # bar. The previous synthetic feed had no buy signals at all.
+        if ticker == "2330":
+            origin = frame.index.get_loc(pd.Timestamp("2020-12-31"))
+            frame.loc[frame.index[origin - 1], ["Open", "High", "Low", "Close"]] -= 7.0
+            frame.loc[frame.index[origin]:, ["Open", "High", "Low", "Close"]] += 8.0
+            frame["Open"] = frame["Close"] - 0.25
         frames[ticker] = frame
         for day in ("2020-12-31", "2021-01-04", "2021-01-05"):
             rows.append({"ticker":ticker,"date":day})
@@ -474,27 +481,24 @@ class FormalMinDailyOracleCases(TestCase):
         self.assertEqual(list(direct_plan["daily_recipes"]), ["DailyUniversal_MinTrade_NetR"])
         self.assertEqual(list(direct_plan["selectors"]), ["DailyUniversal_MinTrade_NetR_Direct"])
 
-    def test_additive_netpnl_preserves_prior_signed_netr_fingerprint_fail_closed(self):
+    def test_signal_alignment_invalidates_old_signed_netr_fingerprint(self):
+        """A genuine setup/continuation semantic fix is NOT additive NetPnL."""
         from services.audit import daily_trade40_oracle as owner
-        from services.audit.mintrade_netr_lineage import certified_netr_compatible_source_sha
         from pathlib import Path
 
-        prior_netr = "cf46236712c396f415531baf4db4a1cf13dae56a1b1d2b5a06868a44d0a694a4"
-        self.assertEqual(owner.truth_producer_fingerprint("net_r"), prior_netr)
-        self.assertEqual(owner.truth_producer_fingerprint(), prior_netr)
-        self.assertNotEqual(owner.truth_producer_fingerprint("net_pnl"), prior_netr)
-        # A future semantic edit must invalidate legacy Net-R receipts;
-        # it must not receive a broad unchecked legacy-SHA exemption.
+        old_netr = "cf46236712c396f415531baf4db4a1cf13dae56a1b1d2b5a06868a44d0a694a4"
+        new_netr = owner.truth_producer_fingerprint("net_r")
+        new_pnl = owner.truth_producer_fingerprint("net_pnl")
+        self.assertNotEqual(new_netr, old_netr)
+        self.assertNotEqual(new_pnl, old_netr)
+        self.assertEqual(owner.truth_producer_fingerprint(), new_netr)
+        # Changes in canonical fee/entry/management dependencies still invalidate.
         real_hash = owner.compute_file_sha256
-        shared_rel = "core/entry_plans.py"
         with patch.object(owner, "compute_file_sha256", side_effect=lambda path: (
-                "f" * 64 if str(path).endswith(shared_rel) else real_hash(path))):
-            self.assertNotEqual(owner._truth_source_sha(Path(owner.__file__).resolve().parents[2]), prior_netr)
-        changed_owner_sha = "f" * 64
-        self.assertEqual(certified_netr_compatible_source_sha(
-            "services/audit/daily_trade40_oracle.py", changed_owner_sha), changed_owner_sha)
-        with self.assertRaisesRegex(ValueError, "Unknown formal Min Oracle outcome"):
-            owner._truth_source_sha(Path(owner.__file__).resolve().parents[2], outcome_metric="other")
+                "f" * 64 if str(path).endswith("core/entry_plans.py") else real_hash(path))):
+            self.assertNotEqual(owner._truth_source_sha(
+                Path(owner.__file__).resolve().parents[2], outcome_metric="net_r"), new_netr)
+
 
     def test_netpnl_exact_direct_comparison_replays_share_one_canonical_score(self):
         names = {

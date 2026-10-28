@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from bisect import bisect_right
+from copy import deepcopy
 from dataclasses import dataclass
 import json
 import math
@@ -431,6 +432,10 @@ def simulate_realized_trade_path_label(
     horizon_end_date: str | pd.Timestamp | None = None,
     counterfactual_entry_limit: float | None = None,
     active_signal_cache_resolver: Callable[[pd.Timestamp], Any] | None = None,
+    # Formal Min Oracle may value the *existing* signal/order candidate at a
+    # later information bar; no trade/portfolio state is read from the future.
+    decision_pos: int | None = None,
+    starting_signal_state: dict[str, Any] | None = None,
 ) -> TradePathLabelResult:
     """A2 canonical execution path; an optional ex-post deadline is isolated.
 
@@ -445,51 +450,69 @@ def simulate_realized_trade_path_label(
     single-member identity path does. Historical A2 callers keep their fixed
     signal cache when this resolver is absent.
     """
-    if signal_pos < 0 or signal_pos >= len(stock_df) - 1:
+    first_information_pos = signal_pos if decision_pos is None else int(decision_pos)
+    if (signal_pos < 0 or first_information_pos < signal_pos or
+            first_information_pos >= len(stock_df) - 1):
         return _excluded_result(
             TRADE_PATH_REASON_INSUFFICIENT_FUTURE,
-            start_date=None,
-            end_date=None,
+            start_date=None, end_date=None,
             teacher_effective_date=teacher_effective_date,
         )
+    if starting_signal_state is None and first_information_pos != signal_pos:
+        raise ValueError("Resumed Min path requires the canonical decision-time signal state")
     atr, buy_condition, sell_condition, buy_limits = precomputed_signals
-    origin_signal_atr = atr[signal_pos]
     signal_date = stock_df.index[signal_pos]
-    eval_start_date = _date_text(stock_df.index[signal_pos + 1])
-    if (counterfactual_entry_limit is None and not bool(buy_condition[signal_pos])) or not math.isfinite(float(atr[signal_pos])):
-        return _excluded_result(
-            TRADE_PATH_REASON_NOT_FORMAL_SETUP,
-            start_date=eval_start_date,
-            end_date=_date_text(signal_date),
-            teacher_effective_date=teacher_effective_date,
+    eval_start_date = _date_text(stock_df.index[first_information_pos + 1])
+    if starting_signal_state is None:
+        if (counterfactual_entry_limit is None and not bool(buy_condition[signal_pos])) or not math.isfinite(float(atr[signal_pos])):
+            return _excluded_result(
+                TRADE_PATH_REASON_NOT_FORMAL_SETUP,
+                start_date=eval_start_date,
+                end_date=_date_text(signal_date),
+                teacher_effective_date=teacher_effective_date,
+            )
+        entry_limit = (
+            float(buy_limits[signal_pos])
+            if counterfactual_entry_limit is None
+            else float(counterfactual_entry_limit)
         )
-
-    # Only the hypothetical decision-date entry intent differs. All future
-    # original signals, fills, stops, exits and fees stay canonical.
-    entry_limit = (
-        float(buy_limits[signal_pos])
-        if counterfactual_entry_limit is None
-        else float(counterfactual_entry_limit)
-    )
-    if not math.isfinite(entry_limit) or entry_limit <= 0.0:
-        return _excluded_result(
-            TRADE_PATH_REASON_INVALID_ENTRY_PLAN,
-            start_date=eval_start_date, end_date=_date_text(signal_date),
-            teacher_effective_date=teacher_effective_date,
+        if not math.isfinite(entry_limit) or entry_limit <= 0.0:
+            return _excluded_result(
+                TRADE_PATH_REASON_INVALID_ENTRY_PLAN,
+                start_date=eval_start_date, end_date=_date_text(signal_date),
+                teacher_effective_date=teacher_effective_date,
+            )
+        signal_state = create_signal_tracking_state(
+            entry_limit, atr[signal_pos], params, ticker=ticker,
+            security_profile=stock_df.attrs.get("security_profile"),
+            signal_date=signal_date,
         )
-    signal_state = create_signal_tracking_state(
-        entry_limit,
-        atr[signal_pos],
-        params,
-        ticker=ticker,
-        security_profile=stock_df.attrs.get("security_profile"),
-        signal_date=signal_date,
-    )
+    else:
+        if counterfactual_entry_limit is not None:
+            raise ValueError("Actual Min signal state cannot accept a hypothetical fresh limit")
+        # Reject snapshots from another ticker, origin, or P16 parameter period.
+        if (str(starting_signal_state.get("ticker")) != str(ticker) or
+                pd.Timestamp(starting_signal_state.get("signal_date")).normalize() !=
+                pd.Timestamp(signal_date).normalize() or
+                starting_signal_state.get("_params_obj") is not params):
+            raise ValueError("Min Oracle starting state does not match its canonical signal")
+        signal_state = deepcopy(
+            starting_signal_state, memo={id(params): params},
+        )
+        entry_limit = float(signal_state.get("orig_limit", math.nan))
     if signal_state is None:
         return _excluded_result(
             TRADE_PATH_REASON_INVALID_ENTRY_PLAN,
             start_date=eval_start_date,
             end_date=_date_text(signal_date),
+            teacher_effective_date=teacher_effective_date,
+        )
+    origin_signal_atr = float(signal_state["orig_atr"])
+    if not (math.isfinite(entry_limit) and entry_limit > 0.0 and
+            math.isfinite(origin_signal_atr) and origin_signal_atr > 0.0):
+        return _excluded_result(
+            TRADE_PATH_REASON_INVALID_ENTRY_PLAN,
+            start_date=eval_start_date, end_date=_date_text(signal_date),
             teacher_effective_date=teacher_effective_date,
         )
 
@@ -500,7 +523,7 @@ def simulate_realized_trade_path_label(
     volume_values = stock_df["Volume"].to_numpy(dtype=np.float64, copy=False)
     dates = stock_df.index
     horizon_day = None if horizon_end_date is None else pd.Timestamp(horizon_end_date).normalize()
-    if horizon_day is not None and horizon_day <= pd.Timestamp(signal_date).normalize():
+    if horizon_day is not None and horizon_day <= pd.Timestamp(stock_df.index[first_information_pos]).normalize():
         raise ValueError("trade-path horizon必須晚於原始signal date")
     # Do not touch bars *after* the signal-anchored deadline.  A stock that
     # cannot trade on the deadline is censored, not synthetically liquidated.
@@ -519,6 +542,7 @@ def simulate_realized_trade_path_label(
             f"ticker={ticker}, signal_date={_date_text(signal_date)}, value={resolved_sizing_capital}"
         )
     active_signal = signal_state
+    first_exec_pos = first_information_pos + 1
     position: dict[str, Any] = {"qty": 0}
     fill_type: str | None = None
     fill_date: str | None = None
@@ -526,7 +550,7 @@ def simulate_realized_trade_path_label(
     wait_bars: int | None = None
     initial_missed_buy = False
 
-    for current_pos in range(signal_pos + 1, last_evaluation_pos + 1):
+    for current_pos in range(first_exec_pos, last_evaluation_pos + 1):
         if active_signal_cache_resolver is not None:
             atr, buy_condition, sell_condition, _ = active_signal_cache_resolver(
                 pd.Timestamp(dates[current_pos]).normalize()
@@ -583,7 +607,7 @@ def simulate_realized_trade_path_label(
                 )
             continue
 
-        if current_pos > signal_pos + 1 and bool(buy_condition[current_pos - 1]):
+        if current_pos > first_exec_pos and bool(buy_condition[current_pos - 1]):
             return _excluded_result(
                 TRADE_PATH_REASON_UNFILLED_SUPERSEDED,
                 start_date=eval_start_date,
@@ -598,7 +622,7 @@ def simulate_realized_trade_path_label(
                 sizing_capital=float(resolved_sizing_capital),
             )
 
-        if current_pos == signal_pos + 1:
+        if current_pos == first_exec_pos and first_exec_pos == signal_pos + 1:
             entry_plan = build_normal_entry_plan(
                 entry_limit,
                 origin_signal_atr,
@@ -635,7 +659,7 @@ def simulate_realized_trade_path_label(
             security_profile=stock_df.attrs.get("security_profile"),
             trade_date=dates[current_pos],
         )
-        if current_pos == signal_pos + 1 and bool(entry_result.get("count_as_missed_buy")):
+        if current_pos == first_exec_pos and bool(entry_result.get("count_as_missed_buy")):
             initial_missed_buy = True
         if bool(entry_result.get("filled")):
             position = dict(entry_result["position"])
@@ -687,7 +711,7 @@ def simulate_realized_trade_path_label(
     if horizon_day is not None:
         # A deadline is a planned closeout, not a license to invent a fill on
         # a suspended/limit-down bar or to sell an entry made that same day.
-        at_deadline = (last_evaluation_pos >= signal_pos + 1 and
+        at_deadline = (last_evaluation_pos >= first_exec_pos and
                        pd.Timestamp(dates[last_evaluation_pos]).normalize() == horizon_day)
         if not at_deadline:
             reason = TRADE_PATH_REASON_HORIZON_SELL_BLOCKED

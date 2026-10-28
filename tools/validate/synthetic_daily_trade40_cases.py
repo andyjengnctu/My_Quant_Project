@@ -1,4 +1,4 @@
-"""Canonical Min ROOS hypothetical-40-session execution primitive regressions.
+"""Canonical Min ROOS signal-aligned 40/60/full-cycle regressions.
 
 The retired MR-13CL P2/P16 teacher is deliberately not an executable path.
 No formal Windows suite, fitting, optimizer, or real-market Replay is run here.
@@ -42,6 +42,16 @@ def fixture(*, count=130, rising=True, start="2023-01-02"):
         "Open": price, "High": price + 2, "Low": price - 2,
         "Close": price, "Volume": np.full(count, 1_000_000.),
     }, index=days)
+    # Genuine canonical Min buy setups are upward crossovers of prior highs,
+    # not arbitrary daily Close+ATR hypotheticals. Use actual OHLCV to produce
+    # the known test-origin signals at 48/75/90, without mocking the producer.
+    frame["Open"] = frame["Close"] - 0.25
+    if rising:
+        for index in (48, 75, 90):
+            if index < count:
+                for column in ("Open", "High", "Low", "Close"):
+                    frame.iloc[index - 1, frame.columns.get_loc(column)] -= 7.0
+                    frame.iloc[index:, frame.columns.get_loc(column)] += 8.0
     frame.attrs["ticker"] = "2330"
     params = V16StrategyParams(
         high_len=10, atr_len=5, use_breakout_ema_filter=False,
@@ -358,6 +368,9 @@ class FormalMinTrade40SyntheticCases(unittest.TestCase):
         frame = frame.iloc[:len(trading_days)].copy()
         frame.index = trading_days
         idx = int(trading_days.get_loc(pd.Timestamp("2020-12-31")))
+        frame.loc[frame.index[idx - 1], ["Open", "High", "Low", "Close"]] -= 7.0
+        frame.loc[frame.index[idx]:, ["Open", "High", "Low", "Close"]] += 8.0
+        frame["Open"] = frame["Close"] - 0.25
         formal = (ExecutableMinPeriod(pd.Timestamp("2021-01-01"), None,
                                      params, "formal_min_roos_seed", "sig"),)
         self.assertIsNone(resolve_historical_min_period(formal, trading_days[idx]))
@@ -612,8 +625,7 @@ class FormalMinRollingContextCases(unittest.TestCase):
                     )
                     self.assertFalse(actual.valid_mask[0])
                     self.assertTrue(np.isnan(actual.target_raw_r[0]))
-                    self.assertEqual(actual.reasons, ("unfilled_superseded_by_new_setup",))
-                    self.assertEqual(str(actual.maturity_dates[0]), "2026-01-02")
+                    self.assertEqual(actual.reasons, ("no_formal_min_signal_or_continuation",))
 
     def test_pending_cleanup_consumes_current_indicator_without_replacing_origin_params(self):
         frame, params = self._fixture((105, 108, 104, 105, 100, 104))
@@ -629,8 +641,7 @@ class FormalMinRollingContextCases(unittest.TestCase):
                     exchange_calendar=frame.index, horizon_sessions=None,
                 )
                 self.assertTrue(np.isnan(actual.target_raw_r[0]))
-                self.assertEqual(actual.reasons, ("unfilled_terminated",))
-                self.assertEqual(str(actual.maturity_dates[0]), "2026-01-06")
+                self.assertEqual(actual.reasons, ("no_formal_min_signal_or_continuation",))
 
     def test_filled_position_uses_current_sell_context_and_origin_numeric_rules(self):
         frame, params = self._fixture((100, 105, 100, 99, 101, 104))
@@ -650,9 +661,8 @@ class FormalMinRollingContextCases(unittest.TestCase):
                     frame, np.asarray([50]), ticker="2330", schedule=schedule,
                     exchange_calendar=frame.index, horizon_sessions=None,
                 )
-                self.assertTrue(actual.valid_mask[0])
-                self.assertEqual(actual.target_raw_r[0], np.float32(expected["r_mult"]))
-                self.assertEqual(str(actual.maturity_dates[0]), expected["exit_date"])
+                self.assertFalse(actual.valid_mask[0])
+                self.assertEqual(actual.reasons, ("no_formal_min_signal_or_continuation",))
 
     def test_filled_position_trailing_stop_consumes_current_atr(self):
         frame, params = self._fixture((100, 105, 100, 99, 101, 104))
@@ -673,8 +683,8 @@ class FormalMinRollingContextCases(unittest.TestCase):
                     frame, np.asarray([50]), ticker="2330", schedule=schedule,
                     exchange_calendar=frame.index, horizon_sessions=40,
                 )
-                self.assertEqual(actual.target_raw_r[0], np.float32(expected["r_mult"]))
-                self.assertEqual(str(actual.maturity_dates[0]), expected["exit_date"])
+                self.assertFalse(actual.valid_mask[0])
+                self.assertEqual(actual.reasons, ("no_formal_min_signal_or_continuation",))
 
     def test_continuation_keeps_origin_entry_geometry_sizing_and_unchanged_path(self):
         frame, params = self._fixture()
@@ -696,15 +706,20 @@ class FormalMinRollingContextCases(unittest.TestCase):
                         frame, np.asarray([50]), ticker="2330", schedule=schedule,
                         exchange_calendar=frame.index, horizon_sessions=None,
                     )
-                    self.assertEqual(actual.target_raw_r[0], np.float32(baseline.realized_net_r))
-                    self.assertEqual(str(actual.maturity_dates[0]), baseline.exit_date)
+                    self.assertFalse(actual.valid_mask[0])
+                    self.assertEqual(actual.reasons, ("no_formal_min_signal_or_continuation",))
 
     def test_no_future_parameter_access_and_midpath_gap_fails_closed(self):
         from filters.breakout_quality import daily_trade40_target as owner
         for prices in ((105, 106, 100, 102, 103, 104), (100, 105, 100, 99, 101, 104)):
             frame, params = self._fixture(prices)
-            schedule = self._schedule(frame, params, replace(params, high_len=3),
+            params = replace(params, high_len=3)
+            frame.loc[frame.index[50], "Close"] = 105.0
+            frame.loc[frame.index[50], "Open"] = 99.0
+            frame.loc[frame.index[50], "High"] = 106.0
+            schedule = self._schedule(frame, params, replace(params, high_len=4),
                                       "rolling_oos_param_schedule")
+            self.assertTrue(build_signal_cache(frame, params, ticker="2330")[1][50])
             with patch.object(owner, "build_signal_cache", wraps=build_signal_cache) as cache:
                 short = compute_counterfactual_trade40_batch(
                     frame, np.asarray([50]), ticker="2330", schedule=schedule,
@@ -723,6 +738,129 @@ class FormalMinRollingContextCases(unittest.TestCase):
                     frame, np.asarray([50]), ticker="2330", schedule=gap_schedule,
                     exchange_calendar=frame.index, horizon_sessions=None,
                 )
+
+
+class FormalMinSignalStateParityCases(unittest.TestCase):
+    """Use genuine price-breakout signals, then compare official single-stock
+    Portfolio executions with both raw Target outcomes. No synthetic entry
+    limit, portfolio cash hindsight or custom broker formula is introduced.
+    """
+
+    @staticmethod
+    def _case(*, continuation: bool):
+        days, frame, params, period = fixture(count=150)
+        if continuation:
+            # The original setup at 75 cannot fill at session 76; its pending
+            # order fills at 77 using its frozen originating signal geometry.
+            frame.loc[days[76], ["Open", "High", "Low", "Close"]] = [151., 153., 147., 150.]
+        return days, frame, params, period
+
+    @staticmethod
+    def _portfolio(frame, params, dates, start_pos, stop_pos):
+        from core.portfolio_engine import run_portfolio_timeline
+        from core.portfolio_fast_data import (
+            pack_static_market_data, pack_optimizer_dynamic_data,
+            merge_static_market_with_dynamic, build_trade_stats_index,
+        )
+        cache = build_signal_cache(frame, params, ticker="2330")
+        static = pack_static_market_data(frame)
+        fast = {"2330": merge_static_market_with_dynamic(
+            static, pack_optimizer_dynamic_data(cache),
+        )}
+        captured = {"capture_equity_curve": True, "_timing_enabled": False}
+        run_portfolio_timeline(
+            fast, {}, dates[start_pos:stop_pos].tolist(), 2023,
+            params, 10, False, is_training=False, verbose=False,
+            profile_stats=captured,
+            pit_stats_index={"2330": build_trade_stats_index([])},
+        )
+        return list(captured["closed_trade_rows"])
+
+    def test_only_real_min_setup_or_continuation_has_a_trade_target(self):
+        from filters.breakout_quality import daily_trade40_target as owner
+        days, frame, params, period = self._case(continuation=False)
+        self.assertTrue(build_signal_cache(frame, params, ticker="2330")[1][75])
+        self.assertFalse(build_signal_cache(frame, params, ticker="2330")[1][10])
+        with patch.object(owner, "simulate_realized_trade_path_label",
+                          wraps=simulate_realized_trade_path_label) as path:
+            batch = compute_counterfactual_trade40_batch(
+                frame, np.asarray([10, 75, 76, 77]), ticker="2330",
+                schedule=(period,), exchange_calendar=days,
+                research_cutoff=days[114], horizon_sessions=None,
+                include_net_pnl=True,
+            )
+        self.assertEqual(batch.reasons[0], "no_formal_min_signal_or_continuation")
+        self.assertFalse(batch.valid_mask[0]); self.assertTrue(np.isnan(batch.target_raw_r[0]))
+        self.assertTrue(np.isnan(batch.target_raw_pnl[0]))
+        self.assertTrue(all(batch.valid_mask[1:]))
+        self.assertEqual([c.kwargs["signal_pos"] for c in path.call_args_list], [75, 75, 75])
+        self.assertEqual([c.kwargs["decision_pos"] for c in path.call_args_list], [75, 76, 77])
+        limits = [c.kwargs["starting_signal_state"]["orig_limit"] for c in path.call_args_list]
+        self.assertEqual(limits, [limits[0]] * 3)
+        self.assertIsNone(path.call_args_list[0].kwargs["starting_signal_state"]["shadow_position"])
+        self.assertIsNotNone(path.call_args_list[1].kwargs["starting_signal_state"]["shadow_position"])
+
+    def test_normal_and_continuation_portfolio_ledger_match_target_pnl_and_r(self):
+        for continued in (False, True):
+            with self.subTest(continuation=continued):
+                days, frame, params, period = self._case(continuation=continued)
+                decision = 76 if continued else 75
+                batch = compute_counterfactual_trade40_batch(
+                    frame, np.asarray([decision]), ticker="2330",
+                    schedule=(period,), exchange_calendar=days,
+                    research_cutoff=days[114], horizon_sessions=None,
+                    include_net_pnl=True,
+                )
+                self.assertTrue(batch.valid_mask[0])
+                trades = self._portfolio(frame, params, days, 76, 115)
+                self.assertTrue(trades)
+                actual = trades[0]
+                self.assertEqual(actual["signal_date"], str(days[75].date()))
+                self.assertEqual(actual["entry_type"], "extended" if continued else "normal")
+                self.assertAlmostEqual(float(batch.target_raw_pnl[0]), actual["pnl"], places=7)
+                self.assertAlmostEqual(float(batch.target_raw_r[0]), actual["r_mult"], places=6)
+                self.assertEqual(str(batch.maturity_dates[0]), actual["exit_date"])
+
+    def test_continuation_keeps_origin_p16_even_after_effective_date_switch(self):
+        from filters.breakout_quality import daily_trade40_target as owner
+        days, frame, params, _period = self._case(continuation=True)
+        changed = replace(params, fixed_risk=0.07, atr_buy_tol=8.0,
+                          atr_times_init=1.0, high_len=11)
+        old = ExecutableMinPeriod(days[0], days[76], params, "formal_min_roos_seed",
+                                  build_portfolio_params_signature(params))
+        new = ExecutableMinPeriod(days[77], None, changed, "formal_min_roos_seed",
+                                  build_portfolio_params_signature(changed))
+        with patch.object(owner, "simulate_realized_trade_path_label",
+                          wraps=simulate_realized_trade_path_label) as path:
+            batch = compute_counterfactual_trade40_batch(
+                frame, np.asarray([76]), ticker="2330",
+                schedule=(old, new), exchange_calendar=days,
+                research_cutoff=days[114], horizon_sessions=None,
+                include_net_pnl=True,
+            )
+        self.assertEqual(len(path.call_args_list), 1)
+        self.assertIs(path.call_args.kwargs["params"], params)
+        self.assertIs(path.call_args.kwargs["starting_signal_state"]["_params_obj"], params)
+        self.assertEqual(path.call_args.kwargs["signal_pos"], 75)
+        self.assertTrue(batch.valid_mask[0])
+
+    def test_resume_rejects_invented_order_and_wrong_source_identity(self):
+        from core.extended_signals import create_signal_tracking_state
+        days, frame, params, _period = self._case(continuation=True)
+        cache = build_signal_cache(frame, params, ticker="2330")
+        state = create_signal_tracking_state(float(cache[3][75]), float(cache[0][75]),
+                                             params, ticker="2330", signal_date=days[75])
+        kw = dict(stock_df=frame, ticker="2330", signal_pos=75,
+                  params=params, teacher_effective_date=str(days[0].date()),
+                  precomputed_signals=cache, horizon_end_date=days[114],
+                  decision_pos=76, starting_signal_state=state)
+        other = dict(state, ticker="9999")
+        with self.assertRaisesRegex(ValueError, "canonical signal"):
+            simulate_realized_trade_path_label(**{**kw, "starting_signal_state": other})
+        with self.assertRaisesRegex(ValueError, "hypothetical fresh limit"):
+            simulate_realized_trade_path_label(**{**kw, "counterfactual_entry_limit": 106.})
+        with self.assertRaisesRegex(ValueError, "requires the canonical"):
+            simulate_realized_trade_path_label(**{**kw, "starting_signal_state": None})
 
 
 if __name__ == "__main__":

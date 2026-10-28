@@ -126,11 +126,9 @@ _TRUTH_SOURCE_MODULES = (
 def _truth_source_sha(root: Path, *, outcome_metric: str = "net_r") -> str:
     if outcome_metric not in {"net_r", "net_pnl"}:
         raise DailyTrade40OracleBlockedError("Unknown formal Min Oracle outcome for source identity")
-    # An audited additive NetPnL output must not invalidate the unchanged
-    # historical Net-R computation. The attestation is accepted ONLY for exact
-    # approved source bytes; any later edit immediately falls back to its own
-    # source SHA. Other execution/price/data dependencies remain fully hashed.
-    from services.audit.mintrade_netr_lineage import certified_netr_compatible_source_sha
+    # All MinTrade outcomes share the actual canonical execution source. A
+    # substantive signal/order-state correction MUST invalidate historical
+    # Net-R and NetPnL truth, never inherit a pre-fix compatibility fingerprint.
     digest = sha256()
     # The daily feature/population closure has one owner shared with price
     # Targets. Entry, management, sizing and ledger owners below add only the
@@ -142,10 +140,7 @@ def _truth_source_sha(root: Path, *, outcome_metric: str = "net_r") -> str:
         if not path.is_file():
             raise DailyTrade40OracleBlockedError(f"Oracle truth source lineage missing: {relative}")
         digest.update(relative.encode("utf-8") + b"\0")
-        source_sha = compute_file_sha256(path)
-        if outcome_metric == "net_r":
-            source_sha = certified_netr_compatible_source_sha(relative, source_sha)
-        digest.update(source_sha.encode("ascii") + b"\n")
+        digest.update(compute_file_sha256(path).encode("ascii") + b"\n")
     return digest.hexdigest()
 
 

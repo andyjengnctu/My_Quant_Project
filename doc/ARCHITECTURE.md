@@ -1012,3 +1012,10 @@ Direct-account BUY provenance is owned by `services/trading/account_trade_entry.
 - **純工程清理／不強迫重跑**：沒改 canonical Target 公式、MinTrade 真值、Price／Min SHA source closure、P16、Selector、Portfolio、手續費、評估截止、Report schema／顏色、Seed 或 UI。Price formula SHA=`d73b4ce20dd958cb75b094f49d6abac94d31e34ca7222fa5806675fd931964bd`；Min truth SHA=`cf46236712c396f415531baf4db4a1cf13dae56a1b1d2b5a06868a44d0a694a4`；report fingerprint=`4f911292da243836`，均與本輪原 ZIP 相同；當前來源合法的 Replay 可照原 REUSE。
 - **本輪 GPT 端驗證邊界**：退役後 Target/Min 167項 unittest 通過、其他交易／訊號／REUSE 19項通過、Audit framework 30項 asserts 通過，647 個 Python AST 可解析；未執行專案禁止在 GPT 端執行的 `apps/run_bundle.py` 或 `apps/test_suite.py`，也未取得真實四 Seeds 全市場 Replay 或 Windows E13 parity 原始 sidecars，不能宣稱完整市場績效逐筆獨立認證。
 - **來源 closure 的已知設計注意事項**：MinTrade `_TRUTH_SOURCE_MODULES` 仍將 `config/trading.py` 的 bytes 納入 truth SHA；該檔不是這條 Research MinTrade 真值路徑的執行依賴，這會造成 Trading-only 修改的保守過度失效。它不會讓既有算出的 Target 數值錯誤，但單純把它從 closure 刪除會改變所有 MinTrade 真值身分、讓合法結果無謂 RUN。此輪保留來源 SHA 不動；任何需要調整 closure 的工程遷移應分開驗證與處理 cache 相容性，**不與本輪純死碼退役合併**。
+
+
+## MinTrade Oracle 的單股訊號與 Portfolio 分工（2026-10-28 E13 修復）
+
+`filters/breakout_quality/daily_trade40_target.py` 只管理可評分股票日對應的**單股 Min 正式買訊／有效延續單**之 decision-time snapshot；用原始 limit、訊號日、原參數與 shadow 延續狀態，讓 `filters/breakout_quality/trade_path_label.py::simulate_realized_trade_path_label()` 從**相同單股候選**的下一可執行日開始運行。起單、延續清理、成交、停損、出場、毫元帳務與 Broker-Cash 直接使用既有正式 `core/` SSOT；沒有買訊／有效延續的 feature-eligible 日仍留在 DL score 母體，但 Target economic truth 為 NULL，禁止每日以 Close+ATR 新造訂單。
+
+單股反事實的「之前沒有被投組買到」及固定參考本金只用來隔離歷史投組資金／持股競爭；正式 Exact／Direct replay 的可評分集合、candidate gate、現金／持股、Selector 與 Score-consumption 維持原有架構。40／60 交易所日和完整週期共用一條交易路徑，只在觀測期限與 Net-R／NetPnL 欄位不同。此為原 Oracle E13 交易等價要求的缺陷修復，舊 daily-fresh MinTrade Target／Replay 工件身分失效，正式研究報表仍採原 `audit.target_oracle_romd@v9` 契約；舊歷史成果與 Registry／Experiment Log 保留。
