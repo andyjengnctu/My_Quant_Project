@@ -13485,3 +13485,59 @@ Decision: `ENGINEERING_CHECKPOINT_FIRST_REUSE / HISTORICAL_AK_EVIDENCE_PRESERVED
 - **科學與交易**：不更改 Target、MinTrade、策略參數、Seed、費稅、模型 fitting、OOS cutoff、REUSE 身分或正式選單；此為工程介面清理，不新建 scientific/report identity。若無完整市場工件，不能由 synthetic 取代真實逐筆驗收。
 - **本輪獨立檢查**：647 個 Python 來源語法解析通過；六個實作檔除待退役的函式與其專屬 import／export 外，其餘既有函式與類別的 AST 完全相同；Price Target、MinTrade Producer、Oracle 報表 fingerprint 及 16 Target × 4 Seed 的 64 組合成 Replay 身分在修改前後完全一致；Research V2 dataset assessment fingerprint 不變，canonical PIT universe、Workbench row layout、Trading tick constraints 直接驗證通過。
 - **尚未驗證**：Research V2 大型 synthetic 因執行環境缺少 `pyarrow` 而未完成 Parquet 寫入；這不是 PASS。未執行本機 `apps/run_bundle.py` 或 `apps/test_suite.py`，也未把上述合成檢查冒充真實市場端到端驗收。
+
+
+## 2026-10-28 — Research [1] Target Oracle 四 Seed 正式回放結果與 64/64 REUSE 登錄（使用者本機輸出）
+
+- **基準／證據**：`test-branch-1_20261028_124740_3c745ada.zip`（SHA256 `bc8baf12fedc19096f3f209bc0f04a01c3379c7c46eab649c95aeaac9f7e7120`）；本機 Console `貼上的文字 (1)(20261028-051732).txt`（SHA256 `6b3bed7f4c8eafffa8b5e2d1020ccbe3e32c41ab8df6b470960efe19029c33c5`），先前完整人讀報表 `貼上的 Markdown.md`（SHA256 `347e3c895c30db382e274a9ab5c0d2f84add5257d3ee1a5e55d9a8b6b4cb3a68`）。已依序核對 `doc/PROJECT_SETTINGS.md`、本 Registry、既有 Experiment Log，並核對 `core/audit_registry.py`、正式 Replay／Score owner 與當前 Report Contract。本次由 GPT 登錄**使用者本機實際執行輸出**，不是 GPT 自行執行完整市場 Replay。
+- **正式研究條件**：Research `[1] Target 驗證`；`AUD-target-ground-truth-romd`，Report `audit.target_oracle_romd@v9`／payload schema 8，不變更任何 Scientific／Report identity。期間 `2021-01-01～2026-03-02`；Score start `2021-01-01`、實際首日 `2021-01-04`；正式 DL feature-eligible **630,589** 個股票日；C96 加 15 Oracle treatments（9 price + 6 DailyUniversal MinTrade，Exact K/R0 與 Direct No-K/No-R0 各循原已核准 Selector）、固定 P16／Broker-Cash，Seed=S1 `693545351`、S2 `2014432738`、S3 `104504529`、S4 `762252050`。2026 年報酬是截至 03/02 的部分年度，不是完整年度；Oracle 使用未來真值，**HINDSIGHT／NON-PIT**。
+- **重播與 REUSE 證據**：正式選單第一次規劃 `REUSE 37 / RUN 27 / BLOCKED 0`；使用者授權後僅 S2/S3/S4 各執行 9 組價格型 Target（共 **27** 組；原始 Price Score **REUSE**，未重新訓練 DL、未執行 Optimizer）；完成後重新進入原選單為 `REUSE 64 / RUN 0 / BLOCKED 0`。四個 C96 及六個 MinTrade×4 Seed 均由原身份 REUSE，沒有因來源修訂全面重算。正式規劃器只證明這64格當前 artifact identity 可用，不等於完整市場逐日交易等價驗收。
+- **來源修訂背景**：2026-10-27 price-target 精度／同分與來源閉包 Bug 修正使 S2～S4 的 `score_algorithm_sha256`、`truth_source_sha256` 舊身分失效；先前唯讀 V3 證據顯示 9 組已匹配現行來源、27 組 Score SHA／母體／價格資料／相同 Seed C96 身分一致但來源 SHA 不同。因此仍依正式 E13 規則重新執行這27格，**沒有覆寫歷史身份或放寬 REUSE**；新報表與重跑前報表的 16 組彙總值於顯示精度完全相同，不宣稱新舊逐筆交易 bytes 已獨立比較。
+
+### 正式報表：四 Seed 平均（直接保存使用者 2026-10-28 Console）
+
+報酬率／年化／MDD 單位為百分比；RoMD、RoMD SD／Δ 為比值；EV(A) 單位為 R；`Win/Seed` 為**相對同 Seed C96**，不是任兩 Target 互比。
+
+| Target | Return | Ann. | MDD | RoMD | RoMD SD | Δ vs C96 | Win/Seed | EV(A) |
+|---|---:|---:|---:|---:|---:|---:|:---:|---:|
+| C96 Same-Window | +137.88% | +18.27% | 15.05% | 9.18 | 0.49 | +0.00 | - | +0.89 R |
+| CG40_EqualRank | +310.60% | +31.02% | 13.41% | 23.22 | 8.35 | +14.05 | 4/4 | +1.53 R |
+| MFE40 | +315.55% | +31.55% | 14.07% | 22.34 | 4.77 | +13.17 | 4/4 | +1.55 R |
+| R40 | +290.85% | +30.23% | 13.27% | 21.92 | 1.42 | +12.74 | 4/4 | +1.52 R |
+| T40 | +327.51% | +32.18% | 12.77% | 25.57 | 6.35 | +16.39 | 4/4 | +1.53 R |
+| T40-MFE | +277.63% | +29.21% | 12.79% | 21.63 | 3.86 | +12.45 | 4/4 | +1.54 R |
+| MFE40_Direct | +1339.25% | +65.59% | 14.36% | 98.76 | 56.20 | +89.58 | 4/4 | +2.41 R |
+| R40_Direct | +1312.01% | +65.07% | 12.83% | 101.49 | 47.97 | +92.32 | 4/4 | +2.62 R |
+| T40_Direct | +1398.61% | +66.78% | 11.71% | 116.71 | 51.78 | +107.53 | 4/4 | +3.32 R |
+| T40-MFE_Direct | +1644.24% | +70.44% | 13.12% | 123.34 | 77.07 | +114.17 | 4/4 | +3.40 R |
+| DailyUniversal_MinTrade40_NetR | +319.50% | +31.55% | 13.46% | 24.04 | 8.90 | +14.86 | 4/4 | +1.74 R |
+| DailyUniversal_MinTrade40_NetR_Direct | +1989.40% | +76.58% | 11.99% | 164.00 | 106.79 | +154.82 | 4/4 | +4.17 R |
+| DailyUniversal_MinTrade60_NetR | +327.26% | +32.38% | 12.73% | 25.60 | 3.37 | +16.42 | 4/4 | +1.80 R |
+| DailyUniversal_MinTrade60_NetR_Direct | +1694.71% | +73.37% | 11.54% | 145.47 | 58.65 | +136.30 | 4/4 | +4.05 R |
+| DailyUniversal_MinTrade_NetR | +314.91% | +31.65% | 13.54% | 23.38 | 4.12 | +14.20 | 4/4 | +1.73 R |
+| DailyUniversal_MinTrade_NetR_Direct | +1369.92% | +66.62% | 11.09% | 122.76 | 57.31 | +113.58 | 4/4 | +3.73 R |
+
+### 同 Seed RoMD（正式報表原始四 Seed 明細）
+
+| Target | S1 | S2 | S3 | S4 |
+|---|---:|---:|---:|---:|
+| C96 Same-Window | 9.57 | 9.00 | 9.58 | 8.56 |
+| CG40_EqualRank | 35.57 | 17.16 | 20.18 | 19.99 |
+| MFE40 | 28.68 | 18.26 | 23.34 | 19.10 |
+| R40 | 23.40 | 20.00 | 22.23 | 22.05 |
+| T40 | 34.41 | 24.25 | 24.30 | 19.29 |
+| T40-MFE | 27.25 | 19.61 | 20.97 | 18.68 |
+| MFE40_Direct | 171.75 | 41.52 | 110.21 | 71.56 |
+| R40_Direct | 168.26 | 55.54 | 98.74 | 83.43 |
+| T40_Direct | 189.08 | 70.72 | 116.60 | 90.44 |
+| T40-MFE_Direct | 234.34 | 56.00 | 103.93 | 99.11 |
+| DailyUniversal_MinTrade40_NetR | 36.61 | 19.84 | 23.50 | 16.20 |
+| DailyUniversal_MinTrade40_NetR_Direct | 322.34 | 88.47 | 120.88 | 124.31 |
+| DailyUniversal_MinTrade60_NetR | 29.91 | 22.68 | 26.61 | 23.19 |
+| DailyUniversal_MinTrade60_NetR_Direct | 228.04 | 90.66 | 139.04 | 124.16 |
+| DailyUniversal_MinTrade_NetR | 28.86 | 23.53 | 22.13 | 18.99 |
+| DailyUniversal_MinTrade_NetR_Direct | 207.48 | 81.11 | 98.59 | 103.87 |
+
+- **結果解讀**：Exact 的最高四 Seed 平均 RoMD 為 `DailyUniversal_MinTrade60_NetR=25.60 (SD 3.37)`，與 `T40=25.57 (SD 6.35)` 僅差 `0.03`，不足以視為穩健的統計優勢。Direct 最高為 `DailyUniversal_MinTrade40_NetR_Direct=164.00 (SD 106.79)`，四 Seed `322.34/88.47/120.88/124.31` 差異很大；Direct 使用另一種既有 Selector（No-K/No-R0），不應把全部 RoMD 差異歸因於 Target 的可學性或 DL 自身提升。皆為迭代研究 OOS 的事後比較，不作模型選擇或 Trading promotion。
+- **附加驗證與未完成項**：先前使用者 `report.json` 之正式 DL 兩 Provider 與 Oracle 母體 `630,589/630,589` 逐股票日相同、`cache_minus_formal=0`／`formal_minus_cache=0`；舊 `643,617` 母體原始鍵集合仍未取得，不能斷定其差異根因。新 ZIP 的 Oracle／MinTrade 167 個獨立合成 unittest 於 GPT 端 PASS，**非** Windows 正式 `apps/run_bundle.py`／`apps/test_suite.py` 及非使用者完整市場逐日 E13 parity；本 ZIP 不含全部原市場 Replay 逐筆帳本／逐日 cash、positions、equity 工件，不能僅憑總 RoMD 相同與 `REUSE 64` 宣告端到端等價驗收完成。舊 Oracle/修復前數值、所有歷史 identity／Log 仍保留且不可倒填為當前有效結果；輸出真理仍是原 `outputs/audit/breakout_quality/reusable/target_oracle_romd/latest/audit.md`／對應正式 artifacts。
+- **處置**：`USER_REPORTED_REAL_MARKET_REPLAY_COMPLETED / CURRENT_CANONICAL_REUSE_64_RUN_0_BLOCKED_0 / FOUR_SEED_AGGREGATES_VERIFIED_AT_DISPLAY_PRECISION / E13_FULL_MARKET_DAILY_PARITY_NOT_YET_CERTIFIED / HINDSIGHT_NON_PIT / ITERATIVE_OOS / NO_NEW_SCIENTIFIC_ID / NO_PROMOTION`。本次只登錄結果與同步 Registry 現況，不修改 Target、策略、費稅、計算程序、REUSE 判定或正式報表版型。
