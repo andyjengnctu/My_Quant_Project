@@ -162,7 +162,7 @@ def execute_synthetic_score_fixture(definition, *, price_scores, daily_scores, k
             "target_id": target_id, "label_id": label_id,
             "profile_id": str(definition.source[plan["daily_recipes"][name][1]]),
             "teacher": {"seed": seed, "param_identity_sha256": param_sha256, "periods": periods},
-            "truth_source_sha256": daily_owner.truth_producer_fingerprint(),
+            "truth_source_sha256": daily_owner.truth_producer_fingerprint(outcome_metric),
             "dataset_summary_sha256": None,
             "rank_policy": (
                 "average_zero_based_completed_net_pnl_censored_rank_last_no_pnl_imputation"
@@ -473,6 +473,28 @@ class FormalMinDailyOracleCases(TestCase):
         direct_plan = oracle._oracle_comparison_plan(only_direct)
         self.assertEqual(list(direct_plan["daily_recipes"]), ["DailyUniversal_MinTrade_NetR"])
         self.assertEqual(list(direct_plan["selectors"]), ["DailyUniversal_MinTrade_NetR_Direct"])
+
+    def test_additive_netpnl_preserves_prior_signed_netr_fingerprint_fail_closed(self):
+        from services.audit import daily_trade40_oracle as owner
+        from services.audit.mintrade_netr_lineage import certified_netr_compatible_source_sha
+        from pathlib import Path
+
+        prior_netr = "cf46236712c396f415531baf4db4a1cf13dae56a1b1d2b5a06868a44d0a694a4"
+        self.assertEqual(owner.truth_producer_fingerprint("net_r"), prior_netr)
+        self.assertEqual(owner.truth_producer_fingerprint(), prior_netr)
+        self.assertNotEqual(owner.truth_producer_fingerprint("net_pnl"), prior_netr)
+        # A future semantic edit must invalidate legacy Net-R receipts;
+        # it must not receive a broad unchecked legacy-SHA exemption.
+        real_hash = owner.compute_file_sha256
+        shared_rel = "core/entry_plans.py"
+        with patch.object(owner, "compute_file_sha256", side_effect=lambda path: (
+                "f" * 64 if str(path).endswith(shared_rel) else real_hash(path))):
+            self.assertNotEqual(owner._truth_source_sha(Path(owner.__file__).resolve().parents[2]), prior_netr)
+        changed_owner_sha = "f" * 64
+        self.assertEqual(certified_netr_compatible_source_sha(
+            "services/audit/daily_trade40_oracle.py", changed_owner_sha), changed_owner_sha)
+        with self.assertRaisesRegex(ValueError, "Unknown formal Min Oracle outcome"):
+            owner._truth_source_sha(Path(owner.__file__).resolve().parents[2], outcome_metric="other")
 
     def test_netpnl_exact_direct_comparison_replays_share_one_canonical_score(self):
         names = {

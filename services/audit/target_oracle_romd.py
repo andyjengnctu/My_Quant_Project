@@ -1392,7 +1392,10 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
         from services.audit.daily_trade40_oracle import (
             NET_PNL_EVIDENCE, target_identity_for_horizon, truth_producer_fingerprint,
         )
-        if daily_evidence.get("truth_source_sha256") != truth_producer_fingerprint():
+        source = plan["daily_sources"][target]
+        recipe, provider, horizon = plan["daily_recipes"][source]
+        if daily_evidence.get("truth_source_sha256") != truth_producer_fingerprint(
+                _ORACLE_DAILY_SCORE_RECIPES[recipe]):
             raise OracleBlockedError("Oracle Target truth has no verified executing producer lineage")
         source_summary_sha = oracle_dataset_summary_sha256(
             root=Path(project_root) if project_root is not None else Path(__file__).resolve().parents[2],
@@ -1401,8 +1404,6 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
         if ("dataset_summary_sha256" not in daily_evidence or
                 daily_evidence["dataset_summary_sha256"] != source_summary_sha):
             raise OracleBlockedError("Oracle Target truth has no matching dataset-source evidence")
-        source = plan["daily_sources"][target]
-        recipe, provider, horizon = plan["daily_recipes"][source]
         target_id, label_id = target_identity_for_horizon(
             horizon, outcome_metric=_ORACLE_DAILY_SCORE_RECIPES[recipe],
         )
@@ -1646,7 +1647,11 @@ def _replay_attested_score_keys(
     from services.audit.daily_trade40_oracle import truth_producer_fingerprint
     # Source code hashes are small, read-only provenance checks: NO outcomes,
     # DL labels, 558-ticker simulation or Portfolio are materialized here.
-    producer_sha = truth_producer_fingerprint() if plan["daily_recipes"] else None
+    # Net-R and the newly added NetPnL have separate producer identities.
+    producer_sha_by_recipe = {
+        recipe: truth_producer_fingerprint(_ORACLE_DAILY_SCORE_RECIPES[recipe])
+        for recipe, _provider, _horizon in plan["daily_recipes"].values()
+    }
     price_producer_sha = (_price_score_replay_lineage(definition, store.project_root)["truth_source_sha256"]
                           if plan["recipes"] else None)
     dataset_summary_sha = oracle_dataset_summary_sha256(
@@ -1670,8 +1675,12 @@ def _replay_attested_score_keys(
                 # Both price and trade-path scores require current producer
                 # evidence; a warm Replay must not bypass its truth-cache SHA.
                 lineage = policy.get("hindsight_target_contract") or {}
-                current_producer_sha = (producer_sha if target in plan["daily_sources"]
-                                        else price_producer_sha)
+                if target in plan["daily_sources"]:
+                    source = plan["daily_sources"][target]
+                    recipe = plan["daily_recipes"][source][0]
+                    current_producer_sha = producer_sha_by_recipe[recipe]
+                else:
+                    current_producer_sha = price_producer_sha
                 if (not isinstance(lineage, Mapping) or
                         lineage.get("truth_source_sha256") != current_producer_sha):
                     continue
@@ -1788,7 +1797,8 @@ def _certified_saved_oracle_identity(
         recorded = policy.get("hindsight_target_contract")
         if not isinstance(recorded, Mapping) or not rolling_periods:
             raise ValueError("historical daily-truth lineage missing")
-        if recorded.get("truth_source_sha256") != truth_producer_fingerprint():
+        if recorded.get("truth_source_sha256") != truth_producer_fingerprint(
+                _ORACLE_DAILY_SCORE_RECIPES[recipe]):
             raise ValueError("historical Target outcome producer semantics not certified")
         if ("dataset_summary_sha256" not in recorded or
                 recorded["dataset_summary_sha256"] != oracle_dataset_summary_sha256(
@@ -2167,8 +2177,10 @@ def _run_single_stage_oracle(
     # Compare signed provenance before considering a cached perfect-score
     # SHA. Legacy receipts without the producer closure fingerprint cannot
     # claim unchanged outcome semantics after the canonical cutoff bug fix.
-    current_daily_producer_sha = (truth_producer_fingerprint()
-                                  if plan["daily_recipes"] else None)
+    current_daily_producer_sha_by_recipe = {
+        recipe: truth_producer_fingerprint(_ORACLE_DAILY_SCORE_RECIPES[recipe])
+        for recipe, _provider, _horizon in plan["daily_recipes"].values()
+    }
     current_price_producer_sha = (_price_score_replay_lineage(definition, root)["truth_source_sha256"]
                                   if plan["recipes"] else None)
     current_dataset_summary_sha = oracle_dataset_summary_sha256(
@@ -2207,9 +2219,13 @@ def _run_single_stage_oracle(
                     else:
                         decisions[key] = "RUN"
                 continue
-            known_lineage = {"truth_source_sha256": (
-                current_daily_producer_sha if target in plan["daily_sources"]
-                else current_price_producer_sha)}
+            if target in plan["daily_sources"]:
+                source = plan["daily_sources"][target]
+                recipe = plan["daily_recipes"][source][0]
+                producer_sha = current_daily_producer_sha_by_recipe[recipe]
+            else:
+                producer_sha = current_price_producer_sha
+            known_lineage = {"truth_source_sha256": producer_sha}
             if target in plan["daily_sources"]:
                 known_lineage["dataset_summary_sha256"] = current_dataset_summary_sha
             # Only already verified inputs enter this source probe. It never

@@ -123,7 +123,14 @@ _TRUTH_SOURCE_MODULES = (
 )
 
 
-def _truth_source_sha(root: Path) -> str:
+def _truth_source_sha(root: Path, *, outcome_metric: str = "net_r") -> str:
+    if outcome_metric not in {"net_r", "net_pnl"}:
+        raise DailyTrade40OracleBlockedError("Unknown formal Min Oracle outcome for source identity")
+    # An audited additive NetPnL output must not invalidate the unchanged
+    # historical Net-R computation. The attestation is accepted ONLY for exact
+    # approved source bytes; any later edit immediately falls back to its own
+    # source SHA. Other execution/price/data dependencies remain fully hashed.
+    from services.audit.mintrade_netr_lineage import certified_netr_compatible_source_sha
     digest = sha256()
     # The daily feature/population closure has one owner shared with price
     # Targets. Entry, management, sizing and ledger owners below add only the
@@ -135,19 +142,22 @@ def _truth_source_sha(root: Path) -> str:
         if not path.is_file():
             raise DailyTrade40OracleBlockedError(f"Oracle truth source lineage missing: {relative}")
         digest.update(relative.encode("utf-8") + b"\0")
-        digest.update(compute_file_sha256(path).encode("ascii") + b"\n")
+        source_sha = compute_file_sha256(path)
+        if outcome_metric == "net_r":
+            source_sha = certified_netr_compatible_source_sha(relative, source_sha)
+        digest.update(source_sha.encode("ascii") + b"\n")
     return digest.hexdigest()
 
 
-@lru_cache(maxsize=1)
-def truth_producer_fingerprint() -> str:
+@lru_cache(maxsize=2)
+def truth_producer_fingerprint(outcome_metric: str = "net_r") -> str:
     """Fingerprint the executing canonical outcome producer without any label RUN.
 
     This is the same source closure used by the durable truth-cache identity.
     The imported module root (not a data project_root) identifies the code
     actually executing; hashing this small source closure never simulates trades.
     """
-    return _truth_source_sha(Path(__file__).resolve().parents[2])
+    return _truth_source_sha(Path(__file__).resolve().parents[2], outcome_metric=outcome_metric)
 
 
 def _ranked_score_sha(scores: Mapping[tuple[str, str], float]) -> str:
@@ -360,7 +370,7 @@ def build_daily_universal_trade40_oracle_scores(
                 "horizon_sessions": horizon_sessions,
                 "price_sha256": str(price_sha256),
                 "feature_eligible_keys_sha256": group_sha,
-                "truth_source_sha256": truth_producer_fingerprint(),
+                "truth_source_sha256": truth_producer_fingerprint(outcome_metric),
                 "dataset_summary_sha256": dataset_summary_sha,
             }
             cache_path = Path(cache_root) / str(seed) / (
@@ -507,7 +517,7 @@ def build_daily_universal_trade40_oracle_scores(
             "first_replay_trade_date": str(first_trade.date()),
             "research_cutoff": str(cutoff_day.date()),
             "score_start_date": str(first_scored_day.date()),
-            "truth_source_sha256": truth_producer_fingerprint(),
+            "truth_source_sha256": truth_producer_fingerprint(outcome_metric),
             "dataset_summary_sha256": dataset_summary_sha,
             "rank_sha256": rank_sha, "raw_label_sha256": raw_sha,
             "calendar_sha256": cal_sha, "teacher": teacher,
