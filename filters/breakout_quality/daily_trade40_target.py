@@ -1,4 +1,4 @@
-"""Daily-universal *counterfactual* Min 40-session net-R target.
+"""Daily-universal *counterfactual* Min 40/60/full-cycle net-outcome target.
 
 For each eligible stock/date, pretend a fresh Min setup originated at that
 close.  Its normal limit is the canonical rounded close + ATR*tolerance;
@@ -66,6 +66,8 @@ class CounterfactualTrade40Batch:
     reasons: tuple[str, ...]
     cutoff_truncated_rows: int = 0
     research_cutoff_closeout_rows: int = 0
+    # Opt-in canonical broker-ledger net PnL, not a second path/sizing engine.
+    target_raw_pnl: np.ndarray | None = None
 
 
 def build_formal_min_execution_schedule(
@@ -140,24 +142,28 @@ def resolve_formal_min_param_records(base_kind: str, base_params: Any) -> tuple[
     return tuple(records)
 
 
-def rank_trade40_outcome_frame(frame: pd.DataFrame) -> dict[tuple[str, str], float]:
-    """Canonical daily hindsight ranking without fabricating censored economic R.
+def rank_trade40_outcome_frame(
+    frame: pd.DataFrame, *, value_column: str = "realized_net_r",
+) -> dict[tuple[str, str], float]:
+    """Canonical daily hindsight ranking without fabricating censored economic outcomes.
 
     Unfilled outcomes remain NaN in the provider; only their relative selector
     order is below actually executed outcomes. This helper is not an event
     Target producer and cannot publish PIT scores or fit a DL model.
     """
-    if frame.empty or not {"ticker", "date", "realized_net_r"}.issubset(frame):
+    if value_column not in {"realized_net_r", "realized_net_pnl"}:
+        raise ValueError("Daily MinTrade outcome column is not an approved economic metric")
+    if frame.empty or not {"ticker", "date", value_column}.issubset(frame):
         raise ValueError("Daily MinTrade missing scoreable stock-day rows")
     if frame.duplicated(["ticker", "date"]).any():
         raise ValueError("Daily Trade40 duplicate ticker/date")
     from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets
-    filled = frame["realized_net_r"].notna()
-    numeric = pd.to_numeric(frame["realized_net_r"], errors="raise").astype(float)
+    filled = frame[value_column].notna()
+    numeric = pd.to_numeric(frame[value_column], errors="raise").astype(float)
     if not np.isfinite(numeric.loc[filled].to_numpy(dtype=float)).all():
-        raise ValueError("Daily Trade40 executed Net-R is nonfinite")
+        raise ValueError("Daily Trade40 executed economic outcome is nonfinite")
     if not filled.any():
-        raise ValueError("Daily Trade40 no executed Net-R truth")
+        raise ValueError("Daily Trade40 no executed economic outcome truth")
     daily_min = numeric.groupby(frame["date"]).transform("min").fillna(0.0)
     numeric.loc[~filled] = daily_min.loc[~filled] - (1.0 + daily_min.loc[~filled].abs())
     if not np.isfinite(numeric.to_numpy(dtype=float)).all():
@@ -220,6 +226,7 @@ def compute_counterfactual_trade40_batch(
     schedule: tuple[ExecutableMinPeriod, ...], exchange_calendar: pd.DatetimeIndex,
     horizon_sessions: int | None = HORIZON_SESSIONS,
     research_cutoff: str | pd.Timestamp | None = None,
+    include_net_pnl: bool = False,
 ) -> CounterfactualTrade40Batch:
     """One Min path for 40/60/any H and full-cycle; cutoff is an exit deadline.
 
@@ -246,6 +253,8 @@ def compute_counterfactual_trade40_batch(
         raise ValueError("Counterfactual Min research cutoff has no exchange sessions")
     last_research_session = eligible_sessions[-1]
     result = np.full(len(positions), np.nan, dtype=np.float32)
+    # Float64 preserves canonical milli-to-money PnL on large allocations.
+    net_pnl = np.full(len(positions), np.nan, dtype=np.float64) if include_net_pnl else None
     valid = np.zeros(len(positions), dtype=bool)
     maturity_dates = np.full(len(positions), np.datetime64("NaT"), dtype="datetime64[D]")
     reasons: list[str] = []
@@ -351,11 +360,21 @@ def compute_counterfactual_trade40_batch(
         value = float(observation.realized_net_r)
         if not math.isfinite(value):
             raise ValueError("canonical trade path produced nonfinite realized R")
+        if net_pnl is not None:
+            # Reuse the very SAME canonical executed trade; do not estimate PnL
+            # using a separate fee, risk denominator, or theoretical fill.
+            pnl_value = observation.realized_net_pnl
+            if pnl_value is None or not math.isfinite(float(pnl_value)):
+                raise ValueError("canonical filled Min path lacks finite broker-ledger NetPnL")
+            if (value > 0 and float(pnl_value) <= 0) or (value < 0 and float(pnl_value) >= 0):
+                raise ValueError("canonical Min Net-R and NetPnL signs disagree")
+            net_pnl[row] = float(pnl_value)
         result[row] = value
         valid[row] = True
         reasons.append("filled_executed_net_R")
     return CounterfactualTrade40Batch(
         result, valid, maturity_dates, tuple(reasons), truncated, cutoff_closeouts,
+        target_raw_pnl=net_pnl,
     )
 
 

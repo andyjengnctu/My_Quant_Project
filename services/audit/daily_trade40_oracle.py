@@ -44,9 +44,24 @@ from services.audit.oracle_score_artifacts import (
 # identity; no new result may masquerade as its supervised-label artifact.
 TARGET_ID = "daily_universal_formal_min_roos_trade40_netr_v1"
 LABEL_ID = "LABEL-daily_universal_formal_min_roos_trade40_netr_v1"
+# One owner for the monetary-outcome evidence, not a second economic model.
+NET_PNL_EVIDENCE = {
+    "sizing_basis": "canonical_single_backtest_initial_capital_not_portfolio_dynamic_equity",
+    "economic_outcome": "broker_ledger_realized_net_pnl_twd",
+}
+NET_PNL_RANK_POLICY = "average_zero_based_completed_net_pnl_censored_rank_last_no_pnl_imputation"
 
 
-def target_identity_for_horizon(horizon_sessions: int | None) -> tuple[str, str]:
+def target_identity_for_horizon(
+    horizon_sessions: int | None, *, outcome_metric: str = "net_r",
+) -> tuple[str, str]:
+    if outcome_metric not in {"net_r", "net_pnl"}:
+        raise DailyTrade40OracleBlockedError("Unknown formal Min Oracle economic outcome")
+    if outcome_metric == "net_pnl":
+        if horizon_sessions is not None:
+            raise DailyTrade40OracleBlockedError("NetPnL Oracle is approved only for full-cycle Min")
+        target = "daily_universal_formal_min_roos_fulltrade_netpnl_v1"
+        return target, f"LABEL-{target}"
     if horizon_sessions is None:
         target = "daily_universal_formal_min_roos_fulltrade_netr_v1"
         return target, f"LABEL-{target}"
@@ -239,6 +254,7 @@ def build_daily_universal_trade40_oracle_scores(
     seed: int, param_sha256: str,
     canonical_schedule: tuple[ExecutableMinPeriod, ...],
     horizon_sessions: int | None = HORIZON_SESSIONS,
+    outcome_metric: str = "net_r",
     evaluation_end: str | None = None,
     price_sha256: str | None = None, cache_root: Path | None = None,
     feature_cohort_cache: dict[tuple[str, ...], tuple[pd.DataFrame, str]] | None = None,
@@ -255,7 +271,10 @@ def build_daily_universal_trade40_oracle_scores(
     the declared horizon and Research data cutoff are both imposed on the
     canonical trade path as earliest legal closeout boundaries.
     """
-    target_id, label_id = target_identity_for_horizon(horizon_sessions)
+    target_id, label_id = target_identity_for_horizon(
+        horizon_sessions, outcome_metric=outcome_metric,
+    )
+    value_column = "realized_net_pnl" if outcome_metric == "net_pnl" else "realized_net_r"
     root = Path(project_root).resolve()
     if not canonical_schedule or len(param_sha256) != 64:
         raise DailyTrade40OracleBlockedError("Missing verified formal Min parameters for this seed")
@@ -407,6 +426,7 @@ def build_daily_universal_trade40_oracle_scores(
                 frame, positions, ticker=ticker, schedule=canonical_schedule,
                 exchange_calendar=exchange, horizon_sessions=horizon_sessions,
                 research_cutoff=cutoff_day,
+                include_net_pnl=(outcome_metric == "net_pnl"),
             )
             # No effective Min parameter is missing source truth, NOT an
             # unfilled trade outcome. Ranking it last would fabricate an
@@ -433,28 +453,35 @@ def build_daily_universal_trade40_oracle_scores(
                 raise DailyTrade40OracleBlockedError("Min target deadline result shape mismatch")
             total_truncated += batch.cutoff_truncated_rows
             total_cutoff_closeouts += batch.research_cutoff_closeout_rows
-            raw = np.asarray(batch.target_raw_r, dtype=np.float64)
+            raw = np.asarray(
+                batch.target_raw_pnl if outcome_metric == "net_pnl" else batch.target_raw_r,
+                dtype=np.float64,
+            )
             valid = np.asarray(batch.valid_mask, dtype=bool)
-            if ((valid & ~np.isfinite(raw)).any() or ((~valid) & np.isfinite(raw)).any()):
-                raise DailyTrade40OracleBlockedError("NULL/valid Net-R contract invalid")
+            if (len(raw) != len(valid) or
+                    (valid & ~np.isfinite(raw)).any() or ((~valid) & np.isfinite(raw)).any()):
+                raise DailyTrade40OracleBlockedError("NULL/valid canonical Min economic outcome invalid")
             records.append(pd.DataFrame({
                 "ticker": ticker,
                 "date": selected["date"].dt.strftime("%Y-%m-%d").to_numpy(),
-                "realized_net_r": np.where(valid, raw, np.nan),
+                value_column: np.where(valid, raw, np.nan),
             }))
             if progress_callback is not None and (tick_index % 100 == 0 or tick_index == total_tickers):
                 progress_callback(f"逐股交易路徑 {tick_index}/{total_tickers}")
         outcome = pd.concat(records, ignore_index=True).sort_values(["date", "ticker"], kind="stable")
-        if outcome.empty or not outcome["realized_net_r"].notna().any():
-            raise DailyTrade40OracleBlockedError("No completed valid formal-Min Net-R outcomes")
+        if outcome.empty or not outcome[value_column].notna().any():
+            raise DailyTrade40OracleBlockedError("No completed valid formal-Min economic outcomes")
         # An information date with no filled path is still a valid censored
         # cross-section: all its stocks tie for last place (canonical rank 0.5).
         # No R is imputed. Missing rolling Min parameters are blocked above;
         # genuine unfilled orders must not make the whole OOS window unusable.
-        scores = rank_trade40_outcome_frame(outcome)
+        scores = rank_trade40_outcome_frame(outcome, value_column=value_column)
         if len(scores) != len(outcome):
             raise DailyTrade40OracleBlockedError("Oracle daily scores missing feature-eligible rows")
-        raw_sha = sha256(outcome.to_csv(index=False, na_rep="NULL", float_format="%.10g").encode("utf-8")).hexdigest()
+        # Preserve every TWD milli-unit carried from the canonical ledger.
+        # Do not change the existing Net-R truth-cache serialization.
+        raw_format = "%.17g" if outcome_metric == "net_pnl" else "%.10g"
+        raw_sha = sha256(outcome.to_csv(index=False, na_rep="NULL", float_format=raw_format).encode("utf-8")).hexdigest()
         rank_sha = sha256("".join(f"{t}|{d}|{scores[t,d]:.17g}\n" for t,d in sorted(scores)).encode("ascii")).hexdigest()
         cal_sha = sha256("\n".join(exchange.strftime("%Y-%m-%d")).encode("ascii")).hexdigest()
         teacher = {
@@ -473,8 +500,9 @@ def build_daily_universal_trade40_oracle_scores(
             "research_cutoff_closeout_rows": int(total_cutoff_closeouts),
             "horizon_sessions": horizon_sessions,
             "evaluation_end_date": str(evaluation_end_day.date()),
-            "settled_net_r_rows": int(outcome["realized_net_r"].notna().sum()),
-            "censored_rank_last_rows": int(outcome["realized_net_r"].isna().sum()),
+            ("settled_net_pnl_rows" if outcome_metric == "net_pnl" else
+             "settled_net_r_rows"): int(outcome[value_column].notna().sum()),
+            "censored_rank_last_rows": int(outcome[value_column].isna().sum()),
             "first_date": outcome["date"].min(), "last_date": outcome["date"].max(),
             "first_replay_trade_date": str(first_trade.date()),
             "research_cutoff": str(cutoff_day.date()),
@@ -483,7 +511,12 @@ def build_daily_universal_trade40_oracle_scores(
             "dataset_summary_sha256": dataset_summary_sha,
             "rank_sha256": rank_sha, "raw_label_sha256": raw_sha,
             "calendar_sha256": cal_sha, "teacher": teacher,
-            "rank_policy": "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",
+            **(NET_PNL_EVIDENCE if outcome_metric == "net_pnl" else {}),
+            "rank_policy": (
+                NET_PNL_RANK_POLICY
+                if outcome_metric == "net_pnl" else
+                "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation"
+            ),
             "oracle_evaluation_start_date": str(start_day.date()),
             "oracle_hindsight_only": True,
         }

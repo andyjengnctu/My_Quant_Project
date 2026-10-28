@@ -72,6 +72,8 @@ def _forty_only(definition):
             "DailyUniversal_MinTrade60_NetR_Direct",
             "DailyUniversal_MinTrade_NetR",
             "DailyUniversal_MinTrade_NetR_Direct",
+            "DailyUniversal_MinTrade_NetPnL",
+            "DailyUniversal_MinTrade_NetPnL_Direct",
         })})
 
 
@@ -1312,7 +1314,7 @@ class OracleAuditContractCases(TestCase):
             {"CG40_EqualRank", "MFE40_Control", "R40", "T40",
              "T40-MFE", "MFE40_Direct", "R40_Direct", "T40_Direct", "T40-MFE_Direct"},
         )
-        self.assertEqual(len(oracle._oracle_comparison_plan(self.active_definition)["targets"]), 15)
+        self.assertEqual(len(oracle._oracle_comparison_plan(self.active_definition)["targets"]), 17)
         self.assertNotIn("MinTrade40_NetR", dict(oracle._oracle_comparison_plan(self.active_definition)["targets"]))
         self.assertNotIn("MinTrade40_NetR_Direct", dict(oracle._oracle_comparison_plan(self.active_definition)["targets"]))
         self.assertEqual(oracle._oracle_comparison_plan(self.active_definition)["aliases"], {
@@ -1321,6 +1323,7 @@ class OracleAuditContractCases(TestCase):
             "DailyUniversal_MinTrade40_NetR_Direct": "DailyUniversal_MinTrade40_NetR",
             "DailyUniversal_MinTrade60_NetR_Direct": "DailyUniversal_MinTrade60_NetR",
             "DailyUniversal_MinTrade_NetR_Direct": "DailyUniversal_MinTrade_NetR",
+            "DailyUniversal_MinTrade_NetPnL_Direct": "DailyUniversal_MinTrade_NetPnL",
         })
         self.assertEqual(self.definition.output_subdir, "breakout_quality/reusable/target_oracle_romd")
         with tempfile.TemporaryDirectory() as tmp:
@@ -2445,7 +2448,7 @@ class RemovedMinTrade40OracleComparisonCases(TestCase):
         current = _ACTIVE_ORACLE_DEFINITION
         planned = oracle._oracle_comparison_plan(current)
         names = {name for name, _ in planned["targets"]}
-        self.assertEqual(len(names), 15)
+        self.assertEqual(len(names), 17)
         self.assertNotIn("MinTrade40_NetR", names)
         self.assertNotIn("MinTrade40_NetR_Direct", names)
         self.assertIn("DailyUniversal_MinTrade40_NetR", names)

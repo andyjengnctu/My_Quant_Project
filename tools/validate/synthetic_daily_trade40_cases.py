@@ -136,6 +136,79 @@ class FormalMinTrade40SyntheticCases(unittest.TestCase):
                 exchange_calendar=days, horizon_sessions=0,
             )
 
+    def test_full_cycle_netpnl_is_the_canonical_ledger_amount_not_a_second_formula(self):
+        from filters.breakout_quality import daily_trade40_target as owner
+        days, frame, _params, period = fixture(count=150)
+        recorded = []
+        canonical_path = simulate_realized_trade_path_label
+        def trace(*args, **kwargs):
+            observed = canonical_path(*args, **kwargs)
+            recorded.append(observed)
+            return observed
+        inputs = dict(frame=frame, positions=np.asarray([75]), ticker="2330",
+                      schedule=(period,), exchange_calendar=days,
+                      horizon_sessions=None, research_cutoff=days[120])
+        with patch.object(owner, "simulate_realized_trade_path_label", side_effect=trace):
+            dual = compute_counterfactual_trade40_batch(**inputs, include_net_pnl=True)
+        self.assertEqual(len(recorded), 1)
+        self.assertTrue(dual.valid_mask[0])
+        self.assertIsNotNone(dual.target_raw_pnl)
+        self.assertAlmostEqual(dual.target_raw_pnl[0], recorded[0].realized_net_pnl, places=8)
+        self.assertAlmostEqual(dual.target_raw_r[0], recorded[0].realized_net_r, places=5)
+        self.assertEqual(recorded[0].forced_closeout, True)
+        self.assertGreater(recorded[0].sizing_capital, 0)
+        default = compute_counterfactual_trade40_batch(**inputs)
+        self.assertIsNone(default.target_raw_pnl)
+        np.testing.assert_array_equal(default.target_raw_r, dual.target_raw_r)
+        np.testing.assert_array_equal(default.maturity_dates, dual.maturity_dates)
+        cutoff_censored = compute_counterfactual_trade40_batch(
+            frame, np.asarray([120]), ticker="2330", schedule=(period,),
+            exchange_calendar=days, horizon_sessions=None,
+            research_cutoff=days[120], include_net_pnl=True,
+        )
+        self.assertFalse(cutoff_censored.valid_mask[0])
+        self.assertTrue(np.isnan(cutoff_censored.target_raw_pnl[0]))
+
+    def test_netpnl_rejects_missing_or_disagreeing_canonical_ledger(self):
+        from filters.breakout_quality import daily_trade40_target as owner
+        days, frame, _params, period = fixture(count=150)
+        actual = SimpleNamespace(
+            realized_net_r=2.0, realized_net_pnl=None,
+            reason="realized_net_profit", exit_date=str(days[100].date()),
+            label_eval_end_date=str(days[100].date()), forced_closeout=False,
+        )
+        with patch.object(owner, "simulate_realized_trade_path_label", return_value=actual):
+            with self.assertRaisesRegex(ValueError, "lacks finite broker-ledger NetPnL"):
+                compute_counterfactual_trade40_batch(
+                    frame, np.asarray([75]), ticker="2330", schedule=(period,),
+                    exchange_calendar=days, horizon_sessions=None,
+                    include_net_pnl=True,
+                )
+        actual.realized_net_pnl = -100.0
+        with patch.object(owner, "simulate_realized_trade_path_label", return_value=actual):
+            with self.assertRaisesRegex(ValueError, "signs disagree"):
+                compute_counterfactual_trade40_batch(
+                    frame, np.asarray([75]), ticker="2330", schedule=(period,),
+                    exchange_calendar=days, horizon_sessions=None,
+                    include_net_pnl=True,
+                )
+
+    def test_netpnl_rank_uses_amount_not_risk_normalized_net_r(self):
+        sample = pd.DataFrame({
+            "ticker": ["2330", "2317", "1101", "0050"],
+            "date": ["2025-01-02"] * 4,
+            "realized_net_r": [3.0, 1.5, -1.0, np.nan],
+            "realized_net_pnl": [6000.0, 13500.0, -1500.0, np.nan],
+        })
+        from filters.breakout_quality.daily_trade40_target import rank_trade40_outcome_frame
+        r = rank_trade40_outcome_frame(sample)
+        pnl = rank_trade40_outcome_frame(sample, value_column="realized_net_pnl")
+        self.assertGreater(r[("2330", "2025-01-02")], r[("2317", "2025-01-02")])
+        self.assertLess(pnl[("2330", "2025-01-02")], pnl[("2317", "2025-01-02")])
+        self.assertEqual(pnl[("0050", "2025-01-02")], 0.0)
+        with self.assertRaisesRegex(ValueError, "not an approved economic metric"):
+            rank_trade40_outcome_frame(sample, value_column="future_portfolio_equity")
+
     def test_any_horizon_and_full_cycle_use_one_earliest_settlement_rule(self):
         from filters.breakout_quality import daily_trade40_target as owner
         days, frame, _params, period = fixture(count=150)
