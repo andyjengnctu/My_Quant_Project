@@ -455,6 +455,7 @@ Breakout Quality 的研究身份與可執行語意必須分層，避免每個新
 - **Reusable components**：target transform、pairwise reduction、risk context、attention／encoder block等可重組數學留在其canonical domain implementation；REJECT的是特定experiment recipe，不代表component本身被刪除或永久禁用。Reusable component不另建第二份MR registry。
 - **Legacy compatibility**：`filters/breakout_quality/models/legacy_compatibility.py`只負責舊checkpoint／manifest reconstruction；新訓練只可走`filters/breakout_quality/models/active.py`。`ACTIVE_MODEL_ARCHITECTURES`與`LEGACY_MODEL_ARCHITECTURES`必須互斥且完整覆蓋supported architecture。
 - **History**：MR/SR identity、phase、比較reference、已執行證據與GO/REJECT理由只由`doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`／`doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`保存；不得要求production service依歷史文件或舊approval report才能執行。
+- **單一實驗結果日誌（2026-10-30）**：依使用者決定只保留 `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`；從原 13,663 行逐節移除未形成研究結果的補丁、工程維護、Formal 測試與歷史待辦，保留已完成受控實驗的定量數值、negative results、對照條件與歷史有效性更正。**不新增 `.gz`、研究封存檔或第二份日誌**；Git 既有 commit 與正式已簽章研究工件持有必要追溯來源，不是額外 maintained Log。後續僅記有證據的研究增量／結果有效性更正；`apps/run_bundle.py` 針對 staged 日誌新增行及疑似工程標題提供非阻擋提醒，不另設 formal gate、確認步驟或科學身分。
 - `selection_pit_authorized`只表示該歷史research recipe是否曾被授權建立PIT evidence／供重現；**不等於current OOS/Rolling授權**。Current time validation只看`current_time_validation_authorized`，避免過去曾做過PIT的profile重新滲入current workflow。
 
 ### 歷史 Daily Universal Risk-normalized Ranker（MR-13I / MR-13J；非 current 設定）
