@@ -23,6 +23,7 @@ from core.file_integrity import (
     canonical_json_sha256,
 )
 from filters.breakout_quality.workflow_io import discover_dataset_csv_inputs
+from core.training_policy import benchmark_seed_execution_equivalent
 
 # AI: V1 accidentally hashed Strategy Compare presentation/membership metadata.
 # AI: V2 keys only execution inputs; V1 is retained read-only for verified reuse.
@@ -621,6 +622,12 @@ class OracleReplayStore:
                 record = self.read(peer)
                 if record is None:
                     raise ValueError("Oracle sibling replay cache is missing")
+                # Historical signed metric supplements belong to their
+                # original identity; do not accidentally backfill a valid
+                # win-rate observation merely because the aggregate grew.
+                complete = self.with_win_rate(peer, record)
+                if complete is not None:
+                    record = complete
             except (OSError, ValueError, TypeError, KeyError, OverflowError) as exc:
                 raise ValueError(
                     f"Oracle sibling replay cache is corrupt; fail closed: "
@@ -640,6 +647,16 @@ class OracleReplayStore:
                     candidate_identity = dict(peer)
                 if peer.get("cache_schema") == _CACHE_SCHEMA:
                     candidate_identity = _v2_presentation_identity(candidate_identity, identity)
+                if (candidate_identity.get("benchmark") != identity.get("benchmark")
+                        and benchmark_seed_execution_equivalent(
+                            recorded_benchmark=str(candidate_identity.get("benchmark") or ""),
+                            active_benchmark=str(identity.get("benchmark") or ""),
+                            seed=int(identity["seed"]),
+                        )):
+                    # Only the outer aggregate membership differs. Every
+                    # executable input, including P16 SHA, must still match
+                    # in the full-identity equality below.
+                    candidate_identity = dict(candidate_identity, benchmark=identity["benchmark"])
                 if oracle_cohorts_compatible(candidate_identity.get("cohort") or {}, requested_cohort):
                     candidate_identity = dict(candidate_identity, cohort=dict(requested_cohort))
                 if candidate_identity == dict(identity):

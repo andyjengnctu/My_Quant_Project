@@ -46,7 +46,7 @@ from services.optimizer.strategy_param_service import (
     ensure_fixed_multiseed_robustness_strategy_parameter_artifact,
     ensure_robustness_benchmark_strategy_parameter_artifact,
     inspect_fixed_multiseed_strategy_parameter_artifact,
-    inspect_fixed_multiseed_robustness_strategy_parameter_artifact,
+    resolve_fixed_multiseed_robustness_strategy_parameter_artifact,
     ensure_strategy_parameter_artifact,
     ensure_validation_budget_robustness_strategy_parameter_artifact,
     ensure_validation_budget_strategy_parameter_artifact,
@@ -383,7 +383,7 @@ def _benchmark_state(
         )
     seed_protocol = _fitting_seed_protocol(profile)
     if seed_protocol.enabled:
-        return inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
+        return resolve_fixed_multiseed_robustness_strategy_parameter_artifact(
             PROJECT_ROOT,
             training_profile_id=profile.profile_id,
             benchmark_id=str(benchmark["benchmark_id"]),

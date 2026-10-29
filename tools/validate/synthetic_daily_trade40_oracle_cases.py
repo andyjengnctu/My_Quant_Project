@@ -402,7 +402,7 @@ class FormalMinDailyOracleCases(TestCase):
         self.assertEqual(p["selectors"][EXACT],"exact")
         self.assertEqual(p["selectors"][DIRECT],"direct")
         self.assertEqual(d.source["daily_trade40_profile"],PROFILE)
-        self.assertEqual(require_approved_report_contract("audit.target_oracle_romd").version,10)
+        self.assertEqual(require_approved_report_contract("audit.target_oracle_romd").version,11)
 
     def test_mixed_horizons_reject_incomplete_stock_day_not_silent_intersection(self):
         d = definition()

@@ -1984,7 +1984,7 @@ class OracleAuditContractCases(TestCase):
             # All past report IDs/fingerprints needed for completed Oracle
             # payload compatibility remain available in one small ledger.
             oracle_history = registry["audit.target_oracle_romd"]
-            self.assertEqual(tuple(row["version"] for row in oracle_history), tuple(range(1, 11)))
+            self.assertEqual(tuple(row["version"] for row in oracle_history), tuple(range(1, 12)))
             self.assertEqual(oracle_history[-1]["fingerprint"], current["audit.target_oracle_romd"])
             self.assertTrue(all(set(row) == {"contract_id", "version", "fingerprint"}
                                 for rows in registry.values() for row in rows))
@@ -2015,14 +2015,14 @@ class OracleAuditContractCases(TestCase):
             shutil.copy2(ROOT / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json", ledger_path)
             ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
             entry = next(x for x in ledger["reports"] if x["report_id"] == "audit.target_oracle_romd")
-            self.assertEqual(entry["versions"][-1]["version"], 10)
+            self.assertEqual(entry["versions"][-1]["version"], 11)
             entry["versions"].append({
-                "contract_id": "audit.target_oracle_romd@v11",
-                "version": 11,
+                "contract_id": "audit.target_oracle_romd@v12",
+                "version": 12,
                 "fingerprint": "1" * 16,
             })
             ledger_path.write_text(json.dumps(ledger, ensure_ascii=False), encoding="utf-8")
-            self.assertEqual(load_report_contract_versions(project)["audit.target_oracle_romd"][-1]["version"], 11)
+            self.assertEqual(load_report_contract_versions(project)["audit.target_oracle_romd"][-1]["version"], 12)
             self.assertEqual(report_contract_version_history_violations(project, approved), [])
             entry["versions"][7]["fingerprint"] = "0" * 16
             ledger_path.write_text(json.dumps(ledger, ensure_ascii=False), encoding="utf-8")
@@ -2052,7 +2052,7 @@ class OracleAuditContractCases(TestCase):
             with patch.object(oracle, "build_report", return_value=result):
                 published = oracle.run_formal_audit(self.definition, project_root=base, quiet=True)
             self.assertEqual(published["schema_version"], 8)
-            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v10")
+            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v11")
             latest = base / "outputs/audit" / self.definition.output_subdir / "latest"
             body = (latest / "audit.md").read_text(encoding="utf-8")
             for name in oracle._oracle_comparison_plan(self.definition)["aliases"]:
@@ -2075,7 +2075,7 @@ class OracleAuditContractCases(TestCase):
             expanded_body = oracle.render_result(expanded, target="markdown")
             self.assertIn(f"Oracle treatments: {len(LEGACY_ORACLE_TARGETS) + 1} ", expanded_body)
             self.assertIn("## 2. Target Definitions\n", expanded_body)
-            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v10")
+            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v11")
             json_data = json.loads((latest / "audit.json").read_text(encoding="utf-8"))
             self.assertEqual(len(json_data["oracles"]), len(LEGACY_ORACLE_TARGETS))
             self.assertIn("**MFE40**", body)
@@ -5039,7 +5039,7 @@ class OracleWinRateReportCases(TestCase):
                  "definitions":{"R40":"return", "T40":"return"},
                  "limitations":["NOT PIT"]}
         md = oracle.render_result(report, target="markdown")
-        table = md.split("## 1. Oracle Performance (4-seed mean)",1)[1].split("## 2.",1)[0]
+        table = md.split("## 1. Oracle Performance (8-seed mean)",1)[1].split("## 2.",1)[0]
         self.assertIn("Win Rate", table)
         self.assertNotIn("Delta RoMD", table)
         self.assertLess(table.index("C96 Same-Window"),table.index("R40"))
@@ -5162,6 +5162,219 @@ class OraclePriceSourceExecutionPolicyIsolationCases(TestCase):
                 raise ValueError("intentional failure")
         self.assertEqual(admitted_resource_candidates(rows), rows)
 
+
+
+class OracleEightSeedSinglePipelineCases(TestCase):
+    """An expanded aggregate consumes the same signed per-seed engines and receipts."""
+
+    @staticmethod
+    def _identity(seed, target, benchmark, *, price_sha="a" * 64, param_sha=None):
+        from services.audit.oracle_replay_artifacts import replay_identity
+        return replay_identity(
+            dataset="full", dataset_sha256=price_sha,
+            target=target, definition={"C96": "same-window", "FUTURE_TARGET": "generic target",
+                                       "NEXT_TARGET": "new generic target"},
+            start="2021-01-01", end="2026-03-02", benchmark=benchmark,
+            param_sha256=param_sha or f"{seed:064x}", seed=seed,
+            cohort={"cohort_rows": 100, "research_cutoff": "2026-03-02"},
+            ranking_policy="exact", ranking_options={"max_rank": 10},
+            evaluation_mode="rolling", max_positions=10,
+            replay_policy={"oracle_parity_implementation": "same"},
+        )
+
+    @staticmethod
+    def _observation(seed, target):
+        observation = {
+            "target": target, "seed": int(seed),
+            "total_return_pct": 20.0, "annualized_return_pct": 10.0,
+            "mdd_pct": 5.0, "romd": 4.0, "ev_a_r": 0.4,
+            "trades": 8, "exposure_pct": 40.0,
+            "win_rate_pct": 50.0, "yearly": _synthetic_full_window_yearly(return_pct=12.0),
+        }
+        if target != "C96":
+            observation["delta_romd_vs_c96"] = 0.0
+        return observation
+
+    def test_single_8_seed_current_registration_preserves_historical_prefix(self):
+        from core.training_policy import (
+            get_robustness_benchmark_policy_snapshot,
+            benchmark_seed_execution_equivalent,
+        )
+        old = get_robustness_benchmark_policy_snapshot("end_to_end_v1")
+        current = get_robustness_benchmark_policy_snapshot()
+        self.assertEqual(current["seed_count"], 8)
+        self.assertEqual(current["benchmark_id"], "end_to_end_v2")
+        self.assertEqual(tuple(old["resolved_seeds"]), tuple(current["resolved_seeds"][:4]))
+        self.assertEqual(len(set(current["resolved_seeds"])), 8)
+        self.assertTrue(all(benchmark_seed_execution_equivalent(
+            recorded_benchmark=old["benchmark_id"], active_benchmark=current["benchmark_id"], seed=s,
+        ) for s in old["resolved_seeds"]))
+        self.assertFalse(benchmark_seed_execution_equivalent(
+            recorded_benchmark=old["benchmark_id"], active_benchmark=current["benchmark_id"],
+            seed=current["resolved_seeds"][-1],
+        ))
+        self.assertFalse(benchmark_seed_execution_equivalent(
+            recorded_benchmark=current["benchmark_id"], active_benchmark=old["benchmark_id"],
+            seed=old["resolved_seeds"][0],
+        ))
+
+    def test_old_four_signed_replays_reuse_new_four_run_and_future_target_uses_8(self):
+        from core.training_policy import get_robustness_benchmark_policy_snapshot
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        v1 = get_robustness_benchmark_policy_snapshot("end_to_end_v1")
+        current = get_robustness_benchmark_policy_snapshot()
+        with tempfile.TemporaryDirectory(prefix="oracle_eight_seed_single_pipeline_") as temp:
+            store = OracleReplayStore(Path(temp), "breakout_quality/reusable/target_oracle_romd")
+            originals = {}
+            for seed in v1["resolved_seeds"]:
+                for target in ("C96", "FUTURE_TARGET"):
+                    identity = self._identity(seed, target, v1["benchmark_id"])
+                    store.write(identity, self._observation(seed, target), origin="canonical_replay")
+                    originals[store._path(identity)] = store._path(identity).read_bytes()
+            planned = {
+                (seed, target): self._identity(seed, target, current["benchmark_id"])
+                for seed in current["resolved_seeds"]
+                for target in ("C96", "FUTURE_TARGET")
+            }
+            plan = store.plan_execution(planned)
+            for seed in current["resolved_seeds"]:
+                for target in ("C96", "FUTURE_TARGET"):
+                    self.assertEqual(plan.action(seed, target),
+                                     "REUSE" if seed in v1["resolved_seeds"] else "RUN")
+            self.assertEqual(sum(action == "REUSE" for action in plan.actions().values()), 8)
+            self.assertEqual(sum(action == "RUN" for action in plan.actions().values()), 8)
+            self.assertFalse(plan.blocked())
+            self.assertTrue(all(path.read_bytes() == old_bytes for path, old_bytes in originals.items()))
+            self.assertTrue(all(not store._path(identity).exists() for identity in planned.values()))
+            # A genuinely new Target has no four-seed compatibility execution path.
+            unseen = {
+                (seed, "NEXT_TARGET"): self._identity(seed, "NEXT_TARGET", current["benchmark_id"])
+                for seed in current["resolved_seeds"]
+            }
+            self.assertEqual(sum(action == "RUN" for action in store.plan_execution(unseen).actions().values()), 8)
+
+    def test_unrelated_changed_inputs_are_never_reused_as_8_seed_expansion(self):
+        from core.training_policy import get_robustness_benchmark_policy_snapshot
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        v1 = get_robustness_benchmark_policy_snapshot("end_to_end_v1")
+        current = get_robustness_benchmark_policy_snapshot()
+        seed = int(v1["resolved_seeds"][0])
+        with tempfile.TemporaryDirectory() as tmp:
+            store = OracleReplayStore(Path(tmp), "breakout_quality/reusable/target_oracle_romd")
+            old = self._identity(seed, "C96", v1["benchmark_id"])
+            store.write(old, self._observation(seed, "C96"), origin="canonical_replay")
+            altered = self._identity(seed, "C96", current["benchmark_id"], param_sha="f" * 64)
+            self.assertEqual(store.plan_execution({(seed, "C96"): altered}).action(seed, "C96"), "BLOCKED")
+            self.assertEqual(store.plan_execution({(seed, "C96"): altered},
+                    allow_historical_execution_input_drift=True).action(seed, "C96"), "RUN")
+            self.assertEqual(store.plan_execution({(seed, "C96"): self._identity(
+                    seed, "C96", current["benchmark_id"])}).action(seed, "C96"), "REUSE")
+
+    def test_canonical_optimizer_artifact_reader_uses_verified_prior_seed_provenance(self):
+        from core.training_policy import get_robustness_benchmark_policy_snapshot
+        from services.optimizer import strategy_param_service as producer
+        v1 = get_robustness_benchmark_policy_snapshot("end_to_end_v1")
+        v2 = get_robustness_benchmark_policy_snapshot()
+        seed = int(v1["resolved_seeds"][0])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            signed = root / "optimizer_p16_v1.json"
+            signed.write_text('{"fitting":"identical"}', encoding="utf-8")
+            old_contract = {"benchmark_id": v1["benchmark_id"], "optimizer_seed": seed,
+                            "trials_per_fold": 300}
+            new_contract = {**old_contract, "benchmark_id": v2["benchmark_id"]}
+            ready = {"ready": True, "status": "READY", "action": "REUSE",
+                     "path": signed, "manifest_path": root / "signed_manifest.json",
+                     "scientific_identity": {"fitting": "identical"},
+                     "build_contract": old_contract}
+            missing = {"ready": False, "status": "ARTIFACT_MISSING_OR_INVALID", "action": "BUILD",
+                       "path": root / "optimizer_p16_v2_missing.json",
+                       "manifest_path": root / "optimizer_p16_v2_missing_manifest.json",
+                       "scientific_identity": {"fitting": "identical"},
+                       "build_contract": new_contract}
+            observations = []
+
+            def inspect(_root, *, benchmark_id, **_kwargs):
+                observations.append(benchmark_id)
+                return dict(ready if benchmark_id == v1["benchmark_id"] else missing)
+
+            kwargs = dict(training_profile_id="production_multiseed_current",
+                          benchmark_id=v2["benchmark_id"], replication_seed=seed,
+                          policy="base-finalists-agree", comparison_end_date="2026-03-02",
+                          dataset="full", max_positions=10, rotation="off",
+                          fixed_risk=1.0, max_position_cap_pct=100.0)
+            with patch.object(producer, "inspect_fixed_multiseed_robustness_strategy_parameter_artifact",
+                              side_effect=inspect):
+                result = producer.resolve_fixed_multiseed_robustness_strategy_parameter_artifact(
+                    root, **kwargs)
+            self.assertEqual(observations, [v2["benchmark_id"], v1["benchmark_id"]])
+            self.assertTrue(result["ready"])
+            self.assertEqual(result["path"], signed)
+            self.assertEqual(result["current_benchmark_id"], v2["benchmark_id"])
+            self.assertEqual(result["origin_benchmark_id"], v1["benchmark_id"])
+            # A damaged current manifest is NOT a reason to silently consume the old P16.
+            missing["manifest_path"].write_text('{"damaged":true}', encoding="utf-8")
+            observations.clear()
+            with patch.object(producer, "inspect_fixed_multiseed_robustness_strategy_parameter_artifact",
+                              side_effect=inspect):
+                damaged = producer.resolve_fixed_multiseed_robustness_strategy_parameter_artifact(
+                    root, **kwargs)
+            self.assertFalse(damaged["ready"])
+            self.assertEqual(observations, [v2["benchmark_id"]])
+            # New seeds have no ancestor and therefore no old execution path.
+            missing["manifest_path"].unlink()
+            observations.clear()
+            with patch.object(producer, "inspect_fixed_multiseed_robustness_strategy_parameter_artifact",
+                              side_effect=inspect):
+                newer = producer.resolve_fixed_multiseed_robustness_strategy_parameter_artifact(
+                    root, **{**kwargs, "replication_seed": v2["resolved_seeds"][-1]})
+            self.assertFalse(newer["ready"])
+            self.assertEqual(observations, [v2["benchmark_id"]])
+
+    def test_canonical_optimizer_producer_reuses_verified_history_without_copying(self):
+        from core.training_policy import get_robustness_benchmark_policy_snapshot
+        from services.optimizer import strategy_param_service as producer
+        v1 = get_robustness_benchmark_policy_snapshot("end_to_end_v1")
+        v2 = get_robustness_benchmark_policy_snapshot()
+        seed = int(v1["resolved_seeds"][0])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            historical_path = root / "historical_signed.json"
+            historical_path.write_text('{"selector":"base_finalists_agree"}', encoding="utf-8")
+            kwargs = dict(training_profile_id="production_multiseed_current",
+                          benchmark_id=v2["benchmark_id"], replication_seed=seed,
+                          policy="base-finalists-agree", comparison_end_date="2026-03-02",
+                          dataset="full", max_positions=10, rotation="off",
+                          fixed_risk=1.0, max_position_cap_pct=100.0)
+            historical = dict(
+                ready=True, action="REUSE", status="READY", path=historical_path,
+                manifest_path=root / "original_manifest.json", coverage_end="2026-03-02",
+                build_contract={"benchmark_id": v1["benchmark_id"],
+                                "robustness_replication_seed": seed},
+                scientific_identity={"same_seed": True},
+            )
+            original_bytes = historical_path.read_bytes()
+            with patch.object(producer, "resolve_fixed_multiseed_robustness_strategy_parameter_artifact",
+                              return_value=historical) as canonical, \
+                 patch.object(producer, "compute_strategy_param_scientific_sha256",
+                              return_value="0" * 64), \
+                 patch.object(producer, "inspect_fixed_multiseed_robustness_strategy_parameter_artifact",
+                              side_effect=AssertionError("legacy bypass must not occur")):
+                result = producer.ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
+                    root, **kwargs)
+            self.assertEqual(result["action"], "REUSE")
+            self.assertEqual(result["path"], historical_path)
+            canonical.assert_called_once()
+            self.assertEqual(historical_path.read_bytes(), original_bytes)
+            with patch.object(producer, "resolve_fixed_multiseed_robustness_strategy_parameter_artifact",
+                              side_effect=AssertionError("force must never target historical path")), \
+                 patch.object(producer, "inspect_fixed_multiseed_robustness_strategy_parameter_artifact",
+                              side_effect=RuntimeError("CURRENT_ONLY")) as current:
+                with self.assertRaisesRegex(RuntimeError, "CURRENT_ONLY"):
+                    producer.ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
+                        root, force_rebuild=True, **kwargs)
+            current.assert_called_once()
+            self.assertEqual(historical_path.read_bytes(), original_bytes)
 
 if __name__ == "__main__":
     main(verbosity=2)

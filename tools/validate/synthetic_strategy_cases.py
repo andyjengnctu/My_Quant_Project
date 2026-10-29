@@ -3382,12 +3382,12 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     check(
         "raw_price_compare_arm_robustness_is_derived_from_same_suite_and_profile",
         True,
-        int(historical_raw_robustness.seed_count) == 4
-        and len(tuple(historical_raw_robustness.resolved_seeds)) == 4
+        int(historical_raw_robustness.seed_count) == int(benchmark_snapshot["seed_count"])
+        and tuple(historical_raw_robustness.resolved_seeds) == tuple(benchmark_snapshot["resolved_seeds"])
         and str(raw_robustness_binding.get("producer_variant")) == "raw_price_isolated_v1"
         and str(raw_robustness_binding.get("training_profile_id"))
             == historical_raw_profile.profile_id
-        and "robustness/end_to_end_v1/seed_"
+        and f"robustness/{benchmark_snapshot['benchmark_id']}/seed_"
             in Path(raw_robustness_binding["path"]).as_posix(),
     )
     from services.optimizer.strategy_param_service import (
@@ -5161,8 +5161,8 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         True,
         len(active_work_plans) == 4
         and all(plan.get("status") in {"READY", "PREPARABLE"} for plan in active_work_plans)
-        and len(active_work_plans[2].get("rows") or ()) == 4
-        and len(active_work_plans[3].get("rows") or ()) == 4
+        and len(active_work_plans[2].get("rows") or ()) == int(benchmark_snapshot["seed_count"])
+        and len(active_work_plans[3].get("rows") or ()) == int(benchmark_snapshot["seed_count"])
         and "Robustness下一輪再開" not in strategy_param_app_source
         and "RAW_PRICE_BASELINE_FIRST_ROBUSTNESS_NOT_ENABLED" not in strategy_param_app_source,
     )

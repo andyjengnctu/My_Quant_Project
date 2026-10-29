@@ -28,7 +28,7 @@ from config.strategy_compare import (
     STRATEGY_COMPARE_ROBUSTNESS_YEARLY_REPORT,
     STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS,
 )
-from config.training_policy import (
+from config.robustness_benchmark import (
     ROBUSTNESS_BENCHMARK_ID,
     ROBUSTNESS_BENCHMARK_SEED_COUNT,
     ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED,

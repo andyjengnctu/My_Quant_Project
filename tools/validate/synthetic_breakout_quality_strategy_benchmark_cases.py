@@ -142,7 +142,7 @@ def append_robustness_benchmark_plan_checks(
     # AI: The benchmark registry is config-driven, but an existing benchmark_id is immutable.
     # Isolated overrides remain legal for tests; changing the registered spec under the same ID
     # must fail before runtime can silently reinterpret historical scientific evidence.
-    from config import training_policy as training_policy_config
+    from config import robustness_benchmark as training_policy_config
     current_benchmark_id = str(training_policy_config.ROBUSTNESS_BENCHMARK_ID)
     current_benchmark_spec = dict(
         training_policy_config.ROBUSTNESS_BENCHMARK_SPECS[current_benchmark_id]
@@ -330,7 +330,7 @@ def append_robustness_benchmark_plan_checks(
             ) as binding_resolver,
             patch.object(
                 robustness_owner,
-                "inspect_fixed_multiseed_robustness_strategy_parameter_artifact",
+                "resolve_fixed_multiseed_robustness_strategy_parameter_artifact",
                 return_value={"action": "BUILD", "status": "ARTIFACT_MISSING_OR_INVALID"},
             ) as fixed_inspector,
         ):
@@ -467,7 +467,7 @@ def append_robustness_benchmark_plan_checks(
             representative_fixed_bindings.items()
         ):
             seed = int(binding["seed"])
-            state = robustness_owner.inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
+            state = robustness_owner.resolve_fixed_multiseed_robustness_strategy_parameter_artifact(
                 temp_dir,
                 training_profile_id=profile_id,
                 benchmark_id=str(robustness.benchmark_id),
@@ -565,7 +565,7 @@ def append_robustness_benchmark_plan_checks(
         # This fixture explicitly tests the plan before fixed-multiseed work is
         # prepared; isolate it from parameter artifacts already present on disk.
         patch(
-            "services.research.strategy_multi_seed_robustness.inspect_fixed_multiseed_robustness_strategy_parameter_artifact",
+            "services.research.strategy_multi_seed_robustness.resolve_fixed_multiseed_robustness_strategy_parameter_artifact",
             return_value={"action": "BUILD"},
         ),
         patch(
@@ -744,7 +744,7 @@ def append_robustness_benchmark_plan_checks(
             return_value={"action": "REUSE", "status": "READY"},
         ),
         patch(
-            "services.research.strategy_multi_seed_robustness.inspect_fixed_multiseed_robustness_strategy_parameter_artifact",
+            "services.research.strategy_multi_seed_robustness.resolve_fixed_multiseed_robustness_strategy_parameter_artifact",
             return_value={"action": "REUSE", "status": "READY"},
         ),
         patch(

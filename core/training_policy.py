@@ -11,6 +11,7 @@ import math
 import random
 
 import config.training_policy as _settings
+import config.robustness_benchmark as _benchmark_config
 from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot
 
 _OPTIMIZER_RUNTIME_MODEL_MODE = None
@@ -55,9 +56,10 @@ def _robustness_benchmark_identity_fingerprint(
 
 
 def _resolve_registered_robustness_benchmark_spec(
+    benchmark_id: str | None = None,
 ) -> tuple[str, int, int, tuple[int, ...], str]:
-    benchmark_id = str(_settings.ROBUSTNESS_BENCHMARK_ID).strip()
-    specs = dict(getattr(_settings, "ROBUSTNESS_BENCHMARK_SPECS", {}) or {})
+    benchmark_id = str(benchmark_id or _benchmark_config.ROBUSTNESS_BENCHMARK_ID).strip()
+    specs = dict(_benchmark_config.ROBUSTNESS_BENCHMARK_SPECS)
     if benchmark_id not in specs:
         raise ValueError(
             f"robustness benchmark未註冊scientific identity: {benchmark_id!r}; "
@@ -92,10 +94,11 @@ def _resolve_registered_robustness_benchmark_spec(
             "既有benchmark_id不得原地修改seed_count/generator/resolved sequence，"
             "請建立新的benchmark_id後再切換current pointer"
         )
-    if int(_settings.ROBUSTNESS_BENCHMARK_SEED_COUNT) != count:
-        raise ValueError("robustness benchmark compatibility seed_count alias與registered spec不一致")
-    if int(_settings.ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED) != seed0:
-        raise ValueError("robustness benchmark compatibility generator alias與registered spec不一致")
+    if benchmark_id == _benchmark_config.ROBUSTNESS_BENCHMARK_ID:
+        if int(_benchmark_config.ROBUSTNESS_BENCHMARK_SEED_COUNT) != count:
+            raise ValueError("robustness benchmark current seed_count與registered spec不一致")
+        if int(_benchmark_config.ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED) != seed0:
+            raise ValueError("robustness benchmark current generator與registered spec不一致")
     return benchmark_id, count, seed0, resolved, actual_fingerprint
 
 
@@ -108,9 +111,9 @@ def resolve_robustness_benchmark_seeds(
     # redefine the registered current scientific identity. Normal runtime resolves only the
     # registered spec.
     if seed_count is not None or generator_seed is not None:
-        count = int(_settings.ROBUSTNESS_BENCHMARK_SEED_COUNT if seed_count is None else seed_count)
+        count = int(_benchmark_config.ROBUSTNESS_BENCHMARK_SEED_COUNT if seed_count is None else seed_count)
         seed0 = int(
-            _settings.ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED
+            _benchmark_config.ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED
             if generator_seed is None
             else generator_seed
         )
@@ -118,9 +121,9 @@ def resolve_robustness_benchmark_seeds(
     return _resolve_registered_robustness_benchmark_spec()[3]
 
 
-def get_robustness_benchmark_policy_snapshot() -> dict:
+def get_robustness_benchmark_policy_snapshot(benchmark_id: str | None = None) -> dict:
     benchmark_id, count, seed0, resolved, _identity_fingerprint = (
-        _resolve_registered_robustness_benchmark_spec()
+        _resolve_registered_robustness_benchmark_spec(benchmark_id)
     )
     return {
         "benchmark_id": benchmark_id,
@@ -134,6 +137,33 @@ def get_robustness_benchmark_policy_snapshot() -> dict:
         "seed_pairing": "same_seed_strategy_optimizer_and_all_dl_sources",
         "production_ensemble_is_separate": True,
     }
+
+
+def benchmark_seed_execution_equivalent(
+    *, recorded_benchmark: str, active_benchmark: str, seed: int,
+) -> bool:
+    """Can one signed seed fit be consumed in an expanded aggregate?
+
+    This is a generic cohort identity check, not Target-specific routing.
+    The caller still must verify the complete per-seed strategy parameter,
+    price, score, execution and Replay identity. Registration is immutable.
+    """
+    if not recorded_benchmark or not active_benchmark:
+        return False
+    if str(recorded_benchmark) == str(active_benchmark):
+        return True
+    earlier = get_robustness_benchmark_policy_snapshot(benchmark_id=recorded_benchmark)
+    active = get_robustness_benchmark_policy_snapshot(benchmark_id=active_benchmark)
+    old = tuple(earlier["resolved_seeds"])
+    current = tuple(active["resolved_seeds"])
+    return (int(seed) in old
+            and len(old) <= len(current)
+            and old == current[:len(old)]
+            and earlier["seed_generator_seed"] == active["seed_generator_seed"]
+            and earlier["strategy_trials_per_fold"] == active["strategy_trials_per_fold"]
+            and earlier["train_window_months"] == active["train_window_months"]
+            and earlier["oos_horizon_months"] == active["oos_horizon_months"])
+
 
 def set_optimizer_runtime_model_mode(model_mode) -> None:
     global _OPTIMIZER_RUNTIME_MODEL_MODE

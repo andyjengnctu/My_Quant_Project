@@ -42,6 +42,7 @@ from core.path_utils import project_relative_display_path
 from core.strategy_compare_policy import (
     get_strategy_comparison_settings, get_strategy_multi_seed_robustness_settings,
 )
+from core.training_policy import benchmark_seed_execution_equivalent
 from filters.breakout_quality.daily_trade40_target import HORIZON_SESSIONS
 from filters.breakout_quality.daily_ranker_data import compute_daily_opportunity_target_batch
 from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets
@@ -73,7 +74,7 @@ from services.audit.oracle_replay_artifacts import (
     OracleReplayStore, price_inventory_sha256, replay_identity,
 )
 from services.optimizer.strategy_param_service import (
-    inspect_fixed_multiseed_robustness_strategy_parameter_artifact,
+    resolve_fixed_multiseed_robustness_strategy_parameter_artifact,
 )
 from config.execution_policy import (
     DEFAULT_FIXED_RISK, DEFAULT_MAX_POSITION_CAP_PCT, EXECUTION_POLICY_PARAM_SPECS,
@@ -470,13 +471,13 @@ def _robustness_artifacts(definition, root: Path):
         or builder is None or not builder.enabled
         or builder.builder_type != "optimizer_fixed_multiseed_strategy_params"
     ):
-        raise OracleBlockedError("Oracle Benchmark無法對齊canonical 4-seed P16訓練合約")
+        raise OracleBlockedError("Oracle Benchmark無法對齊canonical P16訓練合約")
     training_profile = str(dict(builder.options).get("training_profile_id") or "")
     if not training_profile:
         raise OracleBlockedError("P16缺少canonical training profile")
     records = []
     for seed in robustness.resolved_seeds:
-        inspection = inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
+        inspection = resolve_fixed_multiseed_robustness_strategy_parameter_artifact(
             root,
             training_profile_id=training_profile,
             benchmark_id=str(robustness.benchmark_id),
@@ -498,9 +499,9 @@ def _robustness_artifacts(definition, root: Path):
 
 
 def collect_status(definition, *, project_root: Path) -> dict[str, Any]:
-    """Read-only 4-seed P16 and daily Target prerequisite preflight."""
+    """Read-only current-benchmark P16 and daily Target prerequisite preflight."""
     root = Path(project_root).resolve()
-    display = "Full Research Dataset + 4-seed canonical P16 + daily target truth"
+    display = "Full Research Dataset + canonical P16 + daily target truth"
     try:
         settings, _base, _exact = _contract(definition)
         # Fail before checking large market/P16 artifacts: a scalar perfect DL
@@ -515,7 +516,7 @@ def collect_status(definition, *, project_root: Path) -> dict[str, Any]:
             raise OracleBlockedError("缺少validated breakout-quality Dataset bundle；Audit不得代替Producer建置")
         robustness, records = _robustness_artifacts(definition, root)
         # No separate DL teacher/optimizer is a precondition for Oracle truth.
-        # The 4 verified per-seed Min artifacts above are the ONLY param source.
+        # The verified per-seed Min artifacts above are the ONLY parameter source.
         return {
             "status": "READY", "reason": "", "source": {
                 "display": display, "preparable": False,
@@ -1588,7 +1589,7 @@ def _certify_unscored_baseline_before_truth(
 
 
 
-def _oracle_limitations() -> list[str]:
+def _oracle_limitations(*, seed_count: int) -> list[str]:
     """One science statement across canonical RUN and certified REUSE reports."""
     return [
             "Ex-post future targets are NOT predictions, not PIT-legal, and never a deployable strategy.",
@@ -1596,7 +1597,7 @@ def _oracle_limitations() -> list[str]:
             "Exact and Direct pairs share identical future truth; only canonical K/R0 allocation changes.",
             "Direct means canonical No-K/No-R0, NOT direct raw-R regression or executable prediction.",
             "C96 is the same-seed Min/Broker-Cash control for both selectors; paired deltas use that baseline.",
-            "N=4 paired end-to-end parameter seeds; Oracle scores have no trainable seed.",
+            f"N={seed_count} paired end-to-end parameter seeds; Oracle scores have no trainable seed.",
             "Win Rate Mean is the arithmetic mean of canonical per-seed completed Round-Trip win rates; Win/Seed instead counts RoMD wins vs C96.",
             "No best-target fitting from iterative OOS; multi-target search is exploratory.",
             "R40 is the future 40th session Close return, not Portfolio Replay exit return.",
@@ -1614,7 +1615,7 @@ def _oracle_report_envelope(*, settings, robustness, seeds, base: dict[str, Any]
         "strategy_profile_id": settings.profile_id,
         "benchmark_id": robustness.benchmark_id,
         "seeds": list(seeds), "dataset": settings.dataset,
-        **base, "limitations": _oracle_limitations(),
+        **base, "limitations": _oracle_limitations(seed_count=len(seeds)),
     }
 
 
@@ -1708,7 +1709,11 @@ def _replay_attested_score_keys(
                         saved.get("dataset") != settings.dataset or
                         saved.get("dataset_sha256") != price_sha or
                         saved.get("param_sha256") != param_sha or
-                        saved.get("benchmark") != robustness.benchmark_id):
+                        not benchmark_seed_execution_equivalent(
+                            recorded_benchmark=str(saved.get("benchmark") or ""),
+                            active_benchmark=str(robustness.benchmark_id),
+                            seed=int(seed),
+                        )):
                     continue
                 policy = saved.get("replay_policy") or {}
                 # A historical perfect-score SHA proves the *old* score bytes,
@@ -1802,7 +1807,11 @@ def _certified_saved_oracle_identity(
             or saved.get("start_date") != str(settings.start_date)
             or saved.get("end_date") != evaluation_end
             or saved.get("dataset") != settings.dataset
-            or saved.get("benchmark") != robustness.benchmark_id):
+            or not benchmark_seed_execution_equivalent(
+                            recorded_benchmark=str(saved.get("benchmark") or ""),
+                            active_benchmark=str(robustness.benchmark_id),
+                            seed=int(seed),
+                        )):
         raise ValueError("current price/P16/evaluation contract differs from historical replay")
     key_sha, n, first, last = keys
     if (cohort.get("cohort_rows") != n

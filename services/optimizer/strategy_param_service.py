@@ -3391,7 +3391,7 @@ def _fixed_multiseed_robustness_build_contract(
         get_strategy_param_training_profile,
     )
 
-    benchmark = dict(get_robustness_benchmark_policy_snapshot())
+    benchmark = dict(get_robustness_benchmark_policy_snapshot(benchmark_id=benchmark_id))
     benchmark_name = normalize_strategy_param_benchmark_id(str(benchmark_id))
     replicate = normalize_strategy_param_benchmark_seed(int(replication_seed))
     if benchmark_name != str(benchmark["benchmark_id"]):
@@ -3646,6 +3646,85 @@ def inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
     }
 
 
+
+def resolve_fixed_multiseed_robustness_strategy_parameter_artifact(
+    project_root: str | Path, *, training_profile_id: str,
+    benchmark_id: str, replication_seed: int, policy: str,
+    comparison_end_date: str, dataset: str, max_positions: int,
+    rotation: str, fixed_risk: float, max_position_cap_pct: float,
+) -> dict[str, Any]:
+    """Single per-seed P16 reader for the active benchmark and its ancestors.
+
+    A benchmark's member count does not affect one seed's optimizer fitting.
+    Reuse an older, signed artifact only if the registered historical seed
+    sequence is an exact prefix of the active sequence and the *complete*
+    concrete build/scientific identities differ only in their cohort tag.
+    Old files and manifests are never copied, relabeled, or overwritten.
+    This is artifact provenance resolution, not a second optimizer path.
+    """
+    from core.training_policy import get_robustness_benchmark_policy_snapshot
+    from core.file_integrity import compute_file_sha256
+
+    active = get_robustness_benchmark_policy_snapshot(benchmark_id=benchmark_id)
+    seed = int(replication_seed)
+    if seed not in active["resolved_seeds"]:
+        raise ValueError(f"Seed {seed} 不屬於正式Benchmark {benchmark_id}")
+    kwargs = dict(
+        training_profile_id=training_profile_id,
+        replication_seed=seed, policy=policy,
+        comparison_end_date=comparison_end_date, dataset=dataset,
+        max_positions=max_positions, rotation=rotation,
+        fixed_risk=fixed_risk, max_position_cap_pct=max_position_cap_pct,
+    )
+    current = inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
+        project_root, benchmark_id=benchmark_id, **kwargs,
+    )
+    # A present but invalid current receipt is not an invitation to fall back.
+    # A missing current receipt may reference a fully certified older seed fit.
+    if (current["ready"] or current["status"] != "ARTIFACT_MISSING_OR_INVALID"
+            or current["path"].exists() or current["manifest_path"].exists()):
+        return current
+    from config.robustness_benchmark import ROBUSTNESS_BENCHMARK_SPECS
+    found: list[dict[str, Any]] = []
+    for old_id in ROBUSTNESS_BENCHMARK_SPECS:
+        if old_id == benchmark_id:
+            continue
+        previous = get_robustness_benchmark_policy_snapshot(benchmark_id=old_id)
+        earlier = previous["resolved_seeds"]
+        if (len(earlier) >= len(active["resolved_seeds"])
+                or active["resolved_seeds"][:len(earlier)] != earlier
+                or seed not in earlier):
+            continue
+        candidate = inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
+            project_root, benchmark_id=old_id, **kwargs,
+        )
+        if not candidate["ready"]:
+            if candidate["status"] != "ARTIFACT_MISSING_OR_INVALID":
+                return {**current, "ready": False, "action": "BLOCKED", "status":
+                        f"HISTORICAL_P16_{candidate['status']}"}
+            continue
+        # A completed per-seed fit has identical strategy/optimizer science
+        # regardless of whether its cohort has four or eight members.
+        previous_contract = dict(candidate["build_contract"])
+        current_contract = dict(current["build_contract"])
+        previous_contract.pop("benchmark_id", None)
+        current_contract.pop("benchmark_id", None)
+        if (previous_contract != current_contract
+                or candidate["scientific_identity"] != current["scientific_identity"]):
+            return {**current, "ready": False, "action": "BLOCKED",
+                    "status": "HISTORICAL_P16_SCIENTIFIC_CONTRACT_DRIFT"}
+        found.append(candidate)
+    if not found:
+        return current
+    sha = {compute_file_sha256(Path(item["path"])) for item in found}
+    if len(sha) != 1:
+        return {**current, "ready": False, "action": "BLOCKED",
+                "status": "HISTORICAL_P16_CONFLICT"}
+    # Full signed original path remains the authoritative artifact provenance.
+    return {**found[0], "origin_benchmark_id": found[0]["build_contract"]["benchmark_id"],
+            "current_benchmark_id": benchmark_id}
+
+
 def ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
     project_root: str | Path,
     *,
@@ -3677,7 +3756,12 @@ def ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
 
     root = Path(project_root).resolve()
     compare_policy = str(policy).strip()
-    state = inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
+    # A normal Producer invocation must resolve the same verified per-seed
+    # artifact as the Oracle and benchmark planners. Explicit force-rebuild
+    # always addresses the *current* benchmark path, never a historical one.
+    inspect_fn = (inspect_fixed_multiseed_robustness_strategy_parameter_artifact
+                  if force_rebuild else resolve_fixed_multiseed_robustness_strategy_parameter_artifact)
+    state = inspect_fn(
         root,
         training_profile_id=training_profile_id,
         benchmark_id=benchmark_id,
@@ -4069,7 +4153,7 @@ def _validation_budget_robustness_contract(
     parameter_set_identity: str = "PARAM-P5",
     validation_protocol_id: str = "validation_budget_refit_v1",
 ) -> dict[str, Any]:
-    benchmark = dict(get_robustness_benchmark_policy_snapshot())
+    benchmark = dict(get_robustness_benchmark_policy_snapshot(benchmark_id=benchmark_id))
     benchmark_name = normalize_strategy_param_benchmark_id(str(benchmark_id))
     seed_value = normalize_strategy_param_benchmark_seed(int(seed))
     if benchmark_name != str(benchmark["benchmark_id"]):
@@ -4656,6 +4740,7 @@ __all__ = [
     "run_fixed_multiseed_strategy_parameter_timing_benchmark",
     "ensure_fixed_multiseed_robustness_strategy_parameter_artifact",
     "inspect_fixed_multiseed_robustness_strategy_parameter_artifact",
+    "resolve_fixed_multiseed_robustness_strategy_parameter_artifact",
     "fixed_multiseed_robustness_strategy_param_manifest_path",
     "fixed_multiseed_robustness_strategy_param_artifact_path",
     "inspect_fixed_multiseed_strategy_parameter_artifact",

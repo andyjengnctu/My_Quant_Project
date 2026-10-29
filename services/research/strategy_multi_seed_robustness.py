@@ -175,7 +175,7 @@ from services.optimizer.strategy_param_service import (
     ensure_fixed_multiseed_robustness_strategy_parameter_artifact,
     ensure_robustness_benchmark_strategy_parameter_artifact,
     ensure_validation_budget_robustness_strategy_parameter_artifact,
-    inspect_fixed_multiseed_robustness_strategy_parameter_artifact,
+    resolve_fixed_multiseed_robustness_strategy_parameter_artifact,
     inspect_robustness_benchmark_strategy_parameter_artifact,
     inspect_validation_budget_robustness_strategy_parameter_artifact,
     fixed_multiseed_robustness_strategy_param_artifact_path,
@@ -828,7 +828,7 @@ def _inspect_benchmark_strategy_parameter_binding(
             validation_protocol_id=str(binding["validation_protocol_id"]),
         )
     if str(binding["producer_variant"]) in {"fixed_multiseed_v1", "fixed_single_seed_v1"}:
-        return inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
+        return resolve_fixed_multiseed_robustness_strategy_parameter_artifact(
             PROJECT_ROOT,
             training_profile_id=str(binding["training_profile_id"]),
             benchmark_id=str(robustness.benchmark_id),

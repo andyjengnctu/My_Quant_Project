@@ -772,3 +772,12 @@ Decision：`USER_AUTHORIZED_DIAGNOSTIC_NONPIT / FULL_CYCLE_ONLY / POSITIVE_RAW_N
 - **仍須保留的正式依賴**：`services/audit/fullcycle_positive_truth.py`、`services/audit/positive_gate_evidence.py`、`core/oracle_positive_gate.py` 及 execution policy／admission 是 `[1]` Positive Direct 的 raw outcome、資格守門與簽章 Replay 證據所需，並非一次性 Audit 專屬程式。歷史 `outputs/audit/.../one_time/fullcycle_positive_direct/` 報表與原始簽章收據均不得刪除或覆寫。
 
 Decision：`ONE_TIME_AUDIT_CLOSED_AND_IMPLEMENTATION_RETIRED / HISTORICAL_FIVE_FACTOR_EVIDENCE_RETAINED / POSITIVE_DIRECT_FORMAL_TARGET_RETAINED / NO_OTHER_TARGET_IDENTITY_CHANGE / NO_REPLAY_RERUN`。
+
+### 2026-10-30 — Research [1] 統一現行 8-Seed Benchmark（使用者決策）
+
+- **唯一現行比較集合**：`config/robustness_benchmark.py` 註冊 `end_to_end_v2`／generator `20260810`／8 個 Seeds：`693545351, 2014432738, 104504529, 762252050, 9734312, 1020806211, 116293459, 1234683984`。S1～S4 的原值與順序不變；`end_to_end_v1` 僅是不可變的既有科學來源身分，不是另一套現行執行方案。外層 8-Seed Robustness 不改變 P16 每個 replicate 內層既定的 fitting-seed bundle／trial 數。
+- **單一正規執行／REUSE**：所有 Target 均讀取同一正式 8-Seed plan、Optimizer P16 identity resolver、Target Score Producer、Portfolio Replay engine 與 ReplayStore；新增 Target 不辨識舊／新 Target 版本，也不設 S1～S4 的舊執行分支。對已完成的舊簽章 P16／Replay，只在 benchmark 前綴、逐 Seed 科學契約、參數與行情／Score／交易身分完整一致時，透過同一驗證器依法 REUSE。已存在但無效／來源漂移的工件不得用舊資料補位；原簽章 bytes 與路徑保持不可變。
+- **報表治理**：現行 `audit.target_oracle_romd@v11` 使用 8-Seed Mean 顯示；原 v1～v10 compact ledger 身分與歷史四 Seed 報表不改寫。Oracle payload `schema_version=8` 與所有 Target 定義、交易／費稅規則均不變。缺少的新 Seeds P16 必須由正式 Optimizer Producer 建立；Oracle `[1]` 仍不得訓練或自行最佳化。
+- **本輪驗證界線**：合成簽章 Replay 可證明舊四個 REUSE／新四個 RUN；但提供的 ZIP 沒有本機完整正式 P16、行情、Replay 與逐日 E13 等價證據，故不宣稱實際全市場八 Seed 已完成。
+
+Decision：`EIGHT_SEED_ONLY_CURRENT / ONE_CANONICAL_TARGET_PIPELINE / PER_SEED_STRICT_REUSE / HISTORICAL_PROVENANCE_IMMUTABLE / REPORT_V11 / LIVE_E13_PENDING`。

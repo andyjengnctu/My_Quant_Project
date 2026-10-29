@@ -74,6 +74,11 @@
           "contract_id": "audit.target_oracle_romd@v10",
           "version": 10,
           "fingerprint": "3a4526e95f8b8393"
+        },
+        {
+          "contract_id": "audit.target_oracle_romd@v11",
+          "version": 11,
+          "fingerprint": "15859b7d9a27acde"
         }
       ]
     },
