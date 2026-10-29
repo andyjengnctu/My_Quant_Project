@@ -78,13 +78,6 @@ AUDIT_METHOD_CATALOG: dict[str, AuditMethodEntry] = {
         description="比較Realized trades→portfolio capital/exposure與exact MTM drawdown attribution",
         order=30,
     ),
-    "fullcycle_positive_direct_trade_attribution": AuditMethodEntry(
-        method_id="fullcycle_positive_direct_trade_attribution",
-        menu_label="一次性 Full-Cycle NetPnL > 0 交易歸因",
-        description="逐筆核對未獲利交易與訊號/股數/出場/NULL差異（NON-PIT）",
-        order=900,
-        one_time_only=True,
-    ),
     "target_ground_truth_strategy_romd": AuditMethodEntry(
         method_id="target_ground_truth_strategy_romd",
         menu_label="Target 驗證",
@@ -153,17 +146,6 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         read_only=True, method_id="target_ground_truth_strategy_romd",
         status_function="collect_status", run_function="run_formal_audit",
         preflight_summary=True,
-    ),
-    "fullcycle_positive_direct_trade_attribution": AuditCatalogEntry(
-        audit_type="fullcycle_positive_direct_trade_attribution",
-        domain="breakout_quality",
-        module="services.audit.positive_fullcycle_gate_audit",
-        mode="formal",
-        description="One-time read-only NON-PIT full-cycle positive NetPnL actual-trade attribution",
-        read_only=True,
-        method_id="fullcycle_positive_direct_trade_attribution",
-        status_function="collect_status",
-        run_function="run_formal_audit",
     ),
     "portfolio_drawdown_attribution": AuditCatalogEntry(
         audit_type="portfolio_drawdown_attribution",

@@ -192,23 +192,9 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
     # Stable module registration survives one-off retirement; reusable Audit remains separate.
     "breakout_quality": {
         "enabled": True,
-        "audits": {
-            "fullcycle_netpnl_positive_direct_trade_audit": {
-                "enabled": True,
-                "audit_type": "fullcycle_positive_direct_trade_attribution",
-                "description": (
-                    "一次性 NON-PIT：完整週期 NetPnL > 0 Direct 的實際已完成交易；"
-                    "核對 NULL、交易事件、股數、出場與零損益的分布和交集"
-                ),
-                "source": {
-                    "oracle_output_subdir": "breakout_quality/reusable/target_oracle_romd",
-                    "target": "DailyUniversal_MinTrade_NetPnL_Positive_Direct",
-                },
-                "dimensions": {"reference": "canonical_min_single_stock_reference_sizing"},
-                "outcomes": {"metric": "canonical_completed_round_trip_win_rate"},
-                "output_subdir": "breakout_quality/one_time/fullcycle_positive_direct",
-            },
-        },
+        # All completed one-time studies are retired; the generic menu and
+        # reusable Audit definitions remain available without a study handler.
+        "audits": {},
     },
 }
 

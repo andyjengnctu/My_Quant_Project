@@ -1037,3 +1037,10 @@ Direct-account BUY provenance is owned by `services/trading/account_trade_entry.
 - `core/portfolio_candidate_admission.py` 是不認識 Oracle/Target ID 的通用、預設停用、ContextVar 限定作用域的候選資格介面；`core/portfolio_entry_selection_max_dl.py` 的 No-K/No-R0 Selector 在資金保留前讀取此介面。只有 `core/oracle_positive_gate.py` 的已簽章 NON-PIT 執行 context 才啟動該門檻；作用域結束即還原，普通 Research／Trading／其他 Oracle Direct 仍使用原候選集合。原始 NetPnL 的 NULL／零／負值仍須在新對照組被拒絕，不以百分位分數替代。
 - **來源與 Replay 身分驗收**：新增政策不修改既有價格型 Score algorithm SHA `d73b4ce20dd958cb75b094f49d6abac94d31e34ca7222fa5806675fd931964bd`，也不修改 MinTrade 共用真值 Source SHA `80a4fe352f4466ce7c3862149f0d23a97cac127eaf71dd98a521905305e5bb32`。原有價格對照 Score Contract／Replay Policy 保持相同；只有新 Positive Direct 的 execution gate 與其來源證據進入該對照組的 Replay identity。已增加 protected synthetic regression：執行-only 設定不得改寫歷史價格演算法 fingerprint，修改已註冊政策必須拒絕，候選 admission 必須隔離並可還原；真正價格分數語意或 MinTrade 真值來源變更仍須依原完整 SHA 失效。
 - **前次事故**：套入完整週期 NetPnL Positive Direct 之後，使用者正式 `[1]` 預覽是 `REUSE 44 / RUN 40 / BLOCKED 0`，其中原有價格型 9 組 ×4 Seed 計 36 組被誤列 RUN；修復後若原 80 組的所有存量 Replay 與 Win Rate 證據有效，預期恢復 `REUSE 80 / RUN 4 / BLOCKED 0`。未於 GPT 隔離環境執行市場 Replay／Windows 正式 Suite；以使用者本機最終簽章預覽為準。禁止重建舊 36 組來掩蓋失效半徑問題。
+
+
+### 2026-10-30 — Positive NetPnL Direct 研究完成後的 Audit ownership 收斂
+
+- `[5] Audit／診斷 → [2] 一次性專題 Audit` 是穩定通用工作入口；當前 `AUDIT_MODULES["breakout_quality"]["audits"]` 空集合，顯示「目前沒有一次性 Audit 設定」，不修改選單次序或 `[3] 歷史 Evidence`。
+- 已完成的 `fullcycle_netpnl_positive_direct_trade_audit` 專用實作、Method／Implementation Catalog 註冊及其 dedicated 回放解釋測試已退役；歷史研究結論仍在 Registry／Log，既有 `outputs/` 歷史一次性 evidence 不刪除。
+- `[1] Target 驗證` 的 `DailyUniversal_MinTrade_NetPnL_Positive_Direct` 是獨立 NON-PIT scientific contrast，不因 Audit handler 退役而移除。正式 `fullcycle_positive_truth.py`（raw 資格）、`positive_gate_evidence.py`（實際 Round-Trip 資料與 fail-closed 正值守門簽章）、`oracle_execution_policy.py` 與 `core/portfolio_candidate_admission.py` 仍有正式 consumer，不能當成 orphan/compatibility 刪除。來源 SHA、Replay identity、v10 表格與 80+4 REUSE 契約不改。

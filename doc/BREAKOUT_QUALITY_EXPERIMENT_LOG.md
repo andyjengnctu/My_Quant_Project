@@ -13651,3 +13651,13 @@ Decision：`NON_PIT_POSITIVE_GATE_DIAGNOSTIC_IMPLEMENTED / PREVIEW_ONLY_UNTIL_FO
 - **修復**：還原純 score-plan 函式原 bytes，新增獨立 `oracle_execution_policy.py` 解讀並認證 Registry 登錄的 extra gate；將原 `core/portfolio_entry_selection_max_dl.py` 對 Oracle 正值門檻的直接認識，改為 generic、預設 inactive 的 `core/portfolio_candidate_admission.py`；Diagnostic policy 仍由 scoped `core/oracle_positive_gate.py` 啟用，NULL／零／負值拒絕規則不變。
 - **驗證**：原有價格 Score 演算法 SHA=`d73b4ce20dd958cb75b094f49d6abac94d31e34ca7222fa5806675fd931964bd`，MinTrade truth SHA=`80a4fe352f4466ce7c3862149f0d23a97cac127eaf71dd98a521905305e5bb32`，均與變更前已驗證版本相同；來源 closure、九組價格型契約及舊執行政策可獨立交叉比對。測試涵蓋 execution-only additions 不影響 price SHA、已註冊政策不可換語意、gate 不外洩其他 Direct、NULL/零/負值仍必須拒絕；合成結果不冒充完整市場驗證。
 - **預期／限制**：不修改任何舊 Target 的數值、P16／費稅、Target Score、Win Rate v10 報表或歷史工件；原有 80 組應完整 REUSE，只有新增 Positive Direct 的四 Seed RUN（前提是原收據及必要 sidecar 均合法）。Windows 正式 Test Suite、實際市場四 Seed、E13 逐日獨立 parity 尚待使用者環境驗證。本輪只修 engineering source-scope bug，不建立新科學 ID／報表版本，也不改 `doc/CMD.md`。
+
+
+## 2026-10-30 — Positive Full-Cycle 一次性 Audit 結案退役（僅工程實作）
+
+- **使用者授權**：刪除已結案 `fullcycle_netpnl_positive_direct_trade_audit` 及可證明專屬且無其他 Consumer 的實作，不更動 `[1]` 之 `DailyUniversal_MinTrade_NetPnL_Positive_Direct`、其他 Target、正式 Replay 身分、固定功能選單或歷史 evidence。
+- **結果已取得**：使用者本機 4 Seed × 701 completed Round-Trips（699 positive、2 negative、0 zero）、NULL／非正 Raw Target 門檻違規 0、21 筆進場事件不同、637 筆參考股數不同、1 筆最後出場日／價不同。4114 在 2022-07-15 參考候選 `ZERO_SIZED_CANDIDATE`，固定參考本金不足最低進場門檻；Portfolio 資金較高於同日成交。00770 參考僅 +1 元、實際 -10 元，由股數倍率及正式費稅取整變號。保留 Registry 中先前研究 identity、當時決策與原始使用者工件，不宣稱具備全部市場逐日 E13 parity。
+- **工程刪除**：專屬 `services/audit/positive_fullcycle_gate_audit.py`、`core/audit_registry.py` 唯一一次性配置、`services/audit/catalog.py` 專屬 method／handler 及 `tools/validate/synthetic_daily_trade40_oracle_cases.py` 專屬 Reference／五因素測試。對 Oracle Audit menu 的舊「必有該一次性設定」synthetic 期待改成 current 零 one-time；通用 `[5]` Audit／診斷、Reusable Audit、歷史 Evidence 的入口均保留。
+- **安全邊界**：`fullcycle_positive_truth.py` 與 `positive_gate_evidence.py` 仍由正規 `[1] Target 驗證` 生產者在合法 RUN 使用，不能為了名稱包含 positive／evidence 刪除；歷史 `outputs/` 不在刪除範圍。不得因退役 Audit 改變 Score／Replay／Source SHA；專項測試與差異驗證分別驗收。
+
+Decision：`AUDIT_STUDY_CLOSED / AUDIT_IMPL_RETIRED / FORMAL_POSITIVE_TARGET_AND_EVIDENCE_PRODUCERS_RETAINED / HISTORY_PRESERVED / NO_REPLAY_RECOMPUTE`。

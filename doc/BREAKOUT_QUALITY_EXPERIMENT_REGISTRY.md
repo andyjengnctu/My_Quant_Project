@@ -762,3 +762,13 @@ Decision：`USER_APPROVED_REPORT_V10_ONLY / TRADE_WIN_RATE_SSOT / ROMD_ASC_PRESE
 - **驗證範圍**：GPT 合成／原單股引擎對照與完整資料身分檢查，**不是**四 Seed 實際市場 RUN、Windows 正式 Test Suite 或歷史全逐日 E13 parity。一次性 Audit 在新對照組完成後才能取得真實分布；未有收據不得填假數字。
 
 Decision：`USER_AUTHORIZED_DIAGNOSTIC_NONPIT / FULL_CYCLE_ONLY / POSITIVE_RAW_NETPNL_STRICT / NULL_ZERO_NEGATIVE_REJECTED / ONE_TIME_READ_ONLY_FIVE_FACTOR_AUDIT / EXISTING_E13_SCORE_ONLY_ARMS_UNCHANGED / REAL_MARKET_RESULTS_PENDING`。
+
+
+### 2026-10-30 — Full-Cycle Positive Direct 專屬一次性 Audit 結案／工程退役
+
+- **現行科學對照不變**：`DailyUniversal_MinTrade_NetPnL_Positive_Direct` 仍屬 `[1] Target 驗證` 的獨立 NON-PIT eligibility intervention；原完整週期 NetPnL Direct、其他 Oracle Targets、正式 Replay／REUSE、v10 報表與 Win Rate 全部保留。
+- **歷史實測證據**：使用者四 Seed 合計 701 筆完成交易，獲利 699 筆、虧損 2 筆、NULL／非正值漏過門檻 0 筆；4114 因參考固定本金／實際 Portfolio 資金造成候選股數零／成交日期及價格不同，00770 為參考股數與實際股數及整數元費稅取整邊界。這些為已結案的 NON-PIT 對照證據，不可宣稱一般 E13 perfect-score Oracle 的 PIT 能力或交易勝率保證。
+- **實作退役**：`fullcycle_netpnl_positive_direct_trade_audit` 自 `AUDIT_MODULES`、Audit Method／Implementation Catalog 移除；其獨立 `services/audit/positive_fullcycle_gate_audit.py` 與專屬 synthetic 測試退役。`[5] → [2] 一次性專題 Audit` 的通用入口及空清單行為保留，不能把已結案研究自動復活為 current run。
+- **仍須保留的正式依賴**：`services/audit/fullcycle_positive_truth.py`、`services/audit/positive_gate_evidence.py`、`core/oracle_positive_gate.py` 及 execution policy／admission 是 `[1]` Positive Direct 的 raw outcome、資格守門與簽章 Replay 證據所需，並非一次性 Audit 專屬程式。歷史 `outputs/audit/.../one_time/fullcycle_positive_direct/` 報表與原始簽章收據均不得刪除或覆寫。
+
+Decision：`ONE_TIME_AUDIT_CLOSED_AND_IMPLEMENTATION_RETIRED / HISTORICAL_FIVE_FACTOR_EVIDENCE_RETAINED / POSITIVE_DIRECT_FORMAL_TARGET_RETAINED / NO_OTHER_TARGET_IDENTITY_CHANGE / NO_REPLAY_RERUN`。

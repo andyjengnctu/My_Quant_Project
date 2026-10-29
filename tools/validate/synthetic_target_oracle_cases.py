@@ -1297,11 +1297,11 @@ class OracleAuditContractCases(TestCase):
         cls.exact_policy = oracle._contract(cls.definition)[2].dl_runtime_mode
         cls.exact_options = oracle._contract(cls.definition)[2].dl_runtime_options
 
-    def test_oracle_is_reusable_only_with_a_single_registered_run_route(self):
-        self.assertEqual(collect_audit_menu_state("breakout_quality")["enabled_count"], 1)
+    def test_oracle_reusable_route_remains_registered_after_one_time_retirement(self):
+        self.assertEqual(collect_audit_menu_state("breakout_quality")["enabled_count"], 0)
         from core.audit_policy import get_audit_definitions
-        self.assertEqual([x.audit_id for x in get_audit_definitions("breakout_quality")],
-                         ["fullcycle_netpnl_positive_direct_trade_audit"])
+        self.assertEqual(get_audit_definitions("breakout_quality"), ())
+        self.assertEqual(collect_audit_menu_state("breakout_quality")["enabled_count"], 0)
         self.assertEqual(
             collect_audit_menu_state("breakout_quality", method_id=oracle.SUPPORTED_AUDIT_TYPE)["enabled_count"], 1
         )

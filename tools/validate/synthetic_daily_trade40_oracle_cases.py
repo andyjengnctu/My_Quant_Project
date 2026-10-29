@@ -1456,27 +1456,6 @@ class FullcyclePositiveNetPnLDiagnosticCases(TestCase):
                 self.assertEqual([x['ticker'] for x in order], ['2330'])
             self.assertEqual(seen, [['2330', '2317', '1301'], ['2330']])
 
-    def test_one_time_audit_rebuilds_identical_reference_and_quantity(self):
-        from services.audit.positive_fullcycle_gate_audit import _reference_trade
-        from filters.breakout_quality.daily_trade40_target import compute_counterfactual_trade40_batch
-        trading, frames, _, schedule = source_fixture()
-        frame = frames['2330']
-        for day in ('2020-12-31', '2021-01-04', '2021-01-05'):
-            with self.subTest(day=day):
-                position = pd.DatetimeIndex(frame.index).get_indexer([pd.Timestamp(day)])
-                formal = compute_counterfactual_trade40_batch(
-                    frame, position, ticker='2330', schedule=schedule,
-                    exchange_calendar=trading, horizon_sessions=None,
-                    research_cutoff=trading[-1], include_net_pnl=True,
-                )
-                observed, origin, qty = _reference_trade(
-                    frame, ticker='2330', info_day=day, schedule=schedule,
-                    cutoff=str(trading[-1].date()),
-                )
-                self.assertAlmostEqual(float(formal.target_raw_pnl[0]), float(observed.realized_net_pnl))
-                self.assertGreater(qty, 0)
-                self.assertEqual(origin, '2020-12-31')
-
     def test_signed_positive_raw_and_trade_evidence_rejects_mutation(self):
         from core.oracle_positive_gate import POSITIVE_FULLCYCLE_NETPNL_GATE
         from services.audit.fullcycle_positive_truth import _save, _load
@@ -1517,7 +1496,7 @@ class FullcyclePositiveNetPnLDiagnosticCases(TestCase):
 
     def test_positive_target_alone_adds_gate_and_keeps_original_score_contract(self):
         from core.oracle_positive_gate import POSITIVE_FULLCYCLE_NETPNL_GATE
-        from services.audit.catalog import get_audit_handler
+        from services.audit.catalog import AUDIT_CATALOG, AUDIT_METHOD_CATALOG
         from core.audit_policy import get_audit_definitions
         definition = next(x for x in get_reusable_audit_definitions('breakout_quality')
                           if x.report_id == 'target_oracle_romd')
@@ -1533,66 +1512,6 @@ class FullcyclePositiveNetPnLDiagnosticCases(TestCase):
         contracts = oracle._resolve_oracle_target_score_contracts(definition, settings, plan)
         self.assertNotIn('hindsight_extra_gate', contracts[original])
         self.assertEqual(contracts[diagnostic]['hindsight_extra_gate'], POSITIVE_FULLCYCLE_NETPNL_GATE)
-        one_time = get_audit_definitions('breakout_quality')
-        self.assertEqual(len(one_time), 1)
-        self.assertTrue(get_audit_handler(one_time[0]).read_only)
-
-    def test_one_time_audit_counts_all_five_factors_without_double_counting_nonwins(self):
-        import json
-        from services.audit import positive_fullcycle_gate_audit as audit
-        from core.audit_policy import get_audit_definitions
-        records = [
-            dict(ticker=ticker, breakout_quality_score_date='2025-01-02',
-                 entry_trade_date=day, signal_date=signal, entry_price=price,
-                 exit_date=exit_day, exit_price=exit_price, exit_type='STOP',
-                 target_raw_net_pnl=raw, pnl=pnl)
-            for ticker, day, signal, price, exit_day, exit_price, raw, pnl in (
-                ('2330', '2025-01-03', '2025-01-02', 100., '2025-01-10', 110., 100., 50.),
-                ('2317', '2025-01-06', '2025-01-01', 103., '2025-01-13', 95., 200., -50.),
-                ('1301', '2025-01-03', '2025-01-02', 100., '2025-01-10', 110., 20., 0.),
-            )
-        ]
-        fills = [dict(ticker=row['ticker'], trade_date=row['entry_trade_date'], filled_qty=qty)
-                 for row, qty in zip(records, (10, 5, 10))]
-        doc = {'rows': records, 'fills': fills,
-               'summary': {'win_rate_pct': 100/3, 'trades': 3},
-               'receipt_sha256': 'a'*64}
-        observations = iter([
-            (SimpleNamespace(realized_net_pnl=100., fill_date='2025-01-03',
-                             entry_price=100., exit_date='2025-01-10',
-                             exit_price=110., exit_reason='STOP'), '2025-01-02', 10),
-            (SimpleNamespace(realized_net_pnl=200., fill_date='2025-01-03',
-                             entry_price=99., exit_date='2025-01-11',
-                             exit_price=105., exit_reason='IND_SELL'), '2025-01-02', 10),
-            (SimpleNamespace(realized_net_pnl=20., fill_date='2025-01-03',
-                             entry_price=100., exit_date='2025-01-10',
-                             exit_price=110., exit_reason='STOP'), '2025-01-02', 10),
-        ])
-        one_time = get_audit_definitions('breakout_quality')[0]
-        formal = get_reusable_audit_definitions('breakout_quality')[2]
-        with TemporaryDirectory() as tmp, \
-             patch.object(audit, '_evidence_inventory', return_value={42: (Path('source.json'), doc)}), \
-             patch.object(audit, '_contract', return_value=(SimpleNamespace(start_date='2021-01-01',
-                                                   end_date='2026-03-02', dataset='full'), None, None)), \
-             patch.object(audit, '_robustness_artifacts', return_value=(None, [(42, Path('x'))])), \
-             patch.object(audit, '_prepare_oracle_parameters', return_value=([(42,'sha','kind','params','other')], None)), \
-             patch.object(audit, 'resolve_formal_min_param_records', return_value=()), \
-             patch.object(audit, 'build_formal_min_execution_schedule', return_value=('schedule', {})), \
-             patch.object(audit, 'discover_dataset_csv_inputs', return_value=([('2330', Path('2330.csv')),('2317',Path('2317.csv')),('1301',Path('1301.csv'))],[])), \
-             patch.object(audit, 'load_dataset_frame', return_value=pd.DataFrame({'Open':[1]})), \
-             patch.object(audit, '_reference_trade', side_effect=lambda *a, **k: next(observations)):
-            result = audit.run_formal_audit(one_time, project_root=Path(tmp), quiet=True)
-            self.assertEqual(result['status'], 'COMPLETED')
-            stats = result['report']
-            self.assertEqual(stats['round_trips'], 3)
-            self.assertEqual(stats['nonwinning_round_trips'], 2)
-            self.assertEqual(stats['factor_totals']['null_or_nonpositive_bought'], 0)
-            self.assertEqual(stats['factor_totals']['different_trade_event'], 1)
-            self.assertEqual(stats['factor_totals']['different_quantity'], 1)
-            self.assertEqual(stats['factor_totals']['different_exit_path'], 1)
-            self.assertEqual(stats['factor_totals']['zero_actual_pnl'], 1)
-            self.assertEqual(stats['by_seed']['42']['nonwin_overlaps'], {
-                'different_exit_path+different_quantity+different_trade_event': 1,
-                'none_of_four': 1,
-            })
-            self.assertTrue((Path(tmp) / 'outputs/audit' / one_time.output_subdir / 'latest/audit.md').is_file())
+        self.assertEqual(get_audit_definitions('breakout_quality'), ())
+        self.assertNotIn('fullcycle_positive_direct_trade_attribution', AUDIT_CATALOG)
+        self.assertNotIn('fullcycle_positive_direct_trade_attribution', AUDIT_METHOD_CATALOG)
