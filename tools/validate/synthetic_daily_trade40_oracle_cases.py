@@ -45,7 +45,8 @@ def definition(*, full_cycle: bool = False):
                                    "DailyUniversal_MinTrade_NetPnL",
                                    "DailyUniversal_MinTrade_NetPnL_Direct",
                                    "DailyUniversal_MinTrade60_NetPnL",
-                                   "DailyUniversal_MinTrade60_NetPnL_Direct"})})
+                                   "DailyUniversal_MinTrade60_NetPnL_Direct",
+                                   "DailyUniversal_MinTrade_NetPnL_Positive_Direct"})})
 
 
 def source_fixture():
@@ -444,7 +445,7 @@ class FormalMinDailyOracleCases(TestCase):
     def test_all_declared_min_horizons_share_feature_universe_and_cutoff_policy(self):
         from services.audit.daily_trade40_oracle import target_identity_for_horizon
         full = definition(full_cycle=True)
-        self.assertEqual(len(full.source["oracle_comparisons"]), 19)
+        self.assertEqual(len(full.source["oracle_comparisons"]), 20)
         plan = oracle._oracle_comparison_plan(full)
         self.assertEqual({name: horizon for name, (_, _, horizon) in plan["daily_recipes"].items()}, {
             "DailyUniversal_MinTrade40_NetR": 40,
@@ -455,7 +456,7 @@ class FormalMinDailyOracleCases(TestCase):
         })
         self.assertEqual(plan["daily_sources"]["DailyUniversal_MinTrade_NetR_Direct"],
                          "DailyUniversal_MinTrade_NetR")
-        self.assertEqual(len(plan["targets"]), 19)
+        self.assertEqual(len(plan["targets"]), 20)
         settings, _base, _exact = oracle._contract(full)
         contracts = _ORIGINAL_SCORE_CONTRACT_RESOLVER(full, settings, plan)
         self.assertEqual(contracts["DailyUniversal_MinTrade_NetR"]["target_id"],
@@ -1368,6 +1369,7 @@ class FormalMinReplayIntegrationCases(TestCase):
                         "DailyUniversal_MinTrade_NetPnL_Direct",
                         "DailyUniversal_MinTrade60_NetPnL",
                         "DailyUniversal_MinTrade60_NetPnL_Direct",
+                        "DailyUniversal_MinTrade_NetPnL_Positive_Direct",
                     })})
             full_cycle = replace(full_cycle, dimensions={
                 **full_cycle.dimensions, "oracle_evaluation_end_date": second[1],
@@ -1394,3 +1396,201 @@ class FormalMinReplayIntegrationCases(TestCase):
 
 if __name__=="__main__":
     main()
+
+
+class FullcyclePositiveNetPnLDiagnosticCases(TestCase):
+    """Dedicated primitive checks; original Oracle score-only behavior is frozen."""
+
+    def test_positive_gate_rejects_zero_negative_null_and_unscored(self):
+        from core.oracle_positive_gate import (
+            active_positive_oracle_truth, positive_oracle_entry_gate,
+            positive_gate_candidate_status, filter_positive_oracle_candidates,
+        )
+        values = {('2330', '2025-01-02'): 5.5,
+                  ('2317', '2025-01-02'): 0.,
+                  ('1301', '2025-01-02'): -1.25,
+                  ('0050', '2025-01-02'): float('nan')}
+        def candidate(ticker, available=True):
+            return {'ticker': ticker, 'breakout_quality_rank': {
+                'available': available, 'score_date': '2025-01-02', 'score': 1.}}
+        rows = [candidate(ticker) for ticker in ('2330', '2317', '1301', '0050', '9999')]
+        rows.append(candidate('2330', available=False))
+        self.assertEqual(len(filter_positive_oracle_candidates(rows)), len(rows))
+        with positive_oracle_entry_gate(values):
+            self.assertEqual([x['ticker'] for x in filter_positive_oracle_candidates(rows)], ['2330'])
+            self.assertEqual([positive_gate_candidate_status(x)[1] for x in rows],
+                             ['positive', 'nonpositive_target', 'nonpositive_target',
+                              'nonpositive_target', 'null_target', 'missing_score'])
+            with self.assertRaisesRegex(RuntimeError, 'Nested'):
+                with positive_oracle_entry_gate(values):
+                    pass
+        self.assertIsNone(active_positive_oracle_truth())
+        self.assertEqual([x['ticker'] for x in filter_positive_oracle_candidates(rows)],
+                         [x['ticker'] for x in rows])
+
+    def test_only_diagnostic_direct_selector_filters_candidates_before_allocation(self):
+        from core.oracle_positive_gate import positive_oracle_entry_gate
+        from core import portfolio_entry_selection_max_dl as selector
+        rows = [
+            {'ticker': ticker, 'breakout_quality_rank': {'available': True,
+                'score_date': '2025-01-02', 'score': score}, 'model_score': score}
+            for ticker, score in [('2330', .1), ('2317', .9), ('1301', .8)]
+        ]
+        seen = []
+        def select(candidates, **kwargs):
+            seen.append([row['ticker'] for row in candidates])
+            return {'selected_count': min(2, len(candidates))}
+        def diag(_base, _baseline, selected, **kw):
+            return dict(kw)
+        kwargs = dict(available_cash=1000, sizing_equity=1000,
+                      free_slots=10, params=object(), baseline={}, default_diag={})
+        with patch.object(selector, '_simulate_reserved_candidate_order', side_effect=select), \
+             patch.object(selector, '_resource_aware_diag_from_result', side_effect=diag), \
+             patch.object(selector, '_max_dl_score_order', side_effect=lambda x, **kw:x):
+            order, _ = selector._reorder_resource_aware_continuous_score_no_k_no_r0(rows, **kwargs)
+            self.assertEqual(len(order), 3)
+            with positive_oracle_entry_gate({('2330','2025-01-02'): 200.,
+                                            ('2317','2025-01-02'): -1.,
+                                            ('1301','2025-01-02'): 0.}):
+                order, _ = selector._reorder_resource_aware_continuous_score_no_k_no_r0(rows, **kwargs)
+                self.assertEqual([x['ticker'] for x in order], ['2330'])
+            self.assertEqual(seen, [['2330', '2317', '1301'], ['2330']])
+
+    def test_one_time_audit_rebuilds_identical_reference_and_quantity(self):
+        from services.audit.positive_fullcycle_gate_audit import _reference_trade
+        from filters.breakout_quality.daily_trade40_target import compute_counterfactual_trade40_batch
+        trading, frames, _, schedule = source_fixture()
+        frame = frames['2330']
+        for day in ('2020-12-31', '2021-01-04', '2021-01-05'):
+            with self.subTest(day=day):
+                position = pd.DatetimeIndex(frame.index).get_indexer([pd.Timestamp(day)])
+                formal = compute_counterfactual_trade40_batch(
+                    frame, position, ticker='2330', schedule=schedule,
+                    exchange_calendar=trading, horizon_sessions=None,
+                    research_cutoff=trading[-1], include_net_pnl=True,
+                )
+                observed, origin, qty = _reference_trade(
+                    frame, ticker='2330', info_day=day, schedule=schedule,
+                    cutoff=str(trading[-1].date()),
+                )
+                self.assertAlmostEqual(float(formal.target_raw_pnl[0]), float(observed.realized_net_pnl))
+                self.assertGreater(qty, 0)
+                self.assertEqual(origin, '2020-12-31')
+
+    def test_signed_positive_raw_and_trade_evidence_rejects_mutation(self):
+        from core.oracle_positive_gate import POSITIVE_FULLCYCLE_NETPNL_GATE
+        from services.audit.fullcycle_positive_truth import _save, _load
+        from services.audit.positive_gate_evidence import (
+            save_positive_replay_evidence, read_evidence,
+        )
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            identity = {'schema': 1, 'gate': POSITIVE_FULLCYCLE_NETPNL_GATE,
+                        'seed': 42, 'raw': 'a'*64}
+            path = root/'raw.npz'
+            _save(path, identity, {('2330', '2025-01-02'): 5.,
+                                   ('2317', '2025-01-02'): float('nan')})
+            self.assertEqual(_load(path, identity), {('2330', '2025-01-02'): 5.})
+            with self.assertRaisesRegex(ValueError, 'invalid|mismatch|corrupt'):
+                _load(path, {**identity, 'seed': 43})
+            replay = {'target': 'DailyUniversal_MinTrade_NetPnL_Positive_Direct', 'seed': 42}
+            trade = {'ticker': '2330', 'breakout_quality_score_date': '2025-01-02',
+                     'entry_trade_date': '2025-01-03', 'signal_date': '2025-01-02',
+                     'entry_price': 100., 'exit_price': 102., 'exit_date': '2025-01-15',
+                     'exit_type': 'STOP', 'pnl': 50.0}
+            played = {'profile': {'closed_trade_rows': [trade]}}
+            kw = dict(project_root=root, output_subdir='audit-test', seed=42,
+                      replay_identity=replay, portfolio=played,
+                      execution_rows=[{'entry_filled': True, 'ticker': '2330',
+                                      'trade_date': '2025-01-03', 'filled_qty': 100}],
+                      raw_net_pnl={('2330', '2025-01-02'): 5.0},
+                      summary={'trades': 1, 'win_rate_pct': 100., 'romd': 8.5})
+            output = save_positive_replay_evidence(**kw)
+            self.assertEqual(read_evidence(output)['summary']['outcomes']['profit'], 1)
+            with self.assertRaisesRegex(ValueError, 'NULL/nonpositive'):
+                save_positive_replay_evidence(**{**kw,
+                        'raw_net_pnl': {('2330', '2025-01-02'): 0.}})
+            original = output.read_text(encoding='utf-8')
+            output.write_text(original.replace('2025-01-03', '2025-01-04'), encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'digest mismatch'):
+                read_evidence(output)
+
+    def test_positive_target_alone_adds_gate_and_keeps_original_score_contract(self):
+        from core.oracle_positive_gate import POSITIVE_FULLCYCLE_NETPNL_GATE
+        from services.audit.catalog import get_audit_handler
+        from core.audit_policy import get_audit_definitions
+        definition = next(x for x in get_reusable_audit_definitions('breakout_quality')
+                          if x.report_id == 'target_oracle_romd')
+        plan = oracle._oracle_comparison_plan(definition)
+        original = 'DailyUniversal_MinTrade_NetPnL_Direct'
+        diagnostic = 'DailyUniversal_MinTrade_NetPnL_Positive_Direct'
+        self.assertEqual(plan['aliases'][original], plan['aliases'][diagnostic])
+        self.assertEqual(plan['selectors'][diagnostic], 'direct')
+        self.assertEqual(plan['positive_gates'], {diagnostic: POSITIVE_FULLCYCLE_NETPNL_GATE})
+        settings, _, _ = oracle._contract(definition)
+        contracts = oracle._resolve_oracle_target_score_contracts(definition, settings, plan)
+        self.assertNotIn('hindsight_extra_gate', contracts[original])
+        self.assertEqual(contracts[diagnostic]['hindsight_extra_gate'], POSITIVE_FULLCYCLE_NETPNL_GATE)
+        one_time = get_audit_definitions('breakout_quality')
+        self.assertEqual(len(one_time), 1)
+        self.assertTrue(get_audit_handler(one_time[0]).read_only)
+
+    def test_one_time_audit_counts_all_five_factors_without_double_counting_nonwins(self):
+        import json
+        from services.audit import positive_fullcycle_gate_audit as audit
+        from core.audit_policy import get_audit_definitions
+        records = [
+            dict(ticker=ticker, breakout_quality_score_date='2025-01-02',
+                 entry_trade_date=day, signal_date=signal, entry_price=price,
+                 exit_date=exit_day, exit_price=exit_price, exit_type='STOP',
+                 target_raw_net_pnl=raw, pnl=pnl)
+            for ticker, day, signal, price, exit_day, exit_price, raw, pnl in (
+                ('2330', '2025-01-03', '2025-01-02', 100., '2025-01-10', 110., 100., 50.),
+                ('2317', '2025-01-06', '2025-01-01', 103., '2025-01-13', 95., 200., -50.),
+                ('1301', '2025-01-03', '2025-01-02', 100., '2025-01-10', 110., 20., 0.),
+            )
+        ]
+        fills = [dict(ticker=row['ticker'], trade_date=row['entry_trade_date'], filled_qty=qty)
+                 for row, qty in zip(records, (10, 5, 10))]
+        doc = {'rows': records, 'fills': fills,
+               'summary': {'win_rate_pct': 100/3, 'trades': 3},
+               'receipt_sha256': 'a'*64}
+        observations = iter([
+            (SimpleNamespace(realized_net_pnl=100., fill_date='2025-01-03',
+                             entry_price=100., exit_date='2025-01-10',
+                             exit_price=110., exit_reason='STOP'), '2025-01-02', 10),
+            (SimpleNamespace(realized_net_pnl=200., fill_date='2025-01-03',
+                             entry_price=99., exit_date='2025-01-11',
+                             exit_price=105., exit_reason='IND_SELL'), '2025-01-02', 10),
+            (SimpleNamespace(realized_net_pnl=20., fill_date='2025-01-03',
+                             entry_price=100., exit_date='2025-01-10',
+                             exit_price=110., exit_reason='STOP'), '2025-01-02', 10),
+        ])
+        one_time = get_audit_definitions('breakout_quality')[0]
+        formal = get_reusable_audit_definitions('breakout_quality')[2]
+        with TemporaryDirectory() as tmp, \
+             patch.object(audit, '_evidence_inventory', return_value={42: (Path('source.json'), doc)}), \
+             patch.object(audit, '_contract', return_value=(SimpleNamespace(start_date='2021-01-01',
+                                                   end_date='2026-03-02', dataset='full'), None, None)), \
+             patch.object(audit, '_robustness_artifacts', return_value=(None, [(42, Path('x'))])), \
+             patch.object(audit, '_prepare_oracle_parameters', return_value=([(42,'sha','kind','params','other')], None)), \
+             patch.object(audit, 'resolve_formal_min_param_records', return_value=()), \
+             patch.object(audit, 'build_formal_min_execution_schedule', return_value=('schedule', {})), \
+             patch.object(audit, 'discover_dataset_csv_inputs', return_value=([('2330', Path('2330.csv')),('2317',Path('2317.csv')),('1301',Path('1301.csv'))],[])), \
+             patch.object(audit, 'load_dataset_frame', return_value=pd.DataFrame({'Open':[1]})), \
+             patch.object(audit, '_reference_trade', side_effect=lambda *a, **k: next(observations)):
+            result = audit.run_formal_audit(one_time, project_root=Path(tmp), quiet=True)
+            self.assertEqual(result['status'], 'COMPLETED')
+            stats = result['report']
+            self.assertEqual(stats['round_trips'], 3)
+            self.assertEqual(stats['nonwinning_round_trips'], 2)
+            self.assertEqual(stats['factor_totals']['null_or_nonpositive_bought'], 0)
+            self.assertEqual(stats['factor_totals']['different_trade_event'], 1)
+            self.assertEqual(stats['factor_totals']['different_quantity'], 1)
+            self.assertEqual(stats['factor_totals']['different_exit_path'], 1)
+            self.assertEqual(stats['factor_totals']['zero_actual_pnl'], 1)
+            self.assertEqual(stats['by_seed']['42']['nonwin_overlaps'], {
+                'different_exit_path+different_quantity+different_trade_event': 1,
+                'none_of_four': 1,
+            })
+            self.assertTrue((Path(tmp) / 'outputs/audit' / one_time.output_subdir / 'latest/audit.md').is_file())

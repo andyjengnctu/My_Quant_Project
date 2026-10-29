@@ -76,6 +76,7 @@ def _forty_only(definition):
             "DailyUniversal_MinTrade_NetR_Direct",
             "DailyUniversal_MinTrade_NetPnL",
             "DailyUniversal_MinTrade_NetPnL_Direct",
+            "DailyUniversal_MinTrade_NetPnL_Positive_Direct",
         })})
 
 
@@ -1297,7 +1298,10 @@ class OracleAuditContractCases(TestCase):
         cls.exact_options = oracle._contract(cls.definition)[2].dl_runtime_options
 
     def test_oracle_is_reusable_only_with_a_single_registered_run_route(self):
-        self.assertEqual(collect_audit_menu_state("breakout_quality")["enabled_count"], 0)
+        self.assertEqual(collect_audit_menu_state("breakout_quality")["enabled_count"], 1)
+        from core.audit_policy import get_audit_definitions
+        self.assertEqual([x.audit_id for x in get_audit_definitions("breakout_quality")],
+                         ["fullcycle_netpnl_positive_direct_trade_audit"])
         self.assertEqual(
             collect_audit_menu_state("breakout_quality", method_id=oracle.SUPPORTED_AUDIT_TYPE)["enabled_count"], 1
         )
@@ -1316,7 +1320,7 @@ class OracleAuditContractCases(TestCase):
             {"CG40_EqualRank", "MFE40_Control", "R40", "T40",
              "T40-MFE", "MFE40_Direct", "R40_Direct", "T40_Direct", "T40-MFE_Direct"},
         )
-        self.assertEqual(len(oracle._oracle_comparison_plan(self.active_definition)["targets"]), 19)
+        self.assertEqual(len(oracle._oracle_comparison_plan(self.active_definition)["targets"]), 20)
         self.assertNotIn("MinTrade40_NetR", dict(oracle._oracle_comparison_plan(self.active_definition)["targets"]))
         self.assertNotIn("MinTrade40_NetR_Direct", dict(oracle._oracle_comparison_plan(self.active_definition)["targets"]))
         self.assertEqual(oracle._oracle_comparison_plan(self.active_definition)["aliases"], {
@@ -1327,6 +1331,7 @@ class OracleAuditContractCases(TestCase):
             "DailyUniversal_MinTrade60_NetPnL_Direct": "DailyUniversal_MinTrade60_NetPnL",
             "DailyUniversal_MinTrade_NetR_Direct": "DailyUniversal_MinTrade_NetR",
             "DailyUniversal_MinTrade_NetPnL_Direct": "DailyUniversal_MinTrade_NetPnL",
+            "DailyUniversal_MinTrade_NetPnL_Positive_Direct": "DailyUniversal_MinTrade_NetPnL",
         })
         self.assertEqual(self.definition.output_subdir, "breakout_quality/reusable/target_oracle_romd")
         with tempfile.TemporaryDirectory() as tmp:
@@ -2451,7 +2456,7 @@ class RemovedMinTrade40OracleComparisonCases(TestCase):
         current = _ACTIVE_ORACLE_DEFINITION
         planned = oracle._oracle_comparison_plan(current)
         names = {name for name, _ in planned["targets"]}
-        self.assertEqual(len(names), 19)
+        self.assertEqual(len(names), 20)
         self.assertNotIn("MinTrade40_NetR", names)
         self.assertNotIn("MinTrade40_NetR_Direct", names)
         self.assertIn("DailyUniversal_MinTrade40_NetR", names)

@@ -1,4 +1,8 @@
-假設 DL 能完美預測 Target，在與 Research DL 策略完全相同的選股與交易條件下，RoMD 可以達到多少？
+- 加入win rate
+- 移除Delta RoMD
+- 報表依romd mean由小到大排序
+增加到8 seeds，原本4 seeds reuse
+
 
 - bug
     - 0050 cannot be selected by any DL

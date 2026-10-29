@@ -140,6 +140,7 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     {"target": "DailyUniversal_MinTrade_NetR_Direct", "description": "Same full-cycle Min Net-R target and ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade_NetR", "selector": "direct"},
                     {"target": "DailyUniversal_MinTrade_NetPnL", "description": "Formal Min full-cycle realized broker-ledger NetPnL at canonical reference sizing; natural exit or Research-cutoff closeout, hindsight ranking", "score": "daily_trade_path_net_pnl", "provider": "daily_trade40_profile", "horizon_mode": "full_trade_cycle", "selector": "exact"},
                     {"target": "DailyUniversal_MinTrade_NetPnL_Direct", "description": "Same full-cycle Min NetPnL perfect daily ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade_NetPnL", "selector": "direct"},
+                    {"target": "DailyUniversal_MinTrade_NetPnL_Positive_Direct", "description": "NON-PIT diagnostic only: full-cycle Min NetPnL Direct with strictly positive canonical raw NetPnL required for every order; NULL/zero/negative rejected", "score_source": "DailyUniversal_MinTrade_NetPnL", "selector": "direct", "positive_gate": "fullcycle_reference_net_pnl_strictly_positive_v1"},
                 ),
             },
             "dimensions": {
@@ -191,7 +192,23 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
     # Stable module registration survives one-off retirement; reusable Audit remains separate.
     "breakout_quality": {
         "enabled": True,
-        "audits": {},
+        "audits": {
+            "fullcycle_netpnl_positive_direct_trade_audit": {
+                "enabled": True,
+                "audit_type": "fullcycle_positive_direct_trade_attribution",
+                "description": (
+                    "一次性 NON-PIT：完整週期 NetPnL > 0 Direct 的實際已完成交易；"
+                    "核對 NULL、交易事件、股數、出場與零損益的分布和交集"
+                ),
+                "source": {
+                    "oracle_output_subdir": "breakout_quality/reusable/target_oracle_romd",
+                    "target": "DailyUniversal_MinTrade_NetPnL_Positive_Direct",
+                },
+                "dimensions": {"reference": "canonical_min_single_stock_reference_sizing"},
+                "outcomes": {"metric": "canonical_completed_round_trip_win_rate"},
+                "output_subdir": "breakout_quality/one_time/fullcycle_positive_direct",
+            },
+        },
     },
 }
 

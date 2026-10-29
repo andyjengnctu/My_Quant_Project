@@ -7,6 +7,8 @@ from core.exact_accounting import (
 )
 from core.order_lot_policy import get_min_entry_notional_milli
 
+from core.oracle_positive_gate import filter_positive_oracle_candidates
+
 from core.portfolio_entry_selection_common import (
     _candidate_continuous_score,
     _candidate_continuous_safety_score,
@@ -1737,9 +1739,12 @@ def _reorder_resource_aware_continuous_score_no_k_no_r0(
     """
 
     candidates = list(rows or [])
+    # Only the isolated NON-PIT Positive-NetPnL arm applies this additional
+    # eligibility gate. Ordinary Direct / Research / Trading are untouched.
+    eligible_candidates = filter_positive_oracle_candidates(candidates)
     physical_free_slots = max(0, int(free_slots))
     base_rank = {id(row): idx for idx, row in enumerate(candidates)}
-    score_order = _max_dl_score_order(candidates, base_rank=base_rank)
+    score_order = _max_dl_score_order(eligible_candidates, base_rank=base_rank)
     selected = _simulate_reserved_candidate_order(
         score_order,
         available_cash=available_cash,

@@ -752,3 +752,13 @@ Decision：`USER_REPORTED_POST_FIX_ORACLE_RESULT_AVAILABLE / EIGHT_MINTRADE_TREA
 - **Cache／補證政策**：現行 signed Portfolio Replay 交易身分與歷史經濟 observation **不因報表版號改變**；已含 `win_rate_pct` 或具備可驗證 Win Rate 補充證據者 REUSE。舊正確但缺 Win Rate 的 signed 收據規劃為 `RUN` 僅補算缺失的交易勝率，Replay 其餘原始經濟數據與原收據必須逐欄符合後，將 Win Rate 寫入與該身分／原 observation SHA 綁定的獨立 `win_rate_evidence`；任何差異或證據損毀一律 BLOCK，不得覆寫原始 Replay 或用 0／推測值冒充。新 Replay 直接保存勝率。未知實際本機工件狀態，RUN 數量由既有正式 `[1]` 唯讀計畫判斷。
 
 Decision：`USER_APPROVED_REPORT_V10_ONLY / TRADE_WIN_RATE_SSOT / ROMD_ASC_PRESENTATION / OLD_RESULTS_IMMUTABLE / MISSING_METRIC_EXPLICIT_RUN / NO_SCIENTIFIC_REPLAY_IDENTITY_CHANGE / E13_FULL_MARKET_DAILY_PARITY_PENDING`.
+
+### 2026-10-29 — Full-Cycle NetPnL > 0 Direct（隔離 NON-PIT 診斷對照）
+
+- **明確授權的額外科學假設**：`DailyUniversal_MinTrade_NetPnL_Positive_Direct`；來源唯一為既有 `DailyUniversal_MinTrade_NetPnL` **完整交易週期**原始 broker-ledger NetPnL。維持相同每日百分位 Score、正式 Min 買訊／延續／P16／成交／停損／出場、Direct No-K/No-R0 與 Broker-Cash；僅額外規定 `raw NetPnL > 0` 才能進入 Direct 候選配置，原始值為 `NULL`、`0` 或負值均拒絕。
+- **與 E13 正式 Oracle 的界線**：這是使用者單獨核准的 **hindsight eligibility intervention**，不符合一般 E13「只替換 Score」條件；**不得**把它當成既有 `DailyUniversal_MinTrade_NetPnL_Direct` 的修復或原版 DL 在同條件下的 RoMD，亦不得提供 PIT 推薦、訓練標籤篩選或 Trading 規則。正式報表沿用現行 v10 欄位，不改寫其他 Target 的科學身分。
+- **SSOT 與工件**：正值門檻只消費正式 `compute_counterfactual_trade40_batch(..., horizon_sessions=None, include_net_pnl=True)` 的 raw PnL，並對現有 Full-Cycle NetPnL 真值 `raw_label_sha256` 與 `rank_sha256` 作完全一致認證；每 Seed 另保存不可覆寫的 raw 資格收據與該新對照組實際 Round-Trip／成交紀錄。舊真值與舊 Replay 身分／結果保持不動；如原有 80 組證據有效，新增僅需 **4 組** Portfolio Replay。
+- **一次性專題 Audit**：`fullcycle_netpnl_positive_direct_trade_audit`；在 `[5] → 一次性專題 Audit` 唯讀消費新對照組四 Seed 已完成工件，逐筆核對 (1) NULL／非正值買入（必須為零）、(2) 原訊號／成交事件不同、(3) 參考與實際成交股數不同、(4) 出場日期／價格不同、(5) 實際帳本零損益；列出正／負／零實際結果、各因素筆數、未勝出交集及未解釋個案。相互重疊的差異不可直接相加為因果比例。
+- **驗證範圍**：GPT 合成／原單股引擎對照與完整資料身分檢查，**不是**四 Seed 實際市場 RUN、Windows 正式 Test Suite 或歷史全逐日 E13 parity。一次性 Audit 在新對照組完成後才能取得真實分布；未有收據不得填假數字。
+
+Decision：`USER_AUTHORIZED_DIAGNOSTIC_NONPIT / FULL_CYCLE_ONLY / POSITIVE_RAW_NETPNL_STRICT / NULL_ZERO_NEGATIVE_REJECTED / ONE_TIME_READ_ONLY_FIVE_FACTOR_AUDIT / EXISTING_E13_SCORE_ONLY_ARMS_UNCHANGED / REAL_MARKET_RESULTS_PENDING`。

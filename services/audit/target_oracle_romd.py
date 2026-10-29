@@ -15,6 +15,7 @@ import math
 import hashlib
 import struct
 import inspect
+from contextlib import ExitStack
 import json
 
 import numpy as np
@@ -138,6 +139,7 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
     daily_recipes: dict[str, tuple[str, str, int | None]] = {}
     aliases: dict[str, str] = {}
     selectors: dict[str, str] = {}
+    positive_gates: dict[str, str] = {}
     provider_fields: list[str] = []
     for entry in selected:
         if not isinstance(entry, Mapping):
@@ -166,6 +168,14 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
             raise OracleBlockedError(
                 f"Oracle {name} 的score/selector身分已變更；須建立新Target科學ID，禁止沿用舊快取"
             )
+        if entry.get("positive_gate") is not None:
+            from core.oracle_positive_gate import POSITIVE_FULLCYCLE_NETPNL_GATE
+            if (entry.get("positive_gate") != POSITIVE_FULLCYCLE_NETPNL_GATE
+                    or name != "DailyUniversal_MinTrade_NetPnL_Positive_Direct"
+                    or selector != "direct"
+                    or entry.get("score_source") != "DailyUniversal_MinTrade_NetPnL"):
+                raise OracleBlockedError("NON-PIT positive gate requires approved full-cycle NetPnL Direct")
+            positive_gates[name] = POSITIVE_FULLCYCLE_NETPNL_GATE
         if entry.get("score_source"):
             source = str(entry["score_source"])
             if selector != "direct" or source in _ORACLE_RETIRED_TARGETS:
@@ -245,7 +255,8 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
     return {"targets": tuple(definitions), "recipes": recipes,
             "daily_recipes": daily_recipes, "daily_sources": daily_sources,
             "aliases": aliases,
-            "selectors": selectors, "providers": tuple(provider_fields)}
+            "selectors": selectors, "positive_gates": positive_gates,
+            "providers": tuple(provider_fields)}
 
 
 # Display labels are intentionally separate from the immutable replay-cache keys.
@@ -421,6 +432,8 @@ def _resolve_oracle_target_score_contracts(definition, settings, plan) -> dict[s
         if str(arm_source.point_in_time_score_start_date or "") != start:
             raise OracleBlockedError(f"{name}: Research DL score起始日不一致")
         result[name] = {
+            **({"hindsight_extra_gate": plan["positive_gates"][name]}
+               if name in plan["positive_gates"] else {}),
             "reference_arm_id": str(arm.arm_id),
             "reference_score_source_id": str(arm.dl_id),
             "reference_profile_id": str(arm_source.experiment_profile),
@@ -1381,6 +1394,17 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
         policy["oracle_parity_implementation"] = ORACLE_PARITY_IMPLEMENTATION
     if plan["selectors"].get(target) == "direct":
         policy["direct_arm"] = str(definition.source["direct_arm_id"])
+    if target in plan.get("positive_gates", {}):
+        from core.file_integrity import compute_file_sha256
+        code_root = Path(__file__).resolve().parents[2]
+        policy["hindsight_extra_gate"] = {
+            "policy": plan["positive_gates"][target],
+            "raw_truth_source": "canonical_fullcycle_min_broker_ledger_net_pnl",
+            "null_and_nonpositive": "reject_all_orders",
+            "gate_code_sha256": compute_file_sha256(code_root / "core/oracle_positive_gate.py"),
+            "raw_witness_code_sha256": compute_file_sha256(code_root / "services/audit/fullcycle_positive_truth.py"),
+            "selector_code_sha256": compute_file_sha256(code_root / "core/portfolio_entry_selection_max_dl.py"),
+        }
     if target != str(definition.source["baseline_arm_id"]):
         if not score_sha256 or len(score_sha256) != 64 or not score_contract:
             raise OracleBlockedError("Oracle per-target score SHA and canonical DL score contract required")
@@ -1953,6 +1977,7 @@ def _execute_single_stage_missing(
         }
     feature_cohort_cache: dict[tuple[str, ...], tuple[pd.DataFrame, str]] = {}
     truth_cache: dict[tuple[int, str], tuple[dict[tuple[str, str], float], dict[str, Any]]] = {}
+    positive_raw_cache: dict[int, dict[tuple[str, str], float]] = {}
     data_dir = Path(get_dataset_dir(str(project_root), settings.dataset)).resolve()
     for seed, param_sha, kind, base_params, oracle_params in prepared:
         seed_run = [target for target in ("C96", *(name for name, _ in plan["targets"]))
@@ -2067,7 +2092,27 @@ def _execute_single_stage_missing(
                     raise OracleBlockedError(
                         f"Oracle {target} seed={seed} changed before win-rate evidence Replay"
                     )
+            positive_raw = None
+            if target in plan.get("positive_gates", {}):
+                if source_name != "DailyUniversal_MinTrade_NetPnL":
+                    raise OracleBlockedError("Positive gate must consume the full-cycle NetPnL source")
+                if seed not in positive_raw_cache:
+                    from services.audit.fullcycle_positive_truth import load_or_build_positive_truth
+                    positive_raw_cache[seed], _ = load_or_build_positive_truth(
+                        project_root=project_root, output_subdir=definition.output_subdir,
+                        dataset=str(settings.dataset), filter_id=str(definition.source["filter_id"]),
+                        profile_id=str(definition.source["daily_trade40_profile"]),
+                        seed=seed, price_sha256=price_sha, param_sha256=param_sha,
+                        canonical_schedule=schedule, research_cutoff=str(settings.end_date),
+                        score_start=_formal_dl_score_start(definition, settings), evaluation_end=end,
+                        canonical_scores=score_map, canonical_evidence=evidence,
+                        feature_cohort_cache=feature_cohort_cache,
+                        progress=None if quiet else lambda msg: print(f"[Positive Target] {msg}", flush=True),
+                    )
+                positive_raw = positive_raw_cache[seed]
+            replay_execution_rows = [] if positive_raw is not None else None
             replay_kwargs = dict(
+                replay_execution_rows=replay_execution_rows,
                 data_dir=data_dir, start_date=start, end_date=end,
                 max_positions=settings.max_positions, enable_rotation=False,
                 quiet=quiet, replay_preparation_cache=preparation,
@@ -2079,19 +2124,31 @@ def _execute_single_stage_missing(
                         params=base_params, param_source_kind=kind, **replay_kwargs,
                     )
                 else:
-                    with audit_oracle_truth_score_context(
-                        score_map,
-                        ranking_policy=str(arm.dl_runtime_mode),
-                        ranking_options=arm.dl_runtime_options,
-                        key_mode="information_date",
-                        missing_key_policy="unavailable_outside_mature_feature_universe",
-                        score_start=_formal_dl_score_start(definition, settings),
-                    ):
+                    with ExitStack() as stack:
+                        stack.enter_context(audit_oracle_truth_score_context(
+                            score_map,
+                            ranking_policy=str(arm.dl_runtime_mode),
+                            ranking_options=arm.dl_runtime_options,
+                            key_mode="information_date",
+                            missing_key_policy="unavailable_outside_mature_feature_universe",
+                            score_start=_formal_dl_score_start(definition, settings),
+                        ))
+                        if positive_raw is not None:
+                            from core.oracle_positive_gate import positive_oracle_entry_gate
+                            stack.enter_context(positive_oracle_entry_gate(positive_raw))
                         played = _run_scenario(
                             name=f"Oracle {target} seed={seed}",
                             params=oracle_params, param_source_kind=kind, **replay_kwargs,
                         )
                 result = _metrics(played, target=target)
+                if positive_raw is not None:
+                    from services.audit.positive_gate_evidence import save_positive_replay_evidence
+                    save_positive_replay_evidence(
+                        project_root=project_root, output_subdir=definition.output_subdir,
+                        seed=seed, replay_identity=identity, portfolio=played,
+                        execution_rows=replay_execution_rows,
+                        raw_net_pnl=positive_raw, summary=result,
+                    )
                 result["seed"] = seed
                 if target != "C96":
                     baseline = out.get((seed, "C96")) or preflight_cached.get((seed, "C96"))

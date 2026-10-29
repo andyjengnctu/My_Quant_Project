@@ -13633,3 +13633,13 @@ Decision：`REPORT_V10_USER_AUTHORIZED / REPLAY_IDENTITY_UNCHANGED / MISSING_MET
 - **狹義、失效封閉的修復**：`services/audit/mintrade_truth_source_attestation.py` 僅對此次已逐檔核對的「原始 Source SHA `e93b116b...` → 新增身分解析及驗證接線後的 Source SHA `aef60db5...`」執行精確雙 SHA 證明，既有來源 closure 的 canonical truth SHA 恢復與 16:10 版本相同的 `80a4fe35...`；任何其他 Producer 版本、正式交易/風控依賴變更均產生新 SHA，不無條件忽略或更新舊簽章。歷史已完成收據、真值快取不覆寫。
 - **獨立性與驗證**：17 個原 Oracle Target 的 Score Contract 在新增前後完全相同；舊 40D Net-R、60D Net-R、完整週期 Net-R、完整週期 NetPnL 的合成 `target_id`、raw-label SHA、rank/score SHA 和真值來源 SHA 逐一相同；新 60D NetPnL Target/Label、horizon 與 Direct/Exact 保持獨立。Oracle／MinTrade 專項 `202/202 PASS`，另驗證 Producer 任一新位元組修改及共同經濟依賴變更必須失效。
 - **預期正式計畫**：若使用者本機原 72 組均已具備合法 Win Rate 補證，應為 **`REUSE 72 / RUN 8 / BLOCKED 0`**（40 價格/C96 + 32 原 MinTrade REUSE；只新增兩組 ×四 Seed RUN）。正式數字仍以 Windows `[1] Target 驗證` 核對，不宣稱本輪已在完整市場資料驗證其收據。純工程來源失效範圍修復，不改科學 Target、正式選單、`audit.target_oracle_romd@v10`、P16、交易 SSOT；E13 完整市場逐日等價仍待驗證。
+
+## 2026-10-29 — 授權並實作完整週期 NetPnL > 0 Direct＋一次性五因素 Audit（待市場證據）
+
+- **需求**：不得使用 60D；新增 `[1]` 的 `DailyUniversal_MinTrade_NetPnL_Positive_Direct`，使用正式完整週期單股淨利原始真值 `> 0` 作為額外 NON-PIT 進場資格；`NULL`、零、負值完全拒絕。原本 `DailyUniversal_MinTrade_NetPnL_Direct` 不變，無任何正式 DL 交易獲利門檻。
+- **科學解釋**：額外前視進場資格是獨立診斷對照，**不是** E13 只替換 perfect score 的原版 Oracle。兩組仍使用相同每日 percentile Score；僅新組 Direct Selector 在掛單之前讀取簽章原始 NetPnL 正負證據，正式單股持有規則和實際 Portfolio 資源配置仍由原引擎執行。使用者希望驗證「加門檻後勝率為何仍不等於 100%」，不以高 RoMD 為實作目標。
+- **防偽與 REUSE**：舊真值快取只有百分位，故新增專用 signed raw-outcome witness，逐 Seed 同時驗證 raw-label SHA、rank SHA 與正式 source 身分；新組 Replay 另保存完整成交／Round-Trip 的簽章證據。原有 19 個 treatments＋C96 的真值與 Replay 來源閉包未更改；已完成 80 組理應繼續 REUSE，新組 4 Seeds 為 RUN（依使用者本機正式預覽與缺失工件為準）。不冒用 60D NetPnL，也不在空缺時以 percentile 分數代替 raw 金額。
+- **唯一一次性 Audit**：`[5] → 一次性專題 Audit → fullcycle_netpnl_positive_direct_trade_audit`。只讀取該新 Target 的四 Seed 已完成正式收據，對每筆實際 Round-Trip 以 canonical Min 單股 SSOT 重建同資訊日原訊號、成交、參考 sizing、出場及原 raw PnL，核對門檻後實際 NULL／非正值成交筆數、交易事件差異、股數差異、出場差異、零損益；逐 Seed 顯示 win/loss/zero、五因素交集、未解釋未勝出；如有未簽章或同身分不一致即 BLOCK，不自行重跑 Portfolio／訓練／Optimizer。
+- **工程驗證**：已有 202 項 Oracle/MinTrade 合成測試在保留歷史 fixture 語意下 PASS，並新增門檻 isolation、正式 Direct 掛單前過濾、正值資格／成交證據篡改拒絕、正式 Min 單股參考損益一致及 Audit 五因素交集測試。正式 Windows suite、市場實際四 Seed Replay／Audit 統計、全歷史逐日 E13 仍待使用者本機驗收；未宣稱勝率 100% 或存在某種歷史差異比例。
+
+Decision：`NON_PIT_POSITIVE_GATE_DIAGNOSTIC_IMPLEMENTED / PREVIEW_ONLY_UNTIL_FOUR_SEED_RUN / AUDIT_READ_ONLY / ORIGINAL_SCORE_ONLY_TARGETS_UNCHANGED / RESULTS_PENDING`。
