@@ -316,8 +316,8 @@ def validate_gui_workbench_documentation_sync_case(_base_params):
     architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     inspector_source = (PROJECT_ROOT / "services" / "workbench_ui" / "single_stock_inspector.py").read_text(encoding="utf-8")
 
-    architecture_apps_required_fragment = "交易明細與 Console 改以獨立分頁承接"
-    architecture_ui_required_fragment = "交易明細與 Console 以獨立分頁承接"
+    architecture_apps_required_fragment = "`apps/workbench.py`：GUI / workbench 正式入口"
+    architecture_ui_required_fragment = "K 線圖、交易明細、Console 三個分頁"
     architecture_forbidden_fragment = "執行摘要與交易明細改以獨立分頁承接"
     architecture_ui_forbidden_fragment = "摘要與明細 / Console 以獨立分頁承接"
 
