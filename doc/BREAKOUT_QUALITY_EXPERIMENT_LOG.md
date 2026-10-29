@@ -13561,3 +13561,51 @@ Decision: `ENGINEERING_CHECKPOINT_FIRST_REUSE / HISTORICAL_AK_EVIDENCE_PRESERVED
 - **獨立驗收證據（本輪）**：`synthetic_daily_trade40_cases`、`synthetic_daily_trade40_oracle_cases`、`synthetic_target_oracle_cases` 共 **197／197 PASS**。另有直接使用正式 `core.portfolio_engine.run_portfolio_timeline()` 的真實合成買訊驗收：新單與延續單的原買訊／成交／出場、NetPnL、Net-R 同步一致；延續單來源價格與原限價不被新資訊日重建。沒有買訊時 Target 保持 NULL；跨年 P16 原參數凍結與新有效訊號、錯誤快照 fail-fast 也通過。另非正式測試，不等同使用者 Windows Formal Suite 或全市場 E13 每日交易／現金／權益逐筆等價。
 - **對舊正式績效的處理／REUSE**：之前 `2026-10-28` 已登錄的 MinTrade 40D／60D／Full-Cycle Net-R 及 Full-Cycle NetPnL 的四 Seed RoMD **全部保留為歷史 daily-fresh 錯誤實作證據，不再視為本次修復後現行有效結果**。因 Net-R 與 NetPnL 共用的單股起始交易身分確實改變，兩者 Producer 來源 SHA 必須更新，舊 8 targets × 4 seeds = 32 個正式 Portfolio Replay 在新的身份下原則應 **RUN 32**；價格型 9 × 4 及 C96 4 × 1 的 40 組不受本修正，預期保持 **REUSE 40**（以使用者本地正式規劃為準）。**禁止**使用先前為「僅加 NetPnL 輸出」建立的 Net-R 舊 SHA compatibility attestation；新的歷史成果不得由舊 daily-fresh receipt 直接補簽。原研究問題、報表 `audit.target_oracle_romd@v9` 及 payload schema 8 保持不變。
 - **交付狀態**：`IMPLEMENTATION_CORRECTED / 197_SYNTHETIC_PASS / REAL_MARKET_32_REPLAYS_NOT_RUN_HERE / E13_FULL_MARKET_DAILY_PARITY_PENDING / HISTORICAL_DAILY_FRESH_RESULTS_ARCHIVED_NOT_CURRENT / NO_DL_FIT / NO_OPTIMIZER / TRADING_UNCHANGED`。
+
+
+## 2026-10-29 — 修正正式買訊／延續單後的 MinTrade Oracle 四 Seed 市場報表登錄（使用者提供）
+
+- **來源與證據層級**：使用者提供 `貼上的 Markdown(5).md`（SHA256 `4907da573718f5b647eebe637795dd4b04ca1d8962f8de0a0e263d2ca24a05b2`），以及 `test-branch-1_20261028_185950_667f8453(1).zip`（SHA256 `bfe6dd543352cd7ae8e476287b90b856bf85f06a64568f6532fc16fd5a9b11bd`）。這是 **USER_REPORTED_MARKET_REPORT**，非 GPT 自行執行四 Seed 市場 Replay；ZIP 不含 `outputs/`、完整市場資料或逐日交易／現金／部位／權益 receipts。
+- **覆蓋的舊狀態**：本 Log 上一節「市場結果待重跑」是 2026-10-28 修補交付時的歷史狀態。本次已有修補後四 Seed 績效報表，故將**績效報表待產生**更新為**使用者已提供**；**不代表**已核對 32 個 RUN 的 signed receipt／當前 72 個逐 Arm REUSE，亦不代表 E13 逐日等價驗收完成。更早 `2026-10-28` 的 daily-fresh 64/64 REUSE 及其 MinTrade 績效只能當歷史證據，不得冒充修正後有效結果。
+- **不變的正式研究條件**：Research `[1] Target 驗證`，報表 `audit.target_oracle_romd@v9`／payload schema `8`；`2021-01-01～2026-03-02`、630,589 個共同股票日、四個 P16 Seed `693545351 / 2014432738 / 104504529 / 762252050`。C96＋17 Oracle treatments（9 價格型、8 MinTrade，計 18 列），Exact K/R0／Direct No-K/No-R0，原 Broker-Cash、參數／Selector／百分位映射不變。2026 為截至 03/02 的**部分年度**；全部 Target 是 hindsight/non-PIT，不能用於當日交易或作模型 fitting。
+
+### 修正後 MinTrade 四 Seed 平均（直接轉錄使用者正式人讀報表）
+
+| Target | Return | Ann. | MDD | RoMD | RoMD SD | EV(A) |
+|---|---:|---:|---:|---:|---:|---:|
+| `DailyUniversal_MinTrade40_NetR` | +345.76% | +33.28% | 12.58% | 27.51 | 7.38 | +1.92 R |
+| `DailyUniversal_MinTrade40_NetR_Direct` | +1231.92% | +61.70% | 11.88% | 99.96 | 57.68 | +4.11 R |
+| `DailyUniversal_MinTrade60_NetR` | +282.41% | +29.69% | 12.76% | 22.23 | 2.18 | +1.89 R |
+| `DailyUniversal_MinTrade60_NetR_Direct` | +1293.06% | +62.90% | 10.82% | 117.77 | 76.20 | +4.23 R |
+| `DailyUniversal_MinTrade_NetR` | +311.69% | +31.22% | 12.99% | 24.63 | 8.20 | +2.09 R |
+| `DailyUniversal_MinTrade_NetR_Direct` | +1343.07% | +63.99% | 11.56% | 114.26 | 69.81 | +4.07 R |
+| `DailyUniversal_MinTrade_NetPnL` | +325.49% | +32.17% | 12.58% | 25.81 | 5.17 | +1.67 R |
+| `DailyUniversal_MinTrade_NetPnL_Direct` | +1520.29% | +68.61% | 11.69% | 131.66 | 74.11 | +3.42 R |
+
+### 完整週期 Net-R／NetPnL 同 Seed 對照
+
+| Seed | Net-R Exact | NetPnL Exact | Net-R Direct | NetPnL Direct | Direct 差（PnL−R） |
+|---|---:|---:|---:|---:|---:|
+| S1 `693545351` | 33.98 | 32.65 | 206.66 | 224.99 | +18.33 |
+| S2 `2014432738` | 15.47 | 22.10 | 43.78 | 51.04 | +7.26 |
+| S3 `104504529` | 28.44 | 26.97 | 124.19 | 149.63 | +25.44 |
+| S4 `762252050` | 20.64 | 21.52 | 82.40 | 100.97 | +18.57 |
+| **四 Seed 平均** | **24.63** | **25.81** | **114.26** | **131.66** | **+17.40** |
+
+### 與修補前 daily-fresh 歷史結果之差（非同算法受控比較）
+
+| MinTrade Target | 舊 RoMD（historical） | 修正後 RoMD（user-reported） | 顯示值差 |
+|---|---:|---:|---:|
+| `DailyUniversal_MinTrade40_NetR` | 24.04 | 27.51 | +3.47 |
+| `DailyUniversal_MinTrade40_NetR_Direct` | 164.00 | 99.96 | -64.04 |
+| `DailyUniversal_MinTrade60_NetR` | 25.60 | 22.23 | -3.37 |
+| `DailyUniversal_MinTrade60_NetR_Direct` | 145.47 | 117.77 | -27.70 |
+| `DailyUniversal_MinTrade_NetR` | 23.38 | 24.63 | +1.25 |
+| `DailyUniversal_MinTrade_NetR_Direct` | 122.76 | 114.26 | -8.50 |
+| `DailyUniversal_MinTrade_NetPnL` | 24.73 | 25.81 | +1.08 |
+| `DailyUniversal_MinTrade_NetPnL_Direct` | 123.14 | 131.66 | +8.52 |
+
+- **重要讀法**：Full-Cycle NetPnL Direct `131.66`，相對 Full-Cycle Net-R Direct `114.26`，四 Seed 分別增加 `18.33 / 7.26 / 25.44 / 18.57`，**4/4 Seed 同向**；在本次 17 組 Oracle treatment 中四 Seed 平均 RoMD 最高。但 NetPnL Direct 對價格型 `T40-MFE_Direct=123.34` 並非 4/4 都領先；Direct 的 NetPnL RoMD SD `74.11`，不應解讀為穩健可部署的模型或全期間資金最優。Exact 的四 Seed 平均為 `25.81` 對 `24.63`，但同 Seed 僅 **2/4** 較好；本次 Exact 全表最高為 `MinTrade40_NetR=27.51`。
+- **舊結果的解讀修正**：修補前 `MinTrade40_NetR_Direct=164.00`，修補後為 `99.96`；因 Target 起點從「每日假設新單」改為「實際 Min 買訊／延續狀態」，這些績效不可當作同算法的純參數或 Target 排名提升／退步。C96 `9.18` 與價格型 `T40-MFE_Direct=123.34` 維持原顯示值，是有限的非 MinTrade 同窗對照，**不能替代** signed source／score／Replay 身分核對。
+- **驗證狀態**：直接解析報表 18 列（C96＋17 treatments），17 組 treatment ×4 Seed 的 RoMD mean 與樣本 SD 全部在 `±0.015` 的兩位數顯示精度容許範圍內一致；上節 197/197 合成與單股引擎對照係修補交付時工程證據，不是本次的真實市場逐日 E13 驗收。此 ZIP 無完整 receipt/ledger/position/equity sidecars；不得宣稱使用者 Windows Formal Test Suite PASS、72/72 REUSE、或正式 DL／Oracle score 入口逐日獨立 parity PASS。
+- **現行處置**：`USER_REPORTED_POST_SIGNAL_STATE_FOUR_SEED_RESULTS_AVAILABLE / EIGHT_MINTRADE_TREATMENTS_REPORTED / OLD_DAILY_FRESH_RESULTS_HISTORICAL_INVALID_FOR_CURRENT / REUSE_72_NOT_INDEPENDENTLY_ATTESTED / E13_FULL_MARKET_DAILY_PARITY_PENDING / NON_PIT / ITERATIVE_OOS / NO_SCIENTIFIC_ID_CHANGE / NO_REPORT_VERSION_CHANGE / NO_PROMOTION`。本次只登錄結果與同步 Registry，**不**修改正式 Target、交易核心、選單、Report Contract、費稅、模型、Replay 工件或 `doc/CMD.md`。
