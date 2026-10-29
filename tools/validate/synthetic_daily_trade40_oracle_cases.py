@@ -1526,7 +1526,9 @@ class FullcyclePositiveNetPnLDiagnosticCases(TestCase):
         diagnostic = 'DailyUniversal_MinTrade_NetPnL_Positive_Direct'
         self.assertEqual(plan['aliases'][original], plan['aliases'][diagnostic])
         self.assertEqual(plan['selectors'][diagnostic], 'direct')
-        self.assertEqual(plan['positive_gates'], {diagnostic: POSITIVE_FULLCYCLE_NETPNL_GATE})
+        from services.audit.oracle_execution_policy import execution_gate_policies
+        self.assertEqual(execution_gate_policies(definition, plan),
+                         {diagnostic: POSITIVE_FULLCYCLE_NETPNL_GATE})
         settings, _, _ = oracle._contract(definition)
         contracts = oracle._resolve_oracle_target_score_contracts(definition, settings, plan)
         self.assertNotIn('hindsight_extra_gate', contracts[original])

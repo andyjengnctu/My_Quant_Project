@@ -93,6 +93,9 @@ from core.research_report_contract import (
     persistent_report_contract_fingerprint,
 )
 from services.audit.reusable_report import format_comparison_rows
+from services.audit.oracle_execution_policy import (
+    execution_gate_policies, OracleExecutionPolicyError,
+)
 
 SUPPORTED_AUDIT_TYPE = "target_ground_truth_strategy_romd"
 ORACLE_REPORT_SCHEMA_VERSION = 8
@@ -117,6 +120,11 @@ _PROVIDER_COHORT_IDS = {
 }
 
 
+# PRICE SOURCE IDENTITY BOUNDARY: this source-only resolver is fingerprinted
+# by _price_score_algorithm_sha256(). Never add target execution/admission or
+# reporting logic here. Execution-only policies belong to the separate
+# services.audit.oracle_execution_policy owner, which receives this plan.
+
 def _oracle_comparison_plan(definition) -> dict[str, Any]:
     """Canonical compare inventory -> score requirements -> provider graph."""
     # The registered daily-truth percentile is the pre-existing hypothetical
@@ -139,7 +147,6 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
     daily_recipes: dict[str, tuple[str, str, int | None]] = {}
     aliases: dict[str, str] = {}
     selectors: dict[str, str] = {}
-    positive_gates: dict[str, str] = {}
     provider_fields: list[str] = []
     for entry in selected:
         if not isinstance(entry, Mapping):
@@ -168,14 +175,6 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
             raise OracleBlockedError(
                 f"Oracle {name} 的score/selector身分已變更；須建立新Target科學ID，禁止沿用舊快取"
             )
-        if entry.get("positive_gate") is not None:
-            from core.oracle_positive_gate import POSITIVE_FULLCYCLE_NETPNL_GATE
-            if (entry.get("positive_gate") != POSITIVE_FULLCYCLE_NETPNL_GATE
-                    or name != "DailyUniversal_MinTrade_NetPnL_Positive_Direct"
-                    or selector != "direct"
-                    or entry.get("score_source") != "DailyUniversal_MinTrade_NetPnL"):
-                raise OracleBlockedError("NON-PIT positive gate requires approved full-cycle NetPnL Direct")
-            positive_gates[name] = POSITIVE_FULLCYCLE_NETPNL_GATE
         if entry.get("score_source"):
             source = str(entry["score_source"])
             if selector != "direct" or source in _ORACLE_RETIRED_TARGETS:
@@ -255,8 +254,15 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
     return {"targets": tuple(definitions), "recipes": recipes,
             "daily_recipes": daily_recipes, "daily_sources": daily_sources,
             "aliases": aliases,
-            "selectors": selectors, "positive_gates": positive_gates,
-            "providers": tuple(provider_fields)}
+            "selectors": selectors, "providers": tuple(provider_fields)}
+
+
+def _validated_execution_gates(definition, plan: Mapping[str, Any]) -> dict[str, str]:
+    """Resolve execution-only rules outside price-score source identity."""
+    try:
+        return execution_gate_policies(definition, plan)
+    except OracleExecutionPolicyError as exc:
+        raise OracleBlockedError(f"NON-PIT Oracle execution policy BLOCKED: {exc}") from exc
 
 
 # Display labels are intentionally separate from the immutable replay-cache keys.
@@ -431,9 +437,9 @@ def _resolve_oracle_target_score_contracts(definition, settings, plan) -> dict[s
             raise OracleBlockedError(f"{name}: Research selector不是正式PIT score消費路徑")
         if str(arm_source.point_in_time_score_start_date or "") != start:
             raise OracleBlockedError(f"{name}: Research DL score起始日不一致")
+        extra_gate = _validated_execution_gates(definition, plan).get(name)
         result[name] = {
-            **({"hindsight_extra_gate": plan["positive_gates"][name]}
-               if name in plan["positive_gates"] else {}),
+            **({"hindsight_extra_gate": extra_gate} if extra_gate is not None else {}),
             "reference_arm_id": str(arm.arm_id),
             "reference_score_source_id": str(arm.dl_id),
             "reference_profile_id": str(arm_source.experiment_profile),
@@ -1394,16 +1400,23 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
         policy["oracle_parity_implementation"] = ORACLE_PARITY_IMPLEMENTATION
     if plan["selectors"].get(target) == "direct":
         policy["direct_arm"] = str(definition.source["direct_arm_id"])
-    if target in plan.get("positive_gates", {}):
+    # The unscored C96 baseline is deliberately built with a minimal plan;
+    # neither it nor any non-selected recipient has an execution-only gate.
+    execution_gate = (_validated_execution_gates(definition, plan).get(target)
+                      if target in plan.get("selectors", {}) else None)
+    if execution_gate is not None:
         from core.file_integrity import compute_file_sha256
         code_root = Path(__file__).resolve().parents[2]
         policy["hindsight_extra_gate"] = {
-            "policy": plan["positive_gates"][target],
+            "policy": execution_gate,
             "raw_truth_source": "canonical_fullcycle_min_broker_ledger_net_pnl",
             "null_and_nonpositive": "reject_all_orders",
+            "execution_policy_code_sha256": compute_file_sha256(
+                code_root / "services/audit/oracle_execution_policy.py"),
             "gate_code_sha256": compute_file_sha256(code_root / "core/oracle_positive_gate.py"),
             "raw_witness_code_sha256": compute_file_sha256(code_root / "services/audit/fullcycle_positive_truth.py"),
             "selector_code_sha256": compute_file_sha256(code_root / "core/portfolio_entry_selection_max_dl.py"),
+            "admission_code_sha256": compute_file_sha256(code_root / "core/portfolio_candidate_admission.py"),
         }
     if target != str(definition.source["baseline_arm_id"]):
         if not score_sha256 or len(score_sha256) != 64 or not score_contract:
@@ -1978,6 +1991,7 @@ def _execute_single_stage_missing(
     feature_cohort_cache: dict[tuple[str, ...], tuple[pd.DataFrame, str]] = {}
     truth_cache: dict[tuple[int, str], tuple[dict[tuple[str, str], float], dict[str, Any]]] = {}
     positive_raw_cache: dict[int, dict[tuple[str, str], float]] = {}
+    execution_gates = _validated_execution_gates(definition, plan)
     data_dir = Path(get_dataset_dir(str(project_root), settings.dataset)).resolve()
     for seed, param_sha, kind, base_params, oracle_params in prepared:
         seed_run = [target for target in ("C96", *(name for name, _ in plan["targets"]))
@@ -2093,7 +2107,7 @@ def _execute_single_stage_missing(
                         f"Oracle {target} seed={seed} changed before win-rate evidence Replay"
                     )
             positive_raw = None
-            if target in plan.get("positive_gates", {}):
+            if target in execution_gates:
                 if source_name != "DailyUniversal_MinTrade_NetPnL":
                     raise OracleBlockedError("Positive gate must consume the full-cycle NetPnL source")
                 if seed not in positive_raw_cache:

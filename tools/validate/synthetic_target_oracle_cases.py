@@ -5081,5 +5081,87 @@ class OracleWinRateReportCases(TestCase):
 
 
 
+class OraclePriceSourceExecutionPolicyIsolationCases(TestCase):
+    """Execution-only arms must never invalidate certified price score sources."""
+
+    # This version's historical signed price-score implementation fingerprint.
+    # A genuine price-score formula change must knowingly update this evidence
+    # and invalidate affected artifacts; a new execution-only gate must not.
+    _CERTIFIED_PRICE_FORMULA_SHA = (
+        "d73b4ce20dd958cb75b094f49d6abac94d31e34ca7222fa5806675fd931964bd"
+    )
+
+    def test_execution_only_policy_does_not_enter_price_producer_identity(self):
+        from services.audit.oracle_execution_policy import execution_gate_policies
+        from core.oracle_positive_gate import POSITIVE_FULLCYCLE_NETPNL_GATE
+        definition = _ACTIVE_ORACLE_DEFINITION
+        before = replace(definition, source={**definition.source,
+            "oracle_comparisons": tuple(row for row in definition.source["oracle_comparisons"]
+                                        if row.get("positive_gate") is None)})
+        before_plan, after_plan = (oracle._oracle_comparison_plan(item)
+                                   for item in (before, definition))
+        self.assertEqual(before_plan["recipes"], after_plan["recipes"])
+        self.assertEqual(before_plan["providers"], after_plan["providers"])
+        self.assertEqual(execution_gate_policies(before, before_plan), {})
+        gates = execution_gate_policies(definition, after_plan)
+        self.assertEqual(len(gates), 1)
+        self.assertEqual(list(gates.values()), [POSITIVE_FULLCYCLE_NETPNL_GATE])
+        self.assertEqual(oracle._price_score_algorithm_sha256(),
+                         self._CERTIFIED_PRICE_FORMULA_SHA)
+        self.assertEqual(oracle._price_score_replay_lineage(before),
+                         oracle._price_score_replay_lineage(definition))
+
+        # The nine preexisting price recipients retain byte-identical score
+        # consumption and economic replay inputs, despite the new diagnostic.
+        settings, base, exact = oracle._contract(definition)
+        before_contracts = oracle._resolve_oracle_target_score_contracts(
+            before, settings, before_plan)
+        after_contracts = oracle._resolve_oracle_target_score_contracts(
+            definition, settings, after_plan)
+        for name in before_plan["selectors"]:
+            self.assertEqual(before_contracts[name], after_contracts[name])
+        price_target = next(name for name in before_plan["selectors"]
+                            if name not in before_plan["daily_sources"])
+        old_policy = oracle._arm_replay_policy(
+            before, plan=before_plan, target=price_target, replay_policy={},
+            score_sha256="a" * 64, score_contract=before_contracts[price_target])
+        new_policy = oracle._arm_replay_policy(
+            definition, plan=after_plan, target=price_target, replay_policy={},
+            score_sha256="a" * 64, score_contract=after_contracts[price_target])
+        self.assertEqual(old_policy, new_policy)
+        self.assertNotIn("hindsight_extra_gate", new_policy)
+
+    def test_execution_policy_must_be_registered_and_fullcycle_direct(self):
+        from services.audit.oracle_execution_policy import (
+            execution_gate_policies, OracleExecutionPolicyError,
+        )
+        definition = _ACTIVE_ORACLE_DEFINITION
+        rows = list(definition.source["oracle_comparisons"])
+        ordinary = next(i for i, row in enumerate(rows)
+                        if row.get("positive_gate") is None)
+        rows[ordinary] = {**rows[ordinary], "positive_gate": "unexpected_non_pit"}
+        modified = replace(definition, source={**definition.source,
+            "oracle_comparisons": tuple(rows)})
+        with self.assertRaisesRegex(OracleExecutionPolicyError, "execution policy changed"):
+            execution_gate_policies(modified, oracle._oracle_comparison_plan(modified))
+
+    def test_generic_admission_hook_is_scoped_and_not_an_oracle_dependency(self):
+        from core.portfolio_candidate_admission import (
+            admitted_resource_candidates, scoped_candidate_admission,
+        )
+        rows = [{"ticker": "2330"}, {"ticker": "2317"}]
+        self.assertEqual(admitted_resource_candidates(rows), rows)
+        with self.assertRaisesRegex(RuntimeError, "nested"):
+            with scoped_candidate_admission(lambda row: row["ticker"] == "2330"):
+                self.assertEqual(admitted_resource_candidates(rows), rows[:1])
+                with scoped_candidate_admission(lambda row: True):
+                    pass
+        self.assertEqual(admitted_resource_candidates(rows), rows)
+        with self.assertRaisesRegex(ValueError, "intentional failure"):
+            with scoped_candidate_admission(lambda row: True):
+                raise ValueError("intentional failure")
+        self.assertEqual(admitted_resource_candidates(rows), rows)
+
+
 if __name__ == "__main__":
     main(verbosity=2)

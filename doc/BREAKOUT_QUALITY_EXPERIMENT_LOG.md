@@ -13643,3 +13643,11 @@ Decision：`REPORT_V10_USER_AUTHORIZED / REPLAY_IDENTITY_UNCHANGED / MISSING_MET
 - **工程驗證**：已有 202 項 Oracle/MinTrade 合成測試在保留歷史 fixture 語意下 PASS，並新增門檻 isolation、正式 Direct 掛單前過濾、正值資格／成交證據篡改拒絕、正式 Min 單股參考損益一致及 Audit 五因素交集測試。正式 Windows suite、市場實際四 Seed Replay／Audit 統計、全歷史逐日 E13 仍待使用者本機驗收；未宣稱勝率 100% 或存在某種歷史差異比例。
 
 Decision：`NON_PIT_POSITIVE_GATE_DIAGNOSTIC_IMPLEMENTED / PREVIEW_ONLY_UNTIL_FOUR_SEED_RUN / AUDIT_READ_ONLY / ORIGINAL_SCORE_ONLY_TARGETS_UNCHANGED / RESULTS_PENDING`。
+
+## 2026-10-29 — Positive Direct 新增後價格型 36 組誤 RUN：來源與 execution-only admission 架構隔離
+
+- **使用者證據**：22:05 版進入 `[1] Target 驗證`，`C96`＋原 MinTrade 共 `44 REUSE`，原有九個價格型 Target ×四 Seed `36 RUN`，新增完整週期 `DailyUniversal_MinTrade_NetPnL_Positive_Direct` 四 Seed `4 RUN`，總計 `REUSE 44 / RUN 40 / BLOCKED 0`。使用者明確要求從架構消除此種反覆的非算法失效，而不是按 Enter 重算。
+- **確定根因**：只為解析 `positive_gate` 欄位改動 `_oracle_comparison_plan()`，其 Python source bytes 卻被 `_price_score_algorithm_sha256()` 納入價格真值來源；因此價格分數／公式未改，來源指紋卻由 `d73b4ce2...` 變為 `7985a616...`。這屬來源依賴界線錯誤，不是 36 組既有價值不合法。
+- **修復**：還原純 score-plan 函式原 bytes，新增獨立 `oracle_execution_policy.py` 解讀並認證 Registry 登錄的 extra gate；將原 `core/portfolio_entry_selection_max_dl.py` 對 Oracle 正值門檻的直接認識，改為 generic、預設 inactive 的 `core/portfolio_candidate_admission.py`；Diagnostic policy 仍由 scoped `core/oracle_positive_gate.py` 啟用，NULL／零／負值拒絕規則不變。
+- **驗證**：原有價格 Score 演算法 SHA=`d73b4ce20dd958cb75b094f49d6abac94d31e34ca7222fa5806675fd931964bd`，MinTrade truth SHA=`80a4fe352f4466ce7c3862149f0d23a97cac127eaf71dd98a521905305e5bb32`，均與變更前已驗證版本相同；來源 closure、九組價格型契約及舊執行政策可獨立交叉比對。測試涵蓋 execution-only additions 不影響 price SHA、已註冊政策不可換語意、gate 不外洩其他 Direct、NULL/零/負值仍必須拒絕；合成結果不冒充完整市場驗證。
+- **預期／限制**：不修改任何舊 Target 的數值、P16／費稅、Target Score、Win Rate v10 報表或歷史工件；原有 80 組應完整 REUSE，只有新增 Positive Direct 的四 Seed RUN（前提是原收據及必要 sidecar 均合法）。Windows 正式 Test Suite、實際市場四 Seed、E13 逐日獨立 parity 尚待使用者環境驗證。本輪只修 engineering source-scope bug，不建立新科學 ID／報表版本，也不改 `doc/CMD.md`。

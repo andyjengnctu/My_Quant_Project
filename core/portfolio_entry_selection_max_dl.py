@@ -7,7 +7,7 @@ from core.exact_accounting import (
 )
 from core.order_lot_policy import get_min_entry_notional_milli
 
-from core.oracle_positive_gate import filter_positive_oracle_candidates
+from core.portfolio_candidate_admission import admitted_resource_candidates
 
 from core.portfolio_entry_selection_common import (
     _candidate_continuous_score,
@@ -1739,9 +1739,10 @@ def _reorder_resource_aware_continuous_score_no_k_no_r0(
     """
 
     candidates = list(rows or [])
-    # Only the isolated NON-PIT Positive-NetPnL arm applies this additional
-    # eligibility gate. Ordinary Direct / Research / Trading are untouched.
-    eligible_candidates = filter_positive_oracle_candidates(candidates)
+    # A scoped admission capability is normally inactive. Optional diagnostic
+    # policies are injected only at the calling workflow's execution boundary;
+    # the canonical selector does not know experiment/Target identities.
+    eligible_candidates = admitted_resource_candidates(candidates)
     physical_free_slots = max(0, int(free_slots))
     base_rank = {id(row): idx for idx, row in enumerate(candidates)}
     score_order = _max_dl_score_order(eligible_candidates, base_rank=base_rank)

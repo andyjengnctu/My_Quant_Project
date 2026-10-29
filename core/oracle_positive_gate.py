@@ -10,6 +10,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Iterator, Mapping
 
+from core.portfolio_candidate_admission import scoped_candidate_admission
+
 POSITIVE_FULLCYCLE_NETPNL_GATE = 'fullcycle_reference_net_pnl_strictly_positive_v1'
 
 _ACTIVE: ContextVar[Mapping[tuple[str, str], float] | None] = ContextVar(
@@ -31,7 +33,8 @@ def positive_oracle_entry_gate(
         raise ValueError('Positive-NetPnL gate requires a certified raw-label map')
     token = _ACTIVE.set(raw_net_pnl)
     try:
-        yield
+        with scoped_candidate_admission(lambda row: positive_gate_candidate_status(row)[0]):
+            yield
     finally:
         _ACTIVE.reset(token)
 
