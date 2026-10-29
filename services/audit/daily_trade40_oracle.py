@@ -57,17 +57,15 @@ def target_identity_for_horizon(
 ) -> tuple[str, str]:
     if outcome_metric not in {"net_r", "net_pnl"}:
         raise DailyTrade40OracleBlockedError("Unknown formal Min Oracle economic outcome")
-    if outcome_metric == "net_pnl":
-        if horizon_sessions is not None:
-            raise DailyTrade40OracleBlockedError("NetPnL Oracle is approved only for full-cycle Min")
-        target = "daily_universal_formal_min_roos_fulltrade_netpnl_v1"
-        return target, f"LABEL-{target}"
-    if horizon_sessions is None:
-        target = "daily_universal_formal_min_roos_fulltrade_netr_v1"
-        return target, f"LABEL-{target}"
-    if not isinstance(horizon_sessions, int) or isinstance(horizon_sessions, bool) or horizon_sessions <= 0:
+    if horizon_sessions is not None and (
+        not isinstance(horizon_sessions, int) or isinstance(horizon_sessions, bool) or horizon_sessions <= 0
+    ):
         raise DailyTrade40OracleBlockedError("Invalid formal Min Oracle session horizon")
-    target = f"daily_universal_formal_min_roos_trade{horizon_sessions}_netr_v1"
+    # Holding horizon and broker-ledger outcome are independent capabilities.
+    # The Audit Registry alone authorizes which combinations are compared.
+    horizon_id = "fulltrade" if horizon_sessions is None else f"trade{horizon_sessions}"
+    outcome_id = "netpnl" if outcome_metric == "net_pnl" else "netr"
+    target = f"daily_universal_formal_min_roos_{horizon_id}_{outcome_id}_v1"
     return target, f"LABEL-{target}"
 
 

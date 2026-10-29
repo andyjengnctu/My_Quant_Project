@@ -13618,3 +13618,11 @@ Decision: `ENGINEERING_CHECKPOINT_FIRST_REUSE / HISTORICAL_AK_EVIDENCE_PRESERVED
 - **驗收狀態**：本輪 GPT 僅完成隔離合成測試與程式／版型契約檢查；Windows Formal Suite、完整市場 72 組 Replay 勝率補證、E13 歷史逐日等價未在本輪執行，不能視為 PASS。
 
 Decision：`REPORT_V10_USER_AUTHORIZED / REPLAY_IDENTITY_UNCHANGED / MISSING_METRIC_RUN_ONLY / IMMUTABLE_LEGACY_RECEIPTS / E13_PARITY_PENDING`.
+
+### 2026-10-29 — 60-session MinTrade NetPnL Oracle Exact／Direct（新增比較對象）
+
+- **授權與研究問題**：使用者新增 `DailyUniversal_MinTrade60_NetPnL`、`DailyUniversal_MinTrade60_NetPnL_Direct`，用同一套正式 Min 單股已實現淨損益金額（NetPnL，NT$）真值檢驗 60 交易所日、自然出場、Research 截止日三者較早結算時的選股績效。這是新 Target 科學身分，而非將既有 60D Net-R 換名或回填，不能由完整週期 NetPnL 收據冒用。
+- **唯一交易與 Score SSOT**：既有 `daily_trade40_target.py` 同次 canonical 訊號／延續狀態、P16 滾動參數、股數與停損／出場／broker-ledger 結果本來就包含 `realized_net_pnl`；Oracle 沿用 `daily_trade_path_net_pnl` 及 60D horizon，不修改交易算法、Broker-Cash／現金競爭、NULL 排序或每日百分位映射。Reference sizing 仍是固定單股參考本金，不是 Portfolio 動態 Equity；不加入 `NetPnL > 0` 未來資訊過濾。Exact K/R0 和 Direct No-K/No-R0 共用相同分數表，只使用原來各自的 Selector。
+- **身份、報表與範圍**：新的 Target/Label 為 `daily_universal_formal_min_roos_trade60_netpnl_v1`／`LABEL-daily_universal_formal_min_roos_trade60_netpnl_v1`，與 `trade60_netr_v1`、`fulltrade_netpnl_v1` 獨立。正式 `[1] Target 驗證` 增加兩列，現在是 C96＋19 Oracle treatments，四 Seed 共 80 組；`audit.target_oracle_romd@v10` 的欄位、Win Rate、沒有 Delta RoMD 與 RoMD Mean 升冪排序契約不變。
+- **來源身分影響**：這版真值 Producer 以整個 `services/audit/daily_trade40_oracle.py` 檔案 SHA 參與 Source fingerprint。新增 60D NetPnL 的身分解析分支雖不改既有 40D／60D／Full-Cycle 的交易算法，仍會改變原 8 組 MinTrade 的來源字節指紋；不得以硬套舊 SHA 宣稱 REUSE。若現行 72 組都完成 Win Rate 補證，正式計畫理論上可能為 40 REUSE／40 RUN（原 32 組 MinTrade 加新 8 組），**以使用者環境實際計畫為準**。新 60D NetPnL 不能用 60D Net-R 百分位或 Full-Cycle NetPnL 百分位近似。
+- **本輪驗證與未完成**：通用 60D NetPnL 真值、來源、教師參數、日期、NULL、有效交易比例及 Exact／Direct 一份分數的隔離合成驗證已加入；工程測試不是完整四 Seed 市場 Replay。當前資料不包含歷史市場原始交易明細／收據，不提供或推測新 RoMD；Windows 正式 Test Suite、實際市場 RUN／REUSE 和 E13 完整逐日等價驗收均待使用者環境確認。舊結果和既有 Win Rate 報表證據不得改寫。

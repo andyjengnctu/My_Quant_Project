@@ -43,7 +43,9 @@ def definition(*, full_cycle: bool = False):
         if entry["target"] not in {"DailyUniversal_MinTrade_NetR",
                                    "DailyUniversal_MinTrade_NetR_Direct",
                                    "DailyUniversal_MinTrade_NetPnL",
-                                   "DailyUniversal_MinTrade_NetPnL_Direct"})})
+                                   "DailyUniversal_MinTrade_NetPnL_Direct",
+                                   "DailyUniversal_MinTrade60_NetPnL",
+                                   "DailyUniversal_MinTrade60_NetPnL_Direct"})})
 
 
 def source_fixture():
@@ -133,7 +135,8 @@ def synthetic_price_scores(definition, *, project_root, cutoff, **_kwargs):
 
 
 def execute_synthetic_score_fixture(definition, *, price_scores, daily_scores, keys,
-                                    evidence_overrides=None, replayed=None):
+                                    evidence_overrides=None, replayed=None,
+                                    source_observations=None):
     """Exercise the current executor gates with paired C96 and no market data.
 
     The input-key proof is independent of injected outcome values. A real
@@ -159,6 +162,8 @@ def execute_synthetic_score_fixture(definition, *, price_scores, daily_scores, k
                 "params_signature": p.params_signature} for p in schedule]
     observed = replayed if replayed is not None else []
     def source(*, seed, param_sha256, horizon_sessions, outcome_metric="net_r", **_kwargs):
+        if source_observations is not None:
+            source_observations.append((seed, horizon_sessions, outcome_metric))
         selected_recipe = "daily_trade_path_net_pnl" if outcome_metric == "net_pnl" else "daily_trade_path_net_r"
         name = next(name for name, row in plan["daily_recipes"].items()
                     if row[2] == horizon_sessions and row[0] == selected_recipe)
@@ -439,17 +444,18 @@ class FormalMinDailyOracleCases(TestCase):
     def test_all_declared_min_horizons_share_feature_universe_and_cutoff_policy(self):
         from services.audit.daily_trade40_oracle import target_identity_for_horizon
         full = definition(full_cycle=True)
-        self.assertEqual(len(full.source["oracle_comparisons"]), 17)
+        self.assertEqual(len(full.source["oracle_comparisons"]), 19)
         plan = oracle._oracle_comparison_plan(full)
         self.assertEqual({name: horizon for name, (_, _, horizon) in plan["daily_recipes"].items()}, {
             "DailyUniversal_MinTrade40_NetR": 40,
             "DailyUniversal_MinTrade60_NetR": 60,
+            "DailyUniversal_MinTrade60_NetPnL": 60,
             "DailyUniversal_MinTrade_NetR": None,
             "DailyUniversal_MinTrade_NetPnL": None,
         })
         self.assertEqual(plan["daily_sources"]["DailyUniversal_MinTrade_NetR_Direct"],
                          "DailyUniversal_MinTrade_NetR")
-        self.assertEqual(len(plan["targets"]), 17)
+        self.assertEqual(len(plan["targets"]), 19)
         settings, _base, _exact = oracle._contract(full)
         contracts = _ORIGINAL_SCORE_CONTRACT_RESOLVER(full, settings, plan)
         self.assertEqual(contracts["DailyUniversal_MinTrade_NetR"]["target_id"],
@@ -552,8 +558,12 @@ class FormalMinDailyOracleCases(TestCase):
         self.assertEqual(target_identity_for_horizon(None, outcome_metric="net_pnl"),
                          ("daily_universal_formal_min_roos_fulltrade_netpnl_v1",
                           "LABEL-daily_universal_formal_min_roos_fulltrade_netpnl_v1"))
-        with self.assertRaisesRegex(ValueError, "only for full-cycle"):
-            target_identity_for_horizon(40, outcome_metric="net_pnl")
+        self.assertEqual(target_identity_for_horizon(60, outcome_metric="net_pnl"),
+                         ("daily_universal_formal_min_roos_trade60_netpnl_v1",
+                          "LABEL-daily_universal_formal_min_roos_trade60_netpnl_v1"))
+        for horizon in (0, -1, True):
+            with self.subTest(horizon=horizon), self.assertRaisesRegex(ValueError, "Invalid.*horizon"):
+                target_identity_for_horizon(horizon, outcome_metric="net_pnl")
         settings, _base, _exact = oracle._contract(active)
         contracts = _ORIGINAL_SCORE_CONTRACT_RESOLVER(active, settings, plan)
         self.assertEqual(contracts[name]["target_id"], contracts[direct]["target_id"])
@@ -573,6 +583,73 @@ class FormalMinDailyOracleCases(TestCase):
         self.assertNotEqual(er["label_id"], ep["label_id"])
         self.assertNotEqual(er["raw_label_sha256"], ep["raw_label_sha256"])
         self.assertTrue(all(0 <= score <= 1 for score in net_pnl.values()))
+
+    def test_60_session_netpnl_exact_direct_share_ssot_trade_and_score(self):
+        """The new treatment reuses the existing 60D executable Min path."""
+        from services.audit.daily_trade40_oracle import target_identity_for_horizon
+        full = definition(full_cycle=True)
+        pnl = "DailyUniversal_MinTrade60_NetPnL"
+        direct = pnl + "_Direct"
+        restricted = replace(full, source={**full.source, "oracle_comparisons": tuple(
+            row for row in full.source["oracle_comparisons"]
+            if row["target"] in {pnl, direct})})
+        plan = oracle._oracle_comparison_plan(restricted)
+        self.assertEqual(plan["daily_recipes"], {
+            pnl: ("daily_trade_path_net_pnl", "daily_trade40_profile", 60),
+        })
+        self.assertEqual(plan["daily_sources"], {pnl: pnl, direct: pnl})
+        self.assertEqual(plan["selectors"], {pnl: "exact", direct: "direct"})
+        settings, _base, _exact = oracle._contract(restricted)
+        contracts = _ORIGINAL_SCORE_CONTRACT_RESOLVER(restricted, settings, plan)
+        expected = target_identity_for_horizon(60, outcome_metric="net_pnl")
+        self.assertEqual({contracts[name]["target_id"] for name in (pnl, direct)},
+                         {expected[0]})
+        self.assertNotEqual(expected[0], target_identity_for_horizon(60)[0])
+        self.assertNotEqual(expected[0], target_identity_for_horizon(
+            None, outcome_metric="net_pnl")[0])
+
+        # Price, signal state, realized fill and closeout are consumed from
+        # the SAME producer; only economic outcome field changes.
+        net_r, r_info = run_source(horizon_sessions=60, cutoff="2021-03-15")
+        net_pnl, pnl_info = run_source(
+            horizon_sessions=60, outcome_metric="net_pnl", cutoff="2021-03-15")
+        self.assertEqual(set(net_r), set(net_pnl))
+        for field in ("teacher", "calendar_sha256", "cutoff_truncated_rows",
+                      "research_cutoff_closeout_rows", "censored_rank_last_rows",
+                      "first_replay_trade_date", "mature_eligible_rows"):
+            self.assertEqual(r_info[field], pnl_info[field], field)
+        self.assertEqual(r_info["settled_net_r_rows"], pnl_info["settled_net_pnl_rows"])
+        self.assertEqual(pnl_info["horizon_sessions"], 60)
+        self.assertEqual((pnl_info["target_id"], pnl_info["label_id"]), expected)
+        self.assertEqual(pnl_info["sizing_basis"],
+                         "canonical_single_backtest_initial_capital_not_portfolio_dynamic_equity")
+        self.assertEqual(pnl_info["economic_outcome"], "broker_ledger_realized_net_pnl_twd")
+        self.assertNotEqual(r_info["raw_label_sha256"], pnl_info["raw_label_sha256"])
+
+        keys = {("2330", "2025-01-03"), ("2317", "2025-01-03")}
+        scores = {693545351: {pnl: {
+            ("2330", "2025-01-03"): .75, ("2317", "2025-01-03"): .25,
+        }}}
+        observed = []
+        source_observations = []
+        completed = execute_synthetic_score_fixture(
+            restricted, price_scores={}, daily_scores=scores, keys=keys,
+            replayed=observed, source_observations=source_observations,
+        )
+        self.assertEqual(len(completed), 2)
+        self.assertEqual(len(observed), 2)
+        self.assertEqual(source_observations, [(693545351, 60, "net_pnl")])
+        self.assertTrue(any(pnl in name and "_Direct" not in name for name in observed))
+        self.assertTrue(any(direct in name for name in observed))
+
+        # Direct-only must resolve the approved Exact score definition without
+        # running a hidden Exact Portfolio Replay.
+        direct_only = replace(restricted, source={**restricted.source,
+            "oracle_comparisons": tuple(row for row in restricted.source["oracle_comparisons"]
+                                        if row["target"] == direct)})
+        only_plan = oracle._oracle_comparison_plan(direct_only)
+        self.assertEqual(list(only_plan["daily_recipes"]), [pnl])
+        self.assertEqual(list(only_plan["selectors"]), [direct])
 
     def test_new_positive_integer_horizon_needs_only_registry_declaration(self):
         full = definition(full_cycle=True)
@@ -1233,6 +1310,8 @@ class FormalMinReplayIntegrationCases(TestCase):
                     if row["target"] not in {
                         "DailyUniversal_MinTrade_NetPnL",
                         "DailyUniversal_MinTrade_NetPnL_Direct",
+                        "DailyUniversal_MinTrade60_NetPnL",
+                        "DailyUniversal_MinTrade60_NetPnL_Direct",
                     })})
             full_cycle = replace(full_cycle, dimensions={
                 **full_cycle.dimensions, "oracle_evaluation_end_date": second[1],
