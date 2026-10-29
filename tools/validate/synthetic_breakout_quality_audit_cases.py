@@ -150,17 +150,31 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and research_method_ids == [oracle_method_id]
         and oracle_method_id not in audit_method_ids,
     )
-    # A validated, final identity plan must appear BEFORE the only approval.
-    # This synthetic owns the Research UI contract (not an existence inventory).
+    # Research [1] shows the Target x 8-Seed matrix BEFORE the one approval,
+    # even if 4 canonical P16 inputs must be built upon that authorization.
+    from services.audit import target_oracle_romd as oracle_handler
+    from services.research import target_oracle_application as oracle_application
+    from core.training_policy import get_robustness_benchmark_policy_snapshot
+    registered_oracle = oracle_application.get_formal_oracle_definition("breakout_quality")
+    benchmark_seeds = tuple(get_robustness_benchmark_policy_snapshot()["resolved_seeds"])
     route_console = io.StringIO()
     prompts = []
     preview = (
         "[Target 驗證 Fixed | Portfolio Replay 正式計畫]\n"
-        "Target                S1     S2\n"
-        "C96                   REUSE  REUSE\n"
-        "DailyUniversal40      RUN    REUSE\n"
-        "REUSE 3 / RUN（需回放）1 / BLOCKED 0"
+        "Seed：" + "  ".join(f"S{i+1}={seed}" for i, seed in enumerate(benchmark_seeds)) + "\n"
+        "Target                         S1     S2     S3     S4     S5   S6   S7   S8\n"
+        "C96                            REUSE  REUSE  REUSE  REUSE  RUN  RUN  RUN  RUN\n"
+        "DailyUniversal_MinTrade40     REUSE  REUSE  REUSE  REUSE  RUN  RUN  RUN  RUN\n"
+        "Portfolio REUSE 8 / RUN（需回放）8 / BLOCKED 0"
     )
+    preview_plan = {
+        "status": "PREVIEW", "text": preview,
+        "seed_set": benchmark_seeds, "missing_p16": benchmark_seeds[4:],
+        "producer_kwargs": {"benchmark_id": "end_to_end_v2"},
+        "preflight": {(seed, target): ("REUSE" if seed in benchmark_seeds[:4] else "RUN")
+                      for seed in benchmark_seeds
+                      for target in ("C96", "DailyUniversal_MinTrade40")},
+    }
     executions = []
     answers = iter(["", "", "0"])
 
@@ -169,18 +183,17 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         return next(answers)
 
     def fake_target_runner(*args, **kwargs):
-        # Audit runner owns certification AND scientific execution. The app
-        # cannot print a preliminary existence-based REUSE table or redecide.
-        print(preview)
-        approval = kwargs["preflight_approval"](preview)
-        if not approval:
-            return {"target_oracle_romd": {"status": "CANCELLED"}}
+        assert kwargs["preflight_display"] == "summary"
+        assert kwargs["approved_replay_decisions"] == preview_plan["preflight"]
+        assert kwargs["preflight_approval"](preview)
         executions.append("replayed missing arms")
         print("[RUN] Target seed=11 | no completed local result")
         return {"target_oracle_romd": {"status": "COMPLETED"}}
 
     with patch("builtins.input", side_effect=input_after_plan), \
          patch.object(research_app, "render_audit_status") as expensive_status, \
+         patch.object(oracle_handler, "preview_oracle_replay_plan", return_value=preview_plan) as preview_owner, \
+         patch.object(oracle_application, "ensure_authorized_oracle_parameters") as ensure, \
          patch.object(research_app, "run_enabled_audits", side_effect=fake_target_runner) as oracle_runner, \
          patch.object(research_app, "render_latest_audit_summary", return_value="LATEST"), \
          redirect_stdout(route_console):
@@ -188,10 +201,11 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     root_text = route_console.getvalue()
     check_true(
         "target_validation_runs_once_from_research_default_enter",
-        route_rc == 0 and oracle_runner.call_count == 1
+        route_rc == 0 and preview_owner.call_count == 1
+        and ensure.call_count == 1 and oracle_runner.call_count == 1
         and oracle_runner.call_args.kwargs.get("method_id") == oracle_method_id
         and callable(oracle_runner.call_args.kwargs.get("preflight_approval"))
-        and "preflight_display" not in oracle_runner.call_args.kwargs
+        and oracle_runner.call_args.kwargs.get("preflight_display") == "summary"
         and "before_replay" not in oracle_runner.call_args.kwargs
         and not expensive_status.called
         and "[1]" in root_text and "Target 驗證" in root_text
@@ -205,91 +219,68 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and "執行正式 REUSE／RUN 計畫" in prompts[1][0]
         and all("輸入 RUN" not in prompt for prompt, _ in prompts)
         and root_text.count(preview) == 1
+        and "P16 前置工件計畫" not in root_text
         and root_text.index(preview) < root_text.index("[RUN] Target")
         and executions == ["replayed missing arms"]
         and "LATEST" in root_text,
     )
 
-    # Cancel must still build the read-only plan, but never produce/commit any
-    # scientific result, even if a cached target score source is missing.
+    # Cancel leaves both Optimizer and Replay untouched. The visible matrix is
+    # a scientific read-only plan, not a P16 file-existence inventory.
     cancellation = io.StringIO()
-    executions.clear()
     with patch("builtins.input", return_value="0") as cancel_input, \
+         patch.object(oracle_handler, "preview_oracle_replay_plan", return_value=preview_plan), \
+         patch.object(oracle_application, "ensure_authorized_oracle_parameters") as producer, \
          patch.object(research_app, "render_audit_status") as status, \
-         patch.object(research_app, "run_enabled_audits", side_effect=fake_target_runner) as cancelled_runner, \
+         patch.object(research_app, "run_enabled_audits") as cancelled_runner, \
          patch.object(research_app, "render_latest_audit_summary") as latest, \
          redirect_stdout(cancellation):
         research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
     check_true(
         "target_single_enter_cancel_is_before_any_expensive_work",
-        cancel_input.call_count == 1
-        and cancelled_runner.call_count == 1 and not executions
-        and not latest.called and not status.called
+        cancel_input.call_count == 1 and producer.call_count == 0
+        and cancelled_runner.call_count == 0 and not latest.called and not status.called
         and cancellation.getvalue().count(preview) == 1
         and "未授權執行" in cancellation.getvalue(),
     )
 
-    # The exact official status, not a preliminary file-existence guess, owns
-    # both the displayed matrix and execution after the same approval.
-    changed_plan_console = io.StringIO()
+    # The formal audit has to reconstruct full Replay identities after P16
+    # BUILD. If that check requires new work outside the approved matrix,
+    # block rather than implicitly expanding authorized RUN.
+    final_matrix = preview.replace("REUSE 8 / RUN（需回放）8", "REUSE 7 / RUN（需回放）9")
     verified_calls = []
-    final_matrix = preview.replace("REUSE 3 / RUN（需回放）1", "REUSE 2 / RUN（需回放）2")
-    def exact_plan(*args, **kwargs):
+    def changed_plan(*args, **kwargs):
         verified_calls.append(kwargs)
-        print(final_matrix)
-        assert kwargs["preflight_approval"](final_matrix)
-        return {"target_oracle_romd": {"status": "COMPLETED"}}
+        assert kwargs["approved_replay_decisions"] == preview_plan["preflight"]
+        raise RuntimeError("Target 授權後執行身份改變，Replay已停止")
+    changed_plan_console = io.StringIO()
     with patch("builtins.input", return_value="") as single_input, \
-         patch.object(research_app, "run_enabled_audits", side_effect=exact_plan), \
-         patch.object(research_app, "render_latest_audit_summary", return_value="LATEST"), \
+         patch.object(oracle_handler, "preview_oracle_replay_plan", return_value=preview_plan), \
+         patch.object(oracle_application, "ensure_authorized_oracle_parameters") as producer, \
+         patch.object(research_app, "run_enabled_audits", side_effect=changed_plan), \
+         patch.object(research_app, "render_latest_audit_summary") as latest, \
          redirect_stdout(changed_plan_console):
-        result = research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
+        changed_plan_refused = raises_expected(
+            RuntimeError,
+            lambda: research_app._run_reusable_audit_method("breakout_quality", oracle_method_id),
+        )
     check_true(
         "target_exact_verified_plan_runs_without_more_confirmation",
-        result == 0 and single_input.call_count == 1
-        and len(verified_calls) == 1 and "before_replay" not in verified_calls[0]
-        and "RUN（需回放）2" in changed_plan_console.getvalue()
-        and changed_plan_console.getvalue().count(final_matrix) == 1
-        and "LATEST" in changed_plan_console.getvalue(),
+        changed_plan_refused and single_input.call_count == 1
+        and producer.call_count == 1 and len(verified_calls) == 1
+        and changed_plan_console.getvalue().count(preview) == 1
+        and not latest.called,
     )
 
-    # Regression for the real one-stage contract: no intermediate truth BUILD,
-    # PENDING or second confirmation. A complete REUSE/RUN matrix MUST be
-    # printed before the *first* approval, even with no persisted truth sidecar.
-    from services.audit import target_oracle_romd as oracle_handler
+    # No Target/Portfolio execution is permitted on the preauthorization side.
     missing_truth_view = io.StringIO()
     truth_prompts = []
-    certified_matrix = (
-        "[Target 驗證 Fixed | Portfolio Replay 正式計畫]\n"
-        "Target                        S1     S2     S3     S4\n"
-        "C96                           REUSE  REUSE  REUSE  REUSE\n"
-        "DailyUniversal_MinTrade40    REUSE  REUSE  REUSE  REUSE\n"
-        "DailyUniversal_MinTrade      RUN    RUN    RUN    RUN\n"
-        "REUSE 8 / RUN（需回放）4 / BLOCKED 0"
-    )
-
-    def approved_matrix_plan(_definition, **kwargs):
-        print(certified_matrix)
-        if not kwargs["preflight_approval"](certified_matrix):
-            return {"status": "CANCELLED", "read_only": True}
-        raise AssertionError("cancelled one-stage plan executed a Producer")
-
     def abort_after_matrix(prompt):
-        truth_prompts.append((prompt, certified_matrix in missing_truth_view.getvalue()))
+        truth_prompts.append((prompt, preview in missing_truth_view.getvalue()))
         return "0"
-
-    def simulate_real_research_runner(_module_id, *, project_root, method_id,
-                                      preflight_approval):
-        return {"target_oracle_romd": oracle_handler.build_report(
-            object(), project_root=project_root, quiet=False,
-            preflight_approval=preflight_approval,
-        )}
-
-    with patch.object(research_app, "collect_audit_menu_state", return_value={"configured": True}), \
-         patch.object(research_app, "run_enabled_audits", side_effect=simulate_real_research_runner), \
-         patch.object(research_app, "render_latest_audit_summary") as premature_report, \
-         patch.object(oracle_handler, "_run_single_stage_oracle", side_effect=approved_matrix_plan) as planner, \
-         patch.object(oracle_handler, "_execute_single_stage_missing") as expensive_producer, \
+    with patch.object(oracle_handler, "preview_oracle_replay_plan", return_value=preview_plan) as planner, \
+         patch.object(oracle_application, "ensure_authorized_oracle_parameters") as producer, \
+         patch.object(oracle_handler, "_execute_single_stage_missing") as expensive, \
          patch("builtins.input", side_effect=abort_after_matrix), \
          redirect_stdout(missing_truth_view):
         research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
@@ -297,30 +288,24 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         "target_missing_truth_shows_certified_reuse_run_matrix_before_first_and_only_approval",
         len(truth_prompts) == 1 and truth_prompts[0][1]
         and "執行正式 REUSE／RUN 計畫" in truth_prompts[0][0]
-        and "PENDING" not in missing_truth_view.getvalue()
-        and "BUILD" not in missing_truth_view.getvalue()
-        and missing_truth_view.getvalue().count(certified_matrix) == 1
-        and missing_truth_view.getvalue().index(certified_matrix)
-            < missing_truth_view.getvalue().index("未授權執行")
-        and planner.call_count == 1
-        and planner.call_args.kwargs["allow_historical_execution_input_drift"] is True
-        and not expensive_producer.called and not premature_report.called,
+        and "P16 前置工件計畫" not in missing_truth_view.getvalue()
+        and missing_truth_view.getvalue().count(preview) == 1
+        and planner.call_count == 1 and producer.call_count == 0 and expensive.call_count == 0,
     )
 
-    # Accept one matrix and assert exactly one approval, then RUN only the
-    # specifically authorized missing arm; the app may not second-guess the
-    # scientific Owner or request another staged approval.
     one_stage = io.StringIO()
     approvals = []
     def one_stage_input(prompt):
-        approvals.append((prompt, certified_matrix in one_stage.getvalue()))
+        approvals.append((prompt, preview in one_stage.getvalue()))
         return ""
     def one_stage_runner(*args, **kwargs):
-        print(certified_matrix)
-        assert kwargs["preflight_approval"](certified_matrix)
+        assert kwargs["approved_replay_decisions"] == preview_plan["preflight"]
+        assert kwargs["preflight_approval"](preview)
         print("[RUN] only missing Portfolio")
         return {"target_oracle_romd": {"status": "COMPLETED"}}
     with patch("builtins.input", side_effect=one_stage_input), \
+         patch.object(oracle_handler, "preview_oracle_replay_plan", return_value=preview_plan), \
+         patch.object(oracle_application, "ensure_authorized_oracle_parameters") as producer, \
          patch.object(research_app, "run_enabled_audits", side_effect=one_stage_runner), \
          patch.object(research_app, "render_latest_audit_summary", return_value="LATEST"), \
          redirect_stdout(one_stage):
@@ -329,56 +314,38 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         "target_truth_and_portfolio_are_owned_by_one_certified_approval_only",
         len(approvals) == 1 and approvals[0][1]
         and "執行正式 REUSE／RUN 計畫" in approvals[0][0]
-        and "PENDING" not in one_stage.getvalue()
-        and one_stage.getvalue().count(certified_matrix) == 1
-        and one_stage.getvalue().index(certified_matrix)
+        and one_stage.getvalue().count(preview) == 1
+        and producer.call_count == 1
+        and one_stage.getvalue().index(preview)
             < one_stage.getvalue().index("[RUN] only missing Portfolio"),
     )
 
-    # Entry-point integration belongs to the existing app/menu contract, not
-    # the domain Target synthetic. Exercise the *real* Audit runner on Enter.
-    # The domain-level tests separately verify canonical per-seed Min parameters.
+    # A read-only direct Audit invocation still blocks when its P16 is absent;
+    # only authorized Research [1] may delegate dependency building.
     with TemporaryDirectory(prefix="synthetic_target_entry_no_fit_") as test_root:
         isolated_root = Path(test_root)
         missing_teacher_status = {
-            "module_id": "breakout_quality",
-            "method_id": oracle_method_id,
-            "audit_id": None,
             "overall_status": "BLOCKED",
             "rows": [{
-                "enabled": True,
-                "audit_id": "target_oracle_romd",
-                "status": "BLOCKED",
-                "reason": "formal Min seed parameter source missing",
-                "source": {
-                    "path": "models/missing_seed.json",
-                    "preparable": False,
-                    "builder_type": "optimizer_fixed_multiseed_strategy_params",
-                },
+                "enabled": True, "audit_id": "target_oracle_romd",
+                "status": "BLOCKED", "reason": "formal Min seed parameter source missing",
             }],
         }
         blocked_text = ""
-        entry_console = io.StringIO()
-        from services.audit import target_oracle_romd as oracle_handler
-        with patch.object(research_app, "PROJECT_ROOT", isolated_root), \
-             patch("builtins.input", return_value=""), \
-             patch.object(audit_runner, "collect_audit_status", return_value=missing_teacher_status), \
-             patch("services.research.strategy_compare_preparation.prepare_strategy_parameter_artifacts", side_effect=AssertionError("Optimizer invoked from Target validation")) as optimizer, \
-             patch.object(oracle_handler, "run_formal_audit", side_effect=AssertionError("Replay invoked with missing Teacher")) as replay, \
-             patch.object(research_app, "render_latest_audit_summary") as latest, \
-             redirect_stdout(entry_console):
+        with patch.object(audit_runner, "collect_audit_status", return_value=missing_teacher_status), \
+             patch("services.research.strategy_compare_preparation.prepare_strategy_parameter_artifacts", side_effect=AssertionError("Unexpected Optimizer")) as optimizer, \
+             patch.object(oracle_handler, "run_formal_audit", side_effect=AssertionError("Unexpected Replay")) as replay:
             try:
-                research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
+                audit_runner.run_enabled_audits(
+                    "breakout_quality", project_root=isolated_root,
+                    method_id=oracle_method_id,
+                )
             except RuntimeError as error:
                 blocked_text = str(error)
         check_true(
             "research_target_enter_missing_param_source_is_blocked_without_optimizer_or_replay",
-            "BLOCKED" in blocked_text
-            and "formal Min seed" in blocked_text
-            and "Target 驗證" in entry_console.getvalue()
-            and optimizer.call_count == 0
-            and replay.call_count == 0
-            and latest.call_count == 0
+            "BLOCKED" in blocked_text and "formal Min seed" in blocked_text
+            and optimizer.call_count == 0 and replay.call_count == 0
             and not (isolated_root / "models" / "missing_seed.json").exists(),
         )
 

@@ -122,7 +122,7 @@ project/
 │  ├─ scanner/                        # 正式掃描 runtime service owner
 │  ├─ workbench_ui/                   # GUI application service/UI owner；含回測檢視、交易中心、帳務中心與資料中心頁
 │  ├─ trade_analysis/                 # 單股 trade-analysis backend/service owner
-│  ├─ research/                       # Research application boundaries／artifact orchestration／Strategy Compare orchestration
+│  ├─ research/                       # Research application boundaries／artifact orchestration；target_oracle_application.py 僅在取得授權後委派既有 Optimizer P16，Oracle Audit 仍只讀
 │  ├─ trading/                        # Trading orchestration；market_data_update canonical update、data_readiness dependency gate、market_data_dataset_state state owner、strategy-param/account/order/fill/protection/daily workflow
 │  └─ optimizer/                      # 正式optimizer primitives；目前含raw cache／trial inputs／walk-forward
 ├─ models/

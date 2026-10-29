@@ -458,8 +458,13 @@ def _resolve_oracle_target_score_contracts(definition, settings, plan) -> dict[s
     return result
 
 
-def _robustness_artifacts(definition, root: Path):
-    settings, baseline, exact = _contract(definition)
+def _oracle_parameter_reuse_plan(definition, root: Path) -> dict[str, Any]:
+    """Read-only, one-contract P16 inspection for Oracle and its Research caller.
+
+    Each seed is independently resolved by the canonical Optimizer owner.
+    A missing P16 is not an Oracle Replay RUN; the Audit itself stays read-only.
+    """
+    settings, baseline, _exact = _contract(definition)
     robustness = get_strategy_multi_seed_robustness_settings(settings.profile_id)
     source = settings.parameter_sources[str(baseline.param_source)]
     builder = source.builder
@@ -475,27 +480,73 @@ def _robustness_artifacts(definition, root: Path):
     training_profile = str(dict(builder.options).get("training_profile_id") or "")
     if not training_profile:
         raise OracleBlockedError("P16缺少canonical training profile")
-    records = []
+    producer_kwargs = {
+        "training_profile_id": training_profile,
+        "benchmark_id": str(robustness.benchmark_id),
+        "policy": str(baseline.param_policy),
+        "comparison_end_date": str(settings.end_date),
+        "dataset": settings.dataset,
+        "max_positions": settings.max_positions,
+        "rotation": settings.rotation,
+        "fixed_risk": float(DEFAULT_FIXED_RISK),
+        "max_position_cap_pct": float(DEFAULT_MAX_POSITION_CAP_PCT),
+    }
+    rows = []
     for seed in robustness.resolved_seeds:
         inspection = resolve_fixed_multiseed_robustness_strategy_parameter_artifact(
-            root,
-            training_profile_id=training_profile,
-            benchmark_id=str(robustness.benchmark_id),
-            replication_seed=int(seed),
-            policy=str(baseline.param_policy),
-            comparison_end_date=str(settings.end_date),
-            dataset=settings.dataset,
-            max_positions=settings.max_positions,
-            rotation=settings.rotation,
-            fixed_risk=float(DEFAULT_FIXED_RISK),
-            max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+            root, replication_seed=int(seed), **producer_kwargs,
         )
-        if not bool(inspection["ready"]):
+        rows.append({
+            "seed": int(seed), "ready": bool(inspection["ready"]),
+            "action": str(inspection.get("action") or ""),
+            "status": str(inspection.get("status") or ""),
+            "path": Path(inspection["path"]),
+            "manifest_path": Path(inspection["manifest_path"]),
+        })
+    return {
+        "robustness": robustness, "producer_kwargs": producer_kwargs,
+        "rows": tuple(rows),
+    }
+
+
+def inspect_oracle_parameter_prerequisites(
+    definition, *, project_root: Path,
+) -> dict[str, Any]:
+    """Validate Oracle source legality before offering any Optimizer work.
+
+    Called by the separate Research entry orchestrator; this function cannot
+    FIT parameters or write Replay/truth artifacts.
+    """
+    root = Path(project_root).resolve()
+    settings, _base, _exact = _contract(definition)
+    _resolve_oracle_target_score_contracts(
+        definition, settings, _oracle_comparison_plan(definition),
+    )
+    data_dir = Path(get_dataset_dir(str(root), settings.dataset)).resolve()
+    if not data_dir.is_dir() or not next(data_dir.rglob("*.csv"), None):
+        raise OracleBlockedError("缺少完整研究價格資料（full dataset）")
+    from filters.breakout_quality.paths import resolve_filter_output_dir
+    truth_root = resolve_filter_output_dir(
+        root, filter_id=str(definition.source["filter_id"]),
+    )
+    if not truth_root.is_dir():
+        raise OracleBlockedError(
+            "缺少validated breakout-quality Dataset bundle；Audit不得代替Producer建置"
+        )
+    return _oracle_parameter_reuse_plan(definition, root)
+
+
+def _robustness_artifacts(definition, root: Path):
+    plan = _oracle_parameter_reuse_plan(definition, root)
+    for row in plan["rows"]:
+        if not row["ready"]:
             raise OracleBlockedError(
-                f"Benchmark P16 seed={seed}非READY: {inspection['status']}（只讀Audit不自動重訓）"
+                f"Benchmark P16 seed={row['seed']}非READY: {row['status']}"
+                "（只讀Audit不自動重訓）"
             )
-        records.append((int(seed), Path(inspection["path"])))
-    return robustness, records
+    return plan["robustness"], [
+        (row["seed"], row["path"]) for row in plan["rows"]
+    ]
 
 
 def collect_status(definition, *, project_root: Path) -> dict[str, Any]:
@@ -503,25 +554,19 @@ def collect_status(definition, *, project_root: Path) -> dict[str, Any]:
     root = Path(project_root).resolve()
     display = "Full Research Dataset + canonical P16 + daily target truth"
     try:
-        settings, _base, _exact = _contract(definition)
-        # Fail before checking large market/P16 artifacts: a scalar perfect DL
-        # output not implied by the actual enabled model is not executable.
-        _resolve_oracle_target_score_contracts(definition, settings, _oracle_comparison_plan(definition))
-        data_dir = Path(get_dataset_dir(str(root), settings.dataset)).resolve()
-        if not data_dir.is_dir() or not next(data_dir.rglob("*.csv"), None):
-            raise OracleBlockedError("缺少完整研究價格資料（full dataset）")
-        from filters.breakout_quality.paths import resolve_filter_output_dir
-        truth_root = resolve_filter_output_dir(root, filter_id=str(definition.source["filter_id"]))
-        if not truth_root.is_dir():
-            raise OracleBlockedError("缺少validated breakout-quality Dataset bundle；Audit不得代替Producer建置")
-        robustness, records = _robustness_artifacts(definition, root)
-        # No separate DL teacher/optimizer is a precondition for Oracle truth.
-        # The verified per-seed Min artifacts above are the ONLY parameter source.
+        plan = inspect_oracle_parameter_prerequisites(definition, project_root=root)
+        incomplete = [row for row in plan["rows"] if not row["ready"]]
+        if incomplete:
+            first = incomplete[0]
+            raise OracleBlockedError(
+                f"Benchmark P16 seed={first['seed']}非READY: {first['status']}"
+                "（只讀Audit不自動重訓）"
+            )
         return {
             "status": "READY", "reason": "", "source": {
                 "display": display, "preparable": False,
-                "benchmark": robustness.benchmark_id,
-                "seeds": [seed for seed, _path in records],
+                "benchmark": plan["robustness"].benchmark_id,
+                "seeds": [row["seed"] for row in plan["rows"]],
             },
         }
     except (ValueError, OSError, OracleBlockedError) as exc:
@@ -2204,8 +2249,10 @@ def _run_single_stage_oracle(
     preflight_approval: Callable[[str], bool] | None,
     preflight_display: str = "full",
     allow_historical_execution_input_drift: bool = False,
+    preview_only: bool = False,
+    approved_replay_decisions: Mapping[tuple[int, str], str] | None = None,
 ) -> dict[str, Any]:
-    """Exactly one pre-authorization certified matrix. Only RUNs create truth.
+    """Read-only matrix planning (including missing P16), then certified Replay.
 
     A provenance-backed historical replay is a completed scientific result;
     it does not require replaying the label producer merely to rediscover an
@@ -2220,10 +2267,29 @@ def _run_single_stage_oracle(
     plan = _oracle_comparison_plan(definition)
     settings, base_arm, exact_arm = _contract(definition)
     contracts = _resolve_oracle_target_score_contracts(definition, settings, plan)
-    status = collect_status(definition, project_root=root)
-    if status["status"] != "READY":
-        raise OracleBlockedError(status["reason"])
-    robustness, paths = _robustness_artifacts(definition, root)
+    pending_p16: tuple[int, ...] = ()
+    if preview_only:
+        # The Research entry must show the *Target* plan before building P16.
+        # The Audit stays read-only: existing seeds undergo the same complete
+        # Replay attestation below; missing P16 can only be provisional RUN.
+        parameter_plan = inspect_oracle_parameter_prerequisites(definition, project_root=root)
+        unsafe = [row for row in parameter_plan["rows"]
+                  if not row["ready"] and row["action"] not in {"BUILD", "REPAIR"}]
+        if unsafe:
+            raise OracleBlockedError(
+                "P16 既有工件身分不合法，禁止覆寫：" +
+                ", ".join(f"seed={row['seed']}:{row['status']}" for row in unsafe)
+            )
+        robustness = parameter_plan["robustness"]
+        paths = [(row["seed"], row["path"]) for row in parameter_plan["rows"]
+                 if row["ready"]]
+        pending_p16 = tuple(int(row["seed"]) for row in parameter_plan["rows"]
+                            if not row["ready"])
+    else:
+        status = collect_status(definition, project_root=root)
+        if status["status"] != "READY":
+            raise OracleBlockedError(status["reason"])
+        robustness, paths = _robustness_artifacts(definition, root)
     end = str(definition.dimensions.get("oracle_evaluation_end_date") or "")
     start = str(settings.start_date)
     if not (start < end <= str(settings.end_date)):
@@ -2250,7 +2316,8 @@ def _run_single_stage_oracle(
         price_sha=price_sha, settings=settings, robustness=robustness,
         evaluation_end=end,
     )
-    seed_set = [seed for seed, _ in paths]
+    seed_set = ([int(row["seed"]) for row in parameter_plan["rows"]]
+                if preview_only else [seed for seed, _ in paths])
     targets = ("C96", *(name for name, _ in plan["targets"]))
     decisions: dict[tuple[int, str], str] = {}
     cached: dict[tuple[int, str], dict[str, Any]] = {}
@@ -2406,6 +2473,12 @@ def _run_single_stage_oracle(
             except (OSError, ValueError, KeyError, TypeError, OracleBlockedError) as exc:
                 decisions[key] = "BLOCKED"
                 blocked[key] = str(exc)
+    if preview_only:
+        for seed in pending_p16:
+            for target in targets:
+                # Without canonical P16 parameters no full Replay identity
+                # exists to certify; do NOT claim REUSE from a file inventory.
+                decisions[(seed, target)] = "RUN"
     preflight = render_replay_preflight(
         label="Fixed", seeds=seed_set, targets=list(targets), decisions=decisions,
     )
@@ -2424,6 +2497,32 @@ def _run_single_stage_oracle(
                     for (seed, target), reason in blocked.items()]
         raise OracleBlockedError("Oracle full-identity BLOCKED; no Target producer or Portfolio "
                                  "ran: " + " | ".join(problems[:3]))
+    if preview_only:
+        return {
+            "status": "PREVIEW", "preflight": decisions, "text": preflight,
+            "missing_p16": pending_p16, "seed_set": tuple(seed_set),
+            "targets": tuple(targets),
+            "producer_kwargs": dict(parameter_plan["producer_kwargs"]),
+        }
+    if approved_replay_decisions is not None:
+        # The Research user authorized the *typed* (seed, Target) plan before
+        # missing P16 was fitted. A previously REUSE cell cannot become RUN,
+        # nor may a new cell appear. RUN -> REUSE is safe (less work).
+        if preflight_approval is None or set(approved_replay_decisions) != set(decisions):
+            raise OracleBlockedError("Target 授權後 Seed／Target 集合已改變；停止 Replay")
+        unexpected = [
+            (seed, target, approved, decisions[(seed, target)])
+            for (seed, target), approved in approved_replay_decisions.items()
+            if (approved not in {"REUSE", "RUN"} or
+                decisions[(seed, target)] not in
+                ({"REUSE"} if approved == "REUSE" else {"REUSE", "RUN"}))
+        ]
+        if unexpected:
+            seed, target, approved, current = unexpected[0]
+            raise OracleBlockedError(
+                "Target 授權後 REUSE／RUN 身分或計畫已改變；停止 Replay："
+                f"seed={seed} Target={target} 原={approved} 現={current}"
+            )
     if preflight_approval is not None and not preflight_approval(preflight):
         return {"status": "CANCELLED", "read_only": True, "preflight": decisions}
     if oracle_dataset_summary_sha256(root=root, filter_id=str(definition.source["filter_id"])) != current_dataset_summary_sha:
@@ -2501,10 +2600,27 @@ def _run_single_stage_oracle(
                                    seeds=seed_set, base=result)
 
 
+def preview_oracle_replay_plan(
+    definition, *, project_root: Path,
+) -> dict[str, Any]:
+    """One read-only Target x Seed plan; pending P16 never hides the Targets.
+
+    A missing P16 is only a provisional RUN. All available P16 and Replay
+    receipts are checked by the same canonical code as the execution plan.
+    No Target truth, Optimizer or Portfolio Replay may execute here.
+    """
+    return _run_single_stage_oracle(
+        definition, project_root=project_root, quiet=True,
+        preflight_approval=None, preview_only=True,
+        allow_historical_execution_input_drift=True,
+    )
+
+
 def build_report(
     definition, *, project_root: Path, quiet: bool = False,
     preflight_display: str = "full",
     preflight_approval: Callable[[str], bool] | None = None,
+    approved_replay_decisions: Mapping[tuple[int, str], str] | None = None,
 ) -> dict[str, Any]:
     """One Research [1] work plan, one approval, zero science before approval.
 
@@ -2519,6 +2635,7 @@ def build_report(
         preflight_approval=preflight_approval,
         preflight_display=preflight_display,
         allow_historical_execution_input_drift=preflight_approval is not None,
+        approved_replay_decisions=approved_replay_decisions,
     )
 
 
@@ -2599,6 +2716,7 @@ def run_formal_audit(
     definition, *, project_root: Path, quiet: bool = False,
     preflight_display: str = "full",
     preflight_approval: Callable[[str], bool] | None = None,
+    approved_replay_decisions: Mapping[tuple[int, str], str] | None = None,
 ) -> dict[str, Any]:
     # Authorization, frozen schema, and historical snapshot must be checked
     # before initiating the costly hindsight-only portfolio replays.
@@ -2607,6 +2725,7 @@ def run_formal_audit(
         definition, project_root=project_root, quiet=quiet,
         preflight_display=preflight_display,
         preflight_approval=preflight_approval,
+        approved_replay_decisions=approved_replay_decisions,
     ))
     if payload.get("status") == "CANCELLED":
         return payload

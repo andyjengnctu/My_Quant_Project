@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Any
+from typing import Callable, Any, Mapping
 
 from config.audit import AUDIT_OUTPUT_ROOT
 from core.audit_policy import (
@@ -315,6 +315,7 @@ def run_enabled_audits(
     audit_id: str | None = None,
     preflight_display: str = "full",
     preflight_approval: Callable[[str], bool] | None = None,
+    approved_replay_decisions: Mapping[tuple[int, str], str] | None = None,
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
     definitions = tuple(
@@ -329,7 +330,6 @@ def run_enabled_audits(
     if preflight_approval is not None and (
         len(definitions) != 1
         or not get_audit_handler(definitions[0]).preflight_summary
-        or preflight_display != "full"
     ):
         raise ValueError("正式 Target Replay 才可使用唯一計畫確認")
     if preflight_display != "full" and (
@@ -337,6 +337,11 @@ def run_enabled_audits(
         or not get_audit_handler(definitions[0]).preflight_summary
     ):
         raise ValueError("簡要 Replay preflight 僅供正式 Target 驗證使用")
+    if approved_replay_decisions is not None and (
+        preflight_approval is None or len(definitions) != 1
+        or not get_audit_handler(definitions[0]).preflight_summary
+    ):
+        raise ValueError("已授權的 Target cells 僅供正式 Target Replay 使用")
     validate_audit_catalog(
         (*get_audit_definitions(module_id), *get_reusable_audit_definitions(module_id))
     )
@@ -366,6 +371,8 @@ def run_enabled_audits(
             kwargs["preflight_display"] = preflight_display
         if preflight_approval is not None:
             kwargs["preflight_approval"] = preflight_approval
+        if approved_replay_decisions is not None:
+            kwargs["approved_replay_decisions"] = approved_replay_decisions
         outputs[definition.audit_id] = spec.load_run_handler()(definition, **kwargs)
     return outputs
 

@@ -799,6 +799,17 @@ class OracleReplayStore:
         normalized = []
         for candidate in candidates:
             inputs = dict(candidate)
+            if (inputs.get("benchmark") != expected.get("benchmark")
+                    and benchmark_seed_execution_equivalent(
+                        recorded_benchmark=str(inputs.get("benchmark") or ""),
+                        active_benchmark=str(expected.get("benchmark") or ""),
+                        seed=int(seed),
+                    )):
+                # Outer benchmark membership is not a different per-seed
+                # execution. This is only a source *candidate* probe: exact
+                # P16, price, score and Replay identities are still attested
+                # below and by the canonical cache owner before REUSE.
+                inputs["benchmark"] = expected["benchmark"]
             if isinstance(inputs.get("replay_policy"), Mapping):
                 inputs["replay_policy"] = _execution_replay_policy(inputs["replay_policy"])
             normalized.append((candidate, inputs))

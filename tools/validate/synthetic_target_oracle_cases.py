@@ -5376,5 +5376,320 @@ class OracleEightSeedSinglePipelineCases(TestCase):
             current.assert_called_once()
             self.assertEqual(historical_path.read_bytes(), original_bytes)
 
+
+class OracleEightSeedParameterDependencyRegressionCases(TestCase):
+    """[1] must coordinate missing P16 without changing read-only Oracle semantics."""
+
+    @staticmethod
+    def _fixture(*, ready_seeds, invalid_seed=None):
+        from core.training_policy import get_robustness_benchmark_policy_snapshot
+        seeds = get_robustness_benchmark_policy_snapshot()["resolved_seeds"]
+        rows = []
+        for seed in seeds:
+            ready = int(seed) in ready_seeds
+            invalid = seed == invalid_seed
+            rows.append(dict(
+                seed=seed, ready=ready,
+                action="REUSE" if ready else "REBUILD" if invalid else "BUILD",
+                status="READY" if ready else "MANIFEST_IDENTITY_MISMATCH" if invalid
+                       else "ARTIFACT_MISSING_OR_INVALID",
+                path=Path(f"/unittest/P16/{seed}.json"),
+                manifest_path=Path(f"/unittest/P16/{seed}.manifest.json"),
+            ))
+        return dict(
+            robustness=SimpleNamespace(benchmark_id="end_to_end_v2"),
+            producer_kwargs={
+                "training_profile_id": "broker_cash_min_best_seed42_current",
+                "benchmark_id": "end_to_end_v2", "policy": "base-finalist-best",
+                "comparison_end_date": "2026-03-02", "dataset": "full",
+                "max_positions": 10, "rotation": "off", "fixed_risk": 0.05,
+                "max_position_cap_pct": 1.0,
+            },
+            rows=tuple(rows),
+        )
+
+    def test_p16_inspection_uses_one_registered_source_for_all_benchmark_seeds(self):
+        from core.training_policy import get_robustness_benchmark_policy_snapshot
+        current = get_robustness_benchmark_policy_snapshot()
+        legacy = get_robustness_benchmark_policy_snapshot("end_to_end_v1")
+        seen = []
+
+        def inspect(_root, *, replication_seed, **kwargs):
+            seen.append((replication_seed, kwargs))
+            return dict(
+                ready=replication_seed in legacy["resolved_seeds"],
+                action="REUSE" if replication_seed in legacy["resolved_seeds"] else "BUILD",
+                status="READY" if replication_seed in legacy["resolved_seeds"] else "ARTIFACT_MISSING_OR_INVALID",
+                path=Path(f"/mock/P16/{replication_seed}.json"),
+                manifest_path=Path(f"/mock/P16/{replication_seed}.manifest.json"),
+            )
+
+        with patch.object(oracle, "resolve_fixed_multiseed_robustness_strategy_parameter_artifact",
+                          side_effect=inspect):
+            plan = oracle._oracle_parameter_reuse_plan(_ACTIVE_ORACLE_DEFINITION, Path("/mock"))
+        self.assertEqual([row["seed"] for row in plan["rows"]], current["resolved_seeds"])
+        self.assertEqual([row["action"] for row in plan["rows"]], ["REUSE"] * 4 + ["BUILD"] * 4)
+        self.assertEqual(len(seen), len(current["resolved_seeds"]))
+        self.assertTrue(all(kwargs["benchmark_id"] == current["benchmark_id"] for _, kwargs in seen))
+        self.assertTrue(all(kwargs["training_profile_id"] ==
+                            "broker_cash_min_best_seed42_current" for _, kwargs in seen))
+        self.assertTrue(all(kwargs["policy"] == "base-finalist-best" for _, kwargs in seen))
+        self.assertEqual(plan["producer_kwargs"]["comparison_end_date"], "2026-03-02")
+
+    def test_p16_missing_cannot_be_accepted_by_read_only_audit(self):
+        from core.training_policy import get_robustness_benchmark_policy_snapshot
+        seeds = get_robustness_benchmark_policy_snapshot()["resolved_seeds"]
+        fixture = self._fixture(ready_seeds=set(seeds[:4]))
+        with patch.object(oracle, "inspect_oracle_parameter_prerequisites", return_value=fixture):
+            status = oracle.collect_status(_ACTIVE_ORACLE_DEFINITION, project_root=Path("/mock"))
+        self.assertEqual(status["status"], "BLOCKED")
+        self.assertIn(str(seeds[4]), status["reason"])
+        self.assertIn("只讀Audit", status["reason"])
+
+    @staticmethod
+    def _approved_preview(fixture):
+        rows = tuple(fixture["rows"])
+        seeds = tuple(row["seed"] for row in rows)
+        return {
+            "seed_set": seeds,
+            "producer_kwargs": fixture["producer_kwargs"],
+            "missing_p16": tuple(row["seed"] for row in rows if not row["ready"]),
+            "preflight": {(row["seed"], "C96"): "REUSE" if row["ready"] else "RUN"
+                          for row in rows},
+            "text": "[Target 驗證 Fixed | Portfolio Replay 正式計畫]\n"
+                    "Target  S1  S2  S3  S4  S5  S6  S7  S8\n"
+                    "C96     REUSE REUSE REUSE REUSE RUN RUN RUN RUN",
+        }
+
+    def test_research_builds_only_four_approved_missing_seeds(self):
+        from services.research import target_oracle_application as application
+        from core.training_policy import get_robustness_benchmark_policy_snapshot
+        seeds = get_robustness_benchmark_policy_snapshot()["resolved_seeds"]
+        ready = set(seeds[:4])
+        built = []
+        def inspect(_definition, *, project_root):
+            return self._fixture(ready_seeds=ready)
+        def resolve(_root, *, replication_seed, **kwargs):
+            return {"ready": replication_seed in ready,
+                    "action": "REUSE" if replication_seed in ready else "BUILD",
+                    "status": "READY" if replication_seed in ready else "ARTIFACT_MISSING_OR_INVALID"}
+        def build(_root, *, replication_seed, **kwargs):
+            self.assertNotIn(replication_seed, ready)
+            built.append(replication_seed)
+            ready.add(replication_seed)
+            return {"action": "BUILD"}
+        preview = self._approved_preview(self._fixture(ready_seeds=ready))
+        with patch.object(application, "inspect_oracle_parameter_prerequisites", side_effect=inspect), \
+             patch.object(application, "resolve_fixed_multiseed_robustness_strategy_parameter_artifact", side_effect=resolve), \
+             patch.object(application, "ensure_fixed_multiseed_robustness_strategy_parameter_artifact", side_effect=build), \
+             redirect_stdout(io.StringIO()):
+            application.ensure_authorized_oracle_parameters(
+                project_root=Path("/mock"), definition=_ACTIVE_ORACLE_DEFINITION,
+                approved_plan=preview,
+            )
+        self.assertEqual(built, seeds[4:])
+        self.assertEqual(ready, set(seeds))
+
+    def test_all_ready_never_invokes_optimizer(self):
+        from services.research import target_oracle_application as application
+        from core.training_policy import get_robustness_benchmark_policy_snapshot
+        seeds = get_robustness_benchmark_policy_snapshot()["resolved_seeds"]
+        fixture = self._fixture(ready_seeds=set(seeds))
+        with patch.object(application, "inspect_oracle_parameter_prerequisites", return_value=fixture), \
+             patch.object(application, "resolve_fixed_multiseed_robustness_strategy_parameter_artifact") as probe, \
+             patch.object(application, "ensure_fixed_multiseed_robustness_strategy_parameter_artifact") as produce, \
+             redirect_stdout(io.StringIO()):
+            application.ensure_authorized_oracle_parameters(
+                project_root=Path("/mock"), definition=_ACTIVE_ORACLE_DEFINITION,
+                approved_plan=self._approved_preview(fixture),
+            )
+        probe.assert_not_called()
+        produce.assert_not_called()
+
+    def test_p16_conflict_and_new_unapproved_seed_never_fit(self):
+        from services.research import target_oracle_application as application
+        from core.training_policy import get_robustness_benchmark_policy_snapshot
+        seeds = get_robustness_benchmark_policy_snapshot()["resolved_seeds"]
+        fixture = self._fixture(ready_seeds=set(seeds[:4]), invalid_seed=seeds[4])
+        authorized = self._approved_preview(self._fixture(ready_seeds=set(seeds[:4])))
+        with patch.object(application, "inspect_oracle_parameter_prerequisites", return_value=fixture), \
+             patch.object(application, "ensure_fixed_multiseed_robustness_strategy_parameter_artifact") as producer, \
+             redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError, "身分衝突"):
+                application.ensure_authorized_oracle_parameters(
+                    project_root=Path("/mock"), definition=_ACTIVE_ORACLE_DEFINITION,
+                    approved_plan=authorized,
+                )
+            producer.assert_not_called()
+        lost = self._fixture(ready_seeds=set(seeds[:3]))
+        with patch.object(application, "inspect_oracle_parameter_prerequisites", return_value=lost), \
+             patch.object(application, "ensure_fixed_multiseed_robustness_strategy_parameter_artifact") as producer, \
+             self.assertRaisesRegex(RuntimeError, "原為 REUSE"):
+            application.ensure_authorized_oracle_parameters(
+                project_root=Path("/mock"), definition=_ACTIVE_ORACLE_DEFINITION,
+                approved_plan=authorized,
+            )
+        producer.assert_not_called()
+
+    def test_target_first_one_prompt_cancel_does_not_fit_or_replay(self):
+        from apps import research as research_app
+        from services.audit import target_oracle_romd as oracle_owner
+        from services.research import target_oracle_application as application
+        from core.training_policy import get_robustness_benchmark_policy_snapshot
+        seeds = get_robustness_benchmark_policy_snapshot()["resolved_seeds"]
+        preview = self._approved_preview(self._fixture(ready_seeds=set(seeds[:4])))
+        method = SimpleNamespace(method_id="target_ground_truth_strategy_romd",
+                                 menu_label="Target 驗證", menu_location="research_root")
+        with patch.object(research_app, "get_audit_methods", return_value=(method,)), \
+             patch.object(research_app, "collect_audit_menu_state", return_value={"configured": True}), \
+             patch.object(application, "get_formal_oracle_definition", return_value=_ACTIVE_ORACLE_DEFINITION), \
+             patch.object(oracle_owner, "preview_oracle_replay_plan", return_value=preview), \
+             patch.object(application, "ensure_authorized_oracle_parameters") as producer, \
+             patch.object(research_app, "run_enabled_audits") as replay, \
+             patch("builtins.input", return_value="0") as answer, \
+             redirect_stdout(io.StringIO()) as view:
+            self.assertEqual(research_app._run_reusable_audit_method(
+                "breakout_quality", "target_ground_truth_strategy_romd"), 0)
+        answer.assert_called_once()
+        self.assertIn("Target  S1  S2  S3  S4  S5  S6  S7  S8", view.getvalue())
+        self.assertNotIn("P16 前置工件計畫", view.getvalue())
+        producer.assert_not_called()
+        replay.assert_not_called()
+
+    def test_target_first_approval_checks_same_plan_without_second_prompt(self):
+        from apps import research as research_app
+        from services.audit import target_oracle_romd as oracle_owner
+        from services.research import target_oracle_application as application
+        from core.training_policy import get_robustness_benchmark_policy_snapshot
+        seeds = get_robustness_benchmark_policy_snapshot()["resolved_seeds"]
+        preview = self._approved_preview(self._fixture(ready_seeds=set(seeds[:4])))
+        method = SimpleNamespace(method_id="target_ground_truth_strategy_romd",
+                                 menu_label="Target 驗證", menu_location="research_root")
+        def replay(_module, **kwargs):
+            self.assertEqual(kwargs["preflight_display"], "summary")
+            self.assertEqual(kwargs["approved_replay_decisions"], preview["preflight"])
+            self.assertTrue(kwargs["preflight_approval"](preview["text"]))
+            return {"target_oracle_romd": {"status": "COMPLETED"}}
+        with patch.object(research_app, "get_audit_methods", return_value=(method,)), \
+             patch.object(research_app, "collect_audit_menu_state", return_value={"configured": True}), \
+             patch.object(application, "get_formal_oracle_definition", return_value=_ACTIVE_ORACLE_DEFINITION), \
+             patch.object(oracle_owner, "preview_oracle_replay_plan", return_value=preview), \
+             patch.object(application, "ensure_authorized_oracle_parameters") as producer, \
+             patch.object(research_app, "run_enabled_audits", side_effect=replay) as runner, \
+             patch.object(research_app, "render_latest_audit_summary", return_value="LATEST"), \
+             patch("builtins.input", return_value="") as answer, \
+             redirect_stdout(io.StringIO()) as view:
+            self.assertEqual(research_app._run_reusable_audit_method(
+                "breakout_quality", "target_ground_truth_strategy_romd"), 0)
+        answer.assert_called_once()
+        self.assertEqual(producer.call_count, 1)
+        self.assertEqual(runner.call_count, 1)
+        self.assertEqual(view.getvalue().count(preview["text"]), 1)
+        self.assertIn("LATEST", view.getvalue())
+
+    def test_approved_replay_cells_cannot_gain_new_run_or_target(self):
+        """Canonical Oracle, not UI text, enforces the approved cell matrix."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = OracleOnePlanRealCacheCases()._fixture(root)
+            definition, bench, seed, price_sha, param_sha, *_ = fixture
+            previous = {(seed, "C96"): "REUSE", (seed, "R40"): "REUSE",
+                        (seed, "T40"): "REUSE"}  # T40 is actually RUN
+            with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
+                 patch.object(oracle, "_robustness_artifacts", return_value=(bench, [(seed, root/"p16.json")])), \
+                 patch.object(oracle, "_prepare_oracle_parameters", return_value=(
+                     [(seed, param_sha, "synthetic", None, None)], {})), \
+                 patch.object(oracle, "price_inventory_sha256", return_value=price_sha), \
+                 patch.object(oracle, "_execute_single_stage_missing", side_effect=AssertionError(
+                     "No unauthorized Target or Portfolio production")) as producer:
+                with self.assertRaisesRegex(oracle.OracleBlockedError, "身分或計畫已改變"):
+                    oracle.build_report(
+                        definition, project_root=root, quiet=True,
+                        preflight_approval=lambda _view: self.fail("Unapproved new RUN"),
+                        approved_replay_decisions=previous,
+                    )
+                # An original RUN becoming REUSE consumes *less* work and is legal.
+                authorized = {**previous, (seed, "T40"): "RUN"}
+                cancelled = oracle.build_report(
+                    definition, project_root=root, quiet=True,
+                    preflight_approval=lambda _view: False,
+                    approved_replay_decisions=authorized,
+                )
+            self.assertEqual(cancelled["status"], "CANCELLED")
+            producer.assert_not_called()
+
+    def test_four_signed_old_seeds_all_reuse_after_8_seed_upgrade(self):
+        """Four existing v1 signed Replay receipts survive v2 membership change."""
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        from core.training_policy import get_robustness_benchmark_policy_snapshot
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            definition, _b, old_seed, price_sha, param_sha, *_ = (
+                OracleOnePlanRealCacheCases()._fixture(root))
+            seeds = get_robustness_benchmark_policy_snapshot()["resolved_seeds"]
+            store = OracleReplayStore(root, definition.output_subdir)
+            # Isolated synthetic receipts from the same source contract; the
+            # production system never copies one seed's real P16 or Replay.
+            for target in ("C96", "R40"):
+                identity, = store.existing_completed_identities(seed=old_seed, target=target)
+                original = store.read(identity)
+                for seed in seeds[1:4]:
+                    store.write({**identity, "seed": seed}, {**original, "seed": seed},
+                                origin="synthetic_8seed_upgrade_reuse")
+            fixture = self._fixture(ready_seeds=set(seeds[:4]))
+            fixture["robustness"] = SimpleNamespace(benchmark_id="end_to_end_v2")
+            def prepare(_definition, *, root, parameter_paths, **_kwargs):
+                return ([(seed, param_sha, "synthetic", None, None)
+                         for seed, _path in parameter_paths], {})
+            with patch.object(oracle, "inspect_oracle_parameter_prerequisites", return_value=fixture), \
+                 patch.object(oracle, "_prepare_oracle_parameters", side_effect=prepare), \
+                 patch.object(oracle, "price_inventory_sha256", return_value=price_sha), \
+                 patch.object(oracle, "_read_only_score_keys", side_effect=AssertionError(
+                     "No expensive Target truth build")), \
+                 patch.object(oracle, "_execute_single_stage_missing", side_effect=AssertionError(
+                     "No Portfolio replay before authorization")):
+                view = oracle.preview_oracle_replay_plan(definition, project_root=root)
+            for seed in seeds[:4]:
+                self.assertEqual(view["preflight"][(seed, "C96")], "REUSE")
+                self.assertEqual(view["preflight"][(seed, "R40")], "REUSE")
+            for seed in seeds[4:]:
+                self.assertEqual({view["preflight"][(seed, key)]
+                                  for key in ("C96", "R40", "T40")}, {"RUN"})
+            self.assertEqual(sum(x == "REUSE" for x in view["preflight"].values()), 8)
+
+    def test_partial_missing_p16_still_previews_registered_target_matrix(self):
+        """Real signed first-seed Replay proves REUSE; other P16s are not guessed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            definition, _benchmark, first, price_sha, param_sha, _proof, _sample = (
+                OracleOnePlanRealCacheCases()._fixture(root))
+            from core.training_policy import get_robustness_benchmark_policy_snapshot
+            seeds = get_robustness_benchmark_policy_snapshot()["resolved_seeds"]
+            fixture = self._fixture(ready_seeds=set(seeds[:4]))
+            fixture["robustness"] = SimpleNamespace(benchmark_id="end_to_end_v2")
+            def prepare(_definition, *, root, parameter_paths, **_kwargs):
+                return ([(seed, param_sha, "synthetic", None, None)
+                         for seed, _path in parameter_paths], {})
+            with patch.object(oracle, "inspect_oracle_parameter_prerequisites", return_value=fixture), \
+                 patch.object(oracle, "_prepare_oracle_parameters", side_effect=prepare), \
+                 patch.object(oracle, "price_inventory_sha256", return_value=price_sha), \
+                 patch.object(oracle, "_read_only_score_keys", side_effect=AssertionError("No Target producer before approval")), \
+                 patch.object(oracle, "_execute_single_stage_missing", side_effect=AssertionError("No Portfolio Replay")), \
+                 patch.object(oracle, "load_profile_continuous_ranker_data", side_effect=AssertionError("No DL features")), \
+                 redirect_stdout(io.StringIO()):
+                preview = oracle.preview_oracle_replay_plan(definition, project_root=root)
+            self.assertEqual(preview["status"], "PREVIEW")
+            self.assertEqual(preview["seed_set"], tuple(seeds))
+            self.assertEqual(preview["missing_p16"], tuple(seeds[4:]))
+            self.assertEqual(len(preview["preflight"]), 8 * 3)
+            self.assertEqual(preview["preflight"][(first, "C96")], "REUSE")
+            self.assertEqual(preview["preflight"][(first, "R40")], "REUSE")
+            for seed in seeds[4:]:
+                self.assertEqual({preview["preflight"][(seed, target)]
+                                  for target in ("C96", "R40", "T40")}, {"RUN"})
+            self.assertIn("Target", preview["text"])
+            self.assertIn("T40", preview["text"])
+            self.assertNotIn("P16 前置工件計畫", preview["text"])
+
 if __name__ == "__main__":
     main(verbosity=2)
