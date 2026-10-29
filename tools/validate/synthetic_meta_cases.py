@@ -41,10 +41,10 @@ from .meta_contracts import (
     summarize_synthetic_cases_import_target_resolution_contract,
 )
 from tools.local_regression.checklist_contract import (
+    derive_checklist_state,
     apply_checklist_transaction,
     compare_persisted_views,
     load_checklist_contract,
-    load_convergence_latest_statuses,
     load_done_b_rows,
     load_done_test_rows,
     load_main_catalog,
@@ -1190,6 +1190,7 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
 
 
 def validate_checklist_generated_view_ssot_contract_case(_base_params):
+    """Current-only v2 B/T updates, retirement, and drift fail-closed."""
     results = []
     summary = {}
     case_id = "META_CHECKLIST_GENERATED_VIEW_SSOT"
@@ -1205,142 +1206,115 @@ def validate_checklist_generated_view_ssot_contract_case(_base_params):
         temp_contract = temp_root / "TEST_SUITE_CHECKLIST_CONTRACT.json"
         shutil.copy2(CHECKLIST_PATH, temp_checklist)
         shutil.copy2(CHECKLIST_PATH.with_name("TEST_SUITE_CHECKLIST_CONTRACT.json"), temp_contract)
-
-        contract = load_checklist_contract(temp_checklist)
-        tail_date = str(contract["transitions"][-1]["date"])
+        current = load_checklist_contract(temp_checklist)
+        check("history_events_not_in_current_v2_contract", False, "transitions" in current)
+        check("retired_NA_definitions_not_in_live_contract", [], [
+            row["id"] for row in (*current["main_items"], *current["tests"])
+            if row["status"] == "N/A"
+        ])
         apply_checklist_transaction(
             temp_checklist,
-            main_definitions=(
-                {
-                    "id": "B999",
-                    "section": "B2",
-                    "priority": "P1",
-                    "category": "Meta / Test governance",
-                    "item": "synthetic canonical checklist transaction",
-                    "gap": "single transaction must regenerate B/T/G views",
-                    "entry": "`tools/local_regression/checklist_contract.py`",
-                },
-            ),
-            test_definitions=(
-                {
-                    "id": "T999",
-                    "description": "`validate_checklist_generated_view_ssot_contract_case` synthetic transaction",
-                    "b_id": "B999",
-                },
-            ),
-            transitions=(
-                {
-                    "date": tail_date,
-                    "id": "B999",
-                    "description": "register synthetic checklist owner row",
-                    "from_status": "NEW",
-                    "to_status": "DONE",
-                    "note": "`tools/local_regression/checklist_contract.py`",
-                },
-                {
-                    "date": tail_date,
-                    "id": "T999",
-                    "description": "register synthetic checklist test binding",
-                    "from_status": "NEW",
-                    "to_status": "DONE",
-                    "note": "`validate_checklist_generated_view_ssot_contract_case`",
-                },
-            ),
+            main_definitions=({
+                "id": "B999", "section": "B2", "priority": "P1",
+                "category": "Meta / Test governance", "item": "synthetic current-state checklist test",
+                "gap": "v2 current B/T only", "entry": "`tools/local_regression/checklist_contract.py`",
+                "status": "DONE",
+            },),
+            test_definitions=({
+                "id": "T999", "description": "`validate_checklist_generated_view_ssot_contract_case` synthetic transaction",
+                "b_id": "B999", "status": "DONE",
+            },),
         )
-
-        mutated_view = compare_persisted_views(temp_checklist)
-        check("single_transaction_keeps_all_generated_views_in_sync", True, bool(mutated_view.get("ok")))
+        check("single_transaction_keeps_b_t_generated_views_in_sync", True,
+              bool(compare_persisted_views(temp_checklist).get("ok")))
         tables = load_checklist_tables(temp_checklist)
-        check("single_transaction_generates_b_view", True, any(row and row[0] == "B999" for row in tables["B2"]))
-        check("single_transaction_generates_t_view", True, any(row and row[0] == "T999" for row in tables["T"]))
-        check("single_transaction_appends_b_and_t_convergence_events", 2, sum(1 for row in tables["G"] if len(row) > 1 and row[1] in {"B999", "T999"}))
+        check("single_transaction_generates_b_view", True,
+              any(row and row[0] == "B999" for row in tables["B2"]))
+        check("single_transaction_generates_t_view", True,
+              any(row and row[0] == "T999" for row in tables["T"]))
+        check("retired_g_history_not_generated", False, "G" in tables)
 
         apply_checklist_transaction(
             temp_checklist,
-            main_updates=({"id": "B999", "gap": "updated synthetic definition", "entry": "`services/example/missing.py`"},),
-            test_updates=({"id": "T999", "description": "`validate_checklist_generated_view_ssot_contract_case` updated synthetic transaction"},),
+            main_updates=({"id": "B999", "gap": "updated current criterion", "entry": "`services/example/missing.py`"},),
+            test_updates=({"id": "T999", "description": "`validate_checklist_generated_view_ssot_contract_case` updated"},),
         )
-        updated_contract = load_checklist_contract(temp_checklist)
-        updated_b999 = next(row for row in updated_contract["main_items"] if row["id"] == "B999")
-        updated_t999 = next(row for row in updated_contract["tests"] if row["id"] == "T999")
-        check("transaction_updates_existing_main_definition", "updated synthetic definition", updated_b999["gap"])
-        check("transaction_updates_existing_test_definition", True, "updated synthetic transaction" in updated_t999["description"])
-        check("definition_update_keeps_generated_views_in_sync", True, bool(compare_persisted_views(temp_checklist).get("ok")))
+        updated = load_checklist_contract(temp_checklist)
+        check("transaction_updates_current_main", "updated current criterion",
+              next(row["gap"] for row in updated["main_items"] if row["id"] == "B999"))
+        check("transaction_updates_current_test", True,
+              "updated" in next(row["description"] for row in updated["tests"] if row["id"] == "T999"))
+        check("definition_update_keeps_generated_views_in_sync", True,
+              bool(compare_persisted_views(temp_checklist).get("ok")))
 
         meta_quality_module = importlib.import_module("tools.local_regression.run_meta_quality")
         with patch.object(meta_quality_module, "CHECKLIST_PATH", temp_checklist):
-            missing_path_summary = meta_quality_module._summarize_checklist_consistency()
-        missing_path_result = next(
-            row for row in missing_path_summary["results"]
-            if row["name"] == "checklist_done_entries_reference_existing_exact_python_paths"
-        )
-        check("done_entry_missing_exact_python_path_fails_meta_guard", "FAIL", missing_path_result["status"])
-        check(
-            "done_entry_missing_exact_python_path_is_reported",
-            True,
-            any(row.get("id") == "B999" and row.get("path") == "services/example/missing.py" for row in missing_path_result.get("missing_paths", [])),
-        )
+            missing_summary = meta_quality_module._summarize_checklist_consistency()
+        missing_row = next(row for row in missing_summary["results"]
+                           if row["name"] == "checklist_done_entries_reference_existing_exact_python_paths")
+        check("missing_current_implementation_path_fails", "FAIL", missing_row["status"])
+        check("missing_current_implementation_path_identified", True,
+              any(row.get("id") == "B999" and row.get("path") == "services/example/missing.py"
+                  for row in missing_row.get("missing_paths", [])))
 
-        apply_checklist_transaction(
-            temp_checklist,
-            main_updates=({"id": "B999", "entry": "`tools/local_regression/checklist_contract.py`"},),
-        )
+        apply_checklist_transaction(temp_checklist, main_updates=({
+            "id": "B999", "entry": "`tools/local_regression/checklist_contract.py`",
+        },))
         with patch.object(meta_quality_module, "CHECKLIST_PATH", temp_checklist):
             restored_summary = meta_quality_module._summarize_checklist_consistency()
-        restored_result = next(
-            row for row in restored_summary["results"]
-            if row["name"] == "checklist_done_entries_reference_existing_exact_python_paths"
-        )
-        check("done_entry_existing_exact_python_path_passes_meta_guard", "PASS", restored_result["status"])
+        restored_row = next(row for row in restored_summary["results"]
+                            if row["name"] == "checklist_done_entries_reference_existing_exact_python_paths")
+        check("restored_current_path_passes", "PASS", restored_row["status"])
 
-        invalid_contract = load_checklist_contract(temp_checklist)
-        invalid_contract["transitions"].append(
-            {
-                "date": tail_date,
-                "id": "B999",
-                "description": "invalid chain",
-                "from_status": "TODO",
-                "to_status": "DONE",
-                "note": "synthetic invalid chain",
-            }
-        )
-        rejected = raises_expected(ValueError, lambda: _validate_checklist_contract(invalid_contract))
-        check("invalid_transition_chain_fails_fast", True, rejected)
+        invalid = load_checklist_contract(temp_checklist)
+        invalid["transitions"] = []
+        check("obsolete_history_field_rejected", True,
+              raises_expected(ValueError, lambda: _validate_checklist_contract(invalid)))
+        invalid = load_checklist_contract(temp_checklist)
+        next(row for row in invalid["tests"] if row["id"] == "T999")["b_id"] = "B998"
+        check("orphan_current_test_mapping_rejected", True,
+              raises_expected(ValueError, lambda: _validate_checklist_contract(invalid)))
+        invalid = load_checklist_contract(temp_checklist)
+        next(row for row in invalid["main_items"] if row["id"] == "B999")["status"] = "N/A"
+        check("retired_na_status_rejected", True,
+              raises_expected(ValueError, lambda: _validate_checklist_contract(invalid)))
 
         drift_text = _replace_markdown_table_row(
             temp_checklist.read_text(encoding="utf-8"),
             heading="T. 目前所有 `DONE` 的建議測試項目摘要",
-            row_id="T999",
-            id_col_idx=0,
+            row_id="T999", id_col_idx=0,
             update_cols=lambda cols: [cols[0], cols[1] + " drift", cols[2]],
         )
         temp_checklist.write_text(drift_text, encoding="utf-8")
-        drift_view = compare_persisted_views(temp_checklist)
-        check("manual_generated_view_drift_is_detected", False, bool(drift_view.get("ok")))
-
-        non_new_rejected = False
-        try:
-            apply_checklist_transaction(
-                temp_checklist,
-                main_definitions=(
-                    {
-                        "id": "B998",
-                        "section": "B2",
-                        "priority": "P1",
-                        "category": "Meta / Test governance",
-                        "item": "invalid synthetic direct status",
-                        "gap": "must reject direct DONE initialization",
-                        "entry": "`tools/local_regression/checklist_contract.py`",
-                        "initial_status": "DONE",
-                    },
-                ),
-            )
-        except ValueError:
-            non_new_rejected = True
-        check("new_definitions_cannot_bypass_transition_chain", True, non_new_rejected)
+        check("manual_generated_view_drift_detected", False,
+              bool(compare_persisted_views(temp_checklist).get("ok")))
+        # Schema v2 must also reject a historical G section reintroduced only
+        # in the human-readable view.
+        temp_checklist.write_text(CHECKLIST_PATH.read_text(encoding="utf-8") +
+                                  "\n## G. 逐項收斂紀錄\n\n| 日期 | 狀態 |\n|---|---|\n",
+                                  encoding="utf-8")
+        check("retired_g_markdown_section_detected", False,
+              bool(compare_persisted_views(temp_checklist).get("ok")))
+        original_json = temp_contract.read_bytes()
+        check("retire_b_without_its_active_test_is_blocked", True,
+              raises_expected(ValueError, lambda: apply_checklist_transaction(
+                  temp_checklist, retire_main_ids=("B999",))))
+        check("failed_orphan_retirement_keeps_original_contract_bytes", original_json,
+              temp_contract.read_bytes())
+        # Restore canonical view and retire both entries in a single transaction.
+        shutil.copy2(CHECKLIST_PATH, temp_checklist)
+        # Canonical current JSON still contains B999/T999; recreate from its owner.
+        from tools.local_regression.checklist_contract import render_checklist_markdown
+        temp_checklist.write_text(render_checklist_markdown(temp_checklist, load_checklist_contract(temp_checklist)), encoding="utf-8")
+        apply_checklist_transaction(temp_checklist, retire_test_ids=("T999",), retire_main_ids=("B999",))
+        after = load_checklist_contract(temp_checklist)
+        check("retirement_removes_both_current_definitions", False,
+              any(row["id"] in {"B999", "T999"} for row in (*after["main_items"], *after["tests"])))
+        check("retirement_preserves_generated_view", True,
+              bool(compare_persisted_views(temp_checklist).get("ok")))
 
     summary["canonical_owner"] = "doc/TEST_SUITE_CHECKLIST_CONTRACT.json"
-    summary["generated_views"] = ["B", "T", "G"]
+    summary["generated_views"] = ["B", "T"]
     return results, summary
 
 
@@ -1416,124 +1390,6 @@ def validate_checklist_t_single_entry_delimiter_case(_base_params):
         row_metric="mutated_t_reports_multiple_entries", expected_invalid_row_presence=True,
         target_missing_metric="target_t_row_exists_for_mutation",
     )
-
-
-
-def validate_checklist_g_transition_format_case(_base_params):
-    return _run_checklist_row_mutation_guard(
-        "META_CHECKLIST_G_TRANSITION_FORMAT",
-        heading="G. 逐項收斂紀錄", row_id="B38", id_col_idx=1,
-        update_cols=lambda cols: cols[:3] + ["DONE"] + cols[4:],
-        temp_prefix="meta_checklist_g_transition_",
-        result_name="checklist_g_rows_have_valid_status_transition", invalid_key="invalid_transition_rows",
-        status_metric="mutated_g_transition_guard_fails", expected_status="FAIL",
-        row_metric="mutated_g_transition_reports_invalid_row", expected_invalid_row_presence=True,
-        target_missing_metric="target_g_row_exists_for_mutation",
-    )
-
-
-def validate_checklist_g_new_transition_first_occurrence_case(_base_params):
-    case_id = "META_CHECKLIST_G_NEW_TRANSITION_FIRST_OCCURRENCE"
-    results, summary = _new_synthetic_case(case_id)
-    g_rows = extract_markdown_table_rows(CHECKLIST_PATH.read_text(encoding="utf-8"), "G. 逐項收斂紀錄")
-    b26_occurrence_count = sum(1 for cols in g_rows if len(cols) > 1 and cols[1].strip() == "B26")
-    target_match_index = 1 if b26_occurrence_count >= 2 else None
-    add_check(results, "meta_checklist", case_id, "target_g_row_has_nonfirst_occurrence_for_mutation", True, target_match_index is not None)
-    if target_match_index is None:
-        return results, summary
-    results, summary = _run_checklist_row_mutation_guard(
-        case_id, heading="G. 逐項收斂紀錄", row_id="B26", id_col_idx=1,
-        update_cols=lambda cols: cols[:3] + ["NEW -> DONE"] + cols[4:],
-        temp_prefix="meta_checklist_g_new_transition_",
-        result_name="checklist_g_new_transition_only_on_first_occurrence", invalid_key="invalid_new_transition_rows",
-        status_metric="mutated_g_new_transition_guard_fails", expected_status="FAIL",
-        row_metric="mutated_g_new_transition_reports_target_row", expected_invalid_row_presence=True,
-        target_missing_metric="target_g_row_exists_for_mutation", match_index=target_match_index,
-        results=results, summary=summary,
-    )
-    summary["b26_occurrence_count"] = b26_occurrence_count
-    summary["target_match_index"] = target_match_index
-    return results, summary
-
-
-def validate_checklist_g_transition_sequence_case(_base_params):
-    case_id = "META_CHECKLIST_G_TRANSITION_SEQUENCE"
-    results, summary = _new_synthetic_case(case_id)
-    g_rows = extract_markdown_table_rows(CHECKLIST_PATH.read_text(encoding="utf-8"), "G. 逐項收斂紀錄")
-    b26_occurrence_count = sum(1 for cols in g_rows if len(cols) > 1 and cols[1].strip() == "B26")
-    target_match_index = 2 if b26_occurrence_count >= 3 else None
-    add_check(results, "meta_checklist", case_id, "target_g_row_has_followup_occurrence_for_mutation", True, target_match_index is not None)
-    if target_match_index is None:
-        return results, summary
-    results, summary = _run_checklist_row_mutation_guard(
-        case_id, heading="G. 逐項收斂紀錄", row_id="B26", id_col_idx=1,
-        update_cols=lambda cols: cols[:3] + ["PARTIAL -> DONE"] + cols[4:],
-        temp_prefix="meta_checklist_g_chain_",
-        result_name="checklist_g_rows_follow_previous_status_chain", invalid_key="invalid_transition_sequence_rows",
-        status_metric="mutated_g_transition_sequence_guard_fails", expected_status="FAIL",
-        row_metric="mutated_g_transition_sequence_reports_target_row", expected_invalid_row_presence=True,
-        target_missing_metric="target_g_row_exists_for_mutation", match_index=target_match_index,
-        results=results, summary=summary,
-    )
-    summary["b26_occurrence_count"] = b26_occurrence_count
-    summary["target_match_index"] = target_match_index
-    return results, summary
-
-def validate_checklist_g_ordering_case(_base_params):
-    meta_quality_module = importlib.import_module("tools.local_regression.run_meta_quality")
-
-    case_id = "META_CHECKLIST_G_ORDERING"
-    results, summary = _new_synthetic_case(case_id)
-
-    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    try:
-        mutated_text = _replace_markdown_table_row(
-            original_text,
-            heading="G. 逐項收斂紀錄",
-            row_id="T01",
-            id_col_idx=1,
-            update_cols=lambda cols: ["2026-04-05"] + cols[1:],
-        )
-    except ValueError:
-        add_check(results, "meta_checklist", case_id, "target_g_row_exists_for_mutation", True, False)
-        return results, summary
-
-    with tempfile.TemporaryDirectory(prefix="meta_checklist_g_order_") as temp_dir:
-        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
-        mutated_path.write_text(mutated_text, encoding="utf-8")
-        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
-            consistency = meta_quality_module._summarize_checklist_consistency()
-
-    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
-    g_order_result = result_by_name.get("checklist_g_dates_non_decreasing", {})
-    invalid_rows = g_order_result.get("invalid_date_rows")
-    if invalid_rows is None:
-        invalid_rows = _read_summary_value(g_order_result, "invalid_date_rows", [])
-
-    add_check(results, "meta_checklist", case_id, "mutated_g_chronology_guard_fails", "FAIL", g_order_result.get("status"))
-    add_check(results, "meta_checklist", case_id, "mutated_g_chronology_reports_invalid_pair", True, bool(invalid_rows))
-
-    same_day_reordered_text = _swap_markdown_table_rows(
-        original_text,
-        heading="G. 逐項收斂紀錄",
-        row_id_a="T01",
-        row_id_b="T02",
-        id_col_idx=1,
-    )
-    with tempfile.TemporaryDirectory(prefix="meta_checklist_g_same_day_") as temp_dir:
-        same_day_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
-        same_day_path.write_text(same_day_reordered_text, encoding="utf-8")
-        with patch.object(meta_quality_module, "CHECKLIST_PATH", same_day_path):
-            same_day_consistency = meta_quality_module._summarize_checklist_consistency()
-    same_day_result = {item.get("name"): item for item in same_day_consistency.get("results", [])}.get(
-        "checklist_g_dates_non_decreasing", {}
-    )
-    add_check(results, "meta_checklist", case_id, "same_day_tracking_id_reorder_is_non_blocking", "PASS", same_day_result.get("status"))
-
-    summary["guard_status"] = g_order_result.get("status")
-    summary["invalid_date_rows"] = invalid_rows
-    summary["same_day_guard_status"] = same_day_result.get("status")
-    return results, summary
 
 
 
@@ -1701,7 +1557,7 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
     validator_name_set = set(validator_names)
     imported_validate_names = load_imported_validate_names_from_synthetic_main_entry(PROJECT_ROOT)
     defined_validate_names = load_defined_validate_names_from_synthetic_case_modules(PROJECT_ROOT)
-    convergence_statuses = load_convergence_latest_statuses(CHECKLIST_PATH)
+    current_test_statuses = derive_checklist_state(CHECKLIST_PATH)["test_statuses"]
     done_test_rows = load_done_test_rows(CHECKLIST_PATH)
     done_b_rows = load_done_b_rows(CHECKLIST_PATH)
     main_statuses = load_main_statuses(load_checklist_tables(CHECKLIST_PATH))
@@ -1800,9 +1656,9 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
             results,
             "meta_registry",
             case_id,
-            f"{row['id']}_done_summary_matches_convergence_status",
+            f"{row['id']}_done_summary_matches_current_status",
             "DONE",
-            convergence_statuses.get(row["id"], ""),
+            current_test_statuses.get(row["id"], ""),
         )
 
     done_b_ids = [row["b_id"] for row in done_b_rows]
@@ -1815,14 +1671,6 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
             f"{row['b_id']}_done_summary_status_matches_main_table",
             "DONE",
             main_statuses.get(row["b_id"]),
-        )
-        add_check(
-            results,
-            "meta_registry",
-            case_id,
-            f"{row['b_id']}_done_summary_matches_convergence_status",
-            "DONE",
-            convergence_statuses.get(row["b_id"], "DONE"),
         )
         if row["entry"] == "既有 synthetic case":
             continue

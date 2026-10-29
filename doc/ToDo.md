@@ -1,6 +1,4 @@
-- 加入win rate
-- 移除Delta RoMD
-- 報表依romd mean由小到大排序
+
 增加到8 seeds，原本4 seeds reuse
 
 

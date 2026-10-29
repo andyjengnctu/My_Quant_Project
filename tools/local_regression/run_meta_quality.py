@@ -72,10 +72,6 @@ def _tracking_id_sort_key(item_id: str) -> tuple[str, int, str]:
     return (match.group(1), int(match.group(2)), match.group(3))
 
 
-def _convergence_row_date_key(row: List[str]) -> str:
-    return row[0].strip() if len(row) > 0 else ""
-
-
 def _find_invalid_summary_table_order(rows: List[List[str]], *, id_col_idx: int, table_name: str) -> List[Dict[str, str]]:
     invalid_rows: List[Dict[str, str]] = []
     previous_key = None
@@ -148,7 +144,7 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
     state = derive_checklist_state(CHECKLIST_PATH)
     tables = state["tables"]
     main_statuses = state["main_statuses"]
-    convergence_statuses = state["convergence_statuses"]
+    test_statuses = state["test_statuses"]
     results: List[Dict[str, Any]] = []
 
     generated_view = compare_persisted_views(CHECKLIST_PATH)
@@ -206,9 +202,7 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
     invalid_summary_table_orders.extend(_find_invalid_summary_table_order(t_rows, id_col_idx=0, table_name="T"))
     t_ids_raw = _ids_from_table(t_rows, idx=0)
     t_ids = _sorted_unique(t_ids_raw)
-    g_done_test_ids = list(state["g_done_test_ids"])
-    g_unfinished_test_ids = list(state["g_unfinished_test_ids"])
-    g_b_statuses = {item_id: status for item_id, status in convergence_statuses.items() if item_id.startswith("B")}
+    contract_done_test_ids = sorted((item_id for item_id, status in test_statuses.items() if status == "DONE"), key=_tracking_id_sort_key)
 
     results.append(
         summarize_result(
@@ -260,168 +254,26 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
         )
     )
 
-    allowed_g_from_statuses = STATUS_VALUES | {"NEW"}
-    allowed_g_to_statuses = set(STATUS_VALUES)
-    invalid_g_transition_rows = []
-    invalid_g_new_transition_rows = []
-    invalid_g_transition_sequence_rows = []
-    no_op_convergence_rows = []
-    governance_note_examples = []
-    seen_g_ids: Set[str] = set()
-    previous_g_status_by_id: Dict[str, str] = {}
-    for row in tables["G"]:
-        if len(row) < 4:
-            continue
-        row_id = row[1].strip()
-        transition = row[3].strip()
-        if "->" not in transition:
-            invalid_g_transition_rows.append({"id": row_id, "transition": transition})
-            seen_g_ids.add(row_id)
-            continue
-        from_status, to_status = [part.strip() for part in transition.split("->", 1)]
-        if (from_status not in allowed_g_from_statuses) or (to_status not in allowed_g_to_statuses):
-            invalid_g_transition_rows.append({"id": row_id, "transition": transition})
-            seen_g_ids.add(row_id)
-            continue
-        previous_to_status = previous_g_status_by_id.get(row_id)
-        if previous_to_status is not None and from_status != previous_to_status:
-            invalid_g_transition_sequence_rows.append(
-                {
-                    "id": row_id,
-                    "previous_to_status": previous_to_status,
-                    "transition": transition,
-                }
-            )
-        if from_status == "NEW" and row_id in seen_g_ids:
-            invalid_g_new_transition_rows.append({"id": row_id, "transition": transition})
-        if from_status == to_status:
-            no_op_convergence_rows.append({"id": row_id, "transition": transition})
-        note = row[4].strip() if len(row) > 4 else ""
-        if note and len(governance_note_examples) < 5:
-            governance_note_examples.append({"id": row_id, "note": note})
-        previous_g_status_by_id[row_id] = to_status
-        seen_g_ids.add(row_id)
+    # Current v2 schema is the single owner of B/T status.  No historical
+    # transition table is replayed or validated in the formal pipeline.
     results.append(
         summarize_result(
-            "checklist_g_rows_have_valid_status_transition",
-            not invalid_g_transition_rows,
-            detail=f"invalid={invalid_g_transition_rows}",
-            extra={"invalid_transition_rows": invalid_g_transition_rows},
+            "checklist_done_test_summary_matches_current_contract",
+            t_ids == contract_done_test_ids,
+            detail=f"view_count={len(t_ids)} | contract_count={len(contract_done_test_ids)}",
+            extra={"view_ids": t_ids, "current_done_test_ids": contract_done_test_ids},
         )
     )
+    invalid_test_statuses = {key: value for key, value in test_statuses.items() if value not in STATUS_VALUES}
     results.append(
         summarize_result(
-            "checklist_g_new_transition_only_on_first_occurrence",
-            not invalid_g_new_transition_rows,
-            detail=f"invalid={invalid_g_new_transition_rows}",
-            extra={"invalid_new_transition_rows": invalid_g_new_transition_rows},
+            "checklist_test_status_values_valid",
+            not invalid_test_statuses,
+            detail=f"invalid={sorted(invalid_test_statuses.items())}",
+            extra={"invalid_test_statuses": invalid_test_statuses},
         )
     )
-    results.append(
-        summarize_result(
-            "checklist_g_rows_follow_previous_status_chain",
-            not invalid_g_transition_sequence_rows,
-            detail=f"invalid={invalid_g_transition_sequence_rows}",
-            extra={"invalid_transition_sequence_rows": invalid_g_transition_sequence_rows},
-        )
-    )
-    results.append(
-        summarize_result(
-            "checklist_g_rows_require_actual_status_change",
-            not no_op_convergence_rows,
-            detail=f"no_op={no_op_convergence_rows}",
-            extra={"no_op_rows": no_op_convergence_rows},
-        )
-    )
-    results.append(
-        summarize_result(
-            "checklist_g_notes_are_non_blocking_governance_context",
-            True,
-            detail="G note content is informational only; formal blockers cover structure, status transitions, and chronological date order.",
-            extra={"sample_note_rows": governance_note_examples},
-        )
-    )
-
-    invalid_g_date_rows = []
-    previous_date_key = None
-    previous_row = None
-    for row in tables["G"]:
-        current_date_key = _convergence_row_date_key(row)
-        if previous_date_key is not None and current_date_key < previous_date_key:
-            invalid_g_date_rows.append(
-                {
-                    "previous": {
-                        "date": previous_row[0].strip() if previous_row and len(previous_row) > 0 else "",
-                        "id": previous_row[1].strip() if previous_row and len(previous_row) > 1 else "",
-                    },
-                    "current": {
-                        "date": row[0].strip() if len(row) > 0 else "",
-                        "id": row[1].strip() if len(row) > 1 else "",
-                    },
-                }
-            )
-            break
-        previous_date_key = current_date_key
-        previous_row = row
-    results.append(
-        summarize_result(
-            "checklist_g_dates_non_decreasing",
-            not invalid_g_date_rows,
-            detail=f"invalid={invalid_g_date_rows}",
-            extra={"invalid_date_rows": invalid_g_date_rows},
-        )
-    )
-
-    results.append(
-        summarize_result(
-            "checklist_done_test_summary_matches_convergence_done_records",
-            t_ids == g_done_test_ids,
-            detail=f"t_unique={t_ids} | t_raw={sorted(t_ids_raw)} | g_done={g_done_test_ids}",
-            extra={"t_ids": t_ids, "t_ids_raw": sorted(t_ids_raw), "g_done_test_ids": g_done_test_ids},
-        )
-    )
-    done_test_missing_from_t = sorted(set(g_done_test_ids) - set(t_ids))
-    done_test_missing_from_g = sorted(set(t_ids) - set(g_done_test_ids))
-    results.append(
-        summarize_result(
-            "checklist_done_test_summary_has_no_missing_done_records",
-            not done_test_missing_from_t,
-            detail=f"missing_from_t={done_test_missing_from_t}",
-            extra={"missing_from_t": done_test_missing_from_t},
-        )
-    )
-    results.append(
-        summarize_result(
-            "checklist_done_test_summary_all_have_convergence_records",
-            not done_test_missing_from_g,
-            detail=f"missing_from_g={done_test_missing_from_g}",
-            extra={"missing_from_g": done_test_missing_from_g},
-        )
-    )
-
-    mismatched_b_statuses = {
-        item_id: {"main": main_statuses.get(item_id, ""), "g": status}
-        for item_id, status in g_b_statuses.items()
-        if main_statuses.get(item_id, "") != status
-    }
-    results.append(
-        summarize_result(
-            "checklist_main_table_matches_convergence_b_statuses",
-            not mismatched_b_statuses,
-            detail=f"mismatch={sorted(mismatched_b_statuses.items())}",
-            extra={"mismatched_b_statuses": mismatched_b_statuses},
-        )
-    )
-
-    unfinished_test_ids = list(g_unfinished_test_ids)
-    results.append(
-        summarize_result(
-            "checklist_unfinished_test_tracking_nonempty_when_main_has_gaps",
-            (len(partial_ids) + len(todo_ids) == 0) or bool(unfinished_test_ids),
-            detail=f"unfinished_test={unfinished_test_ids}",
-            extra={"unfinished_test_ids": unfinished_test_ids},
-        )
-    )
+    unfinished_test_ids = list(state["unfinished_test_ids"])
 
     ok = all(item["status"] == "PASS" for item in results)
     return {
@@ -432,8 +284,6 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
         "done_ids": done_ids,
         "unfinished_test_ids": unfinished_test_ids,
         "done_test_ids": t_ids,
-        "g_done_test_ids": g_done_test_ids,
-        "g_unfinished_test_ids": g_unfinished_test_ids,
     }
 
 
