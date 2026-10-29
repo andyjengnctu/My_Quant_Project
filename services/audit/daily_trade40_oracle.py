@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from core.file_integrity import (
-    canonical_json_sha256, compute_file_sha256, is_sha256_hex,
+    canonical_json_sha256, is_sha256_hex,
     atomic_replace_with_retry, exclusive_file_lock,
 )
 
@@ -39,6 +39,7 @@ from filters.breakout_quality.workflow_io import discover_dataset_csv_inputs, lo
 from services.audit.oracle_score_artifacts import (
     oracle_daily_source_fingerprint, oracle_dataset_summary_sha256,
 )
+from services.audit.mintrade_truth_source_attestation import attested_mintrade_source_sha256
 
 # Old MR-13CL's P2/P16 single-teacher label is a distinct retired scientific
 # identity; no new result may masquerade as its supervised-label artifact.
@@ -138,7 +139,7 @@ def _truth_source_sha(root: Path, *, outcome_metric: str = "net_r") -> str:
         if not path.is_file():
             raise DailyTrade40OracleBlockedError(f"Oracle truth source lineage missing: {relative}")
         digest.update(relative.encode("utf-8") + b"\0")
-        digest.update(compute_file_sha256(path).encode("ascii") + b"\n")
+        digest.update(attested_mintrade_source_sha256(relative, path).encode("ascii") + b"\n")
     return digest.hexdigest()
 
 

@@ -1025,3 +1025,8 @@ Direct-account BUY provenance is owned by `services/trading/account_trade_entry.
 正式 `[1] Target 驗證` 人讀報表的現行版本為 `audit.target_oracle_romd@v10`，由 `core/research_report_contract.py` 唯一持有欄位契約、`doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json` 追加新 ledger 身分；舊版 v9 等皆為歷史。主表以 `RoMD Mean` 升冪（同分 Target 名稱排序），新增交易勝率 `Win Rate`、移除 `Delta RoMD`；same-seed Robustness 仍保留每 Seed 的自身 RoMD 與 C96 Seed RoMD 直接對照，不另顯示差值；`Win/Seed` 保留。`Win Rate` 唯一計算來源是 `core/portfolio_terminal_statistics.py` → `win_rate_pct`（completed Round-Trip 淨利 > 0 視為勝），逐 Seed 記錄後取算術平均，不得從 EV(A)、Target 真值、Win/Seed 或報表代理推算。
 
 `services/audit/oracle_replay_artifacts.py` 的 Replay identity 不含報表版本且不因 v10 改變。舊 signed 觀測若缺 Win Rate，既有 `[1]` 首次唯讀 REUSE/RUN 計畫必須如實標為 `RUN`，經原單一授權後才調用相同正式 Broker-Cash Replay 回補；若原 `return/MDD/RoMD/EV(A)/trade_count/exposure/yearly/paired delta` 與重播不同則 BLOCK，且不可產出完成報表。補充勝率寫入簽章連結原始 immutable observation／execution identity 的 `win_rate_evidence/`，不修改歷史 Replay 檔案。補證完成後才能 REUSE；未取得證據不得填 `N/A`、0 或視為完成。
+
+
+### 2026-10-29 — 新 Target 名稱分支與既有 MinTrade 交易來源的身分隔離
+
+60D NetPnL 只擴充 `target_identity_for_horizon()` 已具備的 broker-ledger × horizon capability；舊八個 MinTrade Target 的交易／Score 實作沒有改變。既有 `_TRUTH_SOURCE_MODULES` 仍包含完整 Canonical 交易、訊號、風控、費稅依賴，不能藉移除 Source SHA 檢查來強迫 REUSE。`mintrade_truth_source_attestation.py` 僅對此一經舊新版本逐檔比對、具固定兩份整檔 SHA 的「新增身分解析」差異追認原 Source SHA，實際成交／Target/Score/Portfolio 身分仍逐項檢查；未列入核准清單的任意 Producer/依賴修訂，全部用實際檔案 SHA 失效。新 60D NetPnL 有不同 Target/Label、horizon、score/receipt identity，不得 REUSE 任何舊真值或 Replay；歷史工件不覆寫。這是 source-identity 過度失效修復，不是新算法或報表版本。

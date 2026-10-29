@@ -499,12 +499,68 @@ class FormalMinDailyOracleCases(TestCase):
         self.assertNotEqual(new_pnl, old_netr)
         self.assertEqual(owner.truth_producer_fingerprint(), new_netr)
         # Changes in canonical fee/entry/management dependencies still invalidate.
-        real_hash = owner.compute_file_sha256
-        with patch.object(owner, "compute_file_sha256", side_effect=lambda path: (
+        from services.audit import mintrade_truth_source_attestation as lineage
+        real_hash = lineage.compute_file_sha256
+        with patch.object(lineage, "compute_file_sha256", side_effect=lambda path: (
                 "f" * 64 if str(path).endswith("core/entry_plans.py") else real_hash(path))):
             self.assertNotEqual(owner._truth_source_sha(
                 Path(owner.__file__).resolve().parents[2], outcome_metric="net_r"), new_netr)
 
+
+    def test_60d_netpnl_addition_preserves_existing_signed_mintrade_source_identity(self):
+        """An identity-only catalog expansion cannot invalidate unchanged trades.
+
+        The old source and whole-closure SHA were independently established
+        before this additive registration. Any later Producer/SSOT change
+        must break that equality instead of inheriting an old signed Replay.
+        """
+        import hashlib
+        from services.audit import daily_trade40_oracle as owner
+        from services.audit import mintrade_truth_source_attestation as lineage
+
+        root = Path(owner.__file__).resolve().parents[2]
+        source_path = root / lineage._SOURCE_OWNER
+        raw = source_path.read_bytes()
+        current_sha = hashlib.sha256(raw).hexdigest()
+        old_sha, reviewed_sha = lineage._AUDITED_IDENTITY_ONLY_REVISION
+        self.assertNotEqual(old_sha, reviewed_sha)
+        self.assertEqual(current_sha, reviewed_sha)
+        self.assertEqual(lineage.attested_mintrade_source_sha256(
+            lineage._SOURCE_OWNER, source_path), old_sha)
+        self.assertEqual(owner._truth_source_sha(root, outcome_metric="net_r"),
+                         "80a4fe352f4466ce7c3862149f0d23a97cac127eaf71dd98a521905305e5bb32")
+        self.assertEqual(owner._truth_source_sha(root, outcome_metric="net_pnl"),
+                         "80a4fe352f4466ce7c3862149f0d23a97cac127eaf71dd98a521905305e5bb32")
+
+        # Changing even one byte of this Producer voids its legacy source SHA.
+        with TemporaryDirectory() as directory:
+            variant = Path(directory) / "daily_trade40_oracle.py"
+            variant.write_bytes(raw + b"\n# deliberate semantic revision guard\n")
+            amended = hashlib.sha256(variant.read_bytes()).hexdigest()
+            self.assertEqual(lineage.attested_mintrade_source_sha256(
+                lineage._SOURCE_OWNER, variant), amended)
+            self.assertNotEqual(amended, old_sha)
+            self.assertEqual(lineage.attested_mintrade_source_sha256(
+                "core/position_management.py", source_path), current_sha)
+
+        # 60D NetPnL is a NEW immutable truth/cache identity, even though
+        # it shares the unchanged broker-ledger and signal execution engine.
+        legacy = {
+            (40, "net_r"), (60, "net_r"),
+            (None, "net_r"), (None, "net_pnl"),
+        }
+        expected_ids = {
+            (40, "net_r"): "daily_universal_formal_min_roos_trade40_netr_v1",
+            (60, "net_r"): "daily_universal_formal_min_roos_trade60_netr_v1",
+            (None, "net_r"): "daily_universal_formal_min_roos_fulltrade_netr_v1",
+            (None, "net_pnl"): "daily_universal_formal_min_roos_fulltrade_netpnl_v1",
+        }
+        for horizon, outcome in legacy:
+            self.assertEqual(owner.target_identity_for_horizon(
+                horizon, outcome_metric=outcome)[0], expected_ids[(horizon, outcome)])
+        new_id = owner.target_identity_for_horizon(60, outcome_metric="net_pnl")[0]
+        self.assertEqual(new_id, "daily_universal_formal_min_roos_trade60_netpnl_v1")
+        self.assertNotIn(new_id, set(expected_ids.values()))
 
     def test_netpnl_exact_direct_comparison_replays_share_one_canonical_score(self):
         names = {
