@@ -700,7 +700,7 @@ PORTFOLIO_DRAWDOWN_REPORT = PersistentReportContract(
 # The current schema is declared directly; historical identities remain in
 # the compact report ledger and are not executable presentation templates.
 TARGET_ORACLE_ROMD_REPORT = PersistentReportContract(
-    report_id="audit.target_oracle_romd", version=9, role="persistent_reusable_hindsight_non_pit",
+    report_id="audit.target_oracle_romd", version=10, role="persistent_reusable_hindsight_non_pit",
     menu_path=("Research", "Target 驗證"),
     sections=(
         S("oracle_performance", 1, "Oracle Performance (4-seed mean)", tables=(T("performance", (
@@ -710,7 +710,7 @@ TARGET_ORACLE_ROMD_REPORT = PersistentReportContract(
             C("mdd_pct", "MDD Mean", 2, "%", "lower", "pct"),
             C("romd", "RoMD Mean", 2, preference="higher", format_kind="number"),
             C("romd_std", "RoMD SD", 2, preference="lower", format_kind="number"),
-            C("delta_romd_vs_c96", "Delta RoMD", 2, preference="higher", format_kind="signed_number"),
+            C("win_rate_pct", "Win Rate", 2, "%", "higher", "pct"),
             C("wins", "Win/Seed", alignment="right"),
             C("ev_a_r", "EV(A) Mean", 2, " R", "higher", "signed_number"),
         )),)),
@@ -721,12 +721,11 @@ TARGET_ORACLE_ROMD_REPORT = PersistentReportContract(
             C("n_seeds", "Seed Count", 0, format_kind="int"),
             C("is_full_year", "Full Year", alignment="left"),
         )),)),
-        S("seed_robustness", 4, "Robustness (paired same-seed Delta RoMD)", tables=(T("paired", (
+        S("seed_robustness", 4, "Robustness (paired same-seed RoMD)", tables=(T("paired", (
             C("target", "Target", alignment="left"),
             C("seed", "Seed", 0, format_kind="int"),
             C("romd", "RoMD", 2, preference="higher", format_kind="number"),
             C("c96_romd", "C96 Seed RoMD", 2, preference="higher", format_kind="number"),
-            C("delta_romd_vs_c96", "Paired Delta", 2, preference="higher", format_kind="signed_number"),
         )),)),
         S("constraints", 5, "Research Constraints"),
     ),

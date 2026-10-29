@@ -313,9 +313,29 @@ def _validate_observation(observation: Mapping[str, Any], *, target: str, seed: 
     for item in row["yearly"]:
         if not isinstance(item, dict) or not item.get("year") or not math.isfinite(float(item["strategy_return_pct"])):
             raise ValueError("Oracle cached yearly evidence incomplete")
+    if "win_rate_pct" in row:
+        win_rate = float(row["win_rate_pct"])
+        if not math.isfinite(win_rate) or not 0.0 <= win_rate <= 100.0:
+            raise ValueError("Oracle cached win rate must be a finite percentage in [0, 100]")
     if target != "C96" and not math.isfinite(float(row["delta_romd_vs_c96"])):
         raise ValueError("Oracle cached contrast is incomplete")
     return row
+
+
+def _same_replay_observation(saved: Any, rerun: Any) -> bool:
+    """An extra metric may not revise any existing historical replay observation."""
+    if isinstance(saved, Mapping) and isinstance(rerun, Mapping):
+        return (set(saved) == set(rerun) and
+                all(_same_replay_observation(saved[key], rerun[key]) for key in saved))
+    if isinstance(saved, list) and isinstance(rerun, list):
+        return (len(saved) == len(rerun) and
+                all(_same_replay_observation(a, b) for a, b in zip(saved, rerun)))
+    if isinstance(saved, bool) or isinstance(rerun, bool):
+        return type(saved) is type(rerun) and saved == rerun
+    if isinstance(saved, (int, float)) and isinstance(rerun, (int, float)):
+        return math.isfinite(float(saved)) and math.isfinite(float(rerun)) and math.isclose(
+            float(saved), float(rerun), rel_tol=1e-10, abs_tol=1e-10)
+    return saved == rerun
 
 
 def oracle_cohorts_compatible(saved: Mapping[str, Any], current: Mapping[str, Any]) -> bool:
@@ -444,6 +464,85 @@ class OracleReplayStore:
         root = Path(project_root).resolve()
         self.project_root = root
         self.cache_root = root / AUDIT_OUTPUT_ROOT / Path(output_subdir) / "replay_cache"
+
+    def _win_rate_path(self, identity: Mapping[str, Any]) -> Path:
+        """Independent supplemental metric evidence; the original replay receipt is immutable."""
+        replay = self._path(identity)
+        return self.cache_root.parent / "win_rate_evidence" / str(identity["seed"]) / replay.name
+
+    def with_win_rate(self, identity: Mapping[str, Any],
+                      observation: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Return a complete observation or None when an old receipt needs metric replay.
+
+        Missing evidence is not a zero win rate and is never reported as REUSE.
+        """
+        row = _validate_observation(observation, target=identity["target"], seed=identity["seed"])
+        if "win_rate_pct" in row:
+            return row
+        path = self._win_rate_path(identity)
+        if not path.is_file():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            data = {key: payload[key] for key in (
+                "schema_version", "identity_sha256", "base_observation_sha256", "win_rate_pct")}
+            if (data["schema_version"] != 1
+                    or data["identity_sha256"] != canonical_json_sha256(identity)
+                    or data["base_observation_sha256"] != canonical_json_sha256(row)
+                    or payload.get("evidence_sha256") != canonical_json_sha256(data)):
+                raise ValueError("metric evidence provenance differs from canonical Replay")
+            augmented = {**row, "win_rate_pct": data["win_rate_pct"]}
+            return _validate_observation(augmented, target=identity["target"], seed=identity["seed"])
+        except (OSError, ValueError, KeyError, TypeError, OverflowError) as exc:
+            raise ValueError("Oracle win-rate evidence is corrupt or inconsistent; fail closed") from exc
+
+    def write_win_rate_evidence(self, identity: Mapping[str, Any],
+                                previous: Mapping[str, Any],
+                                replayed: Mapping[str, Any], *,
+                                allow_historical_execution_input_drift: bool = False) -> dict[str, Any]:
+        """Backfill only an observed metric after verifying identical Replay economics.
+
+        Never rewrite an earlier signed observation or let a changed result
+        silently masquerade as a presentation-only field addition.
+        """
+        old = _validate_observation(previous, target=identity["target"], seed=identity["seed"])
+        new = _validate_observation(replayed, target=identity["target"], seed=identity["seed"])
+        if "win_rate_pct" in old or "win_rate_pct" not in new:
+            raise ValueError("Oracle win-rate supplement requires a missing original metric")
+        expected = dict(new)
+        expected.pop("win_rate_pct")
+        if not _same_replay_observation(old, expected):
+            raise ValueError("Oracle win-rate metric replay changes prior economic evidence; BLOCKED")
+        # Resolve again after Replay: the signed original must not have changed.
+        persisted, _ = self.resolve_completed(
+            identity,
+            allow_historical_execution_input_drift=allow_historical_execution_input_drift,
+        )
+        if persisted is None or persisted != old:
+            raise ValueError("Oracle original replay receipt changed during win-rate backfill")
+        path = self._win_rate_path(identity)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "schema_version": 1,
+            "identity_sha256": canonical_json_sha256(identity),
+            "base_observation_sha256": canonical_json_sha256(old),
+            "win_rate_pct": float(new["win_rate_pct"]),
+        }
+        payload = {**data, "evidence_sha256": canonical_json_sha256(data)}
+        with exclusive_file_lock(path.with_name("." + path.name + ".lock")):
+            if path.exists():
+                existing = self.with_win_rate(identity, old)
+                if existing is None or existing["win_rate_pct"] != new["win_rate_pct"]:
+                    raise ValueError("Oracle deterministic win-rate evidence conflict")
+            else:
+                temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+                try:
+                    temporary.write_text(json.dumps(payload, ensure_ascii=False,
+                        sort_keys=True, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+                    atomic_replace_with_retry(temporary, path)
+                finally:
+                    temporary.unlink(missing_ok=True)
+        return {**old, "win_rate_pct": float(new["win_rate_pct"])}
 
     def _path(self, identity: Mapping[str, Any]) -> Path:
         seed = int(identity["seed"])

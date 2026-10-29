@@ -1019,3 +1019,9 @@ Direct-account BUY provenance is owned by `services/trading/account_trade_entry.
 `filters/breakout_quality/daily_trade40_target.py` 只管理可評分股票日對應的**單股 Min 正式買訊／有效延續單**之 decision-time snapshot；用原始 limit、訊號日、原參數與 shadow 延續狀態，讓 `filters/breakout_quality/trade_path_label.py::simulate_realized_trade_path_label()` 從**相同單股候選**的下一可執行日開始運行。起單、延續清理、成交、停損、出場、毫元帳務與 Broker-Cash 直接使用既有正式 `core/` SSOT；沒有買訊／有效延續的 feature-eligible 日仍留在 DL score 母體，但 Target economic truth 為 NULL，禁止每日以 Close+ATR 新造訂單。
 
 單股反事實的「之前沒有被投組買到」及固定參考本金只用來隔離歷史投組資金／持股競爭；正式 Exact／Direct replay 的可評分集合、candidate gate、現金／持股、Selector 與 Score-consumption 維持原有架構。40／60 交易所日和完整週期共用一條交易路徑，只在觀測期限與 Net-R／NetPnL 欄位不同。此為原 Oracle E13 交易等價要求的缺陷修復，舊 daily-fresh MinTrade Target／Replay 工件身分失效，正式研究報表仍採原 `audit.target_oracle_romd@v9` 契約；舊歷史成果與 Registry／Experiment Log 保留。
+
+### 2026-10-29 — Target Oracle 人讀報表 v10 與舊 Replay Win Rate 補證契約
+
+正式 `[1] Target 驗證` 人讀報表的現行版本為 `audit.target_oracle_romd@v10`，由 `core/research_report_contract.py` 唯一持有欄位契約、`doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json` 追加新 ledger 身分；舊版 v9 等皆為歷史。主表以 `RoMD Mean` 升冪（同分 Target 名稱排序），新增交易勝率 `Win Rate`、移除 `Delta RoMD`；same-seed Robustness 仍保留每 Seed 的自身 RoMD 與 C96 Seed RoMD 直接對照，不另顯示差值；`Win/Seed` 保留。`Win Rate` 唯一計算來源是 `core/portfolio_terminal_statistics.py` → `win_rate_pct`（completed Round-Trip 淨利 > 0 視為勝），逐 Seed 記錄後取算術平均，不得從 EV(A)、Target 真值、Win/Seed 或報表代理推算。
+
+`services/audit/oracle_replay_artifacts.py` 的 Replay identity 不含報表版本且不因 v10 改變。舊 signed 觀測若缺 Win Rate，既有 `[1]` 首次唯讀 REUSE/RUN 計畫必須如實標為 `RUN`，經原單一授權後才調用相同正式 Broker-Cash Replay 回補；若原 `return/MDD/RoMD/EV(A)/trade_count/exposure/yearly/paired delta` 與重播不同則 BLOCK，且不可產出完成報表。補充勝率寫入簽章連結原始 immutable observation／execution identity 的 `win_rate_evidence/`，不修改歷史 Replay 檔案。補證完成後才能 REUSE；未取得證據不得填 `N/A`、0 或視為完成。

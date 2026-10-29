@@ -13609,3 +13609,12 @@ Decision: `ENGINEERING_CHECKPOINT_FIRST_REUSE / HISTORICAL_AK_EVIDENCE_PRESERVED
 - **舊結果的解讀修正**：修補前 `MinTrade40_NetR_Direct=164.00`，修補後為 `99.96`；因 Target 起點從「每日假設新單」改為「實際 Min 買訊／延續狀態」，這些績效不可當作同算法的純參數或 Target 排名提升／退步。C96 `9.18` 與價格型 `T40-MFE_Direct=123.34` 維持原顯示值，是有限的非 MinTrade 同窗對照，**不能替代** signed source／score／Replay 身分核對。
 - **驗證狀態**：直接解析報表 18 列（C96＋17 treatments），17 組 treatment ×4 Seed 的 RoMD mean 與樣本 SD 全部在 `±0.015` 的兩位數顯示精度容許範圍內一致；上節 197/197 合成與單股引擎對照係修補交付時工程證據，不是本次的真實市場逐日 E13 驗收。此 ZIP 無完整 receipt/ledger/position/equity sidecars；不得宣稱使用者 Windows Formal Test Suite PASS、72/72 REUSE、或正式 DL／Oracle score 入口逐日獨立 parity PASS。
 - **現行處置**：`USER_REPORTED_POST_SIGNAL_STATE_FOUR_SEED_RESULTS_AVAILABLE / EIGHT_MINTRADE_TREATMENTS_REPORTED / OLD_DAILY_FRESH_RESULTS_HISTORICAL_INVALID_FOR_CURRENT / REUSE_72_NOT_INDEPENDENTLY_ATTESTED / E13_FULL_MARKET_DAILY_PARITY_PENDING / NON_PIT / ITERATIVE_OOS / NO_SCIENTIFIC_ID_CHANGE / NO_REPORT_VERSION_CHANGE / NO_PROMOTION`。本次只登錄結果與同步 Registry，**不**修改正式 Target、交易核心、選單、Report Contract、費稅、模型、Replay 工件或 `doc/CMD.md`。
+
+## 2026-10-29 — Oracle v10 報表欄位／排序授權及工程實作（不變更 Target）
+
+- **使用者授權**：加入交易勝率 `Win Rate`、移除 `Delta RoMD`（主表與配對欄）、按四 Seed `RoMD Mean` 從小到大顯示。正式版型由 `audit.target_oracle_romd@v9` → `@v10`，已完成歷史 v9 報表與身分保留；machine-readable `schema_version=8` 及原始 P16/Target/Replay 身分不變。
+- **指標／排序**：正式 Portfolio `win_rate_pct` 以已完成 Round-Trip 淨損益為依據，獨立四 Seed 勝率取算術平均、單位 `%`、2 位；`Win/Seed` 是相對 C96 的 RoMD 勝出 Seed 數，不是交易勝率。主表及 paired Robustness 移除差值欄；同 Seed Oracle RoMD 與 C96 Seed RoMD 仍同列呈現。報表各區塊依 RoMD Mean 升冪呈現，不重排原始 scientific comparison 清單或任何 replay。
+- **既有工件**：歷史 signed Replay 原始 observation 未保存勝率；不能靠 EV(A)、成交次數或一般策略比較 CSV 無證據推回。正式首輪預覽依逐組身分／Win Rate evidence 標為 REUSE 或 RUN。缺者採原 Replay 核心補證、先驗證所有已存經濟欄位與年度結果一致，再另存獨立簽章的 Win Rate evidence，不覆寫歷史收據；若差異則 BLOCK。來源真值／分數、模型 FIT、Optimizer 不因純報表版型重新執行。
+- **驗收狀態**：本輪 GPT 僅完成隔離合成測試與程式／版型契約檢查；Windows Formal Suite、完整市場 72 組 Replay 勝率補證、E13 歷史逐日等價未在本輪執行，不能視為 PASS。
+
+Decision：`REPORT_V10_USER_AUTHORIZED / REPLAY_IDENTITY_UNCHANGED / MISSING_METRIC_RUN_ONLY / IMMUTABLE_LEGACY_RECEIPTS / E13_PARITY_PENDING`.

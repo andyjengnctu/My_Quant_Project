@@ -294,7 +294,7 @@ class OracleResearchCutoff2026Cases(TestCase):
                 "seed": seed, "target": "C96", "total_return_pct": 50.0,
                 "annualized_return_pct": 10.0, "mdd_pct": 10.0,
                 "romd": 5.0, "ev_a_r": 0.3, "trades": 10,
-                "exposure_pct": 70.0,
+                "exposure_pct": 70.0, "win_rate_pct": 56.0,
                 "yearly": [{"year": year, "strategy_return_pct": float(year - 2020),
                             "is_full_year": year < 2026}
                            for year in range(2021, 2027)],
@@ -904,7 +904,7 @@ class OracleScoreParityContractCases(TestCase):
         def fake_metrics(result, *, target):
             return {"target": target, "total_return_pct": 40., "annualized_return_pct": 8.,
                     "mdd_pct": 6., "romd": {"C96": 8., source: 12., direct: 15.}[target],
-                    "ev_a_r": .6, "trades": 9, "exposure_pct": 30.,
+                    "ev_a_r": .6, "trades": 9, "exposure_pct": 30., "win_rate_pct": 56.0,
                     "yearly": _synthetic_full_window_yearly()}
         with tempfile.TemporaryDirectory() as directory, \
              patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
@@ -970,7 +970,7 @@ class OracleScoreParityContractCases(TestCase):
         def metrics(result, *, target):
             return {"target": target, "total_return_pct": 40., "annualized_return_pct": 8.,
                     "mdd_pct": 6., "romd": {"C96": 8., direct: 15.}[target],
-                    "ev_a_r": .6, "trades": 9, "exposure_pct": 30.,
+                    "ev_a_r": .6, "trades": 9, "exposure_pct": 30., "win_rate_pct": 56.0,
                     "yearly": _synthetic_full_window_yearly()}
         with tempfile.TemporaryDirectory() as directory, \
              patch.object(oracle, "collect_status", return_value={"status":"READY"}), \
@@ -1628,7 +1628,7 @@ class OracleAuditContractCases(TestCase):
             return {"target": target, "total_return_pct": 120.0,
                     "annualized_return_pct": 15.0, "mdd_pct": 12.0,
                     "romd": (8.0 if target == "C96" else 12.0) + seeds.index(seed) * 0.2,
-                    "ev_a_r": 0.4, "trades": 50, "exposure_pct": 45.0,
+                    "ev_a_r": 0.4, "trades": 50, "exposure_pct": 45.0, "win_rate_pct": 56.0,
                     "yearly": _synthetic_full_window_yearly(return_pct=4.0)}
         def matching_panels(selected_definition, **_kwargs):
             complete, evidence = _mock_panels(full)
@@ -1976,7 +1976,7 @@ class OracleAuditContractCases(TestCase):
             # All past report IDs/fingerprints needed for completed Oracle
             # payload compatibility remain available in one small ledger.
             oracle_history = registry["audit.target_oracle_romd"]
-            self.assertEqual(tuple(row["version"] for row in oracle_history), tuple(range(1, 10)))
+            self.assertEqual(tuple(row["version"] for row in oracle_history), tuple(range(1, 11)))
             self.assertEqual(oracle_history[-1]["fingerprint"], current["audit.target_oracle_romd"])
             self.assertTrue(all(set(row) == {"contract_id", "version", "fingerprint"}
                                 for rows in registry.values() for row in rows))
@@ -2007,14 +2007,14 @@ class OracleAuditContractCases(TestCase):
             shutil.copy2(ROOT / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json", ledger_path)
             ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
             entry = next(x for x in ledger["reports"] if x["report_id"] == "audit.target_oracle_romd")
-            self.assertEqual(entry["versions"][-1]["version"], 9)
+            self.assertEqual(entry["versions"][-1]["version"], 10)
             entry["versions"].append({
-                "contract_id": "audit.target_oracle_romd@v10",
-                "version": 10,
+                "contract_id": "audit.target_oracle_romd@v11",
+                "version": 11,
                 "fingerprint": "1" * 16,
             })
             ledger_path.write_text(json.dumps(ledger, ensure_ascii=False), encoding="utf-8")
-            self.assertEqual(load_report_contract_versions(project)["audit.target_oracle_romd"][-1]["version"], 10)
+            self.assertEqual(load_report_contract_versions(project)["audit.target_oracle_romd"][-1]["version"], 11)
             self.assertEqual(report_contract_version_history_violations(project, approved), [])
             entry["versions"][7]["fingerprint"] = "0" * 16
             ledger_path.write_text(json.dumps(ledger, ensure_ascii=False), encoding="utf-8")
@@ -2044,7 +2044,7 @@ class OracleAuditContractCases(TestCase):
             with patch.object(oracle, "build_report", return_value=result):
                 published = oracle.run_formal_audit(self.definition, project_root=base, quiet=True)
             self.assertEqual(published["schema_version"], 8)
-            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v9")
+            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v10")
             latest = base / "outputs/audit" / self.definition.output_subdir / "latest"
             body = (latest / "audit.md").read_text(encoding="utf-8")
             for name in oracle._oracle_comparison_plan(self.definition)["aliases"]:
@@ -2057,7 +2057,7 @@ class OracleAuditContractCases(TestCase):
             self.assertNotIn("60D Mature Oracle", body)
             self.assertNotIn("**CH20_EqualRank**", body)
             self.assertIn("MAE40 >= 1R", body)
-            self.assertIn("Delta RoMD", body)
+            self.assertNotIn("Delta RoMD", body)
             # Display titles describe stable schema, not today's selected inventory.
             self.assertIn("## 2. Target Definitions\n", body)
             self.assertIn(f"Oracle treatments: {len(LEGACY_ORACLE_TARGETS)} ", body)
@@ -2067,7 +2067,7 @@ class OracleAuditContractCases(TestCase):
             expanded_body = oracle.render_result(expanded, target="markdown")
             self.assertIn(f"Oracle treatments: {len(LEGACY_ORACLE_TARGETS) + 1} ", expanded_body)
             self.assertIn("## 2. Target Definitions\n", expanded_body)
-            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v9")
+            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v10")
             json_data = json.loads((latest / "audit.json").read_text(encoding="utf-8"))
             self.assertEqual(len(json_data["oracles"]), len(LEGACY_ORACLE_TARGETS))
             self.assertIn("**MFE40**", body)
@@ -2108,7 +2108,7 @@ class OracleAuditContractCases(TestCase):
             return {
                 "target": target, "total_return_pct": 100.0, "annualized_return_pct": 15.0,
                 "mdd_pct": 12.0, "romd": base_romd if target == "C96" else base_romd + 1.5,
-                "ev_a_r": 0.3, "trades": 50, "exposure_pct": 75.0,
+                "ev_a_r": 0.3, "trades": 50, "exposure_pct": 75.0, "win_rate_pct": 56.0,
                 "yearly": _synthetic_full_window_yearly(return_pct=4.0),
             }
         with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
@@ -2468,7 +2468,7 @@ class OracleSameWindowEvidenceInvariantCases(TestCase):
         return {
             "seed": seed, "target": "T40", "total_return_pct": 13.0,
             "annualized_return_pct": 4.0, "mdd_pct": 3.0, "romd": 4.0,
-            "ev_a_r": 0.4, "trades": 10, "exposure_pct": 40.0,
+            "ev_a_r": 0.4, "trades": 10, "exposure_pct": 40.0, "win_rate_pct": 56.0,
             "yearly": [{"year": year, "strategy_return_pct": 12.0,
                         "is_full_year": full}
                        for year, full in zip(years, flags)],
@@ -2577,7 +2577,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
             "target": target, "seed": seed,
             "total_return_pct": 123.0, "annualized_return_pct": 16.0,
             "mdd_pct": 12.0, "romd": romd, "ev_a_r": 0.7,
-            "trades": 100, "exposure_pct": 75.0,
+            "trades": 100, "exposure_pct": 75.0, "win_rate_pct": 56.0,
             "yearly": _synthetic_full_window_yearly(return_pct=14.0),
         }
         if target != "C96":
@@ -3584,7 +3584,7 @@ class OracleUnifiedReuseArchitectureCases(TestCase):
                 identity, {
                     "target": "C96", "seed": seed, "total_return_pct": 100.0,
                     "annualized_return_pct": 16.0, "mdd_pct": 12.0, "romd": 8.0,
-                    "ev_a_r": 0.7, "trades": 100, "exposure_pct": 75.0,
+                    "ev_a_r": 0.7, "trades": 100, "exposure_pct": 75.0, "win_rate_pct": 56.0,
                     "yearly": _synthetic_full_window_yearly(return_pct=14.0),
                 }, origin="synthetic_baseline_fixture",
             )
@@ -3674,7 +3674,7 @@ class OracleOnePlanRealCacheCases(TestCase):
             "target": target, "seed": seed,
             "total_return_pct": 100.0, "annualized_return_pct": 16.0,
             "mdd_pct": 12.0, "romd": romd, "ev_a_r": 0.7,
-            "trades": 100, "exposure_pct": 75.0,
+            "trades": 100, "exposure_pct": 75.0, "win_rate_pct": 56.0,
             "yearly": _synthetic_full_window_yearly(return_pct=14.0),
             **({} if diff is None else {"delta_romd_vs_c96": diff}),
         }
@@ -3939,7 +3939,7 @@ class OracleOnePlanRealCacheCases(TestCase):
                     "yearly": _synthetic_full_window_yearly(),
                     "total_return_pct": 250., "annualized_return_pct": 25.,
                     "mdd_pct": 12.5, "ev_a_r": 1.5, "trades": 200,
-                    "exposure_pct": 85.}
+                    "exposure_pct": 85., "win_rate_pct": 56.0}
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             store = OracleReplayStore(root, definition.output_subdir)
@@ -4041,7 +4041,7 @@ class OracleOnePlanRealCacheCases(TestCase):
             max_positions=settings.max_positions)
         observation = {"target": target, "seed": seed, "total_return_pct": 55.,
                        "annualized_return_pct": 12., "mdd_pct": 10., "romd": 5.5,
-                       "ev_a_r": 1.0, "trades": 12, "exposure_pct": 75.,
+                       "ev_a_r": 1.0, "trades": 12, "exposure_pct": 75., "win_rate_pct": 56.0,
                        "delta_romd_vs_c96": 1.0, "yearly": _synthetic_full_window_yearly()}
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -4113,7 +4113,7 @@ class OracleOnePlanRealCacheCases(TestCase):
                 old = replay_identity(**kwargs, replay_policy=policy)
                 receipt = {"target": target, "seed": 11, "total_return_pct": 50.,
                            "annualized_return_pct": 10., "mdd_pct": 10., "romd": 5.,
-                           "ev_a_r": 0.5, "trades": 22, "exposure_pct": 50.,
+                           "ev_a_r": 0.5, "trades": 22, "exposure_pct": 50., "win_rate_pct": 56.0,
                            "delta_romd_vs_c96": 1.,
                            "yearly": _synthetic_full_window_yearly()}
                 store.write(old, receipt, origin="historical_producer")
@@ -4261,7 +4261,7 @@ class OracleOnePlanRealCacheCases(TestCase):
             store.write(old, {"target": kwargs["target"], "seed": 11,
                               "total_return_pct": 50., "annualized_return_pct": 10.,
                               "mdd_pct": 10., "romd": 5., "ev_a_r": 0.5,
-                              "trades": 22, "exposure_pct": 50.,
+                              "trades": 22, "exposure_pct": 50., "win_rate_pct": 56.0,
                               "delta_romd_vs_c96": 1.,
                               "yearly": _synthetic_full_window_yearly()}, origin="synthetic")
             current = replay_identity(**kwargs, replay_policy=policy)
@@ -4515,7 +4515,7 @@ class OracleDailySourceMetadataCases(TestCase):
                 max_positions=settings.max_positions, replay_policy=policy)
             observation = {"target": target, "seed": seed, "romd": 1.,
                 "total_return_pct": 1., "annualized_return_pct": 1., "mdd_pct": 1.,
-                "ev_a_r": .1, "trades": 1, "exposure_pct": 1.,
+                "ev_a_r": .1, "trades": 1, "exposure_pct": 1., "win_rate_pct": 56.0,
                 "yearly": _synthetic_full_window_yearly(),
                 **({} if target == "C96" else {"delta_romd_vs_c96": 0.})}
             store.write(identity, observation, origin="synthetic_dataset_source_witness")
@@ -4928,6 +4928,149 @@ class OracleSingleOwnerExecutionCases(TestCase):
                                    for target in ("C96", "R40")})
         self.assertEqual(reports[0], reports[1])
         self.assertEqual(identities[0], identities[1])
+
+    def test_old_complete_replay_adds_win_rate_without_overwriting_original(self):
+        """One missing metric is a declared RUN, then an attested 100% REUSE."""
+        from core.file_integrity import canonical_json_sha256
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = self._fixture(root)
+            store = oracle.OracleReplayStore(root, fixture[0].output_subdir)
+            seed = fixture[2]
+            scores = {("2330", "2025-01-02"): 0.2, ("2330", "2025-12-22"): 0.8}
+            import hashlib
+            key_sha = hashlib.sha256("".join(
+                f"{ticker}|{day}\n" for ticker, day in sorted(scores)
+            ).encode()).hexdigest()
+            # The independent owner fixture uses placeholder score/key hashes.
+            # Construct a *real* digest-backed score/eligibility identity here,
+            # rather than bypassing the formal RUN source-cohort proof.
+            for name in ("C96", "R40"):
+                previous, = store.existing_completed_identities(seed=seed, target=name)
+                current = dict(previous)
+                current["cohort"] = {**previous["cohort"], "cohort_rows": len(scores),
+                    "first_common_day":"2025-01-02", "last_common_day":"2025-12-22"}
+                if name != "C96":
+                    policy = dict(current["replay_policy"])
+                    policy["perfect_score_sha256"] = oracle._canonical_score_map_sha256(scores)
+                    policy["canonical_dl_score_contract"] = {
+                        **policy["canonical_dl_score_contract"],
+                        "canonical_feature_eligible_keys_sha256": key_sha,
+                        "oracle_scored_rows": len(scores),
+                    }
+                    current["replay_policy"] = policy
+                store.write(current, store.read(previous), origin="synthetic_digest_attested")
+                store._path(previous).unlink()
+            identity, = store.existing_completed_identities(seed=seed, target="R40")
+            path = store._path(identity)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertIn("win_rate_pct", payload["observation"])
+            payload["observation"].pop("win_rate_pct")
+            payload["observation_sha256"] = canonical_json_sha256(payload["observation"])
+            path.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+            original = path.read_bytes()
+            self.assertIsNone(store.with_win_rate(identity, store.read(identity)))
+            calls = []
+            def simulate(*, name, **_kw):
+                calls.append(name)
+                return {"name": name}
+            def summarize(_played, *, target):
+                return fixture[-1](target, 8.0 if target == "C96" else 18.0,
+                                   None if target == "C96" else 10.0)
+            prompts = []
+            with self._context(root, fixture), \
+                 patch.object(oracle, "_load_or_build_oracle_price_scores", return_value=(
+                     {"R40": scores}, {})) as source, \
+                 patch.object(oracle, "_run_scenario", side_effect=simulate), \
+                 patch.object(oracle, "_metrics", side_effect=summarize):
+                cancelled = oracle.build_report(fixture[0], project_root=root, quiet=True,
+                    preflight_approval=lambda view: prompts.append(view) or False)
+                self.assertEqual(cancelled["status"], "CANCELLED")
+                self.assertIn("REUSE 1 / RUN（需回放）1 / BLOCKED 0", prompts[-1])
+                self.assertEqual(calls, [])
+                report = oracle.build_report(fixture[0], project_root=root, quiet=True,
+                    preflight_approval=lambda _view: True)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(source.call_count, 1)
+                self.assertEqual(report["oracles"][0]["win_rate_pct"], 56.0)
+                self.assertEqual(path.read_bytes(), original, "historical signed cache must be immutable")
+                self.assertEqual(store.with_win_rate(identity, store.read(identity))["win_rate_pct"], 56.0)
+                oracle.build_report(fixture[0], project_root=root, quiet=True,
+                    preflight_approval=lambda view: prompts.append(view) or False)
+                self.assertIn("REUSE 2 / RUN（需回放）0 / BLOCKED 0", prompts[-1])
+                self.assertEqual(len(calls), 1)
+            evidence = store._win_rate_path(identity)
+            evidence_json = json.loads(evidence.read_text(encoding="utf-8"))
+            evidence_json["win_rate_pct"] = 99.0
+            evidence.write_text(json.dumps(evidence_json, sort_keys=True), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "win-rate evidence is corrupt"):
+                store.with_win_rate(identity, store.read(identity))
+
+
+class OracleWinRateReportCases(TestCase):
+    def test_completed_trade_win_rate_aggregation_and_order(self):
+        rows = []
+        for seed, rate in zip((10, 20, 30, 40), (20.0, 40.0, 60.0, 80.0)):
+            rows.append({"target":"R40", "seed":seed, "total_return_pct":90.0,
+                "annualized_return_pct":15.0, "mdd_pct":10.0, "romd":9.0,
+                "ev_a_r":1.0, "win_rate_pct":rate, "trades":10,
+                "exposure_pct":45.0, "delta_romd_vs_c96":1.0,
+                "yearly":[{"year":"2025", "strategy_return_pct":12.0,
+                           "is_full_year":False}]})
+        performance = oracle._aggregate(rows, target="R40")
+        self.assertAlmostEqual(performance["win_rate_pct"], 50.0)
+        self.assertAlmostEqual(performance["win_rate_pct_std"],
+                               float(np.std([20.0,40.0,60.0,80.0],ddof=1)))
+        baseline = {**performance, "target":"C96", "romd":8.0}
+        better = {**performance, "target":"T40", "romd":12.0, "positive_seed_count":4}
+        report = {"baseline":baseline, "oracles":[better,
+                 {**performance, "positive_seed_count":4}],
+                 "start_date":"2021-01-01", "end_date":"2026-03-02",
+                 "common_cohort":{"cohort_rows":100}, "benchmark_id":"test",
+                 "seeds":[10,20,30,40], "schema_version":8,
+                 "definitions":{"R40":"return", "T40":"return"},
+                 "limitations":["NOT PIT"]}
+        md = oracle.render_result(report, target="markdown")
+        table = md.split("## 1. Oracle Performance (4-seed mean)",1)[1].split("## 2.",1)[0]
+        self.assertIn("Win Rate", table)
+        self.assertNotIn("Delta RoMD", table)
+        self.assertLess(table.index("C96 Same-Window"),table.index("R40"))
+        self.assertLess(table.index("R40"),table.index("T40"))
+        self.assertIn("50.00%", table)
+        self.assertNotIn("Delta RoMD", md)
+        self.assertNotIn("Paired Delta", md)
+        self.assertIn("C96 Seed RoMD", md, "robustness retains independent same-seed baseline")
+        self.assertIn("RoMD Mean", oracle.render_result(report, target="console"))
+
+    def test_changed_economic_replay_blocks_win_rate_backfill(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore, replay_identity
+        identity = replay_identity(dataset="synthetic", dataset_sha256="a"*64,
+            target="C96", definition={"C96":"same-window"}, start="2021-01-01",
+            end="2026-03-02", benchmark="synthetic", param_sha256="b"*64,
+            seed=42, cohort={"cohort_rows":1}, ranking_policy="exact",
+            ranking_options={}, evaluation_mode="oos", max_positions=10,
+            replay_policy={})
+        original = {"target":"C96", "seed":42, "total_return_pct":12.,
+            "annualized_return_pct":8., "mdd_pct":5., "romd":2.4,
+            "ev_a_r":0.4, "trades":10, "exposure_pct":50.,
+            "yearly":[{"year":2025,"strategy_return_pct":12.,"is_full_year":True}]}
+        with tempfile.TemporaryDirectory() as temp:
+            store = OracleReplayStore(Path(temp), "oracle_test")
+            store.write(identity, original, origin="legacy_signed")
+            self.assertIsNone(store.with_win_rate(identity, original))
+            with self.assertRaisesRegex(ValueError, "changes prior economic evidence"):
+                store.write_win_rate_evidence(identity, original,
+                    {**original, "romd":99., "win_rate_pct":70.0})
+            self.assertFalse(store._win_rate_path(identity).exists())
+            stored = store.write_win_rate_evidence(identity, original,
+                                                  {**original, "win_rate_pct":70.0})
+            self.assertEqual(stored["win_rate_pct"], 70.)
+            self.assertEqual(store.read(identity),original)
+            self.assertEqual(store.with_win_rate(identity, original),stored)
+            with self.assertRaisesRegex(ValueError, "evidence conflict"):
+                store.write_win_rate_evidence(identity, original,
+                                              {**original, "win_rate_pct":20.0})
+
 
 
 if __name__ == "__main__":

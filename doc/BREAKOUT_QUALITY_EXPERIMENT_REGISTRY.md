@@ -738,9 +738,16 @@ Decision：`SINGLE_ORACLE_EXECUTOR / CANONICAL_SOURCE_SCORE_CACHE / LEGAL_IDENTI
 
 ### 2026-10-29 — Research [1] MinTrade 買訊／延續單修補後結果：最新狀態（不改研究身分）
 
-- **現行名單與報表**：`AUD-target-ground-truth-romd`／`audit.target_oracle_romd@v9`，payload schema 8；C96＋17 Oracle treatments（9 價格型＋8 MinTrade）。正式 P16 四 Seed、共同 630,589 stock-days、2021-01-01～2026-03-02（2026 部分年度）、Exact K/R0 或 Direct No-K/No-R0、Broker-Cash／完美每日百分位分數均不變。
+- **2026-10-29 當時名單與報表（歷史快照）**：`AUD-target-ground-truth-romd`／`audit.target_oracle_romd@v9`，payload schema 8；C96＋17 Oracle treatments（9 價格型＋8 MinTrade）。正式 P16 四 Seed、共同 630,589 stock-days、2021-01-01～2026-03-02（2026 部分年度）、Exact K/R0 或 Direct No-K/No-R0、Broker-Cash／完美每日百分位分數均不變。
 - **使用者已回報修補後四 Seed 報表**：`貼上的 Markdown(5).md` SHA256 `4907da573718f5b647eebe637795dd4b04ca1d8962f8de0a0e263d2ca24a05b2`；本次 MinTrade RoMD（依 40D Exact／Direct、60D Exact／Direct、完整週期 Net-R Exact／Direct、完整週期 NetPnL Exact／Direct 順序）為 `27.51 / 99.96 / 22.23 / 117.77 / 24.63 / 114.26 / 25.81 / 131.66`；完整四 Seed、Return／MDD／年化／EV(A) 及修補前歷史對照見本 Log `2026-10-29` 區段。價格型原顯示值不變。
 - **歷史狀態不再代表現行**：上方長列的 `2026-10-28 REUSE 64 / RUN 0` 是 **daily-fresh 交易對象修補前**的時點證據，已明示為 HISTORICAL；Log 先前「市場結果待重跑」也已由使用者報表解決**績效結果取得**，但不代表 signed 32 份 MinTrade replay receipts 完整認證。不得將舊 daily-fresh 原始結果追認成修正後現行結果。
 - **證據與放行界線**：修補後的 8 MinTrade ×4 Seed **已有使用者績效報表**，不是 GPT 自行跑真實市場。最新 ZIP 不含完整原始市場、`outputs/` receipt／逐日交易、現金、部位、權益，**目前 72 組正式 REUSE 計畫未獨立核對**；E13 要求的正式 DL／Oracle 同 perfect-score 逐日 parity 仍 **PENDING**。不得宣稱完整形式驗收 PASS、模型 PIT 合法或 Trading Promotion。
 
 Decision：`USER_REPORTED_POST_FIX_ORACLE_RESULT_AVAILABLE / EIGHT_MINTRADE_TREATMENTS_FOUR_SEEDS_REPORTED / HISTORICAL_DAILY_FRESH_NOT_CURRENT / REPLAY_RECEIPTS_NOT_ATTESTED / E13_FULL_MARKET_DAILY_PARITY_PENDING / SAME_REPORT_V9 / NO_NEW_SCIENTIFIC_IDENTITY / NON_PIT / NO_PROMOTION`。
+
+### 2026-10-29 — Research [1] Oracle 報表 v10：Win Rate／主表排序改版
+
+- **使用者明確授權之現行報表**：`audit.target_oracle_romd@v10`；payload `schema_version=8` 不變，原 v1～v9 的 compact report ledger 身分／原始報表不可覆寫。主表加入 `Win Rate`（四個 Seed 的正式完成 Round-Trip 勝率 `win_rate_pct` 算術平均，百分比／2 位），移除 `Delta RoMD`（包含配對表的 `Paired Delta` 欄位／原 Delta 字樣），主表及相應年度／Seed 明細按 RoMD Mean 由小到大排序、同分以 Target 名稱決定。配對表仍保留同 Seed 的 Oracle RoMD 與 C96 Seed RoMD，`Win/Seed` 亦保留；全部策略／Target／Selector／費稅／P16 身分不變。
+- **Cache／補證政策**：現行 signed Portfolio Replay 交易身分與歷史經濟 observation **不因報表版號改變**；已含 `win_rate_pct` 或具備可驗證 Win Rate 補充證據者 REUSE。舊正確但缺 Win Rate 的 signed 收據規劃為 `RUN` 僅補算缺失的交易勝率，Replay 其餘原始經濟數據與原收據必須逐欄符合後，將 Win Rate 寫入與該身分／原 observation SHA 綁定的獨立 `win_rate_evidence`；任何差異或證據損毀一律 BLOCK，不得覆寫原始 Replay 或用 0／推測值冒充。新 Replay 直接保存勝率。未知實際本機工件狀態，RUN 數量由既有正式 `[1]` 唯讀計畫判斷。
+
+Decision：`USER_APPROVED_REPORT_V10_ONLY / TRADE_WIN_RATE_SSOT / ROMD_ASC_PRESENTATION / OLD_RESULTS_IMMUTABLE / MISSING_METRIC_EXPLICIT_RUN / NO_SCIENTIFIC_REPLAY_IDENTITY_CHANGE / E13_FULL_MARKET_DAILY_PARITY_PENDING`.

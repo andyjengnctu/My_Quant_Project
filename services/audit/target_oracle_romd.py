@@ -1169,9 +1169,11 @@ def _load_or_build_oracle_price_scores(
 
 def _metrics(replay: dict[str, Any], *, target: str) -> dict[str, Any]:
     summary = _scenario_summary(replay)
-    required = ("total_return_pct", "max_drawdown_pct", "return_over_max_drawdown", "expected_value_r", "trade_count", "avg_exposure_pct")
+    required = ("total_return_pct", "max_drawdown_pct", "return_over_max_drawdown", "expected_value_r", "trade_count", "avg_exposure_pct", "win_rate_pct")
     if any(not math.isfinite(float(summary[name])) for name in (*required, "annual_return_pct")):
         raise OracleBlockedError(f"Oracle {target}缺少有效portfolio performance metrics")
+    if not 0.0 <= float(summary["win_rate_pct"]) <= 100.0:
+        raise OracleBlockedError(f"Oracle {target} has invalid completed-trade win rate")
     yearly = _yearly_frame(replay["profile"], "strategy")
     return {
         "target": target,
@@ -1180,6 +1182,7 @@ def _metrics(replay: dict[str, Any], *, target: str) -> dict[str, Any]:
         "mdd_pct": float(summary["max_drawdown_pct"]),
         "romd": float(summary["return_over_max_drawdown"]),
         "ev_a_r": float(summary["expected_value_r"]),
+        "win_rate_pct": float(summary["win_rate_pct"]),
         "trades": int(summary["trade_count"]),
         "exposure_pct": float(summary["avg_exposure_pct"]),
         "yearly": _to_json_native(yearly.to_dict("records")),
@@ -1244,7 +1247,7 @@ def _aggregate(
         annual_rows.append(by_year)
     summary = {"target": target, "seeds": len(records)}
     fields = (
-        "total_return_pct", "annualized_return_pct", "mdd_pct", "romd", "ev_a_r", "trades", "exposure_pct",
+        "total_return_pct", "annualized_return_pct", "mdd_pct", "romd", "ev_a_r", "win_rate_pct", "trades", "exposure_pct",
     )
     for field in fields:
         values = np.asarray([float(x[field]) for x in records], dtype=float)
@@ -1557,6 +1560,7 @@ def _oracle_limitations() -> list[str]:
             "Direct means canonical No-K/No-R0, NOT direct raw-R regression or executable prediction.",
             "C96 is the same-seed Min/Broker-Cash control for both selectors; paired deltas use that baseline.",
             "N=4 paired end-to-end parameter seeds; Oracle scores have no trainable seed.",
+            "Win Rate Mean is the arithmetic mean of canonical per-seed completed Round-Trip win rates; Win/Seed instead counts RoMD wins vs C96.",
             "No best-target fitting from iterative OOS; multi-target search is exploratory.",
             "R40 is the future 40th session Close return, not Portfolio Replay exit return.",
             "T40 uses full-path nonnegative MAE and clamps to -1R at 1R adverse movement.",
@@ -1869,6 +1873,7 @@ def _execute_single_stage_missing(
     start: str, end: str, base_arm, exact_arm, direct_arm,
     base_policy: Mapping[str, Any], cache,
     allow_historical_execution_input_drift: bool = False,
+    metric_backfill: Mapping[tuple[int, str], tuple[Mapping[str, Any], Mapping[str, Any]]] | None = None,
 ) -> dict[tuple[int, str], dict[str, Any]]:
     """Run ONLY the missing Seed x Target cells in the certified one-shot plan.
 
@@ -1899,6 +1904,9 @@ def _execute_single_stage_missing(
         raise OracleBlockedError("Oracle P16 inputs changed after approved preflight")
     out: dict[tuple[int, str], dict[str, Any]] = {}
     required = {key for key, action in decisions.items() if action == "RUN"}
+    metric_backfill = dict(metric_backfill or {})
+    if not set(metric_backfill).issubset(required):
+        raise OracleBlockedError("Win-rate supplement escaped the authorized RUN plan")
     if not required:
         return out
     all_cohorts = set(current_keys.values())
@@ -2043,10 +2051,22 @@ def _execute_single_stage_missing(
                 action.require_ready()
             except ValueError as exc:
                 raise OracleBlockedError(str(exc)) from exc
-            if action.action(seed, target) != "RUN":
+            is_metric_backfill = key in metric_backfill
+            expected_action = "REUSE" if is_metric_backfill else "RUN"
+            if action.action(seed, target) != expected_action:
                 raise OracleBlockedError(
                     f"Oracle {target} seed={seed} changed after preflight; refusing silent replanning"
                 )
+            if is_metric_backfill:
+                original_identity, original_observation = metric_backfill[key]
+                current_saved, _ = cache.resolve_completed(
+                    identity,
+                    allow_historical_execution_input_drift=allow_historical_execution_input_drift,
+                )
+                if identity != original_identity or current_saved != original_observation:
+                    raise OracleBlockedError(
+                        f"Oracle {target} seed={seed} changed before win-rate evidence Replay"
+                    )
             replay_kwargs = dict(
                 data_dir=data_dir, start_date=start, end_date=end,
                 max_positions=settings.max_positions, enable_rotation=False,
@@ -2079,12 +2099,21 @@ def _execute_single_stage_missing(
                         raise OracleBlockedError("Oracle RUN missing paired C96 benchmark")
                     result["delta_romd_vs_c96"] = result["romd"] - baseline["romd"]
                 return result
-            result, origin = action.execute(seed, target, produce)
-            if origin != "newly completed":
-                raise OracleBlockedError("Oracle RUN unexpectedly reused a different receipt")
+            if is_metric_backfill:
+                result = cache.write_win_rate_evidence(
+                    identity, original_observation, produce(),
+                    allow_historical_execution_input_drift=allow_historical_execution_input_drift,
+                )
+                if not quiet:
+                    print(f"[RUN] seed={seed} {target} | Win Rate evidence completed; "
+                          "original Replay preserved", flush=True)
+            else:
+                result, origin = action.execute(seed, target, produce)
+                if origin != "newly completed":
+                    raise OracleBlockedError("Oracle RUN unexpectedly reused a different receipt")
+                if not quiet:
+                    print(f"[RUN] seed={seed} {target} | completed", flush=True)
             out[key] = result
-            if not quiet:
-                print(f"[RUN] seed={seed} {target} | completed", flush=True)
     if set(out) != required:
         raise OracleBlockedError("Oracle missing-only execution did not complete every RUN cell")
     return out
@@ -2146,6 +2175,7 @@ def _run_single_stage_oracle(
     decisions: dict[tuple[int, str], str] = {}
     cached: dict[tuple[int, str], dict[str, Any]] = {}
     identities: dict[tuple[int, str], dict[str, Any]] = {}
+    metric_backfill: dict[tuple[int, str], tuple[dict[str, Any], dict[str, Any]]] = {}
     blocked: dict[tuple[int, str], str] = {}
     # Reconstruct canonical Min rolling schedule metadata once per seed, not
     # a single stock's historical trade path or future Target outcome.
@@ -2205,7 +2235,12 @@ def _run_single_stage_oracle(
                     )
                     if obs is None:
                         raise OracleBlockedError("C96 evidence disappeared during preflight")
-                    decisions[key], cached[key], identities[key] = "REUSE", obs, identity
+                    complete = cache.with_win_rate(identity, obs)
+                    if complete is None:
+                        decisions[key] = "RUN"
+                        metric_backfill[key] = (identity, obs)
+                    else:
+                        decisions[key], cached[key], identities[key] = "REUSE", complete, identity
                 else:
                     # Historical C96 inputs/revisions are not scientific
                     # conflicts. A stale result remains intact and the
@@ -2282,7 +2317,12 @@ def _run_single_stage_oracle(
                 )
                 if obs is None:
                     raise ValueError("certified historical replay disappeared")
-                decisions[key], cached[key], identities[key] = "REUSE", obs, expected
+                complete = cache.with_win_rate(expected, obs)
+                if complete is None:
+                    decisions[key] = "RUN"
+                    metric_backfill[key] = (expected, obs)
+                else:
+                    decisions[key], cached[key], identities[key] = "REUSE", complete, expected
             except (OSError, ValueError, KeyError, TypeError, OracleBlockedError) as exc:
                 decisions[key] = "BLOCKED"
                 blocked[key] = str(exc)
@@ -2331,6 +2371,7 @@ def _run_single_stage_oracle(
         base_arm=base_arm, exact_arm=exact_arm, direct_arm=direct_arm,
         base_policy=baseline_policy, cache=cache,
         allow_historical_execution_input_drift=allow_historical_execution_input_drift,
+        metric_backfill=metric_backfill,
     )
     for key, record in newly_completed.items():
         if decisions[key] != "RUN" or key in cached:
@@ -2409,9 +2450,11 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
     yearly_table = sections[2].tables[0]
     paired_table = sections[3].tables[0]
     baseline = dict(report["baseline"])
-    items = [dict(baseline, target="C96 Same-Window", delta_romd_vs_c96=0.0, wins="-"),
+    items = [dict(baseline, target="C96 Same-Window", wins="-"),
              *[dict(item, target=_oracle_display_name(item["target"]), wins=f'{item["positive_seed_count"]}/{item["seeds"]}')
                for item in report["oracles"]]]
+    # Presentation-only sort; preserve the canonical comparison/Replay order.
+    items.sort(key=lambda row: (float(row["romd"]), str(row["target"])))
     rows = format_comparison_rows(perf_table, items, target=target)
     intro = [
         "Target Ground Truth -> Strategy RoMD (HINDSIGHT ORACLE / NOT PIT)",
@@ -2422,6 +2465,7 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
         f'Report schema: {report["schema_version"]}, Oracle treatments: '
         f'{len(report["oracles"])} (Exact + Direct); not Standard SOP',
         'Ranking: Exact K/R0 or Direct No-K/No-R0; same Broker-Cash, seed/P16 and future scores.',
+        'Presentation: ascending RoMD Mean (lowest to highest; Target name breaks ties).',
         'T40: (1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 >= 1R -> T40 = -1R.',
         'T40-MFE: (1 - min(MAE40, 1R)) * MFE40_R - min(MAE40, 1R); MAE40 >= 1R -> -1R.',
         'CG = equal-rank 50/50 geometry PROXY, not a neural-network model head.',
@@ -2458,7 +2502,7 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
     baselines = {int(x["seed"]): float(x["romd"]) for x in baseline["seed_observations"]}
     paired_rows = [
         dict(obs, target=_oracle_display_name(item["target"]), c96_romd=baselines[int(obs["seed"])])
-        for item in report["oracles"]
+        for item in items if item["target"] != "C96 Same-Window"
         for obs in item["seed_observations"]
     ]
     for paired_cells in format_comparison_rows(

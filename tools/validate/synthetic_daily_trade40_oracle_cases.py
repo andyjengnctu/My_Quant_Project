@@ -193,7 +193,7 @@ def execute_synthetic_score_fixture(definition, *, price_scores, daily_scores, k
     end = str(definition.dimensions["oracle_evaluation_end_date"])
     def metrics(_result, *, target):
         return {"target": target, "total_return_pct": 5., "annualized_return_pct": 1.,
-                "mdd_pct": 1., "romd": 5., "ev_a_r": .5, "trades": 1, "exposure_pct": 5.,
+                "mdd_pct": 1., "romd": 5., "ev_a_r": .5, "trades": 1, "exposure_pct": 5., "win_rate_pct": 56.0,
                 "yearly": [{"year": year, "strategy_return_pct": 1.,
                             "is_full_year": year < pd.Timestamp(end).year}
                            for year in range(pd.Timestamp(settings.start_date).year, pd.Timestamp(end).year + 1)]}
@@ -363,7 +363,7 @@ class FormalMinDailyOracleCases(TestCase):
         )
         observation = {"target": EXACT, "seed": seed, "romd": 1.,
             "total_return_pct": 1., "annualized_return_pct": 1., "mdd_pct": 1.,
-            "ev_a_r": .1, "trades": 1, "exposure_pct": 1., "delta_romd_vs_c96": 0.,
+            "ev_a_r": .1, "trades": 1, "exposure_pct": 1., "win_rate_pct": 56.0, "delta_romd_vs_c96": 0.,
             "yearly": [{"year": year, "strategy_return_pct": 1., "is_full_year": year < 2026}
                        for year in range(2021, 2027)]}
         with TemporaryDirectory() as temp_dir:
@@ -396,7 +396,7 @@ class FormalMinDailyOracleCases(TestCase):
         self.assertEqual(p["selectors"][EXACT],"exact")
         self.assertEqual(p["selectors"][DIRECT],"direct")
         self.assertEqual(d.source["daily_trade40_profile"],PROFILE)
-        self.assertEqual(require_approved_report_contract("audit.target_oracle_romd").version,9)
+        self.assertEqual(require_approved_report_contract("audit.target_oracle_romd").version,10)
 
     def test_mixed_horizons_reject_incomplete_stock_day_not_silent_intersection(self):
         d = definition()
@@ -1016,7 +1016,7 @@ class FormalMinReplayIntegrationCases(TestCase):
                   6. if target==DIRECT else 8.)
             return {"target":target,"seed":seed,"total_return_pct":100.,
                     "annualized_return_pct":12.,"mdd_pct":10.,"romd":romd,
-                    "ev_a_r":.5,"trades":25,"exposure_pct":60.,
+                    "ev_a_r":.5,"trades":25,"exposure_pct":60., "win_rate_pct": 56.0,
                     "yearly":[{"year":year,"strategy_return_pct":5.,"is_full_year":year!=2025}
                               for year in range(2021,2026)]}
         formal=source_fixture()[3]
@@ -1159,7 +1159,7 @@ class FormalMinReplayIntegrationCases(TestCase):
             return {"target": target, "total_return_pct": 100.,
                 "annualized_return_pct": 12., "mdd_pct": 10.,
                 "romd": 7. if target == "C96" else 9., "ev_a_r": .5,
-                "trades": 25, "exposure_pct": 60.,
+                "trades": 25, "exposure_pct": 60., "win_rate_pct": 56.0,
                 "yearly": [{"year": year, "strategy_return_pct": 5.,
                             "is_full_year": year != 2025} for year in range(2021, 2026)]}
 
