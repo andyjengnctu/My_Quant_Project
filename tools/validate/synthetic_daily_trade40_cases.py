@@ -863,5 +863,145 @@ class FormalMinSignalStateParityCases(unittest.TestCase):
             simulate_realized_trade_path_label(**{**kw, "starting_signal_state": None})
 
 
+
+
+class FormalMinTrade40TrainingSourcePreflightCases(unittest.TestCase):
+    """The new supervised target must fail closed before selecting old teachers."""
+
+    @staticmethod
+    def _source(*, start="2018-01-02", publish=None, seed=693545351):
+        from services.breakout_quality.formal_mintrade40_pit_source import FormalMinTrade40PITSource
+        days, frame, params, _period = fixture(count=140, start=start)
+        period = ExecutableMinPeriod(
+            pd.Timestamp(days[0]), None, params, "formal_min_roos_seed",
+            build_portfolio_params_signature(params),
+        )
+        return days, FormalMinTrade40PITSource(
+            seed=seed, param_sha256="a" * 64, schedule=(period,),
+            publication_dates=(str(publish or days[0].date()),),
+        )
+
+    def test_certified_historical_seed_schedule_can_pass_preflight(self):
+        from services.breakout_quality.formal_mintrade40_pit_source import verify_formal_mintrade40_pit_source
+        days, source = self._source()
+        evidence = verify_formal_mintrade40_pit_source(
+            source, expected_seed=source.seed, information_dates=[days[70]],
+            executable_dates=[days[71]], fit_cutoff=days[110],
+        )
+        self.assertEqual(evidence["sample_count"], 1)
+        self.assertEqual(evidence["validation"], "PIT_SCHEDULE_PREFLIGHT_ONLY_NOT_FIT_AUTHORIZATION")
+
+    def test_current_2021_p16_cannot_label_historical_training_rows(self):
+        from services.breakout_quality.formal_mintrade40_pit_source import (
+            FormalMinTrade40PITBlocked, verify_formal_mintrade40_pit_source,
+        )
+        days, source = self._source(start="2021-01-04")
+        with self.assertRaisesRegex(FormalMinTrade40PITBlocked, "Future-dated Min schedule"):
+            verify_formal_mintrade40_pit_source(
+                source, expected_seed=source.seed,
+                information_dates=[pd.Timestamp("2019-01-03")],
+                executable_dates=[pd.Timestamp("2019-01-04")],
+                fit_cutoff=pd.Timestamp("2020-12-31"),
+            )
+
+    def test_teacher_seed_mismatch_rejected(self):
+        from services.breakout_quality.formal_mintrade40_pit_source import (
+            FormalMinTrade40PITBlocked, verify_formal_mintrade40_pit_source,
+        )
+        days, source = self._source()
+        with self.assertRaisesRegex(FormalMinTrade40PITBlocked, "Seed-specific"):
+            verify_formal_mintrade40_pit_source(
+                source, expected_seed=2014432738,
+                information_dates=[days[50]], executable_dates=[days[51]],
+                fit_cutoff=days[110],
+            )
+
+    def test_future_published_teacher_rejected(self):
+        from services.breakout_quality.formal_mintrade40_pit_source import (
+            FormalMinTrade40PITBlocked, verify_formal_mintrade40_pit_source,
+        )
+        days, source = self._source(publish="2020-01-01")
+        with self.assertRaisesRegex(FormalMinTrade40PITBlocked, "backfilled"):
+            verify_formal_mintrade40_pit_source(
+                source, expected_seed=source.seed,
+                information_dates=[days[60]], executable_dates=[days[61]],
+                fit_cutoff=days[110],
+            )
+
+    def test_post_cutoff_rows_and_retired_teacher_rejected(self):
+        from dataclasses import replace as dataclass_replace
+        from services.breakout_quality.formal_mintrade40_pit_source import (
+            FormalMinTrade40PITBlocked, verify_formal_mintrade40_pit_source,
+        )
+        days, source = self._source()
+        with self.assertRaisesRegex(FormalMinTrade40PITBlocked, "Post-FIT-cutoff"):
+            verify_formal_mintrade40_pit_source(
+                source, expected_seed=source.seed,
+                information_dates=[days[60]], executable_dates=[days[61]],
+                fit_cutoff=days[60],
+            )
+        with self.assertRaisesRegex(FormalMinTrade40PITBlocked, "Retired or nonformal"):
+            verify_formal_mintrade40_pit_source(
+                dataclass_replace(source, source_id="retired_p2_teacher"),
+                expected_seed=source.seed, information_dates=[days[60]],
+                executable_dates=[days[61]], fit_cutoff=days[110],
+            )
+
+
+    def test_mature_labels_match_canonical_and_immature_cannot_force_closeout(self):
+        from services.breakout_quality.formal_mintrade40_pit_source import (
+            materialize_formal_mintrade40_pit_labels,
+        )
+        days, source = self._source()
+        _, frame, _, _ = fixture(count=140, start="2018-01-02")
+        fit = days[110]
+        labels = materialize_formal_mintrade40_pit_labels(
+            source, expected_seed=source.seed, frame=frame, positions=np.array([70, 90]),
+            ticker="2330", exchange_calendar=days, fit_cutoff=fit,
+        )
+        canonical = compute_counterfactual_trade40_batch(
+            frame.loc[:fit], np.array([70]), ticker="2330", schedule=source.schedule,
+            exchange_calendar=days[days <= fit], research_cutoff=fit,
+        )
+        self.assertEqual(labels.matured.tolist(), [True, False])
+        self.assertEqual(labels.completed.tolist(), [True, False])
+        self.assertAlmostEqual(float(labels.raw_net_r[0]), float(canonical.target_raw_r[0]))
+        self.assertTrue(np.isnan(labels.raw_net_r[1]))
+        self.assertTrue(np.isnat(labels.maturity_dates[1]))
+
+    def test_future_prices_do_not_change_fit_cutoff_labels(self):
+        from services.breakout_quality.formal_mintrade40_pit_source import (
+            materialize_formal_mintrade40_pit_labels,
+        )
+        days, source = self._source()
+        _, frame, _, _ = fixture(count=140, start="2018-01-02")
+        kwargs = dict(source=source, expected_seed=source.seed, positions=np.array([70, 90]),
+                      ticker="2330", exchange_calendar=days, fit_cutoff=days[110])
+        before = materialize_formal_mintrade40_pit_labels(frame=frame, **kwargs)
+        tampered = frame.copy()
+        tampered.loc[tampered.index > days[110], ["Open", "High", "Low", "Close"]] *= 15
+        after = materialize_formal_mintrade40_pit_labels(frame=tampered, **kwargs)
+        np.testing.assert_equal(before.raw_net_r, after.raw_net_r)
+        np.testing.assert_array_equal(before.matured, after.matured)
+
+    def test_natural_early_maturity_is_accepted_without_full_horizon(self):
+        from services.breakout_quality import formal_mintrade40_pit_source as owner
+        days, source = self._source()
+        _, frame, _, _ = fixture(count=140, start="2018-01-02")
+        early = SimpleNamespace(
+            target_raw_r=np.array([1.25], dtype=np.float32),
+            valid_mask=np.array([True]),
+            maturity_dates=np.array([days[88].to_datetime64().astype("datetime64[D]")]),
+        )
+        with patch.object(owner, "compute_counterfactual_trade40_batch", return_value=early):
+            labels = owner.materialize_formal_mintrade40_pit_labels(
+                source, expected_seed=source.seed, frame=frame,
+                positions=np.array([75]), ticker="2330", exchange_calendar=days,
+                fit_cutoff=days[95],
+            )
+        self.assertTrue(labels.completed[0])
+        self.assertEqual(float(labels.raw_net_r[0]), 1.25)
+
+
 if __name__ == "__main__":
     unittest.main()
