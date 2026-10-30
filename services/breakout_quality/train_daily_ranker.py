@@ -1237,6 +1237,13 @@ def run(args) -> int:
         training_semantics=canonical_training_semantics,
         args=args,
         plan=plan,
+        forward_selection_ids=split.selection_ids,
+        forward_fitting_cutoff=(
+            pd.to_datetime(bundle.group_table.iloc[split.selection_ids]['label_eval_end_date']).max()
+            if dict(bundle.target_manifest.get('target_contract') or {}).get('target_kind')
+               == 'formal_seed_mintrade40_broker_net_r'
+            else None
+        ),
     )
     # This is the only Forward FIT resolution path. The service examines local
     # and cross-mode candidates under one fitting-identity/checkpoint policy.

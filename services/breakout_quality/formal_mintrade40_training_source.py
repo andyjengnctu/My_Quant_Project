@@ -33,6 +33,9 @@ from services.optimizer.formal_mintrade40_teacher_source import (
 )
 from services.optimizer.strategy_param_service import (
     resolve_fixed_multiseed_robustness_strategy_parameter_artifact,
+    ensure_fixed_multiseed_robustness_strategy_parameter_artifact,
+    inspect_fixed_multiseed_strategy_parameter_artifact,
+    ensure_fixed_multiseed_strategy_parameter_artifact,
 )
 from services.research.strategy_compare_preparation_status import resolve_param_source_path
 
@@ -43,7 +46,9 @@ _BROKER_CASH_ROLLING_PROFILE = 'broker_cash_dl_conversion_rolling'
 _BASELINE_ARM = 'C96'
 
 
-def _current_p16_seed_artifact(root: Path, seed: int) -> tuple[Path, str, str, str]:
+def _current_p16_seed_artifact(
+    root: Path, seed: int, *, authorized_build: bool = False,
+) -> tuple[Path, str, str, str]:
     settings = get_strategy_comparison_settings(_BROKER_CASH_ROLLING_PROFILE)
     arm = settings.arms[_BASELINE_ARM]
     source = settings.parameter_sources[arm.param_source]
@@ -55,30 +60,60 @@ def _current_p16_seed_artifact(root: Path, seed: int) -> tuple[Path, str, str, s
         raise FormalMinTrade40PITBlocked('Canonical Min P16 training profile missing')
     benchmark = get_strategy_multi_seed_robustness_settings(settings.profile_id)
     benchmark_seeds = tuple(int(value) for value in benchmark.resolved_seeds)
+    optimizer_args = dict(
+        training_profile_id=training_profile,
+        policy=str(arm.param_policy),
+        comparison_end_date=str(settings.end_date),
+        dataset=str(settings.dataset),
+        max_positions=int(settings.max_positions),
+        rotation=str(settings.rotation),
+        fixed_risk=float(DEFAULT_FIXED_RISK),
+        max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+    )
     if seed == int(RESEARCH_SINGLE_SEED):
-        path = resolve_param_source_path(root, settings, arm.param_source,
-                                         param_policy=arm.param_policy)
-        if not path.is_file():
-            raise FormalMinTrade40PITBlocked('Single-seed canonical P16 missing; produce via Strategy Parameter work')
+        path = resolve_param_source_path(
+            root, settings, arm.param_source, param_policy=arm.param_policy,
+        ).resolve()
+        state = inspect_fixed_multiseed_strategy_parameter_artifact(root, **optimizer_args)
+        if not bool(state.get('ready')):
+            if not authorized_build or str(state.get('action')) == 'BLOCKED':
+                raise FormalMinTrade40PITBlocked(
+                    f'Canonical single-seed P16 not verified: {state.get("status")}; '
+                    'authorized canonical Optimizer required'
+                )
+            record = ensure_fixed_multiseed_strategy_parameter_artifact(
+                root, **optimizer_args,
+            )
+        else:
+            record = state
+        if Path(record['path']).resolve() != path or not path.is_file():
+            raise FormalMinTrade40PITBlocked('Canonical P16 publication path differs from registered strategy source')
+        verified = inspect_fixed_multiseed_strategy_parameter_artifact(root, **optimizer_args)
+        if not verified.get('ready'):
+            raise FormalMinTrade40PITBlocked('Canonical single-seed P16 remains unverified after producer')
     elif seed in benchmark_seeds:
-        record = resolve_fixed_multiseed_robustness_strategy_parameter_artifact(
-            root,
-            training_profile_id=training_profile,
+        robust_args = dict(
+            **optimizer_args,
             benchmark_id=str(benchmark.benchmark_id),
             replication_seed=seed,
-            policy=str(arm.param_policy),
-            comparison_end_date=str(settings.end_date),
-            dataset=str(settings.dataset),
-            max_positions=int(settings.max_positions),
-            rotation=str(settings.rotation),
-            fixed_risk=float(DEFAULT_FIXED_RISK),
-            max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+        )
+        record = resolve_fixed_multiseed_robustness_strategy_parameter_artifact(
+            root, **robust_args,
         )
         if not bool(record.get('ready')):
-            raise FormalMinTrade40PITBlocked(
-                f'Canonical P16 seed={seed} is not verified: {record.get("status")}; '
-                'use the authorized Strategy Parameter producer'
+            if not authorized_build or str(record.get('action')) == 'BLOCKED':
+                raise FormalMinTrade40PITBlocked(
+                    f'Canonical P16 seed={seed} not verified: {record.get("status")}; '
+                    'authorized canonical Optimizer required'
+                )
+            ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
+                root, **robust_args,
             )
+            record = resolve_fixed_multiseed_robustness_strategy_parameter_artifact(
+                root, **robust_args,
+            )
+            if not bool(record.get('ready')):
+                raise FormalMinTrade40PITBlocked('Canonical robustness P16 remains unverified after producer')
         path = Path(record['path'])
     else:
         raise FormalMinTrade40PITBlocked('Model seed has no registered same-seed P16 producer')
@@ -97,9 +132,12 @@ def load_formal_mintrade40_training_source(
     if type(seed) is not int or seed <= 0:
         raise FormalMinTrade40PITBlocked('Formal MinTrade40 requires an exact positive model seed')
     root = Path(project_root).resolve()
-    # Verify the current official same-seed P16 before authorizing expensive
-    # historical optimization: missing current evidence must not trigger work.
-    p16_path, start, end, policy = _current_p16_seed_artifact(root, seed)
+    # Both dependencies belong to canonical Optimizer; when this model work is
+    # authorized a missing legitimate P16 is built by its own producer first.
+    # Existing incompatible identities remain blocked by that producer.
+    p16_path, start, end, policy = _current_p16_seed_artifact(
+        root, seed, authorized_build=allow_optimizer_build,
+    )
     if allow_optimizer_build:
         history = prepare_formal_mintrade40_optimizer_teacher(
             project_root=root, seed=seed, authorized=True,
@@ -177,6 +215,7 @@ def load_formal_mintrade40_training_source(
         }),
         schedule=schedules,
         publication_dates=publication_dates,
+        oos_start_date=str(current[0].start.date()),
     )
 
 
@@ -203,6 +242,14 @@ def resolve_formal_mintrade40_loader_kwargs(
             'source_sha256': str(source.param_sha256),
             'first_effective_date': str(source.schedule[0].start.date()),
             'last_source_period_start': str(source.schedule[-1].start.date()),
+            'oos_start_date': source.oos_start_date,
+            'teacher_periods': [
+                {'start': str(period.start.date()),
+                 'end': None if period.end is None else str(period.end.date()),
+                 'params_signature': period.params_signature,
+                 'published': published}
+                for period, published in zip(source.schedule, source.publication_dates)
+            ],
         },
     }
 

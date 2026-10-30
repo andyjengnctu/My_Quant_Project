@@ -119,7 +119,7 @@ from services.breakout_quality.fit_repair_transaction import (
     archived_rolling_fit_fold_candidates, selection_pit_build_lock_path,
 )
 from services.breakout_quality.fitting_data_dependencies import (
-    FitDataDependencies, build_fitting_context_origin, preserve_fitting_migration_chain,
+    FitDataDependencies, mintrade40_fit_sample_sha256, build_fitting_context_origin, preserve_fitting_migration_chain,
 )
 from services.breakout_quality.fitted_model_artifacts import (
     FittedModelContract,
@@ -577,6 +577,7 @@ def _fold_contract_payload(args, bundle, fold, ids: dict[str, Any]) -> dict[str,
             "allow_tf32": bool(args.allow_tf32),
         },
         "source_contract": FitDataDependencies.from_bundle(bundle).rolling_source(
+            fit_cutoff=cutoff,
             daily_training_universe_start_date=(
                 str(training_universe_start.date())
                 if str(bundle.profile.training_sample_scope)
@@ -590,6 +591,10 @@ def _fold_contract_payload(args, bundle, fold, ids: dict[str, Any]) -> dict[str,
             "oos_used_for_training_or_epoch_selection": False,
         },
     }
+
+    fit_samples = mintrade40_fit_sample_sha256(bundle, ids['final_ids'])
+    if fit_samples is not None:
+        payload['source_contract']['formal_mintrade40_fit_samples_sha256'] = fit_samples
 
     if args.train_window_months is not None:
         payload["training_settings"]["train_window_months"] = int(args.train_window_months)
@@ -883,6 +888,7 @@ def _import_forward_checkpoint_to_fitting_cache_unlocked(
         bundle=bundle,
         execution_plan=execution_plan,
         project_root=PROJECT_ROOT,
+        source_model_dir=source_model_dir,
     )
     if issues:
         # For the canonical first Rolling fold, Forward and Rolling share the

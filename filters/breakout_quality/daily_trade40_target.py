@@ -65,6 +65,9 @@ class CounterfactualTrade40Batch:
     research_cutoff_closeout_rows: int = 0
     # Opt-in canonical broker-ledger net PnL, not a second path/sizing engine.
     target_raw_pnl: np.ndarray | None = None
+    # Original simulator evidence: a still-open trade forced closed only by
+    # the study-end boundary is NOT a naturally FIT-matured label.
+    research_cutoff_forced_mask: np.ndarray | None = None
 
 
 def build_formal_min_execution_schedule(
@@ -224,6 +227,7 @@ def compute_counterfactual_trade40_batch(
     horizon_sessions: int | None = HORIZON_SESSIONS,
     research_cutoff: str | pd.Timestamp | None = None,
     include_net_pnl: bool = False,
+    signal_state_reset_date: str | pd.Timestamp | None = None,
 ) -> CounterfactualTrade40Batch:
     """One Min path for 40/60/any H and full-cycle; cutoff is an exit deadline.
 
@@ -255,6 +259,7 @@ def compute_counterfactual_trade40_batch(
     valid = np.zeros(len(positions), dtype=bool)
     maturity_dates = np.full(len(positions), np.datetime64("NaT"), dtype="datetime64[D]")
     reasons: list[str] = []
+    forced_at_research_cutoff = np.zeros(len(positions), dtype=bool)
     signal_caches: dict[str, Any] = {}
 
     def active_signal_cache_for_date(day: pd.Timestamp):
@@ -290,11 +295,23 @@ def compute_counterfactual_trade40_batch(
     close_values = frame["Close"].to_numpy(dtype=np.float64, copy=False)
     volume_values = frame["Volume"].to_numpy(dtype=np.float64, copy=False)
     max_info_pos = int(max(requested)) if requested else -1
+    reset_date = (None if signal_state_reset_date is None else
+                  pd.Timestamp(signal_state_reset_date).normalize())
+    if reset_date is not None and pd.isna(reset_date):
+        raise ValueError("Min Oracle signal-state reset date invalid")
+    previous_trade_day = None
     for information_pos in range(max_info_pos + 1):
         executable_pos = information_pos + 1
         if executable_pos >= len(dates) or dates[information_pos] >= cutoff:
             continue
         trade_day = dates[executable_pos]
+        # A historical teacher is allowed before OOS for FIT labels, but its
+        # pending signal must not leak into the official evaluation segment.
+        # The Oracle starts with no pending state on its first P16 session.
+        if (reset_date is not None and trade_day >= reset_date and
+                (previous_trade_day is None or previous_trade_day < reset_date)):
+            pending = None
+        previous_trade_day = trade_day
         active_period = resolve_historical_min_period(schedule, trade_day)
         if active_period is None:
             if trade_day >= schedule[0].start and trade_day <= last_research_session:
@@ -408,6 +425,7 @@ def compute_counterfactual_trade40_batch(
             continue
         if cutoff_limited and observation.forced_closeout:
             cutoff_closeouts += 1
+            forced_at_research_cutoff[row] = True
         value = float(observation.realized_net_r)
         if not math.isfinite(value):
             raise ValueError("canonical trade path produced nonfinite realized R")
@@ -426,6 +444,7 @@ def compute_counterfactual_trade40_batch(
     return CounterfactualTrade40Batch(
         result, valid, maturity_dates, tuple(reasons), truncated, cutoff_closeouts,
         target_raw_pnl=net_pnl,
+        research_cutoff_forced_mask=forced_at_research_cutoff,
     )
 
 

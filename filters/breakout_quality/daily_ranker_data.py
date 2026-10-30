@@ -1414,6 +1414,7 @@ def load_daily_universal_ranker_data(
     valid_opportunity_date_chunks: list[np.ndarray] = []
     valid_first_breach_date_chunks: list[np.ndarray] = []
     valid_minimum_low_return_chunks: list[np.ndarray] = []
+    valid_standard_price_mature_chunks: list[np.ndarray] = []
 
     inference_ticker_id_chunks: list[np.ndarray] = []
     inference_source_pos_chunks: list[np.ndarray] = []
@@ -1477,6 +1478,7 @@ def load_daily_universal_ranker_data(
         local_first_breach_bar = np.full(len(local_positions), -1, dtype=np.int16)
         local_minimum_low_return = np.full(len(local_positions), np.nan, dtype=np.float32)
         local_label_end_dates = None
+        local_standard_price_mature = np.zeros(len(local_positions), dtype=bool)
         if trade_path_mode:
             # The canonical single-stock execution primitive owns all NetR/NULL
             # and maturity definitions. The callback is provided by the domain
@@ -1498,10 +1500,31 @@ def load_daily_universal_ranker_data(
                     frame=frame, positions=local_positions[eligible],
                     ticker=ticker, exchange_calendar=exchange_calendar,
                     fit_cutoff=sample_end,
+                    research_end_is_terminal=True,
                 )
                 local_targets[eligible] = np.asarray(completed.raw_net_r, dtype=np.float32)
                 local_target_valid[eligible] = np.asarray(completed.completed, dtype=bool)
                 local_label_end_dates[eligible] = np.asarray(completed.maturity_dates, dtype="datetime64[D]")
+            # Common MFE/MAE are independent price outcomes, never broker NetR.
+            # Use the same canonical daily outcome owner as other rankers.
+            # Insufficient future 40-bar evidence remains NaN; Standard SOP
+            # correctly rejects such an immature scored cohort.
+            common_mature = (
+                (local_positions + int(spec.horizon_bars) < len(frame))
+                & (frame_dates.take(np.minimum(local_positions + int(spec.horizon_bars), len(frame) - 1)) <= sample_end)
+            )
+            local_standard_price_mature = common_mature
+            if np.any(common_mature):
+                common = compute_daily_opportunity_target_batch(
+                    frame, local_positions[common_mature], spec=spec,
+                    target_id=DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+                )
+                common_idx = np.flatnonzero(common_mature)
+                local_favorable[common_idx] = common.favorable_return
+                local_adverse[common_idx] = common.adverse_return_to_peak
+                local_opportunity_bar[common_idx] = common.opportunity_bar
+                local_first_breach_bar[common_idx] = common.first_risk_breach_bar
+                local_minimum_low_return[common_idx] = common.minimum_low_return
             if np.any(local_target_valid & ~np.isfinite(local_targets)):
                 raise ValueError("Formal MinTrade40 completed label is nonfinite")
         elif (
@@ -1637,6 +1660,10 @@ def load_daily_universal_ranker_data(
                 )
             valid_first_breach_date_chunks.append(breach_dates)
             valid_minimum_low_return_chunks.append(np.asarray(valid_minimum_low_return, dtype=np.float32))
+            if trade_path_mode:
+                valid_standard_price_mature_chunks.append(
+                    np.asarray(local_standard_price_mature[local_target_valid], dtype=bool)
+                )
             if len(invalid_positions):
                 inference_ticker_id_chunks.append(
                     np.full(len(invalid_positions), ticker_id, dtype=np.int32)
@@ -1801,6 +1828,15 @@ def load_daily_universal_ranker_data(
             "target_minimum_low_return": minimum_low_return,
         }
     )
+    if trade_path_mode:
+        # Standard 40D price Outcome is evaluated on *price-mature* rows.
+        # Broker NetR can validly resolve earlier or at research closeout; it
+        # remains the fitted Target and the full inference/Oracle score cohort.
+        # The common price evaluation cohort must NOT impute future OHLCV.
+        group_table["standard_common_40d_matured"] = np.concatenate([
+            np.concatenate(valid_standard_price_mature_chunks),
+            np.zeros(len(inference_dates), dtype=bool),
+        ])
     if (
         target_policy.postprocess
         == CONTINUOUS_RANKER_TARGET_POSTPROCESS_EQUAL_RANK_MFE_LOW_ADVERSE
@@ -1967,7 +2003,14 @@ def load_daily_universal_ranker_data(
             "target_kind": "formal_seed_mintrade40_broker_net_r",
             "null_policy": "unfilled_or_unmatured_is_missing_v1",
             "maturity_policy": "natural_exit_or_40_exchange_sessions_pit_v1",
-            "teacher_lineage": dict(target_lineage),
+            # A FIT may consume only the teacher prefix visible by its own
+            # cutoff. The complete source file SHA/late periods are provenance,
+            # not weight-affecting content of EVERY earlier Fold.
+            "teacher_lineage": {
+                'contract': str(target_lineage['contract']),
+                'seed': int(target_lineage['seed']),
+                'oos_start_date': target_lineage.get('oos_start_date'),
+            },
         }
         if trade_path_mode else
         _build_daily_target_contract(
@@ -1982,6 +2025,10 @@ def load_daily_universal_ranker_data(
     target_manifest = {
         "target_id": target_id,
         "target_contract": target_contract,
+        **({
+            "formal_mintrade40_teacher_periods": list(target_lineage['teacher_periods']),
+            "formal_mintrade40_original_source_sha256": str(target_lineage['source_sha256']),
+        } if trade_path_mode else {}),
         **({"sample_universe_horizon_bars": sample_universe_horizon}
            if target_policy.sample_universe_horizon_bars is not None else {}),
         "sample_scope": "daily_eligible_stock_days",

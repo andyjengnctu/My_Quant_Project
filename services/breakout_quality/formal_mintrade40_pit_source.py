@@ -16,7 +16,7 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
-from core.file_integrity import canonical_json_sha256
+from core.mintrade40_teacher_asof import mintrade40_teacher_asof_sha256
 from core.portfolio_param_runtime import build_portfolio_params_signature
 from filters.breakout_quality.daily_trade40_target import (
     ExecutableMinPeriod, resolve_historical_min_period,
@@ -43,6 +43,9 @@ class FormalMinTrade40PITSource:
     # not prove the parameter was available when the stock-day occurred.
     publication_dates: tuple[str, ...]
     source_id: str = "formal_min_roos_seed"
+    # Boundary between historical FIT teacher and the canonical OOS P16.
+    # Pending signals reset on this first evaluation session as in the Oracle.
+    oos_start_date: str | None = None
 
 
 
@@ -112,17 +115,15 @@ def slice_formal_mintrade40_pit_source_for_fold(
     )
     # Model FIT will separately bind the source price universe, samples, labels,
     # training settings and seed.  This digest covers teacher semantics only.
-    teacher_digest = canonical_json_sha256({
-        "type": "formal_mintrade40_fold_teacher_asof_v1",
-        "seed": source.seed,
-        "source_id": source.source_id,
-        "fit_cutoff": str(cutoff.date()),
-        "periods": [
-            {"start": str(p.start.date()), "end": str(p.end.date()),
+    teacher_digest = mintrade40_teacher_asof_sha256(
+        seed=source.seed, fit_cutoff=cutoff, oos_start_date=source.oos_start_date,
+        records=[
+            {"start": str(p.start.date()),
+             "end": None if p.end is None else str(p.end.date()),
              "params_signature": p.params_signature, "published": d}
-            for p, d in zip(as_of_source.schedule, publication_dates)
+            for p, d in zip(source.schedule, source.publication_dates)
         ],
-    })
+    )
     return as_of_source, teacher_digest
 
 
@@ -232,6 +233,7 @@ def materialize_formal_mintrade40_pit_labels(
     ticker: str,
     exchange_calendar: pd.DatetimeIndex,
     fit_cutoff: Any,
+    research_end_is_terminal: bool = False,
 ) -> FormalMinTrade40PITLabels:
     """Compute a seed's *historically mature* 40-session Net-R without OOS rows.
 
@@ -276,19 +278,31 @@ def materialize_formal_mintrade40_pit_labels(
         frame, positions, ticker=ticker, schedule=source.schedule,
         exchange_calendar=calendar, horizon_sessions=HORIZON_SESSIONS,
         research_cutoff=cutoff,
+        signal_state_reset_date=source.oos_start_date,
     )
     if len(batch.target_raw_r) != len(positions):
         raise FormalMinTrade40PITBlocked("Canonical MinTrade40 label count mismatch")
     full_horizon_matured = market_pos + HORIZON_SESSIONS < len(calendar)
-    # All non-horizon label resolution dates must strictly precede the FIT
-    # cutoff; an apparent trade resolution exactly on that boundary could
-    # instead be the artificial research-cutoff forced closeout.
-    natural_early_matured = (
+    # Do not infer natural maturity from a calendar comparison. On a weekend
+    # cutoff the last Friday is *before* the requested cutoff but can still be
+    # an artificial forced closeout. The canonical simulator owns that reason.
+    if batch.research_cutoff_forced_mask is None:
+        raise FormalMinTrade40PITBlocked("Canonical MinTrade40 cutoff-resolution evidence missing")
+    forced = np.asarray(batch.research_cutoff_forced_mask, dtype=bool)
+    if len(forced) != len(positions) or np.any(forced & ~batch.valid_mask):
+        raise FormalMinTrade40PITBlocked("Invalid MinTrade40 cutoff-resolution evidence")
+    resolved_before_cutoff = (
         np.asarray(batch.maturity_dates, dtype="datetime64[D]")
-        < np.datetime64(cutoff.date(), "D")
+        <= np.datetime64(cutoff.date(), "D")
     )
+    natural_early_matured = resolved_before_cutoff & ~forced & np.asarray(batch.valid_mask, dtype=bool)
+    # At the *declared research end*, canonical Oracle closeouts are actual
+    # evaluation truth. Such forced rows are not mature historical FIT labels:
+    # earlier folds still gate them by their own published label-end dates.
     matured = full_horizon_matured | natural_early_matured
-    matured &= np.asarray(batch.maturity_dates, dtype="datetime64[D]") <= np.datetime64(cutoff.date(), "D")
+    if research_end_is_terminal:
+        matured |= forced & resolved_before_cutoff
+    matured &= resolved_before_cutoff
     completed = matured & np.asarray(batch.valid_mask, dtype=bool)
     censored = matured & ~np.asarray(batch.valid_mask, dtype=bool)
     raw = np.where(completed, batch.target_raw_r, np.nan).astype(np.float32)

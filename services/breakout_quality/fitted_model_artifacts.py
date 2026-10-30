@@ -41,7 +41,7 @@ from filters.breakout_quality.model_source_provenance import (
     source_inventory_matches_current,
 )
 from services.breakout_quality.fitting_data_dependencies import (
-    FitDataDependencies, fold_source_dependency_issues,
+    FitDataDependencies, mintrade40_fit_sample_sha256, fold_source_dependency_issues,
     forward_publication_fit_dependency_issues, verified_published_context_fit_proof,
     native_rolling_score_refresh_candidate,
     migrated_forward_origin_training_evidence, context_source_for_profile,
@@ -651,6 +651,7 @@ def _forward_checkpoint_import_issues(
     bundle,
     execution_plan,
     project_root: Path | None = None,
+    source_model_dir: Path | None = None,
 ) -> tuple[str, ...]:
     """Validate that a canonical Forward model is the exact fit required by this PIT fold.
 
@@ -749,6 +750,18 @@ def _forward_checkpoint_import_issues(
     source_dataset = dict(source_manifest.get("source_dataset") or {})
     source_target = dict(source_manifest.get("source_continuous_target") or {})
     expected_source = dict(fold_contract.get("source_contract") or {})
+    published_fit_source = None
+    if dict(source_target.get('target_contract') or {}).get('target_kind') == 'formal_seed_mintrade40_broker_net_r':
+        # Read the original checkpoint's canonical FIT sidecar, not score or
+        # research report data. Its checkpoint bytes are cross-checked below.
+        sidecar = (_read_json(Path(source_model_dir) / FITTED_MODEL_MANIFEST_FILENAME)
+                   if source_model_dir is not None else None)
+        if (not isinstance(sidecar, Mapping)
+                or sidecar.get('model') != checkpoint_manifest
+                or getattr(source_fitting_evidence, 'source', None) != 'fitted_model_manifest'):
+            issues.append('MinTrade40 Forward fitted-model origin proof missing')
+        else:
+            published_fit_source = dict(dict(sidecar.get('fitting_identity') or {}).get('source') or {})
     issues.extend(forward_publication_fit_dependency_issues(
         source_dataset=source_dataset, source_target=source_target,
         expected_fold_source=expected_source,
@@ -757,6 +770,8 @@ def _forward_checkpoint_import_issues(
         project_root=(Path(project_root) if project_root is not None
                       else Path(__file__).resolve().parents[2]),
         inventory_matcher=source_inventory_matches_current,
+        fit_cutoff=fold_contract.get('model_information_cutoff'),
+        published_forward_fit_source=published_fit_source,
     ))
 
     if checkpoint.get("model_spec") != fold_contract.get("model_spec"):
@@ -1177,8 +1192,8 @@ def fitting_split_identity(split_report: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def source_training_identity(bundle) -> dict[str, Any]:
-    return FitDataDependencies.from_bundle(bundle).forward_source()
+def source_training_identity(bundle, *, fit_cutoff: Any | None = None) -> dict[str, Any]:
+    return FitDataDependencies.from_bundle(bundle).forward_source(fit_cutoff=fit_cutoff)
 
 
 def build_daily_forward_fitting_identity(
@@ -1192,7 +1207,13 @@ def build_daily_forward_fitting_identity(
     training_semantics: Mapping[str, Any],
     args,
     plan,
+    forward_fitting_cutoff: Any | None = None,
+    forward_selection_ids: Any = None,
 ) -> dict[str, Any]:
+    source = source_training_identity(bundle, fit_cutoff=forward_fitting_cutoff)
+    fit_samples = mintrade40_fit_sample_sha256(bundle, forward_selection_ids)
+    if fit_samples is not None:
+        source['formal_mintrade40_fit_samples_sha256'] = fit_samples
     return {
         "filter_id": str(filter_id),
         "model_architecture": str(model_architecture),
@@ -1208,7 +1229,7 @@ def build_daily_forward_fitting_identity(
         "training_settings": canonical_fitting_settings(args),
         "torch_execution": scientific_torch_execution(plan),
         "split": fitting_split_identity(split_report),
-        "source": source_training_identity(bundle),
+        "source": source,
     }
 
 

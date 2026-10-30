@@ -12,6 +12,10 @@ Do not put MR identities, evaluation score horizons or report fields here.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
+
+import numpy as np
+import pandas as pd
 import json
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -23,6 +27,7 @@ from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
 )
 from filters.breakout_quality.artifacts import build_file_manifest
+from core.mintrade40_teacher_asof import mintrade40_teacher_asof_sha256
 from filters.breakout_quality.dataset_store import resolve_dataset_paths
 from filters.breakout_quality.model_source_provenance import (
     canonical_source_dataset_artifacts, source_inventory_matches_current,
@@ -32,6 +37,43 @@ from filters.breakout_quality.paths import (
     resolve_filter_model_output_dir,
 )
 from filters.breakout_quality.predicted_context_artifact import maybe_predicted_context_artifact_spec
+
+
+def mintrade40_fit_sample_sha256(bundle: Any, ordered_group_ids: Any) -> str | None:
+    """Bind the actual ordered FIT cohort/labels; never the later score rows.
+
+    Extending future teacher periods must not force a refit if earlier FIT rows
+    and their order are identical. Conversely changing training labels, order,
+    maturity, or ticker/position truth MUST invalidate weight reuse even if an
+    upstream teacher signature was accidentally left unchanged.
+    """
+    contract = dict(dict(bundle.target_manifest or {}).get('target_contract') or {})
+    if contract.get('target_kind') != 'formal_seed_mintrade40_broker_net_r':
+        return None
+    ids = np.asarray(ordered_group_ids, dtype=np.int64)
+    table = bundle.group_table
+    values = np.asarray(bundle.raw_target, dtype=np.float32)
+    if ids.ndim != 1 or len(ids) == 0 or np.any(ids < 0) or np.any(ids >= len(table)):
+        raise ValueError('MinTrade40 FIT ordered sample identity invalid')
+    if len(table) != len(values) or len(np.unique(ids)) != len(ids):
+        raise ValueError('MinTrade40 FIT labels/group identity invalid')
+    rows = table.iloc[ids]
+    target = values[ids]
+    if not np.isfinite(target).all():
+        raise ValueError('MinTrade40 FIT has unverified NULL target')
+    label_dates = pd.to_datetime(rows['label_eval_end_date'], errors='raise')
+    if label_dates.isna().any():
+        raise ValueError('MinTrade40 FIT has missing maturity date')
+    digest = sha256(b'formal_mintrade40_ordered_fit_truth_v1\n')
+    for ticker, date, pos, maturity, raw in zip(
+        rows['ticker'].astype(str), pd.to_datetime(rows['date']),
+        rows['source_pos'], label_dates, target,
+    ):
+        text = f'{ticker}|{pd.Timestamp(date).date()}|{int(pos)}|{pd.Timestamp(maturity).date()}|'
+        digest.update(text.encode('utf-8'))
+        digest.update(np.float32(raw).tobytes())
+        digest.update(b'\n')
+    return digest.hexdigest()
 
 
 @dataclass(frozen=True)
@@ -54,7 +96,29 @@ class FitDataDependencies:
     def from_bundle(cls, bundle: Any) -> "FitDataDependencies":
         return cls(summary=dict(bundle.summary or {}), target=dict(bundle.target_manifest or {}))
 
-    def forward_source(self) -> dict[str, Any]:
+    def _asof_target_contract(self, fit_cutoff: Any | None) -> Any:
+        target = self.target
+        original = target.get('target_contract')
+        if not isinstance(original, Mapping) or original.get('target_kind') != 'formal_seed_mintrade40_broker_net_r':
+            return original
+        if fit_cutoff is None:
+            raise ValueError('MinTrade40 FIT identity requires explicit information cutoff')
+        lineage = dict(original.get('teacher_lineage') or {})
+        if lineage.get('contract') != 'formal_mintrade40_seed_historical_plus_p16_v1':
+            raise ValueError('MinTrade40 FIT lineage contract missing')
+        records = target.get('formal_mintrade40_teacher_periods')
+        if not isinstance(records, list) or not records:
+            raise ValueError('MinTrade40 verified source schedule missing from bundle')
+        digest = mintrade40_teacher_asof_sha256(
+            seed=int(lineage['seed']), records=records,
+            fit_cutoff=fit_cutoff, oos_start_date=lineage.get('oos_start_date'),
+        )
+        return {
+            **original,
+            'teacher_lineage': {**lineage, 'fold_teacher_as_of_sha256': digest},
+        }
+
+    def forward_source(self, *, fit_cutoff: Any | None = None) -> dict[str, Any]:
         """Exact V1 Forward source schema; never introduce a second fitting identity."""
         summary, target = self.summary, self.target
         return {
@@ -67,7 +131,7 @@ class FitDataDependencies:
             "source_dataset_artifacts": canonical_source_dataset_artifacts(summary),
             "source_target_artifacts": target.get("artifacts"),
             "target_id": target.get("target_id"),
-            "target_contract": target.get("target_contract"),
+            "target_contract": self._asof_target_contract(fit_cutoff),
             "context_features": target.get("context_features"),
             "pair_weight_context_features": target.get("pair_weight_context_features"),
             "pair_weight_context_contract": target.get("pair_weight_context_contract"),
@@ -78,6 +142,7 @@ class FitDataDependencies:
 
     def rolling_source(
         self, *, daily_training_universe_start_date: str | None = None,
+        fit_cutoff: Any | None = None,
     ) -> dict[str, Any]:
         """Exact V2 PIT Fold source schema; preserve historical FitKey bytes."""
         summary, target = self.summary, self.target
@@ -89,7 +154,7 @@ class FitDataDependencies:
             **({"input_trade_count_source": summary["input_trade_count_source"]} if "input_trade_count_source" in summary else {}),
             "dataset_artifacts": canonical_source_dataset_artifacts(summary),
             "target_schema_version": target.get("schema_version"),
-            "target_contract": target.get("target_contract"),
+            "target_contract": self._asof_target_contract(fit_cutoff),
             "target_artifacts": target.get("artifacts"),
         }
         if daily_training_universe_start_date is not None:
@@ -272,19 +337,41 @@ def forward_publication_fit_dependency_issues(
     expected_fold_source: Mapping[str, Any], current_target: Mapping[str, Any],
     experiment_profile: str, project_root: Path,
     inventory_matcher: Callable[..., bool],
+    fit_cutoff: Any | None = None,
+    published_forward_fit_source: Mapping[str, Any] | None = None,
 ) -> tuple[str, ...]:
     """Forward -> Rolling import uses the same persisted-source projection owner.
 
     The old Forward publication is evidence, not a second scientific source
     identity. Fold manifest/identity/checkpoint decisions remain in FIT owner.
     """
+    # A CM checkpoint must carry its ORIGINAL Forward FIT witness, including
+    # the exact ordered training-label digest. The published evaluation manifest
+    # alone cannot reconstruct this weight-affecting fact. Never bypass it to
+    # import a model merely because the evaluation and score dates match.
+    is_mintrade40 = (dict(source_target.get('target_contract') or {}).get('target_kind')
+                     == 'formal_seed_mintrade40_broker_net_r')
+    issues = []
+    if is_mintrade40 and (fit_cutoff is None or not isinstance(published_forward_fit_source, Mapping)):
+        return ('MinTrade40 original Forward FIT source witness missing',)
     source = FitDataDependencies(source_dataset, source_target).rolling_source(
+        fit_cutoff=fit_cutoff,
         daily_training_universe_start_date=(
             source_dataset.get("training_universe_start_date")
             if "training_universe_start_date" in expected_fold_source else None
         ),
     )
-    issues = []
+    if is_mintrade40:
+        published = published_forward_fit_source
+        teacher = published.get('target_contract')
+        fit_sha = published.get('formal_mintrade40_fit_samples_sha256')
+        if not isinstance(teacher, Mapping) or teacher != source.get('target_contract'):
+            issues.append('Forward FIT as-of teacher witness mismatch')
+        if (not isinstance(fit_sha, str) or len(fit_sha) != 64
+                or any(c not in '0123456789abcdef' for c in fit_sha.lower())):
+            issues.append('Forward FIT ordered sample witness missing')
+        else:
+            source['formal_mintrade40_fit_samples_sha256'] = fit_sha
     for key in expected_fold_source:
         if key == "source_data_inventory":
             matches = inventory_matcher(

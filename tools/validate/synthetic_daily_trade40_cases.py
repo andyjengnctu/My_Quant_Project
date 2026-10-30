@@ -1081,6 +1081,7 @@ class FormalMinTrade40TrainingSourcePreflightCases(unittest.TestCase):
             target_raw_r=np.array([1.25], dtype=np.float32),
             valid_mask=np.array([True]),
             maturity_dates=np.array([days[88].to_datetime64().astype("datetime64[D]")]),
+            research_cutoff_forced_mask=np.array([False]),
         )
         with patch.object(owner, "compute_counterfactual_trade40_batch", return_value=early):
             labels = owner.materialize_formal_mintrade40_pit_labels(
@@ -1442,19 +1443,28 @@ class FormalMinTrade40IntegratedResearchCases(unittest.TestCase):
         self.assertEqual(assigned['DailyUniversal_MinTrade40_NetR_Direct']['strategy'],'C120')
         self.assertEqual(len(assigned),2)
 
-    def test_missing_original_p16_cannot_trigger_historical_optimizer(self):
-        from services.breakout_quality.formal_mintrade40_training_source import (
-            load_formal_mintrade40_training_source,
-        )
+    def test_missing_original_p16_is_delegated_to_canonical_optimizer_first(self):
+        from services.breakout_quality import formal_mintrade40_training_source as owner
         from services.breakout_quality.formal_mintrade40_pit_source import FormalMinTrade40PITBlocked
-        with TemporaryDirectory() as root, patch(
-            'services.breakout_quality.formal_mintrade40_training_source.prepare_formal_mintrade40_optimizer_teacher'
-        ) as optimizer:
-            with self.assertRaises(FormalMinTrade40PITBlocked):
-                load_formal_mintrade40_training_source(
+        with TemporaryDirectory() as root, patch.object(
+            owner, 'prepare_formal_mintrade40_optimizer_teacher'
+        ) as historical, patch.object(
+            owner, 'ensure_fixed_multiseed_strategy_parameter_artifact',
+            side_effect=RuntimeError('canonical current P16 producer invoked'),
+        ) as current:
+            with self.assertRaisesRegex(RuntimeError, 'canonical current P16 producer invoked'):
+                owner.load_formal_mintrade40_training_source(
                     project_root=root, seed=42, allow_optimizer_build=True,
                 )
-            optimizer.assert_not_called()
+            current.assert_called_once()
+            historical.assert_not_called()
+            current.reset_mock()
+            with self.assertRaises(FormalMinTrade40PITBlocked):
+                owner.load_formal_mintrade40_training_source(
+                    project_root=root, seed=42, allow_optimizer_build=False,
+                )
+            current.assert_not_called()
+            historical.assert_not_called()
 
     def test_original_optimizer_fold_cutoff_and_seed_are_mandatory(self):
         from services.breakout_quality.formal_mintrade40_training_source import (
@@ -1497,6 +1507,207 @@ class FormalMinTrade40IntegratedResearchCases(unittest.TestCase):
             fold['selection_end_date']='2021-01-10'
             with self.assertRaisesRegex(FormalMinTrade40PITBlocked,'PIT aligned'):
                 load_formal_mintrade40_training_source(project_root=root,seed=42)
+
+
+
+class FormalMinTrade40EndToEndDefinitionCases(unittest.TestCase):
+    """Six real boundary/lineage regression cases; no Oracle caches or FIT run."""
+
+    def test_oos_signal_boundary_is_identical_to_canonical_oracle(self):
+        days, frame, params, period = fixture(count=170, start='2020-09-01')
+        frame = frame.drop(index=pd.Timestamp('2021-01-01'), errors='ignore')
+        days = pd.DatetimeIndex(frame.index)
+        boundary = pd.Timestamp('2021-01-01')
+        past = replace(period, end=boundary - pd.Timedelta(days=1))
+        present = replace(period, start=boundary, end=None)
+        positions = np.flatnonzero((days >= boundary-pd.Timedelta(days=1)) &
+                                   (days < boundary+pd.Timedelta(days=35)))
+        original = compute_counterfactual_trade40_batch(
+            frame, positions, ticker='2330', schedule=(present,), exchange_calendar=days)
+        with_teacher = compute_counterfactual_trade40_batch(
+            frame, positions, ticker='2330', schedule=(past, present),
+            exchange_calendar=days, signal_state_reset_date=boundary)
+        np.testing.assert_array_equal(with_teacher.valid_mask, original.valid_mask)
+        np.testing.assert_array_equal(with_teacher.target_raw_r, original.target_raw_r)
+        np.testing.assert_array_equal(with_teacher.maturity_dates, original.maturity_dates)
+
+    def test_weekend_fit_cutoff_censors_forced_closeout_but_research_end_accepts(self):
+        from services.breakout_quality.formal_mintrade40_pit_source import (
+            FormalMinTrade40PITSource, materialize_formal_mintrade40_pit_labels,
+        )
+        days, frame, params, period = fixture(count=140, start='2018-01-02')
+        source = FormalMinTrade40PITSource(
+            seed=42, param_sha256='a'*64, schedule=(period,),
+            publication_dates=('2018-01-01',))
+        for date in ('2018-05-25', '2018-05-27'):
+            kwargs = dict(source=source, expected_seed=42, frame=frame,
+                positions=np.array([90]), ticker='2330', exchange_calendar=days,
+                fit_cutoff=date)
+            fit = materialize_formal_mintrade40_pit_labels(**kwargs)
+            study = materialize_formal_mintrade40_pit_labels(
+                **kwargs, research_end_is_terminal=True)
+            self.assertFalse(fit.completed[0])
+            self.assertTrue(np.isnan(fit.raw_net_r[0]))
+            self.assertTrue(study.completed[0])
+            canonical = compute_counterfactual_trade40_batch(
+                frame.loc[:date], np.array([90]), ticker='2330',
+                schedule=(period,), exchange_calendar=days[days <= date],
+                research_cutoff=date)
+            self.assertAlmostEqual(float(study.raw_net_r[0]), float(canonical.target_raw_r[0]))
+            self.assertTrue(bool(canonical.research_cutoff_forced_mask[0]))
+
+    def test_teacher_asof_fit_identity_excludes_future_but_binds_current_history(self):
+        from services.breakout_quality.fitting_data_dependencies import FitDataDependencies
+        from core.mintrade40_teacher_asof import mintrade40_teacher_asof_sha256
+        from services.breakout_quality.formal_mintrade40_pit_source import (
+            FormalMinTrade40PITSource, slice_formal_mintrade40_pit_source_for_fold,
+        )
+        days, frame, params, period = fixture(count=170, start='2020-09-01')
+        future_start = days[150]
+        past = replace(period, end=future_start-pd.Timedelta(days=1))
+        future = replace(period, start=future_start, end=None)
+        published = str(days[0].date())
+        late_published = str((future_start-pd.Timedelta(days=1)).date())
+        payload = lambda p,d: {'start':str(p.start.date()),
+            'end':None if p.end is None else str(p.end.date()),
+            'params_signature':p.params_signature, 'published':d}
+        parent = FormalMinTrade40PITSource(seed=42, param_sha256='a'*64,
+            schedule=(past, future), publication_dates=(published, late_published))
+        _, original_digest = slice_formal_mintrade40_pit_source_for_fold(
+            parent, fit_cutoff=days[120])
+        truth = {'target_kind':'formal_seed_mintrade40_broker_net_r',
+                 'teacher_lineage':{'contract':'formal_mintrade40_seed_historical_plus_p16_v1',
+                    'seed':42, 'oos_start_date':None}}
+        bare = {'target_contract':truth,
+                'formal_mintrade40_teacher_periods':[payload(past,published)]}
+        extended = {'target_contract':truth,
+                    'formal_mintrade40_teacher_periods':[payload(past,published),
+                                                         payload(future,late_published)]}
+        first = FitDataDependencies({},bare).rolling_source(fit_cutoff=days[120])
+        later = FitDataDependencies({},extended).rolling_source(fit_cutoff=days[120])
+        self.assertEqual(first,later)
+        self.assertEqual(first['target_contract']['teacher_lineage']['fold_teacher_as_of_sha256'],
+                         original_digest)
+        mutated = {**bare, 'formal_mintrade40_teacher_periods':[
+            {**payload(past,published), 'params_signature':'different'}]}
+        self.assertNotEqual(first,FitDataDependencies({},mutated).rolling_source(
+            fit_cutoff=days[120]))
+        with self.assertRaisesRegex(ValueError, 'cutoff'):
+            FitDataDependencies({},bare).rolling_source()
+
+    def test_fit_source_binds_actual_ordered_training_truth(self):
+        from services.breakout_quality.fitting_data_dependencies import mintrade40_fit_sample_sha256
+        from types import SimpleNamespace
+        frame = pd.DataFrame({'ticker':['2330','2317'],
+            'date':pd.to_datetime(['2020-01-02','2020-01-02']),
+            'source_pos':[99,98],
+            'label_eval_end_date':pd.to_datetime(['2020-02-28','2020-02-27'])})
+        bundle = SimpleNamespace(target_manifest={'target_contract':{
+            'target_kind':'formal_seed_mintrade40_broker_net_r'}},
+            group_table=frame, raw_target=np.array([0.5,-0.2],dtype=np.float32))
+        original = mintrade40_fit_sample_sha256(bundle, np.array([0,1]))
+        self.assertNotEqual(original, mintrade40_fit_sample_sha256(bundle,np.array([1,0])))
+        bundle.raw_target[1]=0.1
+        self.assertNotEqual(original, mintrade40_fit_sample_sha256(bundle,np.array([0,1])))
+
+    def test_forward_rolling_fit_bridge_requires_original_labeled_fit_witness(self):
+        from services.breakout_quality.fitting_data_dependencies import (
+            FitDataDependencies, forward_publication_fit_dependency_issues,
+        )
+        from core.breakout_quality_registry import (
+            DAILY_UNIVERSAL_FORMAL_MINTRADE40_NETR_PAIRWISE_PROFILE,
+        )
+        published_target = {
+            'schema_version': 1,
+            'target_id': 'formal_mintrade40',
+            'target_contract': {
+                'target_kind': 'formal_seed_mintrade40_broker_net_r',
+                'teacher_lineage': {
+                    'contract': 'formal_mintrade40_seed_historical_plus_p16_v1',
+                    'seed': 42, 'oos_start_date': '2021-01-01',
+                },
+            },
+            'formal_mintrade40_teacher_periods': [
+                {'start': '2019-01-01', 'end': '2020-12-31',
+                 'params_signature': 'historical', 'published': '2018-12-31'},
+                {'start': '2021-01-01', 'end': None,
+                 'params_signature': 'p16', 'published': '2020-12-31'},
+            ],
+        }
+        published_dataset = {
+            'dataset': 'full', 'policy': {'repro': True},
+            'source_data_inventory': {'inventory': 'verified'},
+            'dataset_artifacts': {'events': 'verified'},
+        }
+        cutoff = '2020-06-01'
+        expected = FitDataDependencies(
+            published_dataset, published_target,
+        ).rolling_source(fit_cutoff=cutoff)
+        original_samples = 'a' * 64
+        expected['formal_mintrade40_fit_samples_sha256'] = original_samples
+        kwargs = {
+            'source_dataset': published_dataset,
+            'source_target': published_target,
+            'expected_fold_source': expected,
+            'current_target': published_target,
+            'experiment_profile': DAILY_UNIVERSAL_FORMAL_MINTRADE40_NETR_PAIRWISE_PROFILE,
+            'project_root': Path.cwd(), 'fit_cutoff': cutoff,
+            'inventory_matcher': lambda *, published, current, project_root: published == current,
+        }
+        witness = {
+            'target_contract': expected['target_contract'],
+            'formal_mintrade40_fit_samples_sha256': original_samples,
+        }
+        self.assertEqual((), forward_publication_fit_dependency_issues(
+            **kwargs, published_forward_fit_source=witness,
+        ))
+        self.assertTrue(any('fit_samples' in error for error in
+            forward_publication_fit_dependency_issues(
+                **kwargs, published_forward_fit_source={
+                    **witness, 'formal_mintrade40_fit_samples_sha256': 'b' * 64,
+                },
+            )))
+        self.assertIn('witness missing', ' '.join(
+            forward_publication_fit_dependency_issues(
+                **kwargs, published_forward_fit_source=None,
+            )))
+        tampered = {**witness, 'target_contract': {'target_kind': 'changed'}}
+        self.assertIn('teacher witness mismatch', ' '.join(
+            forward_publication_fit_dependency_issues(
+                **kwargs, published_forward_fit_source=tampered,
+            )))
+
+    def test_standard_model_sop_uses_independent_40d_price_maturity(self):
+        from services.breakout_quality.standard_model_sop import build_standard_model_sop
+        days = pd.to_datetime(['2021-01-04','2021-01-04','2021-01-05','2021-01-05'])
+        table = pd.DataFrame({
+            'ticker':['2330','2317','2330','2317'], 'date':days,
+            'group_index':[0,1,2,3], 'source_pos':[100,100,140,140],
+            'label':[1,0,1,0],
+            'standard_common_40d_matured':[True,True,False,False],
+            'target_favorable_r':[2.,1.,np.nan,np.nan],
+            'target_adverse_r':[1.,0.5,np.nan,np.nan],
+            'target_favorable_return':[.08,.04,np.nan,np.nan],
+            'target_adverse_return_to_peak':[.03,.02,np.nan,np.nan],
+        })
+        scores=pd.DataFrame({'group_index':[0,1,2,3],'date':days,
+                    'breakout_quality_score':[.4,.7,.3,.5]})
+        report=build_standard_model_sop(group_table=table,
+            raw_target=np.array([.5,.9,.2,.7],dtype=np.float32),
+            training_objective='daily_pairwise_ranking',
+            validation_scores=scores, oos_scores=scores,
+            breakout_scores=scores, evaluation_mode='rolling_oos',
+            evaluation_horizon_bars=40)
+        self.assertEqual(report['schema'],'standard_model_sop_v10')
+        # Missing *mature* price truth must still block the report.
+        table.loc[0,'target_favorable_r']=np.nan
+        with self.assertRaisesRegex(ValueError,'actual truth'):
+            build_standard_model_sop(group_table=table,
+                raw_target=np.array([.5,.9,.2,.7],dtype=np.float32),
+                training_objective='daily_pairwise_ranking',
+                validation_scores=scores, oos_scores=scores,
+                breakout_scores=scores, evaluation_mode='rolling_oos',
+                evaluation_horizon_bars=40)
 
 
 if __name__ == "__main__":

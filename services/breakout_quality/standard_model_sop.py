@@ -377,21 +377,39 @@ def build_standard_model_sop(
     if len(shared_truth) != len(group_table):
         raise ValueError("Standard SOP evaluation stock-day population size mismatch")
     percentile_target = _canonical_percentile_target(group_table, raw_target)
+    score_splits = {
+        "validation": validation_scores,
+        "oos": oos_scores,
+        "breakout_candidate_oos": breakout_scores,
+    }
+    if "standard_common_40d_matured" in group_table.columns:
+        # The broker NetR Target may resolve before 40 sessions or via the
+        # declared research-end closeout, while the *independent* Standard SOP
+        # 40D MFE/MAE requires actual 40-session price truth. Use the same
+        # prespecified 40D-mature cohort as other Daily Universal models;
+        # never change the fitted NetR labels, infer missing highs/lows, or
+        # silently suppress malformed price evidence within that cohort.
+        flag = group_table["standard_common_40d_matured"]
+        if flag.isna().any() or flag.dtype != bool:
+            raise ValueError("Standard SOP common 40D maturity evidence invalid")
+        eligible = flag.to_numpy(dtype=bool)
+        restricted = {}
+        for key, frame in score_splits.items():
+            ids = pd.to_numeric(frame['group_index'], errors='raise').to_numpy(dtype=np.int64)
+            if np.any(ids < 0) or np.any(ids >= len(eligible)):
+                raise ValueError("Standard SOP scored group-index out of range")
+            selected = frame.loc[eligible[ids]].copy()
+            if selected.empty:
+                raise ValueError("Standard SOP common 40D mature evaluation cohort unavailable")
+            restricted[key] = selected
+        score_splits = restricted
     cohort_identity = {
         key: _score_cohort_digest(frame, group_table)
-        for key, frame in (
-            ("validation", validation_scores),
-            ("oos", oos_scores),
-            ("breakout_candidate_oos", breakout_scores),
-        )
+        for key, frame in score_splits.items()
     }
     split_metrics: dict[str, Any] = {}
     alignment: dict[str, Any] = {}
-    for key, frame in (
-        ("validation", validation_scores),
-        ("oos", oos_scores),
-        ("breakout_candidate_oos", breakout_scores),
-    ):
+    for key, frame in score_splits.items():
         split_metrics[key], alignment[key] = _split_metrics(
             frame,
             group_table=group_table,
