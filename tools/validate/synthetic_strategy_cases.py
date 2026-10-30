@@ -3370,6 +3370,11 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     historical_raw_robustness = get_strategy_multi_seed_robustness_settings(
         "non_dl_reference_only_oos"
     )
+    # AI: Historical Strategy Robustness is bound to its own registered benchmark;
+    # the default snapshot may instead be the newer Oracle 8-seed benchmark.
+    historical_raw_benchmark = get_robustness_benchmark_policy_snapshot(
+        historical_raw_robustness.benchmark_id
+    )
     historical_raw_profile = get_strategy_param_training_profile(
         "raw_price_full_base_finalist_best_current"
     )
@@ -3382,12 +3387,13 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     check(
         "raw_price_compare_arm_robustness_is_derived_from_same_suite_and_profile",
         True,
-        int(historical_raw_robustness.seed_count) == int(benchmark_snapshot["seed_count"])
-        and tuple(historical_raw_robustness.resolved_seeds) == tuple(benchmark_snapshot["resolved_seeds"])
+        historical_raw_robustness.benchmark_id == historical_raw_benchmark["benchmark_id"]
+        and int(historical_raw_robustness.seed_count) == int(historical_raw_benchmark["seed_count"])
+        and tuple(historical_raw_robustness.resolved_seeds) == tuple(historical_raw_benchmark["resolved_seeds"])
         and str(raw_robustness_binding.get("producer_variant")) == "raw_price_isolated_v1"
         and str(raw_robustness_binding.get("training_profile_id"))
             == historical_raw_profile.profile_id
-        and f"robustness/{benchmark_snapshot['benchmark_id']}/seed_"
+        and f"robustness/{historical_raw_benchmark['benchmark_id']}/seed_"
             in Path(raw_robustness_binding["path"]).as_posix(),
     )
     from services.optimizer.strategy_param_service import (
@@ -5156,13 +5162,21 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         strategy_param_application._build_plan(active_param_profile, work)
         for work in strategy_param_application.WORK_TYPES
     ]
+    from config.robustness_benchmark import MODEL_STRATEGY_ROBUSTNESS_BENCHMARK_ID
+    strategy_benchmark = get_robustness_benchmark_policy_snapshot(
+        MODEL_STRATEGY_ROBUSTNESS_BENCHMARK_ID
+    )
     check(
         "active_strategy_param_profile_opens_all_four_work_types_from_one_profile",
         True,
         len(active_work_plans) == 4
         and all(plan.get("status") in {"READY", "PREPARABLE"} for plan in active_work_plans)
-        and len(active_work_plans[2].get("rows") or ()) == int(benchmark_snapshot["seed_count"])
-        and len(active_work_plans[3].get("rows") or ()) == int(benchmark_snapshot["seed_count"])
+        and all(
+            plan["benchmark"]["benchmark_id"] == strategy_benchmark["benchmark_id"]
+            and tuple(int(row["seed"]) for row in plan.get("rows") or ())
+                == tuple(strategy_benchmark["resolved_seeds"])
+            for plan in active_work_plans[2:]
+        )
         and "Robustness下一輪再開" not in strategy_param_app_source
         and "RAW_PRICE_BASELINE_FIRST_ROBUSTNESS_NOT_ENABLED" not in strategy_param_app_source,
     )
