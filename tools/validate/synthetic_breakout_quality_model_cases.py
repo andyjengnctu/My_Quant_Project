@@ -7374,6 +7374,11 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
         ) == tuple((profile, rolling) for rolling in (False, True) for _model_id, profile in configured_models),
     )
 
+    # [AI] The configured list may contain a trade-path Target with a
+    # seed-specific Optimizer teacher. The preview is still read-only, but its
+    # Rolling producer must revalidate SCORE at execution before deciding
+    # whether to prepare the teacher. Stop both real input producers here.
+    preview_score_probe_counts = []
     with (
         patch.object(research_app, "get_breakout_quality_model_test_settings", return_value=SimpleNamespace(model_profiles=configured_models)),
         patch.object(research_app, "get_breakout_quality_workflow_settings", side_effect=settings_stub),
@@ -7384,9 +7389,11 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
                      side_effect=lambda _settings, *, seed: research_app.ModelRobustnessSeedSource(
                          seed, None, outputs[0], "synthetic SCORE missing")),
         patch.object(research_app, "_rolling_robustness_score_core_contract",
-                     side_effect=AssertionError("preview source should not revalidate SCORE")),
-        patch.object(research_app, "_prepare_continuous_research_inputs", return_value=98),
-        patch.object(research_app, "_print_model_action_status") as robustness_status,
+                     return_value=(None, "synthetic SCORE missing")) as execution_score_probe,
+        patch.object(research_app, "_prepare_formal_robustness_seed_inputs", return_value=98) as formal_input_preflight,
+        patch.object(research_app, "_prepare_continuous_research_inputs", return_value=98) as generic_input_preflight,
+        patch.object(research_app, "_print_model_action_status",
+                     side_effect=lambda _rows: preview_score_probe_counts.append(execution_score_probe.call_count)) as robustness_status,
         redirect_stdout(StringIO()),
     ):
         forward_robustness_return = research_app._run_configured_model_robustness("apps/research.py model", rolling=False)
@@ -7398,6 +7405,16 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
         forward_robustness_return == rolling_robustness_return == 98
         and tuple((model_id, profile) for model_id, profile, _action, _reason in forward_robustness_rows) == configured_models
         and tuple((model_id, profile) for model_id, profile, _action, _reason in rolling_robustness_rows) == configured_models,
+    )
+    first_model_uses_trade_path_teacher = research_app._requires_formal_trade_path_inputs(
+        settings_stub(configured_models[0][1])
+    )
+    check_true(
+        "robustness_preview_does_not_revalidate_score_but_execution_checks_current_score",
+        preview_score_probe_counts == [0, 0]
+        and execution_score_probe.call_count == (1 if first_model_uses_trade_path_teacher else 0)
+        and formal_input_preflight.call_count == (2 if first_model_uses_trade_path_teacher else 0)
+        and generic_input_preflight.call_count == (0 if first_model_uses_trade_path_teacher else 2),
     )
 
     project_root = Path(__file__).resolve().parents[2]
