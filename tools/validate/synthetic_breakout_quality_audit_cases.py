@@ -150,8 +150,8 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and research_method_ids == [oracle_method_id]
         and oracle_method_id not in audit_method_ids,
     )
-    # Research [1] shows the Target x 8-Seed matrix BEFORE the one approval,
-    # even if 4 canonical P16 inputs must be built upon that authorization.
+    # Research [1] -> Target Validation [1] shows the Target x Seed matrix
+    # BEFORE the one execution approval, even if canonical P16 inputs are missing.
     from services.audit import target_oracle_romd as oracle_handler
     from services.research import target_oracle_application as oracle_application
     from core.training_policy import get_robustness_benchmark_policy_snapshot
@@ -176,7 +176,10 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                       for target in ("C96", "DailyUniversal_MinTrade40")},
     }
     executions = []
-    answers = iter(["", "", "0"])
+    # Root Enter -> Target submenu Enter -> Oracle approval Enter ->
+    # Target submenu 0 -> Research root 0.  Menu navigation must not count
+    # as a second execution authorization.
+    answers = iter(["", "", "", "0", "0"])
 
     def input_after_plan(prompt):
         prompts.append((prompt, preview in route_console.getvalue()))
@@ -200,7 +203,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         route_rc = research_app._interactive_menu()
     root_text = route_console.getvalue()
     check_true(
-        "target_validation_runs_once_from_research_default_enter",
+        "target_validation_runs_once_from_research_target_submenu_enter",
         route_rc == 0 and preview_owner.call_count == 1
         and ensure.call_count == 1 and oracle_runner.call_count == 1
         and oracle_runner.call_args.kwargs.get("method_id") == oracle_method_id
@@ -209,20 +212,47 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and "before_replay" not in oracle_runner.call_args.kwargs
         and not expensive_status.called
         and "[1]" in root_text and "Target 驗證" in root_text
+        and "Target Oracle 驗證" in root_text
+        and "Target × DL 驗證總覽" in root_text
         and "[2]" in root_text and "模型訓練／驗證" in root_text
         and "[5]" in root_text and "Audit／診斷" in root_text
         and "[9]" in root_text and "策略升格" in root_text,
     )
     check_true(
         "target_validation_only_one_confirm_even_if_verified_run_count_changes",
-        len(prompts) == 3 and not prompts[0][1] and prompts[1][1]
-        and "執行正式 REUSE／RUN 計畫" in prompts[1][0]
+        len(prompts) == 5
+        and not prompts[0][1] and not prompts[1][1] and prompts[2][1]
+        and "執行正式 REUSE／RUN 計畫" in prompts[2][0]
         and all("輸入 RUN" not in prompt for prompt, _ in prompts)
         and root_text.count(preview) == 1
         and "P16 前置工件計畫" not in root_text
         and root_text.index(preview) < root_text.index("[RUN] Target")
         and executions == ["replayed missing arms"]
         and "LATEST" in root_text,
+    )
+
+    # The second submenu item must only consume existing reports; navigating
+    # to the overview is not authorization to FIT, build P16, or run Replay.
+    from services.research import target_dl_overview
+    overview_console = io.StringIO()
+    with patch("builtins.input", side_effect=["1", "2", "0", "0"]) as overview_input, \
+         patch.object(target_dl_overview, "collect_target_dl_overview", return_value={"rows": []}) as collector, \
+         patch.object(target_dl_overview, "render_target_dl_overview", return_value="SYNTHETIC_OVERVIEW") as renderer, \
+         patch.object(research_app, "_run_reusable_audit_method", side_effect=AssertionError("Unexpected Oracle")) as oracle_entry, \
+         patch.object(oracle_application, "ensure_authorized_oracle_parameters") as producer, \
+         patch.object(research_app, "run_enabled_audits") as replay, \
+         redirect_stdout(overview_console):
+        overview_rc = research_app._interactive_menu()
+    check_true(
+        "target_dl_overview_submenu_is_read_only_and_returns_to_research",
+        overview_rc == 0 and overview_input.call_count == 4
+        and collector.call_count == 1 and renderer.call_count == 1
+        and collector.call_args.args == (research_app.PROJECT_ROOT,)
+        and renderer.call_args.args == ({"rows": []},)
+        and overview_console.getvalue().count("SYNTHETIC_OVERVIEW") == 1
+        and "Target × DL 驗證總覽" in overview_console.getvalue()
+        and oracle_entry.call_count == 0
+        and producer.call_count == 0 and replay.call_count == 0,
     )
 
     # Cancel leaves both Optimizer and Replay untouched. The visible matrix is
