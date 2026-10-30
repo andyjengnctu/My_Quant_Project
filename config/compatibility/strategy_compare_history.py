@@ -2123,3 +2123,84 @@ HISTORICAL_STRATEGY_COMPARE_CONTRASTS.update({
         "description": "Historical same-direct-allocator MR-13AC conditional-safety vs MR-13E comparison.",
     },
 })
+
+# 2026-10-30: all MR-13H strategy treatments C77/C113/C114 retired from
+# current Compare/Test at user request. Scientific IDs and definitions remain
+# immutable for prior result reconstruction; C115/C116 are NEW AH treatments.
+HISTORICAL_STRATEGY_DL_SOURCES.update({
+    "CONT13H_ROLL": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "description": "MR-13H current OOS/Rolling PIT-safe full-horizon economic score；保留C77 historical/current direct-result comparison，不代表promotion。",
+        "forward_scores_builder": {
+            "enabled": True,
+            "builder_type": "selection_pit_from_existing_folds",
+            "options": {"resume": True, "allow_stale_source": False},
+        },
+    },
+})
+HISTORICAL_STRATEGY_COMPARE_ARMS.update({
+    "C77": {
+        "name": "Min MR-13H No-K No-R0",
+        "description": (
+            "MR-13H single-head full-horizon economic score direct conversion；沿用已完成的No-K/No-R0 Min contract，"
+            "保留作single-head economic historical/current reference，不因C79新增而改變既有結果。"
+        ),
+        "param_source": "min_rolling",
+        "param_policy": "base-finalist-best",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13H_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False,
+            "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+})
+HISTORICAL_STRATEGY_COMPARE_ARMS.update({
+    "C113": {
+        "name": "Min MR-13H Economic Control Exact K/R0 / Broker-Cash",
+        "description": "SR-C113: MR-13H full-horizon economic PIT score (not pure-MFE supervision); C96/P16 broker cash, Exact K/R0 selector.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13H_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C114": {
+        "name": "Min MR-13H Economic Direct No-K No-R0 / Broker-Cash",
+        "description": "SR-C114: same MR-13H economic PIT score and P16 broker cash as C113; Direct No-K/No-R0 selector.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13H_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False, "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+})
+HISTORICAL_STRATEGY_COMPARE_CONTRASTS.update({
+    "C77-C58": {"left": "C77", "right": "C58", "description": "MR-13H No-K/No-R0 single-head economic score相對Min baseline"},
+    "C78-C77": {"left": "C78", "right": "C77", "description": "同一No-K/No-R0 direct contract下conditional safety residual相對MR-13H single-head economic score"},
+    "C81-C77": {"left": "C81", "right": "C77", "description": "同一No-K/No-R0 direct contract下MR-13AH相對MR-13H economic score"},
+    "C113-C96": {"left": "C113", "right": "C96", "description": "H economic Exact against matched P16 DL-off baseline"},
+    "C114-C96": {"left": "C114", "right": "C96", "description": "H economic Direct against matched P16 DL-off baseline"},
+    "C113-C114": {"left": "C113", "right": "C114", "description": "Same H economic score/P16: Exact versus Direct selector"},
+    "C111-C113": {"left": "C111", "right": "C113", "description": "K Pure-MFE versus H economic score under same P16 Exact selector"},
+    "C112-C114": {"left": "C112", "right": "C114", "description": "K Pure-MFE versus H economic score under same P16 Direct selector"},
+})

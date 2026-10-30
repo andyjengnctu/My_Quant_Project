@@ -98,7 +98,6 @@ STRATEGY_COMPARE_DISPLAY_MIN_MR13R_CONDITIONAL_MFE_RAW_SAFETY_GATE_60_NO_K_NO_R0
 STRATEGY_COMPARE_DISPLAY_MIN_MR13R_CONDITIONAL_MFE_RAW_SAFETY_GATE_70_NO_K_NO_R0 = "Min MR-13R Conditional-MFE Raw-Safety P70 No-K No-R0"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13R_SAFETY_MFE_PRODUCT_NO_K_NO_R0 = "Min MR-13R Raw-Safety × Conditional-MFE Product No-K No-R0"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13Z_JOINT_MIN_NO_K_NO_R0 = "Min MR-13Z Joint-Min No-K No-R0"
-STRATEGY_COMPARE_DISPLAY_MIN_MR13H_NO_K_NO_R0 = "Min MR-13H No-K No-R0"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13AC_NO_K_NO_R0 = "Min MR-13AC No-K No-R0"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13AC_SCORE_CONSTRAINED = "Min MR-13AC Constrained"
 STRATEGY_COMPARE_DISPLAY_MIN_MR13AH_SCORE_CONSTRAINED = "Min MR-13AH Constrained"
@@ -133,12 +132,12 @@ STRATEGY_COMPARE_SUITES = {
         # All DL arms reuse C96/P16; active model membership comes from Model Compare/Test SSOT.
         # Historical AO/CH/CI/Direct arms remain registered but filtered by the
         # canonical Model Compare list; C104 is explicitly retired from this suite.
-        # Current CJ/CK Direct and K/H Exact/Direct use the same P16 broker-cash
+        # Current CJ/CK Direct and K/AH Exact/Direct use the same P16 broker-cash
         # accounting; they differ only by model score or selector.
         "arm_ids": (
             "C96", "C97", "C98", "C99", "C100", "C101", "C102", "C103",
             "C105", "C106", "C107", "C108", "C109", "C110",
-            "C111", "C112", "C113", "C114",
+            "C111", "C112", "C115", "C116",
         ),
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
@@ -150,9 +149,9 @@ STRATEGY_COMPARE_SUITES = {
             "C99-C101", "C100-C102",
             "C103-C96", "C105-C96", "C106-C96", "C107-C96", "C108-C96",
             "C108-C107",
-            "C109-C96", "C110-C96", "C111-C96", "C112-C96", "C113-C96", "C114-C96",
-            "C109-C107", "C110-C108", "C111-C112", "C113-C114",
-            "C110-C109", "C111-C113", "C112-C114",
+            "C109-C96", "C110-C96", "C111-C96", "C112-C96", "C115-C96", "C116-C96",
+            "C109-C107", "C110-C108", "C111-C112", "C115-C116",
+            "C110-C109", "C111-C115", "C112-C116",
         ),
         "display_name_bases": {
             "C96": "Min Base-Finalist-Best / Broker-Cash",
@@ -171,8 +170,8 @@ STRATEGY_COMPARE_SUITES = {
             "C110": "Min MR-13CK T40-MFE Direct No-K No-R0 / Broker-Cash",
             "C111": "Min MR-13K Pure-MFE Control Exact K/R0 / Broker-Cash",
             "C112": "Min MR-13K Pure-MFE Direct No-K No-R0 / Broker-Cash",
-            "C113": "Min MR-13H Economic Control Exact K/R0 / Broker-Cash",
-            "C114": "Min MR-13H Economic Direct No-K No-R0 / Broker-Cash",
+            "C115": "Min MR-13AH Safety-Weighted MFE Control Exact K/R0 / Broker-Cash",
+            "C116": "Min MR-13AH Safety-Weighted MFE Direct No-K No-R0 / Broker-Cash",
         },
     },
     "non_dl_c85_same_signal_revalidation_v1": {
@@ -287,16 +286,15 @@ STRATEGY_COMPARE_SUITES = {
     },
     "extending_current": {
         "filter_by_current_model_list": True,
-        "arm_ids": ("C62", "C61", "C58", "C59", "C77", "C78", "C79", "C80", "C81", "C82", "C83"),
+        "arm_ids": ("C62", "C61", "C58", "C59", "C78", "C79", "C80", "C81", "C82", "C83"),
         "contrast_ids": (
             "C62-C61", "C62-C58",
             "C61-C58",
             "C59-C58",
-            "C77-C58",
-            "C78-C58", "C78-C77",
+            "C78-C58",
             "C79-C58", "C79-C59", "C79-C78",
             "C80-C58", "C80-C59", "C80-C79",
-            "C81-C58", "C81-C77", "C81-C78",
+            "C81-C58", "C81-C78",
             "C80-C81",
             "C82-C80", "C83-C81", "C82-C83",
         ),
@@ -305,7 +303,6 @@ STRATEGY_COMPARE_SUITES = {
             "C61": "Full Base-Finalist-Best",
             "C58": "Min Base-Finalist-Best",
             "C59": "Min MR-13E Constrained",
-            "C77": "Min MR-13H No-K No-R0",
             "C78": "Min MR-13AC No-K No-R0",
             "C79": "Min MR-13AC Constrained",
             "C80": "Min MR-13AH Constrained",
@@ -364,7 +361,6 @@ STRATEGY_COMPARE_PROFILES = {
             "C61": "full_oos",
             "C58": "min_oos",
             "C59": "min_oos",
-            "C77": "min_oos",
             "C78": "min_oos",
             "C79": "min_oos",
             "C80": "min_oos",
@@ -2070,19 +2066,6 @@ STRATEGY_DL_SOURCES = {
                      'forward_scores_builder': {'enabled': True,
                                                 'builder_type': 'selection_pit_from_existing_folds',
                                                 'options': {'resume': True, 'allow_stale_source': False}}},
-    "CONT13H_ROLL": {
-        "filter_id": "breakout_quality_v1",
-        "model_architecture": "inception_time_v1",
-        "experiment_profile": "daily_universal_full_horizon_no_breach_full_list_ndcg_pairwise",
-        "threshold": None,
-        "score_source": "selection_point_in_time",
-        "description": "MR-13H current OOS/Rolling PIT-safe full-horizon economic score；保留C77 historical/current direct-result comparison，不代表promotion。",
-        "forward_scores_builder": {
-            "enabled": True,
-            "builder_type": "selection_pit_from_existing_folds",
-            "options": {"resume": True, "allow_stale_source": False},
-        },
-    },
     "CONT13AC_ROLL": {
         "filter_id": "breakout_quality_v1",
         "model_architecture": "inception_time_predicted_upside_context_v1",
@@ -2431,12 +2414,14 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
-    "C113": {
-        "name": "Min MR-13H Economic Control Exact K/R0 / Broker-Cash",
-        "description": "SR-C113: MR-13H full-horizon economic PIT score (not pure-MFE supervision); C96/P16 broker cash, Exact K/R0 selector.",
+    # AH is Safety-product-weighted Pure-MFE, not the unweighted MFE40 label.
+    # Keep C113/C114 retired under historical compatibility; never reuse their IDs.
+    "C115": {
+        "name": "Min MR-13AH Safety-Weighted MFE Control Exact K/R0 / Broker-Cash",
+        "description": "SR-C115: MR-13AH predicted-Safety-product-weighted Pure-MFE PIT score; C96/P16 broker cash, Exact K/R0 selector.",
         "param_source": "min_best_broker_cash_rolling_experiment",
         "param_policy": "base-finalist-best", "rule_policy": "all_off",
-        "dl_enabled": True, "dl_id": "CONT13H_ROLL",
+        "dl_enabled": True, "dl_id": "CONT13AH_ROLL",
         "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
         "dl_runtime_options": {
             "preserve_k_r0": True,
@@ -2445,12 +2430,12 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
-    "C114": {
-        "name": "Min MR-13H Economic Direct No-K No-R0 / Broker-Cash",
-        "description": "SR-C114: same MR-13H economic PIT score and P16 broker cash as C113; Direct No-K/No-R0 selector.",
+    "C116": {
+        "name": "Min MR-13AH Safety-Weighted MFE Direct No-K No-R0 / Broker-Cash",
+        "description": "SR-C116: same MR-13AH weighted Pure-MFE PIT score/P16 as C115; Direct No-K/No-R0 selector.",
         "param_source": "min_best_broker_cash_rolling_experiment",
         "param_policy": "base-finalist-best", "rule_policy": "all_off",
-        "dl_enabled": True, "dl_id": "CONT13H_ROLL",
+        "dl_enabled": True, "dl_id": "CONT13AH_ROLL",
         "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
         "dl_runtime_options": {
             "preserve_k": False, "preserve_r0": False,
@@ -2700,26 +2685,6 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
-    "C77": {
-        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13H_NO_K_NO_R0,
-        "description": (
-            "MR-13H single-head full-horizon economic score direct conversion；沿用已完成的No-K/No-R0 Min contract，"
-            "保留作single-head economic historical/current reference，不因C79新增而改變既有結果。"
-        ),
-        "param_source": "min_rolling",
-        "param_policy": "base-finalist-best",
-        "rule_policy": "all_off",
-        "dl_enabled": True,
-        "dl_id": "CONT13H_ROLL",
-        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
-        "dl_runtime_options": {
-            "preserve_k": False,
-            "preserve_r0": False,
-            "selection_order": "model_score_desc_then_canonical_tie_v1",
-            "selection_only": True,
-        },
-        "robustness_role": "off",
-    },
     "C78": {
         "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13AC_NO_K_NO_R0,
         "description": (
@@ -2877,15 +2842,15 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C110-C96": {"left": "C110", "right": "C96", "description": "CK T40-MFE Direct against matched P16 DL-off baseline"},
     "C111-C96": {"left": "C111", "right": "C96", "description": "K Pure-MFE Exact against matched P16 DL-off baseline"},
     "C112-C96": {"left": "C112", "right": "C96", "description": "K Pure-MFE Direct against matched P16 DL-off baseline"},
-    "C113-C96": {"left": "C113", "right": "C96", "description": "H economic Exact against matched P16 DL-off baseline"},
-    "C114-C96": {"left": "C114", "right": "C96", "description": "H economic Direct against matched P16 DL-off baseline"},
     "C109-C107": {"left": "C109", "right": "C107", "description": "Same CJ T40 score/P16: Direct versus Exact selector"},
     "C110-C108": {"left": "C110", "right": "C108", "description": "Same CK T40-MFE score/P16: Direct versus Exact selector"},
     "C111-C112": {"left": "C111", "right": "C112", "description": "Same K Pure-MFE score/P16: Exact versus Direct selector"},
-    "C113-C114": {"left": "C113", "right": "C114", "description": "Same H economic score/P16: Exact versus Direct selector"},
+    "C115-C96": {"left": "C115", "right": "C96", "description": "AH Safety-Weighted MFE Exact against matched P16 DL-off baseline"},
+    "C116-C96": {"left": "C116", "right": "C96", "description": "AH Safety-Weighted MFE Direct against matched P16 DL-off baseline"},
+    "C115-C116": {"left": "C115", "right": "C116", "description": "Same AH weighted MFE score/P16: Exact versus Direct selector"},
+    "C111-C115": {"left": "C111", "right": "C115", "description": "K Pure-MFE versus AH Safety-weighted MFE under same P16 Exact selector"},
+    "C112-C116": {"left": "C112", "right": "C116", "description": "K Pure-MFE versus AH Safety-weighted MFE under same P16 Direct selector"},
     "C110-C109": {"left": "C110", "right": "C109", "description": "CK T40-MFE versus CJ T40 with Direct selector and identical P16"},
-    "C111-C113": {"left": "C111", "right": "C113", "description": "K Pure-MFE versus H economic score under same P16 Exact selector"},
-    "C112-C114": {"left": "C112", "right": "C114", "description": "K Pure-MFE versus H economic score under same P16 Direct selector"},
     "C95-C61": {
         "left": "C95", "right": "C61",
         "description": "corrected C95 Full same-signal consensus 4x300 versus Full base-finalist-best reference; non-isolated selector contrast",
@@ -2984,9 +2949,7 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C62-C58": {"left": "C62", "right": "C58", "description": "Production-matched Full finalists-agree相對Min base-finalist-best的整體策略體系比較；不是單一policy或單一rules效果"},
     "C61-C58": {"left": "C61", "right": "C58", "description": "Full相對Min的整體策略體系reference；不是單一DL效果"},
     "C59-C58": {"left": "C59", "right": "C58", "description": "既有MR-13E exact K/R0 constrained相對Min baseline"},
-    "C77-C58": {"left": "C77", "right": "C58", "description": "MR-13H No-K/No-R0 single-head economic score相對Min baseline"},
     "C78-C58": {"left": "C78", "right": "C58", "description": "MR-13AC No-K/No-R0 conditional-safety standalone diagnostic相對Min baseline"},
-    "C78-C77": {"left": "C78", "right": "C77", "description": "同一No-K/No-R0 direct contract下conditional safety residual相對MR-13H single-head economic score"},
     "C79-C58": {"left": "C79", "right": "C58", "description": "MR-13AC exact K/R0 constrained相對Min DL-off baseline"},
     "C79-C59": {"left": "C79", "right": "C59", "description": "C59 portfolio contract完全不變，只把DL source由MR-13E換成MR-13AC；primary DL-source-only controlled contrast"},
     "C79-C78": {"left": "C79", "right": "C78", "description": "同一MR-13AC source下 exact K/R0 constrained相對No-K/No-R0 direct allocator；allocator/resource secondary diagnostic"},
@@ -2994,7 +2957,6 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C80-C59": {"left": "C80", "right": "C59", "description": "C59 portfolio contract完全不變，只把DL source由MR-13E換成MR-13AH；AH constrained primary controlled contrast"},
     "C80-C79": {"left": "C80", "right": "C79", "description": "同一exact K/R0 constrained contract下MR-13AH相對MR-13AC；upside-safety score geometry comparison"},
     "C81-C58": {"left": "C81", "right": "C58", "description": "MR-13AH No-K/No-R0 direct conversion相對Min DL-off baseline"},
-    "C81-C77": {"left": "C81", "right": "C77", "description": "同一No-K/No-R0 direct contract下MR-13AH相對MR-13H economic score"},
     "C81-C78": {"left": "C81", "right": "C78", "description": "C78 direct allocator contract完全不變，只把DL source由MR-13AC換成MR-13AH；AH direct primary controlled contrast"},
     "C80-C81": {"left": "C80", "right": "C81", "description": "同一MR-13AH source下 exact K/R0 constrained相對No-K/No-R0 direct allocator；allocator/resource diagnostic"},
     "C82-C80": {"left": "C82", "right": "C80", "description": "C80 constrained allocator contract完全不變，只把DL source由MR-13AH換成MR-13AK；AK constrained primary controlled contrast"},
