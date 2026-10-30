@@ -7350,7 +7350,8 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
     with (
         patch.object(research_app, "get_breakout_quality_model_test_settings", return_value=SimpleNamespace(model_profiles=configured_models)),
         patch.object(research_app, "get_breakout_quality_workflow_settings", side_effect=settings_stub),
-        patch.object(research_app, "resolve_robustness_benchmark_seeds", return_value=(11, 17)),
+        # [AI] Resolve the workflow-owned benchmark through the real canonical
+        # policy; no legacy application-level seed resolver is available.
         patch.object(research_app, "_load_forward_robustness_seed", return_value=(None, outputs[0], "missing")),
         patch.object(research_app, "_inspect_rolling_robustness_seed",
                      side_effect=lambda _settings, *, seed: research_app.ModelRobustnessSeedSource(
