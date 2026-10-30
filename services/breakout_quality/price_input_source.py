@@ -79,6 +79,21 @@ def resolve_feature_price_source(
 def load_daily_universal_ranker_data_with_price_source(**kwargs):
     """Drop-in domain adapter for every direct daily-universal producer."""
     root = kwargs.get("project_root", PROJECT_ROOT)
+    from core.breakout_quality_registry import get_continuous_ranker_execution_recipe
+    from core.breakout_quality_runtime import CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
+    recipe = get_continuous_ranker_execution_recipe(str(kwargs['experiment_profile']))
+    if recipe.target_policy.materialization_mode == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH:
+        seed = kwargs.pop('seed', None)
+        authorized = bool(kwargs.pop('authorized_target_dependency_build', False))
+        if seed is None:
+            raise ValueError('Formal MinTrade40 requires an explicit model seed')
+        from services.breakout_quality.formal_mintrade40_training_source import resolve_formal_mintrade40_loader_kwargs
+        kwargs.update(resolve_formal_mintrade40_loader_kwargs(
+            project_root=root, seed=int(seed), authorized_build=authorized,
+        ))
+    else:
+        kwargs.pop('seed', None)
+        kwargs.pop('authorized_target_dependency_build', None)
     alternate = resolve_feature_price_source(
         model_architecture=kwargs["model_architecture"],
         project_root=root,

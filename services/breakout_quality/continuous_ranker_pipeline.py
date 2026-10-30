@@ -45,6 +45,8 @@ def load_continuous_ranker_data(
     allow_stale_source: bool,
     project_root: Path | None = None,
     progress_callback=None,
+    seed: int | None = None,
+    authorized_target_dependency_build: bool = False,
 ) -> ContinuousRankerDataBundle:
     """Compatibility facade for the domain-layer canonical sample provider."""
 
@@ -67,6 +69,20 @@ def load_continuous_ranker_data(
         model_architecture=str(model_architecture),
         project_root=kwargs.get("project_root", Path(__file__).resolve().parents[2]),
     )
+    # Scientific dispatch by registered target capability, not by a model ID.
+    from core.breakout_quality_registry import get_continuous_ranker_execution_recipe
+    from core.breakout_quality_runtime import CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
+    recipe = get_continuous_ranker_execution_recipe(str(experiment_profile))
+    if recipe.target_policy.materialization_mode == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH:
+        if seed is None:
+            raise ValueError('Seed-specific formal MinTrade40 requires a model/PIT seed')
+        from services.breakout_quality.formal_mintrade40_training_source import (
+            resolve_formal_mintrade40_loader_kwargs,
+        )
+        kwargs.update(resolve_formal_mintrade40_loader_kwargs(
+            project_root=kwargs.get('project_root', Path(__file__).resolve().parents[2]),
+            seed=int(seed), authorized_build=authorized_target_dependency_build,
+        ))
     return load_profile_continuous_ranker_data(
         **kwargs, feature_price_source=alternate, feature_trade_count_source=activity,
     )

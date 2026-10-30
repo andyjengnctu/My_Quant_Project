@@ -1411,5 +1411,93 @@ class FormalMinTrade40OptimizerBuildGuardCases(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Seed-specific"):
                 load_formal_mintrade40_optimizer_teacher(source, expected_seed=693545351)
 
+class FormalMinTrade40IntegratedResearchCases(unittest.TestCase):
+    """New model/strategy capability, with zero actual FIT or market Replay."""
+
+    def test_current_model_exact_and_direct_are_one_formal_pit_source(self):
+        from core.breakout_quality_policy import get_breakout_quality_model_test_settings
+        from core.strategy_compare_policy import get_strategy_comparison_settings
+        from core.breakout_quality_runtime import DAILY_FORMAL_MINTRADE40_NETR_TARGET_ID
+        from services.research.target_dl_overview import collect_target_dl_overview
+        profile = 'daily_universal_formal_mintrade40_netr_per_seed_full_list_ndcg_pairwise'
+        self.assertIn(('MR-13CM', profile), get_breakout_quality_model_test_settings().model_profiles)
+        self.assertEqual(get_continuous_ranker_research_spec(profile).model_research_id, 'MR-13CM')
+        self.assertEqual(get_continuous_ranker_research_spec(profile).selection_pit_authorized, True)
+        from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+        recipe = get_continuous_ranker_execution_recipe(profile)
+        self.assertEqual(recipe.continuous_target_id, DAILY_FORMAL_MINTRADE40_NETR_TARGET_ID)
+        self.assertEqual(recipe.target_policy.contract_kind, 'formal_seed_mintrade40_netr')
+        for mode in ('broker_cash_dl_conversion_oos', 'broker_cash_dl_conversion_rolling'):
+            cfg = get_strategy_comparison_settings(mode)
+            a, b = cfg.arms['C119'], cfg.arms['C120']
+            self.assertEqual(a.dl_id, b.dl_id)
+            self.assertEqual(a.dl_id, 'CONT13CM_ROLL')
+            self.assertEqual(a.param_source, b.param_source)
+            self.assertEqual(a.param_policy, b.param_policy)
+            self.assertEqual(a.rule_policy, b.rule_policy)
+            self.assertNotEqual(a.dl_runtime_mode, b.dl_runtime_mode)
+        rows = collect_target_dl_overview(Path(__file__).resolve().parents[2])['rows']
+        assigned = {row['target']: row for row in rows if row['model']=='MR-13CM'}
+        self.assertEqual(assigned['DailyUniversal_MinTrade40_NetR']['strategy'],'C119')
+        self.assertEqual(assigned['DailyUniversal_MinTrade40_NetR_Direct']['strategy'],'C120')
+        self.assertEqual(len(assigned),2)
+
+    def test_missing_original_p16_cannot_trigger_historical_optimizer(self):
+        from services.breakout_quality.formal_mintrade40_training_source import (
+            load_formal_mintrade40_training_source,
+        )
+        from services.breakout_quality.formal_mintrade40_pit_source import FormalMinTrade40PITBlocked
+        with TemporaryDirectory() as root, patch(
+            'services.breakout_quality.formal_mintrade40_training_source.prepare_formal_mintrade40_optimizer_teacher'
+        ) as optimizer:
+            with self.assertRaises(FormalMinTrade40PITBlocked):
+                load_formal_mintrade40_training_source(
+                    project_root=root, seed=42, allow_optimizer_build=True,
+                )
+            optimizer.assert_not_called()
+
+    def test_original_optimizer_fold_cutoff_and_seed_are_mandatory(self):
+        from services.breakout_quality.formal_mintrade40_training_source import (
+            load_formal_mintrade40_training_source,
+        )
+        from services.breakout_quality.formal_mintrade40_pit_source import (
+            FormalMinTrade40PITSource, FormalMinTrade40PITBlocked,
+        )
+        days, _frame, _params, period = fixture()
+        historical = replace(period, start=pd.Timestamp('2014-01-01'), end=pd.Timestamp('2020-12-31'))
+        current = replace(period, start=pd.Timestamp('2021-01-01'), end=pd.Timestamp('2021-12-31'))
+        prior_source = FormalMinTrade40PITSource(
+            seed=42, param_sha256='a'*64, schedule=(historical,),
+            publication_dates=('2013-12-31',),
+        )
+        fold = {
+            'oos_start_date': '2021-01-01',
+            'selection_start_date': '2011-01-01',
+            'selection_end_date': '2020-12-31',
+            'optimizer_seed': 42,
+        }
+        from contextlib import ExitStack
+        f='services.breakout_quality.formal_mintrade40_training_source.'
+        with TemporaryDirectory() as root, ExitStack() as stack:
+            stack.enter_context(patch(f+'_current_p16_seed_artifact',return_value=(Path(root)/'p16.json','2021-01-01','2026-03-02','base-finalist-best')))
+            stack.enter_context(patch(f+'load_formal_mintrade40_optimizer_teacher',return_value=prior_source))
+            payload={'kind':'rolling_active_param_ensemble','payload':{'folds':[fold]}}
+            stack.enter_context(patch(f+'load_strategy_param_evaluation_view',return_value=(payload,'b'*64)))
+            stack.enter_context(patch(f+'resolve_formal_min_param_records',return_value=({'members':({'seed':42},)},)))
+            stack.enter_context(patch(f+'build_formal_min_execution_schedule',return_value=((current,),{})))
+            # _validate_requested_param_policy is imported within the owner.
+            stack.enter_context(patch('filters.breakout_quality.strategy_compare_sources._validate_requested_param_policy'))
+            verified=load_formal_mintrade40_training_source(project_root=root,seed=42)
+            self.assertEqual(verified.seed,42)
+            self.assertEqual(verified.publication_dates[-1],'2020-12-31')
+            fold['optimizer_seed']=2014432738
+            with self.assertRaisesRegex(FormalMinTrade40PITBlocked,'Seed'):
+                load_formal_mintrade40_training_source(project_root=root,seed=42)
+            fold['optimizer_seed']=42
+            fold['selection_end_date']='2021-01-10'
+            with self.assertRaisesRegex(FormalMinTrade40PITBlocked,'PIT aligned'):
+                load_formal_mintrade40_training_source(project_root=root,seed=42)
+
+
 if __name__ == "__main__":
     unittest.main()

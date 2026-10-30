@@ -1151,6 +1151,8 @@ def run(args) -> int:
             preload_feature_bank=bool(args.preload_feature_bank),
             allow_stale_source=bool(args.allow_stale_source),
             progress_callback=_daily_build_progress,
+            seed=int(args.seed),
+            authorized_target_dependency_build=True,
         )
     finally:
         daily_target_progress.finish()

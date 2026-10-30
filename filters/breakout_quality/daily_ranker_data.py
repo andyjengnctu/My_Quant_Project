@@ -1214,6 +1214,8 @@ def load_daily_universal_ranker_data(
     allow_stale_source: bool,
     extend_score_eligibility_to_source_tail: bool = False,
     oracle_evaluation_start_date: str | None = None,
+    target_materializer=None,
+    target_lineage: dict[str, Any] | None = None,
     feature_price_source: dict[str, Any] | None = None,
     feature_trade_count_source: dict[str, Any] | None = None,
     project_root: str | Path = PROJECT_ROOT,
@@ -1243,11 +1245,22 @@ def load_daily_universal_ranker_data(
     # Historical MR-13CL remains registered for lineage inspection, but its
     # P2/P16 training label is not the formal Min ROOS per-seed truth.
     # Fail before reading prices or touching any model/teacher artifact.
-    if target_policy.materialization_mode == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH:
-        raise ValueError("MR-13CL target retired: old historical Min teacher is not formal per-seed Min ROOS")
+    trade_path_mode = (
+        target_policy.materialization_mode
+        == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
+    )
+    if trade_path_mode:
+        if target_policy.contract_kind != "formal_seed_mintrade40_netr":
+            raise ValueError("MR-13CL target retired: historical P2/P16 teacher is not the formal seed Target")
+        if (target_materializer is None or not isinstance(target_lineage, dict)
+                or not target_lineage.get("seed") or not target_lineage.get("source_sha256")):
+            raise ValueError("Daily Trade40 requires verified canonical per-seed P16 materializer")
+    elif target_materializer is not None or target_lineage is not None:
+        raise ValueError("Non-trade-path target must not receive a Min teacher")
     if target_policy.materialization_mode not in {
         CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
         CONTINUOUS_RANKER_TARGET_MATERIALIZATION_RISK_NORMALIZED,
+        CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
     }:
         raise ValueError(
             "daily universal ranker需要daily target materialization capability: "
@@ -1363,6 +1376,12 @@ def load_daily_universal_ranker_data(
         if target_policy.sample_universe_horizon_bars is not None
         else spec.horizon_bars
     )
+    exchange_calendar = None
+    if trade_path_mode:
+        from filters.breakout_quality.daily_trade40_target import collect_canonical_exchange_sessions
+        exchange_calendar = collect_canonical_exchange_sessions(
+            csv_inputs, benchmark_ticker=benchmark_ticker,
+        )
     risk_schedule = None
     risk_param_policy = None
     if (
@@ -1458,7 +1477,34 @@ def load_daily_universal_ranker_data(
         local_first_breach_bar = np.full(len(local_positions), -1, dtype=np.int16)
         local_minimum_low_return = np.full(len(local_positions), np.nan, dtype=np.float32)
         local_label_end_dates = None
-        if (
+        if trade_path_mode:
+            # The canonical single-stock execution primitive owns all NetR/NULL
+            # and maturity definitions. The callback is provided by the domain
+            # FIT source owner and cannot be constructed from Oracle hindsight.
+            local_targets = np.full(len(local_positions), np.nan, dtype=np.float32)
+            local_target_valid = np.zeros(len(local_positions), dtype=bool)
+            local_label_end_dates = np.full(
+                len(local_positions), np.datetime64("NaT"), dtype="datetime64[D]"
+            )
+            eligible = (
+                (local_positions + 1 < len(frame))
+                & (frame_dates.take(np.minimum(local_positions + 1, len(frame) - 1))
+                   >= pd.Timestamp(str(target_lineage["first_effective_date"])))
+                & (frame_dates.take(np.minimum(local_positions + 1, len(frame) - 1))
+                   <= sample_end)
+            )
+            if eligible.any():
+                completed = target_materializer(
+                    frame=frame, positions=local_positions[eligible],
+                    ticker=ticker, exchange_calendar=exchange_calendar,
+                    fit_cutoff=sample_end,
+                )
+                local_targets[eligible] = np.asarray(completed.raw_net_r, dtype=np.float32)
+                local_target_valid[eligible] = np.asarray(completed.completed, dtype=bool)
+                local_label_end_dates[eligible] = np.asarray(completed.maturity_dates, dtype="datetime64[D]")
+            if np.any(local_target_valid & ~np.isfinite(local_targets)):
+                raise ValueError("Formal MinTrade40 completed label is nonfinite")
+        elif (
             target_policy.materialization_mode
             == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT
         ):
@@ -1914,10 +1960,20 @@ def load_daily_universal_ranker_data(
         policy=input_policy,
     )
     validate_model_sequence_length(model_spec, int(feature_bank.shape[1]))
-    target_contract = _build_daily_target_contract(
-        target_policy.contract_kind,
-        spec=spec,
-        risk_param_policy=risk_param_policy,
+    target_contract = (
+        {
+            "target_id": target_id,
+            "horizon_bars": int(target_policy.horizon_bars),
+            "target_kind": "formal_seed_mintrade40_broker_net_r",
+            "null_policy": "unfilled_or_unmatured_is_missing_v1",
+            "maturity_policy": "natural_exit_or_40_exchange_sessions_pit_v1",
+            "teacher_lineage": dict(target_lineage),
+        }
+        if trade_path_mode else
+        _build_daily_target_contract(
+            target_policy.contract_kind, spec=spec,
+            risk_param_policy=risk_param_policy,
+        )
     )
     if target_policy.horizon_bars is not None:
         # The declarative target identity includes horizon; do not persist a

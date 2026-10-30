@@ -29,6 +29,8 @@ def load_profile_continuous_ranker_data(
     feature_trade_count_source=None,
     progress_callback=None,
     oracle_evaluation_start_date: str | None = None,
+    target_materializer=None,
+    target_lineage: dict | None = None,
 ) -> ContinuousRankerDataBundle:
     """Load the canonical sample provider selected by the experiment profile."""
 
@@ -56,6 +58,8 @@ def load_profile_continuous_ranker_data(
             feature_price_source=feature_price_source,
             feature_trade_count_source=feature_trade_count_source,
             oracle_evaluation_start_date=oracle_evaluation_start_date,
+            target_materializer=target_materializer,
+            target_lineage=target_lineage,
         )
     raise ValueError(
         "不支援的continuous ranker sample scope: "

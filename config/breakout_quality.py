@@ -379,6 +379,7 @@ BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES = (
     ("MR-13CI", "daily_universal_terminal_r40_full_list_ndcg_pairwise"),
     ("MR-13CJ", "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise"),
     ("MR-13CK", "daily_universal_full_horizon_mae_gated_mfe_t40_full_list_ndcg_pairwise"),
+    ("MR-13CM", "daily_universal_formal_mintrade40_netr_per_seed_full_list_ndcg_pairwise"),
     # Archived AO/CH and historical identities/artifacts remain retained; CI is active for R40 comparison.
 )
 

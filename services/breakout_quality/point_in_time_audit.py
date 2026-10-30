@@ -1537,6 +1537,7 @@ def _run_point_in_time_scores_audit(
         preload_feature_bank=False,
         allow_stale_source=bool(args.allow_stale_source),
         project_root=PROJECT_ROOT,
+        seed=int(manifest.get('seed')) if manifest.get('seed') is not None else None,
     )
     if str(bundle.profile.continuous_target_id) != str(manifest.get("continuous_target_id")):
         raise ValueError("PIT score manifest target與目前profile不一致")

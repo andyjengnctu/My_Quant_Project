@@ -142,7 +142,7 @@ STRATEGY_COMPARE_SUITES = {
         "arm_ids": (
             "C96", "C97", "C98", "C99", "C100", "C101", "C102", "C103",
             "C105", "C106", "C107", "C108", "C109", "C110",
-            "C111", "C112", "C115", "C116", "C117", "C118",
+            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120",
         ),
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
@@ -154,8 +154,8 @@ STRATEGY_COMPARE_SUITES = {
             "C99-C101", "C100-C102",
             "C103-C96", "C105-C96", "C106-C96", "C107-C96", "C108-C96",
             "C108-C107",
-            "C109-C96", "C110-C96", "C111-C96", "C112-C96", "C115-C96", "C116-C96", "C117-C96", "C118-C96",
-            "C109-C107", "C110-C108", "C111-C112", "C115-C116", "C105-C117", "C106-C118",
+            "C109-C96", "C110-C96", "C111-C96", "C112-C96", "C115-C96", "C116-C96", "C117-C96", "C118-C96", "C119-C96", "C120-C96",
+            "C109-C107", "C110-C108", "C111-C112", "C115-C116", "C105-C117", "C106-C118", "C119-C120",
             "C110-C109", "C111-C115", "C112-C116",
         ),
         "display_name_bases": {
@@ -179,6 +179,8 @@ STRATEGY_COMPARE_SUITES = {
             "C116": "Min MR-13AH Safety-Weighted MFE Direct No-K No-R0 / Broker-Cash",
             "C117": "Min MR-13AK Direct No-K No-R0 / Broker-Cash",
             "C118": "Min MR-13CI R40 Direct No-K No-R0 / Broker-Cash",
+            "C119": "Min MR-13CM Formal MinTrade40 NetR Exact K/R0 / Broker-Cash",
+            "C120": "Min MR-13CM Formal MinTrade40 NetR Direct No-K No-R0 / Broker-Cash",
         },
     },
     "non_dl_c85_same_signal_revalidation_v1": {
@@ -2193,6 +2195,22 @@ STRATEGY_DL_SOURCES = {
         "forward_scores_builder": {"enabled": True, "builder_type": "selection_pit_from_existing_folds",
                                    "options": {"resume": True, "allow_stale_source": False}},
     },
+    "CONT13CM_ROLL": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_formal_mintrade40_netr_per_seed_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "single_seed_strategy_conversion_authorized": True,
+        "description": (
+            "MR-13CM: per-seed canonical Min ROOS 40-session broker-net R,"
+            "PIT-matured historical Optimizer/P16 source only; research comparison, not Trading."
+        ),
+        "forward_scores_builder": {
+            "enabled": True, "builder_type": "selection_pit_from_existing_folds",
+            "options": {"resume": True, "allow_stale_source": False},
+        },
+    },
     "CONT13CK_ROLL": {
         "filter_id": "breakout_quality_v1",
         "model_architecture": "inception_time_v1",
@@ -2471,6 +2489,34 @@ STRATEGY_COMPARE_ARMS = {
         "param_source": "min_best_broker_cash_rolling_experiment",
         "param_policy": "base-finalist-best", "rule_policy": "all_off",
         "dl_enabled": True, "dl_id": "CONT13CI_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False, "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C119": {
+        "name": "Min MR-13CM Formal MinTrade40 NetR Exact K/R0 / Broker-Cash",
+        "description": "MR-13CM same-seed canonical P16 MinTrade40 NetR PIT rank; C96/P16 broker-cash with Exact K/R0.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CM_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C120": {
+        "name": "Min MR-13CM Formal MinTrade40 NetR Direct No-K No-R0 / Broker-Cash",
+        "description": "Same MR-13CM PIT scores/P16/broker cash as C119; only selector changes to Direct No-K/No-R0.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CM_ROLL",
         "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
         "dl_runtime_options": {
             "preserve_k": False, "preserve_r0": False,
@@ -2887,6 +2933,9 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C105-C117": {"left": "C105", "right": "C117", "description": "Same MR-13AK Safety/MFE PIT score and P16 broker cash: Exact K/R0 versus Direct No-K/No-R0"},
     "C118-C96": {"left": "C118", "right": "C96", "description": "CI terminal R40 Direct No-K/No-R0 versus matched P16 broker-cash DL-off reference"},
     "C106-C118": {"left": "C106", "right": "C118", "description": "Same MR-13CI terminal R40 PIT score and P16 broker cash: Exact K/R0 versus Direct No-K/No-R0"},
+    "C119-C96": {"left": "C119", "right": "C96", "description": "Formal MinTrade40 NetR model versus C96 broker-cash under identical P16 Exact selector"},
+    "C120-C96": {"left": "C120", "right": "C96", "description": "Formal MinTrade40 NetR model versus C96 broker-cash under identical P16 Direct selector"},
+    "C119-C120": {"left": "C119", "right": "C120", "description": "Same MR-13CM per-seed PIT scores/P16/fees: Exact K/R0 versus Direct No-K/No-R0"},
     "C111-C115": {"left": "C111", "right": "C115", "description": "K Pure-MFE versus AH Safety-weighted MFE under same P16 Exact selector"},
     "C112-C116": {"left": "C112", "right": "C116", "description": "K Pure-MFE versus AH Safety-weighted MFE under same P16 Direct selector"},
     "C110-C109": {"left": "C110", "right": "C109", "description": "CK T40-MFE versus CJ T40 with Direct selector and identical P16"},

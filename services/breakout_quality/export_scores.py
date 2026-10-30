@@ -471,6 +471,7 @@ def _run_daily_continuous_workflow_export(*, root: Path, args, profile) -> int:
         allow_stale_source=True,
         extend_score_eligibility_to_source_tail=True,
         project_root=root,
+        seed=int(contract.seed),
     )
 
     torch, _nn = require_torch()

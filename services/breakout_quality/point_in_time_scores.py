@@ -2741,6 +2741,8 @@ def _run_authorized_point_in_time_scores(args, *, settings) -> int:
             allow_stale_source=bool(args.allow_stale_source),
             project_root=PROJECT_ROOT,
             progress_callback=_daily_data_progress if daily_scope else None,
+            seed=int(args.seed),
+            authorized_target_dependency_build=True,
         )
     finally:
         if daily_scope:

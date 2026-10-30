@@ -23,9 +23,11 @@ from core.breakout_quality_runtime import (
     DAILY_TERMINAL_R40_TARGET_ID,
     DAILY_TERMINAL_MAE_GATED_T40_TARGET_ID,
     DAILY_FULL_HORIZON_MAE_GATED_MFE_T40_TARGET_ID,
+    DAILY_FORMAL_MINTRADE40_NETR_TARGET_ID,
     CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL,
     CONTINUOUS_RANKER_TARGET_POSTPROCESS_NONE,
     CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_NONE,
+    CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
 )
 from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
 from core.breakout_quality_policy import get_breakout_quality_model_test_settings
@@ -116,7 +118,14 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
         raw = item
         if item.get("score_source"):
             raw = next((other for other in comparisons if other["target"] == item["score_source"]), {})
-        score_targets[str(item["target"])] = _ORACLE_SCORE_TARGETS.get(raw.get("score"))
+        label = _ORACLE_SCORE_TARGETS.get(raw.get("score"))
+        # Trade-path truth is not a single generic label: distinguish the
+        # fixed 40-session NetR from 60-session and full-cycle NetR/NetPnL.
+        if (raw.get("score") == "daily_trade_path_net_r"
+                and not raw.get("horizon_mode")
+                and raw.get("horizon_sessions") in (None, 40)):
+            label = DAILY_FORMAL_MINTRADE40_NETR_TARGET_ID
+        score_targets[str(item["target"])] = label
     data_path = (root / "outputs" / "audit" / Path(definition.output_subdir)
                  / "latest" / "audit.json")
     doc_path = data_path.with_name("audit.md")
@@ -169,7 +178,11 @@ def _is_exact_supervision(profile: str, target_id: str) -> bool:
     objective = recipe.objective_policy
     return bool(
         registered.continuous_target_id == target_id
-        and policy.component_target_id == target_id
+        and (
+            policy.component_target_id == target_id
+            or (policy.materialization_mode == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
+                and policy.contract_kind == "formal_seed_mintrade40_netr")
+        )
         and policy.postprocess == CONTINUOUS_RANKER_TARGET_POSTPROCESS_NONE
         and policy.context_transform == CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_NONE
         and objective.secondary_pair_scope == CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL

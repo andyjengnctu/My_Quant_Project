@@ -30,6 +30,7 @@ DAILY_TERMINAL_R40_TARGET_ID = "daily_terminal_r40_v1"
 DAILY_TERMINAL_MAE_GATED_T40_TARGET_ID = "daily_terminal_mae_gated_t40_v1"
 DAILY_FULL_HORIZON_MAE_GATED_MFE_T40_TARGET_ID = "daily_full_horizon_mae_gated_mfe_t40_v1"
 DAILY_COUNTERFACTUAL_MINTRADE40_NETR_TARGET_ID = "daily_universal_counterfactual_mintrade40_netr_v1"
+DAILY_FORMAL_MINTRADE40_NETR_TARGET_ID = "daily_formal_mintrade40_netr_per_seed_v1"
 DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID = "daily_first_risk_breach_pure_mfe_r_v1"
 DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID = "daily_full_horizon_low_adverse_r_v1"
 DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID = "daily_full_horizon_equal_rank_mfe_low_adverse_v1"
@@ -1315,6 +1316,11 @@ def _continuous_ranker_target_policies() -> dict[str, ContinuousRankerTargetPoli
             ),
             context_transform=CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_PRESERVE_PURE_MFE,
             contract_kind="predicted_safety_pure_mfe",
+        ),
+        DAILY_FORMAL_MINTRADE40_NETR_TARGET_ID: ContinuousRankerTargetPolicy(
+            materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
+            horizon_bars=40,
+            contract_kind="formal_seed_mintrade40_netr",
         ),
         DAILY_COUNTERFACTUAL_MINTRADE40_NETR_TARGET_ID: ContinuousRankerTargetPolicy(
             materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
