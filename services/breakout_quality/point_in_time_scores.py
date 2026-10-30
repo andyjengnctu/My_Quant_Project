@@ -1546,6 +1546,7 @@ def _rescore_fold_from_compatible_checkpoint(
     torch_module,
     plan,
     verified_archived_fit: bool = False,
+    fit_validation_errors: list[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]] | None:
     """Reuse an unchanged fitted fold model and regenerate its score rows only."""
 
@@ -1564,32 +1565,61 @@ def _rescore_fold_from_compatible_checkpoint(
             manifest, expected_contract=fold_contract
         )
         if not exact_fitting_schema and not verified_archived_fit:
-            # A previously restored archive may need another score-only
-            # refresh. Revalidate its immutable source through the FIT owner
-            # rather than silently switching to optimizer training.
-            if manifest.get("archived_rolling_fit_source") is not None:
-                contract, _reason = validate_rolling_fold_fitted_checkpoint(
-                    manifest_path=manifest_path, manifest=manifest,
-                    expected=fold_contract,
-                    expected_execution=scientific_torch_execution(plan),
-                    bundle=bundle, torch_module=torch_module,
-                    project_root=PROJECT_ROOT,
-                )
-                verified_archived_fit = contract is not None
+            # FIT source records may have a proven, non-fitting-only schema/cache
+            # difference. The old strict raw-JSON equality is not the FIT
+            # authority: validate *all* local (native or archived) checkpoint
+            # candidates with the canonical FIT owner before score-only reuse.
+            # Missing/changed consumed inputs, provenance or checkpoint bytes
+            # continue to fail closed; no optimiser refit is authorised here.
+            contract, reason = validate_rolling_fold_fitted_checkpoint(
+                manifest_path=manifest_path, manifest=manifest,
+                expected=fold_contract,
+                expected_execution=scientific_torch_execution(plan),
+                bundle=bundle, torch_module=torch_module,
+                project_root=PROJECT_ROOT,
+            )
+            verified_archived_fit = contract is not None
             if not verified_archived_fit:
+                if fit_validation_errors is not None and reason:
+                    fit_validation_errors.append(str(reason))
                 return None
 
         checkpoint = torch_module.load(model_path, map_location="cpu", weights_only=True)
         if not isinstance(checkpoint, dict):
             return None
-        if not _checkpoint_matches_rescore_contract(
+        checkpoint_compatible = _checkpoint_matches_rescore_contract(
             checkpoint=checkpoint,
             manifest=manifest,
             fold_contract=fold_contract,
             bundle=bundle,
             verified_archived_fit=verified_archived_fit,
             project_root=PROJECT_ROOT,
-        ):
+        )
+        if not checkpoint_compatible and not verified_archived_fit:
+            # A prior FIT-owner-approved score refresh updates the *manifest*
+            # source snapshot but intentionally preserves the original Fold
+            # contract embedded in model.pt. A later SCORE refresh therefore
+            # needs the same FIT proof even when the outer manifest now matches.
+            contract, reason = validate_rolling_fold_fitted_checkpoint(
+                manifest_path=manifest_path, manifest=manifest,
+                expected=fold_contract,
+                expected_execution=scientific_torch_execution(plan),
+                bundle=bundle, torch_module=torch_module,
+                project_root=PROJECT_ROOT,
+            )
+            if contract is None:
+                if fit_validation_errors is not None and reason:
+                    fit_validation_errors.append(str(reason))
+                return None
+            checkpoint_compatible = _checkpoint_matches_rescore_contract(
+                checkpoint=checkpoint,
+                manifest=manifest,
+                fold_contract=fold_contract,
+                bundle=bundle,
+                verified_archived_fit=True,
+                project_root=PROJECT_ROOT,
+            )
+        if not checkpoint_compatible:
             return None
         expected_shape = (
             int(bundle.feature_bank.shape[1]),
@@ -2929,6 +2959,7 @@ def _run_authorized_point_in_time_scores(args, *, settings) -> int:
         fitting_checkpoint_reuse = False
         forward_checkpoint_verified = False
         forward_checkpoint_imported = False
+        fit_validation_errors: list[str] = []
         if reused is None and bool(args.resume):
             reused = _rescore_fold_from_compatible_checkpoint(
                 fold_dir=fold_dir,
@@ -2939,6 +2970,7 @@ def _run_authorized_point_in_time_scores(args, *, settings) -> int:
                 args=args,
                 torch_module=torch,
                 plan=plan,
+                fit_validation_errors=fit_validation_errors,
             )
             rescored_checkpoint = reused is not None
         if (
@@ -3122,7 +3154,9 @@ def _run_authorized_point_in_time_scores(args, *, settings) -> int:
                         fold_dir=fold_dir, fold_contract=fold_contract, args=args,
                         torch_module=torch,
                     )
-                    detail = "; ".join(reasons) if reasons else "checkpoint identity proof unavailable"
+                    evidence = [f"canonical FIT owner: {reason}" for reason in fit_validation_errors]
+                    evidence.extend(reasons)
+                    detail = "; ".join(evidence) if evidence else "checkpoint identity proof unavailable"
                     raise RuntimeError(
                         "PIT FIT identity unverified: existing fold/shared-cache checkpoint "
                         f"for {fold['fold_id']} cannot be reused; automatic refit is blocked; "

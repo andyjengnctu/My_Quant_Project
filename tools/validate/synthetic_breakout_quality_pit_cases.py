@@ -1277,6 +1277,140 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             conflict_blocked and (entry / "model.pt").read_bytes() == b"new native fold bytes",
         )
 
+    # A live native Rolling checkpoint with changed source *record serialization*
+    # must enter the same strict FIT owner proof used by archives. Raw FitKey
+    # equality alone must not force a new optimizer FIT or discard the model.
+    with tempfile.TemporaryDirectory(prefix="pit_native_fit_source_bridge_") as td:
+        root = Path(td)
+        fold_dir = root / "fold_20210101_20211231"
+        fold_dir.mkdir()
+        model_path = fold_dir / DEFAULT_MODEL_FILENAME
+        model_path.write_bytes(b"immutable-original-fitting-checkpoint")
+        historical = {
+            "fold_id": fold_dir.name,
+            "model_information_cutoff": "2020-12-31",
+            "source_contract": {"source_data_inventory": {"version": "old"},
+                                "dataset_artifacts": {"events": "old"}},
+            "artifacts": {"checkpoint": build_file_manifest(model_path)},
+        }
+        expected = {**historical, "source_contract": {
+            "source_data_inventory": {"version": "new"},
+            "dataset_artifacts": {"events": "refreshed"},
+        }}
+        manifest_path = fold_dir / FOLD_MANIFEST_FILENAME
+        manifest_path.write_text(json.dumps(historical), encoding="utf-8")
+        unchanged_checkpoint = model_path.read_bytes()
+        unchanged_manifest = manifest_path.read_bytes()
+        from unittest.mock import MagicMock
+        fake_model = SimpleNamespace(load_state_dict=lambda *_a, **_k: None,
+                                     to=lambda *_a: None, eval=lambda: None)
+        fake_bundle = SimpleNamespace(
+            feature_bank=np.zeros((1, 2, 3)), group_context=np.zeros((1, 1)),
+            profile=SimpleNamespace(training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS),
+        )
+        fake_checkpoint = {"model_spec": {}, "model_state_dict": {}}
+        def frame(*_a, **_k):
+            return pd.DataFrame({"ticker": ["2330"], "date": ["2021-01-04"],
+                                 "group_index": [0], "score": [0.5]})
+        with patch.object(pit_module, "_fold_training_contract_is_compatible", return_value=False), \
+             patch.object(pit_module, "scientific_torch_execution", return_value={}), \
+             patch.object(pit_module, "validate_rolling_fold_fitted_checkpoint",
+                          return_value=(None, "source_data_inventory not proven")) as fit_owner, \
+             patch.object(pit_module, "_checkpoint_matches_rescore_contract") as checkpoint_check:
+            errors = []
+            blocked = pit_module._rescore_fold_from_compatible_checkpoint(
+                fold_dir=fold_dir, bundle=fake_bundle,
+                ids={"score_ids": [0], "validation_ids": [0]},
+                fold_contract=expected, expected_fingerprint="test", args=SimpleNamespace(),
+                torch_module=SimpleNamespace(load=MagicMock(return_value=fake_checkpoint)),
+                plan=SimpleNamespace(device="cpu"), fit_validation_errors=errors,
+            )
+            check_true(
+                "pit_native_source_drift_requires_fit_owner_proof_before_scoring",
+                blocked is None and errors == ["source_data_inventory not proven"]
+                and fit_owner.call_count == 1 and not checkpoint_check.called
+                and model_path.read_bytes() == unchanged_checkpoint
+                and manifest_path.read_bytes() == unchanged_manifest
+                and not list(fold_dir.glob("*scores.csv")),
+            )
+        with patch.object(pit_module, "_fold_training_contract_is_compatible", return_value=False), \
+             patch.object(pit_module, "scientific_torch_execution", return_value={}), \
+             patch.object(pit_module, "validate_rolling_fold_fitted_checkpoint",
+                          return_value=(object(), None)) as fit_owner, \
+             patch.object(pit_module, "_checkpoint_matches_rescore_contract", return_value=True) as checkpoint_check, \
+             patch.object(pit_module, "build_model", return_value=fake_model), \
+             patch.object(pit_module, "_predict_primary_score_payload", return_value=(np.array([0.5]), {})), \
+             patch.object(pit_module, "_build_fold_score_frame", side_effect=frame), \
+             patch.object(pit_module, "_validate_score_frame", side_effect=lambda x, **_k: x), \
+             patch.object(pit_module, "_validate_validation_score_frame", side_effect=lambda x, **_k: x):
+            recovered = pit_module._rescore_fold_from_compatible_checkpoint(
+                fold_dir=fold_dir, bundle=fake_bundle,
+                ids={"score_ids": [0], "validation_ids": [0]},
+                fold_contract=expected, expected_fingerprint="test", args=SimpleNamespace(),
+                torch_module=SimpleNamespace(load=MagicMock(return_value=fake_checkpoint)),
+                plan=SimpleNamespace(device="cpu"),
+            )
+            check_true(
+                "pit_native_verified_fit_reuses_identical_weight_bytes_and_rebuilds_only_scores",
+                recovered is not None and fit_owner.call_count == 1
+                and checkpoint_check.call_args.kwargs["verified_archived_fit"] is True
+                and model_path.read_bytes() == unchanged_checkpoint
+                and recovered[1]["source_contract"] == expected["source_contract"]
+                and recovered[1]["artifacts"]["checkpoint"] == historical["artifacts"]["checkpoint"]
+                and (fold_dir / pit_module.FOLD_SCORE_FILENAME).is_file(),
+            )
+
+        # A subsequent score-output refresh sees the new manifest but the
+        # immutable model.pt still has its historical embedded Fold contract.
+        # Re-consult the FIT owner, rather than regressing to TRAIN/BLOCK.
+        with patch.object(pit_module, "_fold_training_contract_is_compatible", return_value=True), \
+             patch.object(pit_module, "scientific_torch_execution", return_value={}), \
+             patch.object(pit_module, "validate_rolling_fold_fitted_checkpoint",
+                          return_value=(object(), None)) as fit_owner, \
+             patch.object(pit_module, "_checkpoint_matches_rescore_contract",
+                          side_effect=[False, True]) as checkpoint_check, \
+             patch.object(pit_module, "build_model", return_value=fake_model), \
+             patch.object(pit_module, "_predict_primary_score_payload", return_value=(np.array([0.5]), {})), \
+             patch.object(pit_module, "_build_fold_score_frame", side_effect=frame), \
+             patch.object(pit_module, "_validate_score_frame", side_effect=lambda x, **_k: x), \
+             patch.object(pit_module, "_validate_validation_score_frame", side_effect=lambda x, **_k: x):
+            second = pit_module._rescore_fold_from_compatible_checkpoint(
+                fold_dir=fold_dir, bundle=fake_bundle,
+                ids={"score_ids": [0], "validation_ids": [0]},
+                fold_contract=expected, expected_fingerprint="test-v2", args=SimpleNamespace(),
+                torch_module=SimpleNamespace(load=MagicMock(return_value=fake_checkpoint)),
+                plan=SimpleNamespace(device="cpu"),
+            )
+            check_true(
+                "pit_repeated_score_refresh_reverifies_historical_embedded_fit_contract",
+                second is not None and fit_owner.call_count == 1
+                and checkpoint_check.call_count == 2
+                and checkpoint_check.call_args.kwargs["verified_archived_fit"] is True
+                and model_path.read_bytes() == unchanged_checkpoint
+                and second[1]["contract_fingerprint"] == "test-v2",
+            )
+        retained_manifest = manifest_path.read_bytes()
+        with patch.object(pit_module, "_fold_training_contract_is_compatible", return_value=True), \
+             patch.object(pit_module, "scientific_torch_execution", return_value={}), \
+             patch.object(pit_module, "validate_rolling_fold_fitted_checkpoint",
+                          return_value=(None, "current target lineage differs")) as fit_owner, \
+             patch.object(pit_module, "_checkpoint_matches_rescore_contract", return_value=False):
+            errors = []
+            rejected = pit_module._rescore_fold_from_compatible_checkpoint(
+                fold_dir=fold_dir, bundle=fake_bundle,
+                ids={"score_ids": [0], "validation_ids": [0]},
+                fold_contract=expected, expected_fingerprint="test-v3", args=SimpleNamespace(),
+                torch_module=SimpleNamespace(load=MagicMock(return_value=fake_checkpoint)),
+                plan=SimpleNamespace(device="cpu"), fit_validation_errors=errors,
+            )
+            check_true(
+                "pit_repeated_score_refresh_rejects_unproven_embedded_contract",
+                rejected is None and errors == ["current target lineage differs"]
+                and fit_owner.call_count == 1
+                and model_path.read_bytes() == unchanged_checkpoint
+                and manifest_path.read_bytes() == retained_manifest,
+            )
+
     # FIT repair history must not be mistaken for absent Rolling folds. A
     # score/Audit refresh first verifies the archived Fold bytes and Context,
     # and never starts optimizer epochs for an unproven historical candidate.
