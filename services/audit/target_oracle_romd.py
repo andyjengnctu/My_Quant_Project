@@ -72,7 +72,10 @@ from services.audit.oracle_score_artifacts import (
     OraclePriceScoreStore, price_score_source_identity, price_score_replay_lineage,
     oracle_dataset_summary_sha256,
 )
-from config.audit import AUDIT_OUTPUT_ROOT, TARGET_ORACLE_REPLAY_SEED_WORKERS
+from config.audit import (
+    AUDIT_OUTPUT_ROOT, TARGET_ORACLE_REPLAY_SEED_WORKERS,
+    TARGET_ORACLE_CPU_WORKER_BUDGET, TARGET_ORACLE_MINTRADE_STOCK_WORKERS,
+)
 from services.audit.oracle_replay_artifacts import (
     OracleReplayStore, price_inventory_sha256, replay_identity,
 )
@@ -1970,6 +1973,7 @@ def _execute_single_stage_missing(
     metric_backfill: Mapping[tuple[int, str], tuple[Mapping[str, Any], Mapping[str, Any]]] | None = None,
     price_targets_for_run: frozenset[str] | None = None,
     price_score_allow_build: bool = True,
+    mintrade_stock_workers: int | None = None,
 ) -> dict[tuple[int, str], dict[str, Any]]:
     """Run ONLY the missing Seed x Target cells in the certified one-shot plan.
 
@@ -2055,6 +2059,7 @@ def _execute_single_stage_missing(
             for name, scores in price_scores.items()
         }
     feature_cohort_cache: dict[tuple[str, ...], tuple[pd.DataFrame, str]] = {}
+    calendar_cache: dict[tuple[str, str, str], pd.DatetimeIndex] = {}
     truth_cache: dict[tuple[int, str], tuple[dict[tuple[str, str], float], dict[str, Any]]] = {}
     positive_raw_cache: dict[int, dict[tuple[str, str], float]] = {}
     execution_gates = _validated_execution_gates(definition, plan)
@@ -2102,6 +2107,10 @@ def _execute_single_stage_missing(
                                 cache_root=project_root / AUDIT_OUTPUT_ROOT /
                                            definition.output_subdir / "truth_cache",
                                 feature_cohort_cache=feature_cohort_cache,
+                                ticker_workers=(TARGET_ORACLE_MINTRADE_STOCK_WORKERS
+                                                if mintrade_stock_workers is None
+                                                else mintrade_stock_workers),
+                                exchange_calendar_cache=calendar_cache,
                                 progress_callback=None if quiet else
                                     lambda msg, name=source_name: print(
                                         f"[Target RUN seed={seed} {name}] {msg}", flush=True),
@@ -2281,6 +2290,37 @@ def _oracle_missing_seed_worker(
     return _execute_single_stage_missing(definition, **arguments)
 
 
+def _oracle_ticker_worker_quotas(
+    *, seed_order: tuple[int, ...], decisions: Mapping[tuple[int, str], str],
+    daily_sources: Mapping[str, Any], total_budget: int, max_per_seed: int,
+) -> dict[int, int]:
+    """Allocate bounded CPU lanes for the actual approved daily RUN work.
+
+    Seed processes always consume at least one lane. Remaining lanes go to
+    seeds with more pending RUN work (and at least one daily source);
+    no new RUN cells are added. The quota changes only execution scheduling.
+    """
+    if (type(total_budget) is not int or not 1 <= total_budget <= 32
+            or type(max_per_seed) is not int or not 1 <= max_per_seed <= 8):
+        raise ValueError("Oracle CPU and MinTrade stock worker budget invalid")
+    weights = {
+        seed: sum(action == "RUN" and key[0] == seed
+                  for key, action in decisions.items())
+        for seed in seed_order
+    }
+    quotas = {seed: 1 for seed in seed_order}
+    for _ in range(max(0, total_budget - len(seed_order))):
+        eligible = [seed for seed in seed_order
+                    if quotas[seed] < max_per_seed and weights[seed] > 0
+                    and any(action == "RUN" and key[0] == seed and key[1] in daily_sources
+                            for key, action in decisions.items())]
+        if not eligible:
+            break
+        chosen = max(eligible, key=lambda seed: (weights[seed] / quotas[seed], -seed_order.index(seed)))
+        quotas[chosen] += 1
+    return quotas
+
+
 def _execute_oracle_missing_parallel(
     definition, *, project_root: Path, quiet: bool,
     plan: Mapping[str, Any], contracts: Mapping[str, Mapping[str, Any]],
@@ -2322,9 +2362,16 @@ def _execute_oracle_missing_parallel(
     worker_limit = TARGET_ORACLE_REPLAY_SEED_WORKERS
     if type(worker_limit) is not int or not 1 <= worker_limit <= 4:
         raise ValueError("TARGET_ORACLE_REPLAY_SEED_WORKERS must be an integer in [1, 4]")
-    worker_count = min(worker_limit, len(seed_order))
+    cpu_budget = TARGET_ORACLE_CPU_WORKER_BUDGET
+    stock_limit = TARGET_ORACLE_MINTRADE_STOCK_WORKERS
+    if (type(cpu_budget) is not int or not 1 <= cpu_budget <= 32
+            or type(stock_limit) is not int or not 1 <= stock_limit <= 8):
+        raise ValueError("Oracle CPU/MinTrade stock process budget invalid")
+    worker_count = min(worker_limit, len(seed_order), cpu_budget)
     if worker_count == 1:
-        return _execute_single_stage_missing(definition, **kwargs)
+        return _execute_single_stage_missing(
+            definition, **kwargs, mintrade_stock_workers=min(cpu_budget, stock_limit),
+        )
     try:
         # Tests, embedding applications and isolated simulations may supply
         # local objects that cannot cross a Windows spawn boundary. In that
@@ -2335,7 +2382,9 @@ def _execute_oracle_missing_parallel(
         if not quiet:
             print("[Target Replay] process payload cannot be serialized; "
                   "using canonical single-worker Replay", flush=True)
-        return _execute_single_stage_missing(definition, **kwargs)
+        return _execute_single_stage_missing(
+            definition, **kwargs, mintrade_stock_workers=min(cpu_budget, stock_limit),
+        )
 
     # Confirm all immutable inputs BEFORE the shared price producer and pool.
     # Child processes independently repeat these checks before their own RUN.
@@ -2377,13 +2426,29 @@ def _execute_oracle_missing_parallel(
                 price_sha=price_sha, allow_build=False,
             )
         except OracleTruthBuildRequired:
-            return _execute_single_stage_missing(definition, **kwargs)
+            return _execute_single_stage_missing(
+                definition, **kwargs, mintrade_stock_workers=min(cpu_budget, stock_limit),
+            )
 
     if not quiet:
         print(
             f"[Target Replay] RUN seeds={','.join(map(str, seed_order))} | "
             f"workers={worker_count} | RUN cells={len(required)}", flush=True,
         )
+    if len(seed_order) > worker_count:
+        # Queued seeds may replace completed workers while the others are
+        # still busy: use a per-slot cap, not a global sum of every seed.
+        per_slot = min(stock_limit, max(1, cpu_budget // worker_count))
+        worker_quotas = {seed: per_slot for seed in seed_order}
+    else:
+        worker_quotas = _oracle_ticker_worker_quotas(
+            seed_order=seed_order, decisions=decisions, daily_sources=plan["daily_sources"],
+            total_budget=cpu_budget, max_per_seed=stock_limit,
+        )
+    if not quiet:
+        print("[Target Replay] ticker CPU lanes=" + ",".join(
+            f"{seed}:{worker_quotas[seed]}" for seed in seed_order
+        ), flush=True)
     futures = {}
     results: dict[tuple[int, str], dict[str, Any]] = {}
     with ProcessPoolExecutor(
@@ -2398,6 +2463,7 @@ def _execute_oracle_missing_parallel(
                                        if key[0] == seed}
             job["metric_backfill"] = {key: value for key, value in (metric_backfill or {}).items()
                                       if key[0] == seed}
+            job["mintrade_stock_workers"] = worker_quotas[seed]
             future = pool.submit(
                 _oracle_missing_seed_worker, definition, seed=seed,
                 job=job, price_targets=price_targets,

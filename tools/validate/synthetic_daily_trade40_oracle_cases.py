@@ -525,9 +525,16 @@ class FormalMinDailyOracleCases(TestCase):
         current_sha = hashlib.sha256(raw).hexdigest()
         old_sha, reviewed_sha = lineage._AUDITED_IDENTITY_ONLY_REVISION
         self.assertNotEqual(old_sha, reviewed_sha)
-        self.assertEqual(current_sha, reviewed_sha)
+        self.assertEqual(current_sha, lineage._AUDITED_PARALLEL_ONLY_REVISION[1])
+        self.assertEqual(lineage._AUDITED_PARALLEL_ONLY_REVISION[0], old_sha)
         self.assertEqual(lineage.attested_mintrade_source_sha256(
             lineage._SOURCE_OWNER, source_path), old_sha)
+        with TemporaryDirectory() as original_dir:
+            prior = Path(original_dir) / "daily_trade40_oracle.py"
+            # Historical exact-byte source remains a valid input witness.
+            with patch.object(lineage, "compute_file_sha256", return_value=reviewed_sha):
+                self.assertEqual(lineage.attested_mintrade_source_sha256(
+                    lineage._SOURCE_OWNER, prior), old_sha)
         self.assertEqual(owner._truth_source_sha(root, outcome_metric="net_r"),
                          "80a4fe352f4466ce7c3862149f0d23a97cac127eaf71dd98a521905305e5bb32")
         self.assertEqual(owner._truth_source_sha(root, outcome_metric="net_pnl"),
@@ -1521,3 +1528,149 @@ class FullcyclePositiveNetPnLDiagnosticCases(TestCase):
         self.assertEqual(get_audit_definitions('breakout_quality'), ())
         self.assertNotIn('fullcycle_positive_direct_trade_attribution', AUDIT_CATALOG)
         self.assertNotIn('fullcycle_positive_direct_trade_attribution', AUDIT_METHOD_CATALOG)
+
+
+class ParallelMinTickerExecutionCases(TestCase):
+    """Real spawn workers must not introduce a second economic path or result."""
+
+    def test_parallel_and_serial_ticker_results_have_identical_raw_and_rank_sha(self):
+        from hashlib import sha256
+        from services.audit import daily_trade40_oracle as owner
+        from filters.breakout_quality.workflow_io import load_dataset_frame
+        from filters.breakout_quality.daily_trade40_target import rank_trade40_outcome_frame
+
+        calendar, frames, group, schedule = source_fixture()
+        with TemporaryDirectory() as directory:
+            jobs = []
+            for index, (ticker, selected) in enumerate(group.group_table.groupby("ticker", sort=True)):
+                path = Path(directory) / f"{ticker}.csv"
+                frames[ticker].reset_index(names="Date").to_csv(path, index=False)
+                # Verify test inputs really follow canonical sanitized CSV.
+                self.assertFalse(load_dataset_frame(path, ticker, min_rows=1).empty)
+                jobs.append((index, ticker, str(path), pd.DatetimeIndex(selected["date"])))
+            for horizon, metric in ((40, "net_r"), (60, "net_r"), (None, "net_pnl")):
+                with self.subTest(horizon=horizon, metric=metric):
+                    kwargs = dict(
+                        jobs=jobs, schedule=schedule, exchange=calendar,
+                        horizon=horizon, cutoff=pd.Timestamp("2021-03-15"), metric=metric,
+                        progress=None,
+                    )
+                    serial = owner._run_ticker_outcomes(workers=1, **kwargs)
+                    spawned = owner._run_ticker_outcomes(workers=2, **kwargs)
+                    self.assertEqual(serial[1:], spawned[1:])
+                    value_column = "realized_net_pnl" if metric == "net_pnl" else "realized_net_r"
+                    def witnesses(output):
+                        raw = pd.concat(output[0], ignore_index=True).sort_values(
+                            ["date", "ticker"], kind="stable")
+                        score = rank_trade40_outcome_frame(raw, value_column=value_column)
+                        form = "%.17g" if metric == "net_pnl" else "%.10g"
+                        return (
+                            sha256(raw.to_csv(index=False, na_rep="NULL", float_format=form).encode()).hexdigest(),
+                            sha256("".join(f"{t}|{d}|{score[t,d]:.17g}\n" for t,d in sorted(score)).encode()).hexdigest(),
+                        )
+                    self.assertEqual(witnesses(serial), witnesses(spawned))
+                    for a, b in zip(serial[0], spawned[0]):
+                        pd.testing.assert_frame_equal(a, b, check_exact=True)
+
+    def test_nested_spawn_seed_can_launch_ticker_spawn(self):
+        from concurrent.futures import ProcessPoolExecutor
+        from multiprocessing import get_context
+        from services.audit import daily_trade40_oracle as owner
+
+        calendar, frames, group, schedule = source_fixture()
+        with TemporaryDirectory() as directory:
+            jobs = []
+            for index, (ticker, selected) in enumerate(group.group_table.groupby("ticker", sort=True)):
+                path = Path(directory) / f"{ticker}.csv"
+                frames[ticker].reset_index(names="Date").to_csv(path, index=False)
+                jobs.append((index, ticker, str(path), pd.DatetimeIndex(selected["date"])))
+            kwargs = dict(schedule=schedule, exchange=calendar, horizon=40,
+                          cutoff=pd.Timestamp("2021-03-15"), metric="net_r", progress=None)
+            expected = owner._run_ticker_outcomes(jobs, workers=1, **kwargs)
+            with ProcessPoolExecutor(max_workers=1, mp_context=get_context("spawn")) as outer:
+                nested = outer.submit(owner._run_ticker_outcomes, jobs, workers=2, **kwargs).result()
+            self.assertEqual(expected[1:], nested[1:])
+            for a, b in zip(expected[0], nested[0]):
+                pd.testing.assert_frame_equal(a, b, check_exact=True)
+
+    def test_signed_truth_and_reuse_same_serial_or_parallel(self):
+        from services.audit import daily_trade40_oracle as owner
+        calendar, frames, bundle, schedule = source_fixture()
+        with TemporaryDirectory() as directory:
+            paths = []
+            for ticker, frame in frames.items():
+                path = Path(directory) / f"{ticker}.csv"
+                frame.reset_index(names="Date").to_csv(path, index=False)
+                paths.append((ticker, path))
+            args = dict(
+                project_root=Path(directory), dataset="full", filter_id="breakout_quality_v1",
+                profile_id=PROFILE, cutoff="2021-03-15", evaluation_start="2021-01-01",
+                evaluation_end="2021-03-15", score_start="2021-01-01",
+                seed=693545351, param_sha256="a" * 64, canonical_schedule=schedule,
+                horizon_sessions=40, outcome_metric="net_r", price_sha256="b" * 64,
+            )
+            with patch.object(owner, "oracle_dataset_summary_sha256", return_value="d" * 64), \
+                 patch.object(owner, "load_profile_continuous_ranker_data", return_value=bundle), \
+                 patch.object(owner, "discover_dataset_csv_inputs", return_value=(paths, [])), \
+                 patch.object(owner, "collect_canonical_exchange_sessions", return_value=calendar):
+                serial, original = owner.build_daily_universal_trade40_oracle_scores(
+                    **args, ticker_workers=1, cache_root=Path(directory) / "serial",
+                )
+                parallel, attested = owner.build_daily_universal_trade40_oracle_scores(
+                    **args, ticker_workers=2, cache_root=Path(directory) / "parallel",
+                )
+                reused, replayed = owner.build_daily_universal_trade40_oracle_scores(
+                    **args, ticker_workers=2, cache_root=Path(directory) / "serial",
+                )
+            self.assertEqual(serial, parallel)
+            self.assertEqual(serial, reused)
+            self.assertEqual(original, attested)
+            self.assertEqual(original["source_reuse_status"], "BUILD")
+            self.assertEqual(replayed["source_reuse_status"], "REUSE")
+            self.assertEqual({k: v for k,v in replayed.items() if k != "source_reuse_status"},
+                             {k: v for k,v in original.items() if k != "source_reuse_status"})
+
+    def test_spawn_worker_fails_closed_on_missing_real_stock_price(self):
+        from services.audit import daily_trade40_oracle as owner
+        calendar, frames, group, schedule = source_fixture()
+        with TemporaryDirectory() as directory:
+            ticker = "2330"
+            valid_path = Path(directory) / "2330.csv"
+            frames[ticker].reset_index(names="Date").to_csv(valid_path, index=False)
+            jobs = [
+                (0, ticker, str(valid_path), pd.DatetimeIndex(group.group_table.loc[
+                    group.group_table["ticker"] == ticker, "date"])),
+                (1, "2317", str(Path(directory) / "missing.csv"), pd.DatetimeIndex(group.group_table.loc[
+                    group.group_table["ticker"] == "2317", "date"])),
+            ]
+            with self.assertRaisesRegex(DailyTrade40OracleBlockedError, "parallel BUILD blocked"):
+                owner._run_ticker_outcomes(
+                    jobs, schedule=schedule, exchange=calendar, horizon=40,
+                    cutoff=pd.Timestamp("2021-03-15"), metric="net_r",
+                    workers=2, progress=None,
+                )
+
+    def test_ticker_cpu_budget_allocated_by_current_run_cells(self):
+        daily = {"MinTrade_NetPnL_Positive", "MinTrade40", "MinTrade60"}
+        decisions = {
+            (6, "MinTrade_NetPnL_Positive"): "RUN",
+            **{(7, f"Daily{i}"): "RUN" for i in range(11)},
+            **{(8, f"Item{i}"): "RUN" for i in range(21)},
+        }
+        daily.update(f"Daily{i}" for i in range(11))
+        daily.update(f"Item{i}" for i in range(11))
+        quotas = oracle._oracle_ticker_worker_quotas(
+            seed_order=(6, 7, 8), decisions=decisions,
+            daily_sources={name: name for name in daily},
+            total_budget=8, max_per_seed=6,
+        )
+        self.assertEqual(quotas, {6: 1, 7: 3, 8: 4})
+        self.assertLessEqual(sum(quotas.values()), 8)
+        self.assertEqual(oracle._oracle_ticker_worker_quotas(
+            seed_order=(8,), decisions=decisions, daily_sources={name: name for name in daily},
+            total_budget=8, max_per_seed=6), {8: 6})
+        self.assertEqual(oracle._oracle_ticker_worker_quotas(
+            seed_order=(1, 2), decisions={(1, "C96"): "RUN", (2, "C96"): "RUN"},
+            daily_sources={name: name for name in daily}, total_budget=8, max_per_seed=6),
+            {1: 1, 2: 1})
+

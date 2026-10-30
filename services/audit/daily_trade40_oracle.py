@@ -7,9 +7,11 @@ Exact/Direct selectors read the same per-seed score table; neither can train.
 """
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from hashlib import sha256
 from functools import lru_cache
 import json
+from multiprocessing import get_context
 import os
 import tempfile
 import zipfile
@@ -251,6 +253,125 @@ def _truth_cache_write(path: Path, identity: Mapping[str, Any],
             os.unlink(temp_name)
 
 
+# Worker inputs are installed once per spawned process rather than pickled
+# for each of hundreds of tickers. The numerical owner below is shared by
+# serial and parallel execution; this optimization cannot change trade math.
+_TICKER_WORKER_CONTEXT: tuple[Any, ...] | None = None
+
+
+def _init_ticker_worker(
+    schedule: tuple[ExecutableMinPeriod, ...], exchange: pd.DatetimeIndex,
+    horizon: int | None, cutoff: pd.Timestamp, metric: str,
+) -> None:
+    global _TICKER_WORKER_CONTEXT
+    _TICKER_WORKER_CONTEXT = (schedule, exchange, horizon, cutoff, metric)
+
+
+def _compute_ticker_outcome(
+    job: tuple[int, str, str, pd.DatetimeIndex],
+    *, schedule: tuple[ExecutableMinPeriod, ...], exchange: pd.DatetimeIndex,
+    horizon: int | None, cutoff: pd.Timestamp, metric: str,
+) -> tuple[int, pd.DataFrame, int, int]:
+    index, ticker, path, dates = job
+    frame = load_dataset_frame(Path(path), ticker, min_rows=1)
+    positions = pd.DatetimeIndex(frame.index).normalize().get_indexer(dates)
+    if (positions < 0).any():
+        raise DailyTrade40OracleBlockedError(f"Feature stock-day missing sanitized price: {ticker}")
+    batch = compute_counterfactual_trade40_batch(
+        frame, positions, ticker=ticker, schedule=schedule,
+        exchange_calendar=exchange, horizon_sessions=horizon,
+        research_cutoff=cutoff, include_net_pnl=(metric == "net_pnl"),
+    )
+    if len(batch.reasons) != len(dates):
+        raise DailyTrade40OracleBlockedError(f"Formal Min path result shape mismatch: {ticker}")
+    missing_param = next((i for i, reason in enumerate(batch.reasons)
+                          if reason == "no_historical_effective_Min_param"), None)
+    if missing_param is not None:
+        raise DailyTrade40OracleBlockedError(
+            "Formal Min rolling parameter schedule missing at "
+            f"ticker={ticker} information_date={dates[missing_param].strftime('%Y-%m-%d')}; "
+            "cannot censor an unavailable parameter as an unfilled trade"
+        )
+    if len(batch.maturity_dates) != len(dates):
+        raise DailyTrade40OracleBlockedError("Min target deadline result shape mismatch")
+    raw = np.asarray(batch.target_raw_pnl if metric == "net_pnl"
+                     else batch.target_raw_r, dtype=np.float64)
+    valid = np.asarray(batch.valid_mask, dtype=bool)
+    if (len(raw) != len(valid) or
+            (valid & ~np.isfinite(raw)).any() or ((~valid) & np.isfinite(raw)).any()):
+        raise DailyTrade40OracleBlockedError("NULL/valid canonical Min economic outcome invalid")
+    value_column = "realized_net_pnl" if metric == "net_pnl" else "realized_net_r"
+    result = pd.DataFrame({
+        "ticker": ticker, "date": dates.strftime("%Y-%m-%d").to_numpy(),
+        value_column: np.where(valid, raw, np.nan),
+    })
+    return index, result, int(batch.cutoff_truncated_rows), int(batch.research_cutoff_closeout_rows)
+
+
+def _ticker_worker(job: tuple[int, str, str, pd.DatetimeIndex]):
+    if _TICKER_WORKER_CONTEXT is None:
+        raise RuntimeError("Formal Min ticker worker has no canonical execution context")
+    schedule, exchange, horizon, cutoff, metric = _TICKER_WORKER_CONTEXT
+    return _compute_ticker_outcome(
+        job, schedule=schedule, exchange=exchange, horizon=horizon,
+        cutoff=cutoff, metric=metric,
+    )
+
+
+def _run_ticker_outcomes(
+    jobs: list[tuple[int, str, str, pd.DatetimeIndex]], *,
+    schedule: tuple[ExecutableMinPeriod, ...], exchange: pd.DatetimeIndex,
+    horizon: int | None, cutoff: pd.Timestamp, metric: str, workers: int,
+    progress: Callable[[str], None] | None,
+) -> tuple[list[pd.DataFrame], int, int]:
+    """One immutable ticker task, stable deterministic gather, bounded spawn pool.
+
+    Futures finish in arbitrary order; their index restores the original
+    groupby(sort=True) result sequence before canonical date/ticker ranking.
+    Worker failures block publication, never fall back to a partial result.
+    """
+    results: list[tuple[pd.DataFrame, int, int] | None] = [None] * len(jobs)
+    total = len(jobs)
+    def receive(result):
+        index, frame, truncated, closeouts = result
+        if not 0 <= index < total or results[index] is not None:
+            raise DailyTrade40OracleBlockedError("Formal Min duplicate/out-of-range ticker result")
+        results[index] = (frame, truncated, closeouts)
+        completed = sum(item is not None for item in results)
+        if progress is not None and (completed % 100 == 0 or completed == total):
+            progress(f"逐股交易路徑 {completed}/{total}")
+
+    if workers <= 1 or total <= 1:
+        for job in jobs:
+            receive(_compute_ticker_outcome(
+                job, schedule=schedule, exchange=exchange, horizon=horizon,
+                cutoff=cutoff, metric=metric,
+            ))
+    else:
+        with ProcessPoolExecutor(
+            max_workers=min(workers, total), mp_context=get_context("spawn"),
+            initializer=_init_ticker_worker,
+            initargs=(schedule, exchange, horizon, cutoff, metric),
+        ) as pool:
+            futures = {pool.submit(_ticker_worker, job): job[1] for job in jobs}
+            for future in as_completed(futures):
+                try:
+                    receive(future.result())
+                except Exception as exc:
+                    for pending in futures:
+                        pending.cancel()
+                    raise DailyTrade40OracleBlockedError(
+                        f"Formal Min ticker={futures[future]} parallel BUILD blocked: "
+                        f"{type(exc).__name__}: {exc}"
+                    ) from exc
+    if any(item is None for item in results):
+        raise DailyTrade40OracleBlockedError("Formal Min ticker BUILD returned incomplete results")
+    ordered = [item for item in results if item is not None]
+    return ([frame for frame, _, _ in ordered],
+            sum(truncated for _, truncated, _ in ordered),
+            sum(closeouts for _, _, closeouts in ordered))
+
+
 def build_daily_universal_trade40_oracle_scores(
     *, project_root: Path, dataset: str, filter_id: str,
     profile_id: str, cutoff: str, evaluation_start: str,
@@ -264,6 +385,8 @@ def build_daily_universal_trade40_oracle_scores(
     feature_cohort_cache: dict[tuple[str, ...], tuple[pd.DataFrame, str]] | None = None,
     allow_build: bool = True,
     progress_callback: Callable[[str], None] | None = None,
+    ticker_workers: int = 1,
+    exchange_calendar_cache: dict[tuple[str, str, str], pd.DatetimeIndex] | None = None,
 ) -> tuple[dict[tuple[str, str], float], dict[str, Any]]:
     """Compute all feature-eligible stock-day outcomes from a formal Min seed.
 
@@ -384,10 +507,19 @@ def build_daily_universal_trade40_oracle_scores(
         csv_inputs, duplicates = discover_dataset_csv_inputs(root, dataset)
         if duplicates:
             raise DailyTrade40OracleBlockedError("Duplicate canonical price ticker source")
-        exchange = collect_canonical_exchange_sessions(
-            csv_inputs, benchmark_ticker=str(DEFAULT_LABEL_POLICY.benchmark_ticker),
-            horizon_sessions=horizon_sessions,
-        )
+        # Calendar depends only on the certified price inventory, not on
+        # horizon or P16 seed; reuse within this worker for subsequent Targets.
+        calendar_key = (str(root), str(dataset), str(price_sha256))
+        exchange = (exchange_calendar_cache.get(calendar_key)
+                    if exchange_calendar_cache is not None and is_sha256_hex(price_sha256)
+                    else None)
+        if exchange is None:
+            exchange = collect_canonical_exchange_sessions(
+                csv_inputs, benchmark_ticker=str(DEFAULT_LABEL_POLICY.benchmark_ticker),
+                horizon_sessions=horizon_sessions,
+            )
+            if exchange_calendar_cache is not None and is_sha256_hex(price_sha256):
+                exchange_calendar_cache[calendar_key] = exchange
         prior = exchange[exchange < start_day]
         if prior.empty:
             raise DailyTrade40OracleBlockedError("No legal pre-OOS information session")
@@ -409,69 +541,24 @@ def build_daily_universal_trade40_oracle_scores(
         # closeout, not whether the date is allowed in the score cross-section.
         if not len(exchange[exchange <= cutoff_day]) or group.empty:
             raise DailyTrade40OracleBlockedError("No Research-cutoff feature stock-days")
-        records: list[pd.DataFrame] = []
-        total_truncated = 0
-        total_cutoff_closeouts = 0
+        if type(ticker_workers) is not int or not 1 <= ticker_workers <= 8:
+            raise DailyTrade40OracleBlockedError("Formal Min ticker_workers must be in [1, 8]")
         groups = group.groupby("ticker", sort=True)
-        total_tickers = group["ticker"].nunique()
-        if progress_callback is not None:
-            progress_callback(f"開始逐股正式交易路徑（0/{total_tickers}）")
-        for tick_index, (ticker, selected) in enumerate(groups, 1):
+        jobs = []
+        for index, (ticker, selected) in enumerate(groups):
             path = source_paths.get(ticker)
             if path is None:
-                raise DailyTrade40OracleBlockedError(f"Feature-universe ticker missing price source: {ticker}")
-            frame = load_dataset_frame(path, ticker, min_rows=1)
-            positions = pd.DatetimeIndex(frame.index).normalize().get_indexer(
-                pd.DatetimeIndex(selected["date"])
-            )
-            if (positions < 0).any():
-                raise DailyTrade40OracleBlockedError(f"Feature stock-day missing sanitized price: {ticker}")
-            batch = compute_counterfactual_trade40_batch(
-                frame, positions, ticker=ticker, schedule=canonical_schedule,
-                exchange_calendar=exchange, horizon_sessions=horizon_sessions,
-                research_cutoff=cutoff_day,
-                include_net_pnl=(outcome_metric == "net_pnl"),
-            )
-            # No effective Min parameter is missing source truth, NOT an
-            # unfilled trade outcome. Ranking it last would fabricate an
-            # economic label for an unavailable rolling P16 parameter period.
-            # Fail the whole controlled Oracle before publishing any scores.
-            if len(batch.reasons) != len(selected):
                 raise DailyTrade40OracleBlockedError(
-                    f"Formal Min path result shape mismatch: {ticker}"
+                    f"Feature-universe ticker missing price source: {ticker}"
                 )
-            missing_param = next(
-                (i for i, reason in enumerate(batch.reasons)
-                 if reason == "no_historical_effective_Min_param"), None
-            )
-            if missing_param is not None:
-                information_day = selected.iloc[missing_param]["date"].strftime("%Y-%m-%d")
-                raise DailyTrade40OracleBlockedError(
-                    f"Formal Min rolling parameter schedule missing at "
-                    f"ticker={ticker} information_date={information_day}; "
-                    "cannot censor an unavailable parameter as an unfilled trade"
-                )
-            # The only allowed deadline is the earlier of horizon and research
-            # cutoff. Cross-ticker calendars are verified by the source owner.
-            if len(batch.maturity_dates) != len(selected):
-                raise DailyTrade40OracleBlockedError("Min target deadline result shape mismatch")
-            total_truncated += batch.cutoff_truncated_rows
-            total_cutoff_closeouts += batch.research_cutoff_closeout_rows
-            raw = np.asarray(
-                batch.target_raw_pnl if outcome_metric == "net_pnl" else batch.target_raw_r,
-                dtype=np.float64,
-            )
-            valid = np.asarray(batch.valid_mask, dtype=bool)
-            if (len(raw) != len(valid) or
-                    (valid & ~np.isfinite(raw)).any() or ((~valid) & np.isfinite(raw)).any()):
-                raise DailyTrade40OracleBlockedError("NULL/valid canonical Min economic outcome invalid")
-            records.append(pd.DataFrame({
-                "ticker": ticker,
-                "date": selected["date"].dt.strftime("%Y-%m-%d").to_numpy(),
-                value_column: np.where(valid, raw, np.nan),
-            }))
-            if progress_callback is not None and (tick_index % 100 == 0 or tick_index == total_tickers):
-                progress_callback(f"逐股交易路徑 {tick_index}/{total_tickers}")
+            jobs.append((index, ticker, str(path), pd.DatetimeIndex(selected["date"])))
+        if progress_callback is not None:
+            progress_callback(f"開始逐股正式交易路徑（0/{len(jobs)}）")
+        records, total_truncated, total_cutoff_closeouts = _run_ticker_outcomes(
+            jobs, schedule=canonical_schedule, exchange=exchange,
+            horizon=horizon_sessions, cutoff=cutoff_day, metric=outcome_metric,
+            workers=ticker_workers, progress=progress_callback,
+        )
         outcome = pd.concat(records, ignore_index=True).sort_values(["date", "ticker"], kind="stable")
         if outcome.empty or not outcome[value_column].notna().any():
             raise DailyTrade40OracleBlockedError("No completed valid formal-Min economic outcomes")
