@@ -5637,11 +5637,25 @@ def validate_research_report_contract_freeze_case(_base_params):
         detail=str(current_standard_pairs),
     )
 
-    # Comparison config must accept one additional arbitrary valid model/profile pair
-    # without any fixed assumption about how many models are currently configured.
-    extra_profile = bq_registry.DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
-    extra_id = str(bq_registry.get_continuous_ranker_research_spec(extra_profile).model_research_id)
-    synthetic_pairs = (*current_pairs, (extra_id, extra_profile))
+    # Comparison config must accept one additional valid, distinct registered pair.
+    # Select outside the current SSOT dynamically: a formerly historical control may
+    # later become a formal comparison model without invalidating this synthetic case.
+    current_ids = {model_id for model_id, _profile in current_pairs}
+    current_profiles = {profile for _model_id, profile in current_pairs}
+    extra_pair = next(
+        (
+            (str(spec.model_research_id), profile)
+            for profile, spec in sorted(bq_registry._CONTINUOUS_RANKER_RESEARCH_SPECS.items())
+            if str(spec.model_research_id) not in current_ids
+            and profile not in current_profiles
+            and bq_registry.get_breakout_quality_experiment_profile(profile).training_objective
+            in bq_registry.CONTINUOUS_RANKER_TRAINING_OBJECTIVES
+        ),
+        None,
+    )
+    if extra_pair is None:
+        raise AssertionError("模型比較清單擴充測試缺少未選用的合法registry model/profile")
+    synthetic_pairs = (*current_pairs, extra_pair)
     with patch.object(bq, "BREAKOUT_QUALITY_MODEL_TEST_PROFILES", synthetic_pairs):
         resolved_shared = bq_policy.get_breakout_quality_model_test_settings()
         resolved = bq_policy.get_breakout_quality_standard_model_comparison_settings()
