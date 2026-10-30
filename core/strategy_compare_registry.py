@@ -133,9 +133,12 @@ STRATEGY_COMPARE_SUITES = {
         # All DL arms reuse C96/P16; active model membership comes from Model Compare/Test SSOT.
         # Historical AO/CH/CI/Direct arms remain registered but filtered by the
         # canonical Model Compare list; C104 is explicitly retired from this suite.
+        # Current CJ/CK Direct and K/H Exact/Direct use the same P16 broker-cash
+        # accounting; they differ only by model score or selector.
         "arm_ids": (
             "C96", "C97", "C98", "C99", "C100", "C101", "C102", "C103",
-            "C105", "C106", "C107", "C108",
+            "C105", "C106", "C107", "C108", "C109", "C110",
+            "C111", "C112", "C113", "C114",
         ),
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
@@ -147,6 +150,9 @@ STRATEGY_COMPARE_SUITES = {
             "C99-C101", "C100-C102",
             "C103-C96", "C105-C96", "C106-C96", "C107-C96", "C108-C96",
             "C108-C107",
+            "C109-C96", "C110-C96", "C111-C96", "C112-C96", "C113-C96", "C114-C96",
+            "C109-C107", "C110-C108", "C111-C112", "C113-C114",
+            "C110-C109", "C111-C113", "C112-C114",
         ),
         "display_name_bases": {
             "C96": "Min Base-Finalist-Best / Broker-Cash",
@@ -161,6 +167,12 @@ STRATEGY_COMPARE_SUITES = {
             "C106": "Min MR-13CI Exact K/R0 / Broker-Cash",
             "C107": "Min MR-13CJ Exact K/R0 / Broker-Cash",
             "C108": "Min MR-13CK T40-MFE Exact K/R0 / Broker-Cash",
+            "C109": "Min MR-13CJ T40 Direct No-K No-R0 / Broker-Cash",
+            "C110": "Min MR-13CK T40-MFE Direct No-K No-R0 / Broker-Cash",
+            "C111": "Min MR-13K Pure-MFE Control Exact K/R0 / Broker-Cash",
+            "C112": "Min MR-13K Pure-MFE Direct No-K No-R0 / Broker-Cash",
+            "C113": "Min MR-13H Economic Control Exact K/R0 / Broker-Cash",
+            "C114": "Min MR-13H Economic Direct No-K No-R0 / Broker-Cash",
         },
     },
     "non_dl_c85_same_signal_revalidation_v1": {
@@ -979,7 +991,7 @@ for _mode in ("oos", "rolling"):
         "label": f"Broker-Cash DL Conversion | {_mode.upper() if _mode == 'oos' else 'Rolling'} Test",
         "description": (
             "C96/P16 broker-cash Min control plus configured model-list "
-            "DL score conversions (current AK/CG/CI/CJ/CK Exact K/R0); "
+            "DL score conversions (authorized Exact K/R0 and Direct No-K/No-R0); "
             "C97/P17 and C98/P15 remain reference arms."
         ),
         "display_alignment_group": "broker_cash_dl_conversion_v1",
@@ -2046,6 +2058,18 @@ STRATEGY_DL_SOURCES = {
             "options": {"resume": True, "allow_stale_source": False},
         },
     },
+    # Existing historical C60 Pure-MFE PIT source, promoted unchanged to the
+    # current catalog so K Exact/Direct can share its canonical checkpoint/score.
+    'CONT13K_ROLL': {'filter_id': 'breakout_quality_v1',
+                     'model_architecture': 'inception_time_v1',
+                     'experiment_profile': 'daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise',
+                     'threshold': None,
+                     'score_source': 'selection_point_in_time',
+                     'description': 'MR-13K Extending-Window Rolling PIT-safe pure-MFE score；expanding history + '
+                                    'mode-specific refit cadence。',
+                     'forward_scores_builder': {'enabled': True,
+                                                'builder_type': 'selection_pit_from_existing_folds',
+                                                'options': {'resume': True, 'allow_stale_source': False}}},
     "CONT13H_ROLL": {
         "filter_id": "breakout_quality_v1",
         "model_architecture": "inception_time_v1",
@@ -2347,6 +2371,92 @@ STRATEGY_COMPARE_ARMS = {
         "dl_enabled": True, "dl_id": "CONT13CK_ROLL",
         "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
         "dl_runtime_options": {"preserve_k_r0": True, "constrained_solver": "exact_branch_and_bound_v1", "selection_only": True},
+        "robustness_role": "off",
+    },
+    # Newly authorized P16 conversion controls. No new target/optimizer/model FIT;
+    # each arm reuses its existing model PIT score and canonical selector.
+    "C109": {
+        "name": "Min MR-13CJ T40 Direct No-K No-R0 / Broker-Cash",
+        "description": "SR-C109: C107 T40 PIT score with P16 broker cash; selector only changes Exact K/R0 to Direct No-K/No-R0.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CJ_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False, "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C110": {
+        "name": "Min MR-13CK T40-MFE Direct No-K No-R0 / Broker-Cash",
+        "description": "SR-C110: C108 T40-MFE PIT score with P16 broker cash; selector only changes Exact K/R0 to Direct No-K/No-R0.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CK_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False, "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C111": {
+        "name": "Min MR-13K Pure-MFE Control Exact K/R0 / Broker-Cash",
+        "description": "SR-C111: canonical MR-13K pure-MFE PIT score; C96/P16 broker cash and Exact K/R0 control selector.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13K_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C112": {
+        "name": "Min MR-13K Pure-MFE Direct No-K No-R0 / Broker-Cash",
+        "description": "SR-C112: same MR-13K pure-MFE PIT score and P16 broker cash as C111; Direct No-K/No-R0 selector.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13K_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False, "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C113": {
+        "name": "Min MR-13H Economic Control Exact K/R0 / Broker-Cash",
+        "description": "SR-C113: MR-13H full-horizon economic PIT score (not pure-MFE supervision); C96/P16 broker cash, Exact K/R0 selector.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13H_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C114": {
+        "name": "Min MR-13H Economic Direct No-K No-R0 / Broker-Cash",
+        "description": "SR-C114: same MR-13H economic PIT score and P16 broker cash as C113; Direct No-K/No-R0 selector.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13H_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False, "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1",
+            "selection_only": True,
+        },
         "robustness_role": "off",
     },
     "C95": {
@@ -2762,6 +2872,20 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C100-C102": {"left": "C100", "right": "C102", "description": "CH Exact K/R0 vs CH No-K/No-R0 with the same PIT score"},
     "C103-C104": {"left": "C103", "right": "C104", "description": "CG Exact K/R0 vs CG No-K/No-R0 with the same PIT score"},
 
+    # Same-parameter Broker-Cash controls and score-vs-selector separations.
+    "C109-C96": {"left": "C109", "right": "C96", "description": "CJ T40 Direct against matched P16 DL-off baseline"},
+    "C110-C96": {"left": "C110", "right": "C96", "description": "CK T40-MFE Direct against matched P16 DL-off baseline"},
+    "C111-C96": {"left": "C111", "right": "C96", "description": "K Pure-MFE Exact against matched P16 DL-off baseline"},
+    "C112-C96": {"left": "C112", "right": "C96", "description": "K Pure-MFE Direct against matched P16 DL-off baseline"},
+    "C113-C96": {"left": "C113", "right": "C96", "description": "H economic Exact against matched P16 DL-off baseline"},
+    "C114-C96": {"left": "C114", "right": "C96", "description": "H economic Direct against matched P16 DL-off baseline"},
+    "C109-C107": {"left": "C109", "right": "C107", "description": "Same CJ T40 score/P16: Direct versus Exact selector"},
+    "C110-C108": {"left": "C110", "right": "C108", "description": "Same CK T40-MFE score/P16: Direct versus Exact selector"},
+    "C111-C112": {"left": "C111", "right": "C112", "description": "Same K Pure-MFE score/P16: Exact versus Direct selector"},
+    "C113-C114": {"left": "C113", "right": "C114", "description": "Same H economic score/P16: Exact versus Direct selector"},
+    "C110-C109": {"left": "C110", "right": "C109", "description": "CK T40-MFE versus CJ T40 with Direct selector and identical P16"},
+    "C111-C113": {"left": "C111", "right": "C113", "description": "K Pure-MFE versus H economic score under same P16 Exact selector"},
+    "C112-C114": {"left": "C112", "right": "C114", "description": "K Pure-MFE versus H economic score under same P16 Direct selector"},
     "C95-C61": {
         "left": "C95", "right": "C61",
         "description": "corrected C95 Full same-signal consensus 4x300 versus Full base-finalist-best reference; non-isolated selector contrast",

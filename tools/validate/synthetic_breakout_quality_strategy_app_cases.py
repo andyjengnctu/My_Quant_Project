@@ -511,10 +511,18 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         )
         and {"full_roos", "min_roos", "selection_min_roos", "selection_full_roos"}
         .issubset(set(strategy_history.HISTORICAL_STRATEGY_PARAM_SOURCES))
+        # Previously registered sources may move from compatibility to the
+        # canonical active registry without changing their DL source identity.
         and {
             "CONT13E", "CONT13E_PIT", "CONT13K", "CONT13M", "CONT13M_PIT", "CONT13K_PIT",
             "CONT13K_ROLL", "CONT13M_ROLL", "CONT13P_ROLL", "CONT13Q_ROLL", "CONT13R_ROLL", "CONT13Z_ROLL",
-        }.issubset(set(strategy_history.HISTORICAL_STRATEGY_DL_SOURCES))
+        }.issubset(
+            set(strategy_config.STRATEGY_DL_SOURCES)
+            | set(strategy_history.HISTORICAL_STRATEGY_DL_SOURCES)
+        )
+        and set(strategy_config.STRATEGY_DL_SOURCES).isdisjoint(
+            strategy_history.HISTORICAL_STRATEGY_DL_SOURCES
+        )
         and {
             "C1", "C3", "C23", "C32", "C42", "C44", "C56", "C57",
             "C64", "C66", "C71", "C72", "C73", "C74", "C75",

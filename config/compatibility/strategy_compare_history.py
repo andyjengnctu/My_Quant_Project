@@ -1835,17 +1835,7 @@ __all__ = [
 ]
 
 # 2026-08-28 current matrix cleanup: retired completed C64/C66/C71-C75 from active catalog.
-HISTORICAL_STRATEGY_DL_SOURCES.update({'CONT13K_ROLL': {'filter_id': 'breakout_quality_v1',
-                  'model_architecture': 'inception_time_v1',
-                  'experiment_profile': 'daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise',
-                  'threshold': None,
-                  'score_source': 'selection_point_in_time',
-                  'description': 'MR-13K Extending-Window Rolling PIT-safe pure-MFE score；expanding history + '
-                                 'mode-specific refit cadence。',
-                  'forward_scores_builder': {'enabled': True,
-                                             'builder_type': 'selection_pit_from_existing_folds',
-                                             'options': {'resume': True, 'allow_stale_source': False}}},
- 'CONT13M_ROLL': {'filter_id': 'breakout_quality_v1',
+HISTORICAL_STRATEGY_DL_SOURCES.update({'CONT13M_ROLL': {'filter_id': 'breakout_quality_v1',
                   'model_architecture': 'inception_time_v1',
                   'experiment_profile': 'daily_universal_full_horizon_low_adverse_full_list_ndcg_pairwise',
                   'threshold': None,
