@@ -342,7 +342,7 @@
       "path": "tools/validate/synthetic_meta_cases.py"
     },
     {
-      "ast_sha256": "c6faa981328910fe70cffd3e09df3a4fc6326c994a29f28f6159ac13d758ec7f",
+      "ast_sha256": "dc5e2268a6c7d055df35b4b9a9d12d7cbc2d40487db5011e3b2940151961770d",
       "function": "validate_research_report_contract_freeze_case",
       "path": "tools/validate/synthetic_meta_cases.py"
     },
