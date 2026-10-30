@@ -446,6 +446,7 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用�
 | `SR-C114` | Broker-Cash Min MR-13H Economic Direct | Same H full-horizon opportunity PIT scores and `PARAM-P16` as C113, canonical No-K/No-R0 Direct selector; NOT a pure-MFE40 predictor. | **RETIRED_FROM_CURRENT_2026-10-30 / HISTORICAL_IDENTITY_RETAINED / RESULT_PENDING / NO_TRADING / NO_PROMOTION**. |
 | `SR-C115` | Broker-Cash Min MR-13AH Safety-Weighted Pure-MFE Control Exact | `CONT13AH_ROLL` predicted-Safety-product-weighted Pure-MFE PIT score, `PARAM-P16` Broker-Cash Min/all-off; Exact K/R0 canonical selector. Target is not unweighted MFE40. | **AUTHORIZED / IMPLEMENTED / RESEARCH_ONLY / RESULT_PENDING / NO_TRADING / NO_PROMOTION**. |
 | `SR-C116` | Broker-Cash Min MR-13AH Safety-Weighted Pure-MFE Direct | Same `CONT13AH_ROLL` score and `PARAM-P16` as C115; canonical Direct No-K/No-R0 selector; contrasts AH Exact vs Direct and AH vs K. | **AUTHORIZED / IMPLEMENTED / RESEARCH_ONLY / RESULT_PENDING / NO_TRADING / NO_PROMOTION**. |
+| `SR-C117` | Broker-Cash Min MR-13AK Direct No-K/No-R0 | Reuses the exact `CONT13AK_ROLL` PIT score and `PARAM-P16` Broker-Cash Min/all-off from `SR-C105`; the only controlled change is the canonical Direct No-K/No-R0 selector instead of Exact K/R0. Same current Compare Suite for OOS, Rolling and 4-seed Robustness; contrasts C117-C96 and C105-C117. No new DL training, Target or optimizer truth. | **AUTHORIZED / IMPLEMENTED / CURRENT_COMPARE / RESEARCH_ONLY / RESULT_PENDING / NO_TRADING / NO_PROMOTION**. |
 
 ### 2026-10-17 Broker-Cash DL Conversion 六臂正式登記（僅實作，尚無績效）
 

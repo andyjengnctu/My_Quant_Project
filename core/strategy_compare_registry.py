@@ -142,7 +142,7 @@ STRATEGY_COMPARE_SUITES = {
         "arm_ids": (
             "C96", "C97", "C98", "C99", "C100", "C101", "C102", "C103",
             "C105", "C106", "C107", "C108", "C109", "C110",
-            "C111", "C112", "C115", "C116",
+            "C111", "C112", "C115", "C116", "C117",
         ),
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
@@ -154,8 +154,8 @@ STRATEGY_COMPARE_SUITES = {
             "C99-C101", "C100-C102",
             "C103-C96", "C105-C96", "C106-C96", "C107-C96", "C108-C96",
             "C108-C107",
-            "C109-C96", "C110-C96", "C111-C96", "C112-C96", "C115-C96", "C116-C96",
-            "C109-C107", "C110-C108", "C111-C112", "C115-C116",
+            "C109-C96", "C110-C96", "C111-C96", "C112-C96", "C115-C96", "C116-C96", "C117-C96",
+            "C109-C107", "C110-C108", "C111-C112", "C115-C116", "C105-C117",
             "C110-C109", "C111-C115", "C112-C116",
         ),
         "display_name_bases": {
@@ -177,6 +177,7 @@ STRATEGY_COMPARE_SUITES = {
             "C112": "Min MR-13K Pure-MFE Direct No-K No-R0 / Broker-Cash",
             "C115": "Min MR-13AH Safety-Weighted MFE Control Exact K/R0 / Broker-Cash",
             "C116": "Min MR-13AH Safety-Weighted MFE Direct No-K No-R0 / Broker-Cash",
+            "C117": "Min MR-13AK Direct No-K No-R0 / Broker-Cash",
         },
     },
     "non_dl_c85_same_signal_revalidation_v1": {
@@ -2449,6 +2450,20 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
+    "C117": {
+        "name": "Min MR-13AK Direct No-K No-R0 / Broker-Cash",
+        "description": "SR-C117: same MR-13AK shared Safety/MFE PIT score and P16 broker cash as C105; canonical Direct No-K/No-R0 selector only.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13AK_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False, "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
     "C95": {
         "name": "Full Adjusted Price Corrected Same-Signal Agree 4x300",
         "description": (
@@ -2853,6 +2868,8 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C115-C96": {"left": "C115", "right": "C96", "description": "AH Safety-Weighted MFE Exact against matched P16 DL-off baseline"},
     "C116-C96": {"left": "C116", "right": "C96", "description": "AH Safety-Weighted MFE Direct against matched P16 DL-off baseline"},
     "C115-C116": {"left": "C115", "right": "C116", "description": "Same AH weighted MFE score/P16: Exact versus Direct selector"},
+    "C117-C96": {"left": "C117", "right": "C96", "description": "AK Direct No-K/No-R0 versus matched P16 DL-off broker-cash reference"},
+    "C105-C117": {"left": "C105", "right": "C117", "description": "Same MR-13AK Safety/MFE PIT score and P16 broker cash: Exact K/R0 versus Direct No-K/No-R0"},
     "C111-C115": {"left": "C111", "right": "C115", "description": "K Pure-MFE versus AH Safety-weighted MFE under same P16 Exact selector"},
     "C112-C116": {"left": "C112", "right": "C116", "description": "K Pure-MFE versus AH Safety-weighted MFE under same P16 Direct selector"},
     "C110-C109": {"left": "C110", "right": "C109", "description": "CK T40-MFE versus CJ T40 with Direct selector and identical P16"},
