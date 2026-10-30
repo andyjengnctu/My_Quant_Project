@@ -376,9 +376,10 @@ BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES = (
     ("MR-13AH", "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise"),
     ("MR-13AK", "daily_universal_shared_safety_weighted_pure_mfe_full_list_ndcg_pairwise"),
     ("MR-13CG", "daily_universal_shared_full_d40_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
+    ("MR-13CI", "daily_universal_terminal_r40_full_list_ndcg_pairwise"),
     ("MR-13CJ", "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise"),
     ("MR-13CK", "daily_universal_full_horizon_mae_gated_mfe_t40_full_list_ndcg_pairwise"),
-    # Other archived AO/CH/CI and historical identities/artifacts remain retained.
+    # Archived AO/CH and historical identities/artifacts remain retained; CI is active for R40 comparison.
 )
 
 
