@@ -153,6 +153,16 @@
       ]
     },
     {
+      "report_id": "research.target_dl_validation_overview",
+      "versions": [
+        {
+          "contract_id": "research.target_dl_validation_overview@v1",
+          "version": 1,
+          "fingerprint": "cade4e97074e9e19"
+        }
+      ]
+    },
+    {
       "report_id": "strategy.oos_rolling_consistency",
       "versions": [
         {

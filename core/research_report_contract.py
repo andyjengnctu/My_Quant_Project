@@ -746,10 +746,33 @@ STRATEGY_CONSISTENCY_METRIC_KEYS = (
     "expected_value_r", "avg_exposure_pct", "high_mfe_high_safety_pct", "high_mfe_total_pct",
 )
 
+TARGET_DL_VALIDATION_OVERVIEW_REPORT = PersistentReportContract(
+    report_id="research.target_dl_validation_overview",
+    version=1,
+    role="read_only_local_completed_report_summary",
+    menu_path=("Research", "Target Validation", "Target x DL Overview"),
+    sections=(
+        S("comparison", 1, "Target \u00d7 DL \u9a57\u8b49\u7e3d\u89bd", "local_reports_only", (
+            T("target_dl", (
+                C("target", "Target", alignment="left"),
+                C("oracle_romd", "Oracle RoMD", 2, preference="higher", format_kind="number"),
+                C("win_rate_pct", "Win Rate", 2, "%", "higher", "pct"),
+                C("model", "DL Model", alignment="left"),
+                C("rolling_rho", "Rolling \u03c1", 4, preference="higher", format_kind="number"),
+                C("robustness_rho", "Robustness \u03c1", 4, preference="higher", format_kind="number"),
+                C("strategy", "\u7b56\u7565\u7de8\u865f", alignment="left"),
+                C("rolling_romd", "Rolling RoMD", 2, preference="higher", format_kind="number"),
+                C("robustness_romd", "Robustness RoMD", 2, preference="higher", format_kind="number"),
+            )),
+        )),
+    ),
+)
+
+
 PERSISTENT_REPORT_CONTRACTS: Mapping[str, PersistentReportContract] = {
     contract.report_id: contract for contract in (
         MODEL_STANDARD_SOP, MODEL_STANDARD_COMPARISON, STRATEGY_STANDARD_SOP, OPPORTUNITY_SELECTION_REPORT,
-        TRADE_OUTCOME_PATH_REPORT, PORTFOLIO_DRAWDOWN_REPORT, TARGET_ORACLE_ROMD_REPORT, STRATEGY_CONSISTENCY_REPORT,
+        TRADE_OUTCOME_PATH_REPORT, PORTFOLIO_DRAWDOWN_REPORT, TARGET_ORACLE_ROMD_REPORT, TARGET_DL_VALIDATION_OVERVIEW_REPORT, STRATEGY_CONSISTENCY_REPORT,
     )
 }
 

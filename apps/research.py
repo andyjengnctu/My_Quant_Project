@@ -415,6 +415,32 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
     return 0
 
 
+def _target_validation_menu() -> int:
+    while True:
+        print("\n=== Target \u9a57\u8b49 ===")
+        print(render_menu_item(1, "Target Oracle \u9a57\u8b49", default=True))
+        print(render_menu_item(2, "Target \u00d7 DL \u9a57\u8b49\u7e3d\u89bd"))
+        print(render_menu_item(0, "\u8fd4\u56de"))
+        try:
+            raw = input("\u27a1 \u8acb\u9078\u64c7\uff1a").strip().lower()
+        except EOFError:
+            return 0
+        choice = "1" if raw == "" else raw
+        if choice in {"0", "q", "quit", "exit"}:
+            return 0
+        if choice == "1":
+            _run_reusable_audit_method(
+                get_active_audit_module_id(), "target_ground_truth_strategy_romd"
+            )
+        elif choice == "2":
+            from services.research.target_dl_overview import (
+                collect_target_dl_overview, render_target_dl_overview,
+            )
+            print("\n" + render_target_dl_overview(collect_target_dl_overview(PROJECT_ROOT)))
+        else:
+            print("\u9078\u9805\u7121\u6548\uff0c\u8acb\u8f38\u5165 0\uff5e2\u3002")
+
+
 def _audit_reusable_menu(module_id: str) -> int:
     methods = get_audit_methods(menu_location="audit")
     while True:
@@ -847,7 +873,7 @@ def _interactive_menu() -> int:
             return 0
         try:
             if choice == "1":
-                _run_reusable_audit_method(get_active_audit_module_id(), "target_ground_truth_strategy_romd")
+                _target_validation_menu()
             elif choice == "2":
                 _run_model_training_menu()
             elif choice == "3":
