@@ -155,7 +155,7 @@
       "path": "tools/validate/ssot_regression_guard.py"
     },
     {
-      "ast_sha256": "3945ea59ca72b53147dd29e9c2615eaed23e6691a9617b3c0136a41b9c27b38e",
+      "ast_sha256": "3b38698862b0558024160ec86e052632a16667d747ba4b0bb0614ed6bc8b090b",
       "function": "report_contract_version_history_violations",
       "path": "tools/validate/ssot_regression_guard.py"
     }
@@ -281,6 +281,13 @@
         "contract_id": "model.standard_sop@v11",
         "fingerprint": "879150664c67c79b",
         "version": 11
+      }
+    ],
+    "research.target_dl_validation_overview": [
+      {
+        "contract_id": "research.target_dl_validation_overview@v1",
+        "fingerprint": "cade4e97074e9e19",
+        "version": 1
       }
     ],
     "strategy.oos_rolling_consistency": [

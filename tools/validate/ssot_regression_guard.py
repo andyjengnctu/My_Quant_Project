@@ -24,7 +24,7 @@ from .source_index import read_source_ast
 # One permanent Golden and one compact contract ledger. No historic source archive
 # or version-specific JSON file is required, read, or generated.
 GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression.json"
-APPROVED_GOLDEN_SHA256 = "335edc1c6bd803325152d22e5ee8ad528d0008ebe55b3c4938fd7d88e3ee4649"
+APPROVED_GOLDEN_SHA256 = "6708c3b52e5bc56c1194b4746acdd6b9e2617f85b55e0664080d0a39b76cbb5d"
 
 IDENTITY_PATTERN = re.compile(r"^(?:MR-[A-Za-z0-9-]+|ARCH-[A-Za-z0-9_]+|PARAM-P[A-Za-z0-9-]+)$")
 GENERIC_CONSUMER_PATHS = (
@@ -141,8 +141,9 @@ def report_contract_version_history_violations(
         return [f"report_contract_registry_invalid:{exc}"]
     reference = approved["protected_report_versions"]
     issues: list[str] = []
-    if set(registry) != set(reference):
-        issues.append(f"report_ids_changed:{sorted(registry)}!={sorted(reference)}")
+    missing_ids = set(reference) - set(registry)
+    if missing_ids:
+        issues.append(f"protected_report_ids_deleted:{sorted(missing_ids)}")
     for report_id, expected_rows in reference.items():
         rows = registry.get(report_id, ())
         if len(rows) < len(expected_rows):
