@@ -781,3 +781,10 @@ Decision：`ONE_TIME_AUDIT_CLOSED_AND_IMPLEMENTATION_RETIRED / HISTORICAL_FIVE_F
 - **本輪驗證界線**：合成簽章 Replay 可證明舊四個 REUSE／新四個 RUN；但提供的 ZIP 沒有本機完整正式 P16、行情、Replay 與逐日 E13 等價證據，故不宣稱實際全市場八 Seed 已完成。
 
 Decision：`EIGHT_SEED_ONLY_CURRENT / ONE_CANONICAL_TARGET_PIPELINE / PER_SEED_STRICT_REUSE / HISTORICAL_PROVENANCE_IMMUTABLE / REPORT_V11 / LIVE_E13_PENDING`。
+
+### 2026-10-30 — 八 Seed Oracle 市場結果回報（同一研究身份；不更動 Report v11）
+
+- `AUD-target-ground-truth-romd`：使用者提供 `end_to_end_v2` 八 Seed、2021-01-01～2026-03-02、共同 630,589 股票日的 C96＋20 Target 報表；20×8 個 paired RoMD 聚合算術已核對。**僅為 USER_REPORTED 市場結果**，非 GPT 端獨立逐日 Replay／完整 E13 parity 認證；不改 benchmark、Report、Target ID 或 current eligibility。詳細 21 組 Return／MDD／RoMD／SD／Win Rate／EV(A) 與來源 SHA 僅記於 `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md` 的 2026-10-30 八 Seed 條目，既有四 Seed 歷史結果維持不變。
+
+Decision：`CURRENT_EIGHT_SEED_REPORT_USER_REPORTED_AVAILABLE / AGGREGATE_ARITHMETIC_VERIFIED / FULL_E13_MARKET_PARITY_PENDING / NON_PIT / NO_PROMOTION`。
+

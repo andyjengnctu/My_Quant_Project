@@ -5167,6 +5167,44 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 - **00770／Seed762252050**：參考 **2,000 股、+1 元**，Portfolio **22,000 股、−10 元**；相同價格路徑在正式券商費稅整數取整後可翻轉獲利正負號。兩筆均非 NULL 漏過門檻。
 - 一次性五因素 Audit **已結案並退役 implementation**；上述數字是當時使用者提供的 Market Replay／Audit 結果，不意味長期部署資格；詳細 signed replay 與既有 `outputs/audit/breakout_quality/one_time/fullcycle_positive_direct/latest/` 為原有研究工件，不是第二份日誌。
 
+### 2026-10-30 · `[1] Target 驗證` `end_to_end_v2` 八 Seed 結果（使用者提供；現行比較基準）
+
+- **來源**：使用者 `貼上的 Markdown(8).md`，SHA256 `911a94fbca917b0c854a249ec514a112b53282fed1ad85185a3bf5faafac1780`；此處只登錄重要結果，原報表保留逐年與 160 筆 Target×Seed 的 RoMD。正式結果原有入口為 `outputs/audit/breakout_quality/reusable/target_oracle_romd/latest/audit.md`（本 ZIP 不含該輸出與簽章 Replay 收據，不能自行驗證其位元組一致性）。
+- **固定口徑**：`AUD-target-ground-truth-romd`／`audit.target_oracle_romd@v11`、payload schema 8；`2021-01-01～2026-03-02`（2026 非全年）、共同 feature-eligible 股票日 **630,589**、`end_to_end_v2` 的八個 P16 parameter Seeds `693545351 / 2014432738 / 104504529 / 762252050 / 9734312 / 1020806211 / 116293459 / 1234683984`。C96 同窗基準＋20 treatments（Exact K/R0 及 Direct No-K/No-R0，含一項特殊 Positive_Direct）；正式 Broker-Cash、原 Oracle percentile Score／Target 定義不變。Hindsight **NON-PIT**，OOS 為迭代研究證據。
+
+#### 八 Seed 彙總績效（RoMD Mean 小→大；直接轉錄使用者報表）
+
+| Target | Return Mean | Ann. Mean | MDD Mean | RoMD Mean | RoMD SD | Win Rate | EV(A) Mean |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `C96 Same-Window` | +130.87% | +17.29% | 14.27% | 9.17 | 3.16 | 43.86% | +0.85 R |
+| `R40` | +311.61% | +31.50% | 12.94% | 24.14 | 2.90 | 52.53% | +1.55 R |
+| `DailyUniversal_MinTrade60_NetPnL` | +322.80% | +32.19% | 13.46% | 24.47 | 5.11 | 55.10% | +1.72 R |
+| `MFE40_Control` | +331.28% | +32.48% | 13.65% | 24.62 | 6.84 | 52.68% | +1.50 R |
+| `CG40_EqualRank` | +303.73% | +30.63% | 12.15% | 25.22 | 7.54 | 54.45% | +1.51 R |
+| `DailyUniversal_MinTrade60_NetR` | +326.08% | +32.30% | 12.26% | 27.07 | 6.78 | 57.05% | +1.96 R |
+| `DailyUniversal_MinTrade40_NetR` | +335.69% | +32.80% | 12.27% | 27.59 | 6.18 | 57.96% | +1.98 R |
+| `DailyUniversal_MinTrade_NetR` | +327.66% | +32.33% | 12.09% | 27.67 | 6.50 | 55.80% | +2.04 R |
+| `DailyUniversal_MinTrade_NetPnL` | +323.02% | +31.84% | 11.56% | 28.20 | 8.42 | 54.89% | +1.67 R |
+| `T40-MFE` | +330.91% | +32.33% | 11.97% | 28.23 | 9.71 | 54.65% | +1.58 R |
+| `T40` | +343.71% | +33.23% | 12.23% | 28.34 | 6.62 | 53.75% | +1.59 R |
+| `MFE40_Direct` | +1418.14% | +67.50% | 14.42% | 102.38 | 50.14 | 60.63% | +2.54 R |
+| `R40_Direct` | +1381.28% | +66.93% | 12.89% | 108.08 | 46.88 | 62.02% | +2.75 R |
+| `DailyUniversal_MinTrade40_NetR_Direct` | +1298.68% | +64.59% | 11.58% | 112.09 | 52.40 | 75.41% | +4.02 R |
+| `DailyUniversal_MinTrade_NetR_Direct` | +1348.74% | +65.56% | 11.12% | 124.42 | 66.23 | 74.03% | +4.11 R |
+| `DailyUniversal_MinTrade60_NetR_Direct` | +1300.05% | +64.14% | 10.55% | 126.21 | 74.58 | 76.13% | +4.18 R |
+| `T40-MFE_Direct` | +1675.23% | +71.50% | 12.46% | 134.80 | 74.86 | 73.66% | +3.50 R |
+| `T40_Direct` | +1509.19% | +68.88% | 11.35% | 137.44 | 81.59 | 72.82% | +3.53 R |
+| `DailyUniversal_MinTrade_NetPnL_Direct` | +1655.37% | +71.98% | 11.79% | 146.54 | 82.19 | 72.24% | +3.43 R |
+| `DailyUniversal_MinTrade60_NetPnL_Direct` | +1852.77% | +75.67% | 12.47% | 152.95 | 80.90 | 73.88% | +3.49 R |
+| `DailyUniversal_MinTrade_NetPnL_Positive_Direct` | +2073.62% | +79.91% | 10.18% | 204.88 | 88.26 | 99.71% | +4.36 R |
+
+- **名稱對應**：來源報表的 `MFE40` 對應正式選單的 `MFE40_Control`，僅為顯示名稱差異。
+- **配對及變動**：20 個 Target 皆為 `8/8` Seed RoMD 高於 same-seed C96（非交易 Win Rate）。四 Seed→八 Seed RoMD：C96 `9.18→9.17`、T40 `25.57→28.34`、`MinTrade40_NetR 27.51→27.59`、`MinTrade60_NetPnL_Direct 137.77→152.95`、Positive_Direct `199.52→204.88`。只是擴充四個 P16 replicate 後的**跨 Seed 彙總變化**，不是更換 Target/演算法後的績效增量；舊四 Seed 報表與其獨立歷史身分保留。
+- **研究判讀／決策**：一般 Exact 以 `T40` RoMD `28.34`（SD `6.62`）最高，僅比 `MinTrade40_NetR` `27.59` 高 `0.75`，不足以單憑名次宣稱穩健優勢；不含 Positive 未來入場資格的 Direct 以 `MinTrade60_NetPnL_Direct` `152.95`（SD `80.90`）最高，跨 Seed 分散明顯。`DailyUniversal_MinTrade_NetPnL_Positive_Direct` 雖達 RoMD `204.88`、Win Rate `99.71%`，**額外以未來 NetPnL>0 拒單**，不是純 Score-only Oracle、更不是可部署 PIT 策略；不得與一般 Direct 當成同條件的可學 Target 上限。
+- **核對與限制**：直接解析新報表的 **21** 個 aggregate（C96＋20 treatments）、20×8＝**160** 筆 paired Seed RoMD；20 組 RoMD mean／sample SD 與八個 Seed 順序皆在顯示精度內一致，C96 same-seed 值一致。這只驗證**報表算術與配對**，不代表使用者本機 168/168 REUSE 已經獨立認證，也不能取代逐筆 Portfolio Ledger、score identity／signed replay 或正式 DL↔Oracle **E13 每日等價驗收**。不因此修改 Target、模型、Trading、報表版本、科學身分或作 promotion。
+
+**結果狀態**：`USER_REPORTED_EIGHT_SEED_MARKET_REPORT_AVAILABLE / TWENTY_TREATMENTS_8_OF_8_ROMD_OVER_C96 / ALL_160_SEED_PAIR_AGGREGATES_ARITHMETIC_VERIFIED / PHYSICAL_REPLAY_RECEIPTS_NOT_IN_UPLOAD / E13_FULL_MARKET_PARITY_PENDING / HINDSIGHT_NON_PIT / ITERATIVE_OOS / NO_PROMOTION`。
+
 ## 5. 後續新增規則
 
 **只有新科學證據或舊科學證據有效性更正才能增加本文件內容。** 記錄必須有實驗／Target 身分、期間／Seed、控制變數、原始結果、負結果與決策，並指向正式證據。沒有市場／模型結果的工程測試、提交紀錄、打包、格式調整或一次性 Audit 清理，不可追加研究章節。本文件不再生成封存副本或研究待辦。
