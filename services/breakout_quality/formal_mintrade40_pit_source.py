@@ -9,13 +9,14 @@ historical pre-OOS Min parameter schedules and per-fold maturity evidence.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
 
+from core.file_integrity import canonical_json_sha256
 from core.portfolio_param_runtime import build_portfolio_params_signature
 from filters.breakout_quality.daily_trade40_target import (
     ExecutableMinPeriod, resolve_historical_min_period,
@@ -42,6 +43,87 @@ class FormalMinTrade40PITSource:
     # not prove the parameter was available when the stock-day occurred.
     publication_dates: tuple[str, ...]
     source_id: str = "formal_min_roos_seed"
+
+
+
+def slice_formal_mintrade40_pit_source_for_fold(
+    source: FormalMinTrade40PITSource,
+    *,
+    fit_cutoff: Any,
+) -> tuple[FormalMinTrade40PITSource, str]:
+    """Return only historically available teacher periods for ONE FIT cutoff.
+
+    The caller must first obtain the parent through the canonical Optimizer
+    provenance loader.  The original parameter file SHA is retained for source
+    verification, but the as-of schedule digest intentionally excludes future
+    periods: extending the 2020 source must not change the 2017 teacher's
+    *semantic* identity.  This digest alone is not a full FIT authorization.
+
+    Truncating a period's end at the cutoff does not refit or replace its
+    parameter values.  In particular this cannot backfill an absent earlier
+    period or reinterpret later optimized parameters as historical ones.
+    """
+    try:
+        cutoff = pd.Timestamp(fit_cutoff).normalize()
+    except (TypeError, ValueError) as exc:
+        raise FormalMinTrade40PITBlocked("Invalid MinTrade40 fold FIT cutoff") from exc
+    if pd.isna(cutoff):
+        raise FormalMinTrade40PITBlocked("Invalid MinTrade40 fold FIT cutoff")
+    if (type(source.seed) is not int or source.seed <= 0 or
+            len(source.param_sha256) != 64 or
+            any(c not in "0123456789abcdef" for c in source.param_sha256.lower()) or
+            source.source_id != "formal_min_roos_seed" or
+            not source.schedule or
+            len(source.schedule) != len(source.publication_dates)):
+        raise FormalMinTrade40PITBlocked("Unverified formal MinTrade40 parent source identity")
+
+    periods = []
+    publication_dates = []
+    previous_end = None
+    for period, raw_published in zip(source.schedule, source.publication_dates):
+        try:
+            published = pd.Timestamp(raw_published).normalize()
+        except (TypeError, ValueError) as exc:
+            raise FormalMinTrade40PITBlocked("Invalid MinTrade40 source publication date") from exc
+        if (pd.isna(published) or pd.isna(period.start) or
+                (period.end is not None and (pd.isna(period.end) or period.end < period.start)) or
+                (previous_end is not None and period.start <= previous_end) or
+                (previous_end is None and periods)):
+            raise FormalMinTrade40PITBlocked("Overlapping or invalid MinTrade40 teacher schedule")
+        if (period.source_id != source.source_id or
+                build_portfolio_params_signature(period.params) != period.params_signature or
+                period.params.use_breakout_quality_filter or period.params.use_breakout_quality_ranking):
+            raise FormalMinTrade40PITBlocked("Unverified MinTrade40 teacher period identity")
+        if published > period.start:
+            raise FormalMinTrade40PITBlocked("Future-optimized MinTrade40 teacher publication")
+        previous_end = period.end
+        if period.start > cutoff:
+            continue
+        end = cutoff if period.end is None or period.end > cutoff else period.end
+        periods.append(replace(period, end=end))
+        publication_dates.append(str(published.date()))
+
+    if not periods:
+        raise FormalMinTrade40PITBlocked(
+            "No historical canonical MinTrade40 teacher available at FIT cutoff"
+        )
+    as_of_source = replace(
+        source, schedule=tuple(periods), publication_dates=tuple(publication_dates)
+    )
+    # Model FIT will separately bind the source price universe, samples, labels,
+    # training settings and seed.  This digest covers teacher semantics only.
+    teacher_digest = canonical_json_sha256({
+        "type": "formal_mintrade40_fold_teacher_asof_v1",
+        "seed": source.seed,
+        "source_id": source.source_id,
+        "fit_cutoff": str(cutoff.date()),
+        "periods": [
+            {"start": str(p.start.date()), "end": str(p.end.date()),
+             "params_signature": p.params_signature, "published": d}
+            for p, d in zip(as_of_source.schedule, publication_dates)
+        ],
+    })
+    return as_of_source, teacher_digest
 
 
 def verify_formal_mintrade40_pit_source(
@@ -160,6 +242,9 @@ def materialize_formal_mintrade40_pit_labels(
     cutoff is NOT treated as a completed 40D label. Unknowns remain NaN.
     """
     cutoff = pd.Timestamp(fit_cutoff).normalize()
+    source, as_of_digest = slice_formal_mintrade40_pit_source_for_fold(
+        source, fit_cutoff=cutoff,
+    )
     frame = frame.loc[pd.DatetimeIndex(frame.index) <= cutoff].copy()
     if frame.empty:
         raise FormalMinTrade40PITBlocked("No pre-FIT-cutoff price observations")
@@ -179,6 +264,7 @@ def materialize_formal_mintrade40_pit_labels(
         executable_dates=dates.take(positions + 1),
         fit_cutoff=cutoff,
     )
+    preflight["fold_teacher_as_of_sha256"] = as_of_digest
     calendar = pd.DatetimeIndex(exchange_calendar).normalize()
     if calendar.has_duplicates or not calendar.is_monotonic_increasing:
         raise FormalMinTrade40PITBlocked("Non-canonical market session calendar")
@@ -218,6 +304,7 @@ def materialize_formal_mintrade40_pit_labels(
 
 __all__ = [
     "FormalMinTrade40PITBlocked", "FormalMinTrade40PITSource",
+    "slice_formal_mintrade40_pit_source_for_fold",
     "verify_formal_mintrade40_pit_source",
     "FormalMinTrade40PITLabels", "materialize_formal_mintrade40_pit_labels",
 ]

@@ -22,6 +22,7 @@ from filters.breakout_quality.daily_trade40_target import (
 from services.breakout_quality.formal_mintrade40_pit_source import (
     FormalMinTrade40PITBlocked,
     FormalMinTrade40PITSource,
+    slice_formal_mintrade40_pit_source_for_fold,
 )
 from services.optimizer.strategy_param_service import _canonical_schedule_build_contract
 from services.optimizer.strategy_param_training import (
@@ -207,6 +208,27 @@ def load_formal_mintrade40_optimizer_teacher(
     )
 
 
+
+def load_formal_mintrade40_optimizer_fold_teacher(
+    params_path: str | Path,
+    *,
+    expected_seed: int,
+    fit_cutoff: str | pd.Timestamp,
+) -> tuple[FormalMinTrade40PITSource, str]:
+    """Attest original Optimizer bytes, then derive a FIT-local PIT snapshot.
+
+    The consumer must use this verified loader rather than creating a source
+    from parameter dates, file existence, or the later full 2014-2020 schedule.
+    This is read-only; no historical parameter optimization is performed here.
+    """
+    source = load_formal_mintrade40_optimizer_teacher(
+        params_path, expected_seed=expected_seed,
+    )
+    return slice_formal_mintrade40_pit_source_for_fold(
+        source, fit_cutoff=fit_cutoff,
+    )
+
+
 def prepare_formal_mintrade40_optimizer_teacher(
     *, project_root: str | Path, seed: int, authorized: bool = False,
 ) -> FormalMinTrade40PITSource:
@@ -275,5 +297,6 @@ def prepare_formal_mintrade40_optimizer_teacher(
 
 __all__ = [
     "HISTORICAL_MINTRADE40_TRAINING_SET", "load_formal_mintrade40_optimizer_teacher",
+    "load_formal_mintrade40_optimizer_fold_teacher",
     "prepare_formal_mintrade40_optimizer_teacher",
 ]

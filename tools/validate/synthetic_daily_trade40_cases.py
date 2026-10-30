@@ -948,6 +948,95 @@ class FormalMinTrade40TrainingSourcePreflightCases(unittest.TestCase):
             )
 
 
+    def test_asof_teacher_slicing_excludes_later_fold_and_caps_current_period(self):
+        from services.breakout_quality.formal_mintrade40_pit_source import (
+            slice_formal_mintrade40_pit_source_for_fold,
+        )
+        from dataclasses import replace as dataclass_replace
+        days, source = self._source()
+        _, _, params, _ = fixture(count=140, start="2018-01-02")
+        old = dataclass_replace(source.schedule[0], end=pd.Timestamp("2018-12-31"))
+        future = ExecutableMinPeriod(
+            pd.Timestamp("2019-01-01"), pd.Timestamp("2019-12-31"),
+            dataclass_replace(params, atr_buy_tol=0.4),
+            "formal_min_roos_seed",
+            build_portfolio_params_signature(dataclass_replace(params, atr_buy_tol=0.4)),
+        )
+        full = dataclass_replace(source, schedule=(old, future),
+                                 publication_dates=("2018-01-02", "2018-12-31"))
+        snapshot, digest = slice_formal_mintrade40_pit_source_for_fold(
+            full, fit_cutoff=days[110],
+        )
+        self.assertEqual(len(snapshot.schedule), 1)
+        self.assertEqual(snapshot.param_sha256, full.param_sha256)
+        self.assertEqual(snapshot.schedule[0].end, days[110])
+        self.assertEqual(snapshot.publication_dates, ("2018-01-02",))
+        self.assertEqual(len(digest), 64)
+        changed = dataclass_replace(future,
+            params=dataclass_replace(future.params, atr_buy_tol=2.2),
+            params_signature=build_portfolio_params_signature(
+                dataclass_replace(future.params, atr_buy_tol=2.2)))
+        revised, revised_digest = slice_formal_mintrade40_pit_source_for_fold(
+            dataclass_replace(full, param_sha256="b" * 64, schedule=(old, changed)),
+            fit_cutoff=days[110],
+        )
+        self.assertEqual(digest, revised_digest)
+        self.assertEqual(snapshot.schedule, revised.schedule)
+        later, later_digest = slice_formal_mintrade40_pit_source_for_fold(
+            full, fit_cutoff=pd.Timestamp("2019-06-30"),
+        )
+        self.assertEqual(len(later.schedule), 2)
+        self.assertNotEqual(digest, later_digest)
+        self.assertEqual(later.schedule[-1].end, pd.Timestamp("2019-06-30"))
+
+    def test_asof_rejects_missing_history_future_publication_and_bad_identity(self):
+        from services.breakout_quality.formal_mintrade40_pit_source import (
+            FormalMinTrade40PITBlocked, slice_formal_mintrade40_pit_source_for_fold,
+        )
+        from dataclasses import replace as dataclass_replace
+        days, source = self._source()
+        with self.assertRaisesRegex(FormalMinTrade40PITBlocked, "No historical"):
+            slice_formal_mintrade40_pit_source_for_fold(
+                source, fit_cutoff=pd.Timestamp("2017-12-29"),
+            )
+        with self.assertRaisesRegex(FormalMinTrade40PITBlocked, "publication"):
+            slice_formal_mintrade40_pit_source_for_fold(
+                dataclass_replace(source, publication_dates=("2019-01-01",)),
+                fit_cutoff=days[110],
+            )
+        with self.assertRaisesRegex(FormalMinTrade40PITBlocked, "source identity"):
+            slice_formal_mintrade40_pit_source_for_fold(
+                dataclass_replace(source, source_id="retired_p2_teacher"),
+                fit_cutoff=days[110],
+            )
+
+    def test_label_materializer_reuses_only_fold_asof_teacher(self):
+        from services.breakout_quality.formal_mintrade40_pit_source import (
+            materialize_formal_mintrade40_pit_labels,
+        )
+        from dataclasses import replace as dataclass_replace
+        days, source = self._source()
+        _, frame, params, _ = fixture(count=140, start="2018-01-02")
+        cutoff = days[110]
+        later = ExecutableMinPeriod(
+            pd.Timestamp("2019-01-01"), None,
+            dataclass_replace(params, atr_buy_tol=0.7), "formal_min_roos_seed",
+            build_portfolio_params_signature(dataclass_replace(params, atr_buy_tol=0.7)),
+        )
+        earlier = dataclass_replace(source.schedule[0], end=pd.Timestamp("2018-12-31"))
+        full = dataclass_replace(source, schedule=(earlier, later),
+                                 publication_dates=("2018-01-02", "2018-12-31"))
+        args = dict(expected_seed=source.seed, frame=frame,
+                    positions=np.array([70, 90]), ticker="2330",
+                    exchange_calendar=days, fit_cutoff=cutoff)
+        from_full = materialize_formal_mintrade40_pit_labels(full, **args)
+        from_prefix = materialize_formal_mintrade40_pit_labels(source, **args)
+        np.testing.assert_equal(from_full.raw_net_r, from_prefix.raw_net_r)
+        np.testing.assert_array_equal(from_full.matured, from_prefix.matured)
+        self.assertEqual(from_full.preflight["fold_teacher_as_of_sha256"],
+                         from_prefix.preflight["fold_teacher_as_of_sha256"])
+        self.assertFalse(from_full.matured[1])
+
     def test_mature_labels_match_canonical_and_immature_cannot_force_closeout(self):
         from services.breakout_quality.formal_mintrade40_pit_source import (
             materialize_formal_mintrade40_pit_labels,
@@ -1107,6 +1196,29 @@ class FormalMinTrade40OptimizerAttestationCases(unittest.TestCase):
             self.assertEqual(len(identity.schedule), 7)
             self.assertEqual(identity.publication_dates[0], "2013-12-31")
             self.assertEqual(str(identity.schedule[-1].end.date()), "2020-12-31")
+
+    def test_optimizer_fold_loader_attests_full_source_then_slices_asof(self):
+        from services.optimizer.formal_mintrade40_teacher_source import (
+            load_formal_mintrade40_optimizer_fold_teacher,
+        )
+        with TemporaryDirectory() as temp:
+            path, *_ = self._artifacts(temp)
+            snapshot, digest = load_formal_mintrade40_optimizer_fold_teacher(
+                path, expected_seed=693545351, fit_cutoff="2016-06-30",
+            )
+            self.assertEqual(len(snapshot.schedule), 3)
+            self.assertEqual(str(snapshot.schedule[-1].end.date()), "2016-06-30")
+            self.assertEqual(snapshot.publication_dates,
+                             ("2013-12-31", "2014-12-31", "2015-12-31"))
+            self.assertEqual(len(digest), 64)
+            with self.assertRaisesRegex(ValueError, "No historical"):
+                load_formal_mintrade40_optimizer_fold_teacher(
+                    path, expected_seed=693545351, fit_cutoff="2013-06-30",
+                )
+            with self.assertRaisesRegex(ValueError, "Seed-specific|path/seed"):
+                load_formal_mintrade40_optimizer_fold_teacher(
+                    path, expected_seed=2014432738, fit_cutoff="2016-06-30",
+                )
 
     def test_optimizer_adapter_rejects_old_p2_teacher(self):
         from services.optimizer.formal_mintrade40_teacher_source import (
