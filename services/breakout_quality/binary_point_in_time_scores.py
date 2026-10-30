@@ -79,12 +79,14 @@ from core.console_report import (
     render_table,
     render_title,
 )
-from services.breakout_quality.point_in_time_scores import (
+from filters.breakout_quality.pit_group_selection import (
     AUTO_SCORE_START_VALUE,
-    _build_fold_periods,
     _fold_group_ids,
     _minimum_count_failures,
     _resolve_score_start,
+)
+from filters.breakout_quality.point_in_time_schedule import (
+    build_point_in_time_fold_periods as _build_fold_periods,
 )
 from filters.breakout_quality.workflow_io import (
     PROJECT_ROOT,

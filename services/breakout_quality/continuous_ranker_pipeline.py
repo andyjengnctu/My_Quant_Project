@@ -14,8 +14,6 @@ import numpy as np
 import pandas as pd
 
 from core.breakout_quality_registry import (
-    TRAINING_LABEL_SCOPE_ALL,
-    TRAINING_LABEL_SCOPE_PASS_ONLY,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
 )
 from core.breakout_quality_runtime import get_continuous_ranker_training_policy
@@ -26,8 +24,9 @@ from filters.breakout_quality.models.factory import (
     require_torch,
 )
 from filters.breakout_quality.torch_runtime import resolve_torch_execution_plan
-from filters.breakout_quality.contract import LABEL_PASS, LABEL_REJECT
+from filters.breakout_quality.contract import LABEL_PASS
 from filters.breakout_quality.continuous_ranker_data import ContinuousRankerDataBundle
+from filters.breakout_quality.pit_group_selection import build_training_scope_mask
 from filters.breakout_quality.profile_ranker_data import load_profile_continuous_ranker_data
 from services.breakout_quality import ranker_training as ranker_api
 from services.breakout_quality.price_input_source import resolve_feature_price_source
@@ -88,21 +87,6 @@ def load_continuous_ranker_data(
     )
 
 
-def build_training_scope_mask(bundle: ContinuousRankerDataBundle) -> np.ndarray:
-    """Return the canonical target-eligible mask for this sample universe."""
-
-    target_valid = np.asarray(bundle.target_valid, dtype=bool)
-    if bundle.profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
-        return target_valid.copy()
-    labels = bundle.group_table["label"].to_numpy(dtype=np.int64)
-    if bundle.profile.training_label_scope == TRAINING_LABEL_SCOPE_PASS_ONLY:
-        return target_valid & (labels == LABEL_PASS)
-    if bundle.profile.training_label_scope == TRAINING_LABEL_SCOPE_ALL:
-        return target_valid & np.isin(labels, [LABEL_REJECT, LABEL_PASS])
-    raise ValueError(
-        "不支援的continuous ranker training scope: "
-        f"{bundle.profile.training_label_scope}"
-    )
 
 
 def primary_audit_metric_scope(bundle: ContinuousRankerDataBundle) -> str:
