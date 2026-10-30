@@ -488,9 +488,39 @@ def render_target_dl_overview(report: Mapping[str, Any]) -> str:
         if source["path"] else "no completed matching local report; metrics blank"
     ))
     rows = list(report["rows"])
-    oracle_signals = best_worst_signals(
-        {str(i): row["oracle_romd"] for i, row in enumerate(rows)}, preference="higher",
-    )
+    # Use the canonical per-column metric preference and best/worst signal owner.
+    # Robustness is comparable only within the same actual seed set/benchmark;
+    # repeated Exact/Direct rows may receive the same signal for their shared ρ.
+    column_signals: dict[str, dict[str, str]] = {}
+    for column in table.columns:
+        if column.preference not in {"higher", "lower"}:
+            continue
+        cohorts: dict[tuple[Any, ...], dict[str, Any]] = {}
+        for i, row in enumerate(rows):
+            value = row.get(column.key)
+            if value is None:
+                continue
+            if column.key == "robustness_rho":
+                seeds = tuple(row.get("rho_seeds") or ())
+                if len(seeds) < 2:
+                    continue
+                cohort = ("model", seeds)
+            elif column.key == "robustness_romd":
+                seeds = tuple(row.get("romd_seeds") or ())
+                benchmark = str(row.get("romd_benchmark") or "")
+                if len(seeds) < 2 or not benchmark:
+                    continue
+                cohort = ("strategy", benchmark, seeds)
+            else:
+                cohort = ("same_column",)
+            cohorts.setdefault(cohort, {})[str(i)] = value
+        column_signals[column.key] = {
+            row_id: signal
+            for cohort_values in cohorts.values()
+            for row_id, signal in best_worst_signals(
+                cohort_values, preference=column.preference,
+            ).items()
+        }
     formatted: list[list[str]] = []
     for i, row in enumerate(rows):
         cells = []
@@ -498,11 +528,13 @@ def render_target_dl_overview(report: Mapping[str, Any]) -> str:
             value = row.get(column.key)
             # A missing official artifact is a visually EMPTY cell, never zero.
             cell = "" if value is None else format_contract_value(column, value)
+            if value is not None:
+                signal = column_signals.get(column.key, {}).get(str(i))
+                if signal:
+                    cell = styled_signal(cell, signal, target="console")
             if column.key in {"robustness_rho", "robustness_romd"} and value is not None:
                 seeds = row["rho_seeds"] if column.key == "robustness_rho" else row["romd_seeds"]
                 cell += f" ({len(seeds)}S)"
-            if column.key == "oracle_romd" and value is not None:
-                cell = styled_signal(cell, oracle_signals.get(str(i), "neutral"), target="console")
             cells.append(cell)
         formatted.append(cells)
     header.append(render_table(table.headers, formatted, alignments=table.alignments))

@@ -746,9 +746,11 @@ STRATEGY_CONSISTENCY_METRIC_KEYS = (
     "expected_value_r", "avg_exposure_pct", "high_mfe_high_safety_pct", "high_mfe_total_pct",
 )
 
+# v2: all comparable numeric columns use canonical best/worst console colors;
+# neutral and unavailable cells remain unstyled (no schema/metric changes).
 TARGET_DL_VALIDATION_OVERVIEW_REPORT = PersistentReportContract(
     report_id="research.target_dl_validation_overview",
-    version=1,
+    version=2,
     role="read_only_local_completed_report_summary",
     menu_path=("Research", "Target Validation", "Target x DL Overview"),
     sections=(
