@@ -3228,10 +3228,16 @@ def _resolve_continuous_model_readiness(settings, *, rolling: bool, mode=None):
         selected_mode = mode or get_breakout_quality_rolling_test_mode("rolling")
         contract, payload, reason = _load_reusable_rolling_standard_report(settings, selected_mode)
         source_path = Path(contract.audit_path) if contract is not None else None
+        # An invalid SCORE publication does not establish that its FIT is absent.
+        # Report a provisional FIT candidate using the canonical status-only
+        # locator; the PIT/FIT owner must still verify full provenance before REUSE.
+        probe = _probe_continuous_fitted_candidates(settings) if contract is None else None
         status = resolve_model_artifact_readiness(
             mode="rolling", source_contract=contract, evidence_payload=payload,
             source_reason=reason, source_path=source_path,
             report_identity=report_identity,
+            forward_fit_candidate=bool(probe is not None and probe.forward_fit_candidate),
+            rolling_fit_candidate=bool(probe is not None and probe.rolling_first_fold_candidate),
         )
         return status
     contract, reason = _load_reusable_continuous_forward_contract(settings)

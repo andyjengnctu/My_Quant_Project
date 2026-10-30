@@ -8,9 +8,11 @@ import hashlib
 import json
 import math
 import os
+import pickle
 import tempfile
 import shutil
 import time
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -973,6 +975,97 @@ def _fold_contract_is_compatible(
 def _checkpoint_cache_entry_dir(cache_root: Path, fold_contract: dict[str, Any]) -> Path:
     return Path(cache_root).resolve() / fold_training_identity(fold_contract)
 
+
+
+def _unverified_fit_checkpoint_reasons(
+    *, fold_dir: Path, fold_contract: dict[str, Any], args, torch_module,
+) -> tuple[str, ...]:
+    """Explain existing checkpoint blockers without treating them as permission to refit.
+
+    This is a read-only diagnostic after all canonical REUSE/score-refresh routes
+    failed. The FIT owner alone decides reuse; differences here never waive its
+    hash, training identity, source lineage, or epoch proof.
+    """
+    candidates = [("Rolling fold", Path(fold_dir))]
+    if args.checkpoint_cache_root not in (None, ""):
+        candidates.append((
+            "shared FIT cache",
+            _checkpoint_cache_entry_dir(Path(str(args.checkpoint_cache_root)), fold_contract),
+        ))
+    def differing_fit_fields(actual: dict[str, Any], expected: dict[str, Any]) -> list[str]:
+        # Only explain differences in FIT-owner-selected identity fields.
+        different: list[str] = []
+        for key, expected_value in expected.items():
+            actual_value = actual.get(key)
+            if actual_value == expected_value:
+                continue
+            if isinstance(actual_value, dict) and isinstance(expected_value, dict):
+                different.extend(
+                    f"{key}.{child}" for child in expected_value
+                    if actual_value.get(child) != expected_value[child]
+                )
+            else:
+                different.append(key)
+        return different
+
+    reasons: list[str] = []
+    for label, directory in candidates:
+        model_path = directory / DEFAULT_MODEL_FILENAME
+        if not model_path.is_file():
+            continue
+        manifest_path = directory / FOLD_MANIFEST_FILENAME
+        if not manifest_path.is_file():
+            reasons.append(f"{label}: manifest missing")
+            continue
+        try:
+            candidate = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(candidate, dict):
+                reasons.append(f"{label}: manifest is not a mapping")
+                continue
+            recorded = dict(candidate.get("artifacts") or {}).get("checkpoint")
+            if build_file_manifest(model_path) != recorded:
+                reasons.append(f"{label}: checkpoint hash/size differs from manifest")
+                continue
+            # Owner-derived identity payload, not an independent fitting policy.
+            # Exclude score-only horizon and score-output capability just as
+            # fold_training_identity does, to avoid falsely blaming SCORE drift.
+            actual_fit = _fold_training_identity_payload(candidate)
+            expected_fit = _fold_training_identity_payload(fold_contract)
+            different = differing_fit_fields(actual_fit, expected_fit)
+            if different:
+                reasons.append(f"{label}: fitting identity fields differ ({', '.join(different[:8])})")
+                continue
+            checkpoint = torch_module.load(model_path, map_location="cpu", weights_only=True)
+            if not isinstance(checkpoint, dict):
+                reasons.append(f"{label}: checkpoint payload is not a mapping")
+                continue
+            embedded = checkpoint.get("fold_contract")
+            if isinstance(embedded, dict):
+                embedded_fit = _fold_training_identity_payload(embedded)
+                different = differing_fit_fields(embedded_fit, expected_fit)
+                if different:
+                    reasons.append(
+                        f"{label}: embedded fitting identity differs ({', '.join(different[:8])})"
+                    )
+                    continue
+            elif not isinstance(candidate.get("fitting_origin"), dict):
+                reasons.append(f"{label}: embedded FIT contract/origin proof missing")
+                continue
+            if checkpoint.get("model_spec") != fold_contract.get("model_spec"):
+                reasons.append(f"{label}: checkpoint model_spec differs")
+            elif (checkpoint.get("selected_epoch") is not None
+                  and int(checkpoint["selected_epoch"]) != int(candidate.get("selected_epoch") or 0)):
+                reasons.append(f"{label}: checkpoint selected_epoch differs")
+            else:
+                reasons.append(
+                    f"{label}: FIT metadata matches; checkpoint scoring/provenance verification rejected"
+                )
+        except (
+            OSError, ValueError, TypeError, KeyError, RuntimeError, UnicodeError,
+            pickle.UnpicklingError, EOFError, zipfile.BadZipFile,
+        ) as exc:
+            reasons.append(f"{label}: {type(exc).__name__} while checking checkpoint evidence")
+    return tuple(reasons)
 
 
 
@@ -3025,9 +3118,15 @@ def _run_authorized_point_in_time_scores(args, *, settings) -> int:
                     )
                     unverified.append(cache_entry / DEFAULT_MODEL_FILENAME)
                 if any(path.is_file() for path in unverified):
+                    reasons = _unverified_fit_checkpoint_reasons(
+                        fold_dir=fold_dir, fold_contract=fold_contract, args=args,
+                        torch_module=torch,
+                    )
+                    detail = "; ".join(reasons) if reasons else "checkpoint identity proof unavailable"
                     raise RuntimeError(
                         "PIT FIT identity unverified: existing fold/shared-cache checkpoint "
-                        f"for {fold['fold_id']} cannot be reused; automatic refit is blocked"
+                        f"for {fold['fold_id']} cannot be reused; automatic refit is blocked; "
+                        f"read-only evidence: {detail}"
                     )
                 candidate_override = str(
                     getattr(args, "forward_fit_candidate_model_dir", "") or ""
