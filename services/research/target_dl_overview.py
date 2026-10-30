@@ -14,6 +14,7 @@ from typing import Any, Mapping
 from core.audit_policy import get_active_audit_module_id
 from core.breakout_quality_registry import (
     SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
+    get_predicted_upside_context_contract,
     get_breakout_quality_experiment_profile,
     get_continuous_ranker_research_spec,
 )
@@ -43,6 +44,7 @@ from core.strategy_compare_policy import (
 from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS, STRATEGY_DL_SOURCES
 from filters.breakout_quality.paths import (
     resolve_filter_point_in_time_dir,
+    resolve_filter_model_output_dir,
     resolve_filter_output_dir,
 )
 from services.research.target_oracle_application import get_formal_oracle_definition
@@ -175,54 +177,88 @@ def _is_exact_supervision(profile: str, target_id: str) -> bool:
     )
 
 
-def _model_paths(root: Path, *, filter_id: str, profile: str) -> tuple[Path, Path]:
+def _model_paths(root: Path, *, filter_id: str, profile: str,
+                 evaluation_mode: str = "rolling_oos") -> tuple[Path, Path]:
     registered = get_breakout_quality_experiment_profile(profile)
     from core.breakout_quality_policy import BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE
     architecture = str(registered.model_architecture or BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE)
-    rolling = resolve_filter_point_in_time_dir(root, filter_id, architecture, profile)
-    return rolling / "standard_model_report.json", rolling / "standard_model_report.md"
+    if evaluation_mode == "rolling_oos":
+        directory = resolve_filter_point_in_time_dir(root, filter_id, architecture, profile)
+    elif evaluation_mode == "forward_oos":
+        directory = resolve_filter_model_output_dir(root, filter_id, architecture, profile)
+    else:
+        raise ValueError(f"Unsupported Standard Model SOP evaluation_mode: {evaluation_mode}")
+    return directory / "standard_model_report.json", directory / "standard_model_report.md"
 
 
-def _single_model_rho(path: Path, markdown: Path, *, profile: str, filter_id: str,
-                      versions: Mapping[str, tuple]) -> float | None:
+def _published_model_report(path: Path, markdown: Path, *, profile: str,
+                            filter_id: str, evaluation_mode: str,
+                            versions: Mapping[str, tuple]) -> dict[str, Any] | None:
     payload = _json(path)
     if not payload or not markdown.is_file() or not _approved(payload, "model.standard_sop", versions):
         return None
     if (payload.get("profile") != profile or payload.get("filter_id") != filter_id
             or payload.get("model_research_id") != get_continuous_ranker_research_spec(profile).model_research_id
-            or payload.get("evaluation_mode") != "rolling_oos"):
+            or payload.get("evaluation_mode") != evaluation_mode):
         return None
     try:
-        digest = hashlib.sha256(markdown.read_bytes()).hexdigest()
-    except OSError:
+        # Match the canonical Model SOP publisher/readiness owner: digest the
+        # decoded text, not raw bytes (Windows CRLF must not invalidate it).
+        digest = hashlib.sha256(markdown.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
+    except (OSError, UnicodeError):
         return None
     if digest != payload.get("markdown_sha256"):
         return None
     sop = payload.get("standard_model_sop") or {}
-    if sop.get("evaluation_mode") != "rolling_oos":
+    if not isinstance(sop, dict) or sop.get("evaluation_mode") != evaluation_mode:
         return None
-    return _number((sop.get("split_metrics") or {}).get("oos", {}).get("mean_daily_spearman"))
+    return payload
 
 
-def _model_comparison_rhos(root: Path, *, filter_id: str, versions: Mapping[str, tuple]):
-    # The official aggregated Rolling robustness comparison is the only source
-    # of cross-seed rho. Never synthesize robustness from a single model report.
+def _single_model_rho(path: Path, markdown: Path, *, profile: str, filter_id: str,
+                      versions: Mapping[str, tuple]) -> float | None:
+    payload = _published_model_report(
+        path, markdown, profile=profile, filter_id=filter_id,
+        evaluation_mode="rolling_oos", versions=versions,
+    )
+    if payload is None:
+        return None
+    metrics = payload["standard_model_sop"].get("split_metrics")
+    oos = metrics.get("oos") if isinstance(metrics, dict) else None
+    return _number(oos.get("mean_daily_spearman")) if isinstance(oos, dict) else None
+
+
+def _model_comparison_rhos(root: Path, *, filter_id: str, versions: Mapping[str, tuple],
+                           robustness: bool):
+    # Published Model Comparison is a first-class Standard SOP source for
+    # both single-seed Rolling and multi-seed Robustness. In particular,
+    # [3]~[6] can publish a comparison without publishing individual SOP files.
+    # Never construct a multi-seed rho from a single-seed report.
+    scope = "rolling_oos_robustness" if robustness else "rolling_oos"
     path = (resolve_filter_output_dir(root, filter_id=filter_id) /
-            "standard_model_comparison" / "rolling_oos_robustness" / "standard_model_comparison.json")
+            "standard_model_comparison" / scope / "standard_model_comparison.json")
     payload = _json(path)
     result: dict[str, tuple[float, tuple[int, ...]]] = {}
     if (not payload or not path.with_suffix(".md").is_file()
             or not _approved(payload, "model.standard_comparison", versions)
             or payload.get("evaluation_mode") != "rolling_oos"
-            or payload.get("robustness") is not True):
+            or payload.get("robustness") is not robustness):
         return result
+    ambiguous: set[str] = set()
     for model in payload.get("models") or []:
         if not isinstance(model, dict) or model.get("filter_id") != filter_id:
             continue
-        seeds = tuple(model.get("benchmark_seeds") or ())
-        if (len(seeds) < 2 or any(type(seed) is not int for seed in seeds)
-                or len(set(seeds)) != len(seeds)):
-            continue
+        if robustness:
+            seeds = tuple(model.get("benchmark_seeds") or ())
+            if (len(seeds) < 2 or any(type(seed) is not int for seed in seeds)
+                    or len(set(seeds)) != len(seeds) or model.get("seed") is not None):
+                continue
+        else:
+            seed = model.get("seed")
+            if (type(seed) is not int or seed < 0
+                    or model.get("benchmark_seeds") not in ([], None)):
+                continue
+            seeds = (seed,)
         view = model.get("sop_view") or {}
         if not isinstance(view, dict):
             continue
@@ -233,8 +269,13 @@ def _model_comparison_rhos(root: Path, *, filter_id: str, versions: Mapping[str,
             continue
         profile = str(model.get("profile") or "")
         identity = get_continuous_ranker_research_spec(profile) if profile in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES else None
-        if identity and model.get("model_id") == identity.model_research_id:
-            result[profile] = rho, seeds
+        if identity and model.get("model_id") == identity.model_research_id and profile not in ambiguous:
+            evidence = (rho, seeds)
+            if profile in result and result[profile] != evidence:
+                result.pop(profile, None)
+                ambiguous.add(profile)
+            else:
+                result[profile] = evidence
     return result
 
 
@@ -350,7 +391,24 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
     targets, comparisons, score_targets, oracle, oracle_info = _oracle_rows(root, definition, versions)
     filter_id = str(definition.source["filter_id"])
     active = {profile for _model_id, profile in get_breakout_quality_model_test_settings().model_profiles}
-    robustness_rho = _model_comparison_rhos(root, filter_id=filter_id, versions=versions)
+    comparison_rolling = _model_comparison_rhos(
+        root, filter_id=filter_id, versions=versions, robustness=False,
+    )
+    robustness_rho = _model_comparison_rhos(
+        root, filter_id=filter_id, versions=versions, robustness=True,
+    )
+    # The historical Strategy Registry is an existing model-identity owner.
+    # It can establish a model's place in the overview, but never supply ρ or RoMD.
+    historical_strategy_profiles = {
+        str(source.get("experiment_profile") or "")
+        for source in STRATEGY_DL_SOURCES.values()
+    }
+    # Historical model-composition dependencies are registered scientific
+    # references too. They may appear with blank Rolling metrics when only
+    # Forward evidence was published, without importing Forward rho as Rolling.
+    historical_model_dependencies = {
+        str(get_predicted_upside_context_contract()["stage1_profile"]),
+    }
     bindings = _strategy_bindings(target_names=targets, score_targets=score_targets, definition=definition)
     rolling_romd = _strategy_rolling_metrics(root, versions)
     robust_romd = _strategy_robustness_metrics(root, versions)
@@ -364,8 +422,20 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
         json_path, md_path = _model_paths(root, filter_id=filter_id, profile=profile)
         rolling_rho = _single_model_rho(json_path, md_path, profile=profile,
                                         filter_id=filter_id, versions=versions)
+        if rolling_rho is None:
+            comparison = comparison_rolling.get(profile)
+            rolling_rho = comparison[0] if comparison else None
         robust_rho, robust_seeds = robustness_rho.get(profile, (None, ()))
+        forward_json, forward_md = _model_paths(
+            root, filter_id=filter_id, profile=profile, evaluation_mode="forward_oos",
+        )
+        published_forward = _published_model_report(
+            forward_json, forward_md, profile=profile, filter_id=filter_id,
+            evaluation_mode="forward_oos", versions=versions,
+        ) is not None
         if (profile not in active and rolling_rho is None and robust_rho is None
+                and not published_forward and profile not in historical_strategy_profiles
+                and profile not in historical_model_dependencies
                 and not any((name, profile) in bindings for name in possible_targets)):
             continue
         for target in possible_targets:
@@ -378,7 +448,9 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
             })
     rows = []
     for target in targets:
-        models = sorted(model_map.get(target) or [{}], key=lambda item: str(item.get("model") or ""))
+        # The canonical scientific profile registry already provides a stable
+        # chronology; keep historical model groups (e.g. K / AH / AK) together.
+        models = model_map.get(target) or [{}]
         for model in models:
             profile = str(model.get("profile") or "")
             arm = bindings.get((target, profile), "")
@@ -401,7 +473,7 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
     rows.sort(key=lambda row: (
         row["oracle_romd"] is None,
         -(row["oracle_romd"] or 0.0),
-        row["target"], row["model"],
+        row["target"],
     ))
     return {"rows": rows, "oracle": oracle_info, "source": "local_completed_reports_only"}
 
