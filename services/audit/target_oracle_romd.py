@@ -8,6 +8,8 @@ No model training, PIT score publication, optimizer, or trading state is touched
 from __future__ import annotations
 
 from dataclasses import replace
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from multiprocessing import get_context
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Mapping
@@ -15,6 +17,7 @@ import math
 import hashlib
 import struct
 import inspect
+import pickle
 from contextlib import ExitStack
 import json
 
@@ -69,7 +72,7 @@ from services.audit.oracle_score_artifacts import (
     OraclePriceScoreStore, price_score_source_identity, price_score_replay_lineage,
     oracle_dataset_summary_sha256,
 )
-from config.audit import AUDIT_OUTPUT_ROOT
+from config.audit import AUDIT_OUTPUT_ROOT, TARGET_ORACLE_REPLAY_SEED_WORKERS
 from services.audit.oracle_replay_artifacts import (
     OracleReplayStore, price_inventory_sha256, replay_identity,
 )
@@ -1965,6 +1968,8 @@ def _execute_single_stage_missing(
     base_policy: Mapping[str, Any], cache,
     allow_historical_execution_input_drift: bool = False,
     metric_backfill: Mapping[tuple[int, str], tuple[Mapping[str, Any], Mapping[str, Any]]] | None = None,
+    price_targets_for_run: frozenset[str] | None = None,
+    price_score_allow_build: bool = True,
 ) -> dict[tuple[int, str], dict[str, Any]]:
     """Run ONLY the missing Seed x Target cells in the certified one-shot plan.
 
@@ -1988,7 +1993,7 @@ def _execute_single_stage_missing(
     current_params, _ = _prepare_oracle_parameters(
         definition, root=project_root,
         parameter_paths=[(seed, path) for seed, path in _robustness_artifacts(
-            definition, project_root)[1]],
+            definition, project_root)[1] if seed in {entry[0] for entry in prepared}],
         start=start, end=end, base_arm=base_arm,
     )
     if [(p[0], p[1]) for p in current_params] != [(p[0], p[1]) for p in prepared]:
@@ -2027,6 +2032,12 @@ def _execute_single_stage_missing(
     # necessary price recipes; do not materialize unused price providers.
     required_price = {target for (_seed, target) in required
                       if target != "C96" and target not in plan["daily_sources"]}
+    # All parallel seed workers load one previously built price-source cache
+    # identity. A seed with only daily RUN targets never loads price scores.
+    if required_price and price_targets_for_run is not None:
+        if not required_price.issubset(price_targets_for_run):
+            raise OracleBlockedError("Oracle worker price scope differs from approved RUN")
+        required_price = set(price_targets_for_run)
     price_scores: dict[str, dict[tuple[str, str], float]] = {}
     if required_price:
         source = {**definition.source,
@@ -2037,6 +2048,7 @@ def _execute_single_stage_missing(
             price_def, project_root=project_root, cutoff=str(settings.end_date),
             price_sha=price_sha, progress=None if quiet else
             lambda msg: print(f"[Target RUN price] {msg}", flush=True),
+            allow_build=price_score_allow_build,
         )
         price_scores = {
             name: {key: value for key, value in scores.items() if key[1] <= end}
@@ -2242,6 +2254,176 @@ def _execute_single_stage_missing(
     if set(out) != required:
         raise OracleBlockedError("Oracle missing-only execution did not complete every RUN cell")
     return out
+
+
+def _oracle_missing_seed_worker(
+    definition, *, seed: int, job: Mapping[str, Any], price_targets: frozenset[str],
+) -> dict[tuple[int, str], dict[str, Any]]:
+    """Spawn-safe, single-seed wrapper around the one canonical RUN engine.
+
+    The producer, replay store, score contexts and temporary caches are local
+    to the worker process. Workers may write only authorized RUN identities
+    for their own seeds; shared price-source truth is read-only at this stage.
+    """
+    if len(job["prepared"]) != 1 or int(job["prepared"][0][0]) != seed:
+        raise OracleBlockedError("Oracle parallel worker received a foreign P16 seed")
+    if not job["decisions"] or any(
+        int(key[0]) != seed or action != "RUN"
+        for key, action in job["decisions"].items()
+    ):
+        raise OracleBlockedError("Oracle parallel worker received an unauthorized Replay cell")
+    from services.audit.oracle_replay_artifacts import OracleReplayStore
+    root = Path(job["project_root"]).resolve()
+    arguments = dict(job)
+    arguments["cache"] = OracleReplayStore(root, definition.output_subdir)
+    arguments["price_targets_for_run"] = price_targets
+    arguments["price_score_allow_build"] = False
+    return _execute_single_stage_missing(definition, **arguments)
+
+
+def _execute_oracle_missing_parallel(
+    definition, *, project_root: Path, quiet: bool,
+    plan: Mapping[str, Any], contracts: Mapping[str, Mapping[str, Any]],
+    current_keys: Mapping[str, tuple[str, int, str, str]], settings, robustness,
+    price_sha: str, prepared, decisions: Mapping[tuple[int, str], str],
+    preflight_cached: Mapping[tuple[int, str], Mapping[str, Any]],
+    start: str, end: str, base_arm, exact_arm, direct_arm,
+    base_policy: Mapping[str, Any], cache,
+    allow_historical_execution_input_drift: bool = False,
+    metric_backfill: Mapping[tuple[int, str], tuple[Mapping[str, Any], Mapping[str, Any]]] | None = None,
+) -> dict[tuple[int, str], dict[str, Any]]:
+    """Schedule the CURRENT certified RUN cells, never a fixed seed range.
+
+    One process per active seed; each seed keeps the original Target ordering,
+    paired C96 semantics, and canonical economic Replay engine. A sparse RUN
+    seed executes only its missing Targets. A 100%-REUSE plan starts no pool.
+    """
+    root = Path(project_root).resolve()
+    kwargs = dict(
+        project_root=root, quiet=quiet, plan=plan, contracts=contracts,
+        current_keys=current_keys, settings=settings, robustness=robustness,
+        price_sha=price_sha, prepared=prepared, decisions=decisions,
+        preflight_cached=preflight_cached, start=start, end=end,
+        base_arm=base_arm, exact_arm=exact_arm, direct_arm=direct_arm,
+        base_policy=base_policy, cache=cache,
+        allow_historical_execution_input_drift=allow_historical_execution_input_drift,
+        metric_backfill=metric_backfill,
+    )
+    required = {key for key, action in decisions.items() if action == "RUN"}
+    seed_order = tuple(int(entry[0]) for entry in prepared if any(
+        key[0] == entry[0] for key in required
+    ))
+    if not required:
+        return {}
+    if (len(seed_order) != len(set(seed_order))
+            or {key[0] for key in required} != set(seed_order)
+            or any(key not in required for key in (metric_backfill or {}))):
+        raise OracleBlockedError("Oracle parallel seed scope differs from authorized RUN plan")
+    worker_limit = TARGET_ORACLE_REPLAY_SEED_WORKERS
+    if type(worker_limit) is not int or not 1 <= worker_limit <= 4:
+        raise ValueError("TARGET_ORACLE_REPLAY_SEED_WORKERS must be an integer in [1, 4]")
+    worker_count = min(worker_limit, len(seed_order))
+    if worker_count == 1:
+        return _execute_single_stage_missing(definition, **kwargs)
+    try:
+        # Tests, embedding applications and isolated simulations may supply
+        # local objects that cannot cross a Windows spawn boundary. In that
+        # case retain the canonical serial execution rather than failing a
+        # valid scientific run due to the execution environment.
+        pickle.dumps((definition, {k: v for k, v in kwargs.items() if k != "cache"}))
+    except (pickle.PicklingError, AttributeError, TypeError):
+        if not quiet:
+            print("[Target Replay] process payload cannot be serialized; "
+                  "using canonical single-worker Replay", flush=True)
+        return _execute_single_stage_missing(definition, **kwargs)
+
+    # Confirm all immutable inputs BEFORE the shared price producer and pool.
+    # Child processes independently repeat these checks before their own RUN.
+    if price_inventory_sha256(root, settings.dataset) != price_sha:
+        raise OracleBlockedError("Oracle price inputs changed after approved preflight")
+    paths = [(seed, path) for seed, path in _robustness_artifacts(definition, root)[1]]
+    current, _ = _prepare_oracle_parameters(
+        definition, root=root, parameter_paths=paths, start=start, end=end, base_arm=base_arm,
+    )
+    if [(p[0], p[1]) for p in current] != [(p[0], p[1]) for p in prepared]:
+        raise OracleBlockedError("Oracle P16 inputs changed after approved preflight")
+
+    price_targets = frozenset(
+        target for (seed, target) in required
+        if target != "C96" and target not in plan["daily_sources"]
+    )
+    if price_targets:
+        # Avoid concurrent BUILD/write of the common seed-independent price
+        # truth. The parent builds this source once, then children only REUSE.
+        price_def = replace(definition, source={
+            **definition.source,
+            "oracle_comparisons": tuple(
+                item for item in definition.source["oracle_comparisons"]
+                if item["target"] in price_targets
+            ),
+        })
+        _load_or_build_oracle_price_scores(
+            price_def, project_root=root, cutoff=str(settings.end_date),
+            price_sha=price_sha, progress=None if quiet else
+            lambda msg: print(f"[Target RUN price] {msg}", flush=True),
+        )
+        try:
+            # A missing official source manifest may produce only an in-memory
+            # panel. That case has no safe multi-process shared cache; fall
+            # back to the existing single-worker pipeline instead of rebuilding
+            # the same truth in multiple children.
+            _load_or_build_oracle_price_scores(
+                price_def, project_root=root, cutoff=str(settings.end_date),
+                price_sha=price_sha, allow_build=False,
+            )
+        except OracleTruthBuildRequired:
+            return _execute_single_stage_missing(definition, **kwargs)
+
+    if not quiet:
+        print(
+            f"[Target Replay] RUN seeds={','.join(map(str, seed_order))} | "
+            f"workers={worker_count} | RUN cells={len(required)}", flush=True,
+        )
+    futures = {}
+    results: dict[tuple[int, str], dict[str, Any]] = {}
+    with ProcessPoolExecutor(
+        max_workers=worker_count, mp_context=get_context("spawn"),
+    ) as pool:
+        for seed in seed_order:
+            job = {key: value for key, value in kwargs.items() if key != "cache"}
+            job["prepared"] = [entry for entry in prepared if entry[0] == seed]
+            job["decisions"] = {key: value for key, value in decisions.items()
+                                if key[0] == seed and value == "RUN"}
+            job["preflight_cached"] = {key: value for key, value in preflight_cached.items()
+                                       if key[0] == seed}
+            job["metric_backfill"] = {key: value for key, value in (metric_backfill or {}).items()
+                                      if key[0] == seed}
+            future = pool.submit(
+                _oracle_missing_seed_worker, definition, seed=seed,
+                job=job, price_targets=price_targets,
+            )
+            futures[future] = seed
+        for future in as_completed(futures):
+            seed = futures[future]
+            try:
+                completed = future.result()
+                expected = {key for key in required if key[0] == seed}
+                if set(completed) != expected or set(completed) & set(results):
+                    raise OracleBlockedError(
+                        f"Oracle seed={seed} worker did not return its exact authorized RUN cells"
+                    )
+                results.update(completed)
+            except Exception as exc:
+                for pending in futures:
+                    pending.cancel()
+                raise OracleBlockedError(
+                    f"Oracle seed={seed} RUN failed; completed per-seed receipts remain reusable: {exc}"
+                ) from exc
+            if not quiet:
+                print(f"[Target Replay] seed={seed} DONE {len(completed)} RUN", flush=True)
+    if set(results) != required:
+        raise OracleBlockedError("Oracle parallel worker results incomplete")
+    return results
 
 
 def _run_single_stage_oracle(
@@ -2542,7 +2724,7 @@ def _run_single_stage_oracle(
         raise OracleBlockedError("Oracle completed Replay missing score-universe evidence")
     # The same immutable matrix governs both the Target producer and Portfolio:
     # a missing arm never authorizes rebuilding any other (seed, target) cell.
-    newly_completed = _execute_single_stage_missing(
+    newly_completed = _execute_oracle_missing_parallel(
         definition, project_root=root, quiet=quiet, plan=plan,
         contracts=contracts, current_keys=keys, settings=settings,
         robustness=robustness, price_sha=price_sha, prepared=prepared,

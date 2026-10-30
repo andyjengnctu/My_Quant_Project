@@ -1100,6 +1100,12 @@ class FormalMinDailyOracleCases(TestCase):
 
 class FormalMinReplayIntegrationCases(TestCase):
     def setUp(self):
+        # Legacy in-process market fixtures use mocks invisible to Windows
+        # spawned children; keep these economics/REUSE regressions serial.
+        # Seed-level process scheduling has its own dedicated spawn tests.
+        worker_override = patch.object(oracle, "TARGET_ORACLE_REPLAY_SEED_WORKERS", 1)
+        worker_override.start()
+        self.addCleanup(worker_override.stop)
         synthetic_score_parity_setup(self)
 
     def test_four_seed_existing_48_reuse_new_8_runs_same_2021_window(self):

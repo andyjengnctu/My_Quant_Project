@@ -168,6 +168,7 @@ project/
 ## 正式入口
 
 - `apps/research.py`：Research 的 Target 驗證、模型、Optimizer、比較及 Audit 單一選單入口。
+- `[1] Target 驗證`：正式授權矩陣由 `services/audit/target_oracle_romd.py` 唯一核對；Replay 僅按當次已授權 `(seed, target)` RUN 格子動態分派，每個活躍 Seed 一個獨立程序，Seed 內維持原本 Target 順序及 C96 配對。共用 price-score 真值僅由主程序預先建立，Seed-specific 真值／Portfolio Replay 工件維持各自 Seed 路徑；完整 REUSE 不啟動子程序。並行上限由 `config/audit.py` 的 `TARGET_ORACLE_REPLAY_SEED_WORKERS` 控制（資源設定，不影響科學／工件身分）；不可跨 Seed 重用未驗證工件。
 - `apps/workbench.py`：GUI / workbench 正式入口，`apps/workbench.py` 為單一 GUI 啟用入口；單股檢視為 K 線圖、交易明細、Console 三個分頁。
 - `apps/smart_downloader.py`：Market Data 更新、Preflight／Bootstrap 入口。
 - `apps/portfolio_sim.py`：投組模擬入口；`apps/vip_scanner.py`：掃描器入口。
