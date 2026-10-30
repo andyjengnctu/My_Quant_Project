@@ -2695,11 +2695,32 @@ def _interactive_binary_model_research(
         print("無效選項，請重新輸入。")
 
 
+def _requires_formal_trade_path_inputs(settings) -> bool:
+    """The registered ranker recipe, not a model-name or menu heuristic, owns this gate."""
+    from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+    from core.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
+        DAILY_FORMAL_MINTRADE40_NETR_TARGET_ID,
+    )
+    from core.breakout_quality_registry import SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+    # Synthetic seedless model-fixture profiles are outside the registered
+    # research namespace; a *registered* recipe error must never be hidden.
+    if str(settings.experiment_profile) not in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES:
+        return False
+    recipe = get_continuous_ranker_execution_recipe(str(settings.experiment_profile))
+    return (
+        recipe.continuous_target_id == DAILY_FORMAL_MINTRADE40_NETR_TARGET_ID
+        and recipe.target_policy.materialization_mode
+        == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
+    )
+
+
 def _collect_continuous_research_input_plan(
     settings,
     *,
     dataset_profile: str | None = None,
     max_tickers: int | None = None,
+    seed: int | None = None,
 ):
     resolved_dataset_profile = str(
         INTERACTIVE_DATASET_PROFILE if dataset_profile is None else dataset_profile
@@ -2707,7 +2728,7 @@ def _collect_continuous_research_input_plan(
     resolved_max_tickers = int(
         INTERACTIVE_MAX_TICKERS if max_tickers is None else max_tickers
     )
-    return collect_model_upstream_preparation_plan(
+    base = collect_model_upstream_preparation_plan(
         PROJECT_ROOT,
         filter_id=str(settings.filter_id),
         model_architecture=str(settings.model_architecture),
@@ -2715,6 +2736,51 @@ def _collect_continuous_research_input_plan(
         dataset=resolved_dataset_profile,
         max_tickers=resolved_max_tickers,
     )
+    # A daily trade-path Target consumes original optimizer-owned parameter
+    # evidence, not just the Dataset. Include it in the *same* plan rather than
+    # letting data materialization launch an invisible 7-fold Min optimizer.
+    if not _requires_formal_trade_path_inputs(settings):
+        return base
+    from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
+    from core.research_policy import get_research_artifact_preparation_policy
+    from services.optimizer.formal_mintrade40_teacher_source import (
+        inspect_formal_mintrade40_optimizer_teacher,
+    )
+    from services.breakout_quality.formal_mintrade40_training_source import (
+        inspect_formal_mintrade40_p16_teacher,
+    )
+
+    model_seed = int(settings.seed if seed is None else seed)
+    policy = get_research_artifact_preparation_policy()
+    actions = list(base.actions)
+    for suffix, inspector, builder, priority in (
+        ('p16', inspect_formal_mintrade40_p16_teacher,
+         'optimizer_formal_mintrade40_p16', 30),
+        ('history', inspect_formal_mintrade40_optimizer_teacher,
+         'optimizer_formal_mintrade40_history', 40),
+    ):
+        try:
+            status = inspector(project_root=PROJECT_ROOT, seed=model_seed)
+            action = str(status['action'])
+            path = Path(status['path'])
+            reason = str(status['reason'])
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            action = 'BLOCKED'
+            path = PROJECT_ROOT / 'outputs' / 'optimizer'
+            reason = f'Optimizer source preflight failed: {type(exc).__name__}: {exc}'
+        if action != 'REUSE' and not policy.auto_prepare:
+            action = 'BLOCKED'
+        artifact_key = f'model-upstream:formal_mintrade40_{suffix}_seed_{model_seed}'
+        actions.append(ResearchArtifactAction(
+            action_id=artifact_key, artifact_key=artifact_key,
+            action=action, builder_type=None if action in {'REUSE', 'BLOCKED'} else builder,
+            description=reason,
+            path=project_relative_display_path(path, project_root=PROJECT_ROOT),
+            dependencies=('model-upstream:dataset_core',),
+            producer_work_type='optimizer' if action != 'REUSE' else 'existing_artifact',
+            execution_priority=priority,
+        ))
+    return ResearchArtifactPlan.from_actions(actions)
 
 
 def _render_continuous_research_input_plan(settings, plan) -> None:
@@ -2748,6 +2814,7 @@ def _prepare_continuous_research_inputs(
     *,
     dataset_profile: str | None = None,
     max_tickers: int | None = None,
+    seed: int | None = None,
     execution_observer: Callable[[bool], None] | None = None,
 ) -> int:
     """Prepare deterministic model inputs through the shared Research orchestrator.
@@ -2763,15 +2830,33 @@ def _prepare_continuous_research_inputs(
     resolved_max_tickers = int(
         INTERACTIVE_MAX_TICKERS if max_tickers is None else max_tickers
     )
+    # Generic Dataset/Context workflows have no seed-dependent teacher and
+    # may use a seedless settings fixture; the formal label always has one.
+    model_seed = int(getattr(settings, 'seed', 0) if seed is None else seed)
 
     def _refresh_plan():
         return _collect_continuous_research_input_plan(
             settings,
             dataset_profile=resolved_dataset_profile,
             max_tickers=resolved_max_tickers,
+            seed=model_seed,
         )
 
     def _execute(action) -> None:
+        if action.builder_type == 'optimizer_formal_mintrade40_p16':
+            from services.breakout_quality.formal_mintrade40_training_source import (
+                _current_p16_seed_artifact,
+            )
+            _current_p16_seed_artifact(PROJECT_ROOT, model_seed, authorized_build=True)
+            return
+        if action.builder_type == 'optimizer_formal_mintrade40_history':
+            from services.optimizer.formal_mintrade40_teacher_source import (
+                prepare_formal_mintrade40_optimizer_teacher,
+            )
+            prepare_formal_mintrade40_optimizer_teacher(
+                project_root=PROJECT_ROOT, seed=model_seed, authorized=True,
+            )
+            return
         if action.builder_type == "breakout_quality_dataset":
             refresh_mode, refresh_reasons, dataset_step = _dataset_refresh_step(
                 str(settings.filter_id),
@@ -4599,9 +4684,33 @@ def _load_rolling_robustness_seed(settings, *, seed: int):
     return observed.verified_evidence, observed.evidence_path, observed.reason
 
 
+def _prepare_formal_robustness_seed_inputs(
+    program_name: str, settings, *, seed: int,
+) -> int:
+    """Same model-upstream protocol, but using the benchmark seed's own teacher.
+
+    Only call this after the exact seed's FIT/SCORE is known to need work.
+    Audit-only refresh must remain read-only even when upstream has changed.
+    """
+    if not _requires_formal_trade_path_inputs(settings):
+        return 0
+    plan = _collect_continuous_research_input_plan(settings, seed=int(seed))
+    if any(row.action != 'REUSE' for row in plan.actions):
+        _render_continuous_research_input_plan(settings, plan)
+    if plan.blocked:
+        print('正式同 Seed Min 前置證據不足；本次不得執行 Robustness 訓練。')
+        return 2
+    return _prepare_continuous_research_inputs(
+        program_name, settings, seed=int(seed),
+    )
+
+
 def _build_forward_robustness_seed(
     program_name: str, settings, *, seed: int, force_rebuild: bool = False
 ) -> int:
+    code = _prepare_formal_robustness_seed_inputs(program_name, settings, seed=int(seed))
+    if code:
+        return int(code)
     model_dir, research_dir = _model_robustness_dirs(settings, seed=seed, rolling=False)
     model_dir.mkdir(parents=True, exist_ok=True)
     research_dir.mkdir(parents=True, exist_ok=True)
@@ -4680,7 +4789,11 @@ def _build_rolling_robustness_seed(
                     emit_simple_report=False,
                 ))
 
-    if not inputs_prepared:
+    if _requires_formal_trade_path_inputs(settings):
+        code = _prepare_formal_robustness_seed_inputs(program_name, settings, seed=int(seed))
+        if code != 0:
+            return int(code)
+    elif not inputs_prepared:
         code = _prepare_continuous_research_inputs(program_name, settings)
         if code != 0:
             return int(code)
@@ -4892,7 +5005,12 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
         # preparation is permitted unless the canonical stage plan requires
         # a new SCORE. Unexpected execution-time SCORE invalidation is handled
         # within the seed producer and re-enters the normal input gate.
-        inputs_prepared = bool(force_rebuild or not rolling or readiness.score_build_required)
+        # Per-seed Min teacher sources cannot be prepared once with default
+        # seed 42; each required seed is handled at its actual producer boundary.
+        inputs_prepared = bool(
+            (force_rebuild or not rolling or readiness.score_build_required)
+            and not _requires_formal_trade_path_inputs(settings)
+        )
         if inputs_prepared and (force_rebuild or readiness.evidence_refresh_required):
             # Keep the prior fail-closed behavior if a legacy/test caller does
             # not supply a canonical execution observation. Real preparation

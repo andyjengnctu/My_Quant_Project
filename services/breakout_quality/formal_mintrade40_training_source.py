@@ -28,6 +28,7 @@ from services.breakout_quality.formal_mintrade40_pit_source import (
     materialize_formal_mintrade40_pit_labels,
 )
 from services.optimizer.formal_mintrade40_teacher_source import (
+    formal_mintrade40_history_params_path,
     load_formal_mintrade40_optimizer_teacher,
     prepare_formal_mintrade40_optimizer_teacher,
 )
@@ -46,9 +47,8 @@ _BROKER_CASH_ROLLING_PROFILE = 'broker_cash_dl_conversion_rolling'
 _BASELINE_ARM = 'C96'
 
 
-def _current_p16_seed_artifact(
-    root: Path, seed: int, *, authorized_build: bool = False,
-) -> tuple[Path, str, str, str]:
+def _current_p16_policy(seed: int):
+    """One canonical P16 reference/producer contract for read and build paths."""
     settings = get_strategy_comparison_settings(_BROKER_CASH_ROLLING_PROFILE)
     arm = settings.arms[_BASELINE_ARM]
     source = settings.parameter_sources[arm.param_source]
@@ -59,7 +59,6 @@ def _current_p16_seed_artifact(
     if not training_profile:
         raise FormalMinTrade40PITBlocked('Canonical Min P16 training profile missing')
     benchmark = get_strategy_multi_seed_robustness_settings(settings.profile_id)
-    benchmark_seeds = tuple(int(value) for value in benchmark.resolved_seeds)
     optimizer_args = dict(
         training_profile_id=training_profile,
         policy=str(arm.param_policy),
@@ -70,6 +69,49 @@ def _current_p16_seed_artifact(
         fixed_risk=float(DEFAULT_FIXED_RISK),
         max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
     )
+    return settings, arm, benchmark, optimizer_args
+
+
+def inspect_formal_mintrade40_p16_teacher(
+    *, project_root: str | Path, seed: int,
+) -> dict[str, object]:
+    """Read-only same-seed P16 status; never starts the canonical Optimizer."""
+    root = Path(project_root).resolve()
+    settings, arm, benchmark, optimizer_args = _current_p16_policy(seed)
+    if seed == int(RESEARCH_SINGLE_SEED):
+        path = resolve_param_source_path(
+            root, settings, arm.param_source, param_policy=arm.param_policy,
+        ).resolve()
+        state = inspect_fixed_multiseed_strategy_parameter_artifact(root, **optimizer_args)
+    elif seed in tuple(int(value) for value in benchmark.resolved_seeds):
+        state = resolve_fixed_multiseed_robustness_strategy_parameter_artifact(
+            root, **optimizer_args,
+            benchmark_id=str(benchmark.benchmark_id), replication_seed=seed,
+        )
+        path = Path(state['path']).resolve()
+    else:
+        raise FormalMinTrade40PITBlocked('Model seed has no registered same-seed P16 producer')
+    if bool(state.get('ready')):
+        if Path(state['path']).resolve() != path or not path.is_file():
+            return {'path': path, 'action': 'BLOCKED', 'reason': 'Verified P16 publication path mismatch'}
+        return {'path': path, 'action': 'REUSE', 'reason': 'Original same-seed canonical P16 verified'}
+    candidate_action = str(state.get('action') or '').upper()
+    if candidate_action not in {'BUILD', 'REBUILD', 'RESUME'}:
+        candidate_action = 'BLOCKED'
+    if path.is_file() and candidate_action != 'RESUME':
+        candidate_action = 'BLOCKED'
+    return {
+        'path': path,
+        'action': candidate_action,
+        'reason': f'Canonical P16 seed={seed}: {state.get("status") or "not READY"}',
+    }
+
+
+def _current_p16_seed_artifact(
+    root: Path, seed: int, *, authorized_build: bool = False,
+) -> tuple[Path, str, str, str]:
+    settings, arm, benchmark, optimizer_args = _current_p16_policy(seed)
+    benchmark_seeds = tuple(int(value) for value in benchmark.resolved_seeds)
     if seed == int(RESEARCH_SINGLE_SEED):
         path = resolve_param_source_path(
             root, settings, arm.param_source, param_policy=arm.param_policy,
@@ -143,10 +185,7 @@ def load_formal_mintrade40_training_source(
             project_root=root, seed=seed, authorized=True,
         )
     else:
-        from filters.breakout_quality.strategy_compare_sources import PARAM_POLICY_SPECS, PARAM_POLICY_BASE_FINALIST_BEST
-        filename = str(PARAM_POLICY_SPECS[PARAM_POLICY_BASE_FINALIST_BEST]['filename'])
-        path = (root / 'outputs' / 'optimizer' / 'mintrade40_label_history'
-                / f'seed_{seed}' / 'p2_dl_off_trained' / 'active_params' / filename)
+        path = formal_mintrade40_history_params_path(root, seed)
         history = load_formal_mintrade40_optimizer_teacher(path, expected_seed=seed)
 
     source, digest = load_strategy_param_evaluation_view(
@@ -255,4 +294,5 @@ def resolve_formal_mintrade40_loader_kwargs(
 
 
 __all__ = ['load_formal_mintrade40_training_source',
-           'resolve_formal_mintrade40_loader_kwargs']
+           'resolve_formal_mintrade40_loader_kwargs',
+           'inspect_formal_mintrade40_p16_teacher']

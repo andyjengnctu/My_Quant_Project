@@ -1710,5 +1710,236 @@ class FormalMinTrade40EndToEndDefinitionCases(unittest.TestCase):
                 evaluation_horizon_bars=40)
 
 
+class FormalMinTrade40UpstreamPlanRegressionCases(unittest.TestCase):
+    """Regression: model work cannot silently run a historical optimizer."""
+
+    def test_read_only_missing_history_never_promotes_legacy_p2(self):
+        from services.optimizer.formal_mintrade40_teacher_source import (
+            inspect_formal_mintrade40_optimizer_teacher,
+        )
+        seed = 693545351
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            legacy = root / 'outputs' / 'optimizer' / 'historical_p2' / 'active_params'
+            legacy.mkdir(parents=True)
+            (legacy / 'roos_base_best.json').write_text('{}', encoding='utf-8')
+            before = {p.relative_to(root) for p in root.rglob('*') if p.is_file()}
+            state = inspect_formal_mintrade40_optimizer_teacher(project_root=root, seed=seed)
+            after = {p.relative_to(root) for p in root.rglob('*') if p.is_file()}
+            self.assertEqual(state['action'], 'BUILD')
+            self.assertIn('mintrade40_label_history', str(state['path']))
+            self.assertEqual(before, after)
+
+    def test_existing_corrupt_historical_publication_blocks_without_overwriting(self):
+        from services.optimizer.formal_mintrade40_teacher_source import (
+            inspect_formal_mintrade40_optimizer_teacher,
+            formal_mintrade40_history_params_path,
+        )
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            target = formal_mintrade40_history_params_path(root, 693545351)
+            target.parent.mkdir(parents=True)
+            target.write_text('{}', encoding='utf-8')
+            state = inspect_formal_mintrade40_optimizer_teacher(
+                project_root=root, seed=693545351,
+            )
+            self.assertEqual(state['action'], 'BLOCKED')
+            self.assertEqual(target.read_text(encoding='utf-8'), '{}')
+
+    def test_partial_history_exact_preflight_resumes_otherwise_blocks(self):
+        from core.file_integrity import canonical_json_sha256
+        from services.optimizer import formal_mintrade40_teacher_source as teacher
+        seed = 693545351
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            target = teacher.formal_mintrade40_history_params_path(root, seed)
+            target.parent.parent.mkdir(parents=True)
+            preflight_path = target.parent.parent / 'rolling_preflight.json'
+            payload = {'arm_id': teacher.HISTORICAL_MINTRADE40_TRAINING_SET,
+                       'dataset': 'full', 'trials_per_fold': 300}
+            digest = canonical_json_sha256(payload)
+            with patch.object(teacher, '_expected_historical_runtime_identity', return_value=digest):
+                import json
+                preflight_path.write_text(json.dumps({**payload,
+                    'runtime_identity_sha256': digest, 'status': 'RUNNING'}), encoding='utf-8')
+                self.assertEqual(teacher.inspect_formal_mintrade40_optimizer_teacher(
+                    project_root=root, seed=seed)['action'], 'RESUME')
+                preflight_path.write_text(json.dumps({**payload,
+                    'dataset': 'different', 'runtime_identity_sha256': digest}), encoding='utf-8')
+                self.assertEqual(teacher.inspect_formal_mintrade40_optimizer_teacher(
+                    project_root=root, seed=seed)['action'], 'BLOCKED')
+            with patch.object(teacher, '_expected_historical_runtime_identity', return_value='b'*64):
+                self.assertEqual(teacher.inspect_formal_mintrade40_optimizer_teacher(
+                    project_root=root, seed=seed)['action'], 'BLOCKED')
+
+    def test_historical_preflight_fingerprint_inspection_never_writes_dataset_witness(self):
+        from services.optimizer import formal_mintrade40_teacher_source as teacher
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch('filters.breakout_quality.source_inventory._build_source_data_inventory',
+                       return_value={'schema_version': 1, 'dataset_profile': 'full',
+                                     'csv_inventory_sha256': 'a'*64}), \
+                 patch('filters.breakout_quality.source_inventory.build_source_data_inventory',
+                       side_effect=AssertionError('Read-only preflight cannot persist a content witness')):
+                digest = teacher._expected_historical_runtime_identity(root)
+            self.assertEqual(len(digest), 64)
+            self.assertFalse((root / 'outputs').exists())
+
+    def test_completed_history_reuses_only_current_original_runtime(self):
+        from services.optimizer import formal_mintrade40_teacher_source as teacher
+        seed = 693545351
+        with TemporaryDirectory() as temp:
+            path, _payload, preflight, _summary = FormalMinTrade40OptimizerAttestationCases._artifacts(
+                temp, seed=seed,
+            )
+            with patch.object(teacher, '_expected_historical_runtime_identity',
+                              return_value=preflight['runtime_identity_sha256']):
+                self.assertEqual(teacher.inspect_formal_mintrade40_optimizer_teacher(
+                    project_root=temp, seed=seed)['action'], 'REUSE')
+            with patch.object(teacher, '_expected_historical_runtime_identity', return_value='b'*64):
+                self.assertEqual(teacher.inspect_formal_mintrade40_optimizer_teacher(
+                    project_root=temp, seed=seed)['action'], 'BLOCKED')
+            self.assertTrue(path.is_file())
+
+    def test_retired_trade_path_profile_cannot_claim_formal_teacher_optimizer(self):
+        from services.research import breakout_quality_application as app
+        from core.breakout_quality_policy import get_breakout_quality_workflow_settings
+        from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
+        settings = get_breakout_quality_workflow_settings(experiment_profile=OLD_PROFILE)
+        base = ResearchArtifactPlan.from_actions([ResearchArtifactAction(
+            action_id='model-upstream:dataset_core', artifact_key='model-upstream:dataset_core',
+            action='REUSE', builder_type=None, description='READY', path='dataset_summary.json',
+        )])
+        with patch.object(app, 'collect_model_upstream_preparation_plan', return_value=base), \
+             patch('services.optimizer.formal_mintrade40_teacher_source.inspect_formal_mintrade40_optimizer_teacher',
+                   side_effect=AssertionError('Retired target cannot trigger formal Min preflight')):
+            plan = app._collect_continuous_research_input_plan(settings)
+        self.assertEqual(plan, base)
+
+    def test_model_preplan_exposes_two_original_seed_dependent_sources(self):
+        from core.breakout_quality_policy import get_breakout_quality_workflow_settings
+        from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
+        from services.research import breakout_quality_application as app
+        from services.optimizer import formal_mintrade40_teacher_source as history
+        from services.breakout_quality import formal_mintrade40_training_source as current
+        settings = get_breakout_quality_workflow_settings(
+            experiment_profile='daily_universal_formal_mintrade40_netr_per_seed_full_list_ndcg_pairwise'
+        )
+        base = ResearchArtifactPlan.from_actions([ResearchArtifactAction(
+            action_id='model-upstream:dataset_core', artifact_key='model-upstream:dataset_core',
+            action='REUSE', builder_type=None, description='READY', path='dataset_summary.json',
+            execution_priority=10,
+        )])
+        seed = 693545351
+        def status(*, project_root, seed):
+            return {'action': 'BUILD', 'path': Path(project_root) / 'seed' / str(seed),
+                    'reason': 'Genuine optimizer needed'}
+        with patch.object(app, 'collect_model_upstream_preparation_plan', return_value=base), \
+             patch.object(history, 'inspect_formal_mintrade40_optimizer_teacher', side_effect=status) as h, \
+             patch.object(current, 'inspect_formal_mintrade40_p16_teacher', side_effect=status) as p:
+            plan = app._collect_continuous_research_input_plan(settings, seed=seed)
+        self.assertEqual(plan.overall_status, 'PREPARABLE')
+        self.assertEqual(len(plan.actions), 3)
+        self.assertEqual([row.artifact_key for row in plan.actions], [
+            'model-upstream:dataset_core',
+            f'model-upstream:formal_mintrade40_p16_seed_{seed}',
+            f'model-upstream:formal_mintrade40_history_seed_{seed}',
+        ])
+        self.assertEqual([row.action for row in plan.actions], ['REUSE', 'BUILD', 'BUILD'])
+        self.assertTrue(all(row.dependencies == ('model-upstream:dataset_core',)
+                            for row in plan.actions[1:]))
+        h.assert_called_once_with(project_root=app.PROJECT_ROOT, seed=seed)
+        p.assert_called_once_with(project_root=app.PROJECT_ROOT, seed=seed)
+
+    def test_optimizer_build_is_only_permitted_through_model_upstream_plan(self):
+        from services.research import breakout_quality_application as app
+        from core.breakout_quality_policy import get_breakout_quality_workflow_settings
+        from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
+        from services.breakout_quality import formal_mintrade40_training_source as owner
+        from services.optimizer import formal_mintrade40_teacher_source as history
+        settings = get_breakout_quality_workflow_settings(
+            experiment_profile='daily_universal_formal_mintrade40_netr_per_seed_full_list_ndcg_pairwise'
+        )
+        seed = 693545351
+        actions = [ResearchArtifactAction(
+            action_id='model-upstream:dataset_core', artifact_key='model-upstream:dataset_core',
+            action='REUSE', builder_type=None, description='READY', path='dataset_summary.json',
+        )]
+        def fake_plan():
+            return ResearchArtifactPlan.from_actions(actions)
+        def fake_inspector(*, project_root, seed):
+            return {'action':'BUILD','path':Path(project_root)/'seed' / str(seed),
+                    'reason':'Missing original'}
+        with patch.object(app, 'collect_model_upstream_preparation_plan', side_effect=lambda *a, **kw: fake_plan()), \
+             patch.object(history, 'inspect_formal_mintrade40_optimizer_teacher', side_effect=fake_inspector), \
+             patch.object(owner, 'inspect_formal_mintrade40_p16_teacher', side_effect=fake_inspector), \
+             patch.object(owner, '_current_p16_seed_artifact', side_effect=RuntimeError('stop')) as builder:
+            # Even if missing both, planning may not call the expensive producer.
+            plan = app._collect_continuous_research_input_plan(settings, seed=seed)
+            self.assertEqual(plan.overall_status, 'PREPARABLE')
+            builder.assert_not_called()
+
+    def test_robustness_seed_preparation_never_falls_back_to_default_seed(self):
+        from services.research import breakout_quality_application as app
+        from core.breakout_quality_policy import get_breakout_quality_workflow_settings
+        from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
+        settings = get_breakout_quality_workflow_settings(
+            experiment_profile='daily_universal_formal_mintrade40_netr_per_seed_full_list_ndcg_pairwise'
+        )
+        seed = 2014432738
+        plan = ResearchArtifactPlan.from_actions([ResearchArtifactAction(
+            action_id='model-upstream:dataset_core', artifact_key='model-upstream:dataset_core',
+            action='BUILD', builder_type='dataset', description='Missing', path='dataset',
+        )])
+        with patch.object(app, '_collect_continuous_research_input_plan', return_value=plan) as inspect, \
+             patch.object(app, '_render_continuous_research_input_plan') as display, \
+             patch.object(app, '_prepare_continuous_research_inputs', return_value=0) as prepare:
+            self.assertEqual(app._prepare_formal_robustness_seed_inputs('research', settings, seed=seed), 0)
+        inspect.assert_called_once_with(settings, seed=seed)
+        prepare.assert_called_once_with('research', settings, seed=seed)
+        display.assert_called_once_with(settings, plan)
+
+    def test_rolling_audit_only_must_not_prepare_min_or_refit(self):
+        from services.research import breakout_quality_application as app
+        from core.breakout_quality_policy import get_breakout_quality_workflow_settings
+        settings = get_breakout_quality_workflow_settings(
+            experiment_profile='daily_universal_formal_mintrade40_netr_per_seed_full_list_ndcg_pairwise'
+        )
+        with patch.object(app, '_rolling_robustness_score_core_ready', return_value=(True, None)), \
+             patch.object(app, '_prepare_formal_robustness_seed_inputs') as forbidden, \
+             patch.object(app, '_run_command', return_value=0) as run:
+            self.assertEqual(app._build_rolling_robustness_seed('research', settings,
+                                                                seed=2014432738), 0)
+        forbidden.assert_not_called()
+        self.assertEqual(run.call_args.args[0], 'audit-point-in-time-scores')
+
+    def test_rolling_missing_score_prepares_exact_seed_even_if_dataset_prepared(self):
+        from services.research import breakout_quality_application as app
+        from core.breakout_quality_policy import get_breakout_quality_workflow_settings
+        settings = get_breakout_quality_workflow_settings(
+            experiment_profile='daily_universal_formal_mintrade40_netr_per_seed_full_list_ndcg_pairwise'
+        )
+        seed = 2014432738
+        with patch.object(app, '_rolling_robustness_score_core_ready', return_value=(False, 'Missing')), \
+             patch.object(app, '_prepare_formal_robustness_seed_inputs', return_value=2) as prepare, \
+             patch.object(app, '_run_command', side_effect=AssertionError('Cannot run')):
+            self.assertEqual(app._build_rolling_robustness_seed(
+                'research', settings, seed=seed, inputs_prepared=True,
+            ), 2)
+        prepare.assert_called_once_with('research', settings, seed=seed)
+
+    def test_daily_materializers_must_not_auto_authorize_optimizer(self):
+        import inspect
+        from services.breakout_quality import point_in_time_scores, train_daily_ranker
+        self.assertIn('authorized_target_dependency_build=False',
+                      inspect.getsource(point_in_time_scores))
+        self.assertIn('authorized_target_dependency_build=False',
+                      inspect.getsource(train_daily_ranker))
+        self.assertNotIn('authorized_target_dependency_build=True',
+                         inspect.getsource(point_in_time_scores))
+        self.assertNotIn('authorized_target_dependency_build=True',
+                         inspect.getsource(train_daily_ranker))
+
+
 if __name__ == "__main__":
     unittest.main()

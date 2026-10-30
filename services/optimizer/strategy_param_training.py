@@ -608,7 +608,7 @@ def _validate_binary_pit_optimizer_coverage(
     return binary_pit
 
 
-def _runtime_contract(*, root, args, baseline_contract, fold_overrides, model_artifact, arm_id, training_dl_enabled, binary_pit):
+def _runtime_contract(*, root, args, baseline_contract, fold_overrides, model_artifact, arm_id, training_dl_enabled, binary_pit, dataset_inventory=None):
     reference_path = baseline_contract.get("path")
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -616,7 +616,7 @@ def _runtime_contract(*, root, args, baseline_contract, fold_overrides, model_ar
         "arm_id": str(arm_id),
         "training_dl_enabled": bool(training_dl_enabled),
         "dataset": str(args.dataset),
-        "dataset_identity": build_source_data_inventory(root, args.dataset),
+        "dataset_identity": (build_source_data_inventory(root, args.dataset) if dataset_inventory is None else dict(dataset_inventory)),
         "parameter_reference": {
             "type": str(
                 baseline_contract.get("reference_type")

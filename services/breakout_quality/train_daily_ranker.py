@@ -1152,7 +1152,7 @@ def run(args) -> int:
             allow_stale_source=bool(args.allow_stale_source),
             progress_callback=_daily_build_progress,
             seed=int(args.seed),
-            authorized_target_dependency_build=True,
+            authorized_target_dependency_build=False,
         )
     finally:
         daily_target_progress.finish()

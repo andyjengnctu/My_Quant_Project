@@ -9,6 +9,7 @@ existence of a plausible parameter JSON.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 
@@ -37,6 +38,116 @@ from filters.breakout_quality.trade_path_label import (
 # This is a *candidate* historical training-source namespace, not an existing
 # PARAM-P16 physical artifact or an authorization to introduce a model/arm.
 HISTORICAL_MINTRADE40_TRAINING_SET = "MINTRADE40_P16_HISTORICAL_LABEL_V1"
+
+
+def formal_mintrade40_history_params_path(project_root: str | Path, seed: int) -> Path:
+    """One optimizer-owned publication path for a single historical label seed."""
+    from filters.breakout_quality.strategy_compare_sources import (
+        PARAM_POLICY_SPECS, PARAM_POLICY_BASE_FINALIST_BEST,
+    )
+
+    if type(seed) is not int or seed <= 0:
+        raise FormalMinTrade40PITBlocked("Historical MinTrade40 optimizer seed invalid")
+    filename = str(PARAM_POLICY_SPECS[PARAM_POLICY_BASE_FINALIST_BEST]["filename"])
+    return (Path(project_root).resolve() / "outputs" / "optimizer"
+            / "mintrade40_label_history" / f"seed_{seed}" / "p2_dl_off_trained"
+            / "active_params" / filename)
+
+
+def _expected_historical_runtime_identity(project_root: Path) -> str:
+    """Canonical optimizer fingerprint with a strictly read-only source inventory.
+
+    The producer uses ``build_source_data_inventory`` to persist its normal
+    content witness. A preflight must not perform this write, but still compare
+    the identical inventory and all optimizer contract fields.
+    """
+    from config.execution_policy import (
+        DEFAULT_FIXED_RISK, DEFAULT_MAX_POSITION_CAP_PCT,
+        DEFAULT_PORTFOLIO_MAX_POSITIONS, DEFAULT_PORTFOLIO_ROTATION,
+    )
+    from filters.breakout_quality.source_inventory import _build_source_data_inventory
+    from filters.breakout_quality.trade_path_label import TRADE_PATH_BASE_FILTER_ID
+    from services.optimizer.strategy_param_training import (
+        _runtime_contract, build_min_roos_fold_overrides,
+    )
+    policy = _canonical_schedule_build_contract(family="min")
+    reference = _build_min_roos_schedule_contract(
+        first_oos_date=TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
+        last_oos_date=TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
+        train_window_months=int(policy["train_window_months"]),
+        oos_months=int(policy["oos_horizon_months"]),
+    )
+    args = SimpleNamespace(
+        dataset=str(policy["dataset"]), filter_id=TRADE_PATH_BASE_FILTER_ID,
+        trials_per_fold=int(policy["trials_per_fold"]),
+        fixed_risk=float(DEFAULT_FIXED_RISK),
+        max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
+        max_positions=int(DEFAULT_PORTFOLIO_MAX_POSITIONS),
+        rotation=str(DEFAULT_PORTFOLIO_ROTATION),
+    )
+    expected = _runtime_contract(
+        root=project_root, args=args, baseline_contract=reference,
+        fold_overrides=build_min_roos_fold_overrides(
+            baseline_contract=reference, args=args, training_dl_enabled=False,
+        ),
+        model_artifact=None, arm_id=HISTORICAL_MINTRADE40_TRAINING_SET,
+        training_dl_enabled=False, binary_pit=None,
+        dataset_inventory=_build_source_data_inventory(project_root, args.dataset),
+    )
+    return str(expected["runtime_identity_sha256"])
+
+
+def inspect_formal_mintrade40_optimizer_teacher(
+    *, project_root: str | Path, seed: int,
+) -> dict[str, object]:
+    """Read-only exact-source REUSE/BUILD/RESUME/BLOCKED for historical Min.
+
+    Completed and interrupted sources must match today's *original* optimizer
+    runtime fingerprint, including raw data inventory, search, policy and dates.
+    A partial run without a matching immutable preflight is never overwritten.
+    The canonical optimizer alone decides which matching folds can resume.
+    """
+    root = Path(project_root).resolve()
+    path = formal_mintrade40_history_params_path(root, seed)
+    arm_dir = path.parent.parent
+    completed = path.is_file()
+    preflight_path = arm_dir / "rolling_preflight.json"
+    other_files = any(p.is_file() for p in arm_dir.rglob("*")) if arm_dir.is_dir() else False
+    if not completed and not preflight_path.is_file():
+        return {"path": path, "action": "BLOCKED" if other_files else "BUILD",
+                "reason": (
+                    "Interrupted optimizer has files but no original preflight; preserve and inspect"
+                    if other_files else "Missing original seed-specific 2014-2020 Optimizer evidence"
+                )}
+    try:
+        prior = load_json_strict(preflight_path)
+        if not isinstance(prior, dict):
+            raise FormalMinTrade40PITBlocked("Optimizer preflight is not a JSON object")
+        original_fingerprint = str(prior.get("runtime_identity_sha256") or "")
+        if not original_fingerprint or original_fingerprint != _expected_historical_runtime_identity(root):
+            raise FormalMinTrade40PITBlocked(
+                "Original optimizer source/parameter/period/runtime identity does not match"
+            )
+        # A partial preflight is not enough if its fields have been tampered.
+        unsigned = {key: value for key, value in prior.items()
+                    if key not in {"runtime_identity_sha256", "created_at", "status",
+                                   "binary_pit_optimizer_coverage_path"}}
+        if canonical_json_sha256(unsigned) != original_fingerprint:
+            raise FormalMinTrade40PITBlocked("Optimizer preflight payload fingerprint differs")
+        if completed:
+            load_formal_mintrade40_optimizer_teacher(path, expected_seed=seed)
+            return {"path": path, "action": "REUSE",
+                    "reason": "Original same-seed 2014-2020 Optimizer evidence and current source identity verified"}
+        summary_path = arm_dir / "rolling_optimizer_summary.json"
+        if summary_path.exists():
+            summary = load_json_strict(summary_path)
+            if not isinstance(summary, dict) or str(summary.get("status")) == "COMPLETED":
+                raise FormalMinTrade40PITBlocked("Optimizer summary completed but parameter publication missing")
+    except (FormalMinTrade40PITBlocked, OSError, ValueError, KeyError, TypeError) as exc:
+        return {"path": path, "action": "BLOCKED",
+                "reason": f"Historical optimizer evidence unverified; preserve bytes: {exc}"}
+    return {"path": path, "action": "RESUME",
+            "reason": "Original runtime identity verified; canonical optimizer resumes only missing trials/folds"}
 
 
 def load_formal_mintrade40_optimizer_teacher(
@@ -252,20 +363,20 @@ def prepare_formal_mintrade40_optimizer_teacher(
         DEFAULT_PORTFOLIO_MAX_POSITIONS, DEFAULT_PORTFOLIO_ROTATION,
     )
     from services.optimizer.strategy_param_training import prepare_selection_historical_p2_params
-    from filters.breakout_quality.strategy_compare_sources import (
-        PARAM_POLICY_SPECS, PARAM_POLICY_BASE_FINALIST_BEST,
-    )
+    from filters.breakout_quality.strategy_compare_sources import PARAM_POLICY_BASE_FINALIST_BEST
 
     root = Path(project_root).resolve()
     policy = _canonical_schedule_build_contract(family="min")
     if str(policy["dataset"]) != str(DEFAULT_DATASET_PROFILE):
         raise FormalMinTrade40PITBlocked("Historical Optimizer dataset/profile drift")
-    filename = str(PARAM_POLICY_SPECS[PARAM_POLICY_BASE_FINALIST_BEST]["filename"])
-    work = root / "outputs" / "optimizer" / "mintrade40_label_history" / f"seed_{seed}"
-    expected = work / "p2_dl_off_trained" / "active_params" / filename
+    expected = formal_mintrade40_history_params_path(root, seed)
+    work = expected.parent.parent.parent
     # If the old source exists but is invalid, preserve it. Never silently
     # recalculate a different identity over an existing scientific artifact.
-    if expected.exists():
+    status = inspect_formal_mintrade40_optimizer_teacher(project_root=root, seed=seed)
+    if status["action"] == "BLOCKED":
+        raise FormalMinTrade40PITBlocked(str(status["reason"]))
+    if status["action"] == "REUSE":
         return load_formal_mintrade40_optimizer_teacher(expected, expected_seed=seed)
     result = prepare_selection_historical_p2_params(
         project_root=root,
@@ -298,5 +409,6 @@ def prepare_formal_mintrade40_optimizer_teacher(
 __all__ = [
     "HISTORICAL_MINTRADE40_TRAINING_SET", "load_formal_mintrade40_optimizer_teacher",
     "load_formal_mintrade40_optimizer_fold_teacher",
-    "prepare_formal_mintrade40_optimizer_teacher",
+    "prepare_formal_mintrade40_optimizer_teacher", "formal_mintrade40_history_params_path",
+    "inspect_formal_mintrade40_optimizer_teacher",
 ]
