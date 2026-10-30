@@ -244,6 +244,20 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and "未授權執行" in cancellation.getvalue(),
     )
 
+    # Interactive Target [1] route regression belongs to this explicit
+    # application-entry contract, not the domain-only Oracle synthetic suite.
+    # Keep the original one-prompt cancellation invariant separately asserted.
+    check_true(
+        "target_first_one_prompt_cancel_does_not_fit_or_replay",
+        cancel_input.call_count == 1
+        and producer.call_count == 0
+        and cancelled_runner.call_count == 0
+        and not latest.called
+        and not status.called
+        and cancellation.getvalue().count(preview) == 1
+        and "未授權執行" in cancellation.getvalue(),
+    )
+
     # The formal audit has to reconstruct full Replay identities after P16
     # BUILD. If that check requires new work outside the approved matrix,
     # block rather than implicitly expanding authorized RUN.
@@ -306,8 +320,8 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     with patch("builtins.input", side_effect=one_stage_input), \
          patch.object(oracle_handler, "preview_oracle_replay_plan", return_value=preview_plan), \
          patch.object(oracle_application, "ensure_authorized_oracle_parameters") as producer, \
-         patch.object(research_app, "run_enabled_audits", side_effect=one_stage_runner), \
-         patch.object(research_app, "render_latest_audit_summary", return_value="LATEST"), \
+         patch.object(research_app, "run_enabled_audits", side_effect=one_stage_runner) as approved_runner, \
+         patch.object(research_app, "render_latest_audit_summary", return_value="LATEST") as approved_latest, \
          redirect_stdout(one_stage):
         research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
     check_true(
@@ -318,6 +332,19 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and producer.call_count == 1
         and one_stage.getvalue().index(preview)
             < one_stage.getvalue().index("[RUN] only missing Portfolio"),
+    )
+
+    check_true(
+        "target_first_approval_checks_same_plan_without_second_prompt",
+        len(approvals) == 1
+        and approvals[0][1]
+        and approved_runner.call_count == 1
+        and approved_runner.call_args.kwargs.get("approved_replay_decisions") == preview_plan["preflight"]
+        and approved_runner.call_args.kwargs.get("preflight_display") == "summary"
+        and approved_latest.call_count == 1
+        and producer.call_count == 1
+        and one_stage.getvalue().count(preview) == 1
+        and one_stage.getvalue().count("LATEST") == 1,
     )
 
     # A read-only direct Audit invocation still blocks when its P16 is absent;

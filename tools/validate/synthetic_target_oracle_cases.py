@@ -5531,62 +5531,6 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
             )
         producer.assert_not_called()
 
-    def test_target_first_one_prompt_cancel_does_not_fit_or_replay(self):
-        from apps import research as research_app
-        from services.audit import target_oracle_romd as oracle_owner
-        from services.research import target_oracle_application as application
-        from core.training_policy import get_robustness_benchmark_policy_snapshot
-        seeds = get_robustness_benchmark_policy_snapshot()["resolved_seeds"]
-        preview = self._approved_preview(self._fixture(ready_seeds=set(seeds[:4])))
-        method = SimpleNamespace(method_id="target_ground_truth_strategy_romd",
-                                 menu_label="Target 驗證", menu_location="research_root")
-        with patch.object(research_app, "get_audit_methods", return_value=(method,)), \
-             patch.object(research_app, "collect_audit_menu_state", return_value={"configured": True}), \
-             patch.object(application, "get_formal_oracle_definition", return_value=_ACTIVE_ORACLE_DEFINITION), \
-             patch.object(oracle_owner, "preview_oracle_replay_plan", return_value=preview), \
-             patch.object(application, "ensure_authorized_oracle_parameters") as producer, \
-             patch.object(research_app, "run_enabled_audits") as replay, \
-             patch("builtins.input", return_value="0") as answer, \
-             redirect_stdout(io.StringIO()) as view:
-            self.assertEqual(research_app._run_reusable_audit_method(
-                "breakout_quality", "target_ground_truth_strategy_romd"), 0)
-        answer.assert_called_once()
-        self.assertIn("Target  S1  S2  S3  S4  S5  S6  S7  S8", view.getvalue())
-        self.assertNotIn("P16 前置工件計畫", view.getvalue())
-        producer.assert_not_called()
-        replay.assert_not_called()
-
-    def test_target_first_approval_checks_same_plan_without_second_prompt(self):
-        from apps import research as research_app
-        from services.audit import target_oracle_romd as oracle_owner
-        from services.research import target_oracle_application as application
-        from core.training_policy import get_robustness_benchmark_policy_snapshot
-        seeds = get_robustness_benchmark_policy_snapshot()["resolved_seeds"]
-        preview = self._approved_preview(self._fixture(ready_seeds=set(seeds[:4])))
-        method = SimpleNamespace(method_id="target_ground_truth_strategy_romd",
-                                 menu_label="Target 驗證", menu_location="research_root")
-        def replay(_module, **kwargs):
-            self.assertEqual(kwargs["preflight_display"], "summary")
-            self.assertEqual(kwargs["approved_replay_decisions"], preview["preflight"])
-            self.assertTrue(kwargs["preflight_approval"](preview["text"]))
-            return {"target_oracle_romd": {"status": "COMPLETED"}}
-        with patch.object(research_app, "get_audit_methods", return_value=(method,)), \
-             patch.object(research_app, "collect_audit_menu_state", return_value={"configured": True}), \
-             patch.object(application, "get_formal_oracle_definition", return_value=_ACTIVE_ORACLE_DEFINITION), \
-             patch.object(oracle_owner, "preview_oracle_replay_plan", return_value=preview), \
-             patch.object(application, "ensure_authorized_oracle_parameters") as producer, \
-             patch.object(research_app, "run_enabled_audits", side_effect=replay) as runner, \
-             patch.object(research_app, "render_latest_audit_summary", return_value="LATEST"), \
-             patch("builtins.input", return_value="") as answer, \
-             redirect_stdout(io.StringIO()) as view:
-            self.assertEqual(research_app._run_reusable_audit_method(
-                "breakout_quality", "target_ground_truth_strategy_romd"), 0)
-        answer.assert_called_once()
-        self.assertEqual(producer.call_count, 1)
-        self.assertEqual(runner.call_count, 1)
-        self.assertEqual(view.getvalue().count(preview["text"]), 1)
-        self.assertIn("LATEST", view.getvalue())
-
     def test_approved_replay_cells_cannot_gain_new_run_or_target(self):
         """Canonical Oracle, not UI text, enforces the approved cell matrix."""
         with tempfile.TemporaryDirectory() as tmp:
