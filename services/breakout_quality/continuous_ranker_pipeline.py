@@ -69,7 +69,7 @@ def load_continuous_ranker_data(
         project_root=kwargs.get("project_root", Path(__file__).resolve().parents[2]),
     )
     # Scientific dispatch by registered target capability, not by a model ID.
-    from core.breakout_quality_registry import get_continuous_ranker_execution_recipe
+    from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
     from core.breakout_quality_runtime import CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
     recipe = get_continuous_ranker_execution_recipe(str(experiment_profile))
     if recipe.target_policy.materialization_mode == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH:

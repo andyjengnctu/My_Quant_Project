@@ -79,7 +79,7 @@ def resolve_feature_price_source(
 def load_daily_universal_ranker_data_with_price_source(**kwargs):
     """Drop-in domain adapter for every direct daily-universal producer."""
     root = kwargs.get("project_root", PROJECT_ROOT)
-    from core.breakout_quality_registry import get_continuous_ranker_execution_recipe
+    from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
     from core.breakout_quality_runtime import CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
     recipe = get_continuous_ranker_execution_recipe(str(kwargs['experiment_profile']))
     if recipe.target_policy.materialization_mode == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH:

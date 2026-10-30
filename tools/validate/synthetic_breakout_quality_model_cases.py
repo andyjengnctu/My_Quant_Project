@@ -801,6 +801,33 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         ),
     )
 
+    # Generic regression for migrated owner boundaries: Python accepts a stale
+    # from-import syntactically, but fails only when that downstream path runs.
+    # Validate all registered-name imports without executing a data producer.
+    unresolved_registry_imports = []
+    for source_root_name in ("filters", "services"):
+        for source_path in sorted((project_root / source_root_name).rglob("*.py")):
+            if "core.breakout_quality_registry" not in read_source_text(source_path):
+                continue
+            for node in read_source_import_nodes(source_path):
+                if not isinstance(node, ast.ImportFrom) or node.module != "core.breakout_quality_registry":
+                    continue
+                missing = sorted(
+                    alias.name for alias in node.names
+                    if alias.name != "*" and not hasattr(breakout_quality_registry, alias.name)
+                )
+                if missing:
+                    unresolved_registry_imports.append(
+                        f"{source_path.relative_to(project_root).as_posix()}:"
+                        + ",".join(missing)
+                    )
+    check(
+        "continuous_ranker_registry_from_import_symbols_exist",
+        [],
+        unresolved_registry_imports,
+        note="generic consumers must import recipe resolution from its current canonical owner",
+    )
+
     # Pair-weight modification-radius acceptance: policy semantics, scientific contract
     # metadata, trainer execution and report copy all resolve through the runtime registry.
     # A synthetic third policy is injected here without changing trainer/data/report code.
