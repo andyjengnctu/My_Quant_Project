@@ -29,8 +29,7 @@ from config.strategy_compare import (
     STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS,
     STRATEGY_RUNTIME_INTEGRATION,
 )
-from config.robustness_benchmark import (
-    ROBUSTNESS_BENCHMARK_ID,
+from core.strategy_compare_registry import (
     ROBUSTNESS_BENCHMARK_SEED_COUNT,
     ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED,
 )
@@ -50,6 +49,7 @@ from core.strategy_compare_registry import (
     STRATEGY_EXPERIMENTAL_PARAM_SOURCES,
 )
 from core.training_policy import (
+    get_robustness_benchmark_policy_snapshot,
     get_strategy_parameter_training_policy_snapshot,
     resolve_robustness_benchmark_seeds,
 )
@@ -344,7 +344,8 @@ def get_strategy_multi_seed_robustness_settings(
         resolved_seeds=tuple(
             int(value) for value in tuple(
                 raw.get("resolved_seeds")
-                or (resolve_robustness_benchmark_seeds() if raw.get("benchmark_id") not in (None, "") else ())
+                or (get_robustness_benchmark_policy_snapshot(str(raw["benchmark_id"]))["resolved_seeds"]
+                      if raw.get("benchmark_id") not in (None, "") else ())
                 or ()
             )
         ),
@@ -396,6 +397,17 @@ def get_strategy_multi_seed_robustness_settings(
             else str(raw.get("checkpoint_cache_root")).strip()
         ),
     )
+    if settings.benchmark_id is not None:
+        registered = get_robustness_benchmark_policy_snapshot(settings.benchmark_id)
+        if (
+            settings.seed_count != int(registered["seed_count"])
+            or settings.seed_generator_seed != int(registered["seed_generator_seed"])
+            or settings.resolved_seeds != tuple(int(seed) for seed in registered["resolved_seeds"])
+        ):
+            raise ValueError(
+                "Strategy robustness benchmark cohort differs from registered identity: "
+                f"{settings.benchmark_id}"
+            )
     if settings.suite_id is None:
         if not settings.resolved_seeds:
             settings = replace(

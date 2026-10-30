@@ -45,7 +45,11 @@ from core.path_utils import project_relative_display_path
 from core.strategy_compare_policy import (
     get_strategy_comparison_settings, get_strategy_multi_seed_robustness_settings,
 )
-from core.training_policy import benchmark_seed_execution_equivalent
+from core.training_policy import (
+    benchmark_seed_execution_equivalent,
+    get_robustness_benchmark_policy_snapshot,
+)
+from config.robustness_benchmark import TARGET_ORACLE_ROBUSTNESS_BENCHMARK_ID
 from filters.breakout_quality.daily_trade40_target import HORIZON_SESSIONS
 from filters.breakout_quality.daily_ranker_data import compute_daily_opportunity_target_batch
 from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets
@@ -471,7 +475,20 @@ def _oracle_parameter_reuse_plan(definition, root: Path) -> dict[str, Any]:
     A missing P16 is not an Oracle Replay RUN; the Audit itself stays read-only.
     """
     settings, baseline, _exact = _contract(definition)
+    # AI: Oracle selects the registered 8-seed benchmark explicitly. The
+    # shared Strategy Compare suite uses its original 4-seed benchmark; only
+    # its selector, parameter-source and P16 contract are reused here.
     robustness = get_strategy_multi_seed_robustness_settings(settings.profile_id)
+    oracle_benchmark = get_robustness_benchmark_policy_snapshot(
+        TARGET_ORACLE_ROBUSTNESS_BENCHMARK_ID,
+    )
+    robustness = replace(
+        robustness,
+        benchmark_id=str(oracle_benchmark["benchmark_id"]),
+        seed_count=int(oracle_benchmark["seed_count"]),
+        seed_generator_seed=int(oracle_benchmark["seed_generator_seed"]),
+        resolved_seeds=tuple(int(seed) for seed in oracle_benchmark["resolved_seeds"]),
+    )
     source = settings.parameter_sources[str(baseline.param_source)]
     builder = source.builder
     if (

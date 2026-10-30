@@ -34,6 +34,7 @@ from core.strategy_param_policy import (
     get_strategy_param_validation_protocol,
 )
 from core.training_policy import get_robustness_benchmark_policy_snapshot
+from config.robustness_benchmark import MODEL_STRATEGY_ROBUSTNESS_BENCHMARK_ID
 from services.research.producer_execution import (
     PRODUCER_ACTION_CANCEL,
     PRODUCER_ACTION_FORCE_REBUILD,
@@ -372,7 +373,9 @@ def _ensure_single(
 def _benchmark_state(
     profile: StrategyParamTrainingProfile, *, seed: int, required_end: str
 ) -> dict:
-    benchmark = get_robustness_benchmark_policy_snapshot()
+    benchmark = get_robustness_benchmark_policy_snapshot(
+        MODEL_STRATEGY_ROBUSTNESS_BENCHMARK_ID
+    )
     if profile.price_basis == "raw_unadjusted":
         return inspect_raw_price_robustness_strategy_parameter_artifact(
             PROJECT_ROOT,
@@ -432,7 +435,9 @@ def _ensure_benchmark(
     profile: StrategyParamTrainingProfile, *, seed: int, required_end: str,
     force_rebuild: bool = False, oos_end_cap_date: str | None = None,
 ) -> dict:
-    benchmark = get_robustness_benchmark_policy_snapshot()
+    benchmark = get_robustness_benchmark_policy_snapshot(
+        MODEL_STRATEGY_ROBUSTNESS_BENCHMARK_ID
+    )
     if profile.price_basis == "raw_unadjusted":
         return ensure_raw_price_robustness_strategy_parameter_artifact(
             PROJECT_ROOT,
@@ -552,7 +557,9 @@ def _render_profile_summary(profile: StrategyParamTrainingProfile) -> str:
 
 def _build_plan(profile: StrategyParamTrainingProfile, work: StrategyParamWorkType) -> dict:
     required_end = _required_schedule_end(profile, work)
-    benchmark = get_robustness_benchmark_policy_snapshot()
+    benchmark = get_robustness_benchmark_policy_snapshot(
+        MODEL_STRATEGY_ROBUSTNESS_BENCHMARK_ID
+    )
     seed_protocol = _fitting_seed_protocol(profile)
     rows: list[dict] = []
     if work.robustness:

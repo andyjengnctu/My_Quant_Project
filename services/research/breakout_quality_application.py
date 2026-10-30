@@ -136,7 +136,8 @@ from services.research.strategy_compare_training import (
 from services.research.training_process import (
     terminate_registered_training_processes,
 )
-from core.training_policy import resolve_robustness_benchmark_seeds
+from core.training_policy import get_robustness_benchmark_policy_snapshot
+from config.robustness_benchmark import MODEL_STRATEGY_ROBUSTNESS_BENCHMARK_ID
 from filters.breakout_quality.artifact_dependency_registry import (
     collect_model_upstream_preparation_plan,
 )
@@ -4845,7 +4846,9 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
     # have rewritten a PIT source since its last cached complete validation.
     if rolling:
         invalidate_rolling_model_source_cache()
-    seeds = tuple(int(seed) for seed in resolve_robustness_benchmark_seeds())
+    seeds = tuple(int(seed) for seed in get_robustness_benchmark_policy_snapshot(
+        MODEL_STRATEGY_ROBUSTNESS_BENCHMARK_ID,
+    )["resolved_seeds"])
     if len(seeds) < 2:
         raise ValueError("Model robustness benchmark至少需要兩個seed")
     model_list = get_breakout_quality_model_test_settings().model_profiles

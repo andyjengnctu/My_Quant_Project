@@ -212,9 +212,11 @@ def build_strategy_parameter_benchmark_manifest_payload(
         source = dict(preserved_sources.get(policy) or {})
         if source:
             artifacts[policy]["source"] = source
-    benchmark_policy = get_robustness_benchmark_policy_snapshot()
+    # AI: The manifest must pin the benchmark explicitly requested by its
+    # parameter artifact, not whichever cohort another workflow has selected.
+    benchmark_policy = get_robustness_benchmark_policy_snapshot(benchmark_id=benchmark_id)
     if int(seed) not in {int(value) for value in benchmark_policy["resolved_seeds"]}:
-        raise ValueError(f"seed不屬於目前robustness benchmark題庫: {seed}")
+        raise ValueError(f"seed不屬於指定robustness benchmark題庫: {seed}")
     training_policy = (
         dict(training_policy_override)
         if isinstance(training_policy_override, dict)

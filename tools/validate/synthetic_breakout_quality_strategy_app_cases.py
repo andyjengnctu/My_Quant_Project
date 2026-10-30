@@ -1865,11 +1865,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "int(item.execution_priority)" in comparison_source,
     )
 
-    # AI: Validate resolved benchmark identity and single generator ownership,
-    # not which orchestrator happens to call the canonical resolver directly.
+    # AI: All Model/Strategy robustness modes consume the same registered v1
+    # seed identity; the independent Target Oracle v2 selection must not change
+    # their benchmark. Seed generation still has exactly one training-policy owner.
     from core.training_policy import get_robustness_benchmark_policy_snapshot
+    from config.robustness_benchmark import MODEL_STRATEGY_ROBUSTNESS_BENCHMARK_ID
 
-    benchmark_seed_spec = get_robustness_benchmark_policy_snapshot()
+    benchmark_seed_spec = get_robustness_benchmark_policy_snapshot(
+        MODEL_STRATEGY_ROBUSTNESS_BENCHMARK_ID
+    )
     canonical_seeds = tuple(int(seed) for seed in benchmark_seed_spec["resolved_seeds"])
     one_seed_owner = (
         bool(current_robustness)

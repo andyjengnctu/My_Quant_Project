@@ -2094,11 +2094,11 @@ def _resolve_robustness_benchmark_strategy_parameter_state(
             "robustness benchmark per-seed策略參數只支援Strategy Compare first-class policies: "
             + ",".join(sorted(supported_policies))
         )
-    benchmark = get_robustness_benchmark_policy_snapshot()
-    if str(benchmark_id) != str(benchmark["benchmark_id"]):
-        raise ValueError(f"benchmark_id與current SSOT不一致: {benchmark_id}")
+    # AI: Each consumer supplies its registered benchmark cohort. Oracle
+    # v2 and Strategy Compare v1 may coexist without changing either identity.
+    benchmark = get_robustness_benchmark_policy_snapshot(benchmark_id=benchmark_id)
     if int(seed) not in {int(value) for value in benchmark["resolved_seeds"]}:
-        raise ValueError(f"seed不屬於current robustness benchmark題庫: {seed}")
+        raise ValueError(f"seed不屬於指定robustness benchmark題庫: {seed}")
 
     optimizer_policy = _benchmark_training_policy_snapshot(
         family=normalized_family, seed=int(seed)
