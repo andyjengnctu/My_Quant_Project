@@ -1003,5 +1003,301 @@ class FormalMinTrade40TrainingSourcePreflightCases(unittest.TestCase):
         self.assertEqual(float(labels.raw_net_r[0]), 1.25)
 
 
+
+class FormalMinTrade40OptimizerAttestationCases(unittest.TestCase):
+    """Source adapter must accept only a genuine-shape, as-of Min Optimizer lineage."""
+
+    @staticmethod
+    def _artifacts(directory, *, seed=693545351):
+        import json
+        from core.params_io import params_to_json_dict
+        from core.file_integrity import canonical_json_sha256
+        from services.optimizer.formal_mintrade40_teacher_source import (
+            HISTORICAL_MINTRADE40_TRAINING_SET,
+        )
+        from services.optimizer.strategy_param_service import _canonical_schedule_build_contract
+        from services.optimizer.strategy_param_training import (
+            MIN_ROOS_SEARCH_FIELDS, _build_min_roos_schedule_contract,
+        )
+        root = (Path(directory) / "outputs" / "optimizer" / "mintrade40_label_history"
+                / f"seed_{seed}" / "p2_dl_off_trained" / "active_params")
+        root.mkdir(parents=True)
+        policy = _canonical_schedule_build_contract(family="min")
+        params = params_to_json_dict(V16StrategyParams(
+            high_len=10, atr_len=5, use_breakout_quality_filter=False,
+            use_breakout_quality_ranking=False,
+        ))
+        effective_dates = pd.date_range("2014-01-01", periods=7, freq="YS")
+        folds = []
+        members = {}
+        for effective in effective_dates:
+            oos_end = effective + pd.DateOffset(years=1) - pd.Timedelta(days=1)
+            folds.append({
+                "oos_start_date": str(effective.date()),
+                "oos_end_date": str(oos_end.date()),
+                "selection_start_date": str((effective - pd.DateOffset(months=policy["train_window_months"])).date()),
+                "selection_end_date": str((effective - pd.Timedelta(days=1)).date()),
+            })
+            members[str(effective.date())] = [{"seed": seed, "params": params}]
+        payload = {
+            "schema_type": "optimizer_active_param_ensemble", "mode": "rolling",
+            "breakout_quality_param_adaptation": {
+                "mode": "min_roos_training",
+                "parameter_set": HISTORICAL_MINTRADE40_TRAINING_SET,
+                "training_dl_enabled": False,
+                "fixed_rule_contract": "all_rule_filters_off",
+                "search_fields": list(MIN_ROOS_SEARCH_FIELDS),
+            },
+            "meta": {
+                "first_oos_date": "2014-01-01", "last_oos_date": "2020-12-31",
+                "train_window_months": policy["train_window_months"],
+                "oos_horizon_months": policy["oos_horizon_months"],
+                "trials_per_fold": policy["trials_per_fold"],
+            },
+            "params_ensemble_by_effective_date": members,
+            "folds": folds,
+            "summary": {"folds": len(folds)},
+        }
+        reference = _build_min_roos_schedule_contract(
+            first_oos_date="2014-01-01", last_oos_date="2020-12-31",
+            train_window_months=policy["train_window_months"],
+            oos_months=policy["oos_horizon_months"],
+        )
+        contract = {
+            "mode": "binary_dl_filter_min_roos_param_adaptation",
+            "arm_id": HISTORICAL_MINTRADE40_TRAINING_SET,
+            "training_dl_enabled": False, "dataset": "full",
+            "dataset_identity": {"csv_inventory_sha256": "b" * 64},
+            "parameter_reference": {
+                "type": reference["reference_type"], "path": None,
+                "sha256": reference["sha256"],
+            },
+            "rolling_policy": dict(reference["meta"]),
+            "search_fields": list(MIN_ROOS_SEARCH_FIELDS),
+            "trials_per_fold": policy["trials_per_fold"],
+            "binary_pit": None, "binary_runtime": None,
+        }
+        identity = canonical_json_sha256(contract)
+        preflight = {**contract, "runtime_identity_sha256": identity,
+                     "status": "PREFLIGHT_PASS"}
+        summary = {"status": "COMPLETED",
+                   "parameter_set": HISTORICAL_MINTRADE40_TRAINING_SET,
+                   "runtime_identity_sha256": identity}
+        source = root / "roos_base_best.json"
+        source.write_text(json.dumps(payload), encoding="utf-8")
+        (root.parent / "rolling_preflight.json").write_text(json.dumps(preflight), encoding="utf-8")
+        (root.parent / "rolling_optimizer_summary.json").write_text(json.dumps(summary), encoding="utf-8")
+        return source, payload, preflight, summary
+
+    @staticmethod
+    def _rewrite(path, payload):
+        import json
+        Path(path).write_text(json.dumps(payload), encoding="utf-8")
+
+    def test_optimizer_adapter_preserves_seed_and_immutable_source_sha(self):
+        from services.optimizer.formal_mintrade40_teacher_source import (
+            load_formal_mintrade40_optimizer_teacher,
+        )
+        from core.strategy_param_artifacts import compute_strategy_param_file_sha256
+        with TemporaryDirectory() as temp:
+            source, *_ = self._artifacts(temp)
+            identity = load_formal_mintrade40_optimizer_teacher(source, expected_seed=693545351)
+            self.assertEqual(identity.seed, 693545351)
+            self.assertEqual(identity.param_sha256, compute_strategy_param_file_sha256(source))
+            self.assertEqual(len(identity.schedule), 7)
+            self.assertEqual(identity.publication_dates[0], "2013-12-31")
+            self.assertEqual(str(identity.schedule[-1].end.date()), "2020-12-31")
+
+    def test_optimizer_adapter_rejects_old_p2_teacher(self):
+        from services.optimizer.formal_mintrade40_teacher_source import (
+            load_formal_mintrade40_optimizer_teacher,
+        )
+        with TemporaryDirectory() as temp:
+            source, payload, *_ = self._artifacts(temp)
+            payload["breakout_quality_param_adaptation"]["parameter_set"] = "P2_HISTORY"
+            self._rewrite(source, payload)
+            with self.assertRaisesRegex(ValueError, "policy/provenance"):
+                load_formal_mintrade40_optimizer_teacher(source, expected_seed=693545351)
+
+    def test_optimizer_adapter_rejects_mixed_seed(self):
+        from services.optimizer.formal_mintrade40_teacher_source import (
+            load_formal_mintrade40_optimizer_teacher,
+        )
+        with TemporaryDirectory() as temp:
+            source, payload, *_ = self._artifacts(temp)
+            payload["params_ensemble_by_effective_date"]["2015-01-01"][0]["seed"] = 2014432738
+            self._rewrite(source, payload)
+            with self.assertRaisesRegex(ValueError, "Seed-specific"):
+                load_formal_mintrade40_optimizer_teacher(source, expected_seed=693545351)
+
+    def test_optimizer_adapter_rejects_as_of_or_history_shortening(self):
+        from services.optimizer.formal_mintrade40_teacher_source import (
+            load_formal_mintrade40_optimizer_teacher,
+        )
+        with TemporaryDirectory() as temp:
+            source, payload, *_ = self._artifacts(temp)
+            payload["folds"][0]["selection_start_date"] = "2011-01-01"
+            self._rewrite(source, payload)
+            with self.assertRaisesRegex(ValueError, "not PIT-aligned"):
+                load_formal_mintrade40_optimizer_teacher(source, expected_seed=693545351)
+
+    def test_optimizer_adapter_rejects_missing_fold_or_fake_preflight_identity(self):
+        from services.optimizer.formal_mintrade40_teacher_source import (
+            load_formal_mintrade40_optimizer_teacher,
+        )
+        with TemporaryDirectory() as temp:
+            source, payload, preflight, _ = self._artifacts(temp)
+            payload["folds"].pop()
+            self._rewrite(source, payload)
+            with self.assertRaisesRegex(ValueError, "provenance incomplete"):
+                load_formal_mintrade40_optimizer_teacher(source, expected_seed=693545351)
+            payload["folds"].append({
+                "oos_start_date": "2020-01-01", "oos_end_date": "2020-12-31",
+                "selection_start_date": "2010-01-01", "selection_end_date": "2019-12-31",
+            })
+            self._rewrite(source, payload)
+            preflight["dataset_identity"]["csv_inventory_sha256"] = "c" * 64
+            self._rewrite(source.parent.parent / "rolling_preflight.json", preflight)
+            with self.assertRaisesRegex(ValueError, "fingerprint mismatch"):
+                load_formal_mintrade40_optimizer_teacher(source, expected_seed=693545351)
+
+
+class FormalMinTrade40OptimizerBuildGuardCases(unittest.TestCase):
+    """Historical P16 is built ONLY via canonical optimizer, never a P2 recovery."""
+
+    def test_historical_build_requires_explicit_authorization(self):
+        from services.optimizer.formal_mintrade40_teacher_source import (
+            prepare_formal_mintrade40_optimizer_teacher,
+        )
+        with TemporaryDirectory() as root:
+            with patch(
+                "services.optimizer.strategy_param_training.prepare_selection_historical_p2_params",
+                side_effect=AssertionError("Optimizer must not execute"),
+            ) as producer:
+                with self.assertRaisesRegex(ValueError, "requires model-work authorization"):
+                    prepare_formal_mintrade40_optimizer_teacher(
+                        project_root=root, seed=693545351,
+                    )
+                producer.assert_not_called()
+
+    def test_producer_gets_formal_120_month_window_and_isolated_physical_path(self):
+        from services.optimizer.formal_mintrade40_teacher_source import (
+            HISTORICAL_MINTRADE40_TRAINING_SET,
+            prepare_formal_mintrade40_optimizer_teacher,
+        )
+        from filters.breakout_quality.strategy_compare_sources import (
+            PARAM_POLICY_SPECS, PARAM_POLICY_BASE_FINALIST_BEST,
+        )
+        from services.optimizer.strategy_param_service import _canonical_schedule_build_contract
+        with TemporaryDirectory() as root:
+            seed = 693545351
+            expected = (Path(root) / "outputs" / "optimizer"
+                        / "mintrade40_label_history" / f"seed_{seed}"
+                        / "p2_dl_off_trained" / "active_params"
+                        / PARAM_POLICY_SPECS[PARAM_POLICY_BASE_FINALIST_BEST]["filename"])
+            sentinel = object()
+            with (patch(
+                    "services.optimizer.strategy_param_training.prepare_selection_historical_p2_params",
+                    return_value={"params_path": expected},
+                  ) as producer,
+                  patch(
+                    "services.optimizer.formal_mintrade40_teacher_source.load_formal_mintrade40_optimizer_teacher",
+                    return_value=sentinel,
+                  ) as loader):
+                actual = prepare_formal_mintrade40_optimizer_teacher(
+                    project_root=root, seed=seed, authorized=True,
+                )
+            self.assertIs(actual, sentinel)
+            loader.assert_called_once_with(expected.resolve(), expected_seed=seed)
+            kwargs = producer.call_args.kwargs
+            policy = _canonical_schedule_build_contract(family="min")
+            self.assertEqual(kwargs["parameter_set_identity"], HISTORICAL_MINTRADE40_TRAINING_SET)
+            self.assertEqual(kwargs["first_oos_date"], "2014-01-01")
+            self.assertEqual(kwargs["last_oos_date"], "2020-12-31")
+            self.assertEqual(kwargs["train_window_months"], int(policy["train_window_months"]))
+            self.assertEqual(kwargs["oos_months"], int(policy["oos_horizon_months"]))
+            self.assertEqual(kwargs["trials_per_fold"], int(policy["trials_per_fold"]))
+            self.assertEqual(kwargs["optimizer_seed"], seed)
+            self.assertEqual(kwargs["dataset"], "full")
+            self.assertEqual(kwargs["output_relative_dir"], expected.parent.parent.parent)
+            self.assertFalse(kwargs["recover_completed_strategy_compare"])
+            self.assertIsNone(kwargs.get("seed_ensemble_policy_override"))
+
+    def test_stale_existing_source_blocks_and_does_not_run_optimizer(self):
+        from services.optimizer.formal_mintrade40_teacher_source import (
+            prepare_formal_mintrade40_optimizer_teacher,
+        )
+        from filters.breakout_quality.strategy_compare_sources import (
+            PARAM_POLICY_SPECS, PARAM_POLICY_BASE_FINALIST_BEST,
+        )
+        with TemporaryDirectory() as root:
+            seed = 693545351
+            path = (Path(root) / "outputs" / "optimizer" / "mintrade40_label_history"
+                    / f"seed_{seed}" / "p2_dl_off_trained" / "active_params"
+                    / PARAM_POLICY_SPECS[PARAM_POLICY_BASE_FINALIST_BEST]["filename"])
+            path.parent.mkdir(parents=True)
+            path.write_text("{}", encoding="utf-8")
+            with patch(
+                "services.optimizer.strategy_param_training.prepare_selection_historical_p2_params",
+                side_effect=AssertionError("Must preserve existing corrupt source"),
+            ) as producer:
+                with self.assertRaises(ValueError):
+                    prepare_formal_mintrade40_optimizer_teacher(
+                        project_root=root, seed=seed, authorized=True,
+                    )
+                producer.assert_not_called()
+            self.assertEqual(path.read_text(encoding="utf-8"), "{}")
+
+    def test_optimizer_adapter_rejects_corrupt_raw_inventory_sha(self):
+        from services.optimizer.formal_mintrade40_teacher_source import (
+            load_formal_mintrade40_optimizer_teacher,
+        )
+        from core.file_integrity import canonical_json_sha256
+        with TemporaryDirectory() as root:
+            source, _, preflight, summary = FormalMinTrade40OptimizerAttestationCases._artifacts(root)
+            preflight["dataset_identity"]["csv_inventory_sha256"] = "non-sha256"
+            contract = {key: value for key, value in preflight.items()
+                        if key not in {"status", "runtime_identity_sha256"}}
+            fingerprint = canonical_json_sha256(contract)
+            preflight["runtime_identity_sha256"] = fingerprint
+            summary["runtime_identity_sha256"] = fingerprint
+            FormalMinTrade40OptimizerAttestationCases._rewrite(
+                source.parent.parent / "rolling_preflight.json", preflight)
+            FormalMinTrade40OptimizerAttestationCases._rewrite(
+                source.parent.parent / "rolling_optimizer_summary.json", summary)
+            with self.assertRaisesRegex(ValueError, "inventory SHA256 invalid"):
+                load_formal_mintrade40_optimizer_teacher(source, expected_seed=693545351)
+
+    def test_optimizer_adapter_rejects_wrong_historical_reference_even_when_rehashed(self):
+        from services.optimizer.formal_mintrade40_teacher_source import (
+            load_formal_mintrade40_optimizer_teacher,
+        )
+        from core.file_integrity import canonical_json_sha256
+        with TemporaryDirectory() as root:
+            source, _, preflight, summary = FormalMinTrade40OptimizerAttestationCases._artifacts(root)
+            preflight["parameter_reference"]["sha256"] = "c" * 64
+            contract = {key: value for key, value in preflight.items()
+                        if key not in {"status", "runtime_identity_sha256"}}
+            fingerprint = canonical_json_sha256(contract)
+            preflight["runtime_identity_sha256"] = fingerprint
+            summary["runtime_identity_sha256"] = fingerprint
+            FormalMinTrade40OptimizerAttestationCases._rewrite(
+                source.parent.parent / "rolling_preflight.json", preflight)
+            FormalMinTrade40OptimizerAttestationCases._rewrite(
+                source.parent.parent / "rolling_optimizer_summary.json", summary)
+            with self.assertRaisesRegex(ValueError, "reference identity invalid"):
+                load_formal_mintrade40_optimizer_teacher(source, expected_seed=693545351)
+
+    def test_optimizer_adapter_rejects_mixed_fold_optimizer_seed(self):
+        from services.optimizer.formal_mintrade40_teacher_source import (
+            load_formal_mintrade40_optimizer_teacher,
+        )
+        with TemporaryDirectory() as root:
+            source, payload, *_ = FormalMinTrade40OptimizerAttestationCases._artifacts(root)
+            payload["folds"][0]["optimizer_seed"] = 2014432738
+            FormalMinTrade40OptimizerAttestationCases._rewrite(source, payload)
+            with self.assertRaisesRegex(ValueError, "Seed-specific"):
+                load_formal_mintrade40_optimizer_teacher(source, expected_seed=693545351)
+
 if __name__ == "__main__":
     unittest.main()
