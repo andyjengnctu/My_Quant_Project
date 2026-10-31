@@ -353,7 +353,7 @@ class FormalMinDailyOracleCases(TestCase):
         policy = oracle._arm_replay_policy(
             active, plan=plan, target=EXACT, replay_policy=common,
             daily_evidence=evidence, score_sha256=oracle._canonical_score_map_sha256(scores),
-            score_contract=score_contract,
+            score_contract=score_contract, project_root=Path("/isolated"),
         )
         seed, price_sha, param_sha = 693545351, "b" * 64, "a" * 64
         benchmark = SimpleNamespace(benchmark_id="synthetic_owner_provenance")
@@ -782,9 +782,9 @@ class FormalMinDailyOracleCases(TestCase):
         evidence_sha=oracle._canonical_score_map_sha256(scores)
         contract={"reference_arm_id":"synthetic_authorized", "target_id":TARGET_ID}
         e1=oracle._arm_replay_policy(d,plan=plan,target=EXACT,replay_policy=base,daily_evidence=evidence,
-                                     score_sha256=evidence_sha,score_contract=contract)
+                                     score_sha256=evidence_sha,score_contract=contract,project_root=Path("/isolated"))
         e2=oracle._arm_replay_policy(d,plan=plan,target=DIRECT,replay_policy=base,daily_evidence=evidence,
-                                     score_sha256=evidence_sha,score_contract=contract)
+                                     score_sha256=evidence_sha,score_contract=contract,project_root=Path("/isolated"))
         self.assertEqual(e1["hindsight_target_contract"],e2["hindsight_target_contract"])
         self.assertEqual(
             e1["hindsight_target_contract"]["missing_key_policy"],

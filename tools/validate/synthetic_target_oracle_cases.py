@@ -4113,7 +4113,8 @@ class OracleOnePlanRealCacheCases(TestCase):
             definition, base_arm=base_arm, exact_arm=exact_arm)
         policy = oracle._arm_replay_policy(
             definition, plan=plan, target=target, replay_policy=base_policy,
-            daily_evidence=record, score_sha256="4"*64, score_contract=score_contract)
+            daily_evidence=record, score_sha256="4"*64, score_contract=score_contract,
+            project_root=Path("/isolated"))
         # Old signed provenance has no newer diagnostic counters.
         old_policy = {**policy, "hindsight_target_contract": {
             key: value for key, value in policy["hindsight_target_contract"].items()
@@ -4270,7 +4271,8 @@ class OracleOnePlanRealCacheCases(TestCase):
                           "source_evidence": "validated_generic_daily_feature_universe_and_research_cutoff_closeout"}
             current_policy = oracle._arm_replay_policy(
                 definition, plan=plan, target=requested, replay_policy=common,
-                daily_evidence=evidence, score_sha256="4"*64, score_contract=full_score)
+                daily_evidence=evidence, score_sha256="4"*64, score_contract=full_score,
+                project_root=root)
             prior_policy = {**current_policy, "hindsight_target_contract": {
                 key: value for key, value in current_policy["hindsight_target_contract"].items()
                 if key != "truth_source_sha256"}}
@@ -6724,6 +6726,264 @@ class OracleMinTradeVerifiedRevisionCertificationCases(TestCase):
                 store.read(new)
             path.write_bytes(canonical_bytes)
             self.assertEqual(store.read(new), result)
+
+
+class OracleMinTradePreflightArtifactReuseCases(TestCase):
+    """Eight-seed regression: real signed JSON/NPZ, zero Target or Replay RUN."""
+
+    def _fixture(self, root, *, encoding_only=False, truth=True, source_sha=None):
+        import hashlib
+        from core.file_integrity import canonical_json_sha256, compute_file_sha256
+        from filters.breakout_quality.dataset_store import resolve_dataset_paths
+        from filters.breakout_quality.paths import resolve_filter_output_dir
+        from services.audit import daily_trade40_oracle as daily
+        from services.audit.oracle_replay_artifacts import OracleReplayStore, replay_identity
+        from services.audit.mintrade_truth_source_attestation import _encoding_equivalent_mintrade_sources
+        from tools.validate.synthetic_daily_trade40_oracle_cases import source_fixture
+
+        definition = _ACTIVE_ORACLE_DEFINITION
+        settings, base, exact = oracle._contract(definition)
+        direct = oracle._direct_arm(definition, settings, base, exact)
+        plan = oracle._oracle_comparison_plan(definition)
+        contracts = oracle._resolve_oracle_target_score_contracts(definition, settings, plan)
+        seeds = (693545351, 2014432738, 104504529, 762252050,
+                 9734312, 1020806211, 116293459, 1234683984)
+        summary = resolve_dataset_paths(resolve_filter_output_dir(
+            root, str(definition.source["filter_id"]))).summary
+        summary.parent.mkdir(parents=True, exist_ok=True)
+        summary.write_text(json.dumps({"source_data_date_range": {"end": str(settings.end_date)}}), encoding="utf-8")
+        summary_sha = compute_file_sha256(summary)
+        start, end = str(settings.start_date), str(definition.dimensions["oracle_evaluation_end_date"])
+        scores = {(ticker, day): float(i) for day in ("2021-01-04", "2021-01-05")
+                  for i, ticker in enumerate(("2317", "2330"))}
+        ordered = sorted(scores)
+        score_sha = oracle._canonical_score_map_sha256(scores)
+        proof = (hashlib.sha256("".join(f"{t}|{d}\n" for t, d in ordered).encode()).hexdigest(),
+                 len(scores), "2021-01-04", "2021-01-05")
+        group_sha = hashlib.sha256(pd.DataFrame(ordered, columns=["ticker", "date"]).to_csv(
+            index=False).encode()).hexdigest()
+        schedule = source_fixture()[3]
+        periods = [{"start": str(p.start.date()), "end": None if p.end is None else str(p.end.date()),
+                    "params_signature": p.params_signature} for p in schedule]
+        price_sha, param_sha = "a" * 64, "b" * 64
+        benchmark = SimpleNamespace(benchmark_id="end_to_end_v2")
+        store = OracleReplayStore(root, definition.output_subdir)
+        common = oracle._canonical_oracle_replay_policy(definition, base_arm=base, exact_arm=exact)
+        cohort = {"cohort_rows": len(scores), "first_common_day": proof[2], "last_common_day": proof[3],
+                  "research_cutoff": str(settings.end_date)}
+        alternate = next(value for value in _encoding_equivalent_mintrade_sources()
+                         if value != daily.truth_producer_fingerprint())
+        truth_paths = []
+        for seed in seeds:
+            sources = {}
+            for source, (recipe, provider, horizon) in plan["daily_recipes"].items():
+                metric = oracle._ORACLE_DAILY_SCORE_RECIPES[recipe]
+                target_id, label_id = daily.target_identity_for_horizon(horizon, outcome_metric=metric)
+                evidence = {
+                    "target_id": target_id, "label_id": label_id,
+                    "profile_id": str(definition.source[provider]),
+                    "teacher": {"seed": seed, "param_identity_sha256": param_sha, "periods": periods},
+                    "truth_source_sha256": daily.truth_producer_fingerprint(metric),
+                    "dataset_summary_sha256": summary_sha,
+                    "rank_policy": (daily.NET_PNL_RANK_POLICY if metric == "net_pnl" else
+                                    "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation"),
+                    "rank_sha256": daily._ranked_score_sha(scores), "raw_label_sha256": "c" * 64, "calendar_sha256": "d" * 64,
+                    "mature_eligible_rows": len(scores), "censored_rank_last_rows": 0,
+                    ("settled_net_pnl_rows" if metric == "net_pnl" else "settled_net_r_rows"): len(scores),
+                    "research_cutoff": str(settings.end_date), "score_start_date": start,
+                    "oracle_evaluation_start_date": start, "horizon_sessions": horizon,
+                    "first_date": proof[2], "last_date": proof[3],
+                    **(daily.NET_PNL_EVIDENCE if metric == "net_pnl" else {}),
+                }
+                sources[source] = evidence
+                if truth:
+                    identity = {
+                        "schema": daily._TRUTH_CACHE_SCHEMA, "target_id": target_id,
+                        "dataset": str(settings.dataset), "filter_id": str(definition.source["filter_id"]),
+                        "profile_id": evidence["profile_id"], "evaluation_start": start,
+                        "evaluation_end": end, "score_start": start, "research_cutoff": str(settings.end_date),
+                        "seed": seed, "param_sha256": param_sha,
+                        "rolling_params": [{"start": p["start"], "end": p["end"],
+                                            "signature": p["params_signature"]} for p in periods],
+                        "horizon_sessions": horizon, "price_sha256": price_sha,
+                        "feature_eligible_keys_sha256": group_sha,
+                        "truth_source_sha256": evidence["truth_source_sha256"],
+                        "dataset_summary_sha256": summary_sha,
+                    }
+                    path = store.cache_root.parent / "truth_cache" / str(seed) / (
+                        f"{target_id}_{canonical_json_sha256(identity)}.npz")
+                    daily._truth_cache_write(path, identity, scores, evidence)
+                    truth_paths.append(path)
+            for target in ("C96", *(name for name, _ in plan["targets"])):
+                arm = direct if plan["selectors"].get(target) == "direct" else exact
+                args = {} if target == "C96" else dict(
+                    score_sha256=score_sha,
+                    score_contract={**contracts[target], "canonical_feature_eligible_keys_sha256": proof[0],
+                                    "oracle_scored_rows": len(scores),
+                                    "source_evidence": "validated_generic_daily_feature_universe_and_research_cutoff_closeout"})
+                if target in plan["daily_sources"]:
+                    args["daily_evidence"] = sources[plan["daily_sources"][target]]
+                policy = oracle._arm_replay_policy(definition, plan=plan, target=target,
+                    replay_policy=common, project_root=root, **args)
+                identity = replay_identity(dataset=settings.dataset, dataset_sha256=price_sha,
+                    target=target, definition={target: target}, start=start, end=end,
+                    benchmark=benchmark.benchmark_id, param_sha256=param_sha, seed=seed, cohort=cohort,
+                    ranking_policy=arm.dl_runtime_mode, ranking_options=dict(arm.dl_runtime_options),
+                    evaluation_mode=str(definition.dimensions["evaluation_mode"]),
+                    max_positions=settings.max_positions, replay_policy=policy)
+                if target in plan["daily_sources"]:
+                    recorded = identity["replay_policy"]["hindsight_target_contract"]
+                    recorded["truth_source_sha256"] = source_sha or (alternate if encoding_only else "0" * 64)
+                    if not encoding_only and "MinTrade40" in target:
+                        recorded.pop("dataset_summary_sha256")
+                result = {"target": target, "seed": seed, "romd": 1., "total_return_pct": 1.,
+                    "annualized_return_pct": 1., "mdd_pct": 1., "ev_a_r": .1, "trades": 1,
+                    "exposure_pct": 1., "win_rate_pct": 56.,
+                    "yearly": [{"year": year, "strategy_return_pct": 1., "is_full_year": year < 2026}
+                               for year in range(2021, 2027)],
+                    **({} if target == "C96" else {"delta_romd_vs_c96": 0.})}
+                if source_sha is not None and seed in seeds[:4]:
+                    identity["benchmark"] = "end_to_end_v1"
+                store.write(identity, result, origin="synthetic_historical_8_seed_replay")
+        return definition, benchmark, seeds, price_sha, param_sha, schedule, store, truth_paths
+
+    def _preflight(self, root, fixture, *, approve=False):
+        from filters.breakout_quality import daily_trade40_target as path_owner
+        from services.audit import daily_trade40_oracle as truth_owner
+        definition, benchmark, seeds, prices, params, schedule, _store, _paths = fixture
+        with patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
+             patch.object(oracle, "_robustness_artifacts", return_value=(benchmark,
+                 [(seed, root / f"p16_{seed}.json") for seed in seeds])), \
+             patch.object(oracle, "_prepare_oracle_parameters", return_value=(
+                 [(seed, params, "synthetic", None, None) for seed in seeds], {})), \
+             patch.object(oracle, "price_inventory_sha256", return_value=prices), \
+             patch.object(path_owner, "resolve_formal_min_param_records", return_value=[]), \
+             patch.object(path_owner, "build_formal_min_execution_schedule", return_value=(schedule, {})), \
+             patch.object(oracle, "_read_only_score_keys", side_effect=AssertionError("No feature/label build")), \
+             patch.object(oracle, "_load_or_build_oracle_price_scores", side_effect=AssertionError("No price build")), \
+             patch.object(truth_owner, "build_daily_universal_trade40_oracle_scores", side_effect=AssertionError("No truth build")), \
+             patch.object(truth_owner, "compute_counterfactual_trade40_batch", side_effect=AssertionError("No per-stock trades")), \
+             patch.object(oracle, "_run_scenario", side_effect=AssertionError("No Portfolio")), \
+             patch.object(oracle, "_execute_single_stage_missing", side_effect=AssertionError("No execution")):
+            result = oracle.build_report(definition, project_root=root, quiet=True,
+                preflight_approval=lambda _: approve)
+            return result if approve else result["preflight"]
+
+    def test_existing_current_truth_certifies_56_cells_before_approval(self):
+        from services.audit import oracle_replay_artifacts as artifacts
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = self._fixture(root)
+            store = fixture[6]
+            before = {p: p.read_bytes() for p in store.cache_root.rglob("*.json")}
+            with patch.object(artifacts, "verified_daily_truth_witness",
+                              wraps=artifacts.verified_daily_truth_witness) as reader:
+                decisions = self._preflight(root, fixture)
+            self.assertEqual(len(decisions), 136)
+            self.assertEqual(set(decisions.values()), {"REUSE"})
+            self.assertEqual(reader.call_count, 24, "One read per seed/source, not per recipient")
+            self.assertEqual(before, {p: p.read_bytes() for p in store.cache_root.rglob("*.json")})
+            completed = self._preflight(root, fixture, approve=True)
+            self.assertEqual(completed["status"], "COMPLETED")
+            self.assertEqual(len(completed["oracles"]), 16)
+            self.assertEqual(before, {p: p.read_bytes() for p in store.cache_root.rglob("*.json")})
+
+    def test_encoding_only_receipts_reuse_without_opening_any_truth_table(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = self._fixture(root, encoding_only=True, truth=False)
+            with patch("services.audit.oracle_replay_artifacts.verified_daily_truth_witness",
+                       side_effect=AssertionError("Encoding proof needs no NPZ or producer")):
+                decisions = self._preflight(root, fixture)
+            self.assertEqual(len(decisions), 136)
+            self.assertEqual(set(decisions.values()), {"REUSE"})
+
+    def test_archived_default_oracle_source_reuses_all_56_without_current_truth_build(self):
+        # Real Windows receipt source SHA; the earlier four seeds retain v1,
+        # the later four use v2. No current-source NPZ is invented to pass.
+        archived = "80a4fe352f4466ce7c3862149f0d23a97cac127eaf71dd98a521905305e5bb32"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = self._fixture(root, encoding_only=True, truth=False, source_sha=archived)
+            before = {p: p.read_bytes() for p in fixture[6].cache_root.rglob("*.json")}
+            with patch("services.audit.oracle_replay_artifacts.verified_daily_truth_witness",
+                       side_effect=AssertionError("Source equivalence must not require a new truth cache")):
+                decisions = self._preflight(root, fixture)
+            self.assertEqual(len(decisions), 136)
+            self.assertEqual(set(decisions.values()), {"REUSE"})
+            self.assertEqual(before, {p: p.read_bytes() for p in fixture[6].cache_root.rglob("*.json")})
+
+    def test_archived_source_certificate_rejects_older_outcomes_and_unknown_primitives(self):
+        from services.audit import mintrade_truth_source_attestation as attest
+        from services.audit.daily_trade40_oracle import truth_producer_fingerprint
+        current = truth_producer_fingerprint()
+        archived = "80a4fe352f4466ce7c3862149f0d23a97cac127eaf71dd98a521905305e5bb32"
+        self.assertTrue(attest.mintrade_sources_equivalent(archived, current))
+        for wrong in (
+            "cf46236712c396f415531baf4db4a1cf13dae56a1b1d2b5a06868a44d0a694a4",
+            "179a250765d16fb32f98f87b801bf4600dcc673dd675374cc7bd071f471b3ea4",
+            "82aa97e7a1444787d733559baec6cd3edd177a6d07dc12fec9f0f9df263ecd88",
+        ):
+            self.assertFalse(attest.mintrade_sources_equivalent(wrong, current))
+        real_hash = attest.compute_file_sha256
+        for changed in ("filters/breakout_quality/daily_trade40_target.py", "core/entry_plans.py",
+                        "core/exact_accounting.py", "config/broker_accounting.py"):
+            with self.subTest(owner=changed):
+                attest._archived_default_oracle_sources.cache_clear()
+                with patch.object(attest, "compute_file_sha256", side_effect=lambda path: (
+                        "f" * 64 if Path(path).as_posix().endswith(changed) else real_hash(path))):
+                    self.assertFalse(attest.mintrade_sources_equivalent(archived, current))
+        attest._archived_default_oracle_sources.cache_clear()
+        self.assertTrue(attest.mintrade_sources_equivalent(archived, current))
+
+    def test_unknown_source_or_missing_metadata_without_current_truth_stays_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            decisions = self._preflight(root, self._fixture(root, truth=False))
+            self.assertEqual(list(decisions.values()).count("REUSE"), 80)
+            self.assertEqual(list(decisions.values()).count("RUN"), 56)
+
+    def test_truth_metadata_and_raw_outcome_changes_cannot_fake_reuse(self):
+        import hashlib
+        from core.file_integrity import canonical_json_sha256
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = self._fixture(root)
+            target = "DailyUniversal_MinTrade40_NetR"
+            path = next(p for p in fixture[7] if p.parent.name == str(fixture[2][0]) and "trade40" in p.name)
+            with np.load(path, allow_pickle=False) as archive:
+                arrays = {key: archive[key].copy() for key in archive.files}
+            metadata = json.loads(str(arrays["metadata"].item()))
+            metadata["evidence"]["raw_label_sha256"] = hashlib.sha256(b"changed actual outcome").hexdigest()
+            payload = {key: metadata[key] for key in ("schema", "identity", "evidence", "score_sha256")}
+            arrays["metadata"] = np.asarray(json.dumps({**payload, "payload_sha256": canonical_json_sha256(payload)}))
+            with path.open("wb") as stream:
+                np.savez_compressed(stream, **arrays)
+            decisions = self._preflight(root, fixture)
+            self.assertEqual(decisions[(fixture[2][0], target)], "RUN")
+            self.assertEqual(decisions[(fixture[2][0], target + "_Direct")], "RUN")
+            self.assertEqual(list(decisions.values()).count("RUN"), 2)
+
+    def test_changed_dataset_metadata_without_current_truth_is_not_reused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = self._fixture(root)
+            from filters.breakout_quality.dataset_store import resolve_dataset_paths
+            from filters.breakout_quality.paths import resolve_filter_output_dir
+            summary = resolve_dataset_paths(resolve_filter_output_dir(
+                root, str(fixture[0].source["filter_id"]))).summary
+            summary.write_text('{"source_data_date_range":{"end":"2025-12-31"}}', encoding="utf-8")
+            decisions = self._preflight(root, fixture)
+            self.assertTrue(all(action != "REUSE" for (seed, target), action in decisions.items()
+                                if target != "C96"))
+
+    def test_corrupt_existing_truth_cannot_be_rebuilt_or_marked_reuse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = self._fixture(root)
+            fixture[7][0].write_bytes(b"corrupt NPZ receipt")
+            with self.assertRaisesRegex(oracle.OracleBlockedError, "daily truth witness is invalid"):
+                self._preflight(root, fixture)
 
 
 if __name__ == "__main__":

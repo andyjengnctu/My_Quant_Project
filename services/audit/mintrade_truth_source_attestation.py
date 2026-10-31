@@ -19,6 +19,7 @@ it cannot reuse existing Net-R or full-cycle NetPnL truth or Replay receipts.
 from __future__ import annotations
 
 import ast
+from functools import lru_cache
 from hashlib import sha256
 from pathlib import Path
 
@@ -42,9 +43,28 @@ _AUDITED_PARALLEL_ONLY_REVISION = (
 # Actual target/label IDs are still included individually in every cache and
 # Replay receipt: changing an EXISTING label mapping is never silent REUSE.
 _CERTIFIED_EXECUTABLE_OWNER_AST_SHA256 = (
-    "c78a8a08b8af9c7730445c91dbd1f22571001b4ab2c9d69decc43bb879b1eaa4"
+    "abccb277560a3f838d7b1045023896182001865f48984c7d0ca5e8ab5b3b9039"
 )
 _NON_ECONOMIC_TARGET_REGISTRY_FUNCTION = "target_identity_for_horizon"
+
+# Reviewed against source ZIP SHA256
+# 741acd4c41ff058dd04aa867fe17a5205d679dea2eb60fde6b4c46c464358c46.
+# Its default Oracle producer is exactly the 80a4fe35... source in the signed
+# eight-seed receipts. The new daily loaders add an opt-in FIT materializer;
+# the existing Oracle provider passes neither that callback nor a signal reset.
+# The trade primitive adds only memoized period lookup and a returned FIT-only
+# forced-close mask on this default path. Raw R/PnL, NULL, ranks and fees stay
+# identical. Effective provider contracts are independently pinned by the
+# daily-source owner; every other delegated execution file remains strict.
+_AUDITED_DEFAULT_ORACLE_DAILY_SOURCES = (
+    "27a79f35a10ee331be504942c28deb1080e2060cc10ae3dc41c1e804352624db",
+    "b7bdeb766babdb66ac5084125d08f2bf59390843e4dc09eb84645c093a3c770d",
+)
+_AUDITED_DEFAULT_TRADE_PRIMITIVE = (
+    "filters/breakout_quality/daily_trade40_target.py",
+    "f62f7c9fa2ac8db936bdfb4fbac8f374f21ed68d7540fb4b77bad8312148c931",
+    "4df90ba6d95a22cd0a78845141dc6bfb91683e7fa2ecc612cafa6f66e6bd3370",
+)
 
 
 def _executable_owner_ast_sha256(path: Path) -> str:
@@ -103,3 +123,87 @@ def attested_mintrade_source_sha256(relative: str, path: Path) -> str:
     if _executable_owner_ast_sha256(path) == _CERTIFIED_EXECUTABLE_OWNER_AST_SHA256:
         return _AUDITED_IDENTITY_ONLY_REVISION[0]
     return actual
+
+
+@lru_cache(maxsize=1)
+def _encoding_equivalent_mintrade_sources() -> frozenset[str]:
+    """Reconstruct LF/CRLF closures of the *executing* economic sources.
+
+    No historical SHA is accepted on its own. Every delegated source stays
+    in the canonical producer's inventory; only line-ending bytes vary.
+    The nested daily-source exception is the existing exact encoding proof.
+    This does not accept an unknown older formula, fee or eligibility change.
+    """
+    from services.audit.daily_trade40_oracle import _TRUTH_SOURCE_MODULES
+    from services.audit.oracle_score_artifacts import (
+        oracle_daily_source_fingerprint,
+        _CERTIFIED_LF_PRICE_SOURCE_SHA256, _CERTIFIED_CRLF_PRICE_SOURCE_SHA256,
+    )
+
+    root = Path(__file__).resolve().parents[2]
+    daily = oracle_daily_source_fingerprint(root)
+    daily_sources = {daily}
+    if daily in {_CERTIFIED_LF_PRICE_SOURCE_SHA256, _CERTIFIED_CRLF_PRICE_SOURCE_SHA256}:
+        daily_sources.update((_CERTIFIED_LF_PRICE_SOURCE_SHA256,
+                              _CERTIFIED_CRLF_PRICE_SOURCE_SHA256))
+    contents = {name: (root / name).read_bytes() for name in _TRUTH_SOURCE_MODULES}
+    result = set()
+    for newline in (None, b"\n", b"\r\n"):
+        for raw_owner in (False, True):
+            hashes = {}
+            for name, data in contents.items():
+                if newline is not None:
+                    data = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+                    if newline == b"\r\n":
+                        data = data.replace(b"\n", b"\r\n")
+                hashes[name] = (attested_mintrade_source_sha256(name, root / name)
+                                if name == _SOURCE_OWNER and not raw_owner
+                                else sha256(data).hexdigest())
+            for daily_sha in daily_sources:
+                digest = sha256(b"canonical_daily_source\0" + daily_sha.encode("ascii") + b"\n")
+                for name in _TRUTH_SOURCE_MODULES:
+                    digest.update(name.encode("utf-8") + b"\0")
+                    digest.update(hashes[name].encode("ascii") + b"\n")
+                result.add(digest.hexdigest())
+    return frozenset(result)
+
+
+def mintrade_sources_equivalent(recorded: str | None, current: str | None) -> bool:
+    """Prove reviewed source equivalence; all data/economic inputs stay strict."""
+    from services.audit.daily_trade40_oracle import truth_producer_fingerprint
+    from core.file_integrity import is_sha256_hex
+
+    if not is_sha256_hex(recorded) or not is_sha256_hex(current):
+        return False
+    if recorded == current:
+        return True
+    equivalents = _encoding_equivalent_mintrade_sources()
+    return (current == truth_producer_fingerprint()
+            and current in equivalents
+            and recorded in equivalents | _archived_default_oracle_sources())
+
+
+@lru_cache(maxsize=1)
+def _archived_default_oracle_sources() -> frozenset[str]:
+    """Reconstruct an archived closure, never whitelist an old result digest.
+
+    An edit to any other fee, signal, price, parameter or execution owner also
+    changes this reconstruction. An unknown loader/primitive revision fails
+    closed. This certificate cannot bless the earlier, different trade labels.
+    """
+    from services.audit.daily_trade40_oracle import _TRUTH_SOURCE_MODULES
+    from services.audit.oracle_score_artifacts import oracle_daily_source_fingerprint
+
+    root = Path(__file__).resolve().parents[2]
+    previous_daily, reviewed_daily = _AUDITED_DEFAULT_ORACLE_DAILY_SOURCES
+    relative, previous_primitive, reviewed_primitive = _AUDITED_DEFAULT_TRADE_PRIMITIVE
+    if (oracle_daily_source_fingerprint(root) != reviewed_daily
+            or compute_file_sha256(root / relative) != reviewed_primitive):
+        return frozenset()
+    digest = sha256(b"canonical_daily_source\0" + previous_daily.encode("ascii") + b"\n")
+    for name in _TRUTH_SOURCE_MODULES:
+        value = (previous_primitive if name == relative else
+                 attested_mintrade_source_sha256(name, root / name))
+        digest.update(name.encode("utf-8") + b"\0")
+        digest.update(value.encode("ascii") + b"\n")
+    return frozenset((digest.hexdigest(),))

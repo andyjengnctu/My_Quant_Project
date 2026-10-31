@@ -1861,9 +1861,10 @@ def _replay_attested_score_keys(
                             not certified_price_lineages_equivalent(lineage, price_producer_lineage)):
                         continue
                     current_producer_sha = price_producer_lineage["truth_source_sha256"]
+                from services.audit.mintrade_truth_source_attestation import mintrade_sources_equivalent
                 if (not isinstance(lineage, Mapping) or
-                        (target in plan["daily_sources"] and
-                         lineage.get("truth_source_sha256") != current_producer_sha)):
+                        (target in plan["daily_sources"] and not mintrade_sources_equivalent(
+                            lineage.get("truth_source_sha256"), current_producer_sha))):
                     continue
                 if target in plan["daily_sources"] and (
                         "dataset_summary_sha256" not in lineage or
@@ -1918,6 +1919,7 @@ def _certified_saved_oracle_identity(
     base_policy: Mapping[str, Any], arm, rolling_periods: list[dict[str, Any]] | None,
     evaluation_end: str,
     verified_price_witness: Mapping[str, Any] | None = None,
+    verified_daily_witness: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Attest a completed replay from signed source/score lineage; no Producer.
 
@@ -1981,10 +1983,16 @@ def _certified_saved_oracle_identity(
     if source:
         recipe, provider, horizon = plan["daily_recipes"][source]
         recorded = policy.get("hindsight_target_contract")
+        if verified_daily_witness is not None:
+            if (verified_daily_witness.get("keys") != keys
+                    or verified_daily_witness.get("score_sha256") != score_sha):
+                raise ValueError("current daily truth score/membership differs from historical Replay")
+            recorded = verified_daily_witness.get("evidence")
         if not isinstance(recorded, Mapping) or not rolling_periods:
             raise ValueError("historical daily-truth lineage missing")
-        if recorded.get("truth_source_sha256") != truth_producer_fingerprint(
-                _ORACLE_DAILY_SCORE_RECIPES[recipe]):
+        from services.audit.mintrade_truth_source_attestation import mintrade_sources_equivalent
+        current_producer = truth_producer_fingerprint(_ORACLE_DAILY_SCORE_RECIPES[recipe])
+        if not mintrade_sources_equivalent(recorded.get("truth_source_sha256"), current_producer):
             raise ValueError("historical Target outcome producer semantics not certified")
         if ("dataset_summary_sha256" not in recorded or
                 recorded["dataset_summary_sha256"] != oracle_dataset_summary_sha256(
@@ -2024,7 +2032,7 @@ def _certified_saved_oracle_identity(
             raise ValueError("historical MinTrade settled/unfilled accounting differs")
         # Canonical policy builder validates all explicit policy and selector
         # fields. Cutoff closeout *counts* are excluded from replay identity.
-        daily_evidence = dict(recorded)
+        daily_evidence = {**recorded, "truth_source_sha256": current_producer}
     reconstructed = _arm_replay_policy(
         definition, plan=plan, target=target, replay_policy=base_policy,
         daily_evidence=daily_evidence, score_sha256=score_sha,
@@ -2818,6 +2826,9 @@ def _run_single_stage_oracle(
                                       if plan["recipes"] else None)
     current_dataset_summary_sha = oracle_dataset_summary_sha256(
         root=root, filter_id=str(definition.source["filter_id"]))
+    # Artifact-only current truth witnesses are shared by Exact/Direct and the
+    # Positive recipient. Never run a Target Producer just to display REUSE.
+    daily_witnesses: dict[tuple[int, str], dict[str, Any] | None] = {}
     # Read the current canonical input manifest once; every stored score
     # receipt is checked against that same source and fixed evaluation scope.
     # No existing scored witness means every scored cell is a genuine RUN.
@@ -2897,6 +2908,74 @@ def _run_single_stage_oracle(
                 decisions[key], blocked[key] = "BLOCKED", source_conflict
                 continue
             if not current_candidates:
+                if target in plan["daily_sources"]:
+                    from services.audit.daily_trade40_oracle import target_identity_for_horizon, _TRUTH_CACHE_SCHEMA
+                    from services.audit.oracle_replay_artifacts import verified_daily_truth_witness
+                    source = plan["daily_sources"][target]
+                    witness_key = (seed, source)
+                    recipe, provider, horizon = plan["daily_recipes"][source]
+                    actual_id, _ = target_identity_for_horizon(
+                        horizon, outcome_metric=_ORACLE_DAILY_SCORE_RECIPES[recipe])
+                    try:
+                        if witness_key not in daily_witnesses:
+                            daily_witnesses[witness_key] = verified_daily_truth_witness(
+                                cache_root=root / AUDIT_OUTPUT_ROOT / definition.output_subdir / "truth_cache",
+                                score_sha=_canonical_score_map_sha256,
+                                expected_inputs={
+                                    "schema": _TRUTH_CACHE_SCHEMA, "target_id": actual_id,
+                                    "dataset": str(settings.dataset),
+                                    "filter_id": str(definition.source["filter_id"]),
+                                    "profile_id": str(definition.source[provider]),
+                                    "evaluation_start": start, "evaluation_end": end,
+                                    "score_start": _formal_dl_score_start(definition, settings),
+                                    "research_cutoff": str(settings.end_date),
+                                    "seed": seed, "param_sha256": param_sha,
+                                    "rolling_params": [{"start": row["start"], "end": row["end"],
+                                                        "signature": row["params_signature"]}
+                                                       for row in schedules[seed]],
+                                    "horizon_sessions": horizon, "price_sha256": price_sha,
+                                    "truth_source_sha256": producer_sha,
+                                    "dataset_summary_sha256": current_dataset_summary_sha,
+                                },
+                            )
+                        witness = daily_witnesses[witness_key]
+                        matches = []
+                        if witness is not None:
+                            proof = witness["keys"]
+                            if (signed_cohort is not None and proof != signed_cohort
+                                    or target in keys and keys[target] != proof):
+                                raise ValueError("Oracle current daily truth conflicts with signed stock-day cohort")
+                            arm = direct_arm if plan["selectors"][target] == "direct" else exact_arm
+                            for saved in cache.existing_completed_identities(seed=seed, target=target):
+                                try:
+                                    expected = _certified_saved_oracle_identity(
+                                        definition, project_root=root, store=cache, saved=saved,
+                                        plan=plan, contract=contracts[target], keys=proof,
+                                        param_sha=param_sha, price_sha=price_sha, seed=seed, target=target,
+                                        settings=settings, robustness=robustness, base_policy=baseline_policy,
+                                        arm=arm, rolling_periods=schedules[seed], evaluation_end=end,
+                                        verified_daily_witness=witness,
+                                    )
+                                except (ValueError, KeyError, TypeError):
+                                    continue  # Historical scientific revisions remain immutable.
+                                record = cache.resolve_verified_daily_truth_revision(
+                                    expected=expected, saved=saved,
+                                    verified_evidence=witness["evidence"],
+                                    score_sha256=witness["score_sha256"],
+                                )
+                                if record is not None:
+                                    matches.append((saved, record))
+                            if matches:
+                                from core.file_integrity import canonical_json_sha256
+                                if len({canonical_json_sha256(record) for _, record in matches}) != 1:
+                                    raise ValueError("Oracle signed daily Replay observations conflict for identical current truth")
+                                keys[target] = proof
+                                decisions[key], cached[key], identities[key] = (
+                                    "REUSE", matches[0][1], matches[0][0])
+                                continue
+                    except (OSError, ValueError, KeyError, TypeError) as exc:
+                        decisions[key], blocked[key] = "BLOCKED", str(exc)
+                        continue
                 # A prior physical source revision is reusable ONLY after
                 # independent full-NPZ score/key verification, matching the
                 # current approved price algorithm and all Replay inputs.

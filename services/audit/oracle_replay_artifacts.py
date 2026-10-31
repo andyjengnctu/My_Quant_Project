@@ -13,6 +13,7 @@ from typing import Callable
 import hashlib
 import json
 import math
+import zipfile
 from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
@@ -87,6 +88,12 @@ def _execution_replay_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
         daily = dict(daily)
         daily.pop("cutoff_truncated_rows", None)
         daily.pop("research_cutoff_closeout_rows", None)
+        if isinstance(daily.get("teacher"), Mapping):
+            from services.audit.daily_trade40_oracle import truth_producer_fingerprint
+            from services.audit.mintrade_truth_source_attestation import mintrade_sources_equivalent
+            current = truth_producer_fingerprint()
+            if mintrade_sources_equivalent(daily.get("truth_source_sha256"), current):
+                daily["truth_source_sha256"] = current
         result["hindsight_target_contract"] = daily
     score_contract = result.get("canonical_dl_score_contract")
     if isinstance(score_contract, Mapping):
@@ -208,6 +215,11 @@ def _independent_source_revision(previous: Mapping[str, Any],
     from services.audit.oracle_score_artifacts import certified_price_lineages_equivalent
     if certified_price_lineages_equivalent(previous_truth, wanted_truth):
         return False
+    if isinstance(previous_truth, Mapping) and isinstance(wanted_truth, Mapping):
+        from services.audit.mintrade_truth_source_attestation import mintrade_sources_equivalent
+        if (isinstance(wanted_truth.get("teacher"), Mapping) and mintrade_sources_equivalent(
+                previous_truth.get("truth_source_sha256"), wanted_truth.get("truth_source_sha256"))):
+            return False
     return (isinstance(wanted_truth, Mapping)
             and is_sha256_hex(wanted_truth.get("truth_source_sha256"))
             and (not isinstance(previous_truth, Mapping)
@@ -259,6 +271,76 @@ def _identity_field_value(identity: Mapping[str, Any], field: str) -> str:
         return f"<{type(value).__name__}>"
     printable = repr(value)
     return printable if len(printable) <= 100 else printable[:97] + "..."
+
+
+def verified_daily_truth_witness(
+    *, cache_root: Path, expected_inputs: Mapping[str, Any],
+    score_sha: Callable[[Mapping[tuple[str, str], float]], str],
+) -> dict[str, Any] | None:
+    """Read an already published current-source truth; never call its Producer.
+
+    Full NPZ values, key membership and immutable producer receipts are checked
+    by the truth owner. This allows a completed current truth cache to certify
+    an old Portfolio *before* the REUSE/RUN matrix, without feature loading,
+    single-stock simulation, score rebuilding or Portfolio execution.
+    """
+    import numpy as np
+    from services.audit.daily_trade40_oracle import _truth_cache_read
+    from services.audit.mintrade_truth_source_attestation import mintrade_sources_equivalent
+
+    target = str(expected_inputs["target_id"])
+    matches = []
+    for path in sorted((Path(cache_root) / str(expected_inputs["seed"])).glob(f"{target}_*.npz")):
+        if not is_sha256_hex(path.stem[len(target) + 1:]):
+            continue
+        try:
+            with np.load(path, allow_pickle=False) as archive:
+                identity = json.loads(str(archive["metadata"].item()))["identity"]
+            if (not isinstance(identity, dict) or
+                    path.stem != f"{target}_{canonical_json_sha256(identity)}"):
+                raise ValueError("daily truth cache filename/identity mismatch")
+            source_sha = identity.get("truth_source_sha256")
+            current_sha = expected_inputs["truth_source_sha256"]
+            if (not mintrade_sources_equivalent(source_sha, current_sha)
+                    or any(identity.get(key, _MISSING) != value
+                           for key, value in expected_inputs.items()
+                           if key != "truth_source_sha256")):
+                continue
+            if set(identity) != set(expected_inputs) | {"feature_eligible_keys_sha256"}:
+                continue
+            cached = _truth_cache_read(path, identity)
+            if cached is None:
+                raise ValueError("daily truth cache disappeared during preflight")
+            scores, evidence = cached
+            ordered = sorted(scores)
+            key_digest = hashlib.sha256()
+            group_digest = hashlib.sha256(b"ticker,date\n")
+            windows_group_digest = hashlib.sha256(b"ticker,date\r\n")
+            for ticker, day in ordered:
+                key_digest.update(f"{ticker}|{day}\n".encode("utf-8"))
+                group_digest.update(f"{ticker},{day}\n".encode("utf-8"))
+                windows_group_digest.update(f"{ticker},{day}\r\n".encode("utf-8"))
+            if identity["feature_eligible_keys_sha256"] not in {
+                    group_digest.hexdigest(), windows_group_digest.hexdigest()}:
+                raise ValueError("daily truth feature-key identity differs from actual NPZ keys")
+            days = [day for _, day in ordered]
+            if (evidence.get("first_date") != min(days)
+                    or evidence.get("last_date") != max(days)):
+                raise ValueError("daily truth date bounds differ from actual NPZ keys")
+            current_evidence = {**evidence, "truth_source_sha256": current_sha}
+            current_evidence.pop("source_reuse_status", None)
+            matches.append({
+                "evidence": current_evidence,
+                "score_sha256": score_sha(scores),
+                "keys": (key_digest.hexdigest(), len(scores), min(days), max(days)),
+            })
+        except (OSError, ValueError, KeyError, TypeError, IndexError, EOFError, zipfile.BadZipFile) as exc:
+            raise ValueError(f"Oracle existing daily truth witness is invalid: {path.name}: {exc}") from exc
+    if not matches:
+        return None
+    if any(item != matches[0] for item in matches[1:]):
+        raise ValueError("Oracle current-source truth caches disagree on identical inputs")
+    return matches[0]
 
 
 def price_inventory_sha256(project_root: Path, dataset: str) -> str:
@@ -1025,13 +1107,13 @@ class OracleReplayStore:
                 or teacher.get("seed") != expected["seed"]
                 or teacher.get("param_identity_sha256") != expected.get("param_sha256")):
             return None
-        if set(old_truth) != set(new_truth):
+        if (set(old_truth) ^ set(new_truth)) - {"dataset_summary_sha256"}:
             return None
-        # Preserve the historic science. Source-code SHA is the ONLY allowed
-        # difference; price, membership, P16, NetR/NetPnL label, rank, cash
-        # accounting, time window and the extra Positive gate stay strict.
+        # Preserve the historic science. Current-source NPZ evidence may also
+        # supply changed/missing Dataset metadata: identical actual raw labels,
+        # ranks, keys, price/P16, period and every economic rule remain strict.
         if any(old_truth.get(field) != value for field, value in new_truth.items()
-               if field != "truth_source_sha256"):
+               if field not in {"truth_source_sha256", "dataset_summary_sha256"}):
             return None
         normalized = _v2_presentation_identity(saved, expected)
         normalized = dict(normalized)
@@ -1042,6 +1124,7 @@ class OracleReplayStore:
         }).get("hindsight_target_contract"):
             return None
         policy_truth["truth_source_sha256"] = new_truth["truth_source_sha256"]
+        policy_truth["dataset_summary_sha256"] = new_truth["dataset_summary_sha256"]
         policy["hindsight_target_contract"] = policy_truth
         normalized["replay_policy"] = policy
         if normalized.get("benchmark") != expected.get("benchmark"):
