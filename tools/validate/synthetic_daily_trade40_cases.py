@@ -2290,5 +2290,116 @@ class FormalMinTrade40UpstreamPlanRegressionCases(unittest.TestCase):
                          inspect.getsource(train_daily_ranker))
 
 
+class RealPathStrategyCompareDiagnosticsRegressionCases(unittest.TestCase):
+    """Post-replay target lookup must use verified PIT Seed, not refit/Optimizer."""
+
+    def tearDown(self):
+        from services.research.strategy_compare_engine import (
+            _cached_real_path_selection_target_lookup,
+        )
+        _cached_real_path_selection_target_lookup.cache_clear()
+
+    def test_real_path_selection_diagnostic_uses_verified_source_and_reuses_one_truth(self):
+        from services.research import strategy_compare_engine as engine
+        profile = 'daily_universal_formal_mintrade40_netr_per_seed_full_list_ndcg_pairwise'
+        engine._cached_real_path_selection_target_lookup.cache_clear()
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            manifest = root / 'selection_point_in_time_manifest.json'
+            manifest.write_text('{"generation": 1}', encoding='utf-8')
+            verified = SimpleNamespace(
+                seed=2014432738, manifest_path=manifest,
+                score_path=root / 'selection_point_in_time_scores.csv',
+                manifest={'artifacts': {'scores': {'sha256': 'a'*64}}},
+            )
+            bundle = object()
+            output = pd.DataFrame({'group_index': [4], 'target_available': [True]})
+            with patch('services.breakout_quality.continuous_ranker_pipeline.load_continuous_ranker_data',
+                       return_value=bundle) as loader, \
+                 patch.object(engine, '_selection_target_lookup', return_value=output) as diagnostic, \
+                 patch('services.optimizer.formal_mintrade40_teacher_source.prepare_formal_mintrade40_optimizer_teacher',
+                       side_effect=AssertionError('Optimizer may not run')):
+                def run():
+                    return engine._selection_target_lookup_for_verified_pit(
+                        root=root, filter_id='breakout_quality_v1',
+                        architecture='inception_time_v1', profile=profile,
+                        pit_contract=verified, score_column='breakout_quality_score',
+                    )
+                first = run()
+                first.loc[0, 'group_index'] = -1
+                second = run()
+                self.assertEqual(second.loc[0, 'group_index'], 4)
+                loader.assert_called_once()
+                self.assertEqual(loader.call_args.kwargs['seed'], 2014432738)
+                self.assertIs(loader.call_args.kwargs['authorized_target_dependency_build'], False)
+                self.assertIs(loader.call_args.kwargs['allow_stale_source'], False)
+                self.assertEqual(diagnostic.call_count, 1)
+                self.assertIs(diagnostic.call_args.kwargs['verified_target_bundle'], bundle)
+                # New physical manifest version must invalidate the process-local cache.
+                manifest.write_text('{"generation": 2}', encoding='utf-8')
+                run()
+                self.assertEqual(loader.call_count, 2)
+                self.assertEqual(diagnostic.call_count, 2)
+
+    def test_non_real_path_selection_diagnostic_unchanged(self):
+        from services.research import strategy_compare_engine as engine
+        profile = 'daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise'
+        with patch.object(engine, '_selection_target_lookup', return_value=pd.DataFrame()) as diagnostic, \
+             patch('services.breakout_quality.continuous_ranker_pipeline.load_continuous_ranker_data',
+                   side_effect=AssertionError('Non-real-path must not resolve Min source')):
+            engine._selection_target_lookup_for_verified_pit(
+                root=Path('/not-accessed'), filter_id='breakout_quality_v1',
+                architecture='inception_time_v1', profile=profile,
+                pit_contract=SimpleNamespace(score_path='scores.csv',manifest_path='manifest.json', seed=42),
+                score_column='breakout_quality_score',
+            )
+        diagnostic.assert_called_once()
+        self.assertNotIn('verified_target_bundle', diagnostic.call_args.kwargs)
+
+    def test_real_path_missing_verified_seed_blocks_without_build(self):
+        from services.research import strategy_compare_engine as engine
+        profile = 'daily_universal_formal_mintrade40_netr_per_seed_full_list_ndcg_pairwise'
+        with patch('services.breakout_quality.continuous_ranker_pipeline.load_continuous_ranker_data',
+                   side_effect=AssertionError('Cannot build without Seed')):
+            with self.assertRaisesRegex(ValueError, 'validated PIT score seed'):
+                engine._selection_target_lookup_for_verified_pit(
+                    root=Path('/not-accessed'), filter_id='breakout_quality_v1',
+                    architecture='inception_time_v1', profile=profile,
+                    pit_contract=SimpleNamespace(score_path='s.csv',manifest_path='m.json',seed=0),
+                    score_column='breakout_quality_score',
+                )
+
+    def test_real_path_target_null_survives_post_replay_diagnostic_join(self):
+        from filters.breakout_quality import strategy_compare_diagnostics as diagnostic
+        scores = pd.DataFrame({
+            'ticker': ['2330', '2317'], 'date': ['2022-01-03']*2,
+            'group_index': [4, 5], 'breakout_quality_score': [0.7, 0.2],
+            'fold_id': ['fold_2022']*2, 'model_information_cutoff': ['2021-12-31']*2,
+        }).set_index(['ticker','date'])
+        verified_bundle = SimpleNamespace(
+            group_table=pd.DataFrame({
+                'ticker': ['2330', '2317'], 'date': pd.to_datetime(['2022-01-03']*2),
+                'group_index': [4, 5], 'label': [1, 1],
+            }),
+            raw_target=np.array([1.25, np.nan], dtype=np.float32),
+            target_valid=np.array([True, False], dtype=bool),
+        )
+        with patch.object(diagnostic, 'load_selection_point_in_time_score_table_from_path',
+                          return_value=scores), \
+             patch.object(diagnostic, 'load_profile_continuous_ranker_data',
+                          side_effect=AssertionError('Direct loader lacks real-path seed')):
+            result = diagnostic._selection_target_lookup(
+                root=Path('/not-accessed'), filter_id='breakout_quality_v1',
+                architecture='inception_time_v1',
+                profile='daily_universal_formal_mintrade40_netr_per_seed_full_list_ndcg_pairwise',
+                score_path_override='ignored.csv', manifest_path_override='ignored.json',
+                verified_target_bundle=verified_bundle,
+            )
+        self.assertEqual(result['target_available'].tolist(), [True, False])
+        self.assertEqual(float(result.iloc[0]['target_raw_r']), 1.25)
+        self.assertTrue(pd.isna(result.iloc[1]['target_raw_r']))
+        self.assertEqual(result['breakout_quality_score'].tolist(), [0.7, 0.2])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -695,6 +695,7 @@ def _selection_target_lookup(
     *, root: Path, filter_id: str, architecture: str, profile: str,
     score_path_override: str | None = None, manifest_path_override: str | None = None,
     score_column: str = "breakout_quality_score",
+    verified_target_bundle=None,
 ) -> pd.DataFrame:
     scores = (
         load_selection_point_in_time_score_table_from_path(
@@ -713,14 +714,19 @@ def _selection_target_lookup(
     scores["__runtime_score__"] = pd.to_numeric(
         scores[resolved_score_column], errors="raise"
     ).astype(float)
-    bundle = load_profile_continuous_ranker_data(
-        filter_id=filter_id,
-        model_architecture=architecture,
-        experiment_profile=profile,
-        preload_feature_bank=False,
-        allow_stale_source=False,
-        project_root=root,
-    )
+    # Strategy Compare's service owner supplies the canonical seed-bound
+    # source for real-execution-path targets. The filter layer must never
+    # invent a model seed or attempt to construct an Optimizer teacher.
+    bundle = verified_target_bundle
+    if bundle is None:
+        bundle = load_profile_continuous_ranker_data(
+            filter_id=filter_id,
+            model_architecture=architecture,
+            experiment_profile=profile,
+            preload_feature_bank=False,
+            allow_stale_source=False,
+            project_root=root,
+        )
     groups = bundle.group_table[["group_index", "ticker", "date", "label"]].copy()
     groups["ticker"] = groups["ticker"].fillna("").astype(str).str.strip()
     groups["date"] = pd.to_datetime(groups["date"], errors="raise").dt.strftime("%Y-%m-%d")

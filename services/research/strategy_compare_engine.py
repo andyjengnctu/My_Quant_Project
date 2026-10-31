@@ -8,6 +8,7 @@ import argparse
 import json
 import math
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
 
@@ -372,6 +373,105 @@ def run_existing_attribution(*, project_root=PROJECT_ROOT) -> dict[str, Any]:
 
 
 
+@lru_cache(maxsize=2)
+def _cached_real_path_selection_target_lookup(
+    root_text: str, filter_id: str, architecture: str, profile: str,
+    score_path: str, manifest_path: str, score_column: str,
+    seed: int, score_sha256: str, manifest_sha256: str,
+) -> pd.DataFrame:
+    """One post-replay diagnostic truth per *validated* PIT publication and seed.
+
+    The canonical loader performs the same seed/PIT/optimizer-source checks as
+    Rolling Audit. The cache is process-local, bounded, and keyed by the exact
+    verified score/manifest revision; C119 and C120 never independently rebuild
+    the same full-history real-trade labels in a single Strategy Compare run.
+    """
+    del score_sha256, manifest_sha256  # Revision identities are cache keys, not new sources.
+    from services.breakout_quality.continuous_ranker_pipeline import load_continuous_ranker_data
+
+    began = time.monotonic()
+    next_percent = 10
+    print("[Strategy Compare Target] 核對真實路徑標籤（僅成交後診斷，不執行 FIT／Optimizer）", flush=True)
+
+    def progress(done, total, completed, skipped):
+        nonlocal next_percent
+        if total <= 0:
+            return
+        percent = 100 * int(done) // int(total)
+        if int(done) == int(total) or percent >= next_percent:
+            print(
+                f"[Strategy Compare Target] {done:,}/{total:,} stocks ({percent}%) | "
+                f"Target rows={int(completed):,} | skipped={int(skipped):,} | "
+                f"elapsed={time.monotonic() - began:.0f}s",
+                flush=True,
+            )
+            next_percent = max(next_percent + 10, (percent // 10 + 1) * 10)
+
+    bundle = load_continuous_ranker_data(
+        filter_id=filter_id,
+        model_architecture=architecture,
+        experiment_profile=profile,
+        preload_feature_bank=False,
+        allow_stale_source=False,
+        project_root=Path(root_text),
+        seed=seed,
+        authorized_target_dependency_build=False,
+        progress_callback=progress,
+    )
+    return _selection_target_lookup(
+        root=Path(root_text), filter_id=filter_id, architecture=architecture,
+        profile=profile, score_path_override=score_path,
+        manifest_path_override=manifest_path, score_column=score_column,
+        verified_target_bundle=bundle,
+    )
+
+
+def _selection_target_lookup_for_verified_pit(
+    *, root: Path, filter_id: str, architecture: str, profile: str,
+    pit_contract, score_column: str,
+) -> pd.DataFrame:
+    """Attach future labels *after* replay from the PIT score's verified seed.
+
+    Unlike ordinary price targets, supervised trade-path labels require their
+    original seed-scoped Min parameter lineage. A Strategy Compare consumer
+    must use the same canonical producer as model PIT Audit; never regenerate
+    parameters, choose a default seed, or change the runtime score universe.
+    """
+    from services.breakout_quality.trade_path_target_source import registered_trade_path_source
+    source_kwargs = dict(
+        root=root, filter_id=filter_id, architecture=architecture, profile=profile,
+        score_path_override=str(pit_contract.score_path),
+        manifest_path_override=str(pit_contract.manifest_path),
+        score_column=score_column,
+    )
+    if registered_trade_path_source(profile) is None:
+        return _selection_target_lookup(**source_kwargs)
+
+    seed = pit_contract.seed
+    if type(seed) is not int or seed <= 0:
+        raise ValueError("Real-path diagnostic requires the validated PIT score seed")
+    # The PIT contract already verified all source files and the score SHA.
+    # Include the physical manifest's independently computed revision in the
+    # bounded cache identity, so republishing a seed/fold/label lineage cannot
+    # silently reuse the preceding diagnostic truth.
+    from core.file_integrity import compute_file_sha256, file_change_signature
+    manifest_path = Path(pit_contract.manifest_path)
+    before = file_change_signature(manifest_path)
+    manifest_sha256 = compute_file_sha256(manifest_path)
+    if before != file_change_signature(manifest_path):
+        raise RuntimeError("Selection PIT manifest changed during real-path diagnostic verification")
+    score_sha256 = str(
+        ((pit_contract.manifest.get("artifacts") or {}).get("scores") or {}).get("sha256") or ""
+    ).lower()
+    if not score_sha256:
+        raise ValueError("Real-path diagnostic requires the verified PIT score SHA256")
+    return _cached_real_path_selection_target_lookup(
+        str(Path(root).resolve()), filter_id, architecture, profile,
+        str(pit_contract.score_path), str(manifest_path), score_column,
+        seed, score_sha256, manifest_sha256,
+    ).copy()
+
+
 def run_comparison(
     *, project_root=PROJECT_ROOT, dataset="full", params_path=None,
     param_policy=PARAM_POLICY_AUTO, max_positions=DEFAULT_PORTFOLIO_MAX_POSITIONS, enable_rotation=False,
@@ -693,11 +793,9 @@ def run_comparison(
                 or primary_score_column_for_source(score_source)
             ).strip()
             if score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
-                lookup = _selection_target_lookup(
+                lookup = _selection_target_lookup_for_verified_pit(
                     root=root, filter_id=filter_id, architecture=manifest_architecture,
-                    profile=manifest_profile,
-                    score_path_override=str(pit_contract.score_path),
-                    manifest_path_override=str(pit_contract.manifest_path),
+                    profile=manifest_profile, pit_contract=pit_contract,
                     score_column=runtime_primary_score_column,
                 )
             else:
