@@ -1231,6 +1231,41 @@ class FormalMinTrade40TrainingSourcePreflightCases(unittest.TestCase):
         self.assertEqual(float(labels.raw_net_r[0]), 1.25)
 
 
+    def test_execution_cache_tracks_simulator_import_graph_not_unrelated_reports(self):
+        """Only changes to canonical execution dependencies may expire stock paths."""
+        from services.breakout_quality.formal_mintrade_outcome_cache import (
+            _execution_dependency_files,
+        )
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            path = root / "filters/breakout_quality/daily_trade40_target.py"
+            path.parent.mkdir(parents=True)
+            path.write_text("from core.position_step import execute_bar_step\n", encoding="utf-8")
+            path2 = root / "filters/breakout_quality/trade_path_label.py"
+            path2.write_text("from .daily_trade40_target import a\n", encoding="utf-8")
+            (root / "core").mkdir()
+            (root / "core/position_step.py").write_text(
+                "from core.exact_accounting import settle\n", encoding="utf-8",
+            )
+            (root / "core/exact_accounting.py").write_text(
+                "def settle(): pass\n", encoding="utf-8",
+            )
+            (root / "core/report_metrics.py").write_text(
+                "# This report must not expire executed stock paths.\n", encoding="utf-8",
+            )
+            sources = {
+                str(p.relative_to(root).as_posix()) for p in _execution_dependency_files(root)
+            }
+            self.assertEqual(sources, {
+                "filters/breakout_quality/daily_trade40_target.py",
+                "filters/breakout_quality/trade_path_label.py",
+                "core/position_step.py", "core/exact_accounting.py",
+            })
+            # The helper always starts from the exact canonical owner.
+            path.unlink()
+            with self.assertRaises(FileNotFoundError):
+                _execution_dependency_files(root)
+
     def test_trade_path_cache_reuses_one_canonical_batch_across_targets_and_recovers_corruption(self):
         """Execution memoization cannot replace the PIT teacher or change outcomes."""
         from services.breakout_quality import formal_mintrade40_pit_source as owner

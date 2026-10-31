@@ -8,6 +8,7 @@ This cache is not an Oracle publication, a model artifact or a source of truth.
 
 from __future__ import annotations
 
+import ast
 from functools import lru_cache
 from hashlib import sha256
 import json
@@ -25,9 +26,11 @@ import pandas as pd
 from filters.breakout_quality.daily_trade40_target import CounterfactualTrade40Batch
 
 _CACHE_SCHEMA = 1
-_CACHE_INPUT_ROOTS = (
-    "core", "filters/breakout_quality", "services/breakout_quality",
-    "strategies/breakout",
+_CACHE_EXECUTION_ENTRYPOINTS = (
+    # The persisted bytes are ONLY the output of this one canonical broker
+    # simulator, not the surrounding PIT, model or reporting consumers.
+    "filters/breakout_quality/daily_trade40_target.py",
+    "filters/breakout_quality/trade_path_label.py",
 )
 _CACHE_EXECUTION_CONFIG = (
     "config/broker_accounting.py", "config/execution_policy.py",
@@ -37,26 +40,77 @@ _CACHE_EXECUTION_CONFIG = (
 _CACHE_SUBDIR = Path("outputs/filters/breakout_quality/formal_mintrade_outcome_cache")
 
 
+def _execution_dependency_files(
+    code_root: Path, entrypoints: tuple[str, ...] = _CACHE_EXECUTION_ENTRYPOINTS,
+) -> tuple[Path, ...]:
+    """Find imported project Python sources for the canonical execution owner.
+
+    Every static import is followed transitively, including imports inside
+    functions.  The input is SOURCE code, not a hardcoded version string or a
+    list of current model identities.  Unrelated report/model changes must not
+    force the broker paths of 616 stocks to run again.
+    """
+    pending = [code_root / name for name in entrypoints]
+    visited: set[Path] = set()
+    while pending:
+        path = pending.pop()
+        if path in visited:
+            continue
+        if not path.is_file():
+            raise FileNotFoundError(f"Real-path execution dependency missing: {path}")
+        visited.add(path)
+        module = path.relative_to(code_root).with_suffix("").parts
+        package = module[:-1]  # All execution owners are ordinary .py modules.
+        if path.name == "__init__.py":
+            package = path.parent.relative_to(code_root).parts
+        tree = ast.parse(path.read_bytes(), filename=str(path))
+        for node in ast.walk(tree):
+            imports: list[str] = []
+            if isinstance(node, ast.Import):
+                imports.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:
+                    if node.level > len(package):
+                        raise ValueError(f"Invalid relative execution import: {path}")
+                    parent = package[: len(package) - node.level + 1]
+                else:
+                    parent = ()
+                prefix = (*parent, *((node.module or "").split(".") if node.module else ()))
+                base = ".".join(prefix)
+                if base:
+                    imports.append(base)
+                    imports.extend(f"{base}.{alias.name}" for alias in node.names)
+            for module_name in imports:
+                module_path = code_root.joinpath(*module_name.split("."))
+                for candidate in (module_path.with_suffix(".py"), module_path / "__init__.py"):
+                    if candidate.is_file() and candidate not in visited:
+                        pending.append(candidate)
+    return tuple(sorted(visited))
+
+
 @lru_cache(maxsize=1)
 def _implementation_digest() -> str:
-    """Conservatively expire shards after any relevant executable-code change.
+    """Expire cached executions only when their executable dependencies change.
 
-    Cover the entire dependency domains rather than relying on a manually
-    updated version number or accidentally missing an imported accounting rule.
+    Price data, teacher periods, seed and exact settings remain part of each
+    *stock* cache identity; this digest covers the shared execution code.
     """
     code_root = Path(__file__).resolve().parents[2]
     digest = sha256()
-    for folder in _CACHE_INPUT_ROOTS:
-        for path in sorted((code_root / folder).rglob("*.py")):
-            digest.update(path.relative_to(code_root).as_posix().encode("utf-8"))
-            digest.update(sha256(path.read_bytes()).digest())
+    for path in _execution_dependency_files(code_root):
+        name = path.relative_to(code_root).as_posix()
+        if name == "config/breakout_quality.py":
+            # The canonical signal owner uses only the two execution defaults
+            # hashed below.  The rest is mutable model/compare configuration.
+            continue
+        digest.update(name.encode("utf-8"))
+        digest.update(sha256(path.read_bytes()).digest())
     for name in _CACHE_EXECUTION_CONFIG:
         path = code_root / name
         if path.is_file():
             digest.update(name.encode("utf-8"))
             digest.update(sha256(path.read_bytes()).digest())
-    # The native C signal kernels are built outside the source tree. Include
-    # their source and any active binary, not the entire transient outputs dir.
+    # Include compiled native kernels independently of the Python import graph.
     source = code_root / "core/native_optimizer_hotpath.c"
     if source.is_file():
         digest.update(sha256(source.read_bytes()).digest())
@@ -65,9 +119,6 @@ def _implementation_digest() -> str:
         for path in sorted(native_root.glob(suffix)):
             digest.update(path.name.encode("utf-8"))
             digest.update(sha256(path.read_bytes()).digest())
-    # Signal/parameter defaults are imported from the wide model config. Hash
-    # only execution-relevant defaults so changing a model comparison list or
-    # this CPU worker knob does not invalidate correct broker outcomes.
     from config.breakout_quality import (
         BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
         BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD,
