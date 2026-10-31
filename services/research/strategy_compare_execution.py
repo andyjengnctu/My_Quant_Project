@@ -33,6 +33,7 @@ from filters.breakout_quality.strategy_compare_pit_contract import (
     resolve_strategy_compare_selection_pit_contract_override,
 )
 from services.research.strategy_compare_engine import run_comparison
+from services.breakout_quality.continuous_ranker_pipeline import load_continuous_ranker_data
 from services.research.strategy_compare_replay import run_standalone_baseline
 from filters.breakout_quality.strategy_compare_runtime import _arm_runtime_spec
 from filters.breakout_quality.strategy_compare_sources import (
@@ -307,6 +308,7 @@ def run_strategy_compare_active_arm(
         selection_pit_expected_seed_override=selection_expected_seed,
         capture_execution_diagnostics=bool(capture_execution_diagnostics),
         capture_selection_target_diagnostics=bool(capture_selection_target_diagnostics),
+        verified_real_path_bundle_loader=load_continuous_ranker_data,
     )
 
 

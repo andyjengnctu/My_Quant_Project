@@ -22,6 +22,10 @@ from filters.breakout_quality.strategy_compare_contracts import (
     comparison_labels as _comparison_labels,
     comparison_switch_spec as _comparison_switch_spec,
 )
+from core.breakout_quality_runtime import (
+    CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
+)
+from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
 from filters.breakout_quality.strategy_compare_sources import (
     OPTIONAL_ENTRY_FILTER_FIELDS,
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
@@ -378,6 +382,7 @@ def _cached_real_path_selection_target_lookup(
     root_text: str, filter_id: str, architecture: str, profile: str,
     score_path: str, manifest_path: str, score_column: str,
     seed: int, score_sha256: str, manifest_sha256: str,
+    verified_bundle_loader: Callable[..., Any],
 ) -> pd.DataFrame:
     """One post-replay diagnostic truth per *validated* PIT publication and seed.
 
@@ -387,8 +392,6 @@ def _cached_real_path_selection_target_lookup(
     the same full-history real-trade labels in a single Strategy Compare run.
     """
     del score_sha256, manifest_sha256  # Revision identities are cache keys, not new sources.
-    from services.breakout_quality.continuous_ranker_pipeline import load_continuous_ranker_data
-
     began = time.monotonic()
     next_percent = 10
     print("[Strategy Compare Target] 核對真實路徑標籤（僅成交後診斷，不執行 FIT／Optimizer）", flush=True)
@@ -407,7 +410,7 @@ def _cached_real_path_selection_target_lookup(
             )
             next_percent = max(next_percent + 10, (percent // 10 + 1) * 10)
 
-    bundle = load_continuous_ranker_data(
+    bundle = verified_bundle_loader(
         filter_id=filter_id,
         model_architecture=architecture,
         experiment_profile=profile,
@@ -429,6 +432,7 @@ def _cached_real_path_selection_target_lookup(
 def _selection_target_lookup_for_verified_pit(
     *, root: Path, filter_id: str, architecture: str, profile: str,
     pit_contract, score_column: str,
+    verified_bundle_loader: Callable[..., Any] | None = None,
 ) -> pd.DataFrame:
     """Attach future labels *after* replay from the PIT score's verified seed.
 
@@ -437,15 +441,21 @@ def _selection_target_lookup_for_verified_pit(
     must use the same canonical producer as model PIT Audit; never regenerate
     parameters, choose a default seed, or change the runtime score universe.
     """
-    from services.breakout_quality.trade_path_target_source import registered_trade_path_source
+    target_policy = get_continuous_ranker_execution_recipe(str(profile)).target_policy
+    requires_real_path = (
+        target_policy.materialization_mode
+        == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
+    )
     source_kwargs = dict(
         root=root, filter_id=filter_id, architecture=architecture, profile=profile,
         score_path_override=str(pit_contract.score_path),
         manifest_path_override=str(pit_contract.manifest_path),
         score_column=score_column,
     )
-    if registered_trade_path_source(profile) is None:
+    if not requires_real_path:
         return _selection_target_lookup(**source_kwargs)
+    if verified_bundle_loader is None:
+        raise ValueError("Real-path diagnostic requires injected canonical seed-scoped loader")
 
     seed = pit_contract.seed
     if type(seed) is not int or seed <= 0:
@@ -468,7 +478,7 @@ def _selection_target_lookup_for_verified_pit(
     return _cached_real_path_selection_target_lookup(
         str(Path(root).resolve()), filter_id, architecture, profile,
         str(pit_contract.score_path), str(manifest_path), score_column,
-        seed, score_sha256, manifest_sha256,
+        seed, score_sha256, manifest_sha256, verified_bundle_loader,
     ).copy()
 
 
@@ -499,6 +509,7 @@ def run_comparison(
     selection_pit_expected_seed_override=None,
     capture_execution_diagnostics=False,
     capture_selection_target_diagnostics=True,
+    verified_real_path_bundle_loader: Callable[..., Any] | None = None,
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
     param_evaluation_mode="rolling",
 ):
@@ -797,6 +808,7 @@ def run_comparison(
                     root=root, filter_id=filter_id, architecture=manifest_architecture,
                     profile=manifest_profile, pit_contract=pit_contract,
                     score_column=runtime_primary_score_column,
+                    verified_bundle_loader=verified_real_path_bundle_loader,
                 )
             else:
                 forward_score_path = (

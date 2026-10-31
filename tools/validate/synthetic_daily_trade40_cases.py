@@ -2324,6 +2324,7 @@ class RealPathStrategyCompareDiagnosticsRegressionCases(unittest.TestCase):
                         root=root, filter_id='breakout_quality_v1',
                         architecture='inception_time_v1', profile=profile,
                         pit_contract=verified, score_column='breakout_quality_score',
+                        verified_bundle_loader=loader,
                     )
                 first = run()
                 first.loc[0, 'group_index'] = -1
@@ -2367,7 +2368,51 @@ class RealPathStrategyCompareDiagnosticsRegressionCases(unittest.TestCase):
                     architecture='inception_time_v1', profile=profile,
                     pit_contract=SimpleNamespace(score_path='s.csv',manifest_path='m.json',seed=0),
                     score_column='breakout_quality_score',
+                    verified_bundle_loader=lambda **kwargs: None,
                 )
+
+    def test_real_path_loader_must_be_injected_by_strategy_comparison_owner(self):
+        from services.research import strategy_compare_engine as engine
+        from services.research import strategy_compare_execution as execution
+        profile = 'daily_universal_formal_mintrade40_netr_per_seed_full_list_ndcg_pairwise'
+        with self.assertRaisesRegex(ValueError, 'injected canonical seed-scoped loader'):
+            engine._selection_target_lookup_for_verified_pit(
+                root=Path('/not-accessed'), filter_id='breakout_quality_v1',
+                architecture='inception_time_v1', profile=profile,
+                pit_contract=SimpleNamespace(score_path='s.csv', manifest_path='m.json',seed=42),
+                score_column='breakout_quality_score',
+            )
+        settings = SimpleNamespace(
+            dataset='full', max_positions=10, rotation='off',
+            dl_sources={'CM': SimpleNamespace(
+                score_source='selection_point_in_time', filter_id='breakout_quality_v1',
+                model_architecture='inception_time_v1', experiment_profile=profile,
+                threshold=None,
+            )},
+        )
+        arm = SimpleNamespace(
+            dl_id='CM', rule_policy='current', dl_runtime_options={},
+            dl_runtime_mode='unconstrained_ranking',
+        )
+        with patch.object(execution, 'run_comparison', return_value={'done': True}) as replay, \
+             patch.object(execution, '_arm_runtime_spec', return_value={
+                 'comparison_mode': 'score_ranking', 'ranking_policy': 'canonical_score',
+             }), \
+             patch.object(execution, 'resolve_strategy_comparison_arm_param_policy',
+                          return_value='base-finalist-best'), \
+             patch.object(execution, 'resolve_strategy_compare_selection_pit_contract_override',
+                          return_value=None):
+            result = execution.run_strategy_compare_active_arm(
+                settings=settings, arm=arm, project_root=Path('/not-accessed'),
+                params_path='params.json', output_dir=Path('/not-accessed/output'),
+                comparison_start='2021-01-01', comparison_end='2021-12-31',
+                param_evaluation_mode='rolling',
+            )
+        self.assertEqual(result, {'done': True})
+        self.assertIs(
+            replay.call_args.kwargs['verified_real_path_bundle_loader'],
+            execution.load_continuous_ranker_data,
+        )
 
     def test_real_path_target_null_survives_post_replay_diagnostic_join(self):
         from filters.breakout_quality import strategy_compare_diagnostics as diagnostic
