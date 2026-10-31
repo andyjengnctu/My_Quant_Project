@@ -392,6 +392,36 @@ def _cached_real_path_selection_target_lookup(
     the same full-history real-trade labels in a single Strategy Compare run.
     """
     del score_sha256, manifest_sha256  # Revision identities are cache keys, not new sources.
+    # Independent strategy runs can consume the disposable diagnostic projection
+    # built by the canonical MODEL data producer. Resolve the original seed's
+    # teacher on EVERY attempt; an absent/stale projection falls back to the
+    # original full Loader, with no new target formula or FIT side effect.
+    from services.breakout_quality.real_path_diagnostic_cache import (
+        real_path_diagnostic_candidate_exists,
+        load_verified_real_path_diagnostic,
+    )
+    cached = None
+    if real_path_diagnostic_candidate_exists(
+        root=Path(root_text), filter_id=filter_id, architecture=architecture,
+        profile=profile, seed=seed,
+    ):
+        from services.breakout_quality.trade_path_target_source import loader_kwargs_for_trade_path
+        teacher = loader_kwargs_for_trade_path(
+            experiment_profile=profile, project_root=Path(root_text),
+            seed=seed, authorized_build=False,
+        )
+        cached = load_verified_real_path_diagnostic(
+            root=Path(root_text), filter_id=filter_id, architecture=architecture,
+            profile=profile, seed=seed, target_lineage=teacher["target_lineage"],
+        )
+    if cached is not None:
+        print("[Strategy Compare Target] REUSE canonical post-replay diagnostic projection", flush=True)
+        return _selection_target_lookup(
+            root=Path(root_text), filter_id=filter_id, architecture=architecture,
+            profile=profile, score_path_override=score_path,
+            manifest_path_override=manifest_path, score_column=score_column,
+            verified_target_bundle=cached,
+        )
     began = time.monotonic()
     next_percent = 10
     print("[Strategy Compare Target] 核對真實路徑標籤（僅成交後診斷，不執行 FIT／Optimizer）", flush=True)

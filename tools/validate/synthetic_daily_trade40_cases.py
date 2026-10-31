@@ -2824,5 +2824,244 @@ class SameWorkflowRealPathSourceWitnessCases(unittest.TestCase):
                     current()
 
 
+
+import json
+from core.file_integrity import compute_file_sha256
+from filters.breakout_quality.dataset_store import resolve_dataset_paths
+from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+from services.breakout_quality import real_path_diagnostic_cache as cache
+
+PROFILE_R = "daily_universal_formal_mintrade_fullcycle_netr_per_seed_full_list_ndcg_pairwise"
+PROFILE_PNL = "daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise"
+
+
+class RealPathDiagnosticCacheCases(unittest.TestCase):
+    def _fake_sources(self, root: Path):
+        data_path = root / "data" / "mock" / "2330.csv"
+        data_path.parent.mkdir(parents=True)
+        data_path.write_bytes(b"ticker,date,Close\n2330,2026-03-02,50\n")
+        output_dir = root / "outputs" / "filters" / "breakout_quality" / "breakout_quality_v1"
+        output_dir.mkdir(parents=True)
+        paths = resolve_dataset_paths(output_dir)
+        for name, path in paths.artifact_paths().items():
+            path.write_bytes((name + "-content").encode("utf-8"))
+        inventory = {"csv_inventory_sha256": "recorded-source", "csv_file_count": 1}
+        artifacts = {name: {"filename": path.name, "sha256": compute_file_sha256(path),
+                            "size_bytes": path.stat().st_size}
+                     for name, path in paths.artifact_paths().items()}
+        payload = {
+            "filter_id": "breakout_quality_v1", "dataset": "full",
+            "source_data_inventory": inventory, "dataset_artifacts": artifacts,
+            "source_data_date_range": {"start": "2011-01-01", "end": "2026-03-02"},
+        }
+        paths.summary.write_text(json.dumps(payload), encoding="utf-8")
+        return data_path, inventory
+
+    def _bundle(self, *, profile=PROFILE_R, root=None):
+        dates = pd.to_datetime(["2023-01-03", "2023-01-03", "2023-01-04"])
+        data = pd.DataFrame({
+            "group_index": [0, 1, 2], "ticker": ["0050", "2330", "0050"],
+            "date": dates, "label": [-1, -1, -1],
+        })
+        if profile == PROFILE_PNL:
+            data["target_realized_net_r_for_diagnostics"] = np.asarray([1.25, np.nan, -0.5])
+        dataset_summary = {"filter_id": "breakout_quality_v1"}
+        if root is not None:
+            from filters.breakout_quality.paths import resolve_filter_output_dir
+            paths = resolve_dataset_paths(resolve_filter_output_dir(root, "breakout_quality_v1"))
+            canonical = json.loads(paths.summary.read_text(encoding="utf-8"))
+            dataset_summary.update({
+                "dataset": canonical["dataset"],
+                "source_data_inventory": canonical["source_data_inventory"],
+                "source_dataset_artifacts": canonical["dataset_artifacts"],
+                "source_data_date_range": canonical["source_data_date_range"],
+                "policy": canonical.get("policy"),
+            })
+        return SimpleNamespace(
+            group_table=data, raw_target=np.asarray([1.25, np.nan, -0.5]),
+            target_valid=np.asarray([True, False, True]),
+            summary=dataset_summary,
+            outer_policy={"end": "2026-03-02"},
+            profile=SimpleNamespace(continuous_target_id=get_continuous_ranker_execution_recipe(profile).continuous_target_id),
+        )
+
+    def _call_args(self, root, *, seed=42, profile=PROFILE_R):
+        return dict(root=root, filter_id="breakout_quality_v1", architecture="inception_time_v1",
+                    profile=profile, seed=seed, target_lineage={"seed": seed, "source_sha256": "teacher-A"})
+
+    def test_cache_source_content_seed_profile_and_corruption(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            data_path, inv = self._fake_sources(root)
+            with (patch.object(cache, "build_source_data_inventory", return_value=inv),
+                  patch.object(cache, "discover_dataset_csv_inputs", return_value=([("2330", data_path)], [])),
+                  patch.object(cache, "_implementation_digest", return_value="simulator-test"),
+                  patch.object(cache, "_data_implementation_sha256", return_value="data-test"),
+                  patch("filters.breakout_quality.splits.resolve_breakout_quality_outer_policy",
+                        return_value={"end": "2026-03-02"})):
+                args = self._call_args(root)
+                bundle = self._bundle(root=root)
+                self.assertIsNone(cache.load_verified_real_path_diagnostic(**args))
+                cache.publish_real_path_diagnostic(**args, bundle=bundle)
+                restored = cache.load_verified_real_path_diagnostic(**args)
+                self.assertIsNotNone(restored)
+                pd.testing.assert_frame_equal(restored.group_table, bundle.group_table)
+                np.testing.assert_array_equal(restored.raw_target, bundle.raw_target)
+                np.testing.assert_array_equal(restored.target_valid, bundle.target_valid)
+                self.assertIsNone(cache.load_verified_real_path_diagnostic(**self._call_args(root, seed=43)))
+                self.assertIsNone(cache.load_verified_real_path_diagnostic(
+                    **self._call_args(root, profile=PROFILE_PNL)))
+                # Physical bytes changed without changing mtime or length:
+                # the source must be re-hashed and old diagnostic refused.
+                before = data_path.stat()
+                changed = data_path.read_bytes().replace(b",50\n", b",51\n")
+                self.assertEqual(len(changed), before.st_size)
+                data_path.write_bytes(changed)
+                import os
+                os.utime(data_path, ns=(before.st_atime_ns, before.st_mtime_ns))
+                self.assertIsNone(cache.load_verified_real_path_diagnostic(**args))
+                data_path.write_bytes(changed.replace(b",51\n", b",50\n"))
+                restored = cache.load_verified_real_path_diagnostic(**args)
+                self.assertIsNotNone(restored)
+                cache_path = cache._slot(root, "breakout_quality_v1", "inception_time_v1", PROFILE_R, 42)
+                cache_path.write_bytes(b"corrupt npz")
+                self.assertIsNone(cache.load_verified_real_path_diagnostic(**args))
+
+    def test_publisher_rejects_stale_bundle_dataset_and_outer_policy(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            data_path, inventory = self._fake_sources(root)
+            with (patch.object(cache, "build_source_data_inventory", return_value=inventory),
+                  patch.object(cache, "discover_dataset_csv_inputs", return_value=([("2330", data_path)], [])),
+                  patch.object(cache, "_implementation_digest", return_value="simulator-test"),
+                  patch.object(cache, "_data_implementation_sha256", return_value="data-test"),
+                  patch("filters.breakout_quality.splits.resolve_breakout_quality_outer_policy",
+                        return_value={"end": "2026-03-02"})):
+                args = self._call_args(root)
+                bundle = self._bundle(root=root)
+                dest = cache._slot(root, "breakout_quality_v1", "inception_time_v1", PROFILE_R, 42)
+                bundle.summary["source_data_inventory"] = {"csv_inventory_sha256": "obsolete"}
+                cache.publish_real_path_diagnostic(**args, bundle=bundle)
+                self.assertFalse(dest.exists(), "Stale Dataset origin may not be re-signed")
+                bundle = self._bundle(root=root)
+                bundle.outer_policy = {"end": "2025-12-31"}
+                cache.publish_real_path_diagnostic(**args, bundle=bundle)
+                self.assertFalse(dest.exists(), "Stale PIT policy may not be re-signed")
+                bundle = self._bundle(root=root)
+                cache.publish_real_path_diagnostic(**args, bundle=bundle)
+                self.assertIsNotNone(cache.load_verified_real_path_diagnostic(**args))
+                wrong_teacher = dict(args, target_lineage={"seed": 42, "source_sha256": "different-teacher"})
+                self.assertIsNone(cache.load_verified_real_path_diagnostic(**wrong_teacher))
+
+    def test_market_set_artifact_change_invalidates_projection(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            data_path, inventory = self._fake_sources(root)
+            from filters.breakout_quality.paths import resolve_filter_output_dir
+            paths = resolve_dataset_paths(resolve_filter_output_dir(root, "breakout_quality_v1"))
+            market = {}
+            for name, path in paths.market_set_artifact_paths().items():
+                path.write_bytes(("market-" + name).encode("utf-8"))
+                market[name] = {"filename": path.name, "size_bytes": path.stat().st_size,
+                                "sha256": compute_file_sha256(path)}
+            summary = json.loads(paths.summary.read_text(encoding="utf-8"))
+            summary["market_set_contract"] = {"fixture": True}
+            summary["market_set_artifacts"] = market
+            paths.summary.write_text(json.dumps(summary), encoding="utf-8")
+            with (patch.object(cache, "build_source_data_inventory", return_value=inventory),
+                  patch.object(cache, "discover_dataset_csv_inputs", return_value=([("2330", data_path)], [])),
+                  patch.object(cache, "_implementation_digest", return_value="simulator-test"),
+                  patch.object(cache, "_data_implementation_sha256", return_value="data-test"),
+                  patch("filters.breakout_quality.splits.resolve_breakout_quality_outer_policy",
+                        return_value={"end": "2026-03-02"})):
+                args = self._call_args(root)
+                cache.publish_real_path_diagnostic(**args, bundle=self._bundle(root=root))
+                self.assertIsNotNone(cache.load_verified_real_path_diagnostic(**args))
+                first = next(iter(paths.market_set_artifact_paths().values()))
+                first.write_bytes(first.read_bytes() + b"!")
+                self.assertIsNone(cache.load_verified_real_path_diagnostic(**args))
+
+    def test_netpnl_stores_same_execution_net_r_for_diagnostics(self):
+        with TemporaryDirectory() as folder:
+            root=Path(folder)
+            data_path, inv=self._fake_sources(root)
+            with (patch.object(cache, "build_source_data_inventory", return_value=inv),
+                  patch.object(cache, "discover_dataset_csv_inputs", return_value=([("2330",data_path)],[])),
+                  patch.object(cache, "_implementation_digest", return_value="simulator-test"),
+                  patch.object(cache, "_data_implementation_sha256", return_value="data-test"),
+                  patch("filters.breakout_quality.splits.resolve_breakout_quality_outer_policy",
+                        return_value={"end":"2026-03-02"})):
+                args=self._call_args(root, profile=PROFILE_PNL)
+                bundle=self._bundle(profile=PROFILE_PNL, root=root)
+                bundle.raw_target=np.asarray([5000.,np.nan,-500.])
+                cache.publish_real_path_diagnostic(**args,bundle=bundle)
+                restored=cache.load_verified_real_path_diagnostic(**args)
+                self.assertIsNotNone(restored)
+                np.testing.assert_array_equal(restored.raw_target, np.asarray([1.25,np.nan,-0.5]))
+                np.testing.assert_array_equal(restored.target_valid, bundle.target_valid)
+
+    def test_restored_netpnl_diagnostic_join_matches_canonical_bundle(self):
+        from filters.breakout_quality import strategy_compare_diagnostics as diagnostics
+        from unittest.mock import patch as mock_patch
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            data_path, inventory = self._fake_sources(root)
+            with (patch.object(cache, "build_source_data_inventory", return_value=inventory),
+                  patch.object(cache, "discover_dataset_csv_inputs", return_value=([("2330", data_path)], [])),
+                  patch.object(cache, "_implementation_digest", return_value="simulator-test"),
+                  patch.object(cache, "_data_implementation_sha256", return_value="data-test"),
+                  patch("filters.breakout_quality.splits.resolve_breakout_quality_outer_policy",
+                        return_value={"end": "2026-03-02"})):
+                args = self._call_args(root, profile=PROFILE_PNL)
+                original = self._bundle(profile=PROFILE_PNL, root=root)
+                original.raw_target = np.asarray([5000.0, np.nan, -500.0])
+                cache.publish_real_path_diagnostic(**args, bundle=original)
+                restored = cache.load_verified_real_path_diagnostic(**args)
+                self.assertIsNotNone(restored)
+                scores = pd.DataFrame({
+                    "ticker": ["0050", "2330", "0050"],
+                    "date": ["2023-01-03", "2023-01-03", "2023-01-04"],
+                    "group_index": [0, 1, 2],
+                    "breakout_quality_score": [0.8, 0.6, 0.1],
+                    "fold_id": ["2023", "2023", "2023"],
+                    "model_information_cutoff": ["2022-12-31"] * 3,
+                }).set_index(["ticker", "date"])
+                with mock_patch.object(
+                    diagnostics, "load_selection_point_in_time_score_table_from_path",
+                    return_value=scores,
+                ):
+                    kwargs = dict(root=root, filter_id="breakout_quality_v1",
+                                  architecture="inception_time_v1", profile=PROFILE_PNL,
+                                  score_path_override="scores.csv", manifest_path_override="manifest.json")
+                    baseline = diagnostics._selection_target_lookup(
+                        **kwargs, verified_target_bundle=original,
+                    )
+                    optimized = diagnostics._selection_target_lookup(
+                        **kwargs, verified_target_bundle=restored,
+                    )
+                pd.testing.assert_frame_equal(optimized, baseline)
+
+    def test_strategy_diagnostic_uses_proven_projection_without_canonical_reload(self):
+        from services.research import strategy_compare_engine as consumer
+        cached=self._bundle()
+        cached.group_table=cached.group_table.copy()
+        args=("root","breakout_quality_v1","inception_time_v1",PROFILE_R,
+              "scores.csv","manifest.json","breakout_quality_score",42,"sha1","sha2")
+        with (patch("services.breakout_quality.trade_path_target_source.loader_kwargs_for_trade_path",
+                    return_value={"target_lineage":{"seed":42}}),
+              patch.object(cache,"real_path_diagnostic_candidate_exists",return_value=True),
+              patch.object(cache,"load_verified_real_path_diagnostic",return_value=cached) as load,
+              patch.object(consumer,"_selection_target_lookup",return_value=pd.DataFrame({"ok":[1]})) as join):
+            def cannot_load(**kwargs):
+                self.fail("Canonical full data load must be skipped on verified diagnostic hit")
+            result=consumer._cached_real_path_selection_target_lookup.__wrapped__(
+                *args,cannot_load,
+            )
+            self.assertEqual(result.to_dict("list"), {"ok":[1]})
+            self.assertEqual(join.call_args.kwargs["verified_target_bundle"],cached)
+            load.assert_called_once()
+
+
+
 if __name__ == "__main__":
     unittest.main()

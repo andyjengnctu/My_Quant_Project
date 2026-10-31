@@ -197,6 +197,19 @@ def load_continuous_ranker_data(
     bundle = load_profile_continuous_ranker_data(
         **kwargs, feature_price_source=alternate, feature_trade_count_source=activity,
     )
+    # Publish only a disposable post-replay diagnostic projection from this
+    # canonical model data producer. No FIT, score or Replay may read it.
+    if (kwargs.get("target_materializer") is not None
+            and isinstance(kwargs.get("target_lineage"), dict)
+            and alternate is None and activity is None
+            and not allow_stale_source and not authorized_target_dependency_build):
+        from services.breakout_quality.real_path_diagnostic_cache import publish_real_path_diagnostic
+        publish_real_path_diagnostic(
+            root=Path(kwargs.get("project_root", Path(__file__).resolve().parents[2])),
+            filter_id=filter_id, architecture=model_architecture,
+            profile=experiment_profile, seed=int(seed),
+            target_lineage=kwargs["target_lineage"], bundle=bundle,
+        )
     if eligible_handoff:
         from core.file_integrity import compute_file_sha256
         from filters.breakout_quality.workflow_io import dataset_paths
