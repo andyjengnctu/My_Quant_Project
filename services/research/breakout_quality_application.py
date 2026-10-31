@@ -673,6 +673,7 @@ def _comparison_evidence_issues(payload: dict, settings) -> tuple[str, ...]:
 def _standard_model_comparison_views(models: list[dict]) -> list[dict]:
     views = []
     common_truth = None
+    reference_model_id = None
     for item in models:
         payload = dict(item.get("payload") or {})
         issues = _standard_model_sop_completeness_issues(payload)
@@ -685,22 +686,34 @@ def _standard_model_comparison_views(models: list[dict]) -> list[dict]:
         truth = dict(standard.get("evaluation_truth") or {})
         if common_truth is None:
             common_truth = truth
+            reference_model_id = str(item.get("model_id") or "-")
         elif truth != common_truth:
             scalar_keys = ("horizon_bars", "mfe_source", "adverse_source", "joint_quality_id")
-            differing = [key for key in scalar_keys if truth.get(key) != common_truth.get(key)]
+            differing = [
+                f"{key}(reference={common_truth.get(key)!r}, candidate={truth.get(key)!r})"
+                for key in scalar_keys if truth.get(key) != common_truth.get(key)
+            ]
             observed = dict(truth.get("cohort_identity") or {})
             expected = dict(common_truth.get("cohort_identity") or {})
-            differing.extend(
-                f"{split}:stock-day/fold cohort"
-                for split in ("validation", "oos", "breakout_candidate_oos")
-                if observed.get(split) != expected.get(split)
-            )
+            for split in ("validation", "oos", "breakout_candidate_oos"):
+                if observed.get(split) != expected.get(split):
+                    # The canonical report already persists the full 64-digit
+                    # hashes. Show enough here to distinguish the actual
+                    # mismatch without dumping model score data into the UI.
+                    differing.append(
+                        f"{split}:stock-day/fold cohort "
+                        f"(reference={str(expected.get(split) or '-')[:16]}, "
+                        f"candidate={str(observed.get(split) or '-')[:16]})"
+                    )
             if not differing:
                 differing.append("unexpected evaluation truth identity")
             raise ValueError(
-                f"MODEL SOP cross-model evaluation truth mismatch: {item.get('model_id')} "
-                f"| {', '.join(differing)}; common horizon, price truth and "
-                "stock-day/fold cohorts are mandatory"
+                "MODEL SOP cross-model evaluation truth mismatch: "
+                f"reference={reference_model_id}, candidate={item.get('model_id')} "
+                f"| {', '.join(differing)}; "
+                "cross-model Standard SOP cannot rank unmatched cohorts. "
+                "Original single-model Standard SOP reports remain valid; "
+                "no FIT or Min optimizer rebuild is authorized by this mismatch"
             )
         view = _model_sop_view(payload)
         views.append({**item, "view": view})
@@ -4524,7 +4537,15 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
     # Standard Comparison consumes approved M1-M4 only: never materialize
     # optional Audit truth or score matrices in this lifecycle.
 
-    console = _render_standard_model_comparison(completed, target="console")
+    try:
+        console = _render_standard_model_comparison(completed, target="console")
+    except ValueError as exc:
+        # Comparability is a report publication gate, not permission to retrain
+        # a valid FIT, overwrite the individual SOPs, or silently drop a model.
+        if not str(exc).startswith("MODEL SOP cross-model evaluation truth mismatch:"):
+            raise
+        print("[模型比較未發布] " + str(exc))
+        return 2
     print("\n" + render_title(f"{mode_label} Standard Model SOP Comparison"))
     print(console)
     json_path, markdown_path = _write_standard_model_comparison_report(
