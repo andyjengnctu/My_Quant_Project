@@ -548,14 +548,24 @@ class FormalMinDailyOracleCases(TestCase):
         self.assertNotEqual(current,
                             "80a4fe352f4466ce7c3862149f0d23a97cac127eaf71dd98a521905305e5bb32")
 
-        # Changing even one byte of this Producer voids its legacy source SHA.
+        # Comments/line endings and Target-name catalog edits are not
+        # economic execution changes. Executed Min code changes are.
         with TemporaryDirectory() as directory:
             variant = Path(directory) / "daily_trade40_oracle.py"
-            variant.write_bytes(raw + b"\n# deliberate semantic revision guard\n")
+            variant.write_bytes(raw + b"\n# unrelated documentation edit\n")
             amended = hashlib.sha256(variant.read_bytes()).hexdigest()
-            self.assertEqual(lineage.attested_mintrade_source_sha256(
-                lineage._SOURCE_OWNER, variant), amended)
             self.assertNotEqual(amended, old_sha)
+            self.assertEqual(lineage.attested_mintrade_source_sha256(
+                lineage._SOURCE_OWNER, variant), old_sha)
+            real_code = raw.decode("utf-8")
+            economic_call = 'include_net_pnl=(metric == "net_pnl")'
+            self.assertEqual(real_code.count(economic_call), 1)
+            variant.write_text(real_code.replace(economic_call,
+                'include_net_pnl=(metric == "net_r")', 1), encoding="utf-8")
+            actual_economic_sha = hashlib.sha256(variant.read_bytes()).hexdigest()
+            self.assertEqual(lineage.attested_mintrade_source_sha256(
+                lineage._SOURCE_OWNER, variant), actual_economic_sha)
+            self.assertNotEqual(actual_economic_sha, old_sha)
             self.assertEqual(lineage.attested_mintrade_source_sha256(
                 "core/position_management.py", source_path), current_sha)
 

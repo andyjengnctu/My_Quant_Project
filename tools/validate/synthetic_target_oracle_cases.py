@@ -5813,6 +5813,90 @@ class OracleInventoryAndSourceIsolationRegressionCases(TestCase):
             self.assertNotEqual(source.oracle_daily_source_fingerprint(), before)
 
 
+class OracleTargetCatalogAdditionDeletionSafetyCases(TestCase):
+    """Add/delete Target names without modifying any executable price/Min trade.
+
+    These fast source-contract cases complement the physical multi-copy signed
+    Replay regression run at delivery. Both directions are necessary: a change
+    that only works for adding but not removing a Target is not a valid SSOT.
+    """
+
+    def test_add_then_delete_oracle_target_does_not_mutate_price_lineage(self):
+        from services.audit.oracle_score_artifacts import oracle_daily_source_fingerprint
+        original = _ACTIVE_ORACLE_DEFINITION
+        before = oracle._price_score_replay_lineage(original)
+        before_catalog = oracle._oracle_comparison_plan(original)
+        add = {"target": "SyntheticUnrelatedPriceControl", "description": "read-only registry test",
+               "score": "mfe", "provider": "pure_mfe40_provider", "selector": "exact"}
+        added = replace(original, source={**original.source,
+             "oracle_comparisons": (*original.source["oracle_comparisons"], add)})
+        self.assertEqual(len(oracle._oracle_comparison_plan(added)["targets"]),
+                         len(before_catalog["targets"]) + 1)
+        self.assertEqual(before, oracle._price_score_replay_lineage(added))
+        reduced = replace(added, source={**added.source,
+             "oracle_comparisons": tuple(item for item in added.source["oracle_comparisons"]
+                                         if item["target"] not in {"CG40_EqualRank", add["target"]})})
+        self.assertEqual(len(oracle._oracle_comparison_plan(reduced)["targets"]),
+                         len(before_catalog["targets"]) - 1)
+        self.assertEqual(before, oracle._price_score_replay_lineage(reduced))
+        restored = replace(reduced, source=original.source)
+        self.assertEqual(before, oracle._price_score_replay_lineage(restored))
+        self.assertEqual(oracle_daily_source_fingerprint(), before["source_code_sha256"])
+
+    def test_add_and_remove_model_selection_configs_preserve_only_price_identity(self):
+        from config import breakout_quality as config
+        from services.audit import oracle_score_artifacts as producer
+        price = producer.oracle_daily_source_fingerprint()
+        config_sha = producer._oracle_price_configuration_sha256()
+        with patch.object(config, "BREAKOUT_QUALITY_MODEL_TEST_FUTURE_PROFILE", "synthetic", create=True):
+            self.assertEqual(producer._oracle_price_configuration_sha256(), config_sha)
+            self.assertEqual(producer.oracle_daily_source_fingerprint(), price)
+        with patch.object(config, "BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_PROFILES",
+                          (*config.BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_PROFILES,
+                           ("MR-SYNTHETIC", "synthetic_profile"))):
+            self.assertEqual(producer.oracle_daily_source_fingerprint(), price)
+        self.assertEqual(producer.oracle_daily_source_fingerprint(), price)
+        with patch.object(config, "BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE", "2022-01-01"):
+            self.assertNotEqual(producer.oracle_daily_source_fingerprint(), price)
+
+    def test_min_trade_new_target_catalog_branch_does_not_rewrite_economic_producer(self):
+        from services.audit import mintrade_truth_source_attestation as owner
+        src = ROOT / owner._SOURCE_OWNER
+        current = owner.attested_mintrade_source_sha256(owner._SOURCE_OWNER, src)
+        with tempfile.TemporaryDirectory() as tmp:
+            staged = Path(tmp) / src.name
+            source = src.read_text(encoding="utf-8")
+            marker = '    if outcome_metric not in {"net_r", "net_pnl"}:\n'
+            self.assertGreaterEqual(source.count(marker), 1)
+            # The first match is the naming-only target resolver, not the
+            # independently attested economic source function below it.
+            added = source.replace(marker,
+                '    if horizon_sessions == 777 and outcome_metric == "net_r":\n'
+                '        return "synthetic_target_777", "LABEL-synthetic_target_777"\n' + marker, 1)
+            staged.write_text(added, encoding="utf-8")
+            self.assertEqual(owner.attested_mintrade_source_sha256(owner._SOURCE_OWNER, staged), current)
+            self.assertEqual(owner._executable_owner_ast_sha256(staged),
+                             owner._CERTIFIED_EXECUTABLE_OWNER_AST_SHA256)
+            # Delete that new Target: the exact previously signed identity returns.
+            staged.write_text(source, encoding="utf-8")
+            self.assertEqual(owner.attested_mintrade_source_sha256(owner._SOURCE_OWNER, staged), current)
+            # A documentation-only change also remains non-executable.
+            original_doc = 'Compute all feature-eligible stock-day outcomes from a formal Min seed.'
+            self.assertEqual(source.count(original_doc), 1)
+            staged.write_text(source.replace(original_doc,
+                'Document-only description of the same canonical Min producer.', 1),
+                encoding="utf-8")
+            self.assertEqual(owner.attested_mintrade_source_sha256(owner._SOURCE_OWNER, staged), current)
+            # A change to the real executed money/NetR routing MUST invalidate.
+            old = 'include_net_pnl=(metric == "net_pnl")'
+            self.assertEqual(source.count(old), 1)
+            staged.write_text(source.replace(old, 'include_net_pnl=(metric == "net_r")', 1),
+                              encoding="utf-8")
+            self.assertNotEqual(owner.attested_mintrade_source_sha256(owner._SOURCE_OWNER, staged), current)
+            self.assertNotEqual(owner._executable_owner_ast_sha256(staged),
+                                owner._CERTIFIED_EXECUTABLE_OWNER_AST_SHA256)
+
+
 class OracleCertifiedSourceLineEndingEquivalenceCases(TestCase):
     """One audited historic ZIP newline conversion is not a new economic RUN."""
 

@@ -86,8 +86,21 @@ _NON_EXECUTABLE_MODEL_SELECTION_FIELDS = frozenset((
     "BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES",
     "BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_PROFILES",
 ))
+# Configuration is projected by *ownership*, not by the current finite model
+# roster.  Future MR additions/deletions may add constants with the same
+# workflow prefixes without silently invalidating unrelated Oracle prices.
+# Only declarations used to select/compare models are excluded; the model
+# architecture, PIT dates, data eligibility, risk and feature policies remain
+# part of the source certificate.
+_NON_EXECUTABLE_MODEL_WORKFLOW_PREFIXES = (
+    "BREAKOUT_QUALITY_MODEL_RESEARCH_",
+    "BREAKOUT_QUALITY_MODEL_TEST_",
+    "BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_",
+    "BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_",
+    "BREAKOUT_QUALITY_ROLLING_TIMING_",
+)
 _ORACLE_PRICE_CONFIGURATION_SHA256 = (
-    "807c6bd1aa88d3b5ccb7b01e9ff3efa310085d4c696bdd2bfe4ed5038e25fb86"
+    "e82d7ac8fe0d9c9879a0e9afa5991c448b0a0d119a5de2e84493cf3615c8f82f"
 )
 _LEGACY_PRICE_REGISTRY_SOURCE_SHA256 = {
     "core/breakout_quality_registry.py": "538a9508b0522566e4944f727f09edd6015eaf8cb63a80454355710c8a62d4a3",
@@ -131,6 +144,7 @@ def _oracle_price_configuration_sha256() -> str:
         name: value for name, value in vars(cfg).items()
         if name.isupper() and not name.startswith("_")
         and name not in _NON_EXECUTABLE_MODEL_SELECTION_FIELDS
+        and not name.startswith(_NON_EXECUTABLE_MODEL_WORKFLOW_PREFIXES)
         and not callable(value)
     }
     return canonical_json_sha256(source)
