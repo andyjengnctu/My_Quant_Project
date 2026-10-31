@@ -2685,6 +2685,40 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                        code == 0 and report_refresh_calls == ["audit_refresh"]
                        and plan_inputs == [()])
 
+    # A valid per-model SOP must not publish a cross-model comparison if the
+    # canonical audited cohort differs. This is an execution regression test,
+    # separate from the independently frozen report-contract Golden test.
+    from contextlib import redirect_stdout
+    from io import StringIO
+    ready_source = SimpleNamespace(
+        source_contract=object(), evidence_payload={"standard_model_sop": {}},
+        evidence_ready=True, display_action="REUSE", display_reason="READY",
+    )
+    stdout = StringIO()
+    truth_error = (
+        "MODEL SOP cross-model evaluation truth mismatch: "
+        "reference=MODEL-A, candidate=MODEL-B | oos:stock-day/fold cohort"
+    )
+    with patch.object(app, "get_breakout_quality_model_test_settings", return_value=SimpleNamespace(
+        model_profiles=(("MODEL-A", "profile-a"), ("MODEL-B", "profile-b"))
+    )), patch.object(app, "_recover_pending_model_fit_repairs"), \
+         patch.object(app, "get_breakout_quality_workflow_settings", return_value=SimpleNamespace(
+             filter_id="synthetic", experiment_profile="synthetic", model_architecture="test"
+         )), patch.object(app, "_resolve_continuous_model_readiness", return_value=ready_source), \
+         patch.object(app, "plan_fit_origin_repairs", return_value=([], [])), \
+         patch.object(app, "_print_model_action_status"), \
+         patch.object(app, "_render_standard_model_comparison", side_effect=ValueError(truth_error)), \
+         patch.object(app, "_write_standard_model_comparison_report") as report_writer, \
+         patch.object(app, "_ensure_continuous_forward_model_report") as fit_producer, \
+         redirect_stdout(stdout):
+        code = app._run_configured_model_comparison("synthetic", rolling=False)
+    check_true(
+        "unmatched_cohort_fails_comparison_publication_without_retraining_or_overwriting",
+        code == 2 and "[模型比較未發布]" in stdout.getvalue()
+        and truth_error in stdout.getvalue()
+        and not report_writer.called and not fit_producer.called,
+    )
+
     # No approved science/report identity may change merely because this is a
     # code-organization refactor; those fingerprints live in the report registry.
     return results, summary
@@ -2715,10 +2749,17 @@ def validate_research_model_readiness_architecture_case(_base_params):
     check("standard_model_comparison_excludes_one_off_audits", (),
           check_model_standard_comparison_audit_boundary_sources(sources))
     illegal = dict(sources)
+    # Preserve the original statement's indentation when injecting an illegal
+    # one-off Audit call. Otherwise a nested try/except becomes invalid Python
+    # and the architecture guard never gets to evaluate the intended mutation.
+    render_line = next(
+        line for line in sources[RESEARCH_APPLICATION].splitlines()
+        if line.lstrip() == 'console = _render_standard_model_comparison(completed, target="console")'
+    )
+    render_indent = render_line[:len(render_line) - len(render_line.lstrip())]
     illegal[RESEARCH_APPLICATION] = illegal[RESEARCH_APPLICATION].replace(
-        '    console = _render_standard_model_comparison(completed, target="console")',
-        "    completed = attach_joint_mfe_d40_extension(completed)\n"
-        '    console = _render_standard_model_comparison(completed, target="console")',
+        render_line,
+        render_indent + "completed = attach_joint_mfe_d40_extension(completed)\n" + render_line,
         1,
     )
     check_true("standard_comparison_cannot_reintroduce_one_off_audit_call",

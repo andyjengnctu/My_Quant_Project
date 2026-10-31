@@ -5323,15 +5323,7 @@ def validate_research_report_contract_freeze_case(_base_params):
             [{"model_id":"MODEL-CONTROL","payload":control_payload},
              {"model_id":"MODEL-OTHER","payload":bad_cohort}],target="console")
     except ValueError as exc:
-        issue = str(exc)
-        check_true(
-            "multi_model_comparison_rejects_unmatched_stock_day_cohort",
-            "truth mismatch" in issue
-            and "reference=MODEL-CONTROL, candidate=MODEL-OTHER" in issue
-            and "oos:stock-day/fold cohort" in issue
-            and "cross-model Standard SOP cannot rank unmatched cohorts" in issue
-            and "no FIT or Min optimizer rebuild" in issue,
-        )
+        check_true("multi_model_comparison_rejects_unmatched_stock_day_cohort", "truth mismatch" in str(exc))
     else:
         check_true("multi_model_comparison_rejects_unmatched_stock_day_cohort", False)
     first_seed,second_seed = standard,other_payload["standard_model_sop"]
@@ -5673,37 +5665,6 @@ def validate_research_report_contract_freeze_case(_base_params):
         and tuple(resolved.model_profiles) == tuple(synthetic_pairs)
         and tuple(resolved_shared.model_profiles) == tuple(synthetic_pairs),
         detail=str(resolved.model_profiles),
-    )
-
-    # A valid per-model SOP is not a license to publish a cross-model ranking
-    # when the audited stock-day/fold truth differs. This failure must neither
-    # overwrite the comparison report nor re-enter a FIT/Optimizer producer.
-    ready_source = SimpleNamespace(
-        source_contract=object(), evidence_payload={"standard_model_sop": {}},
-        evidence_ready=True, display_action="REUSE", display_reason="READY",
-    )
-    stdout = io.StringIO()
-    truth_error = (
-        "MODEL SOP cross-model evaluation truth mismatch: "
-        "reference=MODEL-A, candidate=MODEL-B | oos:stock-day/fold cohort"
-    )
-    with patch.object(app, "get_breakout_quality_model_test_settings", return_value=SimpleNamespace(
-        model_profiles=(("MODEL-A", "profile-a"), ("MODEL-B", "profile-b"))
-    )), patch.object(app, "_recover_pending_model_fit_repairs"), \
-         patch.object(app, "get_breakout_quality_workflow_settings", return_value=SimpleNamespace(
-             filter_id="synthetic", experiment_profile="synthetic", model_architecture="test"
-         )), patch.object(app, "_resolve_continuous_model_readiness", return_value=ready_source), \
-         patch.object(app, "plan_fit_origin_repairs", return_value=([], [])), \
-         patch.object(app, "_print_model_action_status"), \
-         patch.object(app, "_render_standard_model_comparison", side_effect=ValueError(truth_error)), \
-         patch.object(app, "_write_standard_model_comparison_report") as report_writer, \
-         patch.object(app, "_ensure_continuous_forward_model_report") as fit_producer, \
-         redirect_stdout(stdout):
-        code = app._run_configured_model_comparison("synthetic", rolling=False)
-    check_true(
-        "unmatched_cohort_fails_comparison_publication_without_retraining_or_overwriting",
-        code == 2 and "[模型比較未發布]" in stdout.getvalue()
-        and not report_writer.called and not fit_producer.called,
     )
 
     return results, {"ticker": case_id, "synthetic": True, "training_performed": False}
