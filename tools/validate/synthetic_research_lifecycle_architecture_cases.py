@@ -4582,19 +4582,43 @@ def validate_research_model_readiness_architecture_case(_base_params):
                            "market_daily_features artifact SHA256 mismatch" in reason
                            for reason in invalid_market.reasons
                        ))
-            # An interrupted, same-size rewrite *during* the SHA check cannot
-            # be persisted as a reusable verified revision.
+            # Start the race from a *valid* publication. Otherwise a stale
+            # summary can reject the file without exercising the concurrent
+            # mutation guard at all.
             artifact.write_bytes(b"Z" + artifact.read_bytes()[1:])
+            summary_data["dataset_artifacts"]["feature_bank"] = build_file_manifest(artifact)
+            dataset_paths.summary.write_text(json.dumps(summary_data), encoding="utf-8")
+            check_true("dataset_sha_race_starts_from_verified_publication",
+                       readiness_owner.collect_dataset_readiness(project, **readiness_args).ready)
+            # Change the physical revision without changing its contents or
+            # published SHA. An atomic replacement guarantees a fresh hash on
+            # Windows too (an in-place same-size write can share a timestamp).
+            old_revision = dataset_owner.file_change_signature(artifact)
+            race_seed = artifact.with_name(".synthetic_sha_race_seed.npy")
+            race_seed.write_bytes(artifact.read_bytes())
+            stat = artifact.stat()
+            os.utime(race_seed, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+            os.replace(race_seed, artifact)
+            check_true("dataset_sha_race_requires_fresh_physical_revision",
+                       dataset_owner.file_change_signature(artifact) != old_revision)
             real_hash = dataset_owner.compute_file_sha256
+            mutated_during_hash = []
             def mutation_during_hash(path):
                 observed = real_hash(path)
-                artifact.write_bytes(b"Y" + artifact.read_bytes()[1:])
+                if Path(path).resolve() == artifact.resolve():
+                    replacement = artifact.with_name(".synthetic_sha_race_changed.npy")
+                    replacement.write_bytes(b"Y" + artifact.read_bytes()[1:])
+                    stat = artifact.stat()
+                    os.utime(replacement, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+                    os.replace(replacement, artifact)
+                    mutated_during_hash.append(True)
                 return observed
             with patch.object(dataset_owner, "compute_file_sha256", side_effect=mutation_during_hash):
                 raced = readiness_owner.collect_dataset_readiness(project, **readiness_args)
             check_true("dataset_changed_during_sha_validation_rejected",
-                       not raced.ready and any("verification failed" in reason
-                                               for reason in raced.reasons))
+                       mutated_during_hash == [True] and not raced.ready
+                       and any("verification failed" in reason or "changed during SHA256 verification" in reason
+                               for reason in raced.reasons))
 
     # The Continuous Target manifest loader already owns main-target hashes.
     # Optional published components must not silently bypass that same owner.
