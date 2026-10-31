@@ -57,7 +57,9 @@ def resolve_standard_evaluation_truth_table(
 
     common_horizon = STANDARD_EVALUATION_HORIZON_BARS
     manifest = dict(bundle.target_manifest or {})
-    source_horizon = int(dict(manifest.get("target_contract") or {}).get("horizon_bars", 0))
+    # Full-cycle realized outcomes do not have a fixed fitting horizon. The
+    # Standard SOP still evaluates the independent canonical 40D price truth.
+    source_horizon = int(dict(manifest.get("target_contract") or {}).get("horizon_bars") or 0)
     # Real execution-path Targets may mature at 40D, 60D or on a full
     # holding-cycle, independently of the canonical 40D *price* evaluation.
     # The group table's explicitly verified price-evidence mask/geometry is

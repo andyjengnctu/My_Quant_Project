@@ -70,6 +70,7 @@ from filters.breakout_quality.daily_ranker_data import (
     load_official_breakout_candidate_keys,
     select_breakout_candidate_group_ids,
 )
+from services.breakout_quality.fitting_data_dependencies import is_formal_min_realized_target_contract
 from services.breakout_quality.price_input_source import (
     load_daily_universal_ranker_data_with_price_source as load_daily_universal_ranker_data,
 )
@@ -1240,8 +1241,8 @@ def run(args) -> int:
         forward_selection_ids=split.selection_ids,
         forward_fitting_cutoff=(
             pd.to_datetime(bundle.group_table.iloc[split.selection_ids]['label_eval_end_date']).max()
-            if dict(bundle.target_manifest.get('target_contract') or {}).get('target_kind')
-               == 'formal_seed_mintrade40_broker_net_r'
+            if is_formal_min_realized_target_contract(
+                dict(bundle.target_manifest.get('target_contract') or {}))
             else None
         ),
     )

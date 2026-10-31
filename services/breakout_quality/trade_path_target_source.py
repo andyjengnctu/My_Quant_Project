@@ -77,9 +77,22 @@ def _min40_historical_execute(*, project_root: str | Path, seed: int):
     )
 
 
-# The only currently authorized primitive.  A 60D/NetPnL/Full-cycle target
-# may share these same producer dependencies; its *new* canonical materializer
-# and target semantics must first be registered by their owner.
+# All formal Min paths share the original, seed-verified Optimizer/P16 teacher.
+# Outcome horizon and currency/R units are declared by the *Target* capability,
+# never inferred from the model name at the data/training consumer.
+def _fullcycle_loader(outcome_metric: str):
+    def load(*, project_root: str | Path, seed: int, authorized_build: bool):
+        from services.breakout_quality.formal_mintrade40_training_source import (
+            resolve_formal_mintrade40_loader_kwargs,
+        )
+        return resolve_formal_mintrade40_loader_kwargs(
+            project_root=project_root, seed=seed,
+            authorized_build=authorized_build,
+            horizon_sessions=None, outcome_metric=outcome_metric,
+        )
+    return load
+
+
 _TRADE_PATH_SOURCES: dict[str, TradePathSource] = {
     "formal_seed_mintrade40_netr": TradePathSource(
         contract_kind="formal_seed_mintrade40_netr",
@@ -95,7 +108,26 @@ _TRADE_PATH_SOURCES: dict[str, TradePathSource] = {
             ),
         ),
     ),
+    "formal_seed_mintrade_fullcycle_netr": TradePathSource(
+        contract_kind="formal_seed_mintrade_fullcycle_netr",
+        loader=_fullcycle_loader("net_r"),
+        dependencies=(),
+    ),
+    "formal_seed_mintrade_fullcycle_netpnl": TradePathSource(
+        contract_kind="formal_seed_mintrade_fullcycle_netpnl",
+        loader=_fullcycle_loader("net_pnl"),
+        dependencies=(),
+    ),
 }
+# Same canonical producer requirements for each realized Min target.
+_ORIGINAL_MIN_REQUIREMENTS = _TRADE_PATH_SOURCES["formal_seed_mintrade40_netr"].dependencies
+for _kind in ("formal_seed_mintrade_fullcycle_netr", "formal_seed_mintrade_fullcycle_netpnl"):
+    _source = _TRADE_PATH_SOURCES[_kind]
+    _TRADE_PATH_SOURCES[_kind] = TradePathSource(
+        contract_kind=_source.contract_kind,
+        loader=_source.loader,
+        dependencies=_ORIGINAL_MIN_REQUIREMENTS,
+    )
 
 
 _RETIRED_TRADE_PATH_CONTRACTS = frozenset({"daily_counterfactual_mintrade40_netr"})

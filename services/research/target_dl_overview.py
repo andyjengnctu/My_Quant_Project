@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from core.audit_policy import get_active_audit_module_id
+from core.audit_registry import resolve_current_oracle_comparisons
 from core.breakout_quality_registry import (
     SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
     get_predicted_upside_context_contract,
@@ -24,6 +25,8 @@ from core.breakout_quality_runtime import (
     DAILY_TERMINAL_MAE_GATED_T40_TARGET_ID,
     DAILY_FULL_HORIZON_MAE_GATED_MFE_T40_TARGET_ID,
     DAILY_FORMAL_MINTRADE40_NETR_TARGET_ID,
+    DAILY_FORMAL_MINTRADE_FULLCYCLE_NETR_TARGET_ID,
+    DAILY_FORMAL_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID,
     CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL,
     CONTINUOUS_RANKER_TARGET_POSTPROCESS_NONE,
     CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_NONE,
@@ -105,14 +108,18 @@ def _approved(payload: Mapping[str, Any], report_id: str, versions: Mapping[str,
 
 def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
     # The current canonical comparison inventory is the sole Target membership SSOT.
-    comparisons = tuple(
-        item for item in definition.source["oracle_comparisons"]
-        if item.get("enabled", True)
-    )
+    comparisons = resolve_current_oracle_comparisons(definition.source)
     baseline = str(definition.source["baseline_arm_id"])
     targets = (baseline, *(str(item["target"]) for item in comparisons))
     if len(set(targets)) != len(targets):
         raise ValueError("Oracle target identities are not unique")
+    # The Audit registry is the owner of retired historical identities; a
+    # previously completed signed report may include them after [1] retires
+    # those rows. Do not use them as current Oracle or DL results.
+    retired = (set(definition.source.get("retired_oracle_targets") or ())
+               | set(definition.source.get("historical_only_oracle_targets") or ()))
+    if retired.intersection(targets):
+        raise ValueError("Current and retired Oracle target identities overlap")
     score_targets = {}
     for item in comparisons:
         raw = item
@@ -121,11 +128,18 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
         label = _ORACLE_SCORE_TARGETS.get(raw.get("score"))
         # Trade-path truth is not a single generic label: distinguish the
         # fixed 40-session NetR from 60-session and full-cycle NetR/NetPnL.
-        if (raw.get("score") == "daily_trade_path_net_r"
-                and not raw.get("horizon_mode")
-                and raw.get("horizon_sessions") in (None, 40)):
-            label = DAILY_FORMAL_MINTRADE40_NETR_TARGET_ID
-        score_targets[str(item["target"])] = label
+        if raw.get("score") == "daily_trade_path_net_r":
+            if raw.get("horizon_mode") == "full_trade_cycle":
+                label = DAILY_FORMAL_MINTRADE_FULLCYCLE_NETR_TARGET_ID
+            elif raw.get("horizon_sessions") in (None, 40):
+                label = DAILY_FORMAL_MINTRADE40_NETR_TARGET_ID
+        elif (raw.get("score") == "daily_trade_path_net_pnl"
+              and raw.get("horizon_mode") == "full_trade_cycle"):
+            label = DAILY_FORMAL_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID
+        # A hindsight-only eligibility intervention is not a deployable DL
+        # model or ordinary Direct strategy, even when its score source is
+        # identical. In particular Positive_Direct must NOT claim C124.
+        score_targets[str(item["target"])] = None if item.get("positive_gate") else label
     data_path = (root / "outputs" / "audit" / Path(definition.output_subdir)
                  / "latest" / "audit.json")
     doc_path = data_path.with_name("audit.md")
@@ -148,7 +162,7 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
                 metrics.clear()
                 break
             target = str(item.get("target") or "")
-            if target not in targets or target in seen or _count(item.get("seeds")) != len(payload["seeds"]):
+            if (target not in targets and target not in retired) or target in seen or _count(item.get("seeds")) != len(payload["seeds"]):
                 metrics.clear()
                 break
             seen.add(target)
@@ -156,8 +170,11 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
             if romd is None or winrate is None or not 0.0 <= winrate <= 100.0:
                 metrics.clear()
                 break
-            metrics[target] = {"oracle_romd": romd, "win_rate_pct": winrate}
-        if seen == set(targets) and len(metrics) == len(targets):
+            if target in targets:
+                metrics[target] = {"oracle_romd": romd, "win_rate_pct": winrate}
+        # Projection only: demand all CURRENT rows, validate every historical
+        # row, and reject unknown/duplicate entries. No replay or data rewrite.
+        if set(targets).issubset(seen) and len(metrics) == len(targets):
             oracle_info = {
                 "path": str(data_path.relative_to(root).as_posix()),
                 "benchmark": str(payload.get("benchmark_id") or ""),
@@ -181,7 +198,7 @@ def _is_exact_supervision(profile: str, target_id: str) -> bool:
         and (
             policy.component_target_id == target_id
             or (policy.materialization_mode == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
-                and policy.contract_kind == "formal_seed_mintrade40_netr")
+                and policy.contract_kind.startswith("formal_seed_mintrade"))
         )
         and policy.postprocess == CONTINUOUS_RANKER_TARGET_POSTPROCESS_NONE
         and policy.context_transform == CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_NONE

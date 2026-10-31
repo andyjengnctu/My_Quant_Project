@@ -260,23 +260,37 @@ def load_formal_mintrade40_training_source(
 
 def resolve_formal_mintrade40_loader_kwargs(
     *, project_root: str | Path, seed: int, authorized_build: bool = False,
+    horizon_sessions: int | None = 40, outcome_metric: str = "net_r",
 ) -> dict:
     """Return a seed-bound materializer and immutable source provenance.
 
     All trainer/PIT/audit consumers call this same owner. Materialization always
     goes through canonical 40-session Min execution, never the Oracle cache.
     """
+    if outcome_metric not in {"net_r", "net_pnl"} or (horizon_sessions is not None and
+            (type(horizon_sessions) is not int or horizon_sessions <= 0)):
+        raise ValueError("Unregistered formal Min target horizon/metric")
     source = load_formal_mintrade40_training_source(
         project_root=project_root, seed=int(seed),
         allow_optimizer_build=bool(authorized_build),
+    )
+    full_cycle = horizon_sessions is None
+    lineage_extension = (
+        {'target_kind': f'formal_seed_mintrade_fullcycle_broker_{outcome_metric}',
+         'maturity_policy': 'natural_exit_or_research_terminal_closeout_pit_v1',
+         'horizon_mode': 'full_trade_cycle',
+         **({'value_field': 'raw_net_pnl'} if outcome_metric == 'net_pnl' else {})}
+        if full_cycle else {}
     )
     return {
         'target_materializer': partial(
             materialize_formal_mintrade40_pit_labels,
             source=source, expected_seed=int(seed),
+            horizon_sessions=horizon_sessions, outcome_metric=outcome_metric,
         ),
         'target_lineage': {
             'contract': 'formal_mintrade40_seed_historical_plus_p16_v1',
+            **lineage_extension,
             'seed': int(seed),
             'source_sha256': str(source.param_sha256),
             'first_effective_date': str(source.schedule[0].start.date()),

@@ -1109,6 +1109,93 @@ class FormalMinTrade40TrainingSourcePreflightCases(unittest.TestCase):
         self.assertTrue(np.isnan(labels.raw_net_r[1]))
         self.assertTrue(np.isnat(labels.maturity_dates[1]))
 
+    def test_fullcycle_netr_and_netpnl_keep_independent_units_and_pit_maturity(self):
+        """NetPnL is original broker ledger currency, not relabeled NetR.
+
+        A Research-closeout forced at an arbitrary fold FIT end cannot enter
+        supervised FIT. The declared Research end can close out study truth.
+        """
+        from services.breakout_quality import formal_mintrade40_pit_source as owner
+        days, source = self._source()
+        _, frame, _params, _period = fixture(count=140, start="2018-01-02")
+        normal = SimpleNamespace(
+            target_raw_r=np.array([1.25],dtype=np.float32),
+            target_raw_pnl=np.array([6200.0],dtype=np.float32),
+            valid_mask=np.array([True]),
+            maturity_dates=np.array([days[88].to_datetime64().astype("datetime64[D]")]),
+            research_cutoff_forced_mask=np.array([False]),
+        )
+        kwargs = dict(source=source,expected_seed=source.seed,frame=frame,
+                      positions=np.array([75]),ticker="2330",
+                      exchange_calendar=days,fit_cutoff=days[95],
+                      horizon_sessions=None)
+        with patch.object(owner,"compute_counterfactual_trade40_batch",return_value=normal) as batch:
+            in_r = owner.materialize_formal_mintrade40_pit_labels(**kwargs,outcome_metric="net_r")
+            in_pnl = owner.materialize_formal_mintrade40_pit_labels(**kwargs,outcome_metric="net_pnl")
+        self.assertTrue(in_r.completed[0])
+        self.assertEqual(float(in_r.raw_net_r[0]),1.25)
+        self.assertIsNone(in_r.raw_net_pnl)
+        self.assertEqual(float(in_pnl.raw_net_r[0]),1.25)
+        self.assertEqual(float(in_pnl.raw_net_pnl[0]),6200.0)
+        self.assertEqual(in_pnl.raw_net_pnl.dtype, np.float64)
+        self.assertIsNone(batch.call_args.kwargs["horizon_sessions"])
+        self.assertTrue(batch.call_args.kwargs["include_net_pnl"])
+        forced = SimpleNamespace(**{**vars(normal),
+            "research_cutoff_forced_mask":np.array([True])})
+        with patch.object(owner,"compute_counterfactual_trade40_batch",return_value=forced):
+            earlier = owner.materialize_formal_mintrade40_pit_labels(**kwargs,outcome_metric="net_pnl")
+            terminal = owner.materialize_formal_mintrade40_pit_labels(
+                **kwargs,outcome_metric="net_pnl",research_end_is_terminal=True)
+        self.assertFalse(earlier.completed[0])
+        self.assertTrue(np.isnan(earlier.raw_net_pnl[0]))
+        self.assertTrue(np.isnat(earlier.maturity_dates[0]))
+        self.assertTrue(terminal.completed[0])
+        self.assertEqual(float(terminal.raw_net_pnl[0]),6200.0)
+
+    def test_new_registered_real_path_models_keep_original_seed_dependencies(self):
+        from core.breakout_quality_registry import get_continuous_ranker_research_spec
+        from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+        from services.breakout_quality.trade_path_target_source import registered_trade_path_source
+        from core.breakout_quality_policy import get_breakout_quality_model_test_settings
+        from core.strategy_compare_policy import get_strategy_comparison_settings
+        profiles = {
+            "MR-13CN": "daily_universal_formal_mintrade_fullcycle_netr_per_seed_full_list_ndcg_pairwise",
+            "MR-13CO": "daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise",
+        }
+        configured = get_breakout_quality_model_test_settings()
+        for research_id, profile in profiles.items():
+            self.assertIn((research_id,profile),configured.model_profiles)
+            self.assertEqual(get_continuous_ranker_research_spec(profile).model_research_id,research_id)
+            recipe = get_continuous_ranker_execution_recipe(profile)
+            self.assertIsNone(recipe.target_policy.horizon_bars)
+            source = registered_trade_path_source(profile)
+            self.assertEqual({dep.name for dep in source.dependencies},
+                {"formal_mintrade40_p16","formal_mintrade40_history"})
+        for mode in ("broker_cash_dl_conversion_rolling","broker_cash_dl_conversion_oos"):
+            comparison=get_strategy_comparison_settings(mode)
+            for a,b,dl in (("C121","C122","CONT13CN_ROLL"),("C123","C124","CONT13CO_ROLL")):
+                self.assertTrue(comparison.arms[a].enabled)
+                self.assertTrue(comparison.arms[b].enabled)
+                self.assertEqual(comparison.arms[a].dl_id,dl)
+                self.assertEqual(comparison.arms[b].dl_id,dl)
+                self.assertNotEqual(comparison.arms[a].dl_runtime_mode,
+                                    comparison.arms[b].dl_runtime_mode)
+
+    def test_fullcycle_common_price_sop_ignores_missing_fixed_label_horizon(self):
+        from services.breakout_quality.standard_model_sop import (
+            resolve_standard_evaluation_truth_table,STANDARD_EVALUATION_HORIZON_BARS,
+        )
+        groups = pd.DataFrame({"standard_common_40d_matured":[True]})
+        bundle = SimpleNamespace(
+            target_manifest={"target_contract":{"horizon_bars":None,
+                "horizon_mode":"full_trade_cycle"}},group_table=groups)
+        result,horizon=resolve_standard_evaluation_truth_table(
+            bundle,filter_id="breakout_quality_v1",model_architecture="inception_time_v1",
+            experiment_profile="daily_universal_formal_mintrade_fullcycle_netr_per_seed_full_list_ndcg_pairwise",
+            project_root=Path("/isolated"))
+        self.assertIs(result,groups)
+        self.assertEqual(horizon,STANDARD_EVALUATION_HORIZON_BARS)
+
     def test_future_prices_do_not_change_fit_cutoff_labels(self):
         from services.breakout_quality.formal_mintrade40_pit_source import (
             materialize_formal_mintrade40_pit_labels,
@@ -2288,6 +2375,40 @@ class FormalMinTrade40UpstreamPlanRegressionCases(unittest.TestCase):
                          inspect.getsource(point_in_time_scores))
         self.assertNotIn('authorized_target_dependency_build=True',
                          inspect.getsource(train_daily_ranker))
+
+
+class NetPnLDiagnosticUnitRegressionCases(unittest.TestCase):
+    def test_broker_netpnl_training_uses_same_trade_netr_for_r_diagnostics(self):
+        from filters.breakout_quality.strategy_compare_diagnostics import _selection_target_lookup
+        from types import SimpleNamespace
+        scores = pd.DataFrame({
+            "group_index": [0, 1], "ticker": ["2330", "2317"],
+            "date": ["2024-05-03", "2024-05-03"],
+            "breakout_quality_score": [0.7, 0.3],
+            "fold_id": ["fold1", "fold1"],
+            "model_information_cutoff": ["2023-12-31", "2023-12-31"],
+        }).set_index("group_index")
+        # Same executed paths: broker NetPnL TWD, diagnostic realized NetR.
+        bundle = SimpleNamespace(
+            group_table=pd.DataFrame({
+                "group_index": [0, 1], "ticker": ["2330", "2317"],
+                "date": ["2024-05-03", "2024-05-03"], "label": [-1, -1],
+                "target_realized_net_r_for_diagnostics": [1.5, -0.5],
+            }),
+            raw_target=np.array([6200., -2300.], dtype=np.float32),
+            target_valid=np.array([True, True]),
+        )
+        with patch('filters.breakout_quality.strategy_compare_diagnostics.load_selection_point_in_time_score_table_from_path',
+                   return_value=scores):
+            rows = _selection_target_lookup(
+                root=Path('/unused'), filter_id='breakout_quality_v1',
+                architecture='inception_time_v1', profile='unused',
+                score_path_override='scores.csv', manifest_path_override='manifest.json',
+                verified_target_bundle=bundle,
+            )
+        self.assertEqual(rows['target_raw_r'].tolist(), [1.5, -0.5])
+        self.assertEqual(bundle.raw_target.tolist(), [6200., -2300.])
+        self.assertTrue(rows['target_available'].all())
 
 
 class RealPathStrategyCompareDiagnosticsRegressionCases(unittest.TestCase):

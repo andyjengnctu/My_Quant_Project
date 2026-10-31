@@ -59,16 +59,121 @@ _DAILY_SCORE_SOURCE_MODULES = (
 )
 
 
+# Price-score lineage is a dependency graph, not a hash of all research
+# experiments currently registered.  The three declarative model owner files
+# can acquire new *unrelated* DL profiles without altering the four existing
+# Oracle price/source profiles.  Preserve the earlier signed source identity
+# only when those exact effective provider contracts remain byte-equivalent.
+#
+# The fourth change was an independently reviewed NetPnL-only diagnostic in
+# daily_ranker_data. It has a much narrower exception: any subsequent change
+# to the shared data loader still invalidates source identity as before.
+# All other feature/price/execution sources retain strict byte-level hashes.
+_ORACLE_PRICE_PROVIDER_ROLES = (
+    "pure_mfe40_provider", "mfe20_d20_provider", "first_breach_provider",
+    "daily_trade40_profile",
+)
+_ORACLE_PRICE_PROFILE_CONTRACT_SHA256 = (
+    "31e7937daf822ce4636038f6de639704409a8f6776c76a22e65de211c02a9433"
+)
+# A current training-model choice or the set of compared DL models cannot
+# influence historical price-truth labels. All other project BQ configuration
+# fields remain attested; changing a feature/eligibility policy is NOT ignored.
+_NON_EXECUTABLE_MODEL_SELECTION_FIELDS = frozenset((
+    "BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE",
+    "BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE",
+    "BREAKOUT_QUALITY_MODEL_TEST_PROFILES",
+    "BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES",
+    "BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_PROFILES",
+))
+_ORACLE_PRICE_CONFIGURATION_SHA256 = (
+    "807c6bd1aa88d3b5ccb7b01e9ff3efa310085d4c696bdd2bfe4ed5038e25fb86"
+)
+_LEGACY_PRICE_REGISTRY_SOURCE_SHA256 = {
+    "core/breakout_quality_registry.py": "538a9508b0522566e4944f727f09edd6015eaf8cb63a80454355710c8a62d4a3",
+    "core/breakout_quality_runtime.py": "84c8bbf9aa3fe35f9a9552e6881fee6b859a60ce5eee71932c536fda44372749",
+    "config/breakout_quality.py": "b6799f8409488f91efa3c122635147ff5d07a72efabde2832e0a6464d3728b59",
+}
+_AUDITED_NETPNL_DIAGNOSTIC_ONLY_REVISION = (
+    "5fe6caf6e64fec14486c1b8b2bdc855bef244d2044fa7645f0b3f7b936291116",
+    "91254d3ba1d71ef95a1a96dffed068335fa3b239bf6fb42f9baf64406d247906",
+)
+
+
+def _oracle_price_provider_contract_sha256() -> str:
+    """Hash *effective* provider policies, not unrelated MR registration rows.
+
+    This is a source-attestation boundary. An Oracle provider edit invalidates
+    the legacy equivalence, whereas adding/removing an unrelated DL model does
+    not. Runtime resolution and data/feature implementation remain certified
+    independently by the source closure below.
+    """
+    from dataclasses import asdict
+    from core.audit_registry import AUDIT_REUSABLE_REPORTS
+    from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+    from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+
+    registered = AUDIT_REUSABLE_REPORTS["breakout_quality"]["target_oracle_romd"]["source"]
+    contracts = {}
+    for role in _ORACLE_PRICE_PROVIDER_ROLES:
+        profile = str(registered[role])
+        contracts[role] = {
+            "profile_id": profile,
+            "profile": asdict(get_breakout_quality_experiment_profile(profile)),
+            "recipe": asdict(get_continuous_ranker_execution_recipe(profile)),
+        }
+    return canonical_json_sha256(contracts)
+
+
+def _oracle_price_configuration_sha256() -> str:
+    import config.breakout_quality as cfg
+    source = {
+        name: value for name, value in vars(cfg).items()
+        if name.isupper() and not name.startswith("_")
+        and name not in _NON_EXECUTABLE_MODEL_SELECTION_FIELDS
+        and not callable(value)
+    }
+    return canonical_json_sha256(source)
+
+
 def oracle_daily_source_fingerprint(root: Path | None = None) -> str:
-    """Shared daily feature/price primitive closure, without loading outcomes."""
-    root = Path(root) if root is not None else Path(__file__).resolve().parents[2]
+    """Canonical feature/price execution lineage, independent of model inventory.
+
+    The historical source digest can only be retained after proving that the
+    *effective* Oracle provider policies equal the archived, independently
+    checked source revision. A new/unrelated DL registration does not affect
+    that proof. Unknown shared-loader or price-primitive edits always produce
+    a new digest, so stale prices cannot be falsely REUSEd.
+    """
+    code_root = Path(__file__).resolve().parents[2]
+    root = Path(root) if root is not None else code_root
+    # Synthetic fixtures with a separate source root must keep ordinary strict
+    # byte hashing; a project-local attestation cannot certify arbitrary files.
+    attested = root.resolve() == code_root.resolve()
+    if attested:
+        try:
+            attested = (
+                _oracle_price_provider_contract_sha256()
+                == _ORACLE_PRICE_PROFILE_CONTRACT_SHA256
+                and _oracle_price_configuration_sha256()
+                == _ORACLE_PRICE_CONFIGURATION_SHA256
+            )
+        except (ValueError, KeyError, TypeError):
+            attested = False
     source_digest = sha256()
     for relative in _DAILY_SCORE_SOURCE_MODULES:
         source_file = root / relative
         if not source_file.is_file():
             raise ValueError(f"Oracle price-score source implementation unavailable: {relative}")
+        physical_sha = compute_file_sha256(source_file)
+        source_sha = physical_sha
+        if attested and relative in _LEGACY_PRICE_REGISTRY_SOURCE_SHA256:
+            source_sha = _LEGACY_PRICE_REGISTRY_SOURCE_SHA256[relative]
+        elif (attested and relative == "filters/breakout_quality/daily_ranker_data.py"
+              and physical_sha == _AUDITED_NETPNL_DIAGNOSTIC_ONLY_REVISION[0]):
+            source_sha = _AUDITED_NETPNL_DIAGNOSTIC_ONLY_REVISION[1]
         source_digest.update(relative.encode("utf-8") + b"\0")
-        source_digest.update(compute_file_sha256(source_file).encode("ascii") + b"\n")
+        source_digest.update(source_sha.encode("ascii") + b"\n")
     return source_digest.hexdigest()
 
 

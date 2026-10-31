@@ -222,6 +222,7 @@ class FormalMinTrade40PITLabels:
     matured: np.ndarray
     maturity_dates: np.ndarray
     preflight: dict[str, Any]
+    raw_net_pnl: np.ndarray | None = None
 
 
 def materialize_formal_mintrade40_pit_labels(
@@ -234,8 +235,10 @@ def materialize_formal_mintrade40_pit_labels(
     exchange_calendar: pd.DatetimeIndex,
     fit_cutoff: Any,
     research_end_is_terminal: bool = False,
+    horizon_sessions: int | None = HORIZON_SESSIONS,
+    outcome_metric: str = "net_r",
 ) -> FormalMinTrade40PITLabels:
-    """Compute a seed's *historically mature* 40-session Net-R without OOS rows.
+    """Compute historical FIT-safe canonical Min NetR or NetPnL, fixed/full-cycle.
 
     No model optimization, score ranking, Oracle percentile mapping or portfolio
     REPLAY is performed here. Only the canonical per-stock execution owner can
@@ -243,6 +246,12 @@ def materialize_formal_mintrade40_pit_labels(
     can also mature before FIT, while a closeout forced solely by the FIT
     cutoff is NOT treated as a completed 40D label. Unknowns remain NaN.
     """
+    if outcome_metric not in {"net_r", "net_pnl"}:
+        raise FormalMinTrade40PITBlocked("Unknown canonical Min realized outcome metric")
+    if horizon_sessions is not None and (
+        type(horizon_sessions) is not int or horizon_sessions <= 0
+    ):
+        raise FormalMinTrade40PITBlocked("Invalid canonical Min horizon")
     cutoff = pd.Timestamp(fit_cutoff).normalize()
     source, as_of_digest = slice_formal_mintrade40_pit_source_for_fold(
         source, fit_cutoff=cutoff,
@@ -276,13 +285,16 @@ def materialize_formal_mintrade40_pit_labels(
         raise FormalMinTrade40PITBlocked("Training stock-day is absent from exchange calendar")
     batch = compute_counterfactual_trade40_batch(
         frame, positions, ticker=ticker, schedule=source.schedule,
-        exchange_calendar=calendar, horizon_sessions=HORIZON_SESSIONS,
-        research_cutoff=cutoff,
+        exchange_calendar=calendar, horizon_sessions=horizon_sessions,
+        research_cutoff=cutoff, include_net_pnl=outcome_metric == "net_pnl",
         signal_state_reset_date=source.oos_start_date,
     )
     if len(batch.target_raw_r) != len(positions):
         raise FormalMinTrade40PITBlocked("Canonical MinTrade40 label count mismatch")
-    full_horizon_matured = market_pos + HORIZON_SESSIONS < len(calendar)
+    full_horizon_matured = (
+        market_pos + horizon_sessions < len(calendar)
+        if horizon_sessions is not None else np.zeros(len(positions), dtype=bool)
+    )
     # Do not infer natural maturity from a calendar comparison. On a weekend
     # cutoff the last Friday is *before* the requested cutoff but can still be
     # an artificial forced closeout. The canonical simulator owns that reason.
@@ -305,14 +317,28 @@ def materialize_formal_mintrade40_pit_labels(
     matured &= resolved_before_cutoff
     completed = matured & np.asarray(batch.valid_mask, dtype=bool)
     censored = matured & ~np.asarray(batch.valid_mask, dtype=bool)
-    raw = np.where(completed, batch.target_raw_r, np.nan).astype(np.float32)
+    raw_values = (batch.target_raw_r if outcome_metric == "net_r"
+                  else batch.target_raw_pnl)
+    if raw_values is None:
+        raise FormalMinTrade40PITBlocked("Missing canonical broker-ledger NetPnL")
+    # Preserve broker-ledger currency precision at the source boundary. The
+    # trainer may later convert the money label to float32 for tensor ranking;
+    # do not truncate the original economic evidence here.
+    raw = np.where(completed, raw_values, np.nan).astype(
+        np.float64 if outcome_metric == "net_pnl" else np.float32
+    )
     if not np.isfinite(raw[completed]).all() or np.isfinite(raw[~completed]).any():
         raise FormalMinTrade40PITBlocked("NULL and PIT label masks disagree")
     maturity_dates = np.asarray(batch.maturity_dates, dtype="datetime64[D]").copy()
     maturity_dates[~matured] = np.datetime64("NaT")
+    # Always preserve the documented NetR field. NetPnL is a separate,
+    # canonical broker-ledger outcome, never an alias disguised as R units.
+    canonical_net_r = (raw if outcome_metric == "net_r" else np.where(
+        completed, batch.target_raw_r, np.nan).astype(np.float32))
     return FormalMinTrade40PITLabels(
-        raw_net_r=raw, completed=completed, censored=censored,
+        raw_net_r=canonical_net_r, completed=completed, censored=censored,
         matured=matured, maturity_dates=maturity_dates, preflight=preflight,
+        raw_net_pnl=raw if outcome_metric == "net_pnl" else None,
     )
 
 

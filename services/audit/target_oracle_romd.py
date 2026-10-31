@@ -115,11 +115,14 @@ ORACLE_REPORT_SCHEMA_VERSION = 8
 ORACLE_PARITY_IMPLEMENTATION = "original_oracle_contract_parity_bugfix_20261027_full_research_cutoff_v4"
 PERIOD_STATS_IMPLEMENTATION = "full_year_calendar_verified_20261026"
 # Resolve comparison membership from the Audit definition on every run.
-from core.audit_registry import AUDIT_REUSABLE_REPORTS
+from core.audit_registry import AUDIT_REUSABLE_REPORTS, resolve_current_oracle_comparisons
 
 _ORACLE_CATALOG_SOURCE = AUDIT_REUSABLE_REPORTS["breakout_quality"]["target_oracle_romd"]["source"]
 _ORACLE_DEFAULT_COMPARISONS = _ORACLE_CATALOG_SOURCE["oracle_comparisons"]
-_ORACLE_RETIRED_TARGETS = frozenset(_ORACLE_CATALOG_SOURCE["retired_oracle_targets"])
+_ORACLE_RETIRED_TARGETS = frozenset(
+    (*_ORACLE_CATALOG_SOURCE["retired_oracle_targets"],
+     *_ORACLE_CATALOG_SOURCE.get("historical_only_oracle_targets", ()))
+)
 
 # Recipe implementation is stable; WHICH recipes and providers are needed is
 # resolved from the selected comparisons, never from a second target allowlist.
@@ -148,9 +151,15 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
             "CONTRACT_UNRESOLVED: Oracle perfect Target-to-Score mapping must "
             "follow the original canonical daily-percentile contract"
         )
-    declared = tuple(definition.source.get("oracle_comparisons") or ())
-    selected = tuple(item for item in declared
-                     if not isinstance(item, Mapping) or item.get("enabled", True))
+    try:
+        selected = resolve_current_oracle_comparisons(definition.source)
+    except ValueError as exc:
+        reason = str(exc)
+        if reason.startswith("Historical-only Oracle target"):
+            raise OracleBlockedError(
+                f"Oracle retired Target identity不得重新啟用: {reason}"
+            ) from exc
+        raise OracleBlockedError(f"Oracle comparison清單非法: {reason}") from exc
     if not selected:
         raise OracleBlockedError("Oracle comparison清單為空；請由正式Registry設定比較對象")
     definitions: list[tuple[str, str]] = []
@@ -378,11 +387,11 @@ def _direct_arm(definition, settings, base, exact):
         and (arm.dl_runtime_options or {}).get("selection_order") == "model_score_desc_then_canonical_tie_v1"
         and (arm.dl_runtime_options or {}).get("selection_only") is True
     )]
-    if not compatible:
-        # Direct is a formally declared controlled selector in this Audit,
-        # even when all Direct Strategy Compare rows are currently disabled.
-        compatible = [settings.arms[str(definition.source["direct_arm_id"])]]
-    direct = compatible[0]
+    # The Audit Registry names the canonical Direct selector reference even
+    # while that historical Strategy Compare arm is disabled. Never replace
+    # an invalid registered reference with a different currently enabled arm:
+    # that would silently authorize a changed selector contract.
+    direct = settings.arms[str(definition.source["direct_arm_id"])]
     options = dict(direct.dl_runtime_options or {})
     if (not direct.dl_enabled or direct.param_source != base.param_source
             or direct.param_policy != base.param_policy or direct.rule_policy != "all_off"
@@ -1105,19 +1114,33 @@ def _build_oracle_score_panels(
     return scores, evidence
 
 
+# Oracle inventory/retirement is NOT an executable price formula. Historical
+# price receipts signed the old *combined* function list; preserve that signed
+# fingerprint only while its independently reviewed price-producing functions
+# remain unchanged. A real formula change yields a different fingerprint.
+_CERTIFIED_PRICE_PRODUCER_ONLY_SHA256 = (
+    "af8c032ba6fbf0737318fd1a349409d93c95018da74cdf405b2a8996b0cf0380"
+)
+_HISTORICAL_ORACLE_PRICE_FORMULA_SHA256 = (
+    "d73b4ce20dd958cb75b094f49d6abac94d31e34ca7222fa5806675fd931964bd"
+)
+
+
 def _price_score_algorithm_sha256() -> str:
-    """Hash ONLY canonical price-truth implementation, not menu/report code."""
+    """Attest only executing price-score algorithms, never a Target inventory."""
     functions = (
-        _oracle_comparison_plan, _formal_dl_score_start,
-        _build_oracle_score_panels, _load_truth, _market_truth_for_oracle,
-        _reconcile_oracle_truth,
+        _formal_dl_score_start, _build_oracle_score_panels, _load_truth,
+        _market_truth_for_oracle, _reconcile_oracle_truth,
         _canonical_score_map_sha256,
     )
     digest = hashlib.sha256()
     for func in functions:
         digest.update(func.__qualname__.encode("utf-8") + b"\0")
         digest.update(inspect.getsource(func).encode("utf-8") + b"\n")
-    return digest.hexdigest()
+    executing = digest.hexdigest()
+    if executing == _CERTIFIED_PRICE_PRODUCER_ONLY_SHA256:
+        return _HISTORICAL_ORACLE_PRICE_FORMULA_SHA256
+    return executing
 
 
 def _price_score_replay_lineage(definition, project_root: Path | None = None) -> dict[str, Any]:

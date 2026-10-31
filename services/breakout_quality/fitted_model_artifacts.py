@@ -45,7 +45,7 @@ from services.breakout_quality.fitting_data_dependencies import (
     forward_publication_fit_dependency_issues, verified_published_context_fit_proof,
     native_rolling_score_refresh_candidate,
     migrated_forward_origin_training_evidence, context_source_for_profile,
-    fitting_context_origin_issue,
+    fitting_context_origin_issue, is_formal_min_realized_target_contract,
 )
 from filters.breakout_quality.models.factory import build_model, count_trainable_parameters
 
@@ -751,7 +751,8 @@ def _forward_checkpoint_import_issues(
     source_target = dict(source_manifest.get("source_continuous_target") or {})
     expected_source = dict(fold_contract.get("source_contract") or {})
     published_fit_source = None
-    if dict(source_target.get('target_contract') or {}).get('target_kind') == 'formal_seed_mintrade40_broker_net_r':
+    if is_formal_min_realized_target_contract(
+            dict(source_target.get('target_contract') or {})):
         # Read the original checkpoint's canonical FIT sidecar, not score or
         # research report data. Its checkpoint bytes are cross-checked below.
         sidecar = (_read_json(Path(source_model_dir) / FITTED_MODEL_MANIFEST_FILENAME)

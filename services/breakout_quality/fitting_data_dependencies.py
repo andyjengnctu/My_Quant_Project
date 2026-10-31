@@ -39,6 +39,18 @@ from filters.breakout_quality.paths import (
 from filters.breakout_quality.predicted_context_artifact import maybe_predicted_context_artifact_spec
 
 
+FORMAL_MIN_REALIZED_TARGET_KINDS = frozenset({
+    'formal_seed_mintrade40_broker_net_r',
+    'formal_seed_mintrade_fullcycle_broker_net_r',
+    'formal_seed_mintrade_fullcycle_broker_net_pnl',
+})
+
+
+def is_formal_min_realized_target_contract(contract: Any) -> bool:
+    return (isinstance(contract, Mapping)
+            and contract.get('target_kind') in FORMAL_MIN_REALIZED_TARGET_KINDS)
+
+
 def mintrade40_fit_sample_sha256(bundle: Any, ordered_group_ids: Any) -> str | None:
     """Bind the actual ordered FIT cohort/labels; never the later score rows.
 
@@ -48,7 +60,7 @@ def mintrade40_fit_sample_sha256(bundle: Any, ordered_group_ids: Any) -> str | N
     upstream teacher signature was accidentally left unchanged.
     """
     contract = dict(dict(bundle.target_manifest or {}).get('target_contract') or {})
-    if contract.get('target_kind') != 'formal_seed_mintrade40_broker_net_r':
+    if not is_formal_min_realized_target_contract(contract):
         return None
     ids = np.asarray(ordered_group_ids, dtype=np.int64)
     table = bundle.group_table
@@ -64,7 +76,12 @@ def mintrade40_fit_sample_sha256(bundle: Any, ordered_group_ids: Any) -> str | N
     label_dates = pd.to_datetime(rows['label_eval_end_date'], errors='raise')
     if label_dates.isna().any():
         raise ValueError('MinTrade40 FIT has missing maturity date')
-    digest = sha256(b'formal_mintrade40_ordered_fit_truth_v1\n')
+    # Preserve archived 40D FitKey bytes. New full-cycle targets use a separate
+    # salt so neither horizon nor monetary/R outcomes can alias historical FIT.
+    salt = (b'formal_mintrade40_ordered_fit_truth_v1\n'
+            if contract['target_kind'] == 'formal_seed_mintrade40_broker_net_r'
+            else (f"{contract['target_kind']}_ordered_fit_truth_v1\n").encode('utf-8'))
+    digest = sha256(salt)
     for ticker, date, pos, maturity, raw in zip(
         rows['ticker'].astype(str), pd.to_datetime(rows['date']),
         rows['source_pos'], label_dates, target,
@@ -99,7 +116,7 @@ class FitDataDependencies:
     def _asof_target_contract(self, fit_cutoff: Any | None) -> Any:
         target = self.target
         original = target.get('target_contract')
-        if not isinstance(original, Mapping) or original.get('target_kind') != 'formal_seed_mintrade40_broker_net_r':
+        if not is_formal_min_realized_target_contract(original):
             return original
         if fit_cutoff is None:
             raise ValueError('MinTrade40 FIT identity requires explicit information cutoff')
@@ -349,8 +366,8 @@ def forward_publication_fit_dependency_issues(
     # the exact ordered training-label digest. The published evaluation manifest
     # alone cannot reconstruct this weight-affecting fact. Never bypass it to
     # import a model merely because the evaluation and score dates match.
-    is_mintrade40 = (dict(source_target.get('target_contract') or {}).get('target_kind')
-                     == 'formal_seed_mintrade40_broker_net_r')
+    is_mintrade40 = is_formal_min_realized_target_contract(
+        dict(source_target.get('target_contract') or {}))
     issues = []
     if is_mintrade40 and (fit_cutoff is None or not isinstance(published_forward_fit_source, Mapping)):
         return ('MinTrade40 original Forward FIT source witness missing',)

@@ -1407,6 +1407,10 @@ def load_daily_universal_ranker_data(
     valid_date_chunks: list[np.ndarray] = []
     valid_label_end_chunks: list[np.ndarray] = []
     valid_target_chunks: list[np.ndarray] = []
+    # Only money-denominated targets need a separate, canonical R diagnostic.
+    valid_trade_r_diagnostic_chunks: list[np.ndarray] = []
+    # Only money-denominated targets need a separate, canonical R diagnostic.
+    valid_trade_r_diagnostic_chunks: list[np.ndarray] = []
     valid_context_chunks: list[np.ndarray] = []
     valid_favorable_chunks: list[np.ndarray] = []
     valid_adverse_chunks: list[np.ndarray] = []
@@ -1432,6 +1436,9 @@ def load_daily_universal_ranker_data(
     skipped_tickers = 0
     processed_tickers = 0
     target_valid_so_far = 0
+    trade_diagnostic_r_required = (
+        trade_path_mode and str(target_lineage.get("value_field") or "raw_net_r") == "raw_net_pnl"
+    )
     stock_input_count = sum(1 for raw_ticker, _path in csv_inputs if str(raw_ticker) != benchmark_ticker)
     if progress_callback is not None:
         progress_callback(0, stock_input_count, 0, 0)
@@ -1491,6 +1498,10 @@ def load_daily_universal_ranker_data(
             # and maturity definitions. The callback is provided by the domain
             # FIT source owner and cannot be constructed from Oracle hindsight.
             local_targets = np.full(len(local_positions), np.nan, dtype=np.float32)
+            local_trade_r_diagnostic = (
+                np.full(len(local_positions), np.nan, dtype=np.float32)
+                if trade_diagnostic_r_required else None
+            )
             local_target_valid = np.zeros(len(local_positions), dtype=bool)
             local_label_end_dates = np.full(
                 len(local_positions), np.datetime64("NaT"), dtype="datetime64[D]"
@@ -1513,6 +1524,8 @@ def load_daily_universal_ranker_data(
                 # source.  NetR keeps its original field and FitKey bytes.
                 value_field = str(target_lineage.get("value_field") or "raw_net_r")
                 local_targets[eligible] = np.asarray(getattr(completed, value_field), dtype=np.float32)
+                if local_trade_r_diagnostic is not None:
+                    local_trade_r_diagnostic[eligible] = np.asarray(completed.raw_net_r, dtype=np.float32)
                 local_target_valid[eligible] = np.asarray(completed.completed, dtype=bool)
                 local_label_end_dates[eligible] = np.asarray(completed.maturity_dates, dtype="datetime64[D]")
             # Common MFE/MAE are independent price outcomes, never broker NetR.
@@ -1646,6 +1659,10 @@ def load_daily_universal_ranker_data(
                 )
             )
             valid_target_chunks.append(np.asarray(valid_targets, dtype=np.float32))
+            if trade_diagnostic_r_required:
+                valid_trade_r_diagnostic_chunks.append(np.asarray(
+                    local_trade_r_diagnostic[local_target_valid], dtype=np.float32,
+                ))
             valid_context_chunks.append(np.asarray(valid_context, dtype=np.float32))
             valid_favorable_chunks.append(np.asarray(valid_favorable, dtype=np.float32))
             valid_adverse_chunks.append(np.asarray(valid_adverse, dtype=np.float32))
@@ -1867,6 +1884,17 @@ def load_daily_universal_ranker_data(
             "target_minimum_low_return": minimum_low_return,
         }
     )
+    if trade_diagnostic_r_required:
+        # NetPnL is the supervised currency target. Only R-named post-replay
+        # diagnostics consume the R value from the very same executed trade.
+        # Do not substitute it for the NetPnL training target or FIT identity.
+        diagnostic_r = np.concatenate([
+            np.concatenate(valid_trade_r_diagnostic_chunks),
+            np.full(len(inference_dates), np.nan, dtype=np.float32),
+        ])
+        if np.any(target_valid & ~np.isfinite(diagnostic_r)):
+            raise ValueError("Money target lacks same-trade canonical NetR diagnostic")
+        group_table["target_realized_net_r_for_diagnostics"] = diagnostic_r
     if trade_path_mode:
         # Score eligibility is independent of whether Min executed a trade.
         # Reconstruct *evaluation-only* 40D prices for stock-days whose Min
@@ -2078,7 +2106,9 @@ def load_daily_universal_ranker_data(
     target_contract = (
         {
             "target_id": target_id,
-            "horizon_bars": int(target_policy.horizon_bars),
+            "horizon_bars": (int(target_policy.horizon_bars)
+                             if target_policy.horizon_bars is not None else None),
+            **({"horizon_mode": "full_trade_cycle"} if target_policy.horizon_bars is None else {}),
             "target_kind": str(target_lineage.get("target_kind") or "formal_seed_mintrade40_broker_net_r"),
             "null_policy": str(target_lineage.get("null_policy") or "unfilled_or_unmatured_is_missing_v1"),
             "maturity_policy": str(target_lineage.get("maturity_policy") or "natural_exit_or_40_exchange_sessions_pit_v1"),

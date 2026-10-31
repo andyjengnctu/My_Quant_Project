@@ -120,6 +120,17 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     "MinTrade40_NetR": "LABEL-mintrade40_realized_net_r_v1",
                     "MinTrade40_NetR_Direct": "LABEL-mintrade40_realized_net_r_v1",
                 },
+                # Removed only from the CURRENT Oracle comparison inventory.
+                # These 60-session scientific identities are retained solely
+                # to read completed historical evidence. Unlike retired aliases,
+                # their independent synthetic historical calculation remains
+                # testable, but formal selection requires current registration.
+                "historical_only_oracle_targets": {
+                    "DailyUniversal_MinTrade60_NetR": "LABEL-daily_universal_formal_min_roos_trade60_netr_v1",
+                    "DailyUniversal_MinTrade60_NetR_Direct": "LABEL-daily_universal_formal_min_roos_trade60_netr_v1",
+                    "DailyUniversal_MinTrade60_NetPnL": "LABEL-daily_universal_formal_min_roos_trade60_netpnl_v1",
+                    "DailyUniversal_MinTrade60_NetPnL_Direct": "LABEL-daily_universal_formal_min_roos_trade60_netpnl_v1",
+                },
                 "oracle_comparisons": (
                     {"target": "CG40_EqualRank", "description": "40D MFE + full D40 Safety, 50/50 daily rank", "score": "equal_rank_mfe_safety", "provider": "pure_mfe40_provider", "selector": "exact"},
                     {"target": "MFE40_Control", "description": "40D MFE only (control, not target recommendation)", "score": "mfe", "provider": "pure_mfe40_provider", "selector": "exact"},
@@ -132,10 +143,6 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     {"target": "T40-MFE_Direct", "description": "Same T40-MFE score; canonical No-K/No-R0 direct allocation", "score_source": "T40-MFE", "selector": "direct"},
                     {"target": "DailyUniversal_MinTrade40_NetR", "description": "Formal Min ROOS Net-R, natural exit / 40 sessions / Research cutoff (earliest), hindsight ranking", "score": "daily_trade_path_net_r", "provider": "daily_trade40_profile", "selector": "exact"},
                     {"target": "DailyUniversal_MinTrade40_NetR_Direct", "description": "Same formal per-seed Min ROOS daily truth and ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade40_NetR", "selector": "direct"},
-                    {"target": "DailyUniversal_MinTrade60_NetR", "description": "Formal Min ROOS Net-R, natural exit / 60 sessions / Research cutoff (earliest), hindsight ranking", "score": "daily_trade_path_net_r", "provider": "daily_trade40_profile", "horizon_sessions": 60, "selector": "exact"},
-                    {"target": "DailyUniversal_MinTrade60_NetR_Direct", "description": "Same formal 60-session Min ROOS daily truth and ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade60_NetR", "selector": "direct"},
-                    {"target": "DailyUniversal_MinTrade60_NetPnL", "description": "Formal Min ROOS broker-ledger NetPnL at canonical reference sizing, natural exit / 60 sessions / Research cutoff (earliest), hindsight ranking", "score": "daily_trade_path_net_pnl", "provider": "daily_trade40_profile", "horizon_sessions": 60, "selector": "exact"},
-                    {"target": "DailyUniversal_MinTrade60_NetPnL_Direct", "description": "Same formal 60-session Min NetPnL daily truth and ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade60_NetPnL", "selector": "direct"},
                     {"target": "DailyUniversal_MinTrade_NetR", "description": "Formal per-seed Min ROOS stock-day Net-R through natural exit or Research-data-end closeout; no session cap", "score": "daily_trade_path_net_r", "provider": "daily_trade40_profile", "horizon_mode": "full_trade_cycle", "selector": "exact"},
                     {"target": "DailyUniversal_MinTrade_NetR_Direct", "description": "Same full-cycle Min Net-R target and ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade_NetR", "selector": "direct"},
                     {"target": "DailyUniversal_MinTrade_NetPnL", "description": "Formal Min full-cycle realized broker-ledger NetPnL at canonical reference sizing; natural exit or Research-cutoff closeout, hindsight ranking", "score": "daily_trade_path_net_pnl", "provider": "daily_trade40_profile", "horizon_mode": "full_trade_cycle", "selector": "exact"},
@@ -199,9 +206,42 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
 }
 
 
+def resolve_current_oracle_comparisons(source: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    """One canonical executable Oracle inventory, disjoint from history.
+
+    The current Research [1] Replay plan and the Target x DL overview must
+    consume the same registry projection. Removing an item never deletes its
+    evidence; keeping historical evidence never re-enables that item. A broken
+    combination is an installation/registration error, not a RUN plan.
+    """
+    from collections.abc import Mapping
+
+    registered = source.get("oracle_comparisons")
+    if not isinstance(registered, (tuple, list)):
+        raise ValueError("Canonical Oracle comparison inventory must be ordered")
+    inactive = (
+        set(source.get("retired_oracle_targets") or ())
+        | set(source.get("historical_only_oracle_targets") or ())
+    )
+    names: set[str] = set()
+    active: list[dict[str, Any]] = []
+    for row in registered:
+        if not isinstance(row, Mapping):
+            raise ValueError("Canonical Oracle comparison must be a mapping")
+        name = str(row.get("target") or "")
+        if not name or name in names:
+            raise ValueError(f"Canonical Oracle comparison duplicate/empty identity: {name}")
+        if name in inactive:
+            raise ValueError(f"Historical-only Oracle target cannot be executable: {name}")
+        names.add(name)
+        if row.get("enabled", True):
+            active.append(dict(row))
+    return tuple(active)
+
 
 __all__ = [
     "AUDIT_MODULES",
     "AUDIT_REUSABLE_REPORTS",
     "AUDIT_SCHEMA_VERSION",
+    "resolve_current_oracle_comparisons",
 ]

@@ -1320,15 +1320,13 @@ class OracleAuditContractCases(TestCase):
             {"CG40_EqualRank", "MFE40_Control", "R40", "T40",
              "T40-MFE", "MFE40_Direct", "R40_Direct", "T40_Direct", "T40-MFE_Direct"},
         )
-        self.assertEqual(len(oracle._oracle_comparison_plan(self.active_definition)["targets"]), 20)
+        self.assertEqual(len(oracle._oracle_comparison_plan(self.active_definition)["targets"]), 16)
         self.assertNotIn("MinTrade40_NetR", dict(oracle._oracle_comparison_plan(self.active_definition)["targets"]))
         self.assertNotIn("MinTrade40_NetR_Direct", dict(oracle._oracle_comparison_plan(self.active_definition)["targets"]))
         self.assertEqual(oracle._oracle_comparison_plan(self.active_definition)["aliases"], {
             "MFE40_Direct": "MFE40_Control", "R40_Direct": "R40", "T40_Direct": "T40",
             "T40-MFE_Direct": "T40-MFE",
             "DailyUniversal_MinTrade40_NetR_Direct": "DailyUniversal_MinTrade40_NetR",
-            "DailyUniversal_MinTrade60_NetR_Direct": "DailyUniversal_MinTrade60_NetR",
-            "DailyUniversal_MinTrade60_NetPnL_Direct": "DailyUniversal_MinTrade60_NetPnL",
             "DailyUniversal_MinTrade_NetR_Direct": "DailyUniversal_MinTrade_NetR",
             "DailyUniversal_MinTrade_NetPnL_Direct": "DailyUniversal_MinTrade_NetPnL",
             "DailyUniversal_MinTrade_NetPnL_Positive_Direct": "DailyUniversal_MinTrade_NetPnL",
@@ -2456,7 +2454,7 @@ class RemovedMinTrade40OracleComparisonCases(TestCase):
         current = _ACTIVE_ORACLE_DEFINITION
         planned = oracle._oracle_comparison_plan(current)
         names = {name for name, _ in planned["targets"]}
-        self.assertEqual(len(names), 20)
+        self.assertEqual(len(names), 16)
         self.assertNotIn("MinTrade40_NetR", names)
         self.assertNotIn("MinTrade40_NetR_Direct", names)
         self.assertIn("DailyUniversal_MinTrade40_NetR", names)
@@ -5634,6 +5632,100 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
             self.assertIn("Target", preview["text"])
             self.assertIn("T40", preview["text"])
             self.assertNotIn("P16 前置工件計畫", preview["text"])
+
+
+class OracleInventoryAndSourceIsolationRegressionCases(TestCase):
+    """Adding/removing research Targets must not invalidate unrelated Replay."""
+
+    def test_both_formal_research_one_views_exclude_historical_60d(self):
+        from core.audit_registry import resolve_current_oracle_comparisons
+        from services.research.target_dl_overview import (
+            collect_target_dl_overview, render_target_dl_overview,
+        )
+        definition = _ACTIVE_ORACLE_DEFINITION
+        live = resolve_current_oracle_comparisons(definition.source)
+        names = [row["target"] for row in live]
+        self.assertEqual(len(names), 16)
+        self.assertEqual(names, [name for name, _ in oracle._oracle_comparison_plan(definition)["targets"]])
+        self.assertTrue(set(definition.source["historical_only_oracle_targets"]).isdisjoint(names))
+        self.assertFalse(any("MinTrade60" in name for name in names))
+        # The actual [1] -> [1] renderer and [1] -> [2] collector, not just
+        # registration metadata, must use the very same active membership.
+        decisions = {(seed, name): "REUSE" for seed in range(1, 9)
+                     for name in ("C96", *names)}
+        visible = oracle.render_replay_preflight(
+            label="Fixed", seeds=tuple(range(1, 9)), targets=["C96", *names],
+            decisions=decisions,
+        )
+        overview = render_target_dl_overview(collect_target_dl_overview(ROOT))
+        self.assertNotIn("MinTrade60", visible)
+        self.assertNotIn("MinTrade60", overview)
+        self.assertEqual(len(decisions), 8 * 17)
+
+    def test_historical_only_target_cannot_enter_plan_even_if_misregistered(self):
+        from core.audit_registry import resolve_current_oracle_comparisons
+        definition = _ACTIVE_ORACLE_DEFINITION
+        past = "DailyUniversal_MinTrade60_NetR"
+        inserted = {"target": past, "description": "accidentally enabled",
+                    "score": "daily_trade_path_net_r", "provider": "daily_trade40_profile",
+                    "horizon_sessions": 60, "selector": "exact"}
+        source = {**definition.source,
+                  "oracle_comparisons": (*definition.source["oracle_comparisons"], inserted)}
+        with self.assertRaisesRegex(ValueError, "Historical-only Oracle target"):
+            resolve_current_oracle_comparisons(source)
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "retired Target identity"):
+            oracle._oracle_comparison_plan(replace(definition, source=source))
+
+    def test_new_unrelated_target_does_not_change_old_price_implementation_sha(self):
+        from services.audit.oracle_score_artifacts import oracle_daily_source_fingerprint
+        original = _ACTIVE_ORACLE_DEFINITION
+        recipe = {"target": "SyntheticPriceNew", "description": "new unrelated price recipient",
+                  "score": "mfe", "provider": "pure_mfe40_provider", "selector": "exact"}
+        new = replace(original, source={**original.source,
+                      "oracle_comparisons": (*original.source["oracle_comparisons"], recipe)})
+        before = oracle._price_score_replay_lineage(original)
+        self.assertEqual(before, oracle._price_score_replay_lineage(new))
+        self.assertEqual(
+            oracle._price_score_algorithm_sha256(),
+            "d73b4ce20dd958cb75b094f49d6abac94d31e34ca7222fa5806675fd931964bd",
+        )
+        # Independently verified 154445 source code had the same four Oracle
+        # provider contracts and executing price algorithms.  No Target list
+        # mutation is allowed to invalidate the signed source lineage.
+        self.assertEqual(oracle_daily_source_fingerprint(),
+                         "b7bdeb766babdb66ac5084125d08f2bf59390843e4dc09eb84645c093a3c770d")
+
+    def test_unrelated_model_registration_is_not_price_source_drift(self):
+        from services.audit import oracle_score_artifacts as source
+        from core.file_integrity import compute_file_sha256 as original
+        from config import breakout_quality as cfg
+        before = source.oracle_daily_source_fingerprint()
+        ignored = {"core/breakout_quality_registry.py", "core/breakout_quality_runtime.py",
+                   "config/breakout_quality.py"}
+        def only_registry_changes(path):
+            if Path(path).resolve().relative_to(ROOT).as_posix() in ignored:
+                return "f" * 64
+            return original(Path(path))
+        with patch.object(source, "compute_file_sha256", side_effect=only_registry_changes):
+            self.assertEqual(source.oracle_daily_source_fingerprint(), before)
+        # The actual price cohort / feature owner must still invalidate.
+        def feature_changes(path):
+            if Path(path).resolve() == ROOT / "filters/breakout_quality/features.py":
+                return "e" * 64
+            return original(Path(path))
+        with patch.object(source, "compute_file_sha256", side_effect=feature_changes):
+            self.assertNotEqual(source.oracle_daily_source_fingerprint(), before)
+        # Price-affecting configuration cannot use the historical alias.
+        with patch.object(cfg, "BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE", "2022-01-01"):
+            self.assertNotEqual(source.oracle_daily_source_fingerprint(), before)
+        # Source code unrelated to a new model must never bypass a changed
+        # general data loader unless that exact change was attested.
+        def loader_changes(path):
+            if Path(path).resolve() == ROOT / "filters/breakout_quality/daily_ranker_data.py":
+                return "d" * 64
+            return original(Path(path))
+        with patch.object(source, "compute_file_sha256", side_effect=loader_changes):
+            self.assertNotEqual(source.oracle_daily_source_fingerprint(), before)
 
 if __name__ == "__main__":
     main(verbosity=2)

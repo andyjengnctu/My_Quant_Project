@@ -730,8 +730,18 @@ def _selection_target_lookup(
     groups = bundle.group_table[["group_index", "ticker", "date", "label"]].copy()
     groups["ticker"] = groups["ticker"].fillna("").astype(str).str.strip()
     groups["date"] = pd.to_datetime(groups["date"], errors="raise").dt.strftime("%Y-%m-%d")
-    groups["target_raw_r"] = bundle.raw_target
-    groups["target_available"] = bundle.target_valid & pd.Series(bundle.raw_target).map(math.isfinite).to_numpy()
+    # Currency-denominated NetPnL is never misreported as an R diagnostic.
+    # Its validated bundle carries same-execution NetR, while model FIT
+    # continues to learn the original broker-ledger NetPnL in currency units.
+    diagnostic_r = (
+        bundle.group_table["target_realized_net_r_for_diagnostics"].to_numpy(dtype=float)
+        if "target_realized_net_r_for_diagnostics" in bundle.group_table.columns
+        else bundle.raw_target
+    )
+    groups["target_raw_r"] = diagnostic_r
+    groups["target_available"] = (
+        bundle.target_valid & pd.Series(diagnostic_r).map(math.isfinite).to_numpy()
+    )
     joined = scores.merge(groups, on="group_index", how="left", validate="one_to_one", suffixes=("", "_dataset"))
     mismatch = (
         joined["ticker"] != joined["ticker_dataset"]

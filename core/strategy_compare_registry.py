@@ -142,7 +142,7 @@ STRATEGY_COMPARE_SUITES = {
         "arm_ids": (
             "C96", "C97", "C98", "C99", "C100", "C101", "C102", "C103",
             "C105", "C106", "C107", "C108", "C109", "C110",
-            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120",
+            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124",
         ),
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
@@ -154,8 +154,8 @@ STRATEGY_COMPARE_SUITES = {
             "C99-C101", "C100-C102",
             "C103-C96", "C105-C96", "C106-C96", "C107-C96", "C108-C96",
             "C108-C107",
-            "C109-C96", "C110-C96", "C111-C96", "C112-C96", "C115-C96", "C116-C96", "C117-C96", "C118-C96", "C119-C96", "C120-C96",
-            "C109-C107", "C110-C108", "C111-C112", "C115-C116", "C105-C117", "C106-C118", "C119-C120",
+            "C109-C96", "C110-C96", "C111-C96", "C112-C96", "C115-C96", "C116-C96", "C117-C96", "C118-C96", "C119-C96", "C120-C96", "C121-C96", "C122-C96", "C123-C96", "C124-C96",
+            "C109-C107", "C110-C108", "C111-C112", "C115-C116", "C105-C117", "C106-C118", "C119-C120", "C121-C122", "C123-C124", "C121-C123", "C122-C124",
             "C110-C109", "C111-C115", "C112-C116",
         ),
         "display_name_bases": {
@@ -181,6 +181,10 @@ STRATEGY_COMPARE_SUITES = {
             "C118": "Min MR-13CI R40 Direct No-K No-R0 / Broker-Cash",
             "C119": "Min MR-13CM Formal MinTrade40 NetR Exact K/R0 / Broker-Cash",
             "C120": "Min MR-13CM Formal MinTrade40 NetR Direct No-K No-R0 / Broker-Cash",
+            "C121": "Min MR-13CN Formal MinTrade Full-cycle NetR Exact K/R0 / Broker-Cash",
+            "C122": "Min MR-13CN Formal MinTrade Full-cycle NetR Direct No-K No-R0 / Broker-Cash",
+            "C123": "Min MR-13CO Formal MinTrade Full-cycle NetPnL Exact K/R0 / Broker-Cash",
+            "C124": "Min MR-13CO Formal MinTrade Full-cycle NetPnL Direct No-K No-R0 / Broker-Cash",
         },
     },
     "non_dl_c85_same_signal_revalidation_v1": {
@@ -2211,6 +2215,38 @@ STRATEGY_DL_SOURCES = {
             "options": {"resume": True, "allow_stale_source": False},
         },
     },
+    "CONT13CN_ROLL": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_formal_mintrade_fullcycle_netr_per_seed_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "single_seed_strategy_conversion_authorized": True,
+        "description": (
+            "MR-13CN: per-seed canonical Min ROOS full-cycle NetR,"
+            "PIT-matured historical Optimizer/P16 source only; research comparison, not Trading."
+        ),
+        "forward_scores_builder": {
+            "enabled": True, "builder_type": "selection_pit_from_existing_folds",
+            "options": {"resume": True, "allow_stale_source": False},
+        },
+    },
+    "CONT13CO_ROLL": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "single_seed_strategy_conversion_authorized": True,
+        "description": (
+            "MR-13CO: per-seed canonical Min ROOS full-cycle NetPnL,"
+            "PIT-matured historical Optimizer/P16 source only; research comparison, not Trading."
+        ),
+        "forward_scores_builder": {
+            "enabled": True, "builder_type": "selection_pit_from_existing_folds",
+            "options": {"resume": True, "allow_stale_source": False},
+        },
+    },
     "CONT13CK_ROLL": {
         "filter_id": "breakout_quality_v1",
         "model_architecture": "inception_time_v1",
@@ -2517,6 +2553,62 @@ STRATEGY_COMPARE_ARMS = {
         "param_source": "min_best_broker_cash_rolling_experiment",
         "param_policy": "base-finalist-best", "rule_policy": "all_off",
         "dl_enabled": True, "dl_id": "CONT13CM_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False, "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C121": {
+        "name": "Min MR-13CN Formal MinTrade Full-cycle NetR Exact K/R0 / Broker-Cash",
+        "description": "MR-13CN same-seed canonical P16 MinTrade Full-cycle NetR PIT rank; C96/P16 broker-cash with Exact K/R0.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CN_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C122": {
+        "name": "Min MR-13CN Formal MinTrade Full-cycle NetR Direct No-K No-R0 / Broker-Cash",
+        "description": "Same MR-13CN PIT scores/P16/broker cash as C121; only selector changes to Direct No-K/No-R0.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CN_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False, "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C123": {
+        "name": "Min MR-13CO Formal MinTrade Full-cycle NetPnL Exact K/R0 / Broker-Cash",
+        "description": "MR-13CO same-seed canonical P16 MinTrade Full-cycle NetPnL PIT rank; C96/P16 broker-cash with Exact K/R0.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CO_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C124": {
+        "name": "Min MR-13CO Formal MinTrade Full-cycle NetPnL Direct No-K No-R0 / Broker-Cash",
+        "description": "Same MR-13CO PIT scores/P16/broker cash as C123; only selector changes to Direct No-K/No-R0.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CO_ROLL",
         "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
         "dl_runtime_options": {
             "preserve_k": False, "preserve_r0": False,
@@ -2936,6 +3028,14 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C119-C96": {"left": "C119", "right": "C96", "description": "Formal MinTrade40 NetR model versus C96 broker-cash under identical P16 Exact selector"},
     "C120-C96": {"left": "C120", "right": "C96", "description": "Formal MinTrade40 NetR model versus C96 broker-cash under identical P16 Direct selector"},
     "C119-C120": {"left": "C119", "right": "C120", "description": "Same MR-13CM per-seed PIT scores/P16/fees: Exact K/R0 versus Direct No-K/No-R0"},
+    "C121-C96": {"left": "C121", "right": "C96", "description": "Full-cycle Min NetR PIT model versus C96 under same Min P16 Exact"},
+    "C122-C96": {"left": "C122", "right": "C96", "description": "Full-cycle Min NetR PIT model versus C96 Direct"},
+    "C123-C96": {"left": "C123", "right": "C96", "description": "Full-cycle Min NetPnL PIT model versus C96 Exact"},
+    "C124-C96": {"left": "C124", "right": "C96", "description": "Full-cycle Min NetPnL PIT model versus C96 Direct"},
+    "C121-C122": {"left": "C121", "right": "C122", "description": "Same MR-13CN PIT score, Exact versus Direct"},
+    "C123-C124": {"left": "C123", "right": "C124", "description": "Same MR-13CO PIT score, Exact versus Direct"},
+    "C121-C123": {"left": "C121", "right": "C123", "description": "Full-cycle NetR versus NetPnL, same P16 Exact"},
+    "C122-C124": {"left": "C122", "right": "C124", "description": "Full-cycle NetR versus NetPnL, same P16 Direct"},
     "C111-C115": {"left": "C111", "right": "C115", "description": "K Pure-MFE versus AH Safety-weighted MFE under same P16 Exact selector"},
     "C112-C116": {"left": "C112", "right": "C116", "description": "K Pure-MFE versus AH Safety-weighted MFE under same P16 Direct selector"},
     "C110-C109": {"left": "C110", "right": "C109", "description": "CK T40-MFE versus CJ T40 with Direct selector and identical P16"},
