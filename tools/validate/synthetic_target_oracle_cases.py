@@ -3646,6 +3646,90 @@ class OracleUnifiedReuseArchitectureCases(TestCase):
 
 
 
+class OracleReplayRunReasonEvidenceCases(TestCase):
+    """Read-only source reasons; never grant REUSE from a diagnostic."""
+
+    def test_signed_inventory_reports_missing_and_changed_inputs_without_replay(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        from services.audit import target_oracle_romd as target
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            definition, benchmark, seed, price_sha, param_sha, _proof, _sample = (
+                OracleOnePlanRealCacheCases()._fixture(root)
+            )
+            store = OracleReplayStore(root, definition.output_subdir)
+            settings, _base, _exact = target._contract(definition)
+            expected = {
+                "start_date": str(settings.start_date),
+                "end_date": str(definition.dimensions["oracle_evaluation_end_date"]),
+                "dataset": settings.dataset,
+                "dataset_sha256": price_sha,
+                "param_sha256": param_sha,
+                "benchmark": benchmark.benchmark_id,
+                "replay_policy": {
+                    "oracle_parity_implementation": target.ORACLE_PARITY_IMPLEMENTATION,
+                    "period_stats_implementation": target.PERIOD_STATS_IMPLEMENTATION,
+                },
+            }
+            diag = {}
+            candidates, conflict = store.inspect_current_source(
+                seed=seed, target="R40", expected_inputs=expected,
+                diagnostic_out=diag,
+            )
+            self.assertEqual(conflict, None)
+            self.assertEqual(len(candidates), 1)
+            self.assertEqual(diag["signed_receipts"], 1)
+            self.assertEqual(diag["source_candidates"], 1)
+            self.assertEqual(diag["differing_fields"], ())
+            diag_wrong = {}
+            current, conflict = store.inspect_current_source(
+                seed=seed, target="R40",
+                expected_inputs={**expected, "param_sha256": "f"*64},
+                diagnostic_out=diag_wrong,
+                allow_historical_execution_input_drift=True,
+            )
+            self.assertEqual(current, ())
+            self.assertIsNone(conflict)
+            self.assertEqual(diag_wrong["signed_receipts"], 1)
+            self.assertIn("param_sha256", diag_wrong["differing_fields"])
+            self.assertIn("param_sha256", target._source_run_diagnostic(diag_wrong))
+            diag_none = {}
+            missing, conflict = store.inspect_current_source(
+                seed=seed + 12, target="R40",
+                expected_inputs=expected, diagnostic_out=diag_none,
+            )
+            self.assertEqual((missing, conflict), ((), None))
+            self.assertEqual(diag_none["signed_receipts"], 0)
+            self.assertEqual(target._source_run_diagnostic(diag_none),
+                             "沒有逐筆簽章 Replay 收據")
+            # A source diagnostic never changes an identity, writes a replay,
+            # or invents a scored observation.
+            self.assertEqual(len(store.existing_completed_identities(
+                seed=seed, target="R40")), 1)
+
+    def test_reason_summary_does_not_change_preflight_actions(self):
+        from services.audit import target_oracle_romd as target
+        seeds = [1, 2]
+        items = ["C96", "R40"]
+        decisions = {(1,"C96"):"REUSE",(2,"C96"):"REUSE",
+                     (1,"R40"):"RUN",(2,"R40"):"RUN"}
+        reasons = {(1,"R40"):"沒有逐筆簽章 Replay 收據",
+                   (2,"R40"):"沒有逐筆簽章 Replay 收據"}
+        line = target._render_reuse_run_reasons(decisions=decisions, reasons=reasons)
+        self.assertEqual(line.count("沒有逐筆簽章 Replay 收據"), 1)
+        self.assertIn(" 2", line)
+        preview = target.render_replay_preflight(
+            label="Fixed", seeds=seeds, targets=items, decisions=decisions,
+            reuse_diagnostic=line,
+        )
+        self.assertIn("REUSE 2 / RUN（需回放）2", preview)
+        self.assertIn("[Target REUSE 核對原因｜唯讀]", preview)
+        self.assertNotIn("[Target REUSE 核對原因｜唯讀]", target.render_replay_preflight(
+            label="Fixed", seeds=seeds, targets=items, decisions=decisions,
+        ))
+        self.assertEqual(decisions[(1,"R40")],"RUN")
+
+
 class OracleOnePlanRealCacheCases(TestCase):
     """Actual signed replay receipts, a single pre-execution table and NO truth on reuse."""
 
@@ -3737,6 +3821,7 @@ class OracleOnePlanRealCacheCases(TestCase):
                 self.assertEqual(len(prompts), 1)
                 self.assertEqual(planned, [])
                 self.assertIn("REUSE 2 / RUN（需回放）1 / BLOCKED 0", prompts[0])
+                self.assertIn("沒有逐筆簽章 Replay 收據 1", prompts[0])
                 self.assertIn("R40", prompts[0])
                 self.assertIn("T40", prompts[0])
                 result = oracle.build_report(

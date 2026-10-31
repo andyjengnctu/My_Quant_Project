@@ -797,6 +797,7 @@ class OracleReplayStore:
         self, *, seed: int, target: str, expected_inputs: Mapping[str, Any],
         allow_historical_execution_input_drift: bool = False,
         certified_price_lineage: Mapping[str, Any] | None = None,
+        diagnostic_out: dict[str, Any] | None = None,
     ) -> tuple[tuple[dict[str, Any], ...], str | None]:
         """Find signed source candidates without producing any missing scores.
 
@@ -845,6 +846,23 @@ class OracleReplayStore:
             normalized.append((candidate, inputs))
         current = tuple(candidate for candidate, inputs in normalized
                         if not _known_input_differences(inputs, expected))
+        if diagnostic_out is not None:
+            # Read-only provenance facts. Never expose local paths, signed
+            # values, or score data; show FIELD NAMES only. A diagnostic does
+            # not authorize an incomplete/same-window receipt as REUSE.
+            comparable = [
+                inputs for _candidate, inputs in normalized
+                if all(inputs.get(field) == expected.get(field)
+                       for field in ("dataset", "start_date", "end_date"))
+            ]
+            differences = sorted({field for inputs in comparable
+                                  for field in _known_input_differences(inputs, expected)})
+            diagnostic_out.update(
+                signed_receipts=len(candidates),
+                same_window_receipts=len(comparable),
+                source_candidates=len(current),
+                differing_fields=tuple(differences),
+            )
         if current or allow_historical_execution_input_drift:
             return current, None
         for candidate, inputs in normalized:

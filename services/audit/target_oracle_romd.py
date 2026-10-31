@@ -1385,6 +1385,7 @@ def render_replay_preflight(
     seeds: list[int],
     targets: list[str],
     decisions: Mapping[tuple[int, str], str],
+    reuse_diagnostic: str | None = None,
 ) -> str:
     """Render the one complete identity-backed Replay authorization plan.
 
@@ -1406,7 +1407,42 @@ def render_replay_preflight(
         f"BLOCKED {counts['BLOCKED']}；REUSE=零Portfolio交易重算，"
         "RUN=舊執行身分過時或合法結果缺件，由系統只計算該項；"
         "BLOCKED=資料損毀或同一執行身分證據矛盾，須停止以避免覆寫；尚未開始回放",
+        *((reuse_diagnostic,) if reuse_diagnostic else ()),
     ))
+
+
+def _source_run_diagnostic(probe: Mapping[str, Any]) -> str:
+    """Explain an unverified RUN using SIGNED cache inventory only.
+
+    Nothing in this helper changes a Replay identity or derives missing score
+    evidence; actual signed receipts remain the unique reuse authority.
+    """
+    stored = int(probe.get("signed_receipts", 0))
+    if stored == 0:
+        return "沒有逐筆簽章 Replay 收據"
+    if int(probe.get("same_window_receipts", 0)) == 0:
+        return "有簽章收據，但回放期間／Dataset 不同"
+    fields = tuple(str(name) for name in probe.get("differing_fields") or ())
+    if fields:
+        # Field names are enough to locate the owner. Never print a cache
+        # value, P16 path, stock-day score, or any other signed evidence bytes.
+        return "收據輸入身分不同：" + ",".join(fields[:3]) + (
+            f" 等{len(fields)}欄" if len(fields) > 3 else ""
+        )
+    return "簽章收據存在，但目前來源核對未取得相同身分"
+
+
+def _render_reuse_run_reasons(*, decisions: Mapping[tuple[int, str], str],
+                              reasons: Mapping[tuple[int, str], str]) -> str | None:
+    """Keep one-line user-visible provenance, never turn a RUN into REUSE."""
+    from collections import Counter
+    counts = Counter(reasons.get(key, "其他未取得可重用證據")
+                     for key, action in decisions.items() if action == "RUN")
+    if not counts:
+        return None
+    detail = "；".join(f"{label} {count}" for label, count in
+                      sorted(counts.items(), key=lambda row: (-row[1], row[0])))
+    return "[Target REUSE 核對原因｜唯讀] " + detail
 
 
 def _prepare_oracle_parameters(
@@ -2625,6 +2661,7 @@ def _run_single_stage_oracle(
     identities: dict[tuple[int, str], dict[str, Any]] = {}
     metric_backfill: dict[tuple[int, str], tuple[dict[str, Any], dict[str, Any]]] = {}
     blocked: dict[tuple[int, str], str] = {}
+    run_causes: dict[tuple[int, str], str] = {}
     # Reconstruct canonical Min rolling schedule metadata once per seed, not
     # a single stock's historical trade path or future Target outcome.
     schedules: dict[int, list[dict[str, Any]]] = {}
@@ -2686,6 +2723,7 @@ def _run_single_stage_oracle(
                     complete = cache.with_win_rate(identity, obs)
                     if complete is None:
                         decisions[key] = "RUN"
+                        run_causes[key] = "完整 Replay 已存在，缺少 Win Rate 證據"
                         metric_backfill[key] = (identity, obs)
                     else:
                         decisions[key], cached[key], identities[key] = "REUSE", complete, identity
@@ -2701,6 +2739,7 @@ def _run_single_stage_oracle(
                         decisions[key] = "BLOCKED"
                     else:
                         decisions[key] = "RUN"
+                        run_causes[key] = "C96 未取得相同經濟身分收據"
                 continue
             if target in plan["daily_sources"]:
                 source = plan["daily_sources"][target]
@@ -2718,6 +2757,7 @@ def _run_single_stage_oracle(
             # Only already verified inputs enter this source probe. It never
             # guesses new scores or membership, and cannot authorize REUSE.
             # The cache owner also owns strict-versus-authorized input drift.
+            source_probe: dict[str, Any] = {}
             current_candidates, source_conflict = cache.inspect_current_source(
                 seed=seed, target=target,
                 expected_inputs={
@@ -2733,6 +2773,7 @@ def _run_single_stage_oracle(
                 allow_historical_execution_input_drift=allow_historical_execution_input_drift,
                 certified_price_lineage=(current_price_producer_lineage
                                          if target not in plan["daily_sources"] else None),
+                diagnostic_out=source_probe,
             )
             if source_conflict is not None:
                 decisions[key], blocked[key] = "BLOCKED", source_conflict
@@ -2741,6 +2782,7 @@ def _run_single_stage_oracle(
                 # Old outcomes are preserved as historical evidence. Only
                 # this missing *current* producer identity needs new truth.
                 decisions[key] = "RUN"
+                run_causes[key] = _source_run_diagnostic(source_probe)
                 continue
             if len(current_candidates) > 1:
                 decisions[key] = "BLOCKED"
@@ -2774,6 +2816,7 @@ def _run_single_stage_oracle(
                 complete = cache.with_win_rate(expected, obs)
                 if complete is None:
                     decisions[key] = "RUN"
+                    run_causes[key] = "完整 Replay 已存在，缺少 Win Rate 證據"
                     metric_backfill[key] = (expected, obs)
                 else:
                     decisions[key], cached[key], identities[key] = "REUSE", complete, expected
@@ -2786,8 +2829,11 @@ def _run_single_stage_oracle(
                 # Without canonical P16 parameters no full Replay identity
                 # exists to certify; do NOT claim REUSE from a file inventory.
                 decisions[(seed, target)] = "RUN"
+                run_causes[(seed, target)] = "缺少合法 P16 參數來源"
     preflight = render_replay_preflight(
         label="Fixed", seeds=seed_set, targets=list(targets), decisions=decisions,
+        reuse_diagnostic=_render_reuse_run_reasons(
+            decisions=decisions, reasons=run_causes),
     )
     if not quiet:
         if blocked or preflight_display == "full":
