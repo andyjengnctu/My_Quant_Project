@@ -1785,8 +1785,8 @@ def _replay_attested_score_keys(
         recipe: truth_producer_fingerprint(_ORACLE_DAILY_SCORE_RECIPES[recipe])
         for recipe, _provider, _horizon in plan["daily_recipes"].values()
     }
-    price_producer_sha = (_price_score_replay_lineage(definition, store.project_root)["truth_source_sha256"]
-                          if plan["recipes"] else None)
+    price_producer_lineage = (_price_score_replay_lineage(definition, store.project_root)
+                              if plan["recipes"] else None)
     dataset_summary_sha = oracle_dataset_summary_sha256(
         root=store.project_root, filter_id=str(definition.source["filter_id"]))
     proofs: dict[tuple[str, bool], tuple[str, int, str, str]] = {}
@@ -1817,9 +1817,17 @@ def _replay_attested_score_keys(
                     recipe = plan["daily_recipes"][source][0]
                     current_producer_sha = producer_sha_by_recipe[recipe]
                 else:
-                    current_producer_sha = price_producer_sha
+                    from services.audit.oracle_score_artifacts import (
+                        certified_price_lineages_equivalent,
+                    )
+                    if (lineage.get("truth_source_sha256") !=
+                            price_producer_lineage["truth_source_sha256"] and
+                            not certified_price_lineages_equivalent(lineage, price_producer_lineage)):
+                        continue
+                    current_producer_sha = price_producer_lineage["truth_source_sha256"]
                 if (not isinstance(lineage, Mapping) or
-                        lineage.get("truth_source_sha256") != current_producer_sha):
+                        (target in plan["daily_sources"] and
+                         lineage.get("truth_source_sha256") != current_producer_sha)):
                     continue
                 if target in plan["daily_sources"] and (
                         "dataset_summary_sha256" not in lineage or
@@ -1985,8 +1993,13 @@ def _certified_saved_oracle_identity(
         daily_evidence=daily_evidence, score_sha256=score_sha,
         score_contract=expected_score, project_root=project_root,
     )
-    if not source and policy.get("hindsight_target_contract") != reconstructed.get("hindsight_target_contract"):
-        raise ValueError("historical price Target producer/source evidence differs")
+    if not source:
+        from services.audit.oracle_score_artifacts import certified_price_lineages_equivalent
+        recorded_source = policy.get("hindsight_target_contract")
+        expected_source = reconstructed.get("hindsight_target_contract")
+        if (recorded_source != expected_source and
+                not certified_price_lineages_equivalent(recorded_source, expected_source)):
+            raise ValueError("historical price Target producer/source evidence differs")
     expected = replay_identity(
         dataset=settings.dataset, dataset_sha256=price_sha,
         target=target, definition={target: target},
@@ -2646,8 +2659,8 @@ def _run_single_stage_oracle(
         recipe: truth_producer_fingerprint(_ORACLE_DAILY_SCORE_RECIPES[recipe])
         for recipe, _provider, _horizon in plan["daily_recipes"].values()
     }
-    current_price_producer_sha = (_price_score_replay_lineage(definition, root)["truth_source_sha256"]
-                                  if plan["recipes"] else None)
+    current_price_producer_lineage = (_price_score_replay_lineage(definition, root)
+                                      if plan["recipes"] else None)
     current_dataset_summary_sha = oracle_dataset_summary_sha256(
         root=root, filter_id=str(definition.source["filter_id"]))
     # Read the current canonical input manifest once; every stored score
@@ -2694,10 +2707,14 @@ def _run_single_stage_oracle(
                 recipe = plan["daily_recipes"][source][0]
                 producer_sha = current_daily_producer_sha_by_recipe[recipe]
             else:
-                producer_sha = current_price_producer_sha
+                producer_sha = current_price_producer_lineage["truth_source_sha256"]
             known_lineage = {"truth_source_sha256": producer_sha}
             if target in plan["daily_sources"]:
                 known_lineage["dataset_summary_sha256"] = current_dataset_summary_sha
+            # The cache probe checks only already known source inputs; the
+            # full lineage is passed separately for the one EOL certification.
+            # Synthetic and historical receipts without full source fields
+            # retain the previous strict SHA-only probe unchanged.
             # Only already verified inputs enter this source probe. It never
             # guesses new scores or membership, and cannot authorize REUSE.
             # The cache owner also owns strict-versus-authorized input drift.
@@ -2714,6 +2731,8 @@ def _run_single_stage_oracle(
                     },
                 },
                 allow_historical_execution_input_drift=allow_historical_execution_input_drift,
+                certified_price_lineage=(current_price_producer_lineage
+                                         if target not in plan["daily_sources"] else None),
             )
             if source_conflict is not None:
                 decisions[key], blocked[key] = "BLOCKED", source_conflict

@@ -136,6 +136,7 @@ def _oracle_price_configuration_sha256() -> str:
     return canonical_json_sha256(source)
 
 
+
 def oracle_daily_source_fingerprint(root: Path | None = None) -> str:
     """Canonical feature/price execution lineage, independent of model inventory.
 
@@ -175,6 +176,73 @@ def oracle_daily_source_fingerprint(root: Path | None = None) -> str:
         source_digest.update(relative.encode("utf-8") + b"\0")
         source_digest.update(source_sha.encode("ascii") + b"\n")
     return source_digest.hexdigest()
+
+
+
+# The 154445 and 170351 historical price producer closures were independently
+# checked: their four changed files are *byte-identical after CRLF -> LF*,
+# including the actual runtime and target data owner. The source SHA alone
+# differs because the 170351 ZIP serialized those same source files as CRLF.
+# This is a single historical encoding-equivalence statement, NOT a wildcard
+# allowing unknown producer changes or missing receipt evidence.
+_CERTIFIED_CRLF_PRICE_SOURCE_SHA256 = (
+    "71e08430171303ede7f8868f2b46993bf40941ac602d381da1c49deb632fc881"
+)
+_CERTIFIED_LF_PRICE_SOURCE_SHA256 = (
+    "b7bdeb766babdb66ac5084125d08f2bf59390843e4dc09eb84645c093a3c770d"
+)
+_CERTIFIED_PRICE_ALGORITHM_SHA256 = (
+    "d73b4ce20dd958cb75b094f49d6abac94d31e34ca7222fa5806675fd931964bd"
+)
+_PRICE_LINEAGE_FIELDS = frozenset((
+    "source_code_sha256", "score_algorithm_sha256",
+    "dataset_summary_sha256", "label_policy", "truth_source_sha256",
+))
+
+
+def certified_price_lineages_equivalent(
+    recorded: Mapping[str, Any], current: Mapping[str, Any],
+) -> bool:
+    """Prove exactly one signed LF/CRLF-only historical producer equivalence.
+
+    The caller still verifies signed Replay cache bytes, identical actual
+    perfect-score SHA, feature-eligible stock-days, seed, P16, price inventory,
+    selector, period and full portfolio economics. A changed source formula,
+    dataset summary, label policy or any other lineage field fails closed.
+    """
+    if not isinstance(recorded, Mapping) or not isinstance(current, Mapping):
+        return False
+    if dict(recorded) == dict(current):
+        return True
+    # During warm witness discovery the producer returns the base source
+    # lineage; saved Replay receipts additionally carry a score recipe/profile
+    # and target label.  Their full equality is independently required when
+    # building the final expected Replay identity below.
+    allowed_replay_annotations = {"profile_id", "score_recipe", "target_id"}
+    if (not _PRICE_LINEAGE_FIELDS.issubset(recorded)
+            or not _PRICE_LINEAGE_FIELDS.issubset(current)
+            or (set(recorded) ^ set(current)) - allowed_replay_annotations
+            or any(recorded[key] != current[key] for key in set(recorded) & set(current)
+                   if key not in {"source_code_sha256", "truth_source_sha256"})):
+        return False
+    if (current.get("source_code_sha256") != _CERTIFIED_LF_PRICE_SOURCE_SHA256
+            or recorded.get("source_code_sha256") != _CERTIFIED_CRLF_PRICE_SOURCE_SHA256
+            or current.get("score_algorithm_sha256") != _CERTIFIED_PRICE_ALGORITHM_SHA256
+            or recorded.get("score_algorithm_sha256") != _CERTIFIED_PRICE_ALGORITHM_SHA256):
+        return False
+    if (recorded.get("dataset_summary_sha256") != current.get("dataset_summary_sha256")
+            or recorded.get("label_policy") != current.get("label_policy")):
+        return False
+    if not all(is_sha256_hex(item.get("truth_source_sha256")) for item in (recorded, current)):
+        return False
+    return all(
+        item["truth_source_sha256"] == canonical_json_sha256({
+            key: item[key] for key in (
+                "source_code_sha256", "score_algorithm_sha256",
+                "dataset_summary_sha256", "label_policy",
+            )
+        }) for item in (recorded, current)
+    )
 
 
 def oracle_dataset_summary_sha256(*, root: Path, filter_id: str) -> str | None:

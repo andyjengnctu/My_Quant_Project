@@ -123,9 +123,18 @@ def _v2_presentation_identity(stored: Mapping[str, Any], expected: Mapping[str, 
                 or _execution_score_contract(previous_contract) !=
                         _execution_score_contract(wanted_contract)):
             return result
-    # This transform may only erase fields already proven non-executable;
-    # the complete normalized identity must still match in _inspect_siblings.
-    result["replay_policy"] = _execution_replay_policy(previous_policy)
+    # The only additional permitted transform is the separately attested
+    # LF/CRLF-only price producer revision. Signed old cache bytes remain
+    # unchanged, and every other producer/execution input stays strict.
+    normalized_policy = _execution_replay_policy(previous_policy)
+    from services.audit.oracle_score_artifacts import certified_price_lineages_equivalent
+    if certified_price_lineages_equivalent(
+        previous_policy.get("hindsight_target_contract"),
+        wanted_policy.get("hindsight_target_contract"),
+    ):
+        normalized_policy["hindsight_target_contract"] = dict(
+            wanted_policy["hindsight_target_contract"])
+    result["replay_policy"] = normalized_policy
     if isinstance(result.get("target_definition"), str):
         result["target_definition"] = expected.get("target_definition")
     if isinstance(result.get("cohort"), Mapping):
@@ -196,6 +205,9 @@ def _independent_source_revision(previous: Mapping[str, Any],
         return True
     wanted_truth = wanted_policy.get("hindsight_target_contract")
     previous_truth = previous_policy.get("hindsight_target_contract")
+    from services.audit.oracle_score_artifacts import certified_price_lineages_equivalent
+    if certified_price_lineages_equivalent(previous_truth, wanted_truth):
+        return False
     return (isinstance(wanted_truth, Mapping)
             and is_sha256_hex(wanted_truth.get("truth_source_sha256"))
             and (not isinstance(previous_truth, Mapping)
@@ -784,6 +796,7 @@ class OracleReplayStore:
     def inspect_current_source(
         self, *, seed: int, target: str, expected_inputs: Mapping[str, Any],
         allow_historical_execution_input_drift: bool = False,
+        certified_price_lineage: Mapping[str, Any] | None = None,
     ) -> tuple[tuple[dict[str, Any], ...], str | None]:
         """Find signed source candidates without producing any missing scores.
 
@@ -812,6 +825,23 @@ class OracleReplayStore:
                 inputs["benchmark"] = expected["benchmark"]
             if isinstance(inputs.get("replay_policy"), Mapping):
                 inputs["replay_policy"] = _execution_replay_policy(inputs["replay_policy"])
+                wanted_policy = expected.get("replay_policy") or {}
+                if isinstance(wanted_policy, Mapping):
+                    previous_lineage = inputs["replay_policy"].get("hindsight_target_contract")
+                    current_lineage = wanted_policy.get("hindsight_target_contract")
+                    from services.audit.oracle_score_artifacts import (
+                        certified_price_lineages_equivalent,
+                    )
+                    if (certified_price_lineage is not None and
+                            certified_price_lineages_equivalent(
+                                previous_lineage, certified_price_lineage)):
+                        # This preliminary probe intentionally knows only the
+                        # producer SHA. Complete source/score/economic evidence
+                        # is checked later from the original signed identity.
+                        inputs["replay_policy"]["hindsight_target_contract"] = {
+                            **previous_lineage,
+                            "truth_source_sha256": certified_price_lineage["truth_source_sha256"],
+                        }
             normalized.append((candidate, inputs))
         current = tuple(candidate for candidate, inputs in normalized
                         if not _known_input_differences(inputs, expected))

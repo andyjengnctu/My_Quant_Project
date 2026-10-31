@@ -5727,5 +5727,79 @@ class OracleInventoryAndSourceIsolationRegressionCases(TestCase):
         with patch.object(source, "compute_file_sha256", side_effect=loader_changes):
             self.assertNotEqual(source.oracle_daily_source_fingerprint(), before)
 
+
+class OracleCertifiedSourceLineEndingEquivalenceCases(TestCase):
+    """One audited historic ZIP newline conversion is not a new economic RUN."""
+
+    def test_signed_crlf_price_replay_reuses_on_lf_code_without_any_producer(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        from services.audit.oracle_score_artifacts import (
+            certified_price_lineages_equivalent,
+            _CERTIFIED_CRLF_PRICE_SOURCE_SHA256,
+        )
+        from core.file_integrity import canonical_json_sha256
+        scenario = OracleSingleOwnerExecutionCases()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = scenario._fixture(root)
+            definition, bench, seed, price_sha, param_sha, *_ = fixture
+            cache = OracleReplayStore(root, definition.output_subdir)
+            original, = cache.existing_completed_identities(seed=seed, target="R40")
+            saved = cache.read(original)
+            current_lineage = original["replay_policy"]["hindsight_target_contract"]
+            previous_lineage = dict(current_lineage)
+            previous_lineage["source_code_sha256"] = _CERTIFIED_CRLF_PRICE_SOURCE_SHA256
+            previous_lineage["truth_source_sha256"] = canonical_json_sha256({
+                key: previous_lineage[key] for key in (
+                    "source_code_sha256", "score_algorithm_sha256",
+                    "dataset_summary_sha256", "label_policy",
+                )
+            })
+            self.assertTrue(certified_price_lineages_equivalent(previous_lineage, current_lineage))
+            previous = {**original, "replay_policy": {
+                **original["replay_policy"], "hindsight_target_contract": previous_lineage,
+            }}
+            cache._path(original).unlink()  # temp fixture only; retain signed old receipt
+            cache.write(previous, saved, origin="signed_170351_crlf_revision")
+            original_bytes = {path: path.read_bytes() for path in root.rglob("*.json")}
+            with scenario._context(root, fixture):
+                published = oracle.build_report(definition, project_root=root, quiet=True,
+                                                preflight_approval=lambda _view: True)
+            self.assertEqual(published["status"], "COMPLETED")
+            self.assertEqual(published["oracles"][0]["target"], "R40")
+            self.assertEqual(published["oracles"][0]["romd"], 18.)
+            self.assertEqual({path: path.read_bytes() for path in root.rglob("*.json")}, original_bytes)
+
+    def test_semantic_change_never_uses_a_line_ending_alias(self):
+        from services.audit.oracle_score_artifacts import (
+            certified_price_lineages_equivalent,
+            _CERTIFIED_CRLF_PRICE_SOURCE_SHA256,
+        )
+        from core.file_integrity import canonical_json_sha256
+        current = oracle._price_score_replay_lineage(_ACTIVE_ORACLE_DEFINITION)
+        previous = {**current, "source_code_sha256": _CERTIFIED_CRLF_PRICE_SOURCE_SHA256}
+        previous["truth_source_sha256"] = canonical_json_sha256({
+            key: previous[key] for key in (
+                "source_code_sha256", "score_algorithm_sha256",
+                "dataset_summary_sha256", "label_policy",
+            )
+        })
+        self.assertTrue(certified_price_lineages_equivalent(previous, current))
+        for changed in ({"score_algorithm_sha256": "f"*64},
+                        {"dataset_summary_sha256": "a"*64},
+                        {"label_policy": {"different": True}},
+                        {"source_code_sha256": "e"*64}):
+            with self.subTest(changed=changed):
+                new = {**previous, **changed}
+                new["truth_source_sha256"] = canonical_json_sha256({
+                    key: new[key] for key in (
+                        "source_code_sha256", "score_algorithm_sha256",
+                        "dataset_summary_sha256", "label_policy",
+                    )
+                })
+                self.assertFalse(certified_price_lineages_equivalent(new, current))
+        invalid_signature = {**previous, "truth_source_sha256": "0"*64}
+        self.assertFalse(certified_price_lineages_equivalent(invalid_signature, current))
+
 if __name__ == "__main__":
     main(verbosity=2)
