@@ -58,6 +58,12 @@ def resolve_standard_evaluation_truth_table(
     common_horizon = STANDARD_EVALUATION_HORIZON_BARS
     manifest = dict(bundle.target_manifest or {})
     source_horizon = int(dict(manifest.get("target_contract") or {}).get("horizon_bars", 0))
+    # Real execution-path Targets may mature at 40D, 60D or on a full
+    # holding-cycle, independently of the canonical 40D *price* evaluation.
+    # The group table's explicitly verified price-evidence mask/geometry is
+    # its own evaluation truth; never borrow the model-specific trade label.
+    if "standard_common_40d_matured" in bundle.group_table.columns:
+        return bundle.group_table, common_horizon
     if source_horizon == common_horizon:
         return bundle.group_table, common_horizon
     if int(manifest.get("sample_universe_horizon_bars") or 0) != common_horizon:
@@ -199,9 +205,11 @@ def calculate_upside_downside_alignment_metrics(
             rank_dates[valid], left[valid], right[valid]
         ).get("mean_daily_spearman")
 
+    # Score-to-price quality is independent of whether this model's *own*
+    # supervised trade Target was ever completed.  Target-to-price diagnostics
+    # still pairwise-exclude missing Target; they must never fabricate NetR.
     base_valid = (
         np.isfinite(score)
-        & np.isfinite(target)
         & np.isfinite(favorable)
         & np.isfinite(adverse)
         & np.isfinite(mfe_return)
@@ -322,14 +330,23 @@ def _split_metrics(
         if not np.isfinite(truth).all():
             raise ValueError(f"Standard SOP尚未成熟或缺少actual truth: {truth_column}")
     rank_dates = _ranking_dates(frame)
+    # M1/M2 remain faithful to each model's *training Target* and are evaluated
+    # only where that Target actually exists.  M3/M4 use every independently
+    # price-mature scored stock-day, including MinTrade NetR=NULL cases.
+    # The two cohorts intentionally have distinct denominators.
+    target_eligible = np.isfinite(np.asarray(raw_target, dtype=np.float64)[ids])
+    if not bool(np.any(target_eligible)):
+        raise ValueError("Standard SOP split has no mature supervised Target for M1/M2")
+    target_ids = ids[target_eligible]
+    target_scores = scores[target_eligible]
     metrics = ranker_api.split_metrics(
-        ids,
+        target_ids,
         group_table,
         raw_target,
         percentile_target,
-        scores,
+        target_scores,
         include_top_k_quality=True,
-        ranking_dates=rank_dates,
+        ranking_dates=rank_dates[target_eligible],
     )
     alignment = calculate_upside_downside_alignment_metrics(
         ids,
@@ -353,6 +370,32 @@ def _score_cohort_digest(frame: pd.DataFrame, group_table: pd.DataFrame) -> str:
     digest = hashlib.sha256()
     for key in keys:
         digest.update(key.encode("utf-8") + b"\n")
+    return digest.hexdigest()
+
+
+def _price_truth_cohort_digest(frame: pd.DataFrame, table: pd.DataFrame) -> str:
+    """SHA of independently evaluated 40D prices, not model-specific labels.
+
+    Two models with identical stock-day/fold membership but different adjusted
+    40D price outcomes must never be ranked as though they share actual truth.
+    """
+    ids = pd.to_numeric(frame["group_index"], errors="raise").to_numpy(dtype=np.int64)
+    rows = table.iloc[ids]
+    fold = (frame["rank_group"].astype(str).to_numpy()
+            if "rank_group" in frame else np.full(len(ids), "", dtype=object))
+    dates = pd.to_datetime(rows["date"], errors="raise").dt.strftime("%Y-%m-%d")
+    favor = pd.to_numeric(rows["target_favorable_return"], errors="coerce").to_numpy(dtype=np.float64)
+    adverse = pd.to_numeric(rows["target_adverse_return_to_peak"], errors="coerce").to_numpy(dtype=np.float64)
+    if not np.isfinite(favor).all() or not np.isfinite(adverse).all():
+        raise ValueError("Standard 40D price outcome SHA requires complete price evidence")
+    tokens = sorted(
+        f"{day}|{ticker}|{fold_id}|{float(up).hex()}|{float(down).hex()}"
+        for day, ticker, fold_id, up, down
+        in zip(dates.to_numpy(), rows["ticker"].astype(str).to_numpy(), fold, favor, adverse)
+    )
+    digest = hashlib.sha256()
+    for row in tokens:
+        digest.update(row.encode("utf-8") + b"\n")
     return digest.hexdigest()
 
 
@@ -407,6 +450,10 @@ def build_standard_model_sop(
         key: _score_cohort_digest(frame, group_table)
         for key, frame in score_splits.items()
     }
+    price_truth_identity = {
+        key: _price_truth_cohort_digest(frame, shared_truth)
+        for key, frame in score_splits.items()
+    }
     split_metrics: dict[str, Any] = {}
     alignment: dict[str, Any] = {}
     for key, frame in score_splits.items():
@@ -427,6 +474,7 @@ def build_standard_model_sop(
             "adverse_source": "target_adverse_return_to_peak",
             "joint_quality_id": JOINT_QUALITY_EVALUATION_ID,
             "cohort_identity": cohort_identity,
+            "price_truth_identity": price_truth_identity,
         },
         "split_metrics": split_metrics,
         "upside_downside_alignment_evaluation": alignment,
@@ -708,7 +756,12 @@ def standard_model_sop_completeness_issues(payload: dict) -> tuple[str, ...]:
         if truth.get(key) != expected:
             issues.append(f"evaluation_truth:{key} mismatch")
     cohorts = dict(truth.get("cohort_identity") or {})
+    independent_price_truth = dict(truth.get("price_truth_identity") or {})
     for split in ("validation", "oos", "breakout_candidate_oos"):
+        price_digest = independent_price_truth.get(split)
+        if (not isinstance(price_digest, str) or len(price_digest) != 64
+                or any(char not in "0123456789abcdef" for char in price_digest)):
+            issues.append(f"evaluation_truth:{split}:independent 40D price SHA256 missing")
         if not isinstance(cohorts.get(split), str) or len(cohorts[split]) != 64:
             issues.append(f"evaluation_truth:{split}:cohort SHA256 missing")
         learn = dict((standard.get("split_metrics") or {}).get(split) or {})

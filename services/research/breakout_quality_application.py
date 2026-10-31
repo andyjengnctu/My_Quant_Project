@@ -705,6 +705,11 @@ def _standard_model_comparison_views(models: list[dict]) -> list[dict]:
                         f"(reference={str(expected.get(split) or '-')[:16]}, "
                         f"candidate={str(observed.get(split) or '-')[:16]})"
                     )
+            observed_prices = dict(truth.get("price_truth_identity") or {})
+            expected_prices = dict(common_truth.get("price_truth_identity") or {})
+            for split in ("validation", "oos", "breakout_candidate_oos"):
+                if observed_prices.get(split) != expected_prices.get(split):
+                    differing.append(f"{split}:independent 40D price truth SHA differs")
             if not differing:
                 differing.append("unexpected evaluation truth identity")
             raise ValueError(
@@ -2709,23 +2714,13 @@ def _interactive_binary_model_research(
 
 
 def _requires_formal_trade_path_inputs(settings) -> bool:
-    """The registered ranker recipe, not a model-name or menu heuristic, owns this gate."""
-    from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
-    from core.breakout_quality_runtime import (
-        CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
-        DAILY_FORMAL_MINTRADE40_NETR_TARGET_ID,
-    )
+    """An active registered real-path contract, never a model-id switch."""
     from core.breakout_quality_registry import SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
-    # Synthetic seedless model-fixture profiles are outside the registered
-    # research namespace; a *registered* recipe error must never be hidden.
-    if str(settings.experiment_profile) not in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES:
-        return False
-    recipe = get_continuous_ranker_execution_recipe(str(settings.experiment_profile))
-    return (
-        recipe.continuous_target_id == DAILY_FORMAL_MINTRADE40_NETR_TARGET_ID
-        and recipe.target_policy.materialization_mode
-        == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
-    )
+    from services.breakout_quality.trade_path_target_source import registered_trade_path_source
+    profile = str(settings.experiment_profile)
+    if profile not in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES:
+        return False  # Unregistered synthetic fixtures do not declare real-path sources.
+    return registered_trade_path_source(profile) is not None
 
 
 def _collect_continuous_research_input_plan(
@@ -2756,24 +2751,17 @@ def _collect_continuous_research_input_plan(
         return base
     from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
     from core.research_policy import get_research_artifact_preparation_policy
-    from services.optimizer.formal_mintrade40_teacher_source import (
-        inspect_formal_mintrade40_optimizer_teacher,
-    )
-    from services.breakout_quality.formal_mintrade40_training_source import (
-        inspect_formal_mintrade40_p16_teacher,
-    )
+    from services.breakout_quality.trade_path_target_source import registered_trade_path_source
 
     model_seed = int(settings.seed if seed is None else seed)
     policy = get_research_artifact_preparation_policy()
     actions = list(base.actions)
-    for suffix, inspector, builder, priority in (
-        ('p16', inspect_formal_mintrade40_p16_teacher,
-         'optimizer_formal_mintrade40_p16', 30),
-        ('history', inspect_formal_mintrade40_optimizer_teacher,
-         'optimizer_formal_mintrade40_history', 40),
-    ):
+    source = registered_trade_path_source(str(settings.experiment_profile))
+    if source is None:
+        raise RuntimeError('Active real-path capability disappeared during planning')
+    for requirement in source.dependencies:
         try:
-            status = inspector(project_root=PROJECT_ROOT, seed=model_seed)
+            status = requirement.inspect(project_root=PROJECT_ROOT, seed=model_seed)
             action = str(status['action'])
             path = Path(status['path'])
             reason = str(status['reason'])
@@ -2783,15 +2771,16 @@ def _collect_continuous_research_input_plan(
             reason = f'Optimizer source preflight failed: {type(exc).__name__}: {exc}'
         if action != 'REUSE' and not policy.auto_prepare:
             action = 'BLOCKED'
-        artifact_key = f'model-upstream:formal_mintrade40_{suffix}_seed_{model_seed}'
+        artifact_key = f'model-upstream:{requirement.name}_seed_{model_seed}'
         actions.append(ResearchArtifactAction(
             action_id=artifact_key, artifact_key=artifact_key,
-            action=action, builder_type=None if action in {'REUSE', 'BLOCKED'} else builder,
+            action=action,
+            builder_type=None if action in {'REUSE', 'BLOCKED'} else requirement.builder_type,
             description=reason,
             path=project_relative_display_path(path, project_root=PROJECT_ROOT),
             dependencies=('model-upstream:dataset_core',),
             producer_work_type='optimizer' if action != 'REUSE' else 'existing_artifact',
-            execution_priority=priority,
+            execution_priority=requirement.priority,
         ))
     return ResearchArtifactPlan.from_actions(actions)
 
@@ -2856,19 +2845,11 @@ def _prepare_continuous_research_inputs(
         )
 
     def _execute(action) -> None:
-        if action.builder_type == 'optimizer_formal_mintrade40_p16':
-            from services.breakout_quality.formal_mintrade40_training_source import (
-                _current_p16_seed_artifact,
-            )
-            _current_p16_seed_artifact(PROJECT_ROOT, model_seed, authorized_build=True)
-            return
-        if action.builder_type == 'optimizer_formal_mintrade40_history':
-            from services.optimizer.formal_mintrade40_teacher_source import (
-                prepare_formal_mintrade40_optimizer_teacher,
-            )
-            prepare_formal_mintrade40_optimizer_teacher(
-                project_root=PROJECT_ROOT, seed=model_seed, authorized=True,
-            )
+        from services.breakout_quality.trade_path_target_source import execute_trade_path_dependency
+        if execute_trade_path_dependency(
+            builder_type=str(action.builder_type), project_root=PROJECT_ROOT,
+            seed=model_seed, experiment_profile=str(settings.experiment_profile),
+        ):
             return
         if action.builder_type == "breakout_quality_dataset":
             refresh_mode, refresh_reasons, dataset_step = _dataset_refresh_step(

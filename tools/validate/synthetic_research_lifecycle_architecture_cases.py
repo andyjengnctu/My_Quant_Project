@@ -4402,6 +4402,7 @@ def validate_research_model_readiness_architecture_case(_base_params):
             "adverse_source": "target_adverse_return_to_peak",
             "joint_quality_id": "same_day_min_mfe_safety_percentile_v1",
             "cohort_identity": {key: "f" * 64 for key in scopes},
+            "price_truth_identity": {key: "a" * 64 for key in scopes},
         },
     }
     witness = {"model_research_id": "SYNTHETIC", "standard_model_sop": standard}

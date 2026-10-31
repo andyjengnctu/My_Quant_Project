@@ -2050,6 +2050,46 @@ def run(args) -> int:
         "oos": oos_metrics,
         "breakout_candidate_oos": candidate_metrics,
     }
+    # Forward single-model SOP evaluates the same 40D-mature price cohort as
+    # Rolling, independently of whether a real-path Target traded/matured.
+    # Re-score additional *validation* rows from the already selected FIT;
+    # neither epoch selection nor fitted checkpoint identity is changed.
+    standard_validation_ids = split.validation_ids
+    standard_validation_scores = validation_scores
+    standard_oos_ids = split.oos_ids
+    standard_candidate_ids = candidate_ids
+    if "standard_common_40d_price_end_date" in bundle.group_table.columns:
+        price_end = pd.to_datetime(
+            bundle.group_table["standard_common_40d_price_end_date"], errors="raise"
+        ).dt.normalize()
+        days = pd.to_datetime(bundle.group_table["date"], errors="raise").dt.normalize()
+        val_start = pd.Timestamp(split.report["inner_validation_start_date"])
+        oos_start = pd.Timestamp(split.report["oos_start_date"])
+        oos_end = pd.Timestamp(split.report["oos_end_date"])
+        from filters.breakout_quality.pit_group_selection import (
+            standard_price_validation_group_ids,
+        )
+        standard_validation_ids = standard_price_validation_group_ids(
+            bundle, validation_start=val_start, score_start=oos_start,
+        )
+        if standard_validation_ids is None:
+            raise ValueError("Canonical price-validation cohort capability not available")
+        if not np.array_equal(standard_validation_ids, split.validation_ids):
+            standard_validation_scores, _extras = predict_score_output_payload(
+                torch, model, bundle, standard_validation_ids,
+                batch_size=int(args.evaluation_batch_size), plan=plan,
+            )
+        oos_eligible = (
+            (days >= oos_start) & (days <= oos_end)
+            & price_end.notna() & (price_end <= oos_end)
+        ).to_numpy(dtype=bool)
+        standard_oos_ids = forward_score_ids[oos_eligible[forward_score_ids]]
+        if not len(standard_validation_ids) or not len(standard_oos_ids):
+            raise ValueError("Forward Standard SOP 40D price-mature score cohort unavailable")
+        standard_candidate_ids = select_breakout_candidate_group_ids(
+            bundle, standard_oos_ids,
+            allow_stale_source=bool(args.allow_stale_source),
+        )
     shared_evaluation_table, shared_evaluation_horizon = resolve_standard_evaluation_truth_table(
         bundle,
         filter_id=str(args.filter_id),
@@ -2111,19 +2151,19 @@ def run(args) -> int:
             raw_target=bundle.raw_target,
             training_objective=str(bundle.profile.training_objective),
             validation_scores=pd.DataFrame({
-                "group_index": split.validation_ids,
-                "date": bundle.group_table.iloc[split.validation_ids]["date"].to_numpy(),
-                "breakout_quality_score": validation_scores,
+                "group_index": standard_validation_ids,
+                "date": bundle.group_table.iloc[standard_validation_ids]["date"].to_numpy(),
+                "breakout_quality_score": standard_validation_scores,
             }),
             oos_scores=pd.DataFrame({
-                "group_index": split.oos_ids,
-                "date": bundle.group_table.iloc[split.oos_ids]["date"].to_numpy(),
-                "breakout_quality_score": oos_scores,
+                "group_index": standard_oos_ids,
+                "date": bundle.group_table.iloc[standard_oos_ids]["date"].to_numpy(),
+                "breakout_quality_score": score_by_group[standard_oos_ids],
             }),
             breakout_scores=pd.DataFrame({
-                "group_index": candidate_ids,
-                "date": bundle.group_table.iloc[candidate_ids]["date"].to_numpy(),
-                "breakout_quality_score": score_by_group[candidate_ids],
+                "group_index": standard_candidate_ids,
+                "date": bundle.group_table.iloc[standard_candidate_ids]["date"].to_numpy(),
+                "breakout_quality_score": score_by_group[standard_candidate_ids],
             }),
             evaluation_mode="forward_oos",
             evaluation_horizon_bars=shared_evaluation_horizon,

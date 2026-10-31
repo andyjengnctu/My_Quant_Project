@@ -1250,11 +1250,12 @@ def load_daily_universal_ranker_data(
         == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
     )
     if trade_path_mode:
-        if target_policy.contract_kind != "formal_seed_mintrade40_netr":
+        if target_policy.contract_kind == "daily_counterfactual_mintrade40_netr":
             raise ValueError("MR-13CL target retired: historical P2/P16 teacher is not the formal seed Target")
         if (target_materializer is None or not isinstance(target_lineage, dict)
-                or not target_lineage.get("seed") or not target_lineage.get("source_sha256")):
-            raise ValueError("Daily Trade40 requires verified canonical per-seed P16 materializer")
+                or not target_lineage.get("seed") or not target_lineage.get("source_sha256")
+                or not target_lineage.get("contract")):
+            raise ValueError("Real-path target requires verified canonical seed-scoped materializer")
     elif target_materializer is not None or target_lineage is not None:
         raise ValueError("Non-trade-path target must not receive a Min teacher")
     if target_policy.materialization_mode not in {
@@ -1502,21 +1503,26 @@ def load_daily_universal_ranker_data(
                     fit_cutoff=sample_end,
                     research_end_is_terminal=True,
                 )
-                local_targets[eligible] = np.asarray(completed.raw_net_r, dtype=np.float32)
+                # Primitive-owned numeric field, declared by its verified
+                # source.  NetR keeps its original field and FitKey bytes.
+                value_field = str(target_lineage.get("value_field") or "raw_net_r")
+                local_targets[eligible] = np.asarray(getattr(completed, value_field), dtype=np.float32)
                 local_target_valid[eligible] = np.asarray(completed.completed, dtype=bool)
                 local_label_end_dates[eligible] = np.asarray(completed.maturity_dates, dtype="datetime64[D]")
             # Common MFE/MAE are independent price outcomes, never broker NetR.
             # Use the same canonical daily outcome owner as other rankers.
             # Insufficient future 40-bar evidence remains NaN; Standard SOP
             # correctly rejects such an immature scored cohort.
+            standard_horizon = int(DEFAULT_LABEL_POLICY.label_horizon_bars)
             common_mature = (
-                (local_positions + int(spec.horizon_bars) < len(frame))
-                & (frame_dates.take(np.minimum(local_positions + int(spec.horizon_bars), len(frame) - 1)) <= sample_end)
+                (local_positions + standard_horizon < len(frame))
+                & (frame_dates.take(np.minimum(local_positions + standard_horizon, len(frame) - 1)) <= sample_end)
             )
             local_standard_price_mature = common_mature
             if np.any(common_mature):
                 common = compute_daily_opportunity_target_batch(
-                    frame, local_positions[common_mature], spec=spec,
+                    frame, local_positions[common_mature],
+                    spec=replace(spec, horizon_bars=standard_horizon),
                     target_id=DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
                 )
                 common_idx = np.flatnonzero(common_mature)
@@ -1829,14 +1835,59 @@ def load_daily_universal_ranker_data(
         }
     )
     if trade_path_mode:
-        # Standard 40D price Outcome is evaluated on *price-mature* rows.
-        # Broker NetR can validly resolve earlier or at research closeout; it
-        # remains the fitted Target and the full inference/Oracle score cohort.
-        # The common price evaluation cohort must NOT impute future OHLCV.
-        group_table["standard_common_40d_matured"] = np.concatenate([
-            np.concatenate(valid_standard_price_mature_chunks),
-            np.zeros(len(inference_dates), dtype=bool),
-        ])
+        # Score eligibility is independent of whether Min executed a trade.
+        # Reconstruct *evaluation-only* 40D prices for stock-days whose Min
+        # Target is NULL.  Never change their raw_target, target_valid, or FIT
+        # label maturity.  Preserve the original target-valid prefix and all
+        # historical group indices/ordered FIT samples byte-for-byte.
+        evaluation_horizon = int(DEFAULT_LABEL_POLICY.label_horizon_bars)
+        evaluation_spec = replace(spec, horizon_bars=evaluation_horizon)
+        evaluation_maturity = np.full(group_count, np.datetime64("NaT"), dtype="datetime64[ns]")
+        price_mature = np.zeros(group_count, dtype=bool)
+        for ticker_id, frame in enumerate(frames):
+            group_ids = np.flatnonzero(ticker_ids == ticker_id)
+            positions = np.asarray(source_positions[group_ids], dtype=np.int64)
+            valid_future = positions + evaluation_horizon < len(frame)
+            if not valid_future.any():
+                continue
+            eligible_ids = group_ids[valid_future]
+            future_positions = positions[valid_future] + evaluation_horizon
+            ends = pd.DatetimeIndex(frame.index.take(future_positions)).normalize()
+            within_cutoff = np.asarray(ends <= sample_end, dtype=bool)
+            mature_ids = eligible_ids[within_cutoff]
+            if not len(mature_ids):
+                continue
+            evaluation_maturity[mature_ids] = ends[within_cutoff].to_numpy(dtype="datetime64[ns]")
+            price_mature[mature_ids] = True
+            # The already-valid Min rows retain their canonical 40D price
+            # geometry.  Populate only Target-NULL rows with independent price
+            # truth; this does not make their Min label known for training.
+            missing_target_ids = mature_ids[~target_valid[mature_ids]]
+            if not len(missing_target_ids):
+                continue
+            batch = compute_daily_opportunity_target_batch(
+                frame, source_positions[missing_target_ids],
+                spec=evaluation_spec,
+                target_id=DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+            )
+            valid_prices = np.asarray(batch.valid_mask, dtype=bool)
+            if not valid_prices.all():
+                price_mature[missing_target_ids[~valid_prices]] = False
+                evaluation_maturity[missing_target_ids[~valid_prices]] = np.datetime64("NaT")
+            usable = missing_target_ids[valid_prices]
+            if not len(usable):
+                continue
+            group_table.loc[usable, "target_favorable_return"] = batch.favorable_return[valid_prices]
+            group_table.loc[usable, "target_adverse_return_to_peak"] = batch.adverse_return_to_peak[valid_prices]
+            group_table.loc[usable, "target_favorable_r"] = batch.favorable_return[valid_prices] / float(spec.risk_budget_return)
+            group_table.loc[usable, "target_adverse_r"] = batch.adverse_return_to_peak[valid_prices] / float(spec.risk_budget_return)
+        group_table["standard_common_40d_matured"] = price_mature
+        group_table["standard_common_40d_price_end_date"] = pd.to_datetime(evaluation_maturity)
+        if bool(np.any(target_valid & (price_mature != np.concatenate([
+                np.concatenate(valid_standard_price_mature_chunks),
+                np.zeros(len(inference_dates), dtype=bool),
+            ])))):
+            raise ValueError("Real-path 40D price maturity disagrees with canonical source")
     if (
         target_policy.postprocess
         == CONTINUOUS_RANKER_TARGET_POSTPROCESS_EQUAL_RANK_MFE_LOW_ADVERSE
@@ -2000,9 +2051,9 @@ def load_daily_universal_ranker_data(
         {
             "target_id": target_id,
             "horizon_bars": int(target_policy.horizon_bars),
-            "target_kind": "formal_seed_mintrade40_broker_net_r",
-            "null_policy": "unfilled_or_unmatured_is_missing_v1",
-            "maturity_policy": "natural_exit_or_40_exchange_sessions_pit_v1",
+            "target_kind": str(target_lineage.get("target_kind") or "formal_seed_mintrade40_broker_net_r"),
+            "null_policy": str(target_lineage.get("null_policy") or "unfilled_or_unmatured_is_missing_v1"),
+            "maturity_policy": str(target_lineage.get("maturity_policy") or "natural_exit_or_40_exchange_sessions_pit_v1"),
             # A FIT may consume only the teacher prefix visible by its own
             # cutoff. The complete source file SHA/late periods are provenance,
             # not weight-affecting content of EVERY earlier Fold.

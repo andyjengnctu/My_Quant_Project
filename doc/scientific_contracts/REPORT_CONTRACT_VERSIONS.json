@@ -119,6 +119,11 @@
           "contract_id": "model.standard_comparison@v15",
           "version": 15,
           "fingerprint": "e4e2788496bf746c"
+        },
+        {
+          "contract_id": "model.standard_comparison@v16",
+          "version": 16,
+          "fingerprint": "2f6825caf69e4165"
         }
       ]
     },
@@ -149,6 +154,11 @@
           "contract_id": "model.standard_sop@v11",
           "version": 11,
           "fingerprint": "879150664c67c79b"
+        },
+        {
+          "contract_id": "model.standard_sop@v12",
+          "version": 12,
+          "fingerprint": "c682c8ae5b5ac525"
         }
       ]
     },

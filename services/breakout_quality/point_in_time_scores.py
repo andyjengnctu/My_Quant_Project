@@ -687,6 +687,14 @@ def _load_reusable_fold(
             return None
         if str(manifest.get("contract_fingerprint")) != expected_fingerprint:
             return None
+        from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+        from core.breakout_quality_runtime import CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
+        if (get_continuous_ranker_execution_recipe(
+                str(fold_contract["experiment_profile"])
+            ).target_policy.materialization_mode
+                == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
+                and manifest.get("validation_score_scope") != "independent_price_40d_matured"):
+            return None  # Re-score this valid FIT; never re-train it.
         artifacts = manifest.get("artifacts") or {}
         if build_file_manifest(model_path) != artifacts.get("checkpoint"):
             return None
@@ -1408,7 +1416,7 @@ def _rescore_fold_from_compatible_checkpoint(
             torch_module, model, bundle, ids["score_ids"], args=args, plan=plan
         )
         validation_scores, validation_extras = _predict_primary_score_payload(
-            torch_module, model, bundle, ids["validation_ids"], args=args, plan=plan
+            torch_module, model, bundle, _standard_validation_score_ids(ids), args=args, plan=plan
         )
         frame = _build_fold_score_frame(
             bundle, ids["score_ids"], scores, score_extras,
@@ -1416,7 +1424,7 @@ def _rescore_fold_from_compatible_checkpoint(
             cutoff=fold_contract["model_information_cutoff"],
         )
         validation_frame = _build_fold_score_frame(
-            bundle, ids["validation_ids"], validation_scores, validation_extras,
+            bundle, _standard_validation_score_ids(ids), validation_scores, validation_extras,
             fold_id=str(fold_contract["fold_id"]),
             cutoff=fold_contract["model_information_cutoff"],
         )
@@ -1424,7 +1432,7 @@ def _rescore_fold_from_compatible_checkpoint(
         frame["model_information_cutoff"] = fold_contract["model_information_cutoff"]
         frame = _validate_score_frame(frame, fold_contract=fold_contract)
         validation_frame = _validate_validation_score_frame(
-            validation_frame, ids=ids["validation_ids"], fold_id=str(fold_contract["fold_id"])
+            validation_frame, ids=_standard_validation_score_ids(ids), fold_id=str(fold_contract["fold_id"])
         )
     except (
         OSError,
@@ -1452,6 +1460,7 @@ def _rescore_fold_from_compatible_checkpoint(
         "schema_version": POINT_IN_TIME_SCHEMA_VERSION,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "contract_fingerprint": expected_fingerprint,
+        **_standard_validation_score_scope(ids),
         "score_coverage": {
             "expected_groups": int(len(ids["score_ids"])),
             "scored_groups": int(len(frame)),
@@ -2000,6 +2009,20 @@ def _build_fold_score_frame(bundle, group_ids, scores, extras, *, fold_id: str, 
     return frame
 
 
+def _standard_validation_score_ids(ids: dict[str, Any]) -> np.ndarray:
+    """Score-only evaluation rows; never the FIT/epoch validation subset."""
+    return np.asarray(
+        ids.get("standard_validation_ids", ids["validation_ids"]), dtype=np.int64
+    )
+
+
+def _standard_validation_score_scope(ids: dict[str, Any]) -> dict[str, str]:
+    return (
+        {"validation_score_scope": "independent_price_40d_matured"}
+        if "standard_validation_ids" in ids else {}
+    )
+
+
 def _validate_validation_score_frame(frame: pd.DataFrame, *, ids: np.ndarray, fold_id: str) -> pd.DataFrame:
     work = frame.copy()
     if len(work) != len(ids):
@@ -2058,21 +2081,21 @@ def _train_fold(
         torch, model, bundle, ids["score_ids"], args=args, plan=plan
     )
     validation_scores, validation_extras = _predict_primary_score_payload(
-        torch, model, bundle, ids["validation_ids"], args=args, plan=plan
+        torch, model, bundle, _standard_validation_score_ids(ids), args=args, plan=plan
     )
     frame = _build_fold_score_frame(
         bundle, ids["score_ids"], scores, score_extras,
         fold_id=fold_id, cutoff=fold_contract["model_information_cutoff"],
     )
     validation_frame = _build_fold_score_frame(
-        bundle, ids["validation_ids"], validation_scores, validation_extras,
+        bundle, _standard_validation_score_ids(ids), validation_scores, validation_extras,
         fold_id=fold_id, cutoff=fold_contract["model_information_cutoff"],
     )
     frame["fold_id"] = fold_id
     frame["model_information_cutoff"] = fold_contract["model_information_cutoff"]
     frame = _validate_score_frame(frame, fold_contract=fold_contract)
     validation_frame = _validate_validation_score_frame(
-        validation_frame, ids=ids["validation_ids"], fold_id=fold_id
+        validation_frame, ids=_standard_validation_score_ids(ids), fold_id=fold_id
     )
 
     fold_dir = _point_in_time_fold_dir_for_args(args, fold_id)
@@ -2112,6 +2135,7 @@ def _train_fold(
         "selected_epoch": selected_epoch,
         "epoch_selection": epoch_selection,
         "final_refit_history": final_history,
+        **_standard_validation_score_scope(ids),
         "score_coverage": {
             "expected_groups": int(len(ids["score_ids"])),
             "scored_groups": int(len(frame)),

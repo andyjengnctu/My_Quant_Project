@@ -226,6 +226,27 @@ def _resolve_score_start(
     )
 
 
+def standard_price_validation_group_ids(bundle, *, validation_start, score_start) -> np.ndarray | None:
+    """Evaluation-only 40D price eligibility, independent of supervised Target.
+
+    ``None`` means this source uses the historical supervised-validation SOP
+    population. The caller must never use these IDs for FIT/epoch selection.
+    """
+    if "standard_common_40d_price_end_date" not in bundle.group_table.columns:
+        return None
+    dates = pd.to_datetime(bundle.group_table["date"], errors="raise").dt.normalize()
+    price_end = pd.to_datetime(
+        bundle.group_table["standard_common_40d_price_end_date"], errors="raise"
+    ).dt.normalize()
+    scope = (
+        (dates >= pd.Timestamp(validation_start))
+        & (dates < pd.Timestamp(score_start))
+        & price_end.notna()
+        & (price_end < pd.Timestamp(score_start))
+    )
+    return np.flatnonzero(scope.to_numpy(dtype=bool)).astype(np.int64)
+
+
 def _fold_group_ids(
     bundle,
     fold: dict[str, Any],
@@ -282,6 +303,12 @@ def _fold_group_ids(
         "validation_start": validation_start,
         "history_start": history_start,
     }
+    # Evaluate price-mature rows independent of legal FIT/epoch supervision.
+    evaluation_validation_ids = standard_price_validation_group_ids(
+        bundle, validation_start=validation_start, score_start=score_start,
+    )
+    if evaluation_validation_ids is not None:
+        ids["standard_validation_ids"] = evaluation_validation_ids
     if np.intersect1d(ids["train_ids"], ids["validation_ids"]).size:
         raise ValueError(f"{fold['fold_id']} train/validation group重疊")
     if np.intersect1d(ids["final_ids"], ids["score_ids"]).size:

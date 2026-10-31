@@ -679,6 +679,10 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
                     scope: sha256(f"synthetic-cli-test::{scope}".encode()).hexdigest()
                     for scope in ("validation", "oos", "breakout_candidate_oos")
                 },
+                "price_truth_identity": {
+                    scope: sha256(f"synthetic-cli-price-truth::{scope}".encode()).hexdigest()
+                    for scope in ("validation", "oos", "breakout_candidate_oos")
+                },
             },
             "upside_downside_alignment_evaluation": {
                 scope: {

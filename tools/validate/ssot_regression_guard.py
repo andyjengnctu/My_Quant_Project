@@ -24,7 +24,7 @@ from .source_index import read_source_ast
 # One permanent Golden and one compact contract ledger. No historic source archive
 # or version-specific JSON file is required, read, or generated.
 GOLDEN_RELATIVE_PATH = "tools/validate/baselines/ssot_regression.json"
-APPROVED_GOLDEN_SHA256 = "f3e079ce5654889b612171715b1e77af8630b963fa350d77583f35d23f3a6bff"
+APPROVED_GOLDEN_SHA256 = "14162ea183bb2cbd4e689f2d41a52ec39828121e6e9de205546378bae4a6823c"
 
 IDENTITY_PATTERN = re.compile(r"^(?:MR-[A-Za-z0-9-]+|ARCH-[A-Za-z0-9_]+|PARAM-P[A-Za-z0-9-]+)$")
 GENERIC_CONSUMER_PATHS = (

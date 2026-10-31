@@ -1710,6 +1710,161 @@ class FormalMinTrade40EndToEndDefinitionCases(unittest.TestCase):
                 evaluation_horizon_bars=40)
 
 
+class RealPathCommonPriceEvaluationCases(unittest.TestCase):
+    """Scheme B: fixed price cohorts, target-null stays unknown for FIT."""
+
+    @staticmethod
+    def _evaluated(model_target_is_sparse: bool):
+        from services.breakout_quality.standard_model_sop import build_standard_model_sop
+        n = 60
+        days = pd.to_datetime(['2024-01-02'] * 30 + ['2024-01-03'] * 30)
+        table = pd.DataFrame({
+            'ticker': [f'{1000 + i%30:04}' for i in range(n)],
+            'date': days, 'group_index': np.arange(n),
+            'source_pos': np.full(n, 80), 'label': np.ones(n),
+            'target_favorable_r': np.linspace(.3, 2, n),
+            'target_adverse_r': np.linspace(.1, .9, n),
+            'target_favorable_return': np.linspace(.02, .2, n),
+            'target_adverse_return_to_peak': np.linspace(.01, .07, n),
+        })
+        target = np.linspace(-.8, 1.5, n).astype('float32')
+        if model_target_is_sparse:
+            table['standard_common_40d_matured'] = np.ones(n, dtype=bool)
+            target[[0, 9, 29, 32, 41, 59]] = np.nan
+        score = pd.DataFrame({
+            'group_index': np.arange(n), 'date': days,
+            'breakout_quality_score': np.linspace(.01, .99, n),
+        })
+        report = build_standard_model_sop(
+            group_table=table, raw_target=target,
+            training_objective='daily_pairwise_ranking',
+            validation_scores=score, oos_scores=score, breakout_scores=score,
+            evaluation_mode='rolling_oos', evaluation_horizon_bars=40,
+        )
+        return table, target, score, report
+
+    def test_common_40d_cohorts_include_null_min_labels_without_fabricating_training_truth(self):
+        normal_table, normal_target, _, normal = self._evaluated(False)
+        trade_table, trade_target, _, trade = self._evaluated(True)
+        self.assertEqual(
+            normal['evaluation_truth']['cohort_identity'],
+            trade['evaluation_truth']['cohort_identity'],
+        )
+        for split in ('validation', 'oos', 'breakout_candidate_oos'):
+            self.assertEqual(normal['upside_downside_alignment_evaluation'][split]['group_count'], 60)
+            self.assertEqual(trade['upside_downside_alignment_evaluation'][split]['group_count'], 60)
+            self.assertEqual(trade['split_metrics'][split]['group_count'], 54)
+            self.assertEqual(normal['split_metrics'][split]['group_count'], 60)
+            self.assertEqual(
+                trade['upside_downside_alignment_evaluation'][split]['score_to_full_mfe_daily_spearman'],
+                normal['upside_downside_alignment_evaluation'][split]['score_to_full_mfe_daily_spearman'],
+            )
+        self.assertEqual(int(np.isnan(trade_target).sum()), 6)
+        self.assertEqual(int(np.isfinite(normal_target).sum()), 60)
+        self.assertTrue(trade_table['standard_common_40d_matured'].all())
+        self.assertNotIn('standard_common_40d_matured',normal_table.columns)
+
+    def test_cross_model_compare_accepts_same_price_population_with_different_supervised_targets(self):
+        from services.research.breakout_quality_application import _standard_model_comparison_views
+        _t1, _r1, _f1, control = self._evaluated(False)
+        _t2, _r2, _f2, actual_path = self._evaluated(True)
+        models = [
+            {'model_id': 'PRICE', 'payload': {'standard_model_sop': control}},
+            {'model_id': 'REAL_PATH', 'payload': {'standard_model_sop': actual_path}},
+        ]
+        self.assertEqual(len(_standard_model_comparison_views(models)), 2)
+        self.assertEqual(
+            control['evaluation_truth']['price_truth_identity'],
+            actual_path['evaluation_truth']['price_truth_identity'],
+        )
+
+    def test_price_population_sha_alone_does_not_mask_different_actual_price_truth(self):
+        from services.research.breakout_quality_application import _standard_model_comparison_views
+        from services.breakout_quality.standard_model_sop import build_standard_model_sop
+        table, target, score, control = self._evaluated(False)
+        changed = table.copy()
+        changed.loc[5, 'target_favorable_return'] += 0.001
+        other = build_standard_model_sop(
+            group_table=changed, raw_target=target,
+            training_objective='daily_pairwise_ranking',
+            validation_scores=score, oos_scores=score, breakout_scores=score,
+            evaluation_mode='rolling_oos', evaluation_horizon_bars=40,
+        )
+        self.assertEqual(control['evaluation_truth']['cohort_identity'],
+                         other['evaluation_truth']['cohort_identity'])
+        self.assertNotEqual(control['evaluation_truth']['price_truth_identity'],
+                            other['evaluation_truth']['price_truth_identity'])
+        with self.assertRaisesRegex(ValueError, 'price truth SHA differs'):
+            _standard_model_comparison_views([
+                {'model_id':'PRICE','payload':{'standard_model_sop':control}},
+                {'model_id':'ALTERED','payload':{'standard_model_sop':other}},
+            ])
+
+    def test_existing_price_target_report_unmodified_when_new_source_is_added(self):
+        from services.breakout_quality.standard_model_sop import build_standard_model_sop
+        table, target, score, old = self._evaluated(False)
+        fresh = table.copy()
+        fresh['standard_common_40d_matured'] = np.ones(len(fresh), dtype=bool)
+        now = build_standard_model_sop(
+            group_table=fresh, raw_target=target,
+            training_objective='daily_pairwise_ranking',
+            validation_scores=score, oos_scores=score, breakout_scores=score,
+            evaluation_mode='rolling_oos', evaluation_horizon_bars=40,
+        )
+        self.assertEqual(old, now)
+
+    def test_null_rows_with_missing_price_truth_must_block_not_fill_with_zero(self):
+        from services.breakout_quality.standard_model_sop import build_standard_model_sop
+        table, target, score, _ = self._evaluated(True)
+        table.loc[9, 'target_favorable_return'] = np.nan
+        with self.assertRaisesRegex(ValueError, 'complete price evidence'):
+            build_standard_model_sop(
+                group_table=table, raw_target=target,
+                training_objective='daily_pairwise_ranking',
+                validation_scores=score, oos_scores=score, breakout_scores=score,
+                evaluation_mode='rolling_oos', evaluation_horizon_bars=40,
+            )
+
+    def test_fold_train_and_epoch_validation_stay_target_gated_but_price_scoring_does_not(self):
+        from filters.breakout_quality.pit_group_selection import _fold_group_ids
+        from filters.breakout_quality.pit_group_selection import TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+        dates = pd.to_datetime([
+            '2023-01-02','2023-01-03',  # historical FIT
+            '2023-12-06','2023-12-06','2023-12-07', # validation
+            '2024-01-02','2024-01-03', # OOS score
+        ])
+        table = pd.DataFrame({
+            'date': dates,
+            'label_eval_end_date': pd.to_datetime([
+                '2023-03-05','2023-03-06','2023-12-20',None,'2023-12-21',None,None
+            ]),
+            'standard_common_40d_price_end_date': pd.to_datetime([
+                '2023-03-05','2023-03-06','2023-12-20','2023-12-22','2023-12-21',None,None
+            ]),
+        })
+        bundle=SimpleNamespace(group_table=table,
+            target_valid=np.asarray([True,True,True,False,True,False,False]),
+            profile=SimpleNamespace(training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS))
+        fold={'fold_id':'toy','score_start':pd.Timestamp('2024-01-01'),
+              'score_end':pd.Timestamp('2024-02-29')}
+        ids=_fold_group_ids(bundle,fold,validation_months=1)
+        self.assertEqual(ids['train_ids'].tolist(),[0,1])
+        self.assertEqual(ids['validation_ids'].tolist(),[2,4])
+        self.assertEqual(ids['final_ids'].tolist(),[0,1,2,4])
+        self.assertEqual(ids['standard_validation_ids'].tolist(),[2,3,4])
+        self.assertEqual(ids['score_ids'].tolist(),[5,6])
+        from services.breakout_quality.point_in_time_scores import _standard_validation_score_ids
+        self.assertEqual(_standard_validation_score_ids(ids).tolist(),[2,3,4])
+
+    def test_missing_score_only_source_does_not_authorize_refit(self):
+        from services.breakout_quality.point_in_time_scores import _standard_validation_score_ids
+        ids={'validation_ids':np.asarray([0,2],dtype=np.int64)}
+        self.assertEqual(_standard_validation_score_ids(ids).tolist(),[0,2])
+        # The existing FIT validator remains authoritative; the expanded
+        # score-only cohort must never enter epoch selection or fit_final.
+
+
+
 class FormalMinTrade40UpstreamPlanRegressionCases(unittest.TestCase):
     """Regression: model work cannot silently run a historical optimizer."""
 

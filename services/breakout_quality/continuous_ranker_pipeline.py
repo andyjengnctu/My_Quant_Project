@@ -68,20 +68,14 @@ def load_continuous_ranker_data(
         model_architecture=str(model_architecture),
         project_root=kwargs.get("project_root", Path(__file__).resolve().parents[2]),
     )
-    # Scientific dispatch by registered target capability, not by a model ID.
-    from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
-    from core.breakout_quality_runtime import CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
-    recipe = get_continuous_ranker_execution_recipe(str(experiment_profile))
-    if recipe.target_policy.materialization_mode == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH:
-        if seed is None:
-            raise ValueError('Seed-specific formal MinTrade40 requires a model/PIT seed')
-        from services.breakout_quality.formal_mintrade40_training_source import (
-            resolve_formal_mintrade40_loader_kwargs,
-        )
-        kwargs.update(resolve_formal_mintrade40_loader_kwargs(
-            project_root=kwargs.get('project_root', Path(__file__).resolve().parents[2]),
-            seed=int(seed), authorized_build=authorized_target_dependency_build,
-        ))
+    # One capability owner resolves this trade-path recipe and its seed-scoped
+    # materializer; the generic FIT loader never selects a model-specific teacher.
+    from services.breakout_quality.trade_path_target_source import loader_kwargs_for_trade_path
+    kwargs.update(loader_kwargs_for_trade_path(
+        experiment_profile=str(experiment_profile),
+        project_root=kwargs.get('project_root', Path(__file__).resolve().parents[2]),
+        seed=seed, authorized_build=authorized_target_dependency_build,
+    ))
     return load_profile_continuous_ranker_data(
         **kwargs, feature_price_source=alternate, feature_trade_count_source=activity,
     )

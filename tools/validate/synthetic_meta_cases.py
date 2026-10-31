@@ -5000,8 +5000,8 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
 
     check_true(
-        "model_sop_v11_preserves_approved_four_section_contract",
-        int(MODEL_STANDARD_SOP.version) == 11
+        "model_sop_v12_preserves_approved_four_section_contract",
+        int(MODEL_STANDARD_SOP.version) == 12
         and [(section.number, section.title) for section in MODEL_STANDARD_SOP.sections]
         == [(1,"Learnability"),(2,"Generalization"),
             (3,"Upside / Downside Validation"),(4,"Joint MFE / Adverse Quality")],
@@ -5013,8 +5013,8 @@ def validate_research_report_contract_freeze_case(_base_params):
     # Frozen to the user's 2026-09-04 standard comparison presentation.  These
     # are UI invariants, not assertions about a particular experimental model.
     check_true(
-        "model_comparison_v15_matches_approved_sop_v11_and_preserves_generalization_tables",
-        int(MODEL_STANDARD_COMPARISON.version) == 15
+        "model_comparison_v16_matches_approved_sop_v12_and_preserves_generalization_tables",
+        int(MODEL_STANDARD_COMPARISON.version) == 16
         and not hasattr(MODEL_STANDARD_COMPARISON, "model_specific_extension_ids")
         and comparison_extension_ids() == tuple(MODEL_COMPARISON_EXTENSION_SCHEMAS)
         and comparison_sections == [(item.number, item.title) for item in MODEL_STANDARD_SOP.sections]

@@ -1639,11 +1639,19 @@ def _run_point_in_time_scores_audit(
     if not validation_frames:
         raise ValueError("Rolling Standard SOP缺少validation score evidence")
     standard_validation_frame = pd.concat(validation_frames, ignore_index=True)
-    standard_oos_frame = valid_target[["group_index", "date", "breakout_quality_score"]].copy()
+    # For a real trade-path Target the source is already scored for the daily
+    # universe.  Its missing trade labels are not a score eligibility gate.
+    # The SOP builder separately enforces canonical 40D *price* maturity and
+    # masks missing Min Target exclusively for Target-learnability metrics.
+    standard_population = (
+        merged if "standard_common_40d_matured" in bundle.group_table.columns
+        else valid_target
+    )
+    standard_oos_frame = standard_population[["group_index", "date", "breakout_quality_score"]].copy()
     if bundle.profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
-        standard_breakout_frame = valid_target[valid_target["group_index"].isin(candidate_ids)][
-            ["group_index", "date", "breakout_quality_score"]
-        ].copy()
+        standard_breakout_frame = standard_population[
+            standard_population["group_index"].isin(candidate_ids)
+        ][["group_index", "date", "breakout_quality_score"]].copy()
     else:
         standard_breakout_frame = standard_oos_frame.copy()
 
