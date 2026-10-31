@@ -36,6 +36,7 @@ from filters.breakout_quality.pit_fold_provenance import (
     pit_fold_file_signatures, validate_pit_fold_evidence,
 )
 from core.file_integrity import file_change_signature
+from filters.breakout_quality.pit_group_selection import validate_standard_validation_score_scope
 from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
 from filters.breakout_quality.ranker_training_contract import (
     stored_training_semantics_mismatches,
@@ -640,6 +641,13 @@ def load_selection_point_in_time_score_source_contract(
         raise ValueError("Selection PIT manifest sample scope mismatch")
     if str(manifest.get("status") or "") != "BUILT":
         raise ValueError("Selection PIT manifest not BUILT")
+    # A legacy real-path publication can have perfectly hashed OOS scores but
+    # target-gated Validation sidecars. It is SCORE-incomplete for the approved
+    # common-price Model SOP: do not mark it READY or run another Audit-only
+    # refresh. The producer repairs only score sidecars from unchanged FIT.
+    validate_standard_validation_score_scope(
+        manifest, experiment_profile=str(experiment_profile),
+    )
     validate_selection_pit_lookahead_contract(manifest)
     if expected_seed is not None and int(manifest.get("seed", -1)) != int(expected_seed):
         raise ValueError("Selection PIT manifest seed mismatch")

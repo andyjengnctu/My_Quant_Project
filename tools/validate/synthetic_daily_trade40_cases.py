@@ -1907,6 +1907,149 @@ class RealPathCommonPriceEvaluationCases(unittest.TestCase):
         from services.breakout_quality.point_in_time_scores import _standard_validation_score_ids
         self.assertEqual(_standard_validation_score_ids(ids).tolist(),[2,3,4])
 
+    def test_signed_validation_rows_must_match_full_price_cohort_exactly(self):
+        from filters.breakout_quality.pit_group_selection import (
+            validate_standard_validation_sidecar_membership,
+        )
+        expected = np.asarray([0, 2, 3, 5], dtype=np.int64)
+        validate_standard_validation_sidecar_membership(
+            expected, expected.copy(), fold_id="synthetic_fold",
+        )
+        with self.assertRaisesRegex(ValueError, "missing=1, extra=0"):
+            validate_standard_validation_sidecar_membership(
+                expected, np.asarray([0, 2, 5]), fold_id="synthetic_fold",
+            )
+        with self.assertRaisesRegex(ValueError, "missing=0, extra=1"):
+            validate_standard_validation_sidecar_membership(
+                expected, np.asarray([0, 1, 2, 3, 5]), fold_id="synthetic_fold",
+            )
+        with self.assertRaisesRegex(ValueError, "validation price cohort differs"):
+            validate_standard_validation_sidecar_membership(
+                expected, np.asarray([5, 3, 2, 0]), fold_id="synthetic_fold",
+            )
+        with self.assertRaisesRegex(ValueError, "validation price cohort differs"):
+            validate_standard_validation_sidecar_membership(
+                expected, np.asarray([0, 2, 3, 3]), fold_id="synthetic_fold",
+            )
+
+    def test_published_pit_aggregate_preserves_real_path_validation_scope(self):
+        """A repaired Fold must remain READY after the aggregate is republished."""
+        from services.breakout_quality.point_in_time_scores import _combined_fold_record
+        from filters.breakout_quality.pit_group_selection import (
+            STANDARD_PRICE_VALIDATION_SCORE_SCOPE,
+        )
+        from services.breakout_quality.point_in_time_scores import FOLD_MANIFEST_FILENAME
+
+        with TemporaryDirectory() as tmp:
+            args = SimpleNamespace(point_in_time_dir_override=tmp)
+            fold_id = "fold_20210104_20211231"
+            fold_dir = Path(tmp) / "folds" / fold_id
+            fold_dir.mkdir(parents=True)
+            (fold_dir / FOLD_MANIFEST_FILENAME).write_text("{}", encoding="utf-8")
+            source = {
+                "fold_id": fold_id,
+                "planned_periods": {"validation_start": "2020-01-01", "score_start": "2021-01-04"},
+                "observed_periods": {},
+                "model_information_cutoff": "2021-01-03",
+                "group_counts": {},
+                "event_row_counts": {},
+                "selected_epoch": 3,
+                "contract_fingerprint": "synthetic",
+                "artifacts": {},
+                "validation_score_scope": STANDARD_PRICE_VALIDATION_SCORE_SCOPE,
+            }
+            scored = _combined_fold_record(args, source)
+            self.assertEqual(
+                scored["validation_score_scope"], STANDARD_PRICE_VALIDATION_SCORE_SCOPE,
+            )
+            source.pop("validation_score_scope")
+            legacy = _combined_fold_record(args, source)
+            self.assertNotIn("validation_score_scope", legacy)
+
+    def test_stale_validation_sidecar_scope_must_not_claim_ready_score_source(self):
+        """Regression for MR-13CM: old signed OOS SCORE != new SOP Validation."""
+        import json
+        from hashlib import sha256
+        from core.breakout_quality_policy import get_breakout_quality_workflow_settings
+        from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+        from core.breakout_quality_runtime import get_continuous_ranker_score_output_columns
+        from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+        from core.breakout_quality_runtime import CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
+        from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
+        from filters.breakout_quality.pit_group_selection import (
+            STANDARD_PRICE_VALIDATION_SCORE_SCOPE,
+            required_standard_validation_score_scope,
+        )
+        from filters.breakout_quality import ranking_score_store as score_owner
+        from filters.breakout_quality.paths import (
+            SELECTION_POINT_IN_TIME_SCORE_FILENAME,
+            SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
+            SELECTION_POINT_IN_TIME_COVERAGE_FILENAME,
+        )
+        from core.breakout_quality_policy import get_breakout_quality_model_test_settings
+
+        entries = get_breakout_quality_model_test_settings().model_profiles
+        real_profiles = [profile for _name, profile in entries
+                         if get_continuous_ranker_execution_recipe(profile).target_policy.materialization_mode
+                         == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH]
+        price_profiles = [profile for _name, profile in entries
+                          if required_standard_validation_score_scope(profile) is None]
+        self.assertTrue(real_profiles)
+        self.assertTrue(price_profiles)
+
+        def verify_source(profile_name, declared_scope):
+            settings = get_breakout_quality_workflow_settings(experiment_profile=profile_name)
+            profile = get_breakout_quality_experiment_profile(profile_name)
+            with TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                score = root / SELECTION_POINT_IN_TIME_SCORE_FILENAME
+                coverage = root / SELECTION_POINT_IN_TIME_COVERAGE_FILENAME
+                manifest_path = root / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
+                score.write_text('score-placeholder', encoding='utf-8')
+                coverage.write_text('coverage-placeholder', encoding='utf-8')
+
+                def record(path):
+                    data = path.read_bytes()
+                    return {"filename": path.name, "sha256": sha256(data).hexdigest(),
+                            "size_bytes": len(data)}
+
+                fold = {"fold_id": "fold_20210104_20211231"}
+                if declared_scope is not None:
+                    fold["validation_score_scope"] = declared_scope
+                manifest = {
+                    "filter_id": settings.filter_id,
+                    "model_architecture": settings.model_architecture,
+                    "experiment_profile": profile_name,
+                    "training_sample_scope": profile.training_sample_scope,
+                    "seed": int(settings.seed), "status": "BUILT",
+                    "continuous_target_id": profile.continuous_target_id,
+                    "source_continuous_target": {"target_contract": {"schema": "fixture-v1"}},
+                    "score_period": {"start": "2021-01-04", "end": "2021-12-31"},
+                    "folds": [fold], "artifacts": {"scores": record(score), "coverage": record(coverage)},
+                    "score_columns": get_continuous_ranker_score_output_columns(profile.training_objective),
+                    "score_eligibility_contract": build_score_eligibility_contract(profile),
+                    "lookahead_contract": score_owner.selection_pit_lookahead_contract(),
+                }
+                manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
+                kwargs = {
+                    "project_root": root,
+                    "filter_id": settings.filter_id,
+                    "model_architecture": settings.model_architecture,
+                    "experiment_profile": profile_name,
+                    "point_in_time_dir_override": root,
+                    "allow_stale_source": True,
+                }
+                return score_owner.load_selection_point_in_time_score_source_contract(**kwargs)
+
+        with self.assertRaisesRegex(ValueError, "validation score scope stale/missing"):
+            verify_source(real_profiles[0], None)
+        with self.assertRaisesRegex(ValueError, "validation score scope stale/missing"):
+            verify_source(real_profiles[0], "supervised_target_only")
+        ready = verify_source(real_profiles[0], STANDARD_PRICE_VALIDATION_SCORE_SCOPE)
+        self.assertEqual(ready.experiment_profile, real_profiles[0])
+        old = verify_source(price_profiles[0], None)
+        self.assertEqual(old.experiment_profile, price_profiles[0])
+
     def test_missing_score_only_source_does_not_authorize_refit(self):
         from services.breakout_quality.point_in_time_scores import _standard_validation_score_ids
         ids={'validation_ids':np.asarray([0,2],dtype=np.int64)}

@@ -23,6 +23,51 @@ from filters.breakout_quality.point_in_time_schedule import build_point_in_time_
 AUTO_SCORE_START_VALUE = "auto"
 _build_fold_periods = build_point_in_time_fold_periods
 
+# Persisted evaluation-only Fold sidecar contract. FIT/epoch validation uses
+# the supervised ids and remains unchanged. This scope is mandatory only for
+# real execution-path Targets whose training labels can be NULL on a price-
+# mature stock-day; an older target-gated sidecar is not a reusable SOP source.
+STANDARD_PRICE_VALIDATION_SCORE_SCOPE = "independent_price_40d_matured"
+
+
+def required_standard_validation_score_scope(experiment_profile: str) -> str | None:
+    """Return a capability-derived score-only scope, never a model-ID switch."""
+    from core.breakout_quality_runtime import (
+        CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
+    )
+    from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+
+    recipe = get_continuous_ranker_execution_recipe(str(experiment_profile))
+    return (
+        STANDARD_PRICE_VALIDATION_SCORE_SCOPE
+        if recipe.target_policy.materialization_mode
+        == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
+        else None
+    )
+
+
+def validate_standard_validation_score_scope(manifest, *, experiment_profile: str) -> None:
+    """Reject score-only evaluation sidecars predating the independent price scope.
+
+    Check the published Fold *records*, not just the aggregate score hash.
+    Missing coverage must trigger canonical checkpoint-only scoring, not an
+    Audit-only refresh that silently republishes an incomparable validation.
+    """
+    required = required_standard_validation_score_scope(str(experiment_profile))
+    if required is None:
+        return
+    folds = manifest.get("folds")
+    if not isinstance(folds, list) or not folds:
+        raise ValueError("Rolling PIT independent-price validation missing Fold records")
+    for fold in folds:
+        if not isinstance(fold, dict) or fold.get("validation_score_scope") != required:
+            fold_id = str(fold.get("fold_id") or "-") if isinstance(fold, dict) else "-"
+            raise ValueError(
+                f"Rolling PIT {fold_id} validation score scope stale/missing; "
+                "score-only refresh from the verified fitted checkpoint is required; "
+                "Audit-only refresh cannot repair this source"
+            )
+
 def build_training_scope_mask(bundle: ContinuousRankerDataBundle) -> np.ndarray:
     """Return the canonical target-eligible mask for this sample universe."""
 
@@ -245,6 +290,29 @@ def standard_price_validation_group_ids(bundle, *, validation_start, score_start
         & (price_end < pd.Timestamp(score_start))
     )
     return np.flatnonzero(scope.to_numpy(dtype=bool)).astype(np.int64)
+
+
+def validate_standard_validation_sidecar_membership(
+    expected_ids: np.ndarray, observed_ids: np.ndarray, *, fold_id: str,
+) -> None:
+    """Ensure signed Validation SCORE rows equal the canonical price-only cohort.
+
+    An incomplete sidecar cannot be repaired by an Audit-only report refresh;
+    the verified per-fold FIT must produce the missing PIT scores first.
+    """
+    expected = np.asarray(expected_ids, dtype=np.int64)
+    observed = np.asarray(observed_ids, dtype=np.int64)
+    if not np.array_equal(observed, expected):
+        expected_set = set(expected)
+        observed_set = set(observed)
+        raise ValueError(
+            f"Rolling Standard SOP {fold_id} validation price cohort differs "
+            f"from the canonical score-only source: "
+            f"expected={len(expected)}, scored={len(observed)}, "
+            f"missing={len(expected_set - observed_set)}, "
+            f"extra={len(observed_set - expected_set)}; "
+            "re-score from the original verified FIT, never fill missing scores"
+        )
 
 
 def _fold_group_ids(

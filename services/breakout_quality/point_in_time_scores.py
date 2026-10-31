@@ -86,6 +86,8 @@ from filters.breakout_quality.pit_group_selection import (
     _candidate_month_starts,
     _resolve_score_start,
     _fold_group_ids,
+    STANDARD_PRICE_VALIDATION_SCORE_SCOPE,
+    required_standard_validation_score_scope,
 )
 from filters.breakout_quality.point_in_time_schedule import (
     FOLD_CALENDAR_ANCHOR,
@@ -687,14 +689,11 @@ def _load_reusable_fold(
             return None
         if str(manifest.get("contract_fingerprint")) != expected_fingerprint:
             return None
-        from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
-        from core.breakout_quality_runtime import CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
-        if (get_continuous_ranker_execution_recipe(
-                str(fold_contract["experiment_profile"])
-            ).target_policy.materialization_mode
-                == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
-                and manifest.get("validation_score_scope") != "independent_price_40d_matured"):
-            return None  # Re-score this valid FIT; never re-train it.
+        required_scope = required_standard_validation_score_scope(
+            str(fold_contract["experiment_profile"])
+        )
+        if required_scope is not None and manifest.get("validation_score_scope") != required_scope:
+            return None  # Score-only refresh; the original FIT stays unchanged.
         artifacts = manifest.get("artifacts") or {}
         if build_file_manifest(model_path) != artifacts.get("checkpoint"):
             return None
@@ -2018,7 +2017,7 @@ def _standard_validation_score_ids(ids: dict[str, Any]) -> np.ndarray:
 
 def _standard_validation_score_scope(ids: dict[str, Any]) -> dict[str, str]:
     return (
-        {"validation_score_scope": "independent_price_40d_matured"}
+        {"validation_score_scope": STANDARD_PRICE_VALIDATION_SCORE_SCOPE}
         if "standard_validation_ids" in ids else {}
     )
 
@@ -2279,6 +2278,10 @@ def _combined_fold_record(args, item: dict[str, Any]) -> dict[str, Any]:
         "event_row_counts": item["event_row_counts"],
         "selected_epoch": item["selected_epoch"],
         "contract_fingerprint": item["contract_fingerprint"],
+        **(
+            {"validation_score_scope": item["validation_score_scope"]}
+            if "validation_score_scope" in item else {}
+        ),
         "artifacts": item["artifacts"],
         "fold_manifest": build_file_manifest(manifest_path),
     }

@@ -1665,6 +1665,29 @@ def _run_point_in_time_scores_audit(
             dtype={"fold_id": "string"},
         )
         validation_frame["date"] = pd.to_datetime(validation_frame["date"], errors="raise").dt.normalize()
+        # A signed sidecar with a declared modern scope can still have the
+        # wrong *rows*. Verify exact price-mature group membership against the
+        # separately computed evaluation mask before publishing any SOP SHA.
+        # Never substitute target-valid/NULL labels for expected price rows.
+        if "standard_common_40d_price_end_date" in bundle.group_table.columns:
+            from filters.breakout_quality.pit_group_selection import (
+                standard_price_validation_group_ids,
+                validate_standard_validation_sidecar_membership,
+            )
+            periods = dict(record.get("planned_periods") or {})
+            expected = standard_price_validation_group_ids(
+                bundle,
+                validation_start=periods["validation_start"],
+                score_start=periods["score_start"],
+            )
+            observed = pd.to_numeric(
+                validation_frame["group_index"], errors="raise"
+            ).to_numpy(dtype=np.int64)
+            if expected is None:
+                raise ValueError("Rolling Standard SOP lacks the canonical price-validation population")
+            validate_standard_validation_sidecar_membership(
+                expected, observed, fold_id=fold_id,
+            )
         validation_frame["rank_group"] = (
             validation_frame["fold_id"].astype(str) + "|" + validation_frame["date"].dt.strftime("%Y-%m-%d")
         )
