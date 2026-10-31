@@ -397,6 +397,142 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
                 == build_file_manifest(source_fold / DEFAULT_MODEL_FILENAME)["sha256"]
             and validation.call_count == 1,
         )
+        # A shared cache that cannot self-rescore may still be corroborated by
+        # a separately published, FIT-owner-verified fold.  Only identical
+        # weight bytes and exact FitKey can enable this score-only fallback;
+        # the old shared publication remains immutable.
+        from services.breakout_quality.point_in_time_scores import (
+            _verify_shared_cache_matches_published_fit,
+            _rescore_fold_from_fitting_checkpoint,
+        )
+        shared_root = base / "shared_fit"
+        shared_entry = shared_root / fold_training_identity(expected)
+        shared_entry.mkdir(parents=True)
+        shared_model = shared_entry / DEFAULT_MODEL_FILENAME
+        shared_model.write_bytes((source_fold / DEFAULT_MODEL_FILENAME).read_bytes())
+        shared_manifest = {
+            **expected,
+            "artifacts": {"checkpoint": build_file_manifest(shared_model)},
+        }
+        (shared_entry / FOLD_MANIFEST_FILENAME).write_text(
+            json.dumps(shared_manifest), encoding="utf-8",
+        )
+        intact_manifest = (shared_entry / FOLD_MANIFEST_FILENAME).read_bytes()
+        _verify_shared_cache_matches_published_fit(
+            cache_entry=shared_entry, fold_contract=expected,
+            verified_source_binding=matched[1],
+            published_source_fold=source_fold,
+        )
+        check_true(
+            "pit_shared_fit_identical_checkpoint_can_be_correlated_with_verified_published_fit",
+            shared_model.read_bytes() == b"published-fit-one"
+            and (shared_entry / FOLD_MANIFEST_FILENAME).read_bytes() == intact_manifest,
+        )
+        refreshed_dir = base / "same_fit_score_refresh"
+        with patch.object(pit_module, "_rescore_fold_from_compatible_checkpoint",
+                          return_value=(pd.DataFrame({"score": [0.5]}), shared_manifest)) as rescore:
+            refreshed = _rescore_fold_from_fitting_checkpoint(
+                source_fold_dir=shared_entry, target_fold_dir=refreshed_dir,
+                bundle=object(), ids={}, fold_contract=expected,
+                expected_fingerprint="fixture", args=SimpleNamespace(
+                    checkpoint_cache_root=str(shared_root),
+                ), torch_module=object(), plan=object(), verified_external_fit=True,
+            )
+        check_true(
+            "pit_verified_same_sha_shared_fit_only_refreshes_scores_not_weights",
+            rescore.call_count == 1
+            and rescore.call_args.kwargs["verified_archived_fit"] is True
+            and refreshed is not None
+            and (refreshed_dir / DEFAULT_MODEL_FILENAME).read_bytes() == b"published-fit-one"
+            and shared_model.read_bytes() == b"published-fit-one"
+            and (shared_entry / FOLD_MANIFEST_FILENAME).read_bytes() == intact_manifest,
+        )
+        # A published Forward/Rolling Fold is NOT a historical FIT Repair archive.
+        published_root = base / "published_with_model_artifacts"
+        published_fold = published_root / "folds" / "fold_20210101_20211231"
+        published_fold.mkdir(parents=True)
+        (published_fold / DEFAULT_MODEL_FILENAME).write_bytes(b"published-fit-one")
+        published_manifest = {
+            **expected,
+            "artifacts": {"checkpoint": build_file_manifest(
+                published_fold / DEFAULT_MODEL_FILENAME,
+            )},
+        }
+        (published_fold / FOLD_MANIFEST_FILENAME).write_text(json.dumps(published_manifest), encoding="utf-8")
+        (published_root / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME).write_text(
+            json.dumps({"folds": [{"fold_id": expected.get("fold_id")}]}), encoding="utf-8",
+        )
+        published_binding = {
+            "source_fold_manifest": build_file_manifest(published_fold / FOLD_MANIFEST_FILENAME),
+            "source_checkpoint": build_file_manifest(published_fold / DEFAULT_MODEL_FILENAME),
+            "source_aggregate_manifest": build_file_manifest(
+                published_root / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
+            ),
+        }
+        observed_snapshots = []
+        def inspect_staged_cross_mode_fit(**kwargs):
+            observed_snapshots.append(json.loads(
+                (kwargs["fold_dir"] / FOLD_MANIFEST_FILENAME).read_text(encoding="utf-8")
+            ))
+            return None
+        with patch.object(pit_module, "_rescore_fold_from_compatible_checkpoint",
+                          side_effect=inspect_staged_cross_mode_fit):
+            _rescore_fold_from_fitting_checkpoint(
+                source_fold_dir=published_fold, target_fold_dir=base / "published_fit_score_refresh",
+                bundle=object(), ids={}, fold_contract=expected,
+                expected_fingerprint="fixture", args=SimpleNamespace(checkpoint_cache_root=None),
+                torch_module=object(), plan=object(), verified_external_fit=True,
+                verified_published_binding=published_binding,
+            )
+        check_true(
+            "pit_published_cross_mode_fit_is_not_misclassified_as_archived_repair",
+            len(observed_snapshots) == 1
+            and "archived_rolling_fit_source" not in observed_snapshots[0],
+        )
+        aggregate_path = source_root / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
+        original_aggregate_bytes = aggregate_path.read_bytes()
+        with aggregate_path.open("ab") as aggregate_stream:
+            aggregate_stream.write(b" ")
+        stale_source_blocked = False
+        try:
+            _verify_shared_cache_matches_published_fit(
+                cache_entry=shared_entry, fold_contract=expected,
+                verified_source_binding=matched[1],
+                published_source_fold=source_fold,
+            )
+        except RuntimeError as exc:
+            stale_source_blocked = "source publication changed" in str(exc)
+        check_true("pit_cross_mode_origin_change_invalidates_saved_same_sha_proof", stale_source_blocked)
+        aggregate_path.write_bytes(original_aggregate_bytes)
+
+        shared_model.write_bytes(b"conflicting-fit-weights")
+        conflict_rejected = False
+        try:
+            _verify_shared_cache_matches_published_fit(
+                cache_entry=shared_entry, fold_contract=expected,
+                verified_source_binding=matched[1],
+                published_source_fold=source_fold,
+            )
+        except RuntimeError as exc:
+            conflict_rejected = "automatic overwrite and refit blocked" in str(exc)
+        check_true(
+            "pit_shared_cache_conflict_cannot_be_covered_by_published_fit",
+            conflict_rejected and shared_model.read_bytes() == b"conflicting-fit-weights",
+        )
+        shared_model.write_bytes(b"published-fit-one")
+        shared_manifest["seed"] = seed + 1
+        (shared_entry / FOLD_MANIFEST_FILENAME).write_text(json.dumps(shared_manifest), encoding="utf-8")
+        identity_rejected = False
+        try:
+            _verify_shared_cache_matches_published_fit(
+                cache_entry=shared_entry, fold_contract=expected,
+                verified_source_binding=matched[1],
+                published_source_fold=source_fold,
+            )
+        except RuntimeError as exc:
+            identity_rejected = "training identity differs" in str(exc)
+        check_true("pit_shared_cache_wrong_seed_never_uses_external_fitted_weights", identity_rejected)
+
         with patch.object(pit_module, "validate_rolling_fold_fitted_checkpoint",
                           return_value=(None, "external context mismatch")):
             try:

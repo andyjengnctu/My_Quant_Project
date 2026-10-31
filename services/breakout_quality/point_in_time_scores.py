@@ -1441,7 +1441,11 @@ def _rescore_fold_from_compatible_checkpoint(
         TypeError,
         KeyError,
         RuntimeError,
-    ):
+    ) as exc:
+        if fit_validation_errors is not None:
+            fit_validation_errors.append(
+                f"checkpoint/rescore rejected ({type(exc).__name__}: {exc})"
+            )
         return None
 
     # Score-output changes are not fitting changes.  Preserve model.pt byte-for-byte;
@@ -1504,6 +1508,9 @@ def _rescore_fold_from_fitting_checkpoint(
     torch_module,
     plan,
     verified_archive_binding: dict[str, Any] | None = None,
+    verified_external_fit: bool = False,
+    verified_published_binding: dict[str, Any] | None = None,
+    fit_validation_errors: list[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]] | None:
     """Materialize a compatible checkpoint from the shared fitting-identity cache, then rescore locally.
 
@@ -1534,6 +1541,8 @@ def _rescore_fold_from_fitting_checkpoint(
         shared_root not in (None, "")
         and source_fold_dir == _checkpoint_cache_entry_dir(Path(shared_root), fold_contract)
     )
+    if verified_external_fit and not (is_shared_cache or verified_published_binding is not None):
+        raise RuntimeError("Verified external FIT reuse requires canonical published-source proof")
     source_guard = (
         exclusive_file_lock(
             sibling_publication_lock_path(source_fold_dir),
@@ -1543,15 +1552,20 @@ def _rescore_fold_from_fitting_checkpoint(
     )
     try:
         with source_guard:
+            if verified_published_binding is not None:
+                _assert_published_fit_binding_unchanged(
+                    source_fold_dir=source_fold_dir, binding=verified_published_binding,
+                )
             if not (source_manifest_path.is_file() and source_model_path.is_file()):
                 return None
             try:
                 source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
                 if not isinstance(source_manifest, dict):
                     return None
-                if (verified_archive_binding is None and not _fold_training_contract_is_compatible(
-                    source_manifest, expected_contract=fold_contract
-                )):
+                if (verified_archive_binding is None and not verified_external_fit
+                    and not _fold_training_contract_is_compatible(
+                        source_manifest, expected_contract=fold_contract
+                    )):
                     return None
                 source_checkpoint_manifest = build_file_manifest(source_model_path)
                 if source_checkpoint_manifest != dict(source_manifest.get("artifacts") or {}).get(
@@ -1573,6 +1587,10 @@ def _rescore_fold_from_fitting_checkpoint(
                 })
             if build_file_manifest(staging / DEFAULT_MODEL_FILENAME) != source_checkpoint_manifest:
                 raise RuntimeError("Fitting checkpoint changed while snapshotting its source")
+            if verified_published_binding is not None:
+                _assert_published_fit_binding_unchanged(
+                    source_fold_dir=source_fold_dir, binding=verified_published_binding,
+                )
         # Source data is immutable for this local rescore from now on.
         rescored = _rescore_fold_from_compatible_checkpoint(
             fold_dir=staging,
@@ -1583,7 +1601,8 @@ def _rescore_fold_from_fitting_checkpoint(
             args=args,
             torch_module=torch_module,
             plan=plan,
-            verified_archived_fit=verified_archive_binding is not None,
+            verified_archived_fit=(verified_archive_binding is not None or verified_external_fit),
+            fit_validation_errors=fit_validation_errors,
         )
         if rescored is None:
             return None
@@ -1767,6 +1786,70 @@ def _resolve_verified_cross_mode_fit_source(
             "automatic training blocked"
         )
     return verified[0]
+
+
+def _assert_published_fit_binding_unchanged(
+    *, source_fold_dir: Path, binding: dict[str, Any],
+) -> None:
+    """TOCTOU guard for an independently FIT-owner-verified source publication."""
+    fold = Path(source_fold_dir)
+    aggregate = fold.parent.parent / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
+    try:
+        valid = all((
+            build_file_manifest(fold / FOLD_MANIFEST_FILENAME) == binding.get("source_fold_manifest"),
+            build_file_manifest(fold / DEFAULT_MODEL_FILENAME) == binding.get("source_checkpoint"),
+            build_file_manifest(aggregate) == binding.get("source_aggregate_manifest"),
+        ))
+    except (OSError, ValueError, TypeError):
+        valid = False
+    if not valid:
+        raise RuntimeError(
+            "Verified cross-mode FIT source publication changed during reuse; "
+            "automatic training and overwrite blocked"
+        )
+
+
+def _verify_shared_cache_matches_published_fit(
+    *, cache_entry: Path, fold_contract: dict[str, Any],
+    verified_source_binding: dict[str, Any],
+    published_source_fold: Path,
+) -> None:
+    """Rehabilitate no cache evidence: only accept bytes independently proven by FIT owner.
+
+    The cross-mode published fold has already passed the canonical FIT owner,
+    including historical Context/Target proof.  An existing shared cache is
+    used *without writing to it* only when its exact FitKey, manifest and model
+    bytes match those independently verified published checkpoint bytes.
+    """
+    _assert_published_fit_binding_unchanged(
+        source_fold_dir=published_source_fold, binding=verified_source_binding,
+    )
+    entry = Path(cache_entry)
+    with exclusive_file_lock(
+        sibling_publication_lock_path(entry),
+        conflict_message="Another shared FIT checkpoint publication is active",
+    ):
+        manifest_path = entry / FOLD_MANIFEST_FILENAME
+        model_path = entry / DEFAULT_MODEL_FILENAME
+        if (not entry.is_dir() or entry.is_symlink()
+            or not manifest_path.is_file() or not model_path.is_file()):
+            raise RuntimeError("Shared FIT cache entry is incomplete; original evidence preserved")
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(manifest, dict):
+                raise ValueError("FIT cache manifest is not an object")
+            if fold_training_identity(manifest) != fold_training_identity(fold_contract):
+                raise ValueError("FIT cache training identity differs")
+            checkpoint = build_file_manifest(model_path)
+            if checkpoint != dict(dict(manifest.get("artifacts") or {}).get("checkpoint") or {}):
+                raise ValueError("FIT cache model bytes differ from cache manifest")
+            if checkpoint != verified_source_binding.get("source_checkpoint"):
+                raise ValueError("same fitting identity has conflicting checkpoint SHA")
+        except (OSError, UnicodeError, ValueError, TypeError) as exc:
+            raise RuntimeError(
+                "Shared FIT cache cannot be corroborated by the verified published source; "
+                f"automatic overwrite and refit blocked: {exc}"
+            ) from exc
 
 
 def _materialize_verified_archived_rolling_fit(
@@ -2792,6 +2875,7 @@ def _run_authorized_point_in_time_scores(args, *, settings) -> int:
                 forward_checkpoint_imported = not bool(imported.get("reused_existing_cache"))
                 if forward_checkpoint_imported:
                     forward_checkpoint_import_count += 1
+        cache_fit_validation_errors: list[str] = []
         if (
             reused is None
             and bool(args.resume)
@@ -2810,6 +2894,7 @@ def _run_authorized_point_in_time_scores(args, *, settings) -> int:
                 args=args,
                 torch_module=torch,
                 plan=plan,
+                fit_validation_errors=cache_fit_validation_errors,
             )
             fitting_checkpoint_reuse = reused is not None
         cross_mode_fit_reuse = False
@@ -2823,33 +2908,72 @@ def _run_authorized_point_in_time_scores(args, *, settings) -> int:
                     f"Cross-mode FIT destination {fold['fold_id']} already has unverified "
                     "checkpoint/manifest; automatic overwrite and training blocked"
                 )
-            if args.checkpoint_cache_root not in (None, ""):
-                existing_cache = _checkpoint_cache_entry_dir(
+            existing_cache = (
+                _checkpoint_cache_entry_dir(
                     Path(str(args.checkpoint_cache_root)), fold_contract
                 )
-                if (existing_cache / DEFAULT_MODEL_FILENAME).exists():
-                    raise RuntimeError(
-                        f"Cross-mode FIT shared cache for {fold['fold_id']} is unverified; "
-                        "automatic overwrite and training blocked"
-                    )
+                if args.checkpoint_cache_root not in (None, "") else None
+            )
             external_source = _resolve_verified_cross_mode_fit_source(
                 fit_source_pit_dirs=tuple(Path(x) for x in args.fit_source_pit_dir),
                 target_fold_dir=fold_dir, fold_contract=fold_contract,
                 bundle=bundle, torch_module=torch, plan=plan, project_root=PROJECT_ROOT,
             )
-            if external_source is not None:
-                source_fold, verified_binding = external_source
+            if existing_cache is not None and existing_cache.exists():
+                if external_source is None:
+                    evidence = [*fit_validation_errors, *cache_fit_validation_errors]
+                    evidence.extend(_unverified_fit_checkpoint_reasons(
+                        fold_dir=fold_dir, fold_contract=fold_contract, args=args,
+                        torch_module=torch,
+                    ))
+                    detail = "; ".join(evidence[:8]) or "no independently verified published FIT"
+                    raise RuntimeError(
+                        f"Cross-mode FIT shared cache for {fold['fold_id']} is unverified; "
+                        "automatic overwrite and training blocked; read-only evidence: " + detail
+                    )
+                # A proven original Fold can corroborate an otherwise unreadable
+                # shared FitKey only when the exact model bytes already match.
+                _verify_shared_cache_matches_published_fit(
+                    cache_entry=existing_cache, fold_contract=fold_contract,
+                    verified_source_binding=external_source[1],
+                    published_source_fold=external_source[0],
+                )
+                rescore_reasons: list[str] = []
+                reused = _rescore_fold_from_fitting_checkpoint(
+                    source_fold_dir=existing_cache, target_fold_dir=fold_dir,
+                    bundle=bundle, ids=ids, fold_contract=fold_contract,
+                    expected_fingerprint=fingerprint, args=args,
+                    torch_module=torch, plan=plan,
+                    verified_external_fit=True, fit_validation_errors=rescore_reasons,
+                )
+                if reused is None:
+                    raise RuntimeError(
+                        f"Verified same-SHA cross-mode FIT for {fold['fold_id']} "
+                        "cannot regenerate scores; automatic training blocked; details: "
+                        + ("; ".join(rescore_reasons[:6]) or "checkpoint or scoring validation failed")
+                    )
+                cross_mode_fit_reuse = True
+            elif external_source is not None:
+                source_fold, _verified_binding = external_source
+                rescore_reasons: list[str] = []
+                # This is a *published cross-mode Fold*, not a historical
+                # FIT Repair archive.  It has already passed the FIT owner;
+                # never fabricate an archived_rolling_fit_source reference,
+                # whose verifier only accepts canonical repair-history paths.
                 reused = _rescore_fold_from_fitting_checkpoint(
                     source_fold_dir=source_fold, target_fold_dir=fold_dir,
                     bundle=bundle, ids=ids, fold_contract=fold_contract,
                     expected_fingerprint=fingerprint, args=args,
                     torch_module=torch, plan=plan,
-                    verified_archive_binding=verified_binding,
+                    verified_external_fit=True,
+                    verified_published_binding=_verified_binding,
+                    fit_validation_errors=rescore_reasons,
                 )
                 if reused is None:
                     raise RuntimeError(
                         f"Cross-mode FIT verified for {fold['fold_id']}, but score regeneration "
-                        "failed; automatic training blocked"
+                        "failed; automatic training blocked; details: "
+                        + ("; ".join(rescore_reasons[:6]) or "checkpoint or scoring validation failed")
                     )
                 cross_mode_fit_reuse = True
         archived_checkpoint_reuse = False
