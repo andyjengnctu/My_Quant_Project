@@ -6237,6 +6237,30 @@ class OraclePublishedPriceGenerationManifestCases(TestCase):
                 self.assertEqual(artifacts.price_inventory_sha256(root, "reduced"), legacy_price)
             self.assertEqual(manifest.read_bytes(), original_manifest)
 
+    def test_published_price_manifest_link_collision_is_idempotent_only_for_a_file(self):
+        from filters.breakout_quality import source_inventory as owner
+        import os
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._setup(root)
+            inventory = owner.build_source_data_inventory(
+                root, "reduced", publish_price_manifest=True)
+            proof = owner._price_manifest_path(
+                root, "reduced", inventory["csv_inventory_sha256"],
+                owner._price_file_revision(root, "reduced"))
+            original = proof.read_bytes()
+            # AI: Existing valid signed proof means a competing publisher won;
+            # AI: no new witness is needed and its original bytes must survive.
+            self.assertEqual(owner.build_source_data_inventory(
+                root, "reduced", publish_price_manifest=True), inventory)
+            self.assertEqual(proof.read_bytes(), original)
+            # AI: A non-file collision is never a successful publication.
+            proof.unlink()
+            proof.mkdir()
+            with self.assertRaisesRegex(ValueError, "publication path is not a file"):
+                owner.build_source_data_inventory(root, "reduced", publish_price_manifest=True)
+            self.assertTrue(proof.is_dir())
+
     def test_price_source_changes_or_tampered_manifest_cannot_fake_reuse(self):
         from filters.breakout_quality import source_inventory as owner
         from services.audit import oracle_replay_artifacts as artifacts

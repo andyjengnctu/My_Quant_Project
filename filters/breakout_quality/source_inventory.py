@@ -317,8 +317,12 @@ def _publish_price_manifest(project_root: str | Path, dataset: str,
             os.fsync(handle.fileno())
         try:
             os.link(temporary, path)
-        except FileExistsError:
-            pass
+        except FileExistsError as exc:
+            # AI: Concurrent publishers may race on this content-addressed file.
+            # AI: The already-published regular file is verified below; refuse
+            # AI: non-file collisions instead of silently accepting a bad path.
+            if not path.is_file():
+                raise ValueError("Price manifest publication path is not a file") from exc
     finally:
         temporary.unlink(missing_ok=True)
     try:
