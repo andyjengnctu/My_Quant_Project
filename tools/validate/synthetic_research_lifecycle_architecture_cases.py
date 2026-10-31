@@ -3770,7 +3770,11 @@ def validate_research_model_readiness_architecture_case(_base_params):
         and final_report.call_count == 1)
 
     # Producer failure must stop before the cross-seed REPORT can be emitted.
+    # This is a sequential first-failure test with an intentionally unregistered
+    # synthetic profile. Disable only the execution parallelism knob for this
+    # fixture; parallel eligibility must still validate real registered profiles.
     with (
+        patch.object(model_app, "BREAKOUT_QUALITY_MODEL_ROBUSTNESS_SEED_WORKERS", 1),
         patch.object(model_app, "get_breakout_quality_model_test_settings",
                      return_value=SimpleNamespace(model_profiles=(("MR-SYN", "synthetic_profile"),))),
         patch.object(model_app, "get_breakout_quality_workflow_settings", return_value=workflow),
@@ -4036,7 +4040,11 @@ def validate_research_model_readiness_architecture_case(_base_params):
         def build(_name, _settings, *, seed, **_kwargs):
             phase["built"].append(int(seed))
             return 0
+        # These mutation-barrier scenarios intentionally test serialized
+        # Producer ordering. Keep real parallel preflight out of the isolated
+        # fake-profile fixture; this test only covers serial mutation barriers.
         with (
+            patch.object(model_app, "BREAKOUT_QUALITY_MODEL_ROBUSTNESS_SEED_WORKERS", 1),
             patch("services.breakout_quality.model_artifact_readiness.standard_model_sop_completeness_issues", return_value=()),
             patch.object(model_app, "get_breakout_quality_model_test_settings",
                          return_value=SimpleNamespace(model_profiles=(("MR-SYN", "synthetic_profile"),))),
