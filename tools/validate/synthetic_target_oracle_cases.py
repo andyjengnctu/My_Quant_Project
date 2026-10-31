@@ -44,6 +44,14 @@ def _synthetic_full_window_yearly(*, return_pct: float = 5.0) -> list[dict]:
     return [{"year": year, "strategy_return_pct": float(return_pct),
              "is_full_year": year != 2025} for year in range(2021, 2026)]
 
+
+def _assert_only_reference_metadata_added(case, root, original):
+    """Migration may add references; original evidence remains byte-identical."""
+    current = {path: path.read_bytes() for path in root.rglob("*.json")}
+    case.assertEqual({path: current.get(path) for path in original}, original)
+    case.assertTrue(all({"execution_index", "truth_index"} & set(path.relative_to(root).parts)
+                        for path in set(current) - set(original)))
+
 # Historical stock-day Oracle regressions must not instantiate a P16 path
 # provider in a temporary no-market fixture. The active suite is tested below.
 _ACTIVE_ORACLE_DEFINITION = next(
@@ -3264,6 +3272,8 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 legacy_path.write_text(json.dumps(legacy_payload), encoding="utf-8")
                 original_legacy_bytes = legacy_path.read_bytes()
                 canonical_path.unlink()  # AI: Fixture: old cache exists, new key does not.
+                # Simulate storage predating effective-contract references.
+                shutil.rmtree(store.cache_root.parent / "execution_index")
                 rebuilt = oracle.build_report(definition, project_root=root, quiet=True)
                 self.assertEqual(len(runs), 40, "verified old C96 must not run")
                 self.assertEqual(rebuilt["oracles"], original["oracles"])
@@ -3347,6 +3357,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 snapshot.mkdir(parents=True)
                 (snapshot / "audit.json").write_text(json.dumps(report), encoding="utf-8")
                 shutil.rmtree(directory / "replay_cache")
+                shutil.rmtree(directory / "execution_index")
                 cache = oracle.OracleReplayStore(root, definition.output_subdir)
                 self.assertTrue(all(
                     not cache.existing_completed_identities(seed=seed, target=name)
@@ -3409,6 +3420,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
                 (old_dir / "audit.json").write_text(json.dumps(old), encoding="utf-8")
                 cache_root = root / "outputs/audit/breakout_quality/reusable/target_oracle_romd/replay_cache"
                 shutil.rmtree(cache_root)
+                shutil.rmtree(cache_root.parent / "execution_index")
                 self.assertTrue(all(
                     not oracle.OracleReplayStore(root, definition.output_subdir).existing_completed_identities(
                         seed=seed, target=name,
@@ -4696,7 +4708,10 @@ class OraclePriceReplayLineageCases(TestCase):
                 fixture = OracleOnePlanRealCacheCases()._fixture(root)
                 seed = fixture[2]
                 self.assertEqual(self._preflight(root, fixture)[(seed, "R40")], "REUSE")
-            with patch.object(oracle, "_price_score_algorithm_sha256", return_value="f" * 64):
+            from services.research.oracle_artifact_contract import PRICE_CALCULATION_REVISIONS
+            # Effective calculation revision, not the obsolete broad loader
+            # SHA. Genuine formula edits are separately covered by AST tests.
+            with patch.dict(PRICE_CALCULATION_REVISIONS, {"terminal_r": 2}):
                 changed = self._preflight(root, fixture)
             self.assertEqual(changed, {(seed, "C96"): "REUSE", (seed, "R40"): "RUN",
                                        (seed, "T40"): "RUN"})
@@ -5139,7 +5154,7 @@ class OracleSingleOwnerExecutionCases(TestCase):
             self.assertEqual(cli, ui)
             self.assertEqual(len(prompts), 1)
             self.assertIn("REUSE 2 / RUN（需回放）0 / BLOCKED 0", prompts[0])
-            self.assertEqual({path: path.read_bytes() for path in root.rglob("*.json")}, original)
+            _assert_only_reference_metadata_added(self, root, original)
 
     def test_noninteractive_price_and_p16_drift_block_before_science(self):
         for field, changed in (("dataset_sha256", {"price_sha": "e" * 64}),
@@ -6146,7 +6161,7 @@ class OracleCertifiedSourceLineEndingEquivalenceCases(TestCase):
             self.assertEqual(published["status"], "COMPLETED")
             self.assertEqual(published["oracles"][0]["target"], "R40")
             self.assertEqual(published["oracles"][0]["romd"], 18.)
-            self.assertEqual({path: path.read_bytes() for path in root.rglob("*.json")}, original_bytes)
+            _assert_only_reference_metadata_added(self, root, original_bytes)
 
     def test_semantic_change_never_uses_a_line_ending_alias(self):
         from services.audit.oracle_score_artifacts import (
@@ -6898,6 +6913,76 @@ class OracleMinTradePreflightArtifactReuseCases(TestCase):
             self.assertEqual(len(decisions), 136)
             self.assertEqual(set(decisions.values()), {"REUSE"})
 
+    def test_warm_136_cell_plan_reads_no_arrays_or_legacy_source_closure(self):
+        """A fresh completed reference makes verification metadata-only."""
+        from contextlib import ExitStack
+        from filters.breakout_quality.dataset_store import resolve_dataset_paths
+        from filters.breakout_quality.paths import resolve_filter_output_dir
+        from services.audit import daily_trade40_oracle as daily
+        from services.audit import oracle_score_artifacts as price
+        from services.audit import oracle_replay_artifacts as replay
+        from services.audit import mintrade_truth_source_attestation as legacy
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = self._fixture(root)
+            first = self._preflight(root, fixture)
+            self.assertEqual(len(first), 136)
+            self.assertEqual(set(first.values()), {"REUSE"})
+            before = {p: p.read_bytes() for p in fixture[6].cache_root.rglob("*.json")}
+            # Publication-only metadata and serialization may change freely.
+            summary = resolve_dataset_paths(resolve_filter_output_dir(
+                root, str(fixture[0].source["filter_id"]))).summary
+            data = json.loads(summary.read_text(encoding="utf-8"))
+            data.update(elapsed_sec=123456, label_counts={"unrelated_fit_label": 100},
+                        dataset_artifacts={"feature_bank": {"sha256": "f" * 64}})
+            summary.write_text(json.dumps(data, indent=4), encoding="utf-8")
+            references = {p: p.read_bytes() for p in (fixture[6].cache_root.parent / "execution_index").rglob("*.json")}
+            with ExitStack() as stack:
+                for owner, name in (
+                    (np, "load"), (daily, "truth_producer_fingerprint"),
+                    (price, "price_score_source_identity"), (price, "oracle_daily_source_fingerprint"),
+                    (price, "verified_existing_price_score_witnesses"),
+                    (replay, "verified_daily_truth_witness"),
+                    (legacy, "_encoding_equivalent_mintrade_sources"),
+                    (oracle, "_price_score_replay_lineage"), (oracle, "_replay_attested_score_keys"),
+                    (oracle, "_certify_unscored_baseline_before_truth"),
+                ):
+                    stack.enter_context(patch.object(owner, name, side_effect=AssertionError(
+                        f"Warm REUSE must not invoke {name}")))
+                completed = self._preflight(root, fixture, approve=True)
+            self.assertEqual(completed["status"], "COMPLETED")
+            self.assertEqual(len(completed["oracles"]), 16)
+            self.assertEqual(before, {p: p.read_bytes() for p in fixture[6].cache_root.rglob("*.json")})
+            self.assertEqual(references, {p: p.read_bytes() for p in references})
+
+    def test_exact_direct_and_positive_share_certified_truth_without_loading_a_provider(self):
+        from services.audit.oracle_truth_references import OracleTruthReferences, source_context, load_or_build_daily_truth
+        from services.audit import daily_trade40_oracle as daily
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = self._fixture(root)
+            self._preflight(root, fixture)
+            seed = fixture[2][0]
+            folder = fixture[6].cache_root.parent
+            contexts = {target: json.loads(next((folder / "execution_index" / str(seed)).glob(
+                target + "_*.json")).read_text())["context"] for target in (
+                    "DailyUniversal_MinTrade_NetPnL", "DailyUniversal_MinTrade_NetPnL_Direct",
+                    "DailyUniversal_MinTrade_NetPnL_Positive_Direct")}
+            shared = {json.dumps(source_context(context), sort_keys=True) for context in contexts.values()}
+            self.assertEqual(len(shared), 1)
+            references = OracleTruthReferences(folder / "truth_cache")
+            before = {p: p.read_bytes() for p in fixture[-1]}
+            for context in contexts.values():
+                with patch.object(daily, "load_profile_continuous_ranker_data", side_effect=AssertionError("No DL labels")), \
+                     patch.object(daily, "truth_producer_fingerprint", side_effect=AssertionError("No legacy source closure")):
+                    scores, evidence = load_or_build_daily_truth(execution=context, cache_root=folder / "truth_cache",
+                        producer=lambda: self.fail("Shared truth cannot BUILD again"))
+                self.assertEqual(len(scores), 4)
+                self.assertEqual(evidence["source_reuse_status"], "REUSE")
+                self.assertEqual(evidence["teacher"]["seed"], seed)
+                references.validate_consumption(context, evidence)
+            self.assertEqual(before, {p: p.read_bytes() for p in fixture[-1]})
+
     def test_archived_default_oracle_source_reuses_all_56_without_current_truth_build(self):
         # Real Windows receipt source SHA; the earlier four seeds retain v1,
         # the later four use v2. No current-source NPZ is invented to pass.
@@ -6984,6 +7069,145 @@ class OracleMinTradePreflightArtifactReuseCases(TestCase):
             fixture[7][0].write_bytes(b"corrupt NPZ receipt")
             with self.assertRaisesRegex(oracle.OracleBlockedError, "daily truth witness is invalid"):
                 self._preflight(root, fixture)
+
+
+class OracleEffectiveArtifactContractCases(TestCase):
+    """Generic capability ownership, invalidation and original-evidence checks."""
+
+    def _implementations(self):
+        from services.research.oracle_artifact_contract import source_implementation_sha256
+        plan = oracle._oracle_comparison_plan(_ACTIVE_ORACLE_DEFINITION)
+        return {recipe: source_implementation_sha256(recipe, str(_ACTIVE_ORACLE_DEFINITION.source[provider]))
+                for recipe, provider, *_ in (*plan["recipes"].values(), *plan["daily_recipes"].values())}
+
+    def _changed_source(self, relative, transform):
+        from services.research.oracle_artifact_contract import source_implementation_sha256
+        original = Path.read_text
+        target = ROOT / relative
+        def read(path, *args, **kwargs):
+            value = original(path, *args, **kwargs)
+            return transform(value) if path == target else value
+        source_implementation_sha256.cache_clear()
+        self.addCleanup(source_implementation_sha256.cache_clear)
+        return patch.object(Path, "read_text", read)
+
+    def test_unrelated_loader_function_and_new_inactive_target_branch_preserve_existing_formulas(self):
+        before = self._implementations()
+        def change(source):
+            return source.replace(
+                "elif target_id == DAILY_FULL_HORIZON_MAE_GATED_MFE_T40_TARGET_ID:",
+                'elif target_id == "unrelated_future_training_target":\n'
+                '        selected_target = 123.0\n'
+                "    elif target_id == DAILY_FULL_HORIZON_MAE_GATED_MFE_T40_TARGET_ID:",
+            ) + '\n\ndef unrelated_model_fit_loader():\n    return "new training workflow"\n'
+        with self._changed_source("filters/breakout_quality/daily_ranker_data.py", change):
+            self.assertEqual(self._implementations(), before)
+
+    def test_actual_terminal_formula_edit_invalidates_only_terminal_recipe(self):
+        before = self._implementations()
+        with self._changed_source("filters/breakout_quality/daily_ranker_data.py", lambda text:
+                text.replace("selected_target = terminal_r\n", "selected_target = terminal_r + 1.0\n")):
+            changed = self._implementations()
+        self.assertEqual({key for key in before if before[key] != changed[key]}, {"terminal_r"})
+
+    def test_provider_input_window_is_bound_but_model_head_width_is_not(self):
+        from services.research.oracle_artifact_contract import (
+            source_calculation_contract, legacy_import_permitted, replay_implementation_sha256)
+        from filters.breakout_quality.models import spec
+        profile = str(_ACTIVE_ORACLE_DEFINITION.source["pure_mfe40_provider"])
+        arguments = dict(recipe="mfe", profile_id=profile,
+                         model_architecture=str(_ACTIVE_ORACLE_DEFINITION.source["model_architecture"]))
+        before = source_calculation_contract(**arguments)
+        def importable(source):
+            return legacy_import_permitted({"replay_calculation_revision": 1,
+                "replay_implementation_sha256": replay_implementation_sha256(), "source_contract": source})
+        self.assertTrue(importable(before))
+        original = spec.get_model_spec(before["feature_provider"]["model_architecture"])
+        with patch.object(spec, "get_model_spec", return_value=replace(original, head_width=12345)):
+            self.assertEqual(source_calculation_contract(**arguments), before)
+        with patch.object(spec, "get_model_spec", return_value=replace(original,
+                input_window_bars=before["feature_provider"]["input_requirements"]["window_bars"] + 1)):
+            changed = source_calculation_contract(**arguments)
+            self.assertNotEqual(changed, before)
+            self.assertFalse(importable(changed), "An old format cannot be imported under a different input universe")
+
+    def test_fit_only_optional_reset_path_does_not_revise_default_oracle(self):
+        before = self._implementations()
+        def change(text):
+            old = "            pending = None\n        previous_trade_day = trade_day"
+            self.assertIn(old, text)
+            return text.replace(old, '            pending = {"fit_only": True}\n        previous_trade_day = trade_day')
+        with self._changed_source("filters/breakout_quality/daily_trade40_target.py", change):
+            self.assertEqual(self._implementations(), before)
+
+    def test_net_pnl_arithmetic_edit_does_not_revise_net_r_or_price_targets(self):
+        before = self._implementations()
+        with self._changed_source("filters/breakout_quality/daily_trade40_target.py", lambda text:
+                text.replace("net_pnl[row] = float(pnl_value)", "net_pnl[row] = 10.0 * float(pnl_value)")):
+            changed = self._implementations()
+        self.assertEqual({key for key in before if before[key] != changed[key]}, {"daily_trade_path_net_pnl"})
+
+    def test_completed_reference_keeps_same_source_conflicts_visible(self):
+        helper = OracleSingleOwnerExecutionCases()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = helper._fixture(root)
+            with helper._context(root, fixture):
+                oracle.build_report(fixture[0], project_root=root, quiet=True)
+            store = oracle.OracleReplayStore(root, fixture[0].output_subdir)
+            saved, = store.existing_completed_identities(seed=fixture[2], target="R40")
+            conflict = {**saved, "replay_policy": {**saved["replay_policy"], "perfect_score_sha256": "e" * 64}}
+            store.write(conflict, store.read(saved), origin="synthetic_same_source_conflict_after_index")
+            original = {p: p.read_bytes() for p in root.rglob("*.json")}
+            with helper._context(root, fixture):
+                with self.assertRaisesRegex(oracle.OracleBlockedError, "conflict"):
+                    oracle.build_report(fixture[0], project_root=root, quiet=True)
+            self.assertEqual(original, {p: p.read_bytes() for p in root.rglob("*.json")})
+
+    def test_reference_tamper_or_missing_origin_cannot_trigger_a_producer(self):
+        helper = OracleSingleOwnerExecutionCases()
+        for kind in ("reference", "origin"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                fixture = helper._fixture(root)
+                with helper._context(root, fixture):
+                    oracle.build_report(fixture[0], project_root=root, quiet=True)
+                store = oracle.OracleReplayStore(root, fixture[0].output_subdir)
+                if kind == "reference":
+                    path = next((store.cache_root.parent / "execution_index").rglob("R40_*.json"))
+                    payload = json.loads(path.read_text())
+                    payload["observation_sha256"] = "f" * 64
+                    path.write_text(json.dumps(payload), encoding="utf-8")
+                else:
+                    origin, = store.existing_completed_identities(seed=fixture[2], target="R40")
+                    store._path(origin).unlink()
+                with helper._context(root, fixture):
+                    with self.assertRaisesRegex(oracle.OracleBlockedError, "reference corrupt"):
+                        oracle.build_report(fixture[0], project_root=root, quiet=True)
+
+    def test_only_effective_inputs_invalidate_completed_cells(self):
+        from services.research import oracle_artifact_contract as contracts
+        helper = OracleSingleOwnerExecutionCases()
+        for kind, expected in (("price", {"C96", "R40"}), ("p16", {"C96", "R40"}),
+                               ("fee", {"C96", "R40"}), ("formula", {"R40"})):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                fixture = helper._fixture(root)
+                with helper._context(root, fixture):
+                    oracle.build_report(fixture[0], project_root=root, quiet=True)
+                from contextlib import ExitStack
+                with ExitStack() as stack:
+                    stack.enter_context(helper._context(root, fixture,
+                        **({"price_sha": "d" * 64} if kind == "price" else
+                           {"param_sha": "e" * 64} if kind == "p16" else {})))
+                    if kind == "fee":
+                        stack.enter_context(patch.object(oracle, "BROKER_FEE_RATE", "0.02"))
+                    if kind == "formula":
+                        stack.enter_context(patch.dict(contracts.PRICE_CALCULATION_REVISIONS, {"terminal_r": 2}))
+                    result = oracle.build_report(fixture[0], project_root=root, quiet=True,
+                                                 preflight_approval=lambda _: False)
+                self.assertEqual({target for (_seed, target), state in result["preflight"].items()
+                                  if state == "RUN"}, expected)
 
 
 if __name__ == "__main__":

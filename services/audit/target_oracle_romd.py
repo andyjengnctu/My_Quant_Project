@@ -107,6 +107,11 @@ from services.audit.reusable_report import format_comparison_rows
 from services.audit.oracle_execution_policy import (
     execution_gate_policies, OracleExecutionPolicyError,
 )
+from services.research.oracle_artifact_contract import (
+    PRICE_CALCULATION_REVISIONS, DAILY_CALCULATION_REVISIONS,
+    OracleExecutionIndex, dataset_input_contract, execution_context,
+    source_calculation_contract, legacy_import_permitted,
+)
 
 SUPPORTED_AUDIT_TYPE = "target_ground_truth_strategy_romd"
 ORACLE_REPORT_SCHEMA_VERSION = 8
@@ -126,7 +131,7 @@ _ORACLE_RETIRED_TARGETS = frozenset(
 
 # Recipe implementation is stable; WHICH recipes and providers are needed is
 # resolved from the selected comparisons, never from a second target allowlist.
-_ORACLE_SCORE_RECIPES = frozenset(("equal_rank_mfe_safety", "mfe", "terminal_r", "terminal_mae_gate", "mfe_mae_gate"))
+_ORACLE_SCORE_RECIPES = frozenset(PRICE_CALCULATION_REVISIONS)
 _ORACLE_DAILY_SCORE_RECIPES = {"daily_trade_path_net_r": "net_r", "daily_trade_path_net_pnl": "net_pnl"}
 _PROVIDER_COHORT_IDS = {
     "pure_mfe40_provider": "40d", "mfe20_d20_provider": "20d",
@@ -1520,9 +1525,13 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
                        daily_evidence: Mapping[str, Any] | None = None,
                        score_sha256: str | None = None,
                        score_contract: Mapping[str, Any] | None = None,
-                       project_root: Path | None = None) -> dict[str, Any]:
+                       project_root: Path | None = None,
+                       effective_context: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """One target-scoped economic/score identity for fast and normal REUSE."""
     policy = dict(replay_policy)
+    if effective_context is not None:
+        from core.file_integrity import canonical_json_sha256
+        policy["effective_execution_contract_sha256"] = canonical_json_sha256(effective_context)
     policy["period_stats_implementation"] = PERIOD_STATS_IMPLEMENTATION
     if target != str(definition.source["baseline_arm_id"]):
         policy["oracle_parity_implementation"] = ORACLE_PARITY_IMPLEMENTATION
@@ -1562,16 +1571,25 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
         )
         source = plan["daily_sources"][target]
         recipe, provider, horizon = plan["daily_recipes"][source]
-        if daily_evidence.get("truth_source_sha256") != truth_producer_fingerprint(
-                _ORACLE_DAILY_SCORE_RECIPES[recipe]):
-            raise OracleBlockedError("Oracle Target truth has no verified executing producer lineage")
-        source_summary_sha = oracle_dataset_summary_sha256(
-            root=Path(project_root) if project_root is not None else Path(__file__).resolve().parents[2],
-            filter_id=str(definition.source["filter_id"]),
-        )
-        if ("dataset_summary_sha256" not in daily_evidence or
-                daily_evidence["dataset_summary_sha256"] != source_summary_sha):
-            raise OracleBlockedError("Oracle Target truth has no matching dataset-source evidence")
+        effective_source_sha = None
+        if effective_context is not None and "effective_source_reference" in daily_evidence:
+            from services.audit.oracle_truth_references import OracleTruthReferences, source_context
+            from core.file_integrity import canonical_json_sha256
+            references = OracleTruthReferences(Path(project_root) / AUDIT_OUTPUT_ROOT /
+                                               definition.output_subdir / "truth_cache")
+            references.validate_consumption(effective_context, daily_evidence)
+            effective_source_sha = canonical_json_sha256(source_context(effective_context))
+        else:
+            if daily_evidence.get("truth_source_sha256") != truth_producer_fingerprint(
+                    _ORACLE_DAILY_SCORE_RECIPES[recipe]):
+                raise OracleBlockedError("Oracle Target truth has no verified executing producer lineage")
+            source_summary_sha = oracle_dataset_summary_sha256(
+                root=Path(project_root) if project_root is not None else Path(__file__).resolve().parents[2],
+                filter_id=str(definition.source["filter_id"]),
+            )
+            if ("dataset_summary_sha256" not in daily_evidence or
+                    daily_evidence["dataset_summary_sha256"] != source_summary_sha):
+                raise OracleBlockedError("Oracle Target truth has no matching dataset-source evidence")
         target_id, label_id = target_identity_for_horizon(
             horizon, outcome_metric=_ORACLE_DAILY_SCORE_RECIPES[recipe],
         )
@@ -1585,6 +1603,7 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
         policy["hindsight_score_recipe"] = recipe
         policy["hindsight_score_key_mode"] = "information_date"
         policy["hindsight_target_contract"] = {
+            **({"effective_calculation_contract_sha256": effective_source_sha} if effective_source_sha else {}),
             "label_id": daily_evidence["label_id"],
             "target_id": daily_evidence["target_id"],
             "profile_id": str(definition.source[provider]),
@@ -2082,6 +2101,7 @@ def _execute_single_stage_missing(
     price_targets_for_run: frozenset[str] | None = None,
     price_score_allow_build: bool = True,
     mintrade_stock_workers: int | None = None,
+    execution_contexts: Mapping[tuple[int, str], Mapping[str, Any]] | None = None,
 ) -> dict[tuple[int, str], dict[str, Any]]:
     """Run ONLY the missing Seed x Target cells in the certified one-shot plan.
 
@@ -2187,6 +2207,7 @@ def _execute_single_stage_missing(
                 evidence = None
                 policy = _arm_replay_policy(
                     definition, plan=plan, target="C96", replay_policy=base_policy,
+                    effective_context=(execution_contexts or {}).get(key),
                 )
             else:
                 arm = direct_arm if plan["selectors"][target] == "direct" else exact_arm
@@ -2201,28 +2222,38 @@ def _execute_single_stage_missing(
                             )
                         _recipe, provider, horizon = plan["daily_recipes"][source_name]
                         try:
-                            truth_cache[source_key] = build_daily_universal_trade40_oracle_scores(
-                                project_root=project_root, dataset=str(settings.dataset),
-                                filter_id=str(definition.source["filter_id"]),
-                                profile_id=str(definition.source[provider]),
-                                cutoff=str(settings.end_date), evaluation_start=start,
-                                evaluation_end=end,
-                                score_start=_formal_dl_score_start(definition, settings),
-                                seed=seed, param_sha256=param_sha,
-                                canonical_schedule=schedule, horizon_sessions=horizon,
-                                outcome_metric=_ORACLE_DAILY_SCORE_RECIPES[_recipe],
-                                price_sha256=price_sha,
-                                cache_root=project_root / AUDIT_OUTPUT_ROOT /
-                                           definition.output_subdir / "truth_cache",
-                                feature_cohort_cache=feature_cohort_cache,
-                                ticker_workers=(TARGET_ORACLE_MINTRADE_STOCK_WORKERS
-                                                if mintrade_stock_workers is None
-                                                else mintrade_stock_workers),
-                                exchange_calendar_cache=calendar_cache,
-                                progress_callback=None if quiet else
-                                    lambda msg, name=source_name: print(
-                                        f"[Target RUN seed={seed} {name}] {msg}", flush=True),
-                            )
+                            def produce_truth():
+                                return build_daily_universal_trade40_oracle_scores(
+                                    project_root=project_root, dataset=str(settings.dataset),
+                                    filter_id=str(definition.source["filter_id"]),
+                                    profile_id=str(definition.source[provider]),
+                                    cutoff=str(settings.end_date), evaluation_start=start,
+                                    evaluation_end=end,
+                                    score_start=_formal_dl_score_start(definition, settings),
+                                    seed=seed, param_sha256=param_sha,
+                                    canonical_schedule=schedule, horizon_sessions=horizon,
+                                    outcome_metric=_ORACLE_DAILY_SCORE_RECIPES[_recipe],
+                                    price_sha256=price_sha,
+                                    cache_root=project_root / AUDIT_OUTPUT_ROOT /
+                                               definition.output_subdir / "truth_cache",
+                                    feature_cohort_cache=feature_cohort_cache,
+                                    ticker_workers=(TARGET_ORACLE_MINTRADE_STOCK_WORKERS
+                                                    if mintrade_stock_workers is None
+                                                    else mintrade_stock_workers),
+                                    exchange_calendar_cache=calendar_cache,
+                                    progress_callback=None if quiet else
+                                        lambda msg, name=source_name: print(
+                                            f"[Target RUN seed={seed} {name}] {msg}", flush=True),
+                                )
+                            if execution_contexts and key in execution_contexts:
+                                from services.audit.oracle_truth_references import load_or_build_daily_truth
+                                truth_cache[source_key] = load_or_build_daily_truth(
+                                    execution=execution_contexts[key],
+                                    cache_root=project_root / AUDIT_OUTPUT_ROOT / definition.output_subdir / "truth_cache",
+                                    producer=produce_truth,
+                                )
+                            else:
+                                truth_cache[source_key] = produce_truth()
                         except (DailyTrade40OracleBlockedError, ValueError) as exc:
                             raise OracleBlockedError(
                                 f"Oracle missing truth {source_name} seed={seed} BLOCKED: {exc}"
@@ -2254,6 +2285,7 @@ def _execute_single_stage_missing(
                     daily_evidence=evidence,
                     score_sha256=_canonical_score_map_sha256(score_map),
                     score_contract=full_contract, project_root=project_root,
+                    effective_context=(execution_contexts or {}).get(key),
                 )
             identity = replay_identity(
                 dataset=settings.dataset, dataset_sha256=price_sha,
@@ -2265,6 +2297,18 @@ def _execute_single_stage_missing(
                 evaluation_mode=str(definition.dimensions["evaluation_mode"]),
                 max_positions=settings.max_positions, replay_policy=policy,
             )
+            is_metric_backfill = key in metric_backfill
+            if is_metric_backfill:
+                original_identity, original_observation = metric_backfill[key]
+                if (target != "C96" and _canonical_score_map_sha256(score_map) !=
+                        original_identity["replay_policy"]["perfect_score_sha256"]):
+                    raise OracleBlockedError("Oracle metric supplement score changed after preflight")
+                if execution_contexts and key in execution_contexts:
+                    OracleExecutionIndex(cache)._validate_binding(
+                        execution_contexts[key], original_identity, original_observation)
+                # A metric supplement belongs to the original identity. It
+                # must never manufacture a new Replay by adding index fields.
+                identity = dict(original_identity)
             action = cache.plan_execution(
                 {key: identity},
                 allow_historical_execution_input_drift=allow_historical_execution_input_drift,
@@ -2273,7 +2317,6 @@ def _execute_single_stage_missing(
                 action.require_ready()
             except ValueError as exc:
                 raise OracleBlockedError(str(exc)) from exc
-            is_metric_backfill = key in metric_backfill
             expected_action = "REUSE" if is_metric_backfill else "RUN"
             if action.action(seed, target) != expected_action:
                 raise OracleBlockedError(
@@ -2318,6 +2361,8 @@ def _execute_single_stage_missing(
                     if certified is None or certified != verified[0][1]:
                         raise OracleBlockedError("Oracle certified economic observations differ")
                     out[key] = certified
+                    if execution_contexts and key in execution_contexts:
+                        OracleExecutionIndex(cache).publish(execution_contexts[key], verified[0][0], certified)
                     if not quiet:
                         print(f"[REUSE] seed={seed} {target} | current truth verified; "
                               "historical signed Portfolio preserved", flush=True)
@@ -2337,8 +2382,10 @@ def _execute_single_stage_missing(
                 if source_name != "DailyUniversal_MinTrade_NetPnL":
                     raise OracleBlockedError("Positive gate must consume the full-cycle NetPnL source")
                 if seed not in positive_raw_cache:
-                    from services.audit.fullcycle_positive_truth import load_or_build_positive_truth
+                    from services.audit.oracle_truth_references import load_or_build_positive_truth
                     positive_raw_cache[seed], _ = load_or_build_positive_truth(
+                        execution=(execution_contexts or {}).get(key),
+                        cache_root=project_root / AUDIT_OUTPUT_ROOT / definition.output_subdir / "truth_cache",
                         project_root=project_root, output_subdir=definition.output_subdir,
                         dataset=str(settings.dataset), filter_id=str(definition.source["filter_id"]),
                         profile_id=str(definition.source["daily_trade40_profile"]),
@@ -2411,6 +2458,12 @@ def _execute_single_stage_missing(
                 if not quiet:
                     print(f"[RUN] seed={seed} {target} | completed", flush=True)
             out[key] = result
+            if execution_contexts and key in execution_contexts:
+                physical = cache.completed_origin_identity(
+                    identity, allow_historical_execution_input_drift=allow_historical_execution_input_drift)
+                if physical is None:
+                    raise OracleBlockedError("Oracle completed RUN has no signed physical origin")
+                OracleExecutionIndex(cache).publish(execution_contexts[key], physical, result)
     if set(out) != required:
         raise OracleBlockedError("Oracle missing-only execution did not complete every RUN cell")
     return out
@@ -2482,6 +2535,7 @@ def _execute_oracle_missing_parallel(
     base_policy: Mapping[str, Any], cache,
     allow_historical_execution_input_drift: bool = False,
     metric_backfill: Mapping[tuple[int, str], tuple[Mapping[str, Any], Mapping[str, Any]]] | None = None,
+    execution_contexts: Mapping[tuple[int, str], Mapping[str, Any]] | None = None,
 ) -> dict[tuple[int, str], dict[str, Any]]:
     """Schedule the CURRENT certified RUN cells, never a fixed seed range.
 
@@ -2499,6 +2553,7 @@ def _execute_oracle_missing_parallel(
         base_policy=base_policy, cache=cache,
         allow_historical_execution_input_drift=allow_historical_execution_input_drift,
         metric_backfill=metric_backfill,
+        execution_contexts=execution_contexts,
     )
     required = {key for key, action in decisions.items() if action == "RUN"}
     seed_order = tuple(int(entry[0]) for entry in prepared if any(
@@ -2708,6 +2763,66 @@ def _run_single_stage_oracle(
     baseline_policy = _canonical_oracle_replay_policy(
         definition, base_arm=base_arm, exact_arm=baseline_arm,
     )
+    # Execution-effective contexts are independent of source file bytes and
+    # comparison inventory. The one-time legacy resolver below may certify
+    # old receipts, but warm plans read only these immutable references.
+    execution_index = OracleExecutionIndex(cache)
+    dataset_inputs = dataset_input_contract(root, str(definition.source["filter_id"]))
+    execution_contexts = {}
+    indexed = {}
+    unpublished_native = set()
+    target_names = ("C96", *(name for name, _ in plan["targets"]))
+    gates = _validated_execution_gates(definition, plan)
+    for seed, param_sha, *_ in prepared:
+        for target in target_names:
+            arm = direct_arm if plan["selectors"].get(target) == "direct" else baseline_arm
+            source_spec = None
+            if target in plan["daily_sources"]:
+                recipe, provider, horizon = plan["daily_recipes"][plan["daily_sources"][target]]
+                source_spec = source_calculation_contract(
+                    recipe=recipe, profile_id=str(definition.source[provider]), horizon=horizon,
+                    model_architecture=str(definition.source["model_architecture"]))
+            elif target != "C96":
+                recipe, provider = plan["recipes"][plan["aliases"].get(target, target)]
+                source_spec = source_calculation_contract(
+                    recipe=recipe, profile_id=str(definition.source[provider]),
+                    model_architecture=str(definition.source["model_architecture"]))
+            context = execution_context(
+                dataset=settings.dataset, price_sha256=price_sha, param_sha256=param_sha,
+                seed=seed, target=target, start=start, end=end, cutoff=str(settings.end_date),
+                max_positions=settings.max_positions,
+                evaluation_mode=str(definition.dimensions["evaluation_mode"]),
+                ranking_policy=str(arm.dl_runtime_mode), ranking_options=dict(arm.dl_runtime_options),
+                replay_policy={**baseline_policy,
+                    "oracle_parity_implementation": ORACLE_PARITY_IMPLEMENTATION,
+                    "period_stats_implementation": PERIOD_STATS_IMPLEMENTATION},
+                score_contract=contracts.get(target), source_contract=source_spec,
+                dataset_inputs=dataset_inputs, execution_gate=gates.get(target),
+            )
+            execution_contexts[(seed, target)] = context
+            try:
+                completed = execution_index.read(context)
+                if completed is None:
+                    completed = execution_index.native_completed(context)
+                    if completed is not None:
+                        unpublished_native.add((seed, target))
+            except ValueError as exc:
+                raise OracleBlockedError(str(exc)) from exc
+            if completed is not None:
+                indexed[(seed, target)] = completed
+    legacy_keys = set()
+    for key, context in execution_contexts.items():
+        if (key in indexed or not legacy_import_permitted(context)
+                or execution_index.has_history(context)):
+            continue
+        for saved in cache.existing_completed_identities(seed=key[0], target=key[1]):
+            if (saved.get("dataset") == context["dataset"]
+                    and saved.get("dataset_sha256") == price_sha
+                    and saved.get("param_sha256") == context["param_sha256"]
+                    and saved.get("start_date") == start and saved.get("end_date") == end):
+                legacy_keys.add(key)
+                break
+    legacy_targets = {target for seed, target in legacy_keys}
     # Existing price-score artifacts are content-validated once, independently
     # of the Replay receipts. The same approved price-score algorithm and
     # fully verified score/key digest can attest a prior physical source
@@ -2715,7 +2830,7 @@ def _run_single_stage_oracle(
     # unverified source revision, corrupt NPZ, changed price/feature/label
     # contract, or different actual score SHA can never authorize REUSE.
     verified_price_witnesses: dict[str, tuple[dict[str, Any], ...]] = {}
-    if plan["recipes"]:
+    if any(target != "C96" and target not in plan["daily_sources"] for target in legacy_targets):
         from services.audit.oracle_score_artifacts import (
             price_score_source_identity, verified_existing_price_score_witnesses,
         )
@@ -2767,7 +2882,13 @@ def _run_single_stage_oracle(
         definition=definition, store=cache, contracts=contracts, plan=plan, prepared=prepared,
         price_sha=price_sha, settings=settings, robustness=robustness,
         evaluation_end=end,
-    )
+    ) if legacy_targets - {"C96"} else {}
+    for (seed, target), (identity, _record) in indexed.items():
+        proof = execution_index.keys(identity)
+        if proof is not None:
+            if target in keys and keys[target] != proof:
+                raise OracleBlockedError("Oracle execution references disagree on score membership")
+            keys[target] = proof
     for target, witnesses in verified_price_witnesses.items():
         for witness in witnesses:
             proof = (
@@ -2807,25 +2928,28 @@ def _run_single_stage_oracle(
     if len(set(keys.values())) > 1:
         raise OracleBlockedError("Oracle signed Replay witnesses disagree on common score cohort")
     signed_cohort = next(iter(keys.values())) if keys else None
+    baseline_pending = [row for row in prepared if (row[0], "C96") not in indexed]
     baseline_status = _certify_unscored_baseline_before_truth(
         definition, project_root=root, settings=settings, base_arm=base_arm,
         exact_arm=baseline_arm, robustness=robustness,
-        prepared_parameters=prepared, price_sha=price_sha,
+        prepared_parameters=baseline_pending, price_sha=price_sha,
         evaluation_end=end, certified_identity_out=baseline_certified,
         certified_cohort_keys=signed_cohort,
         allow_historical_execution_input_drift=allow_historical_execution_input_drift,
-    )
+    ) if baseline_pending else {}
     # Compare signed provenance before considering a cached perfect-score
     # SHA. Legacy receipts without the producer closure fingerprint cannot
     # claim unchanged outcome semantics after the canonical cutoff bug fix.
     current_daily_producer_sha_by_recipe = {
         recipe: truth_producer_fingerprint(_ORACLE_DAILY_SCORE_RECIPES[recipe])
         for recipe, _provider, _horizon in plan["daily_recipes"].values()
-    }
+    } if any(target in plan["daily_sources"] for target in legacy_targets) else {}
     current_price_producer_lineage = (_price_score_replay_lineage(definition, root)
-                                      if plan["recipes"] else None)
-    current_dataset_summary_sha = oracle_dataset_summary_sha256(
+                                      if any(target != "C96" and target not in plan["daily_sources"]
+                                             for target in legacy_targets) else None)
+    current_dataset_summary_sha = (oracle_dataset_summary_sha256(
         root=root, filter_id=str(definition.source["filter_id"]))
+        if any(target in plan["daily_sources"] for target in legacy_targets) else None)
     # Artifact-only current truth witnesses are shared by Exact/Direct and the
     # Positive recipient. Never run a Target Producer just to display REUSE.
     daily_witnesses: dict[tuple[int, str], dict[str, Any] | None] = {}
@@ -2839,6 +2963,20 @@ def _run_single_stage_oracle(
     for seed, param_sha, _kind, _base_params, _oracle_params in prepared:
         for target in targets:
             key = (seed, target)
+            if key in indexed:
+                identity, complete = indexed[key]
+                decisions[key], cached[key], identities[key] = "REUSE", complete, identity
+                continue
+            if target != "C96" and key not in legacy_keys:
+                decisions[key] = "RUN"
+                run_causes[key] = ("有效計算契約或輸入已改變，無同契約完成工件"
+                                   if key in execution_contexts and execution_index.has_history(execution_contexts[key])
+                                   else "沒有逐筆簽章 Replay 收據")
+                continue
+            if key in execution_contexts and not legacy_import_permitted(execution_contexts[key]):
+                decisions[key] = "RUN"
+                run_causes[key] = "有效計算契約已改變，無同契約完成工件"
+                continue
             if target == "C96":
                 c96 = baseline_certified.get(seed)
                 if c96 is not None:
@@ -2864,7 +3002,13 @@ def _run_single_stage_oracle(
                     # remain blocked; neither can be repaired by guessing.
                     state = baseline_status.get(seed, "BLOCKED")
                     if state == "BLOCKED":
-                        blocked[key] = "C96 工件完整性或相同身分證據衝突；禁止自動覆寫"
+                        _candidates, detail = cache.inspect_current_source(
+                            seed=seed, target=target, expected_inputs={
+                                "dataset": settings.dataset, "dataset_sha256": price_sha,
+                                "param_sha256": param_sha, "start_date": start, "end_date": end,
+                                "replay_policy": {"period_stats_implementation": PERIOD_STATS_IMPLEMENTATION},
+                            }, allow_historical_execution_input_drift=allow_historical_execution_input_drift)
+                        blocked[key] = detail or "C96 工件完整性或相同身分證據衝突；禁止自動覆寫"
                         decisions[key] = "BLOCKED"
                     else:
                         decisions[key] = "RUN"
@@ -3088,6 +3232,21 @@ def _run_single_stage_oracle(
                     for (seed, target), reason in blocked.items()]
         raise OracleBlockedError("Oracle full-identity BLOCKED; no Target producer or Portfolio "
                                  "ran: " + " | ".join(problems[:3]))
+    # Publish only after the complete matrix passes integrity checks. Metadata
+    # migration is idempotent; no original Replay/Target bytes are rewritten.
+    for key, observation in cached.items():
+        if key in execution_contexts and (key not in indexed or key in unpublished_native):
+            origin = cache.completed_origin_identity(
+                identities[key], allow_historical_execution_input_drift=allow_historical_execution_input_drift)
+            if origin is None:
+                raise OracleBlockedError("Oracle completed origin disappeared before indexing")
+            execution_index.publish(execution_contexts[key], origin, observation)
+            if key[1] in plan["daily_sources"]:
+                from services.audit.oracle_truth_references import OracleTruthReferences
+                references = OracleTruthReferences(root / AUDIT_OUTPUT_ROOT / definition.output_subdir / "truth_cache")
+                witness = daily_witnesses.get((key[0], plan["daily_sources"][key[1]]))
+                references.publish_existing(execution_contexts[key],
+                    **({"evidence": witness["evidence"]} if witness is not None else {"replay_identity": origin}))
     if preview_only:
         return {
             "status": "PREVIEW", "preflight": decisions, "text": preflight,
@@ -3116,7 +3275,7 @@ def _run_single_stage_oracle(
             )
     if preflight_approval is not None and not preflight_approval(preflight):
         return {"status": "CANCELLED", "read_only": True, "preflight": decisions}
-    if oracle_dataset_summary_sha256(root=root, filter_id=str(definition.source["filter_id"])) != current_dataset_summary_sha:
+    if dataset_input_contract(root, str(definition.source["filter_id"])) != dataset_inputs:
         raise OracleBlockedError("Oracle dataset-source metadata changed after approved preflight")
     # Cold-start eligibility is needed only to produce genuinely missing arms.
     # Performing this DL provider load before the user's approval was the
@@ -3142,6 +3301,7 @@ def _run_single_stage_oracle(
         base_policy=baseline_policy, cache=cache,
         allow_historical_execution_input_drift=allow_historical_execution_input_drift,
         metric_backfill=metric_backfill,
+        execution_contexts=execution_contexts,
     )
     for key, record in newly_completed.items():
         if decisions[key] != "RUN" or key in cached:

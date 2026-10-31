@@ -74,7 +74,8 @@ def _execution_score_contract(contract: Mapping[str, Any]) -> dict[str, Any]:
             if key not in _REFERENCE_ONLY_SCORE_FIELDS}
 
 
-def _execution_replay_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
+def _execution_replay_policy(policy: Mapping[str, Any], *,
+                             truth_source_reference: str | None = None) -> dict[str, Any]:
     result = dict(policy)
     # No dependency may infer or reconstruct the selected model from this key;
     # the formal Exact selection mode and options are recorded independently.
@@ -91,7 +92,8 @@ def _execution_replay_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(daily.get("teacher"), Mapping):
             from services.audit.daily_trade40_oracle import truth_producer_fingerprint
             from services.audit.mintrade_truth_source_attestation import mintrade_sources_equivalent
-            current = truth_producer_fingerprint()
+            current = (truth_source_reference if truth_source_reference is not None
+                       else truth_producer_fingerprint())
             if mintrade_sources_equivalent(daily.get("truth_source_sha256"), current):
                 daily["truth_source_sha256"] = current
         result["hindsight_target_contract"] = daily
@@ -101,7 +103,8 @@ def _execution_replay_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _v2_presentation_identity(stored: Mapping[str, Any], expected: Mapping[str, Any]) -> dict[str, Any]:
+def _v2_presentation_identity(stored: Mapping[str, Any], expected: Mapping[str, Any], *,
+                              bind_origin_provenance: bool = False) -> dict[str, Any]:
     """Verify old V2 presentation-only drift without rewriting historical bytes.
 
     The old snapshot carried the first enabled Exact arm ID and its model
@@ -133,7 +136,9 @@ def _v2_presentation_identity(stored: Mapping[str, Any], expected: Mapping[str, 
     # The only additional permitted transform is the separately attested
     # LF/CRLF-only price producer revision. Signed old cache bytes remain
     # unchanged, and every other producer/execution input stays strict.
-    normalized_policy = _execution_replay_policy(previous_policy)
+    reference = ((wanted_policy.get("hindsight_target_contract") or {}).get("truth_source_sha256")
+                 if bind_origin_provenance else None)
+    normalized_policy = _execution_replay_policy(previous_policy, truth_source_reference=reference)
     from services.audit.oracle_score_artifacts import certified_price_lineages_equivalent
     if certified_price_lineages_equivalent(
         previous_policy.get("hindsight_target_contract"),
@@ -150,7 +155,8 @@ def _v2_presentation_identity(stored: Mapping[str, Any], expected: Mapping[str, 
 
 
 def _same_producer_different_score(previous: Mapping[str, Any],
-                                   expected: Mapping[str, Any]) -> bool:
+                                   expected: Mapping[str, Any], *,
+                                   bind_origin_provenance: bool = False) -> bool:
     """Distinguish impossible same-source score drift from a different RUN identity.
 
     A score or raw/rank digest changing with *identical* price, P16,
@@ -184,7 +190,9 @@ def _same_producer_different_score(previous: Mapping[str, Any],
         cohort = result.get("cohort")
         if isinstance(cohort, Mapping):
             result["cohort"] = _execution_cohort(cohort)
-        policy = _execution_replay_policy(dict(result.get("replay_policy") or {}))
+        reference = ((wanted_lineage or {}).get("truth_source_sha256") if bind_origin_provenance else None)
+        policy = _execution_replay_policy(dict(result.get("replay_policy") or {}),
+                                           truth_source_reference=reference)
         policy.pop("perfect_score_sha256", None)
         lineage = policy.get("hindsight_target_contract")
         if isinstance(lineage, Mapping):
@@ -201,7 +209,8 @@ def _same_producer_different_score(previous: Mapping[str, Any],
 
 
 def _independent_source_revision(previous: Mapping[str, Any],
-                                 expected: Mapping[str, Any]) -> bool:
+                                 expected: Mapping[str, Any], *,
+                                 bind_origin_provenance: bool = False) -> bool:
     """Approved implementation/producer corrections retain a separate old result."""
     previous_policy = previous.get("replay_policy") or {}
     wanted_policy = expected.get("replay_policy") or {}
@@ -212,6 +221,12 @@ def _independent_source_revision(previous: Mapping[str, Any],
         return True
     wanted_truth = wanted_policy.get("hindsight_target_contract")
     previous_truth = previous_policy.get("hindsight_target_contract")
+    if bind_origin_provenance:
+        # A completed effective-contract reference already names its original
+        # producer. Other physical revisions are historical evidence, not an
+        # invitation to reconstruct the executing producer's source closure.
+        return (isinstance(wanted_truth, Mapping) and isinstance(previous_truth, Mapping)
+                and wanted_truth.get("truth_source_sha256") != previous_truth.get("truth_source_sha256"))
     from services.audit.oracle_score_artifacts import certified_price_lineages_equivalent
     if certified_price_lineages_equivalent(previous_truth, wanted_truth):
         return False
@@ -690,6 +705,7 @@ class OracleReplayStore:
     def _inspect_siblings(
         self, identity: Mapping[str, Any], *,
         allow_historical_execution_input_drift: bool = False,
+        bind_origin_provenance: bool = False,
     ) -> tuple[tuple[dict[str, Any], str] | None, str | None]:
         """Resolve a signed cache against the current execution identity.
 
@@ -746,7 +762,7 @@ class OracleReplayStore:
                 ) from exc
             # The same revision policy governs both the read-only source plan
             # and final full-identity execution. Old evidence is never rewritten.
-            if _independent_source_revision(peer, identity):
+            if _independent_source_revision(peer, identity, bind_origin_provenance=bind_origin_provenance):
                 continue
             if (peer.get("dataset") == identity["dataset"]
                     and peer.get("start_date") == identity["start_date"]
@@ -757,7 +773,8 @@ class OracleReplayStore:
                 if candidate_identity is None:
                     candidate_identity = dict(peer)
                 if peer.get("cache_schema") == _CACHE_SCHEMA:
-                    candidate_identity = _v2_presentation_identity(candidate_identity, identity)
+                    candidate_identity = _v2_presentation_identity(
+                        candidate_identity, identity, bind_origin_provenance=bind_origin_provenance)
                 if (candidate_identity.get("benchmark") != identity.get("benchmark")
                         and benchmark_seed_execution_equivalent(
                             recorded_benchmark=str(candidate_identity.get("benchmark") or ""),
@@ -773,7 +790,8 @@ class OracleReplayStore:
                 if candidate_identity == dict(identity):
                     aliases.append((candidate, record))
                 elif (not allow_historical_execution_input_drift or
-                      _same_producer_different_score(candidate_identity, identity)):
+                      _same_producer_different_score(candidate_identity, identity,
+                                                    bind_origin_provenance=bind_origin_provenance)):
                     # The interactive Research work plan can explicitly
                     # authorize a new execution identity while preserving
                     # signed old receipts. In other (read-only) workflows,
@@ -786,7 +804,8 @@ class OracleReplayStore:
             for _candidate, peer in conflicts:
                 normalized = self._legacy_semantic_identity(peer, identity) or peer
                 if peer.get("cache_schema") == _CACHE_SCHEMA:
-                    normalized = _v2_presentation_identity(normalized, identity)
+                    normalized = _v2_presentation_identity(
+                        normalized, identity, bind_origin_provenance=bind_origin_provenance)
                 for field in _changed_identity_fields(normalized, identity):
                     examples.setdefault(
                         field, f"{field} [cache={_identity_field_value(normalized, field)}, "
@@ -828,6 +847,53 @@ class OracleReplayStore:
             record, source = legacy
             return record, f"verified legacy replay cache ({source})"
         return None, "none"
+
+    def completed_origin_identity(
+        self, identity: Mapping[str, Any], *,
+        allow_historical_execution_input_drift: bool = False,
+    ) -> dict[str, Any] | None:
+        """Return the physical signed identity selected by the canonical matcher.
+
+        Execution indexes must reference the exact certified origin, never
+        choose a historical result merely because its aggregate metrics match.
+        """
+        if self.read(identity) is not None:
+            return dict(identity)
+        legacy, conflict = self._inspect_siblings(
+            identity, allow_historical_execution_input_drift=allow_historical_execution_input_drift)
+        if conflict is not None:
+            raise ValueError(conflict)
+        if legacy is None:
+            return None
+        path = (self.project_root / legacy[1]).resolve()
+        if not path.is_relative_to(self.cache_root):
+            raise ValueError("Oracle completed origin escapes the replay store")
+        physical = json.loads(path.read_text(encoding="utf-8"))["identity"]
+        if self._path(physical) != path or self.read(physical) is None:
+            raise ValueError("Oracle completed origin changed while indexing")
+        return physical
+
+    def validate_completed_origin(self, identity: Mapping[str, Any],
+                                  observation: Mapping[str, Any]) -> None:
+        """An indexed origin cannot hide a contradictory signed sibling.
+
+        This reads small Replay receipts only, with the same source/score
+        conflict rules as canonical execution. Different historical inputs
+        remain independent results; same-source contradictions fail closed.
+        """
+        alias, conflict = self._inspect_siblings(
+            identity, allow_historical_execution_input_drift=True, bind_origin_provenance=True)
+        if conflict is not None:
+            raise ValueError(conflict)
+        if alias is not None and dict(alias[0]) != dict(observation):
+            raise ValueError("Oracle same-identity completed Replay observations conflict")
+        contract = (identity.get("replay_policy") or {}).get("effective_execution_contract_sha256")
+        if contract is not None:
+            for peer in self.existing_completed_identities(seed=identity["seed"], target=identity["target"]):
+                if (peer.get("replay_policy") or {}).get("effective_execution_contract_sha256") == contract:
+                    completed = self.with_win_rate(peer, self.read(peer))
+                    if completed is not None and completed != dict(observation):
+                        raise ValueError("Oracle same effective contract has conflicting completed Replay observations")
 
     def plan_execution(
         self, identities: Mapping[tuple[int, str], Mapping[str, Any]], *,

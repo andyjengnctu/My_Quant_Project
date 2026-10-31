@@ -1184,7 +1184,7 @@ class FormalMinReplayIntegrationCases(TestCase):
             oracle.run_formal_audit(active,project_root=root,quiet=True)
             self.assertEqual(run.call_count,48,"second run must REUSE all 48")
             self.assertEqual(source.call_count,4,"warm Replay never regenerates Min truth")
-            # A new producer revision must build its new truth and preserve the
+            # A new calculation revision must build its new truth and preserve the
             # previous completed identities; unchanged warm receipts need no
             # speculative producer call merely to rediscover their score SHA.
             changed_hash="0"*64
@@ -1194,7 +1194,9 @@ class FormalMinReplayIntegrationCases(TestCase):
                 y["truth_source_sha256"]="f"*64
                 return x,y
             source.side_effect=conflicting
-            with patch("services.audit.daily_trade40_oracle.truth_producer_fingerprint",return_value="f"*64):
+            from services.research.oracle_artifact_contract import DAILY_CALCULATION_REVISIONS
+            with patch("services.audit.daily_trade40_oracle.truth_producer_fingerprint",return_value="f"*64), \
+                 patch.dict(DAILY_CALCULATION_REVISIONS, {"daily_trade_path_net_r": 2}):
                 oracle.run_formal_audit(active,project_root=root,quiet=True)
             self.assertEqual(run.call_count,56,"only changed Min source replays need RUN")
             self.assertEqual(source.call_count,8)
