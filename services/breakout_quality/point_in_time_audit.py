@@ -1530,6 +1530,36 @@ def _run_point_in_time_scores_audit(
             ) / TARGET_MANIFEST_FILENAME
         )
         source_target_manifest_record = build_file_manifest(target_manifest_path)
+    # Real-path evaluation replays the canonical per-stock trade teacher to
+    # rebuild Target metrics. This is CPU-heavy but is neither model fitting
+    # nor Min parameter optimization. Show actual progress rather than leaving
+    # the comparison menu silent for a long audit-only refresh.
+    from core.breakout_quality_runtime import CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
+    from time import monotonic
+    audit_recipe = get_continuous_ranker_execution_recipe(str(args.experiment_profile))
+    is_real_path = (audit_recipe.target_policy.materialization_mode
+                    == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH)
+    progress_callback = None
+    if is_real_path:
+        started_at = monotonic()
+        next_percent = 10
+        print("[Rolling Audit] 真實路徑 Target 評估：逐股重建合法標籤，不執行 FIT／Optimizer", flush=True)
+
+        def audit_progress(done, total, completed, skipped):
+            nonlocal next_percent
+            if total <= 0:
+                return
+            percent = 100 * int(done) // int(total)
+            if int(done) == int(total) or percent >= next_percent:
+                print(
+                    f"[Rolling Audit] {done:,}/{total:,} stocks ({percent}%) | "
+                    f"Target rows={int(completed):,} | skipped={int(skipped):,} | "
+                    f"elapsed={monotonic() - started_at:.0f}s",
+                    flush=True,
+                )
+                next_percent = max(next_percent + 10, (percent // 10 + 1) * 10)
+        progress_callback = audit_progress
+
     bundle = load_continuous_ranker_data(
         filter_id=args.filter_id,
         model_architecture=args.model_architecture,
@@ -1538,7 +1568,10 @@ def _run_point_in_time_scores_audit(
         allow_stale_source=bool(args.allow_stale_source),
         project_root=PROJECT_ROOT,
         seed=int(manifest.get('seed')) if manifest.get('seed') is not None else None,
+        progress_callback=progress_callback,
     )
+    if is_real_path:
+        print("[Rolling Audit] 真實路徑標籤完成，開始核對三個 Split 與 40D 評估", flush=True)
     if str(bundle.profile.continuous_target_id) != str(manifest.get("continuous_target_id")):
         raise ValueError("PIT score manifest target與目前profile不一致")
     manifest_sample_scope = str(

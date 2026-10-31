@@ -1422,7 +1422,13 @@ def load_daily_universal_ranker_data(
     inference_benchmark_pos_chunks: list[np.ndarray] = []
     inference_date_chunks: list[np.ndarray] = []
     inference_context_chunks: list[np.ndarray] = []
-    pending_inference_only_tickers: list[tuple[str, pd.DataFrame, np.ndarray, np.ndarray, pd.DatetimeIndex, np.ndarray]] = []
+    # Common 40D prices have already been computed by the canonical target
+    # batch before valid/NULL rows are separated. Carry the inference-only
+    # values forward instead of recomputing the same 40-session windows after
+    # constructing the group table (potentially hundreds of thousands of rows).
+    inference_price_favorable_chunks: list[np.ndarray] = []
+    inference_price_adverse_chunks: list[np.ndarray] = []
+    pending_inference_only_tickers: list[tuple] = []
     skipped_tickers = 0
     processed_tickers = 0
     target_valid_so_far = 0
@@ -1531,6 +1537,10 @@ def load_daily_universal_ranker_data(
                 local_opportunity_bar[common_idx] = common.opportunity_bar
                 local_first_breach_bar[common_idx] = common.first_risk_breach_bar
                 local_minimum_low_return[common_idx] = common.minimum_low_return
+                # Only price-NULL rows need this correction; the original
+                # target-valid 40D maturity invariant is checked downstream.
+                invalid_price = common_idx[(~common.valid_mask) & (~local_target_valid[common_idx])]
+                local_standard_price_mature[invalid_price] = False
             if np.any(local_target_valid & ~np.isfinite(local_targets)):
                 raise ValueError("Formal MinTrade40 completed label is nonfinite")
         elif (
@@ -1684,6 +1694,13 @@ def load_daily_universal_ranker_data(
                     frame_dates.take(invalid_positions).to_numpy(dtype="datetime64[D]")
                 )
                 inference_context_chunks.append(np.asarray(invalid_context, dtype=np.float32))
+                if trade_path_mode:
+                    inference_price_favorable_chunks.append(np.asarray(
+                        local_favorable[~local_target_valid], dtype=np.float32,
+                    ))
+                    inference_price_adverse_chunks.append(np.asarray(
+                        local_adverse[~local_target_valid], dtype=np.float32,
+                    ))
         else:
             # A ticker with no target-valid row can still be score-eligible.  Append these
             # tickers after the historical training tickers so existing target-valid ticker
@@ -1696,13 +1713,16 @@ def load_daily_universal_ranker_data(
                     np.asarray(invalid_benchmark_positions, dtype=np.int32),
                     frame_dates,
                     np.asarray(invalid_context, dtype=np.float32),
+                    np.asarray(local_favorable[~local_target_valid], dtype=np.float32) if trade_path_mode else None,
+                    np.asarray(local_adverse[~local_target_valid], dtype=np.float32) if trade_path_mode else None,
                 )
             )
 
     if not valid_target_chunks:
         raise ValueError("daily universal ranker沒有任何有效target stock-day sample")
 
-    for ticker, frame, positions, benchmark_positions_local, frame_dates, pending_context in pending_inference_only_tickers:
+    for (ticker, frame, positions, benchmark_positions_local, frame_dates,
+         pending_context, pending_favorable, pending_adverse) in pending_inference_only_tickers:
         if len(positions) == 0:
             continue
         ticker_id = len(tickers)
@@ -1719,6 +1739,9 @@ def load_daily_universal_ranker_data(
             frame_dates.take(positions).to_numpy(dtype="datetime64[D]")
         )
         inference_context_chunks.append(np.asarray(pending_context, dtype=np.float32))
+        if trade_path_mode:
+            inference_price_favorable_chunks.append(np.asarray(pending_favorable, dtype=np.float32))
+            inference_price_adverse_chunks.append(np.asarray(pending_adverse, dtype=np.float32))
 
     valid_ticker_ids = np.concatenate(valid_ticker_id_chunks)
     valid_source_positions = np.concatenate(valid_source_pos_chunks)
@@ -1793,8 +1816,18 @@ def load_daily_universal_ranker_data(
             np.full(len(inference_dates), np.datetime64("NaT"), dtype="datetime64[ns]"),
         ]
     )
-    favorable_return = np.concatenate([valid_favorable, np.full(len(inference_dates), np.nan, dtype=np.float32)])
-    adverse_return = np.concatenate([valid_adverse, np.full(len(inference_dates), np.nan, dtype=np.float32)])
+    if trade_path_mode:
+        inference_favorable = (np.concatenate(inference_price_favorable_chunks)
+                               if inference_price_favorable_chunks else np.empty(0, dtype=np.float32))
+        inference_adverse = (np.concatenate(inference_price_adverse_chunks)
+                             if inference_price_adverse_chunks else np.empty(0, dtype=np.float32))
+        if len(inference_favorable) != len(inference_dates) or len(inference_adverse) != len(inference_dates):
+            raise ValueError("Real-path 40D evaluation price evidence / inference rows mismatch")
+    else:
+        inference_favorable = np.full(len(inference_dates), np.nan, dtype=np.float32)
+        inference_adverse = np.full(len(inference_dates), np.nan, dtype=np.float32)
+    favorable_return = np.concatenate([valid_favorable, inference_favorable])
+    adverse_return = np.concatenate([valid_adverse, inference_adverse])
     risk_budget_return = float(spec.risk_budget_return)
     favorable_r = favorable_return / risk_budget_return
     adverse_r = adverse_return / risk_budget_return
@@ -1841,11 +1874,16 @@ def load_daily_universal_ranker_data(
         # label maturity.  Preserve the original target-valid prefix and all
         # historical group indices/ordered FIT samples byte-for-byte.
         evaluation_horizon = int(DEFAULT_LABEL_POLICY.label_horizon_bars)
-        evaluation_spec = replace(spec, horizon_bars=evaluation_horizon)
         evaluation_maturity = np.full(group_count, np.datetime64("NaT"), dtype="datetime64[ns]")
         price_mature = np.zeros(group_count, dtype=bool)
+        # Stable grouping is equivalent to np.flatnonzero(ticker_ids == i)
+        # for every ticker, without rescanning the full stock-day population
+        # once per security. Preserve increasing group-index order within each.
+        ticker_order = np.argsort(ticker_ids, kind="stable")
+        ticker_counts = np.bincount(ticker_ids, minlength=len(frames))
+        ticker_offsets = np.concatenate(([0], np.cumsum(ticker_counts)))
         for ticker_id, frame in enumerate(frames):
-            group_ids = np.flatnonzero(ticker_ids == ticker_id)
+            group_ids = ticker_order[ticker_offsets[ticker_id]:ticker_offsets[ticker_id + 1]]
             positions = np.asarray(source_positions[group_ids], dtype=np.int64)
             valid_future = positions + evaluation_horizon < len(frame)
             if not valid_future.any():
@@ -1859,28 +1897,18 @@ def load_daily_universal_ranker_data(
                 continue
             evaluation_maturity[mature_ids] = ends[within_cutoff].to_numpy(dtype="datetime64[ns]")
             price_mature[mature_ids] = True
-            # The already-valid Min rows retain their canonical 40D price
-            # geometry.  Populate only Target-NULL rows with independent price
-            # truth; this does not make their Min label known for training.
+            # Every NULL-target row's 40D price truth was already evaluated
+            # once by the same canonical batch during ticker collection. Do
+            # not recalculate its future prices here, or change its FIT label.
             missing_target_ids = mature_ids[~target_valid[mature_ids]]
-            if not len(missing_target_ids):
-                continue
-            batch = compute_daily_opportunity_target_batch(
-                frame, source_positions[missing_target_ids],
-                spec=evaluation_spec,
-                target_id=DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
-            )
-            valid_prices = np.asarray(batch.valid_mask, dtype=bool)
-            if not valid_prices.all():
-                price_mature[missing_target_ids[~valid_prices]] = False
-                evaluation_maturity[missing_target_ids[~valid_prices]] = np.datetime64("NaT")
-            usable = missing_target_ids[valid_prices]
-            if not len(usable):
-                continue
-            group_table.loc[usable, "target_favorable_return"] = batch.favorable_return[valid_prices]
-            group_table.loc[usable, "target_adverse_return_to_peak"] = batch.adverse_return_to_peak[valid_prices]
-            group_table.loc[usable, "target_favorable_r"] = batch.favorable_return[valid_prices] / float(spec.risk_budget_return)
-            group_table.loc[usable, "target_adverse_r"] = batch.adverse_return_to_peak[valid_prices] / float(spec.risk_budget_return)
+            if len(missing_target_ids):
+                known = (
+                    np.isfinite(group_table.iloc[missing_target_ids]["target_favorable_return"].to_numpy(dtype=np.float64))
+                    & np.isfinite(group_table.iloc[missing_target_ids]["target_adverse_return_to_peak"].to_numpy(dtype=np.float64))
+                )
+                if not known.all():
+                    price_mature[missing_target_ids[~known]] = False
+                    evaluation_maturity[missing_target_ids[~known]] = np.datetime64("NaT")
         group_table["standard_common_40d_matured"] = price_mature
         group_table["standard_common_40d_price_end_date"] = pd.to_datetime(evaluation_maturity)
         if bool(np.any(target_valid & (price_mature != np.concatenate([

@@ -261,12 +261,22 @@ def compute_counterfactual_trade40_batch(
     reasons: list[str] = []
     forced_at_research_cutoff = np.zeros(len(positions), dtype=bool)
     signal_caches: dict[str, Any] = {}
+    # Within one stock's canonical replay, the same executable trading day
+    # can be visited by the signal-state pass and many overlapping 40D paths.
+    # Memoize its already-verified active period, never the simulated outcome.
+    active_periods_by_date: dict[pd.Timestamp, ExecutableMinPeriod | None] = {}
+
+    def active_period_for_date(day: pd.Timestamp) -> ExecutableMinPeriod | None:
+        key = pd.Timestamp(day).normalize()
+        if key not in active_periods_by_date:
+            active_periods_by_date[key] = resolve_historical_min_period(schedule, key)
+        return active_periods_by_date[key]
 
     def active_signal_cache_for_date(day: pd.Timestamp):
         # P16 Base-Finalist-Best has exactly one member. Both supported rolling
         # payload kinds therefore use Portfolio's ordinary identity path:
         # origin params own order/position rules, current params own signals.
-        active_period = resolve_historical_min_period(schedule, day)
+        active_period = active_period_for_date(day)
         if active_period is None:
             # A gap during continuation/holding is missing source truth, never
             # an economically censored trade and never permission to keep old
@@ -312,7 +322,7 @@ def compute_counterfactual_trade40_batch(
                 (previous_trade_day is None or previous_trade_day < reset_date)):
             pending = None
         previous_trade_day = trade_day
-        active_period = resolve_historical_min_period(schedule, trade_day)
+        active_period = active_period_for_date(trade_day)
         if active_period is None:
             if trade_day >= schedule[0].start and trade_day <= last_research_session:
                 raise ValueError(
@@ -379,7 +389,7 @@ def compute_counterfactual_trade40_batch(
         # An actual normal setup or a still-live continuation is required.
         # All other feature-eligible rows stay in the score cohort but have a
         # censored (NULL) economic outcome; they are NOT artificial new buys.
-        if resolve_historical_min_period(schedule, dates[position + 1]) is None:
+        if active_period_for_date(dates[position + 1]) is None:
             reasons.append("no_historical_effective_Min_param")
             continue
         state = decisions.get(int(position))
@@ -391,7 +401,7 @@ def compute_counterfactual_trade40_batch(
         if origin_pos < 0 or origin_pos > int(position):
             raise ValueError("Min Oracle signal origin not in the sanitized ticker calendar")
         params = state["_params_obj"]
-        active_period = resolve_historical_min_period(schedule, dates[position + 1])
+        active_period = active_period_for_date(dates[position + 1])
         if active_period is None:
             reasons.append("no_historical_effective_Min_param")
             continue

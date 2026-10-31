@@ -66,6 +66,57 @@ def fixture(*, count=130, rising=True, start="2023-01-02"):
 
 
 class FormalMinTrade40SyntheticCases(unittest.TestCase):
+    def test_replayed_trade_dates_reuse_verified_parameter_period(self):
+        # The same decision/executable day can be revisited by many overlapping
+        # counterfactual trades. Parameter lookup is execution-only; neither
+        # active schedule nor replayed net R/NULL may change.
+        from filters.breakout_quality import daily_trade40_target as owner
+        days, frame, _params, period = fixture(count=150)
+        positions = np.arange(45, 118, dtype=np.int64)
+        with patch.object(owner, "resolve_historical_min_period",
+                          wraps=resolve_historical_min_period) as lookup:
+            cached = compute_counterfactual_trade40_batch(
+                frame, positions, ticker="2330", schedule=(period,),
+                exchange_calendar=days, research_cutoff=days[130],
+            )
+        baseline = compute_counterfactual_trade40_batch(
+            frame, positions, ticker="2330", schedule=(period,),
+            exchange_calendar=days, research_cutoff=days[130],
+        )
+        self.assertLessEqual(lookup.call_count, len(days))
+        self.assertGreater(int(cached.valid_mask.sum()), 0)
+        np.testing.assert_array_equal(cached.target_raw_r, baseline.target_raw_r)
+        np.testing.assert_array_equal(cached.maturity_dates, baseline.maturity_dates)
+        self.assertEqual(cached.reasons, baseline.reasons)
+
+    def test_common_price_truth_independent_of_null_target_subset(self):
+        from filters.breakout_quality.daily_ranker_data import compute_daily_opportunity_target_batch
+        from filters.breakout_quality.continuous_target import (
+            DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID, StrategyAlignedContinuousTargetSpec,
+        )
+        from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY
+        _days, frame, _params, _period = fixture(count=150)
+        spec = StrategyAlignedContinuousTargetSpec.from_label_policy(
+            replace(DEFAULT_LABEL_POLICY, label_horizon_bars=40),
+        )
+        positions = np.arange(48, 106, dtype=np.int64)
+        is_null = positions % 3 == 0
+        all_prices = compute_daily_opportunity_target_batch(
+            frame, positions, spec=spec, target_id=DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+        )
+        null_prices = compute_daily_opportunity_target_batch(
+            frame, positions[is_null], spec=spec,
+            target_id=DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+        )
+        for column in (
+            "valid_mask", "favorable_return", "adverse_return_to_peak",
+            "opportunity_bar", "first_risk_breach_bar", "minimum_low_return",
+        ):
+            np.testing.assert_array_equal(
+                np.asarray(getattr(all_prices, column))[is_null],
+                np.asarray(getattr(null_prices, column)),
+            )
+
     def test_net_r_daily_truth_uses_canonical_dl_float32_rank(self):
         from filters.breakout_quality.daily_trade40_target import rank_trade40_outcome_frame
         from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets
