@@ -343,6 +343,126 @@ def price_score_source_identity(
     }
 
 
+def verified_existing_price_score_witnesses(
+    *, cache_root: Path, current_identity: Mapping[str, Any],
+    requested_sources: Mapping[str, tuple[str, str]],
+    score_sha: Callable[[Mapping[tuple[str, str], float]], str],
+) -> dict[str, tuple[dict[str, Any], ...]]:
+    """Certify archived price-score *values* without rerunning a Target producer.
+
+    Historical price source-code revisions are never accepted on a SHA alias
+    alone: the complete archived NPZ matrix must pass the canonical score
+    digest, its immutable input/source manifest must match the present price,
+    Dataset and approved score-algorithm contract, and its actual scored-key
+    membership must be verified. The Replay owner independently checks every
+    signed observation and all economic/execution inputs before REUSE.
+
+    A changed score algorithm, provider, price generation, label policy, source
+    cohort or missing/corrupt NPZ cannot authorize old economic observations.
+    A new unrelated Target/Model never changes existing named source witnesses.
+    """
+    if not isinstance(current_identity, Mapping):
+        return {}
+    # Historical source-bridge authority exists only for the independently
+    # certified, CURRENT executable price/feature closure. A changed feature
+    # transform, data loader, provider, price primitive or policy must not be
+    # accepted merely because an archived matrix still hashes to its OLD
+    # numerical scores. This boundary applies ONLY to archival migration;
+    # ordinary exact-source receipts use the original canonical path.
+    if (current_identity.get("source_code_sha256") != _CERTIFIED_LF_PRICE_SOURCE_SHA256
+            or current_identity.get("score_algorithm_sha256") !=
+                _CERTIFIED_PRICE_ALGORITHM_SHA256):
+        return {}
+    store = OraclePriceScoreStore(cache_root)
+    valid: dict[str, list[dict[str, Any]]] = {}
+    for path in sorted(Path(cache_root).glob("price_scores_*.npz")):
+        # Read metadata alone first; old algorithm generations never force a
+        # 630k x 9 array read just to determine they are irrelevant.
+        try:
+            with np.load(path, allow_pickle=False) as archive:
+                meta = json.loads(str(archive["metadata"].item()))
+            old = meta.get("identity")
+            if not isinstance(old, dict) or old.get("schema") != _PRICE_SCORE_CACHE_SCHEMA:
+                raise ValueError("archived price-score identity malformed")
+            if store._path(old) != path:
+                raise ValueError("archived price-score filename does not match identity")
+            if not is_sha256_hex(current_identity.get("dataset_summary_sha256")):
+                continue
+            for field in (
+                "schema", "dataset", "filter_id", "price_sha256",
+                "dataset_summary_sha256", "score_algorithm_sha256",
+                "score_start", "cutoff", "label_policy",
+            ):
+                if old.get(field) != current_identity.get(field):
+                    break
+            else:
+                old_providers = old.get("providers")
+                old_recipes = old.get("recipes")
+                current_providers = current_identity.get("providers")
+                current_recipes = current_identity.get("recipes")
+                if (not all(isinstance(x, Mapping) for x in
+                            (old_providers, old_recipes, current_providers, current_recipes))
+                        or not is_sha256_hex(old.get("source_code_sha256"))):
+                    raise ValueError("archived price-score provider identity malformed")
+                relevant = {
+                    source: (recipe, provider)
+                    for source, (recipe, provider) in requested_sources.items()
+                    if list(old_recipes.get(source, ())) == [recipe, provider]
+                    and list(current_recipes.get(source, ())) == [recipe, provider]
+                    and old_providers.get(provider) == current_providers.get(provider)
+                }
+                if not relevant:
+                    continue
+                verified = store.read(old, score_sha=score_sha)
+                if verified is None:
+                    raise ValueError("archived price-score file disappeared")
+                panels, cohort = verified
+                if (not all(source in panels for source in relevant)
+                        or not all(is_sha256_hex(meta["score_sha256"].get(source))
+                                   for source in relevant)):
+                    raise ValueError("archived price-score target inventory inconsistent")
+                old_lineage = {
+                    "source_code_sha256": old["source_code_sha256"],
+                    "score_algorithm_sha256": old["score_algorithm_sha256"],
+                    "dataset_summary_sha256": old["dataset_summary_sha256"],
+                    "label_policy": old["label_policy"],
+                }
+                legacy_truth_sha = canonical_json_sha256(old_lineage)
+                for source in relevant:
+                    scores = panels[source]
+                    keys = sorted(scores)
+                    digest = sha256()
+                    for ticker, day in keys:
+                        digest.update(f"{ticker}|{day}\n".encode("utf-8"))
+                    value = {
+                        "score_sha256": meta["score_sha256"][source],
+                        "eligible_keys_sha256": digest.hexdigest(),
+                        "cohort_rows": len(keys),
+                        "first_common_day": min(day for _, day in keys),
+                        "last_common_day": max(day for _, day in keys),
+                        "source_code_sha256": old["source_code_sha256"],
+                        "truth_source_sha256": legacy_truth_sha,
+                    }
+                    # Different archived score generations with the SAME
+                    # declared algorithm and full input contract cannot both
+                    # be current truth. Never pick a favorable version.
+                    previous = valid.setdefault(source, [])
+                    numerical = (
+                        "score_sha256", "eligible_keys_sha256", "cohort_rows",
+                        "first_common_day", "last_common_day",
+                    )
+                    if any(tuple(old_value[field] for field in numerical) !=
+                           tuple(value[field] for field in numerical)
+                           for old_value in previous):
+                        raise ValueError("conflicting same-contract historical price-score generations")
+                    if value not in previous:
+                        previous.append(value)
+        except (OSError, ValueError, KeyError, TypeError, IndexError, EOFError,
+                zipfile.BadZipFile) as exc:
+            raise ValueError(f"Oracle archived price-score provenance corrupt: {path.name}: {exc}") from exc
+    return {source: tuple(items) for source, items in valid.items()}
+
+
 class OraclePriceScoreStore:
     """One immutable score-panel result per certified provider/algorithm input."""
 

@@ -4461,6 +4461,213 @@ class OracleReuseMenuAndPreparationCases(TestCase):
         self.assertEqual([result for result, _ in outcomes],
                          ["independent-timeline-1", "independent-timeline-2"])
 
+
+class OracleArchivedPriceTruthWitnessCases(TestCase):
+    """Physical archived NPZ + signed Replay compatibility; no Target producer."""
+
+    def _fixture(self, root):
+        import copy
+        from hashlib import sha256
+        from core.file_integrity import canonical_json_sha256
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        from services.audit.oracle_score_artifacts import OraclePriceScoreStore
+        from filters.breakout_quality.dataset_store import resolve_dataset_paths
+        from filters.breakout_quality.paths import resolve_filter_output_dir
+
+        from core.file_integrity import compute_file_sha256
+        dataset_paths = resolve_dataset_paths(resolve_filter_output_dir(
+            root, str(_ACTIVE_ORACLE_DEFINITION.source["filter_id"])))
+        records = {}
+        for group, paths in (("dataset_artifacts", dataset_paths.artifact_paths()),
+                             ("market_set_artifacts", dataset_paths.market_set_artifact_paths())):
+            records[group] = {}
+            for name, path in paths.items():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(f"independent fixture artifact {group} {name}".encode())
+                records[group][name] = {"sha256": compute_file_sha256(path)}
+        summary = dataset_paths.summary
+        summary.parent.mkdir(parents=True, exist_ok=True)
+        summary.write_text(json.dumps({
+            **records, "dataset": "full", "filter_id": "breakout_quality_v1",
+            "source_data_end_date": "2026-03-02",
+        },sort_keys=True), encoding="utf-8")
+        fixture = OracleOnePlanRealCacheCases()._fixture(root)
+        definition, bench, seed, price_sha, param_sha, _keys, sample = fixture
+        plan = oracle._oracle_comparison_plan(definition)
+        price_alg = oracle._price_score_algorithm_sha256()
+        from services.audit.oracle_score_artifacts import oracle_daily_source_fingerprint
+        source_code = oracle_daily_source_fingerprint()
+        current = {
+            "schema": 1, "dataset": "full", "filter_id": "breakout_quality_v1",
+            "price_sha256": price_sha,
+            "dataset_summary_sha256": oracle.oracle_dataset_summary_sha256(
+                root=root, filter_id="breakout_quality_v1"),
+            "source_code_sha256": source_code,
+            "score_algorithm_sha256": price_alg,
+            "providers": {field: str(definition.source[field]) for field in plan["providers"]},
+            "recipes": {name: list(spec) for name, spec in plan["recipes"].items()},
+            "score_start": "2021-01-01", "cutoff": "2026-03-02",
+            "label_policy": oracle.DEFAULT_LABEL_POLICY.as_manifest_payload(),
+        }
+        old = {**current, "source_code_sha256": "e" * 64}
+        dates = [f"2021-01-{i:02d}" for i in range(1,20)] + ["2025-12-22"]
+        scores = {("2330", day): float(i) / 20 for i, day in enumerate(dates)}
+        score_hash = oracle._canonical_score_map_sha256(scores)
+        digest = sha256()
+        for ticker, day in sorted(scores):
+            digest.update(f"{ticker}|{day}\n".encode())
+        eligible = digest.hexdigest()
+        cache_root = root / "outputs" / "audit" / "breakout_quality" / "reusable" /             "target_oracle_romd" / "truth_cache"
+        score_store = OraclePriceScoreStore(cache_root)
+        score_store.write(old, {"R40": scores, "T40": scores}, {
+            "cohort_rows": 20, "first_common_day": dates[0],
+            "last_common_day": dates[-1],
+        }, score_sha=oracle._canonical_score_map_sha256)
+        replay_store = OracleReplayStore(root, definition.output_subdir)
+        original, = replay_store.existing_completed_identities(seed=seed, target="R40")
+        observation = replay_store.read(original)
+        saved = copy.deepcopy(original)
+        saved["replay_policy"]["perfect_score_sha256"] = score_hash
+        saved_score = saved["replay_policy"]["canonical_dl_score_contract"]
+        saved_score["canonical_feature_eligible_keys_sha256"] = eligible
+        saved_score["oracle_scored_rows"] = 20
+        old_lineage = saved["replay_policy"]["hindsight_target_contract"]
+        old_lineage["source_code_sha256"] = old["source_code_sha256"]
+        old_lineage["truth_source_sha256"] = canonical_json_sha256({
+            key: old_lineage[key] for key in (
+                "source_code_sha256", "score_algorithm_sha256",
+                "dataset_summary_sha256", "label_policy",
+            )
+        })
+        replay_store._path(original).unlink()
+        replay_store.write(saved, observation, origin="previous_signed_source_with_same_real_price_scores")
+        return fixture, current, saved, score_store._path(old)
+
+    def _preflight(self, root, fixture, current):
+        definition, benchmark, seed, price_sha, param_sha, _keys, _sample = fixture
+        from services.audit import oracle_score_artifacts as score_artifacts
+        with patch.object(score_artifacts, "oracle_daily_source_fingerprint",
+                          return_value=current["source_code_sha256"]), \
+             patch.object(oracle, "collect_status", return_value={"status": "READY"}), \
+             patch.object(oracle, "_robustness_artifacts", return_value=(benchmark, [(seed, root / "p16.json")])), \
+             patch.object(oracle, "_prepare_oracle_parameters", return_value=(
+                 [(seed, param_sha, "synthetic", None, None)], {})), \
+             patch.object(oracle, "price_inventory_sha256", return_value=price_sha), \
+             patch.object(oracle, "_price_score_algorithm_sha256", return_value=current["score_algorithm_sha256"]), \
+             patch.object(oracle, "_read_only_score_keys", side_effect=AssertionError("no scored universe generation")), \
+             patch.object(oracle, "_build_oracle_score_panels", side_effect=AssertionError("no price Target")), \
+             patch.object(oracle, "_execute_oracle_missing_parallel", side_effect=AssertionError("no portfolio")):
+            return oracle.build_report(definition, project_root=root, quiet=True,
+                                       preflight_approval=lambda _view: False)["preflight"]
+
+    def test_archived_verified_values_allow_signed_price_reuse_without_producer(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture, current, saved, npz = self._fixture(root)
+            seed = fixture[2]
+            store = OracleReplayStore(root, fixture[0].output_subdir)
+            old_bytes = store._path(saved).read_bytes()
+            npz_bytes = npz.read_bytes()
+            # The source has changed, not the approved price algorithm or
+            # archived true numerical values; every executed input is checked.
+            result = self._preflight(root, fixture, current)
+            self.assertEqual(result[(seed, "C96")], "REUSE")
+            self.assertEqual(result[(seed, "R40")], "REUSE")
+            self.assertEqual(result[(seed, "T40")], "RUN")
+            self.assertEqual(store._path(saved).read_bytes(), old_bytes)
+            self.assertEqual(npz.read_bytes(), npz_bytes)
+
+    def test_price_score_algo_and_dataset_drift_reject_old_cached_replay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture, current, saved, _npz = self._fixture(root)
+            seed = fixture[2]
+            shifted = dict(current, score_algorithm_sha256="f" * 64)
+            with patch.object(oracle, "_price_score_algorithm_sha256", return_value="f" * 64):
+                plan = self._preflight(root, fixture, shifted)
+            self.assertEqual(plan[(seed, "R40")], "RUN")
+            # The approved algorithm may be unchanged while a separate
+            # executed price/feature module changed. Archived old scores
+            # cannot attest that new implementation without a new producer.
+            drifted_source = dict(current, source_code_sha256="f" * 64)
+            self.assertEqual(
+                self._preflight(root, fixture, drifted_source)[(seed, "R40")], "RUN"
+            )
+            from filters.breakout_quality.dataset_store import resolve_dataset_paths
+            from filters.breakout_quality.paths import resolve_filter_output_dir
+            path = resolve_dataset_paths(resolve_filter_output_dir(
+                root, "breakout_quality_v1")).summary
+            path.write_text('{"dataset":"full","filter_id":"breakout_quality_v1","source_data_end_date":"2025-12-31"}',
+                            encoding="utf-8")
+            self.assertEqual(self._preflight(root, fixture, current)[(seed, "R40")], "RUN")
+
+    def test_tampered_npz_blocks_before_portfolio(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture, current, _saved, path = self._fixture(root)
+            with np.load(path, allow_pickle=False) as archive:
+                data = {name: archive[name] for name in archive.files}
+            data["matrix"] = data["matrix"].copy()
+            data["matrix"][0,0] += 0.1
+            np.savez_compressed(path, **data)
+            with self.assertRaisesRegex(oracle.OracleBlockedError, "price-score"):
+                self._preflight(root, fixture, current)
+
+    def _second_price_generation(self, root, original_path, *, change_scores=False):
+        from services.audit.oracle_score_artifacts import OraclePriceScoreStore
+        with np.load(original_path, allow_pickle=False) as archive:
+            meta = json.loads(str(archive["metadata"].item()))
+            keys = list(zip(archive["tickers"].tolist(), archive["days"].tolist()))
+            matrix = archive["matrix"]
+        scores = {
+            target: dict(zip(keys, matrix[:, idx].tolist()))
+            for idx, target in enumerate(meta["targets"])
+        }
+        if change_scores:
+            target = meta["targets"][0]
+            scores[target][keys[0]] += 0.2
+        second = dict(meta["identity"], source_code_sha256="f" * 64)
+        store = OraclePriceScoreStore(original_path.parent)
+        store.write(second, scores, meta["cohort"],
+                    score_sha=oracle._canonical_score_map_sha256)
+
+    def test_two_archived_source_revisions_with_identical_scores_still_reuse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture, current, saved, path = self._fixture(root)
+            self._second_price_generation(root, path)
+            self.assertEqual(
+                self._preflight(root, fixture, current)[(fixture[2], "R40")], "REUSE"
+            )
+
+    def test_conflicting_archived_scores_same_execution_inputs_are_blocked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture, current, saved, path = self._fixture(root)
+            self._second_price_generation(root, path, change_scores=True)
+            with self.assertRaisesRegex(oracle.OracleBlockedError, "price-score"):
+                self._preflight(root, fixture, current)
+
+    def test_real_target_catalog_add_remove_has_no_replay_or_receipt_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture, current, saved, _path = self._fixture(root)
+            definition = fixture[0]
+            store_root = root / "outputs" / "audit" / "breakout_quality" / "reusable" /                 "target_oracle_romd" / "replay_cache"
+            before = {path.name: path.read_bytes() for path in store_root.rglob("*.json")}
+            for desired in (
+                ("R40", "T40"), ("R40",), ("R40", "T40"),
+            ):
+                selected = replace(definition, source={**definition.source,
+                    "oracle_comparisons": tuple(entry for entry in definition.source["oracle_comparisons"]
+                                                if entry["target"] in desired)})
+                item = list(fixture)
+                item[0] = selected
+                result = self._preflight(root, tuple(item), current)
+                self.assertEqual(result[(fixture[2], "R40")], "REUSE")
+                self.assertEqual({path.name: path.read_bytes() for path in store_root.rglob("*.json")}, before)
+
 class OraclePriceReplayLineageCases(TestCase):
     """A signed old score cannot certify changed formula/feature producers."""
 
@@ -5969,6 +6176,308 @@ class OracleCertifiedSourceLineEndingEquivalenceCases(TestCase):
                 self.assertFalse(certified_price_lineages_equivalent(new, current))
         invalid_signature = {**previous, "truth_source_sha256": "0"*64}
         self.assertFalse(certified_price_lineages_equivalent(invalid_signature, current))
+
+
+class OraclePublishedPriceGenerationManifestCases(TestCase):
+    """Producer-published price provenance, fast REUSE and fail-closed drift.
+
+    These fixtures deliberately use actual CSV bytes, independent signed
+    Oracle Replay receipts, and physically mutate files/registry snapshots.
+    Nothing depends on an allowlist of present MR-* or Target names.
+    """
+
+    @staticmethod
+    def _setup(root):
+        from core.dataset_profiles import get_dataset_dir
+        data_dir = Path(get_dataset_dir(root, "reduced"))
+        data_dir.mkdir(parents=True)
+        for ticker, price in (("2330", 100), ("2317", 75), ("0050", 130)):
+            (data_dir / (ticker + ".csv")).write_text(
+                f"Time,Open,High,Low,Close,Volume\n2021-01-04,{price},{price},{price},{price},10000\n",
+                encoding="utf-8")
+        return data_dir
+
+    def test_canonical_price_publisher_preserves_existing_price_sha_and_never_rehashes_in_reuse(self):
+        from filters.breakout_quality import source_inventory as owner
+        from services.audit import oracle_replay_artifacts as artifacts
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_dir = self._setup(root)
+            legacy_price = artifacts.price_inventory_sha256(root, "reduced")
+            self.assertIsNone(owner.read_published_price_inventory(root, "reduced"))
+            inventory = owner.build_source_data_inventory(root, "reduced", publish_price_manifest=True)
+            manifest = owner._price_manifest_path(
+                root, "reduced", inventory["csv_inventory_sha256"],
+                owner._price_file_revision(root, "reduced"))
+            original_manifest = manifest.read_bytes()
+            self.assertEqual(legacy_price, owner.read_published_price_inventory(root, "reduced"))
+            csv_open = Path.open
+
+            def fail_on_csv(path, *args, **kwargs):
+                if path.suffix.lower() == ".csv":
+                    self.fail("REUSE must not reopen source price bytes")
+                return csv_open(path, *args, **kwargs)
+
+            with patch.object(Path, "open", fail_on_csv), \
+                 patch.object(artifacts, "compute_file_sha256", side_effect=AssertionError("content SHA forbidden")):
+                for _ in range(3):
+                    self.assertEqual(artifacts.price_inventory_sha256(root, "reduced"), legacy_price)
+            self.assertEqual(manifest.read_bytes(), original_manifest)
+            # Publication of the same immutable generation is idempotent.
+            self.assertEqual(owner.build_source_data_inventory(
+                root, "reduced", publish_price_manifest=True), inventory)
+            self.assertEqual(manifest.read_bytes(), original_manifest)
+            # A new history item affects only the catalog, not source data.
+            registry = root / "core" / "audit_registry.py"
+            registry.parent.mkdir()
+            registry.write_text("TARGETS = ('R40',)\n", encoding="utf-8")
+            for version in ("TARGETS = ('R40', 'SyntheticNew')\n",
+                            "TARGETS = ()\n", "TARGETS = ('R40',)\n"):
+                registry.write_text(version, encoding="utf-8")
+                self.assertEqual(artifacts.price_inventory_sha256(root, "reduced"), legacy_price)
+            self.assertEqual(manifest.read_bytes(), original_manifest)
+
+    def test_price_source_changes_or_tampered_manifest_cannot_fake_reuse(self):
+        from filters.breakout_quality import source_inventory as owner
+        from services.audit import oracle_replay_artifacts as artifacts
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            folder = self._setup(root)
+            inventory = owner.build_source_data_inventory(root, "reduced", publish_price_manifest=True)
+            manifest = owner._price_manifest_path(
+                root, "reduced", inventory["csv_inventory_sha256"],
+                owner._price_file_revision(root, "reduced"))
+            baseline = artifacts.price_inventory_sha256(root, "reduced")
+            bad = json.loads(manifest.read_text(encoding="utf-8"))
+            bad["price_inventory_sha256"] = "f" * 64
+            manifest.write_text(json.dumps(bad), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "manifest invalid"):
+                artifacts.price_inventory_sha256(root, "reduced")
+            # A content witness is part of the original data publication,
+            # never a replaceable price-cache hint.
+            manifest.unlink()
+            owner.build_source_data_inventory(root, "reduced", publish_price_manifest=True)
+            witness = (root / "outputs" / "filters" / "breakout_quality"
+                       / "source_integrity" / "reduced"
+                       / (str(inventory["csv_inventory_sha256"]) + ".json"))
+            preserved_witness = witness.read_bytes()
+            evidence = json.loads(witness.read_text(encoding="utf-8"))
+            evidence["csv_content_sha256"] = "0" * 64
+            witness.write_text(json.dumps(evidence), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "manifest invalid"):
+                artifacts.price_inventory_sha256(root, "reduced")
+            witness.write_bytes(preserved_witness)
+            # Restoring from producer-signed bytes is permitted only in test fixture.
+            manifest.unlink()
+            owner.build_source_data_inventory(root, "reduced", publish_price_manifest=True)
+            file = folder / "2330.csv"
+            before = file.stat()
+            text = file.read_text(encoding="utf-8")
+            file.write_text(text.replace("100,100,100,100", "101,100,100,100"), encoding="utf-8")
+            self.assertEqual(file.stat().st_size, before.st_size)
+            # Prove the existing FULL content-witness check detects a same-
+            # metadata rewrite. Its metadata digest must be identical first.
+            import os
+            os.utime(file, ns=(before.st_atime_ns, before.st_mtime_ns))
+            with self.assertRaisesRegex(ValueError, "內容已變更"):
+                owner.build_source_data_inventory(root, "reduced")
+            # Oracle's cheap manifest preflight must also reject changed
+            # physical revision without opening the CSV bytes.
+            self.assertNotEqual(artifacts.price_inventory_sha256(root, "reduced"), baseline)
+            # Newly added ticker is a different source generation; without
+            # new publication it falls back to full content verification.
+            (folder / "3008.csv").write_text("Time,Open\n2021-01-04,100\n")
+            with patch.object(artifacts, "compute_file_sha256", wraps=artifacts.compute_file_sha256) as sha:
+                changed = artifacts.price_inventory_sha256(root, "reduced")
+            self.assertNotEqual(changed, baseline)
+            self.assertGreaterEqual(sha.call_count, 4)
+
+    def test_legacy_published_dataset_bootstraps_once_then_reuse_never_opens_csv(self):
+        from filters.breakout_quality import source_inventory as owner
+        from services.audit import oracle_replay_artifacts as artifacts
+        from filters.breakout_quality.contract import DEFAULT_FILTER_ID
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._setup(root)
+            inventory = owner.build_source_data_inventory(root, "reduced")
+            summary = (root / "outputs" / "filters" / "breakout_quality"
+                       / DEFAULT_FILTER_ID / "dataset_summary.json")
+            summary.parent.mkdir(parents=True)
+            summary.write_text(json.dumps({
+                "dataset": "reduced", "source_data_inventory": inventory,
+                "build_mode": "full_feature_bank_rebuild",
+            }), encoding="utf-8")
+            legacy_summary_bytes = summary.read_bytes()
+            self.assertIsNone(owner.read_published_price_inventory(root, "reduced"))
+            # First preflight may scan actual source bytes exactly once.
+            with patch.object(artifacts, "compute_file_sha256", wraps=artifacts.compute_file_sha256) as strict:
+                price_sha = artifacts.price_inventory_sha256(root, "reduced")
+            self.assertEqual(strict.call_count, 0)  # single canonical source-owner scan
+            self.assertEqual(owner.read_published_price_inventory(root, "reduced"), price_sha)
+            self.assertEqual(summary.read_bytes(), legacy_summary_bytes)
+            csv_open = Path.open
+            def no_csv(path, *args, **kwargs):
+                if path.suffix == ".csv":
+                    raise AssertionError("REUSE cannot open CSV bytes after first certification")
+                return csv_open(path, *args, **kwargs)
+            with patch.object(Path, "open", no_csv), \
+                 patch.object(artifacts, "compute_file_sha256", side_effect=AssertionError("SHA redo")):
+                self.assertEqual(artifacts.price_inventory_sha256(root, "reduced"), price_sha)
+                self.assertEqual(artifacts.price_inventory_sha256(root, "reduced"), price_sha)
+            self.assertEqual(summary.read_bytes(), legacy_summary_bytes)
+
+    def test_stale_legacy_dataset_summary_cannot_certify_different_source(self):
+        from filters.breakout_quality import source_inventory as owner
+        from services.audit import oracle_replay_artifacts as artifacts
+        from filters.breakout_quality.contract import DEFAULT_FILTER_ID
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prices = self._setup(root)
+            prior = owner.build_source_data_inventory(root, "reduced")
+            summary = (root / "outputs" / "filters" / "breakout_quality"
+                       / DEFAULT_FILTER_ID / "dataset_summary.json")
+            summary.parent.mkdir(parents=True)
+            summary.write_text(json.dumps({"dataset": "reduced", "source_data_inventory": prior}),
+                               encoding="utf-8")
+            path = prices / "2330.csv"
+            path.write_text(path.read_text().replace("100,100,100,100", "120,120,120,120"))
+            # Physical source generation changed; the historical summary is not
+            # authorization to publish or reuse the old source witness.
+            self.assertIsNone(owner.certify_existing_dataset_price_generation(root, "reduced"))
+            calculated = artifacts.price_inventory_sha256(root, "reduced")
+            self.assertTrue(len(calculated) == 64)
+            integrity_dir = (root / "outputs" / "filters" / "breakout_quality"
+                             / "source_integrity" / "reduced" / "price_manifests")
+            self.assertFalse(integrity_dir.exists())
+
+    def test_same_price_content_new_physical_revision_can_publish_without_overwriting_old(self):
+        from filters.breakout_quality import source_inventory as owner
+        from services.audit import oracle_replay_artifacts as artifacts
+        import os
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._setup(root) / "2330.csv"
+            inventory = owner.build_source_data_inventory(root, "reduced", publish_price_manifest=True)
+            generation_a = owner._price_file_revision(root, "reduced")
+            first = owner._price_manifest_path(root, "reduced", inventory["csv_inventory_sha256"], generation_a)
+            receipt_a = first.read_bytes()
+            original = artifacts.price_inventory_sha256(root, "reduced")
+            before = source.stat()
+            clone = source.with_suffix(".new")
+            clone.write_bytes(source.read_bytes())
+            os.utime(clone, ns=(before.st_atime_ns, before.st_mtime_ns))
+            os.replace(clone, source)
+            generation_b = owner._price_file_revision(root, "reduced")
+            self.assertNotEqual(generation_a, generation_b)
+            self.assertEqual(artifacts.price_inventory_sha256(root, "reduced"), original)
+            # A full source-owner attestation creates the new immutable proof.
+            self.assertEqual(owner.build_source_data_inventory(
+                root, "reduced", publish_price_manifest=True), inventory)
+            second = owner._price_manifest_path(root, "reduced", inventory["csv_inventory_sha256"], generation_b)
+            self.assertTrue(second.is_file())
+            self.assertEqual(first.read_bytes(), receipt_a)
+            self.assertEqual(artifacts.price_inventory_sha256(root, "reduced"), original)
+
+    def test_physical_source_swap_during_certification_never_signs_old_contents(self):
+        from filters.breakout_quality import source_inventory as owner
+        import os
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            folder = self._setup(root)
+            target = folder / "2330.csv"
+            original = owner._source_content_witness
+            def change_source_after_scan(*args, **kwargs):
+                sha = original(*args, **kwargs)
+                stat = target.stat()
+                replacement = folder / "replacement.tmp"
+                replacement.write_bytes(target.read_bytes())
+                os.utime(replacement, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+                os.replace(replacement, target)
+                return sha
+            with patch.object(owner, "_source_content_witness", side_effect=change_source_after_scan):
+                with self.assertRaisesRegex(ValueError, "physical revision changed"):
+                    owner.build_source_data_inventory(root, "reduced", publish_price_manifest=True)
+            inventory = owner._build_source_data_inventory(root, "reduced")
+            revision = owner._price_file_revision(root, "reduced")
+            price_manifest = owner._price_manifest_path(
+                root, "reduced", inventory["csv_inventory_sha256"], revision)
+            self.assertFalse(price_manifest.exists())
+
+    def test_published_v2_fast_manifest_resolver_does_not_validate_all_materialized_csv_content(self):
+        from filters.breakout_quality import source_inventory as owner
+        from config.market_data import RESEARCH_DATA_GENERATION_V2
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = root / "frozen_v2"; data.mkdir()
+            (data / "2330.csv").write_text("Time,Open\n2021-01-04,100\n", encoding="utf-8")
+            published = SimpleNamespace(
+                full_dataset_dir=data,
+                frozen_cutoff="2026-03-02", promotion_fingerprint="1" * 64,
+                materialization_fingerprint="2" * 64,
+            )
+            from core.market_data_research_promotion import load_active_research_v2_promotion
+            with patch("core.market_data_research_promotion.load_active_research_v2_promotion",
+                       return_value=published) as loader, \
+                 patch.object(owner, "get_dataset_dir", side_effect=AssertionError(
+                     "fast published source must not invoke regular full-content V2 routing")):
+                snapshot = owner._build_source_data_inventory(
+                    root, "full", published_manifest_check=True,
+                )
+                self.assertEqual(snapshot["research_market_data_lineage"], {
+                    "generation_id": RESEARCH_DATA_GENERATION_V2,
+                    "frozen_cutoff": "2026-03-02",
+                    "promotion_fingerprint": "1" * 64,
+                    "materialization_fingerprint": "2" * 64,
+                })
+                self.assertTrue(all(call.kwargs.get("verify_materialization_file_content") is False
+                                    for call in loader.call_args_list))
+
+    def test_eight_seed_replay_receipts_survive_real_add_remove_without_execution(self):
+        from filters.breakout_quality import source_inventory as source
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        from core.file_integrity import canonical_json_sha256
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._setup(root)
+            source.build_source_data_inventory(root, "reduced", publish_price_manifest=True)
+            from services.audit.oracle_replay_artifacts import price_inventory_sha256
+            dataset_sha = price_inventory_sha256(root, "reduced")
+            store = OracleReplayStore(root, "breakout_quality/reusable/target_oracle_romd")
+            seeds = (693545351, 2014432738, 104504529, 762252050,
+                     9734312, 1020806211, 116293459, 1234683984)
+            old_targets = ("C96", "R40", "T40")
+            ids = {}
+            for seed in seeds:
+                for target in old_targets:
+                    identity = OracleReplayEvidenceReuseCases._identity(
+                        seed=seed, target=target, dataset_sha=dataset_sha)
+                    observation = OracleReplayEvidenceReuseCases._observation(target, seed)
+                    store.write(identity, observation, origin="canonical_replay")
+                    ids[(seed, target)] = identity
+            receipts = {store._path(identity): store._path(identity).read_bytes()
+                        for identity in ids.values()}
+            registry = root / "core" / "audit_registry.py"
+            registry.parent.mkdir()
+            for text in ("('C96','R40','T40')", "('C96','R40','T40','NewTarget')",
+                         "('C96','T40')", "('C96','R40','T40')"):
+                registry.write_text("TARGETS = " + text + "\n", encoding="utf-8")
+                expected = {key: ids[key] for key in ids}
+                plan = store.plan_execution(expected)
+                self.assertTrue(all(action == "REUSE" for action in plan.actions().values()))
+                for seed, target in ids:
+                    result, _ = plan.execute(seed, target,
+                                             lambda: self.fail("REUSE cannot execute Portfolio Producer"))
+                    self.assertEqual(result, OracleReplayEvidenceReuseCases._observation(target, seed))
+                self.assertEqual(price_inventory_sha256(root, "reduced"), dataset_sha)
+                self.assertTrue(all(path.read_bytes() == saved
+                                    for path, saved in receipts.items()))
+            self.assertEqual(len(receipts), 24)
+            # A true replay input change is not a compatible identity.
+            altered = {key: {**value, "param_sha256": "c" * 64}
+                       for key, value in ids.items()}
+            amended = store.plan_execution(altered)
+            self.assertTrue(all(action != "REUSE" for action in amended.actions().values()))
+            self.assertTrue(all(path.read_bytes() == saved for path, saved in receipts.items()))
 
 if __name__ == "__main__":
     main(verbosity=2)

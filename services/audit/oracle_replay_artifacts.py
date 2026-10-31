@@ -262,7 +262,24 @@ def _identity_field_value(identity: Mapping[str, Any], field: str) -> str:
 
 
 def price_inventory_sha256(project_root: Path, dataset: str) -> str:
-    """Hash real Research OHLCV *bytes* (not timestamps or file existence)."""
+    """Reuse a published content-verified price generation; otherwise hash bytes.
+
+    The canonical source owner can certify one pre-existing Dataset generation
+    once when the original Dataset summary/metadata matches. Subsequent Oracle
+    plans read only the content-attested source proof and metadata. This does
+    not build a Dataset, Target or Portfolio, nor alter signed Replay receipts.
+    Source-only fixtures without a canonical Dataset retain the strict legacy
+    byte-hashing path.
+    """
+    from filters.breakout_quality.source_inventory import (
+        read_published_price_inventory, certify_existing_dataset_price_generation,
+    )
+    published = read_published_price_inventory(project_root, dataset)
+    if published is not None:
+        return published
+    bootstrapped = certify_existing_dataset_price_generation(project_root, dataset)
+    if bootstrapped is not None:
+        return bootstrapped
     sources, duplicates = discover_dataset_csv_inputs(Path(project_root), str(dataset))
     if duplicates or not sources:
         raise ValueError("Oracle price inventory cannot be certified for reuse")
@@ -875,6 +892,86 @@ class OracleReplayStore:
                     return (), ("same-window replay_cache has a DIFFERENT identity for "
                                 f"{target} seed={seed}; changed fields: " + "; ".join(changed))
         return (), None
+
+    def resolve_verified_price_score_revision(
+        self, *, expected: Mapping[str, Any], saved: Mapping[str, Any],
+        witness: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Replay a signed *observation lookup*, not an old numerical producer.
+
+        The caller must have independently hashed the full archived price-score
+        array and confirmed its exact per-target value/key digest. This method
+        then requires an identical full economic identity after removing ONLY
+        the two source-code lineage digests proven by that archived truth
+        witness. No old signed receipt or scientific identity is rewritten.
+        """
+        old_policy = saved.get("replay_policy")
+        new_policy = expected.get("replay_policy")
+        if not isinstance(old_policy, Mapping) or not isinstance(new_policy, Mapping):
+            return None
+        old_truth = old_policy.get("hindsight_target_contract")
+        new_truth = new_policy.get("hindsight_target_contract")
+        if not isinstance(old_truth, Mapping) or not isinstance(new_truth, Mapping):
+            return None
+        required = (
+            "source_code_sha256", "score_algorithm_sha256",
+            "dataset_summary_sha256", "label_policy", "truth_source_sha256",
+        )
+        if not all(field in old_truth and field in new_truth for field in required):
+            return None
+        old_digest = canonical_json_sha256({key: old_truth[key] for key in required[:-1]})
+        new_digest = canonical_json_sha256({key: new_truth[key] for key in required[:-1]})
+        if (old_digest != old_truth["truth_source_sha256"]
+                or new_digest != new_truth["truth_source_sha256"]
+                or old_truth["source_code_sha256"] != witness.get("source_code_sha256")
+                or old_truth["truth_source_sha256"] != witness.get("truth_source_sha256")
+                or old_policy.get("perfect_score_sha256") != witness.get("score_sha256")
+                or new_policy.get("perfect_score_sha256") != witness.get("score_sha256")):
+            return None
+        for policy in (old_policy, new_policy):
+            score_contract = policy.get("canonical_dl_score_contract")
+            if (not isinstance(score_contract, Mapping)
+                    or score_contract.get("canonical_feature_eligible_keys_sha256") !=
+                        witness.get("eligible_keys_sha256")
+                    or score_contract.get("oracle_scored_rows") !=
+                        witness.get("cohort_rows")):
+                return None
+        for identity in (saved, expected):
+            cohort = identity.get("cohort")
+            if (not isinstance(cohort, Mapping)
+                    or cohort.get("cohort_rows") != witness.get("cohort_rows")
+                    or cohort.get("first_common_day") != witness.get("first_common_day")
+                    or cohort.get("last_common_day") != witness.get("last_common_day")):
+                return None
+        # Every non-source execution input, including exact/direct ranking,
+        # P16/seed/fee, full PIT score mapping, time/feature eligibility and
+        # portfolio boundary must match. An archived cohort may carry extra
+        # report-only provider fields; use the existing V2 normalizer.
+        normalized = _v2_presentation_identity(saved, expected)
+        normalized = dict(normalized)
+        peer_policy = dict(normalized.get("replay_policy") or {})
+        peer_truth = dict(peer_policy.get("hindsight_target_contract") or {})
+        if (set(peer_truth) != set(new_truth)
+                or any(peer_truth.get(key) != value for key, value in new_truth.items()
+                       if key not in ("source_code_sha256", "truth_source_sha256"))):
+            return None
+        peer_truth["source_code_sha256"] = new_truth["source_code_sha256"]
+        peer_truth["truth_source_sha256"] = new_truth["truth_source_sha256"]
+        peer_policy["hindsight_target_contract"] = peer_truth
+        normalized["replay_policy"] = peer_policy
+        if normalized.get("benchmark") != expected.get("benchmark"):
+            if not benchmark_seed_execution_equivalent(
+                    recorded_benchmark=str(normalized.get("benchmark") or ""),
+                    active_benchmark=str(expected.get("benchmark") or ""),
+                    seed=int(expected["seed"])):
+                return None
+            normalized["benchmark"] = expected["benchmark"]
+        if normalized != dict(expected):
+            return None
+        obs = self.read(saved)  # original signed identity + observation SHA
+        if obs is None:
+            return None
+        return self.with_win_rate(saved, obs)
 
     def read(self, identity: Mapping[str, Any]) -> dict[str, Any] | None:
         path = self._path(identity)

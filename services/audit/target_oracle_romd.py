@@ -1917,6 +1917,7 @@ def _certified_saved_oracle_identity(
     price_sha: str, seed: int, target: str, settings, robustness,
     base_policy: Mapping[str, Any], arm, rolling_periods: list[dict[str, Any]] | None,
     evaluation_end: str,
+    verified_price_witness: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Attest a completed replay from signed source/score lineage; no Producer.
 
@@ -2035,7 +2036,17 @@ def _certified_saved_oracle_identity(
         expected_source = reconstructed.get("hindsight_target_contract")
         if (recorded_source != expected_source and
                 not certified_price_lineages_equivalent(recorded_source, expected_source)):
-            raise ValueError("historical price Target producer/source evidence differs")
+            witness = verified_price_witness
+            if (not isinstance(witness, Mapping)
+                    or not isinstance(recorded_source, Mapping)
+                    or recorded_source.get("source_code_sha256") != witness.get("source_code_sha256")
+                    or recorded_source.get("truth_source_sha256") != witness.get("truth_source_sha256")
+                    or score_sha != witness.get("score_sha256")
+                    or key_sha != witness.get("eligible_keys_sha256")
+                    or n != witness.get("cohort_rows")
+                    or first != witness.get("first_common_day")
+                    or last != witness.get("last_common_day")):
+                raise ValueError("historical price Target producer/source evidence differs")
     expected = replay_identity(
         dataset=settings.dataset, dataset_sha256=price_sha,
         target=target, definition={target: target},
@@ -2646,6 +2657,59 @@ def _run_single_stage_oracle(
     baseline_policy = _canonical_oracle_replay_policy(
         definition, base_arm=base_arm, exact_arm=baseline_arm,
     )
+    # Existing price-score artifacts are content-validated once, independently
+    # of the Replay receipts. The same approved price-score algorithm and
+    # fully verified score/key digest can attest a prior physical source
+    # revision without re-simulating ANY Target or portfolio path. An
+    # unverified source revision, corrupt NPZ, changed price/feature/label
+    # contract, or different actual score SHA can never authorize REUSE.
+    verified_price_witnesses: dict[str, tuple[dict[str, Any], ...]] = {}
+    if plan["recipes"]:
+        from services.audit.oracle_score_artifacts import (
+            price_score_source_identity, verified_existing_price_score_witnesses,
+        )
+        try:
+            price_identity = price_score_source_identity(
+                root=root, dataset=str(settings.dataset),
+                filter_id=str(definition.source["filter_id"]),
+                price_sha256=price_sha,
+                providers={field: str(definition.source[field]) for field in plan["providers"]},
+                recipes=plan["recipes"],
+                score_start=_formal_dl_score_start(definition, settings),
+                cutoff=str(settings.end_date),
+                score_algorithm_sha256=_price_score_algorithm_sha256(),
+                label_policy=DEFAULT_LABEL_POLICY.as_manifest_payload(),
+            )
+        except (OSError, ValueError, TypeError, KeyError):
+            # A missing/incompatible upstream Dataset cannot authorize an
+            # archived matrix; retain the original strict source plan. The
+            # producer's ordinary path remains responsible for diagnosis.
+            price_identity = None
+        if price_identity is not None:
+            try:
+                sources = verified_existing_price_score_witnesses(
+                    cache_root=(root / AUDIT_OUTPUT_ROOT /
+                                definition.output_subdir / "truth_cache"),
+                    current_identity=price_identity,
+                    requested_sources={
+                        plan["aliases"].get(target, target):
+                            plan["recipes"][plan["aliases"].get(target, target)]
+                        for target, _ in plan["targets"]
+                        if target not in plan["daily_sources"]
+                    },
+                    score_sha=_canonical_score_map_sha256,
+                )
+                verified_price_witnesses = {
+                    target: sources[source]
+                    for target, _ in plan["targets"]
+                    if target not in plan["daily_sources"]
+                    for source in (plan["aliases"].get(target, target),)
+                    if source in sources
+                }
+            except ValueError as exc:
+                raise OracleBlockedError(
+                    f"Oracle verified price-score evidence BLOCKED: {exc}") from exc
+
     # Artifact-only score-universe proof. A full DL data-provider call here
     # silently recomputed hundreds of 40D price labels even on 100% REUSE.
     keys = _replay_attested_score_keys(
@@ -2653,6 +2717,17 @@ def _run_single_stage_oracle(
         price_sha=price_sha, settings=settings, robustness=robustness,
         evaluation_end=end,
     )
+    for target, witnesses in verified_price_witnesses.items():
+        for witness in witnesses:
+            proof = (
+                witness["eligible_keys_sha256"], int(witness["cohort_rows"]),
+                witness["first_common_day"], witness["last_common_day"],
+            )
+            if target in keys and keys[target] != proof:
+                raise OracleBlockedError(
+                    "Oracle archived score matrix conflicts with a signed stock-day receipt"
+                )
+            keys[target] = proof
     seed_set = ([int(row["seed"]) for row in parameter_plan["rows"]]
                 if preview_only else [seed for seed, _ in paths])
     targets = ("C96", *(name for name, _ in plan["targets"]))
@@ -2779,6 +2854,47 @@ def _run_single_stage_oracle(
                 decisions[key], blocked[key] = "BLOCKED", source_conflict
                 continue
             if not current_candidates:
+                # A prior physical source revision is reusable ONLY after
+                # independent full-NPZ score/key verification, matching the
+                # current approved price algorithm and all Replay inputs.
+                witnesses = verified_price_witnesses.get(target, ())
+                if witnesses and target in keys:
+                    arm = direct_arm if plan["selectors"][target] == "direct" else exact_arm
+                    matches: list[tuple[dict[str, Any], dict[str, Any]]] = []
+                    for saved in cache.existing_completed_identities(seed=seed, target=target):
+                        for witness in witnesses:
+                            if ((saved.get("replay_policy") or {}).get("perfect_score_sha256")
+                                    != witness["score_sha256"]):
+                                continue
+                            try:
+                                expected = _certified_saved_oracle_identity(
+                                    definition, project_root=root, store=cache,
+                                    saved=saved, plan=plan, contract=contracts[target],
+                                    keys=keys[target], param_sha=param_sha, price_sha=price_sha,
+                                    seed=seed, target=target, settings=settings,
+                                    robustness=robustness, base_policy=baseline_policy,
+                                    arm=arm, rolling_periods=schedules.get(seed),
+                                    evaluation_end=end, verified_price_witness=witness,
+                                )
+                                record = cache.resolve_verified_price_score_revision(
+                                    expected=expected, saved=saved, witness=witness,
+                                )
+                                if record is not None:
+                                    matches.append((saved, record))
+                            except (ValueError, KeyError, TypeError):
+                                # Preserve unrelated historical scientific
+                                # revisions; only full signed matches qualify.
+                                continue
+                    if matches:
+                        from core.file_integrity import canonical_json_sha256
+                        if len({canonical_json_sha256(record) for _, record in matches}) != 1:
+                            decisions[key] = "BLOCKED"
+                            blocked[key] = "same fully verified price score produced conflicting signed Replay observations"
+                            continue
+                        decisions[key], cached[key], identities[key] = (
+                            "REUSE", matches[0][1], matches[0][0],
+                        )
+                        continue
                 # Old outcomes are preserved as historical evidence. Only
                 # this missing *current* producer identity needs new truth.
                 decisions[key] = "RUN"

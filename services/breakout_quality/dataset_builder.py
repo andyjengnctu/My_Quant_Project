@@ -522,7 +522,9 @@ def _full_build(args, policy, *, started: float) -> int:
             market_features_memmap.flush()
             market_valid_memmap.flush()
             del market_features_memmap, market_valid_memmap
-        source_inventory_after = build_source_data_inventory(PROJECT_ROOT, args.dataset)
+        source_inventory_after = build_source_data_inventory(
+            PROJECT_ROOT, args.dataset, publish_price_manifest=True,
+        )
         if source_inventory_after != source_inventory_before:
             raise RuntimeError("來源 CSV 在 build_dataset 執行期間發生變更；請完成資料更新後重新執行")
 
