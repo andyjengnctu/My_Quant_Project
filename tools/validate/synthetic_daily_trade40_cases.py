@@ -2653,6 +2653,44 @@ class RealPathStrategyCompareDiagnosticsRegressionCases(unittest.TestCase):
             replay.call_args.kwargs['verified_real_path_bundle_loader'],
             execution.load_continuous_ranker_data,
         )
+        self.assertIs(
+            replay.call_args.kwargs['verified_real_path_diagnostic_loader'],
+            execution._load_verified_real_path_diagnostic_projection,
+        )
+
+    def test_diagnostic_reader_does_not_resolve_teacher_on_cache_miss(self):
+        from services.research import strategy_compare_execution as execution
+        with (patch('services.breakout_quality.real_path_diagnostic_cache.real_path_diagnostic_candidate_exists',
+                    return_value=False) as exists,
+              patch('services.breakout_quality.trade_path_target_source.loader_kwargs_for_trade_path',
+                    side_effect=AssertionError('Missing diagnostic must not inspect teacher')) as teacher):
+            found = execution._load_verified_real_path_diagnostic_projection(
+                root=Path('/unused'), filter_id='breakout_quality_v1',
+                architecture='inception_time_v1', profile=PROFILE_R, seed=42,
+            )
+        self.assertIsNone(found)
+        exists.assert_called_once()
+        teacher.assert_not_called()
+
+    def test_diagnostic_reader_preserves_verified_seed_and_teacher(self):
+        from services.research import strategy_compare_execution as execution
+        expected = object()
+        teacher_lineage = {'seed': 762252050, 'canonical_source': 'original'}
+        with (patch('services.breakout_quality.real_path_diagnostic_cache.real_path_diagnostic_candidate_exists',
+                    return_value=True),
+              patch('services.breakout_quality.trade_path_target_source.loader_kwargs_for_trade_path',
+                    return_value={'target_lineage': teacher_lineage}) as teacher,
+              patch('services.breakout_quality.real_path_diagnostic_cache.load_verified_real_path_diagnostic',
+                    return_value=expected) as cache_reader):
+            found = execution._load_verified_real_path_diagnostic_projection(
+                root=Path('/unused'), filter_id='breakout_quality_v1',
+                architecture='inception_time_v1', profile=PROFILE_R, seed=762252050,
+            )
+        self.assertIs(found, expected)
+        self.assertEqual(teacher.call_args.kwargs['seed'], 762252050)
+        self.assertIs(teacher.call_args.kwargs['authorized_build'], False)
+        self.assertEqual(cache_reader.call_args.kwargs['target_lineage'], teacher_lineage)
+        self.assertEqual(cache_reader.call_args.kwargs['seed'], 762252050)
 
     def test_real_path_target_null_survives_post_replay_diagnostic_join(self):
         from filters.breakout_quality import strategy_compare_diagnostics as diagnostic
@@ -3043,6 +3081,7 @@ class RealPathDiagnosticCacheCases(unittest.TestCase):
 
     def test_strategy_diagnostic_uses_proven_projection_without_canonical_reload(self):
         from services.research import strategy_compare_engine as consumer
+        from services.research import strategy_compare_execution as execution
         cached=self._bundle()
         cached.group_table=cached.group_table.copy()
         args=("root","breakout_quality_v1","inception_time_v1",PROFILE_R,
@@ -3056,6 +3095,7 @@ class RealPathDiagnosticCacheCases(unittest.TestCase):
                 self.fail("Canonical full data load must be skipped on verified diagnostic hit")
             result=consumer._cached_real_path_selection_target_lookup.__wrapped__(
                 *args,cannot_load,
+                execution._load_verified_real_path_diagnostic_projection,
             )
             self.assertEqual(result.to_dict("list"), {"ok":[1]})
             self.assertEqual(join.call_args.kwargs["verified_target_bundle"],cached)

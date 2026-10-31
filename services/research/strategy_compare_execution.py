@@ -179,6 +179,38 @@ def run_strategy_compare_baseline_arm(
     )
 
 
+def _load_verified_real_path_diagnostic_projection(
+    *, root: Path, filter_id: str, architecture: str, profile: str, seed: int,
+):
+    """Read a disposable diagnostic using the canonical, read-only teacher.
+
+    The execution owner injects this optional fast path into the comparison
+    engine; no optimizer, FIT or Target producer is executed on a cache hit.
+    A cache miss delegates to the engine's original canonical bundle loader.
+    """
+    from services.breakout_quality.real_path_diagnostic_cache import (
+        real_path_diagnostic_candidate_exists,
+        load_verified_real_path_diagnostic,
+    )
+
+    root = Path(root).resolve()
+    if not real_path_diagnostic_candidate_exists(
+        root=root, filter_id=filter_id, architecture=architecture,
+        profile=profile, seed=seed,
+    ):
+        return None
+    from services.breakout_quality.trade_path_target_source import loader_kwargs_for_trade_path
+
+    teacher = loader_kwargs_for_trade_path(
+        experiment_profile=profile, project_root=root, seed=seed,
+        authorized_build=False,
+    )
+    return load_verified_real_path_diagnostic(
+        root=root, filter_id=filter_id, architecture=architecture,
+        profile=profile, seed=seed, target_lineage=teacher["target_lineage"],
+    )
+
+
 def run_strategy_compare_active_arm(
     *,
     settings: Any,
@@ -309,6 +341,7 @@ def run_strategy_compare_active_arm(
         capture_execution_diagnostics=bool(capture_execution_diagnostics),
         capture_selection_target_diagnostics=bool(capture_selection_target_diagnostics),
         verified_real_path_bundle_loader=load_continuous_ranker_data,
+        verified_real_path_diagnostic_loader=_load_verified_real_path_diagnostic_projection,
     )
 
 

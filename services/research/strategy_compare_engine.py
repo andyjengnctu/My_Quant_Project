@@ -383,6 +383,7 @@ def _cached_real_path_selection_target_lookup(
     score_path: str, manifest_path: str, score_column: str,
     seed: int, score_sha256: str, manifest_sha256: str,
     verified_bundle_loader: Callable[..., Any],
+    verified_diagnostic_loader: Callable[..., Any] | None = None,
 ) -> pd.DataFrame:
     """One post-replay diagnostic truth per *validated* PIT publication and seed.
 
@@ -392,28 +393,17 @@ def _cached_real_path_selection_target_lookup(
     the same full-history real-trade labels in a single Strategy Compare run.
     """
     del score_sha256, manifest_sha256  # Revision identities are cache keys, not new sources.
-    # Independent strategy runs can consume the disposable diagnostic projection
-    # built by the canonical MODEL data producer. Resolve the original seed's
-    # teacher on EVERY attempt; an absent/stale projection falls back to the
-    # original full Loader, with no new target formula or FIT side effect.
-    from services.breakout_quality.real_path_diagnostic_cache import (
-        real_path_diagnostic_candidate_exists,
-        load_verified_real_path_diagnostic,
-    )
-    cached = None
-    if real_path_diagnostic_candidate_exists(
-        root=Path(root_text), filter_id=filter_id, architecture=architecture,
-        profile=profile, seed=seed,
-    ):
-        from services.breakout_quality.trade_path_target_source import loader_kwargs_for_trade_path
-        teacher = loader_kwargs_for_trade_path(
-            experiment_profile=profile, project_root=Path(root_text),
-            seed=seed, authorized_build=False,
-        )
-        cached = load_verified_real_path_diagnostic(
+    # The execution owner validates the seed-scoped teacher and disposable
+    # projection. The comparison engine must not import the Target/Optimizer
+    # producer: that would create an Optimizer -> Replay -> Target cycle.
+    # No injected reader (e.g. an isolated test) means a normal canonical load.
+    cached = (
+        verified_diagnostic_loader(
             root=Path(root_text), filter_id=filter_id, architecture=architecture,
-            profile=profile, seed=seed, target_lineage=teacher["target_lineage"],
+            profile=profile, seed=seed,
         )
+        if verified_diagnostic_loader is not None else None
+    )
     if cached is not None:
         print("[Strategy Compare Target] REUSE canonical post-replay diagnostic projection", flush=True)
         return _selection_target_lookup(
@@ -463,6 +453,7 @@ def _selection_target_lookup_for_verified_pit(
     *, root: Path, filter_id: str, architecture: str, profile: str,
     pit_contract, score_column: str,
     verified_bundle_loader: Callable[..., Any] | None = None,
+    verified_diagnostic_loader: Callable[..., Any] | None = None,
 ) -> pd.DataFrame:
     """Attach future labels *after* replay from the PIT score's verified seed.
 
@@ -509,6 +500,7 @@ def _selection_target_lookup_for_verified_pit(
         str(Path(root).resolve()), filter_id, architecture, profile,
         str(pit_contract.score_path), str(manifest_path), score_column,
         seed, score_sha256, manifest_sha256, verified_bundle_loader,
+        verified_diagnostic_loader,
     ).copy()
 
 
@@ -540,6 +532,7 @@ def run_comparison(
     capture_execution_diagnostics=False,
     capture_selection_target_diagnostics=True,
     verified_real_path_bundle_loader: Callable[..., Any] | None = None,
+    verified_real_path_diagnostic_loader: Callable[..., Any] | None = None,
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
     param_evaluation_mode="rolling",
 ):
@@ -839,6 +832,7 @@ def run_comparison(
                     profile=manifest_profile, pit_contract=pit_contract,
                     score_column=runtime_primary_score_column,
                     verified_bundle_loader=verified_real_path_bundle_loader,
+                    verified_diagnostic_loader=verified_real_path_diagnostic_loader,
                 )
             else:
                 forward_score_path = (
