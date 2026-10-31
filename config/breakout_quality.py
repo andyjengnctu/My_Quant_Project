@@ -244,6 +244,7 @@ BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES = 8  # Continuous/dail
 BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS = 4  # CPU feature materialization workers；結果仍按原batch順序消費，僅提升GPU feeding。
 BREAKOUT_QUALITY_TRADE_PATH_LABEL_WORKERS = 4  # A2 realized trade-path label builder 的 CPU workers；只改 execution strategy。
 BREAKOUT_QUALITY_DAILY_REAL_PATH_WORKERS = 6  # Daily real-path per-ticker CPU processes; source, row order and PIT remain unchanged.
+BREAKOUT_QUALITY_MODEL_ROBUSTNESS_SEED_WORKERS = 2  # Independent benchmark seed processes; upstream preparation remains serialized; set 1 for limited GPU/RAM.
 
 
 # =============================================================================

@@ -8,7 +8,7 @@ import argparse
 import hashlib
 from collections import deque
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 import importlib
 import json
@@ -134,10 +134,12 @@ from services.research.strategy_compare_training import (
     validate_strategy_compare_training_artifacts,
 )
 from services.research.training_process import (
+    run_logged_training_process,
     terminate_registered_training_processes,
 )
 from core.training_policy import get_robustness_benchmark_policy_snapshot
 from config.robustness_benchmark import MODEL_STRATEGY_ROBUSTNESS_BENCHMARK_ID
+from config.breakout_quality import BREAKOUT_QUALITY_MODEL_ROBUSTNESS_SEED_WORKERS
 from filters.breakout_quality.artifact_dependency_registry import (
     collect_model_upstream_preparation_plan,
 )
@@ -4708,11 +4710,13 @@ def _prepare_formal_robustness_seed_inputs(
 
 
 def _build_forward_robustness_seed(
-    program_name: str, settings, *, seed: int, force_rebuild: bool = False
+    program_name: str, settings, *, seed: int, force_rebuild: bool = False,
+    inputs_prepared: bool = False,
 ) -> int:
-    code = _prepare_formal_robustness_seed_inputs(program_name, settings, seed=int(seed))
-    if code:
-        return int(code)
+    if not inputs_prepared:
+        code = _prepare_formal_robustness_seed_inputs(program_name, settings, seed=int(seed))
+        if code:
+            return int(code)
     model_dir, research_dir = _model_robustness_dirs(settings, seed=seed, rolling=False)
     model_dir.mkdir(parents=True, exist_ok=True)
     research_dir.mkdir(parents=True, exist_ok=True)
@@ -4792,9 +4796,10 @@ def _build_rolling_robustness_seed(
                 ))
 
     if _requires_formal_trade_path_inputs(settings):
-        code = _prepare_formal_robustness_seed_inputs(program_name, settings, seed=int(seed))
-        if code != 0:
-            return int(code)
+        if not inputs_prepared:
+            code = _prepare_formal_robustness_seed_inputs(program_name, settings, seed=int(seed))
+            if code != 0:
+                return int(code)
     elif not inputs_prepared:
         code = _prepare_continuous_research_inputs(program_name, settings)
         if code != 0:
@@ -4954,6 +4959,126 @@ def _require_model_robustness_report_sources(
     )
 
 
+def _execute_prepared_model_robustness_seed(
+    *, profile: str, seed: int, rolling: bool,
+) -> int:
+    """Internal isolated process: the canonical single-seed producer remains owner.
+
+    The parent serialized all shared Dataset/Target/Optimizer preparation. A
+    missing upstream dependency here must FAIL, never become a second concurrent
+    producer. Parallel processes use seed-specific model/output directories.
+    """
+    settings = get_breakout_quality_workflow_settings(experiment_profile=str(profile))
+    source = _observe_model_robustness_seed(settings, seed=int(seed), rolling=rolling)
+    if source.verified_evidence is not None:
+        return 0  # A concurrent prior producer finished this exact seed.
+    if not rolling or not _rolling_robustness_score_core_ready(settings, seed=int(seed))[0]:
+        upstream = _collect_continuous_research_input_plan(settings, seed=int(seed))
+        if any(action.action != "REUSE" for action in upstream.actions):
+            raise RuntimeError(
+                f"Robustness parallel seed={seed}: canonical upstream changed; "
+                "refusing concurrent Dataset/Target/Optimizer publication"
+            )
+    program = "apps/research.py model"
+    return int(
+        _build_rolling_robustness_seed(
+            program, settings, seed=int(seed), inputs_prepared=True,
+        ) if rolling else _build_forward_robustness_seed(
+            program, settings, seed=int(seed), inputs_prepared=True,
+        )
+    )
+
+
+def _parallel_model_robustness_inputs_reusable(
+    settings, *, seeds: tuple[int, ...], rolling: bool,
+    score_ready_seeds: tuple[int, ...] = (),
+) -> bool:
+    """Never parallelize any seed that could publish a shared upstream truth.
+
+    A missing Dataset, Target or Optimizer teacher retains the existing
+    serialized canonical producer protocol. Only already-verified input sets
+    can be processed by isolated model seed workers. Rolling EVIDENCE-only
+    refreshes need no upstream preparation when SCORE is valid.
+    """
+    for seed in seeds:
+        # Read only the canonical snapshot from the existing plan. An extra
+        # SCORE probe here would add an unplanned preflight stage and could
+        # contradict the executor's one fresh validation at execution time.
+        if rolling and seed in score_ready_seeds:
+            continue
+        upstream = _collect_continuous_research_input_plan(settings, seed=seed)
+        if upstream.blocked or any(
+            action.action != "REUSE" for action in upstream.actions
+        ):
+            return False
+    return True
+
+
+def _run_parallel_model_robustness_seeds(
+    settings, *, model_id: str, seeds: tuple[int, ...], rolling: bool,
+    workers: int,
+) -> None:
+    """One bounded pool of *process-isolated* canonical seed producers.
+
+    Threads merely supervise child processes; training and PIT evaluation do
+    not share sys.argv, environment, torch state, or Python GIL. Parent owns
+    the only aggregate publication after every seed passes source validation.
+    """
+    registry: dict[str, subprocess.Popen] = {}
+    registry_lock = Lock()
+    mode = "rolling" if rolling else "forward"
+    with ThreadPoolExecutor(max_workers=min(workers, len(seeds))) as executor:
+        futures = {}
+        for seed in seeds:
+            _unused_model_dir, research_dir = _model_robustness_dirs(
+                settings, seed=seed, rolling=rolling,
+            )
+            command = [
+                sys.executable, "-m", "services.research.breakout_quality_application",
+                "__robustness_seed_worker", "--profile", str(settings.experiment_profile),
+                "--seed", str(int(seed)), "--mode", mode,
+            ]
+            future = executor.submit(
+                run_logged_training_process,
+                command=command,
+                log_path=research_dir / "robustness_seed_worker.log",
+                cwd=PROJECT_ROOT,
+                registry=registry,
+                registry_lock=registry_lock,
+                registry_key=f"{model_id}:{mode}:{seed}",
+                failure_prefix=f"{model_id} {mode} Robustness seed={seed} producer failed",
+            )
+            futures[future] = int(seed)
+        try:
+            for future in as_completed(futures):
+                seed = futures[future]
+                future.result()
+                # Each child publishes from another process. Invalidate the
+                # parent-only read cache before the complete source owner probes
+                # this seed, just as the original serial lifecycle does.
+                if rolling:
+                    invalidate_rolling_model_source_cache()
+                # Other children can still be running; inspect only this seed's
+                # complete canonical evidence, never an unverified file existence.
+                source = _observe_model_robustness_seed(
+                    settings, seed=seed, rolling=rolling,
+                )
+                if source.verified_evidence is None:
+                    raise RuntimeError(
+                        f"{model_id} {mode} Robustness seed={seed} worker completed "
+                        f"without verified Standard SOP: {source.reason}"
+                    )
+                print(
+                    styled_workflow_status("[DONE]") + " " + _model_identity_text(model_id)
+                    + f" | seed={seed} | {mode} Standard SOP READY"
+                )
+        except BaseException:
+            terminate_registered_training_processes(registry, registry_lock)
+            for future in futures:
+                future.cancel()
+            raise
+
+
 def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int:
     """Run model robustness through the same model list, SOP builder and comparison renderer."""
 
@@ -5039,9 +5164,45 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
                 seed_states, readiness = _plan_model_robustness_snapshot(
                     settings, seeds=seeds, rolling=rolling,
                 )
+        parallel_seed_builds: set[int] = set()
+        seed_workers = int(BREAKOUT_QUALITY_MODEL_ROBUSTNESS_SEED_WORKERS)
+        if seed_workers < 1 or seed_workers > 4:
+            raise ValueError("Model Robustness seed workers must be between 1 and 4")
+        pending_seeds = tuple(
+            int(item.seed) for item in readiness.seeds
+            if force_rebuild or not item.readiness.evidence_ready
+        )
+        if (
+            seed_workers > 1
+            and len(pending_seeds) > 1
+            and not force_rebuild
+            and _parallel_model_robustness_inputs_reusable(
+                settings, seeds=pending_seeds, rolling=rolling,
+                score_ready_seeds=tuple(
+                    int(item.seed) for item in readiness.seeds
+                    if item.readiness.plan.action_by_key["SCORE"].action == "REUSE"
+                ),
+            )
+        ):
+            # The canonical input authority has no pending writes. Workers may
+            # now FIT/score independent seeds without sharing Python state.
+            print(
+                styled_workflow_status("[ROBUSTNESS PARALLEL]")
+                + f" {_model_identity_text(model_id)} | workers={min(seed_workers, len(pending_seeds))}"
+                + f" | pending seeds={len(pending_seeds)}"
+            )
+            _run_parallel_model_robustness_seeds(
+                settings, model_id=model_id, seeds=pending_seeds,
+                rolling=rolling, workers=seed_workers,
+            )
+            parallel_seed_builds.update(pending_seeds)
+            affected_completed_models.update(range(len(completed)))
+            preceding_model_mutation = True
+            if rolling:
+                invalidate_rolling_model_source_cache()
         seed_payloads = []
         source_reports = []
-        built = False
+        built = bool(parallel_seed_builds)
         for seed_index, ((seed, payload, path, reason), seed_stage) in enumerate(
             zip(seed_states, readiness.seeds, strict=True), start=1,
         ):
@@ -5060,7 +5221,16 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
                     mode="rolling" if rolling else "forward", source=current,
                 )
             seed_text = _seed_progress_text(seed, seed_index, len(seeds))
-            if force_rebuild or not seed_stage.readiness.evidence_ready:
+            if seed in parallel_seed_builds:
+                payload, path, reason = (
+                    _load_rolling_robustness_seed(settings, seed=seed)
+                    if rolling else _load_forward_robustness_seed(settings, seed=seed)
+                )
+                if payload is None:
+                    raise RuntimeError(
+                        f"{model_id} parallel robustness seed={seed} result invalid: {reason}"
+                    )
+            elif force_rebuild or not seed_stage.readiness.evidence_ready:
                 verifying_fit = bool(
                     not rolling and not force_rebuild
                     and seed_stage.readiness.display_action == "VERIFY FIT"
@@ -5107,7 +5277,7 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
                     + f" | {mode_label} Standard SOP READY"
                 )
                 built = True
-            else:
+            elif seed not in parallel_seed_builds:
                 print(
                     styled_workflow_status("[REUSE]")
                     + " " + _model_identity_text(model_id)
@@ -5260,6 +5430,18 @@ def main(argv=None) -> int:
         raise ValueError("breakout quality command 不可為空")
     if command.startswith("-"):
         raise ValueError(f"不支援的參數: {command}")
+
+    if command == "__robustness_seed_worker":
+        parser = argparse.ArgumentParser(prog="internal robustness seed worker")
+        parser.add_argument("--profile", required=True)
+        parser.add_argument("--seed", type=int, required=True)
+        parser.add_argument("--mode", choices=("forward", "rolling"), required=True)
+        worker_args = parser.parse_args(args[1:])
+        return _execute_prepared_model_robustness_seed(
+            profile=worker_args.profile,
+            seed=int(worker_args.seed),
+            rolling=worker_args.mode == "rolling",
+        )
 
     if command == "menu":
         if len(args) > 1:

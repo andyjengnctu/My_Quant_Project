@@ -12,7 +12,8 @@ import argparse
 import gzip
 from collections import deque
 from contextlib import ExitStack, contextmanager, nullcontext
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from multiprocessing import get_context
 from dataclasses import asdict
 from datetime import datetime, timezone
 import hashlib
@@ -1538,6 +1539,30 @@ def _run_strategy_only_benchmark_unit(
         ),
         "baseline_dir": str(output_dir.resolve()),
     }
+
+
+def _run_strategy_only_baseline_job(job: dict[str, Any]) -> dict[str, Any]:
+    """Replay an independent seed/arm baseline in a Windows-spawned worker.
+
+    Only the parent resolves and, if needed, builds canonical strategy params.
+    Each worker consumes its verified binding in a distinct work directory;
+    aggregate scientific evidence is committed by the parent, never by workers.
+    """
+    settings = get_strategy_comparison_settings(str(job["profile_id"]))
+    return _run_strategy_only_benchmark_unit(
+        settings=settings,
+        arm=settings.arms[str(job["arm_id"])],
+        seed=int(job["seed"]),
+        seed_order=int(job["seed_order"]),
+        arm_order=int(job["arm_order"]),
+        params_path=Path(str(job["params_path"])),
+        comparison_start=str(job["comparison_start"]),
+        comparison_end=str(job["comparison_end"]),
+        output_dir=Path(str(job["output_dir"])),
+        strategy_param_sha256=str(job["strategy_param_sha256"]),
+        strategy_param_manifest_sha256=str(job["strategy_param_manifest_sha256"]),
+        param_evaluation_mode=str(job["param_evaluation_mode"]),
+    )
 
 def _required_parameter_sources(
     fixed_arms: tuple[StrategyComparisonArm, ...],
@@ -5356,6 +5381,9 @@ def _prepare_strategy_only_baseline_units(
 
     strategy_only_actions: dict[tuple[str, int], str] = {}
     strategy_results_changed = False
+    # Plan every independent replay first. The only possible upstream mutation
+    # (canonical parameter publication) remains serial, before workers start.
+    baseline_jobs: list[tuple[tuple[str, int], str, dict[str, Any]]] = []
     for seed_order, seed in enumerate(seeds, start=1):
         for arm in strategy_only_arms:
             unit_identity = (arm.arm_id, int(seed))
@@ -5406,24 +5434,64 @@ def _prepare_strategy_only_baseline_units(
                 benchmark_bindings[unit_identity] = refreshed
                 binding = refreshed
 
-            result = _run_strategy_only_benchmark_unit(
-                settings=settings,
-                arm=arm,
-                seed=int(seed),
-                seed_order=int(seed_order),
-                arm_order=int(stochastic_order[arm.arm_id]),
-                params_path=Path(binding["path"]),
-                comparison_start=str(comparison_start),
-                comparison_end=str(comparison_end),
-                output_dir=output_dir,
-                strategy_param_sha256=str(binding["sha256"]),
-                strategy_param_manifest_sha256=str(binding["manifest_sha256"]),
-                param_evaluation_mode=str(binding["evaluation_mode"]),
+            baseline_jobs.append((unit_identity, action, {
+                "profile_id": str(settings.profile_id),
+                "arm_id": str(arm.arm_id),
+                "seed": int(seed),
+                "seed_order": int(seed_order),
+                "arm_order": int(stochastic_order[arm.arm_id]),
+                "params_path": str(binding["path"]),
+                "comparison_start": str(comparison_start),
+                "comparison_end": str(comparison_end),
+                "output_dir": str(output_dir.resolve()),
+                "strategy_param_sha256": str(binding["sha256"]),
+                "strategy_param_manifest_sha256": str(binding["manifest_sha256"]),
+                "param_evaluation_mode": str(binding["evaluation_mode"]),
+            }))
+
+    workers = max(1, int(cfg.cpu_replay_workers))
+    pool = (
+        ProcessPoolExecutor(max_workers=min(workers, len(baseline_jobs)), mp_context=get_context("spawn"))
+        if workers > 1 and len(baseline_jobs) > 1 else None
+    )
+    try:
+        if pool is not None:
+            print(
+                styled_workflow_status("[BASELINE REPLAY PARALLEL]")
+                + f" workers={min(workers, len(baseline_jobs))} | units={len(baseline_jobs)}"
             )
-            benchmark_baseline_dirs[unit_identity] = str(output_dir.resolve())
+            future_units = {
+                pool.submit(_run_strategy_only_baseline_job, job): unit_identity
+                for unit_identity, _action, job in baseline_jobs
+            }
+            completed_results: dict[tuple[str, int], dict[str, Any]] = {}
+            for future in as_completed(future_units):
+                completed_results[future_units[future]] = future.result()
+            results = (completed_results[unit_identity] for unit_identity, _, _ in baseline_jobs)
+        else:
+            # Preserve the established direct-call behavior for single-worker
+            # runs and tests that inject a validated settings snapshot.
+            results = (
+                _run_strategy_only_benchmark_unit(
+                    settings=settings, arm=settings.arms[str(job["arm_id"])],
+                    seed=int(job["seed"]), seed_order=int(job["seed_order"]),
+                    arm_order=int(job["arm_order"]),
+                    params_path=Path(str(job["params_path"])),
+                    comparison_start=str(job["comparison_start"]),
+                    comparison_end=str(job["comparison_end"]),
+                    output_dir=Path(str(job["output_dir"])),
+                    strategy_param_sha256=str(job["strategy_param_sha256"]),
+                    strategy_param_manifest_sha256=str(job["strategy_param_manifest_sha256"]),
+                    param_evaluation_mode=str(job["param_evaluation_mode"]),
+                )
+                for _, _, job in baseline_jobs
+            )
+        # Preserve original seed/arm ordering and single-writer scientific
+        # checkpoints regardless of the order in which child processes finish.
+        for (unit_identity, action, job), result in zip(baseline_jobs, results, strict=True):
+            benchmark_baseline_dirs[unit_identity] = str(Path(job["output_dir"]).resolve())
             if action == "REBUILD_CONTEXT":
                 continue
-
             rows = [
                 row for row in rows
                 if (str(row.get("arm_id")), int(row.get("seed"))) != unit_identity
@@ -5437,6 +5505,9 @@ def _prepare_strategy_only_baseline_units(
             scientific_completed.add(unit_identity)
             completed.add(unit_identity)
             strategy_results_changed = True
+    finally:
+        if pool is not None:
+            pool.shutdown(wait=True, cancel_futures=True)
     if strategy_results_changed:
         seed_frame_checkpoint = pd.DataFrame(rows)
         yearly_frame_checkpoint = pd.DataFrame(yearly_rows)
@@ -5676,9 +5747,17 @@ def _execute_robustness_under_lock(
     current_training: dict[str, Any] | None = None
     active_trainers: dict[str, subprocess.Popen] = {}
     active_trainers_lock = Lock()
-    replay_executor = ThreadPoolExecutor(
-        max_workers=int(cfg.cpu_replay_workers),
-        thread_name_prefix="strategy-replay",
+    # CPU-heavy portfolio Replay must use independent processes: Python threads
+    # otherwise serialize the Python hot path under the GIL. Each job writes to
+    # its already isolated arm/seed work directory; the coordinator alone commits
+    # aggregate rows, manifests and reports. Windows spawn is required explicitly.
+    replay_executor = (
+        ProcessPoolExecutor(
+            max_workers=int(cfg.cpu_replay_workers),
+            mp_context=get_context("spawn"),
+        )
+        if int(cfg.cpu_replay_workers) > 1
+        else ThreadPoolExecutor(max_workers=1, thread_name_prefix="strategy-replay")
     )
     training_executor = ThreadPoolExecutor(
         max_workers=int(cfg.gpu_train_workers),
