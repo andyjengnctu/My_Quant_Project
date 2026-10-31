@@ -6903,6 +6903,64 @@ class OracleMinTradePreflightArtifactReuseCases(TestCase):
             self.assertEqual(len(completed["oracles"]), 16)
             self.assertEqual(before, {p: p.read_bytes() for p in store.cache_root.rglob("*.json")})
 
+    def test_current_receipts_import_existing_truth_with_distinct_rank_and_replay_hashes(self):
+        """Completed receipts use binary score hashing; NPZ uses rank text hashing."""
+        from services.audit import daily_trade40_oracle as daily
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = self._fixture(root, encoding_only=True, truth=True,
+                                    source_sha=daily.truth_producer_fingerprint())
+            store = fixture[6]
+            original = {path: path.read_bytes() for path in (*store.cache_root.rglob("*.json"), *fixture[-1])}
+            for seed in fixture[2]:
+                saved, = store.existing_completed_identities(seed=seed, target="DailyUniversal_MinTrade_NetR")
+                policy = saved["replay_policy"]
+                self.assertNotEqual(policy["perfect_score_sha256"], policy["hindsight_target_contract"]["rank_sha256"])
+            with patch("services.audit.oracle_replay_artifacts.verified_daily_truth_witness",
+                       side_effect=AssertionError("Current receipts must not scan numerical truth arrays")):
+                decisions = self._preflight(root, fixture)
+            self.assertEqual(set(decisions.values()), {"REUSE"})
+            self.assertEqual(len(decisions), 136)
+            self.assertEqual(len(list((store.cache_root.parent / "truth_index").rglob("*.json"))),
+                             len(fixture[2]) * len(oracle._oracle_comparison_plan(fixture[0])["daily_recipes"]))
+            with patch.object(np, "load", side_effect=AssertionError("Warm plan must not open NPZ")):
+                self.assertEqual(self._preflight(root, fixture), decisions)
+            self.assertEqual(original, {path: path.read_bytes() for path in original})
+
+    def test_current_receipt_import_still_rejects_corrupt_truth_metadata(self):
+        from core.file_integrity import canonical_json_sha256
+        from services.audit import daily_trade40_oracle as daily
+        for corruption, expected in (("filename", "filename/identity"),
+                                     ("payload", "metadata payload SHA"),
+                                     ("rank", "producer rank SHA")):
+            with self.subTest(corruption=corruption), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                fixture = self._fixture(root, encoding_only=True, truth=True,
+                                        source_sha=daily.truth_producer_fingerprint())
+                path = fixture[-1][0]
+                if corruption == "filename":
+                    renamed = path.with_name(path.name.rsplit("_", 1)[0] + "_" + "f" * 64 + ".npz")
+                    path.rename(renamed)
+                else:
+                    with np.load(path, allow_pickle=False) as archive:
+                        fields = {name: archive[name] for name in archive.files}
+                    meta = json.loads(str(fields["metadata"].item()))
+                    if corruption == "payload":
+                        meta["payload_sha256"] = "f" * 64
+                    else:
+                        meta["score_sha256"] = "f" * 64
+                        meta["payload_sha256"] = canonical_json_sha256({key: meta[key] for key in (
+                            "schema", "identity", "evidence", "score_sha256")})
+                    fields["metadata"] = np.asarray(json.dumps(meta))
+                    with path.open("wb") as stream:
+                        np.savez_compressed(stream, **fields)
+                folder = fixture[6].cache_root.parent
+                original = {p: p.read_bytes() for p in folder.rglob("*")
+                            if p.is_file() and p.suffix in {".npz", ".json"}}
+                with self.assertRaisesRegex(ValueError, expected):
+                    self._preflight(root, fixture)
+                self.assertEqual(original, {p: p.read_bytes() for p in original})
+
     def test_encoding_only_receipts_reuse_without_opening_any_truth_table(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -7079,6 +7137,27 @@ class OracleEffectiveArtifactContractCases(TestCase):
         plan = oracle._oracle_comparison_plan(_ACTIVE_ORACLE_DEFINITION)
         return {recipe: source_implementation_sha256(recipe, str(_ACTIVE_ORACLE_DEFINITION.source[provider]))
                 for recipe, provider, *_ in (*plan["recipes"].values(), *plan["daily_recipes"].values())}
+
+    def test_source_attestation_uses_one_inventory_without_importing_its_producer(self):
+        import builtins
+        from services.audit import daily_trade40_oracle as daily
+        from services.audit import mintrade_truth_source_attestation as attest
+        expected = daily.truth_producer_fingerprint()
+        for function in (attest._truth_source_inventory, attest._mintrade_source_fingerprint_proof,
+                         attest._encoding_equivalent_mintrade_sources):
+            function.cache_clear()
+            self.addCleanup(function.cache_clear)
+        original_import = builtins.__import__
+        def import_without_producer(name, *args, **kwargs):
+            if name == "services.audit.daily_trade40_oracle":
+                self.fail("Source attestation must not import the producer it certifies")
+            return original_import(name, *args, **kwargs)
+        with patch.object(builtins, "__import__", side_effect=import_without_producer):
+            inventory = attest._truth_source_inventory()
+            current, equivalents = attest._mintrade_source_fingerprint_proof()
+        self.assertEqual(inventory, daily._TRUTH_SOURCE_MODULES)
+        self.assertEqual(current, expected, "Dependency inversion must preserve the original producer identity")
+        self.assertIn(current, equivalents)
 
     def _changed_source(self, relative, transform):
         from services.research.oracle_artifact_contract import source_implementation_sha256

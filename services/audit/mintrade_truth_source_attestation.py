@@ -126,7 +126,30 @@ def attested_mintrade_source_sha256(relative: str, path: Path) -> str:
 
 
 @lru_cache(maxsize=1)
-def _encoding_equivalent_mintrade_sources() -> frozenset[str]:
+def _truth_source_inventory() -> tuple[str, ...]:
+    """Read the producer's one declarative inventory without importing it.
+
+    Attestation must not depend back on the producer it certifies. Reading
+    this literal declaration preserves its single ownership and all original
+    producer bytes; no source alias or numerical implementation is changed.
+    """
+    path = Path(__file__).resolve().parents[2] / _SOURCE_OWNER
+    tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
+    declarations = [node.value for node in tree.body if isinstance(node, ast.Assign)
+                    and any(isinstance(target, ast.Name) and target.id == "_TRUTH_SOURCE_MODULES"
+                            for target in node.targets)]
+    if len(declarations) != 1:
+        raise ValueError("Oracle truth source inventory missing or duplicated")
+    inventory = ast.literal_eval(declarations[0])
+    if not isinstance(inventory, tuple) or not inventory or any(
+            not isinstance(name, str) or Path(name).is_absolute() or ".." in Path(name).parts
+            for name in inventory):
+        raise ValueError("Oracle truth source inventory must be relative source paths")
+    return inventory
+
+
+@lru_cache(maxsize=1)
+def _mintrade_source_fingerprint_proof() -> tuple[str, frozenset[str]]:
     """Reconstruct LF/CRLF closures of the *executing* economic sources.
 
     No historical SHA is accepted on its own. Every delegated source stays
@@ -134,20 +157,21 @@ def _encoding_equivalent_mintrade_sources() -> frozenset[str]:
     The nested daily-source exception is the existing exact encoding proof.
     This does not accept an unknown older formula, fee or eligibility change.
     """
-    from services.audit.daily_trade40_oracle import _TRUTH_SOURCE_MODULES
     from services.audit.oracle_score_artifacts import (
         oracle_daily_source_fingerprint,
         _CERTIFIED_LF_PRICE_SOURCE_SHA256, _CERTIFIED_CRLF_PRICE_SOURCE_SHA256,
     )
 
     root = Path(__file__).resolve().parents[2]
+    source_modules = _truth_source_inventory()
     daily = oracle_daily_source_fingerprint(root)
     daily_sources = {daily}
     if daily in {_CERTIFIED_LF_PRICE_SOURCE_SHA256, _CERTIFIED_CRLF_PRICE_SOURCE_SHA256}:
         daily_sources.update((_CERTIFIED_LF_PRICE_SOURCE_SHA256,
                               _CERTIFIED_CRLF_PRICE_SOURCE_SHA256))
-    contents = {name: (root / name).read_bytes() for name in _TRUTH_SOURCE_MODULES}
+    contents = {name: (root / name).read_bytes() for name in source_modules}
     result = set()
+    executing = None
     for newline in (None, b"\n", b"\r\n"):
         for raw_owner in (False, True):
             hashes = {}
@@ -161,16 +185,24 @@ def _encoding_equivalent_mintrade_sources() -> frozenset[str]:
                                 else sha256(data).hexdigest())
             for daily_sha in daily_sources:
                 digest = sha256(b"canonical_daily_source\0" + daily_sha.encode("ascii") + b"\n")
-                for name in _TRUTH_SOURCE_MODULES:
+                for name in source_modules:
                     digest.update(name.encode("utf-8") + b"\0")
                     digest.update(hashes[name].encode("ascii") + b"\n")
                 result.add(digest.hexdigest())
-    return frozenset(result)
+                if newline is None and not raw_owner and daily_sha == daily:
+                    executing = digest.hexdigest()
+    if executing is None:
+        raise ValueError("Oracle truth source closure has no executing fingerprint")
+    return executing, frozenset(result)
+
+
+@lru_cache(maxsize=1)
+def _encoding_equivalent_mintrade_sources() -> frozenset[str]:
+    return _mintrade_source_fingerprint_proof()[1]
 
 
 def mintrade_sources_equivalent(recorded: str | None, current: str | None) -> bool:
     """Prove reviewed source equivalence; all data/economic inputs stay strict."""
-    from services.audit.daily_trade40_oracle import truth_producer_fingerprint
     from core.file_integrity import is_sha256_hex
 
     if not is_sha256_hex(recorded) or not is_sha256_hex(current):
@@ -178,7 +210,7 @@ def mintrade_sources_equivalent(recorded: str | None, current: str | None) -> bo
     if recorded == current:
         return True
     equivalents = _encoding_equivalent_mintrade_sources()
-    return (current == truth_producer_fingerprint()
+    return (current == _mintrade_source_fingerprint_proof()[0]
             and current in equivalents
             and recorded in equivalents | _archived_default_oracle_sources())
 
@@ -191,7 +223,6 @@ def _archived_default_oracle_sources() -> frozenset[str]:
     changes this reconstruction. An unknown loader/primitive revision fails
     closed. This certificate cannot bless the earlier, different trade labels.
     """
-    from services.audit.daily_trade40_oracle import _TRUTH_SOURCE_MODULES
     from services.audit.oracle_score_artifacts import oracle_daily_source_fingerprint
 
     root = Path(__file__).resolve().parents[2]
@@ -201,7 +232,7 @@ def _archived_default_oracle_sources() -> frozenset[str]:
             or compute_file_sha256(root / relative) != reviewed_primitive):
         return frozenset()
     digest = sha256(b"canonical_daily_source\0" + previous_daily.encode("ascii") + b"\n")
-    for name in _TRUTH_SOURCE_MODULES:
+    for name in _truth_source_inventory():
         value = (previous_primitive if name == relative else
                  attested_mintrade_source_sha256(name, root / name))
         digest.update(name.encode("utf-8") + b"\0")

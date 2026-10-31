@@ -114,10 +114,14 @@ class OracleTruthReferences:
             return
         if replay_identity is not None:
             wanted = replay_identity["replay_policy"]["hindsight_target_contract"]
-            score_sha = replay_identity["replay_policy"]["perfect_score_sha256"]
         else:
             wanted = _evidence(evidence)
-            score_sha = wanted["rank_sha256"]
+        # NPZ score_sha256 signs the producer's text-encoded rank sequence.
+        # Replay perfect_score_sha256 signs a binary float64 score map. They
+        # cover the same values using DIFFERENT encodings and cannot be equal
+        # by contract. The signed Replay carries the producer's rank_sha256
+        # explicitly; that is the matching provenance for an NPZ reference.
+        score_sha = wanted["rank_sha256"]
         target = str(wanted["target_id"])
         for path in sorted((self.cache_root / str(context["seed"])).glob(target + "_*.npz")):
             # Opening metadata.npy does not decompress tickers/days/scores.
@@ -132,9 +136,13 @@ class OracleTruthReferences:
                     "calendar_sha256", "teacher", "target_id", "label_id", "mature_eligible_rows")):
                 continue
             payload = {key: meta.get(key) for key in ("schema", "identity", "evidence", "score_sha256")}
-            if (path != self.origin_path(identity) or meta.get("payload_sha256") != canonical_json_sha256(payload)
-                    or meta.get("score_sha256") != score_sha):
-                raise ValueError("Oracle signed truth metadata/filename is corrupt")
+            relative = path.relative_to(self.cache_root).as_posix()
+            if path != self.origin_path(identity):
+                raise ValueError(f"Oracle signed truth filename/identity mismatch: {relative}")
+            if meta.get("payload_sha256") != canonical_json_sha256(payload):
+                raise ValueError(f"Oracle signed truth metadata payload SHA mismatch: {relative}")
+            if meta.get("score_sha256") != score_sha:
+                raise ValueError(f"Oracle signed truth producer rank SHA mismatch: {relative}")
             self._publish(context, identity, original)
             return
 
