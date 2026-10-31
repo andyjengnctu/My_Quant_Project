@@ -8,12 +8,15 @@ materialized on demand by the existing breakout-quality feature function.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
+from config.breakout_quality import BREAKOUT_QUALITY_DAILY_REAL_PATH_WORKERS
 from core.market_data_raw_quote import raw_research_observed_ohlc_mask
 
 from core.breakout_quality_runtime import (
@@ -1205,6 +1208,70 @@ def load_aligned_observed_raw_quote_frame(
     return result
 
 
+def _eligible_daily_stock_positions(
+    frame: pd.DataFrame, *, first_pos: int,
+    sample_start: pd.Timestamp, sample_end: pd.Timestamp,
+    benchmark_index: pd.DatetimeIndex,
+) -> tuple[np.ndarray, np.ndarray, pd.DatetimeIndex]:
+    """One canonical stock/day eligibility rule, for serial and CPU workers."""
+    candidate_positions = np.arange(first_pos, len(frame), dtype=np.int64)
+    frame_dates = pd.DatetimeIndex(frame.index).normalize()
+    candidate_dates = frame_dates.take(candidate_positions)
+    in_period = (candidate_dates >= sample_start) & (candidate_dates <= sample_end)
+    benchmark_pos = benchmark_index.get_indexer(candidate_dates)
+    feature_eligible = np.asarray(in_period, dtype=bool) & (benchmark_pos >= first_pos)
+    return (
+        candidate_positions[feature_eligible],
+        benchmark_pos[feature_eligible], frame_dates,
+    )
+
+
+def _eligible_real_path_materialization_positions(
+    positions: np.ndarray, frame_dates: pd.DatetimeIndex, *,
+    first_effective_date: str, sample_end: pd.Timestamp,
+) -> np.ndarray:
+    """Use the exact same next-executable-day teacher gate in both passes."""
+    next_positions = np.minimum(positions + 1, len(frame_dates) - 1)
+    return (
+        (positions + 1 < len(frame_dates))
+        & (frame_dates.take(next_positions) >= pd.Timestamp(first_effective_date))
+        & (frame_dates.take(next_positions) <= sample_end)
+    )
+
+
+def _precompute_real_path_ticker(
+    ticker: str, path: Path, *, min_rows: int, first_pos: int,
+    sample_start: pd.Timestamp, sample_end: pd.Timestamp,
+    benchmark_index: pd.DatetimeIndex, first_effective_date: str,
+    exchange_calendar: pd.DatetimeIndex, target_materializer,
+) -> bool:
+    """Build only the verified execution cache; do not publish model/score truth."""
+    try:
+        frame = load_dataset_frame(path, ticker, min_rows=min_rows)
+    except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError):
+        return False
+    if len(frame) <= first_pos:
+        return False
+    positions, _benchmark_positions, frame_dates = _eligible_daily_stock_positions(
+        frame, first_pos=first_pos, sample_start=sample_start,
+        sample_end=sample_end, benchmark_index=benchmark_index,
+    )
+    if not len(positions):
+        return False
+    eligible = _eligible_real_path_materialization_positions(
+        positions, frame_dates, first_effective_date=first_effective_date,
+        sample_end=sample_end,
+    )
+    if not np.any(eligible):
+        return False
+    target_materializer(
+        frame=frame, positions=positions[eligible], ticker=ticker,
+        exchange_calendar=exchange_calendar, fit_cutoff=sample_end,
+        research_end_is_terminal=True,
+    )
+    return True
+
+
 def load_daily_universal_ranker_data(
     *,
     filter_id: str,
@@ -1444,6 +1511,38 @@ def load_daily_universal_ranker_data(
         progress_callback(0, stock_input_count, 0, 0)
 
     stock_inputs = [(str(raw_ticker), path) for raw_ticker, path in csv_inputs if str(raw_ticker) != benchmark_ticker]
+    workers = int(BREAKOUT_QUALITY_DAILY_REAL_PATH_WORKERS)
+    if trade_path_mode and workers < 1:
+        raise ValueError("Daily real-path workers must be >= 1")
+    if trade_path_mode and workers > 1 and len(stock_inputs) > 1:
+        # Independent stock execution is CPU/GIL-bound. Parallelize only its
+        # disposable per-stock cache; the original serial consumer below still
+        # reconstructs the identical rows in canonical ticker/date order.
+        started = monotonic()
+        finished = 0
+        last_bucket = -1
+        with ProcessPoolExecutor(max_workers=min(workers, len(stock_inputs))) as pool:
+            futures = [pool.submit(
+                _precompute_real_path_ticker, ticker, path,
+                min_rows=min_rows, first_pos=first_pos,
+                sample_start=sample_start, sample_end=sample_end,
+                benchmark_index=benchmark_index,
+                first_effective_date=str(target_lineage["first_effective_date"]),
+                exchange_calendar=exchange_calendar,
+                target_materializer=target_materializer,
+            ) for ticker, path in stock_inputs]
+            for future in as_completed(futures):
+                future.result()  # Fail fast on a broken verified PIT/teacher path.
+                finished += 1
+                bucket = finished * 10 // len(stock_inputs)
+                if bucket > last_bucket and (bucket > 0 or finished == len(stock_inputs)):
+                    print(
+                        f"[RealPath CPU] {finished}/{len(stock_inputs)} stocks "
+                        f"({100 * finished // len(stock_inputs)}%) | "
+                        f"elapsed={monotonic() - started:.0f}s",
+                        flush=True,
+                    )
+                    last_bucket = bucket
     for ticker, path in stock_inputs:
         processed_tickers += 1
         try:
@@ -1459,14 +1558,12 @@ def load_daily_universal_ranker_data(
             if progress_callback is not None:
                 progress_callback(processed_tickers, stock_input_count, target_valid_so_far, skipped_tickers)
             continue
-        candidate_positions = np.arange(first_pos, len(frame), dtype=np.int64)
-        frame_dates = pd.DatetimeIndex(frame.index).normalize()
-        candidate_dates = frame_dates.take(candidate_positions)
-        in_period = (candidate_dates >= sample_start) & (candidate_dates <= sample_end)
-        benchmark_pos = benchmark_index.get_indexer(candidate_dates)
-        feature_eligible = np.asarray(in_period, dtype=bool) & (benchmark_pos >= first_pos)
-        local_positions = candidate_positions[feature_eligible]
-        local_benchmark_positions = benchmark_pos[feature_eligible]
+        local_positions, local_benchmark_positions, frame_dates = (
+            _eligible_daily_stock_positions(
+                frame, first_pos=first_pos, sample_start=sample_start,
+                sample_end=sample_end, benchmark_index=benchmark_index,
+            )
+        )
         if len(local_positions) == 0:
             skipped_tickers += 1
             if progress_callback is not None:
@@ -1506,12 +1603,10 @@ def load_daily_universal_ranker_data(
             local_label_end_dates = np.full(
                 len(local_positions), np.datetime64("NaT"), dtype="datetime64[D]"
             )
-            eligible = (
-                (local_positions + 1 < len(frame))
-                & (frame_dates.take(np.minimum(local_positions + 1, len(frame) - 1))
-                   >= pd.Timestamp(str(target_lineage["first_effective_date"])))
-                & (frame_dates.take(np.minimum(local_positions + 1, len(frame) - 1))
-                   <= sample_end)
+            eligible = _eligible_real_path_materialization_positions(
+                local_positions, frame_dates,
+                first_effective_date=str(target_lineage["first_effective_date"]),
+                sample_end=sample_end,
             )
             if eligible.any():
                 completed = target_materializer(

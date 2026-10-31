@@ -1231,6 +1231,87 @@ class FormalMinTrade40TrainingSourcePreflightCases(unittest.TestCase):
         self.assertEqual(float(labels.raw_net_r[0]), 1.25)
 
 
+    def test_trade_path_cache_reuses_one_canonical_batch_across_targets_and_recovers_corruption(self):
+        """Execution memoization cannot replace the PIT teacher or change outcomes."""
+        from services.breakout_quality import formal_mintrade40_pit_source as owner
+
+        days, source = self._source()
+        _days, frame, _params, _period = fixture(count=140, start="2018-01-02")
+        base = dict(
+            source=source, expected_seed=source.seed, frame=frame,
+            positions=np.array([70, 75, 90], dtype=np.int64),
+            ticker="2330", exchange_calendar=days, fit_cutoff=days[110],
+            research_end_is_terminal=True,
+        )
+
+        for horizon in (40, None):
+            net_r_baseline = owner.materialize_formal_mintrade40_pit_labels(
+                **base, horizon_sessions=horizon, outcome_metric="net_r",
+            )
+            net_pnl_baseline = owner.materialize_formal_mintrade40_pit_labels(
+                **base, horizon_sessions=horizon, outcome_metric="net_pnl",
+            )
+            with TemporaryDirectory() as root:
+                with patch.object(
+                    owner, "compute_counterfactual_trade40_batch",
+                    wraps=compute_counterfactual_trade40_batch,
+                ) as simulator:
+                    net_r_cached = owner.materialize_formal_mintrade40_pit_labels(
+                        **base, horizon_sessions=horizon, outcome_metric="net_r",
+                        cache_project_root=root,
+                    )
+                    net_pnl_cached = owner.materialize_formal_mintrade40_pit_labels(
+                        **base, horizon_sessions=horizon, outcome_metric="net_pnl",
+                        cache_project_root=root,
+                    )
+                    self.assertEqual(simulator.call_count, 1)
+                    self.assertTrue(simulator.call_args.kwargs["include_net_pnl"])
+                    for field in ("raw_net_r", "completed", "matured", "maturity_dates"):
+                        np.testing.assert_array_equal(
+                            getattr(net_r_cached, field), getattr(net_r_baseline, field),
+                        )
+                        np.testing.assert_array_equal(
+                            getattr(net_pnl_cached, field), getattr(net_pnl_baseline, field),
+                        )
+                    np.testing.assert_array_equal(
+                        net_pnl_cached.raw_net_pnl, net_pnl_baseline.raw_net_pnl,
+                    )
+                    # The disposable store does not authorize skipping source
+                    # verification, even after a previously successful hit.
+                    with self.assertRaisesRegex(
+                        owner.FormalMinTrade40PITBlocked, "Seed-specific",
+                    ):
+                        owner.materialize_formal_mintrade40_pit_labels(
+                            **{**base, "expected_seed": source.seed + 1},
+                            horizon_sessions=horizon, outcome_metric="net_r",
+                            cache_project_root=root,
+                        )
+                    self.assertEqual(simulator.call_count, 1)
+
+                    shard = next(Path(root).rglob("*.npz"))
+                    shard.write_bytes(b"broken cache shard")
+                    owner.materialize_formal_mintrade40_pit_labels(
+                        **base, horizon_sessions=horizon, outcome_metric="net_r",
+                        cache_project_root=root,
+                    )
+                    self.assertEqual(simulator.call_count, 2)
+                    owner.materialize_formal_mintrade40_pit_labels(
+                        **base, horizon_sessions=horizon, outcome_metric="net_pnl",
+                        cache_project_root=root,
+                    )
+                    self.assertEqual(simulator.call_count, 2)
+
+                    changed = frame.copy()
+                    changed.loc[days[70], "Volume"] *= 1.1
+                    owner.materialize_formal_mintrade40_pit_labels(
+                        **{**base, "frame": changed},
+                        horizon_sessions=horizon, outcome_metric="net_r",
+                        cache_project_root=root,
+                    )
+                    self.assertEqual(simulator.call_count, 3)
+                    self.assertEqual(len(list(Path(root).rglob("*.npz"))), 1)
+
+
 
 class FormalMinTrade40OptimizerAttestationCases(unittest.TestCase):
     """Source adapter must accept only a genuine-shape, as-of Min Optimizer lineage."""

@@ -287,6 +287,7 @@ def resolve_formal_mintrade40_loader_kwargs(
             materialize_formal_mintrade40_pit_labels,
             source=source, expected_seed=int(seed),
             horizon_sessions=horizon_sessions, outcome_metric=outcome_metric,
+            cache_project_root=str(Path(project_root).resolve()),
         ),
         'target_lineage': {
             'contract': 'formal_mintrade40_seed_historical_plus_p16_v1',

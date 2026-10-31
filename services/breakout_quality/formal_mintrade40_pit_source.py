@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from hashlib import sha256
+from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
@@ -21,6 +22,9 @@ from core.portfolio_param_runtime import build_portfolio_params_signature
 from filters.breakout_quality.daily_trade40_target import (
     ExecutableMinPeriod, resolve_historical_min_period,
     HORIZON_SESSIONS, compute_counterfactual_trade40_batch,
+)
+from services.breakout_quality.formal_mintrade_outcome_cache import (
+    load_or_compute_formal_mintrade_outcomes,
 )
 
 
@@ -237,6 +241,7 @@ def materialize_formal_mintrade40_pit_labels(
     research_end_is_terminal: bool = False,
     horizon_sessions: int | None = HORIZON_SESSIONS,
     outcome_metric: str = "net_r",
+    cache_project_root: str | None = None,
 ) -> FormalMinTrade40PITLabels:
     """Compute historical FIT-safe canonical Min NetR or NetPnL, fixed/full-cycle.
 
@@ -283,12 +288,34 @@ def materialize_formal_mintrade40_pit_labels(
     market_pos = calendar.get_indexer(dates.take(positions))
     if np.any(market_pos < 0):
         raise FormalMinTrade40PITBlocked("Training stock-day is absent from exchange calendar")
-    batch = compute_counterfactual_trade40_batch(
-        frame, positions, ticker=ticker, schedule=source.schedule,
-        exchange_calendar=calendar, horizon_sessions=horizon_sessions,
-        research_cutoff=cutoff, include_net_pnl=outcome_metric == "net_pnl",
-        signal_state_reset_date=source.oos_start_date,
-    )
+    def compute_batch(*, include_net_pnl: bool):
+        return compute_counterfactual_trade40_batch(
+            frame, positions, ticker=ticker, schedule=source.schedule,
+            exchange_calendar=calendar, horizon_sessions=horizon_sessions,
+            research_cutoff=cutoff, include_net_pnl=include_net_pnl,
+            signal_state_reset_date=source.oos_start_date,
+        )
+
+    if cache_project_root is not None:
+        # Fixed-horizon and Full-cycle outcomes each memoize their own exact
+        # broker execution. NetR and NetPnL share the corresponding batch.
+        # Retain a disposable, verified per-ticker execution batch; the PIT
+        # source preflight and maturity/NULL gates above and below are ALWAYS
+        # evaluated afresh, regardless of cache hits.
+        batch = load_or_compute_formal_mintrade_outcomes(
+            project_root=Path(cache_project_root), frame=frame,
+            positions=positions, ticker=ticker, exchange_calendar=calendar,
+            source_sha256=source.param_sha256, seed=source.seed,
+            schedule_signatures=tuple(
+                f"{period.start}:{period.end}:{period.params_signature}:{published}"
+                for period, published in zip(source.schedule, source.publication_dates)
+            ),
+            horizon_sessions=horizon_sessions, research_cutoff=cutoff,
+            signal_state_reset_date=source.oos_start_date,
+            compute=lambda: compute_batch(include_net_pnl=True),
+        )
+    else:
+        batch = compute_batch(include_net_pnl=outcome_metric == "net_pnl")
     if len(batch.target_raw_r) != len(positions):
         raise FormalMinTrade40PITBlocked("Canonical MinTrade40 label count mismatch")
     full_horizon_matured = (
