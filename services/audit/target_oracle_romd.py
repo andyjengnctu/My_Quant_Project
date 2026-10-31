@@ -2271,6 +2271,49 @@ def _execute_single_stage_missing(
                 raise OracleBlockedError(
                     f"Oracle {target} seed={seed} changed after preflight; refusing silent replanning"
                 )
+            # Source versions can change without changing any submitted
+            # MinTrade score or economic outcome. After the CURRENT producer
+            # has verified the full truth table, avoid needlessly replaying the
+            # same Broker-Cash portfolio. This is not preflight REUSE: the
+            # historical result remains RUN until the current truth exists.
+            if (not is_metric_backfill and target in plan["daily_sources"]
+                    and action.action(seed, target) == "RUN"
+                    and isinstance(evidence, Mapping)
+                    and target not in execution_gates):
+                verified: list[tuple[Mapping[str, Any], dict[str, Any]]] = []
+                for old_identity in cache.existing_completed_identities(
+                        seed=seed, target=target):
+                    old_observation = cache.resolve_verified_daily_truth_revision(
+                        expected=identity, saved=old_identity,
+                        verified_evidence=evidence,
+                        score_sha256=policy["perfect_score_sha256"],
+                    )
+                    if old_observation is not None:
+                        verified.append((old_identity, old_observation))
+                if verified:
+                    from core.file_integrity import canonical_json_sha256
+                    if len({canonical_json_sha256(row) for _old, row in verified}) != 1:
+                        raise OracleBlockedError(
+                            f"Oracle {target} seed={seed}: signed economic observations "
+                            "conflict for a fully verified current MinTrade score"
+                        )
+                    try:
+                        certified = cache.write_verified_daily_truth_revision(
+                            expected=identity, saved=verified[0][0],
+                            verified_evidence=evidence,
+                            score_sha256=policy["perfect_score_sha256"],
+                        )
+                    except ValueError as exc:
+                        raise OracleBlockedError(
+                            f"Oracle {target} seed={seed} truth-certified Replay cannot be sealed"
+                        ) from exc
+                    if certified is None or certified != verified[0][1]:
+                        raise OracleBlockedError("Oracle certified economic observations differ")
+                    out[key] = certified
+                    if not quiet:
+                        print(f"[REUSE] seed={seed} {target} | current truth verified; "
+                              "historical signed Portfolio preserved", flush=True)
+                    continue
             if is_metric_backfill:
                 original_identity, original_observation = metric_backfill[key]
                 current_saved, _ = cache.resolve_completed(

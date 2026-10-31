@@ -973,28 +973,185 @@ class OracleReplayStore:
             return None
         return self.with_win_rate(saved, obs)
 
-    def read(self, identity: Mapping[str, Any]) -> dict[str, Any] | None:
+    def resolve_verified_daily_truth_revision(
+        self, *, expected: Mapping[str, Any], saved: Mapping[str, Any],
+        verified_evidence: Mapping[str, Any], score_sha256: str,
+    ) -> dict[str, Any] | None:
+        """REUSE after the CURRENT MinTrade truth Producer has verified its output.
+
+        Unlike a source-SHA compatibility table, this path cannot certify an
+        old score using only historical declarations: the caller must have
+        loaded or built current-source truth, checked every stock-day score
+        against its actual keys/SHA, and constructed `expected` from that
+        evidence. Only then can the old signed Replay be reused without
+        re-executing Portfolio. All original cache bytes remain immutable.
+        """
+        if (not is_sha256_hex(score_sha256)
+                or expected.get("target") != saved.get("target")
+                or expected.get("seed") != saved.get("seed")):
+            return None
+        old_policy = saved.get("replay_policy")
+        new_policy = expected.get("replay_policy")
+        if not isinstance(old_policy, Mapping) or not isinstance(new_policy, Mapping):
+            return None
+        old_truth = old_policy.get("hindsight_target_contract")
+        new_truth = new_policy.get("hindsight_target_contract")
+        if not isinstance(old_truth, Mapping) or not isinstance(new_truth, Mapping):
+            return None
+        if (old_policy.get("perfect_score_sha256") != score_sha256
+                or new_policy.get("perfect_score_sha256") != score_sha256
+                or not is_sha256_hex(new_truth.get("truth_source_sha256"))
+                or verified_evidence.get("truth_source_sha256") !=
+                    new_truth["truth_source_sha256"]):
+            return None
+        # The producer's full current evidence is an independent second
+        # witness. Do not let a caller invent a source-equivalent identity
+        # from a self-consistent old Replay receipt alone.
+        evidence_fields = (
+            "target_id", "label_id", "profile_id", "rank_policy",
+            "rank_sha256", "raw_label_sha256", "dataset_summary_sha256",
+            "calendar_sha256", "teacher", "mature_eligible_rows",
+            "research_cutoff", "score_start_date", "censored_rank_last_rows",
+        )
+        if any(verified_evidence.get(field) != new_truth.get(field)
+               for field in evidence_fields):
+            return None
+        if any(not is_sha256_hex(new_truth.get(field)) for field in
+               ("raw_label_sha256", "rank_sha256", "calendar_sha256",
+                "dataset_summary_sha256")):
+            return None
+        teacher = new_truth.get("teacher")
+        if (not isinstance(teacher, Mapping)
+                or teacher.get("seed") != expected["seed"]
+                or teacher.get("param_identity_sha256") != expected.get("param_sha256")):
+            return None
+        if set(old_truth) != set(new_truth):
+            return None
+        # Preserve the historic science. Source-code SHA is the ONLY allowed
+        # difference; price, membership, P16, NetR/NetPnL label, rank, cash
+        # accounting, time window and the extra Positive gate stay strict.
+        if any(old_truth.get(field) != value for field, value in new_truth.items()
+               if field != "truth_source_sha256"):
+            return None
+        normalized = _v2_presentation_identity(saved, expected)
+        normalized = dict(normalized)
+        policy = dict(normalized.get("replay_policy") or {})
+        policy_truth = dict(policy.get("hindsight_target_contract") or {})
+        if policy_truth != _execution_replay_policy({
+            "hindsight_target_contract": old_truth,
+        }).get("hindsight_target_contract"):
+            return None
+        policy_truth["truth_source_sha256"] = new_truth["truth_source_sha256"]
+        policy["hindsight_target_contract"] = policy_truth
+        normalized["replay_policy"] = policy
+        if normalized.get("benchmark") != expected.get("benchmark"):
+            if not benchmark_seed_execution_equivalent(
+                    recorded_benchmark=str(normalized.get("benchmark") or ""),
+                    active_benchmark=str(expected.get("benchmark") or ""),
+                    seed=int(expected["seed"])):
+                return None
+            normalized["benchmark"] = expected["benchmark"]
+        if normalized != dict(expected):
+            return None
+        # Requires signed identity/observation and explicit Win Rate evidence.
+        observed = self.read(saved)
+        if observed is None:
+            return None
+        return self.with_win_rate(saved, observed)
+
+    def write_verified_daily_truth_revision(
+        self, *, expected: Mapping[str, Any], saved: Mapping[str, Any],
+        verified_evidence: Mapping[str, Any], score_sha256: str,
+    ) -> dict[str, Any] | None:
+        """Seal the exact present-day execution identity after one authorized verification.
+
+        The old receipt remains byte-identical.  A future preflight can reuse
+        the new certified identity without materializing the daily label table
+        again; its certificate always points to the immutable signed origin.
+        """
+        result = self.resolve_verified_daily_truth_revision(
+            expected=expected, saved=saved, verified_evidence=verified_evidence,
+            score_sha256=score_sha256,
+        )
+        if result is None:
+            return None
+        origin_observation = self.read(saved)
+        if origin_observation is None:
+            return None
+        certificate = {
+            "schema_version": 1,
+            "origin_identity": dict(saved),
+            "origin_observation_sha256": canonical_json_sha256(origin_observation),
+            "verified_observation_sha256": canonical_json_sha256(result),
+            "full_truth_evidence_sha256": canonical_json_sha256(verified_evidence),
+            "score_sha256": score_sha256,
+            "truth_source_sha256": expected["replay_policy"]["hindsight_target_contract"]["truth_source_sha256"],
+        }
+        self.write(expected, result, origin="certified_identical_signed_daily_truth_replay",
+                   reuse_certificate=certificate)
+        persisted = self.read(expected)
+        if persisted != result:
+            raise ValueError("Oracle attested source revision observation differs after publication")
+        return result
+
+    def read(self, identity: Mapping[str, Any], *,
+             _seen: frozenset[str] = frozenset()) -> dict[str, Any] | None:
         path = self._path(identity)
         if not path.is_file():
             return None
+        identity_sha = canonical_json_sha256(identity)
+        if identity_sha in _seen:
+            raise ValueError("Oracle replay reuse certificate contains an identity cycle")
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             if (payload.get("cache_schema") != identity.get("cache_schema")
                     or identity.get("cache_schema") not in (_LEGACY_CACHE_SCHEMA, _CACHE_SCHEMA)
                     or payload.get("identity") != dict(identity)
-                    or payload.get("identity_sha256") != canonical_json_sha256(identity)):
+                    or payload.get("identity_sha256") != identity_sha):
                 raise ValueError("Oracle cache identity mismatch")
             observation = _validate_observation(payload["observation"], target=identity["target"], seed=identity["seed"])
             if payload.get("observation_sha256") != canonical_json_sha256(observation):
                 raise ValueError("Oracle cached observation SHA256 mismatch")
+            if payload.get("origin") == "certified_identical_signed_daily_truth_replay":
+                certificate = payload.get("reuse_certificate")
+                if (not isinstance(certificate, dict)
+                        or certificate.get("schema_version") != 1
+                        or not isinstance(certificate.get("origin_identity"), dict)
+                        or not is_sha256_hex(certificate.get("full_truth_evidence_sha256"))
+                        or not is_sha256_hex(certificate.get("origin_observation_sha256"))
+                        or not is_sha256_hex(certificate.get("verified_observation_sha256"))
+                        or not is_sha256_hex(certificate.get("truth_source_sha256"))
+                        or payload.get("reuse_certificate_sha256") != canonical_json_sha256(certificate)):
+                    raise ValueError("Oracle source-revision certificate malformed")
+                origin_identity = certificate["origin_identity"]
+                truth = identity.get("replay_policy", {}).get("hindsight_target_contract", {})
+                if (certificate["truth_source_sha256"] != truth.get("truth_source_sha256")
+                        or certificate["score_sha256"] != identity.get("replay_policy", {}).get("perfect_score_sha256")
+                        or certificate["verified_observation_sha256"] != canonical_json_sha256(observation)
+                        or origin_identity.get("seed") != identity.get("seed")
+                        or origin_identity.get("target") != identity.get("target")
+                        or origin_identity == dict(identity)):
+                    raise ValueError("Oracle source-revision certificate binding mismatch")
+                signed_origin = self.read(origin_identity, _seen=_seen | {identity_sha})
+                if (signed_origin is None or canonical_json_sha256(signed_origin) !=
+                        certificate["origin_observation_sha256"]):
+                    raise ValueError("Oracle attested historical replay receipt is missing or changed")
+                verified_origin = self.with_win_rate(origin_identity, signed_origin)
+                if verified_origin != observation:
+                    raise ValueError("Oracle certified old and new replay observations differ")
+            elif "reuse_certificate" in payload or "reuse_certificate_sha256" in payload:
+                raise ValueError("Oracle unsupported replay certificate origin")
             return observation
         except (OSError, ValueError, KeyError, TypeError, OverflowError) as exc:
             raise ValueError("Oracle existing replay cache is corrupt or conflicting; fail closed") from exc
 
-    def write(self, identity: Mapping[str, Any], observation: Mapping[str, Any], *, origin: str) -> None:
+    def write(self, identity: Mapping[str, Any], observation: Mapping[str, Any], *,
+              origin: str, reuse_certificate: Mapping[str, Any] | None = None) -> None:
         if identity.get("cache_schema") != _CACHE_SCHEMA:
             raise ValueError("Oracle historical replay cache is read-only")
         record = _validate_observation(observation, target=identity["target"], seed=identity["seed"])
+        if (origin == "certified_identical_signed_daily_truth_replay") != (reuse_certificate is not None):
+            raise ValueError("Oracle source-revision receipt requires a verifiable certificate")
         path = self._path(identity)
         path.parent.mkdir(parents=True, exist_ok=True)
         # The same-identity lock and atomic replacement avoid partial reads and
@@ -1013,6 +1170,9 @@ class OracleReplayStore:
                 "observation_sha256": canonical_json_sha256(record),
                 "origin": str(origin),
             }
+            if reuse_certificate is not None:
+                payload["reuse_certificate"] = dict(reuse_certificate)
+                payload["reuse_certificate_sha256"] = canonical_json_sha256(reuse_certificate)
             temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
             try:
                 temporary.write_text(
