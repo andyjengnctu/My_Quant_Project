@@ -7,6 +7,10 @@ without duplicating loss, epoch-selection, refit, or inference semantics.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+from hashlib import sha256
+import json
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +35,89 @@ from filters.breakout_quality.profile_ranker_data import load_profile_continuous
 from services.breakout_quality import ranker_training as ranker_api
 from services.breakout_quality.price_input_source import resolve_feature_price_source
 from services.breakout_quality.trade_count_source import resolve_trade_count_feature_source
+
+
+# Execution-only, single-workflow handoff. No persistent artifact, model identity
+# or REUSE state is published here. Only an explicitly scoped PIT build->audit
+# may reuse the already-computed canonical stock/day bundle.
+_PIT_TRADE_PATH_HANDOFF: ContextVar[dict | None] = ContextVar(
+    "pit_trade_path_bundle_handoff", default=None,
+)
+
+
+@contextmanager
+def same_workflow_pit_bundle_handoff():
+    """Bound a model-build/Audit data handoff to exactly one authorized run."""
+    token = _PIT_TRADE_PATH_HANDOFF.set({})
+    try:
+        yield
+    finally:
+        _PIT_TRADE_PATH_HANDOFF.reset(token)
+
+
+def _bundle_data_witness(bundle: ContinuousRankerDataBundle) -> str:
+    """Detect mutation of canonical Target/sample evidence while model FIT runs."""
+    digest = sha256()
+    for values in (bundle.raw_target, bundle.target_valid, bundle.group_context):
+        arr = np.ascontiguousarray(np.asarray(values))
+        digest.update(str(arr.shape).encode("ascii"))
+        digest.update(str(arr.dtype).encode("ascii"))
+        digest.update(arr.tobytes())
+    digest.update(pd.util.hash_pandas_object(bundle.group_table, index=True).to_numpy(
+        dtype=np.uint64,
+    ).tobytes())
+    digest.update(json.dumps(bundle.target_manifest, ensure_ascii=False,
+                             sort_keys=True, default=str).encode("utf-8"))
+    return digest.hexdigest()
+
+
+def _handoff_source_is_current(
+    *, root: Path, filter_id: str, bundle: ContinuousRankerDataBundle,
+    summary_sha256: str, data_witness: str,
+) -> bool:
+    """Recheck canonical input *content*, dataset bytes and policy before reuse.
+
+    Any mismatch is a cache miss: the ordinary loader remains the sole
+    authority for a changed/stale source. An in-memory handoff must not use
+    source mtime or the score manifest's presence as its only evidence.
+    """
+    from filters.breakout_quality.artifacts import build_file_manifest
+    from filters.breakout_quality.source_inventory import build_source_data_inventory
+    from filters.breakout_quality.splits import resolve_breakout_quality_outer_policy
+    from filters.breakout_quality.workflow_io import dataset_paths
+    from core.file_integrity import compute_file_sha256
+
+    paths = dataset_paths(filter_id)
+    if compute_file_sha256(paths.summary) != summary_sha256:
+        return False
+    if (build_source_data_inventory(root, str(bundle.summary["dataset"]))
+            != bundle.summary.get("source_data_inventory")):
+        return False
+    artifact_records = bundle.summary.get("source_dataset_artifacts")
+    if not isinstance(artifact_records, dict):
+        return False
+    for name, path in paths.artifact_paths().items():
+        if build_file_manifest(path) != artifact_records.get(name):
+            return False
+    source_range = bundle.summary.get("source_data_date_range") or {}
+    if (resolve_breakout_quality_outer_policy(
+            root, source_data_end_date=str(source_range["end"]),
+        ) != bundle.outer_policy):
+        return False
+    return _bundle_data_witness(bundle) == data_witness
+
+
+def _handoff_key(
+    *, root: Path, filter_id: str, model_architecture: str,
+    experiment_profile: str, seed: int | None, target_lineage: dict,
+) -> str:
+    payload = {
+        "root": str(root.resolve()), "filter_id": str(filter_id),
+        "architecture": str(model_architecture), "profile": str(experiment_profile),
+        "seed": seed, "target_lineage": target_lineage,
+    }
+    return sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                             default=str).encode("utf-8")).hexdigest()
 
 
 
@@ -76,9 +163,49 @@ def load_continuous_ranker_data(
         project_root=kwargs.get('project_root', Path(__file__).resolve().parents[2]),
         seed=seed, authorized_build=authorized_target_dependency_build,
     ))
-    return load_profile_continuous_ranker_data(
+    handoff = _PIT_TRADE_PATH_HANDOFF.get()
+    # Only the verified real-path, same-seed source without external feature
+    # dependencies can be handed off. Every call above still validates the
+    # canonical Optimizer/teacher provenance before a handoff is considered.
+    eligible_handoff = (
+        handoff is not None and kwargs.get("target_materializer") is not None
+        and isinstance(kwargs.get("target_lineage"), dict)
+        and alternate is None and activity is None
+        and not allow_stale_source and not authorized_target_dependency_build
+    )
+    key = None
+    if eligible_handoff:
+        key = _handoff_key(
+            root=Path(kwargs.get("project_root", Path(__file__).resolve().parents[2])),
+            filter_id=filter_id, model_architecture=model_architecture,
+            experiment_profile=experiment_profile, seed=seed,
+            target_lineage=kwargs["target_lineage"],
+        )
+        held = handoff.get("bundle")
+        if held is not None and held["key"] == key:
+            # Source-content attestation is independent of the prior FIT. If
+            # the dataset changed, the existing canonical provider reruns.
+            if _handoff_source_is_current(
+                root=Path(kwargs.get("project_root", Path(__file__).resolve().parents[2])),
+                filter_id=filter_id, bundle=held["bundle"],
+                summary_sha256=held["summary_sha256"],
+                data_witness=held["data_witness"],
+            ):
+                handoff.pop("bundle", None)  # one shot, never a cross-run cache
+                print("[PIT data] 本次工作已驗證的 Target 資料直接交接 Audit", flush=True)
+                return held["bundle"]
+    bundle = load_profile_continuous_ranker_data(
         **kwargs, feature_price_source=alternate, feature_trade_count_source=activity,
     )
+    if eligible_handoff:
+        from core.file_integrity import compute_file_sha256
+        from filters.breakout_quality.workflow_io import dataset_paths
+        handoff["bundle"] = {
+            "key": key, "bundle": bundle,
+            "summary_sha256": compute_file_sha256(dataset_paths(filter_id).summary),
+            "data_witness": _bundle_data_witness(bundle),
+        }
+    return bundle
 
 
 

@@ -2475,8 +2475,11 @@ class FormalMinTrade40UpstreamPlanRegressionCases(unittest.TestCase):
         with patch.object(app, '_rolling_robustness_score_core_ready', return_value=(False, 'Missing')), \
              patch.object(app, '_prepare_formal_robustness_seed_inputs', return_value=2) as prepare, \
              patch.object(app, '_run_command', side_effect=AssertionError('Cannot run')):
+            # Shared Dataset readiness alone does not certify this seed's
+            # historical Optimizer teacher. False means seed inputs still need
+            # the canonical producer; True is reserved for a verified REUSE plan.
             self.assertEqual(app._build_rolling_robustness_seed(
-                'research', settings, seed=seed, inputs_prepared=True,
+                'research', settings, seed=seed, inputs_prepared=False,
             ), 2)
         prepare.assert_called_once_with('research', settings, seed=seed)
 
@@ -2681,6 +2684,144 @@ class RealPathStrategyCompareDiagnosticsRegressionCases(unittest.TestCase):
         self.assertEqual(float(result.iloc[0]['target_raw_r']), 1.25)
         self.assertTrue(pd.isna(result.iloc[1]['target_raw_r']))
         self.assertEqual(result['breakout_quality_score'].tolist(), [0.7, 0.2])
+
+
+class SameWorkflowRealPathBundleHandoffCases(unittest.TestCase):
+    """Execution-only shortcut may reuse data, never a teacher or PIT authorization."""
+
+    @staticmethod
+    def _invoke(seed=42):
+        from services.breakout_quality.continuous_ranker_pipeline import load_continuous_ranker_data
+        return load_continuous_ranker_data(
+            filter_id="breakout_quality_v1", model_architecture="inception_time_v1",
+            experiment_profile="test_capability_profile", preload_feature_bank=False,
+            allow_stale_source=False, project_root=Path("/isolated_test_root"),
+            seed=seed, authorized_target_dependency_build=False,
+        )
+
+    def _exercise(self, verify_current=True, extra_seed=False):
+        from services.breakout_quality import continuous_ranker_pipeline as loader
+        from services.breakout_quality import trade_path_target_source as source
+        simulated = [SimpleNamespace() for _ in range(4)]
+        with patch.object(loader, "resolve_feature_price_source", return_value=None), \
+             patch.object(loader, "resolve_trade_count_feature_source", return_value=None), \
+             patch.object(source, "loader_kwargs_for_trade_path", return_value={
+                 "target_materializer": lambda **kwargs: None,
+                 "target_lineage": {"seed": 42, "source_sha256": "a" * 64},
+             }) as verified_teacher, \
+             patch.object(loader, "load_profile_continuous_ranker_data",
+                          side_effect=simulated) as canonical, \
+             patch.object(loader, "_bundle_data_witness", return_value="data-witness"), \
+             patch.object(loader, "_handoff_source_is_current",
+                          return_value=verify_current) as source_check, \
+             patch("filters.breakout_quality.workflow_io.dataset_paths",
+                   return_value=SimpleNamespace(summary=Path("/isolated_test_root/summary.json"))), \
+             patch("core.file_integrity.compute_file_sha256", return_value="summary-sha"):
+            with loader.same_workflow_pit_bundle_handoff():
+                first = self._invoke()
+                second = self._invoke()
+                self.assertIs(first, simulated[0])
+                if verify_current:
+                    self.assertIs(second, first)
+                    self.assertEqual(canonical.call_count, 1)
+                    source_check.assert_called_once()
+                    # The in-memory handoff must be consumed exactly once.
+                    third = self._invoke()
+                    self.assertIs(third, simulated[1])
+                else:
+                    self.assertIs(second, simulated[1])
+                    self.assertEqual(canonical.call_count, 2)
+                if extra_seed:
+                    different_seed = self._invoke(seed=778)
+                    self.assertIs(different_seed, simulated[2])
+            outside_scope = self._invoke()
+            self.assertIs(outside_scope, simulated[3 if extra_seed else 2])
+            self.assertEqual(verified_teacher.call_count, canonical.call_count + (1 if verify_current else 0))
+
+    def test_matching_seed_and_verified_source_are_one_shot(self):
+        self._exercise(verify_current=True, extra_seed=True)
+
+    def test_changed_source_falls_back_to_canonical_loader(self):
+        self._exercise(verify_current=False)
+
+
+class SameWorkflowRealPathSourceWitnessCases(unittest.TestCase):
+    """Check actual content/artifact/data-mutation guards, not mocked REUSE."""
+
+    def test_handoff_requires_same_csv_content_and_in_memory_target(self):
+        from filters.breakout_quality.artifacts import build_file_manifest
+        from filters.breakout_quality.source_inventory import build_source_data_inventory
+        from core.file_integrity import compute_file_sha256
+        from services.breakout_quality.continuous_ranker_pipeline import (
+            _bundle_data_witness, _handoff_source_is_current,
+        )
+        import os
+
+        with TemporaryDirectory(prefix="bq_real_path_handoff_") as temporary:
+            root = Path(temporary)
+            data_dir = root / "data" / "tw_stock_data_vip_reduced"
+            data_dir.mkdir(parents=True)
+            csv = data_dir / "2330.csv"
+            csv.write_text("Date,Open,High,Low,Close,Volume\n2023-01-02,1,2,1,2,100\n", encoding="utf-8")
+            original_csv_bytes = csv.read_bytes()
+            source_inventory = build_source_data_inventory(root, "reduced")
+
+            artifacts = root / "artifacts"
+            artifacts.mkdir()
+            feature = artifacts / "feature_bank.npy"
+            feature.write_bytes(b"immutable dataset fixture")
+            summary_file = artifacts / "dataset_summary.json"
+            summary_file.write_text('{"fixture":"valid"}', encoding="utf-8")
+            paths = SimpleNamespace(
+                summary=summary_file,
+                artifact_paths=lambda: {"feature_bank": feature},
+            )
+            outer_policy = {"effective_oos_end_date": "2026-03-02"}
+            bundle = SimpleNamespace(
+                summary={
+                    "dataset": "reduced",
+                    "source_dataset_artifacts": {"feature_bank": build_file_manifest(feature)},
+                    "source_data_inventory": source_inventory,
+                    "source_data_date_range": {"end": "2026-03-02"},
+                },
+                outer_policy=outer_policy,
+                group_table=pd.DataFrame({
+                    "group_index": [0, 1], "ticker": ["2330", "2330"],
+                    "date": pd.to_datetime(["2023-01-02", "2023-01-03"]),
+                }),
+                raw_target=np.asarray([1.2, np.nan], dtype=np.float32),
+                target_valid=np.asarray([True, False], dtype=bool),
+                group_context=np.asarray([[0.0], [1.0]], dtype=np.float32),
+                target_manifest={"target_id": "fixture-trade-path"},
+            )
+            sha = compute_file_sha256(summary_file)
+            witness = _bundle_data_witness(bundle)
+
+            def current():
+                return _handoff_source_is_current(
+                    root=root, filter_id="breakout_quality_v1",
+                    bundle=bundle, summary_sha256=sha, data_witness=witness,
+                )
+
+            with patch("filters.breakout_quality.workflow_io.dataset_paths", return_value=paths), \
+                 patch("filters.breakout_quality.splits.resolve_breakout_quality_outer_policy",
+                       return_value=outer_policy):
+                self.assertTrue(current())
+                bundle.raw_target[0] = 2.3
+                self.assertFalse(current())
+                bundle.raw_target[0] = 1.2
+                self.assertTrue(current())
+                feature.write_bytes(b"mutated dataset fixture")
+                self.assertFalse(current())
+                feature.write_bytes(b"immutable dataset fixture")
+                self.assertTrue(current())
+                before = csv.stat()
+                replacement = original_csv_bytes.replace(b"2023-01-02,1,2", b"2023-01-02,2,2")
+                self.assertEqual(len(replacement), len(original_csv_bytes))
+                csv.write_bytes(replacement)
+                os.utime(csv, ns=(before.st_atime_ns, before.st_mtime_ns))
+                with self.assertRaisesRegex(ValueError, "來源 CSV 內容已變更"):
+                    current()
 
 
 if __name__ == "__main__":

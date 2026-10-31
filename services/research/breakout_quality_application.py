@@ -3487,7 +3487,13 @@ def _run_continuous_pit_profile(
     if pit_dir_override is not None:
         audit_args.extend(["--point-in-time-dir-override", str(pit_dir_override)])
     def _run_build_and_audit(effective_build_args: list[str]) -> int:
-        with _compact_console_scope():
+        from services.breakout_quality.continuous_ranker_pipeline import (
+            same_workflow_pit_bundle_handoff,
+        )
+        # The producer and Audit run synchronously under one authorization.
+        # Only this scope can hand the already-verified Target rows directly
+        # to Audit; the normal loader is used everywhere else.
+        with _compact_console_scope(), same_workflow_pit_bundle_handoff():
             code = _run_command(
                 "build-point-in-time-scores", effective_build_args, program_name=program_name,
                 emit_simple_report=False,
@@ -4849,7 +4855,12 @@ def _build_rolling_robustness_seed(
         build_args.extend(["--train-window-months", str(int(settings.point_in_time_train_window_months))])
 
     def _run(effective_args: list[str]) -> int:
-        with _compact_console_scope():
+        from services.breakout_quality.continuous_ranker_pipeline import (
+            same_workflow_pit_bundle_handoff,
+        )
+        # Rolling Robustness has the same single authorized build->audit lifetime.
+        # The handoff is seed-local even when other seeds run in parallel.
+        with _compact_console_scope(), same_workflow_pit_bundle_handoff():
             code = _run_command(
                 "build-point-in-time-scores", effective_args, program_name=program_name,
                 emit_simple_report=False,

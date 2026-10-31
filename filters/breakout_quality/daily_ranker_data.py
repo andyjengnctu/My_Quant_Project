@@ -1239,37 +1239,60 @@ def _eligible_real_path_materialization_positions(
     )
 
 
-def _precompute_real_path_ticker(
+@dataclass(frozen=True)
+class _PreparedRealPathTicker:
+    """One verified stock preparation, returned to the ordered dataset consumer.
+
+    Workers must never assemble group indices or change the score population.
+    The parent remains the only owner of canonical ticker/date row ordering.
+    """
+
+    frame: pd.DataFrame | None
+    positions: np.ndarray | None = None
+    benchmark_positions: np.ndarray | None = None
+    frame_dates: pd.DatetimeIndex | None = None
+    completed: Any = None
+
+
+def _prepare_real_path_ticker(
     ticker: str, path: Path, *, min_rows: int, first_pos: int,
     sample_start: pd.Timestamp, sample_end: pd.Timestamp,
     benchmark_index: pd.DatetimeIndex, first_effective_date: str,
     exchange_calendar: pd.DatetimeIndex, target_materializer,
-) -> bool:
-    """Build only the verified execution cache; do not publish model/score truth."""
+) -> _PreparedRealPathTicker:
+    """Prepare one canonical ticker once, including the seed/PIT-verified path.
+
+    This replaces the prior write-only parallel cache warmup. A second serial
+    read and materializer call would otherwise repeat all source parsing,
+    eligibility, teacher preflight and cache hash checks for every ticker.
+    """
     try:
         frame = load_dataset_frame(path, ticker, min_rows=min_rows)
     except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError):
-        return False
+        return _PreparedRealPathTicker(frame=None)
     if len(frame) <= first_pos:
-        return False
-    positions, _benchmark_positions, frame_dates = _eligible_daily_stock_positions(
+        return _PreparedRealPathTicker(frame=frame)
+    positions, benchmark_positions, frame_dates = _eligible_daily_stock_positions(
         frame, first_pos=first_pos, sample_start=sample_start,
         sample_end=sample_end, benchmark_index=benchmark_index,
     )
-    if not len(positions):
-        return False
-    eligible = _eligible_real_path_materialization_positions(
-        positions, frame_dates, first_effective_date=first_effective_date,
-        sample_end=sample_end,
+    completed = None
+    if len(positions):
+        eligible = _eligible_real_path_materialization_positions(
+            positions, frame_dates, first_effective_date=first_effective_date,
+            sample_end=sample_end,
+        )
+        if np.any(eligible):
+            completed = target_materializer(
+                frame=frame, positions=positions[eligible], ticker=ticker,
+                exchange_calendar=exchange_calendar, fit_cutoff=sample_end,
+                research_end_is_terminal=True,
+            )
+    return _PreparedRealPathTicker(
+        frame=frame, positions=positions,
+        benchmark_positions=benchmark_positions, frame_dates=frame_dates,
+        completed=completed,
     )
-    if not np.any(eligible):
-        return False
-    target_materializer(
-        frame=frame, positions=positions[eligible], ticker=ticker,
-        exchange_calendar=exchange_calendar, fit_cutoff=sample_end,
-        research_end_is_terminal=True,
-    )
-    return True
 
 
 def load_daily_universal_ranker_data(
@@ -1514,25 +1537,31 @@ def load_daily_universal_ranker_data(
     workers = int(BREAKOUT_QUALITY_DAILY_REAL_PATH_WORKERS)
     if trade_path_mode and workers < 1:
         raise ValueError("Daily real-path workers must be >= 1")
+    prepared_stocks: dict[int, _PreparedRealPathTicker] | None = None
     if trade_path_mode and workers > 1 and len(stock_inputs) > 1:
-        # Independent stock execution is CPU/GIL-bound. Parallelize only its
-        # disposable per-stock cache; the original serial consumer below still
-        # reconstructs the identical rows in canonical ticker/date order.
+        # A worker prepares exactly one ticker. Transfer the sanitized frame
+        # and verified Target to the parent; do NOT run the same preparation
+        # again in a second serial pass. Results are consumed below in the
+        # original stock_inputs order, regardless of completion order.
         started = monotonic()
         finished = 0
         last_bucket = -1
+        prepared_stocks = {}
         with ProcessPoolExecutor(max_workers=min(workers, len(stock_inputs))) as pool:
-            futures = [pool.submit(
-                _precompute_real_path_ticker, ticker, path,
-                min_rows=min_rows, first_pos=first_pos,
-                sample_start=sample_start, sample_end=sample_end,
-                benchmark_index=benchmark_index,
-                first_effective_date=str(target_lineage["first_effective_date"]),
-                exchange_calendar=exchange_calendar,
-                target_materializer=target_materializer,
-            ) for ticker, path in stock_inputs]
-            for future in as_completed(futures):
-                future.result()  # Fail fast on a broken verified PIT/teacher path.
+            future_to_input_index = {
+                pool.submit(
+                    _prepare_real_path_ticker, ticker, path,
+                    min_rows=min_rows, first_pos=first_pos,
+                    sample_start=sample_start, sample_end=sample_end,
+                    benchmark_index=benchmark_index,
+                    first_effective_date=str(target_lineage["first_effective_date"]),
+                    exchange_calendar=exchange_calendar,
+                    target_materializer=target_materializer,
+                ): input_index
+                for input_index, (ticker, path) in enumerate(stock_inputs)
+            }
+            for future in as_completed(future_to_input_index):
+                prepared_stocks[future_to_input_index[future]] = future.result()
                 finished += 1
                 bucket = finished * 10 // len(stock_inputs)
                 if bucket > last_bucket and (bucket > 0 or finished == len(stock_inputs)):
@@ -1543,27 +1572,43 @@ def load_daily_universal_ranker_data(
                         flush=True,
                     )
                     last_bucket = bucket
-    for ticker, path in stock_inputs:
+    for input_index, (ticker, path) in enumerate(stock_inputs):
         processed_tickers += 1
-        try:
-            frame = load_dataset_frame(path, ticker, min_rows=min_rows)
-        except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError):
-            skipped_tickers += 1
-            if progress_callback is not None:
-                progress_callback(processed_tickers, stock_input_count, target_valid_so_far, skipped_tickers)
-            continue
-
+        prepared = None if prepared_stocks is None else prepared_stocks.pop(input_index)
+        if prepared is None:
+            try:
+                frame = load_dataset_frame(path, ticker, min_rows=min_rows)
+            except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError):
+                skipped_tickers += 1
+                if progress_callback is not None:
+                    progress_callback(processed_tickers, stock_input_count, target_valid_so_far, skipped_tickers)
+                continue
+        else:
+            frame = prepared.frame
+            if frame is None:
+                skipped_tickers += 1
+                if progress_callback is not None:
+                    progress_callback(processed_tickers, stock_input_count, target_valid_so_far, skipped_tickers)
+                continue
         if len(frame) <= first_pos:
             skipped_tickers += 1
             if progress_callback is not None:
                 progress_callback(processed_tickers, stock_input_count, target_valid_so_far, skipped_tickers)
             continue
-        local_positions, local_benchmark_positions, frame_dates = (
-            _eligible_daily_stock_positions(
-                frame, first_pos=first_pos, sample_start=sample_start,
-                sample_end=sample_end, benchmark_index=benchmark_index,
+        if prepared is not None:
+            if (prepared.positions is None or prepared.benchmark_positions is None
+                    or prepared.frame_dates is None):
+                raise ValueError("Prepared real-path ticker lacks canonical sample index")
+            local_positions = prepared.positions
+            local_benchmark_positions = prepared.benchmark_positions
+            frame_dates = prepared.frame_dates
+        else:
+            local_positions, local_benchmark_positions, frame_dates = (
+                _eligible_daily_stock_positions(
+                    frame, first_pos=first_pos, sample_start=sample_start,
+                    sample_end=sample_end, benchmark_index=benchmark_index,
+                )
             )
-        )
         if len(local_positions) == 0:
             skipped_tickers += 1
             if progress_callback is not None:
@@ -1609,12 +1654,17 @@ def load_daily_universal_ranker_data(
                 sample_end=sample_end,
             )
             if eligible.any():
-                completed = target_materializer(
-                    frame=frame, positions=local_positions[eligible],
-                    ticker=ticker, exchange_calendar=exchange_calendar,
-                    fit_cutoff=sample_end,
-                    research_end_is_terminal=True,
-                )
+                if prepared is not None:
+                    completed = prepared.completed
+                    if completed is None:
+                        raise ValueError("Prepared real-path ticker lost verified target")
+                else:
+                    completed = target_materializer(
+                        frame=frame, positions=local_positions[eligible],
+                        ticker=ticker, exchange_calendar=exchange_calendar,
+                        fit_cutoff=sample_end,
+                        research_end_is_terminal=True,
+                    )
                 # Primitive-owned numeric field, declared by its verified
                 # source.  NetR keeps its original field and FitKey bytes.
                 value_field = str(target_lineage.get("value_field") or "raw_net_r")
