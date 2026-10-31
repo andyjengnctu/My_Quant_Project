@@ -169,7 +169,7 @@ project/
 
 - `apps/research.py`：Research 的 Target 驗證、模型、Optimizer、比較及 Audit 單一選單入口。
 - `[1] Target 驗證`：正式授權矩陣由 `services/audit/target_oracle_romd.py` 唯一核對；Replay 僅按當次已授權 `(seed, target)` RUN 格子動態分派，每個活躍 Seed 一個獨立程序，Seed 內維持原本 Target 順序及 C96 配對。共用 price-score 真值僅由主程序預先建立，Seed-specific 真值／Portfolio Replay 工件維持各自 Seed 路徑；完整 REUSE 不啟動子程序。並行上限由 `config/audit.py` 的 `TARGET_ORACLE_REPLAY_SEED_WORKERS` 控制（資源設定，不影響科學／工件身分）；不可跨 Seed 重用未驗證工件。
-- Target 工件契約：`services/research/oracle_artifact_contract.py` 持有有效計算／資料／P16／交易契約與完成結果索引；`services/audit/oracle_truth_references.py` 持有 Min 真值的共用消費參照。日常矩陣只核對契約與原始簽章收據，舊格式的完整來源核對限首次匯入；數值真值只由 RUN 消費者讀取並驗證。原始 Replay／NPZ 保留其物理來源 SHA，不把模型清單、報表或 Dataset 發布 metadata 當成執行輸入。計算 revision 是工程失效身分：影響 eligibility、Oracle 截斷／組合、共用 Replay 或未納入數值 owner 投影的執行修復，須調升唯一 owner 中對應 revision；不另立 scientific identity，也不追加舊 producer SHA 通行名單。
+- Target 工件契約：`services/research/oracle_artifact_contract.py` 持有有效計算／資料／P16／交易契約與完成結果索引；`services/audit/oracle_truth_references.py` 持有 Min 真值的共用消費參照。日常矩陣只核對契約與原始簽章收據，舊格式的完整來源核對限首次匯入；數值真值只由 RUN 消費者讀取並驗證。RUN worker 必須攜帶其 Seed／Target 的有效契約；REUSE 由結果索引參照已認證的原始收據，不另複製 Replay 或產生 source-revision 別名收據，歷史證書僅保留讀取驗證。原始 Replay／NPZ 保留其物理來源 SHA，不把模型清單、報表或 Dataset 發布 metadata 當成執行輸入。計算 revision 是工程失效身分：影響 eligibility、Oracle 截斷／組合、共用 Replay 或未納入數值 owner 投影的執行修復，須調升唯一 owner 中對應 revision；不另立 scientific identity，也不追加舊 producer SHA 通行名單。
 - `apps/workbench.py`：GUI / workbench 正式入口，`apps/workbench.py` 為單一 GUI 啟用入口；單股檢視為 K 線圖、交易明細、Console 三個分頁。
 - `apps/smart_downloader.py`：Market Data 更新、Preflight／Bootstrap 入口。
 - `apps/portfolio_sim.py`：投組模擬入口；`apps/vip_scanner.py`：掃描器入口。

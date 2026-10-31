@@ -4046,6 +4046,20 @@ class OracleOnePlanRealCacheCases(TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             store = OracleReplayStore(root, definition.output_subdir)
+            from services.research.oracle_artifact_contract import execution_context, source_calculation_contract
+            recipe, provider = plan["recipes"]["T40"]
+            base_policy = oracle._canonical_oracle_replay_policy(definition, base_arm=baseline, exact_arm=exact)
+            context = execution_context(
+                dataset=settings.dataset, price_sha256=price_sha, param_sha256=param_sha,
+                seed=seed, target="T40", start="2021-01-01", end="2025-12-22", cutoff=str(settings.end_date),
+                max_positions=settings.max_positions, evaluation_mode=str(definition.dimensions["evaluation_mode"]),
+                ranking_policy=exact.dl_runtime_mode, ranking_options=exact.dl_runtime_options,
+                replay_policy={**base_policy, "oracle_parity_implementation": oracle.ORACLE_PARITY_IMPLEMENTATION,
+                               "period_stats_implementation": oracle.PERIOD_STATS_IMPLEMENTATION},
+                score_contract=contracts["T40"], source_contract=source_calculation_contract(
+                    recipe=recipe, profile_id=str(definition.source[provider]),
+                    model_architecture=str(definition.source["model_architecture"])),
+                dataset_inputs=None, execution_gate=None)
             with patch("services.audit.oracle_replay_artifacts.price_inventory_sha256", return_value=price_sha), \
                  patch.object(oracle, "_robustness_artifacts", return_value=(
                      benchmark, [(seed, root/"p16.json")])), \
@@ -4062,8 +4076,8 @@ class OracleOnePlanRealCacheCases(TestCase):
                     preflight_cached={(seed, "C96"): baseline_row},
                     start="2021-01-01", end="2025-12-22", base_arm=baseline,
                     exact_arm=exact, direct_arm=None,
-                    base_policy=oracle._canonical_oracle_replay_policy(
-                        definition, base_arm=baseline, exact_arm=exact), cache=store,
+                    base_policy=base_policy, cache=store,
+                    execution_contexts={(seed, "T40"): context},
                 )
             self.assertEqual(set(result), {(seed, "T40")})
             self.assertEqual(result[(seed,"T40")]["delta_romd_vs_c96"], 12.)
@@ -4072,6 +4086,21 @@ class OracleOnePlanRealCacheCases(TestCase):
             self.assertEqual(calls, [f"Oracle T40 seed={seed}"])
             self.assertIsNotNone(store.existing_completed_identities(seed=seed, target="T40"))
             self.assertEqual(store.existing_completed_identities(seed=seed, target="R40"), ())
+
+    def test_direct_executor_rejects_a_run_without_its_effective_context(self):
+        definition = _ACTIVE_ORACLE_DEFINITION
+        seed, target = 693545351, "C96"
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch("services.audit.oracle_replay_artifacts.price_inventory_sha256",
+                   side_effect=AssertionError("Missing contract must fail before price reads")), \
+             patch.object(oracle, "_run_scenario", side_effect=AssertionError("No unplanned Replay")):
+            with self.assertRaisesRegex(oracle.OracleBlockedError, "effective execution context"):
+                oracle._execute_single_stage_missing(
+                    definition, project_root=Path(tmp), quiet=True, plan={}, contracts={}, current_keys={},
+                    settings=None, robustness=None, price_sha="a" * 64, prepared=[],
+                    decisions={(seed, target): "RUN"}, preflight_cached={},
+                    start="2021-01-01", end="2026-03-02", base_arm=None, exact_arm=None, direct_arm=None,
+                    base_policy={}, cache=None, execution_contexts={})
 
     def test_formal_daily_40d_historical_receipt_reuses_before_truth_producer(self):
         """A signed same-producer receipt survives diagnostic-only schema drift.
@@ -5155,6 +5184,31 @@ class OracleSingleOwnerExecutionCases(TestCase):
             self.assertEqual(len(prompts), 1)
             self.assertIn("REUSE 2 / RUN（需回放）0 / BLOCKED 0", prompts[0])
             _assert_only_reference_metadata_added(self, root, original)
+
+    def test_legacy_reuse_consumes_original_without_copying_a_canonical_receipt(self):
+        from core.file_integrity import canonical_json_sha256
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = self._fixture(root)
+            store = oracle.OracleReplayStore(root, fixture[0].output_subdir)
+            wanted, = store.existing_completed_identities(seed=fixture[2], target="R40")
+            current_path = store._path(wanted)
+            payload = json.loads(current_path.read_text(encoding="utf-8"))
+            historical = {**wanted, "cache_schema": 1, "strategy_settings_fingerprint": "a" * 64}
+            payload.update(cache_schema=1, identity=historical, identity_sha256=canonical_json_sha256(historical))
+            original_path = store._path(historical)
+            original_path.write_text(json.dumps(payload), encoding="utf-8")
+            original = original_path.read_bytes()
+            current_path.unlink()
+            key = (fixture[2], "R40")
+            planned = store.plan_execution({key: wanted})
+            self.assertEqual(planned.action(*key), "REUSE")
+            with patch.object(store, "write", side_effect=AssertionError("REUSE cannot publish another Replay")):
+                result, _origin = planned.execute(*key, lambda: self.fail("REUSE cannot execute a producer"))
+            self.assertEqual(result, payload["observation"])
+            self.assertEqual(original_path.read_bytes(), original)
+            self.assertFalse(current_path.exists())
+
 
     def test_noninteractive_price_and_p16_drift_block_before_science(self):
         for field, changed in (("dataset_sha256", {"price_sha": "e" * 64}),
@@ -6522,7 +6576,7 @@ class OraclePublishedPriceGenerationManifestCases(TestCase):
 
 
 class OracleMinTradeVerifiedRevisionCertificationCases(TestCase):
-    """A current-source full truth witness can seal a prior immutable Replay.
+    """Read historical certificates and certify originals for execution indexes.
 
     These tests supply synthetic producer outputs.  An archived receipt alone
     must never be treated as a current truth or source equivalence certificate.
@@ -6572,7 +6626,32 @@ class OracleMinTradeVerifiedRevisionCertificationCases(TestCase):
         observation = OracleReplayEvidenceReuseCases._observation(target, 693545351)
         return previous, current, current_evidence, observation
 
-    def test_verified_actual_truth_seals_current_identity_without_portfolio_replay(self):
+    @staticmethod
+    def _historical_certificate_fixture(store, old, current, evidence):
+        """AI: Historical format fixture; production has no certificate writer."""
+        from core.file_integrity import canonical_json_sha256
+        original = store.read(old)
+        observation = store.with_win_rate(old, original)
+        certificate = {
+            "schema_version": 1, "origin_identity": dict(old),
+            "origin_observation_sha256": canonical_json_sha256(original),
+            "verified_observation_sha256": canonical_json_sha256(observation),
+            "full_truth_evidence_sha256": canonical_json_sha256(evidence),
+            "score_sha256": current["replay_policy"]["perfect_score_sha256"],
+            "truth_source_sha256": current["replay_policy"]["hindsight_target_contract"]["truth_source_sha256"],
+        }
+        payload = {
+            "cache_schema": current["cache_schema"], "identity": current,
+            "identity_sha256": canonical_json_sha256(current), "observation": observation,
+            "observation_sha256": canonical_json_sha256(observation),
+            "origin": "certified_identical_signed_daily_truth_replay",
+            "reuse_certificate": certificate, "reuse_certificate_sha256": canonical_json_sha256(certificate),
+        }
+        path = store._path(current)
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return path
+
+    def test_historical_certificate_remains_readable_without_portfolio_replay(self):
         from services.audit.oracle_replay_artifacts import OracleReplayStore
         old, new, evidence, result = self._fixtures()
         with tempfile.TemporaryDirectory() as tmp:
@@ -6582,12 +6661,13 @@ class OracleMinTradeVerifiedRevisionCertificationCases(TestCase):
             previous_bytes = previous_receipt.read_bytes()
             self.assertEqual(store.plan_execution({(old["seed"], old["target"]): new},
                 allow_historical_execution_input_drift=True).action(old["seed"], old["target"]), "RUN")
-            certified = store.write_verified_daily_truth_revision(
+            certified = store.resolve_verified_daily_truth_revision(
                 expected=new, saved=old, verified_evidence=evidence,
                 score_sha256=new["replay_policy"]["perfect_score_sha256"],
             )
             self.assertEqual(certified, result)
             self.assertEqual(previous_receipt.read_bytes(), previous_bytes)
+            self._historical_certificate_fixture(store, old, new, evidence)
             plan = store.plan_execution({(old["seed"], old["target"]): new},
                 allow_historical_execution_input_drift=True)
             self.assertEqual(plan.action(old["seed"], old["target"]), "REUSE")
@@ -6633,7 +6713,7 @@ class OracleMinTradeVerifiedRevisionCertificationCases(TestCase):
                     id_copy = copy.deepcopy(new)
                     evidence_copy = copy.deepcopy(evidence)
                     change(id_copy, evidence_copy)
-                    self.assertIsNone(store.write_verified_daily_truth_revision(
+                    self.assertIsNone(store.resolve_verified_daily_truth_revision(
                         expected=id_copy, saved=old, verified_evidence=evidence_copy,
                         score_sha256=new["replay_policy"]["perfect_score_sha256"],
                     ))
@@ -6650,75 +6730,12 @@ class OracleMinTradeVerifiedRevisionCertificationCases(TestCase):
                 row["replay_policy"]["hindsight_target_contract"]["teacher"]["param_identity_sha256"] = "c" * 64
             no_metric_evidence["teacher"]["param_identity_sha256"] = "c" * 64
             store.write(no_metric_old, incomplete, origin="synthetic_no_win_rate")
-            self.assertIsNone(store.write_verified_daily_truth_revision(
+            self.assertIsNone(store.resolve_verified_daily_truth_revision(
                 expected=no_metric_new, saved=no_metric_old,
                 verified_evidence=no_metric_evidence,
                 score_sha256=new["replay_policy"]["perfect_score_sha256"],
             ))
 
-    def test_authorized_current_truth_uses_real_runtime_seam_without_portfolio(self):
-        """RUN materializes canonical current labels but skips duplicate replay.
-
-        External truth bytes are mocked only inside this scenario; the full
-        contract/receipt assertions remain enabled in the real Replay store.
-        """
-        import hashlib
-        import copy
-        from services.audit import oracle_replay_artifacts as artifacts
-        from services.audit import daily_trade40_oracle as trade_truth
-        from filters.breakout_quality import daily_trade40_target as trade_path
-        old, new, evidence, result = self._fixtures()
-        target, seed = old["target"], old["seed"]
-        keys = (("2330", "2022-01-03"), ("2330", "2022-01-04"))
-        scores = {keys[0]: 0.0, keys[1]: 1.0}
-        digest = hashlib.sha256("".join(f"{ticker}|{day}\n" for ticker, day in keys).encode()).hexdigest()
-        definition = _ACTIVE_ORACLE_DEFINITION
-        plan = {
-            "targets": ((target, "fullcycle Min NetR"),),
-            "selectors": {target: "exact"},
-            "daily_sources": {target: target},
-            "daily_recipes": {target: ("daily_trade_path_net_r", "daily_trade40_profile", None)},
-        }
-        settings = SimpleNamespace(dataset="full", max_positions=10,
-                                   start_date="2021-01-01", end_date="2026-03-02")
-        arm = SimpleNamespace(dl_runtime_mode="score", dl_runtime_options={"preserve_k_r0": True})
-        bench = SimpleNamespace(benchmark_id="end_to_end_v1")
-        prepared = [(seed, old["param_sha256"], "rolling_active", "base", "oracle")]
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            store = artifacts.OracleReplayStore(root, definition.output_subdir)
-            store.write(old, result, origin="synthetic_verified_historical_portfolio")
-            previous = store._path(old).read_bytes()
-            with patch.object(artifacts, "price_inventory_sha256", return_value=old["dataset_sha256"]), \
-                 patch.object(oracle, "_robustness_artifacts", return_value=(bench, [(seed, root / "params.json")])), \
-                 patch.object(oracle, "_prepare_oracle_parameters", return_value=(prepared, {})), \
-                 patch.object(oracle, "get_dataset_dir", return_value=str(root)), \
-                 patch.object(trade_path, "resolve_formal_min_param_records", return_value=()), \
-                 patch.object(trade_path, "build_formal_min_execution_schedule", return_value=(("schedule",), {})), \
-                 patch.object(oracle, "_formal_dl_score_start", return_value="2021-01-01"), \
-                 patch.object(oracle, "_validated_execution_gates", return_value={}), \
-                 patch.object(oracle, "_arm_replay_policy", return_value=new["replay_policy"]), \
-                 patch.object(artifacts, "replay_identity", return_value=copy.deepcopy(new)), \
-                 patch.object(trade_truth, "build_daily_universal_trade40_oracle_scores",
-                              return_value=(scores, evidence)) as true_source, \
-                 patch.object(oracle, "_run_scenario", side_effect=AssertionError(
-                      "verified identical historical score cannot execute Portfolio")):
-                observations = oracle._execute_single_stage_missing(
-                    definition, project_root=root, quiet=True,
-                    plan=plan, contracts={target: {}},
-                    current_keys={target: (digest, len(scores), keys[0][1], keys[-1][1])},
-                    settings=settings, robustness=bench,
-                    price_sha=old["dataset_sha256"], prepared=prepared,
-                    decisions={(seed, target): "RUN"}, preflight_cached={},
-                    start="2021-01-01", end="2025-12-22",
-                    base_arm=arm, exact_arm=arm, direct_arm=None, base_policy={}, cache=store,
-                    allow_historical_execution_input_drift=True,
-                )
-            self.assertEqual(true_source.call_count, 1)
-            self.assertEqual(observations, {(seed, target): result})
-            self.assertEqual(store._path(old).read_bytes(), previous)
-            self.assertEqual(store.plan_execution({(seed, target): new},
-                allow_historical_execution_input_drift=True).action(seed, target), "REUSE")
 
     def test_tampered_certificate_cannot_create_reuse(self):
         from core.file_integrity import canonical_json_sha256
@@ -6727,11 +6744,8 @@ class OracleMinTradeVerifiedRevisionCertificationCases(TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store = OracleReplayStore(Path(tmp), "breakout_quality/reusable/target_oracle_romd")
             store.write(old, result, origin="synthetic_historical_signed_replay")
-            self.assertEqual(store.write_verified_daily_truth_revision(
-                expected=new, saved=old, verified_evidence=evidence,
-                score_sha256=new["replay_policy"]["perfect_score_sha256"],
-            ), result)
-            path = store._path(new)
+            path = self._historical_certificate_fixture(store, old, new, evidence)
+            self.assertEqual(store.read(new), result)
             canonical_bytes = path.read_bytes()
             malicious = json.loads(canonical_bytes)
             malicious["reuse_certificate"]["truth_source_sha256"] = "8" * 64
@@ -6741,6 +6755,15 @@ class OracleMinTradeVerifiedRevisionCertificationCases(TestCase):
                 store.read(new)
             path.write_bytes(canonical_bytes)
             self.assertEqual(store.read(new), result)
+
+    def test_historical_source_revision_format_is_read_only(self):
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        _old, current, _evidence, observation = self._fixtures()
+        with tempfile.TemporaryDirectory() as tmp:
+            store = OracleReplayStore(Path(tmp), "breakout_quality/reusable/target_oracle_romd")
+            with self.assertRaisesRegex(ValueError, "read-only"):
+                store.write(current, observation, origin="certified_identical_signed_daily_truth_replay")
+            self.assertFalse(store.cache_root.exists())
 
 
 class OracleMinTradePreflightArtifactReuseCases(TestCase):

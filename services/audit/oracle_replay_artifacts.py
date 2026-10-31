@@ -566,16 +566,8 @@ class OracleReplayExecutionPlan:
         if row.action == "REUSE":
             if row.observation is None:
                 raise ValueError("Oracle REUSE missing completed observation")
-            if row.origin.startswith("verified legacy replay cache"):
-                # Verify the alias again before publishing the canonical key.
-                # This is metadata promotion, NEVER a portfolio computation.
-                refreshed, origin = self._store.resolve_completed(
-                    row.identity,
-                    allow_historical_execution_input_drift=self._allow_historical_execution_input_drift,
-                )
-                if refreshed != row.observation or origin != row.origin:
-                    raise ValueError("Oracle historical replay changed after preflight")
-                self._store.write(row.identity, refreshed, origin="verified_legacy_replay_cache")
+            # AI: Consume the result certified by the one plan; completion
+            # indexes reference its origin without copying a Replay receipt.
             return dict(row.observation), row.origin
         if row.action != "RUN" or row.observation is not None:
             raise ValueError("Invalid canonical Replay execution plan")
@@ -1125,14 +1117,12 @@ class OracleReplayStore:
         self, *, expected: Mapping[str, Any], saved: Mapping[str, Any],
         verified_evidence: Mapping[str, Any], score_sha256: str,
     ) -> dict[str, Any] | None:
-        """REUSE after the CURRENT MinTrade truth Producer has verified its output.
+        """Read-only legacy import against an already verified truth artifact.
 
-        Unlike a source-SHA compatibility table, this path cannot certify an
-        old score using only historical declarations: the caller must have
-        loaded or built current-source truth, checked every stock-day score
-        against its actual keys/SHA, and constructed `expected` from that
-        evidence. Only then can the old signed Replay be reused without
-        re-executing Portfolio. All original cache bytes remain immutable.
+        The planner verifies existing numerical keys/scores before the one
+        authoritative matrix, then builds `expected` from that evidence.
+        Return the original signed observation for its execution-index
+        reference; never create another Replay receipt or replan after RUN.
         """
         if (not is_sha256_hex(score_sha256)
                 or expected.get("target") != saved.get("target")
@@ -1208,41 +1198,6 @@ class OracleReplayStore:
             return None
         return self.with_win_rate(saved, observed)
 
-    def write_verified_daily_truth_revision(
-        self, *, expected: Mapping[str, Any], saved: Mapping[str, Any],
-        verified_evidence: Mapping[str, Any], score_sha256: str,
-    ) -> dict[str, Any] | None:
-        """Seal the exact present-day execution identity after one authorized verification.
-
-        The old receipt remains byte-identical.  A future preflight can reuse
-        the new certified identity without materializing the daily label table
-        again; its certificate always points to the immutable signed origin.
-        """
-        result = self.resolve_verified_daily_truth_revision(
-            expected=expected, saved=saved, verified_evidence=verified_evidence,
-            score_sha256=score_sha256,
-        )
-        if result is None:
-            return None
-        origin_observation = self.read(saved)
-        if origin_observation is None:
-            return None
-        certificate = {
-            "schema_version": 1,
-            "origin_identity": dict(saved),
-            "origin_observation_sha256": canonical_json_sha256(origin_observation),
-            "verified_observation_sha256": canonical_json_sha256(result),
-            "full_truth_evidence_sha256": canonical_json_sha256(verified_evidence),
-            "score_sha256": score_sha256,
-            "truth_source_sha256": expected["replay_policy"]["hindsight_target_contract"]["truth_source_sha256"],
-        }
-        self.write(expected, result, origin="certified_identical_signed_daily_truth_replay",
-                   reuse_certificate=certificate)
-        persisted = self.read(expected)
-        if persisted != result:
-            raise ValueError("Oracle attested source revision observation differs after publication")
-        return result
-
     def read(self, identity: Mapping[str, Any], *,
              _seen: frozenset[str] = frozenset()) -> dict[str, Any] | None:
         path = self._path(identity)
@@ -1295,12 +1250,12 @@ class OracleReplayStore:
             raise ValueError("Oracle existing replay cache is corrupt or conflicting; fail closed") from exc
 
     def write(self, identity: Mapping[str, Any], observation: Mapping[str, Any], *,
-              origin: str, reuse_certificate: Mapping[str, Any] | None = None) -> None:
+              origin: str) -> None:
         if identity.get("cache_schema") != _CACHE_SCHEMA:
             raise ValueError("Oracle historical replay cache is read-only")
         record = _validate_observation(observation, target=identity["target"], seed=identity["seed"])
-        if (origin == "certified_identical_signed_daily_truth_replay") != (reuse_certificate is not None):
-            raise ValueError("Oracle source-revision receipt requires a verifiable certificate")
+        if origin == "certified_identical_signed_daily_truth_replay":
+            raise ValueError("Oracle historical source-revision receipts are read-only; publish an execution reference")
         path = self._path(identity)
         path.parent.mkdir(parents=True, exist_ok=True)
         # The same-identity lock and atomic replacement avoid partial reads and
@@ -1319,9 +1274,6 @@ class OracleReplayStore:
                 "observation_sha256": canonical_json_sha256(record),
                 "origin": str(origin),
             }
-            if reuse_certificate is not None:
-                payload["reuse_certificate"] = dict(reuse_certificate)
-                payload["reuse_certificate_sha256"] = canonical_json_sha256(reuse_certificate)
             temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
             try:
                 temporary.write_text(

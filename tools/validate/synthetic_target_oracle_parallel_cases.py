@@ -33,6 +33,7 @@ def _spawn_worker_probe(seed: int, target: str, project_root: str):
         "project_root": Path(project_root),
         "prepared": [(seed, "sha", "kind", None, None)],
         "decisions": {(seed, target): "RUN"},
+        "execution_contexts": {(seed, target): {"seed": seed, "target": target}},
     }
     observed = {}
 
@@ -113,6 +114,8 @@ class OracleParallelSeedWorkCases(TestCase):
             base_policy={}, cache=None,
             allow_historical_execution_input_drift=True,
             metric_backfill=backfill or {},
+            execution_contexts={key: {"seed": key[0], "target": key[1]}
+                                for key, action in decisions.items() if action == "RUN"},
         )
 
     def _patch_source_validation(self, args):
@@ -149,6 +152,9 @@ class OracleParallelSeedWorkCases(TestCase):
             self.assertEqual(len(result), 3 + len(self.targets) * 2)
             self.assertFalse(any(seed in self.seeds[:5] for seed, _target in result))
             self.assertEqual({seed for seed, _target in result}, set(self.seeds[5:]))
+            for seed, job, _targets in _InstantPool.seen:
+                self.assertEqual(set(job["execution_contexts"]), set(job["decisions"]))
+                self.assertTrue(all(key[0] == seed for key in job["execution_contexts"]))
 
     def test_all_reuse_never_calls_any_producer_or_process(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -174,6 +180,16 @@ class OracleParallelSeedWorkCases(TestCase):
                               backfill={(self.seeds[4], self.targets[-1]): ({}, {})})
             with patch.object(oracle, "_execute_single_stage_missing", side_effect=AssertionError("ran")):
                 with self.assertRaisesRegex(oracle.OracleBlockedError, "authorized RUN"):
+                    oracle._execute_oracle_missing_parallel(self.definition, **args)
+
+    def test_missing_execution_contract_is_blocked_before_any_producer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = self._args(Path(tmp), {(self.seeds[0], self.targets[-1]): "RUN"})
+            args["execution_contexts"] = {}
+            with patch.object(oracle, "price_inventory_sha256", side_effect=AssertionError("No source reads")), \
+                 patch.object(oracle, "_execute_single_stage_missing", side_effect=AssertionError("No Replay")), \
+                 patch.object(oracle, "ProcessPoolExecutor", side_effect=AssertionError("No process")):
+                with self.assertRaisesRegex(oracle.OracleBlockedError, "effective execution context"):
                     oracle._execute_oracle_missing_parallel(self.definition, **args)
 
     def test_failed_worker_does_not_create_unapproved_receipts(self):

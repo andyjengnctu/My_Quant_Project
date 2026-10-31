@@ -2096,12 +2096,12 @@ def _execute_single_stage_missing(
     preflight_cached: Mapping[tuple[int, str], Mapping[str, Any]],
     start: str, end: str, base_arm, exact_arm, direct_arm,
     base_policy: Mapping[str, Any], cache,
+    execution_contexts: Mapping[tuple[int, str], Mapping[str, Any]],
     allow_historical_execution_input_drift: bool = False,
     metric_backfill: Mapping[tuple[int, str], tuple[Mapping[str, Any], Mapping[str, Any]]] | None = None,
     price_targets_for_run: frozenset[str] | None = None,
     price_score_allow_build: bool = True,
     mintrade_stock_workers: int | None = None,
-    execution_contexts: Mapping[tuple[int, str], Mapping[str, Any]] | None = None,
 ) -> dict[tuple[int, str], dict[str, Any]]:
     """Run ONLY the missing Seed x Target cells in the certified one-shot plan.
 
@@ -2118,6 +2118,12 @@ def _execute_single_stage_missing(
     from filters.breakout_quality.daily_trade40_target import (
         build_formal_min_execution_schedule, resolve_formal_min_param_records,
     )
+    required = {key for key, action in decisions.items() if action == "RUN"}
+    if not isinstance(execution_contexts, Mapping) or required.difference(execution_contexts):
+        raise OracleBlockedError("Oracle RUN missing effective execution context; no Target or Portfolio ran")
+    if any(execution_contexts[key].get("seed") != key[0]
+           or execution_contexts[key].get("target") != key[1] for key in required):
+        raise OracleBlockedError("Oracle RUN effective execution context has a different seed/Target")
     # Do not consume preflight decisions if any material input was edited
     # during the interactive confirmation prompt.
     if price_inventory_sha256(project_root, settings.dataset) != price_sha:
@@ -2131,7 +2137,6 @@ def _execute_single_stage_missing(
     if [(p[0], p[1]) for p in current_params] != [(p[0], p[1]) for p in prepared]:
         raise OracleBlockedError("Oracle P16 inputs changed after approved preflight")
     out: dict[tuple[int, str], dict[str, Any]] = {}
-    required = {key for key, action in decisions.items() if action == "RUN"}
     metric_backfill = dict(metric_backfill or {})
     if not set(metric_backfill).issubset(required):
         raise OracleBlockedError("Win-rate supplement escaped the authorized RUN plan")
@@ -2207,7 +2212,7 @@ def _execute_single_stage_missing(
                 evidence = None
                 policy = _arm_replay_policy(
                     definition, plan=plan, target="C96", replay_policy=base_policy,
-                    effective_context=(execution_contexts or {}).get(key),
+                    effective_context=execution_contexts[key],
                 )
             else:
                 arm = direct_arm if plan["selectors"][target] == "direct" else exact_arm
@@ -2245,15 +2250,12 @@ def _execute_single_stage_missing(
                                         lambda msg, name=source_name: print(
                                             f"[Target RUN seed={seed} {name}] {msg}", flush=True),
                                 )
-                            if execution_contexts and key in execution_contexts:
-                                from services.audit.oracle_truth_references import load_or_build_daily_truth
-                                truth_cache[source_key] = load_or_build_daily_truth(
-                                    execution=execution_contexts[key],
-                                    cache_root=project_root / AUDIT_OUTPUT_ROOT / definition.output_subdir / "truth_cache",
-                                    producer=produce_truth,
-                                )
-                            else:
-                                truth_cache[source_key] = produce_truth()
+                            from services.audit.oracle_truth_references import load_or_build_daily_truth
+                            truth_cache[source_key] = load_or_build_daily_truth(
+                                execution=execution_contexts[key],
+                                cache_root=project_root / AUDIT_OUTPUT_ROOT / definition.output_subdir / "truth_cache",
+                                producer=produce_truth,
+                            )
                         except (DailyTrade40OracleBlockedError, ValueError) as exc:
                             raise OracleBlockedError(
                                 f"Oracle missing truth {source_name} seed={seed} BLOCKED: {exc}"
@@ -2285,7 +2287,7 @@ def _execute_single_stage_missing(
                     daily_evidence=evidence,
                     score_sha256=_canonical_score_map_sha256(score_map),
                     score_contract=full_contract, project_root=project_root,
-                    effective_context=(execution_contexts or {}).get(key),
+                    effective_context=execution_contexts[key],
                 )
             identity = replay_identity(
                 dataset=settings.dataset, dataset_sha256=price_sha,
@@ -2303,9 +2305,8 @@ def _execute_single_stage_missing(
                 if (target != "C96" and _canonical_score_map_sha256(score_map) !=
                         original_identity["replay_policy"]["perfect_score_sha256"]):
                     raise OracleBlockedError("Oracle metric supplement score changed after preflight")
-                if execution_contexts and key in execution_contexts:
-                    OracleExecutionIndex(cache)._validate_binding(
-                        execution_contexts[key], original_identity, original_observation)
+                OracleExecutionIndex(cache)._validate_binding(
+                    execution_contexts[key], original_identity, original_observation)
                 # A metric supplement belongs to the original identity. It
                 # must never manufacture a new Replay by adding index fields.
                 identity = dict(original_identity)
@@ -2322,51 +2323,6 @@ def _execute_single_stage_missing(
                 raise OracleBlockedError(
                     f"Oracle {target} seed={seed} changed after preflight; refusing silent replanning"
                 )
-            # Source versions can change without changing any submitted
-            # MinTrade score or economic outcome. After the CURRENT producer
-            # has verified the full truth table, avoid needlessly replaying the
-            # same Broker-Cash portfolio. This is not preflight REUSE: the
-            # historical result remains RUN until the current truth exists.
-            if (not is_metric_backfill and target in plan["daily_sources"]
-                    and action.action(seed, target) == "RUN"
-                    and isinstance(evidence, Mapping)
-                    and target not in execution_gates):
-                verified: list[tuple[Mapping[str, Any], dict[str, Any]]] = []
-                for old_identity in cache.existing_completed_identities(
-                        seed=seed, target=target):
-                    old_observation = cache.resolve_verified_daily_truth_revision(
-                        expected=identity, saved=old_identity,
-                        verified_evidence=evidence,
-                        score_sha256=policy["perfect_score_sha256"],
-                    )
-                    if old_observation is not None:
-                        verified.append((old_identity, old_observation))
-                if verified:
-                    from core.file_integrity import canonical_json_sha256
-                    if len({canonical_json_sha256(row) for _old, row in verified}) != 1:
-                        raise OracleBlockedError(
-                            f"Oracle {target} seed={seed}: signed economic observations "
-                            "conflict for a fully verified current MinTrade score"
-                        )
-                    try:
-                        certified = cache.write_verified_daily_truth_revision(
-                            expected=identity, saved=verified[0][0],
-                            verified_evidence=evidence,
-                            score_sha256=policy["perfect_score_sha256"],
-                        )
-                    except ValueError as exc:
-                        raise OracleBlockedError(
-                            f"Oracle {target} seed={seed} truth-certified Replay cannot be sealed"
-                        ) from exc
-                    if certified is None or certified != verified[0][1]:
-                        raise OracleBlockedError("Oracle certified economic observations differ")
-                    out[key] = certified
-                    if execution_contexts and key in execution_contexts:
-                        OracleExecutionIndex(cache).publish(execution_contexts[key], verified[0][0], certified)
-                    if not quiet:
-                        print(f"[REUSE] seed={seed} {target} | current truth verified; "
-                              "historical signed Portfolio preserved", flush=True)
-                    continue
             if is_metric_backfill:
                 original_identity, original_observation = metric_backfill[key]
                 current_saved, _ = cache.resolve_completed(
@@ -2384,7 +2340,7 @@ def _execute_single_stage_missing(
                 if seed not in positive_raw_cache:
                     from services.audit.oracle_truth_references import load_or_build_positive_truth
                     positive_raw_cache[seed], _ = load_or_build_positive_truth(
-                        execution=(execution_contexts or {}).get(key),
+                        execution=execution_contexts[key],
                         cache_root=project_root / AUDIT_OUTPUT_ROOT / definition.output_subdir / "truth_cache",
                         project_root=project_root, output_subdir=definition.output_subdir,
                         dataset=str(settings.dataset), filter_id=str(definition.source["filter_id"]),
@@ -2458,12 +2414,11 @@ def _execute_single_stage_missing(
                 if not quiet:
                     print(f"[RUN] seed={seed} {target} | completed", flush=True)
             out[key] = result
-            if execution_contexts and key in execution_contexts:
-                physical = cache.completed_origin_identity(
-                    identity, allow_historical_execution_input_drift=allow_historical_execution_input_drift)
-                if physical is None:
-                    raise OracleBlockedError("Oracle completed RUN has no signed physical origin")
-                OracleExecutionIndex(cache).publish(execution_contexts[key], physical, result)
+            physical = cache.completed_origin_identity(
+                identity, allow_historical_execution_input_drift=allow_historical_execution_input_drift)
+            if physical is None:
+                raise OracleBlockedError("Oracle completed RUN has no signed physical origin")
+            OracleExecutionIndex(cache).publish(execution_contexts[key], physical, result)
     if set(out) != required:
         raise OracleBlockedError("Oracle missing-only execution did not complete every RUN cell")
     return out
@@ -2533,9 +2488,9 @@ def _execute_oracle_missing_parallel(
     preflight_cached: Mapping[tuple[int, str], Mapping[str, Any]],
     start: str, end: str, base_arm, exact_arm, direct_arm,
     base_policy: Mapping[str, Any], cache,
+    execution_contexts: Mapping[tuple[int, str], Mapping[str, Any]],
     allow_historical_execution_input_drift: bool = False,
     metric_backfill: Mapping[tuple[int, str], tuple[Mapping[str, Any], Mapping[str, Any]]] | None = None,
-    execution_contexts: Mapping[tuple[int, str], Mapping[str, Any]] | None = None,
 ) -> dict[tuple[int, str], dict[str, Any]]:
     """Schedule the CURRENT certified RUN cells, never a fixed seed range.
 
@@ -2561,6 +2516,8 @@ def _execute_oracle_missing_parallel(
     ))
     if not required:
         return {}
+    if not isinstance(execution_contexts, Mapping) or required.difference(execution_contexts):
+        raise OracleBlockedError("Oracle RUN missing effective execution context; no Target or Portfolio ran")
     if (len(seed_order) != len(set(seed_order))
             or {key[0] for key in required} != set(seed_order)
             or any(key not in required for key in (metric_backfill or {}))):
@@ -2669,6 +2626,8 @@ def _execute_oracle_missing_parallel(
                                        if key[0] == seed}
             job["metric_backfill"] = {key: value for key, value in (metric_backfill or {}).items()
                                       if key[0] == seed}
+            job["execution_contexts"] = {key: value for key, value in execution_contexts.items()
+                                         if key in job["decisions"]}
             job["mintrade_stock_workers"] = worker_quotas[seed]
             future = pool.submit(
                 _oracle_missing_seed_worker, definition, seed=seed,

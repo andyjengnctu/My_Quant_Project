@@ -12,9 +12,7 @@ from __future__ import annotations
 
 import json
 import ast
-import inspect
 import importlib
-import textwrap
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
@@ -152,15 +150,6 @@ class _CalculationSyntax(ast.NodeTransformer):
         if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
             return None
         return self.generic_visit(node)
-
-
-def calculation_syntax(function, *, bound_literals=None) -> str:
-    """Small, executable capability projection; never hash a model loader."""
-    literals = {name: value for name, value in function.__globals__.items()
-                if name.isupper() and isinstance(value, (str, int, float, bool, type(None)))}
-    literals.update(bound_literals or {})
-    tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
-    return canonical_json_sha256(_syntax_payload(_CalculationSyntax(literals).visit(tree)))
 
 
 def _syntax_payload(value):

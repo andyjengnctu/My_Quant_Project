@@ -197,6 +197,27 @@ def execute_synthetic_score_fixture(definition, *, price_scores, daily_scores, k
         observed.append(name)
         return {"name": name}
     end = str(definition.dimensions["oracle_evaluation_end_date"])
+    from services.research.oracle_artifact_contract import execution_context, source_calculation_contract
+    contexts = {}
+    for seed in seeds:
+        for target in contracts:
+            arm = direct if plan["selectors"][target] == "direct" else baseline_arm
+            if target in plan["daily_sources"]:
+                recipe, provider, horizon = plan["daily_recipes"][plan["daily_sources"][target]]
+            else:
+                recipe, provider = plan["recipes"][plan["aliases"].get(target, target)]
+                horizon = None
+            contexts[(seed, target)] = execution_context(
+                dataset=settings.dataset, price_sha256="f" * 64, param_sha256="a" * 64,
+                seed=seed, target=target, start=str(settings.start_date), end=end, cutoff=str(settings.end_date),
+                max_positions=settings.max_positions, evaluation_mode=str(definition.dimensions["evaluation_mode"]),
+                ranking_policy=arm.dl_runtime_mode, ranking_options=arm.dl_runtime_options,
+                replay_policy={**base_policy, "oracle_parity_implementation": oracle.ORACLE_PARITY_IMPLEMENTATION,
+                               "period_stats_implementation": oracle.PERIOD_STATS_IMPLEMENTATION},
+                score_contract=contracts[target], source_contract=source_calculation_contract(
+                    recipe=recipe, profile_id=str(definition.source[provider]), horizon=horizon,
+                    model_architecture=str(definition.source["model_architecture"])),
+                dataset_inputs=None, execution_gate=oracle._validated_execution_gates(definition, plan).get(target))
     def metrics(_result, *, target):
         return {"target": target, "total_return_pct": 5., "annualized_return_pct": 1.,
                 "mdd_pct": 1., "romd": 5., "ev_a_r": .5, "trades": 1, "exposure_pct": 5., "win_rate_pct": 56.0,
@@ -223,7 +244,7 @@ def execute_synthetic_score_fixture(definition, *, price_scores, daily_scores, k
             preflight_cached={(seed, "C96"): {"romd": 1.} for seed in seeds},
             start=str(settings.start_date), end=end, base_arm=base, exact_arm=exact,
             direct_arm=direct, base_policy=base_policy,
-            cache=OracleReplayStore(Path(directory), definition.output_subdir))
+            cache=OracleReplayStore(Path(directory), definition.output_subdir), execution_contexts=contexts)
 
 
 def synthetic_score_parity_setup(testcase):
