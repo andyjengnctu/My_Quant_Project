@@ -1948,6 +1948,23 @@ def _render_robustness_execution_plan(
                 artifact_identities=dict(status.get("artifact_identities") or {}),
                 benchmark_parameter_identities=_benchmark_identity_payload(resolved_bindings),
             )
+            registered_scientific_reuse.update(
+                _discover_registered_model_scientific_reuse(
+                    settings=settings, robustness=cfg,
+                    current_contract=robustness_contract,
+                    stochastic_arms=tuple(stochastic_arms),
+                )
+            )
+            for unit, item in registered_scientific_reuse.items():
+                if unit not in robustness_unit_states:
+                    robustness_unit_states[unit] = resolve_strategy_result_state(
+                        verified_evidence={
+                            "arm_id": unit[0], "seed": int(unit[1]),
+                            "source_run_root": project_relative_display_path(
+                                Path(item["source_run_root"]), project_root=PROJECT_ROOT
+                            ),
+                        }
+                    ).as_dict()
             _existing, _existing_yearly, exact_unit_states = (
                 _resolve_existing_scientific_unit_states(
                     run_root=_run_root(robustness_contract),
@@ -3413,7 +3430,7 @@ def _strategy_only_unit_scientific_signature_from_contract(
         ),
         None,
     )
-    if arm_contract is None or bool(arm_contract.get("model_seed_sensitive")):
+    if arm_contract is None:
         return None
     parameter_identity = dict(
         dict(contract.get("benchmark_parameter_artifact_identities") or {}).get(
@@ -3448,12 +3465,12 @@ def _strategy_only_unit_scientific_signature_from_contract(
         "arm": {
             key: arm_contract.get(key)
             for key in (
-                "arm_id",
-                "param_source",
-                "param_policy",
-                "rule_policy",
-                "strategy_seed_sensitive",
-                "model_seed_sensitive",
+                "arm_id", "param_source", "param_policy", "rule_policy",
+                "strategy_seed_sensitive", "model_seed_sensitive",
+                *(
+                    ("dl_id", "dl_runtime_mode", "dl_runtime_options", "runtime_dl_sources")
+                    if bool(arm_contract.get("model_seed_sensitive")) else ()
+                ),
             )
         },
         "benchmark_parameter": {
@@ -3661,6 +3678,270 @@ def _discover_registered_strategy_only_scientific_reuse(
     return found
 
 
+def _runtime_replay_source_identities(
+    source_artifacts: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """One identity projection for the Replay worker and registered REUSE checks."""
+
+    return {
+        dl_id: {
+            "selected_epoch": int(artifacts.get("selected_epoch", 0) or 0),
+            "fold_count": artifacts.get("fold_count"),
+            "model_sha256": str(artifacts.get("model_sha256") or "") or None,
+            "score_sha256": str(artifacts.get("score_sha256") or "") or None,
+            "score_available_from": str(artifacts.get("score_available_from") or "") or None,
+            "score_available_through": str(artifacts.get("score_available_through") or "") or None,
+        }
+        for dl_id, artifacts in source_artifacts.items()
+    }
+
+
+def _research_score_replay_identity(
+    *, settings, seed: int, comparison_start: str, comparison_end: str,
+    required_dl_ids: tuple[str, ...],
+    cache: dict[tuple[str, int], dict[str, Any] | None],
+) -> dict[str, Any] | None:
+    """Read *verified* Research Rolling score evidence in the replay job's schema.
+
+    A model READY indicator alone is not enough to reuse an old Portfolio result.
+    We require the same score bytes and all auxiliary-head score identities.
+    """
+
+    artifacts_by_dl: dict[str, dict[str, Any]] = {}
+    for dl_id in required_dl_ids:
+        cache_key = (str(dl_id), int(seed))
+        if cache_key not in cache:
+            source = settings.dl_sources[str(dl_id)]
+            workflow = get_breakout_quality_workflow_settings(
+                experiment_profile=str(source.experiment_profile)
+            )
+            evidence, _reason = inspect_reusable_model_research_rolling_score(
+                project_root=PROJECT_ROOT, source=source, workflow=workflow,
+                seed=int(seed), comparison_start=str(comparison_start),
+                comparison_end=str(comparison_end),
+            )
+            cache[cache_key] = None if evidence is None else dict(evidence)
+        artifacts = cache[cache_key]
+        if artifacts is None or not _normalized_hash_value(artifacts.get("score_sha256")):
+            return None
+        artifacts_by_dl[str(dl_id)] = artifacts
+
+    # The same projection is used by _build_robustness_replay_job for the actual
+    # model-driven Replay. Preserve field names, null values and ordering.
+    runtime_source_identities = _runtime_replay_source_identities(artifacts_by_dl)
+    return {
+        "primary_score_sha256": _normalized_hash_value(
+            artifacts_by_dl[str(required_dl_ids[0])].get("score_sha256")
+        ),
+        "runtime_source_identity_sha256": canonical_json_sha256(runtime_source_identities),
+        "runtime_source_identities": runtime_source_identities,
+    }
+
+
+def _discover_registered_model_scientific_reuse(
+    *, settings, robustness, current_contract: dict[str, Any],
+    stochastic_arms: tuple[StrategyComparisonArm, ...],
+) -> dict[tuple[str, int], dict[str, Any]]:
+    """Reuse signed model-arm observations across suite expansions, never scores alone.
+
+    A newly added arm changes the whole-run fingerprint but cannot invalidate
+    independent arm/seed observations whose actual PIT score bytes, dependency
+    heads, model provenance, strategy parameters and Replay semantics match.
+    The source must have both a signed complete observation and verified compact
+    trade attribution; otherwise this remains RUN, not an invented REUSE.
+    """
+
+    if not bool(robustness.reuse_completed) or robustness.benchmark_id is None:
+        return {}
+    period = dict(current_contract.get("comparison_period") or {})
+    start, end = str(period.get("start") or ""), str(period.get("end") or "")
+    if not start or not end:
+        return {}
+    model_ids = set(robustness.model_seed_sensitive_arm_ids)
+    historical_sources = tuple(_iter_registered_robustness_scientific_runs(robustness))
+    if not historical_sources:
+        return {}
+    cache: dict[tuple[str, int], dict[str, Any] | None] = {}
+    desired: dict[tuple[str, int], tuple[dict[str, Any], dict[str, Any]]] = {}
+    for arm in stochastic_arms:
+        if arm.arm_id not in model_ids:
+            continue
+        required_dl_ids = resolve_arm_runtime_dl_source_ids(settings, arm)
+        if not required_dl_ids:
+            continue
+        for seed in robustness.resolved_seeds:
+            signature = _strategy_only_unit_scientific_signature_from_contract(
+                contract=current_contract, arm_id=str(arm.arm_id), seed=int(seed)
+            )
+            if signature is None or not _normalized_hash_value(
+                dict(signature.get("benchmark_parameter") or {}).get("sha256")
+            ):
+                continue
+            identity = _research_score_replay_identity(
+                settings=settings, seed=int(seed), comparison_start=start,
+                comparison_end=end, required_dl_ids=required_dl_ids, cache=cache,
+            )
+            if identity is not None:
+                desired[(str(arm.arm_id), int(seed))] = (signature, identity)
+    if not desired:
+        return {}
+
+    found: dict[tuple[str, int], dict[str, Any]] = {}
+    for source_root, validated in historical_sources:
+        source_contract = dict(validated["contract"])
+        source_rows = validated["seed_frame"]
+        source_yearly = validated["seed_yearly_frame"]
+        for unit, (expected_signature, current_identity) in desired.items():
+            arm_id, seed = unit
+            old_signature = _strategy_only_unit_scientific_signature_from_contract(
+                contract=source_contract, arm_id=arm_id, seed=seed
+            )
+            if old_signature != expected_signature:
+                continue
+            matches = source_rows[
+                (source_rows["arm_id"].astype(str) == arm_id)
+                & (source_rows["seed"].astype(int) == seed)
+            ]
+            if len(matches) != 1:
+                continue
+            row = dict(matches.iloc[0].to_dict())
+            if (
+                _normalized_hash_value(row.get("score_sha256"))
+                != current_identity["primary_score_sha256"]
+                or _normalized_hash_value(row.get("runtime_source_identity_sha256"))
+                != current_identity["runtime_source_identity_sha256"]
+            ):
+                continue
+            attribution = _read_attribution_unit_manifest(
+                source_root, arm_id=arm_id, seed=seed,
+                expected_fingerprint=str(source_contract["fingerprint"]),
+            )
+            if attribution is None:
+                continue
+            source_training = dict(attribution.get("training_identity") or {})
+            if any(
+                _normalized_hash_value(source_training.get(key))
+                != _normalized_hash_value(row.get(key))
+                for key in ("score_sha256", "runtime_source_identity_sha256")
+            ):
+                continue
+            if dict(attribution.get("runtime_training_identities") or {}) != current_identity["runtime_source_identities"]:
+                continue
+            yearly = source_yearly[
+                (source_yearly["arm_id"].astype(str) == arm_id)
+                & (source_yearly["seed"].astype(int) == seed)
+            ].copy()
+            candidate = {
+                "row": row,
+                "yearly": yearly,
+                "source_run_root": source_root,
+                "signature": old_signature,
+                "current_parameter_sha256": _normalized_hash_value(
+                    dict(expected_signature["benchmark_parameter"]).get("sha256")
+                ),
+                "source_attribution": attribution,
+                "source_scientific_artifacts": dict(
+                    dict(validated.get("evidence") or {}).get("artifacts") or {}
+                ),
+            }
+            previous = found.get(unit)
+            if previous is not None:
+                # Never pick one of two conflicting historical observations.
+                _validate_rebuilt_observation(
+                    existing_row=dict(previous["row"]), rebuilt={
+                        **row, "yearly": yearly.to_dict("records")
+                    }, existing_yearly=previous["yearly"],
+                )
+                continue
+            found[unit] = candidate
+    return found
+
+
+def _copy_registered_model_attribution(
+    *, source_item: dict[str, Any], destination_root: Path,
+    contract: dict[str, Any], arm_id: str, seed: int,
+    arm_order: int, seed_order: int, arm_name: str,
+) -> None:
+    """Copy only verified, SHA-checked compact evidence into the new namespace."""
+
+    source_run_root = Path(source_item["source_run_root"])
+    source_manifest = dict(source_item["source_attribution"])
+    # The original provenance was already validated by _read_attribution_unit_manifest.
+    original_fingerprint = str(source_manifest.get("scientific_fingerprint") or "")
+    if not original_fingerprint or source_run_root.name != original_fingerprint:
+        raise ValueError("cross-run model attribution source identity inconsistent")
+    source_files = dict(source_manifest.get("files") or {})
+    destination = _attribution_unit_dir(destination_root, arm_id, seed)
+    if destination.exists():
+        existing = _read_attribution_unit_manifest(
+            destination_root, arm_id=arm_id, seed=seed,
+            expected_fingerprint=str(contract["fingerprint"]),
+        )
+        if existing is not None:
+            if (
+                dict(existing.get("training_identity") or {})
+                == dict(source_manifest.get("training_identity") or {})
+                and dict(existing.get("runtime_training_identities") or {})
+                == dict(source_manifest.get("runtime_training_identities") or {})
+                and {
+                    role: _normalized_hash_value(dict(data or {}).get("sha256"))
+                    for role, data in dict(existing.get("files") or {}).items()
+                } == {
+                    role: _normalized_hash_value(dict(data or {}).get("sha256"))
+                    for role, data in source_files.items()
+                }
+            ):
+                return
+            raise RuntimeError("cross-run attribution destination has different model or trade evidence")
+        raise RuntimeError("cross-run attribution destination exists but is not verified")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".verified_model_reuse_", dir=destination.parent) as staging:
+        stage = Path(staging)
+        rebuilt_files: dict[str, Any] = {}
+        for role in ("trades", "equity", "daily_capacity", "selected_buys", "execution"):
+            item = dict(source_files.get(role) or {})
+            old_file = (PROJECT_ROOT / str(item.get("path") or "")).resolve()
+            old_file.relative_to(PROJECT_ROOT)
+            if not old_file.is_file() or compute_file_sha256(old_file).lower() != _normalized_hash_value(item.get("sha256")):
+                raise ValueError("cross-run attribution changed during scientific reuse")
+            new_file = destination / f"{role}.csv.gz"
+            staged_file = stage / new_file.name
+            shutil.copyfile(old_file, staged_file)
+            if compute_file_sha256(staged_file).lower() != _normalized_hash_value(item.get("sha256")):
+                raise RuntimeError("cross-run attribution copy SHA mismatch")
+            rebuilt_files[role] = {
+                **item,
+                "path": project_relative_display_path(new_file, project_root=PROJECT_ROOT),
+            }
+        new_manifest = {
+            **source_manifest,
+            "scientific_fingerprint": str(contract["fingerprint"]),
+            "robustness_id": str(contract["robustness_id"]),
+            "profile_id": str(contract["profile_id"]),
+            "arm_name": str(arm_name),
+            "arm_order": int(arm_order),
+            "seed_order": int(seed_order),
+            "files": rebuilt_files,
+            "scientific_observation_validation": {
+                "status": "VERIFIED",
+                "verified_at_utc": datetime.now(timezone.utc).isoformat(),
+                "source": "verified_cross_run_model_scientific_observation",
+            },
+        }
+        (stage / MANIFEST_FILENAME).write_text(
+            json.dumps(new_manifest, ensure_ascii=False, sort_keys=True, indent=2),
+            encoding="utf-8",
+        )
+        # This is a publication of byte-for-byte reused scientific source files,
+        # not a reconstruction of a historical model or a Portfolio replay.
+        stage.rename(destination)
+    if _read_attribution_unit_manifest(
+        destination_root, arm_id=arm_id, seed=seed,
+        expected_fingerprint=str(contract["fingerprint"]),
+    ) is None:
+        raise RuntimeError("cross-run attribution failed destination verification")
+
+
 def _materialize_registered_strategy_only_scientific_reuse(
     *, run_root: Path, contract: dict[str, Any],
     stochastic_arms: tuple[StrategyComparisonArm, ...],
@@ -3684,10 +3965,28 @@ def _materialize_registered_strategy_only_scientific_reuse(
     new_rows: list[dict[str, Any]] = []
     new_yearly_rows: list[dict[str, Any]] = []
     provenance: list[dict[str, Any]] = []
+    verified_source_artifacts: set[Path] = set()
     for unit, item in sorted(reusable.items()):
         if unit in existing_units:
             continue
         arm_id, seed = unit
+        if item.get("source_attribution") is not None and bool(
+            dict(contract.get("retention") or {}).get("keep_attribution_source")
+        ):
+            source_root = Path(item["source_run_root"])
+            source_artifacts = dict(item.get("source_scientific_artifacts") or {})
+            if source_artifacts and source_root not in verified_source_artifacts:
+                if not _validate_durable_result_artifacts(
+                    source_root, source_artifacts, keys=SCIENTIFIC_DURABLE_RESULT_KEYS
+                ):
+                    raise RuntimeError("cross-run signed scientific result changed during reuse")
+                verified_source_artifacts.add(source_root)
+            _copy_registered_model_attribution(
+                source_item=item, destination_root=run_root, contract=contract,
+                arm_id=arm_id, seed=seed,
+                arm_order=arm_order[arm_id], seed_order=seed_order[seed],
+                arm_name=names[arm_id],
+            )
         row = dict(item["row"])
         row.update({
             "arm_id": arm_id,
@@ -5224,6 +5523,12 @@ def run_multi_seed_robustness(
         artifact_identities=dict(status.get("artifact_identities") or {}),
         benchmark_parameter_identities=_benchmark_identity_payload(benchmark_bindings),
     )
+    registered_scientific_reuse.update(
+        _discover_registered_model_scientific_reuse(
+            settings=settings, robustness=cfg,
+            current_contract=contract, stochastic_arms=tuple(stochastic_arms),
+        )
+    )
     # The planner and canonical parameter producers run before these locks.
     # One acquired session owns every mutation of this run's result files and
     # the shared model workspace, including exact REUSE and derived upgrades.
@@ -5303,17 +5608,7 @@ def _build_robustness_replay_job(
 ) -> dict[str, Any]:
     """Project one validated model/parameter binding into the replay worker payload."""
     primary = source_artifacts[str(arm.dl_id)]
-    runtime_source_identities = {
-        dl_id: {
-            "selected_epoch": int(artifacts.get("selected_epoch", 0) or 0),
-            "fold_count": artifacts.get("fold_count"),
-            "model_sha256": str(artifacts.get("model_sha256") or "") or None,
-            "score_sha256": str(artifacts.get("score_sha256") or "") or None,
-            "score_available_from": str(artifacts.get("score_available_from") or "") or None,
-            "score_available_through": str(artifacts.get("score_available_through") or "") or None,
-        }
-        for dl_id, artifacts in source_artifacts.items()
-    }
+    runtime_source_identities = _runtime_replay_source_identities(source_artifacts)
     score_overrides = {
         dl_id: {
             "score_path": str(artifacts["score"]),

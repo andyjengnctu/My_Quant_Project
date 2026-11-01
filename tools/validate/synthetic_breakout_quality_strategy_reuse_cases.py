@@ -2161,3 +2161,204 @@ def append_model_robustness_pit_strategy_reuse_contract_checks(*, results, case_
             and f"{expected_reused_scores} 待PIT／checkpoint確認" in missing_plan
             and "Research模型score REUSE=0" in missing_plan,
         )
+
+    append_model_unit_cross_run_scientific_reuse_checks(results=results, case_id=case_id)
+
+
+def append_model_unit_cross_run_scientific_reuse_checks(*, results, case_id: str) -> None:
+    """Old validated DL-arm observations survive a new arm in the suite, not score drift."""
+    import gzip
+    from types import SimpleNamespace
+    from core.strategy_compare_policy import (
+        get_strategy_comparison_settings, get_strategy_multi_seed_robustness_settings,
+    )
+    from filters.breakout_quality.strategy_compare_dl_artifacts import (
+        resolve_arm_runtime_dl_source_ids,
+    )
+    from services.research import strategy_multi_seed_robustness as robust
+
+    settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
+    cfg = get_strategy_multi_seed_robustness_settings("broker_cash_dl_conversion_rolling")
+    model_arms = tuple(
+        arm for arm in settings.enabled_arms if arm.dl_enabled
+    )
+    arm = model_arms[0]
+    seed = int(cfg.resolved_seeds[0])
+    ids = resolve_arm_runtime_dl_source_ids(settings, arm)
+    contract_arm = {
+        "arm_id": arm.arm_id, "param_source": arm.param_source,
+        "param_policy": "base-finalist-best", "rule_policy": arm.rule_policy,
+        "strategy_seed_sensitive": True, "model_seed_sensitive": True,
+        "dl_id": arm.dl_id, "dl_runtime_mode": arm.dl_runtime_mode,
+        "dl_runtime_options": dict(arm.dl_runtime_options or {}),
+        "runtime_dl_sources": [
+            {"dl_id": dl_id, "score_source": "selection_point_in_time"}
+            for dl_id in ids
+        ],
+        "seed_pairing": "same_seed",
+    }
+    parameter = {
+        "identity_schema": robust.STRATEGY_PARAM_SCIENTIFIC_IDENTITY_SCHEMA,
+        "family": "min", "evaluation_mode": "rolling",
+        "param_policy": "base-finalist-best", "sha256": "param-good",
+    }
+    common = {
+        "scientific_contract_version": robust.ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION,
+        "dataset": "synthetic", "dataset_identity": {"stock_days": 630589},
+        "max_positions": 10, "rotation": "off",
+        "comparison_period": {"start": "2021-01-01", "end": "2026-03-02"},
+        "benchmark_id": "end_to_end_v1", "strategy_trials_per_fold": 300,
+        "seed_pairing": "same_seed",
+        "benchmark_parameter_artifact_identities": {
+            f"{arm.arm_id}:seed={seed}": parameter
+        },
+    }
+    old = {**common, "fingerprint": "old", "stochastic_arms": [contract_arm]}
+    current = {
+        **common, "fingerprint": "new",
+        "stochastic_arms": [contract_arm, {"arm_id": "new_arm", "model_seed_sensitive": True}],
+    }
+    old_signature = robust._strategy_only_unit_scientific_signature_from_contract(
+        contract=old, arm_id=arm.arm_id, seed=seed
+    )
+    current_signature = robust._strategy_only_unit_scientific_signature_from_contract(
+        contract=current, arm_id=arm.arm_id, seed=seed
+    )
+    changed_arm = dict(contract_arm, dl_runtime_options={"eligibility_threshold": 0.9})
+    changed_signature = robust._strategy_only_unit_scientific_signature_from_contract(
+        contract={**old, "stochastic_arms": [changed_arm]},
+        arm_id=arm.arm_id, seed=seed,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "model_arm_result_identity_survives_unrelated_new_arm_but_not_rule_change",
+        True, old_signature == current_signature != changed_signature,
+    )
+
+    def fake_model_research(*, source, **_kwargs):
+        return ({
+            "selected_epoch": 3, "fold_count": 6, "model_sha256": None,
+            "score_sha256": f"score-{source.dl_id}",
+            "score_available_from": "2021-01-01",
+            "score_available_through": "2026-03-02",
+        }, "READY")
+
+    with patch.object(
+        robust, "inspect_reusable_model_research_rolling_score",
+        side_effect=fake_model_research,
+    ):
+        score_identity = robust._research_score_replay_identity(
+            settings=settings, seed=seed, comparison_start="2021-01-01",
+            comparison_end="2026-03-02", required_dl_ids=ids, cache={},
+        )
+    source_row = {
+        "arm_id": arm.arm_id, "seed": seed,
+        "score_sha256": score_identity["primary_score_sha256"],
+        "runtime_source_identity_sha256": score_identity["runtime_source_identity_sha256"],
+        "strategy_param_sha256": "param-good",
+        "strategy_param_manifest_sha256": "param-manifest",
+        "selected_epoch": 3, "fold_count": 6,
+        "return_over_max_drawdown": 10.0,
+    }
+    source_yearly = pd.DataFrame([
+        {"arm_id": arm.arm_id, "seed": seed, "year": 2021,
+         "return_pct": 4.0, "is_complete_year": True},
+    ])
+    source_attr = {
+        "schema_version": robust.ATTRIBUTION_SOURCE_SCHEMA_VERSION,
+        "scientific_fingerprint": "old", "arm_id": arm.arm_id, "seed": seed,
+        "training_identity": {
+            "score_sha256": source_row["score_sha256"],
+            "runtime_source_identity_sha256": source_row["runtime_source_identity_sha256"],
+        },
+        "runtime_training_identities": score_identity["runtime_source_identities"],
+    }
+    mini_cfg = SimpleNamespace(
+        reuse_completed=True, benchmark_id="end_to_end_v1",
+        model_seed_sensitive_arm_ids=(arm.arm_id,), resolved_seeds=(seed,),
+    )
+    with tempfile.TemporaryDirectory(prefix="model_seed_scientific_reuse_") as temp_dir:
+        root = Path(temp_dir)
+        old_root = root / "old"
+        new_root = root / "new"
+        old_root.mkdir()
+        new_root.mkdir()
+        validated = {
+            "contract": old,
+            "seed_frame": pd.DataFrame([source_row]),
+            "seed_yearly_frame": source_yearly,
+        }
+        def discover(row, attribution):
+            data = dict(validated, seed_frame=pd.DataFrame([row]))
+            with patch.object(
+                robust, "inspect_reusable_model_research_rolling_score",
+                side_effect=fake_model_research,
+            ), patch.object(
+                robust, "_iter_registered_robustness_scientific_runs",
+                return_value=iter(((old_root, data),)),
+            ), patch.object(
+                robust, "_read_attribution_unit_manifest", return_value=attribution,
+            ):
+                return robust._discover_registered_model_scientific_reuse(
+                    settings=settings, robustness=mini_cfg,
+                    current_contract=current, stochastic_arms=(arm,),
+                )
+        found = discover(source_row, source_attr)
+        wrong_score = discover({**source_row, "score_sha256": "changed"}, source_attr)
+        missing_attr = discover(source_row, None)
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "old_dl_arm_reuse_requires_matching_pit_score_and_verified_attribution",
+            True, len(found) == 1 and not wrong_score and not missing_attr,
+        )
+        alternate_source = dict(source_attr, runtime_training_identities={"forged": {}})
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "old_dl_arm_reuse_rejects_incompatible_multisource_head_identity",
+            True, not discover(source_row, alternate_source),
+        )
+        roles = ("trades", "equity", "daily_capacity", "selected_buys", "execution")
+        old_attribution_dir = robust._attribution_unit_dir(old_root, arm.arm_id, seed)
+        old_attribution_dir.mkdir(parents=True)
+        files = {}
+        for role in roles:
+            old_file = old_attribution_dir / f"{role}.csv.gz"
+            with gzip.open(old_file, "wb") as dest:
+                dest.write(f"sample {role}".encode("utf-8"))
+            files[role] = {
+                "path": str(old_file.relative_to(root)).replace("\\", "/"),
+                "sha256": robust.compute_file_sha256(old_file), "row_count": 1,
+            }
+        copy_item = {
+            **next(iter(found.values())),
+            "source_run_root": old_root,
+            "source_attribution": dict(source_attr, files=files),
+        }
+        full_new = dict(current, robustness_id=cfg.robustness_id,
+                        profile_id=settings.profile_id)
+        with patch.object(robust, "PROJECT_ROOT", root):
+            robust._copy_registered_model_attribution(
+                source_item=copy_item, destination_root=new_root,
+                contract=full_new, arm_id=arm.arm_id, seed=seed,
+                arm_order=1, seed_order=1, arm_name=arm.name,
+            )
+            new_attr = robust._read_attribution_unit_manifest(
+                new_root, arm_id=arm.arm_id, seed=seed,
+                expected_fingerprint="new",
+            )
+            old_file = old_attribution_dir / "trades.csv.gz"
+            old_file.write_bytes(b"tampered")
+            corrupted = False
+            try:
+                robust._copy_registered_model_attribution(
+                    source_item=copy_item, destination_root=root / "corrupt_run",
+                    contract=full_new, arm_id=arm.arm_id, seed=seed,
+                    arm_order=1, seed_order=1, arm_name=arm.name,
+                )
+            except ValueError:
+                corrupted = True
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "reused_dl_trade_attribution_is_copied_and_signed_without_portfolio_replay",
+            True, new_attr is not None and corrupted,
+        )
