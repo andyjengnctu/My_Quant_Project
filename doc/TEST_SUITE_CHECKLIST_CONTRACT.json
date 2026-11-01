@@ -6476,7 +6476,7 @@
     },
     {
       "id": "T475",
-      "description": "`validate_breakout_quality_fitted_model_lifecycle_contract_case` 與 `validate_breakout_quality_point_in_time_score_builder_contract_case` 覆蓋B355：Forward fitted_model_manifest與Rolling fold原始證據經canonical FIT owner核驗、同權重不同封裝可REUSE、來源/權重差異拒絕、stale fit不得假REUSE",
+      "description": "`validate_breakout_quality_fitted_model_lifecycle_contract_case` 覆蓋B355：Forward fitted-model evidence與Rolling fold原始證據由canonical FIT owner核驗；同權重不同封裝可REUSE，來源/權重差異拒絕，stale fit不得假REUSE。Rolling PIT分數路徑另由既有PIT synthetic契約覆蓋。",
       "b_id": "B355",
       "order": 465,
       "status": "DONE"

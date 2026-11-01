@@ -396,8 +396,16 @@ def _publish_fold_checkpoint_to_cache_unlocked(
                             "same_fit_different_checkpoint_envelope": True,
                         }
                 except (OSError, RuntimeError, ValueError, TypeError, KeyError,
-                        EOFError, pickle.UnpicklingError, zipfile.BadZipFile):
-                    pass  # The original fail-fast below is mandatory.
+                        EOFError, pickle.UnpicklingError, zipfile.BadZipFile) as exc:
+                    # Unverifiable evidence cannot be treated as an equivalent
+                    # FIT. Preserve the exact failure and both original artifacts;
+                    # the publisher must neither overwrite nor silently REUSE.
+                    raise RuntimeError(
+                        "同一fitting identity產生不同checkpoint；"
+                        f"identity={identity}, cached={cached_checkpoint.get('sha256')}, "
+                        f"current={checkpoint_manifest.get('sha256')}; "
+                        f"FIT equivalence verification failed: {type(exc).__name__}: {exc}"
+                    ) from exc
             if _is_score_only_checkpoint_reuse_manifest(manifest):
                 # A score-only rescore must never create a second fitted checkpoint.
                 # Older code rewrote model.pt only to refresh its embedded fold_contract,

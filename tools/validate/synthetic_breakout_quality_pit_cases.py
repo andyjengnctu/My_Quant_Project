@@ -1491,17 +1491,31 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         }
         (cache_entry / "manifest.json").write_text(json.dumps(cached_manifest), encoding="utf-8")
         (fold_dir / "manifest.json").write_text(json.dumps(local_manifest), encoding="utf-8")
+        original_cache_checkpoint = cached_model.read_bytes()
+        original_cache_manifest = (cache_entry / "manifest.json").read_bytes()
+        original_source_checkpoint = local_model.read_bytes()
+        original_source_manifest = (fold_dir / "manifest.json").read_bytes()
         try:
             _publish_fold_checkpoint_to_cache(
                 fold_dir=fold_dir, cache_root=cache_root, fold_contract=expected_contract
             )
         except RuntimeError as exc:
-            true_conflict_rejected = "同一fitting identity產生不同checkpoint" in str(exc)
+            true_conflict_rejected = (
+                "同一fitting identity產生不同checkpoint" in str(exc)
+                and "FIT equivalence verification failed" in str(exc)
+                and exc.__cause__ is not None
+            )
         else:
             true_conflict_rejected = False
+        conflict_kept_original_evidence = (
+            cached_model.read_bytes() == original_cache_checkpoint
+            and (cache_entry / "manifest.json").read_bytes() == original_cache_manifest
+            and local_model.read_bytes() == original_source_checkpoint
+            and (fold_dir / "manifest.json").read_bytes() == original_source_manifest
+        )
     check_true(
         "pit_true_same_identity_different_checkpoint_still_fails_closed",
-        true_conflict_rejected,
+        true_conflict_rejected and conflict_kept_original_evidence,
     )
 
     # Shared FitKey cache is append-once: an incomplete existing directory is
