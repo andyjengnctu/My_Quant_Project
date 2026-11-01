@@ -2163,6 +2163,8 @@ def append_model_robustness_pit_strategy_reuse_contract_checks(*, results, case_
         )
 
     append_model_unit_cross_run_scientific_reuse_checks(results=results, case_id=case_id)
+    from tools.validate.synthetic_strategy_robustness_unit_cases import append_strategy_robustness_unit_checks
+    append_strategy_robustness_unit_checks(results=results, case_id=case_id)
 
 
 def append_model_unit_cross_run_scientific_reuse_checks(*, results, case_id: str) -> None:
@@ -2243,14 +2245,13 @@ def append_model_unit_cross_run_scientific_reuse_checks(*, results, case_id: str
             "score_available_through": "2026-03-02",
         }, "READY")
 
-    with patch.object(
-        robust, "inspect_reusable_model_research_rolling_score",
-        side_effect=fake_model_research,
-    ):
-        score_identity = robust._research_score_replay_identity(
-            settings=settings, seed=seed, comparison_start="2021-01-01",
-            comparison_end="2026-03-02", required_dl_ids=ids, cache={},
-        )
+    artifacts = {dl: fake_model_research(source=settings.dl_sources[dl])[0] for dl in ids}
+    source_identities = robust._runtime_replay_source_identities(artifacts)
+    score_identity = {
+        "primary_score_sha256": artifacts[ids[0]]["score_sha256"],
+        "runtime_source_identity_sha256": robust.canonical_json_sha256(source_identities),
+        "runtime_source_identities": source_identities,
+    }
     source_row = {
         "arm_id": arm.arm_id, "seed": seed,
         "score_sha256": score_identity["primary_score_sha256"],
@@ -2337,7 +2338,7 @@ def append_model_unit_cross_run_scientific_reuse_checks(*, results, case_id: str
         full_new = dict(current, robustness_id=cfg.robustness_id,
                         profile_id=settings.profile_id)
         with patch.object(robust, "PROJECT_ROOT", root):
-            robust._copy_registered_model_attribution(
+            robust._reference_registered_model_attribution(
                 source_item=copy_item, destination_root=new_root,
                 contract=full_new, arm_id=arm.arm_id, seed=seed,
                 arm_order=1, seed_order=1, arm_name=arm.name,
@@ -2350,7 +2351,7 @@ def append_model_unit_cross_run_scientific_reuse_checks(*, results, case_id: str
             old_file.write_bytes(b"tampered")
             corrupted = False
             try:
-                robust._copy_registered_model_attribution(
+                robust._reference_registered_model_attribution(
                     source_item=copy_item, destination_root=root / "corrupt_run",
                     contract=full_new, arm_id=arm.arm_id, seed=seed,
                     arm_order=1, seed_order=1, arm_name=arm.name,
@@ -2359,6 +2360,6 @@ def append_model_unit_cross_run_scientific_reuse_checks(*, results, case_id: str
                 corrupted = True
         add_check(
             results, "synthetic_breakout_quality", case_id,
-            "reused_dl_trade_attribution_is_copied_and_signed_without_portfolio_replay",
+            "reused_dl_trade_attribution_is_referenced_and_signed_without_portfolio_replay",
             True, new_attr is not None and corrupted,
         )

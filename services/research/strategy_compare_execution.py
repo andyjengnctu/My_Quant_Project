@@ -243,6 +243,7 @@ def run_strategy_compare_active_arm(
     ranking_options_extra: dict[str, Any] | None = None,
     expected_seed_override: int | None = None,
     baseline_reuse_dir: str | Path | None = None,
+    replay_active_only: bool = False,
     quiet: bool = False,
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
     capture_execution_diagnostics: bool = False,
@@ -332,6 +333,7 @@ def run_strategy_compare_active_arm(
         progress_callback=progress_callback,
         shared_param_overrides=(ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None),
         baseline_reuse_dir=baseline_reuse_dir,
+        replay_active_only=bool(replay_active_only),
         param_evaluation_mode=str(param_evaluation_mode),
         continuous_score_path_override=(
             str(primary_override["score_path"])

@@ -209,6 +209,12 @@ from filters.breakout_quality.trade_attribution import reconstruct_round_trips
 from services.research.strategy_compare_preparation_status import (
     collect_preparation_status,
 )
+from services.research.strategy_robustness_units import (
+    RobustnessWorkPlan, ScientificUnitStore,
+    scientific_unit_signature as _strategy_only_unit_scientific_signature_from_contract,
+    model_source_signature, model_observation_provenance_matches,
+    pin_files, require_pinned_files,
+)
 from services.research.strategy_compare_preparation import (
     prepare_strategy_parameter_artifacts,
 )
@@ -1798,6 +1804,33 @@ def _parameter_plan_rows(
     return rows, blockers
 
 
+def _robustness_plan_file_pins(*, contract, bindings, reused, model_artifacts):
+    paths = set()
+    for item in bindings.values():
+        for key in ("path", "manifest_path"):
+            if item.get(key) and Path(item[key]).is_file():
+                paths.add(Path(item[key]))
+    roots = {_run_root(contract)}
+    for item in reused.values():
+        roots.add(Path(item["source_run_root"]))
+        if item.get("source_unit_receipt"):
+            paths.add(Path(item["source_unit_receipt"]))
+        for data in dict(dict(item.get("source_attribution") or {}).get("files") or {}).values():
+            if dict(data or {}).get("path"):
+                paths.add((PROJECT_ROOT / str(data["path"])).resolve())
+    for root in roots:
+        for name in (MANIFEST_FILENAME, SCIENTIFIC_OBSERVATIONS_MANIFEST_FILENAME,
+                     SEED_RESULTS_FILENAME, SEED_YEARLY_RESULTS_FILENAME):
+            path = root / name
+            if path.is_file():
+                paths.add(path)
+    for item in model_artifacts.values():
+        for key in ("score", "manifest", "audit", "model", "report"):
+            if item.get(key):
+                paths.add(Path(item[key]))
+    return pin_files(paths)
+
+
 def _render_robustness_execution_plan(
     *, cfg, settings, status: dict[str, Any], fixed_arms, stochastic_arms
 ) -> tuple[str, dict[str, Any]]:
@@ -1872,9 +1905,9 @@ def _render_robustness_execution_plan(
         for unit, item in registered_scientific_reuse.items()
     }
     robustness_contract: dict[str, Any] | None = None
+    resolved_bindings: dict[tuple[str, int], dict[str, Any]] = {}
     if (
         overall == "READY"
-        and cfg.benchmark_id is not None
         and start is not None
         and end is not None
     ):
@@ -1985,6 +2018,7 @@ def _render_robustness_execution_plan(
     # Validate its score and fitted evidence before declaring a *model* REUSE;
     # this never means the new strategy replay itself is already completed.
     model_source_reuse: dict[tuple[str, int], bool] = {}
+    model_source_artifacts: dict[tuple[str, int], dict[str, Any]] = {}
     if bool(cfg.reuse_completed) and start is not None and end is not None:
         for dl_id, arm_entries in _training_source_groups(tuple(model_arms), settings=settings):
             source = settings.dl_sources[str(dl_id)]
@@ -2002,6 +2036,8 @@ def _render_robustness_execution_plan(
                     seed=int(seed), comparison_start=str(start), comparison_end=str(end),
                 )
                 model_source_reuse[(str(dl_id), int(seed))] = evidence is not None
+                if evidence is not None:
+                    model_source_artifacts[(str(dl_id), int(seed))] = dict(evidence)
 
     # The shared Dataset/parameter plan must be resolved first.  A missing
     # Dataset cannot be used to attest a seed's Optimizer runtime fingerprint.
@@ -2238,7 +2274,7 @@ def _render_robustness_execution_plan(
                 "策略Optimizer搜尋",
                 (
                     f"{len(pending_optimizer_search_groups)} pending search units"
-                    f"（scientific result REUSE={len(registered_scientific_reuse)}/{cfg.seed_count * len(stochastic_arms)} arm×replicate）"
+                    f"（scientific result REUSE={sum(state.get('action') == RESULT_ACTION_REUSE for state in robustness_unit_states.values())}/{cfg.seed_count * len(stochastic_arms)} arm×replicate）"
                 ),
             ),)
             if cfg.benchmark_id is not None else ()
@@ -2259,6 +2295,39 @@ def _render_robustness_execution_plan(
         metadata_rows=metadata_rows,
         action_rows=rows,
     )
+    work_plan = None
+    evidence_pins = ()
+    if robustness_contract is not None and overall == "READY":
+        work_plan = RobustnessWorkPlan.build(
+            fingerprint=str(robustness_contract["fingerprint"]),
+            units=((arm.arm_id, int(seed)) for arm in stochastic_arms for seed in cfg.resolved_seeds),
+            reuse_units=(unit for unit, state in robustness_unit_states.items()
+                         if state.get("action") == RESULT_ACTION_REUSE),
+            dependencies={arm.arm_id: resolve_arm_runtime_dl_source_ids(settings, arm)
+                          if arm.dl_enabled else () for arm in stochastic_arms},
+        )
+        source_evidence = []
+        for arm_id, seed in work_plan.reuse_units:
+            item = registered_scientific_reuse.get((arm_id, seed))
+            if item is not None:
+                attribution = item.get("source_attribution")
+            elif any(unit[1] == seed for unit in work_plan.source_units):
+                attribution = _read_attribution_unit_manifest(
+                    _run_root(robustness_contract), arm_id=arm_id, seed=seed,
+                    expected_fingerprint=str(robustness_contract["fingerprint"]),
+                )
+            else:
+                attribution = None
+            for dl_id, identity in dict((attribution or {}).get("runtime_training_identities") or {}).items():
+                source_evidence.append(((str(dl_id), seed), dict(identity)))
+        work_plan = work_plan.bind_sources(source_evidence)
+        for unit, artifacts in model_source_artifacts.items():
+            work_plan.require_source_identity(unit, _runtime_replay_source_identities(
+                {unit[0]: artifacts})[unit[0]])
+        evidence_pins = _robustness_plan_file_pins(
+            contract=robustness_contract, bindings=resolved_bindings,
+            reused=registered_scientific_reuse, model_artifacts=model_source_artifacts,
+        )
     return rendered_plan, {
         "overall_status": overall,
         "blockers": blockers,
@@ -2266,6 +2335,11 @@ def _render_robustness_execution_plan(
         "benchmark_param_bindings": benchmark_bindings,
         "robustness_unit_states": robustness_unit_states,
         "robustness_contract": robustness_contract,
+        "resolved_benchmark_bindings": resolved_bindings,
+        "registered_scientific_reuse": registered_scientific_reuse,
+        "model_source_artifacts": model_source_artifacts,
+        "work_plan": work_plan,
+        "evidence_pins": evidence_pins,
         "registered_scientific_reuse_units": tuple(sorted(registered_scientific_reuse)),
         "comparison_period": None if start is None else {"start": start, "end": end},
         "period_error": period_error,
@@ -3412,81 +3486,6 @@ def _validate_scientific_observation_manifest(
 
 
 
-def _strategy_only_unit_scientific_signature_from_contract(
-    *, contract: dict[str, Any], arm_id: str, seed: int
-) -> dict[str, Any] | None:
-    """Return the replay-scientific identity of one DL-off robustness observation.
-
-    Container identity (profile/suite/whole-run fingerprint/other arms) is excluded on
-    purpose.  A reusable unit is identified by the concrete replay inputs that can
-    affect that arm/seed observation.
-    """
-
-    arm_contract = next(
-        (
-            dict(raw or {})
-            for raw in tuple(contract.get("stochastic_arms") or ())
-            if str(dict(raw or {}).get("arm_id") or "") == str(arm_id)
-        ),
-        None,
-    )
-    if arm_contract is None:
-        return None
-    parameter_identity = dict(
-        dict(contract.get("benchmark_parameter_artifact_identities") or {}).get(
-            f"{arm_id}:seed={int(seed)}"
-        )
-        or {}
-    )
-    param_sha = _normalized_hash_value(parameter_identity.get("sha256"))
-    if not param_sha:
-        return None
-    arm_seed_pairing = str(arm_contract.get("seed_pairing") or "").strip()
-    if not arm_seed_pairing:
-        # Backward compatibility for durable observations produced before
-        # per-arm pairing semantics were persisted in ``stochastic_arms``.
-        # Historical same-seed-only suites already stored the correct top-level
-        # value, so their C58/C61 observations remain reusable.
-        arm_seed_pairing = str(contract.get("seed_pairing") or "")
-    return {
-        "unit_result_identity_schema": "robustness_strategy_seed_result_v1",
-        "scientific_contract_version": int(
-            contract.get("scientific_contract_version") or 0
-        ),
-        "dataset": str(contract.get("dataset") or ""),
-        "dataset_identity": dict(contract.get("dataset_identity") or {}),
-        "max_positions": int(contract.get("max_positions") or 0),
-        "rotation": str(contract.get("rotation") or ""),
-        "comparison_period": dict(contract.get("comparison_period") or {}),
-        "benchmark_id": str(contract.get("benchmark_id") or ""),
-        "seed": int(seed),
-        "strategy_trials_per_fold": contract.get("strategy_trials_per_fold"),
-        "seed_pairing": arm_seed_pairing,
-        "arm": {
-            key: arm_contract.get(key)
-            for key in (
-                "arm_id", "param_source", "param_policy", "rule_policy",
-                "strategy_seed_sensitive", "model_seed_sensitive",
-                *(
-                    ("dl_id", "dl_runtime_mode", "dl_runtime_options", "runtime_dl_sources")
-                    if bool(arm_contract.get("model_seed_sensitive")) else ()
-                ),
-            )
-        },
-        "benchmark_parameter": {
-            key: parameter_identity.get(key)
-            for key in (
-                "identity_schema",
-                "family",
-                "evaluation_mode",
-                "param_policy",
-                "sha256",
-            )
-            if parameter_identity.get(key) not in (None, "")
-        },
-    }
-
-
 def _current_strategy_only_unit_scientific_signature(
     *, settings, robustness, arm: StrategyComparisonArm, seed: int,
     binding: dict[str, Any], comparison_start: str, comparison_end: str,
@@ -3569,6 +3568,8 @@ def _discover_registered_strategy_only_scientific_reuse(
     desired: dict[tuple[str, int], dict[str, Any]] = {}
     for seed in robustness.resolved_seeds:
         for arm in stochastic_arms:
+            if arm.arm_id in set(robustness.model_seed_sensitive_arm_ids):
+                continue
             binding = _benchmark_param_binding(
                 settings=settings, robustness=robustness, arm=arm, seed=int(seed)
             )
@@ -3607,6 +3608,19 @@ def _discover_registered_strategy_only_scientific_reuse(
         return {}
 
     found: dict[tuple[str, int], dict[str, Any]] = {}
+    store = _unit_observation_store(robustness) if getattr(robustness, "output_root", None) else None
+    if store is not None:
+        for unit, signature in desired.items():
+            if not dict(signature["benchmark_parameter"]).get("sha256"):
+                continue
+            observation = store.load(signature)
+            if observation is not None:
+                candidate = _stored_observation_candidate(observation, signature)
+                candidate["source_unit_receipt"] = store.path(signature)
+                found[unit] = candidate
+    desired = {unit: signature for unit, signature in desired.items() if unit not in found}
+    if not desired:
+        return found
     for source_root, validated in _iter_registered_robustness_scientific_runs(robustness):
         contract = dict(validated["contract"])
         seed_frame = validated["seed_frame"]
@@ -3696,177 +3710,156 @@ def _runtime_replay_source_identities(
     }
 
 
-def _research_score_replay_identity(
-    *, settings, seed: int, comparison_start: str, comparison_end: str,
-    required_dl_ids: tuple[str, ...],
-    cache: dict[tuple[str, int], dict[str, Any] | None],
-) -> dict[str, Any] | None:
-    """Read *verified* Research Rolling score evidence in the replay job's schema.
+def _unit_observation_store(robustness) -> ScientificUnitStore:
+    return ScientificUnitStore(PROJECT_ROOT / str(robustness.output_root))
 
-    A model READY indicator alone is not enough to reuse an old Portfolio result.
-    We require the same score bytes and all auxiliary-head score identities.
-    """
 
-    artifacts_by_dl: dict[str, dict[str, Any]] = {}
-    for dl_id in required_dl_ids:
-        cache_key = (str(dl_id), int(seed))
-        if cache_key not in cache:
-            source = settings.dl_sources[str(dl_id)]
-            workflow = get_breakout_quality_workflow_settings(
-                experiment_profile=str(source.experiment_profile)
-            )
-            evidence, _reason = inspect_reusable_model_research_rolling_score(
-                project_root=PROJECT_ROOT, source=source, workflow=workflow,
-                seed=int(seed), comparison_start=str(comparison_start),
-                comparison_end=str(comparison_end),
-            )
-            cache[cache_key] = None if evidence is None else dict(evidence)
-        artifacts = cache[cache_key]
-        if artifacts is None or not _normalized_hash_value(artifacts.get("score_sha256")):
-            return None
-        artifacts_by_dl[str(dl_id)] = artifacts
+def _stored_observation_candidate(observation: dict[str, Any], signature: dict[str, Any]):
+    candidate = dict(observation)
+    candidate["row"] = dict(candidate["row"])
+    candidate["yearly"] = pd.DataFrame(candidate["yearly"])
+    source_root = (PROJECT_ROOT / str(candidate["source_run_root"])).resolve()
+    source_root.relative_to(PROJECT_ROOT)
+    candidate["source_run_root"] = source_root
+    candidate["signature"] = signature
+    return candidate
 
-    # The same projection is used by _build_robustness_replay_job for the actual
-    # model-driven Replay. Preserve field names, null values and ordering.
-    runtime_source_identities = _runtime_replay_source_identities(artifacts_by_dl)
-    return {
-        "primary_score_sha256": _normalized_hash_value(
-            artifacts_by_dl[str(required_dl_ids[0])].get("score_sha256")
-        ),
-        "runtime_source_identity_sha256": canonical_json_sha256(runtime_source_identities),
-        "runtime_source_identities": runtime_source_identities,
+
+def _observation_equivalence(previous: dict[str, Any], current: dict[str, Any]) -> None:
+    left, right = dict(previous["row"]), dict(current["row"])
+    for key in ("score_sha256", "runtime_source_identity_sha256", "strategy_param_sha256"):
+        if _normalized_hash_value(left.get(key)) != _normalized_hash_value(right.get(key)):
+            raise ValueError(f"Conflicting committed scientific-unit provenance: {key}")
+    _validate_rebuilt_observation(
+        existing_row=left, rebuilt={**right, "yearly": list(current["yearly"])},
+        existing_yearly=pd.DataFrame(previous["yearly"]),
+    )
+
+
+def _publish_unit_observation(*, cfg, contract, run_root, row, yearly, attribution=None):
+    arm_id, seed = str(row["arm_id"]), int(row["seed"])
+    signature = _strategy_only_unit_scientific_signature_from_contract(
+        contract=contract, arm_id=arm_id, seed=seed,
+    )
+    if signature is None:
+        return  # legacy non-benchmark contracts use their existing exact-run owner
+    if bool(dict(signature["arm"]).get("model_seed_sensitive")):
+        if attribution is None and not bool(getattr(cfg, "keep_attribution_source", True)):
+            return  # Respect retention policy; no cross-view proof can be fabricated.
+        if attribution is None or not model_observation_provenance_matches(signature, row, attribution):
+            raise ValueError(f"Cannot commit incomplete model provenance: {arm_id}/seed={seed}")
+    observation = {
+        "row": dict(row), "yearly": list(yearly),
+        "source_run_root": project_relative_display_path(Path(run_root), project_root=PROJECT_ROOT),
+        "source_fingerprint": str(contract["fingerprint"]),
+        "source_attribution": attribution,
+        "current_parameter_sha256": signature["benchmark_parameter"]["sha256"],
     }
+    _unit_observation_store(cfg).publish(
+        signature=signature, observation=observation, validate_equivalent=_observation_equivalence,
+    )
 
 
 def _discover_registered_model_scientific_reuse(
     *, settings, robustness, current_contract: dict[str, Any],
     stochastic_arms: tuple[StrategyComparisonArm, ...],
 ) -> dict[tuple[str, int], dict[str, Any]]:
-    """Reuse signed model-arm observations across suite expansions, never scores alone.
+    """Resolve immutable original observations before resolving model dependencies.
 
-    A newly added arm changes the whole-run fingerprint but cannot invalidate
-    independent arm/seed observations whose actual PIT score bytes, dependency
-    heads, model provenance, strategy parameters and Replay semantics match.
-    The source must have both a signed complete observation and verified compact
-    trade attribution; otherwise this remains RUN, not an invented REUSE.
+    The full original recipe, input inventory, PIT policy, seed, parameters and
+    multi-head score provenance must match. Latest model publications are outputs,
+    not inputs to an already committed observation. They are consulted ONLY for
+    pending replay units, never to force finished arms to train or replay again.
     """
-
     if not bool(robustness.reuse_completed) or robustness.benchmark_id is None:
         return {}
-    period = dict(current_contract.get("comparison_period") or {})
-    start, end = str(period.get("start") or ""), str(period.get("end") or "")
-    if not start or not end:
-        return {}
     model_ids = set(robustness.model_seed_sensitive_arm_ids)
-    historical_sources = tuple(_iter_registered_robustness_scientific_runs(robustness))
-    if not historical_sources:
-        return {}
-    cache: dict[tuple[str, int], dict[str, Any] | None] = {}
-    desired: dict[tuple[str, int], tuple[dict[str, Any], dict[str, Any]]] = {}
+    desired = {}
     for arm in stochastic_arms:
         if arm.arm_id not in model_ids:
             continue
-        required_dl_ids = resolve_arm_runtime_dl_source_ids(settings, arm)
-        if not required_dl_ids:
-            continue
         for seed in robustness.resolved_seeds:
             signature = _strategy_only_unit_scientific_signature_from_contract(
-                contract=current_contract, arm_id=str(arm.arm_id), seed=int(seed)
+                contract=current_contract, arm_id=arm.arm_id, seed=int(seed),
             )
-            if signature is None or not _normalized_hash_value(
-                dict(signature.get("benchmark_parameter") or {}).get("sha256")
-            ):
+            if signature is not None:
+                desired[(str(arm.arm_id), int(seed))] = signature
+    found = {}
+    store = _unit_observation_store(robustness) if getattr(robustness, "output_root", None) else None
+    if store is not None:
+        for unit, signature in desired.items():
+            observation = store.load(signature)
+            if observation is None:
                 continue
-            identity = _research_score_replay_identity(
-                settings=settings, seed=int(seed), comparison_start=start,
-                comparison_end=end, required_dl_ids=required_dl_ids, cache=cache,
+            candidate = _stored_observation_candidate(observation, signature)
+            attribution = _read_attribution_unit_manifest(
+                candidate["source_run_root"], arm_id=unit[0], seed=unit[1],
+                expected_fingerprint=str(observation["source_fingerprint"]),
             )
-            if identity is not None:
-                desired[(str(arm.arm_id), int(seed))] = (signature, identity)
-    if not desired:
-        return {}
-
-    found: dict[tuple[str, int], dict[str, Any]] = {}
-    for source_root, validated in historical_sources:
+            original_attribution = dict(observation.get("source_attribution") or {})
+            if (attribution is None
+                or dict(attribution.get("files") or {}) != dict(original_attribution.get("files") or {})
+                or not model_observation_provenance_matches(signature, candidate["row"], attribution)):
+                raise ValueError(f"Committed scientific-unit evidence corrupted: {unit}")
+            candidate["source_attribution"] = attribution
+            candidate["source_unit_receipt"] = store.path(signature)
+            found[unit] = candidate
+    missing = {unit: sig for unit, sig in desired.items() if unit not in found}
+    if not missing:
+        return found
+    # Legacy import is read-only during planning. Once authorized, the same
+    # validated observations are committed individually, never re-computed.
+    for source_root, validated in _iter_registered_robustness_scientific_runs(robustness):
         source_contract = dict(validated["contract"])
         source_rows = validated["seed_frame"]
         source_yearly = validated["seed_yearly_frame"]
-        for unit, (expected_signature, current_identity) in desired.items():
+        for unit, signature in missing.items():
             arm_id, seed = unit
             old_signature = _strategy_only_unit_scientific_signature_from_contract(
-                contract=source_contract, arm_id=arm_id, seed=seed
+                contract=source_contract, arm_id=arm_id, seed=seed,
             )
-            if old_signature != expected_signature:
+            if old_signature != signature:
                 continue
-            matches = source_rows[
-                (source_rows["arm_id"].astype(str) == arm_id)
-                & (source_rows["seed"].astype(int) == seed)
-            ]
+            matches = source_rows[(source_rows["arm_id"].astype(str) == arm_id)
+                                  & (source_rows["seed"].astype(int) == seed)]
             if len(matches) != 1:
                 continue
             row = dict(matches.iloc[0].to_dict())
-            if (
-                _normalized_hash_value(row.get("score_sha256"))
-                != current_identity["primary_score_sha256"]
-                or _normalized_hash_value(row.get("runtime_source_identity_sha256"))
-                != current_identity["runtime_source_identity_sha256"]
-            ):
-                continue
             attribution = _read_attribution_unit_manifest(
                 source_root, arm_id=arm_id, seed=seed,
                 expected_fingerprint=str(source_contract["fingerprint"]),
             )
-            if attribution is None:
+            if attribution is None or not model_observation_provenance_matches(signature, row, attribution):
                 continue
-            source_training = dict(attribution.get("training_identity") or {})
-            if any(
-                _normalized_hash_value(source_training.get(key))
-                != _normalized_hash_value(row.get(key))
-                for key in ("score_sha256", "runtime_source_identity_sha256")
-            ):
-                continue
-            if dict(attribution.get("runtime_training_identities") or {}) != current_identity["runtime_source_identities"]:
-                continue
-            yearly = source_yearly[
-                (source_yearly["arm_id"].astype(str) == arm_id)
-                & (source_yearly["seed"].astype(int) == seed)
-            ].copy()
+            yearly = source_yearly[(source_yearly["arm_id"].astype(str) == arm_id)
+                                    & (source_yearly["seed"].astype(int) == seed)].copy()
             candidate = {
-                "row": row,
-                "yearly": yearly,
-                "source_run_root": source_root,
-                "signature": old_signature,
-                "current_parameter_sha256": _normalized_hash_value(
-                    dict(expected_signature["benchmark_parameter"]).get("sha256")
-                ),
+                "row": row, "yearly": yearly, "source_run_root": source_root,
+                "source_fingerprint": str(source_contract["fingerprint"]),
+                "signature": signature,
+                "current_parameter_sha256": signature["benchmark_parameter"]["sha256"],
                 "source_attribution": attribution,
-                "source_scientific_artifacts": dict(
-                    dict(validated.get("evidence") or {}).get("artifacts") or {}
-                ),
+                "source_scientific_artifacts": dict(dict(validated.get("evidence") or {}).get("artifacts") or {}),
             }
             previous = found.get(unit)
             if previous is not None:
-                # Never pick one of two conflicting historical observations.
-                _validate_rebuilt_observation(
-                    existing_row=dict(previous["row"]), rebuilt={
-                        **row, "yearly": yearly.to_dict("records")
-                    }, existing_yearly=previous["yearly"],
+                _observation_equivalence(
+                    {"row": previous["row"], "yearly": previous["yearly"].to_dict("records")},
+                    {"row": row, "yearly": yearly.to_dict("records")},
                 )
-                continue
-            found[unit] = candidate
+            else:
+                found[unit] = candidate
     return found
 
 
-def _copy_registered_model_attribution(
+def _reference_registered_model_attribution(
     *, source_item: dict[str, Any], destination_root: Path,
     contract: dict[str, Any], arm_id: str, seed: int,
     arm_order: int, seed_order: int, arm_name: str,
 ) -> None:
-    """Copy only verified, SHA-checked compact evidence into the new namespace."""
-
+    """Publish a small view manifest; the original verified trade bytes stay put."""
     source_run_root = Path(source_item["source_run_root"])
     source_manifest = dict(source_item["source_attribution"])
-    # The original provenance was already validated by _read_attribution_unit_manifest.
     original_fingerprint = str(source_manifest.get("scientific_fingerprint") or "")
     if not original_fingerprint or source_run_root.name != original_fingerprint:
         raise ValueError("cross-run model attribution source identity inconsistent")
@@ -3877,69 +3870,41 @@ def _copy_registered_model_attribution(
             destination_root, arm_id=arm_id, seed=seed,
             expected_fingerprint=str(contract["fingerprint"]),
         )
-        if existing is not None:
-            if (
-                dict(existing.get("training_identity") or {})
-                == dict(source_manifest.get("training_identity") or {})
-                and dict(existing.get("runtime_training_identities") or {})
-                == dict(source_manifest.get("runtime_training_identities") or {})
-                and {
-                    role: _normalized_hash_value(dict(data or {}).get("sha256"))
-                    for role, data in dict(existing.get("files") or {}).items()
-                } == {
-                    role: _normalized_hash_value(dict(data or {}).get("sha256"))
-                    for role, data in source_files.items()
-                }
-            ):
-                return
-            raise RuntimeError("cross-run attribution destination has different model or trade evidence")
-        raise RuntimeError("cross-run attribution destination exists but is not verified")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".verified_model_reuse_", dir=destination.parent) as staging:
-        stage = Path(staging)
-        rebuilt_files: dict[str, Any] = {}
-        for role in ("trades", "equity", "daily_capacity", "selected_buys", "execution"):
-            item = dict(source_files.get(role) or {})
-            old_file = (PROJECT_ROOT / str(item.get("path") or "")).resolve()
-            old_file.relative_to(PROJECT_ROOT)
-            if not old_file.is_file() or compute_file_sha256(old_file).lower() != _normalized_hash_value(item.get("sha256")):
-                raise ValueError("cross-run attribution changed during scientific reuse")
-            new_file = destination / f"{role}.csv.gz"
-            staged_file = stage / new_file.name
-            shutil.copyfile(old_file, staged_file)
-            if compute_file_sha256(staged_file).lower() != _normalized_hash_value(item.get("sha256")):
-                raise RuntimeError("cross-run attribution copy SHA mismatch")
-            rebuilt_files[role] = {
-                **item,
-                "path": project_relative_display_path(new_file, project_root=PROJECT_ROOT),
-            }
-        new_manifest = {
-            **source_manifest,
-            "scientific_fingerprint": str(contract["fingerprint"]),
-            "robustness_id": str(contract["robustness_id"]),
-            "profile_id": str(contract["profile_id"]),
-            "arm_name": str(arm_name),
-            "arm_order": int(arm_order),
-            "seed_order": int(seed_order),
-            "files": rebuilt_files,
-            "scientific_observation_validation": {
-                "status": "VERIFIED",
-                "verified_at_utc": datetime.now(timezone.utc).isoformat(),
-                "source": "verified_cross_run_model_scientific_observation",
-            },
-        }
-        (stage / MANIFEST_FILENAME).write_text(
-            json.dumps(new_manifest, ensure_ascii=False, sort_keys=True, indent=2),
-            encoding="utf-8",
-        )
-        # This is a publication of byte-for-byte reused scientific source files,
-        # not a reconstruction of a historical model or a Portfolio replay.
-        stage.rename(destination)
-    if _read_attribution_unit_manifest(
-        destination_root, arm_id=arm_id, seed=seed,
-        expected_fingerprint=str(contract["fingerprint"]),
-    ) is None:
-        raise RuntimeError("cross-run attribution failed destination verification")
+        if existing is not None and all(
+            dict(existing.get(key) or {}) == dict(source_manifest.get(key) or {})
+            for key in ("training_identity", "runtime_training_identities")
+        ) and {
+            role: _normalized_hash_value(dict(data or {}).get("sha256"))
+            for role, data in dict(existing.get("files") or {}).items()
+        } == {
+            role: _normalized_hash_value(dict(data or {}).get("sha256"))
+            for role, data in source_files.items()
+        }:
+            return
+        raise RuntimeError("cross-run attribution destination has different or unverified evidence")
+    for role in ("trades", "equity", "daily_capacity", "selected_buys", "execution"):
+        item = dict(source_files.get(role) or {})
+        source_file = (PROJECT_ROOT / str(item.get("path") or "")).resolve()
+        source_file.relative_to(PROJECT_ROOT)
+        if not source_file.is_file() or compute_file_sha256(source_file).lower() != _normalized_hash_value(item.get("sha256")):
+            raise ValueError("cross-run attribution changed during scientific reuse")
+    new_manifest = {
+        **source_manifest,
+        "scientific_fingerprint": str(contract["fingerprint"]),
+        "robustness_id": str(contract["robustness_id"]),
+        "profile_id": str(contract["profile_id"]),
+        "arm_name": str(arm_name), "arm_order": int(arm_order), "seed_order": int(seed_order),
+        "source_attribution_manifest": project_relative_display_path(
+            _attribution_unit_dir(source_run_root, arm_id, seed) / MANIFEST_FILENAME,
+            project_root=PROJECT_ROOT,
+        ),
+        "scientific_observation_validation": {
+            "status": "VERIFIED", "verified_at_utc": datetime.now(timezone.utc).isoformat(),
+            "source": "verified_cross_run_scientific_observation_reference",
+        },
+    }
+    destination.mkdir(parents=True, exist_ok=True)
+    _write_json(destination / MANIFEST_FILENAME, new_manifest)
 
 
 def _materialize_registered_strategy_only_scientific_reuse(
@@ -3951,6 +3916,7 @@ def _materialize_registered_strategy_only_scientific_reuse(
 
     if not reusable:
         return []
+    store = ScientificUnitStore(Path(run_root).parent)
     seeds = tuple(int(value) for value in contract["resolved_seeds"])
     arm_order = {arm.arm_id: i for i, arm in enumerate(stochastic_arms, start=1)}
     seed_order = {int(seed): i for i, seed in enumerate(seeds, start=1)}
@@ -3967,9 +3933,29 @@ def _materialize_registered_strategy_only_scientific_reuse(
     provenance: list[dict[str, Any]] = []
     verified_source_artifacts: set[Path] = set()
     for unit, item in sorted(reusable.items()):
-        if unit in existing_units:
-            continue
         arm_id, seed = unit
+        if unit in existing_units:
+            existing_row = current[(current["arm_id"].astype(str) == arm_id)
+                                   & (current["seed"].astype(int) == seed)]
+            if len(existing_row) != 1:
+                raise ValueError("Duplicate scientific observation while restoring result view")
+            existing_years = current_yearly[
+                (current_yearly["arm_id"].astype(str) == arm_id)
+                & (current_yearly["seed"].astype(int) == seed)
+            ] if not current_yearly.empty else pd.DataFrame()
+            known_years = set(existing_years.get("year", pd.Series(dtype=int)).astype(int))
+            source_years = item["yearly"][item["yearly"]["year"].astype(int).isin(known_years)]
+            _observation_equivalence(
+                {"row": existing_row.iloc[0].to_dict(), "yearly": existing_years.to_dict("records")},
+                {"row": dict(item["row"]), "yearly": source_years.to_dict("records")},
+            )
+            # Restore the view, not the old producer's evidence. Existing complete
+            # economic values were checked above and remain identical.
+            current = current[~((current["arm_id"].astype(str) == arm_id)
+                                & (current["seed"].astype(int) == seed))]
+            if not current_yearly.empty:
+                current_yearly = current_yearly[~((current_yearly["arm_id"].astype(str) == arm_id)
+                                                & (current_yearly["seed"].astype(int) == seed))]
         if item.get("source_attribution") is not None and bool(
             dict(contract.get("retention") or {}).get("keep_attribution_source")
         ):
@@ -3981,7 +3967,7 @@ def _materialize_registered_strategy_only_scientific_reuse(
                 ):
                     raise RuntimeError("cross-run signed scientific result changed during reuse")
                 verified_source_artifacts.add(source_root)
-            _copy_registered_model_attribution(
+            _reference_registered_model_attribution(
                 source_item=item, destination_root=run_root, contract=contract,
                 arm_id=arm_id, seed=seed,
                 arm_order=arm_order[arm_id], seed_order=seed_order[seed],
@@ -4006,6 +3992,15 @@ def _materialize_registered_strategy_only_scientific_reuse(
                 "seed_order": int(seed_order[int(seed)]),
             })
             new_yearly_rows.append(yearly_row)
+        observation = {
+            "row": dict(item["row"]), "yearly": item["yearly"].to_dict("records"),
+            "source_run_root": project_relative_display_path(Path(item["source_run_root"]), project_root=PROJECT_ROOT),
+            "source_fingerprint": str(item.get("source_fingerprint") or Path(item["source_run_root"]).name),
+            "source_attribution": item.get("source_attribution"),
+            "current_parameter_sha256": item.get("current_parameter_sha256"),
+        }
+        store.publish(signature=item["signature"], observation=observation,
+                      validate_equivalent=_observation_equivalence)
         provenance.append({
             "arm_id": arm_id,
             "seed": int(seed),
@@ -4130,6 +4125,14 @@ def _resolve_existing_scientific_unit_states(
             unit for unit, years in yearly_by_unit.items()
             if years == expected_year_set
         }
+    if completed_rows and bool(dict(contract.get("retention") or {}).get("keep_attribution_source")):
+        model_ids = set(contract.get("model_seed_sensitive_arm_ids") or ())
+        for arm_id, seed in tuple(completed_rows):
+            if arm_id in model_ids and _read_attribution_unit_manifest(
+                run_root, arm_id=arm_id, seed=seed,
+                expected_fingerprint=str(contract["fingerprint"]),
+            ) is None:
+                completed_rows.remove((arm_id, seed))
     unit_states: dict[tuple[str, int], dict[str, Any]] = {}
     for arm in stochastic_arms:
         for seed in seeds:
@@ -4174,24 +4177,34 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
     )
     started = time.perf_counter()
     artifacts = None
-    reusable_artifact_roots_exist = model_dir.is_dir() and (
-        is_selection_pit or research_dir.is_dir()
-    )
-    if bool(job.get("reuse_completed")) and reusable_artifact_roots_exist:
+    candidates = [(model_dir, research_dir)]
+    legacy_model = job.get("legacy_model_dir")
+    if legacy_model and Path(legacy_model).resolve() != model_dir:
+        candidates.append((Path(legacy_model).resolve(), research_dir))
+    for candidate_model, candidate_research in candidates:
+        if not bool(job.get("reuse_completed")) or not candidate_model.is_dir():
+            continue
+        if not is_selection_pit and not candidate_research.is_dir():
+            continue
         try:
             artifacts = validate_strategy_compare_training_artifacts(
-                project_root=PROJECT_ROOT,
-                source=dl,
-                workflow=workflow,
-                seed=seed,
-                model_dir=model_dir,
-                research_dir=research_dir,
+                project_root=PROJECT_ROOT, source=dl, workflow=workflow, seed=seed,
+                model_dir=candidate_model, research_dir=candidate_research,
                 comparison_start=str(job["comparison_start"]),
                 comparison_end=str(job["comparison_end"]),
-                point_in_time_dir_override=(model_dir if is_selection_pit else None),
+                point_in_time_dir_override=(candidate_model if is_selection_pit else None),
             )
-        except (FileNotFoundError, ValueError):
-            artifacts = None
+        except FileNotFoundError as exc:
+            # Missing aggregates can be resumed by the canonical fold producer.
+            # The consumer never resets the existing partial workspace.
+            job["model_reuse_miss_reason"] = str(exc)
+            continue
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Existing model source failed identity/integrity validation: {dl_id}/seed={seed}; "
+                "no artifact was deleted and no replacement FIT was started"
+            ) from exc
+        break
     if artifacts is None and bool(job.get("reuse_completed")) and is_selection_pit:
         artifacts, reuse_reason = inspect_reusable_model_research_rolling_score(
             project_root=PROJECT_ROOT,
@@ -4204,6 +4217,7 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         if artifacts is None:
             job["model_reuse_miss_reason"] = reuse_reason
     if artifacts is not None:
+        artifacts["current_training_elapsed_sec"] = 0.0
         artifacts["model_prediction_metrics"] = (
             _model_prediction_metrics_from_training_artifacts(artifacts)
         )
@@ -4222,23 +4236,9 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         authorized=bool(settings.preparation.auto_prepare),
     )
 
-    if is_selection_pit:
-        # Isolated benchmark namespace may resume completed PIT folds.  Remove only
-        # top-level aggregate artifacts so the canonical builder can reconstruct them.
-        model_dir.mkdir(parents=True, exist_ok=True)
-        for filename in (
-            SELECTION_POINT_IN_TIME_SCORE_FILENAME,
-            SELECTION_POINT_IN_TIME_COVERAGE_FILENAME,
-            SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
-        ):
-            try:
-                (model_dir / filename).unlink()
-            except FileNotFoundError:
-                pass
-    else:
-        shutil.rmtree(model_dir, ignore_errors=True)
-        model_dir.mkdir(parents=True, exist_ok=True)
-    shutil.rmtree(research_dir, ignore_errors=True)
+    # The canonical producer owns partial-fold reconciliation and integrity.
+    # The consumer never unlinks an aggregate/manifest or resets a model tree.
+    model_dir.mkdir(parents=True, exist_ok=True)
     research_dir.mkdir(parents=True, exist_ok=True)
 
     trained = run_strategy_compare_training_unit(
@@ -4264,6 +4264,7 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         resume=True,
     )
     artifacts = dict(trained["artifacts"])
+    artifacts["current_training_elapsed_sec"] = float(trained.get("elapsed_sec", 0.0) or 0.0)
     artifacts["model_prediction_metrics"] = (
         _model_prediction_metrics_from_training_artifacts(artifacts)
     )
@@ -4272,6 +4273,12 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         "reused": False,
         "wall_elapsed_sec": round(time.perf_counter() - started, 3),
     }
+
+
+def _model_source_work_root(contract: dict[str, Any], dl_id: str) -> Path:
+    return _model_work_root(contract).parent / "sources" / canonical_json_sha256(
+        model_source_signature(contract, str(dl_id)), length=16,
+    )
 
 
 def _training_units(
@@ -4287,6 +4294,7 @@ def _training_units(
     reuse_completed: bool,
     benchmark_id: str | None = None,
     checkpoint_cache_root: str | None = None,
+    contract: dict[str, Any] | None = None,
 ) -> deque[dict[str, Any]]:
     units: deque[dict[str, Any]] = deque()
     source_groups = _training_source_groups(stochastic_arms, settings=settings)
@@ -4309,6 +4317,9 @@ def _training_units(
                 if checkpoint_cache_root in (None, "")
                 else (PROJECT_ROOT / str(checkpoint_cache_root)).resolve()
             )
+            source_root = model_root
+            if contract is not None:
+                source_root = _model_source_work_root(contract, str(dl_id))
             units.append({
                 "arm": representative_arm,
                 "replay_arms": replay_entries,
@@ -4318,7 +4329,8 @@ def _training_units(
                 "settings": settings,
                 "seed": int(seed),
                 "seed_order": int(seed_order),
-                "model_dir": str(model_root / source_unit / "model"),
+                "model_dir": str(source_root / source_unit / "model"),
+                "legacy_model_dir": str(model_root / source_unit / "model"),
                 "research_dir": str(run_root / "work" / "training" / source_unit),
                 "comparison_start": str(comparison_start),
                 "comparison_end": str(comparison_end),
@@ -4569,7 +4581,7 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
     dl = settings.dl_sources[str(arm.dl_id)]
     start = str(job["comparison_start"]); end = str(job["comparison_end"])
     pair_dir = Path(str(job["pair_dir"])).resolve()
-    baseline_dir = Path(str(job["baseline_dir"])).resolve()
+    baseline_dir = None if job.get("replay_active_only") else Path(str(job["baseline_dir"])).resolve()
     if pair_dir.exists(): shutil.rmtree(pair_dir)
     started = time.perf_counter()
     runtime_spec = _arm_runtime_spec(arm)
@@ -4589,6 +4601,7 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         score_overrides=score_overrides,
         expected_seed_override=int(job["seed"]),
         baseline_reuse_dir=baseline_dir,
+        replay_active_only=bool(job.get("replay_active_only")),
         quiet=True,
         capture_execution_diagnostics=bool(job.get("keep_attribution_source")),
         # Multi-seed robustness只需要策略績效、trade-set與compact attribution。
@@ -5450,6 +5463,13 @@ def run_multi_seed_robustness(
             print("輸入無效，本次不執行。")
             return {}
 
+    if plan.get("work_plan") is not None:
+        return _execute_resolved_robustness_plan(
+            cfg=cfg, settings=settings, status=status, plan=plan,
+            fixed_arms=fixed_arms, stochastic_arms=stochastic_arms,
+            model_arms=model_arms, strategy_only_arms=strategy_only_arms,
+        )
+
     if bool(plan.get("model_upstream_prepare_required")):
         if model_upstream_preparer is None:
             raise RuntimeError(
@@ -5517,29 +5537,48 @@ def run_multi_seed_robustness(
     )
     status = dict(status)
     status["comparison_period"] = {"start": comparison_start, "end": comparison_end}
-    contract = build_multi_seed_robustness_contract(
-        robustness_id=cfg.robustness_id,
-        comparison_period={"start": comparison_start, "end": comparison_end},
-        artifact_identities=dict(status.get("artifact_identities") or {}),
-        benchmark_parameter_identities=_benchmark_identity_payload(benchmark_bindings),
+    final_text, final_plan = _render_robustness_execution_plan(
+        cfg=cfg, settings=settings, status=status,
+        fixed_arms=fixed_arms, stochastic_arms=stochastic_arms,
     )
-    registered_scientific_reuse.update(
-        _discover_registered_model_scientific_reuse(
-            settings=settings, robustness=cfg,
-            current_contract=contract, stochastic_arms=tuple(stochastic_arms),
-        )
+    if final_plan.get("work_plan") is None:
+        raise RuntimeError("Canonical prerequisites did not produce a READY execution plan")
+    initial_reuse = {unit for unit, state in plan.get("robustness_unit_states", {}).items()
+                     if state.get("action") == RESULT_ACTION_REUSE}
+    if not initial_reuse <= final_plan["work_plan"].reuse_units:
+        raise RuntimeError("Previously reusable results changed during preparation; no replay was started")
+    print("\n" + final_text)
+    return _execute_resolved_robustness_plan(
+        cfg=cfg, settings=settings, status=status, plan=final_plan,
+        fixed_arms=fixed_arms, stochastic_arms=stochastic_arms,
+        model_arms=model_arms, strategy_only_arms=strategy_only_arms,
     )
-    # The planner and canonical parameter producers run before these locks.
-    # One acquired session owns every mutation of this run's result files and
-    # the shared model workspace, including exact REUSE and derived upgrades.
-    with _exclusive_robustness_run(contract):
+
+
+def _execute_resolved_robustness_plan(
+    *, cfg, settings, status, plan, fixed_arms, stochastic_arms,
+    model_arms, strategy_only_arms,
+):
+    contract = plan["robustness_contract"]
+    with _exclusive_robustness_run(contract), ExitStack() as source_leases:
+        require_pinned_files(plan["evidence_pins"])
+        missing_sources = set(plan["work_plan"].source_units) - set(plan["model_source_artifacts"])
+        for dl_id, seed in sorted(missing_sources):
+            source_root = _model_source_work_root(contract, dl_id) / _unit_key(dl_id, seed)
+            source_leases.enter_context(exclusive_file_lock(
+                sibling_publication_lock_path(source_root),
+                conflict_message="This model source/seed is already in use; no duplicate FIT was started",
+            ))
         return _execute_robustness_under_lock(
             cfg=cfg, settings=settings, status=status, contract=contract,
             fixed_arms=fixed_arms, stochastic_arms=stochastic_arms,
             model_arms=model_arms, strategy_only_arms=strategy_only_arms,
-            registered_scientific_reuse=registered_scientific_reuse,
-            benchmark_bindings=benchmark_bindings,
-            comparison_start=comparison_start, comparison_end=comparison_end,
+            registered_scientific_reuse=plan["registered_scientific_reuse"],
+            benchmark_bindings=plan["resolved_benchmark_bindings"],
+            comparison_start=str(plan["comparison_period"]["start"]),
+            comparison_end=str(plan["comparison_period"]["end"]),
+            work_plan=plan["work_plan"],
+            planned_model_artifacts=plan["model_source_artifacts"],
         )
 
 
@@ -5602,7 +5641,7 @@ def _reuse_completed_robustness_run(
 def _build_robustness_replay_job(
     *, cfg: Any, settings: Any, contract: dict[str, Any], run_root: Path,
     arm: StrategyComparisonArm, arm_order: int, seed: int, seed_order: int,
-    param_binding: dict[str, Any], baseline_dir: str,
+    param_binding: dict[str, Any], baseline_dir: str | None,
     source_artifacts: dict[str, dict[str, Any]],
     comparison_start: str, comparison_end: str,
 ) -> dict[str, Any]:
@@ -5634,7 +5673,8 @@ def _build_robustness_replay_job(
         "param_evaluation_mode": str(param_binding["evaluation_mode"]),
         "comparison_start": comparison_start,
         "comparison_end": comparison_end,
-        "baseline_dir": baseline_dir,
+        "baseline_dir": None,
+        "replay_active_only": True,
         "score_path": primary["score"],
         "score_manifest_path": primary.get("manifest"),
         "score_execution_start": primary["score_execution_start"],
@@ -5642,7 +5682,7 @@ def _build_robustness_replay_job(
         "selected_epoch": primary["selected_epoch"],
         "fold_count": primary.get("fold_count"),
         "training_elapsed_sec": float(sum(
-            float(artifacts.get("training_elapsed_sec", 0.0) or 0.0)
+            float(artifacts.get("current_training_elapsed_sec", artifacts.get("training_elapsed_sec", 0.0)) or 0.0)
             for artifacts in source_artifacts.values()
         )),
         "model_sha256": primary.get("model_sha256"),
@@ -5783,32 +5823,20 @@ def _prepare_strategy_only_baseline_units(
     scientific_completed: set[tuple[str, int]],
     completed: set[tuple[str, int]],
     rows: list[dict[str, Any]], yearly_rows: list[dict[str, Any]],
+    work_plan: RobustnessWorkPlan | None = None, contract: dict[str, Any] | None = None,
 ) -> tuple[dict[tuple[str, int], str], dict[tuple[str, int], str], list[dict[str, Any]], list[dict[str, Any]]]:
-    """Reuse durable strategy-only observations; build baseline context only if a model replay needs it.
+    """Produce only missing scientific baselines; active-arm replay needs no pair context.
 
     The caller owns the scientific identity and mutable completed-unit sets.
     """
     seed_results_path = run_root / SEED_RESULTS_FILENAME
     seed_yearly_results_path = run_root / SEED_YEARLY_RESULTS_FILENAME
-    # C61/C58 are per-seed scientific baselines.  Their durable seed results are
-    # reusable; the replay directory itself is transient and is rebuilt only when
-    # an unfinished model arm actually needs baseline_reuse_dir.
+    # Durable per-seed scientific baselines are independent observations.
+    # Missing disposable pair directories never authorize replay of old results.
     benchmark_baseline_dirs: dict[tuple[str, int], str] = {}
     stochastic_order = {arm.arm_id: index for index, arm in enumerate(stochastic_arms, start=1)}
-    model_replay_pending = {
-        (arm.arm_id, int(seed))
-        for seed in seeds
-        for arm in model_arms
-        if (arm.arm_id, int(seed)) not in completed
-    }
+    # Active-only observation replay never needs a transient DL-off pair.
     required_baseline_units: set[tuple[str, int]] = set()
-    for model_arm in model_arms:
-        baseline_arm = _resolve_same_seed_baseline_arm(
-            settings=settings, strategy_only_arms=tuple(strategy_only_arms), model_arm=model_arm
-        )
-        for seed in seeds:
-            if (model_arm.arm_id, int(seed)) in model_replay_pending:
-                required_baseline_units.add((baseline_arm.arm_id, int(seed)))
 
     strategy_only_actions: dict[tuple[str, int], str] = {}
     strategy_results_changed = False
@@ -5865,6 +5893,8 @@ def _prepare_strategy_only_baseline_units(
                 benchmark_bindings[unit_identity] = refreshed
                 binding = refreshed
 
+            if work_plan is not None:
+                work_plan.require_replay(unit_identity)
             baseline_jobs.append((unit_identity, action, {
                 "profile_id": str(settings.profile_id),
                 "arm_id": str(arm.arm_id),
@@ -5933,6 +5963,11 @@ def _prepare_strategy_only_baseline_units(
                 if (str(row.get("arm_id")), int(row.get("seed"))) != unit_identity
             ]
             yearly_rows.extend(result["yearly"])
+            if contract is not None:
+                _publish_unit_observation(
+                    cfg=cfg, contract=contract, run_root=run_root,
+                    row=_result_row(result), yearly=list(result["yearly"]),
+                )
             scientific_completed.add(unit_identity)
             completed.add(unit_identity)
             strategy_results_changed = True
@@ -6022,6 +6057,8 @@ def _execute_robustness_under_lock(
     registered_scientific_reuse: dict[tuple[str, int], dict[str, Any]],
     benchmark_bindings: dict[tuple[str, int], dict[str, Any]],
     comparison_start: str, comparison_end: str,
+    work_plan: RobustnessWorkPlan | None = None,
+    planned_model_artifacts: dict[tuple[str, int], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Mutate one exact robustness run only while the caller holds both locks."""
     run_root = _run_root(contract)
@@ -6096,6 +6133,15 @@ def _execute_robustness_under_lock(
         for unit, state in scientific_unit_states.items()
         if str(state.get("action") or "") == RESULT_ACTION_REUSE
     }
+    if work_plan is None:
+        work_plan = RobustnessWorkPlan.build(
+            fingerprint=str(contract["fingerprint"]),
+            units=((arm.arm_id, seed) for arm in stochastic_arms for seed in seeds),
+            reuse_units=scientific_completed,
+            dependencies={arm.arm_id: resolve_arm_runtime_dl_source_ids(settings, arm)
+                          if arm.dl_enabled else () for arm in stochastic_arms},
+        )
+    work_plan.verify_completed(scientific_completed)
     model_arm_ids = {arm.arm_id for arm in model_arms}
     strategy_only_completed = {unit for unit in scientific_completed if unit[0] not in model_arm_ids}
     attribution_ready = (
@@ -6109,6 +6155,7 @@ def _execute_robustness_under_lock(
         else {unit for unit in scientific_completed if unit[0] in model_arm_ids}
     )
     completed = set(strategy_only_completed | (scientific_completed & attribution_ready))
+    work_plan.verify_completed(completed)
     rows = (
         [row for row in existing.to_dict("records") if (str(row.get("arm_id")), int(row.get("seed"))) in scientific_completed]
         if not existing.empty and cfg.reuse_completed else []
@@ -6130,7 +6177,7 @@ def _execute_robustness_under_lock(
             benchmark_bindings=benchmark_bindings,
             comparison_start=comparison_start, comparison_end=comparison_end,
             scientific_completed=scientific_completed, completed=completed,
-            rows=rows, yearly_rows=yearly_rows,
+            rows=rows, yearly_rows=yearly_rows, work_plan=work_plan, contract=contract,
         )
     )
 
@@ -6209,18 +6256,32 @@ def _execute_robustness_under_lock(
         reuse_completed=cfg.reuse_completed,
         benchmark_id=cfg.benchmark_id,
         checkpoint_cache_root=cfg.checkpoint_cache_root,
+        contract=contract,
     )
     training_cleanup_targets = []
-    for meta in pending_trainings:
-        meta["trainer_registry"] = active_trainers
-        meta["trainer_registry_lock"] = active_trainers_lock
-        meta["trainer_key"] = _unit_key(str(meta["dl_id"]), int(meta["seed"]))
-        training_cleanup_targets.append({
-            "model_dir": Path(str(meta["model_dir"])),
-            "research_dir": Path(str(meta["research_dir"])),
-            "score_source": str(settings.dl_sources[str(meta["dl_id"])].score_source),
-        })
     trained_artifacts: dict[tuple[str, int], dict[str, Any]] = {}
+    remaining_trainings = deque()
+    for meta in pending_trainings:
+        source_unit = (str(meta["dl_id"]), int(meta["seed"]))
+        work_plan.require_source(source_unit)
+        artifacts = dict((planned_model_artifacts or {}).get(source_unit) or {})
+        if not artifacts:
+            meta["trainer_registry"] = active_trainers
+            meta["trainer_registry_lock"] = active_trainers_lock
+            meta["trainer_key"] = _unit_key(str(meta["dl_id"]), int(meta["seed"]))
+            remaining_trainings.append(meta)
+            training_cleanup_targets.append({
+                "model_dir": Path(str(meta["model_dir"])),
+                "research_dir": Path(str(meta["research_dir"])),
+                "score_source": str(settings.dl_sources[str(meta["dl_id"])].score_source),
+            })
+            continue
+        work_plan.require_source_identity(source_unit, _runtime_replay_source_identities(
+            {source_unit[0]: artifacts})[source_unit[0]])
+        artifacts["current_training_elapsed_sec"] = 0.0
+        artifacts["model_prediction_metrics"] = _model_prediction_metrics_from_training_artifacts(artifacts)
+        trained_artifacts[source_unit] = artifacts
+    pending_trainings = remaining_trainings
     queued_replay_units: set[tuple[str, int]] = set()
 
     displayed_done_units = 0
@@ -6338,6 +6399,15 @@ def _execute_robustness_under_lock(
                         expected_fingerprint=str(contract["fingerprint"]),
                         source="new_scientific_observation",
                     )
+            _publish_unit_observation(
+                cfg=cfg, contract=contract, run_root=run_root,
+                row=_result_row(result), yearly=list(result.get("yearly") or []),
+                attribution=(
+                    _read_attribution_unit_manifest(run_root, arm_id=unit_identity[0], seed=unit_identity[1],
+                                                    expected_fingerprint=str(contract["fingerprint"]))
+                    if cfg.keep_attribution_source else None
+                ),
+            )
             completed.add(unit_identity)
             done_units = len(completed)
             romd = float(result.get("return_over_max_drawdown"))
@@ -6370,6 +6440,7 @@ def _execute_robustness_under_lock(
         while ready_replays and len(replay_futures) < int(cfg.cpu_replay_workers):
             replay_job, meta = ready_replays.popleft()
             meta["submitted_at"] = time.perf_counter()
+            work_plan.require_replay((str(replay_job["arm_id"]), int(replay_job["seed"])))
             future = replay_executor.submit(_replay_one_unit, replay_job)
             replay_futures[future] = meta
             progress_update(
@@ -6395,14 +6466,8 @@ def _execute_robustness_under_lock(
         source_keys = tuple((dl_id, int(seed)) for dl_id in required_dl_ids)
         if any(key not in trained_artifacts for key in source_keys):
             return
-        baseline_arm = _resolve_same_seed_baseline_arm(
-            settings=settings, strategy_only_arms=tuple(strategy_only_arms), model_arm=arm
-        )
-        baseline_dir = benchmark_baseline_dirs.get((baseline_arm.arm_id, int(seed)))
-        if not baseline_dir:
-            raise RuntimeError(
-                f"model benchmark arm缺少same-seed baseline replay: {baseline_arm.arm_id}/seed={seed}"
-            )
+        work_plan.require_replay(unit_identity)
+        baseline_dir = None
         source_artifacts = {
             dl_id: dict(trained_artifacts[(dl_id, int(seed))])
             for dl_id in required_dl_ids
@@ -6432,7 +6497,10 @@ def _execute_robustness_under_lock(
             meta = training_futures.pop(future)
             trained = future.result()
             artifacts = dict(trained["artifacts"])
-            trained_artifacts[(str(meta["dl_id"]), int(meta["seed"]))] = artifacts
+            source_unit = (str(meta["dl_id"]), int(meta["seed"]))
+            work_plan.require_source_identity(source_unit, _runtime_replay_source_identities(
+                {source_unit[0]: artifacts})[source_unit[0]])
+            trained_artifacts[source_unit] = artifacts
             fold_reuse = dict(artifacts.get("fold_reuse_summary") or {})
             built_folds = int(fold_reuse.get("built", 0) or 0)
             if trained["reused"]:
@@ -6446,7 +6514,7 @@ def _execute_robustness_under_lock(
             else:
                 tag = "[TRAIN DONE]"
             fold_note = ""
-            if fold_reuse:
+            if fold_reuse and not trained["reused"]:
                 fold_note = (
                     " | folds="
                     f"reuse:{int(fold_reuse.get('exact_reuse', 0) or 0)}"
@@ -6461,7 +6529,7 @@ def _execute_robustness_under_lock(
                 f"模型來源 {meta['source_order']}/{meta['source_count']} {meta['dl_id']} "
                 + f"| replay targets={len(meta['replay_arms'])} "
                 + f"| epoch={artifacts['selected_epoch']} "
-                + f"| elapsed={format_elapsed(artifacts.get('training_elapsed_sec', trained['wall_elapsed_sec']))}"
+                + f"| elapsed={format_elapsed(trained['wall_elapsed_sec'])}"
                 + fold_note
                             )
             for arm_order, arm in meta["replay_arms"]:
@@ -6515,6 +6583,14 @@ def _execute_robustness_under_lock(
         if training_futures:
             write_progress_manifest()
             render_training_progress(time.perf_counter())
+
+    for seed_order, seed in enumerate(seeds, start=1):
+        for arm_order, arm in enumerate(stochastic_arms, start=1):
+            if arm.dl_enabled and (arm.arm_id, seed) in work_plan.replay_units:
+                queue_replay_if_ready(arm_order=arm_order, arm=arm, seed=seed, seed_order=seed_order)
+    if trained_artifacts:
+        print_event(styled_workflow_status("[MODEL SCORE REUSE]")
+                    + f" sources={len(trained_artifacts)} | current FIT=0 | pending replay only")
 
     next_print = time.perf_counter() + float(cfg.progress_interval_seconds)
     try:

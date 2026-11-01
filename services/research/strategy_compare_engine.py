@@ -504,6 +504,53 @@ def _selection_target_lookup_for_verified_pit(
     ).copy()
 
 
+def _materialize_active_observation(
+    *, root, output_dir, payload, labels, replay_counts, execution_rows,
+    selector_trace_rows, start_date, end_date, elapsed_sec,
+):
+    """Transient arm-only output using the same replay/metric/annual owners.
+
+    Robustness already owns verified baseline observations. Rebuilding a DL-off
+    portfolio merely to create a disposable paired report is not a dependency of
+    this arm's economic result. The final Standard SOP still joins the real arms.
+    """
+    output_dir = Path(output_dir)
+    if not output_dir.is_absolute():
+        output_dir = Path(root) / output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+    name = labels["active_name"]
+    payload["equity_curve"].to_csv(output_dir / f"{name}_equity.csv", index=False, encoding="utf-8-sig")
+    payload["trade_history"].to_csv(output_dir / f"{name}_trades.csv", index=False, encoding="utf-8-sig")
+    pd.DataFrame(payload["profile"].get("portfolio_capacity_rows") or []).to_csv(
+        output_dir / f"{name}_daily_capacity.csv", index=False, encoding="utf-8-sig")
+    _flatten_selected_buy_rows(payload["trade_history"]).to_csv(
+        output_dir / f"{name}_selected_buys.csv", index=False, encoding="utf-8-sig")
+    _flatten_candidate_replay_rows(replay_counts or {}, "orderable_rows").to_csv(
+        output_dir / f"{name}_orderable_candidates.csv", index=False, encoding="utf-8-sig")
+    if execution_rows is not None:
+        _flatten_entry_execution_rows(execution_rows).to_csv(
+            output_dir / f"{name}_execution.csv", index=False, encoding="utf-8-sig")
+    if selector_trace_rows is not None:
+        _flatten_selector_trace_rows(selector_trace_rows).to_csv(
+            output_dir / f"{name}_selector_trace.csv", index=False, encoding="utf-8-sig")
+        _flatten_repair_mechanism_rows(selector_trace_rows).to_csv(
+            output_dir / f"{name}_repair_search_certificate.csv", index=False, encoding="utf-8-sig")
+    yearly = _yearly_frame(payload["profile"], name).sort_values("year").reset_index(drop=True)
+    result = _to_json_native({
+        "metadata": {"transient_active_only": True,
+                     "comparison_period": {"start": str(start_date), "end": str(end_date)},
+                     "execution_timing": {"baseline_action": "NOT_REQUIRED", "baseline_elapsed_sec": 0.0,
+                                          "active_elapsed_sec": float(elapsed_sec)}},
+        name: _scenario_summary(payload),
+        "yearly": yearly.to_dict("records"),
+        "benchmark_yearly": list(payload["profile"].get("bm_report_yearly_return_rows") or []),
+    })
+    # Not a paired report and never a baseline reuse candidate.
+    (output_dir / "strategy_observation.json").write_text(
+        json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    return result
+
+
 def run_comparison(
     *, project_root=PROJECT_ROOT, dataset="full", params_path=None,
     param_policy=PARAM_POLICY_AUTO, max_positions=DEFAULT_PORTFOLIO_MAX_POSITIONS, enable_rotation=False,
@@ -524,6 +571,7 @@ def run_comparison(
     shared_param_overrides=None,
     hard_filter_source=None,
     baseline_reuse_dir=None,
+    replay_active_only=False,
     continuous_score_path_override=None,
     continuous_score_execution_start_override=None,
     selection_pit_score_path_override=None,
@@ -651,55 +699,64 @@ def run_comparison(
             f"params={param_start}~{param_end}, comparison={start_date}~{end_date}"
         )
 
+    if replay_active_only and (
+        comparison_mode != COMPARISON_MODE_SCORE_RANKING
+        or output_dir_override is None or capture_selection_target_diagnostics
+        or baseline_reuse_dir is not None
+    ):
+        raise ValueError("Active-only replay requires explicit transient output and no paired diagnostics/baseline")
     baseline_replay_counts = {} if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None
     baseline_summary_override = None
     baseline_orderable_reused = None
     pair_timing_started = time.perf_counter()
     baseline_timing_started = time.perf_counter()
-    if progress_callback is not None:
-        progress_callback("baseline_start", {"reused": baseline_reuse_dir is not None})
-    if baseline_reuse_dir is not None:
-        baseline_payload, baseline_summary_override, baseline_orderable_reused = (
-            _load_reusable_no_filter_baseline(
-                Path(baseline_reuse_dir),
-                comparison_mode=comparison_mode,
-                expected_dataset=dataset,
-                expected_params_sha256=param_identity_sha256,
-                expected_param_policy=param_policy,
-                expected_param_evaluation_mode=str(param_evaluation_mode),
-                expected_optional_entry_filter_policy=optional_entry_filter_policy,
-                expected_shared_param_overrides=dict(shared_param_overrides or {}),
-                expected_max_positions=max_positions,
-                expected_enable_rotation=enable_rotation,
-                expected_start_date=start_date,
-                expected_end_date=end_date,
-            )
-        )
-        baseline_replay_counts = None
-        if not quiet:
-            print(
-                "[no_filter] 重用既有正式baseline replay："
-                + project_relative_display_path(
-                    Path(baseline_reuse_dir).resolve(),
-                    project_root=root,
+    baseline_payload = None
+    baseline_elapsed_sec = 0.0
+    if not replay_active_only:
+        if progress_callback is not None:
+            progress_callback("baseline_start", {"reused": baseline_reuse_dir is not None})
+        if baseline_reuse_dir is not None:
+            baseline_payload, baseline_summary_override, baseline_orderable_reused = (
+                _load_reusable_no_filter_baseline(
+                    Path(baseline_reuse_dir),
+                    comparison_mode=comparison_mode,
+                    expected_dataset=dataset,
+                    expected_params_sha256=param_identity_sha256,
+                    expected_param_policy=param_policy,
+                    expected_param_evaluation_mode=str(param_evaluation_mode),
+                    expected_optional_entry_filter_policy=optional_entry_filter_policy,
+                    expected_shared_param_overrides=dict(shared_param_overrides or {}),
+                    expected_max_positions=max_positions,
+                    expected_enable_rotation=enable_rotation,
+                    expected_start_date=start_date,
+                    expected_end_date=end_date,
                 )
             )
-    else:
-        baseline_payload = _run_scenario(
-            name="no_filter", data_dir=data_dir, param_source_kind=param_source_kind,
-            params=no_filter_params, start_date=start_date, end_date=end_date,
-            max_positions=max_positions, enable_rotation=enable_rotation, quiet=quiet,
-            replay_counts=baseline_replay_counts,
-        )
-    baseline_elapsed_sec = time.perf_counter() - baseline_timing_started
-    if progress_callback is not None:
-        progress_callback(
-            "baseline_done",
-            {
-                "reused": baseline_reuse_dir is not None,
-                "elapsed_sec": float(baseline_elapsed_sec),
-            },
-        )
+            baseline_replay_counts = None
+            if not quiet:
+                print(
+                    "[no_filter] 重用既有正式baseline replay："
+                    + project_relative_display_path(
+                        Path(baseline_reuse_dir).resolve(),
+                        project_root=root,
+                    )
+                )
+        else:
+            baseline_payload = _run_scenario(
+                name="no_filter", data_dir=data_dir, param_source_kind=param_source_kind,
+                params=no_filter_params, start_date=start_date, end_date=end_date,
+                max_positions=max_positions, enable_rotation=enable_rotation, quiet=quiet,
+                replay_counts=baseline_replay_counts,
+            )
+        baseline_elapsed_sec = time.perf_counter() - baseline_timing_started
+        if progress_callback is not None:
+            progress_callback(
+                "baseline_done",
+                {
+                    "reused": baseline_reuse_dir is not None,
+                    "elapsed_sec": float(baseline_elapsed_sec),
+                },
+            )
     quality_replay_counts = {} if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None
     quality_execution_rows = (
         []
@@ -725,6 +782,13 @@ def run_comparison(
     active_elapsed_sec = time.perf_counter() - active_timing_started
     if progress_callback is not None:
         progress_callback("active_done", {"elapsed_sec": float(active_elapsed_sec)})
+    if replay_active_only:
+        return _materialize_active_observation(
+            root=root, output_dir=output_dir_override, payload=quality_payload, labels=labels,
+            replay_counts=quality_replay_counts, execution_rows=quality_execution_rows,
+            selector_trace_rows=quality_selector_trace_rows, start_date=start_date,
+            end_date=end_date, elapsed_sec=active_elapsed_sec,
+        )
     _assert_shared_benchmark(baseline_payload, quality_payload)
 
     baseline = (

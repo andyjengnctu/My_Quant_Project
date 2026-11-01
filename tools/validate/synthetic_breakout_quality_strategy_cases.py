@@ -1943,6 +1943,8 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             }
         ],
     }
+    from services.research.strategy_robustness_units import model_source_signature
+    source_identity_before = model_source_signature(model_identity_scientific, "CONT13E_ROLL")
     model_identity_before = _model_artifact_identity_payload(model_identity_scientific)
     model_identity_scientific["benchmark_parameter_artifact_identities"] = {
         "C59:seed=11": {"sha256": "param-new"}
@@ -1952,7 +1954,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         "robustness_model_artifact_identity_is_independent_of_strategy_param_retraining",
         model_identity_before == model_identity_after
         and 'contract.get("model_artifact_fingerprint") or contract["fingerprint"]' in multi_seed_source
-        and "reusable_artifact_roots_exist = model_dir.is_dir()" in multi_seed_source,
+        and source_identity_before == model_source_signature(model_identity_scientific, "CONT13E_ROLL"),
     )
     seed_expansion_before = dict(model_identity_scientific)
     seed_expansion_before["resolved_seeds"] = [11, 22]
@@ -2233,6 +2235,12 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             for arm_id in ("C62", "C61", "C58", "C84")
         },
     }
+    materialize_contract["stochastic_arms"] = [
+        {"arm_id": arm.arm_id, "param_source": arm.param_source,
+         "param_policy": arm.param_policy, "rule_policy": arm.rule_policy,
+         "model_seed_sensitive": False, "strategy_seed_sensitive": True}
+        for arm in materialize_arms
+    ]
     materialize_reuse = {}
     for arm_id in ("C62", "C61", "C58"):
         row = {
@@ -2251,14 +2259,21 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             for year in range(2021, 2027)
         ])
         materialize_reuse[(arm_id, materialize_seed)] = {
-            "row": row, "yearly": yearly, "source_run_root": Path("synthetic/source")
+            "row": row, "yearly": yearly, "source_run_root": Path("synthetic/source"),
+            "signature": _strategy_only_unit_scientific_signature_from_contract(
+                contract=materialize_contract, arm_id=arm_id, seed=materialize_seed,
+            ),
         }
     with tempfile.TemporaryDirectory(prefix="robustness_unit_materialize_") as temp_dir:
-        materialize_root = Path(temp_dir)
-        provenance = _materialize_registered_strategy_only_scientific_reuse(
-            run_root=materialize_root, contract=materialize_contract,
-            stochastic_arms=materialize_arms, reusable=materialize_reuse,
-        )
+        materialize_root = Path(temp_dir) / "result_view"
+        materialize_root.mkdir()
+        for item in materialize_reuse.values():
+            item["source_run_root"] = Path(temp_dir) / "synthetic" / "source"
+        with patch("services.research.strategy_multi_seed_robustness.PROJECT_ROOT", Path(temp_dir)):
+            provenance = _materialize_registered_strategy_only_scientific_reuse(
+                run_root=materialize_root, contract=materialize_contract,
+                stochastic_arms=materialize_arms, reusable=materialize_reuse,
+            )
         materialized_rows, materialized_yearly, materialized_states = (
             _resolve_existing_scientific_unit_states(
                 run_root=materialize_root, contract=materialize_contract,

@@ -872,7 +872,7 @@ def append_robustness_benchmark_plan_checks(
         and not fitted_param_payload.get("blockers")
         and not fitted_param_payload.get("registered_scientific_reuse_units")
         and "0 pending search units" in fitted_param_plan
-        and f"scientific result REUSE=0/{expected_total_units} arm×replicate" in fitted_param_plan
+        and f"scientific result REUSE={len(exact_result_reuse_states)}/{expected_total_units} arm×replicate" in fitted_param_plan
         and len(ready_param_bindings) == expected_total_units
         and all(binding.get("plan_action") == "REUSE" for binding in ready_param_bindings.values())
         and len(ready_result_states) == len(rolling_robustness.resolved_seeds)
