@@ -93,6 +93,7 @@ def _forty_only(definition):
             "DailyUniversal_MinTrade_NetR_Direct",
             "DailyUniversal_MinTrade_NetPnL",
             "DailyUniversal_MinTrade_NetPnL_Direct",
+            "DailyUniversal_MinTrade_NetPnL_Positive",
             "DailyUniversal_MinTrade_NetPnL_Positive_Direct",
         })})
 
@@ -1358,7 +1359,10 @@ class OracleAuditContractCases(TestCase):
             {"MFE40_Control", "R40", "T40",
              "T40-MFE", "MFE40_Direct", "R40_Direct", "T40_Direct", "T40-MFE_Direct"},
         )
-        self.assertEqual(len(oracle._oracle_comparison_plan(self.active_definition)["targets"]), 15)
+        self.assertEqual(
+            len(oracle._oracle_comparison_plan(self.active_definition)["targets"]),
+            len([row for row in self.active_definition.source["oracle_comparisons"] if row.get("enabled", True)]),
+        )
         self.assertNotIn("CG40_EqualRank", dict(oracle._oracle_comparison_plan(self.active_definition)["targets"]))
         self.assertNotIn("MinTrade40_NetR", dict(oracle._oracle_comparison_plan(self.active_definition)["targets"]))
         self.assertNotIn("MinTrade40_NetR_Direct", dict(oracle._oracle_comparison_plan(self.active_definition)["targets"]))
@@ -1368,6 +1372,7 @@ class OracleAuditContractCases(TestCase):
             "DailyUniversal_MinTrade40_NetR_Direct": "DailyUniversal_MinTrade40_NetR",
             "DailyUniversal_MinTrade_NetR_Direct": "DailyUniversal_MinTrade_NetR",
             "DailyUniversal_MinTrade_NetPnL_Direct": "DailyUniversal_MinTrade_NetPnL",
+            "DailyUniversal_MinTrade_NetPnL_Positive": "DailyUniversal_MinTrade_NetPnL",
             "DailyUniversal_MinTrade_NetPnL_Positive_Direct": "DailyUniversal_MinTrade_NetPnL",
         })
         self.assertEqual(self.definition.output_subdir, "breakout_quality/reusable/target_oracle_romd")
@@ -2493,7 +2498,7 @@ class RemovedMinTrade40OracleComparisonCases(TestCase):
         current = _ACTIVE_ORACLE_DEFINITION
         planned = oracle._oracle_comparison_plan(current)
         names = {name for name, _ in planned["targets"]}
-        self.assertEqual(len(names), 15)
+        self.assertEqual(names, {item["target"] for item in current.source["oracle_comparisons"]})
         self.assertNotIn("MinTrade40_NetR", names)
         self.assertNotIn("MinTrade40_NetR_Direct", names)
         self.assertIn("DailyUniversal_MinTrade40_NetR", names)
@@ -5500,17 +5505,17 @@ class OraclePriceSourceExecutionPolicyIsolationCases(TestCase):
         from services.audit.oracle_execution_policy import execution_gate_policies
         from core.oracle_positive_gate import POSITIVE_FULLCYCLE_NETPNL_GATE
         definition = _ACTIVE_ORACLE_DEFINITION
+        # Current Positive Exact/Direct are formal dual-score consumers.  The
+        # historical raw-hindsight gate is no longer a current Oracle arm.
         before = replace(definition, source={**definition.source,
             "oracle_comparisons": tuple(row for row in definition.source["oracle_comparisons"]
-                                        if row.get("positive_gate") is None)})
+                                        if not row.get("positive_output"))})
         before_plan, after_plan = (oracle._oracle_comparison_plan(item)
                                    for item in (before, definition))
         self.assertEqual(before_plan["recipes"], after_plan["recipes"])
         self.assertEqual(before_plan["providers"], after_plan["providers"])
         self.assertEqual(execution_gate_policies(before, before_plan), {})
-        gates = execution_gate_policies(definition, after_plan)
-        self.assertEqual(len(gates), 1)
-        self.assertEqual(list(gates.values()), [POSITIVE_FULLCYCLE_NETPNL_GATE])
+        self.assertEqual(execution_gate_policies(definition, after_plan), {})
         self.assertEqual(oracle._price_score_algorithm_sha256(),
                          self._CERTIFIED_PRICE_FORMULA_SHA)
         self.assertEqual(oracle._price_score_replay_lineage(before),
@@ -6058,7 +6063,6 @@ class OracleInventoryAndSourceIsolationRegressionCases(TestCase):
         definition = _ACTIVE_ORACLE_DEFINITION
         live = resolve_current_oracle_comparisons(definition.source)
         names = [row["target"] for row in live]
-        self.assertEqual(len(names), 15)
         self.assertEqual(names, [name for name, _ in oracle._oracle_comparison_plan(definition)["targets"]])
         self.assertTrue(set(definition.source["historical_only_oracle_targets"]).isdisjoint(names))
         self.assertFalse(any("MinTrade60" in name for name in names))
@@ -6073,7 +6077,7 @@ class OracleInventoryAndSourceIsolationRegressionCases(TestCase):
         overview = render_target_dl_overview(collect_target_dl_overview(ROOT))
         self.assertNotIn("MinTrade60", visible)
         self.assertNotIn("MinTrade60", overview)
-        self.assertEqual(len(decisions), 8 * 16)
+        self.assertEqual(len(decisions), 8 * (1 + len(names)))
 
     def test_historical_only_target_cannot_enter_plan_even_if_misregistered(self):
         from core.audit_registry import resolve_current_oracle_comparisons
@@ -6944,7 +6948,8 @@ class OracleMinTradePreflightArtifactReuseCases(TestCase):
                     daily._truth_cache_write(path, identity, scores, evidence)
                     truth_paths.append(path)
             for target in ("C96", *(name for name, _ in plan["targets"])):
-                arm = direct if plan["selectors"].get(target) == "direct" else exact
+                arm = (exact if target == "C96" else oracle._target_reference_arm(
+                    definition, settings, plan, target, exact, direct))
                 args = {} if target == "C96" else dict(
                     score_sha256=score_sha,
                     score_contract={**contracts[target], "canonical_feature_eligible_keys_sha256": proof[0],
@@ -7008,7 +7013,7 @@ class OracleMinTradePreflightArtifactReuseCases(TestCase):
             with patch.object(artifacts, "verified_daily_truth_witness",
                               wraps=artifacts.verified_daily_truth_witness) as reader:
                 decisions = self._preflight(root, fixture)
-            self.assertEqual(len(decisions), 128)
+            self.assertEqual(len(decisions), len(fixture[2]) * (1 + len(oracle._oracle_comparison_plan(fixture[0])["targets"])))
             self.assertEqual(set(decisions.values()), {"REUSE"})
             self.assertEqual(reader.call_count, 24, "One read per seed/source, not per recipient")
             self.assertEqual(before, {p: p.read_bytes() for p in store.cache_root.rglob("*.json")})
@@ -7020,7 +7025,7 @@ class OracleMinTradePreflightArtifactReuseCases(TestCase):
             completed = self._preflight(root, fixture, approve=True)
             self.assertEqual(len(list((index_parent / "truth_index").rglob("*.json"))), 24)
             self.assertEqual(completed["status"], "COMPLETED")
-            self.assertEqual(len(completed["oracles"]), 15)
+            self.assertEqual(len(completed["oracles"]), len(oracle._oracle_comparison_plan(fixture[0])["targets"]))
             self.assertEqual(before, {p: p.read_bytes() for p in store.cache_root.rglob("*.json")})
 
     def test_current_receipts_import_existing_truth_with_distinct_rank_and_replay_hashes(self):
@@ -7040,7 +7045,7 @@ class OracleMinTradePreflightArtifactReuseCases(TestCase):
                        side_effect=AssertionError("Current receipts must not scan numerical truth arrays")):
                 decisions = self._preflight(root, fixture)
             self.assertEqual(set(decisions.values()), {"REUSE"})
-            self.assertEqual(len(decisions), 128)
+            self.assertEqual(len(decisions), len(fixture[2]) * (1 + len(oracle._oracle_comparison_plan(fixture[0])["targets"])))
             self.assertFalse(list((store.cache_root.parent / "truth_index").rglob("*.json")),
                              "Preview cannot publish a truth reference")
             approved = self._preflight(root, fixture, approve=True)
@@ -7092,7 +7097,7 @@ class OracleMinTradePreflightArtifactReuseCases(TestCase):
             with patch("services.audit.oracle_replay_artifacts.verified_daily_truth_witness",
                        side_effect=AssertionError("Encoding proof needs no NPZ or producer")):
                 decisions = self._preflight(root, fixture)
-            self.assertEqual(len(decisions), 128)
+            self.assertEqual(len(decisions), len(fixture[2]) * (1 + len(oracle._oracle_comparison_plan(fixture[0])["targets"])))
             self.assertEqual(set(decisions.values()), {"REUSE"})
 
     def test_warm_128_cell_plan_reads_no_arrays_or_legacy_source_closure(self):
@@ -7108,7 +7113,7 @@ class OracleMinTradePreflightArtifactReuseCases(TestCase):
             root = Path(tmp)
             fixture = self._fixture(root)
             first = self._preflight(root, fixture)
-            self.assertEqual(len(first), 128)
+            self.assertEqual(len(first), len(fixture[2]) * (1 + len(oracle._oracle_comparison_plan(fixture[0])["targets"])))
             self.assertEqual(set(first.values()), {"REUSE"})
             # Preflight only checks; an explicit authorization must first
             # create the reusable reference indexes for warm metadata-only reads.
@@ -7136,7 +7141,7 @@ class OracleMinTradePreflightArtifactReuseCases(TestCase):
                         f"Warm REUSE must not invoke {name}")))
                 completed = self._preflight(root, fixture, approve=True)
             self.assertEqual(completed["status"], "COMPLETED")
-            self.assertEqual(len(completed["oracles"]), 15)
+            self.assertEqual(len(completed["oracles"]), len(oracle._oracle_comparison_plan(fixture[0])["targets"]))
             self.assertEqual(before, {p: p.read_bytes() for p in fixture[6].cache_root.rglob("*.json")})
             self.assertEqual(references, {p: p.read_bytes() for p in references})
 
@@ -7179,7 +7184,7 @@ class OracleMinTradePreflightArtifactReuseCases(TestCase):
             with patch("services.audit.oracle_replay_artifacts.verified_daily_truth_witness",
                        side_effect=AssertionError("Source equivalence must not require a new truth cache")):
                 decisions = self._preflight(root, fixture)
-            self.assertEqual(len(decisions), 128)
+            self.assertEqual(len(decisions), len(fixture[2]) * (1 + len(oracle._oracle_comparison_plan(fixture[0])["targets"])))
             self.assertEqual(set(decisions.values()), {"REUSE"})
             self.assertEqual(before, {p: p.read_bytes() for p in fixture[6].cache_root.rglob("*.json")})
 

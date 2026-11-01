@@ -113,6 +113,8 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
     targets = (baseline, *(str(item["target"]) for item in comparisons))
     if len(set(targets)) != len(targets):
         raise ValueError("Oracle target identities are not unique")
+    current_definitions = {str(item["target"]): str(item["description"])
+                           for item in comparisons}
     # The Audit registry is the owner of retired historical identities; a
     # previously completed signed report may include them after [1] retires
     # those rows. Do not use them as current Oracle or DL results.
@@ -156,6 +158,7 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
             and payload.get("start_date") and payload.get("end_date")
             and payload.get("strategy_profile_id") == definition.source["strategy_profile_id"]):
         seen: set[str] = set()
+        published_definitions = payload.get("definitions")
         original = [dict(payload.get("baseline") or {}), *payload["oracles"]]
         for item in original:
             if not isinstance(item, dict):
@@ -170,11 +173,18 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
             if romd is None or winrate is None or not 0.0 <= winrate <= 100.0:
                 metrics.clear()
                 break
-            if target in targets:
+            if (target == baseline or
+                    (target in current_definitions
+                     and isinstance(published_definitions, dict)
+                     and published_definitions.get(target) == current_definitions[target])):
                 metrics[target] = {"oracle_romd": romd, "win_rate_pct": winrate}
-        # Projection only: demand all CURRENT rows, validate every historical
-        # row, and reject unknown/duplicate entries. No replay or data rewrite.
-        if set(targets).issubset(seen) and len(metrics) == len(targets):
+        # A completed historical report is validated against its OWN published
+        # inventory. Project only unchanged current rows; new/redefined Targets
+        # must await their own completed Replay, never inherit a stale metric.
+        if (baseline in seen and isinstance(published_definitions, dict)
+                and set(published_definitions) == seen - {baseline}
+                and all(isinstance(desc, str) and desc for desc in published_definitions.values())
+                and metrics):
             oracle_info = {
                 "path": str(data_path.relative_to(root).as_posix()),
                 "benchmark": str(payload.get("benchmark_id") or ""),
@@ -314,6 +324,11 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
     baseline = str(definition.source["baseline_arm_id"])
     base_arm = STRATEGY_COMPARE_ARMS[baseline]
     bindings = {(baseline, ""): baseline}
+    positive_targets = {
+        str(item["target"])
+        for item in resolve_current_oracle_comparisons(definition.source)
+        if item.get("positive_output")
+    }
     candidates: dict[tuple[str, str], set[str]] = {}
     for target in target_names:
         if target == baseline or not score_targets.get(target):
@@ -326,12 +341,21 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
                     or arm.get("param_policy") != base_arm["param_policy"]
                     or arm.get("rule_policy") != base_arm["rule_policy"]):
                 continue
-            dl = STRATEGY_DL_SOURCES.get(arm.get("dl_id")) or {}
-            profile = str(dl.get("experiment_profile") or "")
-            if profile not in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES:
+            options = dict(arm.get("dl_runtime_options") or {})
+            positive_dl_id = str(options.get("positive_dl_id") or "")
+            if bool(positive_dl_id) != (target in positive_targets):
                 continue
-            if _is_exact_supervision(profile, str(score_targets[target])):
-                candidates.setdefault((target, profile), set()).add(str(arm_id))
+            dl = STRATEGY_DL_SOURCES.get(arm.get("dl_id")) or {}
+            primary_profile = str(dl.get("experiment_profile") or "")
+            if (primary_profile not in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+                    or not _is_exact_supervision(primary_profile, str(score_targets[target]))):
+                continue
+            reporting_source = (STRATEGY_DL_SOURCES.get(positive_dl_id) or {}) if positive_dl_id else dl
+            profile = str(reporting_source.get("experiment_profile") or "")
+            if (profile not in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+                    or not _is_exact_supervision(profile, str(score_targets[target]))):
+                continue
+            candidates.setdefault((target, profile), set()).add(str(arm_id))
     # Ambiguous historical strategies must never be selected by ID order.
     bindings.update({key: next(iter(arm_ids)) for key, arm_ids in candidates.items()
                      if len(arm_ids) == 1})
@@ -440,12 +464,20 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
         str(get_predicted_upside_context_contract()["stage1_profile"]),
     }
     bindings = _strategy_bindings(target_names=targets, score_targets=score_targets, definition=definition)
+    positive_targets = {
+        str(item["target"]) for item in comparisons if item.get("positive_output")
+    }
+    positive_profiles = {
+        profile for (target, profile) in bindings if target in positive_targets
+    }
     rolling_romd = _strategy_rolling_metrics(root, versions)
     robust_romd = _strategy_robustness_metrics(root, versions)
     model_map: dict[str, list[dict[str, Any]]] = {}
     for profile in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES:
         possible_targets = [name for name, label_id in score_targets.items()
-                            if label_id and _is_exact_supervision(profile, label_id)]
+                            if label_id and _is_exact_supervision(profile, label_id)
+                            and ((name in positive_targets and profile in positive_profiles)
+                                 or (name not in positive_targets and profile not in positive_profiles))]
         if not possible_targets:
             continue
         model = get_continuous_ranker_research_spec(profile)

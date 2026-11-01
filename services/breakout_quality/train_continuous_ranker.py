@@ -3872,6 +3872,9 @@ def _training_target_for_profile(
         CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN: "safety_raw_mfe_joint_min_training_target",
         CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS: "direct_hmhs_target",
     }
+    if target_builder == "binary_positive_from_raw":
+        from core.positive_netpnl_contract import positive_labels
+        return positive_labels(raw_target)
     if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_JOINT_MFE_D40:
         return build_joint_mfe_d40_quadrants(
             group_table, np.isfinite(np.asarray(raw_target, dtype=np.float32))
@@ -4034,14 +4037,16 @@ def _evaluate_epoch_split(
     metric_family = None
     family_keys = None
 
-    if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_JOINT_MFE_D40:
+    if target_builder in {CONTINUOUS_RANKER_TARGET_BUILDER_JOINT_MFE_D40, "binary_positive_from_raw"}:
+        policy = get_continuous_ranker_training_policy(profile.training_objective)
         logits = _predict_logits(
             torch, model, feature_bank, group_context, ids, **predict_common
         )
-        labels = build_joint_mfe_d40_quadrants(
-            group_table, np.isfinite(np.asarray(raw_target, dtype=np.float32))
+        labels = _training_target_for_profile(profile, raw_target, percentile_target, group_table)
+        details["joint_quadrant_metrics"] = joint_probabilistic_metrics(
+            logits, labels[ids], class_count=int(policy.categorical_class_count),
+            positive_class=int(policy.categorical_primary_class),
         )
-        details["joint_quadrant_metrics"] = joint_probabilistic_metrics(logits, labels[ids])
         scores = predict_scores(
             torch, model, feature_bank, group_context, ids,
             training_objective=profile.training_objective, **predict_common,
@@ -4544,7 +4549,7 @@ def select_epoch(
             marker = " ★新最佳" if improved else ""
             if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_CATEGORICAL_CE:
                 print(
-                    f"  Epoch {epoch:>3}/{int(args.epochs)} | Train 4-class CE {batch_loss:.6f} "
+                    f"  Epoch {epoch:>3}/{int(args.epochs)} | Train {int(training_policy.categorical_class_count)}-class CE {batch_loss:.6f} "
                     f"| Val CE {float(validation_joint_metrics['cross_entropy']):.6f} "
                     f"| Val Event Brier {float(validation_joint_metrics['joint_event_brier']):.6f} "
                     f"| Val MFE rho {float(daily_spearman):.4f} "

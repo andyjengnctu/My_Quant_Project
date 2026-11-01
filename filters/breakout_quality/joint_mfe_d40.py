@@ -49,27 +49,31 @@ def build_joint_mfe_d40_quadrants(group_table: pd.DataFrame, valid_mask: np.ndar
     return labels
 
 
-def joint_probabilistic_metrics(logits: np.ndarray, labels: np.ndarray) -> dict:
-    """Proper scoring rules on a held-out scope; class-3 is the joint success event."""
+def joint_probabilistic_metrics(
+    logits: np.ndarray, labels: np.ndarray, *,
+    class_count: int = JOINT_CLASS_COUNT,
+    positive_class: int = JOINT_FAVORABLE_AND_LOW_MAE_CLASS,
+) -> dict:
+    """Proper CE/Brier scoring for a declared categorical output schema."""
     raw = np.asarray(logits, dtype=np.float64)
     truth = np.asarray(labels, dtype=np.float64)
-    if raw.ndim != 2 or raw.shape[1] != JOINT_CLASS_COUNT or len(raw) != len(truth):
+    if raw.ndim != 2 or raw.shape[1] != class_count or len(raw) != len(truth):
         raise ValueError("joint quadrant logits/target dimension mismatch")
     if not np.isfinite(raw).all() or not np.isfinite(truth).all():
         raise ValueError("joint quadrant logits/target must be finite")
     classes = truth.astype(np.int64)
-    if not np.array_equal(truth, classes.astype(np.float64)) or np.any((classes < 0) | (classes >= JOINT_CLASS_COUNT)):
+    if not np.array_equal(truth, classes.astype(np.float64)) or np.any((classes < 0) | (classes >= class_count)):
         raise ValueError("joint quadrant target must be integer class 0..3")
     shifted = raw - np.max(raw, axis=1, keepdims=True)
     log_norm = np.log(np.exp(shifted).sum(axis=1, keepdims=True))
     log_probs = shifted - log_norm
     probs = np.exp(log_probs)
-    success = (classes == JOINT_FAVORABLE_AND_LOW_MAE_CLASS).astype(np.float64)
+    success = (classes == positive_class).astype(np.float64)
     return {
         "group_count": int(len(classes)),
         "cross_entropy": float(-np.mean(log_probs[np.arange(len(classes)), classes])),
-        "joint_event_brier": float(np.mean((probs[:, JOINT_FAVORABLE_AND_LOW_MAE_CLASS] - success) ** 2)),
+        "joint_event_brier": float(np.mean((probs[:, positive_class] - success) ** 2)),
         "joint_event_base_rate": float(success.mean()),
-        "joint_event_predicted_mean": float(probs[:, JOINT_FAVORABLE_AND_LOW_MAE_CLASS].mean()),
-        "class_counts": [int(np.count_nonzero(classes == k)) for k in range(JOINT_CLASS_COUNT)],
+        "joint_event_predicted_mean": float(probs[:, positive_class].mean()),
+        "class_counts": [int(np.count_nonzero(classes == k)) for k in range(class_count)],
     }

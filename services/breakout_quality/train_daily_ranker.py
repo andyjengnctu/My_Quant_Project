@@ -2006,10 +2006,13 @@ def run(args) -> int:
     if training_policy.categorical_class_count is not None:
         for column, values in forward_sidecars.items():
             oos_frame[str(column)] = np.asarray(values, dtype=np.float32)
-        joint_labels = ranker_api.build_joint_mfe_d40_quadrants(
-            bundle.group_table, np.isfinite(np.asarray(bundle.raw_target, dtype=np.float32))
+        class_labels = ranker_api._training_target_for_profile(
+            bundle.profile, bundle.raw_target, percentile_target, bundle.group_table
         )
-        oos_frame["target_joint_quadrant_class"] = joint_labels[forward_score_ids]
+        oos_frame[
+            "target_joint_quadrant_class" if training_policy.categorical_class_count == 4
+            else "target_binary_positive_class"
+        ] = class_labels[forward_score_ids]
     if forward_heads is not None:
         if safety_primary_duo:
             oos_frame["raw_safety_score"] = forward_heads["raw_safety"]
@@ -2118,7 +2121,11 @@ def run(args) -> int:
             "training_label_scope": bundle.profile.training_label_scope,
             "target": target_id,
             "model_score": (
-                "p_high_mfe_and_low_full_horizon_mae"
+                (
+                    "p_positive_fullcycle_netpnl"
+                    if training_policy.categorical_class_count == 2
+                    else "p_high_mfe_and_low_full_horizon_mae"
+                )
                 if training_policy.categorical_class_count is not None
                 else "predicted_r_two_logit_margin"
                 if training_policy.score_transform == CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R

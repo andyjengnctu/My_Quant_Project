@@ -246,6 +246,11 @@ def reorder_candidates_for_resource_aware_quality(
     rows = list(orderable_candidates_today or [])
     free_slots = max(0, int(max_positions) - int(pre_market_occupied))
     policy = _resource_aware_quality_policy(rows)
+    # A configured PIT Positive output qualifies the common Exact/Direct membership.
+    # Rank order, K/R0, broker cash and the canonical reservation owner stay unchanged.
+    if any(bool((row.get('breakout_quality_ranking_options') or {}).get('positive_dl_id')) for row in rows):
+        from core.positive_netpnl_contract import admit_positive_score_rows
+        rows = admit_positive_score_rows(rows)
     selector, handler, static_kwargs = _RESOURCE_AWARE_POLICY_SPECS.get(
         policy,
         ('greedy-first-improvement', _reorder_resource_aware_binary_greedy, {}),

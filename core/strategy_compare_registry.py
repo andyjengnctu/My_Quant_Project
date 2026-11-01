@@ -142,7 +142,7 @@ STRATEGY_COMPARE_SUITES = {
         "arm_ids": (
             "C96", "C97", "C98", "C99", "C100", "C101", "C102", "C103",
             "C105", "C106", "C107", "C108", "C109", "C110",
-            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124",
+            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126",
         ),
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
@@ -154,8 +154,8 @@ STRATEGY_COMPARE_SUITES = {
             "C99-C101", "C100-C102",
             "C103-C96", "C105-C96", "C106-C96", "C107-C96", "C108-C96",
             "C108-C107",
-            "C109-C96", "C110-C96", "C111-C96", "C112-C96", "C115-C96", "C116-C96", "C117-C96", "C118-C96", "C119-C96", "C120-C96", "C121-C96", "C122-C96", "C123-C96", "C124-C96",
-            "C109-C107", "C110-C108", "C111-C112", "C115-C116", "C105-C117", "C106-C118", "C119-C120", "C121-C122", "C123-C124", "C121-C123", "C122-C124",
+            "C109-C96", "C110-C96", "C111-C96", "C112-C96", "C115-C96", "C116-C96", "C117-C96", "C118-C96", "C119-C96", "C120-C96", "C121-C96", "C122-C96", "C123-C96", "C124-C96", "C125-C96", "C126-C96",
+            "C109-C107", "C110-C108", "C111-C112", "C115-C116", "C105-C117", "C106-C118", "C119-C120", "C121-C122", "C123-C124", "C125-C126", "C123-C125", "C124-C126", "C121-C123", "C122-C124",
             "C110-C109", "C111-C115", "C112-C116",
         ),
         "display_name_bases": {
@@ -185,6 +185,8 @@ STRATEGY_COMPARE_SUITES = {
             "C122": "Min MR-13CN Formal MinTrade Full-cycle NetR Direct No-K No-R0 / Broker-Cash",
             "C123": "Min MR-13CO Formal MinTrade Full-cycle NetPnL Exact K/R0 / Broker-Cash",
             "C124": "Min MR-13CO Formal MinTrade Full-cycle NetPnL Direct No-K No-R0 / Broker-Cash",
+            "C125": "Min MR-13CP NetPnL Rank + PIT Positive Exact K/R0 / Broker-Cash",
+            "C126": "Min MR-13CP NetPnL Rank + PIT Positive Direct No-K No-R0 / Broker-Cash",
         },
     },
     "non_dl_c85_same_signal_revalidation_v1": {
@@ -2247,6 +2249,22 @@ STRATEGY_DL_SOURCES = {
             "options": {"resume": True, "allow_stale_source": False},
         },
     },
+    "CONT13CP_ROLL": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_formal_mintrade_fullcycle_netpnl_positive_binary",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "single_seed_strategy_conversion_authorized": True,
+        "description": (
+            "MR-13CP independent auxiliary 2-class P(NetPnL>0) PIT output; "
+            "C125/C126 rank exclusively by MR-13CO; no hindsight gate."
+        ),
+        "forward_scores_builder": {
+            "enabled": True, "builder_type": "selection_pit_from_existing_folds",
+            "options": {"resume": True, "allow_stale_source": False},
+        },
+    },
     "CONT13CK_ROLL": {
         "filter_id": "breakout_quality_v1",
         "model_architecture": "inception_time_v1",
@@ -2614,6 +2632,35 @@ STRATEGY_COMPARE_ARMS = {
             "preserve_k": False, "preserve_r0": False,
             "selection_order": "model_score_desc_then_canonical_tie_v1",
             "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C125": {
+        "name": "Min MR-13CP NetPnL Rank + PIT Positive Exact K/R0 / Broker-Cash",
+        "description": "Same C123 MR-13CO order/P16/cash; only an independent PIT P(NetPnL>0)>0.5 admission from MR-13CP is added.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CO_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True, "constrained_solver": "exact_branch_and_bound_v1", "selection_only": True,
+            "positive_dl_id": "CONT13CP_ROLL", "positive_score_column": "positive_p_positive",
+            "positive_probability_threshold": 0.5,
+        },
+        "robustness_role": "off",
+    },
+    "C126": {
+        "name": "Min MR-13CP NetPnL Rank + PIT Positive Direct No-K No-R0 / Broker-Cash",
+        "description": "Same C124 MR-13CO order/P16/cash; only an independent PIT P(NetPnL>0)>0.5 admission from MR-13CP is added.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CO_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False, "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1", "selection_only": True,
+            "positive_dl_id": "CONT13CP_ROLL", "positive_score_column": "positive_p_positive",
+            "positive_probability_threshold": 0.5,
         },
         "robustness_role": "off",
     },
@@ -3032,6 +3079,11 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C122-C96": {"left": "C122", "right": "C96", "description": "Full-cycle Min NetR PIT model versus C96 Direct"},
     "C123-C96": {"left": "C123", "right": "C96", "description": "Full-cycle Min NetPnL PIT model versus C96 Exact"},
     "C124-C96": {"left": "C124", "right": "C96", "description": "Full-cycle Min NetPnL PIT model versus C96 Direct"},
+    "C125-C96": {"left": "C125", "right": "C96", "description": "CO NetPnL ranking plus Positive PIT gate, Exact versus C96"},
+    "C126-C96": {"left": "C126", "right": "C96", "description": "CO NetPnL ranking plus Positive PIT gate, Direct versus C96"},
+    "C125-C126": {"left": "C125", "right": "C126", "description": "Same CO ranking and CP gate: Exact versus Direct"},
+    "C123-C125": {"left": "C123", "right": "C125", "description": "Same CO Exact rank: without versus with CP Positive gate"},
+    "C124-C126": {"left": "C124", "right": "C126", "description": "Same CO Direct rank: without versus with CP Positive gate"},
     "C121-C122": {"left": "C121", "right": "C122", "description": "Same MR-13CN PIT score, Exact versus Direct"},
     "C123-C124": {"left": "C123", "right": "C124", "description": "Same MR-13CO PIT score, Exact versus Direct"},
     "C121-C123": {"left": "C121", "right": "C123", "description": "Full-cycle NetR versus NetPnL, same P16 Exact"},

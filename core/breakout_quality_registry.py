@@ -48,6 +48,7 @@ from core.breakout_quality_runtime import (
     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_JOINT_MFE_D40_QUADRANT,
+    TRAINING_OBJECTIVE_DAILY_NETPNL_POSITIVE_BINARY,
     CONTINUOUS_RANKER_TRAINER_EVENT,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
@@ -401,6 +402,7 @@ DAILY_UNIVERSAL_FORMAL_MINTRADE40_NETR_PAIRWISE_PROFILE = "daily_universal_forma
 DAILY_UNIVERSAL_FORMAL_MINTRADE_FULLCYCLE_NETR_PAIRWISE_PROFILE = "daily_universal_formal_mintrade_fullcycle_netr_per_seed_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_FORMAL_MINTRADE_FULLCYCLE_NETPNL_PAIRWISE_PROFILE = "daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE = "daily_universal_joint_mfe_d40_quadrant_cross_entropy"
+DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE = "daily_universal_formal_mintrade_fullcycle_netpnl_positive_binary"
 DAILY_UNIVERSAL_DIRECT_U40_HUBER_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_huber"
 DAILY_UNIVERSAL_DIRECT_U40_PAIRWISE_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_PIT_TRADE_COUNT_PROFILE = (
@@ -1709,6 +1711,18 @@ _EXPERIMENT_PROFILES = {
         continuous_target_id="daily_formal_mintrade_fullcycle_netpnl_per_seed_v1",
         loss_name="pairwise_logistic",
         epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_v1",
+    ),
+    DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_NETPNL_POSITIVE_BINARY,
+        continuous_target_id="daily_formal_mintrade_fullcycle_netpnl_per_seed_v1",
+        loss_name="binary_positive_cross_entropy",
+        epoch_selection_metric="positive_validation_cross_entropy",
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_v1",
@@ -3384,6 +3398,26 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         metric_scope="all_stock_days_formal_mintrade_fullcycle_netpnl_per_seed",
         score_semantic_id="daily_formal_mintrade_fullcycle_netpnl_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        selection_pit_authorized=True,
+        current_time_validation_authorized=True,
+    ),
+    DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE,
+        model_research_id="MR-13CP",
+        experiment_name="MR-13CP Full-cycle NetPnL Positive Auxiliary Classification",
+        phase="13CP",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "Same per-seed full-cycle matured broker NetPnL as MR-13CO; "
+            "binary class is strictly positive vs nonpositive, censored NULL is never class 0"
+        ),
+        objective_description=(
+            "Independent two-class PIT cross-entropy auxiliary output. "
+            "C125/C126 preserve MR-13CO rank and apply only P(positive)>0.5 admission; "
+            "neither OOS labels nor hindsight Oracle outcomes enter FIT."
+        ),
+        metric_scope="all_stock_days_formal_mintrade_fullcycle_netpnl_positive_binary",
+        score_semantic_id="daily_formal_mintrade_fullcycle_netpnl_p_positive",
         selection_pit_authorized=True,
         current_time_validation_authorized=True,
     ),

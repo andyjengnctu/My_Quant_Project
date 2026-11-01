@@ -154,6 +154,9 @@ def breakout_quality_filter_source_execution_context(
 _ORACLE_TRUTH_SCORES: ContextVar[Mapping[tuple[str, str], float] | None] = ContextVar(
     "breakout_quality_audit_oracle_truth_scores", default=None,
 )
+_ORACLE_POSITIVE_SCORES: ContextVar[Mapping[tuple[str, str], float] | None] = ContextVar(
+    "breakout_quality_audit_oracle_positive_output", default=None,
+)
 _ORACLE_TRUTH_KEY_MODE: ContextVar[str] = ContextVar(
     "breakout_quality_audit_oracle_truth_key_mode", default="information_date",
 )
@@ -193,6 +196,7 @@ def audit_oracle_truth_score_context(
     key_mode: str = "information_date",
     missing_key_policy: str = "block",
     score_start: str | None = None,
+    positive_scores: Mapping[tuple[str, str], float] | None = None,
 ) -> Iterator[None]:
     """Bind verified hindsight scores during one isolated Audit replay.
 
@@ -216,10 +220,14 @@ def audit_oracle_truth_score_context(
             raise ValueError("Oracle score start requires an information-date lookup")
     if _ORACLE_TRUTH_SCORES.get() is not None:
         raise RuntimeError("Oracle Audit不得巢狀覆寫未來真值score")
+    requires_positive = bool(dict(ranking_options or {}).get("positive_dl_id"))
+    if requires_positive != (positive_scores is not None):
+        raise ValueError("Oracle dual-output score requires matching Positive score map")
     with audit_oracle_ranking_policy_context(
         ranking_policy=ranking_policy, ranking_options=ranking_options,
     ):
         token = _ORACLE_TRUTH_SCORES.set(scores)
+        positive_token = _ORACLE_POSITIVE_SCORES.set(positive_scores)
         key_token = _ORACLE_TRUTH_KEY_MODE.set(key_mode)
         missing_token = _ORACLE_TRUTH_MISSING_KEY_POLICY.set(missing_key_policy)
         start_token = _ORACLE_TRUTH_SCORE_START.set(score_start)
@@ -229,6 +237,7 @@ def audit_oracle_truth_score_context(
             _ORACLE_TRUTH_SCORE_START.reset(start_token)
             _ORACLE_TRUTH_MISSING_KEY_POLICY.reset(missing_token)
             _ORACLE_TRUTH_KEY_MODE.reset(key_token)
+            _ORACLE_POSITIVE_SCORES.reset(positive_token)
             _ORACLE_TRUTH_SCORES.reset(token)
 
 
@@ -312,11 +321,24 @@ def resolve_breakout_quality_candidate_rank(
         value = truth[key]
         if value is None or not math.isfinite(float(value)):
             raise ValueError(f"Oracle Audit非有限真值分數，停止回測: ticker={ticker}, date={date}")
-        return {
+        payload = {
             "score": float(value), "available": True, "unavailable_reason": "",
             "score_date": date, "filter_id": str(filter_id),
             "score_source": SCORE_SOURCE_AUDIT_ORACLE_FUTURE_TRUTH,
         }
+        if dict(context.ranking_options or {}).get("positive_dl_id"):
+            positive_values = _ORACLE_POSITIVE_SCORES.get()
+            if positive_values is None:
+                raise RuntimeError("Oracle Positive score output is missing")
+            positive_value = positive_values.get(key)
+            available = positive_value is not None and math.isfinite(float(positive_value))
+            payload.update({
+                "positive_probability": float(positive_value) if available else None,
+                "positive_available": bool(available),
+                "positive_score_date": date,
+                "positive_score_source": SCORE_SOURCE_AUDIT_ORACLE_FUTURE_TRUTH,
+            })
+        return payload
     if context.score_source == SCORE_SOURCE_CANONICAL_RUNTIME:
         lookup_date = _candidate_score_lookup_date(
             signal_date=signal_date, information_date=information_date,
@@ -444,6 +466,40 @@ def resolve_breakout_quality_candidate_rank(
                 "safety_score_source": str(safety_payload.get("score_source") or ""),
                 "safety_model_architecture": safety_architecture,
                 "safety_experiment_profile": safety_profile,
+            })
+        positive_dl_id = str(options.get("positive_dl_id") or "").strip()
+        if positive_dl_id:
+            required = (
+                "positive_filter_id", "positive_score_source", "positive_model_architecture",
+                "positive_experiment_profile", "positive_score_column",
+            )
+            if any(not str(options.get(key) or "").strip() for key in required):
+                raise ValueError("positive ranking options lack complete secondary source identity")
+            source = str(options["positive_score_source"])
+            arguments = dict(
+                project_root=root, ticker=str(ticker), signal_date=lookup_date,
+                filter_id=str(options["positive_filter_id"]),
+                model_architecture=str(options["positive_model_architecture"]),
+                experiment_profile=str(options["positive_experiment_profile"]),
+                score_path_override=str(options.get("positive_score_path_override") or "") or None,
+                score_column=str(options["positive_score_column"]),
+            )
+            if source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+                positive_payload = lookup_selection_point_in_time_candidate_score(
+                    **arguments,
+                    manifest_path_override=str(options.get("positive_score_manifest_path_override") or "") or None,
+                )
+            elif source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
+                positive_payload = lookup_continuous_ranker_oos_candidate_score(**arguments)
+            else:
+                raise ValueError("positive secondary model must use PIT or OOS score source")
+            payload = dict(payload)
+            payload.update({
+                "positive_dl_id": positive_dl_id,
+                "positive_probability": positive_payload.get("score"),
+                "positive_available": bool(positive_payload.get("available", False)),
+                "positive_score_date": str(positive_payload.get("score_date") or ""),
+                "positive_score_source": str(positive_payload.get("score_source") or ""),
             })
         calibration_path = str(options.get("expected_r_calibration_path") or "").strip()
         excess_calibration_path = str(

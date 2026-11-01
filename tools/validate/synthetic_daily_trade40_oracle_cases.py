@@ -201,7 +201,8 @@ def execute_synthetic_score_fixture(definition, *, price_scores, daily_scores, k
     contexts = {}
     for seed in seeds:
         for target in contracts:
-            arm = direct if plan["selectors"][target] == "direct" else baseline_arm
+            arm = oracle._target_reference_arm(
+                definition, settings, plan, target, exact, direct)
             if target in plan["daily_sources"]:
                 recipe, provider, horizon = plan["daily_recipes"][plan["daily_sources"][target]]
             else:
@@ -234,7 +235,11 @@ def execute_synthetic_score_fixture(definition, *, price_scores, daily_scores, k
          patch.object(trade_owner, "build_formal_min_execution_schedule", return_value=(schedule, {})), \
          patch.object(daily_owner, "build_daily_universal_trade40_oracle_scores", side_effect=source), \
          patch.object(oracle, "_run_scenario", side_effect=scenario), \
-         patch.object(oracle, "_metrics", side_effect=metrics):
+         patch.object(oracle, "_metrics", side_effect=metrics), \
+         patch("services.audit.oracle_truth_references.load_or_build_positive_truth",
+               side_effect=lambda **kwargs: (
+                   {key: (1.0 if index % 2 else -1.0)
+                    for index, key in enumerate(sorted(kwargs["canonical_scores"]))}, None)):
         return oracle._execute_single_stage_missing(
             definition, project_root=Path(directory), quiet=True, plan=plan,
             contracts=contracts, current_keys={name: proof for name in contracts},

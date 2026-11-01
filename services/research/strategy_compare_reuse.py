@@ -262,6 +262,15 @@ def _pair_cache_fingerprint_from_payload(
             artifact_keys.extend(
                 f"dl:{safety_dl_id}:{name}" for name in safety_artifact_names
             )
+    positive_dl_id = str(dict(on_arm_payload.get("dl_runtime_options") or {}).get("positive_dl_id") or "").strip()
+    if positive_dl_id:
+        positive_source = dict(dl_sources.get(positive_dl_id) or {})
+        names = (
+            ("manifest", "audit", "forward_scores")
+            if str(positive_source.get("score_source") or "") == "selection_point_in_time"
+            else ("model", "manifest", "forward_scores")
+        )
+        artifact_keys.extend(f"dl:{positive_dl_id}:{name}" for name in names)
     projected_score_artifacts = _selection_pit_projection_artifacts(
         settings_payload=settings_payload,
         artifact_identities=artifact_identities,

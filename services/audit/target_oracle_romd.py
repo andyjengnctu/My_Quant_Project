@@ -202,11 +202,10 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
             )
         if entry.get("score_source"):
             source = str(entry["score_source"])
-            if selector != "direct" or source in _ORACLE_RETIRED_TARGETS:
-                raise OracleBlockedError(f"Oracle Direct score來源非法：{name} -> {source}")
-            # A Direct arm consumes an existing approved score, but need not
-            # display or replay the corresponding Exact arm. Resolve any
-            # unselected source after processing the complete comparison list.
+            if source in _ORACLE_RETIRED_TARGETS:
+                raise OracleBlockedError(f"Oracle score來源非法：{name} -> {source}")
+            # An Exact/Direct recipient may reuse an approved canonical score;
+            # only a score *producer* must be the registered Exact source.
             aliases[name] = source
         else:
             recipe, provider = str(entry.get("score") or ""), str(entry.get("provider") or "")
@@ -235,9 +234,8 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
                 raise OracleBlockedError(f"Oracle未授權的score recipe：{recipe}")
         definitions.append((name, desc))
         selectors[name] = selector
-    # Direct-only and Direct-before-Exact compare lists must not require a
-    # hidden Exact *Replay*. Their input truth is still derived from the same
-    # immutable Exact score recipe registered by the canonical Audit owner.
+    # Aliased Exact/Direct recipients reuse the immutable registered Exact
+    # truth recipe, but do not require a separate source portfolio Replay.
     for direct_name, source_name in aliases.items():
         if source_name in recipes or source_name in daily_recipes:
             continue
@@ -335,6 +333,58 @@ class OracleTruthBuildRequired(RuntimeError):
     """A read-only source-cache probe has no certified truth to return."""
 
 
+def _unqualified_selector_options(options: Mapping[str, Any] | None) -> dict[str, Any]:
+    """One selector comparison baseline: Positive score admission is an optional head."""
+    return {key: val for key, val in dict(options or {}).items()
+            if not str(key).startswith("positive_")}
+
+
+def _target_reference_arm(definition, settings, plan, target, exact, direct):
+    """Use the declared formal arm when a Target adds a common score-output head."""
+    selected = next((item for item in definition.source["oracle_comparisons"]
+                     if item["target"] == target), None)
+    if selected is None:
+        return direct if plan["selectors"].get(target) == "direct" else exact
+    arm_id = str(selected.get("strategy_arm_id") or "").strip()
+    if not arm_id:
+        return direct if plan["selectors"].get(target) == "direct" else exact
+    if arm_id not in settings.arms:
+        raise OracleBlockedError(f"Oracle registered strategy arm unavailable: {arm_id}")
+    arm = settings.arms[arm_id]
+    base = direct if plan["selectors"].get(target) == "direct" else exact
+    if base is None or not arm.dl_enabled or arm.dl_runtime_mode != base.dl_runtime_mode:
+        raise OracleBlockedError(f"Oracle matching selector unavailable: {target}/{arm_id}")
+    if (arm.param_source, arm.param_policy, arm.rule_policy,
+            _unqualified_selector_options(arm.dl_runtime_options)) != (
+            base.param_source, base.param_policy, base.rule_policy,
+            _unqualified_selector_options(base.dl_runtime_options)):
+        raise OracleBlockedError(f"Oracle target-scoped strategy differs from formal selector: {arm_id}")
+    qualified = bool(selected.get("positive_output"))
+    options = dict(arm.dl_runtime_options or {})
+    if qualified != bool(options.get("positive_dl_id")):
+        raise OracleBlockedError(f"Oracle Positive output does not match arm source: {arm_id}")
+    if qualified:
+        # The canonical Exact/Direct selector is source-agnostic; verify the
+        # Positive arm reuses the SAME source and rank options as its own
+        # unqualified companion, not the first arbitrarily registered model.
+        companions = [item for item in settings.enabled_arms
+                      if item.dl_enabled and item.dl_id == arm.dl_id
+                      and item.dl_runtime_mode == arm.dl_runtime_mode
+                      and not (item.dl_runtime_options or {}).get("positive_dl_id")
+                      and _unqualified_selector_options(item.dl_runtime_options)
+                          == _unqualified_selector_options(arm.dl_runtime_options)]
+        if len(companions) != 1:
+            raise OracleBlockedError(f"Oracle Positive rank lacks unique original DL arm: {arm_id}")
+        positive_source = settings.dl_sources[str(options["positive_dl_id"])]
+        primary_source = settings.dl_sources[arm.dl_id]
+        if (positive_source.score_source != "selection_point_in_time"
+                or positive_source.filter_id != primary_source.filter_id
+                or positive_source.point_in_time_score_start_date != primary_source.point_in_time_score_start_date
+                or positive_source.model_architecture != primary_source.model_architecture):
+            raise OracleBlockedError(f"Oracle Positive output source does not match PIT rank: {arm_id}")
+    return arm
+
+
 def _contract(definition, *, settings=None) -> tuple[Any, Any, Any]:
     """Resolve the currently enabled canonical Research selector, not a retired C100.
 
@@ -369,9 +419,9 @@ def _contract(definition, *, settings=None) -> tuple[Any, Any, Any]:
         raise OracleBlockedError("CONTRACT_UNRESOLVED: Research DL active Exact selector unavailable")
     canonical = exact_candidates[0] if requires_exact else None
     if requires_exact and any((arm.param_source, arm.param_policy, arm.rule_policy,
-            arm.dl_runtime_mode, dict(arm.dl_runtime_options or {})) !=
+            arm.dl_runtime_mode, _unqualified_selector_options(arm.dl_runtime_options)) !=
            (canonical.param_source, canonical.param_policy, canonical.rule_policy,
-            canonical.dl_runtime_mode, dict(canonical.dl_runtime_options or {}))
+            canonical.dl_runtime_mode, _unqualified_selector_options(canonical.dl_runtime_options))
            for arm in exact_candidates[1:]):
         raise OracleBlockedError("CONTRACT_UNRESOLVED: 啟用的Research Exact arms不是同一選股契約")
     if "direct" in selected_modes:
@@ -406,9 +456,9 @@ def _direct_arm(definition, settings, base, exact):
             or options.get("selection_order") != "model_score_desc_then_canonical_tie_v1"
             or options.get("selection_only") is not True
             or any((arm.param_source, arm.param_policy, arm.rule_policy,
-                    arm.dl_runtime_mode, dict(arm.dl_runtime_options or {})) !=
+                    arm.dl_runtime_mode, _unqualified_selector_options(arm.dl_runtime_options)) !=
                    (direct.param_source, direct.param_policy, direct.rule_policy,
-                    direct.dl_runtime_mode, options)
+                    direct.dl_runtime_mode, _unqualified_selector_options(options))
                    for arm in compatible[1:])):
         raise OracleBlockedError("CONTRACT_UNRESOLVED: Research DL Direct selector contract不唯一或漂移")
     return direct
@@ -452,7 +502,7 @@ def _resolve_oracle_target_score_contracts(definition, settings, plan) -> dict[s
             )
         if profile.training_sample_scope != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
             raise OracleBlockedError(f"{name}: 來源不是正式Daily DL可評分母體")
-        arm = direct if plan["selectors"][name] == "direct" else exact
+        arm = _target_reference_arm(definition, settings, plan, name, exact, direct)
         arm_source = settings.dl_sources[str(arm.dl_id)]
         if str(arm_source.filter_id) != str(definition.source["filter_id"]):
             raise OracleBlockedError(
@@ -463,8 +513,39 @@ def _resolve_oracle_target_score_contracts(definition, settings, plan) -> dict[s
         if str(arm_source.point_in_time_score_start_date or "") != start:
             raise OracleBlockedError(f"{name}: Research DL score起始日不一致")
         extra_gate = _validated_execution_gates(definition, plan).get(name)
+        comparison = next(row for row in definition.source["oracle_comparisons"] if row["target"] == name)
+        positive_output = str(comparison.get("positive_output") or "")
+        positive_contract = {}
+        if positive_output:
+            options = dict(arm.dl_runtime_options or {})
+            threshold = options.get("positive_probability_threshold")
+            positive_dl_id = str(options.get("positive_dl_id") or "")
+            from core.positive_netpnl_contract import POSITIVE_P_CLASS_COLUMN
+            if (positive_output != "netpnl_positive_probability_v1"
+                    or not isinstance(threshold, (int,float)) or isinstance(threshold,bool)
+                    or not 0.0 < float(threshold) < 1.0
+                    or not positive_dl_id
+                    or str(options.get("positive_score_column")) != POSITIVE_P_CLASS_COLUMN
+                    or (plan["daily_recipes"][plan["daily_sources"][name]][0]
+                        != "daily_trade_path_net_pnl")):
+                raise OracleBlockedError(f"Oracle Positive score-contract mismatch: {name}")
+            aux_source = settings.dl_sources[positive_dl_id]
+            primary_target = get_breakout_quality_experiment_profile(
+                settings.dl_sources[arm.dl_id].experiment_profile).continuous_target_id
+            aux_target = get_breakout_quality_experiment_profile(aux_source.experiment_profile).continuous_target_id
+            if primary_target != aux_target:
+                raise OracleBlockedError(f"Oracle Positive/rank models supervise different raw targets: {name}")
+            positive_contract = {
+                "perfect_positive_output": positive_output,
+                "positive_probability_threshold": float(threshold),
+                "positive_score_column": POSITIVE_P_CLASS_COLUMN,
+                "positive_score_source_id": positive_dl_id,
+                "positive_profile_id": str(aux_source.experiment_profile),
+                "positive_score_contract_revision": "positive_netpnl_dual_output_v1",
+            }
         result[name] = {
             **({"hindsight_extra_gate": extra_gate} if extra_gate is not None else {}),
+            **positive_contract,
             "reference_arm_id": str(arm.arm_id),
             "reference_score_source_id": str(arm.dl_id),
             "reference_profile_id": str(arm_source.experiment_profile),
@@ -1537,6 +1618,17 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
         policy["oracle_parity_implementation"] = ORACLE_PARITY_IMPLEMENTATION
     if plan["selectors"].get(target) == "direct":
         policy["direct_arm"] = str(definition.source["direct_arm_id"])
+    selected = next((row for row in definition.source["oracle_comparisons"]
+                     if row["target"] == target), None)
+    if selected is not None and selected.get("positive_output"):
+        from core.file_integrity import compute_file_sha256
+        code_root = Path(__file__).resolve().parents[2]
+        policy["formal_positive_score_output"] = {
+            "contract": str(selected["positive_output"]),
+            "selector_arm_id": str(selected["strategy_arm_id"]),
+            "shared_admission_code_sha256": compute_file_sha256(
+                code_root / "core/positive_netpnl_contract.py"),
+        }
     # The unscored C96 baseline is deliberately built with a minimal plan;
     # neither it nor any non-selected recipient has an execution-only gate.
     execution_gate = (_validated_execution_gates(definition, plan).get(target)
@@ -2215,7 +2307,7 @@ def _execute_single_stage_missing(
                     effective_context=execution_contexts[key],
                 )
             else:
-                arm = direct_arm if plan["selectors"][target] == "direct" else exact_arm
+                arm = _target_reference_arm(definition, settings, plan, target, exact_arm, direct_arm)
                 if target in plan["daily_sources"]:
                     source_name = plan["daily_sources"][target]
                     source_key = (seed, source_name)
@@ -2353,6 +2445,37 @@ def _execute_single_stage_missing(
                         progress=None if quiet else lambda msg: print(f"[Positive Target] {msg}", flush=True),
                     )
                 positive_raw = positive_raw_cache[seed]
+            positive_score_map = None
+            selected = next((row for row in definition.source["oracle_comparisons"]
+                             if row["target"] == target), None)
+            if selected is not None and selected.get("positive_output"):
+                if target not in plan["daily_sources"]:
+                    raise OracleBlockedError("Positive target requires the canonical NetPnL daily truth")
+                if seed not in positive_raw_cache:
+                    if schedule is None:
+                        schedule, _ = build_formal_min_execution_schedule(
+                            resolve_formal_min_param_records(kind, base_params),
+                            seed=seed, param_sha256=param_sha,
+                        )
+                    from services.audit.oracle_truth_references import load_or_build_positive_truth
+                    positive_raw_cache[seed], _ = load_or_build_positive_truth(
+                        execution=execution_contexts[key],
+                        cache_root=project_root / AUDIT_OUTPUT_ROOT / definition.output_subdir / "truth_cache",
+                        project_root=project_root, output_subdir=definition.output_subdir,
+                        dataset=str(settings.dataset), filter_id=str(definition.source["filter_id"]),
+                        profile_id=str(definition.source["daily_trade40_profile"]),
+                        seed=seed, price_sha256=price_sha, param_sha256=param_sha,
+                        canonical_schedule=schedule, research_cutoff=str(settings.end_date),
+                        score_start=_formal_dl_score_start(definition, settings), evaluation_end=end,
+                        canonical_scores=score_map, canonical_evidence=evidence,
+                        feature_cohort_cache=feature_cohort_cache,
+                        progress=None if quiet else lambda msg: print(f"[Positive output] {msg}", flush=True),
+                    )
+                raw_values = positive_raw_cache[seed]
+                positive_score_map = {
+                    key: (1.0 if float(value) > 0.0 else 0.0)
+                    for key, value in raw_values.items() if key in score_map
+                }
             replay_execution_rows = [] if positive_raw is not None else None
             replay_kwargs = dict(
                 replay_execution_rows=replay_execution_rows,
@@ -2375,6 +2498,7 @@ def _execute_single_stage_missing(
                             key_mode="information_date",
                             missing_key_policy="unavailable_outside_mature_feature_universe",
                             score_start=_formal_dl_score_start(definition, settings),
+                            positive_scores=positive_score_map,
                         ))
                         if positive_raw is not None:
                             from core.oracle_positive_gate import positive_oracle_entry_gate
@@ -2765,7 +2889,8 @@ def _run_single_stage_oracle(
     gates = _validated_execution_gates(definition, plan)
     for seed, param_sha, *_ in prepared:
         for target in target_names:
-            arm = direct_arm if plan["selectors"].get(target) == "direct" else baseline_arm
+            arm = (baseline_arm if target == "C96" else
+                   _target_reference_arm(definition, settings, plan, target, exact_arm, direct_arm))
             source_spec = None
             if target in plan["daily_sources"]:
                 recipe, provider, horizon = plan["daily_recipes"][plan["daily_sources"][target]]
@@ -3079,7 +3204,7 @@ def _run_single_stage_oracle(
                             if (signed_cohort is not None and proof != signed_cohort
                                     or target in keys and keys[target] != proof):
                                 raise ValueError("Oracle current daily truth conflicts with signed stock-day cohort")
-                            arm = direct_arm if plan["selectors"][target] == "direct" else exact_arm
+                            arm = _target_reference_arm(definition, settings, plan, target, exact_arm, direct_arm)
                             for saved in cache.existing_completed_identities(seed=seed, target=target):
                                 try:
                                     expected = _certified_saved_oracle_identity(
@@ -3115,7 +3240,7 @@ def _run_single_stage_oracle(
                 # current approved price algorithm and all Replay inputs.
                 witnesses = verified_price_witnesses.get(target, ())
                 if witnesses and target in keys:
-                    arm = direct_arm if plan["selectors"][target] == "direct" else exact_arm
+                    arm = _target_reference_arm(definition, settings, plan, target, exact_arm, direct_arm)
                     matches: list[tuple[dict[str, Any], dict[str, Any]]] = []
                     for saved in cache.existing_completed_identities(seed=seed, target=target):
                         for witness in witnesses:
@@ -3160,7 +3285,7 @@ def _run_single_stage_oracle(
                 decisions[key] = "BLOCKED"
                 blocked[key] = "multiple same-window scored replays require source conflict resolution"
                 continue
-            arm = direct_arm if plan["selectors"][target] == "direct" else exact_arm
+            arm = _target_reference_arm(definition, settings, plan, target, exact_arm, direct_arm)
             try:
                 if target not in keys:
                     raise ValueError("historical score key receipt cannot be certified from current inputs")
