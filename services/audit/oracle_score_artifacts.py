@@ -86,6 +86,13 @@ _NON_EXECUTABLE_MODEL_SELECTION_FIELDS = frozenset((
     "BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES",
     "BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_PROFILES",
 ))
+# These preparation/supervision knobs were added after the independently
+# certified configuration. They schedule identical inputs; neither value is
+# consumed by price eligibility, Target arithmetic or score ranking.
+_NON_EXECUTABLE_RESOURCE_FIELDS = frozenset((
+    "BREAKOUT_QUALITY_DAILY_REAL_PATH_WORKERS",
+    "BREAKOUT_QUALITY_MODEL_ROBUSTNESS_SEED_WORKERS",
+))
 # Configuration is projected by *ownership*, not by the current finite model
 # roster.  Future MR additions/deletions may add constants with the same
 # workflow prefixes without silently invalidating unrelated Oracle prices.
@@ -110,6 +117,17 @@ _LEGACY_PRICE_REGISTRY_SOURCE_SHA256 = {
 _AUDITED_NETPNL_DIAGNOSTIC_ONLY_REVISION = (
     "5fe6caf6e64fec14486c1b8b2bdc855bef244d2044fa7645f0b3f7b936291116",
     "91254d3ba1d71ef95a1a96dffed068335fa3b239bf6fb42f9baf64406d247906",
+)
+# Compared against 004258 source ZIP SHA256
+# 251cef0db7b51e77542e1573fa2192ad4f35a5b23d552e68b6dc52e836cbb21d.
+# This exact loader revision extracts the unchanged eligibility expression
+# and prepares supervised real-path tickers in ordered CPU workers. All four
+# Oracle price providers still take the ordinary price branch; their complete
+# stock/day tables, labels, manifests and feature batches were compared exactly.
+# Unknown subsequent loader edits retain strict physical source hashing.
+_AUDITED_PARALLEL_DATA_ONLY_REVISION = (
+    "65338ef9511e2739fccda5db90bbdc65893f63d5b97c968ef3e50fa51963c2c6",
+    _AUDITED_NETPNL_DIAGNOSTIC_ONLY_REVISION[1],
 )
 
 
@@ -144,6 +162,7 @@ def _oracle_price_configuration_sha256() -> str:
         name: value for name, value in vars(cfg).items()
         if name.isupper() and not name.startswith("_")
         and name not in _NON_EXECUTABLE_MODEL_SELECTION_FIELDS
+        and name not in _NON_EXECUTABLE_RESOURCE_FIELDS
         and not name.startswith(_NON_EXECUTABLE_MODEL_WORKFLOW_PREFIXES)
         and not callable(value)
     }
@@ -185,7 +204,10 @@ def oracle_daily_source_fingerprint(root: Path | None = None) -> str:
         if attested and relative in _LEGACY_PRICE_REGISTRY_SOURCE_SHA256:
             source_sha = _LEGACY_PRICE_REGISTRY_SOURCE_SHA256[relative]
         elif (attested and relative == "filters/breakout_quality/daily_ranker_data.py"
-              and physical_sha == _AUDITED_NETPNL_DIAGNOSTIC_ONLY_REVISION[0]):
+              and physical_sha in {
+                  _AUDITED_NETPNL_DIAGNOSTIC_ONLY_REVISION[0],
+                  _AUDITED_PARALLEL_DATA_ONLY_REVISION[0],
+              }):
             source_sha = _AUDITED_NETPNL_DIAGNOSTIC_ONLY_REVISION[1]
         source_digest.update(relative.encode("utf-8") + b"\0")
         source_digest.update(source_sha.encode("ascii") + b"\n")

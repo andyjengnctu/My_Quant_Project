@@ -3162,5 +3162,88 @@ class RealPathDiagnosticCacheCases(unittest.TestCase):
 
 
 
+class ModelRobustnessProcessCancellationCases(unittest.TestCase):
+    """A failed seed must stop active launches and prevent queued producers."""
+
+    def test_cancelled_supervisor_never_launches_a_queued_process(self):
+        from threading import Event, Lock
+        from services.research import training_process as process
+        stopped = Event()
+        stopped.set()
+        with TemporaryDirectory() as td, patch.object(process.subprocess, "Popen") as launch:
+            with self.assertRaisesRegex(RuntimeError, "cancelled before subprocess launch"):
+                process.run_logged_training_process(
+                    command=["unused"], log_path=Path(td) / "worker.log", cwd=td,
+                    registry={}, registry_lock=Lock(), registry_key="queued",
+                    failure_prefix="seed failure", cancellation_event=stopped,
+                )
+            launch.assert_not_called()
+
+    def test_seed_failure_cannot_miss_a_process_during_launch_registration(self):
+        from threading import Event
+        import time
+        from services.research import breakout_quality_application as app
+        from services.research import training_process as process
+        ready_second, entering_third = Event(), Event()
+        instances = {}
+
+        class ControlledProcess:
+            def __init__(self, command, **kwargs):
+                self.seed = int(command[command.index("--seed") + 1])
+                self.returncode = None
+                self.done = Event()
+                self.terminated = False
+                instances[self.seed] = self
+                if self.seed == 2:
+                    ready_second.set()
+                if self.seed == 3:
+                    entering_third.set()
+                    time.sleep(0.05)  # OS launch before registry insertion.
+
+            def wait(self, timeout=None):
+                if self.seed == 1:
+                    if not ready_second.wait(2):
+                        raise RuntimeError("second worker did not start")
+                    self.returncode = 1
+                elif not self.done.wait(0.5 if timeout is None else timeout):
+                    self.returncode = 0
+                return int(self.returncode or 0)
+
+            def poll(self):
+                return self.returncode
+
+            def terminate(self):
+                self.terminated = True
+                self.returncode = -15
+                self.done.set()
+
+            def kill(self):
+                self.terminate()
+
+        original_terminate = process.terminate_registered_training_processes
+
+        def terminate_during_launch(registry, lock):
+            # If already cancelled, a queued third launch is correctly absent.
+            # Otherwise force the old race's valid in-progress launch interval.
+            entering_third.wait(0.1)
+            original_terminate(registry, lock)
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            with patch.object(process.subprocess, "Popen", ControlledProcess), \
+                 patch.object(app, "terminate_registered_training_processes", terminate_during_launch), \
+                 patch.object(app, "_model_robustness_dirs", side_effect=lambda settings, seed, rolling: (
+                     root / str(seed), root / str(seed))), \
+                 patch.object(app, "_observe_model_robustness_seed", return_value=SimpleNamespace(
+                     verified_evidence={"ready": True})):
+                with self.assertRaisesRegex(RuntimeError, "seed=1 producer failed"):
+                    app._run_parallel_model_robustness_seeds(
+                        SimpleNamespace(experiment_profile="controlled_parallel_probe"),
+                        model_id="probe", seeds=(1, 2, 3), rolling=True, workers=2,
+                    )
+        self.assertTrue(instances[2].terminated)
+        self.assertTrue(3 not in instances or instances[3].terminated)
+
+
 if __name__ == "__main__":
     unittest.main()

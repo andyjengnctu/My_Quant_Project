@@ -6058,6 +6058,16 @@ class OracleInventoryAndSourceIsolationRegressionCases(TestCase):
         self.assertEqual(oracle_daily_source_fingerprint(),
                          "b7bdeb766babdb66ac5084125d08f2bf59390843e4dc09eb84645c093a3c770d")
 
+    def test_resource_only_workers_do_not_change_certified_price_source(self):
+        from services.audit import oracle_score_artifacts as source
+        from config import breakout_quality as cfg
+        before = source.oracle_daily_source_fingerprint()
+        for ticker_workers, seed_workers in ((1, 1), (4, 2), (8, 4)):
+            with self.subTest(ticker_workers=ticker_workers, seed_workers=seed_workers):
+                with patch.object(cfg, "BREAKOUT_QUALITY_DAILY_REAL_PATH_WORKERS", ticker_workers), \
+                     patch.object(cfg, "BREAKOUT_QUALITY_MODEL_ROBUSTNESS_SEED_WORKERS", seed_workers):
+                    self.assertEqual(source.oracle_daily_source_fingerprint(), before)
+
     def test_unrelated_model_registration_is_not_price_source_drift(self):
         from services.audit import oracle_score_artifacts as source
         from core.file_integrity import compute_file_sha256 as original

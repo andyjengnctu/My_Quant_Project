@@ -1510,6 +1510,7 @@ def _rescore_fold_from_fitting_checkpoint(
     verified_archive_binding: dict[str, Any] | None = None,
     verified_external_fit: bool = False,
     verified_published_binding: dict[str, Any] | None = None,
+    verified_checkpoint_manifest: dict[str, Any] | None = None,
     fit_validation_errors: list[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]] | None:
     """Materialize a compatible checkpoint from the shared fitting-identity cache, then rescore locally.
@@ -1551,6 +1552,8 @@ def _rescore_fold_from_fitting_checkpoint(
         if is_shared_cache else nullcontext()
     )
     try:
+        if verified_external_fit and is_shared_cache and not isinstance(verified_checkpoint_manifest, dict):
+            raise RuntimeError("Shared external FIT snapshot requires the independently verified checkpoint")
         with source_guard:
             if verified_published_binding is not None:
                 _assert_published_fit_binding_unchanged(
@@ -1572,6 +1575,13 @@ def _rescore_fold_from_fitting_checkpoint(
                     "checkpoint"
                 ):
                     return None
+                if verified_external_fit and is_shared_cache:
+                    if (source_checkpoint_manifest != verified_checkpoint_manifest
+                            or fold_training_identity(source_manifest) != fold_training_identity(fold_contract)):
+                        raise RuntimeError(
+                            "Shared FIT snapshot differs from the independently verified checkpoint; "
+                            "automatic scoring, overwrite and refit blocked"
+                        )
             except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError):
                 return None
             shutil.copy2(source_model_path, staging / DEFAULT_MODEL_FILENAME)
@@ -2945,6 +2955,7 @@ def _run_authorized_point_in_time_scores(args, *, settings) -> int:
                     expected_fingerprint=fingerprint, args=args,
                     torch_module=torch, plan=plan,
                     verified_external_fit=True, fit_validation_errors=rescore_reasons,
+                    verified_checkpoint_manifest=external_source[1]["source_checkpoint"],
                 )
                 if reused is None:
                     raise RuntimeError(

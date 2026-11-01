@@ -18,7 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from threading import Lock
+from threading import Event, Lock
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -5037,6 +5037,7 @@ def _run_parallel_model_robustness_seeds(
     """
     registry: dict[str, subprocess.Popen] = {}
     registry_lock = Lock()
+    cancellation_event = Event()
     mode = "rolling" if rolling else "forward"
     with ThreadPoolExecutor(max_workers=min(workers, len(seeds))) as executor:
         futures = {}
@@ -5058,6 +5059,7 @@ def _run_parallel_model_robustness_seeds(
                 registry_lock=registry_lock,
                 registry_key=f"{model_id}:{mode}:{seed}",
                 failure_prefix=f"{model_id} {mode} Robustness seed={seed} producer failed",
+                cancellation_event=cancellation_event,
             )
             futures[future] = int(seed)
         try:
@@ -5084,6 +5086,7 @@ def _run_parallel_model_robustness_seeds(
                     + f" | seed={seed} | {mode} Standard SOP READY"
                 )
         except BaseException:
+            cancellation_event.set()
             terminate_registered_training_processes(registry, registry_lock)
             for future in futures:
                 future.cancel()

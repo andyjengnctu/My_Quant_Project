@@ -437,6 +437,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
                 expected_fingerprint="fixture", args=SimpleNamespace(
                     checkpoint_cache_root=str(shared_root),
                 ), torch_module=object(), plan=object(), verified_external_fit=True,
+                verified_checkpoint_manifest=matched[1]["source_checkpoint"],
             )
         check_true(
             "pit_verified_same_sha_shared_fit_only_refreshes_scores_not_weights",
@@ -447,6 +448,34 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             and shared_model.read_bytes() == b"published-fit-one"
             and (shared_entry / FOLD_MANIFEST_FILENAME).read_bytes() == intact_manifest,
         )
+        # The independently proven cache and the snapshot use separate lock
+        # scopes. A self-consistent replacement between them must not reach
+        # inference merely because its model still agrees with its own manifest.
+        shared_model.write_bytes(b"changed-between-verification-and-snapshot")
+        replacement = {**shared_manifest, "artifacts": {
+            "checkpoint": build_file_manifest(shared_model),
+        }}
+        (shared_entry / FOLD_MANIFEST_FILENAME).write_text(json.dumps(replacement), encoding="utf-8")
+        stale_snapshot_blocked = False
+        with patch.object(pit_module, "_rescore_fold_from_compatible_checkpoint") as rescore:
+            try:
+                _rescore_fold_from_fitting_checkpoint(
+                    source_fold_dir=shared_entry, target_fold_dir=base / "stale_snapshot",
+                    bundle=object(), ids={}, fold_contract=expected,
+                    expected_fingerprint="fixture", args=SimpleNamespace(
+                        checkpoint_cache_root=str(shared_root),
+                    ), torch_module=object(), plan=object(), verified_external_fit=True,
+                    verified_checkpoint_manifest=matched[1]["source_checkpoint"],
+                )
+            except RuntimeError as exc:
+                stale_snapshot_blocked = "independently verified checkpoint" in str(exc)
+        check_true(
+            "pit_shared_fit_snapshot_keeps_independently_verified_sha_across_lock_scopes",
+            stale_snapshot_blocked and rescore.call_count == 0
+            and not (base / "stale_snapshot").exists(),
+        )
+        shared_model.write_bytes(b"published-fit-one")
+        (shared_entry / FOLD_MANIFEST_FILENAME).write_bytes(intact_manifest)
         # A published Forward/Rolling Fold is NOT a historical FIT Repair archive.
         published_root = base / "published_with_model_artifacts"
         published_fold = published_root / "folds" / "fold_20210101_20211231"

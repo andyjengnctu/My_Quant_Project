@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import time
-from threading import Lock
+from threading import Event, Lock
 from typing import Mapping, MutableMapping, Sequence
 
 from config.runtime import RESEARCH_TRAINER_TERMINATION_GRACE_SECONDS
@@ -51,6 +51,7 @@ def run_logged_training_process(
     failure_prefix: str,
     log_tail_chars: int = 5000,
     grace_seconds: float = RESEARCH_TRAINER_TERMINATION_GRACE_SECONDS,
+    cancellation_event: Event | None = None,
 ) -> dict[str, object]:
     """Run one trainer with shared logging, cancellation and failure-tail semantics."""
 
@@ -60,15 +61,20 @@ def run_logged_training_process(
     env.update({str(k): str(v) for k, v in dict(env_overrides or {}).items()})
     started = time.perf_counter()
     with path.open("w", encoding="utf-8") as handle:
-        proc = subprocess.Popen(
-            list(command),
-            cwd=str(Path(cwd).resolve()),
-            env=env,
-            stdout=handle,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
         with registry_lock:
+            if cancellation_event is not None and cancellation_event.is_set():
+                raise RuntimeError(f"{failure_prefix}: cancelled before subprocess launch")
+            # Publication in the registry and OS launch share the same lock
+            # as the terminator's snapshot. A failed sibling cannot otherwise
+            # miss a process launched just before its registry insertion.
+            proc = subprocess.Popen(
+                list(command),
+                cwd=str(Path(cwd).resolve()),
+                env=env,
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
             registry[str(registry_key)] = proc
         try:
             returncode = proc.wait()
