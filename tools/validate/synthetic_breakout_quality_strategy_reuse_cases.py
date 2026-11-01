@@ -2057,17 +2057,34 @@ def append_model_robustness_pit_strategy_reuse_contract_checks(*, results, case_
         model_replay_arms = tuple(
             arm for arm in strategy_arms if arm.dl_enabled
         )
-        unique_model_ids = {
-            arm.dl_id for arm in model_replay_arms
+        # A replay arm may consume multiple PIT sources (for example, rank
+        # plus an auxiliary eligibility head). Count distinct physical model
+        # source/seed units, not only the primary arm.dl_id. Sources shared by
+        # several replay arms must still be counted just once per seed.
+        from filters.breakout_quality.strategy_compare_dl_artifacts import (
+            resolve_arm_runtime_dl_source_ids,
+        )
+        required_source_ids = {
+            dl_id
+            for arm in model_replay_arms
+            for dl_id in resolve_arm_runtime_dl_source_ids(settings, arm)
         }
-        expected_reused_scores = len(unique_model_ids) * len(cfg.resolved_seeds)
+        grouped_source_ids = {
+            dl_id
+            for dl_id, _entries in robust._training_source_groups(
+                model_replay_arms, settings=settings
+            )
+        }
+        expected_reused_scores = len(required_source_ids) * len(cfg.resolved_seeds)
         add_check(
             results, "synthetic_breakout_quality", case_id,
             "active_arm_plan_reports_model_reuse_and_only_replays_new_strategy_scientific_units",
             True, reused_state["overall_status"] == "READY"
+            and required_source_ids == grouped_source_ids
             and reused_plan.count("REUSE+REPLAY") == len(model_replay_arms)
             and "0 待PIT／checkpoint確認" in reused_plan
             and f"Research模型score REUSE={expected_reused_scores}" in reused_plan
             and missing_plan.count("TRAIN+REPLAY") == len(model_replay_arms)
+            and f"{expected_reused_scores} 待PIT／checkpoint確認" in missing_plan
             and "Research模型score REUSE=0" in missing_plan,
         )
