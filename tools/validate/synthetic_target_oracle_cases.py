@@ -61,6 +61,10 @@ _ACTIVE_ORACLE_DEFINITION = next(
 _NON_PRICE_SCORE_TARGETS = frozenset(
     set(oracle._oracle_comparison_plan(_ACTIVE_ORACLE_DEFINITION)["daily_sources"])
 )
+LEGACY_ORACLE_TARGETS = tuple(
+    item for item in oracle._oracle_comparison_plan(_ACTIVE_ORACLE_DEFINITION)["targets"]
+    if item[0] not in _NON_PRICE_SCORE_TARGETS
+)
 # Historical 50/50 CG comparison is an isolated fixture, not an executable
 # entry in the current Oracle Registry.
 _HISTORICAL_CG_COMPARISON = {
@@ -94,13 +98,14 @@ def _forty_only(definition):
 
 
 def _legacy_definition():
-    """Historical fixed-period fixture of currently executable price treatments."""
-    active = _ACTIVE_ORACLE_DEFINITION
+    """Historical fixed-window replay fixture, limited to currently executable targets."""
+    active = next(d for d in get_reusable_audit_definitions("breakout_quality")
+                  if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
     return replace(active, dimensions={**active.dimensions,
         "oracle_evaluation_end_date": "2025-12-22"},
         source={**active.source, "oracle_comparisons": tuple(
-            item for item in active.source["oracle_comparisons"]
-            if item["target"] not in _NON_PRICE_SCORE_TARGETS)})
+        item for item in active.source["oracle_comparisons"]
+        if item["target"] not in _NON_PRICE_SCORE_TARGETS)})
 
 
 def _historical_cg_price_definition():
@@ -110,10 +115,6 @@ def _historical_cg_price_definition():
         **active.source, "oracle_comparisons": (_HISTORICAL_CG_COMPARISON,),
     })
 
-
-LEGACY_ORACLE_TARGETS = tuple(
-    item for item in oracle._oracle_comparison_plan(_legacy_definition())["targets"]
-)
 
 
 def _mock_panels(common40):
