@@ -1716,6 +1716,8 @@ def append_model_robustness_pit_strategy_reuse_contract_checks(*, results, case_
         get_strategy_multi_seed_robustness_settings,
     )
     from filters.breakout_quality.paths import resolve_model_research_robustness_seed_dirs
+    from filters.breakout_quality import strategy_compare_pit_contract as pit_contract
+    from filters.breakout_quality.point_in_time_schedule import FOLD_CALENDAR_ANCHOR
     from services.research import breakout_quality_application as model_app
     from services.research import strategy_compare_training as training
     from services.research import strategy_multi_seed_robustness as robust
@@ -1735,6 +1737,68 @@ def append_model_robustness_pit_strategy_reuse_contract_checks(*, results, case_
         experiment_profile=str(source.experiment_profile)
     )
     seed = 693545351
+    # Current producer persists the effective default calendar anchor, NOT
+    # null, even when rolling mode omitted --fold-anchor-date. This is the
+    # historical 44/44 false-TRAIN regression.
+    effective_anchor = FOLD_CALENDAR_ANCHOR.strftime("%Y-%m-%d")
+    natural_manifest = {
+        "fold_anchor_date": effective_anchor,
+        "fold_identity": {
+            "calendar_anchor": effective_anchor,
+            "stable_when_earlier_folds_are_added": True,
+        },
+        "fold_months": int(source.point_in_time_fold_months or workflow.point_in_time_fold_months),
+        "single_score_block": False,
+        "score_period": {"start": "2021-01-01", "end": "2026-03-02"},
+        "folds": [{"selected_epoch": 1}],
+    }
+    with patch.object(
+        pit_contract, "load_selection_point_in_time_ranking_contract",
+        return_value=SimpleNamespace(seed=seed, manifest=dict(natural_manifest)),
+    ):
+        try:
+            loaded = pit_contract.load_validated_selection_pit_strategy_compare_contract(
+                root=Path("/synthetic"), source=source, workflow=workflow,
+                seed=seed, comparison_start="2021-01-01", comparison_end="2026-03-02",
+            )
+        except ValueError:
+            loaded = None
+    changed_anchor = dict(natural_manifest, fold_anchor_date="2020-12-01")
+    changed_mode = dict(natural_manifest, fold_identity=dict(
+        natural_manifest["fold_identity"], stable_when_earlier_folds_are_added=False,
+    ))
+    try:
+        pit_contract.validate_selection_pit_fold_anchor_identity(
+            changed_anchor, requested_fold_anchor_date=source.point_in_time_fold_anchor_date,
+        )
+    except ValueError as exc:
+        changed_anchor_rejected = "fold_anchor_date mismatch" in str(exc)
+    else:
+        changed_anchor_rejected = False
+    try:
+        pit_contract.validate_selection_pit_fold_anchor_identity(
+            changed_mode, requested_fold_anchor_date=source.point_in_time_fold_anchor_date,
+        )
+    except ValueError as exc:
+        changed_mode_rejected = "fold_identity schedule mismatch" in str(exc)
+    else:
+        changed_mode_rejected = False
+    explicit_manifest = dict(natural_manifest, fold_identity=dict(
+        natural_manifest["fold_identity"], stable_when_earlier_folds_are_added=False,
+    ))
+    try:
+        pit_contract.validate_selection_pit_fold_anchor_identity(
+            explicit_manifest, requested_fold_anchor_date=effective_anchor,
+        )
+        explicit_accepted = True
+    except ValueError:
+        explicit_accepted = False
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "canonical_default_fold_anchor_matches_persisted_producer_and_rejects_wrong_schedule",
+        True, loaded is not None and changed_anchor_rejected
+        and changed_mode_rejected and explicit_accepted,
+    )
     with tempfile.TemporaryDirectory(prefix="model_robustness_reuse_") as temporary:
         root = Path(temporary)
         expected_dirs = resolve_model_research_robustness_seed_dirs(
@@ -1758,7 +1822,7 @@ def append_model_robustness_pit_strategy_reuse_contract_checks(*, results, case_
         model_dir.mkdir(parents=True)
         for filename, content in (
             (training.SELECTION_POINT_IN_TIME_SCORE_FILENAME, "synthetic-score"),
-            (training.SELECTION_POINT_IN_TIME_MANIFEST_FILENAME, '{"folds": []}'),
+            (training.SELECTION_POINT_IN_TIME_MANIFEST_FILENAME, json.dumps(natural_manifest)),
             (training.SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME, "synthetic-audit"),
         ):
             (model_dir / filename).write_text(content, encoding="utf-8")
@@ -1774,7 +1838,16 @@ def append_model_robustness_pit_strategy_reuse_contract_checks(*, results, case_
             "score_available_from": "2021-01-01",
             "score_available_through": "2026-03-02",
         }
-        with patch.object(training, "validate_strategy_compare_training_artifacts", return_value=dict(identity)) as validation, patch.object(
+        def validation_fixture(**_kwargs):
+            persisted = json.loads(
+                (model_dir / training.SELECTION_POINT_IN_TIME_MANIFEST_FILENAME).read_text(encoding="utf-8")
+            )
+            pit_contract.validate_selection_pit_fold_anchor_identity(
+                persisted, requested_fold_anchor_date=source.point_in_time_fold_anchor_date,
+            )
+            return dict(identity)
+
+        with patch.object(training, "validate_strategy_compare_training_artifacts", side_effect=validation_fixture) as validation, patch.object(
             training, "pit_fold_fitting_settings_issues", return_value=()
         ) as fitting:
             evidence, reason = training.inspect_reusable_model_research_rolling_score(
@@ -1818,7 +1891,7 @@ def append_model_robustness_pit_strategy_reuse_contract_checks(*, results, case_
         manifest_path = model_dir / training.SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
         manifest_path.write_text('{"folds": [], "fold_anchor_date": "2020-12-01"}', encoding="utf-8")
         with patch.object(
-            training, "validate_strategy_compare_training_artifacts", return_value=dict(identity)
+            training, "validate_strategy_compare_training_artifacts", side_effect=validation_fixture
         ), patch.object(training, "pit_fold_fitting_settings_issues", return_value=()):
             anchored, anchored_reason = training.inspect_reusable_model_research_rolling_score(
                 project_root=root, source=source, workflow=workflow, seed=seed,

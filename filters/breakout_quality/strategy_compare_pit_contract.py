@@ -8,7 +8,9 @@ PIT identity/period validation rules.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
+
+from filters.breakout_quality.point_in_time_schedule import FOLD_CALENDAR_ANCHOR
 
 from filters.breakout_quality.paths import (
     resolve_filter_model_output_dir,
@@ -142,6 +144,41 @@ def validate_selection_pit_score_period(
     return actual_start, actual_end
 
 
+def validate_selection_pit_fold_anchor_identity(
+    manifest: Mapping[str, Any], *, requested_fold_anchor_date: str | None,
+) -> None:
+    """Match the PIT producer's *effective* anchor and its schedule semantics.
+
+    An omitted CLI anchor is not persisted as null. The canonical PIT producer
+    serializes FOLD_CALENDAR_ANCHOR (2000-01-01) and records the unanchored
+    schedule mode in fold_identity. Comparing the persisted date to Python None
+    incorrectly rejected every completed Research Rolling Robustness score.
+    """
+    implicit_anchor = requested_fold_anchor_date in (None, "")
+    expected_anchor = (
+        FOLD_CALENDAR_ANCHOR.strftime("%Y-%m-%d")
+        if implicit_anchor else _normalize_contract_date(requested_fold_anchor_date)
+    )
+    actual_anchor = str(manifest.get("fold_anchor_date") or "").strip()
+    if actual_anchor != expected_anchor:
+        raise ValueError(
+            "Strategy Compare PIT fold_anchor_date mismatch: "
+            f"expected={expected_anchor}, actual={actual_anchor or '<missing>'}"
+        )
+    identity = manifest.get("fold_identity")
+    if identity is not None:
+        if not isinstance(identity, Mapping):
+            raise ValueError("Strategy Compare PIT fold_identity invalid")
+        identity_anchor = str(identity.get("calendar_anchor") or "").strip()
+        stable = identity.get("stable_when_earlier_folds_are_added")
+        if identity_anchor != expected_anchor or not isinstance(stable, bool) or stable != implicit_anchor:
+            raise ValueError(
+                "Strategy Compare PIT fold_identity schedule mismatch: "
+                f"expected_anchor={expected_anchor}, implicit={implicit_anchor}, "
+                f"actual_anchor={identity_anchor}, stable={stable!r}"
+            )
+
+
 def load_validated_selection_pit_strategy_compare_contract(
     *,
     root: Path,
@@ -178,14 +215,9 @@ def load_validated_selection_pit_strategy_compare_contract(
     expected_single_block = bool(source.point_in_time_single_score_block)
     if bool(manifest.get("single_score_block", False)) != expected_single_block:
         raise ValueError("Strategy Compare PIT single_score_block不一致")
-    expected_anchor = (
-        None
-        if source.point_in_time_fold_anchor_date in (None, "")
-        else str(source.point_in_time_fold_anchor_date)
+    validate_selection_pit_fold_anchor_identity(
+        manifest, requested_fold_anchor_date=source.point_in_time_fold_anchor_date,
     )
-    actual_anchor = str(manifest.get("fold_anchor_date") or "").strip() or None
-    if expected_anchor is not None and actual_anchor != expected_anchor:
-        raise ValueError("Strategy Compare PIT fold_anchor_date不一致")
 
     expected_start = comparison_start
     if expected_start in (None, ""):
@@ -214,4 +246,5 @@ __all__ = [
     "resolve_strategy_compare_selection_pit_bundle_dir",
     "resolve_strategy_compare_selection_pit_contract_override",
     "validate_selection_pit_score_period",
+    "validate_selection_pit_fold_anchor_identity",
 ]

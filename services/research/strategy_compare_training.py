@@ -273,13 +273,10 @@ def inspect_reusable_model_research_rolling_score(
             comparison_end=comparison_end,
             point_in_time_dir_override=model_dir,
         )
+        # The shared Selection-PIT contract already verifies the producer's
+        # effective anchor, fold schedule mode, score period and source lineage.
+        # Never re-interpret an omitted anchor as a persisted null here.
         manifest = _read_json(model_dir / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME)
-        expected_anchor = str(source.point_in_time_fold_anchor_date or "").strip() or None
-        actual_anchor = str(manifest.get("fold_anchor_date") or "").strip() or None
-        # Exact score-universe reuse requires an exact fold schedule, including
-        # the distinction between anchored and naturally aligned folds.
-        if actual_anchor != expected_anchor:
-            return None, "Research Rolling Robustness PIT fold_anchor_date mismatch"
         fitting_issues = pit_fold_fitting_settings_issues(
             point_in_time_dir=model_dir,
             manifest=manifest,
