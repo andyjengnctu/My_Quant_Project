@@ -2453,31 +2453,55 @@ def _oracle_ticker_worker_quotas(
     *, seed_order: tuple[int, ...], decisions: Mapping[tuple[int, str], str],
     daily_sources: Mapping[str, Any], total_budget: int, max_per_seed: int,
 ) -> dict[int, int]:
-    """Allocate bounded CPU lanes for the actual approved daily RUN work.
+    """Allocate *additional process* slots, including all active Seed hosts.
 
-    Seed processes always consume at least one lane. Remaining lanes go to
-    seeds with more pending RUN work (and at least one daily source);
-    no new RUN cells are added. The quota changes only execution scheduling.
+    Each seed needs one outer worker process. A ticker quota of 1 executes
+    sequentially inside that worker (zero extra processes); a quota >= 2
+    starts exactly that many child processes. Capacity must cover both layers.
+    Called only when all given seeds can run concurrently; queued seeds are
+    governed separately by a uniform per-slot quota.
     """
     if (type(total_budget) is not int or not 1 <= total_budget <= 32
             or type(max_per_seed) is not int or not 1 <= max_per_seed <= 8):
         raise ValueError("Oracle CPU and MinTrade stock worker budget invalid")
+    if len(seed_order) != len(set(seed_order)) or len(seed_order) > total_budget:
+        raise ValueError("Oracle simultaneous Seed workers exceed CPU budget")
     weights = {
-        seed: sum(action == "RUN" and key[0] == seed
+        seed: sum(action == "RUN" and key[0] == seed and key[1] in daily_sources
                   for key, action in decisions.items())
         for seed in seed_order
     }
     quotas = {seed: 1 for seed in seed_order}
-    for _ in range(max(0, total_budget - len(seed_order))):
+    remaining = total_budget - len(seed_order)
+    while remaining > 0:
+        # A 1 -> 2 transition creates *two* child processes, not one.
         eligible = [seed for seed in seed_order
-                    if quotas[seed] < max_per_seed and weights[seed] > 0
-                    and any(action == "RUN" and key[0] == seed and key[1] in daily_sources
-                            for key, action in decisions.items())]
+                    if weights[seed] > 0 and quotas[seed] < max_per_seed
+                    and remaining >= (2 if quotas[seed] == 1 else 1)]
         if not eligible:
             break
-        chosen = max(eligible, key=lambda seed: (weights[seed] / quotas[seed], -seed_order.index(seed)))
+        chosen = max(eligible, key=lambda seed: (
+            weights[seed] / quotas[seed], -seed_order.index(seed),
+        ))
+        remaining -= 2 if quotas[chosen] == 1 else 1
         quotas[chosen] += 1
     return quotas
+
+
+def _oracle_queued_ticker_worker_quota(*, active_seeds: int,
+                                        total_budget: int, max_per_seed: int) -> int:
+    """Uniform slot cap: any set of queued replacement seeds stays in budget.
+
+    ProcessPoolExecutor does not guarantee which queued seed replaces a
+    completed one. A constant per-slot cap is necessary unless the scheduler
+    explicitly owns slot-to-seed affinity. Never budget only the first batch.
+    """
+    if not (1 <= active_seeds <= total_budget):
+        raise ValueError("Oracle active worker count exceeds CPU budget")
+    # The first process in each slot is the Seed itself. If we cannot afford
+    # at least two additional children per slot, keep ticker work serial.
+    extra_per_seed = (total_budget - active_seeds) // active_seeds
+    return min(max_per_seed, extra_per_seed) if extra_per_seed >= 2 else 1
 
 
 def _execute_oracle_missing_parallel(
@@ -2533,7 +2557,7 @@ def _execute_oracle_missing_parallel(
     worker_count = min(worker_limit, len(seed_order), cpu_budget)
     if worker_count == 1:
         return _execute_single_stage_missing(
-            definition, **kwargs, mintrade_stock_workers=min(cpu_budget, stock_limit),
+            definition, **kwargs, mintrade_stock_workers=min(max(1, cpu_budget - 1), stock_limit),
         )
     try:
         # Tests, embedding applications and isolated simulations may supply
@@ -2546,7 +2570,7 @@ def _execute_oracle_missing_parallel(
             print("[Target Replay] process payload cannot be serialized; "
                   "using canonical single-worker Replay", flush=True)
         return _execute_single_stage_missing(
-            definition, **kwargs, mintrade_stock_workers=min(cpu_budget, stock_limit),
+            definition, **kwargs, mintrade_stock_workers=min(max(1, cpu_budget - 1), stock_limit),
         )
 
     # Confirm all immutable inputs BEFORE the shared price producer and pool.
@@ -2590,7 +2614,7 @@ def _execute_oracle_missing_parallel(
             )
         except OracleTruthBuildRequired:
             return _execute_single_stage_missing(
-                definition, **kwargs, mintrade_stock_workers=min(cpu_budget, stock_limit),
+                definition, **kwargs, mintrade_stock_workers=min(max(1, cpu_budget - 1), stock_limit),
             )
 
     if not quiet:
@@ -2601,7 +2625,10 @@ def _execute_oracle_missing_parallel(
     if len(seed_order) > worker_count:
         # Queued seeds may replace completed workers while the others are
         # still busy: use a per-slot cap, not a global sum of every seed.
-        per_slot = min(stock_limit, max(1, cpu_budget // worker_count))
+        per_slot = _oracle_queued_ticker_worker_quota(
+            active_seeds=worker_count, total_budget=cpu_budget,
+            max_per_seed=stock_limit,
+        )
         worker_quotas = {seed: per_slot for seed in seed_order}
     else:
         worker_quotas = _oracle_ticker_worker_quotas(
@@ -2708,7 +2735,11 @@ def _run_single_stage_oracle(
     if not (start < end <= str(settings.end_date)):
         raise OracleBlockedError("Oracle fixed evaluation window invalid")
     try:
-        price_sha = price_inventory_sha256(root, settings.dataset)
+        # Matrix construction must never create a source content witness or
+        # price manifest. Optional source certification is authorized below.
+        price_sha = price_inventory_sha256(
+            root, settings.dataset, certify_missing=False,
+        )
     except ValueError as exc:
         raise OracleBlockedError(f"Oracle price provenance BLOCKED: {exc}") from exc
     prepared, param_evidence = _prepare_oracle_parameters(
@@ -3191,22 +3222,32 @@ def _run_single_stage_oracle(
                     for (seed, target), reason in blocked.items()]
         raise OracleBlockedError("Oracle full-identity BLOCKED; no Target producer or Portfolio "
                                  "ran: " + " | ".join(problems[:3]))
-    # Publish only after the complete matrix passes integrity checks. Metadata
-    # migration is idempotent; no original Replay/Target bytes are rewritten.
-    for key, observation in cached.items():
-        if key in execution_contexts and (key not in indexed or key in unpublished_native):
+    def inspect_unpublished_origins_read_only() -> None:
+        """Validate unpublished signed truth origins without creating indexes."""
+        # Corrupt origins must not be marked REUSE merely because indexing is
+        # deferred until authorization.
+        from services.audit.oracle_truth_references import OracleTruthReferences
+        references = OracleTruthReferences(
+            root / AUDIT_OUTPUT_ROOT / definition.output_subdir / "truth_cache")
+        for key in cached:
+            if (key not in execution_contexts or
+                    (key in indexed and key not in unpublished_native) or
+                    key[1] not in plan["daily_sources"]):
+                continue
             origin = cache.completed_origin_identity(
-                identities[key], allow_historical_execution_input_drift=allow_historical_execution_input_drift)
+                identities[key],
+                allow_historical_execution_input_drift=allow_historical_execution_input_drift,
+            )
             if origin is None:
-                raise OracleBlockedError("Oracle completed origin disappeared before indexing")
-            execution_index.publish(execution_contexts[key], origin, observation)
-            if key[1] in plan["daily_sources"]:
-                from services.audit.oracle_truth_references import OracleTruthReferences
-                references = OracleTruthReferences(root / AUDIT_OUTPUT_ROOT / definition.output_subdir / "truth_cache")
-                witness = daily_witnesses.get((key[0], plan["daily_sources"][key[1]]))
-                references.publish_existing(execution_contexts[key],
-                    **({"evidence": witness["evidence"]} if witness is not None else {"replay_identity": origin}))
+                raise OracleBlockedError("Oracle completed origin disappeared before read-only attestation")
+            witness = daily_witnesses.get((key[0], plan["daily_sources"][key[1]]))
+            references.inspect_existing(execution_contexts[key],
+                **({"evidence": witness["evidence"]}
+                   if witness is not None else {"replay_identity": origin}))
     if preview_only:
+        inspect_unpublished_origins_read_only()
+        # REUSE is certified from signed receipts and immutable references,
+        # never newly created files; a preview returns before publication.
         return {
             "status": "PREVIEW", "preflight": decisions, "text": preflight,
             "missing_p16": pending_p16, "seed_set": tuple(seed_set),
@@ -3214,9 +3255,8 @@ def _run_single_stage_oracle(
             "producer_kwargs": dict(parameter_plan["producer_kwargs"]),
         }
     if approved_replay_decisions is not None:
-        # The Research user authorized the *typed* (seed, Target) plan before
-        # missing P16 was fitted. A previously REUSE cell cannot become RUN,
-        # nor may a new cell appear. RUN -> REUSE is safe (less work).
+        # The Research user authorized the (seed, Target) plan before missing
+        # P16 existed. A previous REUSE must never turn into unapproved RUN.
         if preflight_approval is None or set(approved_replay_decisions) != set(decisions):
             raise OracleBlockedError("Target 授權後 Seed／Target 集合已改變；停止 Replay")
         unexpected = [
@@ -3233,9 +3273,29 @@ def _run_single_stage_oracle(
                 f"seed={seed} Target={target} 原={approved} 現={current}"
             )
     if preflight_approval is not None and not preflight_approval(preflight):
+        inspect_unpublished_origins_read_only()
         return {"status": "CANCELLED", "read_only": True, "preflight": decisions}
+    # The optional, immutable source-manifest migration is an execution-only
+    # action. It must preserve exactly the SHA used for the approved matrix.
+    if price_inventory_sha256(root, settings.dataset) != price_sha:
+        raise OracleBlockedError("Oracle price inputs changed after approved preflight")
     if dataset_input_contract(root, str(definition.source["filter_id"])) != dataset_inputs:
         raise OracleBlockedError("Oracle dataset-source metadata changed after approved preflight")
+    # Existing signed Replay references may now be published, but no original
+    # Target or Replay artifact is rewritten by this metadata migration.
+    for key, observation in cached.items():
+        if key in execution_contexts and (key not in indexed or key in unpublished_native):
+            origin = cache.completed_origin_identity(
+                identities[key], allow_historical_execution_input_drift=allow_historical_execution_input_drift)
+            if origin is None:
+                raise OracleBlockedError("Oracle completed origin disappeared before indexing")
+            execution_index.publish(execution_contexts[key], origin, observation)
+            if key[1] in plan["daily_sources"]:
+                from services.audit.oracle_truth_references import OracleTruthReferences
+                references = OracleTruthReferences(root / AUDIT_OUTPUT_ROOT / definition.output_subdir / "truth_cache")
+                witness = daily_witnesses.get((key[0], plan["daily_sources"][key[1]]))
+                references.publish_existing(execution_contexts[key],
+                    **({"evidence": witness["evidence"]} if witness is not None else {"replay_identity": origin}))
     # Cold-start eligibility is needed only to produce genuinely missing arms.
     # Performing this DL provider load before the user's approval was the
     # original hidden 617-price-path preflight rerun.
