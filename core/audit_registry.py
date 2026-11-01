@@ -126,13 +126,13 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                 # their independent synthetic historical calculation remains
                 # testable, but formal selection requires current registration.
                 "historical_only_oracle_targets": {
+                    "CG40_EqualRank": "40D MFE + full D40 Safety, 50/50 daily rank",
                     "DailyUniversal_MinTrade60_NetR": "LABEL-daily_universal_formal_min_roos_trade60_netr_v1",
                     "DailyUniversal_MinTrade60_NetR_Direct": "LABEL-daily_universal_formal_min_roos_trade60_netr_v1",
                     "DailyUniversal_MinTrade60_NetPnL": "LABEL-daily_universal_formal_min_roos_trade60_netpnl_v1",
                     "DailyUniversal_MinTrade60_NetPnL_Direct": "LABEL-daily_universal_formal_min_roos_trade60_netpnl_v1",
                 },
                 "oracle_comparisons": (
-                    {"target": "CG40_EqualRank", "description": "40D MFE + full D40 Safety, 50/50 daily rank", "score": "equal_rank_mfe_safety", "provider": "pure_mfe40_provider", "selector": "exact"},
                     {"target": "MFE40_Control", "description": "40D MFE only (control, not target recommendation)", "score": "mfe", "provider": "pure_mfe40_provider", "selector": "exact"},
                     {"target": "R40", "description": "40D close-to-close terminal return divided by canonical risk budget R", "score": "terminal_r", "provider": "pure_mfe40_provider", "selector": "exact"},
                     {"target": "T40", "description": "(1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 is nonnegative in R", "score": "terminal_mae_gate", "provider": "pure_mfe40_provider", "selector": "exact"},
