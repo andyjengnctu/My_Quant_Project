@@ -291,6 +291,7 @@ def _identity_field_value(identity: Mapping[str, Any], field: str) -> str:
 def verified_daily_truth_witness(
     *, cache_root: Path, expected_inputs: Mapping[str, Any],
     score_sha: Callable[[Mapping[tuple[str, str], float]], str],
+    certified_keys: tuple[str, int, str, str] | None = None,
 ) -> dict[str, Any] | None:
     """Read an already published current-source truth; never call its Producer.
 
@@ -301,6 +302,7 @@ def verified_daily_truth_witness(
     """
     import numpy as np
     from services.audit.daily_trade40_oracle import _truth_cache_read
+    from services.audit.oracle_truth_references import verify_truth_score_membership
     from services.audit.mintrade_truth_source_attestation import mintrade_sources_equivalent
 
     target = str(expected_inputs["target_id"])
@@ -329,15 +331,11 @@ def verified_daily_truth_witness(
             scores, evidence = cached
             ordered = sorted(scores)
             key_digest = hashlib.sha256()
-            group_digest = hashlib.sha256(b"ticker,date\n")
-            windows_group_digest = hashlib.sha256(b"ticker,date\r\n")
             for ticker, day in ordered:
                 key_digest.update(f"{ticker}|{day}\n".encode("utf-8"))
-                group_digest.update(f"{ticker},{day}\n".encode("utf-8"))
-                windows_group_digest.update(f"{ticker},{day}\r\n".encode("utf-8"))
-            if identity["feature_eligible_keys_sha256"] not in {
-                    group_digest.hexdigest(), windows_group_digest.hexdigest()}:
-                raise ValueError("daily truth feature-key identity differs from actual NPZ keys")
+            verify_truth_score_membership(
+                scores, identity, certified_keys=certified_keys,
+            )
             days = [day for _, day in ordered]
             if (evidence.get("first_date") != min(days)
                     or evidence.get("last_date") != max(days)):

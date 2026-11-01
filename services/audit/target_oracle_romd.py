@@ -2347,6 +2347,7 @@ def _execute_single_stage_missing(
                                 execution=execution_contexts[key],
                                 cache_root=project_root / AUDIT_OUTPUT_ROOT / definition.output_subdir / "truth_cache",
                                 producer=produce_truth,
+                                certified_keys=current_keys.get(target, cohort_keys),
                             )
                         except (DailyTrade40OracleBlockedError, ValueError) as exc:
                             raise OracleBlockedError(
@@ -3180,6 +3181,7 @@ def _run_single_stage_oracle(
                             daily_witnesses[witness_key] = verified_daily_truth_witness(
                                 cache_root=root / AUDIT_OUTPUT_ROOT / definition.output_subdir / "truth_cache",
                                 score_sha=_canonical_score_map_sha256,
+                                certified_keys=signed_cohort,
                                 expected_inputs={
                                     "schema": _TRUTH_CACHE_SCHEMA, "target_id": actual_id,
                                     "dataset": str(settings.dataset),

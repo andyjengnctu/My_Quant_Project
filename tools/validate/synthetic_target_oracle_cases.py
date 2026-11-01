@@ -7268,7 +7268,8 @@ class OracleMinTradePreflightArtifactReuseCases(TestCase):
 class OracleTruthReferenceFeatureCsvParityCases(TestCase):
     """Certified NPZ keys must use the producer's CSV encoding, not ad hoc rows."""
 
-    def _load_reference(self, scores, *, newline="\n", bad_feature_sha=False):
+    def _load_reference(self, scores, *, newline="\n", bad_feature_sha=False,
+                        certified_keys=None):
         import hashlib
         from core.file_integrity import canonical_json_sha256
         from services.audit.oracle_truth_references import OracleTruthReferences
@@ -7291,7 +7292,7 @@ class OracleTruthReferenceFeatureCsvParityCases(TestCase):
              patch.object(references, "origin_path", return_value=Path("synthetic.npz")), \
              patch.object(daily, "_truth_cache_read", return_value=(
                  scores, {**evidence, "source_reuse_status": "REUSE"})):
-            return references.load({})
+            return references.load({}, certified_keys=certified_keys)
 
     def test_producer_quoted_keys_and_both_line_endings_are_readable(self):
         # The producer uses pandas.to_csv(), which quotes embedded CSV punctuation.
@@ -7308,6 +7309,134 @@ class OracleTruthReferenceFeatureCsvParityCases(TestCase):
         scores = {("2330", "2021-01-04"): .5}
         with self.assertRaisesRegex(ValueError, "feature membership differs"):
             self._load_reference(scores, bad_feature_sha=True)
+
+
+    @staticmethod
+    def _proof(scores):
+        import hashlib
+        keys = sorted(scores)
+        return (hashlib.sha256("".join(f"{ticker}|{day}\n" for ticker, day in keys)
+                               .encode("utf-8")).hexdigest(),
+                len(keys), min(day for _, day in keys), max(day for _, day in keys))
+
+    def test_signed_replay_keys_certify_actual_npz_membership_not_legacy_csv_bytes(self):
+        # Old feature-CSV metadata is immutable and can have a different
+        # serialization from a formally signed Replay key witness. Actual
+        # score membership must still be identical, not merely equal in size.
+        scores = {("0050", "2021-01-04"): .9, ("2330", "2021-01-05"): .4}
+        proof = self._proof(scores)
+        values, evidence = self._load_reference(
+            scores, bad_feature_sha=True, certified_keys=proof,
+        )
+        self.assertEqual(values, scores)
+        self.assertEqual(evidence["effective_source_reference"], "b" * 64)
+
+    def test_signed_replay_keys_must_match_actual_membership_and_dates(self):
+        scores = {("0050", "2021-01-04"): .9, ("2330", "2021-01-05"): .4}
+        alternate = {("0050", "2021-01-04"): .9, ("2317", "2021-01-05"): .4}
+        with self.assertRaisesRegex(ValueError, "score membership differs from certified Replay keys"):
+            self._load_reference(scores, bad_feature_sha=True, certified_keys=self._proof(alternate))
+        proof = self._proof(scores)
+        for bad in ((proof[0], 3, proof[2], proof[3]),
+                    (proof[0], 2, "2021-01-01", proof[3]),
+                    (proof[0], 2, proof[2], "2021-02-01")):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "score membership differs"):
+                self._load_reference(scores, certified_keys=bad)
+        with self.assertRaisesRegex(ValueError, "membership proof is invalid"):
+            self._load_reference(scores, certified_keys=("not-a-sha", 2, proof[2], proof[3]))
+
+
+class OracleTruthReferenceSignedNpZCases(TestCase):
+    """Regression for a previously certified truth with a legacy CSV feature SHA."""
+
+    def test_real_npz_reference_requires_unchanged_scores_and_signed_replay_keys(self):
+        import hashlib
+        from core.file_integrity import canonical_json_sha256
+        from services.audit import daily_trade40_oracle as daily
+        from services.audit.oracle_truth_references import OracleTruthReferences, source_context
+
+        scores = {("2330", "2021-01-04"): 0.0,
+                  ("2317", "2021-01-04"): 1.0,
+                  ("2330", "2021-01-05"): 0.5}
+        keys = sorted(scores)
+        proof = (hashlib.sha256("".join(f"{ticker}|{date}\n" for ticker, date in keys)
+                                .encode("utf-8")).hexdigest(),
+                 len(keys), "2021-01-04", "2021-01-05")
+        source_sha = daily.truth_producer_fingerprint("net_pnl")
+        with tempfile.TemporaryDirectory() as tmp:
+            ref = OracleTruthReferences(Path(tmp) / "truth_cache")
+            execution = {
+                "dataset": "full", "price_sha256": "a" * 64,
+                "param_sha256": "b" * 64, "seed": 693545351,
+                "start_date": "2021-01-01", "end_date": "2021-01-05",
+                "research_cutoff": "2026-03-02",
+                "source_contract": {"recipe": "daily_trade_path_net_pnl",
+                                    "feature_provider": {"profile_id": "profile"},
+                                    "horizon_sessions": None},
+                "dataset_inputs": {"sha256": "d" * 64},
+                "replay_calculation_revision": 1,
+                "replay_implementation_sha256": "e" * 64,
+                "score_contract": {"score_start_date": "2021-01-01"},
+                "replay_policy": {"filter_id": "breakout_quality_v1",
+                                  "fixed_risk": 1.0, "max_position_cap_pct": 1.0,
+                                  "broker_accounting": "signed_accounting",
+                                  "execution_defaults": "signed_defaults"},
+            }
+            identity = {
+                "schema": daily._TRUTH_CACHE_SCHEMA,
+                "target_id": "daily_full_net_pnl", "dataset": "full",
+                "price_sha256": "a" * 64, "param_sha256": "b" * 64,
+                "seed": 693545351, "filter_id": "breakout_quality_v1",
+                "evaluation_start": "2021-01-01", "evaluation_end": "2021-01-05",
+                "research_cutoff": "2026-03-02", "score_start": "2021-01-01",
+                "profile_id": "profile", "horizon_sessions": None,
+                "truth_source_sha256": source_sha,
+                "dataset_summary_sha256": "f" * 64,
+                # Legacy original metadata must remain immutable. It is not
+                # the authoritative score-key proof for a new recipient.
+                "feature_eligible_keys_sha256": "0" * 64,
+            }
+            evidence = {
+                "target_id": "daily_full_net_pnl", "profile_id": "profile",
+                "truth_source_sha256": source_sha,
+                "dataset_summary_sha256": "f" * 64,
+                "research_cutoff": "2026-03-02", "score_start_date": "2021-01-01",
+                "teacher": {"seed": 693545351, "param_identity_sha256": "b" * 64},
+                "mature_eligible_rows": len(scores),
+                "rank_sha256": daily._ranked_score_sha(scores),
+                "first_date": "2021-01-04", "last_date": "2021-01-05",
+            }
+            path = ref.origin_path(identity)
+            daily._truth_cache_write(path, identity, scores, evidence)
+            ref._publish(source_context(execution), identity, evidence)
+            with self.assertRaisesRegex(ValueError, "feature membership differs"):
+                ref.load(execution)
+            loaded, consumed = ref.load(execution, certified_keys=proof)
+            self.assertEqual(loaded, scores)
+            ref.validate_consumption(execution, consumed)
+            from services.audit.oracle_replay_artifacts import verified_daily_truth_witness
+            expected_inputs = {key: value for key, value in identity.items()
+                               if key != "feature_eligible_keys_sha256"}
+            witness = verified_daily_truth_witness(
+                cache_root=ref.cache_root, expected_inputs=expected_inputs,
+                score_sha=oracle._canonical_score_map_sha256,
+                certified_keys=proof,
+            )
+            self.assertEqual(witness["keys"], proof)
+            bad = {("2317", "2021-01-04"): 1.0,
+                   ("2318", "2021-01-04"): 0.0,
+                   ("2330", "2021-01-05"): 0.5}
+            wrong_proof = (hashlib.sha256("".join(f"{t}|{d}\n" for t, d in sorted(bad))
+                                          .encode()).hexdigest(), 3, proof[2], proof[3])
+            with self.assertRaisesRegex(ValueError, "score membership differs"):
+                ref.load(execution, certified_keys=wrong_proof)
+            with np.load(path, allow_pickle=False) as archive:
+                payload = {name: archive[name].copy() for name in archive.files}
+            payload["scores"][0] += 0.1
+            with path.open("wb") as handle:
+                np.savez_compressed(handle, **payload)
+            with self.assertRaisesRegex(ValueError, "truth cache|corrupt"):
+                ref.load(execution, certified_keys=proof)
 
 
 class OracleEffectiveArtifactContractCases(TestCase):

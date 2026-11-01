@@ -8,6 +8,7 @@ arrays through the original truth owner before using them.
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
@@ -39,6 +40,52 @@ def source_context(execution: Mapping[str, Any]) -> dict[str, Any]:
 def _evidence(evidence: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in evidence.items()
             if key not in {"source_reuse_status", "effective_source_reference"}}
+
+
+def verify_truth_score_membership(
+    scores: Mapping[tuple[str, str], float], origin_identity: Mapping[str, Any],
+    *, certified_keys: tuple[str, int, str, str] | None = None,
+) -> None:
+    """Verify NPZ keys against the canonical Oracle score-universe witness.
+
+    With an independently certified preflight witness, compare the *actual*
+    ticker/date keys in the NPZ to the same canonical ``ticker|date`` digest
+    required by Portfolio Replay. The original feature-cohort CSV digest is
+    retained in the signed NPZ identity, but its DataFrame serialization is
+    not a substitute for the signed Replay membership proof. Without such a
+    witness (e.g. a standalone origin inspection), require the original CSV
+    digest as before. No comparison uses score counts alone.
+    """
+    ordered = sorted(scores)
+    if not ordered:
+        raise ValueError("Oracle referenced truth has no score keys")
+    if certified_keys is not None:
+        from core.file_integrity import is_sha256_hex
+        if (not isinstance(certified_keys, tuple) or len(certified_keys) != 4
+                or not is_sha256_hex(certified_keys[0])
+                or type(certified_keys[1]) is not int or certified_keys[1] <= 0
+                or not isinstance(certified_keys[2], str)
+                or not isinstance(certified_keys[3], str)):
+            raise ValueError("Oracle certified Replay score membership proof is invalid")
+        digest = sha256()
+        for ticker, day in ordered:
+            digest.update(f"{ticker}|{day}\n".encode("utf-8"))
+        if ((digest.hexdigest(), len(ordered), min(day for _, day in ordered),
+             max(day for _, day in ordered)) != certified_keys):
+            raise ValueError("Oracle referenced truth score membership differs from certified Replay keys")
+        return
+
+    # Standalone legacy inspection has no separately certified Replay cohort.
+    # Reconstruct the producer's original two-column CSV, including its
+    # platform line endings, rather than assuming an unverified key set.
+    import pandas as pd
+    keys = pd.DataFrame.from_records(ordered, columns=["ticker", "date"])
+    csv_digests = {
+        sha256(keys.to_csv(index=False, lineterminator=newline).encode("utf-8")).hexdigest()
+        for newline in ("\n", "\r\n")
+    }
+    if origin_identity["feature_eligible_keys_sha256"] not in csv_digests:
+        raise ValueError("Oracle referenced truth feature membership differs from actual arrays")
 
 
 class OracleTruthReferences:
@@ -164,7 +211,7 @@ class OracleTruthReferences:
                 self._publish(context, identity, original)
             return
 
-    def load(self, execution):
+    def load(self, execution, *, certified_keys: tuple[str, int, str, str] | None = None):
         context = source_context(execution)
         reference = self.read(context)
         if reference is None:
@@ -176,21 +223,9 @@ class OracleTruthReferences:
         scores, evidence = loaded
         if canonical_json_sha256(_evidence(evidence)) != reference["evidence_sha256"]:
             raise ValueError("Oracle referenced truth evidence differs from its certified origin")
-        # The truth producer signs DataFrame.to_csv(), not a hand-written CSV.
-        # Use its exact two-column serialization here as well: escaping commas,
-        # quotes and line endings can otherwise cause a false mismatch even
-        # when the immutable NPZ contains the identical feature-key cohort.
-        # The Portfolio score boundary independently checks ticker|date keys.
-        from hashlib import sha256
-        import pandas as pd
-        ordered = sorted(scores)
-        keys = pd.DataFrame.from_records(ordered, columns=["ticker", "date"])
-        key_digests = {
-            sha256(keys.to_csv(index=False, lineterminator=newline).encode("utf-8")).hexdigest()
-            for newline in ("\n", "\r\n")
-        }
-        if reference["origin_identity"]["feature_eligible_keys_sha256"] not in key_digests:
-            raise ValueError("Oracle referenced truth feature membership differs from actual arrays")
+        verify_truth_score_membership(
+            scores, reference["origin_identity"], certified_keys=certified_keys,
+        )
         return scores, {**evidence, "effective_source_reference": reference["reference_sha256"]}
 
     def validate_consumption(self, execution, evidence):
@@ -201,9 +236,10 @@ class OracleTruthReferences:
         return reference["reference_sha256"]
 
 
-def load_or_build_daily_truth(*, execution, cache_root, producer):
+def load_or_build_daily_truth(*, execution, cache_root, producer,
+                              certified_keys: tuple[str, int, str, str] | None = None):
     references = OracleTruthReferences(cache_root)
-    loaded = references.load(execution)
+    loaded = references.load(execution, certified_keys=certified_keys)
     if loaded is not None:
         return loaded
     scores, evidence = producer()
