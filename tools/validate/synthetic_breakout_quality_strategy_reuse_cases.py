@@ -1856,14 +1856,151 @@ def append_model_robustness_pit_strategy_reuse_contract_checks(*, results, case_
         ), patch.object(
             robust, "run_strategy_compare_training_unit",
             side_effect=AssertionError("must not refit completed research model"),
-        ) as trainer:
+        ) as trainer, patch.object(
+            robust, "_prepare_trade_path_teacher_for_model",
+            side_effect=AssertionError("must not prepare teachers for completed Research score"),
+        ) as teacher_preparer:
             reused = robust._train_one_unit(job)
         add_check(
             results, "synthetic_breakout_quality", case_id,
             "robustness_training_unit_short_circuits_to_existing_research_model_score",
             True, reused["reused"] is True and not trainer.called
+            and not teacher_preparer.called
             and reused["artifacts"].get("model_artifact_origin") == "model_research_rolling_robustness"
             and not Path(job["model_dir"]).exists(),
+        )
+
+        # AI: A historical MinTrade teacher is a *seed-scoped* Optimizer input.
+        # CN/CO consume the same teacher within each seed; completed scientific
+        # results do not trigger a new teacher. A missing source is BUILD only
+        # under the canonical Producer, never silently substituted from seed 1.
+        from services.breakout_quality.trade_path_target_source import (
+            registered_trade_path_source,
+        )
+        benchmark_seeds = get_strategy_multi_seed_robustness_settings(
+            settings.profile_id
+        ).resolved_seeds
+        missing_seed = int(benchmark_seeds[1])
+        produced = set()
+        executed = []
+
+        def inspect_p16(*, project_root, seed):
+            return {"action": "REUSE", "reason": "same seed P16 verified",
+                    "path": Path(project_root) / f"p16_{seed}.json"}
+
+        def inspect_history(*, project_root, seed):
+            return {"action": "REUSE" if seed in produced or seed == 693545351 else "BUILD",
+                    "reason": "same seed historical evidence",
+                    "path": Path(project_root) / f"history_{seed}.json"}
+
+        def execute_history(*, project_root, seed):
+            executed.append(seed)
+            produced.add(seed)
+
+        p16 = SimpleNamespace(name="formal_mintrade40_p16", priority=30,
+                              builder_type="optimizer_formal_mintrade40_p16",
+                              inspect=inspect_p16, execute=lambda **_kwargs: None)
+        history = SimpleNamespace(name="formal_mintrade40_history", priority=40,
+                                  builder_type="optimizer_formal_mintrade40_history",
+                                  inspect=inspect_history, execute=execute_history)
+        real_path_arms = tuple(
+            arm for arm in settings.enabled_arms
+            if arm.dl_id in settings.dl_sources
+            and registered_trade_path_source(
+                settings.dl_sources[arm.dl_id].experiment_profile
+            ) is not None
+        )
+        teacher_model_profile = str(
+            settings.dl_sources[real_path_arms[0].dl_id].experiment_profile
+        )
+        completed_first_seed = {
+            (arm.arm_id, seed): {"action": robust.RESULT_ACTION_REUSE}
+            for arm in real_path_arms
+        }
+        with patch.object(robust, "PROJECT_ROOT", root), patch.object(
+            robust, "_trade_path_teacher_requirements", return_value=(p16, history)
+        ):
+            teacher_rows, teacher_blockers = robust._trade_path_seed_plan(
+                cfg=SimpleNamespace(resolved_seeds=(seed, missing_seed)),
+                settings=settings, model_arms=real_path_arms,
+                robustness_unit_states=completed_first_seed,
+                model_source_reuse={},
+            )
+            robust._prepare_trade_path_teacher_for_model(
+                experiment_profile=teacher_model_profile,
+                seed=missing_seed, authorized=True,
+            )
+            robust._prepare_trade_path_teacher_for_model(
+                experiment_profile=teacher_model_profile,
+                seed=missing_seed, authorized=True,
+            )
+            refreshed_rows, refreshed_blockers = robust._trade_path_seed_plan(
+                cfg=SimpleNamespace(resolved_seeds=(seed, missing_seed)),
+                settings=settings, model_arms=real_path_arms,
+                robustness_unit_states=completed_first_seed,
+                model_source_reuse={},
+            )
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "robustness_missing_historical_min_seed_planned_once_for_cm_cn_co",
+            True, len(real_path_arms) >= 3 and not teacher_blockers
+            and len(teacher_rows) == 2
+            and {item[0] for item in teacher_rows} == {"REUSE", "BUILD"}
+            and all(f"seed={missing_seed}" in item[1] for item in teacher_rows)
+            and not refreshed_blockers and all(item[0] == "REUSE" for item in refreshed_rows),
+        )
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "robustness_teacher_build_is_idempotent_and_seed_isolated",
+            True, executed == [missing_seed] and seed not in executed,
+        )
+        with patch.object(robust, "_trade_path_teacher_requirements", return_value=(
+            SimpleNamespace(name="formal_mintrade40_history", priority=40,
+                            builder_type="optimizer_formal_mintrade40_history",
+                            inspect=lambda **_kwargs: {"action": "BLOCKED", "reason": "invalid original preflight"},
+                            execute=execute_history),
+        )):
+            try:
+                robust._prepare_trade_path_teacher_for_model(
+                    experiment_profile=teacher_model_profile, seed=missing_seed,
+                    authorized=True,
+                )
+            except RuntimeError as exc:
+                blocked_preserved = "BLOCKED" in str(exc) and "invalid original preflight" in str(exc)
+            else:
+                blocked_preserved = False
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "robustness_invalid_historical_teacher_preserves_bytes_without_fallback",
+            True, blocked_preserved and executed == [missing_seed],
+        )
+        resumable_model = root / "incomplete_isolated_score"
+        resumable_model.mkdir()
+        existing_fold = resumable_model / "fold_checkpoint.bin"
+        existing_fold.write_bytes(b"preserve-validated-fitted-evidence")
+        cold_job = {
+            **job, "reuse_completed": False, "model_dir": str(resumable_model),
+            "research_dir": str(root / "not_started_training"),
+        }
+        with patch.object(
+            robust, "_prepare_trade_path_teacher_for_model",
+            side_effect=RuntimeError("seed historical source BLOCKED"),
+        ) as teacher_guard, patch.object(
+            robust, "run_strategy_compare_training_unit",
+            side_effect=AssertionError("must not run PIT trainer before teacher verification"),
+        ) as cold_trainer:
+            try:
+                robust._train_one_unit(cold_job)
+            except RuntimeError as exc:
+                early_blocked = "historical source BLOCKED" in str(exc)
+            else:
+                early_blocked = False
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "robustness_teacher_preflight_blocks_before_deleting_resumable_folds",
+            True, early_blocked and teacher_guard.call_count == 1
+            and not cold_trainer.called
+            and existing_fold.read_bytes() == b"preserve-validated-fitted-evidence",
         )
 
         cfg = get_strategy_multi_seed_robustness_settings("broker_cash_dl_conversion_rolling")

@@ -1653,6 +1653,118 @@ def _model_upstream_rows(status: dict[str, Any]) -> tuple[list[tuple[str, str, s
     return rows, blockers
 
 
+# Seed-sensitive Target teachers are *not* shared Dataset artifacts.  Resolve
+# their dependencies from the canonical Target capability rather than assuming
+# that a seed-42 or first-replicate preparation covers every robustness seed.
+_trade_path_teacher_preparation_lock = Lock()
+
+
+def _trade_path_teacher_requirements(experiment_profile: str):
+    from services.breakout_quality.trade_path_target_source import (
+        registered_trade_path_source,
+    )
+
+    source = registered_trade_path_source(str(experiment_profile))
+    return () if source is None else tuple(sorted(source.dependencies, key=lambda item: item.priority))
+
+
+def _trade_path_seed_plan(
+    *, cfg, settings, model_arms, robustness_unit_states, model_source_reuse,
+) -> tuple[list[tuple[str, str, str]], list[str]]:
+    """Read-only, seed-scoped canonical Optimizer dependencies for pending models.
+
+    This is an addition to (not a substitute for) the shared Dataset plan.
+    The exact strategy result and a verified Research model score are checked
+    *before* inspecting the teacher, so neither forces an Optimizer rebuild.
+    """
+    from core.research_policy import get_research_artifact_preparation_policy
+
+    auto_prepare = bool(
+        get_research_artifact_preparation_policy().auto_prepare
+        and settings.preparation.auto_prepare
+    )
+    rows: list[tuple[str, str, str]] = []
+    blockers: list[str] = []
+    visited: set[tuple[int, str]] = set()
+    for dl_id, arms in _training_source_groups(tuple(model_arms), settings=settings):
+        model = settings.dl_sources[str(dl_id)]
+        requirements = _trade_path_teacher_requirements(str(model.experiment_profile))
+        if not requirements:
+            continue
+        for raw_seed in cfg.resolved_seeds:
+            seed = int(raw_seed)
+            if all(
+                robustness_unit_states.get((arm.arm_id, seed), {}).get("action")
+                == RESULT_ACTION_REUSE
+                for _arm_order, arm in arms
+            ) or bool(model_source_reuse.get((str(dl_id), seed))):
+                continue
+            for requirement in requirements:
+                identity = (seed, str(requirement.builder_type))
+                if identity in visited:
+                    continue
+                visited.add(identity)
+                key = f"model-teacher:{requirement.name}:seed={seed}"
+                try:
+                    state = requirement.inspect(project_root=PROJECT_ROOT, seed=seed)
+                    action = str(state.get("action") or "BLOCKED").upper()
+                    detail = str(state.get("reason") or "")
+                except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+                    action = "BLOCKED"
+                    detail = f"{type(exc).__name__}: {exc}"
+                if action not in {"REUSE", "BUILD", "RESUME", "REBUILD"}:
+                    action = "BLOCKED"
+                if action != "REUSE" and not auto_prepare:
+                    action = "BLOCKED"
+                    detail = f"Canonical Optimizer automatic preparation disabled: {detail}"
+                rows.append((action, key, detail))
+                if action == "BLOCKED":
+                    blockers.append(f"{key}: {detail}")
+    return rows, blockers
+
+
+def _prepare_trade_path_teacher_for_model(
+    *, experiment_profile: str, seed: int, authorized: bool,
+) -> None:
+    """Authorized robustness training delegates missing teachers to the Optimizer.
+
+    Perform the fresh read/produce/read sequence under one coordinator lock,
+    so CN and CO (and any concurrent model workers) cannot publish the same
+    seed-specific historical parameter truth concurrently.  No model/Target
+    source is inferred or synthesized here.
+    """
+    from core.research_policy import get_research_artifact_preparation_policy
+
+    requirements = _trade_path_teacher_requirements(experiment_profile)
+    if not requirements:
+        return
+    with _trade_path_teacher_preparation_lock:
+        for requirement in requirements:
+            state = requirement.inspect(project_root=PROJECT_ROOT, seed=int(seed))
+            action = str(state.get("action") or "BLOCKED").upper()
+            if action == "REUSE":
+                continue
+            reason = str(state.get("reason") or "")
+            if (action not in {"BUILD", "RESUME", "REBUILD"}
+                    or not authorized
+                    or not get_research_artifact_preparation_policy().auto_prepare):
+                raise RuntimeError(
+                    f"Robustness canonical Target teacher BLOCKED: "
+                    f"{requirement.name}/seed={seed}: {reason}"
+                )
+            print(
+                styled_workflow_status(f"[TEACHER {action}]")
+                + f" seed={seed} | {requirement.name} | canonical Optimizer"
+            )
+            requirement.execute(project_root=PROJECT_ROOT, seed=int(seed))
+            verified = requirement.inspect(project_root=PROJECT_ROOT, seed=int(seed))
+            if str(verified.get("action") or "").upper() != "REUSE":
+                raise RuntimeError(
+                    "Robustness canonical Optimizer dependency still unverified: "
+                    f"{requirement.name}/seed={seed}: {verified.get('reason')}"
+                )
+
+
 def _comparison_period_from_status(status: dict[str, Any]) -> tuple[str, str]:
     """Read the period resolved by the shared Strategy preparation owner."""
 
@@ -1873,6 +1985,21 @@ def _render_robustness_execution_plan(
                     seed=int(seed), comparison_start=str(start), comparison_end=str(end),
                 )
                 model_source_reuse[(str(dl_id), int(seed))] = evidence is not None
+
+    # The shared Dataset/parameter plan must be resolved first.  A missing
+    # Dataset cannot be used to attest a seed's Optimizer runtime fingerprint.
+    teacher_rows, teacher_blockers = (
+        _trade_path_seed_plan(
+            cfg=cfg, settings=settings, model_arms=model_arms,
+            robustness_unit_states=robustness_unit_states,
+            model_source_reuse=model_source_reuse,
+        )
+        if start is not None and end is not None else ([], [])
+    )
+    rows.extend(teacher_rows)
+    blockers.extend(teacher_blockers)
+    if teacher_blockers:
+        overall = "BLOCKED"
 
     for arm in fixed_arms:
         rows.append((
@@ -3786,6 +3913,15 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
             "reused": True,
             "wall_elapsed_sec": round(time.perf_counter() - started, 3),
         }
+
+    # The shared Dataset is seed-agnostic, but actual MinTrade targets require
+    # one verified 2014-2020 historical Optimizer teacher for *this* benchmark
+    # seed.  A missing teacher is prepared only after model-score REUSE has
+    # failed, and before touching any resumable PIT score or checkpoint.
+    _prepare_trade_path_teacher_for_model(
+        experiment_profile=str(dl.experiment_profile), seed=seed,
+        authorized=bool(settings.preparation.auto_prepare),
+    )
 
     if is_selection_pit:
         # Isolated benchmark namespace may resume completed PIT folds.  Remove only

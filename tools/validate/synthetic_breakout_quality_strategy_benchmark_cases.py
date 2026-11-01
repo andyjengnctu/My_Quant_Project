@@ -778,6 +778,13 @@ def append_robustness_benchmark_plan_checks(
             "services.research.strategy_multi_seed_robustness.inspect_reusable_model_research_rolling_score",
             return_value=(None, "isolated synthetic model-score absence"),
         ),
+        # AI: This fixture isolates *benchmark parameter* READY/revision logic.
+        # Seed-scoped historical Optimizer teachers have dedicated tests in the
+        # model-robustness reuse case; do not inspect the operator's workspace.
+        patch(
+            "services.research.strategy_multi_seed_robustness._trade_path_seed_plan",
+            return_value=([], []),
+        ),
     ):
         fitted_param_plan, fitted_param_payload = _render_robustness_execution_plan(
             cfg=rolling_robustness,
