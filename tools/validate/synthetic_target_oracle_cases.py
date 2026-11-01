@@ -7264,6 +7264,52 @@ class OracleMinTradePreflightArtifactReuseCases(TestCase):
                 self._preflight(root, fixture)
 
 
+
+class OracleTruthReferenceFeatureCsvParityCases(TestCase):
+    """Certified NPZ keys must use the producer's CSV encoding, not ad hoc rows."""
+
+    def _load_reference(self, scores, *, newline="\n", bad_feature_sha=False):
+        import hashlib
+        from core.file_integrity import canonical_json_sha256
+        from services.audit.oracle_truth_references import OracleTruthReferences
+        from services.audit import daily_trade40_oracle as daily
+
+        serialized = pd.DataFrame(sorted(scores), columns=["ticker", "date"]).to_csv(
+            index=False, lineterminator=newline)
+        feature_sha = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+        if bad_feature_sha:
+            feature_sha = "0" * 64 if feature_sha != "0" * 64 else "1" * 64
+        evidence = {"target_id": "synthetic_source", "rank_sha256": "a" * 64}
+        reference = {
+            "origin_identity": {"feature_eligible_keys_sha256": feature_sha},
+            "evidence_sha256": canonical_json_sha256(evidence),
+            "reference_sha256": "b" * 64,
+        }
+        references = OracleTruthReferences(Path("synthetic") / "truth_cache")
+        with patch("services.audit.oracle_truth_references.source_context", return_value={}), \
+             patch.object(references, "read", return_value=reference), \
+             patch.object(references, "origin_path", return_value=Path("synthetic.npz")), \
+             patch.object(daily, "_truth_cache_read", return_value=(
+                 scores, {**evidence, "source_reuse_status": "REUSE"})):
+            return references.load({})
+
+    def test_producer_quoted_keys_and_both_line_endings_are_readable(self):
+        # The producer uses pandas.to_csv(), which quotes embedded CSV punctuation.
+        # An independent hand-written f"{ticker},{date}" string cannot verify it.
+        scores = {("00,50", "2021-01-04"): .9,
+                  ('11"01', "2021-01-04"): .4}
+        for newline in ("\n", "\r\n"):
+            with self.subTest(newline=repr(newline)):
+                values, proof = self._load_reference(scores, newline=newline)
+                self.assertEqual(values, scores)
+                self.assertEqual(proof["effective_source_reference"], "b" * 64)
+
+    def test_genuine_feature_membership_mismatch_is_still_blocked(self):
+        scores = {("2330", "2021-01-04"): .5}
+        with self.assertRaisesRegex(ValueError, "feature membership differs"):
+            self._load_reference(scores, bad_feature_sha=True)
+
+
 class OracleEffectiveArtifactContractCases(TestCase):
     """Generic capability ownership, invalidation and original-evidence checks."""
 

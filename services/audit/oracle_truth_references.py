@@ -176,14 +176,19 @@ class OracleTruthReferences:
         scores, evidence = loaded
         if canonical_json_sha256(_evidence(evidence)) != reference["evidence_sha256"]:
             raise ValueError("Oracle referenced truth evidence differs from its certified origin")
-        # Bind the feature-key identity to the actual consumed arrays, including
-        # historical Windows CSV line endings. Portfolio keys are checked again
-        # at the score boundary by the canonical execution service.
+        # The truth producer signs DataFrame.to_csv(), not a hand-written CSV.
+        # Use its exact two-column serialization here as well: escaping commas,
+        # quotes and line endings can otherwise cause a false mismatch even
+        # when the immutable NPZ contains the identical feature-key cohort.
+        # The Portfolio score boundary independently checks ticker|date keys.
         from hashlib import sha256
+        import pandas as pd
         ordered = sorted(scores)
-        key_digests = {sha256(("ticker,date" + newline + "".join(
-            f"{ticker},{day}{newline}" for ticker, day in ordered)).encode()).hexdigest()
-            for newline in ("\n", "\r\n")}
+        keys = pd.DataFrame.from_records(ordered, columns=["ticker", "date"])
+        key_digests = {
+            sha256(keys.to_csv(index=False, lineterminator=newline).encode("utf-8")).hexdigest()
+            for newline in ("\n", "\r\n")
+        }
         if reference["origin_identity"]["feature_eligible_keys_sha256"] not in key_digests:
             raise ValueError("Oracle referenced truth feature membership differs from actual arrays")
         return scores, {**evidence, "effective_source_reference": reference["reference_sha256"]}
