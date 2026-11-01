@@ -351,7 +351,7 @@ class OracleScoreParityContractCases(TestCase):
         source.start()
         self.addCleanup(source.stop)
         prices = patch("services.audit.oracle_replay_artifacts.price_inventory_sha256",
-                       side_effect=lambda *args: oracle.price_inventory_sha256(*args))
+                       side_effect=lambda *args, **kwargs: oracle.price_inventory_sha256(*args, **kwargs))
         prices.start()
         self.addCleanup(prices.stop)
 
@@ -1291,7 +1291,7 @@ class OracleAuditContractCases(TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         prices = patch("services.audit.oracle_replay_artifacts.price_inventory_sha256",
-                       side_effect=lambda *args: oracle.price_inventory_sha256(*args))
+                       side_effect=lambda *args, **kwargs: oracle.price_inventory_sha256(*args, **kwargs))
         prices.start()
         self.addCleanup(prices.stop)
 
@@ -2558,7 +2558,7 @@ class OracleReplayEvidenceReuseCases(TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         prices = patch("services.audit.oracle_replay_artifacts.price_inventory_sha256",
-                       side_effect=lambda *args: oracle.price_inventory_sha256(*args))
+                       side_effect=lambda *args, **kwargs: oracle.price_inventory_sha256(*args, **kwargs))
         prices.start()
         self.addCleanup(prices.stop)
 
@@ -3825,11 +3825,18 @@ class OracleOnePlanRealCacheCases(TestCase):
                      planned.append(kw["decisions"].copy()) or {(seed,"T40"): sample("T40", 20., 12.)}), \
                  patch.object(oracle, "_load_or_build_oracle_price_scores", side_effect=AssertionError(
                      "No price/target producer before authorization")):
+                # Cancellation is observational only: no reference migration.
+                before_cancel = {str(path.relative_to(root)): path.read_bytes()
+                                 for path in root.rglob("*") if path.is_file()}
                 cancelled = oracle.build_report(
                     definition, project_root=root, quiet=True,
                     preflight_approval=lambda view: prompts.append(view) or False,
                 )
                 self.assertEqual(cancelled["status"], "CANCELLED")
+                self.assertEqual(before_cancel, {
+                    str(path.relative_to(root)): path.read_bytes()
+                    for path in root.rglob("*") if path.is_file()
+                })
                 self.assertEqual(len(prompts), 1)
                 self.assertEqual(planned, [])
                 self.assertIn("REUSE 2 / RUN（需回放）1 / BLOCKED 0", prompts[0])
@@ -5975,6 +5982,8 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
             def prepare(_definition, *, root, parameter_paths, **_kwargs):
                 return ([(seed, param_sha, "synthetic", None, None)
                          for seed, _path in parameter_paths], {})
+            before_preview = {str(path.relative_to(root)): path.read_bytes()
+                              for path in root.rglob("*") if path.is_file()}
             with patch.object(oracle, "inspect_oracle_parameter_prerequisites", return_value=fixture), \
                  patch.object(oracle, "_prepare_oracle_parameters", side_effect=prepare), \
                  patch.object(oracle, "price_inventory_sha256", return_value=price_sha), \
@@ -5983,6 +5992,10 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
                  patch.object(oracle, "load_profile_continuous_ranker_data", side_effect=AssertionError("No DL features")), \
                  redirect_stdout(io.StringIO()):
                 preview = oracle.preview_oracle_replay_plan(definition, project_root=root)
+            self.assertEqual(before_preview, {
+                str(path.relative_to(root)): path.read_bytes()
+                for path in root.rglob("*") if path.is_file()
+            }, "PREVIEW must not migrate execution or truth references")
             self.assertEqual(preview["status"], "PREVIEW")
             self.assertEqual(preview["seed_set"], tuple(seeds))
             self.assertEqual(preview["missing_p16"], tuple(seeds[4:]))
@@ -6396,6 +6409,37 @@ class OraclePublishedPriceGenerationManifestCases(TestCase):
                 changed = artifacts.price_inventory_sha256(root, "reduced")
             self.assertNotEqual(changed, baseline)
             self.assertGreaterEqual(sha.call_count, 4)
+
+    def test_price_preflight_does_not_publish_missing_source_manifest(self):
+        from filters.breakout_quality import source_inventory as owner
+        from services.audit import oracle_replay_artifacts as artifacts
+        from filters.breakout_quality.contract import DEFAULT_FILTER_ID
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._setup(root)
+            inventory = owner.build_source_data_inventory(root, "reduced")
+            summary = (root / "outputs" / "filters" / "breakout_quality"
+                       / DEFAULT_FILTER_ID / "dataset_summary.json")
+            summary.parent.mkdir(parents=True, exist_ok=True)
+            summary.write_text(json.dumps({
+                "dataset": "reduced", "source_data_inventory": inventory,
+                "build_mode": "full_feature_bank_rebuild",
+            }), encoding="utf-8")
+            manifest_dir = summary.parents[1] / "source_integrity" / "reduced" / "price_manifests"
+            self.assertFalse(manifest_dir.exists())
+            before = {str(path.relative_to(root)): path.read_bytes()
+                      for path in root.rglob("*") if path.is_file()}
+            preview_sha = artifacts.price_inventory_sha256(
+                root, "reduced", certify_missing=False,
+            )
+            self.assertEqual(before, {
+                str(path.relative_to(root)): path.read_bytes()
+                for path in root.rglob("*") if path.is_file()
+            })
+            self.assertFalse(manifest_dir.exists())
+            authorized_sha = artifacts.price_inventory_sha256(root, "reduced")
+            self.assertEqual(preview_sha, authorized_sha)
+            self.assertEqual(owner.read_published_price_inventory(root, "reduced"), preview_sha)
 
     def test_legacy_published_dataset_bootstraps_once_then_reuse_never_opens_csv(self):
         from filters.breakout_quality import source_inventory as owner
@@ -6931,7 +6975,13 @@ class OracleMinTradePreflightArtifactReuseCases(TestCase):
             self.assertEqual(set(decisions.values()), {"REUSE"})
             self.assertEqual(reader.call_count, 24, "One read per seed/source, not per recipient")
             self.assertEqual(before, {p: p.read_bytes() for p in store.cache_root.rglob("*.json")})
+            # Preview is strictly observational; authorization publishes only
+            # the existing certified source references, without rebuilding.
+            index_parent = store.cache_root.parent
+            self.assertFalse(list((index_parent / "truth_index").rglob("*.json")))
+            self.assertFalse(list((index_parent / "execution_index").rglob("*.json")))
             completed = self._preflight(root, fixture, approve=True)
+            self.assertEqual(len(list((index_parent / "truth_index").rglob("*.json"))), 24)
             self.assertEqual(completed["status"], "COMPLETED")
             self.assertEqual(len(completed["oracles"]), 16)
             self.assertEqual(before, {p: p.read_bytes() for p in store.cache_root.rglob("*.json")})
@@ -6954,6 +7004,10 @@ class OracleMinTradePreflightArtifactReuseCases(TestCase):
                 decisions = self._preflight(root, fixture)
             self.assertEqual(set(decisions.values()), {"REUSE"})
             self.assertEqual(len(decisions), 136)
+            self.assertFalse(list((store.cache_root.parent / "truth_index").rglob("*.json")),
+                             "Preview cannot publish a truth reference")
+            approved = self._preflight(root, fixture, approve=True)
+            self.assertEqual(approved["status"], "COMPLETED")
             self.assertEqual(len(list((store.cache_root.parent / "truth_index").rglob("*.json"))),
                              len(fixture[2]) * len(oracle._oracle_comparison_plan(fixture[0])["daily_recipes"]))
             with patch.object(np, "load", side_effect=AssertionError("Warm plan must not open NPZ")):
@@ -7019,6 +7073,9 @@ class OracleMinTradePreflightArtifactReuseCases(TestCase):
             first = self._preflight(root, fixture)
             self.assertEqual(len(first), 136)
             self.assertEqual(set(first.values()), {"REUSE"})
+            # Preflight only checks; an explicit authorization must first
+            # create the reusable reference indexes for warm metadata-only reads.
+            self.assertEqual(self._preflight(root, fixture, approve=True)["status"], "COMPLETED")
             before = {p: p.read_bytes() for p in fixture[6].cache_root.rglob("*.json")}
             # Publication-only metadata and serialization may change freely.
             summary = resolve_dataset_paths(resolve_filter_output_dir(
@@ -7052,7 +7109,7 @@ class OracleMinTradePreflightArtifactReuseCases(TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             fixture = self._fixture(root)
-            self._preflight(root, fixture)
+            self.assertEqual(self._preflight(root, fixture, approve=True)["status"], "COMPLETED")
             seed = fixture[2][0]
             folder = fixture[6].cache_root.parent
             contexts = {target: json.loads(next((folder / "execution_index" / str(seed)).glob(

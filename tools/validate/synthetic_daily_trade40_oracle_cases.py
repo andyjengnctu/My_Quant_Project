@@ -265,7 +265,7 @@ def synthetic_score_parity_setup(testcase):
         guard.start()
         testcase.addCleanup(guard.stop)
     prices = patch("services.audit.oracle_replay_artifacts.price_inventory_sha256",
-                   side_effect=lambda *args: oracle.price_inventory_sha256(*args))
+                   side_effect=lambda *args, **kwargs: oracle.price_inventory_sha256(*args, **kwargs))
     prices.start()
     testcase.addCleanup(prices.stop)
 
@@ -1478,6 +1478,40 @@ class ParallelMinTickerExecutionCases(TestCase):
                     workers=2, progress=None,
                 )
 
+    def test_ticker_cpu_budget_covers_nested_processes_and_queued_replacements(self):
+        daily = {"Trade40"}
+        for budget in (1, 2, 3, 4, 6, 8, 12):
+            for active in range(1, min(4, budget) + 1):
+                seeds = tuple(range(active))
+                decisions = {(seed, "Trade40"): "RUN" for seed in seeds}
+                quotas = oracle._oracle_ticker_worker_quotas(
+                    seed_order=seeds, decisions=decisions, daily_sources=daily,
+                    total_budget=budget, max_per_seed=6,
+                )
+                self.assertEqual(tuple(quotas), seeds)
+                self.assertLessEqual(
+                    active + sum(q if q > 1 else 0 for q in quotas.values()), budget,
+                )
+                queued_quota = oracle._oracle_queued_ticker_worker_quota(
+                    active_seeds=active, total_budget=budget, max_per_seed=6,
+                )
+                # Any arbitrary subset of the queued RUN seeds may be active.
+                self.assertLessEqual(
+                    active + active * (queued_quota if queued_quota > 1 else 0),
+                    budget,
+                )
+                self.assertGreaterEqual(queued_quota, 1)
+                self.assertLessEqual(queued_quota, 6)
+        self.assertEqual(oracle._oracle_queued_ticker_worker_quota(
+            active_seeds=4, total_budget=8, max_per_seed=6), 1)
+        self.assertEqual(oracle._oracle_queued_ticker_worker_quota(
+            active_seeds=2, total_budget=8, max_per_seed=6), 3)
+        with self.assertRaises(ValueError):
+            oracle._oracle_ticker_worker_quotas(
+                seed_order=(1, 2), decisions={(1, "Trade40"): "RUN"},
+                daily_sources=daily, total_budget=1, max_per_seed=6,
+            )
+
     def test_ticker_cpu_budget_allocated_by_current_run_cells(self):
         daily = {"MinTrade_NetPnL_Positive", "MinTrade40", "MinTrade60"}
         decisions = {
@@ -1492,8 +1526,11 @@ class ParallelMinTickerExecutionCases(TestCase):
             daily_sources={name: name for name in daily},
             total_budget=8, max_per_seed=6,
         )
-        self.assertEqual(quotas, {6: 1, 7: 3, 8: 4})
-        self.assertLessEqual(sum(quotas.values()), 8)
+        # Three outer Seed processes + 3 and 2 ticker children = 8.
+        self.assertEqual(quotas, {6: 1, 7: 3, 8: 2})
+        self.assertLessEqual(
+            len(quotas) + sum(q if q > 1 else 0 for q in quotas.values()), 8,
+        )
         self.assertEqual(oracle._oracle_ticker_worker_quotas(
             seed_order=(8,), decisions=decisions, daily_sources={name: name for name in daily},
             total_budget=8, max_per_seed=6), {8: 6})

@@ -143,8 +143,14 @@ class OracleParallelSeedWorkCases(TestCase):
                 for ctx in self._patch_source_validation(args):
                     stack.enter_context(ctx)
                 stack.enter_context(patch.object(oracle, "TARGET_ORACLE_REPLAY_SEED_WORKERS", 2))
+                stack.enter_context(patch.object(oracle, "TARGET_ORACLE_CPU_WORKER_BUDGET", 8))
+                stack.enter_context(patch.object(oracle, "TARGET_ORACLE_MINTRADE_STOCK_WORKERS", 6))
                 result = oracle._execute_oracle_missing_parallel(self.definition, **args)
             self.assertEqual(_InstantPool.max_workers, 2)
+            # Two concurrent seeds + two nested pools of three processes = 8.
+            # Seed6, Seed7 and Seed8 are queued without fixed slot affinity.
+            self.assertEqual({job["mintrade_stock_workers"]
+                              for _seed, job, _targets in _InstantPool.seen}, {3})
             self.assertEqual([seed for seed, _job, _targets in _InstantPool.seen], list(self.seeds[5:]))
             self.assertEqual(len(_InstantPool.seen[0][1]["decisions"]), 3)
             self.assertEqual(len(_InstantPool.seen[1][1]["decisions"]), len(self.targets))
@@ -155,6 +161,24 @@ class OracleParallelSeedWorkCases(TestCase):
             for seed, job, _targets in _InstantPool.seen:
                 self.assertEqual(set(job["execution_contexts"]), set(job["decisions"]))
                 self.assertTrue(all(key[0] == seed for key in job["execution_contexts"]))
+
+    def test_eight_seed_queue_honors_total_nested_cpu_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            decisions = {(seed, self.targets[-1]): "RUN" for seed in self.seeds}
+            args = self._args(Path(tmp), decisions)
+            from contextlib import ExitStack
+            with ExitStack() as stack:
+                for ctx in self._patch_source_validation(args):
+                    stack.enter_context(ctx)
+                stack.enter_context(patch.object(oracle, "TARGET_ORACLE_REPLAY_SEED_WORKERS", 4))
+                stack.enter_context(patch.object(oracle, "TARGET_ORACLE_CPU_WORKER_BUDGET", 8))
+                stack.enter_context(patch.object(oracle, "TARGET_ORACLE_MINTRADE_STOCK_WORKERS", 6))
+                result = oracle._execute_oracle_missing_parallel(self.definition, **args)
+            self.assertEqual(_InstantPool.max_workers, 4)
+            self.assertEqual(len(result), 8)
+            self.assertEqual({job["mintrade_stock_workers"]
+                              for _seed, job, _targets in _InstantPool.seen}, {1})
+            self.assertEqual([seed for seed, _job, _targets in _InstantPool.seen], list(self.seeds))
 
     def test_all_reuse_never_calls_any_producer_or_process(self):
         with tempfile.TemporaryDirectory() as tmp:

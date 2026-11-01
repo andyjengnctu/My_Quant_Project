@@ -102,13 +102,30 @@ class OracleTruthReferences:
             finally:
                 temporary.unlink(missing_ok=True)
 
+    def inspect_existing(self, execution, *, replay_identity=None, evidence=None):
+        """Validate an existing truth origin without publishing any reference.
+
+        Preview must detect corrupt metadata just as an authorized migration
+        would, but inspecting a signed Replay must never write truth indexes.
+        """
+        return self._resolve_existing(
+            execution, replay_identity=replay_identity, evidence=evidence,
+            publish=False,
+        )
+
     def publish_existing(self, execution, *, replay_identity=None, evidence=None):
-        """Import metadata only AFTER canonical Replay/source certification.
+        """Publish only an already certified truth origin after authorization.
 
         A missing truth NPZ does not invalidate a completed Portfolio. Without
         an NPZ no source reference is published; a future consumer must BUILD.
         This never infers scores from portfolio summary statistics.
         """
+        return self._resolve_existing(
+            execution, replay_identity=replay_identity, evidence=evidence,
+            publish=True,
+        )
+
+    def _resolve_existing(self, execution, *, replay_identity, evidence, publish: bool):
         context = source_context(execution)
         if self.read(context) is not None:
             return
@@ -143,7 +160,8 @@ class OracleTruthReferences:
                 raise ValueError(f"Oracle signed truth metadata payload SHA mismatch: {relative}")
             if meta.get("score_sha256") != score_sha:
                 raise ValueError(f"Oracle signed truth producer rank SHA mismatch: {relative}")
-            self._publish(context, identity, original)
+            if publish:
+                self._publish(context, identity, original)
             return
 
     def load(self, execution):

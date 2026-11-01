@@ -358,15 +358,15 @@ def verified_daily_truth_witness(
     return matches[0]
 
 
-def price_inventory_sha256(project_root: Path, dataset: str) -> str:
-    """Reuse a published content-verified price generation; otherwise hash bytes.
+def price_inventory_sha256(
+    project_root: Path, dataset: str, *, certify_missing: bool = True,
+) -> str:
+    """Resolve the original price SHA without weakening source verification.
 
-    The canonical source owner can certify one pre-existing Dataset generation
-    once when the original Dataset summary/metadata matches. Subsequent Oracle
-    plans read only the content-attested source proof and metadata. This does
-    not build a Dataset, Target or Portfolio, nor alter signed Replay receipts.
-    Source-only fixtures without a canonical Dataset retain the strict legacy
-    byte-hashing path.
+    ``certify_missing=False`` is a strictly read-only preflight: use a valid
+    published proof, or calculate the *same* historical SHA from source bytes.
+    Only an authorized execution can request the optional one-time publication
+    of an existing canonical Dataset generation. Never publish during preview.
     """
     from filters.breakout_quality.source_inventory import (
         read_published_price_inventory, certify_existing_dataset_price_generation,
@@ -374,9 +374,10 @@ def price_inventory_sha256(project_root: Path, dataset: str) -> str:
     published = read_published_price_inventory(project_root, dataset)
     if published is not None:
         return published
-    bootstrapped = certify_existing_dataset_price_generation(project_root, dataset)
-    if bootstrapped is not None:
-        return bootstrapped
+    if certify_missing:
+        bootstrapped = certify_existing_dataset_price_generation(project_root, dataset)
+        if bootstrapped is not None:
+            return bootstrapped
     sources, duplicates = discover_dataset_csv_inputs(Path(project_root), str(dataset))
     if duplicates or not sources:
         raise ValueError("Oracle price inventory cannot be certified for reuse")
