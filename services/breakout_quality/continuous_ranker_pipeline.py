@@ -99,6 +99,21 @@ def _handoff_source_is_current(
     for name, path in paths.artifact_paths().items():
         if build_file_manifest(path) != artifact_records.get(name):
             return False
+    # The Dataset publication may include a separately stored market-set
+    # generation. It is part of the canonical input snapshot even though the
+    # in-memory bundle records only the ordinary feature-bank artifacts.
+    # Apply the same byte-level attestation as the persistent diagnostic reader
+    # before handing an earlier PIT bundle to the subsequent Audit.
+    summary = json.loads(paths.summary.read_text(encoding="utf-8-sig"))
+    if not isinstance(summary, dict) or compute_file_sha256(paths.summary) != summary_sha256:
+        return False
+    market_records = summary.get("market_set_artifacts")
+    if summary.get("market_set_contract") is not None and not isinstance(market_records, dict):
+        return False
+    if isinstance(market_records, dict):
+        for name, path in paths.market_set_artifact_paths().items():
+            if build_file_manifest(path) != market_records.get(name):
+                return False
     source_range = bundle.summary.get("source_data_date_range") or {}
     if (resolve_breakout_quality_outer_policy(
             root, source_data_end_date=str(source_range["end"]),

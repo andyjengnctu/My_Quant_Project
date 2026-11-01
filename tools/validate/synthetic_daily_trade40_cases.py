@@ -2862,6 +2862,65 @@ class SameWorkflowRealPathSourceWitnessCases(unittest.TestCase):
                     current()
 
 
+    def test_market_set_artifact_change_prevents_in_memory_handoff(self):
+        """The handoff must obey the same market-set identity as the dataset."""
+        from filters.breakout_quality.artifacts import build_file_manifest
+        from core.file_integrity import compute_file_sha256
+        from services.breakout_quality.continuous_ranker_pipeline import (
+            _bundle_data_witness, _handoff_source_is_current,
+        )
+
+        with TemporaryDirectory(prefix="bq_handoff_market_set_") as temporary:
+            root = Path(temporary)
+            artifacts_dir = root / "artifacts"
+            artifacts_dir.mkdir()
+            feature = artifacts_dir / "feature.npy"
+            market = artifacts_dir / "market.npy"
+            summary_file = artifacts_dir / "dataset_summary.json"
+            feature.write_bytes(b"stable-feature")
+            market.write_bytes(b"stable-market")
+            summary_file.write_text(json.dumps({
+                "market_set_contract": {"fixture": True},
+                "market_set_artifacts": {"market_daily_features": build_file_manifest(market)},
+            }), encoding="utf-8")
+            paths = SimpleNamespace(
+                summary=summary_file,
+                artifact_paths=lambda: {"feature_bank": feature},
+                market_set_artifact_paths=lambda: {"market_daily_features": market},
+            )
+            inventory = {"csv_inventory_sha256": "sample"}
+            outer_policy = {"effective_oos_end_date": "2026-03-02"}
+            bundle = SimpleNamespace(
+                summary={
+                    "dataset": "reduced", "source_data_inventory": inventory,
+                    "source_dataset_artifacts": {"feature_bank": build_file_manifest(feature)},
+                    "source_data_date_range": {"end": "2026-03-02"},
+                },
+                outer_policy=outer_policy,
+                group_table=pd.DataFrame({"ticker": ["2330"], "date": [pd.Timestamp("2023-01-02")]}),
+                raw_target=np.asarray([0.7], dtype=np.float32),
+                target_valid=np.asarray([True], dtype=bool),
+                group_context=np.asarray([[0.0]], dtype=np.float32),
+                target_manifest={"target_id": "real_path"},
+            )
+            witness = _bundle_data_witness(bundle)
+            summary_sha = compute_file_sha256(summary_file)
+            def is_current():
+                return _handoff_source_is_current(
+                    root=root, filter_id="breakout_quality_v1", bundle=bundle,
+                    summary_sha256=summary_sha, data_witness=witness,
+                )
+            with patch("filters.breakout_quality.workflow_io.dataset_paths", return_value=paths), \
+                 patch("filters.breakout_quality.source_inventory.build_source_data_inventory", return_value=inventory), \
+                 patch("filters.breakout_quality.splits.resolve_breakout_quality_outer_policy", return_value=outer_policy):
+                self.assertTrue(is_current())
+                old_stat = market.stat()
+                market.write_bytes(b"stable-markez")  # Same size, different bytes.
+                import os
+                os.utime(market, ns=(old_stat.st_atime_ns, old_stat.st_mtime_ns))
+                self.assertFalse(is_current(), "Same-metadata market-set mutation must invalidate handoff")
+
+
 
 import json
 from core.file_integrity import compute_file_sha256
