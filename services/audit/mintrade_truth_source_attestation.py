@@ -43,8 +43,13 @@ _AUDITED_PARALLEL_ONLY_REVISION = (
 # function cannot change the economic producer's signed source identity.
 # Actual target/label IDs are still included individually in every cache and
 # Replay receipt: changing an EXISTING label mapping is never silent REUSE.
+# The reviewed parallel-only Oracle producer is byte-pinned by
+# _AUDITED_PARALLEL_ONLY_REVISION.  Pin its executable AST here as well, so
+# adding a *naming-only* Target cannot invalidate already signed economics.
+# Historical exact-byte revisions still use their independent SHA allowlist.
+# All other changes to executable code fail closed and hash normally.
 _CERTIFIED_EXECUTABLE_OWNER_AST_SHA256 = (
-    "abccb277560a3f838d7b1045023896182001865f48984c7d0ca5e8ab5b3b9039"
+    "c78a8a08b8af9c7730445c91dbd1f22571001b4ab2c9d69decc43bb879b1eaa4"
 )
 _NON_ECONOMIC_TARGET_REGISTRY_FUNCTION = "target_identity_for_horizon"
 
