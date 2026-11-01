@@ -3760,31 +3760,70 @@ def _publish_unit_observation(*, cfg, contract, run_root, row, yearly, attributi
     )
 
 
+def _historical_model_score_choice(
+    *, settings, arm: StrategyComparisonArm, seed: int,
+    comparison_start: str, comparison_end: str,
+    cache: dict[tuple[str, int], dict[str, Any] | None],
+) -> tuple[str, str] | None:
+    """Pin an ambiguous legacy result to the canonical *verified* source scores.
+
+    Historical scores from distinct producer revisions must never be compared as
+    if they were two results of one observation.  Read Research scores only
+    when multiple fully signed historical provenances make selection ambiguous;
+    never FIT or silently choose the newest directory.
+    """
+    dl_ids = resolve_arm_runtime_dl_source_ids(settings, arm)
+    if not dl_ids:
+        return None
+    source_artifacts: dict[str, dict[str, Any]] = {}
+    for dl_id in dl_ids:
+        key = (str(dl_id), int(seed))
+        if key not in cache:
+            source = settings.dl_sources[str(dl_id)]
+            workflow = get_breakout_quality_workflow_settings(
+                experiment_profile=str(source.experiment_profile)
+            )
+            evidence, _reason = inspect_reusable_model_research_rolling_score(
+                project_root=PROJECT_ROOT, source=source, workflow=workflow,
+                seed=int(seed), comparison_start=comparison_start,
+                comparison_end=comparison_end,
+            )
+            cache[key] = None if evidence is None else dict(evidence)
+        evidence = cache[key]
+        if evidence is None or not _normalized_hash_value(evidence.get("score_sha256")):
+            return None
+        source_artifacts[str(dl_id)] = evidence
+    runtime_sources = _runtime_replay_source_identities(source_artifacts)
+    return (
+        _normalized_hash_value(source_artifacts[str(dl_ids[0])]["score_sha256"]),
+        _normalized_hash_value(canonical_json_sha256(runtime_sources)),
+    )
+
+
 def _discover_registered_model_scientific_reuse(
     *, settings, robustness, current_contract: dict[str, Any],
     stochastic_arms: tuple[StrategyComparisonArm, ...],
 ) -> dict[tuple[str, int], dict[str, Any]]:
-    """Resolve immutable original observations before resolving model dependencies.
+    """Select one signed arm/seed observation, never mix model score revisions.
 
-    The full original recipe, input inventory, PIT policy, seed, parameters and
-    multi-head score provenance must match. Latest model publications are outputs,
-    not inputs to an already committed observation. They are consulted ONLY for
-    pending replay units, never to force finished arms to train or replay again.
+    A single fully verified original observation remains independent of the
+    mutable Latest model pointer.  When different historical score revisions
+    exist, use canonical verified Research scores to disambiguate.  Only two
+    observations with *identical* score provenance may be compared for drift.
     """
     if not bool(robustness.reuse_completed) or robustness.benchmark_id is None:
         return {}
     model_ids = set(robustness.model_seed_sensitive_arm_ids)
-    desired = {}
-    for arm in stochastic_arms:
-        if arm.arm_id not in model_ids:
-            continue
+    model_arms = {str(arm.arm_id): arm for arm in stochastic_arms if arm.arm_id in model_ids}
+    desired: dict[tuple[str, int], dict[str, Any]] = {}
+    for arm_id in model_arms:
         for seed in robustness.resolved_seeds:
             signature = _strategy_only_unit_scientific_signature_from_contract(
-                contract=current_contract, arm_id=arm.arm_id, seed=int(seed),
+                contract=current_contract, arm_id=arm_id, seed=int(seed),
             )
             if signature is not None:
-                desired[(str(arm.arm_id), int(seed))] = signature
-    found = {}
+                desired[(arm_id, int(seed))] = signature
+    found: dict[tuple[str, int], dict[str, Any]] = {}
     store = _unit_observation_store(robustness) if getattr(robustness, "output_root", None) else None
     if store is not None:
         for unit, signature in desired.items():
@@ -3807,8 +3846,11 @@ def _discover_registered_model_scientific_reuse(
     missing = {unit: sig for unit, sig in desired.items() if unit not in found}
     if not missing:
         return found
-    # Legacy import is read-only during planning. Once authorized, the same
-    # validated observations are committed individually, never re-computed.
+
+    # Read-only import of previously signed full-run scientific observations.
+    # Group by consumed PIT-score provenance before comparing economic results.
+    # A different score fingerprint describes a *different* original observation.
+    alternatives: dict[tuple[str, int], dict[tuple[str, str], dict[str, Any]]] = {}
     for source_root, validated in _iter_registered_robustness_scientific_runs(robustness):
         source_contract = dict(validated["contract"])
         source_rows = validated["seed_frame"]
@@ -3841,14 +3883,41 @@ def _discover_registered_model_scientific_reuse(
                 "source_attribution": attribution,
                 "source_scientific_artifacts": dict(dict(validated.get("evidence") or {}).get("artifacts") or {}),
             }
-            previous = found.get(unit)
+            provenance = (
+                _normalized_hash_value(row.get("score_sha256")),
+                _normalized_hash_value(row.get("runtime_source_identity_sha256")),
+            )
+            variants = alternatives.setdefault(unit, {})
+            previous = variants.get(provenance)
             if previous is not None:
+                # Same inputs but differing returns/trades is a genuine contradiction.
                 _observation_equivalence(
                     {"row": previous["row"], "yearly": previous["yearly"].to_dict("records")},
                     {"row": row, "yearly": yearly.to_dict("records")},
                 )
             else:
-                found[unit] = candidate
+                variants[provenance] = candidate
+
+    period = dict(current_contract.get("comparison_period") or {})
+    verified_score_cache: dict[tuple[str, int], dict[str, Any] | None] = {}
+    for unit, variants in alternatives.items():
+        if len(variants) == 1:
+            found[unit] = next(iter(variants.values()))
+            continue
+        arm_id, seed = unit
+        verified = _historical_model_score_choice(
+            settings=settings, arm=model_arms[arm_id], seed=seed,
+            comparison_start=str(period.get("start") or ""),
+            comparison_end=str(period.get("end") or ""),
+            cache=verified_score_cache,
+        )
+        if verified is None or verified not in variants:
+            raise ValueError(
+                f"Ambiguous historical model score provenance for {arm_id}/seed={seed}; "
+                "distinct signed score revisions exist but no canonical matching "
+                "PIT score is verified; original observations remain unchanged"
+            )
+        found[unit] = variants[verified]
     return found
 
 
@@ -5449,8 +5518,10 @@ def run_multi_seed_robustness(
     )
     print("\n" + plan_text)
     if plan["overall_status"] == "BLOCKED":
+        reasons = tuple(str(reason) for reason in (plan.get("blockers") or ()))
         raise RuntimeError(
-            "Multiple-seed robustness前置BLOCKED；存在無法由正式builder確定性補建的依賴。"
+            "Multiple-seed robustness前置BLOCKED: "
+            + (reasons[0] if reasons else "無法由正式builder確定性補建的依賴")
         )
     if confirm:
         try:

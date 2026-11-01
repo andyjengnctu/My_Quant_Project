@@ -467,6 +467,163 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
                         self.assertTrue((active_dir / "strategy_observation.json").exists())
 
 
+
+    def test_historical_score_revisions_do_not_invalidate_unmodified_arms(self):
+        """Real legacy discovery must not mix separate signed score versions."""
+        from services.research import strategy_multi_seed_robustness as robust
+        settings, cfg, arms, seeds, contract = _registered_fixture()
+        arm = next(a for a in arms if a.dl_enabled and
+                   len(resolve_arm_runtime_dl_source_ids(settings, a)) == 1)
+        dl_id = resolve_arm_runtime_dl_source_ids(settings, arm)[0]
+        seed = seeds[0]
+        cfg = SimpleNamespace(
+            reuse_completed=True, benchmark_id=cfg.benchmark_id,
+            model_seed_sensitive_arm_ids=(arm.arm_id,),
+            resolved_seeds=(seed,), output_root="outputs/test_score_revision",
+        )
+        current = {"selected_epoch": 2, "fold_count": 6,
+                   "model_sha256": "model-current", "score_sha256": "score-current",
+                   "score_available_from": "2021-01-01",
+                   "score_available_through": "2026-03-02"}
+        old = dict(current, model_sha256="model-old", score_sha256="score-old")
+        sources = []
+        attributions = {}
+        for label, artifact in (("current", current), ("old", old)):
+            root = Path("/tmp") / ("signed_robustness_" + label)
+            contract_copy = deepcopy(contract)
+            contract_copy["fingerprint"] = label
+            runtime_sources = {dl_id: artifact}
+            row = {
+                "arm_id": arm.arm_id, "seed": seed,
+                "score_sha256": artifact["score_sha256"],
+                "runtime_source_identity_sha256": canonical_json_sha256(runtime_sources),
+                "strategy_param_sha256": "parameter",
+                "return_over_max_drawdown": 10.0,
+            }
+            attributions[str(root)] = {
+                "runtime_training_identities": runtime_sources,
+                "training_identity": dict(row),
+                "files": {"trades": {"sha256": label}},
+            }
+            sources.append((root, {
+                "contract": contract_copy,
+                "seed_frame": pd.DataFrame([row]),
+                "seed_yearly_frame": pd.DataFrame([{
+                    "arm_id": arm.arm_id, "seed": seed, "year": 2021,
+                    "return_pct": 2.0, "is_complete_year": True,
+                }]),
+                "evidence": {"artifacts": {}},
+            }))
+        unit = (arm.arm_id, seed)
+        for source_order in (sources, list(reversed(sources))):
+            with self.subTest(first_source=source_order[0][0].name):
+                with (
+                    patch.object(robust, "_iter_registered_robustness_scientific_runs",
+                                 return_value=iter(source_order)),
+                    patch.object(robust, "_read_attribution_unit_manifest",
+                                 side_effect=lambda root, **kw: attributions[str(root)]),
+                    patch.object(robust, "inspect_reusable_model_research_rolling_score",
+                                 return_value=(current, "READY")),
+                ):
+                    found = robust._discover_registered_model_scientific_reuse(
+                        settings=settings, robustness=cfg,
+                        current_contract=contract, stochastic_arms=(arm,),
+                    )
+                self.assertEqual(found[unit]["row"]["score_sha256"], "score-current")
+        # Ambiguous historical provenance without a verified tie-break is not REUSE.
+        with (
+            patch.object(robust, "_iter_registered_robustness_scientific_runs",
+                         return_value=iter(sources)),
+            patch.object(robust, "_read_attribution_unit_manifest",
+                         side_effect=lambda root, **kw: attributions[str(root)]),
+            patch.object(robust, "inspect_reusable_model_research_rolling_score",
+                         return_value=(None, "NOT_READY")),
+        ):
+            with self.assertRaisesRegex(ValueError, "Ambiguous historical model score provenance"):
+                robust._discover_registered_model_scientific_reuse(
+                    settings=settings, robustness=cfg,
+                    current_contract=contract, stochastic_arms=(arm,),
+                )
+        # With only one verified source, no newest-model lookup or FIT is needed.
+        with (
+            patch.object(robust, "_iter_registered_robustness_scientific_runs",
+                         return_value=iter(sources[:1])),
+            patch.object(robust, "_read_attribution_unit_manifest",
+                         side_effect=lambda root, **kw: attributions[str(root)]),
+            patch.object(robust, "inspect_reusable_model_research_rolling_score",
+                         side_effect=AssertionError("model looked up for completed result")),
+        ):
+            found = robust._discover_registered_model_scientific_reuse(
+                settings=settings, robustness=cfg,
+                current_contract=contract, stochastic_arms=(arm,),
+            )
+        self.assertEqual(found[unit]["row"]["score_sha256"], "score-current")
+
+    def test_positive_dual_source_legacy_collision_uses_both_heads(self):
+        """CP's Positive score distinguishes two outcomes with identical CO rank."""
+        from services.research import strategy_multi_seed_robustness as robust
+        settings, cfg, arms, seeds, contract = _registered_fixture()
+        arm = next(a for a in arms if a.dl_enabled and
+                   len(resolve_arm_runtime_dl_source_ids(settings, a)) == 2)
+        dl_ids = resolve_arm_runtime_dl_source_ids(settings, arm)
+        seed = seeds[0]
+        cfg = SimpleNamespace(
+            reuse_completed=True, benchmark_id=cfg.benchmark_id,
+            model_seed_sensitive_arm_ids=(arm.arm_id,), resolved_seeds=(seed,),
+            output_root="outputs/test_dual_score_revision",
+        )
+        rank = {"selected_epoch": 2, "fold_count": 6, "model_sha256": "same-rank-model",
+                "score_sha256": "same-rank-score", "score_available_from": "2021-01-01",
+                "score_available_through": "2026-03-02"}
+        gate = dict(rank, model_sha256="gate-current-model", score_sha256="gate-current-score")
+        old_gate = dict(gate, model_sha256="gate-old-model", score_sha256="gate-old-score")
+        sources = []
+        attributions = {}
+        for label, positive in (("current", gate), ("old", old_gate)):
+            root = Path("/tmp") / ("signed_dual_" + label)
+            source_contract = deepcopy(contract)
+            source_contract["fingerprint"] = label
+            runtime_sources = {dl_ids[0]: rank, dl_ids[1]: positive}
+            row = {"arm_id": arm.arm_id, "seed": seed,
+                   "score_sha256": rank["score_sha256"],
+                   "runtime_source_identity_sha256": canonical_json_sha256(runtime_sources)}
+            attributions[str(root)] = {"runtime_training_identities": runtime_sources,
+                                       "training_identity": dict(row),
+                                       "files": {"trades": {"sha256": label}}}
+            sources.append((root, {"contract": source_contract,
+                                   "seed_frame": pd.DataFrame([row]),
+                                   "seed_yearly_frame": pd.DataFrame([{
+                                       "arm_id": arm.arm_id, "seed": seed, "year": 2021,
+                                       "return_pct": 2.0, "is_complete_year": True,
+                                   }]), "evidence": {"artifacts": {}}}))
+        def canonical_score(*, source, **_kw):
+            return ((rank if source.dl_id == dl_ids[0] else gate), "READY")
+        with (
+            patch.object(robust, "_iter_registered_robustness_scientific_runs",
+                         return_value=iter(reversed(sources))),
+            patch.object(robust, "_read_attribution_unit_manifest",
+                         side_effect=lambda root, **kw: attributions[str(root)]),
+            patch.object(robust, "inspect_reusable_model_research_rolling_score",
+                         side_effect=canonical_score),
+        ):
+            found = robust._discover_registered_model_scientific_reuse(
+                settings=settings, robustness=cfg,
+                current_contract=contract, stochastic_arms=(arm,),
+            )
+        self.assertEqual(found[(arm.arm_id, seed)]["source_fingerprint"], "current")
+
+    def test_same_provenance_with_different_economic_results_still_blocks(self):
+        """Only different score versions are independent, not contradictory PnL."""
+        from services.research import strategy_multi_seed_robustness as robust
+        before = {"row": {"score_sha256": "same", "runtime_source_identity_sha256": "same",
+                          "strategy_param_sha256": "same", "return_over_max_drawdown": 3.0},
+                  "yearly": [{"year": 2021, "return_pct": 10.0, "is_complete_year": True}]}
+        after = deepcopy(before)
+        after["row"]["return_over_max_drawdown"] = 4.0
+        with self.assertRaisesRegex(RuntimeError, "scientific observation"):
+            robust._observation_equivalence(before, after)
+
+
 def append_strategy_robustness_unit_checks(*, results, case_id):
     """Join the existing Strategy Compare capability case, not a new gate."""
     from tools.validate.check_result_utils import add_check
