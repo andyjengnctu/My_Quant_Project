@@ -7390,6 +7390,10 @@ def validate_breakout_quality_reverse_conditional_mfe_ab_contract_case(_base_par
                          seed, None, outputs[0], "synthetic SCORE missing")),
         patch.object(research_app, "_rolling_robustness_score_core_contract",
                      return_value=(None, "synthetic SCORE missing")) as execution_score_probe,
+        # [AI] This fixture tests menu/readiness routing, not worker publication.
+        # Keep the serial provider boundary isolated on hosts where shared
+        # synthetic upstream happens to be READY (notably Windows local runs).
+        patch.object(research_app, "_parallel_model_robustness_inputs_reusable", return_value=False),
         patch.object(research_app, "_prepare_formal_robustness_seed_inputs", return_value=98) as formal_input_preflight,
         patch.object(research_app, "_prepare_continuous_research_inputs", return_value=98) as generic_input_preflight,
         patch.object(research_app, "_print_model_action_status",
