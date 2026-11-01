@@ -129,6 +129,7 @@ from services.breakout_quality.fitted_model_artifacts import (
     scientific_torch_execution,
     _fold_training_contract_is_compatible,
     _forward_checkpoint_import_issues,
+    forward_native_checkpoint_same_fitting_weights,
     _checkpoint_matches_rescore_contract,
     _fold_training_identity_payload,
     fold_training_identity,
@@ -958,12 +959,54 @@ def _import_forward_checkpoint_to_fitting_cache_unlocked(
             raise RuntimeError(f"fitting identity cache contract衝突: identity={identity}")
         if cached_checkpoint != dict(dict(cached_manifest.get("artifacts") or {}).get("checkpoint") or {}):
             raise RuntimeError(f"fitting identity cache checkpoint manifest mismatch: identity={identity}")
+        # Native Rolling and Forward serialize different model.pt envelopes.
+        # Raw file SHA inequality is not evidence of different model weights;
+        # demand full FIT/source validation (above), native fold provenance,
+        # equal selected epoch, equal resolved execution and bit-exact tensors.
+        # An existing Forward-import cache with different source SHA is never
+        # silently re-certified against another Forward publication.
+        same_fit_different_envelope = False
         if cached_checkpoint != checkpoint_manifest:
-            raise RuntimeError(
-                "同一fitting identity已有不同checkpoint；"
-                f"identity={identity}, cached={cached_checkpoint.get('sha256')}, "
-                f"forward={checkpoint_manifest.get('sha256')}"
+            cached_origin = cached_manifest.get("fitting_origin")
+            cached_migration = cached_manifest.get("migration")
+            native_origin_ok = (
+                cached_origin is None
+                or (isinstance(cached_origin, dict)
+                    and cached_origin.get("kind") == "rolling_native"
+                    and cached_origin.get("checkpoint") == cached_checkpoint)
             )
+            native_migration_ok = (
+                cached_migration is None
+                or (isinstance(cached_migration, dict)
+                    and cached_migration.get("kind") == "rolling_native")
+            )
+            if native_origin_ok and native_migration_ok:
+                try:
+                    native_payload = torch_module.load(
+                        cached_model_path, map_location="cpu", weights_only=True
+                    )
+                    same_fit_different_envelope = (
+                        isinstance(native_payload, dict)
+                        and forward_native_checkpoint_same_fitting_weights(
+                            native_checkpoint=native_payload,
+                            forward_checkpoint=checkpoint,
+                            native_manifest=cached_manifest,
+                            fold_contract=fold_contract,
+                            forward_selected_epoch=int(source_manifest["selected_epoch"]),
+                            expected_torch_execution=dict(source_fitting_evidence.torch_execution),
+                            torch_module=torch_module,
+                        )
+                    )
+                except (OSError, RuntimeError, TypeError, ValueError, KeyError,
+                        EOFError, pickle.UnpicklingError, zipfile.BadZipFile):
+                    same_fit_different_envelope = False
+            if not same_fit_different_envelope:
+                raise RuntimeError(
+                    "同一fitting identity已有不同checkpoint；"
+                    f"identity={identity}, cached={cached_checkpoint.get('sha256')}, "
+                    f"forward={checkpoint_manifest.get('sha256')}; "
+                    "不同封裝的權重與FIT證據未通過完全一致驗證"
+                )
         if source_origin is not None:
             existing_origin = cached_manifest.get("fitting_origin")
             migration = cached_manifest.get("migration")
@@ -1001,6 +1044,7 @@ def _import_forward_checkpoint_to_fitting_cache_unlocked(
             "training_identity": identity,
             "cache_entry": str(entry_dir),
             "reused_existing_cache": True,
+            "same_fit_different_checkpoint_envelope": same_fit_different_envelope,
         }
 
     cache_manifest = {

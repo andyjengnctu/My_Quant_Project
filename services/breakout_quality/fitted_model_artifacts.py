@@ -753,6 +753,94 @@ def _fitted_forward_evidence_fold_issues(
     return tuple(issues)
 
 
+
+def forward_native_checkpoint_same_fitting_weights(
+    *,
+    native_checkpoint: Mapping[str, Any],
+    forward_checkpoint: Mapping[str, Any],
+    native_manifest: Mapping[str, Any],
+    fold_contract: Mapping[str, Any],
+    forward_selected_epoch: int,
+    expected_torch_execution: Mapping[str, Any],
+    torch_module,
+) -> bool:
+    """Prove compatible native/Forward envelopes before reusing *existing* FIT.
+
+    A native Rolling model.pt embeds the PIT fold contract and selected epoch;
+    the Forward model.pt persists the original fitting proof in a separate
+    fitted_model_manifest.json. Their torch.save byte SHA therefore need not
+    coincide even if the trained weights do. This predicate never publishes,
+    rewrites or selects between weights: a mismatch stays fail-closed.
+
+    Caller must already have verified BOTH publication hashes and the full
+    Forward -> first Rolling fitting/source/epoch/torch contract.
+    """
+    native_contract = native_checkpoint.get("fold_contract")
+    if (not isinstance(native_contract, dict)
+            or not _fold_training_contract_is_compatible(
+                native_contract, expected_contract=dict(fold_contract))):
+        return False
+    epoch = int(forward_selected_epoch)
+    if epoch < 1 or int(native_manifest.get("selected_epoch") or 0) != epoch:
+        return False
+    if int(native_checkpoint.get("selected_epoch") or 0) != epoch:
+        return False
+    if (forward_checkpoint.get("selected_epoch") is not None
+            and int(forward_checkpoint["selected_epoch"]) != epoch):
+        return False
+
+    # Cross-mode differences are restricted to the known producer envelopes.
+    # Unknown/mismatched metadata is NOT silently normalized away.
+    required = frozenset({
+        "model_state_dict", "feature_count", "context_count", "sequence_length",
+        "model_spec", "experiment_profile", "experiment_settings",
+        "training_objective", "training_label_scope", "continuous_target_contract",
+        "torch_execution", "trainable_parameter_count", "total_parameter_count",
+    })
+    native_keys = set(native_checkpoint)
+    forward_keys = set(forward_checkpoint)
+    if (not required.issubset(native_keys & forward_keys)
+            or (native_keys ^ forward_keys) - {
+                "fold_contract", "selected_epoch", "training_semantics"
+            }):
+        return False
+    for key in native_keys & forward_keys - {
+            "model_state_dict", "torch_execution", "fold_contract",
+            "selected_epoch", "training_semantics"
+    }:
+        if native_checkpoint[key] != forward_checkpoint[key]:
+            return False
+
+    expected_execution = dict(expected_torch_execution)
+    if not expected_execution:
+        return False
+    for execution in (
+        native_checkpoint.get("torch_execution"),
+        forward_checkpoint.get("torch_execution"),
+        native_manifest.get("torch_execution"),
+    ):
+        if not isinstance(execution, Mapping):
+            return False
+        comparable = dict(execution)
+        comparable.pop("requested_device", None)  # Device request is not execution truth.
+        if comparable != expected_execution:
+            return False
+
+    native_state = native_checkpoint.get("model_state_dict")
+    forward_state = forward_checkpoint.get("model_state_dict")
+    if (not isinstance(native_state, Mapping) or not isinstance(forward_state, Mapping)
+            or not native_state or native_state.keys() != forward_state.keys()):
+        return False
+    for key in native_state:
+        left, right = native_state[key], forward_state[key]
+        if (not torch_module.is_tensor(left) or not torch_module.is_tensor(right)
+                or left.dtype != right.dtype or left.shape != right.shape
+                or not torch_module.equal(left, right)):
+            return False
+    return True
+
+
+
 def _forward_checkpoint_import_issues(
     *,
     source_manifest: dict[str, Any],

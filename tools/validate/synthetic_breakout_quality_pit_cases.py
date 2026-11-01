@@ -908,6 +908,170 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         and not _fold_training_contract_is_compatible(changed_contract, expected_contract=expected_contract),
     )
 
+    # Same FIT, different torch.save envelopes: only exact weight identity,
+    # native fold evidence, epoch and resolved execution may admit reuse.
+    # AI: This protects the first Rolling fold against the native-vs-Forward
+    # checkpoint collision without relaxing real two-weights conflicts.
+    import torch
+    from services.breakout_quality.fitted_model_artifacts import (
+        forward_native_checkpoint_same_fitting_weights,
+    )
+    execution = {
+        "resolved_device": "cpu", "autocast_dtype": None,
+        "mixed_precision_enabled": False, "deterministic_algorithms": True,
+        "allow_tf32": False,
+    }
+    envelope_fields = {
+        "feature_count": 3, "context_count": 0, "sequence_length": 300,
+        "model_spec": expected_contract["model_spec"],
+        "experiment_profile": expected_contract["experiment_profile"],
+        "experiment_settings": expected_contract["experiment_settings"],
+        "training_objective": "daily_pairwise_ranking",
+        "training_label_scope": expected_contract["training_label_scope"],
+        "continuous_target_contract": {"target_id": expected_contract["continuous_target_id"]},
+        "trainable_parameter_count": 2, "total_parameter_count": 3,
+        "torch_execution": {**execution, "requested_device": "auto"},
+        "model_state_dict": {
+            "layer.weight": torch.tensor([1., -2.], dtype=torch.bfloat16),
+            "counter": torch.tensor(3, dtype=torch.long),  # Zero-dimensional tensor.
+        },
+    }
+    native_ckpt = {
+        **envelope_fields, "fold_contract": expected_contract,
+        "selected_epoch": 1,
+    }
+    forward_ckpt = {
+        **envelope_fields, "training_semantics": {"batching": "whole_date_pack_no_date_split"},
+    }
+    native_manifest = {"selected_epoch": 1, "torch_execution": execution}
+    def compatible_native_forward(native=native_ckpt, forward=forward_ckpt,
+                                  manifest=native_manifest, contract=expected_contract):
+        return forward_native_checkpoint_same_fitting_weights(
+            native_checkpoint=native, forward_checkpoint=forward,
+            native_manifest=manifest, fold_contract=contract,
+            forward_selected_epoch=1, expected_torch_execution=execution,
+            torch_module=torch,
+        )
+    with tempfile.TemporaryDirectory(prefix="fit_envelope_parity_") as td:
+        first = Path(td) / "native.pt"
+        second = Path(td) / "forward.pt"
+        torch.save(native_ckpt, first)
+        torch.save(forward_ckpt, second)
+        original_cache_bytes = first.read_bytes()
+        check_true("native_forward_checkpoint_envelope_sha_may_differ_with_same_weights",
+                   build_file_manifest(first) != build_file_manifest(second)
+                   and compatible_native_forward()
+                   and first.read_bytes() == original_cache_bytes)
+    changed_state = dict(forward_ckpt["model_state_dict"])
+    changed_state["layer.weight"] = torch.tensor([1., -1.], dtype=torch.bfloat16)
+    check_true("native_forward_true_weights_conflict_blocks_reuse",
+               not compatible_native_forward(forward={**forward_ckpt, "model_state_dict": changed_state}))
+    check_true("native_forward_changed_selected_epoch_blocks_reuse",
+               not compatible_native_forward(manifest={**native_manifest, "selected_epoch": 2}))
+    check_true("native_forward_changed_fit_source_blocks_reuse",
+               not compatible_native_forward(contract={**expected_contract, "seed": 888}))
+    check_true("native_forward_changed_execution_blocks_reuse",
+               not compatible_native_forward(manifest={"selected_epoch": 1,
+                                                       "torch_execution": {**execution, "allow_tf32": True}}))
+    check_true("native_forward_unknown_checkpoint_metadata_blocks_reuse",
+               not compatible_native_forward(forward={**forward_ckpt, "extra": "unapproved"}))
+    check_true("native_forward_missing_native_fit_provenance_blocks_reuse",
+               not compatible_native_forward(native={k: v for k, v in native_ckpt.items()
+                                                      if k != "fold_contract"}))
+
+    # Exercise the real cache-bridge branch with independent serialized files.
+    # Only the upstream proof is mocked; the cache SHA, FIT and weight checks
+    # are executed by the actual producer and must never mutate the old FIT.
+    from services.breakout_quality import point_in_time_scores as fit_bridge
+    with tempfile.TemporaryDirectory(prefix="fit_collision_import_integration_") as td:
+        fit_root = Path(td)
+        fit_source = fit_root / "forward_model"
+        fit_source.mkdir()
+        source_model = fit_source / "model.pt"
+        source_manifest_path = fit_source / "manifest.json"
+        source_report_path = fit_root / "forward_report.json"
+        torch.save(forward_ckpt, source_model)
+        source_manifest_path.write_text(json.dumps({"selected_epoch": 1}), encoding="utf-8")
+        source_report_path.write_text(json.dumps({
+            "training": {"selected_epoch": 1, "epoch_selection": {"best_epoch": 1}}
+        }), encoding="utf-8")
+        cache_root = fit_root / "cache"
+        fit_key = fold_training_identity(expected_contract)
+        entry = cache_root / fit_key
+        entry.mkdir(parents=True)
+        cached_model = entry / "model.pt"
+        cached_manifest_path = entry / "manifest.json"
+        torch.save(native_ckpt, cached_model)
+        cached_manifest_path.write_text(json.dumps({
+            **expected_contract, "selected_epoch": 1,
+            "torch_execution": execution,
+            "artifacts": {"checkpoint": build_file_manifest(cached_model)},
+        }), encoding="utf-8")
+        prior_model = cached_model.read_bytes()
+        prior_manifest = cached_manifest_path.read_bytes()
+        fake_fitting_evidence = SimpleNamespace(
+            training_settings={"max_epochs": 200},
+            torch_execution=execution, selected_epoch=1,
+        )
+        def run_cross_mode():
+            with patch.object(fit_bridge, "_forward_checkpoint_import_issues", return_value=[]), \
+                 patch.object(fit_bridge, "load_fitted_model_training_evidence",
+                              return_value=(fake_fitting_evidence, None)):
+                return fit_bridge._import_forward_checkpoint_to_fitting_cache(
+                    source_model_dir=fit_source, source_report_path=source_report_path,
+                    cache_root=cache_root, fold_contract=expected_contract,
+                    bundle=SimpleNamespace(target_manifest={}), torch_module=torch,
+                    execution_plan=SimpleNamespace(),
+                )
+        imported = run_cross_mode()
+        check_true("native_forward_bridge_reuses_verified_same_weights_with_different_raw_sha",
+                   imported is not None and imported["reused_existing_cache"] is True
+                   and imported.get("same_fit_different_checkpoint_envelope") is True
+                   and cached_model.read_bytes() == prior_model
+                   and cached_manifest_path.read_bytes() == prior_manifest)
+        torch.save({**forward_ckpt, "model_state_dict": changed_state}, source_model)
+        try:
+            run_cross_mode()
+        except RuntimeError as exc:
+            genuine_conflict_rejected = "同一fitting identity已有不同checkpoint" in str(exc)
+        else:
+            genuine_conflict_rejected = False
+        check_true("native_forward_bridge_refuses_different_weights_without_mutation",
+                   genuine_conflict_rejected
+                   and cached_model.read_bytes() == prior_model
+                   and cached_manifest_path.read_bytes() == prior_manifest)
+
+        torch.save(forward_ckpt, source_model)
+        invalid_cache = json.loads(prior_manifest.decode("utf-8"))
+        invalid_cache["migration"] = {"kind": "forward_model_fitting_identity_import"}
+        cached_manifest_path.write_text(json.dumps(invalid_cache), encoding="utf-8")
+        migration_before = cached_manifest_path.read_bytes()
+        try:
+            run_cross_mode()
+        except RuntimeError as exc:
+            unverified_migration_rejected = "同一fitting identity已有不同checkpoint" in str(exc)
+        else:
+            unverified_migration_rejected = False
+        check_true("native_forward_bridge_never_rebrands_a_different_forward_import",
+                   unverified_migration_rejected
+                   and cached_model.read_bytes() == prior_model
+                   and cached_manifest_path.read_bytes() == migration_before)
+        cached_manifest_path.write_bytes(prior_manifest)
+        foreign_origin = json.loads(prior_manifest.decode("utf-8"))
+        foreign_origin["fitting_origin"] = {"kind": "forward_import", "checkpoint": {}}
+        cached_manifest_path.write_text(json.dumps(foreign_origin), encoding="utf-8")
+        foreign_before = cached_manifest_path.read_bytes()
+        try:
+            run_cross_mode()
+        except RuntimeError as exc:
+            unverified_origin_rejected = "同一fitting identity已有不同checkpoint" in str(exc)
+        else:
+            unverified_origin_rejected = False
+        check_true("native_forward_bridge_refuses_foreign_origin_without_mutation",
+                   unverified_origin_rejected
+                   and cached_model.read_bytes() == prior_model
+                   and cached_manifest_path.read_bytes() == foreign_before)
+
     a1_profile = get_breakout_quality_experiment_profile(
         DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
     )
