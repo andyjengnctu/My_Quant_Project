@@ -3276,6 +3276,91 @@ class ExecutionAccelerationCases(unittest.TestCase):
                 resource_equivalent_fitting_cache_entry(cache, expected)
 
 
+class ModelRobustnessProgressCases(unittest.TestCase):
+    """Parallel Model Robustness must reveal real producer progress, not an ETA guess."""
+
+    def test_parallel_seed_progress_reads_fold_epoch_and_queue_without_refitting(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from threading import Event
+        import time
+        from services.research import breakout_quality_application as app
+
+        first_started = Event()
+        env_seen = []
+        calls = []
+
+        def fake_worker(*, command, log_path, registry, registry_lock,
+                        registry_key, env_overrides, **kwargs):
+            seed = int(command[command.index('--seed') + 1])
+            env_seen.append(dict(env_overrides))
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with registry_lock:
+                registry[registry_key] = object()
+            if seed == 11:
+                first_started.set()
+            with log_path.open('w', encoding='utf-8') as handle:
+                handle.write('__BQ_PIT_PROGRESS__ completed=1 total=4 active=2\n')
+                handle.write('__BQ_EPOCH_PROGRESS__ phase=select epoch=2/9\n')
+                handle.flush()
+                time.sleep(0.27)
+                handle.write('__BQ_PIT_PROGRESS__ completed=4 total=4 active=0\n')
+                handle.flush()
+                time.sleep(0.08)
+            with registry_lock:
+                registry.pop(registry_key, None)
+            calls.append(seed)
+            return {'elapsed_sec': 0.35, 'returncode': 0}
+
+        stdout = StringIO()
+        with (
+            TemporaryDirectory() as td,
+            patch.object(app, 'research_cpu_lanes', return_value=1),
+            patch.object(app, 'BREAKOUT_QUALITY_MODEL_ROBUSTNESS_PROGRESS_INTERVAL_SECONDS', 0.03),
+            patch.object(app, 'BREAKOUT_QUALITY_MODEL_ROBUSTNESS_PROGRESS_LOG_INTERVAL_SECONDS', 0.09),
+            patch.object(app, '_model_robustness_dirs', side_effect=lambda settings, seed, rolling: (
+                Path(td) / str(seed), Path(td) / str(seed))),
+            patch.object(app, 'run_logged_training_process', side_effect=fake_worker),
+            patch.object(app, '_observe_model_robustness_seed', return_value=SimpleNamespace(
+                verified_evidence={'ready': True})),
+            patch.object(app, 'invalidate_rolling_model_source_cache') as invalidate,
+            redirect_stdout(stdout),
+        ):
+            app._run_parallel_model_robustness_seeds(
+                SimpleNamespace(experiment_profile='synthetic'),
+                model_id='MR-SYN', seeds=(11, 22), rolling=True, workers=1,
+            )
+        text = stdout.getvalue()
+        self.assertTrue(first_started.is_set())
+        self.assertEqual(sorted(calls), [11, 22])
+        self.assertEqual(invalidate.call_count, 2)
+        self.assertIn('[WAIT] seed=22 (2/2)', text)
+        self.assertIn('PIT 1/4', text)
+        self.assertIn('select 2/9', text)
+        self.assertIn('PIT 4/4', text)
+        self.assertIn('DONE 1/2', text)
+        self.assertIn('seed=11 | rolling Standard SOP READY', text)
+        self.assertIn('seed=22 | rolling Standard SOP READY', text)
+        self.assertEqual(len(env_seen), 2)
+        self.assertTrue(all(item['BREAKOUT_QUALITY_PIT_PROGRESS_MARKERS'] == '1'
+                            and item['BREAKOUT_QUALITY_EPOCH_PROGRESS_MARKERS'] == '1'
+                            and item['PYTHONUNBUFFERED'] == '1' for item in env_seen))
+
+    def test_bad_progress_config_fails_before_spawning(self):
+        from services.research import breakout_quality_application as app
+        with (
+            patch.object(app, 'BREAKOUT_QUALITY_MODEL_ROBUSTNESS_PROGRESS_INTERVAL_SECONDS', 5.0),
+            patch.object(app, 'BREAKOUT_QUALITY_MODEL_ROBUSTNESS_PROGRESS_LOG_INTERVAL_SECONDS', 2.0),
+            patch.object(app, 'run_logged_training_process') as launch,
+        ):
+            with self.assertRaisesRegex(ValueError, 'progress intervals'):
+                app._run_parallel_model_robustness_seeds(
+                    SimpleNamespace(experiment_profile='synthetic'),
+                    model_id='MR-SYN', seeds=(11,), rolling=True, workers=1,
+                )
+            launch.assert_not_called()
+
+
 class ModelRobustnessProcessCancellationCases(unittest.TestCase):
     """A failed seed must stop active launches and prevent queued producers."""
 

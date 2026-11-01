@@ -8,7 +8,7 @@ import argparse
 import hashlib
 from collections import deque
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 import importlib
 import json
@@ -94,6 +94,7 @@ from core.report_style import (
     styled_workflow_status,
 )
 from core.runtime_utils import (
+    choose_inline_progress_message,
     is_interactive_console,
     resolve_cli_program_name,
     run_cli_entrypoint,
@@ -140,7 +141,11 @@ from services.research.training_process import (
 )
 from core.training_policy import get_robustness_benchmark_policy_snapshot
 from config.robustness_benchmark import MODEL_STRATEGY_ROBUSTNESS_BENCHMARK_ID
-from config.breakout_quality import BREAKOUT_QUALITY_MODEL_ROBUSTNESS_SEED_WORKERS
+from config.breakout_quality import (
+    BREAKOUT_QUALITY_MODEL_ROBUSTNESS_PROGRESS_INTERVAL_SECONDS,
+    BREAKOUT_QUALITY_MODEL_ROBUSTNESS_PROGRESS_LOG_INTERVAL_SECONDS,
+    BREAKOUT_QUALITY_MODEL_ROBUSTNESS_SEED_WORKERS,
+)
 from filters.breakout_quality.artifact_dependency_registry import (
     collect_model_upstream_preparation_plan,
 )
@@ -5030,11 +5035,11 @@ def _run_parallel_model_robustness_seeds(
     settings, *, model_id: str, seeds: tuple[int, ...], rolling: bool,
     workers: int,
 ) -> None:
-    """One bounded pool of *process-isolated* canonical seed producers.
+    """Run isolated seed producers while reporting canonical FIT/PIT log progress.
 
-    Threads merely supervise child processes; training and PIT evaluation do
-    not share sys.argv, environment, torch state, or Python GIL. Parent owns
-    the only aggregate publication after every seed passes source validation.
+    Child stdout remains in the seed-local log.  The parent only reads bounded
+    log tails and never infers checkpoint or score readiness from progress text.
+    Completion still requires verification by the canonical model source owner.
     """
     registry: dict[str, subprocess.Popen] = {}
     registry_lock = Lock()
@@ -5042,12 +5047,24 @@ def _run_parallel_model_robustness_seeds(
     mode = "rolling" if rolling else "forward"
     workers = min(workers, len(seeds), research_cpu_lanes())
     seed_lanes = max(1, research_cpu_lanes() // workers)
+    progress_interval = float(BREAKOUT_QUALITY_MODEL_ROBUSTNESS_PROGRESS_INTERVAL_SECONDS)
+    log_interval = float(BREAKOUT_QUALITY_MODEL_ROBUSTNESS_PROGRESS_LOG_INTERVAL_SECONDS)
+    if progress_interval <= 0 or log_interval < progress_interval:
+        raise ValueError("Model Robustness progress intervals must be positive and ordered")
+    seed_positions = {int(seed): idx for idx, seed in enumerate(seeds, start=1)}
+    seed_log_paths: dict[int, Path] = {}
+    seed_started: dict[int, float] = {}
+    progress = FixedProgressBlock()
+    last_log_at = float("-inf")
+
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {}
+        futures: dict[Future, int] = {}
         for seed in seeds:
             _unused_model_dir, research_dir = _model_robustness_dirs(
                 settings, seed=seed, rolling=rolling,
             )
+            log_path = research_dir / "robustness_seed_worker.log"
+            seed_log_paths[int(seed)] = log_path
             command = [
                 sys.executable, "-m", "services.research.breakout_quality_application",
                 "__robustness_seed_worker", "--profile", str(settings.experiment_profile),
@@ -5056,40 +5073,110 @@ def _run_parallel_model_robustness_seeds(
             future = executor.submit(
                 run_logged_training_process,
                 command=command,
-                log_path=research_dir / "robustness_seed_worker.log",
+                log_path=log_path,
                 cwd=PROJECT_ROOT,
                 registry=registry,
                 registry_lock=registry_lock,
                 registry_key=f"{model_id}:{mode}:{seed}",
                 failure_prefix=f"{model_id} {mode} Robustness seed={seed} producer failed",
                 cancellation_event=cancellation_event,
-                env_overrides={CPU_LANES_ENV: str(seed_lanes)},
+                env_overrides={
+                    CPU_LANES_ENV: str(seed_lanes),
+                    "PYTHONUNBUFFERED": "1",
+                    "BREAKOUT_QUALITY_PIT_PROGRESS_MARKERS": "1",
+                    "BREAKOUT_QUALITY_EPOCH_PROGRESS_MARKERS": "1",
+                },
             )
             futures[future] = int(seed)
-        try:
-            for future in as_completed(futures):
-                seed = futures[future]
-                future.result()
-                # Each child publishes from another process. Invalidate the
-                # parent-only read cache before the complete source owner probes
-                # this seed, just as the original serial lifecycle does.
-                if rolling:
-                    invalidate_rolling_model_source_cache()
-                # Other children can still be running; inspect only this seed's
-                # complete canonical evidence, never an unverified file existence.
-                source = _observe_model_robustness_seed(
-                    settings, seed=seed, rolling=rolling,
-                )
-                if source.verified_evidence is None:
-                    raise RuntimeError(
-                        f"{model_id} {mode} Robustness seed={seed} worker completed "
-                        f"without verified Standard SOP: {source.reason}"
+
+        def show_progress(*, force_log: bool = False) -> None:
+            nonlocal last_log_at
+            now = time.perf_counter()
+            with registry_lock:
+                running_keys = set(registry)
+            lines: list[str] = []
+            running_count = 0
+            queued_count = 0
+            for future, seed in sorted(futures.items(), key=lambda item: seed_positions[item[1]]):
+                idx = seed_positions[seed]
+                seed_title = f"seed={seed} ({idx}/{len(seeds)})"
+                process_running = f"{model_id}:{mode}:{seed}" in running_keys
+                if not process_running:
+                    if future.running():
+                        lines.append(f"[START] {seed_title} | 啟動／準備中")
+                    else:
+                        queued_count += 1
+                        lines.append(f"[WAIT] {seed_title} | 尚未輪到")
+                    continue
+                running_count += 1
+                started = seed_started.setdefault(seed, now)
+                elapsed = now - started
+                pit = read_trainer_pit_progress(seed_log_paths[seed]) if rolling else None
+                epoch = read_trainer_epoch_progress(seed_log_paths[seed])
+                if pit is not None and pit[1] > 0 and pit[0] >= pit[1]:
+                    full = (
+                        f"[TRAIN] {seed_title} | {render_elapsed(elapsed)}"
+                        f" | PIT {pit[0]}/{pit[1]} | 分數整理／Audit"
                     )
+                else:
+                    full = "[TRAIN] " + render_training_unit_progress(
+                        unit_id=seed_title,
+                        elapsed_seconds=elapsed,
+                        pit_progress=pit,
+                        epoch_progress=epoch,
+                    )
+                short = f"[TRAIN] S{idx}/{len(seeds)} {seed} | {render_elapsed(elapsed)}"
+                if pit is not None and pit[1] > 0:
+                    short += f" | PIT {pit[0]}/{pit[1]}"
+                if epoch is not None and not (pit is not None and pit[1] > 0 and pit[0] >= pit[1]):
+                    phase, selected, count = epoch
+                    if count > 0:
+                        short += f" | {phase} {selected}/{count}"
+                tiny = f"[TRAIN] S{idx}/{len(seeds)} {seed} | {render_elapsed(elapsed)}"
+                lines.append(choose_inline_progress_message((full, short, tiny), stream=progress.stream))
+            if progress.inline:
+                progress.update(lines)
+            elif force_log or now - last_log_at >= log_interval:
                 print(
-                    styled_workflow_status("[DONE]") + " " + _model_identity_text(model_id)
-                    + f" | seed={seed} | {mode} Standard SOP READY"
+                    f"[ROBUSTNESS PROGRESS] {model_id} | DONE {len(seeds) - len(futures)}/{len(seeds)}"
+                    f" | RUN {running_count} | WAIT {queued_count}",
+                    flush=True,
                 )
+                for line in lines:
+                    print(line, flush=True)
+                last_log_at = now
+
+        try:
+            show_progress(force_log=True)
+            while futures:
+                finished, _unfinished = wait(
+                    futures, timeout=progress_interval, return_when=FIRST_COMPLETED,
+                )
+                for future in sorted(finished, key=lambda item: seed_positions[futures[item]]):
+                    seed = futures.pop(future)
+                    result = future.result()
+                    # Other children may still be FITting. Validate only this
+                    # seed's completed source before recording DONE.
+                    if rolling:
+                        invalidate_rolling_model_source_cache()
+                    source = _observe_model_robustness_seed(
+                        settings, seed=seed, rolling=rolling,
+                    )
+                    if source.verified_evidence is None:
+                        raise RuntimeError(
+                            f"{model_id} {mode} Robustness seed={seed} worker completed "
+                            f"without verified Standard SOP: {source.reason}"
+                        )
+                    progress.print_line(
+                        styled_workflow_status("[DONE]") + " " + _model_identity_text(model_id)
+                        + f" | seed={seed} | {mode} Standard SOP READY"
+                        + f" | elapsed={render_elapsed(float(result['elapsed_sec']))}"
+                    )
+                if futures:
+                    show_progress(force_log=bool(finished))
+            progress.finish()
         except BaseException:
+            progress.finish()
             cancellation_event.set()
             terminate_registered_training_processes(registry, registry_lock)
             for future in futures:
