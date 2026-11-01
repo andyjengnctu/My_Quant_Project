@@ -22,6 +22,7 @@ import zlib
 
 import numpy as np
 import pandas as pd
+from core.research_execution_equivalence import reviewed_execution_source_sha256
 
 from filters.breakout_quality.daily_trade40_target import CounterfactualTrade40Batch
 
@@ -104,7 +105,9 @@ def _implementation_digest() -> str:
             # hashed below.  The rest is mutable model/compare configuration.
             continue
         digest.update(name.encode("utf-8"))
-        digest.update(sha256(path.read_bytes()).digest())
+        digest.update(bytes.fromhex(reviewed_execution_source_sha256(
+            name, sha256(path.read_bytes()).hexdigest(),
+        )))
     for name in _CACHE_EXECUTION_CONFIG:
         path = code_root / name
         if path.is_file():

@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import ast
 import importlib
+from hashlib import sha256
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
@@ -21,6 +22,7 @@ from uuid import uuid4
 from core.file_integrity import (
     canonical_json_sha256, is_sha256_hex, exclusive_file_lock, atomic_replace_with_retry,
 )
+from core.research_execution_equivalence import reviewed_calculation_sha256
 
 # Engineering calculation revisions, not scientific Target/model identities.
 # Change only the affected capability after a result-affecting fix. Existing
@@ -177,7 +179,10 @@ def calculation_source(relative: str, name: str, *, bound_literals=None) -> str:
                 if key.isupper() and isinstance(value, (str, int, float, bool, type(None)))}
     literals.update(bound_literals or {})
     projected = _CalculationSyntax(literals).visit(ast.Module(body=[selected], type_ignores=[]))
-    return canonical_json_sha256(_syntax_payload(projected))
+    return reviewed_calculation_sha256(
+        relative, sha256((code_root / relative).read_bytes()).hexdigest(),
+        canonical_json_sha256(_syntax_payload(projected)),
+    )
 
 
 @lru_cache(maxsize=1)

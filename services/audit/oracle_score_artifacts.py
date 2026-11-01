@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Mapping, Callable
 
 import numpy as np
+from core.research_execution_equivalence import reviewed_execution_source_sha256
 
 from core.file_integrity import (
     atomic_replace_with_retry, canonical_json_sha256,
@@ -200,6 +201,8 @@ def oracle_daily_source_fingerprint(root: Path | None = None) -> str:
         if not source_file.is_file():
             raise ValueError(f"Oracle price-score source implementation unavailable: {relative}")
         physical_sha = compute_file_sha256(source_file)
+        if attested:
+            physical_sha = reviewed_execution_source_sha256(relative, physical_sha)
         source_sha = physical_sha
         if attested and relative in _LEGACY_PRICE_REGISTRY_SOURCE_SHA256:
             source_sha = _LEGACY_PRICE_REGISTRY_SOURCE_SHA256[relative]

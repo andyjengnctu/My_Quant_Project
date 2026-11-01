@@ -62,6 +62,8 @@ project/
 │  ├─ trading_order_state.py          # Trading broker-order ORDERED/PARTIAL/FILLED/CANCELLED state + hash-chain contract
 │  ├─ trading_fill_transaction.py     # Trading confirmed-fill two-state write-ahead transaction contract
 │  ├─ training_performance.py         # optimizer performance config resolver／env override／snapshot
+│  ├─ research_execution_resources.py # Research seed／ticker 共用 CPU 資源預算
+│  ├─ research_execution_equivalence.py # 已驗證執行加速的來源／計算等價證據
 │  ├─ training_policy.py              # Strategy Optimizer training policy validation／derived snapshot／runtime owner
 │  ├─ strategy_param_scientific_contract.py # Strategy Parameter resolved scientific-contract/fingerprint boundary
 │  ├─ selection_policy.py             # history-selection 策略參數 schema／default snapshot owner

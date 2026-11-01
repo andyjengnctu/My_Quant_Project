@@ -19,3 +19,4 @@ OPTIMIZER_PROFILE_PRINT_EVERY_N_TRIALS = 1
 
 # Research subprocess lifecycle.
 RESEARCH_TRAINER_TERMINATION_GRACE_SECONDS = 5.0
+RESEARCH_CPU_WORKER_BUDGET = 8  # Shared across concurrent model seeds and their ticker processes.

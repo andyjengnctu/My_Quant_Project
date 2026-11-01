@@ -2435,6 +2435,13 @@ def validate_breakout_quality_pit_training_performance_semantics_case(_base_para
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
+    from .check_result_utils import run_unittest_capability_cases
+    from .synthetic_daily_trade40_cases import ExecutionAccelerationCases
+    acceleration_checks, _details = run_unittest_capability_cases(
+        case_id, "synthetic_breakout_quality", (ExecutionAccelerationCases,),
+    )
+    results.extend(acceleration_checks)
+
     from config.breakout_quality import (
         BREAKOUT_QUALITY_PIT_EPOCH_SELECTION_LIGHTWEIGHT_METRICS,
     )

@@ -420,6 +420,23 @@ def _completed_result(
     )
 
 
+@dataclass(frozen=True)
+class PreparedTradePathInputs:
+    """One stock snapshot shared by its independent canonical trade paths."""
+
+    source_frame: pd.DataFrame
+    ohlcv: tuple[np.ndarray, ...]
+    dates: tuple[pd.Timestamp, ...]
+
+
+def prepare_trade_path_inputs(frame: pd.DataFrame) -> PreparedTradePathInputs:
+    arrays = tuple(frame[column].to_numpy(dtype=np.float64, copy=True)
+                   for column in ("Open", "High", "Low", "Close", "Volume"))
+    for array in arrays:
+        array.setflags(write=False)
+    return PreparedTradePathInputs(frame, arrays, tuple(frame.index))
+
+
 def simulate_realized_trade_path_label(
     stock_df: pd.DataFrame,
     *,
@@ -436,6 +453,7 @@ def simulate_realized_trade_path_label(
     # later information bar; no trade/portfolio state is read from the future.
     decision_pos: int | None = None,
     starting_signal_state: dict[str, Any] | None = None,
+    prepared_inputs: PreparedTradePathInputs | None = None,
 ) -> TradePathLabelResult:
     """A2 canonical execution path; an optional ex-post deadline is isolated.
 
@@ -450,6 +468,9 @@ def simulate_realized_trade_path_label(
     single-member identity path does. Historical A2 callers keep their fixed
     signal cache when this resolver is absent.
     """
+    if prepared_inputs is not None and prepared_inputs.source_frame is not stock_df:
+        raise ValueError("Prepared trade-path inputs belong to another stock snapshot")
+    date_values = stock_df.index if prepared_inputs is None else prepared_inputs.dates
     first_information_pos = signal_pos if decision_pos is None else int(decision_pos)
     if (signal_pos < 0 or first_information_pos < signal_pos or
             first_information_pos >= len(stock_df) - 1):
@@ -461,8 +482,8 @@ def simulate_realized_trade_path_label(
     if starting_signal_state is None and first_information_pos != signal_pos:
         raise ValueError("Resumed Min path requires the canonical decision-time signal state")
     atr, buy_condition, sell_condition, buy_limits = precomputed_signals
-    signal_date = stock_df.index[signal_pos]
-    eval_start_date = _date_text(stock_df.index[first_information_pos + 1])
+    signal_date = date_values[signal_pos]
+    eval_start_date = _date_text(date_values[first_information_pos + 1])
     if starting_signal_state is None:
         if (counterfactual_entry_limit is None and not bool(buy_condition[signal_pos])) or not math.isfinite(float(atr[signal_pos])):
             return _excluded_result(
@@ -516,20 +537,23 @@ def simulate_realized_trade_path_label(
             teacher_effective_date=teacher_effective_date,
         )
 
-    open_values = stock_df["Open"].to_numpy(dtype=np.float64, copy=False)
-    high_values = stock_df["High"].to_numpy(dtype=np.float64, copy=False)
-    low_values = stock_df["Low"].to_numpy(dtype=np.float64, copy=False)
-    close_values = stock_df["Close"].to_numpy(dtype=np.float64, copy=False)
-    volume_values = stock_df["Volume"].to_numpy(dtype=np.float64, copy=False)
-    dates = stock_df.index
+    if prepared_inputs is None:
+        open_values = stock_df["Open"].to_numpy(dtype=np.float64, copy=False)
+        high_values = stock_df["High"].to_numpy(dtype=np.float64, copy=False)
+        low_values = stock_df["Low"].to_numpy(dtype=np.float64, copy=False)
+        close_values = stock_df["Close"].to_numpy(dtype=np.float64, copy=False)
+        volume_values = stock_df["Volume"].to_numpy(dtype=np.float64, copy=False)
+    else:
+        open_values, high_values, low_values, close_values, volume_values = prepared_inputs.ohlcv
+    dates = date_values
     horizon_day = None if horizon_end_date is None else pd.Timestamp(horizon_end_date).normalize()
-    if horizon_day is not None and horizon_day <= pd.Timestamp(stock_df.index[first_information_pos]).normalize():
+    if horizon_day is not None and horizon_day <= pd.Timestamp(dates[first_information_pos]).normalize():
         raise ValueError("trade-path horizon必須晚於原始signal date")
     # Do not touch bars *after* the signal-anchored deadline.  A stock that
     # cannot trade on the deadline is censored, not synthetically liquidated.
     last_evaluation_pos = (
         len(stock_df) - 1 if horizon_day is None else
-        int(dates.searchsorted(horizon_day, side="right")) - 1
+        int(stock_df.index.searchsorted(horizon_day, side="right")) - 1
     )
     resolved_sizing_capital = (
         resolve_single_backtest_sizing_capital(params, params.initial_capital)

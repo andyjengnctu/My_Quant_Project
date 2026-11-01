@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 import hashlib
 import json
 import shutil
@@ -36,6 +37,7 @@ from filters.breakout_quality.paths import (
 )
 from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME
 from filters.breakout_quality.artifacts import build_file_manifest
+from core.file_integrity import file_change_signature
 from filters.breakout_quality.model_source_provenance import (
     forward_published_source_provenance_issues,
     source_inventory_matches_current,
@@ -126,6 +128,31 @@ def _canonical_fold_payload_fingerprint(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+# Feeding only: evaluation batch size, device and precision remain strict.
+FOLD_RESOURCE_SETTING_KEYS = frozenset({"train_prefetch_batches", "train_prefetch_workers"})
+
+
+def _fold_settings_without_resources(settings):
+    if not isinstance(settings, dict):
+        return None
+    return {key: value for key, value in settings.items() if key not in FOLD_RESOURCE_SETTING_KEYS}
+
+
+def fold_score_contract_resource_equivalent(candidate, expected) -> bool:
+    """Verify an unchanged complete score contract without rewriting its old ID."""
+    if not isinstance(candidate, dict) or not isinstance(expected, dict):
+        return False
+    if not all(key in candidate for key in expected):
+        return False
+    original = {key: candidate[key] for key in expected}
+    if candidate.get("contract_fingerprint") != _canonical_fold_payload_fingerprint(original):
+        return False
+    left, right = dict(original), dict(expected)
+    left["training_settings"] = _fold_settings_without_resources(left.get("training_settings"))
+    right["training_settings"] = _fold_settings_without_resources(right.get("training_settings"))
+    return left["training_settings"] is not None and left == right
+
+
 def _fold_training_contract_is_compatible(
     candidate: dict[str, Any], *, expected_contract: dict[str, Any]
 ) -> bool:
@@ -146,7 +173,13 @@ def _fold_training_contract_is_compatible(
         "source_contract",
         "lookahead_contract",
     )
-    if not all(candidate.get(field) == expected_contract.get(field) for field in exact_fields):
+    if not all(candidate.get(field) == expected_contract.get(field)
+               for field in exact_fields if field != "training_settings"):
+        return False
+    left = _fold_settings_without_resources(candidate.get("training_settings"))
+    right = _fold_settings_without_resources(expected_contract.get("training_settings"))
+    if (left != right or (left is None and
+            candidate.get("training_settings") != expected_contract.get("training_settings"))):
         return False
 
     candidate_planned = candidate.get("planned_periods")
@@ -214,6 +247,86 @@ def _fold_training_identity_payload(contract: dict[str, Any]) -> dict[str, Any]:
 
 def fold_training_identity(contract: dict[str, Any]) -> str:
     return _canonical_fold_payload_fingerprint(_fold_training_identity_payload(contract))
+
+
+def fold_fitting_resource_equivalent(candidate: dict, expected: dict) -> bool:
+    """Compare the historical FitKey payload, ignoring only feeding resources."""
+    payloads = [_fold_training_identity_payload(item) for item in (candidate, expected)]
+    for payload in payloads:
+        settings = payload.get("training_settings")
+        if isinstance(settings, dict):
+            payload["training_settings"] = _fold_settings_without_resources(settings)
+    return payloads[0] == payloads[1]
+
+
+def _resource_fitting_signature(contract: dict) -> str:
+    payload = _fold_training_identity_payload(contract)
+    if isinstance(payload.get("training_settings"), dict):
+        payload["training_settings"] = _fold_settings_without_resources(payload["training_settings"])
+    return _canonical_fold_payload_fingerprint(payload)
+
+
+@lru_cache(maxsize=2048)
+def _cached_fitting_cache_header(path_text: str, signature: tuple):
+    """Cache only a tiny locator; the model reader still verifies full evidence."""
+    path = Path(path_text)
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if file_change_signature(path) != signature:
+        raise RuntimeError("FIT cache manifest changed during candidate discovery")
+    if not isinstance(manifest, dict):
+        raise ValueError("FIT cache manifest is not an object")
+    return (fold_training_identity(manifest), _resource_fitting_signature(manifest),
+            dict(manifest.get("artifacts") or {}).get("checkpoint"))
+
+
+def resource_equivalent_fitting_cache_entry(cache_root: Path, contract: dict[str, Any]) -> Path:
+    """Find existing resource-only variants; all historical physical keys stay intact.
+
+    This locates a candidate, never authorizes FIT. The existing checkpoint
+    reader still verifies its embedded contract, provenance and execution.
+    An equivalent but incomplete/conflicting publication blocks automatic FIT.
+    """
+    root = Path(cache_root).resolve()
+    exact = root / fold_training_identity(contract)
+    if exact.exists() or not root.is_dir():
+        return exact
+    matches = []
+    expected_signature = _resource_fitting_signature(contract)
+    from core.file_integrity import is_sha256_hex
+    for entry in sorted(root.iterdir()):
+        if not is_sha256_hex(entry.name) or not entry.is_dir() or entry.is_symlink():
+            continue
+        path = entry / "manifest.json"
+        try:
+            identity, candidate_signature, record = _cached_fitting_cache_header(
+                str(path), file_change_signature(path),
+            )
+        except (OSError, UnicodeError, ValueError):
+            continue  # Unrelated entries are not evidence for this FIT.
+        if candidate_signature != expected_signature:
+            continue
+        if entry.name != identity:
+            raise FittedModelConflictError("Equivalent FIT cache physical key differs from its manifest")
+        model = entry / DEFAULT_MODEL_FILENAME
+        if not model.is_file() or record != build_file_manifest(model):
+            raise FittedModelConflictError("Equivalent FIT cache checkpoint incomplete or corrupt; refit blocked")
+        matches.append((entry, record))
+    if len({record["sha256"] for _entry, record in matches}) > 1:
+        raise FittedModelConflictError("Resource-equivalent FIT caches contain conflicting checkpoint bytes")
+    return matches[0][0] if matches else exact
+
+
+def fold_contract_with_original_resources(contract: dict, original: dict) -> dict:
+    """Keep an already fitted publication's physical resource-key representation."""
+    if not _fold_training_contract_is_compatible(original, expected_contract=contract):
+        return contract
+    settings = dict(contract["training_settings"])
+    for key in FOLD_RESOURCE_SETTING_KEYS:
+        if key in original["training_settings"]:
+            settings[key] = original["training_settings"][key]
+        else:
+            settings.pop(key, None)
+    return {**contract, "training_settings": settings}
 
 
 # These values control routing / throughput, not optimizer samples, gradients,

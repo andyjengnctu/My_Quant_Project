@@ -27,6 +27,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from core.research_execution_resources import CPU_LANES_ENV, research_cpu_lanes
 from config.breakout_quality import (
     BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL,
 )
@@ -5039,7 +5040,9 @@ def _run_parallel_model_robustness_seeds(
     registry_lock = Lock()
     cancellation_event = Event()
     mode = "rolling" if rolling else "forward"
-    with ThreadPoolExecutor(max_workers=min(workers, len(seeds))) as executor:
+    workers = min(workers, len(seeds), research_cpu_lanes())
+    seed_lanes = max(1, research_cpu_lanes() // workers)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {}
         for seed in seeds:
             _unused_model_dir, research_dir = _model_robustness_dirs(
@@ -5060,6 +5063,7 @@ def _run_parallel_model_robustness_seeds(
                 registry_key=f"{model_id}:{mode}:{seed}",
                 failure_prefix=f"{model_id} {mode} Robustness seed={seed} producer failed",
                 cancellation_event=cancellation_event,
+                env_overrides={CPU_LANES_ENV: str(seed_lanes)},
             )
             futures[future] = int(seed)
         try:
@@ -5182,6 +5186,7 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
         seed_workers = int(BREAKOUT_QUALITY_MODEL_ROBUSTNESS_SEED_WORKERS)
         if seed_workers < 1 or seed_workers > 4:
             raise ValueError("Model Robustness seed workers must be between 1 and 4")
+        seed_workers = min(seed_workers, research_cpu_lanes())
         pending_seeds = tuple(
             int(item.seed) for item in readiness.seeds
             if force_rebuild or not item.readiness.evidence_ready

@@ -13,6 +13,7 @@ from __future__ import annotations
 from bisect import bisect_right
 from copy import deepcopy
 from dataclasses import dataclass
+from functools import lru_cache
 import math
 from pathlib import Path
 from typing import Any, Iterable
@@ -32,6 +33,7 @@ from filters.breakout_quality.trade_path_label import (
     TRADE_PATH_REASON_UNFILLED_SUPERSEDED,
     TRADE_PATH_REASON_UNFILLED_TERMINATED,
     build_signal_cache,
+    prepare_trade_path_inputs,
     simulate_realized_trade_path_label,
 )
 from filters.breakout_quality.workflow_io import load_dataset_frame
@@ -272,6 +274,7 @@ def compute_counterfactual_trade40_batch(
             active_periods_by_date[key] = resolve_historical_min_period(schedule, key)
         return active_periods_by_date[key]
 
+    @lru_cache(maxsize=None)
     def active_signal_cache_for_date(day: pd.Timestamp):
         # P16 Base-Finalist-Best has exactly one member. Both supported rolling
         # payload kinds therefore use Portfolio's ordinary identity path:
@@ -368,6 +371,7 @@ def compute_counterfactual_trade40_batch(
 
     truncated = 0
     cutoff_closeouts = 0
+    prepared_inputs = prepare_trade_path_inputs(frame)
     for row, (position, calendar_pos) in enumerate(zip(positions, calendar_index)):
         if calendar_pos < 0 or dates[position] >= last_research_session:
             reasons.append("no_future_executable_research_session")
@@ -412,6 +416,7 @@ def compute_counterfactual_trade40_batch(
             horizon_end_date=expiry, decision_pos=int(position),
             starting_signal_state=state,
             active_signal_cache_resolver=active_signal_cache_for_date,
+            prepared_inputs=prepared_inputs,
         )
         # The *deadline* and the date a label is actually known are different.
         # A natural stop/indicator exit resolves the full-cycle or H-day label

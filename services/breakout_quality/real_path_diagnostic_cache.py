@@ -22,6 +22,9 @@ import numpy as np
 import pandas as pd
 
 from core.file_integrity import compute_file_sha256, file_change_signature
+from core.research_execution_equivalence import (
+    RESOURCE_ONLY_DEPENDENCIES, reviewed_execution_source_sha256,
+)
 from filters.breakout_quality.dataset_store import resolve_dataset_paths
 from filters.breakout_quality.source_inventory import build_source_data_inventory
 from filters.breakout_quality.workflow_io import discover_dataset_csv_inputs
@@ -67,8 +70,13 @@ def _data_implementation_sha256() -> str:
     )
     digest = sha256()
     for path in sources:
-        digest.update(path.relative_to(code_root).as_posix().encode("utf-8"))
-        digest.update(sha256(path.read_bytes()).digest())
+        name = path.relative_to(code_root).as_posix()
+        if name in RESOURCE_ONLY_DEPENDENCIES:
+            continue
+        digest.update(name.encode("utf-8"))
+        digest.update(bytes.fromhex(reviewed_execution_source_sha256(
+            name, sha256(path.read_bytes()).hexdigest(),
+        )))
     return digest.hexdigest()
 
 

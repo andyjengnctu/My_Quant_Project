@@ -3162,6 +3162,120 @@ class RealPathDiagnosticCacheCases(unittest.TestCase):
 
 
 
+class ExecutionAccelerationCases(unittest.TestCase):
+    def test_reviewed_execution_proof_never_accepts_unknown_source_or_calculation(self):
+        from core.research_execution_equivalence import (
+            _REVIEWED, reviewed_execution_source_sha256, reviewed_calculation_sha256,
+        )
+        unknown = "f" * 64
+        self.assertEqual(reviewed_execution_source_sha256("unregistered.py", unknown), unknown)
+        self.assertEqual(reviewed_calculation_sha256("unregistered.py", unknown, unknown), unknown)
+        for relative, proof in _REVIEWED.items():
+            self.assertEqual(reviewed_execution_source_sha256(relative, unknown), unknown)
+            self.assertEqual(reviewed_execution_source_sha256(relative, proof["file_sha256"]),
+                             proof["original_file_sha256"])
+            self.assertEqual(reviewed_calculation_sha256(relative, proof["file_sha256"], unknown), unknown)
+            for syntax, original in proof["calculations"].items():
+                self.assertEqual(reviewed_calculation_sha256(relative, unknown, syntax), syntax)
+                self.assertEqual(reviewed_calculation_sha256(relative, proof["file_sha256"], syntax), original)
+
+    def test_prepared_stock_inputs_keep_every_single_trade_observation(self):
+        from dataclasses import asdict
+        from filters.breakout_quality.trade_path_label import prepare_trade_path_inputs
+        days, frame, params, _ = fixture(count=150)
+        inputs = prepare_trade_path_inputs(frame)
+        for row in inputs.ohlcv:
+            self.assertFalse(row.flags.writeable)
+        cache = build_signal_cache(frame, params, ticker="2330")
+        for position in (48, 75, 90):
+            for horizon in (20, 40):
+                kwargs = dict(ticker="2330", signal_pos=position, params=params,
+                    teacher_effective_date=str(days[0].date()), precomputed_signals=cache,
+                    horizon_end_date=days[min(position + horizon, len(days) - 1)])
+                a = simulate_realized_trade_path_label(frame, **kwargs)
+                b = simulate_realized_trade_path_label(frame, **kwargs, prepared_inputs=inputs)
+                self.assertEqual(asdict(a), asdict(b))
+        with self.assertRaisesRegex(ValueError, "another stock snapshot"):
+            simulate_realized_trade_path_label(frame.copy(), **kwargs, prepared_inputs=inputs)
+
+    def test_nested_cpu_lanes_stay_within_shared_budget(self):
+        import os
+        from core import research_execution_resources as resources
+        with patch.object(resources, "RESEARCH_CPU_WORKER_BUDGET", 8), \
+             patch.object(resources.os, "cpu_count", return_value=16):
+            for seeds in (1, 2, 4):
+                share = 8 // seeds
+                with patch.dict(os.environ, {resources.CPU_LANES_ENV: str(share)}):
+                    children = resources.research_ticker_workers(6)
+                    cost = seeds * (children + 1 if children > 1 else 1)
+                    self.assertLessEqual(cost, 8)
+            with patch.dict(os.environ, {resources.CPU_LANES_ENV: "0"}):
+                with self.assertRaises(ValueError):
+                    resources.research_cpu_lanes()
+
+    def test_resource_only_fold_scores_and_cache_preserve_original_bytes(self):
+        import json
+        from copy import deepcopy
+        from filters.breakout_quality.artifacts import build_file_manifest
+        from services.breakout_quality import point_in_time_scores as pit
+        from services.breakout_quality.fitted_model_artifacts import (
+            fold_training_identity, resource_equivalent_fitting_cache_entry,
+        )
+        original = {
+            "fold_id": "fixture", "experiment_profile": "daily_universal_no_time_pairwise",
+            "seed": 42, "model_information_cutoff": "2020-12-31",
+            "planned_periods": {"validation_start": "2020-01-01", "validation_end": "2020-12-31",
+                                "score_start": "2021-01-01", "score_end": "2021-12-31"},
+            "observed_periods": {}, "group_counts": {}, "event_row_counts": {},
+            "training_settings": {"batch_size": 128, "learning_rate": 0.001,
+                                  "train_prefetch_batches": 0, "train_prefetch_workers": 1},
+        }
+        expected = deepcopy(original)
+        expected["training_settings"].update(train_prefetch_batches=8, train_prefetch_workers=4)
+        self.assertNotEqual(fold_training_identity(original), fold_training_identity(expected))
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            cache = root / "cache"
+            fold = root / "fold"
+            fold.mkdir()
+            (fold / pit.DEFAULT_MODEL_FILENAME).write_bytes(b"original immutable fitted model")
+            scores = pd.DataFrame({"ticker": ["2330"], "date": ["2021-01-04"],
+                "group_index": [0], "breakout_quality_score": [0.5], "fold_id": ["fixture"],
+                "model_information_cutoff": ["2020-12-31"]})
+            for filename in (pit.FOLD_SCORE_FILENAME, pit.FOLD_VALIDATION_SCORE_FILENAME):
+                scores.to_csv(fold / filename, index=False)
+            manifest = {**original, "contract_fingerprint": pit._json_fingerprint(original),
+                "artifacts": {key: build_file_manifest(fold / filename) for key, filename in (
+                    ("checkpoint", pit.DEFAULT_MODEL_FILENAME), ("scores", pit.FOLD_SCORE_FILENAME),
+                    ("validation_scores", pit.FOLD_VALIDATION_SCORE_FILENAME))}}
+            (fold / pit.FOLD_MANIFEST_FILENAME).write_text(json.dumps(manifest))
+            before = {p.name: p.read_bytes() for p in fold.iterdir()}
+            reused = pit._load_reusable_fold(fold_dir=fold,
+                expected_fingerprint=pit._json_fingerprint(expected), fold_contract=expected)
+            self.assertIsNotNone(reused)
+            published = pit._publish_fold_checkpoint_to_cache(
+                fold_dir=fold, cache_root=cache, fold_contract=expected)
+            old_entry = cache / fold_training_identity(original)
+            self.assertEqual(Path(published["cache_entry"]), old_entry)
+            self.assertEqual(resource_equivalent_fitting_cache_entry(cache, expected), old_entry)
+            with patch.object(Path, "read_text", side_effect=AssertionError("unchanged FIT header reparsed")):
+                self.assertEqual(resource_equivalent_fitting_cache_entry(cache, expected), old_entry)
+            cached_bytes = {p.name: p.read_bytes() for p in old_entry.iterdir()}
+            pit._publish_fold_checkpoint_to_cache(fold_dir=fold, cache_root=cache, fold_contract=expected)
+            self.assertEqual(before, {p.name: p.read_bytes() for p in fold.iterdir()})
+            self.assertEqual(cached_bytes, {p.name: p.read_bytes() for p in old_entry.iterdir()})
+            self.assertEqual(len([p for p in cache.iterdir() if p.is_dir()]), 1)
+            for field, value in (("learning_rate", 0.002), ("batch_size", 256)):
+                changed = deepcopy(expected)
+                changed["training_settings"][field] = value
+                self.assertIsNone(pit._load_reusable_fold(fold_dir=fold,
+                    expected_fingerprint=pit._json_fingerprint(changed), fold_contract=changed))
+                self.assertFalse(resource_equivalent_fitting_cache_entry(cache, changed).exists())
+            (old_entry / pit.DEFAULT_MODEL_FILENAME).write_bytes(b"corrupt")
+            with self.assertRaisesRegex(RuntimeError, "corrupt"):
+                resource_equivalent_fitting_cache_entry(cache, expected)
+
+
 class ModelRobustnessProcessCancellationCases(unittest.TestCase):
     """A failed seed must stop active launches and prevent queued producers."""
 
@@ -3231,6 +3345,7 @@ class ModelRobustnessProcessCancellationCases(unittest.TestCase):
         with TemporaryDirectory() as td:
             root = Path(td)
             with patch.object(process.subprocess, "Popen", ControlledProcess), \
+                 patch.object(app, "research_cpu_lanes", return_value=2), \
                  patch.object(app, "terminate_registered_training_processes", terminate_during_launch), \
                  patch.object(app, "_model_robustness_dirs", side_effect=lambda settings, seed, rolling: (
                      root / str(seed), root / str(seed))), \

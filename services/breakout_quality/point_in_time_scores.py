@@ -132,6 +132,10 @@ from services.breakout_quality.fitted_model_artifacts import (
     _checkpoint_matches_rescore_contract,
     _fold_training_identity_payload,
     fold_training_identity,
+    fold_score_contract_resource_equivalent,
+    fold_fitting_resource_equivalent,
+    fold_contract_with_original_resources,
+    resource_equivalent_fitting_cache_entry,
     validate_rolling_fold_fitted_checkpoint,
     select_unique_fitted_contract,
     resolve_rolling_fitted_folds_root,
@@ -687,7 +691,8 @@ def _load_reusable_fold(
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if not isinstance(manifest, dict):
             return None
-        if str(manifest.get("contract_fingerprint")) != expected_fingerprint:
+        if (str(manifest.get("contract_fingerprint")) != expected_fingerprint
+                and not fold_score_contract_resource_equivalent(manifest, fold_contract)):
             return None
         required_scope = required_standard_validation_score_scope(
             str(fold_contract["experiment_profile"])
@@ -1218,6 +1223,18 @@ def _publish_fold_checkpoint_to_cache(
     """Single FIT cache publisher for native fold checkpoints and score-only reuse."""
     if cache_root is None:
         return None
+    candidate = resource_equivalent_fitting_cache_entry(Path(cache_root), fold_contract)
+    original_manifest_path = (
+        candidate / FOLD_MANIFEST_FILENAME if candidate.exists()
+        else Path(fold_dir) / FOLD_MANIFEST_FILENAME
+    )
+    if original_manifest_path.is_file():
+        original = json.loads(original_manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(original, dict):
+            raise RuntimeError("FIT cache publication requires an object manifest")
+        if candidate.exists() and candidate.name != fold_training_identity(original):
+            raise RuntimeError("FIT cache physical key differs from its manifest; publication blocked")
+        fold_contract = fold_contract_with_original_resources(fold_contract, original)
     entry = _checkpoint_cache_entry_dir(Path(cache_root), fold_contract)
     with exclusive_file_lock(
         sibling_publication_lock_path(entry),
@@ -1540,7 +1557,7 @@ def _rescore_fold_from_fitting_checkpoint(
     shared_root = getattr(args, "checkpoint_cache_root", None)
     is_shared_cache = (
         shared_root not in (None, "")
-        and source_fold_dir == _checkpoint_cache_entry_dir(Path(shared_root), fold_contract)
+        and source_fold_dir.parent == Path(shared_root).resolve()
     )
     if verified_external_fit and not (is_shared_cache or verified_published_binding is not None):
         raise RuntimeError("Verified external FIT reuse requires canonical published-source proof")
@@ -1565,6 +1582,8 @@ def _rescore_fold_from_fitting_checkpoint(
                 source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
                 if not isinstance(source_manifest, dict):
                     return None
+                if is_shared_cache and source_fold_dir.name != fold_training_identity(source_manifest):
+                    return None
                 if (verified_archive_binding is None and not verified_external_fit
                     and not _fold_training_contract_is_compatible(
                         source_manifest, expected_contract=fold_contract
@@ -1577,7 +1596,7 @@ def _rescore_fold_from_fitting_checkpoint(
                     return None
                 if verified_external_fit and is_shared_cache:
                     if (source_checkpoint_manifest != verified_checkpoint_manifest
-                            or fold_training_identity(source_manifest) != fold_training_identity(fold_contract)):
+                            or not fold_fitting_resource_equivalent(source_manifest, fold_contract)):
                         raise RuntimeError(
                             "Shared FIT snapshot differs from the independently verified checkpoint; "
                             "automatic scoring, overwrite and refit blocked"
@@ -1848,7 +1867,8 @@ def _verify_shared_cache_matches_published_fit(
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             if not isinstance(manifest, dict):
                 raise ValueError("FIT cache manifest is not an object")
-            if fold_training_identity(manifest) != fold_training_identity(fold_contract):
+            if (entry.name != fold_training_identity(manifest)
+                    or not fold_fitting_resource_equivalent(manifest, fold_contract)):
                 raise ValueError("FIT cache training identity differs")
             checkpoint = build_file_manifest(model_path)
             if checkpoint != dict(dict(manifest.get("artifacts") or {}).get("checkpoint") or {}):
@@ -2886,14 +2906,16 @@ def _run_authorized_point_in_time_scores(args, *, settings) -> int:
                 if forward_checkpoint_imported:
                     forward_checkpoint_import_count += 1
         cache_fit_validation_errors: list[str] = []
+        attempted_cache_entry = None
         if (
             reused is None
             and bool(args.resume)
             and args.checkpoint_cache_root not in (None, "")
         ):
-            cache_entry = _checkpoint_cache_entry_dir(
+            cache_entry = resource_equivalent_fitting_cache_entry(
                 Path(str(args.checkpoint_cache_root)), fold_contract
             )
+            attempted_cache_entry = cache_entry
             reused = _rescore_fold_from_fitting_checkpoint(
                 source_fold_dir=cache_entry,
                 target_fold_dir=fold_dir,
@@ -2918,7 +2940,7 @@ def _run_authorized_point_in_time_scores(args, *, settings) -> int:
                     f"Cross-mode FIT destination {fold['fold_id']} already has unverified "
                     "checkpoint/manifest; automatic overwrite and training blocked"
                 )
-            existing_cache = (
+            existing_cache = attempted_cache_entry or (
                 _checkpoint_cache_entry_dir(
                     Path(str(args.checkpoint_cache_root)), fold_contract
                 )
@@ -3082,12 +3104,15 @@ def _run_authorized_point_in_time_scores(args, *, settings) -> int:
                         Path(str(args.checkpoint_cache_root)), fold_contract
                     )
                     unverified.append(cache_entry / DEFAULT_MODEL_FILENAME)
+                if attempted_cache_entry is not None:
+                    unverified.append(attempted_cache_entry / DEFAULT_MODEL_FILENAME)
                 if any(path.is_file() for path in unverified):
                     reasons = _unverified_fit_checkpoint_reasons(
                         fold_dir=fold_dir, fold_contract=fold_contract, args=args,
                         torch_module=torch,
                     )
                     evidence = [f"canonical FIT owner: {reason}" for reason in fit_validation_errors]
+                    evidence.extend(cache_fit_validation_errors)
                     evidence.extend(reasons)
                     detail = "; ".join(evidence) if evidence else "checkpoint identity proof unavailable"
                     raise RuntimeError(

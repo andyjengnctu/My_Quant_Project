@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from config.breakout_quality import BREAKOUT_QUALITY_DAILY_REAL_PATH_WORKERS
+from core.research_execution_resources import research_ticker_workers
 from core.market_data_raw_quote import raw_research_observed_ohlc_mask
 
 from core.breakout_quality_runtime import (
@@ -1537,6 +1538,8 @@ def load_daily_universal_ranker_data(
     workers = int(BREAKOUT_QUALITY_DAILY_REAL_PATH_WORKERS)
     if trade_path_mode and workers < 1:
         raise ValueError("Daily real-path workers must be >= 1")
+    if trade_path_mode:
+        workers = research_ticker_workers(workers)
     prepared_stocks: dict[int, _PreparedRealPathTicker] | None = None
     if trade_path_mode and workers > 1 and len(stock_inputs) > 1:
         # A worker prepares exactly one ticker. Transfer the sanitized frame

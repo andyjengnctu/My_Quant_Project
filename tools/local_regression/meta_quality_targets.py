@@ -129,6 +129,8 @@ POLICY_CONTRACT_COVERAGE_TARGETS = [
     "core/market_data_trading_sync.py",
     "core/market_data_trading_storage_contract.py",
     "core/research_policy.py",
+    "core/research_execution_resources.py",
+    "core/research_execution_equivalence.py",
     "config/trading.py",
     "core/trading_policy.py",
     "core/runtime_domains.py",

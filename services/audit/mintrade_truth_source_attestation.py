@@ -24,6 +24,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from core.file_integrity import compute_file_sha256
+from core.research_execution_equivalence import reviewed_execution_source_sha256
 
 _SOURCE_OWNER = "services/audit/daily_trade40_oracle.py"
 # (pre-addition source SHA, exact reviewed post-addition source SHA)
@@ -111,6 +112,7 @@ def attested_mintrade_source_sha256(relative: str, path: Path) -> str:
     independent data-source change; unrecognized revisions hash normally.
     """
     actual = compute_file_sha256(path)
+    actual = reviewed_execution_source_sha256(relative, actual)
     if relative != _SOURCE_OWNER:
         return actual
     # Historical byte-exact receipts remain independently certified without
@@ -182,7 +184,7 @@ def _mintrade_source_fingerprint_proof() -> tuple[str, frozenset[str]]:
                         data = data.replace(b"\n", b"\r\n")
                 hashes[name] = (attested_mintrade_source_sha256(name, root / name)
                                 if name == _SOURCE_OWNER and not raw_owner
-                                else sha256(data).hexdigest())
+                                else reviewed_execution_source_sha256(name, sha256(data).hexdigest()))
             for daily_sha in daily_sources:
                 digest = sha256(b"canonical_daily_source\0" + daily_sha.encode("ascii") + b"\n")
                 for name in source_modules:
@@ -229,7 +231,7 @@ def _archived_default_oracle_sources() -> frozenset[str]:
     previous_daily, reviewed_daily = _AUDITED_DEFAULT_ORACLE_DAILY_SOURCES
     relative, previous_primitive, reviewed_primitive = _AUDITED_DEFAULT_TRADE_PRIMITIVE
     if (oracle_daily_source_fingerprint(root) != reviewed_daily
-            or compute_file_sha256(root / relative) != reviewed_primitive):
+            or attested_mintrade_source_sha256(relative, root / relative) != reviewed_primitive):
         return frozenset()
     digest = sha256(b"canonical_daily_source\0" + previous_daily.encode("ascii") + b"\n")
     for name in _truth_source_inventory():
