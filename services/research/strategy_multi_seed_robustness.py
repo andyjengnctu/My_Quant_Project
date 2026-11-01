@@ -12,7 +12,7 @@ import argparse
 import gzip
 from collections import deque
 from contextlib import ExitStack, contextmanager, nullcontext
-from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, ThreadPoolExecutor, as_completed, wait
 from multiprocessing import get_context
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -6685,7 +6685,14 @@ def _execute_robustness_under_lock(
                     )
                 next_print = now + float(cfg.progress_interval_seconds)
             if pending_trainings or training_futures or ready_replays or replay_futures:
-                time.sleep(0.25)
+                # Wake promptly on a finished unit instead of waiting for the
+                # full polling interval after every short replay.  The timeout
+                # still bounds progress refresh latency for long-running FITs.
+                outstanding = tuple(training_futures) + tuple(replay_futures)
+                if outstanding:
+                    wait(outstanding, timeout=0.25, return_when=FIRST_COMPLETED)
+                else:
+                    time.sleep(0.01)
         harvest_replays()
         training_progress.clear()
     except BaseException as exc:

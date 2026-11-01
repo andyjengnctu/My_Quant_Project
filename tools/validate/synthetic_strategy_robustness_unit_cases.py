@@ -267,7 +267,12 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
             path.write_text("proof-a")
             pinned = pin_files([path])
             require_pinned_files(pinned)
-            path.write_text("proof-b")
+            # Canonical producers publish through atomic replacement.  A same-size
+            # in-place write is not a reliable stat-change fixture on Windows,
+            # where timestamp resolution differs across filesystems.
+            staged = path.with_name(path.name + ".new")
+            staged.write_text("proof-b")
+            staged.replace(path)
             with self.assertRaises(RuntimeError):
                 require_pinned_files(pinned)
 
@@ -325,6 +330,7 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
             no_baseline = mock("_run_strategy_only_benchmark_unit", side_effect=AssertionError("unexpected old baseline replay"))
             no_inspection = mock("inspect_reusable_model_research_rolling_score", side_effect=AssertionError("plan was already resolved"))
             mock("_model_prediction_metrics_from_training_artifacts", return_value={})
+            wake_on_completion = mock("wait", wraps=r.wait)
             mock("_replay_one_unit", side_effect=replay)
             def commit(**kwargs):
                 frame = r._load_seed_results(kwargs["seed_results_path"])
@@ -346,6 +352,7 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
             self.assertEqual(set(seen), plan.replay_units)
             self.assertEqual(len(seen), len(plan.replay_units))
             no_fit.assert_not_called(); no_baseline.assert_not_called(); no_inspection.assert_not_called()
+            self.assertTrue(wake_on_completion.called, "replay must wait for completion, not a fixed polling sleep")
             self.assertEqual(cleanup.call_args.kwargs["training_cleanup_targets"], [])
             self.assertNotIn("built:6", out.getvalue())
             self.assertNotIn("elapsed=", out.getvalue())
