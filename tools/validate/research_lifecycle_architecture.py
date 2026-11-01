@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Mapping
 
 FIT_OWNER = "services/breakout_quality/fitted_model_artifacts.py"
+FIT_CHECKPOINT_STORE = "services/breakout_quality/fitting_checkpoint_store.py"
 FIT_DEPENDENCY_OWNER = "services/breakout_quality/fitting_data_dependencies.py"
 PIT_PRODUCER = "services/breakout_quality/point_in_time_scores.py"
 FORWARD_PRODUCER = "services/breakout_quality/train_daily_ranker.py"
@@ -26,6 +27,7 @@ OWNED_FIT_BEHAVIORS = frozenset({
     "fold_training_identity",
     "_first_fold_fit_identity_issues",
     "_forward_checkpoint_import_issues",
+    "certified_fitted_checkpoint_equivalence",
     "_checkpoint_matches_rescore_contract",
     "validate_rolling_fold_fitted_checkpoint",
     "select_unique_fitted_contract",
@@ -188,7 +190,8 @@ def check_research_fit_architecture_sources(
     without editing the checked code or its validator at runtime.
     """
     trees = {path: _parse_snapshot_source(path, sources[path])
-             for path in (FIT_OWNER, PIT_PRODUCER, FORWARD_PRODUCER, RESEARCH_APPLICATION)}
+             for path in (FIT_OWNER, FIT_CHECKPOINT_STORE, PIT_PRODUCER,
+                          FORWARD_PRODUCER, RESEARCH_APPLICATION)}
     issues: list[str] = []
     owner_defs = set(_defs(trees[FIT_OWNER]))
     # Both evaluation modes must project persisted sources from the same
@@ -221,10 +224,48 @@ def check_research_fit_architecture_sources(
         for name in sorted(duplicate):
             issues.append(f"non-owner defines a second FIT policy: {path}::{name}")
 
+    # The FIT checkpoint store is the *only physical* writer of shared FitKey
+    # entries. PIT is an evaluation producer and must only import and call the
+    # store. This is checked by behavior/capability names, never experiment IDs.
+    store_defs = set(_defs(trees[FIT_CHECKPOINT_STORE]))
+    store_ops = {
+        "_checkpoint_cache_entry_dir", "_import_forward_checkpoint_to_fitting_cache_unlocked",
+        "_import_forward_checkpoint_to_fitting_cache",
+        "_publish_fold_checkpoint_to_cache_unlocked",
+        "_publish_fold_checkpoint_to_cache", "publish_verified_native_first_fold_cache",
+    }
+    for name in store_ops - store_defs:
+        issues.append(f"canonical FIT cache store missing: {name}")
+    store_facts = _module_facts(trees[FIT_CHECKPOINT_STORE])
+    owner_contract = store_facts.imports.get(
+        "services.breakout_quality.fitted_model_artifacts", frozenset(),
+    )
+    if "certified_fitted_checkpoint_equivalence" not in owner_contract:
+        issues.append("FIT store bypasses canonical model-weight equivalence owner")
+    for method in ("_import_forward_checkpoint_to_fitting_cache_unlocked",
+                   "_publish_fold_checkpoint_to_cache_unlocked"):
+        method_facts = _top_level_function_facts(
+            FIT_CHECKPOINT_STORE, sources[FIT_CHECKPOINT_STORE],
+        ).get(method)
+        if method_facts is not None and "certified_fitted_checkpoint_equivalence" not in method_facts.calls:
+            issues.append(f"FIT store has independent checkpoint SHA collision policy: {method}")
+    if ("services.breakout_quality.point_in_time_scores" in store_facts.imports
+            or "services.breakout_quality.point_in_time_scores" in store_facts.absolute_imports):
+        issues.append("FIT store imports PIT score producer (reverse dependency)")
+    pit_store_imports = _module_facts(trees[PIT_PRODUCER]).imports.get(
+        "services.breakout_quality.fitting_checkpoint_store", frozenset(),
+    )
+    for name in ("_checkpoint_cache_entry_dir", "_import_forward_checkpoint_to_fitting_cache",
+                 "_publish_fold_checkpoint_to_cache", "publish_verified_native_first_fold_cache"):
+        if name not in pit_store_imports:
+            issues.append(f"PIT producer bypasses FIT checkpoint store: {name}")
+    for module in (PIT_PRODUCER, FORWARD_PRODUCER, RESEARCH_APPLICATION):
+        for name in set(_defs(trees[module])) & store_ops:
+            issues.append(f"non-store defines a second FIT cache publisher: {module}::{name}")
     pit_imports = _owner_imports(trees[PIT_PRODUCER])
     for name in (
         "_fold_training_contract_is_compatible", "fold_training_identity",
-        "_forward_checkpoint_import_issues", "_checkpoint_matches_rescore_contract",
+        "_checkpoint_matches_rescore_contract",
         "validate_rolling_fold_fitted_checkpoint", "select_unique_fitted_contract",
         "resolve_rolling_fitted_folds_root",
     ):
@@ -628,7 +669,8 @@ def check_research_fit_architecture(project_root: Path) -> tuple[str, ...]:
     root = Path(project_root)
     sources = {
         path: (root / path).read_text(encoding="utf-8")
-        for path in (FIT_OWNER, PIT_PRODUCER, FORWARD_PRODUCER, RESEARCH_APPLICATION)
+        for path in (FIT_OWNER, FIT_CHECKPOINT_STORE, PIT_PRODUCER,
+                     FORWARD_PRODUCER, RESEARCH_APPLICATION)
     }
     strategy_sources = {
         path: (root / path).read_text(encoding="utf-8")

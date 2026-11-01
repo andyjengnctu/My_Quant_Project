@@ -753,92 +753,158 @@ def _fitted_forward_evidence_fold_issues(
     return tuple(issues)
 
 
+# FIT equivalence is an identity + attested-payload decision, not a torch.save
+# serialization decision. Historical Forward/Native PIT envelopes retain their
+# original bytes and score identity; only this owner may accept cross-mode FIT.
+# These are *producer schema fields*, not model/profile-specific exceptions.
+_FITTED_CHECKPOINT_COMMON_STATE = frozenset({
+    "model_spec", "experiment_profile", "experiment_settings", "training_objective",
+    "continuous_target_contract", "feature_count", "context_count",
+    "sequence_length", "trainable_parameter_count", "total_parameter_count",
+})
+_FITTED_CHECKPOINT_CARRIER_FIELDS = frozenset({
+    "fold_contract", "training_label_scope", "training_sample_scope",
+})
 
-def forward_native_checkpoint_same_fitting_weights(
+
+def certified_fitted_checkpoint_equivalence(
     *,
-    native_checkpoint: Mapping[str, Any],
-    forward_checkpoint: Mapping[str, Any],
-    native_manifest: Mapping[str, Any],
-    fold_contract: Mapping[str, Any],
-    forward_selected_epoch: int,
-    expected_torch_execution: Mapping[str, Any],
+    existing_checkpoint: Mapping[str, Any],
+    existing_manifest: Mapping[str, Any],
+    existing_kind: str,
+    incoming_checkpoint: Mapping[str, Any],
+    incoming_manifest: Mapping[str, Any],
+    incoming_kind: str,
+    expected_fold_contract: Mapping[str, Any],
+    expected_execution: Mapping[str, Any],
     torch_module,
-) -> bool:
-    """Prove compatible native/Forward envelopes before reusing *existing* FIT.
+) -> tuple[bool, str]:
+    """Compare two already-attested FIT publications without rebranding either.
 
-    A native Rolling model.pt embeds the PIT fold contract and selected epoch;
-    the Forward model.pt persists the original fitting proof in a separate
-    fitted_model_manifest.json. Their torch.save byte SHA therefore need not
-    coincide even if the trained weights do. This predicate never publishes,
-    rewrites or selects between weights: a mismatch stays fail-closed.
+    Each caller must *first* check the individual file SHA against its original
+    manifest and validate its source/target/PIT provenance. Forward additionally
+    needs its fitted_model_manifest.json, the original report and the FIT-source
+    dependency proof. This function never treats weight equality as a substitute
+    for either independent publication proof and never mutates their bytes.
 
-    Caller must already have verified BOTH publication hashes and the full
-    Forward -> first Rolling fitting/source/epoch/torch contract.
+    Only producer-specific *carriers* are projected out: Rolling embeds its
+    fold_contract, Forward puts its fitting evidence in a fitted-model sidecar.
+    The complete declared fitting identity, actual execution, selected epoch,
+    tensor structure and bit-exact state must still agree. No experiment ID is
+    special-cased and unrecognized unilateral metadata fails closed.
     """
-    native_contract = native_checkpoint.get("fold_contract")
-    if (not isinstance(native_contract, dict)
-            or not _fold_training_contract_is_compatible(
-                native_contract, expected_contract=dict(fold_contract))):
-        return False
-    epoch = int(forward_selected_epoch)
-    if epoch < 1 or int(native_manifest.get("selected_epoch") or 0) != epoch:
-        return False
-    if int(native_checkpoint.get("selected_epoch") or 0) != epoch:
-        return False
-    if (forward_checkpoint.get("selected_epoch") is not None
-            and int(forward_checkpoint["selected_epoch"]) != epoch):
-        return False
+    if not isinstance(expected_fold_contract, Mapping) or not dict(expected_execution):
+        return False, "missing canonical fitting contract or execution"
+    if existing_kind not in {"native", "forward"} or incoming_kind not in {"native", "forward"}:
+        return False, "unsupported FIT publication kind"
 
-    # Cross-mode differences are restricted to the known producer envelopes.
-    # Unknown/mismatched metadata is NOT silently normalized away.
-    required = frozenset({
-        "model_state_dict", "feature_count", "context_count", "sequence_length",
-        "model_spec", "experiment_profile", "experiment_settings",
-        "training_objective", "training_label_scope", "continuous_target_contract",
-        "torch_execution", "trainable_parameter_count", "total_parameter_count",
-    })
-    native_keys = set(native_checkpoint)
-    forward_keys = set(forward_checkpoint)
-    if (not required.issubset(native_keys & forward_keys)
-            or (native_keys ^ forward_keys) - {
-                "fold_contract", "selected_epoch", "training_semantics"
-            }):
-        return False
-    for key in native_keys & forward_keys - {
-            "model_state_dict", "torch_execution", "fold_contract",
-            "selected_epoch", "training_semantics"
-    }:
-        if native_checkpoint[key] != forward_checkpoint[key]:
-            return False
-
-    expected_execution = dict(expected_torch_execution)
-    if not expected_execution:
-        return False
-    for execution in (
-        native_checkpoint.get("torch_execution"),
-        forward_checkpoint.get("torch_execution"),
-        native_manifest.get("torch_execution"),
+    expected = dict(expected_fold_contract)
+    for label, checkpoint, manifest, kind in (
+        ("existing", existing_checkpoint, existing_manifest, existing_kind),
+        ("incoming", incoming_checkpoint, incoming_manifest, incoming_kind),
     ):
+        if not isinstance(checkpoint, Mapping) or not isinstance(manifest, Mapping):
+            return False, f"{label} FIT checkpoint/manifest is not an object"
+        if kind == "native":
+            if not _fold_training_contract_is_compatible(dict(manifest), expected_contract=expected):
+                return False, f"{label} native fitting contract mismatch"
+            embedded = checkpoint.get("fold_contract")
+            if (not isinstance(embedded, dict)
+                or not _fold_training_contract_is_compatible(embedded, expected_contract=expected)
+                or fold_training_identity(embedded) != fold_training_identity(dict(manifest))):
+                return False, f"{label} native checkpoint has no matching original fold proof"
+        elif "fold_contract" in checkpoint:
+            # A Forward envelope must never disguise an embedded unrelated Fold.
+            return False, f"{label} Forward checkpoint has unexpected native fold proof"
+        if any(checkpoint.get(field) != expected.get(field)
+               for field in ("model_spec", "experiment_settings", "experiment_profile")):
+            return False, f"{label} model/profile specification mismatch"
+        if checkpoint.get("training_objective") != dict(expected.get("experiment_settings") or {}).get("training_objective"):
+            return False, f"{label} training objective mismatch"
+        target = dict(expected.get("source_contract") or {}).get("target_contract")
+        checkpoint_target = checkpoint.get("continuous_target_contract")
+        if target != checkpoint_target:
+            # For formal MinTrade, the fit cutoff adds a fold-specific historical
+            # teacher fingerprint to the *source* contract. The immutable model
+            # payload retains the unqualified Target definition. The original
+            # as-of fingerprint has already been verified by the source owner.
+            if not (is_formal_min_realized_target_contract(target)
+                    and isinstance(checkpoint_target, Mapping)
+                    and isinstance(target, Mapping)):
+                return False, f"{label} target contract mismatch"
+            projected = dict(target)
+            recorded_lineage = dict(projected.get("teacher_lineage") or {})
+            if not recorded_lineage.get("fold_teacher_as_of_sha256"):
+                return False, f"{label} formal Target has no fold teacher fingerprint"
+            recorded_lineage.pop("fold_teacher_as_of_sha256")
+            projected["teacher_lineage"] = recorded_lineage
+            if projected != dict(checkpoint_target):
+                return False, f"{label} Target identity differs beyond as-of teacher proof"
+        for scope_field in ("training_label_scope", "training_sample_scope"):
+            expected_scope = expected.get(scope_field)
+            profile_scope = dict(checkpoint.get("experiment_settings") or {}).get(scope_field)
+            carrier_scope = checkpoint.get(scope_field)
+            if (carrier_scope is not None and carrier_scope != expected_scope
+                or profile_scope is not None and profile_scope != expected_scope
+                or kind == "native" and carrier_scope is None and profile_scope is None):
+                return False, f"{label} {scope_field} not certified"
+        epoch = manifest.get("selected_epoch")
+        try:
+            if (int(epoch) < 1 or int(checkpoint.get("selected_epoch")) != int(epoch)):
+                return False, f"{label} selected epoch mismatch"
+        except (TypeError, ValueError):
+            return False, f"{label} missing selected epoch"
+        execution = checkpoint.get("torch_execution")
         if not isinstance(execution, Mapping):
-            return False
-        comparable = dict(execution)
-        comparable.pop("requested_device", None)  # Device request is not execution truth.
-        if comparable != expected_execution:
-            return False
+            return False, f"{label} missing actual torch execution"
+        actual_execution = dict(execution)
+        actual_execution.pop("requested_device", None)
+        if actual_execution != dict(expected_execution):
+            return False, f"{label} actual torch execution mismatch"
+        if kind == "native":
+            native_execution = manifest.get("torch_execution")
+            if not isinstance(native_execution, Mapping):
+                return False, f"{label} native execution origin missing"
+            origin_execution = dict(native_execution)
+            origin_execution.pop("requested_device", None)
+            if origin_execution != dict(expected_execution):
+                return False, f"{label} native manifest execution mismatch"
+        if not _FITTED_CHECKPOINT_COMMON_STATE.issubset(checkpoint):
+            return False, f"{label} missing canonical checkpoint model metadata"
+        state = checkpoint.get("model_state_dict")
+        if not isinstance(state, Mapping) or not state:
+            return False, f"{label} missing model_state_dict"
 
-    native_state = native_checkpoint.get("model_state_dict")
-    forward_state = forward_checkpoint.get("model_state_dict")
-    if (not isinstance(native_state, Mapping) or not isinstance(forward_state, Mapping)
-            or not native_state or native_state.keys() != forward_state.keys()):
-        return False
-    for key in native_state:
-        left, right = native_state[key], forward_state[key]
-        if (not torch_module.is_tensor(left) or not torch_module.is_tensor(right)
-                or left.dtype != right.dtype or left.shape != right.shape
-                or not torch_module.equal(left, right)):
-            return False
-    return True
+    if int(existing_manifest["selected_epoch"]) != int(incoming_manifest["selected_epoch"]):
+        return False, "different selected epochs for the same fitting identity"
+    for field in _FITTED_CHECKPOINT_COMMON_STATE:
+        if existing_checkpoint[field] != incoming_checkpoint[field]:
+            return False, f"different fitted checkpoint metadata: {field}"
+    # Unknown asymmetric fields may carry undisclosed training semantics. They
+    # cannot be silently discarded just because Tensor weights happen to match.
+    left_extra = set(existing_checkpoint) - _FITTED_CHECKPOINT_COMMON_STATE - {
+        "model_state_dict", "selected_epoch", "torch_execution",
+    }
+    right_extra = set(incoming_checkpoint) - _FITTED_CHECKPOINT_COMMON_STATE - {
+        "model_state_dict", "selected_epoch", "torch_execution",
+    }
+    asymmetric = (left_extra ^ right_extra) - _FITTED_CHECKPOINT_CARRIER_FIELDS
+    if asymmetric:
+        return False, f"unrecognized checkpoint carrier mismatch: {sorted(asymmetric)}"
+    for field in (left_extra & right_extra) - _FITTED_CHECKPOINT_CARRIER_FIELDS:
+        if existing_checkpoint[field] != incoming_checkpoint[field]:
+            return False, f"different additional FIT metadata: {field}"
 
+    left = existing_checkpoint["model_state_dict"]
+    right = incoming_checkpoint["model_state_dict"]
+    if set(left) != set(right):
+        return False, "different model state tensor keys"
+    for name in sorted(left):
+        a, b = left[name], right[name]
+        if (not torch_module.is_tensor(a) or not torch_module.is_tensor(b)
+            or a.dtype != b.dtype or a.shape != b.shape or not torch_module.equal(a, b)):
+            return False, f"different fitted tensor: {name}"
+    return True, "verified same fitted identity and bit-exact model weights"
 
 
 def _forward_checkpoint_import_issues(

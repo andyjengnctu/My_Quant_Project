@@ -2064,9 +2064,9 @@
       "section": "B2",
       "priority": "P1",
       "order": 248,
-      "item": "`raw_safety_score`等score-output-only contract變更不得改寫既有fitted `model.pt` bytes；`_rescore_fold_from_compatible_checkpoint`只能重新推論scores與更新fold manifest，checkpoint artifact SHA必須保持原值。若舊版score-only rescore已造成local checkpoint SHA漂移，`_publish_fold_checkpoint_to_cache`只可在manifest明示`training_contract_unchanged=True`且migration kind屬受控score-only checkpoint reuse時，以相同`fold_training_identity`之canonical cache checkpoint byte-for-byte還原local model並更新manifest；不得覆寫cache。缺少上述migration證據之same-fitting-identity/different-checkpoint仍必須RuntimeError fail-closed。此修正不得改C71 scientific identity、fitting identity、model weights或觸發重訓。",
-      "gap": "PIT synthetic直接重現C71首次RESUME事故：cache checkpoint與metadata-rewritten local checkpoint具有同fitting identity但不同SHA，驗證publisher會還原canonical cache bytes、manifest標記cache restore且source SHA preserved；source contract另驗score-only rescore helper不含`torch_module.save`；控制案例驗真正同identity不同checkpoint仍拒絕。",
-      "entry": "`services/breakout_quality/point_in_time_scores.py`, `tools/validate/synthetic_breakout_quality_pit_cases.py`",
+      "item": "`raw_safety_score`等score-output-only contract變更不得改寫既有fitted `model.pt` bytes；`_rescore_fold_from_compatible_checkpoint`只能重新推論scores與更新fold manifest，checkpoint artifact SHA必須保持原值。若舊版score-only rescore已造成local checkpoint SHA漂移，`_publish_fold_checkpoint_to_cache`只可在manifest明示`training_contract_unchanged=True`且migration kind屬受控score-only checkpoint reuse時，以相同`fold_training_identity`之canonical cache checkpoint byte-for-byte還原local model並更新manifest；不得覆寫cache。未經FIT owner完整驗證原始來源、FIT身分與逐Tensor權重等價的同identity異checkpoint必須RuntimeError fail-closed；檔案SHA仍為各原始封裝的完整性證據，不作跨封裝FIT等價鍵。此修正不得改C71 scientific identity、fitting identity、model weights或觸發重訓。",
+      "gap": "PIT synthetic重現C71首次RESUME事故：合法score-only migration可byte-for-byte還原cache，原始checkpoint hash保持可追溯；獨立校驗的兩份原生FIT若僅封裝不同但身分及逐Tensor權重完全一致則沿用既有cache；來源、權重或未知單側欄位不同仍fail-fast，不覆寫canonical cache。",
+      "entry": "`services/breakout_quality/point_in_time_scores.py`, `services/breakout_quality/fitted_model_artifacts.py`, `services/breakout_quality/fitting_checkpoint_store.py`, `tools/validate/synthetic_breakout_quality_pit_cases.py`",
       "category": "C71 PIT score-only checkpoint byte-preservation / canonical fitting-cache self-heal",
       "status": "DONE"
     },
@@ -2077,7 +2077,7 @@
       "order": 249,
       "item": "`_publish_fold_checkpoint_to_cache`若因B263受控score-only migration原地還原local checkpoint並改寫fold manifest，PIT builder不得繼續沿用cache同步前的in-memory manifest。完成cache sync後必須重新載入canonical fold manifest，重新驗證fitting compatibility、checkpoint hash/size與fold score hash/size，之後才可寫入coverage與top-level `folds[]` record；因此PIT Audit看到的aggregate checkpoint SHA必須與實際fold `model.pt`一致。真正same-fitting-identity/different-checkpoint仍由B263 fail-closed。",
       "gap": "PIT synthetic重現publisher自癒後舊in-memory manifest仍帶pre-repair SHA，驗post-sync reload取得canonical checkpoint SHA；source integration另要求cache publish之後、`fold_manifests.append`之前完成reload。",
-      "entry": "`services/breakout_quality/point_in_time_scores.py`, `tools/validate/synthetic_breakout_quality_pit_cases.py`",
+      "entry": "`services/breakout_quality/point_in_time_scores.py`, `services/breakout_quality/fitting_checkpoint_store.py`, `tools/validate/synthetic_breakout_quality_pit_cases.py`",
       "category": "C71 PIT cache-repair post-sync aggregate manifest integrity",
       "status": "DONE"
     },
@@ -3077,8 +3077,8 @@
       "priority": "P1",
       "order": 343,
       "item": "Forward OOS → Rolling exact fitting-checkpoint bridge consumes fitted-model SSOT",
-      "gap": "Forward與Rolling第一個同fitting identity fold必須共用同一checkpoint bytes；橋接不得從evaluation report重猜optimizer settings，而必須讀canonical fitted_model_manifest／immutable legacy fitting evidence。requested_device等routing metadata不得製造假mismatch；Rolling fit stale時不得誤走audit-only refresh，必須回canonical PIT producer refit/resume。",
-      "entry": "`services/breakout_quality/fitted_model_artifacts.py`, `services/breakout_quality/point_in_time_scores.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`",
+      "gap": "同一合法fitting identity須重用經驗證的同一組模型權重，不得因Forward／Rolling使用不同checkpoint封裝而重訓或產生第二份權重真理。原始checkpoint SHA由各自原始manifest驗證；FIT owner須獨立核對Forward fitted_model_manifest、Rolling Fold PIT來源、完整訓練契約、execution、selected epoch及逐Tensor相等，僅可辨認宣告的封裝carrier差異，其餘異常fail-fast；既有cache保持不可覆寫。橋接不得從evaluation report重猜optimizer settings；requested_device等routing metadata不得製造假mismatch；Rolling fit stale仍須回canonical PIT producer refit/resume。",
+      "entry": "`services/breakout_quality/fitted_model_artifacts.py`, `services/breakout_quality/fitting_checkpoint_store.py`, `services/breakout_quality/point_in_time_scores.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_breakout_quality_pit_cases.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`",
       "category": "Research / Artifact lifecycle",
       "status": "DONE"
     },
@@ -5790,7 +5790,7 @@
     },
     {
       "id": "T374",
-      "description": "`validate_breakout_quality_point_in_time_score_builder_contract_case` 覆蓋B263：C71 score-only rescore保持checkpoint bytes、已污染local fold由canonical fitting cache自癒、真正same-identity/different-checkpoint仍fail-closed",
+      "description": "`validate_breakout_quality_point_in_time_score_builder_contract_case` 覆蓋B263：C71 score-only cache自癒、跨封裝bit-exact相同FIT保留原始cache bytes、真正權重或來源衝突fail-fast",
       "b_id": "B263",
       "order": 364,
       "status": "DONE"
@@ -6476,7 +6476,7 @@
     },
     {
       "id": "T475",
-      "description": "`validate_breakout_quality_fitted_model_lifecycle_contract_case` 覆蓋B355：真實Forward report不含optimizer欄位時仍可由fitted_model_manifest匯入同identity checkpoint至Rolling cache；stale Rolling fit回傳不可REUSE而非audit-only refresh",
+      "description": "`validate_breakout_quality_fitted_model_lifecycle_contract_case` 與 `validate_breakout_quality_point_in_time_score_builder_contract_case` 覆蓋B355：Forward fitted_model_manifest與Rolling fold原始證據經canonical FIT owner核驗、同權重不同封裝可REUSE、來源/權重差異拒絕、stale fit不得假REUSE",
       "b_id": "B355",
       "order": 465,
       "status": "DONE"

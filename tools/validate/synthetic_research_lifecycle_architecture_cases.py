@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from .checks import bind_synthetic_case
 from .research_lifecycle_architecture import (
-    FIT_OWNER, PIT_PRODUCER, FORWARD_PRODUCER, RESEARCH_APPLICATION,
+    FIT_OWNER, FIT_CHECKPOINT_STORE, PIT_PRODUCER, FORWARD_PRODUCER, RESEARCH_APPLICATION,
     check_research_fit_architecture_sources,
     BENCHMARK_OWNER, STRATEGY_SINGLE, STRATEGY_MULTI,
     check_strategy_benchmark_architecture_sources, check_research_fit_architecture,
@@ -27,10 +27,27 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
     root = Path(__file__).resolve().parents[2]
     sources = {
         name: (root / name).read_text(encoding="utf-8")
-        for name in (FIT_OWNER, PIT_PRODUCER, FORWARD_PRODUCER, RESEARCH_APPLICATION)
+        for name in (FIT_OWNER, FIT_CHECKPOINT_STORE, PIT_PRODUCER,
+                     FORWARD_PRODUCER, RESEARCH_APPLICATION)
     }
     check("canonical_source_owner_and_dependency_boundary", (),
           check_research_fit_architecture_sources(sources))
+    # Mutation-test the physical FIT owner boundary: proof-free cache writers
+    # cannot be quietly added to an evaluation producer.
+    store_mutation = dict(sources)
+    store_mutation[FIT_CHECKPOINT_STORE] = store_mutation[FIT_CHECKPOINT_STORE].replace(
+        "certified_fitted_checkpoint_equivalence(", "unchecked_checkpoint_equivalence(", 1,
+    )
+    check_true("fit_store_cannot_bypass_canonical_weight_equivalence",
+               any("independent checkpoint SHA collision policy" in issue
+                   for issue in check_research_fit_architecture_sources(store_mutation)))
+    shadow_cache_writer = dict(sources)
+    shadow_cache_writer[PIT_PRODUCER] += (
+        "\ndef _publish_fold_checkpoint_to_cache(*args, **kwargs):\n    return None\n"
+    )
+    check_true("pit_producer_cannot_recreate_duplicate_fit_cache_writer",
+               any("non-store defines a second FIT cache publisher" in issue
+                   for issue in check_research_fit_architecture_sources(shadow_cache_writer)))
     # AI: Test the shared provenance seam, not fixed experiment identities.
     for module_name in (FIT_OWNER, PIT_PRODUCER):
         disconnected = dict(sources)
@@ -1325,6 +1342,7 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                     # still exist*. Previously the importer returned early and
                     # silently skipped the producer-captured origin witness.
                     from services.breakout_quality import point_in_time_scores as pit_owner
+                    from services.breakout_quality import fitting_checkpoint_store as fit_cache_owner
                     from shutil import copy2
                     cache_root = root_dir / "isolated_fit_cache"
                     entry = pit_owner._checkpoint_cache_entry_dir(cache_root, ctx_manifest)
@@ -1349,8 +1367,8 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                     def run_verified_cache_import():
                         # Input identity checks are exercised above through the
                         # canonical validator; isolate the post-proof cache path.
-                        with patch.object(pit_owner, "_forward_checkpoint_import_issues", return_value=[]), \
-                             patch.object(pit_owner, "load_fitted_model_training_evidence", return_value=(fake_evidence, None)):
+                        with patch.object(fit_cache_owner, "_forward_checkpoint_import_issues", return_value=[]), \
+                             patch.object(fit_cache_owner, "load_fitted_model_training_evidence", return_value=(fake_evidence, None)):
                             return pit_owner._import_forward_checkpoint_to_fitting_cache(
                                 source_model_dir=model_paths.model_dir,
                                 source_report_path=report_path,
