@@ -1,7 +1,4 @@
 
-增加到8 seeds，原本4 seeds reuse
-
-
 - bug
     - 0050 cannot be selected by any DL
 
