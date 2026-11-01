@@ -739,6 +739,15 @@ def append_robustness_benchmark_plan_checks(
             "services.research.strategy_multi_seed_robustness._discover_registered_strategy_only_scientific_reuse",
             return_value={},
         ),
+        # AI: This fixture measures parameter-truth hash deduplication, not
+        # cross-run DL-result discovery. The latter reads unrelated historical
+        # result/attribution SHA files from the operator's workspace and has
+        # its own synthetic tests covering signed, tampered and multisource
+        # provenance. Keep this scenario independent of those live files.
+        patch(
+            "services.research.strategy_multi_seed_robustness._discover_registered_model_scientific_reuse",
+            return_value={},
+        ),
         patch(
             "services.research.strategy_multi_seed_robustness.inspect_robustness_benchmark_strategy_parameter_artifact",
             return_value={"action": "REUSE", "status": "READY"},
