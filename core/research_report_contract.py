@@ -731,6 +731,69 @@ TARGET_ORACLE_ROMD_REPORT = PersistentReportContract(
     ),
 )
 
+DL_FIT_SAMPLE_COVERAGE_REPORT = PersistentReportContract(
+    report_id="audit.dl_fit_sample_coverage", version=1,
+    role="persistent_reusable_read_only_fit_sample_evidence",
+    menu_path=("Research", "Audit／診斷", "可重複使用的原因分析", "DL FIT 年度／有效樣本／Event-Daily Coverage"),
+    sections=(
+        S("model_coverage", 1, "Model FIT Coverage (latest verified fold per seed)", tables=(T("models", (
+            C("model", "Model", alignment="left"), C("scope", "Sample", alignment="left"),
+            C("seeds", "Verified", 0, format_kind="int"), C("expected_seeds", "Expected", 0, format_kind="int"),
+            C("folds", "Folds", 0, format_kind="int"), C("raw_groups", "Mean pre-score", 0, format_kind="int"),
+            C("target_valid", "Mean valid", 0, format_kind="int"),
+            C("final_refit", "Mean FIT", 0, format_kind="int"),
+            C("fit_rate", "FIT / Pre-score", 2, "%", format_kind="pct"),
+            C("first_fit_date", "First FIT date", alignment="left"),
+            C("last_fit_date", "Last FIT date", alignment="left"),
+            C("status", "Status", alignment="left"),
+        )),)),
+        S("seed_coverage", 2, "Seed / latest-fold FIT partition", tables=(T("seeds", (
+            C("model", "Model", alignment="left"), C("seed", "Seed", 0, format_kind="int"),
+            C("fold", "Fold", alignment="left"), C("score_start", "Score start", alignment="left"),
+            C("pre_score_groups", "Pre-score", 0, format_kind="int"),
+            C("missing_target", "No target", 0, format_kind="int"),
+            C("scope_excluded", "Scope excluded", 0, format_kind="int"),
+            C("not_matured", "Unmatured", 0, format_kind="int"),
+            C("inner_train", "Inner train", 0, format_kind="int"),
+            C("validation", "Validation", 0, format_kind="int"),
+            C("final_refit", "Final FIT", 0, format_kind="int"),
+            C("event_rows", "Event rows", 0, format_kind="int"),
+            C("positive_rate", "Positive %", 2, "%", format_kind="pct"),
+            C("status", "Status", alignment="left"),
+        )),)),
+        S("fold_coverage", 3, "Full Fold FIT membership", tables=(T("folds", (
+            C("model", "Model", alignment="left"), C("seed", "Seed", 0, format_kind="int"),
+            C("fold", "Fold", alignment="left"), C("score_start", "Score start", alignment="left"),
+            C("inner_train", "Inner train", 0, format_kind="int"),
+            C("validation", "Validation", 0, format_kind="int"),
+            C("final_refit", "Final FIT", 0, format_kind="int"),
+            C("event_rows", "Event rows", 0, format_kind="int"),
+            C("missing_target", "No target", 0, format_kind="int"),
+            C("not_matured", "Unmatured", 0, format_kind="int"),
+            C("positive", "Positive", 0, format_kind="int"),
+            C("nonpositive", "Nonpositive", 0, format_kind="int"),
+            C("positive_rate", "Positive %", 2, "%", format_kind="pct"),
+            C("fit_start", "FIT from", alignment="left"),
+            C("fit_end", "FIT to", alignment="left"),
+            C("status", "Status", alignment="left"),
+        )),)),
+        S("yearly_coverage", 4, "Yearly each-Fold coverage", tables=(T("years", (
+            C("model", "Model", alignment="left"), C("seed", "Seed", 0, format_kind="int"),
+            C("fold", "Fold", alignment="left"),
+            C("year", "Year", 0, format_kind="int"),
+            C("pre_score_groups", "Pre-score", 0, format_kind="int"),
+            C("valid_target", "Valid target", 0, format_kind="int"),
+            C("missing_target", "No target", 0, format_kind="int"),
+            C("scope_excluded", "Scope excluded", 0, format_kind="int"),
+            C("not_matured", "Unmatured", 0, format_kind="int"),
+            C("final_refit", "Final FIT", 0, format_kind="int"),
+            C("event_rows", "Event rows", 0, format_kind="int"),
+            C("positive_rate", "Positive %", 2, "%", format_kind="pct"),
+        )),)),
+        S("evidence", 5, "Evidence / scope limits"),
+    ),
+)
+
 STRATEGY_CONSISTENCY_REPORT = PersistentReportContract(
     report_id="strategy.oos_rolling_consistency", version=1, role="persistent_standard",
     menu_path=("Research", "策略組合比較", "OOS + Rolling 一鍵／Consistency"),
@@ -774,7 +837,7 @@ TARGET_DL_VALIDATION_OVERVIEW_REPORT = PersistentReportContract(
 PERSISTENT_REPORT_CONTRACTS: Mapping[str, PersistentReportContract] = {
     contract.report_id: contract for contract in (
         MODEL_STANDARD_SOP, MODEL_STANDARD_COMPARISON, STRATEGY_STANDARD_SOP, OPPORTUNITY_SELECTION_REPORT,
-        TRADE_OUTCOME_PATH_REPORT, PORTFOLIO_DRAWDOWN_REPORT, TARGET_ORACLE_ROMD_REPORT, TARGET_DL_VALIDATION_OVERVIEW_REPORT, STRATEGY_CONSISTENCY_REPORT,
+        TRADE_OUTCOME_PATH_REPORT, PORTFOLIO_DRAWDOWN_REPORT, DL_FIT_SAMPLE_COVERAGE_REPORT, TARGET_ORACLE_ROMD_REPORT, TARGET_DL_VALIDATION_OVERVIEW_REPORT, STRATEGY_CONSISTENCY_REPORT,
     )
 }
 

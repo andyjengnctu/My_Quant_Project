@@ -164,6 +164,23 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
             },
             "output_subdir": "breakout_quality/reusable/target_oracle_romd",
         },
+        # Generic FIT-cohort audit: model and seed inventory are resolved at
+        # runtime from canonical Model Compare/Test and benchmark policies.
+        "dl_fit_sample_coverage": {
+            "enabled": True,
+            "report_type": "dl_fit_sample_coverage",
+            "description": (
+                "所有DL的Rolling FIT年份／樣本／成熟／Event-vs-Daily覆蓋稽核；"
+                "逐Fold對照正式簽章，只讀、不重訓。"
+            ),
+            "source": {
+                "model_inventory": "canonical_model_compare_test_settings",
+                "seed_inventory": "canonical_model_robustness_benchmark",
+                "fit_source": "canonical_pit_fold_manifest_and_training_group_selection",
+            },
+            "dimensions": {"mode": "rolling_oos", "reference_fold": "latest_verified"},
+            "output_subdir": "breakout_quality/reusable/dl_fit_sample_coverage",
+        },
         "portfolio_drawdown": {
             "enabled": True,
             "report_type": "portfolio_drawdown_attribution",

@@ -125,6 +125,7 @@ project/
 │  ├─ workbench_ui/                   # GUI application service/UI owner；含回測檢視、交易中心、帳務中心與資料中心頁
 │  ├─ trade_analysis/                 # 單股 trade-analysis backend/service owner
 │  ├─ breakout_quality/               # fitted_model_artifacts.py：canonical FIT 身分／權重等價；fitting_checkpoint_store.py：Shared FIT cache 唯一發布 owner；point_in_time_scores.py：PIT 評分 producer
+│  ├─ audit/                          # reusable read-only Audit；dl_fit_sample_coverage.py核對全DL Rolling FIT Fold／來源簽章／年度覆蓋，不建置模型或Target
 │  ├─ research/                       # Research application boundaries／artifact orchestration；target_oracle_application.py 僅在取得授權後委派既有 Optimizer P16，Oracle Audit 仍只讀
 │  │  ├─ strategy_robustness_units.py # 逐策略/Seed不可變結果索引、單元身分、凍結差額工作計畫
 │  │  ├─ strategy_multi_seed_robustness.py # 先解析完成證據，只委派差額依賴/FIT/Replay，組裝正式多Seed報表

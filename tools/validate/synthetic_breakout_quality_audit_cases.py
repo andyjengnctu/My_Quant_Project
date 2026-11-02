@@ -25,6 +25,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         validate_audit_config,
     )
     from services.audit.catalog import (
+        AUDIT_CATALOG,
         get_domain_cli_commands,
         validate_audit_catalog,
     )
@@ -82,12 +83,17 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         "research_point_in_time_score_validation_remains_catalogued",
         "audit-point-in-time-scores" in commands,
     )
-    # One-time Audit may have zero definitions; this is not a failure of reusable Audit.
+    # Registered formal capabilities, rather than a fixed list of historical
+    # report names, define the reusable inventory. One-time Audit may be empty.
+    expected_reusable_types = {
+        item.audit_type for item in AUDIT_CATALOG.values()
+        if item.formal and item.domain == "breakout_quality" and item.method_id
+    }
     check_true(
         "retired_one_time_studies_do_not_change_reusable_audit_contract",
         len(definitions) == len(enabled)
-        and {entry.report_id for entry in get_reusable_audit_definitions("breakout_quality")}
-        == {"opportunity_selection", "trade_outcome_path", "portfolio_drawdown", "target_oracle_romd"},
+        and {entry.report_type for entry in get_reusable_audit_definitions("breakout_quality")}
+        == expected_reusable_types,
     )
 
     import apps.research as research_app
@@ -134,6 +140,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         "Opportunity／Selection Attribution  [已設定]" in reusable_text
         and "Trade Outcome／Path Attribution  [已設定]" in reusable_text
         and "Portfolio／Drawdown Attribution  [已設定]" in reusable_text
+        and "DL FIT 年度／有效樣本／Event-Daily Coverage  [已設定]" in reusable_text
         and "Target 驗證" not in reusable_text
         and "Regime／Stability Attribution" not in reusable_text,
     )
@@ -409,9 +416,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     reusable_defs = get_reusable_audit_definitions("breakout_quality")
     check_true(
         "reusable_audit_reports_are_registry_driven_and_not_scientific_aud_ids",
-        len(reusable_defs) == 4
-        and {item.report_id for item in reusable_defs}
-        == {"opportunity_selection", "trade_outcome_path", "portfolio_drawdown", "target_oracle_romd"}
+        len(reusable_defs) == len(expected_reusable_types)
+        and {item.report_type for item in reusable_defs} == expected_reusable_types
+        and len({item.report_id for item in reusable_defs}) == len(reusable_defs)
         and all(not item.report_id.startswith("AUD-") for item in reusable_defs),
     )
 

@@ -3,6 +3,16 @@
   "purpose": "Current report approval and compact legacy report-id/fingerprint compatibility index. Historical per-version schema files and Golden clones are retired; research results retain their own lineage.",
   "reports": [
     {
+      "report_id": "audit.dl_fit_sample_coverage",
+      "versions": [
+        {
+          "contract_id": "audit.dl_fit_sample_coverage@v1",
+          "version": 1,
+          "fingerprint": "33bc1ee7da38dfc8"
+        }
+      ]
+    },
+    {
       "report_id": "audit.opportunity_selection",
       "versions": [
         {
