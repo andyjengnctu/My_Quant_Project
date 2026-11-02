@@ -12192,10 +12192,13 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
 
     from services.research import breakout_quality_application as research_app
 
+    # The application entrypoint validates canonical path identities.  Keep
+    # the synthetic report/command evidence, but use a registered architecture
+    # and profile rather than bypassing their formal path contract.
     settings = SimpleNamespace(
         filter_id="breakout_quality_v1",
-        model_architecture="synthetic_architecture",
-        experiment_profile="synthetic_profile",
+        model_architecture=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+        experiment_profile=DAILY_UNIVERSAL_NO_TIME_PAIRWISE_GAP_WEIGHTED_PROFILE,
         seed=42,
     )
     built_contract = SimpleNamespace(report={"standard_model_sop": {}}, report_path=Path("synthetic_report.json"))
@@ -12205,7 +12208,9 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
         command_args.append((command, tuple(args)))
         return 0
 
-    with patch.object(
+    with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+        research_app, "PROJECT_ROOT", Path(temp_dir),
+    ), patch.object(
         research_app,
         "_load_reusable_continuous_forward_contract",
         side_effect=[(None, "report refresh required"), (built_contract, None)],
@@ -12377,6 +12382,9 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
             "filter_id": settings.filter_id,
             "model_architecture": settings.model_architecture,
             "experiment_profile": settings.experiment_profile,
+            "experiment_settings": get_breakout_quality_experiment_profile(
+                settings.experiment_profile
+            ).as_manifest_payload(),
         }), encoding="utf-8")
         report_path.write_text(json.dumps({}), encoding="utf-8")
         synthetic_contract = SimpleNamespace(
@@ -12431,7 +12439,9 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
             and "Rolling robustness fitted-model training settings stale" in str(rolling_robust_reason),
         )
 
-    with patch.object(
+    with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+        research_app, "PROJECT_ROOT", Path(temp_dir),
+    ), patch.object(
         research_app,
         "_load_reusable_continuous_forward_contract",
         return_value=(built_contract, None),
