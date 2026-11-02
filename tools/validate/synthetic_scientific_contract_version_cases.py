@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -478,7 +479,14 @@ class ScientificVersionCases(TestCase):
                 self.assertFalse(target.exists())
                 _write_rolling(target, CQ)
                 return {"elapsed_sec": 0.0}
-            with patch.object(strategy_compare_training, 'build_strategy_compare_trainer_command', side_effect=fake_builder), patch.object(strategy_compare_training, 'run_logged_training_process', side_effect=fake_train), patch.object(strategy_compare_training, 'validate_strategy_compare_training_artifacts', return_value={"ready":True}), patch('services.breakout_quality.point_in_time_audit.audit_selection_point_in_time_scores', return_value=0):
+            def fake_validator(**kwargs):
+                # Only a committed current publication may be used by Strategy Compare.
+                self.assertFalse((root / ".published.superseded_fit_backup").exists())
+                self.assertEqual(published_fit_contract_version_state(
+                    experiment_profile=CQ, publication_dir=target, rolling=True,
+                )[0], "CURRENT")
+                return {"ready": True}
+            with patch.object(strategy_compare_training, 'build_strategy_compare_trainer_command', side_effect=fake_builder), patch.object(strategy_compare_training, 'run_logged_training_process', side_effect=fake_train), patch.object(strategy_compare_training, 'validate_strategy_compare_training_artifacts', side_effect=fake_validator), patch('services.breakout_quality.point_in_time_audit.audit_selection_point_in_time_scores', return_value=0):
                 result = strategy_compare_training.run_strategy_compare_training_unit(
                     project_root=root, source=source,
                     workflow=SimpleNamespace(point_in_time_fold_months=12), seed=42,
@@ -495,6 +503,207 @@ class ScientificVersionCases(TestCase):
             self.assertFalse((root / ".published.superseded_fit_backup").exists())
             self.assertEqual(published_fit_contract_version_state(
                 experiment_profile=CQ, publication_dir=target, rolling=True)[0], "CURRENT")
+
+
+    def test_rolling_version_rebuild_does_not_rollback_completed_fit_for_audit_failure(self):
+        """Regression: CQ v2 six-fold FIT must survive post-training SOP/Audit work."""
+        from core.breakout_quality_policy import get_breakout_quality_workflow_settings, get_breakout_quality_rolling_test_mode
+
+        settings = get_breakout_quality_workflow_settings(experiment_profile=CQ)
+        mode = get_breakout_quality_rolling_test_mode("rolling")
+        for scenario in ("success", "audit_failure", "producer_failure", "report_failure"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "rolling"
+                backup = path.with_name("." + path.name + ".superseded_fit_backup")
+                _write_rolling(path, CQ, legacy=True)
+                calls = []
+
+                def fake_command(command, args, **kwargs):
+                    calls.append(command)
+                    if command == "build-point-in-time-scores":
+                        self.assertTrue(backup.is_dir(), "v1 backup needed during FIT")
+                        self.assertFalse(path.exists(), "v1 cannot be reused by v2 FIT")
+                        _write_rolling(path, CQ)
+                        return 7 if scenario == "producer_failure" else 0
+                    self.assertEqual(command, "audit-point-in-time-scores")
+                    self.assertFalse(backup.exists(), "readers must run after commit")
+                    self.assertEqual(published_fit_contract_version_state(
+                        experiment_profile=CQ, publication_dir=path, rolling=True,
+                    )[0], "CURRENT")
+                    return 7 if scenario == "audit_failure" else 0
+
+                def fake_read_report(*args, **kwargs):
+                    self.assertFalse(backup.exists())
+                    self.assertEqual(published_fit_contract_version_state(
+                        experiment_profile=CQ, publication_dir=path, rolling=True,
+                    )[0], "CURRENT")
+                    if scenario == "report_failure":
+                        return None, None, "SOP evidence incomplete"
+                    return SimpleNamespace(audit_path=path / "audit.json"), {"standard_model_sop": {"valid": True}}, None
+
+                with patch.object(application, '_prepare_continuous_research_inputs', return_value=0), \
+                     patch.object(application, '_rolling_mode_point_in_time_dir', return_value=path), \
+                     patch.object(application, '_rolling_publication_dir', return_value=path), \
+                     patch.object(application, '_compact_console_scope', side_effect=nullcontext), \
+                     patch('services.breakout_quality.continuous_ranker_pipeline.same_workflow_pit_bundle_handoff', side_effect=nullcontext), \
+                     patch.object(application, '_run_command', side_effect=fake_command), \
+                     patch.object(application, '_load_reusable_rolling_standard_report', side_effect=fake_read_report), \
+                     patch.object(application, '_emit_standard_model_sop_report') as render:
+                    if scenario == "producer_failure":
+                        with self.assertRaisesRegex(RuntimeError, "Force Rebuild失敗"):
+                            application._run_continuous_pit_profile(
+                                "research", model_id="MR-13CQ", profile_name=CQ,
+                                mode=mode, force_rebuild=True,
+                            )
+                    elif scenario == "report_failure":
+                        with self.assertRaisesRegex(RuntimeError, "Standard SOP仍不可REUSE"):
+                            application._run_continuous_pit_profile(
+                                "research", model_id="MR-13CQ", profile_name=CQ,
+                                mode=mode, force_rebuild=True,
+                            )
+                    else:
+                        code = application._run_continuous_pit_profile(
+                            "research", model_id="MR-13CQ", profile_name=CQ,
+                            mode=mode, force_rebuild=True,
+                        )
+                        self.assertEqual(code, 7 if scenario == "audit_failure" else 0)
+                self.assertFalse(backup.exists())
+                self.assertEqual(calls, ["build-point-in-time-scores"] if scenario == "producer_failure"
+                                 else ["build-point-in-time-scores", "audit-point-in-time-scores"])
+                self.assertEqual(published_fit_contract_version_state(
+                    experiment_profile=CQ, publication_dir=path, rolling=True,
+                )[0], "UPGRADE_REQUIRED" if scenario == "producer_failure" else "CURRENT")
+                self.assertEqual(render.call_count, 1 if scenario == "success" else 0)
+
+    def test_forward_version_rebuild_verifies_after_backup_is_removed(self):
+        from core.breakout_quality_policy import get_breakout_quality_workflow_settings
+
+        settings = get_breakout_quality_workflow_settings(experiment_profile=CQ)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir, report_dir = root / "model", root / "report"
+            _write_json(model_dir / "manifest.json", {
+                "experiment_profile": CQ, "experiment_settings": _manifest_settings(CQ, legacy=True),
+            })
+            report_dir.mkdir()
+            (report_dir / "old.txt").write_text("v1")
+            checked = []
+
+            def fake_command(command, args, **kwargs):
+                self.assertEqual(command, "train-continuous-ranker")
+                self.assertTrue((root / ".model.superseded_fit_backup").exists())
+                _write_json(model_dir / "manifest.json", {
+                    "experiment_profile": CQ, "experiment_settings": _manifest_settings(CQ),
+                })
+                report_dir.mkdir()
+                return 0
+
+            def fake_loader(_settings):
+                checked.append(True)
+                if len(checked) == 1:
+                    return None, "v1 stale"
+                self.assertFalse((root / ".model.superseded_fit_backup").exists())
+                self.assertFalse((root / ".report.superseded_fit_backup").exists())
+                self.assertEqual(published_fit_contract_version_state(
+                    experiment_profile=CQ, publication_dir=model_dir, rolling=False,
+                )[0], "CURRENT")
+                return SimpleNamespace(report={}), None
+
+            with patch.object(application, '_forward_publication_paths', return_value=(model_dir, report_dir)), \
+                 patch.object(application, '_load_reusable_continuous_forward_contract', side_effect=fake_loader), \
+                 patch.object(application, '_collect_continuous_research_input_plan', return_value=SimpleNamespace(blocked=False)), \
+                 patch.object(application, '_render_continuous_research_input_plan'), \
+                 patch.object(application, '_prepare_continuous_research_inputs', return_value=0), \
+                 patch.object(application, '_run_command', side_effect=fake_command), \
+                 patch.object(application, '_clear_continuous_forward_reuse_caches'):
+                code, contract, action = application._ensure_continuous_forward_model_report(
+                    "research", model_id="MR-13CQ", settings=settings,
+                    prompt_for_build=False, force_rebuild=True,
+                )
+            self.assertEqual((code, action), (0, "FORCE_REBUILD"))
+            self.assertIsNotNone(contract)
+            self.assertEqual(len(checked), 2)
+            self.assertFalse((root / ".model.superseded_fit_backup").exists())
+            self.assertFalse((root / ".report.superseded_fit_backup").exists())
+
+    def test_strategy_compare_audit_error_keeps_completed_versioned_pit_fit(self):
+        source = get_strategy_comparison_settings(
+            STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE
+        ).dl_sources["CONT13CQ_ROLL"]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "rolling"
+            _write_rolling(target, CQ, legacy=True)
+
+            def fake_builder(**kwargs):
+                return ["python", "mock"], [], {
+                    "score_source": kwargs["source"].score_source,
+                    "score_start_date": "2021-01-01", "score_end_date": "2026-03-02",
+                }
+            def fake_train(**kwargs):
+                _write_rolling(target, CQ)
+                return {"elapsed_sec": 0.0}
+            def fake_audit(**kwargs):
+                self.assertFalse((root / ".rolling.superseded_fit_backup").exists())
+                self.assertEqual(published_fit_contract_version_state(
+                    experiment_profile=CQ, publication_dir=target, rolling=True,
+                )[0], "CURRENT")
+                return 1
+            with patch.object(strategy_compare_training, 'build_strategy_compare_trainer_command', side_effect=fake_builder), \
+                 patch.object(strategy_compare_training, 'run_logged_training_process', side_effect=fake_train), \
+                 patch('services.breakout_quality.point_in_time_audit.audit_selection_point_in_time_scores', side_effect=fake_audit):
+                with self.assertRaisesRegex(RuntimeError, "PIT audit失敗"):
+                    strategy_compare_training.run_strategy_compare_training_unit(
+                        project_root=root, source=source,
+                        workflow=SimpleNamespace(point_in_time_fold_months=12), seed=42,
+                        model_dir=target, research_dir=None,
+                        log_path=root / "log", comparison_start="2021-01-01",
+                        comparison_end="2026-03-02", point_in_time_dir_override=target,
+                    )
+            self.assertFalse((root / ".rolling.superseded_fit_backup").exists())
+            self.assertEqual(published_fit_contract_version_state(
+                experiment_profile=CQ, publication_dir=target, rolling=True,
+            )[0], "CURRENT")
+
+
+
+    def test_rolling_robustness_rebuild_keeps_completed_fit_on_audit_failure(self):
+        from core.breakout_quality_policy import get_breakout_quality_workflow_settings
+
+        settings = get_breakout_quality_workflow_settings(experiment_profile=CQ)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "seed_693545351" / "rolling"
+            _write_rolling(path, CQ, legacy=True)
+            backup = path.with_name("." + path.name + ".superseded_fit_backup")
+            def dirs(_settings, *, seed, rolling):
+                self.assertEqual(int(seed), 693545351)
+                return (path if rolling else root / "forward"), root / "report"
+            def fake_command(command, args, **kwargs):
+                if command == "build-point-in-time-scores":
+                    self.assertTrue(backup.exists())
+                    _write_rolling(path, CQ)
+                    return 0
+                self.assertEqual(command, "audit-point-in-time-scores")
+                self.assertFalse(backup.exists())
+                self.assertEqual(published_fit_contract_version_state(
+                    experiment_profile=CQ, publication_dir=path, rolling=True,
+                )[0], "CURRENT")
+                return 9  # Audit cannot destroy a completed FIT publication.
+            with patch.object(application, '_model_robustness_dirs', side_effect=dirs), \
+                 patch.object(application, '_compact_console_scope', side_effect=nullcontext), \
+                 patch('services.breakout_quality.continuous_ranker_pipeline.same_workflow_pit_bundle_handoff', side_effect=nullcontext), \
+                 patch.object(application, '_run_command', side_effect=fake_command):
+                code = application._build_rolling_robustness_seed(
+                    "research", settings, seed=693545351, force_rebuild=True,
+                    inputs_prepared=True,
+                )
+            self.assertEqual(code, 9)
+            self.assertFalse(backup.exists())
+            self.assertEqual(published_fit_contract_version_state(
+                experiment_profile=CQ, publication_dir=path, rolling=True,
+            )[0], "CURRENT")
+
 
 
 if __name__ == "__main__":

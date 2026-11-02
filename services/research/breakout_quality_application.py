@@ -9,7 +9,7 @@ import hashlib
 from collections import deque
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import importlib
 import json
 import math
@@ -3198,30 +3198,33 @@ def _ensure_continuous_forward_model_report(
             raise ValueError("FIT repair cannot separately force rebuild Forward")
         train_args.append("--require-rolling-fit-reuse")
 
-    def _run_and_validate():
+    # The transaction guards only the canonical FIT producer.  Post-build
+    # readers must not inspect a publication while its superseded backup is
+    # still present: that is deliberately BLOCKED by the shared version owner.
+    # After successful producer publication, validation/report failure must
+    # leave the new fitted weights available for an evidence-only refresh.
+    guard = (
+        _force_rebuild_publication_guard(*_forward_publication_paths(settings))
+        if force_rebuild else nullcontext()
+    )
+    with guard:
         code = _run_command(
             "train-continuous-ranker", train_args,
             program_name=program_name, emit_simple_report=False,
         )
-        if code != 0:
-            return int(code), None, "BUILD_FAILED"
-        _clear_continuous_forward_reuse_caches()
-        built_contract, reason = _load_reusable_continuous_forward_contract(settings)
-        if built_contract is None:
+        if code != 0 and force_rebuild:
             raise RuntimeError(
-                f"{model_id}訓練完成但canonical Forward-OOS contract仍不可REUSE: {reason}"
+                f"{model_id} Force Rebuild失敗: returncode={int(code)}"
             )
-        return 0, built_contract, ("FORCE_REBUILD" if force_rebuild else "BUILD/REFRESH")
-
-    if force_rebuild:
-        with _force_rebuild_publication_guard(*_forward_publication_paths(settings)):
-            result = _run_and_validate()
-            if int(result[0]) != 0:
-                raise RuntimeError(
-                    f"{model_id} Force Rebuild失敗: returncode={int(result[0])}"
-                )
-            return result
-    return _run_and_validate()
+    if code != 0:
+        return int(code), None, "BUILD_FAILED"
+    _clear_continuous_forward_reuse_caches()
+    built_contract, reason = _load_reusable_continuous_forward_contract(settings)
+    if built_contract is None:
+        raise RuntimeError(
+            f"{model_id}訓練完成但canonical Forward-OOS contract仍不可REUSE: {reason}"
+        )
+    return 0, built_contract, ("FORCE_REBUILD" if force_rebuild else "BUILD/REFRESH")
 
 
 def _run_continuous_forward_model_gate(program_name: str, settings) -> int:
@@ -3501,10 +3504,23 @@ def _run_continuous_pit_profile(
         # Only this scope can hand the already-verified Target rows directly
         # to Audit; the normal loader is used everywhere else.
         with _compact_console_scope(), same_workflow_pit_bundle_handoff():
-            code = _run_command(
-                "build-point-in-time-scores", effective_build_args, program_name=program_name,
-                emit_simple_report=False,
+            # Commit the complete v2 FIT/score publication before the Audit or
+            # Standard SOP reads it.  A failed Audit is evidence-only staleness,
+            # not permission to discard six successfully built Rolling folds.
+            guard = (
+                _force_rebuild_publication_guard(
+                    _rolling_publication_dir(settings, selected_mode)
+                ) if force_rebuild else nullcontext()
             )
+            with guard:
+                code = _run_command(
+                    "build-point-in-time-scores", effective_build_args,
+                    program_name=program_name, emit_simple_report=False,
+                )
+                if code != 0 and force_rebuild:
+                    raise RuntimeError(
+                        f"{model_id} Rolling Force Rebuild失敗: returncode={int(code)}"
+                    )
             if code != 0:
                 return int(code)
             code = _run_command(
@@ -3525,17 +3541,10 @@ def _run_continuous_pit_profile(
         return 0
 
     if force_rebuild:
-        publication_dir = _rolling_publication_dir(settings, selected_mode)
         with tempfile.TemporaryDirectory(prefix="bq_force_rebuild_checkpoint_") as cache_dir:
             forced_args = list(build_args)
             forced_args.extend(["--checkpoint-cache-root", str(Path(cache_dir).resolve())])
-            with _force_rebuild_publication_guard(publication_dir):
-                result = _run_build_and_audit(forced_args)
-                if int(result) != 0:
-                    raise RuntimeError(
-                        f"{model_id} Rolling Force Rebuild失敗: returncode={int(result)}"
-                    )
-                return int(result)
+            return _run_build_and_audit(forced_args)
     return _run_build_and_audit(build_args)
 
 
@@ -4884,13 +4893,22 @@ def _build_rolling_robustness_seed(
         from services.breakout_quality.continuous_ranker_pipeline import (
             same_workflow_pit_bundle_handoff,
         )
-        # Rolling Robustness has the same single authorized build->audit lifetime.
-        # The handoff is seed-local even when other seeds run in parallel.
+        # Keep the seed-local data handoff across build and Audit, but only
+        # protect the actual producer with a version-rebuild backup.
         with _compact_console_scope(), same_workflow_pit_bundle_handoff():
-            code = _run_command(
-                "build-point-in-time-scores", effective_args, program_name=program_name,
-                emit_simple_report=False,
+            guard = (
+                _force_rebuild_publication_guard(pit_dir)
+                if force_rebuild else nullcontext()
             )
+            with guard:
+                code = _run_command(
+                    "build-point-in-time-scores", effective_args,
+                    program_name=program_name, emit_simple_report=False,
+                )
+                if code != 0 and force_rebuild:
+                    raise RuntimeError(
+                        f"Rolling robustness seed={int(seed)} Force Rebuild失敗: returncode={int(code)}"
+                    )
             if code != 0:
                 return int(code)
             return int(_run_command(
@@ -4902,13 +4920,7 @@ def _build_rolling_robustness_seed(
         with tempfile.TemporaryDirectory(prefix="bq_robust_force_checkpoint_") as cache_dir:
             forced_args = list(build_args)
             forced_args.extend(["--checkpoint-cache-root", str(Path(cache_dir).resolve())])
-            with _force_rebuild_publication_guard(pit_dir):
-                result = _run(forced_args)
-                if int(result) != 0:
-                    raise RuntimeError(
-                        f"Rolling robustness seed={int(seed)} Force Rebuild失敗: returncode={int(result)}"
-                    )
-                return int(result)
+            return _run(forced_args)
     return _run(build_args)
 
 
