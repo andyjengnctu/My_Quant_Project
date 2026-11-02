@@ -21,7 +21,9 @@ from core.breakout_quality_policy import (
     get_continuous_ranker_execution_recipe,
 )
 from core.breakout_quality_registry import TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
-from core.breakout_quality_runtime import CONTINUOUS_RANKER_TARGET_BUILDER_BINARY_POSITIVE
+from core.breakout_quality_runtime import (
+    CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE, CONTINUOUS_RANKER_TARGET_BUILDER_BINARY_POSITIVE,
+)
 from core.console_report import render_table
 from core.research_report_contract import (
     require_approved_report_contract, section_contract, table_contract,
@@ -39,6 +41,7 @@ from filters.breakout_quality.pit_group_selection import _fold_group_ids, build_
 from filters.breakout_quality.profile_ranker_data import load_profile_continuous_ranker_data
 from services.breakout_quality.fitting_data_dependencies import (
     FitDataDependencies, fold_source_dependency_issues, mintrade40_fit_sample_sha256,
+    verified_published_context_fit_proof,
 )
 from services.breakout_quality.price_input_source import resolve_feature_price_source
 from services.breakout_quality.trade_count_source import resolve_trade_count_feature_source
@@ -245,9 +248,28 @@ def _verify_fold(bundle, cohort: Mapping[str, Any], record: Mapping[str, Any], *
     digest = mintrade40_fit_sample_sha256(bundle, ids["final_ids"])
     if digest is not None:
         expected_source["formal_mintrade40_fit_samples_sha256"] = digest
+    # Compare with the full declared FIT scope, not a source-only wrapper.
+    # The shared dependency owner permits non-consumed event-cache drift only
+    # for verified daily-component training with its original context proof.
+    expected_scope = bundle.profile.training_sample_scope
+    if manifest.get("training_sample_scope") != expected_scope:
+        raise ValueError(f"{fold_id} training_sample_scope與正式FIT契約不一致")
+    context_verified = False
+    if get_continuous_ranker_execution_recipe(profile).context_policy.source != CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE:
+        context_verified, context_reason = verified_published_context_fit_proof(
+            manifest_path=fold_manifest_path, fold_manifest=manifest,
+            bundle=bundle, project_root=root,
+        )
+        if not context_verified:
+            raise ValueError(f"{fold_id} original FIT context proof blocked: {context_reason}")
     issues = fold_source_dependency_issues(
-        manifest, {"source_contract": expected_source}, project_root=root,
+        manifest, {
+            "experiment_profile": profile,
+            "training_sample_scope": expected_scope,
+            "source_contract": expected_source,
+        }, project_root=root,
         inventory_matcher=source_inventory_matches_current,
+        external_context_verified=context_verified,
     )
     if issues:
         raise ValueError(f"{fold_id} FIT source mismatch: {'; '.join(issues)}")

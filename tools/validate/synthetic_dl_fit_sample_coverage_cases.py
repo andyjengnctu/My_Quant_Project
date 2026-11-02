@@ -24,15 +24,31 @@ from core.research_report_contract import validate_approved_persistent_report_co
 from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TARGET_BUILDER_BINARY_POSITIVE,
     CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
+    CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
 )
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME, LABEL_PASS, LABEL_REJECT
 from filters.breakout_quality.pit_group_selection import _fold_group_ids
-from services.breakout_quality.fitting_data_dependencies import FitDataDependencies
+from services.breakout_quality.fitting_data_dependencies import (
+    FitDataDependencies, fold_source_dependency_issues,
+)
 from services.audit import dl_fit_sample_coverage as audit
 
 
 class SampleCoverageTests(unittest.TestCase):
+    @staticmethod
+    def external_daily_profile():
+        from core.breakout_quality_runtime import (
+            CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE,
+            CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
+        )
+        for _model, profile in audit._inventory():
+            recipe = get_continuous_ranker_execution_recipe(profile)
+            if (recipe.context_policy.source != CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE
+                and recipe.target_policy.materialization_mode
+                == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT):
+                return profile
+        raise AssertionError("No registered daily-component external-context profile")
     def fake_bundle(self, *, daily=True):
         dates = pd.to_datetime([
             "2014-01-01", "2015-01-01", "2020-09-01", "2020-10-01",
@@ -139,6 +155,7 @@ class SampleCoverageTests(unittest.TestCase):
         manifest = {
             "fold_id": "fold_001", "seed": 7, "experiment_profile": profile,
             "filter_id": "test_filter", "model_architecture": "test_arch",
+            "training_sample_scope": bundle.profile.training_sample_scope,
             "planned_periods": planned, "observed_periods": observed,
             "group_counts": counts, "event_row_counts": event_counts,
             "model_information_cutoff": cutoff, "training_settings": {},
@@ -174,6 +191,7 @@ class SampleCoverageTests(unittest.TestCase):
             fake_recipe = SimpleNamespace(
                 training_policy=SimpleNamespace(target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_BINARY_POSITIVE),
                 target_policy=SimpleNamespace(materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH),
+                context_policy=SimpleNamespace(source="none"),
             )
             with (patch.object(audit, "_source_path", return_value=(base, "test_filter", "test_arch")),
                   patch.object(audit, "get_breakout_quality_workflow_settings", return_value=fake_settings),
@@ -212,6 +230,7 @@ class SampleCoverageTests(unittest.TestCase):
             fake_recipe = SimpleNamespace(
                 training_policy=SimpleNamespace(target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_BINARY_POSITIVE),
                 target_policy=SimpleNamespace(materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH),
+                context_policy=SimpleNamespace(source="none"),
             )
             definitions = get_reusable_audit_definitions("breakout_quality")
             definition = next(d for d in definitions if d.audit_type == audit.SUPPORTED_AUDIT_TYPE)
@@ -274,7 +293,11 @@ class SampleCoverageTests(unittest.TestCase):
                           patch.object(audit, "resolve_feature_price_source", return_value=None),
                           patch.object(audit, "resolve_trade_count_feature_source", return_value=None),
                           patch.object(audit, "loader_kwargs_for_trade_path", return_value={}),
-                          patch.object(audit, "load_profile_continuous_ranker_data", return_value=bundle)):
+                          patch.object(audit, "load_profile_continuous_ranker_data", return_value=bundle),
+                          # This test exercises genuine registry Recipe shape;
+                          # external historical lineage is covered by the
+                          # dedicated positive/negative proof tests below.
+                          patch.object(audit, "verified_published_context_fit_proof", return_value=(True, "test fixture"))):
                         actual = audit._audit_seed(root, model=model, profile=profile, seed=7)
                 self.assertEqual(actual["status"], "VERIFIED")
                 expected_positive_rate = None
@@ -283,6 +306,127 @@ class SampleCoverageTests(unittest.TestCase):
                     expected_positive_rate = float(100 * (fitted_raw > 0).sum() / len(fitted_raw))
                 self.assertEqual(actual["seed_coverage"]["positive_rate"], expected_positive_rate)
                 self.assertEqual(actual["label_materialization"], recipe.target_policy.materialization_mode)
+
+    def test_daily_context_source_drift_uses_formal_scope_and_signed_context(self):
+        """Context-dependent Daily FIT may ignore *nonconsumed* cache drift only.
+
+        A full registered profile and owner-level source checker are used.  The
+        historical context proof itself is mocked here because the synthetic
+        fixture does not contain a real Stage-1 model or checkpoint lineage.
+        """
+        from filters.breakout_quality.dataset_store import resolve_dataset_paths
+        from filters.breakout_quality.model_source_provenance import source_inventory_matches_current
+
+        profile = self.external_daily_profile()
+        recipe = get_continuous_ranker_execution_recipe(profile)
+        self.assertNotEqual(recipe.context_policy.source, "none")
+        self.assertEqual(recipe.target_policy.materialization_mode, CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT)
+        dataset = resolve_dataset_paths(Path(".")).artifact_paths()
+        def records(value):
+            return {key: {"filename": path.name, "sha256": value * 64, "size_bytes": 1}
+                    for key, path in dataset.items()}
+        common = {"source_data_inventory": {"same_csv": "identity"},
+                  "target_contract": {"target_kind": "pure_mfe"},
+                  "target_artifacts": {"source": "same_target"}}
+        old_source = {**common, "dataset_artifacts": records("a")}
+        new_source = {**common, "dataset_artifacts": records("b")}
+        candidate = {"experiment_profile": profile,
+                     "training_sample_scope": TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+                     "source_contract": old_source}
+        expected = {"experiment_profile": profile,
+                    "training_sample_scope": TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+                    "source_contract": new_source}
+        # This test uses complete registry-resolved metadata. No AH special-case.
+        self.assertFalse(fold_source_dependency_issues(
+            candidate, expected, project_root=Path("."),
+            inventory_matcher=source_inventory_matches_current,
+            external_context_verified=True,
+        ))
+        blocked = fold_source_dependency_issues(
+            candidate, expected, project_root=Path("."),
+            inventory_matcher=source_inventory_matches_current,
+            external_context_verified=False,
+        )
+        self.assertTrue(any("external context" in msg for msg in blocked))
+        wrong_scope = {**expected, "training_sample_scope": TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS}
+        self.assertTrue(fold_source_dependency_issues(
+            candidate, wrong_scope, project_root=Path("."),
+            inventory_matcher=source_inventory_matches_current,
+            external_context_verified=True,
+        ))
+        changed_target = {**expected, "source_contract": {**new_source,
+                          "target_contract": {"target_kind": "different_target"}}}
+        self.assertTrue(fold_source_dependency_issues(
+            candidate, changed_target, project_root=Path("."),
+            inventory_matcher=source_inventory_matches_current,
+            external_context_verified=True,
+        ))
+
+    def test_external_context_attestation_accepts_only_eligible_dataset_drift(self):
+        """Integration: all 6 source checks are bound to original Fold provenance."""
+        from filters.breakout_quality.dataset_store import resolve_dataset_paths
+        profile = self.external_daily_profile()
+        bundle = self.fake_bundle()
+        paths = resolve_dataset_paths(Path(".")).artifact_paths()
+        def records(value):
+            return {key: {"filename": path.name, "sha256": value * 64, "size_bytes": 1}
+                    for key, path in paths.items()}
+        bundle.summary["dataset_artifacts"] = records("b")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            base, manifest, files = self.make_published_fold(root, bundle, profile=profile)
+            old = {**manifest, "source_contract": {
+                **manifest["source_contract"], "dataset_artifacts": records("a")}}
+            files["fold_manifest"].write_text(json.dumps(old), encoding="utf-8")
+            aggregate_path = base / "selection_point_in_time_manifest.json"
+            aggregate = json.loads(aggregate_path.read_text(encoding="utf-8"))
+            aggregate["folds"][0]["fold_manifest"] = build_file_manifest(files["fold_manifest"])
+            aggregate_path.write_text(json.dumps(aggregate), encoding="utf-8")
+            settings = SimpleNamespace(filter_id="test_filter", model_architecture="test_arch")
+            with (patch.object(audit, "_source_path", return_value=(base, "test_filter", "test_arch")),
+                  patch.object(audit, "get_breakout_quality_workflow_settings", return_value=settings),
+                  patch.object(audit, "resolve_feature_price_source", return_value=None),
+                  patch.object(audit, "resolve_trade_count_feature_source", return_value=None),
+                  patch.object(audit, "loader_kwargs_for_trade_path", return_value={}),
+                  patch.object(audit, "load_profile_continuous_ranker_data", return_value=bundle),
+                  patch.object(audit, "verified_published_context_fit_proof", return_value=(True, "proven")) as proof):
+                actual = audit._audit_seed(root, model="MODEL", profile=profile, seed=7)
+                self.assertEqual(actual["status"], "VERIFIED")
+                self.assertEqual(proof.call_count, 1)
+                bad = {**old, "source_contract": {**old["source_contract"],
+                       "target_contract": {"target_kind": "different_target"}}}
+                files["fold_manifest"].write_text(json.dumps(bad), encoding="utf-8")
+                aggregate["folds"][0]["fold_manifest"] = build_file_manifest(files["fold_manifest"])
+                aggregate_path.write_text(json.dumps(aggregate), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "source mismatch"):
+                    audit._audit_seed(root, model="MODEL", profile=profile, seed=7)
+
+    def test_external_context_is_required_even_without_cache_drift(self):
+        """An AH-like context cannot be marked VERIFIED from matching hashes."""
+        profile = self.external_daily_profile()
+        bundle = self.fake_bundle()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            base, _manifest, paths = self.make_published_fold(root, bundle, profile=profile)
+            settings = SimpleNamespace(filter_id="test_filter", model_architecture="test_arch")
+            with (patch.object(audit, "_source_path", return_value=(base, "test_filter", "test_arch")),
+                  patch.object(audit, "get_breakout_quality_workflow_settings", return_value=settings),
+                  patch.object(audit, "resolve_feature_price_source", return_value=None),
+                  patch.object(audit, "resolve_trade_count_feature_source", return_value=None),
+                  patch.object(audit, "loader_kwargs_for_trade_path", return_value={}),
+                  patch.object(audit, "load_profile_continuous_ranker_data", return_value=bundle)):
+                # Real owner verification must fail on a fixture without
+                # authentic Stage-1 Context and its original FIT binding.
+                with self.assertRaisesRegex(ValueError, "original FIT context proof blocked"):
+                    audit._audit_seed(root, model="MODEL", profile=profile, seed=7)
+                # Isolate audit plumbing and inspect proof arguments.
+                with patch.object(audit, "verified_published_context_fit_proof", return_value=(False, "original FIT proof missing")) as proof:
+                    with self.assertRaisesRegex(ValueError, "original FIT context proof blocked"):
+                        audit._audit_seed(root, model="MODEL", profile=profile, seed=7)
+                    self.assertEqual(proof.call_count, 1)
+                    self.assertEqual(proof.call_args.kwargs["manifest_path"], paths["fold_manifest"])
+                    self.assertIs(proof.call_args.kwargs["bundle"], bundle)
+                    self.assertEqual(proof.call_args.kwargs["project_root"], root)
 
     def test_registry_and_report_approval(self):
         self.assertEqual(validate_approved_persistent_report_contracts(), ())
