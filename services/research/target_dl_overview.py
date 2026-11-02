@@ -630,7 +630,8 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
             rolling_rho = comparison[0] if comparison else None
         robust_rho, robust_seeds = robustness_rho.get(profile, (None, ()))
         if not _rolling_fit_version_current(root, filter_id=filter_id, profile=profile):
-            rolling_rho, robust_rho, robust_seeds = None, None, ()
+            # Robustness has independent per-seed FIT evidence, validated above.
+            rolling_rho = None
         forward_json, forward_md = _model_paths(
             root, filter_id=filter_id, profile=profile, evaluation_mode="forward_oos",
         )

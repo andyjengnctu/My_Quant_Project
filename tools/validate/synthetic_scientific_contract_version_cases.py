@@ -299,6 +299,36 @@ class ScientificVersionCases(TestCase):
                 root, model={"source_reports": paths[:1]}, profile=CQ,
                 seeds=(101, 102)))
 
+    def test_robustness_rho_independent_of_main_rolling_version_state(self):
+        """Valid per-Seed Robustness evidence must survive a missing main Rolling FIT."""
+        from services.research import target_dl_overview as overview
+
+        target = "DailyUniversal_MinTrade_NetPnL_Positive"
+        evidence = ((target,), ({"target": target, "positive_output": True},),
+                    {target: "synthetic-positive-target"},
+                    {target: {"oracle_romd": 90.84, "win_rate_pct": 99.88}}, {})
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(overview, "load_report_contract_versions", return_value={}), \
+             patch.object(overview, "get_formal_oracle_definition",
+                          return_value=SimpleNamespace(source={"filter_id": "breakout_quality_v1"})), \
+             patch.object(overview, "get_active_audit_module_id", return_value="synthetic"), \
+             patch.object(overview, "_oracle_rows", return_value=evidence), \
+             patch.object(overview, "_strategy_bindings", return_value={(target, CQ): "C127"}), \
+             patch.object(overview, "_is_exact_supervision", side_effect=lambda profile, _label: profile == CQ), \
+             patch.object(overview, "_model_comparison_rhos",
+                          side_effect=[{}, {CQ: (0.1234, (101, 102, 103, 104))}]), \
+             patch.object(overview, "_rolling_fit_version_current", return_value=False), \
+             patch.object(overview, "_single_model_rho", return_value=None), \
+             patch.object(overview, "_published_model_report", return_value=None), \
+             patch.object(overview, "_strategy_rolling_metrics", return_value={}), \
+             patch.object(overview, "_strategy_robustness_metrics", return_value={}):
+            rows = overview.collect_target_dl_overview(Path(tmp))["rows"]
+        cq_rows = [row for row in rows if row["model"] == "MR-13CQ"]
+        self.assertEqual(len(cq_rows), 1)
+        self.assertIsNone(cq_rows[0]["rolling_rho"])
+        self.assertEqual(cq_rows[0]["robustness_rho"], 0.1234)
+        self.assertEqual(cq_rows[0]["rho_seeds"], (101, 102, 103, 104))
+
     def test_old_cq_model_and_strategy_results_blank_until_matching_v2(self):
         import hashlib
         from core.breakout_quality_fit_contract_version import current_fit_contract_artifact_identity
